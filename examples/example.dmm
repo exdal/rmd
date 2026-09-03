@@ -1,0 +1,19 @@
+"a" = (/turf/closed/wall,/area/station)
+"b" = (/turf/open/floor{icon_state = "white"},/area/station)
+"c" = (/obj/machinery/door/airlock{name = "Cabin 5"; id_tag = "Dorm5"},/turf/open/floor,/area/station)
+"d" = (/obj/structure/sign{icon = 'icons/obj/signs.dmi'; desc = "a \"loud\" sign"},/turf/open/floor,/area/station)
+"e" = (/obj/machinery/camera{network = list("ss13","engine"); movement_force = list("KNOCKDOWN"=0)},/turf/open/floor,/area/station)
+
+(1,1,1) = {"
+aaaaa
+abcda
+abbea
+aaaaa
+"}
+
+(1,1,2) = {"
+aaaaa
+abbba
+abbba
+aaaaa
+"}

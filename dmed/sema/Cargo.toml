@@ -1,0 +1,12 @@
+[package]
+name = "sema"
+version = "1.0.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+core = { path = "../core" }
+ast = { path = "../ast" }
+objtree = { path = "../objtree" }

@@ -1,0 +1,10 @@
+// A minimal environment for exercising the viewer end to end.
+
+// BEGIN_FILE_DIR
+#define FILE_DIR .
+// END_FILE_DIR
+
+// BEGIN_INCLUDE
+#include "test.dm"
+#include "test.dmm"
+// END_INCLUDE

@@ -1,0 +1,51 @@
+use ash::vk;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GpuError {
+    Loader(String),
+    Vulkan(vk::Result),
+    NoSuitableDevice,
+    NoGraphicsQueue,
+    UnsupportedWindow,
+    TooManyTextures { requested: u32, limit: u32 },
+    TextureUploadTooLarge,
+    OutOfDate,
+}
+
+impl std::fmt::Display for GpuError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Loader(e) => write!(f, "could not load Vulkan: {e}"),
+            Self::Vulkan(e) => write!(f, "vulkan error: {e}"),
+            Self::NoSuitableDevice => write!(
+                f,
+                "no Vulkan 1.3 device with a graphics queue, a swapchain, and bindless sampled-image support"
+            ),
+            Self::NoGraphicsQueue => write!(f, "the selected device has no graphics queue"),
+            Self::UnsupportedWindow => write!(f, "unsupported window system"),
+            Self::TooManyTextures { requested, limit } => {
+                write!(
+                    f,
+                    "the scene needs {requested} bindless textures, but the device supports {limit}"
+                )
+            },
+            Self::TextureUploadTooLarge => write!(f, "sprite texture data is too large to upload"),
+            Self::OutOfDate => write!(f, "the swapchain is out of date"),
+        }
+    }
+}
+
+impl std::error::Error for GpuError {}
+
+impl From<vk::Result> for GpuError {
+    fn from(result: vk::Result) -> Self {
+        match result {
+            vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR => Self::OutOfDate,
+            other => Self::Vulkan(other),
+        }
+    }
+}
+
+impl From<GpuError> for render::RenderError {
+    fn from(e: GpuError) -> Self { Self::Backend(e.to_string()) }
+}

@@ -1,0 +1,19 @@
+[package]
+name = "dmedc"
+version = "1.0.0"
+edition = "2024"
+resolver = "3"
+
+[[bin]]
+name = "dmedc"
+path = "src/main.rs"
+
+[dependencies]
+core = { path = "../dmed/core" }
+lexer = { path = "../dmed/lexer" }
+preprocessor = { path = "../dmed/preprocessor" }
+ast = { path = "../dmed/ast" }
+sema = { path = "../dmed/sema" }
+objtree = { path = "../dmed/objtree" }
+dmm = { path = "../dmed/dmm" }
+dmi = { path = "../dmed/dmi" }

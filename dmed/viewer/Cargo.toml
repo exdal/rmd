@@ -1,0 +1,18 @@
+[package]
+name = "viewer"
+version = "1.0.0"
+edition = "2024"
+
+[[bin]]
+name = "dmedv"
+path = "src/main.rs"
+
+[dependencies]
+core = { path = "../core" }
+dmm = { path = "../dmm" }
+dmi = { path = "../dmi" }
+editor = { path = "../editor" }
+render = { path = "../render" }
+gpu = { path = "../gpu" }
+winit = "0.30.12"
+raw-window-handle = "0.6.0"
