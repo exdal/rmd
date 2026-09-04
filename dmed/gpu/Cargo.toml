@@ -11,6 +11,7 @@ render = { path = "../render" }
 vir = { git = "https://github.com/exdal/vir.git", package = "vir" }
 ash = "0.38.0"
 raw-window-handle = "0.6.0"
+dear-imgui-rs = "=0.17.0"
 
 [build-dependencies]
 shader-slang = "0.1.0"

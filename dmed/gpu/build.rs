@@ -3,10 +3,16 @@ use std::{env, error::Error, ffi::CString, fs, path::PathBuf};
 use shader_slang as slang;
 use slang::Downcast;
 
-const MODULES: [(&str, &[(&str, &str)]); 1] = [(
-    "sprite.slang",
-    &[("vs_main", "sprite.vert.spv"), ("fs_main", "sprite.frag.spv")],
-)];
+const MODULES: [(&str, &[(&str, &str)]); 2] = [
+    (
+        "sprite.slang",
+        &[("vs_main", "sprite.vert.spv"), ("fs_main", "sprite.frag.spv")],
+    ),
+    (
+        "imgui.slang",
+        &[("vs_main", "imgui.vert.spv"), ("fs_main", "imgui.frag.spv")],
+    ),
+];
 
 fn main() -> Result<(), Box<dyn Error>> {
     for (module, _) in MODULES {

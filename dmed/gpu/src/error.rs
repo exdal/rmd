@@ -7,9 +7,18 @@ pub enum GpuError {
     NoSuitableDevice,
     NoGraphicsQueue,
     UnsupportedWindow,
-    TooManyTextures { requested: u32, limit: u32 },
+    TooManyTextures {
+        requested: u32,
+        limit: u32,
+    },
     TextureUploadTooLarge,
+    TextureIdExhausted,
     OutOfDate,
+    RawDrawCallback,
+    TextureRowPitchTooSmall,
+    TextureUpdateMismatch,
+    UnknownTexture(u64),
+    ImGui(String),
 }
 
 impl std::fmt::Display for GpuError {
@@ -30,7 +39,16 @@ impl std::fmt::Display for GpuError {
                 )
             },
             Self::TextureUploadTooLarge => write!(f, "sprite texture data is too large to upload"),
+            Self::TextureIdExhausted => write!(f, "the interface exhausted the renderer texture id space"),
             Self::OutOfDate => write!(f, "the swapchain is out of date"),
+            Self::RawDrawCallback => write!(
+                f,
+                "the interface asked for a raw draw callback, which this backend has not"
+            ),
+            Self::TextureRowPitchTooSmall => write!(f, "an interface texture upload is narrower than one packed row"),
+            Self::TextureUpdateMismatch => write!(f, "an interface texture patch does not fit the image it names"),
+            Self::UnknownTexture(id) => write!(f, "the interface painted with texture {id}, which was never uploaded"),
+            Self::ImGui(e) => write!(f, "imgui error: {e}"),
         }
     }
 }

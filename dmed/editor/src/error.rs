@@ -9,10 +9,7 @@ use crate::environment;
 #[derive(Debug)]
 pub enum LoadError {
     Preprocess(PreprocessError),
-    Parse {
-        error: ParseError,
-        file: Option<PathBuf>,
-    },
+    Parse { error: ParseError, file: Option<PathBuf> },
 }
 
 impl LoadError {
