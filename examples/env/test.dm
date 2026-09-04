@@ -3,7 +3,6 @@
 
 /turf
 	icon = 'icons/test.dmi'
-	layer = 2
 
 /turf/open/floor
 	name = "floor"
@@ -15,7 +14,6 @@
 
 /obj
 	icon = 'icons/test.dmi'
-	layer = 3
 
 /obj/structure/table
 	name = "table"

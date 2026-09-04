@@ -12,3 +12,12 @@
 
 // tgstation
 // #define CBT  // dont
+
+/area
+	layer = AREA_LAYER
+/turf
+	layer = TURF_LAYER
+/obj
+	layer = OBJ_LAYER
+/mob
+	layer = MOB_LAYER

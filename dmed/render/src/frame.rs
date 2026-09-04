@@ -395,8 +395,9 @@ mod example_environment {
             &FrameOptions::default(),
         );
 
-        // `/turf` is layer 2 and `/obj` is 3, so the last 4 drawn are all objects. Cell 0 is
-        // "floor" and cell 1 is "wall", so no turf may appear after the first object.
+        // Neither `/turf` nor `/obj` declares a layer, so this is `demir.dm`'s builtin defaults
+        // beating the map's own order, which lists every obj ahead of its turf. Cell 0 is "floor"
+        // and cell 1 is "wall", so no turf may appear after the first object.
         let first_object = sprites
             .iter()
             .position(|sprite| sprite.texture.index >= 2)
