@@ -5,7 +5,10 @@
 #define DM_BUILD 1665
 
 // mapping tools set this, and codebases gate map editor icon states on it
-#define SPACEMAN_DMM  // we do a little bit of lying
+#define FASTDMM  // we do a little bit of lying
+#define SPACEMAN_DMM
+#define SpacemanDMM_unlint(X) X
+#define SpacemanDMM_debug(X...) X
 
 // tgstation
 // #define CBT  // dont
