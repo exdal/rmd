@@ -13,6 +13,8 @@ pub struct Appearance {
     pub plane: f32,
     pub pixel_x: i32,
     pub pixel_y: i32,
+    pub pixel_w: i32,
+    pub pixel_z: i32,
     pub color: Option<String>,
     pub alpha: u8,
     pub invisibility: i32,
@@ -30,6 +32,8 @@ impl Default for Appearance {
             plane: 0.0,
             pixel_x: 0,
             pixel_y: 0,
+            pixel_w: 0,
+            pixel_z: 0,
             color: None,
             alpha: 255,
             invisibility: 0,
@@ -81,6 +85,14 @@ pub fn resolve_id(tree: &ObjectTree, id: TypeId, prefab: &Prefab) -> Appearance 
 
     if let Some(pixel_y) = get("pixel_y").and_then(|v| v.as_num()) {
         appearance.pixel_y = pixel_y as i32;
+    }
+
+    if let Some(pixel_w) = get("pixel_w").and_then(|v| v.as_num()) {
+        appearance.pixel_w = pixel_w as i32;
+    }
+
+    if let Some(pixel_z) = get("pixel_z").and_then(|v| v.as_num()) {
+        appearance.pixel_z = pixel_z as i32;
     }
 
     if let Some(alpha) = get("alpha").and_then(|v| v.as_num()) {
