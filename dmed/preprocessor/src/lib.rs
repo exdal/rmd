@@ -12,6 +12,7 @@ use core::{
 use std::{
     collections::{HashSet, VecDeque},
     path::{Component, Path, PathBuf},
+    rc::Rc,
 };
 
 use lexer::{IndentState, Lexer, token::Token};
@@ -24,6 +25,97 @@ use crate::{
 
 pub type PreprocessResult<T> = Result<T, PreprocessError>;
 pub type Spanned<'a> = (Token<'a>, Location);
+
+#[derive(Clone, Copy)]
+enum Spacing {
+    /// Tokens read directly from a source file can derive spacing from their locations.
+    Source,
+    Joint,
+    Separated,
+}
+
+#[derive(Clone, Default)]
+struct HideSet(Option<Rc<HiddenMacro>>);
+
+struct HiddenMacro {
+    name: Identifier,
+    previous: HideSet,
+}
+
+impl HideSet {
+    fn contains(&self, name: &str) -> bool {
+        let mut current = self.0.as_deref();
+        while let Some(hidden) = current {
+            if hidden.name.as_str() == name {
+                return true;
+            }
+
+            current = hidden.previous.0.as_deref();
+        }
+
+        false
+    }
+
+    fn with(&self, name: &Identifier) -> Self {
+        if self.contains(name.as_str()) {
+            return self.clone();
+        }
+
+        Self(Some(Rc::new(HiddenMacro {
+            name: name.clone(),
+            previous: self.clone(),
+        })))
+    }
+
+    fn union(&self, other: &Self) -> Self {
+        let mut merged = self.clone();
+        let mut current = other.0.as_deref();
+        while let Some(hidden) = current {
+            merged = merged.with(&hidden.name);
+            current = hidden.previous.0.as_deref();
+        }
+
+        merged
+    }
+}
+
+#[derive(Clone)]
+struct RawToken<'a> {
+    token: Token<'a>,
+    location: Location,
+    /// Macro expansion reuses the invocation location for every token, so its whitespace has to
+    /// travel separately from the source span.
+    spacing: Spacing,
+    hidden: HideSet,
+}
+
+impl<'a> RawToken<'a> {
+    fn source((token, location): Spanned<'a>) -> Self {
+        Self {
+            token,
+            location,
+            spacing: Spacing::Source,
+            hidden: HideSet::default(),
+        }
+    }
+
+    fn expanded(token: Token<'a>, location: Location, separated: bool, hidden: HideSet) -> Self {
+        Self {
+            token,
+            location,
+            spacing: if separated { Spacing::Separated } else { Spacing::Joint },
+            hidden,
+        }
+    }
+
+    fn separated_from(&self, previous: Location) -> bool {
+        match self.spacing {
+            Spacing::Source => !adjacent(previous, self.location),
+            Spacing::Joint => false,
+            Spacing::Separated => true,
+        }
+    }
+}
 
 /// `foo##x`, `foo x`
 fn adjacent(left: Location, right: Location) -> bool {
@@ -46,9 +138,7 @@ struct IncludeState<'a> {
 }
 
 struct Expansion<'a> {
-    tokens: VecDeque<Spanned<'a>>,
-    /// `#define A A`
-    hide: Option<Identifier>,
+    tokens: VecDeque<RawToken<'a>>,
 }
 
 pub struct Preprocessed<'a> {
@@ -218,9 +308,11 @@ impl<'a> Preprocessor<'a> {
 
     fn pump(&mut self) {
         let from_file = self.expansions.is_empty();
-        let Some((token, location)) = self.next_raw() else {
+        let Some(mut raw) = self.next_raw() else {
             return;
         };
+        let token = raw.token;
+        let location = raw.location;
 
         if from_file {
             let previous = self.last_file_line.replace((location.file, location.end.line));
@@ -230,6 +322,7 @@ impl<'a> Preprocessor<'a> {
         }
 
         match token {
+            Token::SuppressedNewline => self.can_use_directive = true,
             Token::Newline => {
                 self.can_use_directive = true;
 
@@ -247,9 +340,11 @@ impl<'a> Preprocessor<'a> {
                 } else {
                     (token, location)
                 };
+                raw.token = token;
+                raw.location = location;
 
                 if let Some(name) = token.word()
-                    && self.try_macro(name, location)
+                    && self.try_macro(name, raw)
                 {
                     return;
                 }
@@ -277,7 +372,7 @@ impl<'a> Preprocessor<'a> {
         self.output.append(&mut line);
     }
 
-    fn next_raw(&mut self) -> Option<Spanned<'a>> {
+    fn next_raw(&mut self) -> Option<RawToken<'a>> {
         loop {
             while let Some(expansion) = self.expansions.last_mut() {
                 if let Some(token) = expansion.tokens.pop_front() {
@@ -296,14 +391,14 @@ impl<'a> Preprocessor<'a> {
                 self.carried_layout.append(&mut line);
             }
 
-            let state = self.include_stack.last_mut().expect("checked just above");
+            let state = self.include_stack.last_mut()?;
             if let Some(token) = state.peeked.take() {
-                return Some(token);
+                return Some(RawToken::source(token));
             }
 
             let spanned = state.lexer.advance();
             if spanned.0 != Token::Eof {
-                return Some(spanned);
+                return Some(RawToken::source(spanned));
             }
 
             let errors = state.lexer.take_errors();
@@ -332,19 +427,18 @@ impl<'a> Preprocessor<'a> {
         }
     }
 
-    fn next_significant(&mut self) -> Option<Spanned<'a>> {
+    fn next_significant(&mut self) -> Option<RawToken<'a>> {
         loop {
-            let spanned = self.next_raw()?;
-            if !spanned.0.is_comment() {
-                return Some(spanned);
+            let raw = self.next_raw()?;
+            if !raw.token.is_comment() {
+                return Some(raw);
             }
         }
     }
 
-    fn push_back(&mut self, spanned: Spanned<'a>) {
+    fn push_back(&mut self, raw: RawToken<'a>) {
         self.expansions.push(Expansion {
-            tokens: VecDeque::from([spanned]),
-            hide: None,
+            tokens: VecDeque::from([raw]),
         });
     }
 
@@ -353,7 +447,7 @@ impl<'a> Preprocessor<'a> {
             return false;
         };
 
-        if spanned.0 == expected {
+        if spanned.token == expected {
             return true;
         }
 
@@ -363,8 +457,8 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn skip_rest_of_line(&mut self) {
-        while let Some((token, _)) = self.next_raw() {
-            if token == Token::Newline {
+        while let Some(raw) = self.next_raw() {
+            if matches!(raw.token, Token::Newline | Token::SuppressedNewline) {
                 break;
             }
         }
@@ -464,9 +558,11 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn directive_define(&mut self, location: Location) {
-        let Some((name_token, name_location)) = self.next_significant() else {
+        let Some(name_raw) = self.next_significant() else {
             return;
         };
+        let name_token = name_raw.token;
+        let name_location = name_raw.location;
 
         let Some(name) = name_token.word() else {
             self.diagnose(
@@ -496,11 +592,11 @@ impl<'a> Preprocessor<'a> {
 
         // `#define M (x) y`
         let mut params = None;
-        if let Some(spanned) = self.next_raw() {
-            if spanned.0 == Token::ParenLeft && adjacent(name_location, spanned.1) {
-                params = Some(self.read_parameters(spanned.1));
+        if let Some(raw) = self.next_raw() {
+            if raw.token == Token::ParenLeft && !raw.separated_from(name_location) {
+                params = Some(self.read_parameters(raw.location));
             } else {
-                self.push_back(spanned);
+                self.push_back(raw);
             }
         }
 
@@ -516,9 +612,11 @@ impl<'a> Preprocessor<'a> {
 
     /// `#define FILE_DIR "icons"`
     fn directive_file_dir(&mut self) {
-        let Some((token, token_location)) = self.next_significant() else {
+        let Some(raw) = self.next_significant() else {
             return;
         };
+        let token = raw.token;
+        let token_location = raw.location;
 
         let directory = match token {
             Token::StringLiteral(text) | Token::RawStringLiteral(text) => Some(text.replace('\\', "/")),
@@ -547,15 +645,17 @@ impl<'a> Preprocessor<'a> {
         let mut found_variadic = false;
 
         loop {
-            let Some((token, location)) = self.next_significant() else {
+            let Some(raw) = self.next_significant() else {
                 self.diagnose(Code::BadDirective, open, "missing ')' in macro definition");
                 return params;
             };
+            let token = raw.token;
+            let location = raw.location;
 
             match token {
                 Token::ParenRight => return params,
-                Token::Newline => {
-                    self.push_back((token, location));
+                Token::Newline | Token::SuppressedNewline => {
+                    self.push_back(raw);
                     self.diagnose(Code::BadDirective, open, "missing ')' in macro definition");
                     return params;
                 },
@@ -622,8 +722,10 @@ impl<'a> Preprocessor<'a> {
         let mut body: Vec<BodyPart<'a>> = Vec::new();
         let mut previous: Option<Location> = None;
 
-        while let Some((token, location)) = self.next_raw() {
-            if token == Token::Newline {
+        while let Some(raw) = self.next_raw() {
+            let token = raw.token;
+            let location = raw.location;
+            if matches!(token, Token::Newline | Token::SuppressedNewline) {
                 break;
             }
 
@@ -631,18 +733,20 @@ impl<'a> Preprocessor<'a> {
                 continue;
             }
 
-            let separated = previous.is_some_and(|p| !adjacent(p, location));
+            let separated = previous.is_some_and(|p| raw.separated_from(p));
             previous = Some(location);
 
             match token {
                 // `#PARAM`, `##PARAM`
                 Token::Hash | Token::Concat => {
-                    let Some((next, next_location)) = self.next_raw() else {
+                    let Some(next_raw) = self.next_raw() else {
                         break;
                     };
+                    let next = next_raw.token;
+                    let next_location = next_raw.location;
 
                     let Some(name) = pastable(&next) else {
-                        self.push_back((next, next_location));
+                        self.push_back(next_raw);
                         continue;
                     };
 
@@ -676,9 +780,11 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn directive_undef(&mut self) {
-        let Some((token, token_location)) = self.next_significant() else {
+        let Some(raw) = self.next_significant() else {
             return;
         };
+        let token = raw.token;
+        let token_location = raw.location;
 
         let Some(name) = token.word() else {
             self.diagnose(Code::BadDirective, token_location, "invalid macro identifier");
@@ -695,9 +801,11 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn directive_include(&mut self, location: Location) {
-        let Some((token, token_location)) = self.next_significant() else {
+        let Some(raw) = self.next_significant() else {
             return;
         };
+        let token = raw.token;
+        let token_location = raw.location;
 
         let (Token::StringLiteral(raw) | Token::RawStringLiteral(raw)) = token else {
             self.diagnose(
@@ -759,8 +867,10 @@ impl<'a> Preprocessor<'a> {
         let mut tokens = Vec::new();
         let mut expand = true;
 
-        while let Some((token, location)) = self.next_raw() {
-            if token == Token::Newline {
+        while let Some(raw) = self.next_raw() {
+            let token = raw.token;
+            let location = raw.location;
+            if matches!(token, Token::Newline | Token::SuppressedNewline) {
                 break;
             }
 
@@ -771,7 +881,7 @@ impl<'a> Preprocessor<'a> {
             if let Some(word) = token.word() {
                 if word == "defined" || word == "fexists" {
                     expand = false;
-                } else if expand && self.try_macro(word, location) {
+                } else if expand && self.try_macro(word, raw) {
                     continue;
                 }
             } else if token == Token::ParenRight {
@@ -787,9 +897,11 @@ impl<'a> Preprocessor<'a> {
     fn directive_ifdef(&mut self, location: Location, negated: bool) {
         self.last_if = location;
 
-        let Some((token, token_location)) = self.next_significant() else {
+        let Some(raw) = self.next_significant() else {
             return;
         };
+        let token = raw.token;
+        let token_location = raw.location;
 
         let Some(name) = token.word() else {
             self.diagnose(Code::BadDirective, token_location, "expected a define identifier");
@@ -847,9 +959,11 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn directive_pragma(&mut self) {
-        let Some((token, token_location)) = self.next_significant() else {
+        let Some(raw) = self.next_significant() else {
             return;
         };
+        let token = raw.token;
+        let token_location = raw.location;
 
         let code = match token {
             token if token.word().is_some() => Code::from_name(token.word().unwrap_or_default()),
@@ -875,9 +989,11 @@ impl<'a> Preprocessor<'a> {
             return;
         };
 
-        let Some((level_token, level_location)) = self.next_significant() else {
+        let Some(level_raw) = self.next_significant() else {
             return;
         };
+        let level_token = level_raw.token;
+        let level_location = level_raw.location;
 
         let level = level_token
             .word()
@@ -911,17 +1027,23 @@ impl<'a> Preprocessor<'a> {
             .include_stack
             .last()
             .map(|state| (self.include_stack.len(), state.lexer.indent_state()));
+        let nesting = self
+            .include_stack
+            .last()
+            .map(|state| (self.include_stack.len(), state.lexer.nesting_state()));
 
         let mut depth = 1usize;
         let mut closed = false;
-        while let Some((token, location)) = self.next_raw() {
+        while let Some(raw) = self.next_raw() {
+            let token = raw.token;
+            let location = raw.location;
             match token {
                 Token::PpIf | Token::PpIfdef | Token::PpIfndef => depth += 1,
                 Token::PpEndif => {
                     depth -= 1;
                     if depth == 0 {
                         if !from_else {
-                            self.push_back((token, location));
+                            self.push_back(raw);
                         }
 
                         closed = true;
@@ -933,7 +1055,7 @@ impl<'a> Preprocessor<'a> {
                         self.diagnose(Code::BadDirective, location, format!("unexpected {token} directive"));
                     }
 
-                    self.push_back((token, location));
+                    self.push_back(raw);
                     closed = true;
                     break;
                 },
@@ -957,11 +1079,18 @@ impl<'a> Preprocessor<'a> {
         {
             state.lexer.restore_indent(indent);
         }
+
+        if let Some((stack_depth, nesting)) = nesting
+            && stack_depth == self.include_stack.len()
+            && let Some(state) = self.include_stack.last_mut()
+        {
+            state.lexer.restore_nesting(nesting);
+        }
     }
 
     /// `#define M(x) x`
-    fn try_macro(&mut self, name: &str, location: Location) -> bool {
-        if self.is_hidden(name) {
+    fn try_macro(&mut self, name: &str, invocation: RawToken<'a>) -> bool {
+        if invocation.hidden.contains(name) {
             return false;
         }
 
@@ -978,38 +1107,30 @@ impl<'a> Preprocessor<'a> {
             None
         };
 
-        let tokens = self.expand(&define, arguments.as_deref(), location);
-        self.expansions.push(Expansion {
-            tokens,
-            hide: Some(Identifier::from(name)),
-        });
+        let tokens = self.expand(&define, arguments.as_deref(), invocation);
+        self.expansions.push(Expansion { tokens });
 
         true
     }
 
-    fn is_hidden(&self, name: &str) -> bool {
-        self.expansions
-            .iter()
-            .any(|e| e.hide.as_ref().is_some_and(|hide| hide.as_str() == name))
-    }
-
     /// `M(a, b)`
-    fn collect_arguments(&mut self) -> Option<Vec<Vec<Spanned<'a>>>> {
+    fn collect_arguments(&mut self) -> Option<Vec<Vec<RawToken<'a>>>> {
         let open = self.next_significant()?;
-        if open.0 != Token::ParenLeft {
+        if open.token != Token::ParenLeft {
             self.push_back(open);
             return None;
         }
 
         let mut arguments = Vec::new();
-        let mut current: Vec<Spanned<'a>> = Vec::new();
+        let mut current: Vec<RawToken<'a>> = Vec::new();
         let mut depth = 1usize;
 
         loop {
-            let Some((token, location)) = self.next_raw() else {
-                self.diagnose(Code::BadDirective, open.1, "missing ')' in macro call");
+            let Some(raw) = self.next_raw() else {
+                self.diagnose(Code::BadDirective, open.location, "missing ')' in macro call");
                 break;
             };
+            let token = raw.token;
 
             match token {
                 Token::Comma if depth == 1 => arguments.push(std::mem::take(&mut current)),
@@ -1019,15 +1140,15 @@ impl<'a> Preprocessor<'a> {
                         break;
                     }
 
-                    current.push((token, location));
+                    current.push(raw);
                 },
                 Token::ParenLeft => {
                     depth += 1;
-                    current.push((token, location));
+                    current.push(raw);
                 },
-                Token::Newline => {},
+                Token::Newline | Token::SuppressedNewline => {},
                 token if token.is_comment() => {},
-                token => current.push((token, location)),
+                _ => current.push(raw),
             }
         }
 
@@ -1037,13 +1158,18 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn expand(
-        &mut self, define: &Define<'a>, arguments: Option<&[Vec<Spanned<'a>>]>, location: Location,
-    ) -> VecDeque<Spanned<'a>> {
+        &mut self, define: &Define<'a>, arguments: Option<&[Vec<RawToken<'a>>]>, invocation: RawToken<'a>,
+    ) -> VecDeque<RawToken<'a>> {
+        let fixed_hidden = invocation.hidden.with(&define.name);
         if let Some(builtin) = define.builtin {
-            return VecDeque::from([(self.expand_builtin(builtin, location), location)]);
+            return VecDeque::from([RawToken {
+                token: self.expand_builtin(builtin, invocation.location),
+                hidden: fixed_hidden,
+                ..invocation
+            }]);
         }
 
-        let mut out: Vec<Token<'a>> = Vec::new();
+        let mut out: Vec<(Token<'a>, bool, HideSet)> = Vec::new();
         // `foo##x`, `foo x`
         let mut separated = true;
 
@@ -1058,22 +1184,24 @@ impl<'a> Preprocessor<'a> {
                         None => name.to_string(),
                     };
 
-                    out.push(Token::RawStringLiteral(self.arena.alloc(text)));
+                    out.push((
+                        Token::RawStringLiteral(self.arena.alloc(text)),
+                        separated,
+                        fixed_hidden.clone(),
+                    ));
                     separated = false;
                 },
                 BodyPart::Paste(name) => {
-                    match Self::slot_tokens(arguments, define, name) {
-                        Some(tokens) => self.splice(&mut out, &tokens, false),
-                        // `##NAME`
-                        None => out.push(Token::from_identifier(name)),
-                    }
+                    let tokens = Self::slot_tokens(arguments, define, name)
+                        .unwrap_or_else(|| vec![(Token::from_identifier(name), false, fixed_hidden.clone())]);
+                    self.splice(&mut out, &tokens, false);
 
                     separated = false;
                 },
                 BodyPart::Token(token) => {
                     match token.word().and_then(|word| Self::slot_tokens(arguments, define, word)) {
                         Some(tokens) => self.splice(&mut out, &tokens, separated),
-                        None => out.push(*token),
+                        None => out.push((*token, separated, fixed_hidden.clone())),
                     }
 
                     separated = false;
@@ -1081,7 +1209,20 @@ impl<'a> Preprocessor<'a> {
             }
         }
 
-        out.into_iter().map(|token| (token, location)).collect()
+        out.into_iter()
+            .enumerate()
+            .map(|(index, (token, separated, hidden))| {
+                if index == 0 {
+                    RawToken {
+                        token,
+                        hidden,
+                        ..invocation.clone()
+                    }
+                } else {
+                    RawToken::expanded(token, invocation.location, separated, hidden)
+                }
+            })
+            .collect()
     }
 
     fn expand_builtin(&self, builtin: Builtin, location: Location) -> Token<'a> {
@@ -1101,8 +1242,8 @@ impl<'a> Preprocessor<'a> {
 
     /// `#define M(a, rest...)`
     fn slot_tokens(
-        arguments: Option<&[Vec<Spanned<'a>>]>, define: &Define<'a>, name: &str,
-    ) -> Option<Vec<(Token<'a>, bool)>> {
+        arguments: Option<&[Vec<RawToken<'a>>]>, define: &Define<'a>, name: &str,
+    ) -> Option<Vec<(Token<'a>, bool, HideSet)>> {
         let (arguments, slot) = arguments.zip(define.lookup(name))?;
         let mut out = Vec::new();
 
@@ -1114,7 +1255,7 @@ impl<'a> Preprocessor<'a> {
             Slot::Rest(index) => {
                 for (offset, argument) in arguments.iter().skip(index).enumerate() {
                     if offset > 0 {
-                        out.push((Token::Comma, true));
+                        out.push((Token::Comma, true, HideSet::default()));
                     }
 
                     push_argument(&mut out, argument, offset > 0);
@@ -1126,33 +1267,36 @@ impl<'a> Preprocessor<'a> {
     }
 
     /// `foo##x`
-    fn splice(&self, out: &mut Vec<Token<'a>>, tokens: &[(Token<'a>, bool)], mut separated: bool) {
-        for (index, (token, token_separated)) in tokens.iter().enumerate() {
+    fn splice(
+        &self, out: &mut Vec<(Token<'a>, bool, HideSet)>, tokens: &[(Token<'a>, bool, HideSet)], mut separated: bool,
+    ) {
+        for (index, (token, token_separated, hidden)) in tokens.iter().enumerate() {
             if index > 0 {
                 separated = *token_separated;
             }
 
             let pasted = (!separated)
-                .then(|| pastable(token).zip(out.last().and_then(Token::word)))
+                .then(|| pastable(token).zip(out.last().and_then(|(token, ..)| token.word())))
                 .flatten();
 
             match pasted.zip(out.last_mut()) {
                 Some(((right, left), last)) => {
                     let joined = self.arena.alloc(format!("{left}{right}"));
-                    *last = Token::from_identifier(joined);
+                    last.0 = Token::from_identifier(joined);
+                    last.2 = last.2.union(hidden);
                 },
-                None => out.push(*token),
+                None => out.push((*token, separated, hidden.clone())),
             }
         }
     }
 
-    fn render_slot(&self, slot: Slot, arguments: &[Vec<Spanned<'a>>]) -> Option<String> {
+    fn render_slot(&self, slot: Slot, arguments: &[Vec<RawToken<'a>>]) -> Option<String> {
         let mut text = String::new();
 
         match slot {
             Slot::Positional(index) => {
-                for (token, _) in arguments.get(index)? {
-                    text.push_str(&token.to_string());
+                for raw in arguments.get(index)? {
+                    text.push_str(&raw.token.to_string());
                 }
             },
             Slot::Rest(index) => {
@@ -1161,8 +1305,8 @@ impl<'a> Preprocessor<'a> {
                         text.push(',');
                     }
 
-                    for (token, _) in argument {
-                        text.push_str(&token.to_string());
+                    for raw in argument {
+                        text.push_str(&raw.token.to_string());
                     }
                 }
             },
@@ -1246,6 +1390,7 @@ impl<'a> Preprocessor<'a> {
     fn push_file(&mut self, file: FileId, path: &Path) {
         let contents = self.sources.contents(file).unwrap_or_default();
         let mut lexer = Lexer::with_file(contents, file);
+        lexer.emit_suppressed_newlines();
 
         // `#include "inner.dm"`
         lexer.keep_indents_at_eof();
@@ -1267,16 +1412,16 @@ impl<'a> Preprocessor<'a> {
     }
 }
 
-fn push_argument<'a>(out: &mut Vec<(Token<'a>, bool)>, argument: &[Spanned<'a>], mut separated: bool) {
+fn push_argument<'a>(out: &mut Vec<(Token<'a>, bool, HideSet)>, argument: &[RawToken<'a>], mut separated: bool) {
     let mut previous: Option<Location> = None;
 
-    for (token, location) in argument {
+    for raw in argument {
         if let Some(previous) = previous {
-            separated = !adjacent(previous, *location);
+            separated = raw.separated_from(previous);
         }
 
-        out.push((*token, separated));
-        previous = Some(*location);
+        out.push((raw.token, separated, raw.hidden.clone()));
+        previous = Some(raw.location);
     }
 }
 
@@ -1340,6 +1485,7 @@ pub fn render(tokens: &[Spanned<'_>]) -> String {
     for (token, _) in tokens {
         match token {
             Token::Newline => out.push('\n'),
+            Token::SuppressedNewline => {},
             Token::Indent => out.push_str("> "),
             Token::Dedent => out.push_str("< "),
             token => {
@@ -1381,6 +1527,138 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
 
         rendered
+    }
+
+    #[test]
+    fn macro_generated_defines_preserve_function_like_spacing() {
+        let rendered = pp(&[(
+            "generated.dm",
+            concat!(
+                "#define DEFINE #define\n",
+                "#define MAKE_FUNCTION(_NAME) DEFINE _NAME(x) x\n",
+                "#define MAKE_OBJECT(_NAME) DEFINE _NAME (x) x\n",
+                "MAKE_FUNCTION(FUNCTION)\n",
+                "FUNCTION\n",
+                "FUNCTION(value)\n",
+                "MAKE_OBJECT(OBJECT)\n",
+                "OBJECT\n",
+            ),
+        )]);
+
+        assert_eq!(rendered, "FUNCTION\nvalue\n( x ) x");
+    }
+
+    #[test]
+    fn concat_pastes_fixed_text_onto_a_parameter() {
+        let rendered = pp(&[(
+            "fixed_concat.dm",
+            "#define UPDATE(X) src.X ## _standing\nUPDATE(body)\n",
+        )]);
+
+        assert_eq!(rendered, "src . body_standing");
+    }
+
+    #[test]
+    fn a_bare_generated_function_macro_survives_in_a_nested_path_macro() {
+        let rendered = pp(&[(
+            "nested.dm",
+            concat!(
+                "#define DEFINE #define\n",
+                "#define MAKE(_NAME) /datum/base/##_NAME {} DEFINE _NAME(x) x\n",
+                "#define OTHER(_NAME) /datum/other/##_NAME\n",
+                "#define WRAP(_PATH, _NAME) _PATH(_NAME) {}\n",
+                "MAKE(OFFSETS)\n",
+                "WRAP(OTHER, OFFSETS)\n",
+            ),
+        )]);
+
+        assert_eq!(rendered, "/ datum / base / OFFSETS { } / datum / other / OFFSETS { }");
+    }
+
+    #[test]
+    fn a_pasted_identity_macro_captures_a_following_argument_list() {
+        let direct = pp(&[(
+            "identity.dm",
+            concat!(
+                "#define IDENTITY(x) x\n",
+                "#define PATH(_NAME) datum/namespace/##_NAME/##IDENTITY\n",
+                "PATH(CHEM)(var/const/REQUEST = 1)\n",
+            ),
+        )]);
+        let nested = pp(&[(
+            "nested_identity.dm",
+            concat!(
+                "#define IDENTITY(x) x\n",
+                "#define ADD_1(a) datum/namespace/##a/##IDENTITY\n",
+                "#define ADD_2(a, b) datum/namespace/inner/##IDENTITY\n",
+                "#define CREATE(a, b) ADD_1(a)(var/##ADD_2(a, b)(##b = 1))\n",
+                "CREATE(CHEM, REQUEST)\n",
+            ),
+        )]);
+
+        assert_eq!(direct, "datum / namespace / CHEM / var / const / REQUEST = 1");
+        assert_eq!(
+            nested,
+            "datum / namespace / CHEM / var / datum / namespace / inner / REQUEST = 1"
+        );
+    }
+
+    #[test]
+    fn recursive_macros_stop_at_the_token_that_already_expanded_them() {
+        let rendered = pp(&[(
+            "recursive.dm",
+            concat!(
+                "#define SELF SELF\n",
+                "#define LEFT RIGHT\n",
+                "#define RIGHT LEFT\n",
+                "SELF\n",
+                "LEFT\n",
+            ),
+        )]);
+
+        assert_eq!(rendered, "SELF\nLEFT");
+    }
+
+    #[test]
+    fn a_condition_inside_parentheses_ends_at_its_physical_line() {
+        let rendered = pp(&[(
+            "conditional_list.dm",
+            concat!(
+                "#define CURRENT 1\n",
+                "#define EXPECTED 1\n",
+                "var/list/items = list(\n",
+                "first,\n",
+                "#if CURRENT == EXPECTED\n",
+                "conditional,\n",
+                "#endif\n",
+                "last,\n",
+                ")\n",
+                "var/after = 1\n",
+            ),
+        )]);
+
+        assert_eq!(
+            rendered,
+            "var / list / items = list ( first , conditional , last , )\nvar / after = 1"
+        );
+    }
+
+    #[test]
+    fn an_inactive_branch_does_not_close_the_surrounding_expression() {
+        let rendered = pp(&[(
+            "conditional_close.dm",
+            concat!(
+                "var/items = list(first,\\\n",
+                "#ifdef WINTER\n",
+                "coat)\n",
+                "#else\n",
+                ")\n",
+                "#endif\n",
+                "var/after = 1\n",
+            ),
+        )]);
+
+        assert_eq!(rendered, "var / items = list ( first , )\nvar / after = 1");
     }
 
     #[test]

@@ -22,6 +22,12 @@ pub struct IndentState {
     pending_dedents: usize,
 }
 
+#[derive(Clone, Debug)]
+pub struct NestingState {
+    paren_depth: usize,
+    brace_stack: Vec<BraceKind>,
+}
+
 pub struct Lexer<'a> {
     buffer_view: &'a str,
     file: FileId,
@@ -32,13 +38,12 @@ pub struct Lexer<'a> {
     indent_stack: Vec<usize>,
     pending_dedents: usize,
     at_line_start: bool,
-    /// An included file shares one logical indent stack with its includer, so only the outermost
-    /// stream closes its blocks at end of file - see `Preprocessor::open`.
     close_indents_at_eof: bool,
 
     paren_depth: usize,
     brace_stack: Vec<BraceKind>,
     layout_disabled: bool,
+    emit_suppressed_newlines: bool,
 
     errors: Vec<LexError>,
 }
@@ -60,6 +65,7 @@ impl<'a> Lexer<'a> {
             paren_depth: 0,
             brace_stack: Vec::new(),
             layout_disabled: false,
+            emit_suppressed_newlines: false,
             errors: Vec::new(),
         }
     }
@@ -82,6 +88,18 @@ impl<'a> Lexer<'a> {
     pub fn restore_indent(&mut self, state: IndentState) {
         self.indent_stack = state.stack;
         self.pending_dedents = state.pending_dedents;
+    }
+
+    pub fn nesting_state(&self) -> NestingState {
+        NestingState {
+            paren_depth: self.paren_depth,
+            brace_stack: self.brace_stack.clone(),
+        }
+    }
+
+    pub fn restore_nesting(&mut self, state: NestingState) {
+        self.paren_depth = state.paren_depth;
+        self.brace_stack = state.brace_stack;
     }
 
     /// Leave open blocks open at end of file, for a stream that continues in another buffer.
@@ -131,6 +149,9 @@ impl<'a> Lexer<'a> {
     /// For a file spliced in by `#include` from inside an expression: its lines are continuations of
     /// the one holding the directive, so none of its layout means anything.
     pub fn disable_layout(&mut self) { self.layout_disabled = true; }
+
+    /// Let a preprocessor observe physical line endings even when they do not create parser layout.
+    pub fn emit_suppressed_newlines(&mut self) { self.emit_suppressed_newlines = true; }
 
     fn suppress_layout(&self) -> bool { self.layout_disabled || self.paren_depth > 0 || !self.brace_stack.is_empty() }
 
@@ -561,6 +582,11 @@ impl<'a> Lexer<'a> {
                 b'\n' => {
                     self.consume_any();
                     if self.suppress_layout() {
+                        if self.emit_suppressed_newlines {
+                            self.at_line_start = true;
+                            return self.located(Token::SuppressedNewline, start_pos);
+                        }
+
                         continue;
                     }
 
@@ -1111,5 +1137,28 @@ mod tests {
 
         assert!(matches!(token, Token::StringLiteral(_)));
         assert!(lexer.errors().is_empty());
+    }
+
+    #[test]
+    fn optionally_exposes_newlines_suppressed_by_parentheses() {
+        let mut lexer = Lexer::new("list(\nvalue,\n)");
+        lexer.emit_suppressed_newlines();
+
+        assert_eq!(
+            std::iter::from_fn(|| {
+                let (token, _) = lexer.next(true);
+                (token != Token::Eof).then_some(token)
+            })
+            .collect::<Vec<_>>(),
+            vec![
+                Token::Soft(SoftKeyword::List),
+                Token::ParenLeft,
+                Token::SuppressedNewline,
+                Token::Identifier("value"),
+                Token::Comma,
+                Token::SuppressedNewline,
+                Token::ParenRight,
+            ]
+        );
     }
 }

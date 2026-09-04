@@ -89,6 +89,8 @@ pub enum Token<'a> {
     Soft(SoftKeyword),
 
     Newline,
+    /// A physical newline whose layout is suppressed by parentheses, brackets, or an include.
+    SuppressedNewline,
     Indent,
     Dedent,
 
@@ -301,7 +303,12 @@ impl<'a> Token<'a> {
         }
     }
 
-    pub fn is_layout(&self) -> bool { matches!(self, Token::Newline | Token::Indent | Token::Dedent) }
+    pub fn is_layout(&self) -> bool {
+        matches!(
+            self,
+            Token::Newline | Token::SuppressedNewline | Token::Indent | Token::Dedent
+        )
+    }
 
     pub fn is_directive(&self) -> bool {
         matches!(
@@ -363,6 +370,7 @@ impl std::fmt::Display for Token<'_> {
             Token::Soft(keyword) => write!(f, "{}", keyword.as_word()),
 
             Token::Newline => write!(f, "newline"),
+            Token::SuppressedNewline => write!(f, "suppressed newline"),
             Token::Indent => write!(f, "indent"),
             Token::Dedent => write!(f, "dedent"),
 

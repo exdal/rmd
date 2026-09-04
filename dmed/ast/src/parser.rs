@@ -668,7 +668,12 @@ impl<'a, 't> Parser<'a, 't> {
                 continue;
             }
 
-            let path = self.parse_path()?;
+            // BYOND permits `null` as a formal name, where it shadows the keyword.
+            let path = if self.consume(Token::Null) {
+                TreePath::new(vec![Identifier("null".to_string())], false)
+            } else {
+                self.parse_path()?
+            };
             let mut spec = self.var_spec_from_path(&path);
             self.parse_var_spec_suffix(&mut spec)?;
             let default = if self.consume(Token::Equal) {
@@ -2231,6 +2236,14 @@ mod tests {
         };
 
         assert_eq!(path.name().map(ToString::to_string).unwrap_or_default(), "operator\"\"");
+
+        let ast = parse_source("/mob/proc/temperature_expose(null, temp, volume)\n\treturn\n");
+        let Declaration::Proc { params, .. } = &ast.declarations[0] else {
+            panic!("expected a proc")
+        };
+
+        assert_eq!(params.len(), 3);
+        assert_eq!(params[0].spec.name.as_str(), "null");
     }
 
     #[test]
