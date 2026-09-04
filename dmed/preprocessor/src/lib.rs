@@ -93,7 +93,7 @@ pub struct Preprocessor<'a> {
     last_file_line: Option<(FileId, usize)>,
     last_if: Location,
 
-    stddef: Option<PathBuf>,
+    prelude: Vec<PreludeFile>,
 }
 
 impl<'a> Preprocessor<'a> {
@@ -118,28 +118,32 @@ impl<'a> Preprocessor<'a> {
             can_use_directive: true,
             last_file_line: None,
             last_if: Location::default(),
-            stddef: stddef_path(),
+            prelude: prelude_files(),
         }
     }
 
-    pub fn with_stddef(mut self, path: impl Into<PathBuf>) -> Self {
-        self.stddef = Some(path.into());
+    pub fn with_prelude(mut self, files: impl IntoIterator<Item = PreludeFile>) -> Self {
+        self.prelude = files.into_iter().collect();
 
         self
     }
 
-    pub fn without_stddef(mut self) -> Self {
-        self.stddef = None;
+    pub fn without_prelude(mut self) -> Self {
+        self.prelude.clear();
 
         self
     }
 
     pub fn sources(&self) -> &SourceMap<'a> { &self.sources }
 
-    /// `stddef.dm`, then the entry `.dme`
+    /// `stddef.dm`, then `demir.dm`, then the entry `.dme`
     pub fn run(mut self, entry: impl AsRef<Path>) -> PreprocessResult<Preprocessed<'a>> {
-        if let Some(stddef) = self.stddef.take() {
-            self.include_file(&stddef, Location::default());
+        for file in std::mem::take(&mut self.prelude) {
+            match file {
+                PreludeFile::Embedded(name, contents) => self.open_embedded(name, contents),
+                PreludeFile::Disk(path) => self.include_file(&path, Location::default()),
+            }
+
             self.drain();
             self.end_stream();
         }
@@ -199,7 +203,6 @@ impl<'a> Preprocessor<'a> {
         }
     }
 
-    /// `stddef.dm` followed by the entry `.dme`
     fn end_stream(&mut self) {
         self.flush_layout();
 
@@ -1133,10 +1136,10 @@ impl<'a> Preprocessor<'a> {
                 .then(|| pastable(token).zip(out.last().and_then(Token::word)))
                 .flatten();
 
-            match pasted {
-                Some((right, left)) => {
+            match pasted.zip(out.last_mut()) {
+                Some(((right, left), last)) => {
                     let joined = self.arena.alloc(format!("{left}{right}"));
-                    *out.last_mut().expect("word() matched") = Token::from_identifier(joined);
+                    *last = Token::from_identifier(joined);
                 },
                 None => out.push(*token),
             }
@@ -1230,6 +1233,17 @@ impl<'a> Preprocessor<'a> {
             },
         };
 
+        self.push_file(file, path);
+    }
+
+    fn open_embedded(&mut self, name: &str, contents: &'static str) {
+        let arena = self.arena;
+        let file = self.sources.add(arena, name, contents.to_string());
+
+        self.push_file(file, Path::new(""));
+    }
+
+    fn push_file(&mut self, file: FileId, path: &Path) {
         let contents = self.sources.contents(file).unwrap_or_default();
         let mut lexer = Lexer::with_file(contents, file);
 
@@ -1291,22 +1305,28 @@ fn normalize(path: &Path) -> PathBuf {
 /// `DM_STDDEF`
 pub const STDDEF_ENV: &str = "DM_STDDEF";
 
-/// `DM_STDDEF`, `dm/stddef.dm`
-pub fn stddef_path() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os(STDDEF_ENV) {
-        return Some(PathBuf::from(path));
-    }
+pub const DEMIR_ENV: &str = "DM_DEMIR";
 
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let candidate = dir.join("dm").join("stddef.dm");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
+pub const STDDEF_SOURCE: &str = include_str!("../../../dm/stddef.dm");
 
-        if !dir.pop() {
-            return None;
-        }
+pub const DEMIR_SOURCE: &str = include_str!("../../../dm/demir.dm");
+
+pub enum PreludeFile {
+    Embedded(&'static str, &'static str),
+    Disk(PathBuf),
+}
+
+pub fn prelude_files() -> Vec<PreludeFile> {
+    vec![
+        env_override(STDDEF_ENV, PreludeFile::Embedded("<stddef.dm>", STDDEF_SOURCE)),
+        env_override(DEMIR_ENV, PreludeFile::Embedded("<demir.dm>", DEMIR_SOURCE)),
+    ]
+}
+
+fn env_override(variable: &str, embedded: PreludeFile) -> PreludeFile {
+    match std::env::var_os(variable) {
+        Some(path) => PreludeFile::Disk(PathBuf::from(path)),
+        None => embedded,
     }
 }
 
@@ -1354,7 +1374,7 @@ mod tests {
 
         let arena = StrArena::new();
         let result = Preprocessor::new(&arena)
-            .without_stddef()
+            .without_prelude()
             .run(dir.join(files[0].0))
             .expect("preprocess");
         let rendered = render(&result.tokens);
@@ -1410,5 +1430,79 @@ mod tests {
             ("nothing.dm", ""),
         ]);
         assert_eq!(empty, "/ datum / a\n> var / x = 1\nvar / y = 2\n<");
+    }
+
+    /// `stddef.dm`, then `demir.dm`, then the entry. The second prelude file may lean on the first.
+    #[test]
+    fn the_prelude_runs_in_order_ahead_of_the_entry() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("dmed-prelude-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+
+        fs::write(dir.join("first.dm"), "#define FROM_FIRST 1\n").expect("write first");
+        fs::write(
+            dir.join("second.dm"),
+            "#if defined(FROM_FIRST)\n#define ORDER 1\n#else\n#define ORDER 0\n#endif\n",
+        )
+        .expect("write second");
+        fs::write(dir.join("entry.dme"), "/datum/a\n\tvar/x = ORDER\n").expect("write entry");
+
+        let arena = StrArena::new();
+        let result = Preprocessor::new(&arena)
+            .with_prelude([
+                PreludeFile::Disk(dir.join("first.dm")),
+                PreludeFile::Disk(dir.join("second.dm")),
+            ])
+            .run(dir.join("entry.dme"))
+            .expect("preprocess");
+
+        let rendered = render(&result.tokens);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert!(rendered.contains("x = 1"), "{rendered}");
+    }
+
+    /// Both prelude files are compiled in, so a shipped binary needs no `dm/` beside it.
+    #[test]
+    fn the_default_prelude_is_stddef_then_demir_and_needs_no_files() {
+        let names: Vec<_> = prelude_files()
+            .iter()
+            .map(|file| match file {
+                PreludeFile::Embedded(name, _) => *name,
+                PreludeFile::Disk(_) => "disk",
+            })
+            .collect();
+
+        assert_eq!(names, vec!["<stddef.dm>", "<demir.dm>"]);
+        assert!(STDDEF_SOURCE.contains("#define NORTH 1"));
+        assert!(DEMIR_SOURCE.contains("#define DM_VERSION"));
+    }
+
+    /// The builtins reach the tree without a single file read.
+    #[test]
+    fn the_embedded_prelude_defines_the_builtins() {
+        let arena = StrArena::new();
+        let mut preprocessor = Preprocessor::new(&arena);
+        preprocessor.prelude = vec![
+            PreludeFile::Embedded("<stddef.dm>", STDDEF_SOURCE),
+            PreludeFile::Embedded("<demir.dm>", DEMIR_SOURCE),
+        ];
+
+        for file in std::mem::take(&mut preprocessor.prelude) {
+            let PreludeFile::Embedded(name, contents) = file else {
+                continue;
+            };
+
+            preprocessor.open_embedded(name, contents);
+            preprocessor.drain();
+            preprocessor.end_stream();
+        }
+
+        assert!(preprocessor.errors.is_empty(), "{:?}", preprocessor.errors);
+        assert!(preprocessor.defines.is_defined("NORTH"));
+        assert!(preprocessor.defines.is_defined("DM_VERSION"));
     }
 }

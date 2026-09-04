@@ -69,6 +69,11 @@ fn main() -> ExitCode {
     }
 
     println!("{} sprites on z {}", session.sprite_count(), session.z());
+    println!(
+        "{} cells packed, {:.1} MiB",
+        session.texture_count(),
+        session.texture_bytes() as f64 / (1024.0 * 1024.0)
+    );
 
     let event_loop = match EventLoop::new() {
         Ok(event_loop) => event_loop,

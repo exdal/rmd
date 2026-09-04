@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use dmi::IconFile;
 
@@ -63,6 +63,28 @@ impl TextureCatalog {
     }
 
     pub fn insert(&mut self, icon: &str, file: &IconFile) -> Result<(), TextureError> {
+        self.insert_cells(icon, file, None)
+    }
+
+    pub fn insert_states(&mut self, icon: &str, file: &IconFile, states: &BTreeSet<&str>) -> Result<(), TextureError> {
+        let mut keep = BTreeSet::new();
+
+        for name in states {
+            let Some(state) = file.metadata.find(name) else {
+                continue;
+            };
+
+            for cell in state.offset..state.offset.saturating_add(state.sprite_count()) {
+                keep.insert(cell);
+            }
+        }
+
+        self.insert_cells(icon, file, Some(&keep))
+    }
+
+    fn insert_cells(
+        &mut self, icon: &str, file: &IconFile, keep: Option<&BTreeSet<usize>>,
+    ) -> Result<(), TextureError> {
         let (width, height) = (file.metadata.width, file.metadata.height);
 
         if width == 0 || height == 0 {
@@ -81,6 +103,11 @@ impl TextureCatalog {
         let mut data = Vec::with_capacity(cells);
         let mut textures = Vec::with_capacity(cells);
         for cell in 0..cells {
+            if keep.is_some_and(|keep| !keep.contains(&cell)) {
+                textures.push(SpriteTexture::default());
+                continue;
+            }
+
             let (src_x, src_y, ..) = file.metadata.sprite_rect(cell, file.sheet_width);
             let in_bounds = src_x.checked_add(width).is_some_and(|right| right <= file.sheet_width)
                 && src_y
@@ -143,7 +170,7 @@ fn extract_cell(file: &IconFile, src_x: u32, src_y: u32, width: u32, height: u32
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{collections::BTreeSet, path::PathBuf};
 
     use dmi::{
         IconFile,
@@ -261,5 +288,94 @@ mod tests {
 
         assert_eq!(catalog.lookup("missing.dmi", 0), None);
         assert_eq!(catalog.lookup("test.dmi", 9), None);
+    }
+
+    /// A sheet of one cell per named state.
+    fn state_sheet(names: &[&str]) -> IconFile {
+        let mut file = sheet(2, 2, names.len() as u32);
+        file.metadata.states = names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| IconState {
+                name: String::from(*name),
+                dirs: 1,
+                frames: 1,
+                offset: index,
+                ..Default::default()
+            })
+            .collect();
+
+        file
+    }
+
+    #[test]
+    fn insert_states_packs_only_the_named_states() {
+        let mut catalog = TextureCatalog::new();
+        let file = state_sheet(&["a", "b", "c"]);
+        catalog
+            .insert_states("test.dmi", &file, &BTreeSet::from(["a", "c"]))
+            .expect("insert");
+
+        assert_eq!(catalog.len(), 2);
+        assert!(catalog.lookup("test.dmi", 0).is_some());
+        assert!(catalog.lookup("test.dmi", 1).is_none());
+        assert!(catalog.lookup("test.dmi", 2).is_some());
+    }
+
+    /// A skipped cell must not shift the cells after it, since `sprite_index` addresses by offset.
+    #[test]
+    fn a_skipped_cell_keeps_the_later_cells_addressable() {
+        let mut catalog = TextureCatalog::new();
+        let file = state_sheet(&["a", "b", "c"]);
+        catalog
+            .insert_states("test.dmi", &file, &BTreeSet::from(["c"]))
+            .expect("insert");
+
+        let third = catalog.lookup("test.dmi", 2).expect("third cell");
+        let data = catalog.textures().get(third.index as usize).expect("texture");
+
+        assert_eq!(data.pixels(), &[3, 0, 0, 255, 3, 0, 0, 255, 3, 0, 0, 255, 3, 0, 0, 255]);
+    }
+
+    #[test]
+    fn insert_states_covers_every_dir_and_frame_of_a_state() {
+        let mut catalog = TextureCatalog::new();
+        let mut file = sheet(2, 2, 6);
+        file.metadata.states = vec![
+            IconState {
+                name: String::from("a"),
+                dirs: 4,
+                frames: 1,
+                offset: 0,
+                ..Default::default()
+            },
+            IconState {
+                name: String::from("b"),
+                dirs: 1,
+                frames: 2,
+                offset: 4,
+                ..Default::default()
+            },
+        ];
+
+        catalog
+            .insert_states("test.dmi", &file, &BTreeSet::from(["a"]))
+            .expect("insert");
+
+        assert_eq!(catalog.len(), 4);
+        assert!((0..4).all(|cell| catalog.lookup("test.dmi", cell).is_some()));
+        assert!((4..6).all(|cell| catalog.lookup("test.dmi", cell).is_none()));
+    }
+
+    #[test]
+    fn a_state_the_sheet_does_not_have_packs_nothing() {
+        let mut catalog = TextureCatalog::new();
+        let file = state_sheet(&["a"]);
+        catalog
+            .insert_states("test.dmi", &file, &BTreeSet::from(["missing"]))
+            .expect("insert");
+
+        assert_eq!(catalog.len(), 0);
+        assert!(catalog.lookup("test.dmi", 0).is_none());
     }
 }

@@ -1,4 +1,4 @@
-use core::{arena::StrArena, location::FileId};
+use core::{arena::StrArena, location::FileId, source::SourceMap};
 use std::path::{Path, PathBuf};
 
 use dmi::error::IconError;
@@ -26,10 +26,19 @@ pub(crate) fn is_map(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("dmm"))
 }
 
+pub(crate) fn source_root<'a>(sources: &'a SourceMap<'_>, entry: Option<FileId>, path: &'a Path) -> &'a Path {
+    entry
+        .and_then(|entry| sources.path(entry))
+        .and_then(Path::parent)
+        .or_else(|| path.parent())
+        .unwrap_or_else(|| Path::new(""))
+}
+
 pub(crate) fn compile(entry: &Path) -> Result<(ObjectTree, Compiled), LoadError> {
     let arena = StrArena::new();
     let preprocessed = preprocessor::preprocess(&arena, entry)?;
-    let ast = ast::parse(&preprocessed.tokens)?;
+    let ast = ast::parse(&preprocessed.tokens)
+        .map_err(|error| LoadError::parse(error, &preprocessed.sources, preprocessed.entry, entry))?;
     let (tree, sema_errors) = sema::analyze(&ast);
 
     let root = preprocessed

@@ -99,10 +99,19 @@ fn dump_tree(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("=== PREPROCESS ===");
     let preprocessed = preprocessor::preprocess(&arena, path)?;
     println!(
-        "{} tokens, {} resources",
+        "{} tokens, {} resources, {} diagnostics",
         preprocessed.tokens.len(),
-        preprocessed.resources.len()
+        preprocessed.resources.len(),
+        preprocessed.errors.len()
     );
+
+    let source_root = source_root(&preprocessed.sources, preprocessed.entry, path);
+    for error in &preprocessed.errors {
+        eprintln!(
+            "{}",
+            error.display(relative_path(&preprocessed.sources, source_root, error.location.file))
+        );
+    }
 
     println!("=== PARSE ===");
     let ast = ast::parse(&preprocessed.tokens).map_err(|error| {
@@ -116,7 +125,6 @@ fn dump_tree(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("{} top level declarations", ast.declarations.len());
 
     println!("=== TREE ===");
-    let source_root = source_root(&preprocessed.sources, preprocessed.entry, path);
     let (tree, errors) = sema::analyze(&ast);
     print!("{}", render_tree(&tree, &preprocessed.sources, source_root));
 

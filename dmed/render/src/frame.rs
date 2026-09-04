@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use dmi::metadata::{Dir, Metadata};
 use dmm::{Coord, Map};
@@ -64,6 +64,29 @@ pub fn build(
     sprites.sort_by_key(|(key, _)| *key);
 
     sprites.into_iter().map(|(_, instance)| instance).collect()
+}
+
+pub fn icons_used(tree: &ObjectTree, map: &Map) -> BTreeMap<String, BTreeSet<String>> {
+    let mut used: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    for tile in map.dictionary.values() {
+        for prefab in tile {
+            let Some(id) = tree.id_of(&prefab.path) else {
+                continue;
+            };
+
+            let appearance = visual::resolve_id(tree, id, prefab);
+            let Some(icon) = appearance.icon else {
+                continue;
+            };
+
+            used.entry(icon)
+                .or_default()
+                .insert(appearance.icon_state.unwrap_or_default());
+        }
+    }
+
+    used
 }
 
 fn sprite_texture(
@@ -380,5 +403,48 @@ mod example_environment {
             .expect("an object sprite");
 
         assert!(sprites[first_object..].iter().all(|sprite| sprite.texture.index >= 2));
+    }
+
+    /// Packing only what [`icons_used`](crate::frame::icons_used) names must not cost a sprite.
+    #[test]
+    fn a_selective_pack_draws_the_same_frame_as_a_whole_one() {
+        use std::collections::BTreeSet;
+
+        use crate::frame::icons_used;
+
+        let root = examples();
+        let (environment, _) = Environment::load(root.join("test.dme")).expect("load");
+        let file = IconFile::load(root.join("icons/test.dmi")).expect("icon");
+
+        let source = std::fs::read_to_string(root.join("test.dmm")).expect("map");
+        let (map, errors) = dmm::parser::parse(&source);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let used = icons_used(&environment.tree, &map);
+        assert!(used.contains_key("icons/test.dmi"));
+
+        let mut whole = TextureCatalog::default();
+        whole.insert("icons/test.dmi", &file).expect("insert");
+
+        let mut selective = TextureCatalog::default();
+        for (icon, states) in &used {
+            let states: BTreeSet<&str> = states.iter().map(String::as_str).collect();
+            selective.insert_states(icon, &file, &states).expect("insert");
+        }
+
+        assert!(selective.len() <= whole.len());
+
+        let frame = |textures: &TextureCatalog| {
+            build(
+                &environment.tree,
+                &environment.icons,
+                textures,
+                &map,
+                1,
+                &FrameOptions::default(),
+            )
+        };
+
+        assert_eq!(frame(&selective), frame(&whole));
     }
 }

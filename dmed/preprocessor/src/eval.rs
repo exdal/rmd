@@ -32,6 +32,13 @@ pub fn evaluate(tokens: &[(Token<'_>, Location)], context: &Context<'_>) -> (Opt
     (value, parser.complaints)
 }
 
+/// BYOND:tm: holds 24 bits for the "integers" so `~0` is 16777215 and not -1_u32
+const BIT_WIDTH_MASK: i32 = 0xFF_FFFF;
+
+fn to_int(value: f32) -> i32 { value as i32 }
+
+fn from_int(value: i32) -> f32 { value as f32 }
+
 struct Parser<'a, 'ctx> {
     tokens: &'a [(Token<'a>, Location)],
     index: usize,
@@ -96,15 +103,60 @@ impl<'a> Parser<'a, '_> {
     }
 
     fn logical_and(&mut self) -> Option<f32> {
-        let mut left = self.equality()?;
+        let mut left = self.bit_or()?;
         while self.check(Token::LogicalAnd) {
-            let Some(right) = self.equality() else {
+            let Some(right) = self.bit_or() else {
                 let location = self.location();
                 self.complain(location, "expected a second value");
                 break;
             };
 
             left = f32::from(u8::from(left != 0.0 && right != 0.0));
+        }
+
+        Some(left)
+    }
+
+    fn bit_or(&mut self) -> Option<f32> {
+        let mut left = self.bit_xor()?;
+        while self.check(Token::BitOr) {
+            let Some(right) = self.bit_xor() else {
+                let location = self.location();
+                self.complain(location, "expected a second value");
+                break;
+            };
+
+            left = from_int(to_int(left) | to_int(right));
+        }
+
+        Some(left)
+    }
+
+    fn bit_xor(&mut self) -> Option<f32> {
+        let mut left = self.bit_and()?;
+        while self.check(Token::BitXor) {
+            let Some(right) = self.bit_and() else {
+                let location = self.location();
+                self.complain(location, "expected a second value");
+                break;
+            };
+
+            left = from_int(to_int(left) ^ to_int(right));
+        }
+
+        Some(left)
+    }
+
+    fn bit_and(&mut self) -> Option<f32> {
+        let mut left = self.equality()?;
+        while self.check(Token::BitAnd) {
+            let Some(right) = self.equality() else {
+                let location = self.location();
+                self.complain(location, "expected a second value");
+                break;
+            };
+
+            left = from_int(to_int(left) & to_int(right));
         }
 
         Some(left)
@@ -131,14 +183,14 @@ impl<'a> Parser<'a, '_> {
     }
 
     fn relational(&mut self) -> Option<f32> {
-        let mut left = self.additive()?;
+        let mut left = self.shift()?;
         while let Some(operator) = self.check_any(&[
             Token::AngleLeft,
             Token::LessEqual,
             Token::AngleRight,
             Token::GreaterEqual,
         ]) {
-            let Some(right) = self.additive() else {
+            let Some(right) = self.shift() else {
                 let location = self.location();
                 self.complain(location, "expected a second value");
                 break;
@@ -150,6 +202,32 @@ impl<'a> Parser<'a, '_> {
                 Token::AngleRight => left > right,
                 _ => left >= right,
             }));
+        }
+
+        Some(left)
+    }
+
+    fn shift(&mut self) -> Option<f32> {
+        let mut left = self.additive()?;
+        while let Some(operator) = self.check_any(&[Token::ShiftLeft, Token::ShiftRight]) {
+            let Some(right) = self.additive() else {
+                let location = self.location();
+                self.complain(location, "expected a second value");
+                break;
+            };
+
+            let Ok(count) = u32::try_from(to_int(right)) else {
+                left = 0.0;
+                continue;
+            };
+
+            let shifted = if operator == Token::ShiftLeft {
+                to_int(left).checked_shl(count)
+            } else {
+                to_int(left).checked_shr(count)
+            };
+
+            left = from_int(shifted.unwrap_or(0));
         }
 
         Some(left)
@@ -213,6 +291,12 @@ impl<'a> Parser<'a, '_> {
             let value = self.unary()?;
 
             return Some(f32::from(u8::from(value == 0.0)));
+        }
+
+        if self.check(Token::BitNot) {
+            let value = self.unary()?;
+
+            return Some(from_int(!to_int(value) & BIT_WIDTH_MASK));
         }
 
         self.sign()
@@ -286,6 +370,11 @@ impl<'a> Parser<'a, '_> {
                     },
                 }
             },
+            token if token.is_identifier() => {
+                self.advance();
+
+                Some(0.0)
+            },
             token if token.is_literal() => {
                 self.advance();
                 self.complain(location, "strings are not valid in preprocessor expressions");
@@ -316,5 +405,118 @@ impl<'a> Parser<'a, '_> {
         }
 
         Some(argument)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lexer::{token::Token, tokenize};
+
+    use crate::eval::{Complaint, Context, evaluate};
+
+    fn run(source: &str, defined: &[&str]) -> (Option<f32>, Vec<Complaint>) {
+        let (tokens, errors) = tokenize(source);
+        assert!(errors.is_empty(), "lexer errors in {source:?}");
+
+        let tokens: Vec<_> = tokens
+            .into_iter()
+            .filter(|(token, _)| !token.is_layout() && *token != Token::Eof)
+            .collect();
+
+        let is_defined = |name: &str| defined.contains(&name);
+        let file_exists = |_: &str| false;
+
+        evaluate(
+            &tokens,
+            &Context {
+                is_defined: &is_defined,
+                file_exists: &file_exists,
+            },
+        )
+    }
+
+    #[track_caller]
+    fn value(source: &str) -> f32 {
+        let (value, complaints) = run(source, &[]);
+        let messages: Vec<_> = complaints.iter().map(|c| c.message.as_str()).collect();
+        assert!(messages.is_empty(), "{source:?} complained: {messages:?}");
+
+        value.unwrap_or_else(|| panic!("{source:?} did not evaluate"))
+    }
+
+    #[test]
+    fn bitwise_operators() {
+        assert_eq!(value("6 & 2"), 2.0);
+        assert_eq!(value("4 | 1"), 5.0);
+        assert_eq!(value("6 ^ 3"), 5.0);
+        assert_eq!(value("~0"), 16777215.0);
+        assert_eq!(value("~1"), 16777214.0);
+        assert_eq!(value("1 << 3"), 8.0);
+        assert_eq!(value("64 >> 2"), 16.0);
+    }
+
+    #[test]
+    fn bitwise_truncates_to_an_integer() {
+        assert_eq!(value("6.9 & 3"), 2.0);
+        assert_eq!(value("1 << 2.9"), 4.0);
+    }
+
+    #[test]
+    fn bitwise_precedence() {
+        // `&` binds tighter than `^`, which binds tighter than `|`.
+        assert_eq!(value("1 | 2 ^ 3 & 3"), 1.0);
+        assert_eq!(value("(1 | 2) ^ 3 & 3"), 0.0);
+
+        // `&&` binds looser than any of them.
+        assert_eq!(value("0 && 1 | 2"), 0.0);
+        assert_eq!(value("1 && 4 & 4"), 1.0);
+
+        // `&` binds looser than `==`, the way C has it.
+        assert_eq!(value("2 & 2 == 2"), 0.0);
+        assert_eq!(value("(2 & 2) == 2"), 1.0);
+
+        // Shifts bind tighter than the comparisons and looser than `+`.
+        assert_eq!(value("1 << 2 > 3"), 1.0);
+        assert_eq!(value("1 << 1 + 1"), 4.0);
+    }
+
+    #[test]
+    fn shift_count_out_of_range_is_zero() {
+        assert_eq!(value("1 << 64"), 0.0);
+        assert_eq!(value("1 << -1"), 0.0);
+        assert_eq!(value("1 >> 64"), 0.0);
+        assert_eq!(value("1 >> -1"), 0.0);
+    }
+
+    #[test]
+    fn undefined_identifier_is_zero() {
+        assert_eq!(value("UNDEFINED_THING"), 0.0);
+        assert_eq!(value("UNDEFINED_THING & 2"), 0.0);
+        assert_eq!(value("!UNDEFINED_THING"), 1.0);
+    }
+
+    #[test]
+    fn defined_still_reads_the_context() {
+        let (value, complaints) = run("defined(HAS_IT) && !defined(LACKS_IT)", &["HAS_IT"]);
+        assert!(complaints.is_empty());
+        assert_eq!(value, Some(1.0));
+    }
+
+    #[test]
+    fn a_string_is_still_a_complaint() {
+        let (_, complaints) = run("\"nope\"", &[]);
+        assert_eq!(complaints.len(), 1);
+    }
+
+    /// `#if FLAGS & 2` with `FLAGS` at 6 used to fail with "trailing tokens" and take the branch.
+    #[test]
+    fn flag_test_no_longer_leaves_trailing_tokens() {
+        let (value, complaints) = run("6 & 2", &[]);
+        assert!(complaints.is_empty());
+        assert_eq!(value, Some(2.0));
+
+        let (value, complaints) = run("6 & 8", &[]);
+        assert!(complaints.is_empty());
+        assert_eq!(value, Some(0.0));
     }
 }

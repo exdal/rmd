@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
 };
 
@@ -37,7 +37,6 @@ impl Session {
         report(&environment, &diagnostics);
 
         self.icons = environment.icons.clone();
-        self.textures = build_textures(&environment);
         self.environment = Some(environment);
 
         Ok(())
@@ -52,6 +51,11 @@ impl Session {
         }
 
         validate_level(z, map.size.z)?;
+
+        if let Some(environment) = self.environment.as_ref() {
+            self.textures = build_textures(environment, &render::frame::icons_used(&environment.tree, &map));
+        }
+
         self.document = Some(MapDocument::open(path, map, z));
         self.rebuild();
 
@@ -122,6 +126,10 @@ impl Session {
 
     pub fn sprite_count(&self) -> usize { self.sprites.len() }
 
+    pub fn texture_count(&self) -> usize { self.textures.len() }
+
+    pub fn texture_bytes(&self) -> usize { self.textures.textures().iter().map(|t| t.pixels().len()).sum() }
+
     pub fn extent_px(&self) -> (f32, f32) {
         let tile = self.options.tile_size.max(1) as f32;
 
@@ -144,11 +152,12 @@ fn validate_level(z: u32, levels: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-fn build_textures(environment: &Environment) -> TextureCatalog {
+/// we only decode used icons to save on VRAM (shit gets expensive real fast)
+fn build_textures(environment: &Environment, used: &BTreeMap<String, BTreeSet<String>>) -> TextureCatalog {
     let mut textures = TextureCatalog::default();
     let base = environment.base_dir();
 
-    for name in environment.icons.keys() {
+    for (name, states) in used {
         let mut candidates = std::iter::once(base.join(name))
             .chain(environment.resource_dirs.iter().map(|dir| base.join(dir).join(name)));
 
@@ -157,9 +166,11 @@ fn build_textures(environment: &Environment) -> TextureCatalog {
             continue;
         };
 
+        let states: BTreeSet<&str> = states.iter().map(String::as_str).collect();
+
         match IconFile::load(&path) {
             Ok(file) => {
-                if let Err(e) = textures.insert(name, &file) {
+                if let Err(e) = textures.insert_states(name, &file, &states) {
                     eprintln!("warning: {e}");
                 }
             },
