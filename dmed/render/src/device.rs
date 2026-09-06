@@ -336,7 +336,7 @@ fn build_swapchain(
     let present_mode = present_modes
         .iter()
         .copied()
-        .find(|mode| *mode == vk::PresentModeKHR::FIFO)
+        .find(|mode| *mode == vk::PresentModeKHR::MAILBOX)
         .unwrap_or(vk::PresentModeKHR::FIFO);
 
     let create_info = vk::SwapchainCreateInfoKHR::default()

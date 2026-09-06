@@ -183,6 +183,7 @@ impl App {
         };
 
         let frame = self.session.frame(self.camera.camera);
+        window.pre_present_notify();
         if let Err(e) = renderer.draw(&frame) {
             eprintln!("error: {e}");
         }

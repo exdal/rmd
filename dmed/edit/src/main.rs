@@ -225,6 +225,7 @@ impl App {
         platform.prepare_render(frame.ui(), window)?;
         let scene = session.frame(camera.camera);
         let pending = frame.try_render(consumer)?;
+        window.pre_present_notify();
         renderer.draw_imgui(&scene, output.viewport, pending)?;
 
         Ok(output.exit)
