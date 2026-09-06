@@ -9,12 +9,12 @@ use vir::{Context, DomainFlag, Image, ImageAttachment, PersistentAllocator, Swap
 use crate::error::GpuError;
 
 pub struct Device {
-    _entry: ash::Entry,
+    pub allocator: PersistentAllocator,
     pub context: Context,
     pub surface: vk::SurfaceKHR,
     pub physical_device: vk::PhysicalDevice,
-    pub allocator: PersistentAllocator,
     pub max_bindless_textures: u32,
+    _entry: ash::Entry,
 }
 
 impl Device {
@@ -157,7 +157,7 @@ fn select_physical_device(
                 .min(limits.max_descriptor_set_sampled_images)
                 .min(limits.max_per_stage_descriptor_samplers)
                 .min(limits.max_descriptor_set_samplers)
-                .min(limits.max_per_stage_resources);
+                .min(limits.max_per_stage_resources.saturating_sub(1));
             if max_bindless_textures == 0 {
                 return None;
             }

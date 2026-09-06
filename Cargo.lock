@@ -441,7 +441,6 @@ dependencies = [
  "dmi",
  "dmm",
  "editor",
- "gpu",
  "objtree",
  "raw-window-handle",
  "render",
@@ -597,18 +596,6 @@ name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
-
-[[package]]
-name = "gpu"
-version = "1.0.0"
-dependencies = [
- "ash",
- "dear-imgui-rs",
- "raw-window-handle",
- "render",
- "shader-slang",
- "vir",
-]
 
 [[package]]
 name = "gpu-allocator"
@@ -1366,11 +1353,16 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "render"
 version = "1.0.0"
 dependencies = [
+ "ash",
  "core",
+ "dear-imgui-rs",
  "dmi",
  "dmm",
  "editor",
  "objtree",
+ "raw-window-handle",
+ "shader-slang",
+ "vir",
 ]
 
 [[package]]
@@ -1796,7 +1788,6 @@ dependencies = [
  "dmi",
  "dmm",
  "editor",
- "gpu",
  "raw-window-handle",
  "render",
  "winit",

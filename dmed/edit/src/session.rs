@@ -14,6 +14,7 @@ pub struct Session {
     pub textures: TextureCatalog,
     pub options: FrameOptions,
     sprites: Vec<SpriteInstance>,
+    underlays: Vec<Vec<SpriteInstance>>,
     revision: u64,
     texture_revision: u64,
 }
@@ -25,6 +26,7 @@ impl Session {
             textures: TextureCatalog::default(),
             options: FrameOptions::default(),
             sprites: Vec::new(),
+            underlays: Vec::new(),
             revision: 0,
             texture_revision: 0,
         }
@@ -119,10 +121,20 @@ impl Session {
         self.rebuild();
     }
 
+    pub fn set_underlay_depth(&mut self, depth: u32) {
+        if depth == self.options.underlay_depth {
+            return;
+        }
+
+        self.options.underlay_depth = depth;
+        self.rebuild();
+    }
+
     pub fn rebuild(&mut self) {
         let (Some(environment), Some(document)) = (self.state.environment.as_ref(), self.state.active_document())
         else {
             self.sprites.clear();
+            self.underlays.clear();
             self.revision = self.revision.wrapping_add(1);
 
             return;
@@ -136,12 +148,21 @@ impl Session {
             document.z,
             &self.options,
         );
+        self.underlays = render::frame::build_underlays(
+            &environment.tree,
+            &environment.icons,
+            &self.textures,
+            &document.map,
+            document.z,
+            &self.options,
+        );
         self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn frame(&self, camera: render::Camera) -> Frame {
         Frame {
             sprites: self.sprites.clone(),
+            underlays: self.underlays.clone(),
             camera,
             revision: self.revision,
         }

@@ -13,7 +13,6 @@ dmm = { path = "../dmm" }
 dmi = { path = "../dmi" }
 editor = { path = "../editor" }
 render = { path = "../render" }
-gpu = { path = "../gpu" }
 objtree = { path = "../objtree" }
 winit = "0.30.12"
 raw-window-handle = "0.6.0"

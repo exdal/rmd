@@ -1,31 +1,14 @@
 pub mod color;
+pub mod device;
+pub mod error;
 pub mod frame;
+pub mod imgui;
+pub mod renderer;
 pub mod texture;
 
 use editor::visual::Appearance;
 
-use crate::texture::{TextureCatalog, TextureError};
-
-#[derive(Debug)]
-pub enum RenderError {
-    Texture(TextureError),
-    Backend(String),
-}
-
-impl std::fmt::Display for RenderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Texture(e) => write!(f, "{e}"),
-            Self::Backend(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl std::error::Error for RenderError {}
-
-impl From<TextureError> for RenderError {
-    fn from(e: TextureError) -> Self { Self::Texture(e) }
-}
+pub use crate::{device::Device, error::GpuError, renderer::Renderer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SpriteTexture {
@@ -68,19 +51,12 @@ impl Default for Camera {
 
 #[derive(Debug, Default)]
 pub struct Frame {
+    /// The active level, drawn sharp and over everything else.
     pub sprites: Vec<SpriteInstance>,
+    /// The levels below the active one, deepest first.
+    pub underlays: Vec<Vec<SpriteInstance>>,
     pub camera: Camera,
     pub revision: u64,
-}
-
-pub trait Renderer {
-    fn resize(&mut self, width: u32, height: u32);
-
-    /// Replaces whatever the backend held. Called when the environment loads or reloads, not per
-    /// frame.
-    fn upload_textures(&mut self, textures: &TextureCatalog) -> Result<(), RenderError>;
-
-    fn draw(&mut self, frame: &Frame) -> Result<(), RenderError>;
 }
 
 /// Turn a resolved [`Appearance`] into an instance. Needs a texture lookup to know the sprite's
@@ -106,34 +82,11 @@ pub fn instance_for(
     }
 }
 
-/// A no-op backend so the editor can be driven headlessly in tests.
-#[derive(Debug, Default)]
-pub struct NullRenderer {
-    pub texture_count: usize,
-    pub last_sprite_count: usize,
-}
-
-impl Renderer for NullRenderer {
-    fn resize(&mut self, _width: u32, _height: u32) {}
-
-    fn upload_textures(&mut self, textures: &TextureCatalog) -> Result<(), RenderError> {
-        self.texture_count = textures.len();
-
-        Ok(())
-    }
-
-    fn draw(&mut self, frame: &Frame) -> Result<(), RenderError> {
-        self.last_sprite_count = frame.sprites.len();
-
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use editor::visual::Appearance;
 
-    use crate::{Frame, NullRenderer, Renderer, SpriteInstance, SpriteTexture, instance_for, texture::TextureCatalog};
+    use crate::{SpriteTexture, instance_for};
 
     fn appearance(color: Option<&str>, alpha: u8) -> Appearance {
         Appearance {
@@ -199,23 +152,18 @@ mod tests {
         let shifted = instance_for(&centred, texture, 1, 1, 32);
         assert_eq!((shifted.x, shifted.y), (-16.0, 0.0));
     }
+}
 
-    #[test]
-    fn the_null_backend_accepts_textures_and_a_frame() {
-        let mut renderer = NullRenderer::default();
-        let frame = Frame {
-            sprites: vec![SpriteInstance {
-                texture: SpriteTexture::default(),
-                x: 0.0,
-                y: 0.0,
-                color: [1.0; 4],
-                depth: 0.0,
-            }],
-            ..Default::default()
-        };
-
-        assert!(renderer.upload_textures(&TextureCatalog::default()).is_ok());
-        assert!(renderer.draw(&frame).is_ok());
-        assert_eq!(renderer.last_sprite_count, 1);
+pub(crate) fn extent3d(extent: ash::vk::Extent2D) -> ash::vk::Extent3D {
+    ash::vk::Extent3D {
+        width: extent.width,
+        height: extent.height,
+        depth: 1,
     }
+}
+
+pub(crate) fn read_spirv(bytes: &[u8]) -> Result<Vec<u32>, GpuError> {
+    let mut cursor = std::io::Cursor::new(bytes);
+
+    ash::util::read_spv(&mut cursor).map_err(|e| GpuError::Loader(e.to_string()))
 }

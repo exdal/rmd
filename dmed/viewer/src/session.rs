@@ -15,6 +15,7 @@ pub struct Session {
     pub icons: HashMap<String, Metadata>,
     pub options: FrameOptions,
     sprites: Vec<SpriteInstance>,
+    underlays: Vec<Vec<SpriteInstance>>,
     revision: u64,
 }
 
@@ -27,6 +28,7 @@ impl Session {
             icons: HashMap::new(),
             options: FrameOptions::default(),
             sprites: Vec::new(),
+            underlays: Vec::new(),
             revision: 0,
         }
     }
@@ -100,6 +102,7 @@ impl Session {
     pub fn rebuild(&mut self) {
         let (Some(environment), Some(document)) = (self.environment.as_ref(), self.document.as_ref()) else {
             self.sprites.clear();
+            self.underlays.clear();
             self.revision = self.revision.wrapping_add(1);
 
             return;
@@ -113,12 +116,21 @@ impl Session {
             document.z,
             &self.options,
         );
+        self.underlays = render::frame::build_underlays(
+            &environment.tree,
+            &self.icons,
+            &self.textures,
+            &document.map,
+            document.z,
+            &self.options,
+        );
         self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn frame(&self, camera: render::Camera) -> Frame {
         Frame {
             sprites: self.sprites.clone(),
+            underlays: self.underlays.clone(),
             camera,
             revision: self.revision,
         }

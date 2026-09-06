@@ -11,9 +11,8 @@ mod session;
 
 use std::{path::PathBuf, process::ExitCode};
 
-use gpu::{Device, VirRenderer};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use render::Renderer;
+use render::{Device, Renderer};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -144,7 +143,7 @@ struct App {
     session: Session,
     camera: Controller,
     window: Option<Window>,
-    renderer: Option<VirRenderer>,
+    renderer: Option<Renderer>,
     title: Option<String>,
 }
 
@@ -160,7 +159,7 @@ impl App {
 
         let device = Device::new(window.window_handle()?.as_raw(), window.display_handle()?.as_raw())?;
 
-        let mut renderer = VirRenderer::new(device, size.width, size.height)?;
+        let mut renderer = Renderer::new(device, size.width, size.height)?;
         renderer.upload_textures(&self.session.textures)?;
 
         self.camera.resize(size.width, size.height);

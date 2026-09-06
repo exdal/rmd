@@ -12,6 +12,8 @@ pub struct FrameOptions {
     pub show_areas: bool,
     /// `world.icon_size`
     pub tile_size: u32,
+    /// How many levels below the active one to draw behind it, 0 for none.
+    pub underlay_depth: u32,
 }
 
 impl Default for FrameOptions {
@@ -19,6 +21,7 @@ impl Default for FrameOptions {
         Self {
             show_areas: false,
             tile_size: 32,
+            underlay_depth: 3,
         }
     }
 }
@@ -64,6 +67,23 @@ pub fn build(
     sprites.sort_by_key(|(key, _)| *key);
 
     sprites.into_iter().map(|(_, instance)| instance).collect()
+}
+
+pub fn build_underlays(
+    tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, map: &Map, z: u32,
+    options: &FrameOptions,
+) -> Vec<Vec<SpriteInstance>> {
+    let mut levels = Vec::new();
+
+    for depth in (1..=options.underlay_depth).rev() {
+        let Some(level) = z.checked_sub(depth).filter(|level| *level >= 1) else {
+            continue;
+        };
+
+        levels.push(build(tree, icons, textures, map, level, options));
+    }
+
+    levels
 }
 
 pub fn icons_used(tree: &ObjectTree, map: &Map) -> BTreeMap<String, BTreeSet<String>> {
@@ -118,7 +138,7 @@ mod tests {
     use objtree::{ObjectTree, VarDecl};
 
     use crate::{
-        frame::{FrameOptions, build},
+        frame::{FrameOptions, build, build_underlays},
         texture::TextureCatalog,
     };
 
@@ -198,6 +218,29 @@ mod tests {
             .and_then(|r| r.get_mut(0))
         {
             *slot = key;
+        }
+
+        map
+    }
+
+    /// One tile per z level, each holding the type named for it.
+    fn layered_map(levels: &[&str]) -> Map {
+        let mut map = Map::new(Size {
+            x: 1,
+            y: 1,
+            z: levels.len() as u32,
+        });
+
+        for (index, path) in levels.iter().enumerate() {
+            let key = map.intern_tile(vec![Prefab::new(TreePath::parse(path))]);
+            if let Some(slot) = map
+                .grid
+                .get_mut(index)
+                .and_then(|z| z.get_mut(0))
+                .and_then(|r| r.get_mut(0))
+            {
+                *slot = key;
+            }
         }
 
         map
@@ -287,6 +330,77 @@ mod tests {
         );
 
         assert!(sprites.is_empty());
+    }
+
+    /// `/turf/one` on z 1, `/turf/two` on z 2, `/turf/three` on z 3, one cell each.
+    fn layered() -> (ObjectTree, HashMap<String, Metadata>, TextureCatalog, Map) {
+        let states = ["one", "two", "three"];
+        let tree = tree(&[
+            ("/turf/one", "one", 2.0),
+            ("/turf/two", "two", 2.0),
+            ("/turf/three", "three", 2.0),
+        ]);
+
+        (
+            tree,
+            icons(&states),
+            textures(&states),
+            layered_map(&["/turf/one", "/turf/two", "/turf/three"]),
+        )
+    }
+
+    #[test]
+    fn no_depth_draws_no_underlays() {
+        let (tree, icons, textures, map) = layered();
+        let options = FrameOptions {
+            underlay_depth: 0,
+            ..Default::default()
+        };
+
+        assert!(build_underlays(&tree, &icons, &textures, &map, 3, &options).is_empty());
+    }
+
+    #[test]
+    fn underlays_come_back_deepest_first() {
+        let (tree, icons, textures, map) = layered();
+        let options = FrameOptions {
+            underlay_depth: 2,
+            ..Default::default()
+        };
+        let underlays = build_underlays(&tree, &icons, &textures, &map, 3, &options);
+
+        assert_eq!(underlays.len(), 2);
+        // Cell 0 is "one", from z 1, which is two levels down and so has to come first.
+        assert_eq!(underlays[0][0].texture.index, 0);
+        assert_eq!(underlays[1][0].texture.index, 1);
+    }
+
+    /// Asking for more levels than the map has must clamp rather than wrap `z - depth`.
+    #[test]
+    fn a_depth_past_the_bottom_of_the_map_yields_what_is_there() {
+        let (tree, icons, textures, map) = layered();
+        let options = FrameOptions {
+            underlay_depth: 9,
+            ..Default::default()
+        };
+
+        assert_eq!(build_underlays(&tree, &icons, &textures, &map, 2, &options).len(), 1);
+        assert!(build_underlays(&tree, &icons, &textures, &map, 1, &options).is_empty());
+    }
+
+    /// How deep a level sits is the backend's business, so a level built as an underlay is the
+    /// level as it would be drawn active, colors and all.
+    #[test]
+    fn an_underlay_is_the_level_as_it_is() {
+        let (tree, icons, textures, map) = layered();
+        let options = FrameOptions {
+            underlay_depth: 2,
+            ..Default::default()
+        };
+        let underlays = build_underlays(&tree, &icons, &textures, &map, 3, &options);
+
+        assert_eq!(underlays[0], build(&tree, &icons, &textures, &map, 1, &options));
+        assert_eq!(underlays[1], build(&tree, &icons, &textures, &map, 2, &options));
     }
 
     #[test]

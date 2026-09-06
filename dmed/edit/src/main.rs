@@ -12,8 +12,8 @@ use std::{path::PathBuf, process::ExitCode, sync::Arc};
 
 use dear_imgui_rs::{BackendFlags, ConfigFlags, Context, render::SynchronousRendererConsumer};
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
-use gpu::{Device, EditorRenderer};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use render::{Device, Renderer};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -148,7 +148,7 @@ struct App {
     uploaded_texture_revision: Option<u64>,
     title: Option<String>,
     consumer: Option<SynchronousRendererConsumer>,
-    renderer: Option<EditorRenderer>,
+    renderer: Option<Renderer>,
     platform: Option<WinitPlatform>,
     imgui: Option<Context>,
     window: Option<Arc<Window>>,
@@ -178,7 +178,7 @@ impl App {
         imgui.io_mut().set_backend_flags(backend);
         let consumer = imgui.create_synchronous_renderer_consumer()?;
 
-        let mut renderer = EditorRenderer::new(device, size.width, size.height)?;
+        let mut renderer = Renderer::new(device, size.width, size.height)?;
         renderer.upload_textures(&self.session.textures)?;
 
         self.uploaded_texture_revision = Some(self.session.texture_revision());
@@ -225,7 +225,7 @@ impl App {
         platform.prepare_render(frame.ui(), window)?;
         let scene = session.frame(camera.camera);
         let pending = frame.try_render(consumer)?;
-        renderer.draw(&scene, output.viewport, pending)?;
+        renderer.draw_imgui(&scene, output.viewport, pending)?;
 
         Ok(output.exit)
     }

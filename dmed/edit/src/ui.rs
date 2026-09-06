@@ -10,10 +10,13 @@ use dear_imgui_rs::{
     WindowKey,
     WindowKeyError,
 };
-use gpu::EditorRenderer;
 use objtree::{ObjectTree, TypeId};
+use render::Renderer;
 
 use crate::{camera::Controller, session::Session};
+
+/// How far down the "Blur below" menu goes. The option itself takes any depth.
+const MAX_UNDERLAY_DEPTH: u32 = 3;
 
 pub struct UiOutput {
     pub exit: bool,
@@ -62,6 +65,7 @@ impl UiState {
         let mut exit = false;
         let mut toggle_areas = false;
         let mut level_delta = 0;
+        let mut underlay_depth = None;
         let mut refit = false;
 
         ui.main_menu_bar(|| {
@@ -80,6 +84,23 @@ impl UiState {
                 if ui.menu_item_with_shortcut("Z down", "Page Down") {
                     level_delta -= 1;
                 }
+                ui.menu("Blur below", || {
+                    for depth in 0..=MAX_UNDERLAY_DEPTH {
+                        let label = match depth {
+                            0 => String::from("Off"),
+                            depth => format!("{depth} level(s)"),
+                        };
+
+                        if ui.menu_item_enabled_selected(
+                            label,
+                            None::<&str>,
+                            session.options.underlay_depth == depth,
+                            true,
+                        ) {
+                            underlay_depth = Some(depth);
+                        }
+                    }
+                });
                 if ui.menu_item_with_shortcut("Refit", "Home") {
                     refit = true;
                 }
@@ -91,6 +112,9 @@ impl UiState {
         }
         if level_delta != 0 {
             session.change_level(level_delta);
+        }
+        if let Some(depth) = underlay_depth {
+            session.set_underlay_depth(depth);
         }
 
         self.draw_object_tree(ui, session);
@@ -136,7 +160,7 @@ impl UiState {
             let (image_size, viewport) = panel_extent(ui.content_region_avail());
             self.viewport = viewport;
             camera.resize(viewport.0, viewport.1);
-            ui.image(EditorRenderer::VIEWPORT_TEXTURE, image_size);
+            ui.image(Renderer::VIEWPORT_TEXTURE, image_size);
 
             let hovered = ui.is_item_hovered();
             if hovered {

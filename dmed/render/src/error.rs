@@ -7,11 +7,9 @@ pub enum GpuError {
     NoSuitableDevice,
     NoGraphicsQueue,
     UnsupportedWindow,
-    TooManyTextures {
-        requested: u32,
-        limit: u32,
-    },
+    TooManyTextures { requested: u32, limit: u32 },
     TextureUploadTooLarge,
+    SpriteUploadTooLarge,
     TextureIdExhausted,
     OutOfDate,
     RawDrawCallback,
@@ -38,6 +36,7 @@ impl std::fmt::Display for GpuError {
                     "the scene needs {requested} bindless textures, but the device supports {limit}"
                 )
             },
+            Self::SpriteUploadTooLarge => write!(f, "sprite data is too large to upload"),
             Self::TextureUploadTooLarge => write!(f, "sprite texture data is too large to upload"),
             Self::TextureIdExhausted => write!(f, "the interface exhausted the renderer texture id space"),
             Self::OutOfDate => write!(f, "the swapchain is out of date"),
@@ -62,8 +61,4 @@ impl From<vk::Result> for GpuError {
             other => Self::Vulkan(other),
         }
     }
-}
-
-impl From<GpuError> for render::RenderError {
-    fn from(e: GpuError) -> Self { Self::Backend(e.to_string()) }
 }

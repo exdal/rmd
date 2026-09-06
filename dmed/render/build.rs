@@ -3,10 +3,14 @@ use std::{env, error::Error, ffi::CString, fs, path::PathBuf};
 use shader_slang as slang;
 use slang::Downcast;
 
-const MODULES: [(&str, &[(&str, &str)]); 2] = [
+const MODULES: [(&str, &[(&str, &str)]); 3] = [
     (
         "sprite.slang",
         &[("vs_main", "sprite.vert.spv"), ("fs_main", "sprite.frag.spv")],
+    ),
+    (
+        "blur.slang",
+        &[("vs_main", "blur.vert.spv"), ("fs_main", "blur.frag.spv")],
     ),
     (
         "imgui.slang",
@@ -14,8 +18,13 @@ const MODULES: [(&str, &[(&str, &str)]); 2] = [
     ),
 ];
 
+const COMMON_MODULES: [&str; 3] = ["common.slang", "common/types.slang", "common/color.slang"];
+
 fn main() -> Result<(), Box<dyn Error>> {
     for (module, _) in MODULES {
+        println!("cargo:rerun-if-changed=shaders/{module}");
+    }
+    for module in COMMON_MODULES {
         println!("cargo:rerun-if-changed=shaders/{module}");
     }
     println!("cargo:rerun-if-changed=build.rs");
