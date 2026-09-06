@@ -6,7 +6,11 @@ use slang::Downcast;
 const MODULES: [(&str, &[(&str, &str)]); 3] = [
     (
         "sprite.slang",
-        &[("vs_main", "sprite.vert.spv"), ("fs_main", "sprite.frag.spv")],
+        &[
+            ("vs_main", "sprite.vert.spv"),
+            ("fs_main", "sprite.frag.spv"),
+            ("fs_visibility", "sprite_visibility.frag.spv"),
+        ],
     ),
     (
         "blur.slang",

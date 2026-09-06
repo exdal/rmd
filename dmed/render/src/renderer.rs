@@ -41,10 +41,11 @@ use crate::{
     texture::TextureCatalog,
 };
 
-const VERTEX_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.vert.spv"));
-const FRAGMENT_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.frag.spv"));
-const BLUR_VERTEX_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blur.vert.spv"));
-const BLUR_FRAGMENT_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blur.frag.spv"));
+const GEOMETRY_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.vert.spv"));
+const SPRITE_SHADE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.frag.spv"));
+const SPRITE_VIS_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_visibility.frag.spv"));
+const BLUR_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blur.vert.spv"));
+const BLUR_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blur.frag.spv"));
 const UPLOAD_BATCH_BYTES: usize = 64 * 1024 * 1024;
 
 #[repr(C)]
@@ -110,7 +111,8 @@ pub struct Renderer {
     recorded: Option<Recorded>,
     frames: Option<SuperFrameAllocator>,
     swapchain: Option<SwapChain>,
-    pipeline: PipelineId,
+    sprite_pipeline: PipelineId,
+    visibility_pipeline: PipelineId,
     blur_pipeline: PipelineId,
     bindless: BindlessDescriptorSet,
     textures: Vec<TextureImage>,
@@ -132,16 +134,28 @@ impl Renderer {
 
     pub fn new(device: Device, width: u32, height: u32, texture_capacity: usize) -> Result<Self, GpuError> {
         let texture_capacity = descriptor_capacity(texture_capacity, device.max_bindless_textures)?;
-        let vertex = read_spirv(VERTEX_SPIRV)?;
-        let fragment = read_spirv(FRAGMENT_SPIRV)?;
-        let blur_vertex = read_spirv(BLUR_VERTEX_SPIRV)?;
-        let blur_fragment = read_spirv(BLUR_FRAGMENT_SPIRV)?;
         let bindless = BindlessDescriptorSet::create(&device, texture_capacity)?;
         let mut graph = RenderGraph::new(&device.context);
-        let pipeline = match graph.declare_pipeline(
+
+        let geometry_vs = read_spirv(GEOMETRY_VS_SPV)?;
+        let sprite_pipeline = match graph.declare_pipeline(
             GraphicsPipelineInfo::new()
-                .with_shader(&vertex)
-                .with_shader(&fragment)
+                .with_shader(&geometry_vs)
+                .with_shader(&read_spirv(SPRITE_SHADE_FS_SPV)?)
+                .with_bindless_set(1, bindless.layout, bindless.set),
+        ) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                drop(graph);
+                bindless.destroy(&device);
+
+                return Err(error.into());
+            },
+        };
+        let visibility_pipeline = match graph.declare_pipeline(
+            GraphicsPipelineInfo::new()
+                .with_shader(&geometry_vs)
+                .with_shader(&read_spirv(SPRITE_VIS_FS_SPV)?)
                 .with_bindless_set(1, bindless.layout, bindless.set),
         ) {
             Ok(pipeline) => pipeline,
@@ -154,8 +168,8 @@ impl Renderer {
         };
         let blur_pipeline = match graph.declare_pipeline(
             GraphicsPipelineInfo::new()
-                .with_shader(&blur_vertex)
-                .with_shader(&blur_fragment),
+                .with_shader(&read_spirv(BLUR_VS_SPV)?)
+                .with_shader(&read_spirv(BLUR_FS_SPV)?),
         ) {
             Ok(pipeline) => pipeline,
             Err(error) => {
@@ -171,7 +185,8 @@ impl Renderer {
             recorded: None,
             frames: None,
             swapchain: None,
-            pipeline,
+            sprite_pipeline,
+            visibility_pipeline,
             blur_pipeline,
             bindless,
             textures: Vec::new(),
@@ -308,13 +323,21 @@ impl Renderer {
         let swapchain_image = module.acquire_next_image(swapchain);
 
         let scene_extent = module.declare_extent_3d_var("scene extent", extent3d(viewport));
-        let scene = module.transient_image_sized(
-            &&ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
+        let scene_attachment = module.transient_image_sized(
+            &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
                 .with_usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
                 .with_name("scene"),
             scene_extent,
         );
-        let scene = module.clear(scene, vir::clear::f32::BLACK);
+        let scene_attachment = module.clear(scene_attachment, vir::clear::f32::BLACK);
+
+        let visibility_attachment = module.transient_image_sized(
+            &ImageInfo::color_target(viewport, vk::Format::R32_UINT)
+                .with_usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
+                .with_name("visibility"),
+            scene_extent,
+        );
+        let visibility_attachment = module.clear(visibility_attachment, vir::clear::u32::TRANSPARENT);
 
         let underlay_extent = module.declare_extent_3d_var("underlay extent", extent3d(viewport));
         let underlays = module.transient_image_sized(
@@ -334,7 +357,7 @@ impl Renderer {
         let underlays_drawn = module
             .begin_rendering([(underlays, Access::ColorRW)])
             .with_name("underlays")
-            .bind_graphics_pipeline(self.pipeline)
+            .bind_graphics_pipeline(self.sprite_pipeline)
             .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
             .set_viewport(0, Rect2D::framebuffer())
             .set_scissor(0, Rect2D::framebuffer())
@@ -348,8 +371,8 @@ impl Renderer {
             .record_from(underlay_draws)
             .end_rendering();
 
-        let blurred = module
-            .begin_rendering([(scene, Access::ColorRW)])
+        let blurred_attachment = module
+            .begin_rendering([(scene_attachment, Access::ColorRW)])
             .with_name("underlay blur")
             .bind_graphics_pipeline(self.blur_pipeline)
             .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
@@ -361,13 +384,17 @@ impl Renderer {
             .end_rendering();
 
         let drawn = module
-            .begin_rendering([(blurred, Access::ColorRW)])
+            .begin_rendering([
+                (blurred_attachment, Access::ColorRW),
+                (visibility_attachment, Access::ColorRW),
+            ])
             .with_name("sprites")
-            .bind_graphics_pipeline(self.pipeline)
+            .bind_graphics_pipeline(self.visibility_pipeline)
             .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
             .set_viewport(0, Rect2D::framebuffer())
             .set_scissor(0, Rect2D::framebuffer())
-            .broadcast_color_blend(BlendPreset::PremultipliedAlphaBlend)
+            .set_color_blend(0, BlendPreset::PremultipliedAlphaBlend)
+            .set_color_blend(1, BlendPreset::Off)
             .set_rasterization(RasterizationState {
                 cull_mode: vk::CullModeFlags::NONE,
                 ..Default::default()
@@ -949,14 +976,19 @@ fn batch_ranges(sizes: &[usize], budget: usize) -> Option<Vec<Range<usize>>> {
 
 #[cfg(test)]
 mod tests {
+    use core::path::TreePath;
+
+    use dmm::{Coord, Map, Prefab, Size};
+    use editor::document::{MapDocument, PrefabInstanceId};
     use vir::resource::shader;
 
     use super::{
         CameraPush,
+        GEOMETRY_VS_SPV,
         GpuSprite,
         LevelRange,
+        SPRITE_VIS_FS_SPV,
         UPLOAD_BATCH_BYTES,
-        VERTEX_SPIRV,
         batch_ranges,
         copy_region,
         descriptor_capacity,
@@ -965,8 +997,18 @@ mod tests {
     };
     use crate::{SpriteInstance, SpriteTexture, read_spirv};
 
+    fn owner() -> PrefabInstanceId {
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        let key = map.intern_tile(vec![Prefab::new(TreePath::parse("/obj/test"))]);
+        map.grid[0][0][0] = key;
+        let document = MapDocument::new(map, 1);
+
+        document.instance_ids_at(Coord::new(1, 1, 1))[0]
+    }
+
     fn sprite(z: u32) -> SpriteInstance {
         SpriteInstance {
+            owner: owner(),
             texture: SpriteTexture::default(),
             x: 0.0,
             y: 0.0,
@@ -1055,11 +1097,25 @@ mod tests {
 
     #[test]
     fn sprite_and_camera_layouts_match_the_shader_scalar_layout() {
-        let reflection = shader::reflect(&read_spirv(VERTEX_SPIRV).expect("valid SPIR-V")).expect("shader reflects");
+        let reflection = shader::reflect(&read_spirv(GEOMETRY_VS_SPV).expect("valid SPIR-V")).expect("shader reflects");
 
         assert_eq!(size_of::<GpuSprite>(), 56);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<CameraPush>());
+    }
+
+    #[test]
+    fn visibility_fragment_reads_sprites_and_textures() {
+        let reflection =
+            shader::reflect(&read_spirv(SPRITE_VIS_FS_SPV).expect("valid SPIR-V")).expect("shader reflects");
+        let mut bindings = reflection
+            .bindings
+            .iter()
+            .map(|binding| (binding.set, binding.binding))
+            .collect::<Vec<_>>();
+        bindings.sort_unstable();
+
+        assert_eq!(bindings, [(0, 1), (1, 0)]);
     }
 
     #[test]

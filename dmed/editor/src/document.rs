@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
-use dmm::{Coord, Map};
+use dmm::{Coord, Map, Prefab};
 
 use crate::command::{Edit, History};
 
@@ -10,6 +10,103 @@ pub struct MapDocument {
     pub history: History,
     pub z: u32,
     pub selection: Option<Selection>,
+    instances: PrefabInstances,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PrefabInstanceId(u64);
+
+impl PrefabInstanceId {
+    pub const fn get(self) -> u64 { self.0 }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrefabLocation {
+    pub coord: Coord,
+    pub prefab_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedPrefab {
+    id: PrefabInstanceId,
+    prefab: Prefab,
+}
+
+impl PlacedPrefab {
+    pub fn id(&self) -> PrefabInstanceId { self.id }
+
+    pub fn prefab(&self) -> &Prefab { &self.prefab }
+
+    pub fn prefab_mut(&mut self) -> &mut Prefab { &mut self.prefab }
+}
+
+pub type PlacedTile = Vec<PlacedPrefab>;
+
+#[derive(Debug)]
+pub(crate) struct PrefabInstances {
+    by_coord: HashMap<Coord, Vec<PrefabInstanceId>>,
+    locations: HashMap<PrefabInstanceId, PrefabLocation>,
+    next_id: u64,
+}
+
+impl PrefabInstances {
+    fn from_map(map: &Map) -> Self {
+        let mut instances = Self {
+            by_coord: HashMap::new(),
+            locations: HashMap::new(),
+            next_id: 1,
+        };
+
+        for z in 1..=map.size.z {
+            for y in 1..=map.size.y {
+                for x in 1..=map.size.x {
+                    let coord = Coord::new(x, y, z);
+                    let count = map.tile_at(coord).map_or(0, Vec::len);
+                    let ids = (0..count).map(|_| instances.allocate()).collect();
+
+                    instances.insert(coord, ids);
+                }
+            }
+        }
+
+        instances
+    }
+
+    pub(crate) fn allocate(&mut self) -> PrefabInstanceId {
+        let id = PrefabInstanceId(self.next_id);
+        self.next_id = self.next_id.checked_add(1).expect("prefab instance ID space exhausted");
+
+        id
+    }
+
+    pub(crate) fn ids_at(&self, coord: Coord) -> &[PrefabInstanceId] {
+        self.by_coord.get(&coord).map(Vec::as_slice).unwrap_or_default()
+    }
+
+    pub(crate) fn location(&self, id: PrefabInstanceId) -> Option<PrefabLocation> { self.locations.get(&id).copied() }
+
+    pub(crate) fn remove(&mut self, coord: Coord) {
+        let Some(ids) = self.by_coord.remove(&coord) else {
+            return;
+        };
+
+        for id in ids {
+            self.locations.remove(&id);
+        }
+    }
+
+    pub(crate) fn insert(&mut self, coord: Coord, ids: Vec<PrefabInstanceId>) {
+        if ids.is_empty() {
+            return;
+        }
+
+        for (prefab_index, id) in ids.iter().copied().enumerate() {
+            let replaced = self.locations.insert(id, PrefabLocation { coord, prefab_index });
+            assert!(replaced.is_none(), "prefab instance ID {} is present twice", id.get());
+        }
+
+        self.by_coord.insert(coord, ids);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,12 +138,15 @@ impl Selection {
 
 impl MapDocument {
     pub fn new(map: Map, z: u32) -> Self {
+        let instances = PrefabInstances::from_map(&map);
+
         Self {
             path: None,
             map,
             history: History::new(),
             z,
             selection: None,
+            instances,
         }
     }
 
@@ -70,11 +170,46 @@ impl MapDocument {
 
     pub fn is_dirty(&self) -> bool { self.history.is_dirty() }
 
-    pub fn apply(&mut self, edit: Edit) { self.history.apply(&mut self.map, edit); }
+    pub fn instance_ids_at(&self, coord: Coord) -> &[PrefabInstanceId] { self.instances.ids_at(coord) }
 
-    pub fn undo(&mut self) -> bool { self.history.undo(&mut self.map).is_some() }
+    pub fn instance_location(&self, id: PrefabInstanceId) -> Option<PrefabLocation> { self.instances.location(id) }
 
-    pub fn redo(&mut self) -> bool { self.history.redo(&mut self.map).is_some() }
+    pub fn prefab_instance(&self, id: PrefabInstanceId) -> Option<(&Prefab, PrefabLocation)> {
+        let location = self.instance_location(id)?;
+        let prefab = self.map.tile_at(location.coord)?.get(location.prefab_index)?;
+
+        Some((prefab, location))
+    }
+
+    pub fn placed_tile(&self, coord: Coord) -> Option<PlacedTile> {
+        let tile = self.map.tile_at(coord)?;
+        let ids = self.instance_ids_at(coord);
+
+        if ids.len() != tile.len() {
+            return None;
+        }
+
+        Some(
+            ids.iter()
+                .copied()
+                .zip(tile.iter().cloned())
+                .map(|(id, prefab)| PlacedPrefab { id, prefab })
+                .collect(),
+        )
+    }
+
+    pub fn instantiate(&mut self, prefab: Prefab) -> PlacedPrefab {
+        PlacedPrefab {
+            id: self.instances.allocate(),
+            prefab,
+        }
+    }
+
+    pub fn apply(&mut self, edit: Edit) { self.history.apply(&mut self.map, &mut self.instances, edit); }
+
+    pub fn undo(&mut self) -> bool { self.history.undo(&mut self.map, &mut self.instances).is_some() }
+
+    pub fn redo(&mut self) -> bool { self.history.redo(&mut self.map, &mut self.instances).is_some() }
 
     pub fn save(&mut self) -> std::io::Result<()> {
         let Some(path) = self.path.clone() else {
@@ -94,5 +229,55 @@ impl MapDocument {
             y.clamp(1, self.map.size.y.max(1)),
             self.z,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::path::TreePath;
+    use std::collections::HashSet;
+
+    use dmm::{Map, Prefab, Size, writer::MapWriter};
+
+    use super::{Coord, MapDocument};
+
+    fn shared_tile_map() -> Map {
+        let mut map = Map::new(Size { x: 2, y: 1, z: 2 });
+        let key = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/turf/floor")),
+            Prefab::new(TreePath::parse("/obj/table")),
+        ]);
+
+        for level in &mut map.grid {
+            for cell in &mut level[0] {
+                *cell = key;
+            }
+        }
+
+        map
+    }
+
+    #[test]
+    fn shared_dictionary_prefabs_receive_unique_placement_ids() {
+        let document = MapDocument::new(shared_tile_map(), 1);
+        let mut ids = Vec::new();
+
+        for z in 1..=2 {
+            for x in 1..=2 {
+                ids.extend_from_slice(document.instance_ids_at(Coord::new(x, 1, z)));
+            }
+        }
+
+        assert_eq!(ids.len(), 8);
+        assert_eq!(ids.iter().copied().collect::<HashSet<_>>().len(), ids.len());
+    }
+
+    #[test]
+    fn placement_ids_are_not_serialized() {
+        let map = shared_tile_map();
+        let before = MapWriter::new(&map).write();
+        let document = MapDocument::new(map, 1);
+
+        assert_eq!(MapWriter::new(&document.map).write(), before);
     }
 }

@@ -47,17 +47,18 @@ impl Session {
         }
 
         validate_level(z, map.size.z)?;
+        let document = MapDocument::open(path, map, z);
 
         self.sprite_instances = self.state.environment.as_ref().map_or_else(Vec::new, |environment| {
             render::frame::build(
                 &environment.tree,
                 &environment.icons,
                 &self.textures,
-                &map,
+                &document,
                 self.options.tile_size,
             )
         });
-        self.state.open_document(MapDocument::open(path, map, z));
+        self.state.open_document(document);
         self.revision = self.revision.wrapping_add(1);
 
         Ok(())

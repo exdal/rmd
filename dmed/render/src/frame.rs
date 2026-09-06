@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
 use dmi::metadata::{Dir, Metadata};
-use dmm::{Coord, Map};
-use editor::visual::{self, Appearance};
+use dmm::Coord;
+use editor::{
+    document::MapDocument,
+    visual::{self, Appearance},
+};
 use objtree::ObjectTree;
 
 use crate::{SpriteInstance, instance_for, texture::TextureCatalog};
@@ -27,10 +30,12 @@ impl Default for FrameOptions {
 }
 
 pub fn build(
-    tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, map: &Map, tile_size: u32,
+    tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, document: &MapDocument,
+    tile_size: u32,
 ) -> Vec<SpriteInstance> {
     let mut sprite_instances = Vec::new();
     let area = tree.roots().area;
+    let map = &document.map;
 
     for z in 1..=map.size.z.max(1) {
         let mut level: Vec<((i32, i32, usize), SpriteInstance)> = Vec::new();
@@ -42,7 +47,10 @@ pub fn build(
                     continue;
                 };
 
-                for prefab in tile {
+                for (prefab_index, prefab) in tile.iter().enumerate() {
+                    let Some(owner) = document.instance_ids_at(Coord::new(x, y, z)).get(prefab_index).copied() else {
+                        continue;
+                    };
                     let Some(id) = tree.id_of(&prefab.path) else {
                         continue;
                     };
@@ -57,7 +65,7 @@ pub fn build(
                     let is_area = area.is_some_and(|area| tree.is_subtype_of(id, area));
                     level.push((
                         visual::sort_key(&appearance, order),
-                        instance_for(&appearance, texture, x, y, z, tile_size, is_area),
+                        instance_for(owner, &appearance, texture, Coord::new(x, y, z), tile_size, is_area),
                     ));
                 }
             }
@@ -96,11 +104,14 @@ mod tests {
         metadata::{IconState, Metadata},
     };
     use dmm::{Map, Prefab, Size};
+    use editor::document::MapDocument;
     use objtree::{ObjectTree, VarDecl};
 
     use crate::{frame::build, texture::TextureCatalog};
 
     const ICON: &str = "test.dmi";
+
+    fn document(map: Map) -> MapDocument { MapDocument::new(map, 1) }
 
     fn icon_file(states: &[&str]) -> IconFile {
         let cells = states.len() as u32;
@@ -217,13 +228,14 @@ mod tests {
     fn orders_sprites_by_layer_not_by_prefab_order() {
         let tree = tree(&[("/turf/floor", "floor", 2.0), ("/obj/table", "table", 3.0)]);
         // The map lists the high-layer object first; the frame must still draw it last.
-        let map = one_tile_map(&["/obj/table", "/turf/floor"]);
+        let document = document(one_tile_map(&["/obj/table", "/turf/floor"]));
+        let owners = document.instance_ids_at(dmm::Coord::new(1, 1, 1));
 
         let sprites = build(
             &tree,
             &icons(&["floor", "table"]),
             &textures(&["floor", "table"]),
-            &map,
+            &document,
             32,
         );
 
@@ -237,15 +249,16 @@ mod tests {
             sprites[1].texture,
             textures(&["floor", "table"]).lookup(ICON, 1).unwrap()
         );
+        assert_eq!([sprites[0].owner, sprites[1].owner], [owners[1], owners[0]]);
     }
 
     #[test]
     fn includes_and_tags_areas_for_renderer_filtering() {
         let tree = tree(&[("/turf/floor", "floor", 2.0), ("/area/station", "floor", 1.0)]);
-        let map = one_tile_map(&["/turf/floor", "/area/station"]);
+        let document = document(one_tile_map(&["/turf/floor", "/area/station"]));
         let (icons, textures) = (icons(&["floor"]), textures(&["floor"]));
 
-        let sprites = build(&tree, &icons, &textures, &map, 32);
+        let sprites = build(&tree, &icons, &textures, &document, 32);
 
         assert_eq!(sprites.len(), 2);
         assert_eq!(sprites.iter().filter(|sprite| sprite.is_area).count(), 1);
@@ -255,18 +268,25 @@ mod tests {
     #[test]
     fn an_unresolvable_icon_state_emits_nothing() {
         let tree = tree(&[("/obj/ghost", "not_in_the_sheet", 2.0)]);
-        let map = one_tile_map(&["/obj/ghost"]);
+        let document = document(one_tile_map(&["/obj/ghost"]));
 
-        let sprites = build(&tree, &icons(&["floor"]), &textures(&["floor"]), &map, 32);
+        let sprites = build(&tree, &icons(&["floor"]), &textures(&["floor"]), &document, 32);
 
         assert!(sprites.is_empty());
+        assert_eq!(document.instance_ids_at(dmm::Coord::new(1, 1, 1)).len(), 1);
     }
 
     #[test]
     fn a_prefab_with_no_type_in_the_tree_emits_nothing() {
-        let map = one_tile_map(&["/obj/never/declared"]);
+        let document = document(one_tile_map(&["/obj/never/declared"]));
 
-        let sprites = build(&ObjectTree::new(), &icons(&["floor"]), &textures(&["floor"]), &map, 32);
+        let sprites = build(
+            &ObjectTree::new(),
+            &icons(&["floor"]),
+            &textures(&["floor"]),
+            &document,
+            32,
+        );
 
         assert!(sprites.is_empty());
     }
@@ -291,7 +311,7 @@ mod tests {
     #[test]
     fn builds_every_level_deepest_first() {
         let (tree, icons, textures, map) = layered();
-        let sprites = build(&tree, &icons, &textures, &map, 32);
+        let sprites = build(&tree, &icons, &textures, &document(map), 32);
 
         assert_eq!(sprites.len(), 3);
         assert_eq!(sprites.iter().map(|sprite| sprite.z).collect::<Vec<_>>(), [1, 2, 3]);
@@ -320,7 +340,7 @@ mod tests {
             *slot = key;
         }
 
-        let sprites = build(&tree, &icons(&["floor"]), &textures(&["floor"]), &map, 32);
+        let sprites = build(&tree, &icons(&["floor"]), &textures(&["floor"]), &document(map), 32);
 
         assert_eq!(sprites.len(), 1);
         assert_eq!((sprites[0].x, sprites[0].y), (32.0, 0.0));
@@ -334,7 +354,7 @@ mod example_environment {
     use std::path::PathBuf;
 
     use dmi::IconFile;
-    use editor::Environment;
+    use editor::{Environment, document::MapDocument};
 
     use crate::{frame::build, texture::TextureCatalog};
 
@@ -362,7 +382,8 @@ mod example_environment {
         let (map, errors) = dmm::parser::parse(&source);
         assert!(errors.is_empty(), "{errors:?}");
 
-        let sprites = build(&environment.tree, &environment.icons, &textures, &map, 32);
+        let document = MapDocument::new(map, 1);
+        let sprites = build(&environment.tree, &environment.icons, &textures, &document, 32);
 
         // 8x6 turfs, plus three tables and one light. The areas have no icon.
         assert_eq!(sprites.len(), 48 + 4);
@@ -383,7 +404,8 @@ mod example_environment {
 
         let source = std::fs::read_to_string(root.join("test.dmm")).expect("map");
         let (map, _) = dmm::parser::parse(&source);
-        let sprites = build(&environment.tree, &environment.icons, &textures, &map, 32);
+        let document = MapDocument::new(map, 1);
+        let sprites = build(&environment.tree, &environment.icons, &textures, &document, 32);
 
         // Neither `/turf` nor `/obj` declares a layer, so this is `demir.dm`'s builtin defaults
         // beating the map's own order, which lists every obj ahead of its turf. Cell 0 is "floor"
