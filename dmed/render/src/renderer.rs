@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use ash::vk;
 use dear_imgui_rs::render::PendingFrame;
+use dmi::IconFile;
 use vir::{
     Access,
     AllocatorKind,
@@ -51,8 +52,12 @@ const UPLOAD_BATCH_BYTES: usize = 64 * 1024 * 1024;
 struct GpuSprite {
     position_size: [f32; 4],
     color: [f32; 4],
+    uv_rect: [f32; 4],
     texture: u32,
+    flags: u32,
 }
+
+const SPRITE_FLAG_AREA: u32 = 1;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -61,6 +66,7 @@ struct CameraPush {
     viewport: [f32; 2],
     zoom: f32,
     base: u32,
+    show_areas: u32,
 }
 
 #[repr(C)]
@@ -92,6 +98,13 @@ struct TextureSource<'a> {
     pixels: &'a [u8],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LevelRange {
+    z: u32,
+    base: u32,
+    count: u32,
+}
+
 pub struct Renderer {
     graph: RenderGraph,
     recorded: Option<Recorded>,
@@ -107,7 +120,7 @@ pub struct Renderer {
     sprites: Option<Buffer>,
     sprite_capacity: usize,
     uploaded_revision: Option<u64>,
-    ranges: Vec<(u32, u32)>,
+    ranges: Vec<LevelRange>,
     imgui: Option<ImGuiPass>,
     extent: vk::Extent2D,
     stale: bool,
@@ -117,12 +130,13 @@ pub struct Renderer {
 impl Renderer {
     pub const VIEWPORT_TEXTURE: dear_imgui_rs::TextureId = crate::imgui::VIEWPORT_TEXTURE;
 
-    pub fn new(device: Device, width: u32, height: u32) -> Result<Self, GpuError> {
+    pub fn new(device: Device, width: u32, height: u32, texture_capacity: usize) -> Result<Self, GpuError> {
+        let texture_capacity = descriptor_capacity(texture_capacity, device.max_bindless_textures)?;
         let vertex = read_spirv(VERTEX_SPIRV)?;
         let fragment = read_spirv(FRAGMENT_SPIRV)?;
         let blur_vertex = read_spirv(BLUR_VERTEX_SPIRV)?;
         let blur_fragment = read_spirv(BLUR_FRAGMENT_SPIRV)?;
-        let bindless = BindlessDescriptorSet::create(&device)?;
+        let bindless = BindlessDescriptorSet::create(&device, texture_capacity)?;
         let mut graph = RenderGraph::new(&device.context);
         let pipeline = match graph.declare_pipeline(
             GraphicsPipelineInfo::new()
@@ -208,25 +222,16 @@ impl Renderer {
 
     pub fn upload_textures(&mut self, catalog: &TextureCatalog) -> Result<(), GpuError> {
         let requested = u32::try_from(catalog.len()).map_err(|_| GpuError::TextureUploadTooLarge)?;
-        if requested > self.device.max_bindless_textures {
-            return Err(GpuError::TooManyTextures {
+        if requested > self.bindless.count {
+            return Err(GpuError::TextureCapacityExceeded {
                 requested,
-                limit: self.device.max_bindless_textures,
+                capacity: self.bindless.count,
             });
         }
 
         self.device.wait_idle()?;
 
-        let sources = catalog
-            .textures()
-            .iter()
-            .map(|texture| TextureSource {
-                width: texture.width(),
-                height: texture.height(),
-                pixels: texture.pixels(),
-            })
-            .collect::<Vec<_>>();
-        let textures = self.upload_images(&sources)?;
+        let textures = self.upload_catalog(catalog)?;
         if let Err(error) = self.write_descriptors(&textures) {
             destroy_images(&mut self.device, textures);
 
@@ -241,10 +246,10 @@ impl Renderer {
         Ok(())
     }
 
-    pub fn draw(&mut self, frame: &Frame) -> Result<(), GpuError> { self.draw_inner(frame, None, None) }
+    pub fn draw(&mut self, frame: &Frame<'_>) -> Result<(), GpuError> { self.draw_inner(frame, None, None) }
 
     pub fn draw_imgui(
-        &mut self, frame: &Frame, viewport: (u32, u32), pending: PendingFrame<'_>,
+        &mut self, frame: &Frame<'_>, viewport: (u32, u32), pending: PendingFrame<'_>,
     ) -> Result<(), GpuError> {
         if pending.draw_requirements().requires_raw_callback_support() {
             return Err(GpuError::RawDrawCallback);
@@ -304,16 +309,16 @@ impl Renderer {
 
         let scene_extent = module.declare_extent_3d_var("scene extent", extent3d(viewport));
         let scene = module.transient_image_sized(
-            &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
+            &&ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
                 .with_usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
                 .with_name("scene"),
             scene_extent,
         );
         let scene = module.clear(scene, vir::clear::f32::BLACK);
 
-        let underlay_extent = module.declare_extent_3d_var("underlay extent", extent3d(underlay_viewport(viewport)));
+        let underlay_extent = module.declare_extent_3d_var("underlay extent", extent3d(viewport));
         let underlays = module.transient_image_sized(
-            &ImageInfo::color_target(underlay_viewport(viewport), vk::Format::R8G8B8A8_UNORM)
+            &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
                 .with_usage(vk::ImageUsageFlags::SAMPLED)
                 .with_name("underlays"),
             underlay_extent,
@@ -399,7 +404,7 @@ impl Renderer {
     }
 
     fn draw_inner(
-        &mut self, frame: &Frame, viewport: Option<vk::Extent2D>, pending: Option<PendingFrame<'_>>,
+        &mut self, frame: &Frame<'_>, viewport: Option<vk::Extent2D>, pending: Option<PendingFrame<'_>>,
     ) -> Result<(), GpuError> {
         if self.stale {
             self.recreate_swapchain()?;
@@ -417,10 +422,7 @@ impl Renderer {
         let frames = self.frames.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
         let sprites = self.sprites.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
         recorded.program.set(recorded.scene_extent, extent3d(viewport));
-        let underlay_extent = underlay_viewport(viewport);
-        recorded
-            .program
-            .set(recorded.underlay_extent, extent3d(underlay_extent));
+        recorded.program.set(recorded.underlay_extent, extent3d(viewport));
         recorded.program.set(recorded.sprites, sprites);
 
         let push = CameraPush {
@@ -428,21 +430,20 @@ impl Renderer {
             viewport: [viewport.width as f32, viewport.height as f32],
             zoom: frame.camera.zoom,
             base: 0,
+            show_areas: u32::from(frame.show_areas),
         };
         recorded.program.set_bytes(recorded.camera, &push);
         recorded.program.set_bytes(
             recorded.blur_push,
             &BlurPush {
                 sample_step: [
-                    frame.camera.zoom / underlay_extent.width as f32,
-                    frame.camera.zoom / underlay_extent.height as f32,
+                    frame.camera.zoom / viewport.width as f32,
+                    frame.camera.zoom / viewport.height as f32,
                 ],
             },
         );
 
-        let mut ranges = self.ranges.clone();
-        let active_range = ranges.pop().unwrap_or((0, 0));
-        let underlay_ranges = ranges;
+        let (underlay_ranges, active_range) = visible_ranges(&self.ranges, frame.active_z, frame.underlay_depth);
         recorded.program.set(
             recorded.underlay_draws,
             PassCallback::new(move |cmd| {
@@ -489,36 +490,28 @@ impl Renderer {
         }
     }
 
-    fn prepare_sprites(&mut self, frame: &Frame) -> Result<(), GpuError> {
-        let level_count = frame
-            .underlays
-            .len()
-            .checked_add(1)
-            .ok_or(GpuError::SpriteUploadTooLarge)?;
-        if self.uploaded_revision == Some(frame.revision) && self.ranges.len() == level_count {
+    fn prepare_sprites(&mut self, frame: &Frame<'_>) -> Result<(), GpuError> {
+        if self.uploaded_revision == Some(frame.revision) {
             return Ok(());
         }
 
-        let total = levels(frame)
-            .try_fold(0usize, |total, level| total.checked_add(level.len()))
-            .ok_or(GpuError::SpriteUploadTooLarge)?;
+        let total = frame.sprite_instances.len();
         u32::try_from(total).map_err(|_| GpuError::SpriteUploadTooLarge)?;
         let mut payload = Vec::with_capacity(total);
-        let mut ranges = Vec::with_capacity(level_count);
+        let ranges = level_ranges(frame.sprite_instances);
 
-        for level in levels(frame) {
-            ranges.push((payload.len() as u32, level.len() as u32));
-            payload.extend(level.iter().map(|sprite| GpuSprite {
-                position_size: [
-                    sprite.x,
-                    sprite.y,
-                    sprite.texture.width as f32,
-                    sprite.texture.height as f32,
-                ],
-                color: sprite.color,
-                texture: sprite.texture.index,
-            }));
-        }
+        payload.extend(frame.sprite_instances.iter().map(|sprite| GpuSprite {
+            position_size: [
+                sprite.x,
+                sprite.y,
+                sprite.texture.width as f32,
+                sprite.texture.height as f32,
+            ],
+            color: sprite.color,
+            uv_rect: sprite.texture.uv_rect,
+            texture: sprite.texture.index,
+            flags: if sprite.is_area { SPRITE_FLAG_AREA } else { 0 },
+        }));
 
         self.device.wait_idle()?;
         self.uploaded_revision = None;
@@ -563,7 +556,7 @@ impl Renderer {
             .sampler(self.sampler)
             .image_view(fallback.view)
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-        let mut infos = vec![info; self.device.max_bindless_textures as usize];
+        let mut infos = vec![info; self.bindless.count as usize];
 
         for (info, texture) in infos.iter_mut().zip(textures) {
             info.image_view = texture.view;
@@ -621,6 +614,78 @@ impl Renderer {
 
         Ok(textures)
     }
+
+    fn upload_catalog(&mut self, catalog: &TextureCatalog) -> Result<Vec<TextureImage>, GpuError> {
+        for texture in catalog.textures() {
+            if texture.width() > self.device.max_image_dimension_2d
+                || texture.height() > self.device.max_image_dimension_2d
+            {
+                return Err(GpuError::TextureSheetTooLarge {
+                    path: texture.path().display().to_string(),
+                    width: texture.width(),
+                    height: texture.height(),
+                    limit: self.device.max_image_dimension_2d,
+                });
+            }
+        }
+
+        let sizes = catalog
+            .textures()
+            .iter()
+            .map(|texture| texture.decoded_bytes())
+            .collect::<Vec<_>>();
+        let ranges = batch_ranges(&sizes, UPLOAD_BATCH_BYTES).ok_or(GpuError::TextureUploadTooLarge)?;
+        let mut textures = Vec::with_capacity(catalog.len());
+
+        for range in ranges {
+            let batch = catalog.textures().get(range).ok_or(GpuError::TextureUploadTooLarge)?;
+            let files = match batch
+                .iter()
+                .map(|texture| {
+                    let path = texture.path();
+                    let file = IconFile::load(path).map_err(|error| GpuError::TextureLoad {
+                        path: path.display().to_string(),
+                        message: error.to_string(),
+                    })?;
+                    if file.sheet_width != texture.width() || file.sheet_height != texture.height() {
+                        return Err(GpuError::TextureSourceChanged {
+                            path: path.display().to_string(),
+                            expected_width: texture.width(),
+                            expected_height: texture.height(),
+                            actual_width: file.sheet_width,
+                            actual_height: file.sheet_height,
+                        });
+                    }
+
+                    Ok(file)
+                })
+                .collect::<Result<Vec<_>, GpuError>>()
+            {
+                Ok(files) => files,
+                Err(error) => {
+                    destroy_images(&mut self.device, textures);
+                    return Err(error);
+                },
+            };
+            let sources = files
+                .iter()
+                .map(|file| TextureSource {
+                    width: file.sheet_width,
+                    height: file.sheet_height,
+                    pixels: &file.pixels,
+                })
+                .collect::<Vec<_>>();
+            match self.upload_images(&sources) {
+                Ok(batch_textures) => textures.extend(batch_textures),
+                Err(error) => {
+                    destroy_images(&mut self.device, textures);
+                    return Err(error);
+                },
+            }
+        }
+
+        Ok(textures)
+    }
 }
 
 impl Drop for Renderer {
@@ -644,20 +709,40 @@ impl Drop for Renderer {
     }
 }
 
-fn levels(frame: &Frame) -> impl Iterator<Item = &[SpriteInstance]> {
-    frame
-        .underlays
-        .iter()
-        .map(Vec::as_slice)
-        .chain(std::iter::once(frame.sprites.as_slice()))
+fn level_ranges(sprite_instances: &[SpriteInstance]) -> Vec<LevelRange> {
+    let mut ranges: Vec<LevelRange> = Vec::new();
+
+    for (index, sprite) in sprite_instances.iter().enumerate() {
+        if let Some(range) = ranges.last_mut()
+            && range.z == sprite.z
+        {
+            range.count += 1;
+        } else {
+            ranges.push(LevelRange {
+                z: sprite.z,
+                base: index as u32,
+                count: 1,
+            });
+        }
+    }
+
+    ranges
 }
 
-/// Underlays render at this resolution and the blur pass upsamples them back to `viewport` while it blurs.
-fn underlay_viewport(viewport: vk::Extent2D) -> vk::Extent2D {
-    vk::Extent2D {
-        width: viewport.width,
-        height: viewport.height,
+fn visible_ranges(ranges: &[LevelRange], active_z: u32, underlay_depth: u32) -> (Vec<(u32, u32)>, (u32, u32)) {
+    let minimum_z = active_z.saturating_sub(underlay_depth).max(1);
+    let mut underlays = Vec::new();
+    let mut active = (0, 0);
+
+    for range in ranges {
+        if (minimum_z..active_z).contains(&range.z) {
+            underlays.push((range.base, range.count));
+        } else if range.z == active_z {
+            active = (range.base, range.count);
+        }
     }
+
+    (underlays, active)
 }
 
 fn destroy_images(device: &mut Device, textures: impl IntoIterator<Item = TextureImage>) {
@@ -667,15 +752,24 @@ fn destroy_images(device: &mut Device, textures: impl IntoIterator<Item = Textur
     }
 }
 
+fn descriptor_capacity(requested: usize, limit: u32) -> Result<u32, GpuError> {
+    let requested = u32::try_from(requested).map_err(|_| GpuError::TextureUploadTooLarge)?;
+    if requested > limit {
+        return Err(GpuError::TooManyTextures { requested, limit });
+    }
+
+    Ok(requested.max(1))
+}
+
 struct BindlessDescriptorSet {
     layout: vk::DescriptorSetLayout,
     set: vk::DescriptorSet,
     pool: vk::DescriptorPool,
+    count: u32,
 }
 
 impl BindlessDescriptorSet {
-    fn create(device: &Device) -> Result<Self, GpuError> {
-        let count = device.max_bindless_textures;
+    fn create(device: &Device, count: u32) -> Result<Self, GpuError> {
         let vk_device = device.context.device();
 
         let binding = vk::DescriptorSetLayoutBinding::default()
@@ -726,7 +820,12 @@ impl BindlessDescriptorSet {
             },
         };
 
-        Ok(Self { layout, set, pool })
+        Ok(Self {
+            layout,
+            set,
+            pool,
+            count,
+        })
     }
 
     fn destroy(&self, device: &Device) {
@@ -850,7 +949,118 @@ fn batch_ranges(sizes: &[usize], budget: usize) -> Option<Vec<Range<usize>>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{UPLOAD_BATCH_BYTES, batch_ranges, copy_region};
+    use vir::resource::shader;
+
+    use super::{
+        CameraPush,
+        GpuSprite,
+        LevelRange,
+        UPLOAD_BATCH_BYTES,
+        VERTEX_SPIRV,
+        batch_ranges,
+        copy_region,
+        descriptor_capacity,
+        level_ranges,
+        visible_ranges,
+    };
+    use crate::{SpriteInstance, SpriteTexture, read_spirv};
+
+    fn sprite(z: u32) -> SpriteInstance {
+        SpriteInstance {
+            texture: SpriteTexture::default(),
+            x: 0.0,
+            y: 0.0,
+            z,
+            is_area: false,
+            color: [1.0; 4],
+            depth: 0.0,
+        }
+    }
+
+    #[test]
+    fn adjacent_instances_are_grouped_into_level_ranges() {
+        let sprites = [sprite(1), sprite(1), sprite(2), sprite(4), sprite(4), sprite(4)];
+
+        assert_eq!(
+            level_ranges(&sprites),
+            [
+                LevelRange {
+                    z: 1,
+                    base: 0,
+                    count: 2
+                },
+                LevelRange {
+                    z: 2,
+                    base: 2,
+                    count: 1
+                },
+                LevelRange {
+                    z: 4,
+                    base: 3,
+                    count: 3
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn visible_ranges_select_only_the_active_level_and_configured_underlays() {
+        let ranges = [
+            LevelRange {
+                z: 1,
+                base: 0,
+                count: 2,
+            },
+            LevelRange {
+                z: 2,
+                base: 2,
+                count: 3,
+            },
+            LevelRange {
+                z: 3,
+                base: 5,
+                count: 4,
+            },
+            LevelRange {
+                z: 4,
+                base: 9,
+                count: 5,
+            },
+        ];
+
+        let (underlays, active) = visible_ranges(&ranges, 3, 2);
+
+        assert_eq!(underlays, [(0, 2), (2, 3)]);
+        assert_eq!(active, (5, 4));
+    }
+
+    #[test]
+    fn underlay_depth_clamps_at_the_bottom_and_can_be_disabled() {
+        let ranges = [
+            LevelRange {
+                z: 1,
+                base: 0,
+                count: 2,
+            },
+            LevelRange {
+                z: 2,
+                base: 2,
+                count: 3,
+            },
+        ];
+
+        assert_eq!(visible_ranges(&ranges, 2, 9), (vec![(0, 2)], (2, 3)));
+        assert_eq!(visible_ranges(&ranges, 2, 0), (Vec::new(), (2, 3)));
+    }
+
+    #[test]
+    fn sprite_and_camera_layouts_match_the_shader_scalar_layout() {
+        let reflection = shader::reflect(&read_spirv(VERTEX_SPIRV).expect("valid SPIR-V")).expect("shader reflects");
+
+        assert_eq!(size_of::<GpuSprite>(), 56);
+        assert_eq!(reflection.push_constant_offset, 0);
+        assert_eq!(reflection.push_constant_size as usize, size_of::<CameraPush>());
+    }
 
     #[test]
     fn copies_are_always_two_dimensional() {
@@ -884,5 +1094,18 @@ mod tests {
         let ranges = batch_ranges(&[UPLOAD_BATCH_BYTES + 4, 4], UPLOAD_BATCH_BYTES).expect("valid ranges");
 
         assert_eq!(ranges, vec![0..1, 1..2]);
+    }
+
+    #[test]
+    fn descriptor_capacity_matches_the_catalog_and_keeps_one_fallback_slot() {
+        assert_eq!(descriptor_capacity(8, 10), Ok(8));
+        assert_eq!(descriptor_capacity(0, 10), Ok(1));
+        assert_eq!(
+            descriptor_capacity(11, 10),
+            Err(crate::GpuError::TooManyTextures {
+                requested: 11,
+                limit: 10,
+            })
+        );
     }
 }

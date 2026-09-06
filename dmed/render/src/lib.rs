@@ -10,11 +10,13 @@ use editor::visual::Appearance;
 
 pub use crate::{device::Device, error::GpuError, renderer::Renderer};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct SpriteTexture {
     pub index: u32,
     pub width: u32,
     pub height: u32,
+    /// Normalized `(left, top, right, bottom)` coordinates within the DMI sheet.
+    pub uv_rect: [f32; 4],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -22,6 +24,10 @@ pub struct SpriteInstance {
     pub texture: SpriteTexture,
     pub x: f32,
     pub y: f32,
+    /// One-based map level containing this instance.
+    pub z: u32,
+    /// Whether this instance belongs to an `/area` subtype.
+    pub is_area: bool,
     /// premultiplied RGBA
     pub color: [f32; 4],
     /// sort key, from plane and layer
@@ -49,13 +55,18 @@ impl Default for Camera {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct Frame {
-    /// The active level, drawn sharp and over everything else.
-    pub sprites: Vec<SpriteInstance>,
-    /// The levels below the active one, deepest first.
-    pub underlays: Vec<Vec<SpriteInstance>>,
+#[derive(Debug)]
+pub struct Frame<'a> {
+    /// Every placed sprite in the map, ordered by z and then draw order.
+    pub sprite_instances: &'a [SpriteInstance],
+    /// The level drawn sharp and above the blurred underlays.
+    pub active_z: u32,
+    /// How many levels immediately below `active_z` to draw as underlays.
+    pub underlay_depth: u32,
+    /// Whether area instances participate in either draw pass.
+    pub show_areas: bool,
     pub camera: Camera,
+    /// Changes only when `sprite_instances` changes.
     pub revision: u64,
 }
 
@@ -65,7 +76,8 @@ pub struct Frame {
 /// An icon wider or taller than `tile_size` is anchored to the tile's bottom left and grows up and
 /// to the right, the way BYOND draws one, so `pixel_x = -16` is what centres a 64 wide icon.
 pub fn instance_for(
-    appearance: &Appearance, texture: SpriteTexture, tile_x: u32, tile_y: u32, tile_size: u32,
+    appearance: &Appearance, texture: SpriteTexture, tile_x: u32, tile_y: u32, tile_z: u32, tile_size: u32,
+    is_area: bool,
 ) -> SpriteInstance {
     let alpha = f32::from(appearance.alpha) / 255.0;
     let tint = appearance.color.as_deref().and_then(color::parse).unwrap_or([1.0; 4]);
@@ -77,6 +89,8 @@ pub fn instance_for(
         texture,
         x: (tile_x.saturating_sub(1) * tile_size) as f32 + offset_x as f32,
         y: (tile_y.saturating_sub(1) * tile_size) as f32 + offset_y as f32,
+        z: tile_z,
+        is_area,
         color: [tint[0] * alpha, tint[1] * alpha, tint[2] * alpha, alpha],
         depth: appearance.plane * 1000.0 + appearance.layer,
     }
@@ -98,7 +112,15 @@ mod tests {
 
     #[test]
     fn a_tint_is_premultiplied_by_alpha() {
-        let instance = instance_for(&appearance(Some("#ff0000"), 128), SpriteTexture::default(), 1, 1, 32);
+        let instance = instance_for(
+            &appearance(Some("#ff0000"), 128),
+            SpriteTexture::default(),
+            1,
+            1,
+            1,
+            32,
+            false,
+        );
         let alpha = 128.0 / 255.0;
 
         assert_eq!(instance.color, [alpha, 0.0, 0.0, alpha]);
@@ -106,14 +128,22 @@ mod tests {
 
     #[test]
     fn an_untinted_sprite_keeps_its_alpha_on_every_channel() {
-        let instance = instance_for(&appearance(None, 255), SpriteTexture::default(), 1, 1, 32);
+        let instance = instance_for(&appearance(None, 255), SpriteTexture::default(), 1, 1, 1, 32, false);
 
         assert_eq!(instance.color, [1.0, 1.0, 1.0, 1.0]);
     }
 
     #[test]
     fn an_unreadable_color_falls_back_to_no_tint() {
-        let instance = instance_for(&appearance(Some("chartreuse"), 255), SpriteTexture::default(), 1, 1, 32);
+        let instance = instance_for(
+            &appearance(Some("chartreuse"), 255),
+            SpriteTexture::default(),
+            1,
+            1,
+            1,
+            32,
+            false,
+        );
 
         assert_eq!(instance.color, [1.0, 1.0, 1.0, 1.0]);
     }
@@ -128,7 +158,7 @@ mod tests {
             pixel_z: -1,
             ..Default::default()
         };
-        let instance = instance_for(&appearance, SpriteTexture::default(), 2, 3, 32);
+        let instance = instance_for(&appearance, SpriteTexture::default(), 2, 3, 1, 32, false);
 
         assert_eq!((instance.x, instance.y), (32.0 - 14.0, 64.0 + 3.0));
     }
@@ -140,17 +170,26 @@ mod tests {
             index: 0,
             width: 64,
             height: 64,
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
         };
         let centred = Appearance {
             pixel_x: -16,
             ..Default::default()
         };
 
-        let plain = instance_for(&Appearance::default(), texture, 1, 1, 32);
+        let plain = instance_for(&Appearance::default(), texture, 1, 1, 1, 32, false);
         assert_eq!((plain.x, plain.y), (0.0, 0.0));
 
-        let shifted = instance_for(&centred, texture, 1, 1, 32);
+        let shifted = instance_for(&centred, texture, 1, 1, 1, 32, false);
         assert_eq!((shifted.x, shifted.y), (-16.0, 0.0));
+    }
+
+    #[test]
+    fn an_instance_keeps_its_level_and_area_classification() {
+        let instance = instance_for(&Appearance::default(), SpriteTexture::default(), 1, 1, 7, 32, true);
+
+        assert_eq!(instance.z, 7);
+        assert!(instance.is_area);
     }
 }
 

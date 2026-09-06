@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use dmi::metadata::{Dir, Metadata};
 use dmm::{Coord, Map};
@@ -27,86 +27,47 @@ impl Default for FrameOptions {
 }
 
 pub fn build(
-    tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, map: &Map, z: u32,
-    options: &FrameOptions,
+    tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, map: &Map, tile_size: u32,
 ) -> Vec<SpriteInstance> {
-    let mut sprites: Vec<((i32, i32, usize), SpriteInstance)> = Vec::new();
-    let mut order = 0usize;
+    let mut sprite_instances = Vec::new();
     let area = tree.roots().area;
 
-    for y in (1..=map.size.y).rev() {
-        for x in 1..=map.size.x {
-            let Some(tile) = map.tile_at(Coord::new(x, y, z)) else {
-                continue;
-            };
+    for z in 1..=map.size.z.max(1) {
+        let mut level: Vec<((i32, i32, usize), SpriteInstance)> = Vec::new();
+        let mut order = 0usize;
 
-            for prefab in tile {
-                let Some(id) = tree.id_of(&prefab.path) else {
+        for y in (1..=map.size.y).rev() {
+            for x in 1..=map.size.x {
+                let Some(tile) = map.tile_at(Coord::new(x, y, z)) else {
                     continue;
                 };
 
-                if !options.show_areas && area.is_some_and(|area| tree.is_subtype_of(id, area)) {
-                    continue;
+                for prefab in tile {
+                    let Some(id) = tree.id_of(&prefab.path) else {
+                        continue;
+                    };
+
+                    let appearance = visual::resolve_id(tree, id, prefab);
+                    order = order.saturating_add(1);
+
+                    let Some(texture) = sprite_texture(icons, textures, &appearance) else {
+                        continue;
+                    };
+
+                    let is_area = area.is_some_and(|area| tree.is_subtype_of(id, area));
+                    level.push((
+                        visual::sort_key(&appearance, order),
+                        instance_for(&appearance, texture, x, y, z, tile_size, is_area),
+                    ));
                 }
-
-                let appearance = visual::resolve_id(tree, id, prefab);
-                order = order.saturating_add(1);
-
-                let Some(texture) = sprite_texture(icons, textures, &appearance) else {
-                    continue;
-                };
-
-                sprites.push((
-                    visual::sort_key(&appearance, order),
-                    instance_for(&appearance, texture, x, y, options.tile_size),
-                ));
             }
         }
+
+        level.sort_by_key(|(key, _)| *key);
+        sprite_instances.extend(level.into_iter().map(|(_, instance)| instance));
     }
 
-    sprites.sort_by_key(|(key, _)| *key);
-
-    sprites.into_iter().map(|(_, instance)| instance).collect()
-}
-
-pub fn build_underlays(
-    tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, map: &Map, z: u32,
-    options: &FrameOptions,
-) -> Vec<Vec<SpriteInstance>> {
-    let mut levels = Vec::new();
-
-    for depth in (1..=options.underlay_depth).rev() {
-        let Some(level) = z.checked_sub(depth).filter(|level| *level >= 1) else {
-            continue;
-        };
-
-        levels.push(build(tree, icons, textures, map, level, options));
-    }
-
-    levels
-}
-
-pub fn icons_used(tree: &ObjectTree, map: &Map) -> BTreeMap<String, BTreeSet<String>> {
-    let mut used: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-
-    for tile in map.dictionary.values() {
-        for prefab in tile {
-            let Some(id) = tree.id_of(&prefab.path) else {
-                continue;
-            };
-
-            let appearance = visual::resolve_id(tree, id, prefab);
-            let Some(icon) = appearance.icon else {
-                continue;
-            };
-
-            used.entry(icon)
-                .or_default()
-                .insert(appearance.icon_state.unwrap_or_default());
-        }
-    }
-
-    used
+    sprite_instances
 }
 
 fn sprite_texture(
@@ -137,10 +98,7 @@ mod tests {
     use dmm::{Map, Prefab, Size};
     use objtree::{ObjectTree, VarDecl};
 
-    use crate::{
-        frame::{FrameOptions, build, build_underlays},
-        texture::TextureCatalog,
-    };
+    use crate::{frame::build, texture::TextureCatalog};
 
     const ICON: &str = "test.dmi";
 
@@ -266,37 +224,32 @@ mod tests {
             &icons(&["floor", "table"]),
             &textures(&["floor", "table"]),
             &map,
-            1,
-            &FrameOptions::default(),
+            32,
         );
 
         assert_eq!(sprites.len(), 2);
-        // "floor" is cell 0, "table" is cell 1.
-        assert_eq!(sprites[0].texture.index, 0);
-        assert_eq!(sprites[1].texture.index, 1);
+        // "floor" is cell 0 and "table" is cell 1 within the same sheet.
+        assert_eq!(
+            sprites[0].texture,
+            textures(&["floor", "table"]).lookup(ICON, 0).unwrap()
+        );
+        assert_eq!(
+            sprites[1].texture,
+            textures(&["floor", "table"]).lookup(ICON, 1).unwrap()
+        );
     }
 
     #[test]
-    fn skips_areas_unless_asked() {
+    fn includes_and_tags_areas_for_renderer_filtering() {
         let tree = tree(&[("/turf/floor", "floor", 2.0), ("/area/station", "floor", 1.0)]);
         let map = one_tile_map(&["/turf/floor", "/area/station"]);
         let (icons, textures) = (icons(&["floor"]), textures(&["floor"]));
 
-        let hidden = build(&tree, &icons, &textures, &map, 1, &FrameOptions::default());
-        assert_eq!(hidden.len(), 1);
+        let sprites = build(&tree, &icons, &textures, &map, 32);
 
-        let shown = build(
-            &tree,
-            &icons,
-            &textures,
-            &map,
-            1,
-            &FrameOptions {
-                show_areas: true,
-                ..Default::default()
-            },
-        );
-        assert_eq!(shown.len(), 2);
+        assert_eq!(sprites.len(), 2);
+        assert_eq!(sprites.iter().filter(|sprite| sprite.is_area).count(), 1);
+        assert_eq!(sprites.iter().filter(|sprite| !sprite.is_area).count(), 1);
     }
 
     #[test]
@@ -304,14 +257,7 @@ mod tests {
         let tree = tree(&[("/obj/ghost", "not_in_the_sheet", 2.0)]);
         let map = one_tile_map(&["/obj/ghost"]);
 
-        let sprites = build(
-            &tree,
-            &icons(&["floor"]),
-            &textures(&["floor"]),
-            &map,
-            1,
-            &FrameOptions::default(),
-        );
+        let sprites = build(&tree, &icons(&["floor"]), &textures(&["floor"]), &map, 32);
 
         assert!(sprites.is_empty());
     }
@@ -320,14 +266,7 @@ mod tests {
     fn a_prefab_with_no_type_in_the_tree_emits_nothing() {
         let map = one_tile_map(&["/obj/never/declared"]);
 
-        let sprites = build(
-            &ObjectTree::new(),
-            &icons(&["floor"]),
-            &textures(&["floor"]),
-            &map,
-            1,
-            &FrameOptions::default(),
-        );
+        let sprites = build(&ObjectTree::new(), &icons(&["floor"]), &textures(&["floor"]), &map, 32);
 
         assert!(sprites.is_empty());
     }
@@ -350,57 +289,18 @@ mod tests {
     }
 
     #[test]
-    fn no_depth_draws_no_underlays() {
+    fn builds_every_level_deepest_first() {
         let (tree, icons, textures, map) = layered();
-        let options = FrameOptions {
-            underlay_depth: 0,
-            ..Default::default()
-        };
+        let sprites = build(&tree, &icons, &textures, &map, 32);
 
-        assert!(build_underlays(&tree, &icons, &textures, &map, 3, &options).is_empty());
-    }
-
-    #[test]
-    fn underlays_come_back_deepest_first() {
-        let (tree, icons, textures, map) = layered();
-        let options = FrameOptions {
-            underlay_depth: 2,
-            ..Default::default()
-        };
-        let underlays = build_underlays(&tree, &icons, &textures, &map, 3, &options);
-
-        assert_eq!(underlays.len(), 2);
-        // Cell 0 is "one", from z 1, which is two levels down and so has to come first.
-        assert_eq!(underlays[0][0].texture.index, 0);
-        assert_eq!(underlays[1][0].texture.index, 1);
-    }
-
-    /// Asking for more levels than the map has must clamp rather than wrap `z - depth`.
-    #[test]
-    fn a_depth_past_the_bottom_of_the_map_yields_what_is_there() {
-        let (tree, icons, textures, map) = layered();
-        let options = FrameOptions {
-            underlay_depth: 9,
-            ..Default::default()
-        };
-
-        assert_eq!(build_underlays(&tree, &icons, &textures, &map, 2, &options).len(), 1);
-        assert!(build_underlays(&tree, &icons, &textures, &map, 1, &options).is_empty());
-    }
-
-    /// How deep a level sits is the backend's business, so a level built as an underlay is the
-    /// level as it would be drawn active, colors and all.
-    #[test]
-    fn an_underlay_is_the_level_as_it_is() {
-        let (tree, icons, textures, map) = layered();
-        let options = FrameOptions {
-            underlay_depth: 2,
-            ..Default::default()
-        };
-        let underlays = build_underlays(&tree, &icons, &textures, &map, 3, &options);
-
-        assert_eq!(underlays[0], build(&tree, &icons, &textures, &map, 1, &options));
-        assert_eq!(underlays[1], build(&tree, &icons, &textures, &map, 2, &options));
+        assert_eq!(sprites.len(), 3);
+        assert_eq!(sprites.iter().map(|sprite| sprite.z).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(
+            sprites.iter().map(|sprite| sprite.texture).collect::<Vec<_>>(),
+            (0..3)
+                .map(|cell| textures.lookup(ICON, cell).unwrap())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -420,14 +320,7 @@ mod tests {
             *slot = key;
         }
 
-        let sprites = build(
-            &tree,
-            &icons(&["floor"]),
-            &textures(&["floor"]),
-            &map,
-            1,
-            &FrameOptions::default(),
-        );
+        let sprites = build(&tree, &icons(&["floor"]), &textures(&["floor"]), &map, 32);
 
         assert_eq!(sprites.len(), 1);
         assert_eq!((sprites[0].x, sprites[0].y), (32.0, 0.0));
@@ -443,10 +336,7 @@ mod example_environment {
     use dmi::IconFile;
     use editor::Environment;
 
-    use crate::{
-        frame::{FrameOptions, build},
-        texture::TextureCatalog,
-    };
+    use crate::{frame::build, texture::TextureCatalog};
 
     fn examples() -> PathBuf {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
@@ -472,16 +362,9 @@ mod example_environment {
         let (map, errors) = dmm::parser::parse(&source);
         assert!(errors.is_empty(), "{errors:?}");
 
-        let sprites = build(
-            &environment.tree,
-            &environment.icons,
-            &textures,
-            &map,
-            1,
-            &FrameOptions::default(),
-        );
+        let sprites = build(&environment.tree, &environment.icons, &textures, &map, 32);
 
-        // 8x6 turfs, plus three tables and one light, with the four areas skipped.
+        // 8x6 turfs, plus three tables and one light. The areas have no icon.
         assert_eq!(sprites.len(), 48 + 4);
 
         // Every sprite found a real cell, and the tinted table came through premultiplied.
@@ -500,66 +383,21 @@ mod example_environment {
 
         let source = std::fs::read_to_string(root.join("test.dmm")).expect("map");
         let (map, _) = dmm::parser::parse(&source);
-        let sprites = build(
-            &environment.tree,
-            &environment.icons,
-            &textures,
-            &map,
-            1,
-            &FrameOptions::default(),
-        );
+        let sprites = build(&environment.tree, &environment.icons, &textures, &map, 32);
 
         // Neither `/turf` nor `/obj` declares a layer, so this is `demir.dm`'s builtin defaults
         // beating the map's own order, which lists every obj ahead of its turf. Cell 0 is "floor"
         // and cell 1 is "wall", so no turf may appear after the first object.
+        let first_object_uv = textures.lookup("icons/test.dmi", 2).expect("object cell").uv_rect[0];
         let first_object = sprites
             .iter()
-            .position(|sprite| sprite.texture.index >= 2)
+            .position(|sprite| sprite.texture.uv_rect[0] >= first_object_uv)
             .expect("an object sprite");
 
-        assert!(sprites[first_object..].iter().all(|sprite| sprite.texture.index >= 2));
-    }
-
-    /// Packing only what [`icons_used`](crate::frame::icons_used) names must not cost a sprite.
-    #[test]
-    fn a_selective_pack_draws_the_same_frame_as_a_whole_one() {
-        use std::collections::BTreeSet;
-
-        use crate::frame::icons_used;
-
-        let root = examples();
-        let (environment, _) = Environment::load(root.join("test.dme")).expect("load");
-        let file = IconFile::load(root.join("icons/test.dmi")).expect("icon");
-
-        let source = std::fs::read_to_string(root.join("test.dmm")).expect("map");
-        let (map, errors) = dmm::parser::parse(&source);
-        assert!(errors.is_empty(), "{errors:?}");
-
-        let used = icons_used(&environment.tree, &map);
-        assert!(used.contains_key("icons/test.dmi"));
-
-        let mut whole = TextureCatalog::default();
-        whole.insert("icons/test.dmi", &file).expect("insert");
-
-        let mut selective = TextureCatalog::default();
-        for (icon, states) in &used {
-            let states: BTreeSet<&str> = states.iter().map(String::as_str).collect();
-            selective.insert_states(icon, &file, &states).expect("insert");
-        }
-
-        assert!(selective.len() <= whole.len());
-
-        let frame = |textures: &TextureCatalog| {
-            build(
-                &environment.tree,
-                &environment.icons,
-                textures,
-                &map,
-                1,
-                &FrameOptions::default(),
-            )
-        };
-
-        assert_eq!(frame(&selective), frame(&whole));
+        assert!(
+            sprites[first_object..]
+                .iter()
+                .all(|sprite| sprite.texture.uv_rect[0] >= first_object_uv)
+        );
     }
 }

@@ -39,6 +39,8 @@ pub(crate) fn compile(entry: &Path) -> Result<(ObjectTree, Compiled), LoadError>
     let preprocessed = preprocessor::preprocess(&arena, entry)?;
     let ast = ast::parse(&preprocessed.tokens)
         .map_err(|error| LoadError::parse(error, &preprocessed.sources, preprocessed.entry, entry))?;
+    drop(preprocessed.tokens);
+    drop(preprocessed.defines);
     let (tree, sema_errors) = sema::analyze(&ast);
 
     let root = preprocessed

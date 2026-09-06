@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use dmi::IconFile;
 use dmm::Map;
@@ -13,8 +10,7 @@ pub struct Session {
     pub state: EditorState,
     pub textures: TextureCatalog,
     pub options: FrameOptions,
-    sprites: Vec<SpriteInstance>,
-    underlays: Vec<Vec<SpriteInstance>>,
+    sprite_instances: Vec<SpriteInstance>,
     revision: u64,
     texture_revision: u64,
 }
@@ -25,8 +21,7 @@ impl Session {
             state: EditorState::new(),
             textures: TextureCatalog::default(),
             options: FrameOptions::default(),
-            sprites: Vec::new(),
-            underlays: Vec::new(),
+            sprite_instances: Vec::new(),
             revision: 0,
             texture_revision: 0,
         }
@@ -36,6 +31,8 @@ impl Session {
         let (environment, diagnostics) = Environment::load(path)?;
 
         report(&environment, &diagnostics);
+        self.textures = build_textures(&environment);
+        self.texture_revision = self.texture_revision.wrapping_add(1);
         self.state.environment = Some(environment);
 
         Ok(())
@@ -51,17 +48,17 @@ impl Session {
 
         validate_level(z, map.size.z)?;
 
-        self.textures = match self.state.environment.as_ref() {
-            Some(environment) => {
-                let used = render::frame::icons_used(&environment.tree, &map);
-
-                build_textures(environment, &used)
-            },
-            None => TextureCatalog::default(),
-        };
-        self.texture_revision = self.texture_revision.wrapping_add(1);
+        self.sprite_instances = self.state.environment.as_ref().map_or_else(Vec::new, |environment| {
+            render::frame::build(
+                &environment.tree,
+                &environment.icons,
+                &self.textures,
+                &map,
+                self.options.tile_size,
+            )
+        });
         self.state.open_document(MapDocument::open(path, map, z));
-        self.rebuild();
+        self.revision = self.revision.wrapping_add(1);
 
         Ok(())
     }
@@ -99,7 +96,6 @@ impl Session {
         }
 
         document.z = z;
-        self.rebuild();
     }
 
     pub fn change_level(&mut self, delta: i32) {
@@ -112,14 +108,10 @@ impl Session {
 
         if next != document.z {
             document.z = next;
-            self.rebuild();
         }
     }
 
-    pub fn toggle_areas(&mut self) {
-        self.options.show_areas = !self.options.show_areas;
-        self.rebuild();
-    }
+    pub fn toggle_areas(&mut self) { self.options.show_areas = !self.options.show_areas; }
 
     pub fn set_underlay_depth(&mut self, depth: u32) {
         if depth == self.options.underlay_depth {
@@ -127,42 +119,14 @@ impl Session {
         }
 
         self.options.underlay_depth = depth;
-        self.rebuild();
     }
 
-    pub fn rebuild(&mut self) {
-        let (Some(environment), Some(document)) = (self.state.environment.as_ref(), self.state.active_document())
-        else {
-            self.sprites.clear();
-            self.underlays.clear();
-            self.revision = self.revision.wrapping_add(1);
-
-            return;
-        };
-
-        self.sprites = render::frame::build(
-            &environment.tree,
-            &environment.icons,
-            &self.textures,
-            &document.map,
-            document.z,
-            &self.options,
-        );
-        self.underlays = render::frame::build_underlays(
-            &environment.tree,
-            &environment.icons,
-            &self.textures,
-            &document.map,
-            document.z,
-            &self.options,
-        );
-        self.revision = self.revision.wrapping_add(1);
-    }
-
-    pub fn frame(&self, camera: render::Camera) -> Frame {
+    pub fn frame(&self, camera: render::Camera) -> Frame<'_> {
         Frame {
-            sprites: self.sprites.clone(),
-            underlays: self.underlays.clone(),
+            sprite_instances: &self.sprite_instances,
+            active_z: self.z(),
+            underlay_depth: self.options.underlay_depth,
+            show_areas: self.options.show_areas,
             camera,
             revision: self.revision,
         }
@@ -192,28 +156,30 @@ fn validate_level(z: u32, levels: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-fn build_textures(environment: &Environment, used: &BTreeMap<String, BTreeSet<String>>) -> TextureCatalog {
+fn build_textures(environment: &Environment) -> TextureCatalog {
     let mut textures = TextureCatalog::default();
     let base = environment.base_dir();
 
-    for (name, states) in used {
-        let mut candidates = std::iter::once(base.join(name))
-            .chain(environment.resource_dirs.iter().map(|dir| base.join(dir).join(name)));
+    for name in environment.icon_paths() {
+        if !environment.icons.contains_key(name) {
+            continue;
+        }
+
+        let mut candidates =
+            std::iter::once(base.join(name)).chain(environment.resource_dirs.iter().map(|dir| dir.join(name)));
 
         let Some(path) = candidates.find(|path| path.is_file()) else {
             eprintln!("warning: could not find '{name}' on disk");
             continue;
         };
 
-        let states: BTreeSet<&str> = states.iter().map(String::as_str).collect();
-
-        match IconFile::load(&path) {
-            Ok(file) => {
-                if let Err(e) = textures.insert_states(name, &file, &states) {
+        match IconFile::load_info(&path) {
+            Ok(info) => {
+                if let Err(e) = textures.insert_info(name, &info) {
                     eprintln!("warning: {e}");
                 }
             },
-            Err(e) => eprintln!("warning: could not decode '{name}': {e}"),
+            Err(e) => eprintln!("warning: could not read '{name}': {e}"),
         }
     }
 
@@ -243,7 +209,19 @@ fn report(environment: &Environment, diagnostics: &editor::environment::LoadDiag
 
 #[cfg(test)]
 mod tests {
-    use super::validate_level;
+    use std::path::PathBuf;
+
+    use dmi::IconFile;
+    use dmm::{Map, Size};
+    use editor::{Environment, document::MapDocument};
+
+    use super::{Session, build_textures, validate_level};
+
+    fn examples() -> PathBuf {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
+
+        path.canonicalize().unwrap_or(path)
+    }
 
     #[test]
     fn validates_one_based_map_levels() {
@@ -251,5 +229,38 @@ mod tests {
         assert!(validate_level(3, 3).is_ok());
         assert!(validate_level(0, 3).is_err());
         assert!(validate_level(4, 3).is_err());
+    }
+
+    #[test]
+    fn environment_loading_packs_every_cell_in_each_dmi() {
+        let root = examples();
+        let (environment, diagnostics) = Environment::load(root.join("test.dme")).expect("load environment");
+        assert!(diagnostics.icons.is_empty(), "{:?}", diagnostics.icons);
+        let file = IconFile::load(root.join("icons/test.dmi")).expect("load icon");
+
+        let textures = build_textures(&environment);
+
+        assert_eq!(textures.len(), 1);
+        assert_eq!(textures.cell_count(), file.cell_count());
+        assert!((0..file.cell_count()).all(|cell| textures.lookup("icons/test.dmi", cell).is_some()));
+    }
+
+    #[test]
+    fn view_changes_do_not_change_the_sprite_revision() {
+        let mut session = Session::new();
+        session
+            .state
+            .open_document(MapDocument::new(Map::new(Size { x: 1, y: 1, z: 3 }), 1));
+        session.revision = 7;
+
+        session.set_level(2);
+        session.set_underlay_depth(1);
+        session.toggle_areas();
+
+        let frame = session.frame(Default::default());
+        assert_eq!(frame.revision, 7);
+        assert_eq!(frame.active_z, 2);
+        assert_eq!(frame.underlay_depth, 1);
+        assert!(frame.show_areas);
     }
 }

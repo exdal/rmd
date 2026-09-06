@@ -7,8 +7,32 @@ pub enum GpuError {
     NoSuitableDevice,
     NoGraphicsQueue,
     UnsupportedWindow,
-    TooManyTextures { requested: u32, limit: u32 },
+    TooManyTextures {
+        requested: u32,
+        limit: u32,
+    },
+    TextureCapacityExceeded {
+        requested: u32,
+        capacity: u32,
+    },
     TextureUploadTooLarge,
+    TextureLoad {
+        path: String,
+        message: String,
+    },
+    TextureSourceChanged {
+        path: String,
+        expected_width: u32,
+        expected_height: u32,
+        actual_width: u32,
+        actual_height: u32,
+    },
+    TextureSheetTooLarge {
+        path: String,
+        width: u32,
+        height: u32,
+        limit: u32,
+    },
     SpriteUploadTooLarge,
     TextureIdExhausted,
     OutOfDate,
@@ -36,8 +60,33 @@ impl std::fmt::Display for GpuError {
                     "the scene needs {requested} bindless textures, but the device supports {limit}"
                 )
             },
+            Self::TextureCapacityExceeded { requested, capacity } => write!(
+                f,
+                "the renderer was created for {capacity} DMI sheets, but this catalog contains {requested}"
+            ),
             Self::SpriteUploadTooLarge => write!(f, "sprite data is too large to upload"),
             Self::TextureUploadTooLarge => write!(f, "sprite texture data is too large to upload"),
+            Self::TextureLoad { path, message } => write!(f, "could not decode texture '{path}': {message}"),
+            Self::TextureSourceChanged {
+                path,
+                expected_width,
+                expected_height,
+                actual_width,
+                actual_height,
+            } => write!(
+                f,
+                "texture '{path}' changed size after it was catalogued: expected {expected_width}x{expected_height}, \
+                 got {actual_width}x{actual_height}"
+            ),
+            Self::TextureSheetTooLarge {
+                path,
+                width,
+                height,
+                limit,
+            } => write!(
+                f,
+                "texture '{path}' is {width}x{height}, but this device supports at most {limit}x{limit}"
+            ),
             Self::TextureIdExhausted => write!(f, "the interface exhausted the renderer texture id space"),
             Self::OutOfDate => write!(f, "the swapchain is out of date"),
             Self::RawDrawCallback => write!(

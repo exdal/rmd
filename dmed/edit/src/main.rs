@@ -178,7 +178,7 @@ impl App {
         imgui.io_mut().set_backend_flags(backend);
         let consumer = imgui.create_synchronous_renderer_consumer()?;
 
-        let mut renderer = Renderer::new(device, size.width, size.height)?;
+        let mut renderer = Renderer::new(device, size.width, size.height, self.session.textures.len())?;
         renderer.upload_textures(&self.session.textures)?;
 
         self.uploaded_texture_revision = Some(self.session.texture_revision());

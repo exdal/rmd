@@ -3,8 +3,12 @@ import common;
 struct Sprite {
     f32x4 position_size;
     f32x4 color;
-    i32 texture;
+    f32x4 uv_rect;
+    u32 texture;
+    u32 flags;
 };
+
+static const u32 SPRITE_FLAG_AREA = 1;
 
 [[vk::binding(0, 1)]]
 Sampler2D textures[];
@@ -16,6 +20,7 @@ struct VSOutput {
     f32x4 position : SV_Position;
     f32x2 uv;
     nointerpolation u32 texture_index;
+    nointerpolation u32 hidden;
     f32x4 color;
 };
 
@@ -33,7 +38,8 @@ func vs_main(
     uniform f32x2 center,
     uniform f32x2 viewport,
     uniform f32 zoom,
-    uniform u32 base
+    uniform u32 base,
+    uniform u32 show_areas
 ) -> VSOutput {
     let sprite = sprites[instance_id + base];
     let corner = CORNERS[vertex_id];
@@ -44,8 +50,10 @@ func vs_main(
 
     VSOutput output;
     output.position = f32x4(clip.x, -clip.y, 0.0, 1.0);
-    output.uv = f32x2(corner.x, 1.0 - corner.y);
+    let local_uv = f32x2(corner.x, 1.0 - corner.y);
+    output.uv = lerp(sprite.uv_rect.xy, sprite.uv_rect.zw, local_uv);
     output.texture_index = sprite.texture;
+    output.hidden = ((sprite.flags & SPRITE_FLAG_AREA) != 0 && show_areas == 0) ? 1 : 0;
     output.color = sprite.color;
 
     return output;
@@ -53,9 +61,12 @@ func vs_main(
 
 [shader("fragment")]
 func fs_main(VSOutput input) -> f32x4 {
+    if (input.hidden != 0) {
+        discard;
+    }
+
     let texture_index = NonUniformResourceIndex(input.texture_index);
     let texel = textures[texture_index].Sample(input.uv);
 
-    // The tint RGB already includes sprite opacity; premultiply only by texture alpha.
     return f32x4(texel.rgb * input.color.rgb * texel.a, texel.a * input.color.a);
 }

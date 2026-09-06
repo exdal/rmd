@@ -22,6 +22,14 @@ pub struct IconFile {
     pub pixels: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct IconInfo {
+    pub path: PathBuf,
+    pub metadata: Metadata,
+    pub sheet_width: u32,
+    pub sheet_height: u32,
+}
+
 /// `zTXt "Description"`
 fn read_description<R: BufRead + Seek>(reader: R) -> Result<(Metadata, Reader<R>), IconError> {
     let mut decoder = Decoder::new(reader);
@@ -68,14 +76,14 @@ fn read_icon<R: BufRead + Seek>(reader: R) -> Result<(Metadata, u32, u32, Vec<u8
     let mut buffer = vec![0; size];
     let info = reader.next_frame(&mut buffer)?;
     buffer.truncate(info.buffer_size());
-    let pixels = to_rgba8(&info, &buffer)?;
+    let pixels = to_rgba8(&info, buffer)?;
 
     Ok((metadata, info.width, info.height, pixels))
 }
 
-fn to_rgba8(info: &OutputInfo, buffer: &[u8]) -> Result<Vec<u8>, IconError> {
+fn to_rgba8(info: &OutputInfo, buffer: Vec<u8>) -> Result<Vec<u8>, IconError> {
     if info.color_type == ColorType::Rgba {
-        return Ok(buffer.to_vec());
+        return Ok(buffer);
     }
 
     let pixels = (info.width as usize).saturating_mul(info.height as usize);
@@ -121,22 +129,37 @@ impl IconFile {
         })
     }
 
-    pub fn load_metadata(path: impl AsRef<Path>) -> Result<Metadata, IconError> {
-        let (metadata, _) = read_description(BufReader::new(File::open(path.as_ref())?))?;
+    pub fn load_metadata(path: impl AsRef<Path>) -> Result<Metadata, IconError> { Ok(Self::load_info(path)?.metadata) }
 
-        Ok(metadata)
+    pub fn load_info(path: impl AsRef<Path>) -> Result<IconInfo, IconError> {
+        let path = path.as_ref();
+        let (metadata, reader) = read_description(BufReader::new(File::open(path)?))?;
+        let info = reader.info();
+
+        Ok(IconInfo {
+            path: path.to_path_buf(),
+            metadata,
+            sheet_width: info.width,
+            sheet_height: info.height,
+        })
     }
 
-    pub fn cell_count(&self) -> usize {
-        if self.metadata.width == 0 || self.metadata.height == 0 {
-            return 0;
-        }
+    pub fn cell_count(&self) -> usize { cell_count(&self.metadata, self.sheet_width, self.sheet_height) }
+}
 
-        let columns = (self.sheet_width / self.metadata.width) as usize;
-        let rows = (self.sheet_height / self.metadata.height) as usize;
+impl IconInfo {
+    pub fn cell_count(&self) -> usize { cell_count(&self.metadata, self.sheet_width, self.sheet_height) }
+}
 
-        columns * rows
+fn cell_count(metadata: &Metadata, sheet_width: u32, sheet_height: u32) -> usize {
+    if metadata.width == 0 || metadata.height == 0 {
+        return 0;
     }
+
+    let columns = (sheet_width / metadata.width) as usize;
+    let rows = (sheet_height / metadata.height) as usize;
+
+    columns * rows
 }
 
 #[cfg(test)]
@@ -256,7 +279,8 @@ mod tests {
         let bytes = encode(ColorType::Rgba, BitDepth::Eight, &[0; 16], Some(DESCRIPTION));
 
         let (full, ..) = read_icon(Cursor::new(bytes.clone())).expect("decode");
-        let (metadata, _) = read_description(Cursor::new(bytes)).expect("metadata");
+        let (metadata, reader) = read_description(Cursor::new(bytes)).expect("metadata");
         assert_eq!(full, metadata);
+        assert_eq!((reader.info().width, reader.info().height), (2, 2));
     }
 }

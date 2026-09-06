@@ -1,9 +1,6 @@
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
-use dmi::{IconFile, metadata::Metadata};
+use dmi::IconFile;
 use dmm::Map;
 use editor::{Environment, document::MapDocument};
 use render::{Frame, SpriteInstance, frame::FrameOptions, texture::TextureCatalog};
@@ -12,10 +9,8 @@ pub struct Session {
     pub environment: Option<Environment>,
     pub document: Option<MapDocument>,
     pub textures: TextureCatalog,
-    pub icons: HashMap<String, Metadata>,
     pub options: FrameOptions,
-    sprites: Vec<SpriteInstance>,
-    underlays: Vec<Vec<SpriteInstance>>,
+    sprite_instances: Vec<SpriteInstance>,
     revision: u64,
 }
 
@@ -25,10 +20,8 @@ impl Session {
             environment: None,
             document: None,
             textures: TextureCatalog::default(),
-            icons: HashMap::new(),
             options: FrameOptions::default(),
-            sprites: Vec::new(),
-            underlays: Vec::new(),
+            sprite_instances: Vec::new(),
             revision: 0,
         }
     }
@@ -38,7 +31,7 @@ impl Session {
 
         report(&environment, &diagnostics);
 
-        self.icons = environment.icons.clone();
+        self.textures = build_textures(&environment);
         self.environment = Some(environment);
 
         Ok(())
@@ -54,12 +47,17 @@ impl Session {
 
         validate_level(z, map.size.z)?;
 
-        if let Some(environment) = self.environment.as_ref() {
-            self.textures = build_textures(environment, &render::frame::icons_used(&environment.tree, &map));
-        }
-
+        self.sprite_instances = self.environment.as_ref().map_or_else(Vec::new, |environment| {
+            render::frame::build(
+                &environment.tree,
+                &environment.icons,
+                &self.textures,
+                &map,
+                self.options.tile_size,
+            )
+        });
         self.document = Some(MapDocument::open(path, map, z));
-        self.rebuild();
+        self.revision = self.revision.wrapping_add(1);
 
         Ok(())
     }
@@ -90,57 +88,29 @@ impl Session {
 
         if next != document.z {
             document.z = next;
-            self.rebuild();
         }
     }
 
-    pub fn toggle_areas(&mut self) {
-        self.options.show_areas = !self.options.show_areas;
-        self.rebuild();
-    }
+    pub fn toggle_areas(&mut self) { self.options.show_areas = !self.options.show_areas; }
 
-    pub fn rebuild(&mut self) {
-        let (Some(environment), Some(document)) = (self.environment.as_ref(), self.document.as_ref()) else {
-            self.sprites.clear();
-            self.underlays.clear();
-            self.revision = self.revision.wrapping_add(1);
-
-            return;
-        };
-
-        self.sprites = render::frame::build(
-            &environment.tree,
-            &self.icons,
-            &self.textures,
-            &document.map,
-            document.z,
-            &self.options,
-        );
-        self.underlays = render::frame::build_underlays(
-            &environment.tree,
-            &self.icons,
-            &self.textures,
-            &document.map,
-            document.z,
-            &self.options,
-        );
-        self.revision = self.revision.wrapping_add(1);
-    }
-
-    pub fn frame(&self, camera: render::Camera) -> Frame {
+    pub fn frame(&self, camera: render::Camera) -> Frame<'_> {
         Frame {
-            sprites: self.sprites.clone(),
-            underlays: self.underlays.clone(),
+            sprite_instances: &self.sprite_instances,
+            active_z: self.z(),
+            underlay_depth: self.options.underlay_depth,
+            show_areas: self.options.show_areas,
             camera,
             revision: self.revision,
         }
     }
 
-    pub fn sprite_count(&self) -> usize { self.sprites.len() }
+    pub fn sprite_count(&self) -> usize { self.sprite_instances.len() }
 
     pub fn texture_count(&self) -> usize { self.textures.len() }
 
-    pub fn texture_bytes(&self) -> usize { self.textures.textures().iter().map(|t| t.pixels().len()).sum() }
+    pub fn texture_cell_count(&self) -> usize { self.textures.cell_count() }
+
+    pub fn texture_bytes(&self) -> usize { self.textures.decoded_bytes() }
 
     pub fn extent_px(&self) -> (f32, f32) {
         let tile = self.options.tile_size.max(1) as f32;
@@ -164,29 +134,31 @@ fn validate_level(z: u32, levels: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// we only decode used icons to save on VRAM (shit gets expensive real fast)
-fn build_textures(environment: &Environment, used: &BTreeMap<String, BTreeSet<String>>) -> TextureCatalog {
+/// Catalog every icon up front so map navigation and future edits never have to extend it.
+fn build_textures(environment: &Environment) -> TextureCatalog {
     let mut textures = TextureCatalog::default();
     let base = environment.base_dir();
 
-    for (name, states) in used {
-        let mut candidates = std::iter::once(base.join(name))
-            .chain(environment.resource_dirs.iter().map(|dir| base.join(dir).join(name)));
+    for name in environment.icon_paths() {
+        if !environment.icons.contains_key(name) {
+            continue;
+        }
+
+        let mut candidates =
+            std::iter::once(base.join(name)).chain(environment.resource_dirs.iter().map(|dir| dir.join(name)));
 
         let Some(path) = candidates.find(|path| path.is_file()) else {
             eprintln!("warning: could not find '{name}' on disk");
             continue;
         };
 
-        let states: BTreeSet<&str> = states.iter().map(String::as_str).collect();
-
-        match IconFile::load(&path) {
-            Ok(file) => {
-                if let Err(e) = textures.insert_states(name, &file, &states) {
+        match IconFile::load_info(&path) {
+            Ok(info) => {
+                if let Err(e) = textures.insert_info(name, &info) {
                     eprintln!("warning: {e}");
                 }
             },
-            Err(e) => eprintln!("warning: could not decode '{name}': {e}"),
+            Err(e) => eprintln!("warning: could not read '{name}': {e}"),
         }
     }
 

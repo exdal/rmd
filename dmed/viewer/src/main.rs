@@ -67,9 +67,14 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    println!("{} sprites on z {}", session.sprite_count(), session.z());
     println!(
-        "{} cells packed, {:.1} MiB",
+        "{} sprite instances across {} z level(s)",
+        session.sprite_count(),
+        session.map().map_or(0, |map| map.size.z)
+    );
+    println!(
+        "{} cells mapped across {} DMI sheets ({:.1} MiB decoded during upload)",
+        session.texture_cell_count(),
         session.texture_count(),
         session.texture_bytes() as f64 / (1024.0 * 1024.0)
     );
@@ -159,7 +164,7 @@ impl App {
 
         let device = Device::new(window.window_handle()?.as_raw(), window.display_handle()?.as_raw())?;
 
-        let mut renderer = Renderer::new(device, size.width, size.height)?;
+        let mut renderer = Renderer::new(device, size.width, size.height, self.session.textures.len())?;
         renderer.upload_textures(&self.session.textures)?;
 
         self.camera.resize(size.width, size.height);

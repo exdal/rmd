@@ -21,6 +21,9 @@ func vs_main(
 }
 
 static const i32 SAMPLES = 8;
+static const i32 LOD = 0;
+static const i32 sLOD = 1 << LOD;
+static const i32 TEXELS = SAMPLES / sLOD;
 static const f32 SIGMA = f32(SAMPLES) * 0.25;
 static const f32 BLUR_RADIUS = 0.65;
 static const f32 DIM = 0.33;
@@ -37,9 +40,9 @@ func fs_main(
 ) -> f32x4 {
     var color = f32x4(0.0);
 
-    for (i32 i = 0; i < SAMPLES * SAMPLES; i++) {
-        let offset = f32x2(i % SAMPLES, i / SAMPLES) - f32(SAMPLES) / 2.0;
-        color += gaussian(offset) * source.Sample(input.uv + offset * sample_step * BLUR_RADIUS);
+    for (i32 i = 0; i < TEXELS * TEXELS; i++) {
+        let offset = f32x2(i % TEXELS, i / TEXELS) * f32(sLOD) - f32(SAMPLES) / 2.0;
+        color += gaussian(offset) * source.SampleLevel(input.uv + offset * sample_step * BLUR_RADIUS, f32(LOD));
     }
 
     return f32x4(color.rgb * DIM, color.a);
