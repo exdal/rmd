@@ -33,6 +33,10 @@ pub enum GpuError {
         height: u32,
         limit: u32,
     },
+    SpritePackingOutOfRange {
+        sprite: usize,
+        field: &'static str,
+    },
     SpriteUploadTooLarge,
     TextureIdExhausted,
     OutOfDate,
@@ -50,9 +54,10 @@ impl std::fmt::Display for GpuError {
             Self::Vulkan(e) => write!(f, "vulkan error: {e}"),
             Self::NoSuitableDevice => write!(
                 f,
-                "no Vulkan 1.3 device with a graphics queue, a swapchain, and bindless sampled-image support"
+                "no Vulkan 1.3 device with a graphics and compute queue, a swapchain, and bindless sampled-image \
+                 support"
             ),
-            Self::NoGraphicsQueue => write!(f, "the selected device has no graphics queue"),
+            Self::NoGraphicsQueue => write!(f, "the selected device has no graphics and compute queue"),
             Self::UnsupportedWindow => write!(f, "unsupported window system"),
             Self::TooManyTextures { requested, limit } => {
                 write!(
@@ -87,6 +92,12 @@ impl std::fmt::Display for GpuError {
                 f,
                 "texture '{path}' is {width}x{height}, but this device supports at most {limit}x{limit}"
             ),
+            Self::SpritePackingOutOfRange { sprite, field } => {
+                write!(
+                    f,
+                    "sprite {sprite} has a {field} value outside the packed GPU representation"
+                )
+            },
             Self::TextureIdExhausted => write!(f, "the interface exhausted the renderer texture id space"),
             Self::OutOfDate => write!(f, "the swapchain is out of date"),
             Self::RawDrawCallback => write!(

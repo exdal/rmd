@@ -94,12 +94,15 @@ impl Session {
 
     pub fn toggle_areas(&mut self) { self.options.show_areas = !self.options.show_areas; }
 
+    pub fn toggle_area_outlines(&mut self) { self.options.show_area_outlines = !self.options.show_area_outlines; }
+
     pub fn frame(&self, camera: render::Camera) -> Frame<'_> {
         Frame {
             sprite_instances: &self.sprite_instances,
             active_z: self.z(),
             underlay_depth: self.options.underlay_depth,
             show_areas: self.options.show_areas,
+            show_area_outlines: self.options.show_area_outlines,
             camera,
             revision: self.revision,
         }

@@ -1,14 +1,5 @@
 import common;
-
-struct Sprite {
-    f32x4 position_size;
-    f32x4 color;
-    f32x4 uv_rect;
-    u32 texture;
-    u32 flags;
-};
-
-static const u32 SPRITE_FLAG_AREA = 1;
+import sprite_shared;
 
 [[vk::binding(0, 1)]]
 Sampler2D textures[];
@@ -19,6 +10,7 @@ StructuredBuffer<Sprite> sprites;
 struct VSOutput {
     f32x4 position : SV_Position;
     f32x2 uv;
+    f32x2 local;
     nointerpolation u32 sprite_id;
 };
 
@@ -37,21 +29,29 @@ func vs_main(
     uniform f32x2 viewport,
     uniform f32 zoom,
     uniform u32 base,
-    uniform u32 show_areas
+    uniform u32 show_areas,
+    uniform u32 show_area_outlines
 ) -> VSOutput {
     let sprite_index = instance_id + base;
     let sprite = sprites[sprite_index];
     let corner = CORNERS[vertex_id];
+    let position_size = sprite.position_size();
+    let flags = sprite.flags();
 
-    let map = sprite.position_size.xy + corner * sprite.position_size.zw;
+    let map = position_size.xy + corner * position_size.zw;
     let view = (map - center) * zoom;
     let clip = view / (viewport * 0.5);
 
     VSOutput output;
     output.position = f32x4(clip.x, -clip.y, 0.0, 1.0);
     let local_uv = f32x2(corner.x, 1.0 - corner.y);
-    output.uv = lerp(sprite.uv_rect.xy, sprite.uv_rect.zw, local_uv);
-    output.sprite_id = ((sprite.flags & SPRITE_FLAG_AREA) != 0 && show_areas == 0) ? 0 : sprite_index + 1;
+    output.uv = f32x2(sprite.source_position()) + local_uv * f32x2(sprite.source_size());
+    output.local = corner;
+    let is_area = (flags & SPRITE_FLAG_AREA) != 0;
+    let is_area_outline = (flags & SPRITE_AREA_EDGE_MASK) != 0;
+    let hidden = (is_area_outline && show_area_outlines == 0) ||
+        (is_area && !is_area_outline && show_areas == 0);
+    output.sprite_id = hidden ? 0 : sprite_index + 1;
 
     return output;
 }
@@ -62,15 +62,35 @@ func sample_sprite(VSOutput input) -> f32x4 {
     }
 
     let sprite = sprites[input.sprite_id - 1];
-    let texture_index = NonUniformResourceIndex(sprite.texture);
-    let texel = textures[texture_index].Sample(input.uv);
-    let color = f32x4(texel.rgb * sprite.color.rgb * texel.a, texel.a * sprite.color.a);
+    let flags = sprite.flags();
+    let color = sprite.color();
+    if ((flags & SPRITE_AREA_EDGE_MASK) != 0) {
+        let pixel = fwidth(input.local);
+        let on_outline =
+            ((flags & SPRITE_AREA_EDGE_NORTH) != 0 && input.local.y >= 1.0 - pixel.y) ||
+            ((flags & SPRITE_AREA_EDGE_EAST) != 0 && input.local.x >= 1.0 - pixel.x) ||
+            ((flags & SPRITE_AREA_EDGE_SOUTH) != 0 && input.local.y <= pixel.y) ||
+            ((flags & SPRITE_AREA_EDGE_WEST) != 0 && input.local.x <= pixel.x);
+        if (!on_outline) {
+            discard;
+        }
 
-    if (color.a <= 0.0) {
+        return color;
+    }
+
+    let texture_index = NonUniformResourceIndex(sprite.texture());
+    u32 texture_width;
+    u32 texture_height;
+    textures[texture_index].GetDimensions(texture_width, texture_height);
+    let uv = input.uv / f32x2(texture_width, texture_height);
+    let texel = textures[texture_index].Sample(uv);
+    let shaded = f32x4(texel.rgb * color.rgb * texel.a, texel.a * color.a);
+
+    if (shaded.a <= 0.0) {
         discard;
     }
 
-    return color;
+    return shaded;
 }
 
 [shader("fragment")]

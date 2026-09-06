@@ -64,6 +64,7 @@ impl UiState {
 
         let mut exit = false;
         let mut toggle_areas = false;
+        let mut toggle_area_outlines = false;
         let mut level_delta = 0;
         let mut underlay_depth = None;
         let mut refit = false;
@@ -77,6 +78,14 @@ impl UiState {
             ui.menu("View", || {
                 if ui.menu_item_enabled_selected_with_shortcut("Show areas", "A", session.options.show_areas, true) {
                     toggle_areas = true;
+                }
+                if ui.menu_item_enabled_selected_with_shortcut(
+                    "Show area outlines",
+                    "O",
+                    session.options.show_area_outlines,
+                    true,
+                ) {
+                    toggle_area_outlines = true;
                 }
                 if ui.menu_item_with_shortcut("Z up", "Page Up") {
                     level_delta += 1;
@@ -109,6 +118,9 @@ impl UiState {
 
         if toggle_areas {
             session.toggle_areas();
+        }
+        if toggle_area_outlines {
+            session.toggle_area_outlines();
         }
         if level_delta != 0 {
             session.change_level(level_delta);
@@ -178,6 +190,9 @@ impl UiState {
 
                 if ui.is_key_pressed(Key::A) {
                     session.toggle_areas();
+                }
+                if ui.is_key_pressed(Key::O) {
+                    session.toggle_area_outlines();
                 }
                 if ui.is_key_pressed(Key::PageUp) {
                     session.change_level(1);

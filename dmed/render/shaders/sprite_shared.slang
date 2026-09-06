@@ -1,0 +1,44 @@
+module sprite_shared;
+
+import common;
+
+public static const u32 SPRITE_FLAG_AREA = 1;
+public static const u32 SPRITE_AREA_EDGE_NORTH = 1 << 1;
+public static const u32 SPRITE_AREA_EDGE_EAST = 1 << 2;
+public static const u32 SPRITE_AREA_EDGE_SOUTH = 1 << 3;
+public static const u32 SPRITE_AREA_EDGE_WEST = 1 << 4;
+public static const u32 SPRITE_AREA_EDGE_MASK =
+    SPRITE_AREA_EDGE_NORTH | SPRITE_AREA_EDGE_EAST | SPRITE_AREA_EDGE_SOUTH | SPRITE_AREA_EDGE_WEST;
+public static const u32 SPRITE_FLAGS_SHIFT = 27;
+public static const u32 SPRITE_TEXTURE_MASK = (1 << SPRITE_FLAGS_SHIFT) - 1;
+
+public struct Sprite {
+    public u32x2 packed_position_size;
+    public u32 packed_color;
+    public u32x2 packed_source_position_size;
+    public u32 packed_texture_flags;
+
+    public func position_size() -> f32x4 {
+        return f32x4(unpack_half2(this.packed_position_size.x), unpack_half2(this.packed_position_size.y));
+    }
+
+    public func color() -> f32x4 {
+        return unpack_unorm4x8(this.packed_color);
+    }
+
+    public func source_position() -> u32x2 {
+        return unpack_u16x2(this.packed_source_position_size.x);
+    }
+
+    public func source_size() -> u32x2 {
+        return unpack_u16x2(this.packed_source_position_size.y);
+    }
+
+    public func texture() -> u32 {
+        return this.packed_texture_flags & SPRITE_TEXTURE_MASK;
+    }
+
+    public func flags() -> u32 {
+        return this.packed_texture_flags >> SPRITE_FLAGS_SHIFT;
+    }
+};

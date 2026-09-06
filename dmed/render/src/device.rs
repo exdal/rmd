@@ -14,6 +14,7 @@ pub struct Device {
     pub surface: vk::SurfaceKHR,
     pub physical_device: vk::PhysicalDevice,
     pub max_bindless_textures: u32,
+    pub max_compute_work_group_count_x: u32,
     pub max_image_dimension_2d: u32,
     _entry: ash::Entry,
 }
@@ -22,12 +23,18 @@ impl Device {
     pub fn new(window: RawWindowHandle, display: RawDisplayHandle) -> Result<Self, GpuError> {
         let entry = unsafe { ash::Entry::load() }.map_err(|e| GpuError::Loader(e.to_string()))?;
         let instance = create_instance(&entry, window)?;
-        let (physical_device, queue_families, max_bindless_textures, max_image_dimension_2d) =
-            select_physical_device(&instance)?;
+        let (
+            physical_device,
+            queue_families,
+            max_bindless_textures,
+            max_compute_work_group_count_x,
+            max_image_dimension_2d,
+        ) = select_physical_device(&instance)?;
         let device = create_device(&instance, physical_device)?;
 
         let mut context = Context::new(device, physical_device, instance, &entry)?;
-        let graphics = first_queue(&queue_families, vk::QueueFlags::GRAPHICS).ok_or(GpuError::NoGraphicsQueue)?;
+        let graphics = first_queue(&queue_families, vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
+            .ok_or(GpuError::NoGraphicsQueue)?;
 
         context.create_command_queue(graphics, DomainFlag::Graphics);
 
@@ -41,6 +48,7 @@ impl Device {
             physical_device,
             allocator,
             max_bindless_textures,
+            max_compute_work_group_count_x,
             max_image_dimension_2d,
         })
     }
@@ -120,7 +128,7 @@ fn create_instance(entry: &ash::Entry, window: RawWindowHandle) -> Result<ash::I
 
 fn select_physical_device(
     instance: &ash::Instance,
-) -> Result<(vk::PhysicalDevice, Vec<vk::QueueFamilyProperties>, u32, u32), GpuError> {
+) -> Result<(vk::PhysicalDevice, Vec<vk::QueueFamilyProperties>, u32, u32, u32), GpuError> {
     let minimum = vk::make_api_version(0, 1, 3, 0);
     let devices = unsafe { instance.enumerate_physical_devices() }?;
 
@@ -145,14 +153,15 @@ fn select_physical_device(
             let mut vk12 = vk::PhysicalDeviceVulkan12Features::default();
             let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut vk12);
             unsafe { instance.get_physical_device_features2(handle, &mut features) };
-            if vk12.runtime_descriptor_array == vk::FALSE
+            if features.features.independent_blend == vk::FALSE
+                || vk12.runtime_descriptor_array == vk::FALSE
                 || vk12.shader_sampled_image_array_non_uniform_indexing == vk::FALSE
             {
                 return None;
             }
 
             let families = unsafe { instance.get_physical_device_queue_family_properties(handle) };
-            first_queue(&families, vk::QueueFlags::GRAPHICS)?;
+            first_queue(&families, vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)?;
 
             let limits = properties.limits;
             let max_bindless_textures = limits
@@ -170,6 +179,7 @@ fn select_physical_device(
                 properties.device_type,
                 families,
                 max_bindless_textures,
+                limits.max_compute_work_group_count[0],
                 limits.max_image_dimension2_d,
             ))
         })
@@ -182,10 +192,16 @@ fn select_physical_device(
         )
     });
 
-    let (handle, _, families, max_bindless_textures, max_image_dimension_2d) =
+    let (handle, _, families, max_bindless_textures, max_compute_work_group_count_x, max_image_dimension_2d) =
         candidates.into_iter().next().ok_or(GpuError::NoSuitableDevice)?;
 
-    Ok((handle, families, max_bindless_textures, max_image_dimension_2d))
+    Ok((
+        handle,
+        families,
+        max_bindless_textures,
+        max_compute_work_group_count_x,
+        max_image_dimension_2d,
+    ))
 }
 
 fn create_device(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Result<ash::Device, GpuError> {
@@ -216,7 +232,11 @@ fn create_device(instance: &ash::Instance, physical_device: vk::PhysicalDevice) 
         .variable_pointers_storage_buffer(true)
         .shader_draw_parameters(true);
     let mut features = vk::PhysicalDeviceFeatures2::default()
-        .features(vk::PhysicalDeviceFeatures::default().fill_mode_non_solid(true))
+        .features(
+            vk::PhysicalDeviceFeatures::default()
+                .fill_mode_non_solid(true)
+                .independent_blend(true),
+        )
         .push_next(&mut vk11)
         .push_next(&mut vk12)
         .push_next(&mut vk13);

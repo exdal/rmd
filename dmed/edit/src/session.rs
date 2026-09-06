@@ -114,6 +114,8 @@ impl Session {
 
     pub fn toggle_areas(&mut self) { self.options.show_areas = !self.options.show_areas; }
 
+    pub fn toggle_area_outlines(&mut self) { self.options.show_area_outlines = !self.options.show_area_outlines; }
+
     pub fn set_underlay_depth(&mut self, depth: u32) {
         if depth == self.options.underlay_depth {
             return;
@@ -128,6 +130,7 @@ impl Session {
             active_z: self.z(),
             underlay_depth: self.options.underlay_depth,
             show_areas: self.options.show_areas,
+            show_area_outlines: self.options.show_area_outlines,
             camera,
             revision: self.revision,
         }
@@ -257,11 +260,15 @@ mod tests {
         session.set_level(2);
         session.set_underlay_depth(1);
         session.toggle_areas();
+        assert!(session.options.show_areas);
+        assert!(!session.options.show_area_outlines);
+        session.toggle_area_outlines();
 
         let frame = session.frame(Default::default());
         assert_eq!(frame.revision, 7);
         assert_eq!(frame.active_z, 2);
         assert_eq!(frame.underlay_depth, 1);
         assert!(frame.show_areas);
+        assert!(frame.show_area_outlines);
     }
 }

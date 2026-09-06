@@ -161,18 +161,11 @@ impl TextureCatalog {
                 continue;
             }
 
-            let sheet_width = info.sheet_width as f32;
-            let sheet_height = info.sheet_height as f32;
             textures.push(SpriteTexture {
                 index,
+                source_position: [src_x, src_y],
                 width,
                 height,
-                uv_rect: [
-                    src_x as f32 / sheet_width,
-                    src_y as f32 / sheet_height,
-                    src_x.saturating_add(width) as f32 / sheet_width,
-                    src_y.saturating_add(height) as f32 / sheet_height,
-                ],
             });
             mapped = mapped.saturating_add(1);
         }
@@ -251,8 +244,8 @@ mod tests {
                 .iter()
                 .all(|texture| texture.width == 32 && texture.height == 16)
         );
-        assert_eq!(textures[0].uv_rect, [0.0, 0.0, 1.0 / 3.0, 1.0]);
-        assert_eq!(textures[2].uv_rect, [2.0 / 3.0, 0.0, 1.0, 1.0]);
+        assert_eq!(textures[0].source_position, [0, 0]);
+        assert_eq!(textures[2].source_position, [64, 0]);
     }
 
     #[test]
@@ -355,7 +348,7 @@ mod tests {
 
         let third = catalog.lookup("test.dmi", 2).expect("third cell");
         assert_eq!(third.index, 0);
-        assert_eq!(third.uv_rect, [2.0 / 3.0, 0.0, 1.0, 1.0]);
+        assert_eq!(third.source_position, [4, 0]);
     }
 
     #[test]

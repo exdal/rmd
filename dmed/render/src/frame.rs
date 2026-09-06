@@ -1,18 +1,27 @@
 use std::collections::HashMap;
 
 use dmi::metadata::{Dir, Metadata};
-use dmm::Coord;
+use dmm::{Coord, Map, Prefab};
 use editor::{
     document::MapDocument,
     visual::{self, Appearance},
 };
-use objtree::ObjectTree;
+use objtree::{ObjectTree, TypeId};
 
-use crate::{SpriteInstance, instance_for, texture::TextureCatalog};
+use crate::{
+    AREA_EDGE_EAST,
+    AREA_EDGE_NORTH,
+    AREA_EDGE_SOUTH,
+    AREA_EDGE_WEST,
+    SpriteInstance,
+    instance_for,
+    texture::TextureCatalog,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameOptions {
     pub show_areas: bool,
+    pub show_area_outlines: bool,
     /// `world.icon_size`
     pub tile_size: u32,
     /// How many levels below the active one to draw behind it, 0 for none.
@@ -23,6 +32,7 @@ impl Default for FrameOptions {
     fn default() -> Self {
         Self {
             show_areas: false,
+            show_area_outlines: false,
             tile_size: 32,
             underlay_depth: 3,
         }
@@ -55,17 +65,48 @@ pub fn build(
                         continue;
                     };
 
+                    let is_area = area.is_some_and(|area| tree.is_subtype_of(id, area));
                     let appearance = visual::resolve_id(tree, id, prefab);
                     order = order.saturating_add(1);
+
+                    if is_area {
+                        let texture = sprite_texture(icons, textures, &appearance);
+                        let sort_key = visual::sort_key(&appearance, order);
+
+                        if let Some(texture) = texture {
+                            level.push((
+                                sort_key,
+                                instance_for(owner, &appearance, texture, Coord::new(x, y, z), tile_size, true),
+                            ));
+                        }
+
+                        let edges = area.map_or(0, |area| area_edges(tree, area, map, prefab, Coord::new(x, y, z)));
+                        if edges == 0 {
+                            continue;
+                        }
+
+                        let texture = texture.unwrap_or_default();
+                        let mut instance =
+                            instance_for(owner, &appearance, texture, Coord::new(x, y, z), tile_size, true);
+                        instance.x = (x.saturating_sub(1) * tile_size) as f32;
+                        instance.y = (y.saturating_sub(1) * tile_size) as f32;
+                        instance.width = tile_size as f32;
+                        instance.height = tile_size as f32;
+                        instance.area_edges = edges;
+                        // The renderer replaces this with the resolved icon cell's averaged RGB.
+                        instance.color = [1.0; 4];
+
+                        level.push((sort_key, instance));
+                        continue;
+                    }
 
                     let Some(texture) = sprite_texture(icons, textures, &appearance) else {
                         continue;
                     };
 
-                    let is_area = area.is_some_and(|area| tree.is_subtype_of(id, area));
                     level.push((
                         visual::sort_key(&appearance, order),
-                        instance_for(owner, &appearance, texture, Coord::new(x, y, z), tile_size, is_area),
+                        instance_for(owner, &appearance, texture, Coord::new(x, y, z), tile_size, false),
                     ));
                 }
             }
@@ -76,6 +117,43 @@ pub fn build(
     }
 
     sprite_instances
+}
+
+fn area_edges(tree: &ObjectTree, area: TypeId, map: &Map, prefab: &Prefab, coord: Coord) -> u32 {
+    let matches = |coord| area_prefab_at(tree, area, map, coord).is_some_and(|other| same_area(prefab, other));
+    let mut edges = 0;
+
+    if coord.y >= map.size.y || !matches(Coord::new(coord.x, coord.y + 1, coord.z)) {
+        edges |= AREA_EDGE_NORTH;
+    }
+    if coord.x >= map.size.x || !matches(Coord::new(coord.x + 1, coord.y, coord.z)) {
+        edges |= AREA_EDGE_EAST;
+    }
+    if coord.y <= 1 || !matches(Coord::new(coord.x, coord.y - 1, coord.z)) {
+        edges |= AREA_EDGE_SOUTH;
+    }
+    if coord.x <= 1 || !matches(Coord::new(coord.x - 1, coord.y, coord.z)) {
+        edges |= AREA_EDGE_WEST;
+    }
+
+    edges
+}
+
+fn area_prefab_at<'a>(tree: &ObjectTree, area: TypeId, map: &'a Map, coord: Coord) -> Option<&'a Prefab> {
+    map.tile_at(coord)?.iter().find(|prefab| {
+        tree.id_of(&prefab.path)
+            .is_some_and(|candidate| tree.is_subtype_of(candidate, area))
+    })
+}
+
+/// Source spelling and variable order do not split otherwise identical area definitions.
+fn same_area(left: &Prefab, right: &Prefab) -> bool {
+    left.path == right.path
+        && left.vars.len() == right.vars.len()
+        && left
+            .vars
+            .iter()
+            .all(|(name, value)| right.var(name).is_some_and(|other| other == &value.value))
 }
 
 fn sprite_texture(
@@ -107,7 +185,15 @@ mod tests {
     use editor::document::MapDocument;
     use objtree::{ObjectTree, VarDecl};
 
-    use crate::{frame::build, texture::TextureCatalog};
+    use crate::{
+        AREA_EDGE_EAST,
+        AREA_EDGE_NORTH,
+        AREA_EDGE_SOUTH,
+        AREA_EDGE_WEST,
+        AREA_EDGES_ALL,
+        frame::build,
+        texture::TextureCatalog,
+    };
 
     const ICON: &str = "test.dmi";
 
@@ -192,6 +278,20 @@ mod tests {
         map
     }
 
+    fn area_map(width: u32, height: u32, path: &str) -> Map {
+        let mut map = Map::new(Size {
+            x: width,
+            y: height,
+            z: 1,
+        });
+        let key = map.intern_tile(vec![Prefab::new(TreePath::parse(path))]);
+        for row in &mut map.grid[0] {
+            row.fill(key);
+        }
+
+        map
+    }
+
     /// One tile per z level, each holding the type named for it.
     fn layered_map(levels: &[&str]) -> Map {
         let mut map = Map::new(Size {
@@ -253,16 +353,173 @@ mod tests {
     }
 
     #[test]
-    fn includes_and_tags_areas_for_renderer_filtering() {
+    fn includes_normal_area_sprites_and_separate_outlines() {
         let tree = tree(&[("/turf/floor", "floor", 2.0), ("/area/station", "floor", 1.0)]);
         let document = document(one_tile_map(&["/turf/floor", "/area/station"]));
         let (icons, textures) = (icons(&["floor"]), textures(&["floor"]));
 
         let sprites = build(&tree, &icons, &textures, &document, 32);
 
-        assert_eq!(sprites.len(), 2);
-        assert_eq!(sprites.iter().filter(|sprite| sprite.is_area).count(), 1);
+        assert_eq!(sprites.len(), 3);
+        assert_eq!(sprites.iter().filter(|sprite| sprite.is_area).count(), 2);
         assert_eq!(sprites.iter().filter(|sprite| !sprite.is_area).count(), 1);
+        let area = sprites
+            .iter()
+            .find(|sprite| sprite.is_area && sprite.area_edges == 0)
+            .unwrap();
+        let outline = sprites.iter().find(|sprite| sprite.area_edges != 0).unwrap();
+        assert_eq!(area.texture, textures.lookup(ICON, 0).unwrap());
+        assert_eq!(outline.area_edges, AREA_EDGES_ALL);
+        assert_eq!((outline.width, outline.height), (32.0, 32.0));
+        assert_eq!((sprites[0].is_area, sprites[0].area_edges), (true, 0));
+        assert_eq!((sprites[1].is_area, sprites[1].area_edges), (true, AREA_EDGES_ALL));
+    }
+
+    #[test]
+    fn matching_area_tiles_only_draw_the_outer_perimeter() {
+        let tree = tree(&[("/area/station", "floor", 1.0)]);
+        let (icons, textures) = (icons(&["floor"]), textures(&["floor"]));
+
+        let sprites = build(&tree, &icons, &textures, &document(area_map(3, 3, "/area/station")), 48);
+
+        assert_eq!(sprites.len(), 9 + 8);
+        assert_eq!(
+            sprites
+                .iter()
+                .filter(|sprite| sprite.is_area && sprite.area_edges == 0)
+                .count(),
+            9
+        );
+        assert_eq!(sprites.iter().filter(|sprite| sprite.area_edges != 0).count(), 8);
+        assert!(
+            sprites
+                .iter()
+                .any(|sprite| sprite.area_edges == 0 && (sprite.x, sprite.y) == (48.0, 48.0))
+        );
+        assert!(
+            !sprites
+                .iter()
+                .any(|sprite| sprite.area_edges != 0 && (sprite.x, sprite.y) == (48.0, 48.0))
+        );
+
+        let bottom_left = sprites
+            .iter()
+            .find(|sprite| sprite.area_edges != 0 && (sprite.x, sprite.y) == (0.0, 0.0))
+            .unwrap();
+        assert_eq!(bottom_left.area_edges, AREA_EDGE_SOUTH | AREA_EDGE_WEST);
+        assert_eq!((bottom_left.width, bottom_left.height), (48.0, 48.0));
+
+        let top_middle = sprites
+            .iter()
+            .find(|sprite| sprite.area_edges != 0 && (sprite.x, sprite.y) == (48.0, 96.0))
+            .unwrap();
+        assert_eq!(top_middle.area_edges, AREA_EDGE_NORTH);
+    }
+
+    #[test]
+    fn touching_different_areas_keep_both_sides_of_the_shared_edge() {
+        let tree = tree(&[("/area/one", "floor", 1.0), ("/area/two", "floor", 1.0)]);
+        let mut map = Map::new(Size { x: 2, y: 1, z: 1 });
+        let left = map.intern_tile(vec![Prefab::new(TreePath::parse("/area/one"))]);
+        let right = map.intern_tile(vec![Prefab::new(TreePath::parse("/area/two"))]);
+        map.grid[0][0] = vec![left, right];
+        let (icons, textures) = (icons(&["floor"]), textures(&["floor"]));
+
+        let sprites = build(&tree, &icons, &textures, &document(map), 32);
+        let left = sprites
+            .iter()
+            .find(|sprite| sprite.area_edges != 0 && sprite.x == 0.0)
+            .unwrap();
+        let right = sprites
+            .iter()
+            .find(|sprite| sprite.area_edges != 0 && sprite.x == 32.0)
+            .unwrap();
+
+        assert_ne!(left.area_edges & AREA_EDGE_EAST, 0);
+        assert_ne!(right.area_edges & AREA_EDGE_WEST, 0);
+    }
+
+    #[test]
+    fn matching_neighbors_remove_both_sides_of_the_shared_edge() {
+        let tree = tree(&[("/area/station", "floor", 1.0)]);
+        let (icons, textures) = (icons(&["floor"]), textures(&["floor"]));
+
+        let sprites = build(&tree, &icons, &textures, &document(area_map(2, 1, "/area/station")), 32);
+        let left = sprites
+            .iter()
+            .find(|sprite| sprite.area_edges != 0 && sprite.x == 0.0)
+            .unwrap();
+        let right = sprites
+            .iter()
+            .find(|sprite| sprite.area_edges != 0 && sprite.x == 32.0)
+            .unwrap();
+
+        assert_eq!(left.area_edges, AREA_EDGE_NORTH | AREA_EDGE_SOUTH | AREA_EDGE_WEST);
+        assert_eq!(right.area_edges, AREA_EDGE_NORTH | AREA_EDGE_EAST | AREA_EDGE_SOUTH);
+    }
+
+    #[test]
+    fn holes_receive_an_inner_perimeter() {
+        let tree = tree(&[("/area/station", "floor", 1.0)]);
+        let mut map = Map::new(Size { x: 3, y: 3, z: 1 });
+        let empty = map.intern_tile(Vec::new());
+        let area = map.intern_tile(vec![Prefab::new(TreePath::parse("/area/station"))]);
+        for row in &mut map.grid[0] {
+            row.fill(area);
+        }
+        map.grid[0][1][1] = empty;
+        let (icons, textures) = (icons(&["floor"]), textures(&["floor"]));
+
+        let sprites = build(&tree, &icons, &textures, &document(map), 32);
+        let west_of_hole = sprites
+            .iter()
+            .find(|sprite| sprite.area_edges != 0 && (sprite.x, sprite.y) == (0.0, 32.0))
+            .unwrap();
+        let east_of_hole = sprites
+            .iter()
+            .find(|sprite| sprite.area_edges != 0 && (sprite.x, sprite.y) == (64.0, 32.0))
+            .unwrap();
+        let south_of_hole = sprites
+            .iter()
+            .find(|sprite| sprite.area_edges != 0 && (sprite.x, sprite.y) == (32.0, 0.0))
+            .unwrap();
+        let north_of_hole = sprites
+            .iter()
+            .find(|sprite| sprite.area_edges != 0 && (sprite.x, sprite.y) == (32.0, 64.0))
+            .unwrap();
+
+        assert_ne!(west_of_hole.area_edges & AREA_EDGE_EAST, 0);
+        assert_ne!(east_of_hole.area_edges & AREA_EDGE_WEST, 0);
+        assert_ne!(south_of_hole.area_edges & AREA_EDGE_NORTH, 0);
+        assert_ne!(north_of_hole.area_edges & AREA_EDGE_SOUTH, 0);
+    }
+
+    #[test]
+    fn area_identity_uses_values_instead_of_source_order() {
+        let mut left = Prefab::new(TreePath::parse("/area/station"));
+        left.set_var("name".into(), Value::Text(String::from("Bridge")));
+        left.set_var("icon_state".into(), Value::Text(String::from("bridge")));
+        let mut right = Prefab::new(TreePath::parse("/area/station"));
+        right.set_var("icon_state".into(), Value::Text(String::from("bridge")));
+        right.set_var("name".into(), Value::Text(String::from("Bridge")));
+
+        assert!(super::same_area(&left, &right));
+        right.set_var("name".into(), Value::Text(String::from("Engineering")));
+        assert!(!super::same_area(&left, &right));
+    }
+
+    #[test]
+    fn an_area_with_an_unresolvable_icon_still_gets_a_white_outline() {
+        let tree = tree(&[("/area/station", "missing", 1.0)]);
+        let document = document(one_tile_map(&["/area/station"]));
+
+        let sprites = build(&tree, &icons(&["floor"]), &textures(&["floor"]), &document, 32);
+
+        assert_eq!(sprites.len(), 1);
+        assert!(sprites[0].is_area);
+        assert_eq!(sprites[0].area_edges, AREA_EDGES_ALL);
+        assert_eq!(sprites[0].texture, Default::default());
+        assert_eq!(sprites[0].color, [1.0; 4]);
     }
 
     #[test]
@@ -385,11 +642,22 @@ mod example_environment {
         let document = MapDocument::new(map, 1);
         let sprites = build(&environment.tree, &environment.icons, &textures, &document, 32);
 
-        // 8x6 turfs, plus three tables and one light. The areas have no icon.
-        assert_eq!(sprites.len(), 48 + 4);
+        // 8x6 turfs, three tables, one light, and the 24 tiles around the area's perimeter.
+        assert_eq!(sprites.len(), 48 + 4 + 24);
 
-        // Every sprite found a real cell, and the tinted table came through premultiplied.
-        assert!(sprites.iter().all(|s| s.texture.width == 32 && s.texture.height == 32));
+        // Drawable atoms found a real cell; the iconless area still uses tile-sized outline geometry.
+        assert!(
+            sprites
+                .iter()
+                .filter(|sprite| !sprite.is_area)
+                .all(|sprite| sprite.texture.width == 32 && sprite.texture.height == 32)
+        );
+        assert!(
+            sprites
+                .iter()
+                .filter(|sprite| sprite.is_area)
+                .all(|sprite| (sprite.width, sprite.height) == (32.0, 32.0))
+        );
         assert!(sprites.iter().any(|s| s.color[0] > s.color[1]));
     }
 
@@ -410,16 +678,20 @@ mod example_environment {
         // Neither `/turf` nor `/obj` declares a layer, so this is `demir.dm`'s builtin defaults
         // beating the map's own order, which lists every obj ahead of its turf. Cell 0 is "floor"
         // and cell 1 is "wall", so no turf may appear after the first object.
-        let first_object_uv = textures.lookup("icons/test.dmi", 2).expect("object cell").uv_rect[0];
+        let first_object_x = textures
+            .lookup("icons/test.dmi", 2)
+            .expect("object cell")
+            .source_position[0];
         let first_object = sprites
             .iter()
-            .position(|sprite| sprite.texture.uv_rect[0] >= first_object_uv)
+            .position(|sprite| !sprite.is_area && sprite.texture.source_position[0] >= first_object_x)
             .expect("an object sprite");
 
         assert!(
             sprites[first_object..]
                 .iter()
-                .all(|sprite| sprite.texture.uv_rect[0] >= first_object_uv)
+                .filter(|sprite| !sprite.is_area)
+                .all(|sprite| sprite.texture.source_position[0] >= first_object_x)
         );
     }
 }

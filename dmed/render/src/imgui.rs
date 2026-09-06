@@ -184,7 +184,8 @@ impl ImGuiPass {
         let drawn = module.set_condition(
             slots.has_draws,
             |m| {
-                m.begin_rendering([(target, Access::ColorRW), (viewport, TEXTURE_RESTING)])
+                let [drawn, _viewport] = m
+                    .begin_rendering([(target, Access::ColorRW), (viewport, TEXTURE_RESTING)])
                     .with_name("imgui")
                     .bind_graphics_pipeline(pipeline)
                     .set_dynamic_state(DynamicStateFlags::Viewport | DynamicStateFlags::Scissor)
@@ -199,7 +200,8 @@ impl ImGuiPass {
                     .bind_vertex_buffer(0, slots.vertices)
                     .bind_index_buffer(slots.indices, vk::IndexType::UINT16)
                     .record_from(slots.body)
-                    .end_rendering()
+                    .end_rendering();
+                drawn
             },
             |_| target,
         );

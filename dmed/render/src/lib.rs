@@ -31,10 +31,10 @@ impl VisibilityId {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct SpriteTexture {
     pub index: u32,
+    /// Pixel-space top-left corner within the DMI sheet.
+    pub source_position: [u32; 2],
     pub width: u32,
     pub height: u32,
-    /// Normalized `(left, top, right, bottom)` coordinates within the DMI sheet.
-    pub uv_rect: [f32; 4],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -43,15 +43,26 @@ pub struct SpriteInstance {
     pub texture: SpriteTexture,
     pub x: f32,
     pub y: f32,
+    /// Draw size in map pixels. This normally matches the texture cell, while area outlines use one map tile.
+    pub width: f32,
+    pub height: f32,
     /// One-based map level containing this instance.
     pub z: u32,
     /// Whether this instance belongs to an `/area` subtype.
     pub is_area: bool,
+    /// Exposed tile edges for area outlines.
+    pub area_edges: u32,
     /// premultiplied RGBA
     pub color: [f32; 4],
     /// sort key, from plane and layer
     pub depth: f32,
 }
+
+pub const AREA_EDGE_NORTH: u32 = 1 << 0;
+pub const AREA_EDGE_EAST: u32 = 1 << 1;
+pub const AREA_EDGE_SOUTH: u32 = 1 << 2;
+pub const AREA_EDGE_WEST: u32 = 1 << 3;
+pub const AREA_EDGES_ALL: u32 = AREA_EDGE_NORTH | AREA_EDGE_EAST | AREA_EDGE_SOUTH | AREA_EDGE_WEST;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera {
@@ -82,8 +93,10 @@ pub struct Frame<'a> {
     pub active_z: u32,
     /// How many levels immediately below `active_z` to draw as underlays.
     pub underlay_depth: u32,
-    /// Whether area instances participate in either draw pass.
+    /// Whether normal area sprites participate in either draw pass.
     pub show_areas: bool,
+    /// Whether area outline instances participate in either draw pass.
+    pub show_area_outlines: bool,
     pub camera: Camera,
     /// Changes only when `sprite_instances` changes.
     pub revision: u64,
@@ -109,8 +122,11 @@ pub fn instance_for(
         texture,
         x: (tile.x.saturating_sub(1) * tile_size) as f32 + offset_x as f32,
         y: (tile.y.saturating_sub(1) * tile_size) as f32 + offset_y as f32,
+        width: texture.width as f32,
+        height: texture.height as f32,
         z: tile.z,
         is_area,
+        area_edges: 0,
         color: [tint[0] * alpha, tint[1] * alpha, tint[2] * alpha, alpha],
         depth: appearance.plane * 1000.0 + appearance.layer,
     }
@@ -218,9 +234,9 @@ mod tests {
     fn a_larger_than_tile_icon_anchors_to_the_bottom_left_of_its_tile() {
         let texture = SpriteTexture {
             index: 0,
+            source_position: [0, 0],
             width: 64,
             height: 64,
-            uv_rect: [0.0, 0.0, 1.0, 1.0],
         };
         let centred = Appearance {
             pixel_x: -16,

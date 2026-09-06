@@ -4,7 +4,7 @@
 //! dmedv <file.dmm> [z]
 //! ```
 //!
-//! Drag to pan, scroll to zoom, PageUp/PageDown to change z level, A to toggle areas.
+//! Drag to pan, scroll to zoom, PageUp/PageDown to change z level, A to toggle areas, O to toggle area outlines.
 
 mod camera;
 mod session;
@@ -243,6 +243,7 @@ impl ApplicationHandler for App {
                     Key::Named(NamedKey::PageUp) => self.session.change_level(1),
                     Key::Named(NamedKey::PageDown) => self.session.change_level(-1),
                     Key::Character("a" | "A") => self.session.toggle_areas(),
+                    Key::Character("o" | "O") => self.session.toggle_area_outlines(),
                     Key::Named(NamedKey::Home) => {
                         let (width, height) = self.session.extent_px();
                         self.camera.frame_map(width, height);
