@@ -13,7 +13,7 @@ use std::{path::PathBuf, process::ExitCode, sync::Arc};
 use dear_imgui_rs::{BackendFlags, ConfigFlags, Context, render::SynchronousRendererConsumer};
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use render::{Device, Renderer};
+use render::{Device, PickResult, Renderer};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -226,7 +226,14 @@ impl App {
         let scene = session.frame(camera.camera);
         let pending = frame.try_render(consumer)?;
         window.pre_present_notify();
-        renderer.draw_imgui(&scene, output.viewport, pending)?;
+        let picked = renderer.draw_imgui(&scene, output.viewport, pending, output.interaction)?;
+        if output.interaction.pick {
+            match picked {
+                Some(PickResult::Hit(owner)) => session.select_instance(Some(owner)),
+                Some(PickResult::Miss) => session.select_instance(None),
+                None => {},
+            }
+        }
 
         Ok(output.exit)
     }

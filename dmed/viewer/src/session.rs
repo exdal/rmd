@@ -56,6 +56,7 @@ impl Session {
                 &document,
                 self.options.tile_size,
             )
+            .sprites
         });
         self.document = Some(document);
         self.revision = self.revision.wrapping_add(1);
@@ -99,6 +100,7 @@ impl Session {
     pub fn frame(&self, camera: render::Camera) -> Frame<'_> {
         Frame {
             sprite_instances: &self.sprite_instances,
+            area_tiles: &[],
             active_z: self.z(),
             underlay_depth: self.options.underlay_depth,
             show_areas: self.options.show_areas,

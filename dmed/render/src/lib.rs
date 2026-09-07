@@ -28,6 +28,24 @@ impl VisibilityId {
     pub const fn sprite_index(self) -> usize { self.get() as usize - 1 }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ViewportInteraction {
+    /// Pixel coordinate relative to the top-left of the rendered viewport.
+    pub cursor: Option<[u32; 2]>,
+    /// Area instance occupying the hovered tile, used for the colored tile outline.
+    pub hovered_area: Option<PrefabInstanceId>,
+    /// Persistently selected prefab instance.
+    pub selected: Option<PrefabInstanceId>,
+    /// Request a CPU-visible pick result for this frame.
+    pub pick: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickResult {
+    Miss,
+    Hit(PrefabInstanceId),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct SpriteTexture {
     pub index: u32,
@@ -89,6 +107,8 @@ impl Default for Camera {
 pub struct Frame<'a> {
     /// Every placed sprite in the map, ordered by z and then draw order.
     pub sprite_instances: &'a [SpriteInstance],
+    /// One tile-sized, fully outlined proxy for every placed area, used by viewport hover feedback.
+    pub area_tiles: &'a [SpriteInstance],
     /// The level drawn sharp and above the blurred underlays.
     pub active_z: u32,
     /// How many levels immediately below `active_z` to draw as underlays.
@@ -130,6 +150,20 @@ pub fn instance_for(
         color: [tint[0] * alpha, tint[1] * alpha, tint[2] * alpha, alpha],
         depth: appearance.plane * 1000.0 + appearance.layer,
     }
+}
+
+pub(crate) fn extent3d(extent: ash::vk::Extent2D) -> ash::vk::Extent3D {
+    ash::vk::Extent3D {
+        width: extent.width,
+        height: extent.height,
+        depth: 1,
+    }
+}
+
+pub(crate) fn read_spirv(bytes: &[u8]) -> Result<Vec<u32>, GpuError> {
+    let mut cursor = std::io::Cursor::new(bytes);
+
+    ash::util::read_spv(&mut cursor).map_err(|e| GpuError::Loader(e.to_string()))
 }
 
 #[cfg(test)]
@@ -271,18 +305,4 @@ mod tests {
         assert_eq!(instance.z, 7);
         assert!(instance.is_area);
     }
-}
-
-pub(crate) fn extent3d(extent: ash::vk::Extent2D) -> ash::vk::Extent3D {
-    ash::vk::Extent3D {
-        width: extent.width,
-        height: extent.height,
-        depth: 1,
-    }
-}
-
-pub(crate) fn read_spirv(bytes: &[u8]) -> Result<Vec<u32>, GpuError> {
-    let mut cursor = std::io::Cursor::new(bytes);
-
-    ash::util::read_spv(&mut cursor).map_err(|e| GpuError::Loader(e.to_string()))
 }

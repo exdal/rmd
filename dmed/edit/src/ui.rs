@@ -11,7 +11,7 @@ use dear_imgui_rs::{
     WindowKeyError,
 };
 use objtree::{ObjectTree, TypeId};
-use render::Renderer;
+use render::{Renderer, ViewportInteraction};
 
 use crate::{camera::Controller, session::Session};
 
@@ -21,6 +21,7 @@ const MAX_UNDERLAY_DEPTH: u32 = 3;
 pub struct UiOutput {
     pub exit: bool,
     pub viewport: (u32, u32),
+    pub interaction: ViewportInteraction,
 }
 
 pub struct UiState {
@@ -68,6 +69,10 @@ impl UiState {
         let mut level_delta = 0;
         let mut underlay_depth = None;
         let mut refit = false;
+        let mut interaction = ViewportInteraction {
+            selected: session.selected_instance(),
+            ..Default::default()
+        };
 
         ui.main_menu_bar(|| {
             ui.menu("File", || {
@@ -130,11 +135,12 @@ impl UiState {
         }
 
         self.draw_object_tree(ui, session);
-        self.draw_viewport(ui, session, camera, &mut exit, &mut refit);
+        self.draw_viewport(ui, session, camera, &mut interaction, &mut exit, &mut refit);
 
         Ok(UiOutput {
             exit,
             viewport: self.viewport,
+            interaction,
         })
     }
 
@@ -164,7 +170,8 @@ impl UiState {
     }
 
     fn draw_viewport(
-        &mut self, ui: &Ui, session: &mut Session, camera: &mut Controller, exit: &mut bool, refit: &mut bool,
+        &mut self, ui: &Ui, session: &mut Session, camera: &mut Controller, interaction: &mut ViewportInteraction,
+        exit: &mut bool, refit: &mut bool,
     ) {
         ui.window(&self.viewport_window).build(|| {
             draw_z_levels(ui, session);
@@ -172,12 +179,18 @@ impl UiState {
             let (image_size, viewport) = panel_extent(ui.content_region_avail());
             self.viewport = viewport;
             camera.resize(viewport.0, viewport.1);
+            if self.initial_refit || *refit {
+                let (width, height) = session.extent_px();
+                camera.frame_map(width, height);
+                self.initial_refit = false;
+                *refit = false;
+            }
             ui.image(Renderer::VIEWPORT_TEXTURE, image_size);
 
             let hovered = ui.is_item_hovered();
             if hovered {
                 let io = ui.io();
-                if ui.is_mouse_down(MouseButton::Left) {
+                if ui.is_mouse_down(MouseButton::Middle) {
                     camera.pan_by(io.mouse_delta());
                 }
 
@@ -203,16 +216,33 @@ impl UiState {
                 if ui.is_key_pressed(Key::Home) {
                     *refit = true;
                 }
+
+                if *refit {
+                    let (width, height) = session.extent_px();
+                    camera.frame_map(width, height);
+                    *refit = false;
+                }
+
+                let mouse = io.mouse_pos();
+                let origin = ui.item_rect_min();
+                let cursor = [mouse[0] - origin[0], mouse[1] - origin[1]];
+                if cursor.iter().all(|value| value.is_finite() && *value >= 0.0)
+                    && cursor[0] < viewport.0 as f32
+                    && cursor[1] < viewport.1 as f32
+                {
+                    interaction.cursor = Some([cursor[0].floor() as u32, cursor[1].floor() as u32]);
+                    interaction.pick = ui.is_mouse_clicked(MouseButton::Left);
+
+                    if let Some(size) = session.map().map(|map| map.size)
+                        && let Some(coord) = camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
+                    {
+                        interaction.hovered_area = session.area_at(coord);
+                    }
+                }
             }
 
             if ui.is_key_pressed(Key::Escape) {
                 *exit = true;
-            }
-
-            if self.initial_refit || *refit {
-                let (width, height) = session.extent_px();
-                camera.frame_map(width, height);
-                self.initial_refit = false;
             }
         });
     }

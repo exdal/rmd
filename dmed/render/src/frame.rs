@@ -18,6 +18,18 @@ use crate::{
     texture::TextureCatalog,
 };
 
+#[derive(Debug, Default)]
+pub struct FrameInstances {
+    pub sprites: Vec<SpriteInstance>,
+    pub area_tiles: Vec<SpriteInstance>,
+}
+
+impl std::ops::Deref for FrameInstances {
+    type Target = [SpriteInstance];
+
+    fn deref(&self) -> &Self::Target { &self.sprites }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameOptions {
     pub show_areas: bool,
@@ -42,8 +54,9 @@ impl Default for FrameOptions {
 pub fn build(
     tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, document: &MapDocument,
     tile_size: u32,
-) -> Vec<SpriteInstance> {
+) -> FrameInstances {
     let mut sprite_instances = Vec::new();
+    let mut area_tiles = Vec::new();
     let area = tree.roots().area;
     let map = &document.map;
 
@@ -79,6 +92,22 @@ pub fn build(
                                 instance_for(owner, &appearance, texture, Coord::new(x, y, z), tile_size, true),
                             ));
                         }
+
+                        let mut hover_outline = instance_for(
+                            owner,
+                            &appearance,
+                            texture.unwrap_or_default(),
+                            Coord::new(x, y, z),
+                            tile_size,
+                            true,
+                        );
+                        hover_outline.x = (x.saturating_sub(1) * tile_size) as f32;
+                        hover_outline.y = (y.saturating_sub(1) * tile_size) as f32;
+                        hover_outline.width = tile_size as f32;
+                        hover_outline.height = tile_size as f32;
+                        hover_outline.area_edges = crate::AREA_EDGES_ALL;
+                        hover_outline.color = [1.0; 4];
+                        area_tiles.push(hover_outline);
 
                         let edges = area.map_or(0, |area| area_edges(tree, area, map, prefab, Coord::new(x, y, z)));
                         if edges == 0 {
@@ -116,7 +145,10 @@ pub fn build(
         sprite_instances.extend(level.into_iter().map(|(_, instance)| instance));
     }
 
-    sprite_instances
+    FrameInstances {
+        sprites: sprite_instances,
+        area_tiles,
+    }
 }
 
 fn area_edges(tree: &ObjectTree, area: TypeId, map: &Map, prefab: &Prefab, coord: Coord) -> u32 {
@@ -373,6 +405,9 @@ mod tests {
         assert_eq!((outline.width, outline.height), (32.0, 32.0));
         assert_eq!((sprites[0].is_area, sprites[0].area_edges), (true, 0));
         assert_eq!((sprites[1].is_area, sprites[1].area_edges), (true, AREA_EDGES_ALL));
+        assert_eq!(sprites.area_tiles.len(), 1);
+        assert_eq!(sprites.area_tiles[0].owner, area.owner);
+        assert_eq!(sprites.area_tiles[0].area_edges, AREA_EDGES_ALL);
     }
 
     #[test]
@@ -391,6 +426,19 @@ mod tests {
             9
         );
         assert_eq!(sprites.iter().filter(|sprite| sprite.area_edges != 0).count(), 8);
+        assert_eq!(sprites.area_tiles.len(), 9);
+        assert!(
+            sprites
+                .area_tiles
+                .iter()
+                .all(|sprite| sprite.area_edges == AREA_EDGES_ALL)
+        );
+        assert!(
+            sprites
+                .area_tiles
+                .iter()
+                .any(|sprite| (sprite.x, sprite.y) == (48.0, 48.0))
+        );
         assert!(
             sprites
                 .iter()
@@ -520,6 +568,9 @@ mod tests {
         assert_eq!(sprites[0].area_edges, AREA_EDGES_ALL);
         assert_eq!(sprites[0].texture, Default::default());
         assert_eq!(sprites[0].color, [1.0; 4]);
+        assert_eq!(sprites.area_tiles.len(), 1);
+        assert_eq!(sprites.area_tiles[0].texture, Default::default());
+        assert_eq!(sprites.area_tiles[0].color, [1.0; 4]);
     }
 
     #[test]

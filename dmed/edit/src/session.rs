@@ -1,16 +1,24 @@
 use std::path::{Path, PathBuf};
 
 use dmi::IconFile;
-use dmm::Map;
-use editor::{EditorState, Environment, document::MapDocument};
+use dmm::{Coord, Map};
+use editor::{
+    EditorState,
+    Environment,
+    document::{MapDocument, PrefabInstanceId},
+};
 use objtree::ObjectTree;
-use render::{Frame, SpriteInstance, frame::FrameOptions, texture::TextureCatalog};
+use render::{
+    Frame,
+    frame::{FrameInstances, FrameOptions},
+    texture::TextureCatalog,
+};
 
 pub struct Session {
     pub state: EditorState,
     pub textures: TextureCatalog,
     pub options: FrameOptions,
-    sprite_instances: Vec<SpriteInstance>,
+    instances: FrameInstances,
     revision: u64,
     texture_revision: u64,
 }
@@ -21,7 +29,7 @@ impl Session {
             state: EditorState::new(),
             textures: TextureCatalog::default(),
             options: FrameOptions::default(),
-            sprite_instances: Vec::new(),
+            instances: FrameInstances::default(),
             revision: 0,
             texture_revision: 0,
         }
@@ -49,15 +57,19 @@ impl Session {
         validate_level(z, map.size.z)?;
         let document = MapDocument::open(path, map, z);
 
-        self.sprite_instances = self.state.environment.as_ref().map_or_else(Vec::new, |environment| {
-            render::frame::build(
-                &environment.tree,
-                &environment.icons,
-                &self.textures,
-                &document,
-                self.options.tile_size,
-            )
-        });
+        self.instances = self
+            .state
+            .environment
+            .as_ref()
+            .map_or_else(FrameInstances::default, |environment| {
+                render::frame::build(
+                    &environment.tree,
+                    &environment.icons,
+                    &self.textures,
+                    &document,
+                    self.options.tile_size,
+                )
+            });
         self.state.open_document(document);
         self.revision = self.revision.wrapping_add(1);
 
@@ -112,6 +124,31 @@ impl Session {
         }
     }
 
+    pub fn selected_instance(&self) -> Option<PrefabInstanceId> {
+        self.state.active_document().and_then(MapDocument::selected_instance)
+    }
+
+    pub fn select_instance(&mut self, selected: Option<PrefabInstanceId>) {
+        if let Some(document) = self.state.active_document_mut() {
+            document.select_instance(selected);
+        }
+    }
+
+    pub fn area_at(&self, coord: Coord) -> Option<PrefabInstanceId> {
+        let environment = self.state.environment.as_ref()?;
+        let area = environment.tree.roots().area?;
+        let document = self.state.active_document()?;
+        let tile = document.map.tile_at(coord)?;
+
+        tile.iter()
+            .zip(document.instance_ids_at(coord))
+            .find_map(|(prefab, owner)| {
+                let id = environment.tree.id_of(&prefab.path)?;
+
+                environment.tree.is_subtype_of(id, area).then_some(*owner)
+            })
+    }
+
     pub fn toggle_areas(&mut self) { self.options.show_areas = !self.options.show_areas; }
 
     pub fn toggle_area_outlines(&mut self) { self.options.show_area_outlines = !self.options.show_area_outlines; }
@@ -126,7 +163,8 @@ impl Session {
 
     pub fn frame(&self, camera: render::Camera) -> Frame<'_> {
         Frame {
-            sprite_instances: &self.sprite_instances,
+            sprite_instances: &self.instances.sprites,
+            area_tiles: &self.instances.area_tiles,
             active_z: self.z(),
             underlay_depth: self.options.underlay_depth,
             show_areas: self.options.show_areas,

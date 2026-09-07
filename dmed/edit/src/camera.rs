@@ -1,3 +1,4 @@
+use dmm::{Coord, Size};
 use render::Camera;
 
 pub struct Controller {
@@ -48,7 +49,7 @@ impl Controller {
         self.camera.y += before[1] - after[1];
     }
 
-    fn screen_to_map(&self, point: [f32; 2]) -> [f32; 2] {
+    pub fn screen_to_map(&self, point: [f32; 2]) -> [f32; 2] {
         let zoom = self.camera.zoom.max(f32::EPSILON);
         let half_w = self.camera.viewport_width as f32 / 2.0;
         let half_h = self.camera.viewport_height as f32 / 2.0;
@@ -57,6 +58,29 @@ impl Controller {
             self.camera.x + (point[0] - half_w) / zoom,
             self.camera.y - (point[1] - half_h) / zoom,
         ]
+    }
+
+    pub fn screen_to_tile(&self, point: [f32; 2], size: Size, tile_size: u32, z: u32) -> Option<Coord> {
+        let map = self.screen_to_map(point);
+        let tile_size = tile_size.max(1) as f32;
+        let width = size.x as f32 * tile_size;
+        let height = size.y as f32 * tile_size;
+
+        if !map[0].is_finite()
+            || !map[1].is_finite()
+            || map[0] < 0.0
+            || map[1] < 0.0
+            || map[0] >= width
+            || map[1] >= height
+        {
+            return None;
+        }
+
+        Some(Coord::new(
+            (map[0] / tile_size).floor() as u32 + 1,
+            (map[1] / tile_size).floor() as u32 + 1,
+            z,
+        ))
     }
 
     #[cfg(test)]
@@ -73,6 +97,8 @@ impl Controller {
 
 #[cfg(test)]
 mod tests {
+    use dmm::{Coord, Size};
+
     use super::Controller;
 
     #[test]
@@ -104,5 +130,35 @@ mod tests {
         let after = controller.screen_to_map(cursor);
         assert!((before[0] - after[0]).abs() < 0.0001);
         assert!((before[1] - after[1]).abs() < 0.0001);
+    }
+
+    #[test]
+    fn screen_position_resolves_one_based_map_tile() {
+        let mut controller = Controller::new();
+        controller.resize(64, 64);
+        controller.camera.x = 32.0;
+        controller.camera.y = 32.0;
+        let size = Size { x: 2, y: 2, z: 1 };
+
+        assert_eq!(
+            controller.screen_to_tile([16.0, 48.0], size, 32, 1),
+            Some(Coord::new(1, 1, 1))
+        );
+        assert_eq!(
+            controller.screen_to_tile([48.0, 16.0], size, 32, 1),
+            Some(Coord::new(2, 2, 1))
+        );
+    }
+
+    #[test]
+    fn screen_position_outside_map_has_no_tile() {
+        let mut controller = Controller::new();
+        controller.resize(64, 64);
+        controller.camera.x = 32.0;
+        controller.camera.y = 32.0;
+        let size = Size { x: 2, y: 2, z: 1 };
+
+        assert_eq!(controller.screen_to_tile([64.0, 32.0], size, 32, 1), None);
+        assert_eq!(controller.screen_to_tile([32.0, 0.0], size, 32, 1), None);
     }
 }

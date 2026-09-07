@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{collections::HashMap, ops::Range};
 
 use ash::vk;
 use dear_imgui_rs::render::PendingFrame;
@@ -36,7 +36,10 @@ use crate::{
     Device,
     Frame,
     GpuError,
+    PickResult,
     SpriteInstance,
+    ViewportInteraction,
+    VisibilityId,
     extent3d,
     imgui::{ImGuiPass, ImGuiSlots},
     read_spirv,
@@ -49,11 +52,15 @@ const SPRITE_VIS_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprit
 const AREA_COLOR_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/area_color.comp.spv"));
 const BLUR_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blur.vert.spv"));
 const BLUR_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blur.frag.spv"));
+const INTERACTION_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/interaction.vert.spv"));
+const INTERACTION_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/interaction.frag.spv"));
+const PICK_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pick.comp.spv"));
 const UPLOAD_BATCH_BYTES: usize = 64 * 1024 * 1024;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct GpuSprite {
+    owner: [u32; 2],
     position_size: [u32; 2],
     color: u32,
     source_position_size: [u32; 2],
@@ -90,6 +97,29 @@ struct BlurPush {
     sample_step: [f32; 2],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct InteractionPush {
+    cursor: [u32; 2],
+    cursor_valid: u32,
+    selected_owner: [u32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct PickPush {
+    cursor: [u32; 2],
+    cursor_valid: u32,
+}
+
+struct InteractionSlots {
+    push: ValueId,
+    pick_push: ValueId,
+    pick_result: ValueId,
+    area_tiles: ValueId,
+    hover_draws: ValueId,
+}
+
 struct Recorded {
     program: Program,
     scene_extent: ValueId,
@@ -99,6 +129,7 @@ struct Recorded {
     blur_push: ValueId,
     underlay_draws: ValueId,
     active_draws: ValueId,
+    interaction: Option<InteractionSlots>,
     ui: Option<ImGuiSlots>,
 }
 
@@ -160,6 +191,8 @@ pub struct Renderer {
     sprite_pipeline: PipelineId,
     visibility_pipeline: PipelineId,
     blur_pipeline: PipelineId,
+    interaction_pipeline: PipelineId,
+    pick_pipeline: PipelineId,
     area_colors: AreaColorPass,
     bindless: BindlessDescriptorSet,
     textures: Vec<TextureImage>,
@@ -168,6 +201,10 @@ pub struct Renderer {
     blur_sampler: vk::Sampler,
     sprites: Option<Buffer>,
     sprite_capacity: usize,
+    area_tiles: Option<Buffer>,
+    area_tile_capacity: usize,
+    area_tile_indices: HashMap<editor::document::PrefabInstanceId, u32>,
+    pick_readback: Option<Buffer>,
     uploaded_revision: Option<u64>,
     ranges: Vec<LevelRange>,
     imgui: Option<ImGuiPass>,
@@ -227,6 +264,28 @@ impl Renderer {
                 return Err(error.into());
             },
         };
+        let interaction_pipeline = match graph.declare_pipeline(
+            GraphicsPipelineInfo::new()
+                .with_shader(&read_spirv(INTERACTION_VS_SPV)?)
+                .with_shader(&read_spirv(INTERACTION_FS_SPV)?),
+        ) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                drop(graph);
+                bindless.destroy(&device);
+
+                return Err(error.into());
+            },
+        };
+        let pick_pipeline = match graph.declare_compute_pipeline(ComputePipelineInfo::new(&read_spirv(PICK_CS_SPV)?)) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                drop(graph);
+                bindless.destroy(&device);
+
+                return Err(error.into());
+            },
+        };
         let area_color_pipeline = match graph.declare_compute_pipeline(
             ComputePipelineInfo::new(&read_spirv(AREA_COLOR_CS_SPV)?).with_bindless_set(
                 1,
@@ -260,6 +319,8 @@ impl Renderer {
             sprite_pipeline,
             visibility_pipeline,
             blur_pipeline,
+            interaction_pipeline,
+            pick_pipeline,
             area_colors,
             bindless,
             textures: Vec::new(),
@@ -268,6 +329,10 @@ impl Renderer {
             blur_sampler: vk::Sampler::null(),
             sprites: None,
             sprite_capacity: 0,
+            area_tiles: None,
+            area_tile_capacity: 0,
+            area_tile_indices: HashMap::new(),
+            pick_readback: None,
             uploaded_revision: None,
             ranges: Vec::new(),
             imgui: None,
@@ -284,6 +349,16 @@ impl Renderer {
             .allocator
             .allocate_sampler(&SamplerInfo::nearest().with_address_mode(vk::SamplerAddressMode::CLAMP_TO_EDGE))?;
         renderer.blur_sampler = renderer.device.allocator.allocate_sampler(&SamplerInfo::linear())?;
+        let pick_readback = renderer.device.allocator.allocate_buffer(
+            &BufferInfo::new(4, vk::BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuToCpu)
+                .with_name("pick readback"),
+        )?;
+        renderer.pick_readback = Some(pick_readback);
+        renderer
+            .pick_readback
+            .as_mut()
+            .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?
+            .write(0, &[0u32])?;
         renderer.fallback = renderer
             .upload_images(&[TextureSource {
                 width: 1,
@@ -334,11 +409,15 @@ impl Renderer {
         Ok(())
     }
 
-    pub fn draw(&mut self, frame: &Frame<'_>) -> Result<(), GpuError> { self.draw_inner(frame, None, None) }
+    pub fn draw(&mut self, frame: &Frame<'_>) -> Result<(), GpuError> {
+        self.draw_inner(frame, None, None, ViewportInteraction::default())?;
+
+        Ok(())
+    }
 
     pub fn draw_imgui(
-        &mut self, frame: &Frame<'_>, viewport: (u32, u32), pending: PendingFrame<'_>,
-    ) -> Result<(), GpuError> {
+        &mut self, frame: &Frame<'_>, viewport: (u32, u32), pending: PendingFrame<'_>, interaction: ViewportInteraction,
+    ) -> Result<Option<PickResult>, GpuError> {
         if pending.draw_requirements().requires_raw_callback_support() {
             return Err(GpuError::RawDrawCallback);
         }
@@ -359,7 +438,7 @@ impl Renderer {
             height: viewport.1.max(1),
         };
 
-        self.draw_inner(frame, Some(viewport), Some(pending))
+        self.draw_inner(frame, Some(viewport), Some(pending), interaction)
     }
 
     pub fn reset_imgui_textures(&mut self) -> Result<(), GpuError> {
@@ -456,7 +535,7 @@ impl Renderer {
             .draw(4u32, 1u32)
             .end_rendering();
 
-        let [scene_attachment, _visibility_attachment] = module
+        let [scene_attachment, visibility_attachment] = module
             .begin_rendering([
                 (scene_attachment, Access::ColorRW),
                 (visibility_attachment, Access::ColorRW),
@@ -477,6 +556,80 @@ impl Renderer {
             .record_from(active_draws)
             .end_rendering();
 
+        let (scene_attachment, interaction, pick_host) = if with_imgui {
+            let interaction_push =
+                module.declare_bytes_var("viewport interaction", size_of::<InteractionPush>() as u32);
+            let highlighted = module.transient_image_sized(
+                &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
+                    .with_usage(vk::ImageUsageFlags::SAMPLED)
+                    .with_name("highlighted scene"),
+                scene_extent,
+            );
+            let highlighted = module.clear(highlighted, vir::clear::f32::BLACK);
+            let [highlighted] = module
+                .begin_rendering([(highlighted, Access::ColorRW)])
+                .with_name("viewport highlights")
+                .bind_graphics_pipeline(self.interaction_pipeline)
+                .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                .set_viewport(0, Rect2D::framebuffer())
+                .set_scissor(0, Rect2D::framebuffer())
+                .bind_texture(0, 0, scene_attachment, self.sampler)
+                .bind_image(0, 1, visibility_attachment)
+                .bind_buffer(0, 2, sprites)
+                .push_constants_from(interaction_push)
+                .draw(4u32, 1u32)
+                .end_rendering();
+
+            let area_tiles = module.declare_buffer_var("hover area tiles", Access::ComputeWrite);
+            let hover_draws = module.declare_callback_var("hover tile outline");
+            let [highlighted] = module
+                .begin_rendering([(highlighted, Access::ColorRW)])
+                .with_name("hover tile outline")
+                .bind_graphics_pipeline(self.sprite_pipeline)
+                .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                .set_viewport(0, Rect2D::framebuffer())
+                .set_scissor(0, Rect2D::framebuffer())
+                .broadcast_color_blend(BlendPreset::PremultipliedAlphaBlend)
+                .set_rasterization(RasterizationState {
+                    cull_mode: vk::CullModeFlags::NONE,
+                    ..Default::default()
+                })
+                .bind_buffer(0, 1, area_tiles)
+                .push_constants_from(camera)
+                .record_from(hover_draws)
+                .end_rendering();
+
+            let pick_push = module.declare_bytes_var("pick cursor", size_of::<PickPush>() as u32);
+            let pick_result = module.declare_buffer_var("pick result", Access::HostRead);
+            let [_, pick_result_after] = module
+                .begin_compute([
+                    (visibility_attachment, Access::ComputeSampled),
+                    (pick_result, Access::ComputeWrite),
+                ])
+                .with_name("mouse pick")
+                .bind_compute_pipeline(self.pick_pipeline)
+                .bind_image(0, 1, visibility_attachment)
+                .bind_buffer(0, 3, pick_result)
+                .push_constants_from(pick_push)
+                .dispatch(1u32, 1u32, 1u32)
+                .end_compute();
+            let pick_host = module.release(pick_result_after, Access::HostRead, DomainFlag::Host);
+
+            (
+                highlighted,
+                Some(InteractionSlots {
+                    push: interaction_push,
+                    pick_push,
+                    pick_result,
+                    area_tiles,
+                    hover_draws,
+                }),
+                Some(pick_host),
+            )
+        } else {
+            (scene_attachment, None, None)
+        };
+
         let (presented, ui) = if with_imgui {
             let imgui = self.imgui.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
             let target = module.clear(swapchain_image, vir::clear::f32::BLACK);
@@ -489,7 +642,10 @@ impl Renderer {
             )
         };
         let present = module.present(presented);
-        let program = module.compile(&self.graph, present)?;
+        let program = match pick_host {
+            Some(pick_host) => module.compile_all(&self.graph, &[present, pick_host])?,
+            None => module.compile(&self.graph, present)?,
+        };
 
         self.recorded = Some(Recorded {
             program,
@@ -500,6 +656,7 @@ impl Renderer {
             blur_push,
             underlay_draws,
             active_draws,
+            interaction,
             ui,
         });
 
@@ -508,7 +665,8 @@ impl Renderer {
 
     fn draw_inner(
         &mut self, frame: &Frame<'_>, viewport: Option<vk::Extent2D>, pending: Option<PendingFrame<'_>>,
-    ) -> Result<(), GpuError> {
+        interaction: ViewportInteraction,
+    ) -> Result<Option<PickResult>, GpuError> {
         if self.stale {
             self.recreate_swapchain()?;
         }
@@ -566,6 +724,52 @@ impl Renderer {
             }),
         );
 
+        let cursor = interaction
+            .cursor
+            .filter(|cursor| cursor[0] < viewport.width && cursor[1] < viewport.height);
+        if let Some(slots) = recorded.interaction.as_ref() {
+            let selected_owner = interaction.selected.map(owner_words).unwrap_or([0; 2]);
+            let cursor_value = cursor.unwrap_or([0; 2]);
+            recorded.program.set_bytes(
+                slots.push,
+                &InteractionPush {
+                    cursor: cursor_value,
+                    cursor_valid: u32::from(cursor.is_some()),
+                    selected_owner,
+                },
+            );
+            recorded.program.set_bytes(
+                slots.pick_push,
+                &PickPush {
+                    cursor: cursor_value,
+                    cursor_valid: u32::from(cursor.is_some()),
+                },
+            );
+
+            let area_tiles = self.area_tiles.as_ref().unwrap_or(sprites);
+            let pick_readback = self
+                .pick_readback
+                .as_ref()
+                .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+            recorded.program.set(slots.area_tiles, area_tiles);
+            recorded.program.set(slots.pick_result, pick_readback);
+
+            let hovered_area = interaction
+                .hovered_area
+                .and_then(|owner| self.area_tile_indices.get(&owner).copied());
+            recorded.program.set(
+                slots.hover_draws,
+                PassCallback::new(move |cmd| {
+                    if let Some(base) = hovered_area {
+                        let show = 1u32;
+                        cmd.push_constants_at(std::mem::offset_of!(CameraPush, base) as u32, &base);
+                        cmd.push_constants_at(std::mem::offset_of!(CameraPush, show_area_outlines) as u32, &show);
+                        cmd.draw(4, 1);
+                    }
+                }),
+            );
+        }
+
         let next = frames.get_next_frame()?;
         if let Some(pending) = pending {
             let imgui = self.imgui.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
@@ -580,18 +784,37 @@ impl Renderer {
             }
         }
 
-        match self
-            .graph
-            .execute(&self.device.context, &recorded.program, &mut AllocatorKind::Frame(next))
-        {
-            Ok(()) => Ok(()),
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR) => {
-                self.stale = true;
+        let executed =
+            match self
+                .graph
+                .execute(&self.device.context, &recorded.program, &mut AllocatorKind::Frame(next))
+            {
+                Ok(()) => true,
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR) => {
+                    self.stale = true;
 
-                Ok(())
-            },
-            Err(error) => Err(error.into()),
+                    false
+                },
+                Err(error) => return Err(error.into()),
+            };
+
+        if !executed || !interaction.pick || cursor.is_none() {
+            return Ok(None);
         }
+
+        self.graph.wait()?;
+        let bytes = self
+            .pick_readback
+            .as_mut()
+            .and_then(Buffer::mapped_slice_mut)
+            .and_then(|bytes| bytes.get(..4))
+            .ok_or(vk::Result::ERROR_MEMORY_MAP_FAILED)?;
+        let raw = u32::from_ne_bytes(bytes.try_into().map_err(|_| vk::Result::ERROR_MEMORY_MAP_FAILED)?);
+        let picked = VisibilityId::from_raw(raw)
+            .and_then(|id| frame.sprite_instances.get(id.sprite_index()))
+            .map_or(PickResult::Miss, |sprite| PickResult::Hit(sprite.owner));
+
+        Ok(Some(picked))
     }
 
     fn prepare_sprites(&mut self, frame: &Frame<'_>) -> Result<(), GpuError> {
@@ -602,10 +825,16 @@ impl Renderer {
         let total = frame.sprite_instances.len();
         u32::try_from(total).map_err(|_| GpuError::SpriteUploadTooLarge)?;
         let mut payload = Vec::with_capacity(total);
+        let area_total = frame.area_tiles.len();
+        u32::try_from(area_total).map_err(|_| GpuError::SpriteUploadTooLarge)?;
+        let mut area_payload = Vec::with_capacity(area_total);
         let ranges = level_ranges(frame.sprite_instances);
 
         for (index, sprite) in frame.sprite_instances.iter().enumerate() {
             payload.push(gpu_sprite(index, sprite)?);
+        }
+        for (index, area) in frame.area_tiles.iter().enumerate() {
+            area_payload.push(gpu_sprite(index, area)?);
         }
 
         self.device.wait_idle()?;
@@ -639,28 +868,72 @@ impl Renderer {
             buffer.write(0, &payload)?;
         }
 
-        let sprite_count = u32::try_from(total).map_err(|_| GpuError::SpriteUploadTooLarge)?;
-        if sprite_count > 0 {
-            let group_count = area_color_group_count(sprite_count, self.device.max_compute_work_group_count_x);
-            let sprites = self.sprites.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
-            self.area_colors.program.set(self.area_colors.sprites, sprites);
-            self.area_colors.program.set_bytes(
-                self.area_colors.push,
-                &AreaColorPush {
-                    sprite_count,
-                    group_count,
-                },
-            );
-            self.area_colors.program.set(self.area_colors.groups, group_count);
-            self.graph.execute_blocking(
-                &self.device.context,
-                &self.area_colors.program,
-                &mut AllocatorKind::Persistent(&mut self.device.allocator),
+        if area_total > 0 && (self.area_tiles.is_none() || self.area_tile_capacity < area_total) {
+            let capacity = area_total
+                .max(1024)
+                .checked_next_power_of_two()
+                .ok_or(GpuError::SpriteUploadTooLarge)?;
+            let size = capacity
+                .checked_mul(size_of::<GpuSprite>())
+                .ok_or(GpuError::SpriteUploadTooLarge)?;
+            let size = u64::try_from(size).map_err(|_| GpuError::SpriteUploadTooLarge)?;
+            let mut buffer = self.device.allocator.allocate_buffer(
+                &BufferInfo::new(size, vk::BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::CpuToGpu)
+                    .with_name("area tile outlines"),
             )?;
+            if let Err(error) = buffer.write(0, &area_payload) {
+                self.device.allocator.deallocate_buffer(buffer);
+
+                return Err(error.into());
+            }
+
+            if let Some(old) = self.area_tiles.replace(buffer) {
+                self.device.allocator.deallocate_buffer(old);
+            }
+
+            self.area_tile_capacity = capacity;
+        } else if let Some(buffer) = self.area_tiles.as_mut() {
+            buffer.write(0, &area_payload)?;
+        }
+
+        let sprites = *self.sprites.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+        self.color_area_outlines(sprites, total)?;
+        if let Some(area_tiles) = self.area_tiles {
+            self.color_area_outlines(area_tiles, area_total)?;
         }
 
         self.ranges = ranges;
+        self.area_tile_indices.clear();
+        for (index, area) in frame.area_tiles.iter().enumerate() {
+            let index = u32::try_from(index).map_err(|_| GpuError::SpriteUploadTooLarge)?;
+            self.area_tile_indices.insert(area.owner, index);
+        }
         self.uploaded_revision = Some(frame.revision);
+
+        Ok(())
+    }
+
+    fn color_area_outlines(&mut self, buffer: Buffer, count: usize) -> Result<(), GpuError> {
+        let sprite_count = u32::try_from(count).map_err(|_| GpuError::SpriteUploadTooLarge)?;
+        if sprite_count == 0 {
+            return Ok(());
+        }
+
+        let group_count = area_color_group_count(sprite_count, self.device.max_compute_work_group_count_x);
+        self.area_colors.program.set(self.area_colors.sprites, buffer);
+        self.area_colors.program.set_bytes(
+            self.area_colors.push,
+            &AreaColorPush {
+                sprite_count,
+                group_count,
+            },
+        );
+        self.area_colors.program.set(self.area_colors.groups, group_count);
+        self.graph.execute_blocking(
+            &self.device.context,
+            &self.area_colors.program,
+            &mut AllocatorKind::Persistent(&mut self.device.allocator),
+        )?;
 
         Ok(())
     }
@@ -821,12 +1094,17 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
     }
 
     Ok(GpuSprite {
+        owner: owner_words(sprite.owner),
         position_size: [position, size],
         color,
         source_position_size: [source_position, source_size],
         texture_flags: sprite.texture.index | (flags << SPRITE_FLAGS_SHIFT),
     })
 }
+
+fn owner_words(owner: editor::document::PrefabInstanceId) -> [u32; 2] { split_owner(owner.get()) }
+
+fn split_owner(owner: u64) -> [u32; 2] { [owner as u32, (owner >> 32) as u32] }
 
 fn pack_half2(x: f32, y: f32) -> Option<u32> {
     let x = meshopt_quantize_half(x);
@@ -918,6 +1196,12 @@ impl Drop for Renderer {
         self.device.allocator.deallocate_sampler(self.blur_sampler);
 
         if let Some(buffer) = self.sprites.take() {
+            self.device.allocator.deallocate_buffer(buffer);
+        }
+        if let Some(buffer) = self.area_tiles.take() {
+            self.device.allocator.deallocate_buffer(buffer);
+        }
+        if let Some(buffer) = self.pick_readback.take() {
             self.device.allocator.deallocate_buffer(buffer);
         }
     }
@@ -1179,7 +1463,11 @@ mod tests {
         CameraPush,
         GEOMETRY_VS_SPV,
         GpuSprite,
+        INTERACTION_FS_SPV,
+        InteractionPush,
         LevelRange,
+        PICK_CS_SPV,
+        PickPush,
         SPRITE_FLAG_AREA,
         SPRITE_FLAGS_SHIFT,
         SPRITE_TEXTURE_MASK,
@@ -1195,6 +1483,7 @@ mod tests {
         meshopt_dequantize_unorm,
         meshopt_quantize_half,
         pack_unorm4x8,
+        split_owner,
         visible_ranges,
     };
     use crate::{AREA_EDGE_EAST, AREA_EDGE_NORTH, GpuError, SpriteInstance, SpriteTexture, read_spirv};
@@ -1243,6 +1532,7 @@ mod tests {
 
         let gpu = gpu_sprite(0, &area).expect("pack");
 
+        assert_eq!(gpu.owner, [area.owner.get() as u32, 0]);
         assert_eq!(gpu.position_size, [0x5400_5000, 0x5000_5000]);
         assert_eq!(gpu.color, 0);
         assert_eq!(gpu.source_position_size, [0x0008_0004, 0x0018_0010]);
@@ -1435,9 +1725,50 @@ mod tests {
     fn sprite_and_camera_layouts_match_the_shader_scalar_layout() {
         let reflection = shader::reflect(&read_spirv(GEOMETRY_VS_SPV).expect("valid SPIR-V")).expect("shader reflects");
 
-        assert_eq!(size_of::<GpuSprite>(), 24);
+        assert_eq!(size_of::<GpuSprite>(), 32);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<CameraPush>());
+    }
+
+    #[test]
+    fn owner_ids_keep_both_words() {
+        assert_eq!(split_owner(0x1234_5678_9abc_def0), [0x9abc_def0, 0x1234_5678]);
+    }
+
+    #[test]
+    fn interaction_fragment_layout_matches_the_host() {
+        let reflection =
+            shader::reflect(&read_spirv(INTERACTION_FS_SPV).expect("valid SPIR-V")).expect("shader reflects");
+        let mut bindings = reflection
+            .bindings
+            .iter()
+            .map(|binding| (binding.set, binding.binding))
+            .collect::<Vec<_>>();
+        bindings.sort_unstable();
+
+        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2)]);
+        assert_eq!(reflection.push_constant_offset, 0);
+        assert_eq!(reflection.push_constant_size as usize, size_of::<InteractionPush>());
+    }
+
+    #[test]
+    fn pick_compute_layout_matches_the_host() {
+        let reflection = shader::reflect(&read_spirv(PICK_CS_SPV).expect("valid SPIR-V")).expect("shader reflects");
+        let mut bindings = reflection
+            .bindings
+            .iter()
+            .map(|binding| (binding.set, binding.binding, binding.access))
+            .collect::<Vec<_>>();
+        bindings.sort_unstable_by_key(|binding| (binding.0, binding.1));
+
+        assert_eq!(reflection.local_size, [1, 1, 1]);
+        assert_eq!(reflection.push_constant_offset, 0);
+        assert_eq!(reflection.push_constant_size as usize, size_of::<PickPush>());
+        assert_eq!(bindings.len(), 2);
+        assert_eq!((bindings[0].0, bindings[0].1), (0, 1));
+        assert_eq!((bindings[1].0, bindings[1].1), (0, 3));
+        assert!(bindings[0].2.contains(vir::Access::ComputeSampled));
+        assert!(bindings[1].2.contains(vir::Access::ComputeWrite));
     }
 
     #[test]

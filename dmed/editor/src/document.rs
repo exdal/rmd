@@ -10,6 +10,7 @@ pub struct MapDocument {
     pub history: History,
     pub z: u32,
     pub selection: Option<Selection>,
+    selected_instance: Option<PrefabInstanceId>,
     instances: PrefabInstances,
 }
 
@@ -146,6 +147,7 @@ impl MapDocument {
             history: History::new(),
             z,
             selection: None,
+            selected_instance: None,
             instances,
         }
     }
@@ -181,6 +183,15 @@ impl MapDocument {
         Some((prefab, location))
     }
 
+    pub fn selected_instance(&self) -> Option<PrefabInstanceId> {
+        self.selected_instance
+            .filter(|id| self.instance_location(*id).is_some())
+    }
+
+    pub fn select_instance(&mut self, selected: Option<PrefabInstanceId>) {
+        self.selected_instance = selected.filter(|id| self.instance_location(*id).is_some());
+    }
+
     pub fn placed_tile(&self, coord: Coord) -> Option<PlacedTile> {
         let tile = self.map.tile_at(coord)?;
         let ids = self.instance_ids_at(coord);
@@ -205,11 +216,24 @@ impl MapDocument {
         }
     }
 
-    pub fn apply(&mut self, edit: Edit) { self.history.apply(&mut self.map, &mut self.instances, edit); }
+    pub fn apply(&mut self, edit: Edit) {
+        self.history.apply(&mut self.map, &mut self.instances, edit);
+        self.clear_stale_instance_selection();
+    }
 
-    pub fn undo(&mut self) -> bool { self.history.undo(&mut self.map, &mut self.instances).is_some() }
+    pub fn undo(&mut self) -> bool {
+        let changed = self.history.undo(&mut self.map, &mut self.instances).is_some();
+        self.clear_stale_instance_selection();
 
-    pub fn redo(&mut self) -> bool { self.history.redo(&mut self.map, &mut self.instances).is_some() }
+        changed
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let changed = self.history.redo(&mut self.map, &mut self.instances).is_some();
+        self.clear_stale_instance_selection();
+
+        changed
+    }
 
     pub fn save(&mut self) -> std::io::Result<()> {
         let Some(path) = self.path.clone() else {
@@ -230,6 +254,12 @@ impl MapDocument {
             self.z,
         )
     }
+
+    fn clear_stale_instance_selection(&mut self) {
+        if self.selected_instance().is_none() {
+            self.selected_instance = None;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -240,6 +270,7 @@ mod tests {
     use dmm::{Map, Prefab, Size, writer::MapWriter};
 
     use super::{Coord, MapDocument};
+    use crate::command::Edit;
 
     fn shared_tile_map() -> Map {
         let mut map = Map::new(Size { x: 2, y: 1, z: 2 });
@@ -279,5 +310,22 @@ mod tests {
         let document = MapDocument::new(map, 1);
 
         assert_eq!(MapWriter::new(&document.map).write(), before);
+    }
+
+    #[test]
+    fn deleted_instance_is_removed_from_selection() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        let coord = Coord::new(1, 1, 1);
+        let selected = document.instance_ids_at(coord)[1];
+        document.select_instance(Some(selected));
+        assert_eq!(document.selected_instance(), Some(selected));
+
+        let mut after = document.placed_tile(coord).unwrap();
+        after.remove(1);
+        let mut edit = Edit::new("delete selected prefab");
+        edit.change(&document, coord, after);
+        document.apply(edit);
+
+        assert_eq!(document.selected_instance(), None);
     }
 }
