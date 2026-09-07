@@ -11,7 +11,7 @@ use editor::{
 };
 use objtree::{ObjectTree, TypeId};
 
-use crate::session::Session;
+use crate::session::{DirectionalTypes, Session};
 use crate::transform::anchor_axis;
 
 const DISPLAY_PROPERTIES: &[&str] = &[
@@ -97,6 +97,7 @@ struct InspectorSnapshot {
     overrides: Vec<InspectorVariable>,
     defaults: Vec<InspectorVariable>,
     icon_states: Vec<(String, u32)>,
+    directional_types: Option<DirectionalTypes>,
     icon_known: bool,
     icon_state_known: bool,
 }
@@ -413,7 +414,9 @@ impl InspectorState {
                 8 => 8,
                 _ => 8,
             });
-        let preview = Dir::from_bits(bits)
+        let directions = direction_choices(count, snapshot.directional_types);
+        let current = selected_direction(bits, snapshot.directional_types);
+        let preview = current
             .map(direction_label)
             .map(str::to_string)
             .unwrap_or_else(|| format!("Custom ({number})"));
@@ -422,18 +425,22 @@ impl InspectorState {
         let _id = ui.push_id("dir");
         ui.set_next_item_width(-1.0);
         if let Some(combo) = ui.begin_combo("##value", &preview) {
-            for direction in Dir::ORDER.iter().take(count) {
+            for direction in directions {
                 let value = direction.to_bits();
                 if ui
-                    .selectable_config(direction_label(*direction))
-                    .selected(value == bits)
+                    .selectable_config(direction_label(direction))
+                    .selected(current == Some(direction))
                     .build()
                 {
-                    session.edit_selected_instance_vars(
-                        "set dir",
-                        &[VarMutation::Set(property.name.clone(), Value::Num(value as f32))],
-                        None,
-                    );
+                    if snapshot.directional_types.is_some() {
+                        session.set_selected_directional_type(direction, None);
+                    } else {
+                        session.edit_selected_instance_vars(
+                            "set dir",
+                            &[VarMutation::Set(property.name.clone(), Value::Num(value as f32))],
+                            None,
+                        );
+                    }
                 }
             }
             combo.end();
@@ -622,6 +629,7 @@ fn inspector_snapshot(session: &Session) -> Option<InspectorSnapshot> {
         .unwrap_or_default()
         .to_string();
     let metadata = session.icon_metadata(&icon);
+    let directional_types = session.selected_directional_types();
     let icon_states = metadata
         .map(|metadata| {
             metadata
@@ -642,6 +650,7 @@ fn inspector_snapshot(session: &Session) -> Option<InspectorSnapshot> {
         overrides,
         defaults,
         icon_states,
+        directional_types,
         icon_known: icon.is_empty() || metadata.is_some(),
         icon_state_known: icon_state.is_empty()
             || metadata.is_some_and(|metadata| metadata.find(&icon_state).is_some()),
@@ -955,6 +964,24 @@ fn direction_label(direction: Dir) -> &'static str {
     }
 }
 
+fn direction_choices(count: usize, directional_types: Option<DirectionalTypes>) -> Vec<Dir> {
+    if let Some(types) = directional_types {
+        return Dir::ORDER
+            .into_iter()
+            .zip(types.supported)
+            .filter_map(|(direction, supported)| supported.then_some(direction))
+            .collect();
+    }
+
+    Dir::ORDER.into_iter().take(count).collect()
+}
+
+fn selected_direction(bits: u32, directional_types: Option<DirectionalTypes>) -> Option<Dir> {
+    directional_types
+        .and_then(|types| types.current)
+        .or_else(|| Dir::from_bits(bits))
+}
+
 fn format_color(color: [f32; 4]) -> String {
     let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
     let [red, green, blue, alpha] = color.map(channel);
@@ -1020,6 +1047,32 @@ mod tests {
     use objtree::{ObjectTree, VarDecl};
 
     use super::*;
+
+    #[test]
+    fn direction_choices_prefer_directional_subtypes_over_dmi_slots() {
+        let mut supported = [false; 8];
+        supported[1] = true;
+        supported[2] = true;
+        supported[7] = true;
+        let types = DirectionalTypes {
+            supported,
+            current: Some(Dir::North),
+        };
+
+        assert_eq!(
+            direction_choices(8, Some(types)),
+            [Dir::North, Dir::East, Dir::Northwest]
+        );
+        assert_eq!(
+            selected_direction(Dir::South.to_bits(), Some(types)),
+            Some(Dir::North)
+        );
+        assert_eq!(direction_choices(4, None), Dir::ORDER[..4]);
+        assert_eq!(
+            selected_direction(Dir::South.to_bits(), None),
+            Some(Dir::South)
+        );
+    }
 
     #[test]
     fn inspector_separates_special_properties_and_closest_editable_defaults() {

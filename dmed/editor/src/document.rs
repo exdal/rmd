@@ -272,6 +272,38 @@ impl MapDocument {
         Some(true)
     }
 
+    /// this function keeps the ID stable
+    pub fn replace_instance_path(
+        &mut self, id: PrefabInstanceId, label: impl Into<String>, path: core::path::TreePath,
+        mutations: &[VarMutation], group: Option<EditGroupId>,
+    ) -> Option<bool> {
+        let location = self.instance_location(id)?;
+        let mut after = self.placed_tile(location.coord)?;
+        let instance = after.get_mut(location.prefab_index)?;
+
+        let before = instance.prefab().clone();
+        instance.prefab_mut().path = path;
+        for mutation in mutations {
+            match mutation {
+                VarMutation::Set(name, value) => instance.prefab_mut().set_var(name.clone(), value.clone()),
+                VarMutation::Remove(name) => {
+                    instance.prefab_mut().remove_var(name);
+                },
+            }
+        }
+        if instance.prefab() == &before {
+            return Some(false);
+        }
+
+        let mut edit = Edit::new(label);
+        edit.change(self, location.coord, after);
+        self.history
+            .apply_grouped(&mut self.map, &mut self.instances, &mut self.key_usage, edit, group);
+        self.clear_stale_instance_selection();
+
+        Some(true)
+    }
+
     pub fn move_instance(
         &mut self, id: PrefabInstanceId, to_coord: Coord, label: impl Into<String>, mutations: &[VarMutation],
         group: Option<EditGroupId>,
@@ -568,7 +600,10 @@ mod tests {
                 .cloned()
                 .collect::<Vec<_>>(),
         );
-        assert_eq!(document.placed_tile(destination).unwrap().len(), destination_before.len() + 1);
+        assert_eq!(
+            document.placed_tile(destination).unwrap().len(),
+            destination_before.len() + 1
+        );
 
         assert!(document.undo());
         assert_eq!(document.instance_location(id).unwrap().coord, source);
@@ -594,12 +629,116 @@ mod tests {
             ),
             Some(true),
         );
-        assert_eq!(document.move_instance(id, Coord::new(9, 9, 1), "off the map", &[], None), Some(false));
+        assert_eq!(
+            document.move_instance(id, Coord::new(9, 9, 1), "off the map", &[], None),
+            Some(false)
+        );
         assert_eq!(document.instance_location(id).unwrap().coord, source);
         assert_eq!(
             document.prefab_instance(id).unwrap().0.var(&"pixel_x".into()),
             Some(&core::types::Value::Num(4.0)),
         );
+    }
+
+    #[test]
+    fn replacing_an_instance_path_preserves_its_id_variables_and_undo_history() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        let coord = Coord::new(1, 1, 1);
+        let id = document.instance_ids_at(coord)[1];
+        document
+            .set_instance_var(id, "name".into(), core::types::Value::Text("custom".into()))
+            .unwrap();
+        document
+            .set_instance_var(id, "dir".into(), core::types::Value::Num(8.0))
+            .unwrap();
+        let replacement = TreePath::parse("/obj/table/directional/north");
+
+        assert_eq!(
+            document.replace_instance_path(
+                id,
+                "set directional type",
+                replacement.clone(),
+                &[VarMutation::Remove("dir".into())],
+                None,
+            ),
+            Some(true)
+        );
+        let (prefab, location) = document.prefab_instance(id).unwrap();
+        assert_eq!(location.coord, coord);
+        assert_eq!(prefab.path, replacement);
+        assert_eq!(
+            prefab.var(&"name".into()),
+            Some(&core::types::Value::Text("custom".into()))
+        );
+        assert_eq!(prefab.var(&"dir".into()), None);
+
+        assert!(document.undo());
+        let prefab = document.prefab_instance(id).unwrap().0;
+        assert_eq!(prefab.path, TreePath::parse("/obj/table"));
+        assert_eq!(
+            prefab.var(&"name".into()),
+            Some(&core::types::Value::Text("custom".into()))
+        );
+        assert_eq!(prefab.var(&"dir".into()), Some(&core::types::Value::Num(8.0)));
+        assert!(document.redo());
+        assert_eq!(document.prefab_instance(id).unwrap().0.path, replacement);
+    }
+
+    #[test]
+    fn grouped_instance_path_replacements_are_one_undo_step() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        let id = document.instance_ids_at(Coord::new(1, 1, 1))[1];
+        let group = EditGroupId::new();
+
+        assert_eq!(
+            document.replace_instance_path(
+                id,
+                "set direction",
+                TreePath::parse("/obj/table/directional/north"),
+                &[],
+                Some(group),
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            document.replace_instance_path(
+                id,
+                "set direction",
+                TreePath::parse("/obj/table/directional/east"),
+                &[],
+                Some(group),
+            ),
+            Some(true)
+        );
+
+        assert!(document.undo());
+        assert_eq!(
+            document.prefab_instance(id).unwrap().0.path,
+            TreePath::parse("/obj/table")
+        );
+        assert!(!document.undo());
+    }
+
+    #[test]
+    fn grouped_instance_path_replacements_collapse_when_returned_to_the_start() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        let id = document.instance_ids_at(Coord::new(1, 1, 1))[1];
+        let group = EditGroupId::new();
+
+        document
+            .replace_instance_path(
+                id,
+                "set direction",
+                TreePath::parse("/obj/table/directional/north"),
+                &[],
+                Some(group),
+            )
+            .unwrap();
+        document
+            .replace_instance_path(id, "set direction", TreePath::parse("/obj/table"), &[], Some(group))
+            .unwrap();
+
+        assert!(!document.history.can_undo());
     }
 
     #[test]

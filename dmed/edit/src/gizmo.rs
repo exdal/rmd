@@ -1,6 +1,7 @@
 use core::types::{Identifier, Value};
 
-use dear_imgui_rs::{MouseButton, MouseCursor, Ui};
+use dear_imgui_rs::{Key, MouseButton, MouseCursor, StyleColor, Ui};
+use dmi::metadata::Dir;
 use dmm::Coord;
 use editor::{
     command::EditGroupId,
@@ -10,7 +11,7 @@ use editor::{
 use crate::{
     camera::Controller,
     inspector::TransformMode,
-    session::{SelectedTransform, Session},
+    session::{DirectionalTypes, SelectedTransform, Session},
     transform::anchor_to_tile,
 };
 
@@ -21,12 +22,29 @@ const CENTER_HALF_SIZE: f32 = 5.0;
 const HIT_RADIUS: f32 = 7.0;
 const LINE_THICKNESS: f32 = 3.0;
 const HOT_LINE_THICKNESS: f32 = 5.0;
+const DIRECTION_HOLD_SECONDS: f64 = 0.2;
+const DIRECTION_TIME_EPSILON: f64 = 1.0e-9;
+const DIRECTION_INNER_RADIUS: f32 = 22.0;
+const DIRECTION_OUTER_RADIUS: f32 = 78.0;
+const DIRECTION_TIP_RADIUS: f32 = 67.0;
+const DIRECTION_ARROW_LENGTH: f32 = 14.0;
+const DIRECTION_ARROW_HALF_WIDTH: f32 = 7.5;
+const DIRECTION_SECTOR_GAP: f32 = 0.035;
+const DIRECTION_SECTOR_SEGMENTS: usize = 8;
+
+const CLOCKWISE_DIRECTIONS: [Dir; 8] = [
+    Dir::North,
+    Dir::Northeast,
+    Dir::East,
+    Dir::Southeast,
+    Dir::South,
+    Dir::Southwest,
+    Dir::West,
+    Dir::Northwest,
+];
 
 const X_COLOR: [f32; 4] = [0.92, 0.24, 0.22, 1.0];
 const Y_COLOR: [f32; 4] = [0.28, 0.82, 0.35, 1.0];
-const CENTER_COLOR: [f32; 4] = [0.92, 0.92, 0.92, 1.0];
-const HOT_COLOR: [f32; 4] = [1.0, 0.78, 0.16, 1.0];
-const SHADOW_COLOR: [f32; 4] = [0.04, 0.04, 0.04, 0.85];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Handle {
@@ -63,6 +81,56 @@ struct DragState {
     group: EditGroupId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DirectionSet {
+    supported: [bool; 8],
+    slots: u8,
+}
+
+impl DirectionSet {
+    fn contains(self, direction: Dir) -> bool { self.supported[clockwise_index(direction)] }
+
+    fn slot_directions(self) -> impl Iterator<Item = Dir> {
+        CLOCKWISE_DIRECTIONS
+            .into_iter()
+            .filter(move |direction| self.slots == 8 || !is_diagonal(*direction))
+    }
+
+    fn directions(self) -> impl Iterator<Item = Dir> {
+        CLOCKWISE_DIRECTIONS
+            .into_iter()
+            .filter(move |direction| self.contains(*direction))
+    }
+
+    fn len(self) -> usize { self.supported.iter().filter(|supported| **supported).count() }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DirectionGesture {
+    selected: PrefabInstanceId,
+    pressed_at: f64,
+    set: DirectionSet,
+    phase: DirectionPhase,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DirectionPhase {
+    Pending,
+    Open {
+        origin: [f32; 2],
+        group: EditGroupId,
+        last_hovered: Option<Dir>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingDirectionOutcome {
+    Pending,
+    Open,
+    Tap,
+    Cancel,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct GizmoResponse {
     pub captures_mouse: bool,
@@ -78,24 +146,25 @@ pub(crate) struct GizmoViewport {
 #[derive(Default)]
 pub(crate) struct GizmoState {
     drag: Option<DragState>,
+    direction: Option<DirectionGesture>,
 }
 
 impl GizmoState {
-    pub(crate) const fn is_dragging(&self) -> bool { self.drag.is_some() }
+    pub(crate) const fn is_interacting(&self) -> bool { self.drag.is_some() || self.direction.is_some() }
 
     pub(crate) fn draw(
         &mut self, ui: &Ui, session: &mut Session, camera: &Controller, mode: TransformMode, viewport: GizmoViewport,
     ) -> GizmoResponse {
         let Some(mut target) = session.selected_transform() else {
             self.drag = None;
+            self.direction = None;
 
             return GizmoResponse::default();
         };
-        let Some(values) = transform_values(target, mode) else {
+        let values = transform_values(target, mode);
+        if values.is_none() {
             self.drag = None;
-
-            return GizmoResponse::default();
-        };
+        }
 
         if self
             .drag
@@ -103,19 +172,109 @@ impl GizmoState {
         {
             self.drag = None;
         }
+        if self
+            .direction
+            .is_some_and(|gesture| gesture.selected != target.selected)
+        {
+            self.direction = None;
+        }
 
         let mouse = ui.io().mouse_pos();
         let initial_origin = gizmo_origin(camera, viewport.min, target.sprite);
-        let hovered = viewport
-            .hovered
-            .then(|| handle_at(mouse, initial_origin, viewport.min, viewport.max))
-            .flatten();
+        let direction_origin = session
+            .selected_location()
+            .map(|location| tile_center_origin(camera, viewport.min, location.coord, session.options.tile_size));
         let was_dragging = self.drag.is_some();
+        if self.direction.is_none()
+            && self.drag.is_none()
+            && viewport.hovered
+            && ui.is_key_pressed_with_repeat(Key::R, false)
+            && let Some(set) = direction_set(target.dmi_directions, target.directional_types)
+        {
+            self.direction = Some(DirectionGesture {
+                selected: target.selected,
+                pressed_at: ui.time(),
+                set,
+                phase: DirectionPhase::Pending,
+            });
+        }
+        let was_direction_active = self.direction.is_some();
+        let key_down = ui.is_key_down(Key::R);
+        let key_released = ui.is_key_released(Key::R);
+        let mut requested_direction = None;
 
-        if self.drag.is_none()
-            && let Some(handle) = hovered
+        if let Some(mut gesture) = self.direction {
+            if matches!(gesture.phase, DirectionPhase::Pending) {
+                match pending_direction_outcome(gesture.pressed_at, ui.time(), key_down, key_released) {
+                    PendingDirectionOutcome::Pending => {},
+                    PendingDirectionOutcome::Open => {
+                        if let Some(origin) = direction_origin {
+                            gesture.phase = DirectionPhase::Open {
+                                origin,
+                                group: EditGroupId::new(),
+                                last_hovered: None,
+                            };
+                        } else {
+                            self.direction = None;
+                        }
+                    },
+                    PendingDirectionOutcome::Tap => {
+                        requested_direction =
+                            next_clockwise_direction(gesture.set, current_direction(target, gesture.set))
+                                .map(|direction| (direction, None));
+                        self.direction = None;
+                    },
+                    PendingDirectionOutcome::Cancel => self.direction = None,
+                }
+            }
+
+            if let DirectionPhase::Open {
+                origin,
+                group,
+                mut last_hovered,
+            } = gesture.phase
+            {
+                if key_released || !key_down {
+                    self.direction = None;
+                } else {
+                    let hovered = direction_at(mouse, origin, viewport.min, viewport.max, gesture.set);
+                    if hovered != last_hovered {
+                        last_hovered = hovered;
+                        if let Some(direction) = hovered
+                            && current_direction(target, gesture.set) != Some(direction)
+                        {
+                            requested_direction = Some((direction, Some(group)));
+                        }
+                    }
+                    gesture.phase = DirectionPhase::Open {
+                        origin,
+                        group,
+                        last_hovered,
+                    };
+                    self.direction = Some(gesture);
+                }
+            } else if self.direction.is_some() {
+                self.direction = Some(gesture);
+            }
+        }
+
+        if let Some((direction, group)) = requested_direction {
+            apply_direction(session, target, direction, group);
+            if let Some(updated) = session.selected_transform() {
+                target = updated;
+            }
+        }
+
+        let hovered_handle = values
+            .filter(|_| viewport.hovered)
+            .and_then(|_| handle_at(mouse, initial_origin, viewport.min, viewport.max));
+
+        if self.direction.is_none()
+            && self.drag.is_none()
+            && let Some(handle) = hovered_handle
             && ui.is_mouse_clicked(MouseButton::Left)
             && let Some(location) = session.selected_location()
+            && let Some(values) = values
         {
             self.drag = Some(DragState {
                 selected: target.selected,
@@ -162,20 +321,45 @@ impl GizmoState {
         let origin = gizmo_origin(camera, viewport.min, target.sprite);
         let hovered = if self.drag.is_some() {
             None
-        } else if viewport.hovered {
+        } else if viewport.hovered && values.is_some() {
             handle_at(mouse, origin, viewport.min, viewport.max)
         } else {
             None
         };
         let hot = self.drag.map(|drag| drag.handle).or(hovered).or(active_handle);
-        if let Some(handle) = hot {
-            ui.set_mouse_cursor(Some(handle.cursor()));
+        let open_wheel = self.direction.and_then(|gesture| match gesture.phase {
+            DirectionPhase::Open {
+                origin, last_hovered, ..
+            } => Some((origin, gesture.set, last_hovered)),
+            DirectionPhase::Pending => None,
+        });
+
+        if let Some((wheel_origin, set, hovered_direction)) = open_wheel {
+            if hovered_direction.is_some() {
+                ui.set_mouse_cursor(Some(MouseCursor::Hand));
+            }
+            draw_direction_wheel(
+                ui,
+                wheel_origin,
+                viewport.min,
+                viewport.max,
+                set,
+                current_direction(target, set),
+                hovered_direction,
+            );
+        } else if values.is_some() {
+            if let Some(handle) = hot {
+                ui.set_mouse_cursor(Some(handle.cursor()));
+            }
+            draw_gizmo(ui, origin, viewport.min, viewport.max, hot);
         }
 
-        draw_gizmo(ui, origin, viewport.min, viewport.max, hot);
-
         GizmoResponse {
-            captures_mouse: was_dragging || self.drag.is_some() || hovered.is_some(),
+            captures_mouse: was_dragging
+                || self.drag.is_some()
+                || was_direction_active
+                || self.direction.is_some()
+                || hovered.is_some(),
         }
     }
 }
@@ -190,6 +374,13 @@ fn transform_values(target: SelectedTransform, mode: TransformMode) -> Option<[i
 
 fn gizmo_origin(camera: &Controller, viewport_min: [f32; 2], sprite: render::SpriteInstance) -> [f32; 2] {
     let center = camera.map_to_screen([sprite.x + sprite.width * 0.5, sprite.y + sprite.height * 0.5]);
+
+    [viewport_min[0] + center[0], viewport_min[1] + center[1]]
+}
+
+fn tile_center_origin(camera: &Controller, viewport_min: [f32; 2], coord: Coord, tile_size: u32) -> [f32; 2] {
+    let tile_size = tile_size.max(1) as f32;
+    let center = camera.map_to_screen([(coord.x as f32 - 0.5) * tile_size, (coord.y as f32 - 0.5) * tile_size]);
 
     [viewport_min[0] + center[0], viewport_min[1] + center[1]]
 }
@@ -225,6 +416,163 @@ fn contains(point: [f32; 2], min: [f32; 2], max: [f32; 2]) -> bool {
         && point[0] <= max[0]
         && point[1] >= min[1]
         && point[1] <= max[1]
+}
+
+fn direction_set(dmi_directions: Option<u32>, directional_types: Option<DirectionalTypes>) -> Option<DirectionSet> {
+    let mut set = DirectionSet {
+        supported: [false; 8],
+        slots: 4,
+    };
+
+    if let Some(directional_types) = directional_types {
+        for (direction, supported) in Dir::ORDER.into_iter().zip(directional_types.supported) {
+            set.supported[clockwise_index(direction)] = supported;
+        }
+    } else {
+        match dmi_directions {
+            Some(4) => {
+                for direction in [Dir::North, Dir::East, Dir::South, Dir::West] {
+                    set.supported[clockwise_index(direction)] = true;
+                }
+            },
+            Some(8) => set.supported.fill(true),
+            _ => return None,
+        }
+    }
+
+    set.slots = if set.directions().any(is_diagonal) { 8 } else { 4 };
+
+    (set.len() > 1).then_some(set)
+}
+
+fn clockwise_index(direction: Dir) -> usize {
+    CLOCKWISE_DIRECTIONS
+        .iter()
+        .position(|candidate| *candidate == direction)
+        .unwrap_or_default()
+}
+
+const fn is_diagonal(direction: Dir) -> bool {
+    matches!(
+        direction,
+        Dir::Northeast | Dir::Southeast | Dir::Southwest | Dir::Northwest
+    )
+}
+
+fn current_direction(target: SelectedTransform, set: DirectionSet) -> Option<Dir> {
+    target
+        .directional_types
+        .and_then(|types| types.current)
+        .or_else(|| Dir::from_bits(target.dir))
+        .filter(|direction| set.contains(*direction))
+}
+
+fn next_clockwise_direction(set: DirectionSet, current: Option<Dir>) -> Option<Dir> {
+    let (start, include_start) = current
+        .map(|direction| (clockwise_index(direction), false))
+        .unwrap_or((clockwise_index(Dir::South), true));
+
+    (usize::from(!include_start)..=CLOCKWISE_DIRECTIONS.len())
+        .map(|offset| CLOCKWISE_DIRECTIONS[(start + offset) % CLOCKWISE_DIRECTIONS.len()])
+        .find(|direction| set.contains(*direction))
+}
+
+fn pending_direction_outcome(pressed_at: f64, now: f64, key_down: bool, key_released: bool) -> PendingDirectionOutcome {
+    let held_long_enough = now.is_finite()
+        && pressed_at.is_finite()
+        && now - pressed_at + DIRECTION_TIME_EPSILON >= DIRECTION_HOLD_SECONDS;
+    if held_long_enough {
+        if key_down {
+            PendingDirectionOutcome::Open
+        } else {
+            PendingDirectionOutcome::Cancel
+        }
+    } else if key_released {
+        PendingDirectionOutcome::Tap
+    } else if key_down {
+        PendingDirectionOutcome::Pending
+    } else {
+        PendingDirectionOutcome::Cancel
+    }
+}
+
+fn apply_direction(session: &mut Session, target: SelectedTransform, direction: Dir, group: Option<EditGroupId>) {
+    if target.directional_types.is_some() {
+        session.set_selected_directional_type(direction, group);
+    } else {
+        session.edit_selected_instance_vars("set dir", &[direction_mutation(direction)], group);
+    }
+}
+
+fn direction_mutation(direction: Dir) -> VarMutation {
+    VarMutation::Set(Identifier::from("dir"), Value::Num(direction.to_bits() as f32))
+}
+
+fn direction_vector(direction: Dir) -> [f32; 2] {
+    const DIAGONAL: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
+    match direction {
+        Dir::South => [0.0, 1.0],
+        Dir::North => [0.0, -1.0],
+        Dir::East => [1.0, 0.0],
+        Dir::West => [-1.0, 0.0],
+        Dir::Southeast => [DIAGONAL, DIAGONAL],
+        Dir::Southwest => [-DIAGONAL, DIAGONAL],
+        Dir::Northeast => [DIAGONAL, -DIAGONAL],
+        Dir::Northwest => [-DIAGONAL, -DIAGONAL],
+    }
+}
+
+fn direction_head(origin: [f32; 2], direction: Dir, expansion: f32) -> [[f32; 2]; 3] {
+    let vector = direction_vector(direction);
+    let perpendicular = [-vector[1], vector[0]];
+    let tip_radius = DIRECTION_TIP_RADIUS + expansion;
+    let base_radius = DIRECTION_TIP_RADIUS - DIRECTION_ARROW_LENGTH - expansion;
+    let half_width = DIRECTION_ARROW_HALF_WIDTH + expansion;
+    let tip = [origin[0] + vector[0] * tip_radius, origin[1] + vector[1] * tip_radius];
+    let base = [origin[0] + vector[0] * base_radius, origin[1] + vector[1] * base_radius];
+
+    [
+        tip,
+        [
+            base[0] + perpendicular[0] * half_width,
+            base[1] + perpendicular[1] * half_width,
+        ],
+        [
+            base[0] - perpendicular[0] * half_width,
+            base[1] - perpendicular[1] * half_width,
+        ],
+    ]
+}
+
+fn direction_at(
+    point: [f32; 2], origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [f32; 2], set: DirectionSet,
+) -> Option<Dir> {
+    if !contains(point, viewport_min, viewport_max) {
+        return None;
+    }
+
+    let delta = [point[0] - origin[0], point[1] - origin[1]];
+    let radius_squared = delta[0] * delta[0] + delta[1] * delta[1];
+    if !(DIRECTION_INNER_RADIUS * DIRECTION_INNER_RADIUS..=DIRECTION_OUTER_RADIUS * DIRECTION_OUTER_RADIUS)
+        .contains(&radius_squared)
+    {
+        return None;
+    }
+
+    let radius = radius_squared.sqrt();
+    let minimum_dot = (std::f32::consts::PI / set.slots as f32).cos();
+
+    set.directions()
+        .map(|direction| {
+            let vector = direction_vector(direction);
+            let dot = (delta[0] * vector[0] + delta[1] * vector[1]) / radius;
+
+            (direction, dot)
+        })
+        .filter(|(_, dot)| *dot >= minimum_dot)
+        .max_by(|left, right| left.1.total_cmp(&right.1))
+        .map(|(direction, _)| direction)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -297,20 +645,25 @@ fn transform_mutations(mode: TransformMode, current: [i32; 2], next: [i32; 2]) -
 
 fn rounded_i32(value: f32) -> i32 { if value.is_finite() { value.round() as i32 } else { 0 } }
 
+fn themed_color(ui: &Ui, color: StyleColor, alpha: f32) -> [f32; 4] {
+    let [red, green, blue, _] = ui.style_color(color);
+
+    [red, green, blue, alpha]
+}
+
 fn draw_gizmo(ui: &Ui, origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [f32; 2], hot: Option<Handle>) {
+    let center = themed_color(ui, StyleColor::Text, 1.0);
+    let hot_color = themed_color(ui, StyleColor::ButtonHovered, 1.0);
+    let shadow_color = themed_color(ui, StyleColor::BorderShadow, 0.85);
     let draw_list = ui.get_window_draw_list();
     draw_list.with_clip_rect(viewport_min, viewport_max, || {
         let x_base = [origin[0] + AXIS_LENGTH - ARROW_LENGTH, origin[1]];
         let x_tip = [origin[0] + AXIS_LENGTH, origin[1]];
         let y_base = [origin[0], origin[1] - AXIS_LENGTH + ARROW_LENGTH];
         let y_tip = [origin[0], origin[1] - AXIS_LENGTH];
-        let x_color = if hot == Some(Handle::X) { HOT_COLOR } else { X_COLOR };
-        let y_color = if hot == Some(Handle::Y) { HOT_COLOR } else { Y_COLOR };
-        let center_color = if hot == Some(Handle::XY) {
-            HOT_COLOR
-        } else {
-            CENTER_COLOR
-        };
+        let x_color = if hot == Some(Handle::X) { hot_color } else { X_COLOR };
+        let y_color = if hot == Some(Handle::Y) { hot_color } else { Y_COLOR };
+        let center_color = if hot == Some(Handle::XY) { hot_color } else { center };
         let x_thickness = if hot == Some(Handle::X) {
             HOT_LINE_THICKNESS
         } else {
@@ -323,11 +676,11 @@ fn draw_gizmo(ui: &Ui, origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [
         };
 
         draw_list
-            .add_line(origin, x_base, SHADOW_COLOR)
+            .add_line(origin, x_base, shadow_color)
             .thickness(x_thickness + 2.0)
             .build();
         draw_list
-            .add_line(origin, y_base, SHADOW_COLOR)
+            .add_line(origin, y_base, shadow_color)
             .thickness(y_thickness + 2.0)
             .build();
         draw_list
@@ -363,7 +716,7 @@ fn draw_gizmo(ui: &Ui, origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [
             .add_rect(
                 [center_min[0] - 1.0, center_min[1] - 1.0],
                 [center_max[0] + 1.0, center_max[1] + 1.0],
-                SHADOW_COLOR,
+                shadow_color,
             )
             .filled(true)
             .build();
@@ -373,6 +726,96 @@ fn draw_gizmo(ui: &Ui, origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [
             .build();
         draw_list.add_text([x_tip[0] + 3.0, x_tip[1] - 8.0], x_color, "X");
         draw_list.add_text([y_tip[0] - 4.0, y_tip[1] - 17.0], y_color, "Y");
+    });
+}
+
+fn direction_angle(direction: Dir) -> f32 {
+    let vector = direction_vector(direction);
+
+    vector[1].atan2(vector[0])
+}
+
+fn direction_sector(origin: [f32; 2], direction: Dir, slots: u8) -> Vec<[[f32; 2]; 4]> {
+    let center = direction_angle(direction);
+    let half_width = std::f32::consts::PI / slots as f32;
+    let start = center - half_width + DIRECTION_SECTOR_GAP;
+    let end = center + half_width - DIRECTION_SECTOR_GAP;
+    let point = |angle: f32, radius: f32| [origin[0] + angle.cos() * radius, origin[1] + angle.sin() * radius];
+    let mut quads = Vec::with_capacity(DIRECTION_SECTOR_SEGMENTS);
+
+    for segment in 0..DIRECTION_SECTOR_SEGMENTS {
+        let first = segment as f32 / DIRECTION_SECTOR_SEGMENTS as f32;
+        let second = (segment + 1) as f32 / DIRECTION_SECTOR_SEGMENTS as f32;
+        let first_angle = start + (end - start) * first;
+        let second_angle = start + (end - start) * second;
+        quads.push([
+            point(first_angle, DIRECTION_INNER_RADIUS),
+            point(first_angle, DIRECTION_OUTER_RADIUS),
+            point(second_angle, DIRECTION_OUTER_RADIUS),
+            point(second_angle, DIRECTION_INNER_RADIUS),
+        ]);
+    }
+
+    quads
+}
+
+fn draw_direction_wheel(
+    ui: &Ui, origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [f32; 2], set: DirectionSet, current: Option<Dir>,
+    hovered: Option<Dir>,
+) {
+    let direction_color = themed_color(ui, StyleColor::Text, 1.0);
+    let wheel_color = themed_color(ui, StyleColor::WindowBg, 0.28);
+    let sector_color = themed_color(ui, StyleColor::WindowBg, 0.42);
+    let current_color = themed_color(ui, StyleColor::Tab, 0.56);
+    let hot_direction_color = themed_color(ui, StyleColor::PlotHistogramHovered, 0.68);
+    let shadow_color = themed_color(ui, StyleColor::BorderShadow, 0.85);
+    let draw_list = ui.get_window_draw_list();
+    draw_list.with_clip_rect(viewport_min, viewport_max, || {
+        for direction in set.slot_directions() {
+            let color = if !set.contains(direction) {
+                wheel_color
+            } else if hovered == Some(direction) {
+                hot_direction_color
+            } else if current == Some(direction) {
+                current_color
+            } else {
+                sector_color
+            };
+
+            for quad in direction_sector(origin, direction, set.slots) {
+                draw_list
+                    .add_triangle(quad[0], quad[1], quad[2], color)
+                    .filled(true)
+                    .build();
+                draw_list
+                    .add_triangle(quad[0], quad[2], quad[3], color)
+                    .filled(true)
+                    .build();
+            }
+        }
+
+        draw_list
+            .add_circle(origin, DIRECTION_OUTER_RADIUS, shadow_color)
+            .thickness(1.5)
+            .build();
+        draw_list
+            .add_circle(origin, DIRECTION_INNER_RADIUS, wheel_color)
+            .thickness(1.5)
+            .build();
+
+        for direction in set.directions() {
+            let shadow = direction_head(origin, direction, 1.5);
+            draw_list
+                .add_triangle(shadow[0], shadow[1], shadow[2], shadow_color)
+                .filled(true)
+                .build();
+
+            let head = direction_head(origin, direction, 0.0);
+            draw_list
+                .add_triangle(head[0], head[1], head[2], direction_color)
+                .filled(true)
+                .build();
+        }
     });
 }
 
@@ -420,6 +863,168 @@ mod tests {
             Some(Handle::Y)
         );
         assert_eq!(handle_at([205.0, 150.0], origin, viewport_min, viewport_max), None);
+    }
+
+    #[test]
+    fn direction_wheel_origin_uses_the_tile_center_instead_of_sprite_offsets() {
+        let mut camera = Controller::new();
+        camera.resize(64, 64);
+        camera.camera.x = 32.0;
+        camera.camera.y = 32.0;
+
+        assert_eq!(
+            tile_center_origin(&camera, [100.0, 200.0], Coord::new(1, 1, 1), 32),
+            [116.0, 248.0]
+        );
+        assert_eq!(
+            tile_center_origin(&camera, [100.0, 200.0], Coord::new(2, 2, 1), 32),
+            [148.0, 216.0]
+        );
+    }
+
+    #[test]
+    fn direction_picker_only_uses_supported_dmi_directions() {
+        assert_eq!(direction_set(None, None), None);
+        assert_eq!(direction_set(Some(1), None), None);
+        assert_eq!(direction_set(Some(2), None), None);
+
+        let four = direction_set(Some(4), None).unwrap();
+        assert_eq!(four.slots, 4);
+        assert_eq!(
+            four.directions().collect::<Vec<_>>(),
+            [Dir::North, Dir::East, Dir::South, Dir::West]
+        );
+
+        let eight = direction_set(Some(8), None).unwrap();
+        assert_eq!(eight.slots, 8);
+        assert_eq!(eight.directions().collect::<Vec<_>>(), CLOCKWISE_DIRECTIONS);
+    }
+
+    #[test]
+    fn directional_types_take_priority_over_dmi_directions() {
+        let mut supported = [false; 8];
+        supported[1] = true;
+        supported[2] = true;
+        supported[3] = true;
+        let types = DirectionalTypes {
+            supported,
+            current: Some(Dir::North),
+        };
+
+        let set = direction_set(Some(8), Some(types)).unwrap();
+        assert_eq!(set.directions().collect::<Vec<_>>(), [Dir::North, Dir::East, Dir::West]);
+        assert_eq!(set.slots, 4);
+
+        let one_type = DirectionalTypes {
+            supported: [true, false, false, false, false, false, false, false],
+            current: None,
+        };
+        assert_eq!(direction_set(Some(8), Some(one_type)), None);
+    }
+
+    #[test]
+    fn direction_sectors_cover_the_wheel_but_not_its_dead_zone_or_exterior() {
+        let origin = [150.0, 150.0];
+        let viewport_min = [0.0, 0.0];
+        let viewport_max = [300.0, 300.0];
+        let set = direction_set(Some(8), None).unwrap();
+
+        for direction in CLOCKWISE_DIRECTIONS {
+            let vector = direction_vector(direction);
+            let point = [origin[0] + vector[0] * 70.0, origin[1] + vector[1] * 70.0];
+
+            assert_eq!(
+                direction_at(point, origin, viewport_min, viewport_max, set),
+                Some(direction)
+            );
+            assert_eq!(handle_at(point, origin, viewport_min, viewport_max), None);
+        }
+
+        assert_eq!(direction_at(origin, origin, viewport_min, viewport_max, set), None);
+        assert_eq!(
+            direction_at([origin[0] + 100.0, origin[1]], origin, viewport_min, viewport_max, set),
+            None
+        );
+        assert_eq!(
+            direction_at([301.0, 150.0], origin, viewport_min, viewport_max, set),
+            None
+        );
+    }
+
+    #[test]
+    fn missing_direction_slots_are_not_selectable() {
+        let mut supported = [false; 8];
+        supported[1] = true;
+        supported[3] = true;
+        let set = direction_set(
+            None,
+            Some(DirectionalTypes {
+                supported,
+                current: None,
+            }),
+        )
+        .unwrap();
+        let origin = [100.0, 100.0];
+
+        assert_eq!(
+            direction_at([100.0, 40.0], origin, [0.0, 0.0], [200.0, 200.0], set),
+            Some(Dir::North)
+        );
+        assert_eq!(
+            direction_at([160.0, 100.0], origin, [0.0, 0.0], [200.0, 200.0], set),
+            None
+        );
+    }
+
+    #[test]
+    fn tap_rotates_clockwise_and_skips_unsupported_directions() {
+        let four = direction_set(Some(4), None).unwrap();
+        assert_eq!(next_clockwise_direction(four, Some(Dir::North)), Some(Dir::East));
+        assert_eq!(next_clockwise_direction(four, Some(Dir::East)), Some(Dir::South));
+        assert_eq!(next_clockwise_direction(four, Some(Dir::South)), Some(Dir::West));
+        assert_eq!(next_clockwise_direction(four, Some(Dir::West)), Some(Dir::North));
+
+        let mut supported = [false; 8];
+        supported[1] = true;
+        supported[2] = true;
+        supported[7] = true;
+        let sparse = direction_set(
+            None,
+            Some(DirectionalTypes {
+                supported,
+                current: None,
+            }),
+        )
+        .unwrap();
+        assert_eq!(next_clockwise_direction(sparse, Some(Dir::North)), Some(Dir::East));
+        assert_eq!(next_clockwise_direction(sparse, Some(Dir::East)), Some(Dir::Northwest));
+        assert_eq!(next_clockwise_direction(sparse, None), Some(Dir::Northwest));
+    }
+
+    #[test]
+    fn r_release_is_a_tap_only_before_the_hold_threshold() {
+        assert_eq!(
+            pending_direction_outcome(10.0, 10.199, false, true),
+            PendingDirectionOutcome::Tap
+        );
+        assert_eq!(
+            pending_direction_outcome(10.0, 10.2, true, false),
+            PendingDirectionOutcome::Open
+        );
+        assert_eq!(
+            pending_direction_outcome(10.0, 10.2, false, true),
+            PendingDirectionOutcome::Cancel
+        );
+    }
+
+    #[test]
+    fn direction_mutations_use_byond_direction_bits() {
+        for direction in Dir::ORDER {
+            assert_eq!(
+                direction_mutation(direction),
+                VarMutation::Set(Identifier::from("dir"), Value::Num(direction.to_bits() as f32))
+            );
+        }
     }
 
     #[test]

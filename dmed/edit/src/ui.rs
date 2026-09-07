@@ -213,12 +213,12 @@ impl UiState {
             let viewport_max = ui.item_rect_max();
             if hovered {
                 let io = ui.io();
-                if !self.gizmo.is_dragging() && ui.is_mouse_down(MouseButton::Middle) {
+                if !self.gizmo.is_interacting() && ui.is_mouse_down(MouseButton::Middle) {
                     camera.pan_by(io.mouse_delta());
                 }
 
                 let wheel = io.mouse_wheel();
-                if !self.gizmo.is_dragging() && wheel != 0.0 {
+                if !self.gizmo.is_interacting() && wheel != 0.0 {
                     let mouse = io.mouse_pos();
                     camera.zoom_by(wheel, [mouse[0] - viewport_min[0], mouse[1] - viewport_min[1]]);
                 }

@@ -1,7 +1,10 @@
-use core::types::{Identifier, Value};
+use core::{
+    path::TreePath,
+    types::{Identifier, Value},
+};
 use std::path::{Path, PathBuf};
 
-use dmi::IconFile;
+use dmi::{IconFile, metadata::Dir};
 use dmm::{Coord, Map, Prefab};
 use editor::{
     EditorState,
@@ -10,7 +13,7 @@ use editor::{
     document::{MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
     visual,
 };
-use objtree::ObjectTree;
+use objtree::{ObjectTree, TypeId};
 use render::{
     Frame,
     SpriteInstance,
@@ -26,6 +29,15 @@ pub(crate) struct SelectedTransform {
     pub pixel: [i32; 2],
     pub step: [i32; 2],
     pub is_movable: bool,
+    pub dir: u32,
+    pub dmi_directions: Option<u32>,
+    pub directional_types: Option<DirectionalTypes>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DirectionalTypes {
+    pub supported: [bool; 8],
+    pub current: Option<Dir>,
 }
 
 pub struct Session {
@@ -158,6 +170,16 @@ impl Session {
         document.instance_location(document.selected_instance()?)
     }
 
+    pub(crate) fn selected_directional_types(&self) -> Option<DirectionalTypes> {
+        let environment = self.state.environment.as_ref()?;
+        let document = self.state.active_document()?;
+        let selected = document.selected_instance()?;
+        let (prefab, _) = document.prefab_instance(selected)?;
+        let id = environment.tree.id_of(&prefab.path)?;
+
+        directional_types_for(&environment.tree, id)
+    }
+
     pub(crate) fn selected_transform(&self) -> Option<SelectedTransform> {
         let environment = self.state.environment.as_ref()?;
         let document = self.state.active_document()?;
@@ -175,6 +197,13 @@ impl Session {
             .roots()
             .movable
             .is_some_and(|movable| environment.tree.is_subtype_of(id, movable));
+        let dmi_directions = appearance
+            .icon
+            .as_deref()
+            .and_then(|icon| environment.icon(icon))
+            .and_then(|metadata| metadata.find(appearance.icon_state.as_deref().unwrap_or_default()))
+            .map(|state| state.dirs);
+        let directional_types = directional_types_for(&environment.tree, id);
 
         Some(SelectedTransform {
             selected,
@@ -182,6 +211,9 @@ impl Session {
             pixel: [appearance.pixel_x, appearance.pixel_y],
             step: [appearance.step_x, appearance.step_y],
             is_movable,
+            dir: appearance.dir,
+            dmi_directions,
+            directional_types,
         })
     }
 
@@ -208,6 +240,32 @@ impl Session {
         let document = self.state.active_document_mut()?;
 
         let changed = document.edit_instance_vars(selected, label, mutations, group)?;
+
+        if changed {
+            self.update_instance(selected);
+        }
+
+        Some(changed)
+    }
+
+    pub(crate) fn set_selected_directional_type(&mut self, direction: Dir, group: Option<EditGroupId>) -> Option<bool> {
+        let selected = self.selected_instance()?;
+        let path = {
+            let environment = self.state.environment.as_ref()?;
+            let document = self.state.active_document()?;
+            let (prefab, _) = document.prefab_instance(selected)?;
+            let id = environment.tree.id_of(&prefab.path)?;
+
+            directional_type_target(&environment.tree, id, direction)?
+        };
+        let document = self.state.active_document_mut()?;
+        let changed = document.replace_instance_path(
+            selected,
+            "set direction",
+            path,
+            &[VarMutation::Remove(Identifier::from("dir"))],
+            group,
+        )?;
 
         if changed {
             self.update_instance(selected);
@@ -330,6 +388,79 @@ impl Session {
     }
 }
 
+fn direction_from_name(name: &str) -> Option<Dir> {
+    match name {
+        "south" => Some(Dir::South),
+        "north" => Some(Dir::North),
+        "east" => Some(Dir::East),
+        "west" => Some(Dir::West),
+        "southeast" => Some(Dir::Southeast),
+        "southwest" => Some(Dir::Southwest),
+        "northeast" => Some(Dir::Northeast),
+        "northwest" => Some(Dir::Northwest),
+        _ => None,
+    }
+}
+
+fn directional_type_group(tree: &ObjectTree, selected: TypeId) -> Option<(TypeId, Option<Dir>)> {
+    let declaration = tree.get(selected)?;
+    let name = declaration.path.name()?.as_str();
+    if name == "directional" {
+        return Some((selected, None));
+    }
+
+    if let Some(direction) = direction_from_name(name)
+        && let Some(parent) = declaration.parent
+        && tree
+            .get(parent)
+            .and_then(|parent| parent.path.name())
+            .is_some_and(|name| name.as_str() == "directional")
+    {
+        return Some((parent, Some(direction)));
+    }
+
+    declaration.children.iter().copied().find_map(|child| {
+        tree.get(child)
+            .and_then(|child| child.path.name())
+            .is_some_and(|name| name.as_str() == "directional")
+            .then_some((child, None))
+    })
+}
+
+fn directional_types_for(tree: &ObjectTree, selected: TypeId) -> Option<DirectionalTypes> {
+    let (group, current) = directional_type_group(tree, selected)?;
+    let mut supported = [false; 8];
+
+    for child in &tree.get(group)?.children {
+        let Some(direction) = tree
+            .get(*child)
+            .and_then(|child| child.path.name())
+            .and_then(|name| direction_from_name(name.as_str()))
+        else {
+            continue;
+        };
+        if let Some(index) = Dir::ORDER.iter().position(|candidate| *candidate == direction) {
+            supported[index] = true;
+        }
+    }
+
+    supported
+        .iter()
+        .any(|supported| *supported)
+        .then_some(DirectionalTypes { supported, current })
+}
+
+fn directional_type_target(tree: &ObjectTree, selected: TypeId, direction: Dir) -> Option<TreePath> {
+    let (group, _) = directional_type_group(tree, selected)?;
+
+    tree.get(group)?.children.iter().find_map(|child| {
+        let child = tree.get(*child)?;
+
+        (child.path.name().and_then(|name| direction_from_name(name.as_str())) == Some(direction))
+            .then(|| TreePath::parse(&child.path.to_string()))
+    })
+}
+
 fn validate_level(z: u32, levels: u32) -> std::io::Result<()> {
     let levels = levels.max(1);
 
@@ -396,14 +527,15 @@ fn report(environment: &Environment, diagnostics: &editor::environment::LoadDiag
 
 #[cfg(test)]
 mod tests {
-    use core::types::Value;
+    use core::{location::Location, path::TreePath, types::Value};
     use std::path::PathBuf;
 
-    use dmi::IconFile;
+    use dmi::{IconFile, metadata::Dir};
     use dmm::{Coord, Map, Size};
     use editor::{Environment, document::MapDocument};
+    use objtree::ObjectTree;
 
-    use super::{Session, build_textures, validate_level};
+    use super::{Session, build_textures, directional_type_target, directional_types_for, validate_level};
 
     fn examples() -> PathBuf {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
@@ -451,6 +583,37 @@ mod tests {
         assert_eq!(textures.len(), 1);
         assert_eq!(textures.cell_count(), file.cell_count());
         assert!((0..file.cell_count()).all(|cell| textures.lookup("icons/test.dmi", cell).is_some()));
+    }
+
+    #[test]
+    fn directional_type_groups_are_discovered_from_base_group_and_direction_paths() {
+        let mut tree = ObjectTree::new();
+        let base = tree.register(&TreePath::parse("/obj/alarm"), Location::default());
+        let group = tree.register(&TreePath::parse("/obj/alarm/directional"), Location::default());
+        let north = tree.register(&TreePath::parse("/obj/alarm/directional/north"), Location::default());
+        tree.register(&TreePath::parse("/obj/alarm/directional/east"), Location::default());
+        tree.register(
+            &TreePath::parse("/obj/alarm/directional/northwest"),
+            Location::default(),
+        );
+        let unrelated = tree.register(&TreePath::parse("/obj/alarm/party"), Location::default());
+
+        let base_types = directional_types_for(&tree, base).unwrap();
+        assert_eq!(base_types.current, None);
+        assert_eq!(
+            base_types.supported,
+            [false, true, true, false, false, false, false, true]
+        );
+        assert_eq!(directional_types_for(&tree, group), Some(base_types));
+
+        let north_types = directional_types_for(&tree, north).unwrap();
+        assert_eq!(north_types.current, Some(Dir::North));
+        assert_eq!(north_types.supported, base_types.supported);
+        assert_eq!(
+            directional_type_target(&tree, north, Dir::Northwest),
+            Some(TreePath::parse("/obj/alarm/directional/northwest"))
+        );
+        assert_eq!(directional_types_for(&tree, unrelated), None);
     }
 
     #[test]
@@ -530,6 +693,9 @@ mod tests {
         assert!(transform.is_movable);
         assert_eq!(transform.pixel, [0, 0]);
         assert_eq!(transform.step, [0, 0]);
+        assert_eq!(transform.dir, 2);
+        assert_eq!(transform.dmi_directions, Some(1));
+        assert_eq!(transform.directional_types, None);
         assert_eq!(transform.sprite.owner, selected);
         let revision = session.revision;
         let before = session.instances.sprites.clone();
