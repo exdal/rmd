@@ -216,6 +216,21 @@ impl Session {
         Some(changed)
     }
 
+    pub fn move_selected_instance(
+        &mut self, to_coord: Coord, label: impl Into<String>, mutations: &[VarMutation], group: Option<EditGroupId>,
+    ) -> Option<bool> {
+        let selected = self.selected_instance()?;
+        let document = self.state.active_document_mut()?;
+
+        let changed = document.move_instance(selected, to_coord, label, mutations, group)?;
+
+        if changed {
+            self.update_instance(selected);
+        }
+
+        Some(changed)
+    }
+
     pub fn area_at(&self, coord: Coord) -> Option<PrefabInstanceId> {
         let environment = self.state.environment.as_ref()?;
         let area = environment.tree.roots().area?;
@@ -459,6 +474,40 @@ mod tests {
         assert_eq!(frame.underlay_depth, 1);
         assert!(frame.show_areas);
         assert!(frame.show_area_outlines);
+    }
+
+    #[test]
+    fn reanchoring_the_selected_instance_keeps_its_rendered_position() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        session.open_map(&root.join("test.dmm"), 1).unwrap();
+        let coord = Coord::new(6, 3, 1);
+        let selected = session
+            .state
+            .active_document()
+            .and_then(|document| document.instance_ids_at(coord).first())
+            .copied()
+            .unwrap();
+        session.select_instance(Some(selected));
+        let before = session.selected_transform().unwrap();
+        let destination = Coord::new(coord.x + 1, coord.y, coord.z);
+
+        let moved = session.move_selected_instance(
+            destination,
+            "re-anchor object",
+            &[editor::document::VarMutation::Set(
+                "pixel_x".into(),
+                Value::Num((before.pixel[0] - 32) as f32),
+            )],
+            None,
+        );
+
+        assert_eq!(moved, Some(true));
+        assert_eq!(session.selected_location().unwrap().coord, destination);
+        let after = session.selected_transform().unwrap();
+        assert_eq!(after.pixel, [before.pixel[0] - 32, before.pixel[1]]);
+        assert_eq!([after.sprite.x, after.sprite.y], [before.sprite.x, before.sprite.y]);
     }
 
     #[test]

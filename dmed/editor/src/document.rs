@@ -272,6 +272,45 @@ impl MapDocument {
         Some(true)
     }
 
+    pub fn move_instance(
+        &mut self, id: PrefabInstanceId, to_coord: Coord, label: impl Into<String>, mutations: &[VarMutation],
+        group: Option<EditGroupId>,
+    ) -> Option<bool> {
+        let location = self.instance_location(id)?;
+        let size = &self.map.size;
+        let in_bounds = to_coord.z == location.coord.z
+            && (1..=size.x.max(1)).contains(&to_coord.x)
+            && (1..=size.y.max(1)).contains(&to_coord.y);
+        if to_coord == location.coord || !in_bounds {
+            return self.edit_instance_vars(id, label, mutations, group);
+        }
+
+        let mut source = self.placed_tile(location.coord)?;
+        if location.prefab_index >= source.len() {
+            return None;
+        }
+        let mut moved = source.remove(location.prefab_index);
+        for mutation in mutations {
+            match mutation {
+                VarMutation::Set(name, value) => moved.prefab_mut().set_var(name.clone(), value.clone()),
+                VarMutation::Remove(name) => {
+                    moved.prefab_mut().remove_var(name);
+                },
+            }
+        }
+        let mut destination = self.placed_tile(to_coord).unwrap_or_default();
+        destination.push(moved);
+
+        let mut edit = Edit::new(label);
+        edit.change(self, location.coord, source);
+        edit.change(self, to_coord, destination);
+        self.history
+            .apply_grouped(&mut self.map, &mut self.instances, &mut self.key_usage, edit, group);
+        self.clear_stale_instance_selection();
+
+        Some(true)
+    }
+
     pub fn apply(&mut self, edit: Edit) {
         self.history
             .apply(&mut self.map, &mut self.instances, &mut self.key_usage, edit);
@@ -494,6 +533,72 @@ mod tests {
                 .prefab_instance(id)
                 .and_then(|(prefab, _)| prefab.var(&"pixel_x".into())),
             Some(&core::types::Value::Num(1_000.0)),
+        );
+    }
+
+    #[test]
+    fn moving_an_instance_applies_mutations_and_undo_restores_both() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        let source = Coord::new(1, 1, 1);
+        let destination = Coord::new(2, 1, 1);
+        let id = document.instance_ids_at(source)[1];
+        let source_before = document.placed_tile(source).unwrap();
+        let destination_before = document.placed_tile(destination).unwrap();
+
+        assert_eq!(
+            document.move_instance(
+                id,
+                destination,
+                "re-anchor table",
+                &[VarMutation::Set("pixel_x".into(), core::types::Value::Num(-32.0))],
+                None,
+            ),
+            Some(true),
+        );
+        assert_eq!(document.instance_location(id).unwrap().coord, destination);
+        assert_eq!(
+            document.prefab_instance(id).unwrap().0.var(&"pixel_x".into()),
+            Some(&core::types::Value::Num(-32.0)),
+        );
+        assert_eq!(
+            document.placed_tile(source).unwrap(),
+            source_before
+                .iter()
+                .filter(|placed| placed.id() != id)
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(document.placed_tile(destination).unwrap().len(), destination_before.len() + 1);
+
+        assert!(document.undo());
+        assert_eq!(document.instance_location(id).unwrap().coord, source);
+        assert_eq!(document.instance_location(id).unwrap().prefab_index, 1);
+        assert_eq!(document.prefab_instance(id).unwrap().0.var(&"pixel_x".into()), None);
+        assert_eq!(document.placed_tile(source).unwrap(), source_before);
+        assert_eq!(document.placed_tile(destination).unwrap(), destination_before);
+    }
+
+    #[test]
+    fn moving_onto_the_same_or_out_of_bounds_tile_only_edits_variables() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        let source = Coord::new(1, 1, 1);
+        let id = document.instance_ids_at(source)[1];
+
+        assert_eq!(
+            document.move_instance(
+                id,
+                source,
+                "change pixel offset",
+                &[VarMutation::Set("pixel_x".into(), core::types::Value::Num(4.0))],
+                None,
+            ),
+            Some(true),
+        );
+        assert_eq!(document.move_instance(id, Coord::new(9, 9, 1), "off the map", &[], None), Some(false));
+        assert_eq!(document.instance_location(id).unwrap().coord, source);
+        assert_eq!(
+            document.prefab_instance(id).unwrap().0.var(&"pixel_x".into()),
+            Some(&core::types::Value::Num(4.0)),
         );
     }
 

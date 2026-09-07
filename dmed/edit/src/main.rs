@@ -8,6 +8,7 @@ mod camera;
 mod gizmo;
 mod inspector;
 mod session;
+mod transform;
 mod ui;
 
 use std::{path::PathBuf, process::ExitCode, sync::Arc};

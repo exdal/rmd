@@ -14,13 +14,14 @@ public static const u32 SPRITE_TEXTURE_MASK = (1 << SPRITE_FLAGS_SHIFT) - 1;
 
 public struct Sprite {
     public u32x2 owner;
-    public u32x2 packed_position_size;
+    public f32x2 position;
+    public u32 packed_size;
     public u32 packed_color;
     public u32x2 packed_source_position_size;
     public u32 packed_texture_flags;
 
     public func position_size() -> f32x4 {
-        return f32x4(unpack_half2(this.packed_position_size.x), unpack_half2(this.packed_position_size.y));
+        return f32x4(this.position, unpack_half2(this.packed_size));
     }
 
     public func color() -> f32x4 {

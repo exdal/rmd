@@ -1,6 +1,7 @@
 use core::types::{Identifier, Value};
 
 use dear_imgui_rs::{MouseButton, MouseCursor, Ui};
+use dmm::Coord;
 use editor::{
     command::EditGroupId,
     document::{PrefabInstanceId, VarMutation},
@@ -10,6 +11,7 @@ use crate::{
     camera::Controller,
     inspector::TransformMode,
     session::{SelectedTransform, Session},
+    transform::anchor_to_tile,
 };
 
 const AXIS_LENGTH: f32 = 48.0;
@@ -55,6 +57,7 @@ struct DragState {
     start_mouse: [f32; 2],
     start_values: [i32; 2],
     start_anchor: [f32; 2],
+    start_coord: Coord,
     zoom: f32,
     tile_size: u32,
     group: EditGroupId,
@@ -112,6 +115,7 @@ impl GizmoState {
         if self.drag.is_none()
             && let Some(handle) = hovered
             && ui.is_mouse_clicked(MouseButton::Left)
+            && let Some(location) = session.selected_location()
         {
             self.drag = Some(DragState {
                 selected: target.selected,
@@ -120,6 +124,7 @@ impl GizmoState {
                 start_mouse: mouse,
                 start_values: values,
                 start_anchor: [target.sprite.x, target.sprite.y],
+                start_coord: location.coord,
                 zoom: camera.camera.zoom.max(f32::EPSILON),
                 tile_size: session.options.tile_size.max(1),
                 group: EditGroupId::new(),
@@ -131,16 +136,22 @@ impl GizmoState {
             if !ui.is_mouse_down(MouseButton::Left) {
                 self.drag = None;
             } else if mouse != drag.start_mouse && mouse.iter().all(|value| value.is_finite()) {
-                let next = dragged_values(drag, mouse, ui.io().key_shift());
-                let current = transform_values(target, mode).unwrap_or(drag.start_values);
-                let mutations = transform_mutations(mode, current, next);
+                if let Some(location) = session.selected_location() {
+                    let size = session
+                        .map()
+                        .map_or((1, 1), |map| (map.size.x.max(1), map.size.y.max(1)));
+                    let shift_snap = ui.io().key_shift();
+                    let ctrl_reanchor = ui.io().key_ctrl();
+                    let (coord, next) = anchored_values(drag, mouse, shift_snap, ctrl_reanchor, size);
+                    let current = transform_values(target, mode).unwrap_or(drag.start_values);
+                    let mutations = transform_mutations(mode, current, next);
+                    let label = format!("move {} offsets", mode.label().to_ascii_lowercase());
 
-                if !mutations.is_empty() {
-                    session.edit_selected_instance_vars(
-                        format!("move {} offsets", mode.label().to_ascii_lowercase()),
-                        &mutations,
-                        Some(drag.group),
-                    );
+                    if coord != location.coord {
+                        session.move_selected_instance(coord, label, &mutations, Some(drag.group));
+                    } else if !mutations.is_empty() {
+                        session.edit_selected_instance_vars(label, &mutations, Some(drag.group));
+                    }
                     if let Some(updated) = session.selected_transform() {
                         target = updated;
                     }
@@ -216,12 +227,19 @@ fn contains(point: [f32; 2], min: [f32; 2], max: [f32; 2]) -> bool {
         && point[1] <= max[1]
 }
 
-fn dragged_values(drag: DragState, mouse: [f32; 2], snap: bool) -> [i32; 2] {
+#[derive(Debug, Clone, Copy)]
+struct DraggedTransform {
+    values: [i32; 2],
+    anchor: [f32; 2],
+}
+
+fn dragged_values(drag: DragState, mouse: [f32; 2], snap: bool) -> DraggedTransform {
     let map_delta = [
         (mouse[0] - drag.start_mouse[0]) / drag.zoom,
         -(mouse[1] - drag.start_mouse[1]) / drag.zoom,
     ];
     let mut next = drag.start_values;
+    let mut anchor = drag.start_anchor;
 
     for axis in 0..2 {
         let enabled = if axis == 0 {
@@ -233,19 +251,35 @@ fn dragged_values(drag: DragState, mouse: [f32; 2], snap: bool) -> [i32; 2] {
             continue;
         }
 
-        let delta = if snap {
+        let desired = drag.start_anchor[axis] + map_delta[axis];
+        anchor[axis] = if snap {
             let tile = drag.tile_size as f32;
-            let desired_anchor = drag.start_anchor[axis] + map_delta[axis];
-            let snapped_anchor = (desired_anchor / tile).round() * tile;
 
-            rounded_i32(snapped_anchor - drag.start_anchor[axis])
+            (desired / tile).round() * tile
         } else {
-            rounded_i32(map_delta[axis])
+            desired
         };
-        next[axis] = drag.start_values[axis].saturating_add(delta);
+        next[axis] = drag.start_values[axis].saturating_add(rounded_i32(anchor[axis] - drag.start_anchor[axis]));
     }
 
-    next
+    DraggedTransform { values: next, anchor }
+}
+
+fn anchored_values(
+    drag: DragState, mouse: [f32; 2], snap: bool, reanchor: bool, size: (u32, u32),
+) -> (Coord, [i32; 2]) {
+    let dragged = dragged_values(drag, mouse, snap);
+    if !reanchor {
+        return (drag.start_coord, dragged.values);
+    }
+
+    let anchored = anchor_to_tile(dragged.anchor, drag.start_coord, drag.tile_size, size);
+    let next = [
+        dragged.values[0].saturating_add(anchored.adjust[0]),
+        dragged.values[1].saturating_add(anchored.adjust[1]),
+    ];
+
+    (anchored.coord, next)
 }
 
 fn transform_mutations(mode: TransformMode, current: [i32; 2], next: [i32; 2]) -> Vec<VarMutation> {
@@ -354,6 +388,7 @@ mod tests {
             start_mouse: [100.0, 100.0],
             start_values: [5, -3],
             start_anchor: [45.0, 29.0],
+            start_coord: dmm::Coord::new(2, 1, 1),
             zoom: 2.0,
             tile_size: 32,
             group: EditGroupId::new(),
@@ -375,10 +410,7 @@ mod tests {
         let viewport_max = [200.0, 200.0];
         let origin = [150.0, 150.0];
 
-        assert_eq!(
-            handle_at(origin, origin, viewport_min, viewport_max),
-            Some(Handle::XY)
-        );
+        assert_eq!(handle_at(origin, origin, viewport_min, viewport_max), Some(Handle::XY));
         assert_eq!(
             handle_at([180.0, 150.0], origin, viewport_min, viewport_max),
             Some(Handle::X)
@@ -396,9 +428,13 @@ mod tests {
         let x = dragged_values(drag(Handle::X), [107.0, 95.0], false);
         let y = dragged_values(drag(Handle::Y), [107.0, 95.0], false);
 
-        assert_eq!(both, [9, 0]);
-        assert_eq!(x, [9, -3]);
-        assert_eq!(y, [5, 0]);
+        assert_eq!(both.values, [9, 0]);
+        assert_eq!(x.values, [9, -3]);
+        assert_eq!(y.values, [5, 0]);
+        // The anchor tracks the free (unsnapged) rendered position, which the
+        // caller re-anchors onto the nearest tile cell.
+        assert_eq!(both.anchor, [48.5, 31.5]);
+        assert_eq!(y.anchor, [45.0, 31.5]);
     }
 
     #[test]
@@ -408,7 +444,10 @@ mod tests {
 
         // The active value starts at 5, while other offsets put the rendered
         // anchor at 45. Snapping its dragged position to 64 adds 19, yielding 24.
-        assert_eq!(dragged_values(state, [110.0, 90.0], true), [24, 0]);
+        let snapped = dragged_values(state, [110.0, 90.0], true);
+
+        assert_eq!(snapped.values, [24, 0]);
+        assert_eq!(snapped.anchor, [64.0, 32.0]);
     }
 
     #[test]
@@ -416,7 +455,41 @@ mod tests {
         let mut state = drag(Handle::X);
         state.zoom = 1.0;
 
-        assert_eq!(dragged_values(state, [110.0, 90.0], true), [24, -3]);
+        assert_eq!(dragged_values(state, [110.0, 90.0], true).values, [24, -3]);
+    }
+
+    #[test]
+    fn reanchoring_is_disabled_without_ctrl() {
+        let mut state = drag(Handle::X);
+        state.start_coord = dmm::Coord::new(2, 1, 1);
+        state.start_values = [15, 0];
+        state.start_anchor = [47.0, 0.0];
+        state.zoom = 1.0;
+
+        let (coord, values) = anchored_values(state, [120.0, 100.0], false, false, (10, 10));
+
+        assert_eq!(coord, state.start_coord);
+        assert_eq!(values, [35, 0]);
+    }
+
+    #[test]
+    fn ctrl_reanchoring_stays_relative_to_the_start_tile_during_a_continued_drag() {
+        let mut state = drag(Handle::X);
+        state.start_coord = dmm::Coord::new(2, 1, 1);
+        state.start_values = [15, 0];
+        state.start_anchor = [47.0, 0.0];
+        state.zoom = 1.0;
+
+        let (first_coord, first_values) = anchored_values(state, [120.0, 100.0], false, true, (10, 10));
+        let (second_coord, second_values) = anchored_values(state, [125.0, 100.0], false, true, (10, 10));
+
+        assert_eq!(first_coord, dmm::Coord::new(3, 1, 1));
+        assert_eq!(second_coord, first_coord);
+        assert_eq!(first_values, [3, 0]);
+        assert_eq!(second_values, [8, 0]);
+
+        assert_eq!((first_coord.x - 1) * 32 + first_values[0] as u32, 67);
+        assert_eq!((second_coord.x - 1) * 32 + second_values[0] as u32, 72);
     }
 
     #[test]

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 use dear_imgui_rs::{DragFlags, StyleColor, TableFlags, TableSizingPolicy, Ui};
 use dmi::metadata::Dir;
-use dmm::{Prefab, writer::format_value};
+use dmm::{Coord, Prefab, writer::format_value};
 use editor::{
     command::EditGroupId,
     document::{PrefabInstanceId, PrefabLocation, VarMutation},
@@ -12,6 +12,7 @@ use editor::{
 use objtree::{ObjectTree, TypeId};
 
 use crate::session::Session;
+use crate::transform::anchor_axis;
 
 const DISPLAY_PROPERTIES: &[&str] = &[
     "name",
@@ -354,11 +355,7 @@ impl InspectorState {
         };
         if changed {
             let group = self.drag_group(&property.name);
-            session.edit_selected_instance_vars(
-                format!("change {}", property.name),
-                &[VarMutation::Set(property.name.clone(), Value::Num(value as f32))],
-                Some(group),
-            );
+            commit_int_property(session, self.transform_mode, &property.name, value, group);
         }
         if ui.is_item_deactivated_after_edit() {
             self.end_drag(&property.name);
@@ -833,6 +830,66 @@ fn text_value(kind: TextPropertyKind, text: &str) -> Value {
         TextPropertyKind::Resource => Value::Resource(text.to_string()),
         TextPropertyKind::NullableText if text.trim().is_empty() => Value::Null,
         TextPropertyKind::NullableText => Value::Text(text.to_string()),
+    }
+}
+
+fn transform_axis(mode: TransformMode, name: &Identifier) -> Option<usize> {
+    let (x, y) = mode.variables();
+
+    if name.as_str() == x {
+        Some(0)
+    } else if name.as_str() == y {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+fn commit_int_property(
+    session: &mut Session, mode: TransformMode, name: &Identifier, value: i32, group: EditGroupId,
+) {
+    let label = format!("change {name}");
+    let mut committed = value;
+    let mut to_coord = None;
+
+    if let Some(axis) = transform_axis(mode, name)
+        && let Some(transform) = session.selected_transform()
+        && let Some(location) = session.selected_location()
+    {
+        let current = match mode {
+            TransformMode::Pixel => transform.pixel[axis],
+            TransformMode::Step => transform.step[axis],
+        };
+        let anchor = if axis == 0 { transform.sprite.x } else { transform.sprite.y };
+        let (origin, limit) = if axis == 0 {
+            (location.coord.x, session.map().map_or(1, |map| map.size.x.max(1)))
+        } else {
+            (location.coord.y, session.map().map_or(1, |map| map.size.y.max(1)))
+        };
+        let (target, adjust) = anchor_axis(
+            anchor + (value - current) as f32,
+            origin,
+            session.options.tile_size,
+            limit,
+        );
+        committed += adjust;
+        if target != origin {
+            to_coord = Some(if axis == 0 {
+                Coord::new(target, location.coord.y, location.coord.z)
+            } else {
+                Coord::new(location.coord.x, target, location.coord.z)
+            });
+        }
+    }
+
+    let mutation = VarMutation::Set(name.clone(), Value::Num(committed as f32));
+    match to_coord {
+        Some(coord) => {
+            session.move_selected_instance(coord, label, &[mutation], Some(group));
+        },
+        None => {
+            session.edit_selected_instance_vars(label, &[mutation], Some(group));
+        },
     }
 }
 

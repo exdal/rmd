@@ -60,10 +60,11 @@ const HIGHLIGHT_STRIPE_PERIOD: f32 = 12.0;
 const HIGHLIGHT_STRIPE_SPEED: f32 = 12.0;
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct GpuSprite {
     owner: [u32; 2],
-    position_size: [u32; 2],
+    position: [f32; 2],
+    packed_size: u32,
     color: u32,
     source_position_size: [u32; 2],
     texture_flags: u32,
@@ -1136,7 +1137,10 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
     };
 
     let out_of_range = |field| GpuError::SpritePackingOutOfRange { sprite: index, field };
-    let position = pack_half2(sprite.x, sprite.y).ok_or_else(|| out_of_range("position"))?;
+    if !sprite.x.is_finite() || !sprite.y.is_finite() {
+        return Err(out_of_range("position"));
+    }
+    let position = [sprite.x, sprite.y];
     let size = pack_half2(sprite.width, sprite.height).ok_or_else(|| out_of_range("size"))?;
     let color = pack_unorm4x8(sprite.color).ok_or_else(|| out_of_range("color"))?;
     let source_position = pack_u16x2(sprite.texture.source_position).ok_or_else(|| out_of_range("source position"))?;
@@ -1148,7 +1152,8 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
 
     Ok(GpuSprite {
         owner: owner_words(sprite.owner),
-        position_size: [position, size],
+        position,
+        packed_size: size,
         color,
         source_position_size: [source_position, source_size],
         texture_flags: sprite.texture.index | (flags << SPRITE_FLAGS_SHIFT),
@@ -1586,7 +1591,8 @@ mod tests {
         let gpu = gpu_sprite(0, &area).expect("pack");
 
         assert_eq!(gpu.owner, [area.owner.get() as u32, 0]);
-        assert_eq!(gpu.position_size, [0x5400_5000, 0x5000_5000]);
+        assert_eq!(gpu.position, [32.0, 64.0]);
+        assert_eq!(gpu.packed_size, 0x5000_5000);
         assert_eq!(gpu.color, 0);
         assert_eq!(gpu.source_position_size, [0x0008_0004, 0x0018_0010]);
         assert_eq!(gpu.texture_flags & SPRITE_TEXTURE_MASK, 3);
@@ -1639,6 +1645,12 @@ mod tests {
     fn sprite_packing_rejects_values_outside_the_wire_format() {
         let mut instance = sprite(1);
         instance.x = 70_000.0;
+        assert_eq!(
+            gpu_sprite(7, &instance).expect("f32 position").position,
+            [70_000.0, 0.0]
+        );
+
+        instance.x = f32::NAN;
         assert_eq!(
             gpu_sprite(7, &instance),
             Err(GpuError::SpritePackingOutOfRange {
@@ -1696,6 +1708,22 @@ mod tests {
                 field: "texture index"
             })
         );
+    }
+
+    #[test]
+    fn sprite_positions_keep_single_pixel_precision_at_large_coordinates() {
+        let mut instance = sprite(1);
+        instance.x = 2_080.0;
+        instance.y = -2_080.0;
+        let original = gpu_sprite(0, &instance).expect("pack");
+
+        instance.x -= 1.0;
+        instance.y += 1.0;
+        let shifted = gpu_sprite(0, &instance).expect("pack");
+
+        assert_eq!(original.position, [2_080.0, -2_080.0]);
+        assert_eq!(shifted.position, [2_079.0, -2_079.0]);
+        assert_ne!(original.position, shifted.position);
     }
 
     #[test]
@@ -1778,7 +1806,7 @@ mod tests {
     fn sprite_and_camera_layouts_match_the_shader_scalar_layout() {
         let reflection = shader::reflect(&read_spirv(GEOMETRY_VS_SPV).expect("valid SPIR-V")).expect("shader reflects");
 
-        assert_eq!(size_of::<GpuSprite>(), 32);
+        assert_eq!(size_of::<GpuSprite>(), 36);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<CameraPush>());
     }
