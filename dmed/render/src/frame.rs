@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use dmi::metadata::{Dir, Metadata};
 use dmm::{Coord, Map, Prefab};
 use editor::{
-    document::MapDocument,
+    document::{MapDocument, PrefabInstanceId},
     visual::{self, Appearance},
 };
 use objtree::{ObjectTree, TypeId};
@@ -22,9 +22,17 @@ use crate::{
 pub struct FrameInstances {
     pub sprites: Vec<SpriteInstance>,
     pub area_tiles: Vec<SpriteInstance>,
-    sprite_keys: HashMap<editor::document::PrefabInstanceId, (u32, i32, i32, usize)>,
-    sprite_indices: HashMap<editor::document::PrefabInstanceId, usize>,
-    placement_orders: HashMap<editor::document::PrefabInstanceId, usize>,
+    sprite_keys: HashMap<PrefabInstanceId, (u32, i32, i32, usize)>,
+    sprite_indices: HashMap<PrefabInstanceId, usize>,
+    placement_orders: HashMap<PrefabInstanceId, usize>,
+}
+
+impl FrameInstances {
+    pub fn sprite(&self, owner: PrefabInstanceId) -> Option<&SpriteInstance> {
+        self.sprite_indices
+            .get(&owner)
+            .and_then(|index| self.sprites.get(*index))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +40,10 @@ pub enum PrefabUpdate {
     /// the edited value has no effect on the cached render data
     Unchanged,
     /// span of changed sprites
-    Sprites { start: usize, end: usize },
+    Sprites {
+        start: usize,
+        end: usize,
+    },
     Rebuild,
 }
 
@@ -169,11 +180,12 @@ pub fn build(
         sprite_instances.extend(level.into_iter().map(|(_, instance)| instance));
     }
 
-    let sprite_indices = sprite_instances
-        .iter()
-        .enumerate()
-        .map(|(index, sprite)| (sprite.owner, index))
-        .collect();
+    let mut sprite_indices = HashMap::new();
+    for (index, sprite) in sprite_instances.iter().enumerate() {
+        // Stable depth sorting leaves a normal area sprite before its outline.
+        // Keep that first sprite as the transform-gizmo anchor.
+        sprite_indices.entry(sprite.owner).or_insert(index);
+    }
 
     FrameInstances {
         sprites: sprite_instances,
@@ -186,7 +198,7 @@ pub fn build(
 
 pub fn update_prefab(
     instances: &mut FrameInstances, tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog,
-    document: &MapDocument, owner: editor::document::PrefabInstanceId, tile_size: u32,
+    document: &MapDocument, owner: PrefabInstanceId, tile_size: u32,
 ) -> PrefabUpdate {
     let previous = instances.sprite_indices.get(&owner).copied();
     let Some((prefab, location)) = document.prefab_instance(owner) else {
@@ -281,8 +293,11 @@ pub fn update_prefab(
 }
 
 fn refresh_sprite_indices(instances: &mut FrameInstances, start: usize) {
+    let mut refreshed = HashSet::new();
     for (index, sprite) in instances.sprites.iter().enumerate().skip(start) {
-        instances.sprite_indices.insert(sprite.owner, index);
+        if refreshed.insert(sprite.owner) {
+            instances.sprite_indices.insert(sprite.owner, index);
+        }
     }
 }
 
@@ -569,10 +584,12 @@ mod tests {
     #[test]
     fn includes_normal_area_sprites_and_separate_outlines() {
         let tree = tree(&[("/turf/floor", "floor", 2.0), ("/area/station", "floor", 1.0)]);
-        let document = document(one_tile_map(&["/turf/floor", "/area/station"]));
+        let mut document = document(one_tile_map(&["/turf/floor", "/area/station"]));
+        let turf_owner = document.instance_ids_at(dmm::Coord::new(1, 1, 1))[0];
+        let area_owner = document.instance_ids_at(dmm::Coord::new(1, 1, 1))[1];
         let (icons, textures) = (icons(&["floor"]), textures(&["floor"]));
 
-        let sprites = build(&tree, &icons, &textures, &document, 32);
+        let mut sprites = build(&tree, &icons, &textures, &document, 32);
 
         assert_eq!(sprites.len(), 3);
         assert_eq!(sprites.iter().filter(|sprite| sprite.is_area).count(), 2);
@@ -590,6 +607,13 @@ mod tests {
         assert_eq!(sprites.area_tiles.len(), 1);
         assert_eq!(sprites.area_tiles[0].owner, area.owner);
         assert_eq!(sprites.area_tiles[0].area_edges, AREA_EDGES_ALL);
+        assert_eq!(sprites.sprite(area_owner).unwrap().area_edges, 0);
+
+        document
+            .set_instance_var(turf_owner, "layer".into(), Value::Num(0.0))
+            .unwrap();
+        update_prefab(&mut sprites, &tree, &icons, &textures, &document, turf_owner, 32);
+        assert_eq!(sprites.sprite(area_owner).unwrap().area_edges, 0);
     }
 
     #[test]
@@ -750,6 +774,7 @@ mod tests {
         assert_eq!(sprites[0].area_edges, AREA_EDGES_ALL);
         assert_eq!(sprites[0].texture, Default::default());
         assert_eq!(sprites[0].color, [1.0; 4]);
+        assert_eq!(sprites.sprite(sprites[0].owner), Some(&sprites[0]));
         assert_eq!(sprites.area_tiles.len(), 1);
         assert_eq!(sprites.area_tiles[0].texture, Default::default());
         assert_eq!(sprites.area_tiles[0].color, [1.0; 4]);

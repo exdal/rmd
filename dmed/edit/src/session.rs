@@ -8,14 +8,25 @@ use editor::{
     Environment,
     command::EditGroupId,
     document::{MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
+    visual,
 };
 use objtree::ObjectTree;
 use render::{
     Frame,
+    SpriteInstance,
     SpriteUpdate,
     frame::{FrameInstances, FrameOptions, PrefabUpdate},
     texture::TextureCatalog,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SelectedTransform {
+    pub selected: PrefabInstanceId,
+    pub sprite: SpriteInstance,
+    pub pixel: [i32; 2],
+    pub step: [i32; 2],
+    pub is_movable: bool,
+}
 
 pub struct Session {
     pub state: EditorState,
@@ -145,6 +156,33 @@ impl Session {
         let document = self.state.active_document()?;
 
         document.instance_location(document.selected_instance()?)
+    }
+
+    pub(crate) fn selected_transform(&self) -> Option<SelectedTransform> {
+        let environment = self.state.environment.as_ref()?;
+        let document = self.state.active_document()?;
+        let selected = document.selected_instance()?;
+        let (prefab, _) = document.prefab_instance(selected)?;
+        let id = environment.tree.id_of(&prefab.path)?;
+        let atom = environment.tree.roots().atom?;
+        if !environment.tree.is_subtype_of(id, atom) {
+            return None;
+        }
+
+        let appearance = visual::resolve_id(&environment.tree, id, prefab);
+        let is_movable = environment
+            .tree
+            .roots()
+            .movable
+            .is_some_and(|movable| environment.tree.is_subtype_of(id, movable));
+
+        Some(SelectedTransform {
+            selected,
+            sprite: *self.instances.sprite(selected)?,
+            pixel: [appearance.pixel_x, appearance.pixel_y],
+            step: [appearance.step_x, appearance.step_y],
+            is_movable,
+        })
     }
 
     pub fn icon_metadata(&self, name: &str) -> Option<&dmi::metadata::Metadata> {
@@ -438,6 +476,12 @@ mod tests {
             .unwrap();
         assert_eq!(session.selected_prefab(), None);
         session.select_instance(Some(selected));
+        let transform = session.selected_transform().unwrap();
+        assert_eq!(transform.selected, selected);
+        assert!(transform.is_movable);
+        assert_eq!(transform.pixel, [0, 0]);
+        assert_eq!(transform.step, [0, 0]);
+        assert_eq!(transform.sprite.owner, selected);
         let revision = session.revision;
         let before = session.instances.sprites.clone();
 
@@ -450,6 +494,7 @@ mod tests {
         assert_eq!(update.previous_revision, revision);
         assert_eq!(update.end, update.start + 1);
         assert_eq!(session.instances.sprites[update.start].owner, selected);
+        assert_eq!(session.selected_transform().unwrap().pixel, [7, 0]);
         assert_eq!(
             session
                 .instances

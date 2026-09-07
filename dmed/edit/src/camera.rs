@@ -83,8 +83,7 @@ impl Controller {
         ))
     }
 
-    #[cfg(test)]
-    fn map_to_screen(&self, point: [f32; 2]) -> [f32; 2] {
+    pub fn map_to_screen(&self, point: [f32; 2]) -> [f32; 2] {
         let half_w = self.camera.viewport_width as f32 / 2.0;
         let half_h = self.camera.viewport_height as f32 / 2.0;
 

@@ -32,7 +32,7 @@ const MOVABLE_PROPERTIES: &[&str] = &[
     "pixel_x", "pixel_y", "pixel_z", "pixel_w", "step_x", "step_y", "step_z", "step_w",
 ];
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum TransformMode {
     #[default]
     Pixel,
@@ -42,10 +42,17 @@ pub(crate) enum TransformMode {
 impl TransformMode {
     const ALL: [Self; 2] = [Self::Pixel, Self::Step];
 
-    const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Pixel => "Pixel",
             Self::Step => "Step",
+        }
+    }
+
+    pub(crate) const fn variables(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Pixel => ("pixel_x", "pixel_y"),
+            Self::Step => ("step_x", "step_y"),
         }
     }
 }
@@ -101,6 +108,8 @@ enum TextPropertyKind {
 }
 
 impl InspectorState {
+    pub(crate) const fn transform_mode(&self) -> TransformMode { self.transform_mode }
+
     pub fn draw(&mut self, ui: &Ui, session: &mut Session) {
         let Some(snapshot) = inspector_snapshot(session) else {
             self.clear();
@@ -193,7 +202,7 @@ impl InspectorState {
                 combo.end();
             }
             ui.table_next_column();
-            ui.text_disabled("Editor");
+            ui.text_disabled("Shift: snap");
         });
 
         section.pop();

@@ -13,7 +13,12 @@ use dear_imgui_rs::{
 use objtree::{ObjectTree, TypeId};
 use render::{Renderer, ViewportInteraction};
 
-use crate::{camera::Controller, inspector::InspectorState, session::Session};
+use crate::{
+    camera::Controller,
+    gizmo::{GizmoState, GizmoViewport},
+    inspector::InspectorState,
+    session::Session,
+};
 
 /// How far down the "Blur below" menu goes. The option itself takes any depth.
 const MAX_UNDERLAY_DEPTH: u32 = 3;
@@ -33,6 +38,7 @@ pub struct UiState {
     layout: DockLayout,
     selected: Option<TypeId>,
     inspector: InspectorState,
+    gizmo: GizmoState,
     viewport: (u32, u32),
     initial_refit: bool,
 }
@@ -61,6 +67,7 @@ impl UiState {
             layout,
             selected: None,
             inspector: InspectorState::default(),
+            gizmo: GizmoState::default(),
             viewport: (1, 1),
             initial_refit: true,
         })
@@ -202,17 +209,18 @@ impl UiState {
             ui.image(Renderer::VIEWPORT_TEXTURE, image_size);
 
             let hovered = ui.is_item_hovered();
+            let viewport_min = ui.item_rect_min();
+            let viewport_max = ui.item_rect_max();
             if hovered {
                 let io = ui.io();
-                if ui.is_mouse_down(MouseButton::Middle) {
+                if !self.gizmo.is_dragging() && ui.is_mouse_down(MouseButton::Middle) {
                     camera.pan_by(io.mouse_delta());
                 }
 
                 let wheel = io.mouse_wheel();
-                if wheel != 0.0 {
+                if !self.gizmo.is_dragging() && wheel != 0.0 {
                     let mouse = io.mouse_pos();
-                    let origin = ui.item_rect_min();
-                    camera.zoom_by(wheel, [mouse[0] - origin[0], mouse[1] - origin[1]]);
+                    camera.zoom_by(wheel, [mouse[0] - viewport_min[0], mouse[1] - viewport_min[1]]);
                 }
 
                 if ui.is_key_pressed(Key::A) {
@@ -236,10 +244,24 @@ impl UiState {
                     camera.frame_map(width, height);
                     *refit = false;
                 }
+            }
 
+            let gizmo = self.gizmo.draw(
+                ui,
+                session,
+                camera,
+                self.inspector.transform_mode(),
+                GizmoViewport {
+                    min: viewport_min,
+                    max: viewport_max,
+                    hovered,
+                },
+            );
+
+            if hovered && !gizmo.captures_mouse {
+                let io = ui.io();
                 let mouse = io.mouse_pos();
-                let origin = ui.item_rect_min();
-                let cursor = [mouse[0] - origin[0], mouse[1] - origin[1]];
+                let cursor = [mouse[0] - viewport_min[0], mouse[1] - viewport_min[1]];
                 if cursor.iter().all(|value| value.is_finite() && *value >= 0.0)
                     && cursor[0] < viewport.0 as f32
                     && cursor[1] < viewport.1 as f32
