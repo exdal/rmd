@@ -22,6 +22,18 @@ use crate::{
 pub struct FrameInstances {
     pub sprites: Vec<SpriteInstance>,
     pub area_tiles: Vec<SpriteInstance>,
+    sprite_keys: HashMap<editor::document::PrefabInstanceId, (u32, i32, i32, usize)>,
+    sprite_indices: HashMap<editor::document::PrefabInstanceId, usize>,
+    placement_orders: HashMap<editor::document::PrefabInstanceId, usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrefabUpdate {
+    /// the edited value has no effect on the cached render data
+    Unchanged,
+    /// span of changed sprites
+    Sprites { start: usize, end: usize },
+    Rebuild,
 }
 
 impl std::ops::Deref for FrameInstances {
@@ -57,6 +69,8 @@ pub fn build(
 ) -> FrameInstances {
     let mut sprite_instances = Vec::new();
     let mut area_tiles = Vec::new();
+    let mut sprite_keys = HashMap::new();
+    let mut placement_orders = HashMap::new();
     let area = tree.roots().area;
     let map = &document.map;
 
@@ -81,6 +95,16 @@ pub fn build(
                     let is_area = area.is_some_and(|area| tree.is_subtype_of(id, area));
                     let appearance = visual::resolve_id(tree, id, prefab);
                     order = order.saturating_add(1);
+                    placement_orders.insert(owner, order);
+                    sprite_keys.insert(
+                        owner,
+                        (
+                            z,
+                            (appearance.plane * 1000.0) as i32,
+                            (appearance.layer * 1000.0) as i32,
+                            order,
+                        ),
+                    );
 
                     if is_area {
                         let texture = sprite_texture(icons, textures, &appearance);
@@ -145,9 +169,120 @@ pub fn build(
         sprite_instances.extend(level.into_iter().map(|(_, instance)| instance));
     }
 
+    let sprite_indices = sprite_instances
+        .iter()
+        .enumerate()
+        .map(|(index, sprite)| (sprite.owner, index))
+        .collect();
+
     FrameInstances {
         sprites: sprite_instances,
         area_tiles,
+        sprite_keys,
+        sprite_indices,
+        placement_orders,
+    }
+}
+
+pub fn update_prefab(
+    instances: &mut FrameInstances, tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog,
+    document: &MapDocument, owner: editor::document::PrefabInstanceId, tile_size: u32,
+) -> PrefabUpdate {
+    let previous = instances.sprite_indices.get(&owner).copied();
+    let Some((prefab, location)) = document.prefab_instance(owner) else {
+        return if previous.is_some() {
+            PrefabUpdate::Rebuild
+        } else {
+            PrefabUpdate::Unchanged
+        };
+    };
+    let Some(id) = tree.id_of(&prefab.path) else {
+        return if previous.is_some() {
+            PrefabUpdate::Rebuild
+        } else {
+            PrefabUpdate::Unchanged
+        };
+    };
+    if tree.roots().area.is_some_and(|area| tree.is_subtype_of(id, area)) {
+        return PrefabUpdate::Rebuild;
+    }
+
+    let appearance = visual::resolve_id(tree, id, prefab);
+    let Some(order) = instances.placement_orders.get(&owner).copied() else {
+        return PrefabUpdate::Rebuild;
+    };
+    let next_key = (
+        location.coord.z,
+        (appearance.plane * 1000.0) as i32,
+        (appearance.layer * 1000.0) as i32,
+        order,
+    );
+    let next = sprite_texture(icons, textures, &appearance)
+        .map(|texture| instance_for(owner, &appearance, texture, location.coord, tile_size, false));
+
+    match (previous, next) {
+        (None, None) => PrefabUpdate::Unchanged,
+        (Some(previous_index), Some(next)) => {
+            let previous_key = instances.sprite_keys.get(&owner).copied().unwrap_or(next_key);
+            if previous_key == next_key && instances.sprites[previous_index] == next {
+                PrefabUpdate::Unchanged
+            } else if previous_key == next_key {
+                instances.sprites[previous_index] = next;
+                PrefabUpdate::Sprites {
+                    start: previous_index,
+                    end: previous_index + 1,
+                }
+            } else {
+                instances.sprites.remove(previous_index);
+                instances.sprite_keys.insert(owner, next_key);
+                let next_index = instances.sprites.partition_point(|sprite| {
+                    instances
+                        .sprite_keys
+                        .get(&sprite.owner)
+                        .is_some_and(|key| *key <= next_key)
+                });
+                instances.sprites.insert(next_index, next);
+                refresh_sprite_indices(instances, previous_index.min(next_index));
+
+                PrefabUpdate::Sprites {
+                    start: previous_index.min(next_index),
+                    end: previous_index.max(next_index) + 1,
+                }
+            }
+        },
+        (None, Some(next)) => {
+            instances.sprite_keys.insert(owner, next_key);
+            let next_index = instances.sprites.partition_point(|sprite| {
+                instances
+                    .sprite_keys
+                    .get(&sprite.owner)
+                    .is_some_and(|key| *key <= next_key)
+            });
+            instances.sprites.insert(next_index, next);
+            refresh_sprite_indices(instances, next_index);
+
+            PrefabUpdate::Sprites {
+                start: next_index,
+                end: instances.sprites.len(),
+            }
+        },
+        (Some(previous_index), None) => {
+            instances.sprites.remove(previous_index);
+            instances.sprite_keys.remove(&owner);
+            instances.sprite_indices.remove(&owner);
+            refresh_sprite_indices(instances, previous_index);
+
+            PrefabUpdate::Sprites {
+                start: previous_index,
+                end: instances.sprites.len(),
+            }
+        },
+    }
+}
+
+fn refresh_sprite_indices(instances: &mut FrameInstances, start: usize) {
+    for (index, sprite) in instances.sprites.iter().enumerate().skip(start) {
+        instances.sprite_indices.insert(sprite.owner, index);
     }
 }
 
@@ -223,7 +358,7 @@ mod tests {
         AREA_EDGE_SOUTH,
         AREA_EDGE_WEST,
         AREA_EDGES_ALL,
-        frame::build,
+        frame::{PrefabUpdate, build, update_prefab},
         texture::TextureCatalog,
     };
 
@@ -382,6 +517,53 @@ mod tests {
             textures(&["floor", "table"]).lookup(ICON, 1).unwrap()
         );
         assert_eq!([sprites[0].owner, sprites[1].owner], [owners[1], owners[0]]);
+    }
+
+    #[test]
+    fn prefab_updates_touch_only_the_changed_sprite_and_preserve_sorting() {
+        let tree = tree(&[("/turf/floor", "floor", 2.0), ("/obj/table", "table", 3.0)]);
+        let icons = icons(&["floor", "table"]);
+        let textures = textures(&["floor", "table"]);
+        let mut document = document(one_tile_map(&["/turf/floor", "/obj/table"]));
+        let owner = document.instance_ids_at(dmm::Coord::new(1, 1, 1))[1];
+        let mut instances = build(&tree, &icons, &textures, &document, 32);
+        let before = instances.sprites.clone();
+
+        document
+            .set_instance_var(owner, "pixel_x".into(), Value::Num(7.0))
+            .unwrap();
+        assert_eq!(
+            update_prefab(&mut instances, &tree, &icons, &textures, &document, owner, 32),
+            PrefabUpdate::Sprites { start: 1, end: 2 },
+        );
+        assert_eq!(instances.sprites[0], before[0]);
+        assert_eq!(instances.sprites[1].x, before[1].x + 7.0);
+
+        document
+            .set_instance_var(owner, "name".into(), Value::Text("renamed".into()))
+            .unwrap();
+        assert_eq!(
+            update_prefab(&mut instances, &tree, &icons, &textures, &document, owner, 32),
+            PrefabUpdate::Unchanged,
+        );
+
+        document
+            .set_instance_var(owner, "layer".into(), Value::Num(1.0))
+            .unwrap();
+        assert_eq!(
+            update_prefab(&mut instances, &tree, &icons, &textures, &document, owner, 32),
+            PrefabUpdate::Sprites { start: 0, end: 2 },
+        );
+        assert_eq!(instances.sprites[0].owner, owner);
+
+        document
+            .set_instance_var(owner, "icon".into(), Value::Resource("missing.dmi".into()))
+            .unwrap();
+        assert_eq!(
+            update_prefab(&mut instances, &tree, &icons, &textures, &document, owner, 32),
+            PrefabUpdate::Sprites { start: 0, end: 1 },
+        );
+        assert_eq!(instances.sprites.len(), 1);
     }
 
     #[test]

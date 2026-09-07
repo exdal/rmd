@@ -1,8 +1,9 @@
+use core::types::{Identifier, Value};
 use std::{collections::HashMap, path::PathBuf};
 
-use dmm::{Coord, Map, Prefab};
+use dmm::{Coord, Map, Prefab, key::Key};
 
-use crate::command::{Edit, History};
+use crate::command::{Edit, EditGroupId, History};
 
 pub struct MapDocument {
     pub path: Option<PathBuf>,
@@ -12,6 +13,7 @@ pub struct MapDocument {
     pub selection: Option<Selection>,
     selected_instance: Option<PrefabInstanceId>,
     instances: PrefabInstances,
+    key_usage: HashMap<Key, usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -42,6 +44,12 @@ impl PlacedPrefab {
 }
 
 pub type PlacedTile = Vec<PlacedPrefab>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VarMutation {
+    Set(Identifier, Value),
+    Remove(Identifier),
+}
 
 #[derive(Debug)]
 pub(crate) struct PrefabInstances {
@@ -140,6 +148,10 @@ impl Selection {
 impl MapDocument {
     pub fn new(map: Map, z: u32) -> Self {
         let instances = PrefabInstances::from_map(&map);
+        let mut key_usage = HashMap::new();
+        for key in map.grid.iter().flatten().flatten() {
+            *key_usage.entry(*key).or_insert(0) += 1;
+        }
 
         Self {
             path: None,
@@ -149,6 +161,7 @@ impl MapDocument {
             selection: None,
             selected_instance: None,
             instances,
+            key_usage,
         }
     }
 
@@ -216,20 +229,70 @@ impl MapDocument {
         }
     }
 
+    /// Set one variable on a placed prefab as an undoable map edit.
+    ///
+    /// Returns `None` when the placement no longer exists and otherwise reports
+    /// whether the stored prefab changed.
+    pub fn set_instance_var(&mut self, id: PrefabInstanceId, name: Identifier, value: Value) -> Option<bool> {
+        let label = format!("set {name}");
+
+        self.edit_instance_vars(id, label, &[VarMutation::Set(name, value)], None)
+    }
+
+    /// Apply several variable mutations to one placement as a single map edit.
+    /// Reusing a group ID replaces the final state of the previous edit in that
+    /// group while retaining its original state, which makes live drags one undo.
+    pub fn edit_instance_vars(
+        &mut self, id: PrefabInstanceId, label: impl Into<String>, mutations: &[VarMutation],
+        group: Option<EditGroupId>,
+    ) -> Option<bool> {
+        let location = self.instance_location(id)?;
+        let mut after = self.placed_tile(location.coord)?;
+        let instance = after.get_mut(location.prefab_index)?;
+
+        let before = instance.prefab().clone();
+        for mutation in mutations {
+            match mutation {
+                VarMutation::Set(name, value) => instance.prefab_mut().set_var(name.clone(), value.clone()),
+                VarMutation::Remove(name) => {
+                    instance.prefab_mut().remove_var(name);
+                },
+            }
+        }
+        if instance.prefab() == &before {
+            return Some(false);
+        }
+
+        let mut edit = Edit::new(label);
+        edit.change(self, location.coord, after);
+        self.history
+            .apply_grouped(&mut self.map, &mut self.instances, &mut self.key_usage, edit, group);
+        self.clear_stale_instance_selection();
+
+        Some(true)
+    }
+
     pub fn apply(&mut self, edit: Edit) {
-        self.history.apply(&mut self.map, &mut self.instances, edit);
+        self.history
+            .apply(&mut self.map, &mut self.instances, &mut self.key_usage, edit);
         self.clear_stale_instance_selection();
     }
 
     pub fn undo(&mut self) -> bool {
-        let changed = self.history.undo(&mut self.map, &mut self.instances).is_some();
+        let changed = self
+            .history
+            .undo(&mut self.map, &mut self.instances, &mut self.key_usage)
+            .is_some();
         self.clear_stale_instance_selection();
 
         changed
     }
 
     pub fn redo(&mut self) -> bool {
-        let changed = self.history.redo(&mut self.map, &mut self.instances).is_some();
+        let changed = self
+            .history
+            .redo(&mut self.map, &mut self.instances, &mut self.key_usage)
+            .is_some();
         self.clear_stale_instance_selection();
 
         changed
@@ -269,8 +332,8 @@ mod tests {
 
     use dmm::{Map, Prefab, Size, writer::MapWriter};
 
-    use super::{Coord, MapDocument};
-    use crate::command::Edit;
+    use super::{Coord, MapDocument, VarMutation};
+    use crate::command::{Edit, EditGroupId};
 
     fn shared_tile_map() -> Map {
         let mut map = Map::new(Size { x: 2, y: 1, z: 2 });
@@ -327,5 +390,145 @@ mod tests {
         document.apply(edit);
 
         assert_eq!(document.selected_instance(), None);
+    }
+
+    #[test]
+    fn setting_an_instance_var_changes_only_that_placement_and_is_undoable() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        let changed = Coord::new(1, 1, 1);
+        let untouched = Coord::new(2, 1, 1);
+        let id = document.instance_ids_at(changed)[1];
+        let untouched_id = document.instance_ids_at(untouched)[1];
+        document.select_instance(Some(id));
+
+        assert_eq!(
+            document.set_instance_var(id, "name".into(), core::types::Value::Text("selected".into())),
+            Some(true),
+        );
+        assert_eq!(document.selected_instance(), Some(id));
+        assert_eq!(document.instance_ids_at(changed)[1], id);
+        assert_eq!(document.instance_ids_at(untouched)[1], untouched_id);
+        assert_eq!(
+            document
+                .prefab_instance(id)
+                .and_then(|(prefab, _)| prefab.var(&"name".into())),
+            Some(&core::types::Value::Text("selected".into())),
+        );
+        assert_eq!(
+            document
+                .prefab_instance(untouched_id)
+                .and_then(|(prefab, _)| prefab.var(&"name".into())),
+            None,
+        );
+        assert!(document.is_dirty());
+        assert!(
+            MapWriter::new(&document.map)
+                .write()
+                .contains("/obj/table{name = \"selected\"}")
+        );
+
+        assert_eq!(
+            document.set_instance_var(id, "name".into(), core::types::Value::Text("selected".into())),
+            Some(false),
+        );
+
+        assert!(document.undo());
+        assert_eq!(
+            document
+                .prefab_instance(id)
+                .and_then(|(prefab, _)| prefab.var(&"name".into())),
+            None
+        );
+        assert_eq!(document.selected_instance(), Some(id));
+
+        assert!(document.redo());
+        assert_eq!(
+            document
+                .prefab_instance(id)
+                .and_then(|(prefab, _)| prefab.var(&"name".into())),
+            Some(&core::types::Value::Text("selected".into())),
+        );
+    }
+
+    #[test]
+    fn a_live_variable_edit_group_is_one_undo_step() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        let id = document.instance_ids_at(Coord::new(1, 1, 1))[1];
+        let group = EditGroupId::new();
+
+        for value in 1..=1_000 {
+            assert_eq!(
+                document.edit_instance_vars(
+                    id,
+                    "change pixel offset",
+                    &[VarMutation::Set(
+                        "pixel_x".into(),
+                        core::types::Value::Num(value as f32),
+                    )],
+                    Some(group),
+                ),
+                Some(true),
+            );
+        }
+
+        // Intermediate drag values must not accumulate unreachable map keys.
+        assert_eq!(document.map.dictionary.len(), 2);
+
+        assert_eq!(
+            document
+                .prefab_instance(id)
+                .and_then(|(prefab, _)| prefab.var(&"pixel_x".into())),
+            Some(&core::types::Value::Num(1_000.0)),
+        );
+        assert!(document.undo());
+        assert_eq!(
+            document
+                .prefab_instance(id)
+                .and_then(|(prefab, _)| prefab.var(&"pixel_x".into())),
+            None,
+        );
+        assert!(!document.undo());
+        assert!(document.redo());
+        assert_eq!(
+            document
+                .prefab_instance(id)
+                .and_then(|(prefab, _)| prefab.var(&"pixel_x".into())),
+            Some(&core::types::Value::Num(1_000.0)),
+        );
+    }
+
+    #[test]
+    fn variable_mutations_can_set_and_reset_a_pair_atomically() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        let id = document.instance_ids_at(Coord::new(1, 1, 1))[1];
+
+        assert_eq!(
+            document.edit_instance_vars(
+                id,
+                "set pixel offset",
+                &[
+                    VarMutation::Set("pixel_x".into(), core::types::Value::Num(4.0)),
+                    VarMutation::Set("pixel_y".into(), core::types::Value::Num(-2.0)),
+                ],
+                None,
+            ),
+            Some(true),
+        );
+        assert_eq!(
+            document.edit_instance_vars(
+                id,
+                "reset pixel offset",
+                &[
+                    VarMutation::Remove("pixel_x".into()),
+                    VarMutation::Remove("pixel_y".into()),
+                ],
+                None,
+            ),
+            Some(true),
+        );
+
+        let prefab = document.prefab_instance(id).unwrap().0;
+        assert_eq!(prefab.var(&"pixel_x".into()), None);
+        assert_eq!(prefab.var(&"pixel_y".into()), None);
     }
 }

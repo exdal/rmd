@@ -1,8 +1,13 @@
-use dmm::{Coord, Map, Tile};
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+use dmm::{Coord, Map, Tile, key::Key};
 
 use crate::document::{MapDocument, PlacedTile, PrefabInstances};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TileChange {
     pub coord: Coord,
     pub before: PlacedTile,
@@ -31,10 +36,33 @@ impl Edit {
     pub fn is_empty(&self) -> bool { self.changes.is_empty() }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EditGroupId(u64);
+
+impl EditGroupId {
+    pub fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+
+    pub const fn get(self) -> u64 { self.0 }
+}
+
+impl Default for EditGroupId {
+    fn default() -> Self { Self::new() }
+}
+
+#[derive(Debug)]
+struct HistoryEntry {
+    edit: Edit,
+    group: Option<EditGroupId>,
+}
+
 #[derive(Debug, Default)]
 pub struct History {
-    undo_stack: Vec<Edit>,
-    redo_stack: Vec<Edit>,
+    undo_stack: Vec<HistoryEntry>,
+    redo_stack: Vec<HistoryEntry>,
     /// Saved undo position
     saved_at: usize,
 }
@@ -42,33 +70,59 @@ pub struct History {
 impl History {
     pub fn new() -> Self { Self::default() }
 
-    pub(crate) fn apply(&mut self, map: &mut Map, instances: &mut PrefabInstances, edit: Edit) {
+    pub(crate) fn apply(
+        &mut self, map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>, edit: Edit,
+    ) {
+        self.apply_grouped(map, instances, key_usage, edit, None);
+    }
+
+    pub(crate) fn apply_grouped(
+        &mut self, map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>, edit: Edit,
+        group: Option<EditGroupId>,
+    ) {
         if edit.is_empty() {
             return;
         }
 
-        apply_changes(map, instances, &edit.changes, ChangeSide::After);
+        apply_changes(map, instances, key_usage, &edit.changes, ChangeSide::After);
 
-        self.undo_stack.push(edit);
+        if group.is_some()
+            && let Some(previous) = self.undo_stack.last_mut()
+            && previous.group == group
+        {
+            merge_changes(&mut previous.edit.changes, edit.changes);
+            if previous.edit.changes.is_empty() {
+                self.undo_stack.pop();
+            }
+            self.redo_stack.clear();
+
+            return;
+        }
+
+        self.undo_stack.push(HistoryEntry { edit, group });
         self.redo_stack.clear();
     }
 
-    pub(crate) fn undo(&mut self, map: &mut Map, instances: &mut PrefabInstances) -> Option<&Edit> {
-        let edit = self.undo_stack.pop()?;
-        apply_changes(map, instances, &edit.changes, ChangeSide::Before);
+    pub(crate) fn undo(
+        &mut self, map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>,
+    ) -> Option<&Edit> {
+        let entry = self.undo_stack.pop()?;
+        apply_changes(map, instances, key_usage, &entry.edit.changes, ChangeSide::Before);
 
-        self.redo_stack.push(edit);
+        self.redo_stack.push(entry);
 
-        self.redo_stack.last()
+        self.redo_stack.last().map(|entry| &entry.edit)
     }
 
-    pub(crate) fn redo(&mut self, map: &mut Map, instances: &mut PrefabInstances) -> Option<&Edit> {
-        let edit = self.redo_stack.pop()?;
-        apply_changes(map, instances, &edit.changes, ChangeSide::After);
+    pub(crate) fn redo(
+        &mut self, map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>,
+    ) -> Option<&Edit> {
+        let entry = self.redo_stack.pop()?;
+        apply_changes(map, instances, key_usage, &entry.edit.changes, ChangeSide::After);
 
-        self.undo_stack.push(edit);
+        self.undo_stack.push(entry);
 
-        self.undo_stack.last()
+        self.undo_stack.last().map(|entry| &entry.edit)
     }
 
     pub fn mark_saved(&mut self) { self.saved_at = self.undo_stack.len(); }
@@ -80,13 +134,27 @@ impl History {
     pub fn can_redo(&self) -> bool { !self.redo_stack.is_empty() }
 }
 
+fn merge_changes(previous: &mut Vec<TileChange>, next: Vec<TileChange>) {
+    for change in next {
+        match previous.iter_mut().find(|existing| existing.coord == change.coord) {
+            Some(existing) => existing.after = change.after,
+            None => previous.push(change),
+        }
+    }
+
+    previous.retain(|change| change.before != change.after);
+}
+
 #[derive(Clone, Copy)]
 enum ChangeSide {
     Before,
     After,
 }
 
-fn apply_changes(map: &mut Map, instances: &mut PrefabInstances, changes: &[TileChange], side: ChangeSide) {
+fn apply_changes(
+    map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>, changes: &[TileChange],
+    side: ChangeSide,
+) {
     for change in changes {
         instances.remove(change.coord);
     }
@@ -99,15 +167,12 @@ fn apply_changes(map: &mut Map, instances: &mut PrefabInstances, changes: &[Tile
         let tile = placed.iter().map(|entry| entry.prefab().clone()).collect();
         let ids = placed.iter().map(|entry| entry.id()).collect();
 
-        set_tile(map, change.coord, tile);
+        set_tile(map, key_usage, change.coord, tile);
         instances.insert(change.coord, ids);
     }
 }
 
-/// Dictionary pruning happens on save
-fn set_tile(map: &mut Map, coord: Coord, tile: Tile) {
-    let key = map.intern_tile(tile);
-
+fn set_tile(map: &mut Map, key_usage: &mut HashMap<Key, usize>, coord: Coord, tile: Tile) {
     let Some(z) = coord.z.checked_sub(1).map(|z| z as usize) else {
         return;
     };
@@ -120,14 +185,32 @@ fn set_tile(map: &mut Map, coord: Coord, tile: Tile) {
         return;
     };
 
-    if let Some(slot) = map
+    let Some(previous) = map
         .grid
-        .get_mut(z)
-        .and_then(|level| level.get_mut(row_index))
-        .and_then(|row| row.get_mut(column))
-    {
-        *slot = key;
+        .get(z)
+        .and_then(|level| level.get(row_index))
+        .and_then(|row| row.get(column))
+        .copied()
+    else {
+        return;
+    };
+
+    let remove_previous = match key_usage.get_mut(&previous) {
+        Some(count) if *count > 1 => {
+            *count -= 1;
+            false
+        },
+        Some(_) => true,
+        None => false,
+    };
+    if remove_previous {
+        key_usage.remove(&previous);
+        map.dictionary.remove(&previous);
     }
+
+    let key = map.intern_tile(tile);
+    *key_usage.entry(key).or_insert(0) += 1;
+    map.grid[z][row_index][column] = key;
 }
 
 #[cfg(test)]

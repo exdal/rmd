@@ -120,6 +120,17 @@ pub struct Frame<'a> {
     pub camera: Camera,
     /// Changes only when `sprite_instances` changes.
     pub revision: u64,
+    /// The changed sprite range from the immediately preceding revision.
+    /// Renderers that already hold that revision can upload only this range
+    /// instead of rebuilding the complete sprite buffer.
+    pub sprite_update: Option<SpriteUpdate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpriteUpdate {
+    pub previous_revision: u64,
+    pub start: usize,
+    pub end: usize,
 }
 
 /// Turn a resolved [`Appearance`] into an instance. Needs a texture lookup to know the sprite's
@@ -134,8 +145,14 @@ pub fn instance_for(
     let alpha = f32::from(appearance.alpha) / 255.0;
     let tint = appearance.color.as_deref().and_then(color::parse).unwrap_or([1.0; 4]);
     let alpha = alpha * tint[3];
-    let offset_x = appearance.pixel_x.saturating_add(appearance.pixel_w);
-    let offset_y = appearance.pixel_y.saturating_add(appearance.pixel_z);
+    let offset_x = appearance
+        .step_x
+        .saturating_add(appearance.pixel_x)
+        .saturating_add(appearance.pixel_w);
+    let offset_y = appearance
+        .step_y
+        .saturating_add(appearance.pixel_y)
+        .saturating_add(appearance.pixel_z);
 
     SpriteInstance {
         owner,
@@ -241,14 +258,16 @@ mod tests {
         assert_eq!(instance.color, [1.0, 1.0, 1.0, 1.0]);
     }
 
-    /// `pixel_w`/`pixel_z` stack on `pixel_x`/`pixel_y` rather than replacing them.
+    /// Step and both pixel offset pairs stack rather than replacing each other.
     #[test]
-    fn both_pairs_of_pixel_offsets_shift_the_sprite() {
+    fn all_offset_pairs_shift_the_sprite() {
         let appearance = Appearance {
             pixel_x: -16,
             pixel_y: 4,
             pixel_w: 2,
             pixel_z: -1,
+            step_x: 3,
+            step_y: -2,
             ..Default::default()
         };
         let instance = instance_for(
@@ -260,7 +279,7 @@ mod tests {
             false,
         );
 
-        assert_eq!((instance.x, instance.y), (32.0 - 14.0, 64.0 + 3.0));
+        assert_eq!((instance.x, instance.y), (32.0 - 11.0, 64.0 + 1.0));
     }
 
     /// A 64x64 icon hangs off the top and the right of its tile, so `pixel_x = -16` centres it.

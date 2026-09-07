@@ -13,10 +13,12 @@ use dear_imgui_rs::{
 use objtree::{ObjectTree, TypeId};
 use render::{Renderer, ViewportInteraction};
 
-use crate::{camera::Controller, session::Session};
+use crate::{camera::Controller, inspector::InspectorState, session::Session};
 
 /// How far down the "Blur below" menu goes. The option itself takes any depth.
 const MAX_UNDERLAY_DEPTH: u32 = 3;
+
+const DOCKSPACE_ID: &str = "dmed-main-dockspace";
 
 pub struct UiOutput {
     pub exit: bool,
@@ -27,8 +29,10 @@ pub struct UiOutput {
 pub struct UiState {
     object_tree: WindowKey,
     viewport_window: WindowKey,
+    inspector_window: WindowKey,
     layout: DockLayout,
     selected: Option<TypeId>,
+    inspector: InspectorState,
     viewport: (u32, u32),
     initial_refit: bool,
 }
@@ -37,18 +41,26 @@ impl UiState {
     pub fn new() -> Result<Self, WindowKeyError> {
         let object_tree = WindowKey::new("object-tree", "Object tree")?;
         let viewport_window = WindowKey::new("viewport", "Viewport")?;
+        let inspector_window = WindowKey::new("inspector", "Inspector")?;
         let layout = DockLayout::split(
             DockSplit::Left,
             0.25,
             DockLayout::tabs([&object_tree]),
-            DockLayout::tabs([&viewport_window]),
+            DockLayout::split(
+                DockSplit::Right,
+                0.20 / 0.75,
+                DockLayout::tabs([&inspector_window]),
+                DockLayout::tabs([&viewport_window]),
+            ),
         );
 
         Ok(Self {
             object_tree,
             viewport_window,
+            inspector_window,
             layout,
             selected: None,
+            inspector: InspectorState::default(),
             viewport: (1, 1),
             initial_refit: true,
         })
@@ -59,6 +71,7 @@ impl UiState {
     ) -> Result<UiOutput, DockspaceError> {
         ui.dockspace()
             .main_viewport()
+            .root_id(ui.get_id(DOCKSPACE_ID))
             .flags(DockNodeFlags::PASSTHRU_CENTRAL_NODE)
             .layout(&self.layout, DockLayoutApply::IfMissing)
             .build()?;
@@ -135,6 +148,7 @@ impl UiState {
         }
 
         self.draw_object_tree(ui, session);
+        self.draw_inspector(ui, session);
         self.draw_viewport(ui, session, camera, &mut interaction, &mut exit, &mut refit);
 
         Ok(UiOutput {
@@ -244,6 +258,12 @@ impl UiState {
             if ui.is_key_pressed(Key::Escape) {
                 *exit = true;
             }
+        });
+    }
+
+    fn draw_inspector(&mut self, ui: &Ui, session: &mut Session) {
+        ui.window(&self.inspector_window).build(|| {
+            self.inspector.draw(ui, session);
         });
     }
 }

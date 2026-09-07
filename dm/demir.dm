@@ -16,11 +16,36 @@
 // tgstation
 // #define CBT  // dont
 
+/atom
+	var
+		name = null
+		icon = null
+		icon_state = null
+		dir = SOUTH
+		layer = 2
+		plane = 0
+		pixel_x = 0
+		pixel_y = 0
+		pixel_w = 0
+		pixel_z = 0
+		color = null
+		alpha = 255
+		invisibility = 0
+
+/atom/movable
+	var
+		step_x = 0
+		step_y = 0
+
 /area
 	layer = AREA_LAYER
+	parent_type = /atom
 /turf
 	layer = TURF_LAYER
+	parent_type = /atom
 /obj
 	layer = OBJ_LAYER
+	parent_type = /atom/movable
 /mob
 	layer = MOB_LAYER
+	parent_type = /atom/movable

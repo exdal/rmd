@@ -63,6 +63,12 @@ impl Prefab {
 
     pub fn set_var(&mut self, name: Identifier, value: Value) { self.set(name, VarValue::new(value)); }
 
+    pub fn remove_var(&mut self, name: &Identifier) -> Option<VarValue> {
+        let index = self.vars.iter().position(|(key, _)| key == name)?;
+
+        Some(self.vars.remove(index).1)
+    }
+
     pub(crate) fn set_var_from_source(&mut self, name: Identifier, value: Value, source: &str) {
         let mut canonical = String::with_capacity(source.len());
 
@@ -206,6 +212,24 @@ mod tests {
 
         assert_eq!(names, ["name", "id_tag"]);
         assert_eq!(prefab.var(&"name".into()), Some(&core::types::Value::Num(3.0)));
+    }
+
+    #[test]
+    fn removing_a_prefab_var_preserves_the_order_of_the_rest() {
+        let mut prefab = Prefab::new(TreePath::parse("/obj/t"));
+        prefab.set_var("first".into(), core::types::Value::Num(1.0));
+        prefab.set_var("middle".into(), core::types::Value::Num(2.0));
+        prefab.set_var("last".into(), core::types::Value::Num(3.0));
+
+        assert_eq!(
+            prefab.remove_var(&"middle".into()).map(|var| var.value),
+            Some(core::types::Value::Num(2.0)),
+        );
+        assert_eq!(
+            prefab.vars.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(),
+            ["first", "last"],
+        );
+        assert_eq!(prefab.remove_var(&"missing".into()), None);
     }
 
     #[test]

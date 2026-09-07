@@ -1,16 +1,19 @@
+use core::types::{Identifier, Value};
 use std::path::{Path, PathBuf};
 
 use dmi::IconFile;
-use dmm::{Coord, Map};
+use dmm::{Coord, Map, Prefab};
 use editor::{
     EditorState,
     Environment,
-    document::{MapDocument, PrefabInstanceId},
+    command::EditGroupId,
+    document::{MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
 };
 use objtree::ObjectTree;
 use render::{
     Frame,
-    frame::{FrameInstances, FrameOptions},
+    SpriteUpdate,
+    frame::{FrameInstances, FrameOptions, PrefabUpdate},
     texture::TextureCatalog,
 };
 
@@ -20,6 +23,7 @@ pub struct Session {
     pub options: FrameOptions,
     instances: FrameInstances,
     revision: u64,
+    sprite_update: Option<SpriteUpdate>,
     texture_revision: u64,
 }
 
@@ -31,6 +35,7 @@ impl Session {
             options: FrameOptions::default(),
             instances: FrameInstances::default(),
             revision: 0,
+            sprite_update: None,
             texture_revision: 0,
         }
     }
@@ -72,6 +77,7 @@ impl Session {
             });
         self.state.open_document(document);
         self.revision = self.revision.wrapping_add(1);
+        self.sprite_update = None;
 
         Ok(())
     }
@@ -128,10 +134,48 @@ impl Session {
         self.state.active_document().and_then(MapDocument::selected_instance)
     }
 
+    pub fn selected_prefab(&self) -> Option<&Prefab> {
+        let document = self.state.active_document()?;
+        let selected = document.selected_instance()?;
+
+        document.prefab_instance(selected).map(|(prefab, _)| prefab)
+    }
+
+    pub fn selected_location(&self) -> Option<PrefabLocation> {
+        let document = self.state.active_document()?;
+
+        document.instance_location(document.selected_instance()?)
+    }
+
+    pub fn icon_metadata(&self, name: &str) -> Option<&dmi::metadata::Metadata> {
+        self.state.environment.as_ref()?.icon(name)
+    }
+
     pub fn select_instance(&mut self, selected: Option<PrefabInstanceId>) {
         if let Some(document) = self.state.active_document_mut() {
             document.select_instance(selected);
         }
+    }
+
+    pub fn set_selected_instance_var(&mut self, name: Identifier, value: Value) -> Option<bool> {
+        let label = format!("set {name}");
+
+        self.edit_selected_instance_vars(label, &[VarMutation::Set(name, value)], None)
+    }
+
+    pub fn edit_selected_instance_vars(
+        &mut self, label: impl Into<String>, mutations: &[VarMutation], group: Option<EditGroupId>,
+    ) -> Option<bool> {
+        let selected = self.selected_instance()?;
+        let document = self.state.active_document_mut()?;
+
+        let changed = document.edit_instance_vars(selected, label, mutations, group)?;
+
+        if changed {
+            self.update_instance(selected);
+        }
+
+        Some(changed)
     }
 
     pub fn area_at(&self, coord: Coord) -> Option<PrefabInstanceId> {
@@ -171,6 +215,7 @@ impl Session {
             show_area_outlines: self.options.show_area_outlines,
             camera,
             revision: self.revision,
+            sprite_update: self.sprite_update,
         }
     }
 
@@ -182,6 +227,53 @@ impl Session {
         self.map().map_or((tile, tile), |map| {
             (map.size.x.max(1) as f32 * tile, map.size.y.max(1) as f32 * tile)
         })
+    }
+
+    fn rebuild_instances(&mut self) {
+        self.instances = match (self.state.environment.as_ref(), self.state.active_document()) {
+            (Some(environment), Some(document)) => render::frame::build(
+                &environment.tree,
+                &environment.icons,
+                &self.textures,
+                document,
+                self.options.tile_size,
+            ),
+            _ => FrameInstances::default(),
+        };
+        self.revision = self.revision.wrapping_add(1);
+        self.sprite_update = None;
+    }
+
+    fn update_instance(&mut self, selected: PrefabInstanceId) {
+        let update = match (self.state.environment.as_ref(), self.state.active) {
+            (Some(environment), Some(active)) => self.state.documents.get(active).map(|document| {
+                render::frame::update_prefab(
+                    &mut self.instances,
+                    &environment.tree,
+                    &environment.icons,
+                    &self.textures,
+                    document,
+                    selected,
+                    self.options.tile_size,
+                )
+            }),
+            _ => None,
+        }
+        .unwrap_or(PrefabUpdate::Unchanged);
+
+        match update {
+            PrefabUpdate::Unchanged => {},
+            PrefabUpdate::Sprites { start, end } => {
+                let previous_revision = self.revision;
+                self.revision = self.revision.wrapping_add(1);
+                self.sprite_update = Some(SpriteUpdate {
+                    previous_revision,
+                    start,
+                    end,
+                });
+            },
+            PrefabUpdate::Rebuild => self.rebuild_instances(),
+        }
     }
 }
 
@@ -251,10 +343,11 @@ fn report(environment: &Environment, diagnostics: &editor::environment::LoadDiag
 
 #[cfg(test)]
 mod tests {
+    use core::types::Value;
     use std::path::PathBuf;
 
     use dmi::IconFile;
-    use dmm::{Map, Size};
+    use dmm::{Coord, Map, Size};
     use editor::{Environment, document::MapDocument};
 
     use super::{Session, build_textures, validate_level};
@@ -278,6 +371,26 @@ mod tests {
         let root = examples();
         let (environment, diagnostics) = Environment::load(root.join("test.dme")).expect("load environment");
         assert!(diagnostics.icons.is_empty(), "{:?}", diagnostics.icons);
+        let roots = environment.tree.roots();
+        let obj = roots.obj.expect("embedded definitions register /obj");
+        let atom = roots.atom.expect("embedded definitions register /atom");
+        let movable = roots.movable.expect("embedded definitions register /atom/movable");
+        assert!(environment.tree.is_subtype_of(obj, atom));
+        assert!(environment.tree.is_subtype_of(obj, movable));
+        assert_eq!(
+            environment
+                .tree
+                .var_inherited(obj, &"pixel_x".into())
+                .map(|variable| &variable.value),
+            Some(&Value::Num(0.0)),
+        );
+        assert_eq!(
+            environment
+                .tree
+                .var_inherited(obj, &"step_x".into())
+                .map(|variable| &variable.value),
+            Some(&Value::Num(0.0)),
+        );
         let file = IconFile::load(root.join("icons/test.dmi")).expect("load icon");
 
         let textures = build_textures(&environment);
@@ -308,5 +421,55 @@ mod tests {
         assert_eq!(frame.underlay_depth, 1);
         assert!(frame.show_areas);
         assert!(frame.show_area_outlines);
+    }
+
+    #[test]
+    fn editing_the_selected_prefab_updates_only_its_cached_sprite() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        session.open_map(&root.join("test.dmm"), 1).unwrap();
+        let coord = Coord::new(6, 3, 1);
+        let selected = session
+            .state
+            .active_document()
+            .and_then(|document| document.instance_ids_at(coord).first())
+            .copied()
+            .unwrap();
+        assert_eq!(session.selected_prefab(), None);
+        session.select_instance(Some(selected));
+        let revision = session.revision;
+        let before = session.instances.sprites.clone();
+
+        assert_eq!(
+            session.set_selected_instance_var("pixel_x".into(), Value::Num(7.0)),
+            Some(true),
+        );
+        assert_eq!(session.revision, revision.wrapping_add(1));
+        let update = session.sprite_update.unwrap();
+        assert_eq!(update.previous_revision, revision);
+        assert_eq!(update.end, update.start + 1);
+        assert_eq!(session.instances.sprites[update.start].owner, selected);
+        assert_eq!(
+            session
+                .instances
+                .sprites
+                .iter()
+                .zip(before)
+                .filter(|(after, before)| *after != before)
+                .count(),
+            1,
+        );
+
+        let rendered_revision = session.revision;
+        assert_eq!(
+            session.set_selected_instance_var("name".into(), Value::Text("edited".into())),
+            Some(true),
+        );
+        assert_eq!(session.revision, rendered_revision);
+        assert_eq!(
+            session.selected_prefab().and_then(|prefab| prefab.var(&"name".into())),
+            Some(&Value::Text("edited".into())),
+        );
     }
 }

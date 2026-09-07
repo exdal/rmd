@@ -5,6 +5,7 @@
 //! ```
 
 mod camera;
+mod inspector;
 mod session;
 mod ui;
 

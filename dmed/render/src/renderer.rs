@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Range};
+use std::{collections::HashMap, ops::Range, time::Instant};
 
 use ash::vk;
 use dear_imgui_rs::render::PendingFrame;
@@ -56,6 +56,8 @@ const INTERACTION_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/inte
 const INTERACTION_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/interaction.frag.spv"));
 const PICK_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pick.comp.spv"));
 const UPLOAD_BATCH_BYTES: usize = 64 * 1024 * 1024;
+const HIGHLIGHT_STRIPE_PERIOD: f32 = 12.0;
+const HIGHLIGHT_STRIPE_SPEED: f32 = 12.0;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +105,7 @@ struct InteractionPush {
     cursor: [u32; 2],
     cursor_valid: u32,
     selected_owner: [u32; 2],
+    stripe_offset: f32,
 }
 
 #[repr(C)]
@@ -206,8 +209,11 @@ pub struct Renderer {
     area_tile_indices: HashMap<editor::document::PrefabInstanceId, u32>,
     pick_readback: Option<Buffer>,
     uploaded_revision: Option<u64>,
+    uploaded_sprite_count: usize,
+    uploaded_area_tile_count: usize,
     ranges: Vec<LevelRange>,
     imgui: Option<ImGuiPass>,
+    highlight_started_at: Instant,
     extent: vk::Extent2D,
     stale: bool,
     device: Device,
@@ -334,8 +340,11 @@ impl Renderer {
             area_tile_indices: HashMap::new(),
             pick_readback: None,
             uploaded_revision: None,
+            uploaded_sprite_count: 0,
+            uploaded_area_tile_count: 0,
             ranges: Vec::new(),
             imgui: None,
+            highlight_started_at: Instant::now(),
             extent: vk::Extent2D {
                 width: width.max(1),
                 height: height.max(1),
@@ -678,6 +687,8 @@ impl Renderer {
         }
 
         self.prepare_sprites(frame)?;
+        let stripe_offset =
+            (self.highlight_started_at.elapsed().as_secs_f32() * HIGHLIGHT_STRIPE_SPEED) % HIGHLIGHT_STRIPE_PERIOD;
 
         let recorded = self.recorded.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
         let frames = self.frames.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
@@ -736,6 +747,7 @@ impl Renderer {
                     cursor: cursor_value,
                     cursor_valid: u32::from(cursor.is_some()),
                     selected_owner,
+                    stripe_offset,
                 },
             );
             recorded.program.set_bytes(
@@ -819,6 +831,10 @@ impl Renderer {
 
     fn prepare_sprites(&mut self, frame: &Frame<'_>) -> Result<(), GpuError> {
         if self.uploaded_revision == Some(frame.revision) {
+            return Ok(());
+        }
+
+        if self.prepare_sprite_update(frame)? {
             return Ok(());
         }
 
@@ -909,8 +925,45 @@ impl Renderer {
             self.area_tile_indices.insert(area.owner, index);
         }
         self.uploaded_revision = Some(frame.revision);
+        self.uploaded_sprite_count = total;
+        self.uploaded_area_tile_count = area_total;
 
         Ok(())
+    }
+
+    fn prepare_sprite_update(&mut self, frame: &Frame<'_>) -> Result<bool, GpuError> {
+        let Some(update) = frame.sprite_update else {
+            return Ok(false);
+        };
+        if self.uploaded_revision != Some(update.previous_revision)
+            || self.uploaded_area_tile_count != frame.area_tiles.len()
+            || frame.sprite_instances.len() > self.sprite_capacity
+            || update.start > update.end
+            || update.end > frame.sprite_instances.len()
+        {
+            return Ok(false);
+        }
+        let Some(buffer) = self.sprites.as_mut() else {
+            return Ok(false);
+        };
+        let byte_offset = update
+            .start
+            .checked_mul(size_of::<GpuSprite>())
+            .and_then(|offset| u64::try_from(offset).ok())
+            .ok_or(GpuError::SpriteUploadTooLarge)?;
+        let payload = frame.sprite_instances[update.start..update.end]
+            .iter()
+            .enumerate()
+            .map(|(offset, sprite)| gpu_sprite(update.start + offset, sprite))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        self.graph.wait()?;
+        buffer.write(byte_offset, &payload)?;
+        self.uploaded_revision = Some(frame.revision);
+        self.uploaded_sprite_count = frame.sprite_instances.len();
+        self.ranges = level_ranges(frame.sprite_instances);
+
+        Ok(true)
     }
 
     fn color_area_outlines(&mut self, buffer: Buffer, count: usize) -> Result<(), GpuError> {

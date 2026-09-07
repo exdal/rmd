@@ -204,6 +204,13 @@ pub(crate) fn write_value(out: &mut impl Write, value: &Value) -> std::fmt::Resu
     }
 }
 
+pub fn format_value(value: &Value) -> String {
+    let mut out = String::new();
+    write_value(&mut out, value).expect("writing to a String cannot fail");
+
+    out
+}
+
 pub fn write(map: &Map) -> String { MapWriter::new(map).write() }
 
 #[cfg(test)]
@@ -217,7 +224,7 @@ mod tests {
         Size,
         key::Key,
         parser::parse,
-        writer::{MapWriter, write},
+        writer::{MapWriter, format_value, write},
     };
 
     const STANDARD: &str = concat!(
@@ -282,6 +289,22 @@ mod tests {
 
     #[test]
     fn round_trips_tgm_bytes() { round_trip(TGM); }
+
+    #[test]
+    fn formats_variable_values_as_dmm_expressions() {
+        let value = Value::List(vec![
+            core::types::ListEntry {
+                key: Value::Text("key".into()),
+                value: Some(Value::Path(TreePath::parse("/obj/item"))),
+            },
+            core::types::ListEntry {
+                key: Value::Resource("icons/items.dmi".into()),
+                value: None,
+            },
+        ]);
+
+        assert_eq!(format_value(&value), "list(\"key\"=/obj/item,'icons/items.dmi')");
+    }
 
     #[test]
     fn converts_between_the_two_formats_without_losing_anything() {

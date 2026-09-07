@@ -627,6 +627,19 @@ impl<'a> MapParser<'a> {
 
 pub fn parse(source: &str) -> (Map, Vec<MapError>) { MapParser::new(source).parse() }
 
+pub fn parse_value(source: &str) -> MapResult<Value> {
+    let mut parser = MapParser::new(source);
+    parser.skip_trivia();
+    let value = parser.parse_value()?;
+    parser.skip_trivia();
+
+    if parser.is_eof() {
+        Ok(value)
+    } else {
+        Err(parser.error(MapErrorKind::MalformedValue(source.to_string())))
+    }
+}
+
 pub fn load(path: impl AsRef<Path>) -> std::io::Result<(Map, Vec<MapError>)> {
     let source = std::fs::read_to_string(path)?;
 
@@ -637,7 +650,14 @@ pub fn load(path: impl AsRef<Path>) -> std::io::Result<(Map, Vec<MapError>)> {
 mod tests {
     use core::types::{Identifier, Value};
 
-    use crate::{Coord, MapFormat, VarValue, error::MapErrorKind, key::Key, parser::parse};
+    use crate::{
+        Coord,
+        MapFormat,
+        VarValue,
+        error::MapErrorKind,
+        key::Key,
+        parser::{parse, parse_value},
+    };
 
     const STANDARD: &str = concat!(
         "\"a\" = (/turf/wall,/area)\n",
@@ -767,6 +787,26 @@ mod tests {
         assert!(matches!(get("z"), Some(Value::List(entries)) if entries.is_empty()));
         assert!(matches!(get("w"), Some(Value::List(entries))
             if matches!(&entries[0].key, Value::Path(path) if !path.absolute)));
+    }
+
+    #[test]
+    fn parses_one_complete_variable_value() {
+        let value = parse_value(" list(\"a\", key = /obj/item, nested = list(1, null)) ").unwrap();
+
+        assert!(matches!(value, Value::List(entries) if entries.len() == 3));
+        assert_eq!(
+            parse_value("'icons/items.dmi'").unwrap(),
+            Value::Resource("icons/items.dmi".into())
+        );
+        assert_eq!(parse_value("-1.5e2").unwrap(), Value::Num(-150.0));
+    }
+
+    #[test]
+    fn standalone_value_parser_rejects_partial_or_malformed_input() {
+        assert!(parse_value("1 trailing").is_err());
+        assert!(parse_value("\"unterminated").is_err());
+        assert!(parse_value("list(1,)").is_err());
+        assert!(parse_value("").is_err());
     }
 
     #[test]
