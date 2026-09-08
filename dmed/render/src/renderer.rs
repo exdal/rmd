@@ -93,6 +93,8 @@ struct CameraPush {
     base: u32,
     show_areas: u32,
     show_area_outlines: u32,
+    placement_flash_owner: [u32; 2],
+    placement_flash_strength: f32,
 }
 
 #[repr(C)]
@@ -170,9 +172,15 @@ impl AreaColorPass {
     }
 }
 
-struct TextureImage {
+pub(crate) struct TextureImage {
     image: Image,
     view: vk::ImageView,
+}
+
+impl TextureImage {
+    pub(crate) fn attachment(&self, layout: vk::ImageLayout) -> ImageAttachment {
+        ImageAttachment::from_image(&self.image, layout).with_image_view(self.view)
+    }
 }
 
 struct TextureSource<'a> {
@@ -224,6 +232,8 @@ pub struct Renderer {
 
 impl Renderer {
     pub const VIEWPORT_TEXTURE: dear_imgui_rs::TextureId = crate::imgui::VIEWPORT_TEXTURE;
+
+    pub const fn sprite_texture(index: u32) -> dear_imgui_rs::TextureId { crate::imgui::sprite_texture(index) }
 
     pub fn new(device: Device, width: u32, height: u32, texture_capacity: usize) -> Result<Self, GpuError> {
         let texture_limit = device.max_bindless_textures.min(SPRITE_TEXTURE_CAPACITY);
@@ -701,6 +711,12 @@ impl Renderer {
         recorded.program.set(recorded.underlay_extent, extent3d(viewport));
         recorded.program.set(recorded.sprites, sprites);
 
+        let (placement_flash_owner, placement_flash_strength) = interaction
+            .placement_flash
+            .filter(|flash| flash.strength.is_finite() && flash.strength > 0.0)
+            .map_or(([0; 2], 0.0), |flash| {
+                (owner_words(flash.owner), flash.strength.min(1.0))
+            });
         let push = CameraPush {
             center: [frame.camera.x, frame.camera.y],
             viewport: [viewport.width as f32, viewport.height as f32],
@@ -708,6 +724,8 @@ impl Renderer {
             base: 0,
             show_areas: u32::from(frame.show_areas),
             show_area_outlines: u32::from(frame.show_area_outlines),
+            placement_flash_owner,
+            placement_flash_strength,
         };
         recorded.program.set_bytes(recorded.camera, &push);
         recorded.program.set_bytes(
@@ -793,7 +811,7 @@ impl Renderer {
             let reconciled = pending
                 .reconcile_texture_feedback(feedback)
                 .map_err(|e| GpuError::ImGui(e.to_string()))?;
-            let ui_frame = imgui.prepare(next, reconciled.draw_data(), self.extent)?;
+            let ui_frame = imgui.prepare(next, reconciled.draw_data(), self.extent, &self.textures)?;
 
             if let Some(slots) = recorded.ui.as_ref() {
                 imgui.bind(&mut recorded.program, slots, &ui_frame);

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use dear_imgui_rs::{
     DockLayout,
     DockLayoutApply,
@@ -6,24 +8,94 @@ use dear_imgui_rs::{
     DockspaceError,
     Key,
     MouseButton,
+    StyleColor,
+    StyleVar,
     Ui,
     WindowKey,
     WindowKeyError,
 };
+use dmm::{Coord, Prefab};
+use editor::{
+    command::EditGroupId,
+    icons::materialdesignicons::{ICON_EYEDROPPER, ICON_IMAGE_BROKEN, ICON_PENCIL},
+    tool::{Tool, is_placeable},
+};
 use objtree::{ObjectTree, TypeId};
-use render::{Renderer, ViewportInteraction};
+use render::{PlacementFlash, Renderer, ViewportInteraction};
 
 use crate::{
     camera::Controller,
     gizmo::{GizmoState, GizmoViewport},
     inspector::InspectorState,
-    session::Session,
+    session::{PlacementPreview, Session},
 };
 
 /// How far down the "Blur below" menu goes. The option itself takes any depth.
 const MAX_UNDERLAY_DEPTH: u32 = 3;
 
 const DOCKSPACE_ID: &str = "dmed-main-dockspace";
+const OVERLAY_PADDING: f32 = 4.0;
+const OVERLAY_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
+const RECENT_ICON_SIZE: f32 = 48.0;
+const RECENT_BADGE_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.8];
+const RECENT_BADGE_TEXT: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+const PLACEMENT_FLASH_DURATION: f64 = 0.25;
+const PLACEMENT_PREVIEW_PERIOD: f64 = 1.5;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ActivePlacementFlash {
+    owner: dmm::PrefabInstanceId,
+    coord: Coord,
+    started_at: f64,
+}
+
+impl ActivePlacementFlash {
+    fn sample(self, now: f64) -> Option<PlacementFlash> {
+        let elapsed = (now - self.started_at).max(0.0);
+        if !elapsed.is_finite() || elapsed >= PLACEMENT_FLASH_DURATION {
+            return None;
+        }
+
+        Some(PlacementFlash {
+            owner: self.owner,
+            strength: (1.0 - elapsed / PLACEMENT_FLASH_DURATION) as f32,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct PlacementStroke {
+    prefab: Prefab,
+    z: u32,
+    group: EditGroupId,
+    visited: HashSet<Coord>,
+}
+
+impl PlacementStroke {
+    fn new(prefab: Prefab, z: u32) -> Self {
+        Self {
+            prefab,
+            z,
+            group: EditGroupId::new(),
+            visited: HashSet::new(),
+        }
+    }
+
+    fn matches_context(&self, tool: Tool, prefab: Option<&Prefab>, z: u32) -> bool {
+        tool == Tool::Place && prefab == Some(&self.prefab) && z == self.z
+    }
+
+    fn visit(&mut self, coord: Coord) -> Option<EditGroupId> {
+        (coord.z == self.z && self.visited.insert(coord)).then_some(self.group)
+    }
+}
+
+fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
+    ui.get_window_draw_list()
+        .add_rect(bounds.min, bounds.max, OVERLAY_BG)
+        .filled(true)
+        .build();
+}
 
 pub struct UiOutput {
     pub exit: bool,
@@ -39,6 +111,8 @@ pub struct UiState {
     selected: Option<TypeId>,
     inspector: InspectorState,
     gizmo: GizmoState,
+    placement_flash: Option<ActivePlacementFlash>,
+    placement_stroke: Option<PlacementStroke>,
     viewport: (u32, u32),
     initial_refit: bool,
 }
@@ -68,6 +142,8 @@ impl UiState {
             selected: None,
             inspector: InspectorState::default(),
             gizmo: GizmoState::default(),
+            placement_flash: None,
+            placement_stroke: None,
             viewport: (1, 1),
             initial_refit: true,
         })
@@ -165,8 +241,9 @@ impl UiState {
         })
     }
 
-    fn draw_object_tree(&mut self, ui: &Ui, session: &Session) {
+    fn draw_object_tree(&mut self, ui: &Ui, session: &mut Session) {
         ui.window(&self.object_tree).build(|| {
+            let mut chosen = None;
             let Some(tree) = session.tree() else {
                 ui.text_disabled("No environment loaded");
 
@@ -174,7 +251,7 @@ impl UiState {
             };
 
             for child in sorted_children(tree, TypeId::ROOT) {
-                draw_type(ui, tree, child, &mut self.selected);
+                draw_type(ui, tree, child, &mut self.selected, &mut chosen);
             }
 
             ui.separator();
@@ -187,6 +264,13 @@ impl UiState {
             ui.text(selected.path.to_string());
             ui.text(format!("{} variables", selected.vars.len()));
             ui.text(format!("{} procedures", selected.procs.len()));
+            if !is_placeable(tree, selected.id) {
+                ui.text_disabled("This type cannot be placed on a map");
+            }
+
+            if let Some(chosen) = chosen {
+                session.choose_type(chosen);
+            }
         });
     }
 
@@ -195,8 +279,6 @@ impl UiState {
         exit: &mut bool, refit: &mut bool,
     ) {
         ui.window(&self.viewport_window).build(|| {
-            draw_z_levels(ui, session);
-
             let (image_size, viewport) = panel_extent(ui.content_region_avail());
             self.viewport = viewport;
             camera.resize(viewport.0, viewport.1);
@@ -208,9 +290,38 @@ impl UiState {
             }
             ui.image(Renderer::VIEWPORT_TEXTURE, image_size);
 
-            let hovered = ui.is_item_hovered();
+            let image_hovered = ui.is_item_hovered();
             let viewport_min = ui.item_rect_min();
             let viewport_max = ui.item_rect_max();
+            let top_overlay_height = ui.frame_height() + OVERLAY_PADDING * 2.0;
+            let history_overlay_height = recent_button_size(ui) + OVERLAY_PADDING * 2.0;
+            let top_overlay = OverlayRect {
+                min: viewport_min,
+                max: [
+                    viewport_max[0],
+                    (viewport_min[1] + top_overlay_height).min(viewport_max[1]),
+                ],
+            };
+            let bottom_overlay = OverlayRect {
+                min: [
+                    viewport_min[0],
+                    (viewport_max[1] - history_overlay_height).max(viewport_min[1]),
+                ],
+                max: viewport_max,
+            };
+
+            let mouse = ui.io().mouse_pos();
+            let over_overlay = top_overlay.contains(mouse) || bottom_overlay.contains(mouse);
+            let hovered = image_hovered && !over_overlay;
+            let focused = ui.is_window_focused();
+            if focused
+                && !ui.io().want_text_input()
+                && !has_modifiers(ui)
+                && let Some(index) = pressed_recent(ui)
+            {
+                session.choose_recent(index);
+            }
+
             if hovered {
                 let io = ui.io();
                 if !self.gizmo.is_interacting() && ui.is_mouse_down(MouseButton::Middle) {
@@ -238,6 +349,12 @@ impl UiState {
                 if ui.is_key_pressed(Key::Home) {
                     *refit = true;
                 }
+                if ui.is_key_pressed(Key::W) {
+                    session.set_tool(Tool::Place);
+                }
+                if ui.is_key_pressed(Key::S) {
+                    session.set_tool(Tool::Select);
+                }
 
                 if *refit {
                     let (width, height) = session.extent_px();
@@ -246,36 +363,108 @@ impl UiState {
                 }
             }
 
-            let gizmo = self.gizmo.draw(
-                ui,
-                session,
-                camera,
-                self.inspector.transform_mode(),
-                GizmoViewport {
-                    min: viewport_min,
-                    max: viewport_max,
-                    hovered,
+            let cursor = hovered
+                .then(|| {
+                    let mouse = ui.io().mouse_pos();
+
+                    [mouse[0] - viewport_min[0], mouse[1] - viewport_min[1]]
+                })
+                .filter(|cursor| {
+                    cursor.iter().all(|value| value.is_finite() && *value >= 0.0)
+                        && cursor[0] < viewport.0 as f32
+                        && cursor[1] < viewport.1 as f32
+                });
+            let pointed_coord = cursor.and_then(|cursor| {
+                let size = session.map()?.size;
+
+                camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
+            });
+            let tool = session.tool();
+            let preview_coord = (tool == Tool::Place)
+                .then(|| self.gizmo.placement_coord().or(pointed_coord))
+                .flatten();
+            let active_flash = active_placement_flash(&mut self.placement_flash, ui.time());
+            interaction.placement_flash = active_flash.map(|(_, flash)| flash);
+            if let Some(coord) = preview_coord
+                && active_flash.is_none_or(|(flash_coord, _)| flash_coord != coord)
+            {
+                draw_placement_preview(ui, session, camera, coord, viewport_min, viewport_max);
+            }
+
+            let gizmo_viewport = GizmoViewport {
+                min: viewport_min,
+                max: viewport_max,
+                hovered,
+            };
+            let gizmo_captures_mouse = match tool {
+                Tool::Select => {
+                    self.gizmo
+                        .draw(ui, session, camera, self.inspector.transform_mode(), gizmo_viewport)
+                        .captures_mouse
                 },
-            );
+                Tool::Place => {
+                    self.gizmo
+                        .draw_placement_direction(ui, session, camera, pointed_coord, gizmo_viewport)
+                        .captures_mouse
+                },
+                Tool::Delete => {
+                    self.gizmo.cancel();
 
-            if hovered && !gizmo.captures_mouse {
-                let io = ui.io();
-                let mouse = io.mouse_pos();
-                let cursor = [mouse[0] - viewport_min[0], mouse[1] - viewport_min[1]];
-                if cursor.iter().all(|value| value.is_finite() && *value >= 0.0)
-                    && cursor[0] < viewport.0 as f32
-                    && cursor[1] < viewport.1 as f32
-                {
-                    interaction.cursor = Some([cursor[0].floor() as u32, cursor[1].floor() as u32]);
-                    interaction.pick = ui.is_mouse_clicked(MouseButton::Left);
+                    false
+                },
+            };
 
-                    if let Some(size) = session.map().map(|map| map.size)
-                        && let Some(coord) = camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
-                    {
-                        interaction.hovered_area = session.area_at(coord);
+            let left_clicked = ui.is_mouse_clicked(MouseButton::Left);
+            let left_down = ui.is_mouse_down(MouseButton::Left);
+            if left_clicked {
+                self.placement_stroke = None;
+            }
+
+            if self.placement_stroke.as_ref().is_some_and(|stroke| {
+                !left_down
+                    || gizmo_captures_mouse
+                    || !stroke.matches_context(session.tool(), session.palette(), session.z())
+            }) {
+                self.placement_stroke = None;
+            }
+
+            if !gizmo_captures_mouse && let Some(cursor) = cursor {
+                interaction.cursor = Some([cursor[0].floor() as u32, cursor[1].floor() as u32]);
+
+                if let Some(coord) = pointed_coord {
+                    interaction.hovered_area = session.area_at(coord);
+                    match session.tool() {
+                        Tool::Place => {
+                            if left_clicked {
+                                self.placement_stroke = session
+                                    .palette()
+                                    .cloned()
+                                    .map(|prefab| PlacementStroke::new(prefab, session.z()));
+                            }
+                            let group = self.placement_stroke.as_mut().and_then(|stroke| stroke.visit(coord));
+                            if let Some(group) = group
+                                && let Some(owner) = session.place_at(coord, Some(group))
+                            {
+                                let flash = ActivePlacementFlash {
+                                    owner,
+                                    coord,
+                                    started_at: ui.time(),
+                                };
+                                self.placement_flash = Some(flash);
+                                interaction.placement_flash = flash.sample(ui.time());
+                            }
+                        },
+                        Tool::Select if left_clicked => interaction.pick = true,
+                        Tool::Select | Tool::Delete => {
+                            self.placement_stroke = None;
+                        },
                     }
                 }
             }
+
+            draw_top_overlay(ui, session, top_overlay);
+            draw_history_overlay(ui, session, bottom_overlay);
+            suppress_place_highlights(session.tool(), interaction);
 
             if ui.is_key_pressed(Key::Escape) {
                 *exit = true;
@@ -290,14 +479,20 @@ impl UiState {
     }
 }
 
+fn active_placement_flash(active: &mut Option<ActivePlacementFlash>, now: f64) -> Option<(Coord, PlacementFlash)> {
+    let placement = (*active)?;
+    let Some(flash) = placement.sample(now) else {
+        *active = None;
+
+        return None;
+    };
+
+    Some((placement.coord, flash))
+}
+
 fn draw_z_levels(ui: &Ui, session: &mut Session) {
     let current = session.z();
     let levels = session.level_count();
-    let available = ui.content_region_avail();
-    let cursor = ui.cursor_pos();
-    let width = z_level_width(ui, levels);
-
-    ui.set_cursor_pos_x(cursor[0] + (available[0] - width).max(0.0));
     ui.align_text_to_frame_padding();
     ui.text("Z");
 
@@ -309,11 +504,225 @@ fn draw_z_levels(ui: &Ui, session: &mut Session) {
             selected = Some(z);
         }
     }
-    ui.new_line();
-
     if let Some(z) = selected {
         session.set_level(z);
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct OverlayRect {
+    min: [f32; 2],
+    max: [f32; 2],
+}
+
+impl OverlayRect {
+    fn contains(self, point: [f32; 2]) -> bool {
+        point[0] >= self.min[0] && point[0] < self.max[0] && point[1] >= self.min[1] && point[1] < self.max[1]
+    }
+}
+
+fn draw_placement_preview(
+    ui: &Ui, session: &Session, camera: &Controller, coord: Coord, viewport_min: [f32; 2], viewport_max: [f32; 2],
+) {
+    let Some(preview) = session.placement_preview() else {
+        return;
+    };
+    let bounds = placement_preview_bounds(camera, viewport_min, coord, session.options.tile_size, preview);
+    let mut tint = preview.thumbnail.tint;
+    tint[3] *= placement_preview_opacity(ui.time());
+    let draw = ui.get_window_draw_list();
+
+    draw.with_clip_rect(viewport_min, viewport_max, || {
+        draw.add_image(
+            Renderer::sprite_texture(preview.thumbnail.texture.index),
+            bounds.min,
+            bounds.max,
+            preview.thumbnail.uv0,
+            preview.thumbnail.uv1,
+            tint,
+        );
+    });
+}
+
+fn placement_preview_bounds(
+    camera: &Controller, viewport_min: [f32; 2], coord: Coord, tile_size: u32, preview: PlacementPreview,
+) -> OverlayRect {
+    let tile_size = tile_size.max(1);
+    let x = coord.x.saturating_sub(1).saturating_mul(tile_size) as f32 + preview.offset[0] as f32;
+    let y = coord.y.saturating_sub(1).saturating_mul(tile_size) as f32 + preview.offset[1] as f32;
+    let width = preview.thumbnail.texture.width as f32;
+    let height = preview.thumbnail.texture.height as f32;
+    let top_left = camera.map_to_screen([x, y + height]);
+    let bottom_right = camera.map_to_screen([x + width, y]);
+
+    OverlayRect {
+        min: [viewport_min[0] + top_left[0], viewport_min[1] + top_left[1]],
+        max: [viewport_min[0] + bottom_right[0], viewport_min[1] + bottom_right[1]],
+    }
+}
+
+fn placement_preview_opacity(time: f64) -> f32 {
+    let phase = time.rem_euclid(PLACEMENT_PREVIEW_PERIOD) / PLACEMENT_PREVIEW_PERIOD * std::f64::consts::TAU;
+
+    (0.9 + 0.1 * phase.cos()) as f32
+}
+
+fn suppress_place_highlights(tool: Tool, interaction: &mut ViewportInteraction) {
+    if tool == Tool::Place {
+        interaction.cursor = None;
+        interaction.hovered_area = None;
+        interaction.selected = None;
+        interaction.pick = false;
+    }
+}
+
+fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect) {
+    draw_overlay_underlay(ui, bounds);
+
+    let button_size = ui.frame_height();
+    ui.set_cursor_screen_pos([bounds.min[0] + OVERLAY_PADDING, bounds.min[1] + OVERLAY_PADDING]);
+
+    ui.set_cursor_screen_pos([bounds.min[0] + OVERLAY_PADDING, bounds.min[1] + OVERLAY_PADDING]);
+    draw_tool_button(ui, session, Tool::Place, ICON_PENCIL);
+    ui.same_line();
+    draw_tool_button(ui, session, Tool::Select, ICON_EYEDROPPER);
+
+    let tools_end = bounds.min[0] + OVERLAY_PADDING + button_size * 2.0 + ui.clone_style().item_spacing()[0];
+    let levels_width = z_level_width(ui, session.level_count());
+    let levels_x = (bounds.max[0] - OVERLAY_PADDING - levels_width).max(tools_end + OVERLAY_PADDING);
+    ui.set_cursor_screen_pos([levels_x, bounds.min[1] + OVERLAY_PADDING]);
+    draw_z_levels(ui, session);
+}
+
+fn draw_tool_button(ui: &Ui, session: &mut Session, tool: Tool, icon: char) {
+    let _active = (session.tool() == tool)
+        .then(|| ui.push_style_color(StyleColor::Button, ui.style_color(StyleColor::PlotHistogramHovered)));
+    if ui.button(icon.to_string()) {
+        session.set_tool(tool);
+    }
+}
+
+fn draw_history_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect) {
+    draw_overlay_underlay(ui, bounds);
+
+    let recent = session.recent_prefabs().to_vec();
+    if recent.is_empty() {
+        let y = bounds.min[1] + ((bounds.max[1] - bounds.min[1] - ui.frame_height()) * 0.5).max(0.0);
+        ui.set_cursor_screen_pos([bounds.min[0] + OVERLAY_PADDING, y]);
+        ui.align_text_to_frame_padding();
+        ui.text_disabled("No recent objects");
+
+        return;
+    }
+
+    let button_size = recent_button_size(ui);
+    let palette = session.palette().cloned();
+    let mut chosen = None;
+    ui.set_cursor_screen_pos([bounds.min[0] + OVERLAY_PADDING, bounds.min[1] + OVERLAY_PADDING]);
+
+    for (index, prefab) in recent.iter().enumerate() {
+        if index > 0 {
+            ui.same_line();
+        }
+        let key = recent_key_label(index);
+        let _selected = (palette.as_ref() == Some(prefab))
+            .then(|| ui.push_style_color(StyleColor::Button, ui.style_color(StyleColor::ButtonActive)));
+        let clicked = match session.prefab_thumbnail(prefab) {
+            Some(thumbnail) => {
+                let image_size = fit_recent_icon(thumbnail.texture.width, thumbnail.texture.height);
+                let padding = [(button_size - image_size[0]) * 0.5, (button_size - image_size[1]) * 0.5];
+                let _ = ui.push_style_var(StyleVar::FramePadding(padding));
+
+                ui.image_button_config(
+                    format!("recent-{index}"),
+                    Renderer::sprite_texture(thumbnail.texture.index),
+                    image_size,
+                )
+                .uv0(thumbnail.uv0)
+                .uv1(thumbnail.uv1)
+                .tint_color(thumbnail.tint)
+                .build()
+            },
+            None => ui.button_with_size(format!("{ICON_IMAGE_BROKEN}##recent-{index}"), [button_size; 2]),
+        };
+        draw_recent_badge(ui, key);
+        if clicked {
+            chosen = Some(index);
+        }
+        ui.set_item_tooltip(prefab_tooltip(prefab));
+    }
+
+    if let Some(index) = chosen {
+        session.choose_recent(index);
+    }
+}
+
+fn has_modifiers(ui: &Ui) -> bool {
+    let io = ui.io();
+
+    io.key_ctrl() || io.key_shift() || io.key_alt() || io.key_super()
+}
+
+fn pressed_recent(ui: &Ui) -> Option<usize> {
+    RECENT_KEYS
+        .iter()
+        .position(|(number, keypad)| ui.is_key_pressed(*number) || ui.is_key_pressed(*keypad))
+}
+
+const RECENT_KEYS: [(Key, Key); 10] = [
+    (Key::Key1, Key::Keypad1),
+    (Key::Key2, Key::Keypad2),
+    (Key::Key3, Key::Keypad3),
+    (Key::Key4, Key::Keypad4),
+    (Key::Key5, Key::Keypad5),
+    (Key::Key6, Key::Keypad6),
+    (Key::Key7, Key::Keypad7),
+    (Key::Key8, Key::Keypad8),
+    (Key::Key9, Key::Keypad9),
+    (Key::Key0, Key::Keypad0),
+];
+
+fn recent_key_label(index: usize) -> char {
+    const LABELS: [char; 10] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
+
+    LABELS.get(index).copied().unwrap_or('?')
+}
+
+fn recent_button_size(ui: &Ui) -> f32 {
+    let padding = ui.clone_style().frame_padding();
+
+    RECENT_ICON_SIZE + padding[0].max(padding[1]) * 2.0
+}
+
+fn fit_recent_icon(width: u32, height: u32) -> [f32; 2] {
+    let width = width.max(1) as f32;
+    let height = height.max(1) as f32;
+    let scale = RECENT_ICON_SIZE / width.max(height);
+
+    [width * scale, height * scale]
+}
+
+fn draw_recent_badge(ui: &Ui, key: char) {
+    let key = key.to_string();
+    let item_min = ui.item_rect_min();
+    let text_size = ui.calc_text_size(&key);
+    let badge_min = [item_min[0] + 2.0, item_min[1] + 2.0];
+    let badge_max = [badge_min[0] + text_size[0] + 4.0, badge_min[1] + text_size[1] + 2.0];
+    let draw = ui.get_window_draw_list();
+    draw.add_rect(badge_min, badge_max, RECENT_BADGE_BG)
+        .rounding(2.0)
+        .filled(true)
+        .build();
+    draw.add_text([badge_min[0] + 2.0, badge_min[1] + 1.0], RECENT_BADGE_TEXT, key);
+}
+
+fn prefab_tooltip(prefab: &Prefab) -> String {
+    let mut tooltip = prefab.path.to_string();
+    for (name, value) in &prefab.vars {
+        tooltip.push_str(&format!("\n{name} = {}", dmm::writer::format_value(&value.value)));
+    }
+
+    tooltip
 }
 
 fn z_level_width(ui: &Ui, levels: u32) -> f32 {
@@ -330,7 +739,7 @@ fn z_level_width(ui: &Ui, levels: u32) -> f32 {
     width
 }
 
-fn draw_type(ui: &Ui, tree: &ObjectTree, id: TypeId, selected: &mut Option<TypeId>) {
+fn draw_type(ui: &Ui, tree: &ObjectTree, id: TypeId, selected: &mut Option<TypeId>, chosen: &mut Option<TypeId>) {
     let Some(decl) = tree.get(id) else {
         return;
     };
@@ -353,11 +762,12 @@ fn draw_type(ui: &Ui, tree: &ObjectTree, id: TypeId, selected: &mut Option<TypeI
 
     if ui.is_item_clicked() {
         *selected = Some(id);
+        *chosen = Some(id);
     }
 
     if !leaf && let Some(token) = token {
         for child in sorted_children(tree, id) {
-            draw_type(ui, tree, child, selected);
+            draw_type(ui, tree, child, selected, chosen);
         }
 
         token.pop();
@@ -401,6 +811,9 @@ fn panel_extent(available: [f32; 2]) -> ([f32; 2], (u32, u32)) {
 mod tests {
     use core::{location::Location, path::TreePath};
 
+    use dmm::PrefabInstanceId;
+    use render::SpriteTexture;
+
     use super::*;
 
     #[test]
@@ -429,5 +842,144 @@ mod tests {
     fn panel_extent_rejects_non_finite_or_empty_sizes() {
         assert_eq!(panel_extent([0.0, f32::NAN]), ([1.0, 1.0], (1, 1)));
         assert_eq!(panel_extent([320.75, 200.25]), ([320.75, 200.25], (320, 200)));
+    }
+
+    #[test]
+    fn recent_slots_follow_the_number_row_order() {
+        assert_eq!((0..10).map(recent_key_label).collect::<String>(), "1234567890");
+    }
+
+    #[test]
+    fn recent_icons_fit_inside_a_square_without_changing_aspect_ratio() {
+        assert_eq!(fit_recent_icon(32, 32), [RECENT_ICON_SIZE, RECENT_ICON_SIZE]);
+        assert_eq!(fit_recent_icon(64, 32), [RECENT_ICON_SIZE, RECENT_ICON_SIZE / 2.0]);
+        assert_eq!(fit_recent_icon(16, 32), [RECENT_ICON_SIZE / 2.0, RECENT_ICON_SIZE]);
+        assert_eq!(fit_recent_icon(0, 0), [RECENT_ICON_SIZE, RECENT_ICON_SIZE]);
+    }
+
+    #[test]
+    fn placement_preview_breathes_between_full_and_eighty_percent_opacity() {
+        assert!((placement_preview_opacity(0.0) - 1.0).abs() < f32::EPSILON);
+        assert!((placement_preview_opacity(0.75) - 0.8).abs() < f32::EPSILON);
+        assert!((placement_preview_opacity(1.5) - 1.0).abs() < f32::EPSILON);
+        assert!((placement_preview_opacity(3.75) - 0.8).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn placement_flash_fades_once_over_a_quarter_second() {
+        let owner = PrefabInstanceId::from_raw(7).unwrap();
+        let flash = ActivePlacementFlash {
+            owner,
+            coord: Coord::new(2, 3, 1),
+            started_at: 10.0,
+        };
+
+        assert_eq!(flash.sample(10.0), Some(PlacementFlash { owner, strength: 1.0 }));
+        assert_eq!(flash.sample(10.125), Some(PlacementFlash { owner, strength: 0.5 }));
+        assert_eq!(flash.sample(10.25), None);
+        assert_eq!(flash.sample(11.0), None);
+    }
+
+    #[test]
+    fn placement_strokes_process_each_tile_once_until_a_new_stroke_begins() {
+        let prefab = Prefab::new(TreePath::parse("/obj/table"));
+        let first = Coord::new(2, 3, 1);
+        let second = Coord::new(3, 3, 1);
+        let mut stroke = PlacementStroke::new(prefab.clone(), 1);
+
+        let group = stroke.visit(first).expect("first tile in stroke");
+        assert_eq!(stroke.visit(first), None);
+        assert_eq!(stroke.visit(second), Some(group));
+        assert_eq!(stroke.visit(first), None);
+        assert_eq!(stroke.visit(Coord::new(2, 3, 2)), None);
+
+        let mut next_stroke = PlacementStroke::new(prefab, 1);
+        assert!(next_stroke.visit(first).is_some());
+    }
+
+    #[test]
+    fn placement_strokes_only_match_their_starting_context() {
+        let prefab = Prefab::new(TreePath::parse("/obj/table"));
+        let other = Prefab::new(TreePath::parse("/obj/chair"));
+        let stroke = PlacementStroke::new(prefab.clone(), 2);
+
+        assert!(stroke.matches_context(Tool::Place, Some(&prefab), 2));
+        assert!(!stroke.matches_context(Tool::Select, Some(&prefab), 2));
+        assert!(!stroke.matches_context(Tool::Place, Some(&other), 2));
+        assert!(!stroke.matches_context(Tool::Place, Some(&prefab), 1));
+        assert!(!stroke.matches_context(Tool::Place, None, 2));
+    }
+
+    #[test]
+    fn placement_preview_bounds_preserve_anchor_offsets_dimensions_and_zoom() {
+        let mut camera = Controller::new();
+        camera.resize(100, 80);
+        camera.camera.x = 50.0;
+        camera.camera.y = 40.0;
+        camera.camera.zoom = 2.0;
+        let preview = PlacementPreview {
+            thumbnail: crate::session::PrefabThumbnail {
+                texture: SpriteTexture {
+                    width: 64,
+                    height: 32,
+                    ..Default::default()
+                },
+                uv0: [0.0; 2],
+                uv1: [1.0; 2],
+                tint: [1.0; 4],
+            },
+            offset: [-16, 4],
+        };
+
+        let bounds = placement_preview_bounds(&camera, [10.0, 20.0], Coord::new(2, 2, 1), 32, preview);
+
+        assert_eq!(bounds.min, [-8.0, 4.0]);
+        assert_eq!(bounds.max, [120.0, 68.0]);
+    }
+
+    #[test]
+    fn place_mode_suppresses_viewport_highlights_and_pick_requests() {
+        let owner = PrefabInstanceId::from_raw(7).unwrap();
+        let interaction = ViewportInteraction {
+            cursor: Some([10, 20]),
+            hovered_area: Some(owner),
+            selected: Some(owner),
+            placement_flash: Some(PlacementFlash { owner, strength: 0.5 }),
+            pick: true,
+        };
+        let mut selected = interaction;
+
+        suppress_place_highlights(Tool::Select, &mut selected);
+        assert_eq!(selected, interaction);
+
+        suppress_place_highlights(Tool::Place, &mut selected);
+        assert_eq!(
+            selected,
+            ViewportInteraction {
+                placement_flash: interaction.placement_flash,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn prefab_tooltips_include_the_path_and_exact_overrides() {
+        let mut prefab = Prefab::new(TreePath::parse("/obj/table"));
+        prefab.set_var("name".into(), core::types::Value::Text("custom".into()));
+
+        assert_eq!(prefab_tooltip(&prefab), "/obj/table\nname = \"custom\"");
+    }
+
+    #[test]
+    fn overlay_bounds_exclude_their_far_edges() {
+        let bounds = OverlayRect {
+            min: [10.0, 20.0],
+            max: [30.0, 40.0],
+        };
+
+        assert!(bounds.contains([10.0, 20.0]));
+        assert!(bounds.contains([29.0, 39.0]));
+        assert!(!bounds.contains([30.0, 39.0]));
+        assert!(!bounds.contains([29.0, 40.0]));
     }
 }

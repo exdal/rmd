@@ -11,7 +11,7 @@ use editor::{
 use crate::{
     camera::Controller,
     inspector::TransformMode,
-    session::{DirectionalTypes, SelectedTransform, Session},
+    session::{DirectionState, DirectionalTypes, SelectedTransform, Session},
     transform::anchor_to_tile,
 };
 
@@ -107,10 +107,23 @@ impl DirectionSet {
 
 #[derive(Debug, Clone, Copy)]
 struct DirectionGesture {
-    selected: PrefabInstanceId,
+    target: DirectionGestureTarget,
+    placement_coord: Option<Coord>,
     pressed_at: f64,
     set: DirectionSet,
     phase: DirectionPhase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectionGestureTarget {
+    Selection(PrefabInstanceId),
+    Placement,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DirectionTarget {
+    id: DirectionGestureTarget,
+    state: DirectionState,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -152,6 +165,11 @@ pub(crate) struct GizmoState {
 impl GizmoState {
     pub(crate) const fn is_interacting(&self) -> bool { self.drag.is_some() || self.direction.is_some() }
 
+    pub(crate) fn cancel(&mut self) {
+        self.drag = None;
+        self.direction = None;
+    }
+
     pub(crate) fn draw(
         &mut self, ui: &Ui, session: &mut Session, camera: &Controller, mode: TransformMode, viewport: GizmoViewport,
     ) -> GizmoResponse {
@@ -172,12 +190,6 @@ impl GizmoState {
         {
             self.drag = None;
         }
-        if self
-            .direction
-            .is_some_and(|gesture| gesture.selected != target.selected)
-        {
-            self.direction = None;
-        }
 
         let mouse = ui.io().mouse_pos();
         let initial_origin = gizmo_origin(camera, viewport.min, target.sprite);
@@ -185,84 +197,16 @@ impl GizmoState {
             .selected_location()
             .map(|location| tile_center_origin(camera, viewport.min, location.coord, session.options.tile_size));
         let was_dragging = self.drag.is_some();
-        if self.direction.is_none()
-            && self.drag.is_none()
-            && viewport.hovered
-            && ui.is_key_pressed_with_repeat(Key::R, false)
-            && let Some(set) = direction_set(target.dmi_directions, target.directional_types)
-        {
-            self.direction = Some(DirectionGesture {
-                selected: target.selected,
-                pressed_at: ui.time(),
-                set,
-                phase: DirectionPhase::Pending,
-            });
-        }
-        let was_direction_active = self.direction.is_some();
-        let key_down = ui.is_key_down(Key::R);
-        let key_released = ui.is_key_released(Key::R);
-        let mut requested_direction = None;
-
-        if let Some(mut gesture) = self.direction {
-            if matches!(gesture.phase, DirectionPhase::Pending) {
-                match pending_direction_outcome(gesture.pressed_at, ui.time(), key_down, key_released) {
-                    PendingDirectionOutcome::Pending => {},
-                    PendingDirectionOutcome::Open => {
-                        if let Some(origin) = direction_origin {
-                            gesture.phase = DirectionPhase::Open {
-                                origin,
-                                group: EditGroupId::new(),
-                                last_hovered: None,
-                            };
-                        } else {
-                            self.direction = None;
-                        }
-                    },
-                    PendingDirectionOutcome::Tap => {
-                        requested_direction =
-                            next_clockwise_direction(gesture.set, current_direction(target, gesture.set))
-                                .map(|direction| (direction, None));
-                        self.direction = None;
-                    },
-                    PendingDirectionOutcome::Cancel => self.direction = None,
-                }
-            }
-
-            if let DirectionPhase::Open {
-                origin,
-                group,
-                mut last_hovered,
-            } = gesture.phase
-            {
-                if key_released || !key_down {
-                    self.direction = None;
-                } else {
-                    let hovered = direction_at(mouse, origin, viewport.min, viewport.max, gesture.set);
-                    if hovered != last_hovered {
-                        last_hovered = hovered;
-                        if let Some(direction) = hovered
-                            && current_direction(target, gesture.set) != Some(direction)
-                        {
-                            requested_direction = Some((direction, Some(group)));
-                        }
-                    }
-                    gesture.phase = DirectionPhase::Open {
-                        origin,
-                        group,
-                        last_hovered,
-                    };
-                    self.direction = Some(gesture);
-                }
-            } else if self.direction.is_some() {
-                self.direction = Some(gesture);
-            }
-        }
-
-        if let Some((direction, group)) = requested_direction {
-            apply_direction(session, target, direction, group);
-            if let Some(updated) = session.selected_transform() {
-                target = updated;
-            }
+        let was_direction_active = self.update_direction(
+            ui,
+            session,
+            selected_direction_target(target),
+            direction_origin,
+            None,
+            viewport,
+        );
+        if let Some(updated) = session.selected_transform() {
+            target = updated;
         }
 
         let hovered_handle = values
@@ -294,26 +238,27 @@ impl GizmoState {
         if let Some(drag) = self.drag {
             if !ui.is_mouse_down(MouseButton::Left) {
                 self.drag = None;
-            } else if mouse != drag.start_mouse && mouse.iter().all(|value| value.is_finite()) {
-                if let Some(location) = session.selected_location() {
-                    let size = session
-                        .map()
-                        .map_or((1, 1), |map| (map.size.x.max(1), map.size.y.max(1)));
-                    let shift_snap = ui.io().key_shift();
-                    let ctrl_reanchor = ui.io().key_ctrl();
-                    let (coord, next) = anchored_values(drag, mouse, shift_snap, ctrl_reanchor, size);
-                    let current = transform_values(target, mode).unwrap_or(drag.start_values);
-                    let mutations = transform_mutations(mode, current, next);
-                    let label = format!("move {} offsets", mode.label().to_ascii_lowercase());
+            } else if mouse != drag.start_mouse
+                && mouse.iter().all(|value| value.is_finite())
+                && let Some(location) = session.selected_location()
+            {
+                let size = session
+                    .map()
+                    .map_or((1, 1), |map| (map.size.x.max(1), map.size.y.max(1)));
+                let shift_snap = ui.io().key_shift();
+                let ctrl_reanchor = ui.io().key_ctrl();
+                let (coord, next) = anchored_values(drag, mouse, shift_snap, ctrl_reanchor, size);
+                let current = transform_values(target, mode).unwrap_or(drag.start_values);
+                let mutations = transform_mutations(mode, current, next);
+                let label = format!("move {} offsets", mode.label().to_ascii_lowercase());
 
-                    if coord != location.coord {
-                        session.move_selected_instance(coord, label, &mutations, Some(drag.group));
-                    } else if !mutations.is_empty() {
-                        session.edit_selected_instance_vars(label, &mutations, Some(drag.group));
-                    }
-                    if let Some(updated) = session.selected_transform() {
-                        target = updated;
-                    }
+                if coord != location.coord {
+                    session.move_selected_instance(coord, label, &mutations, Some(drag.group));
+                } else if !mutations.is_empty() {
+                    session.edit_selected_instance_vars(label, &mutations, Some(drag.group));
+                }
+                if let Some(updated) = session.selected_transform() {
+                    target = updated;
                 }
             }
         }
@@ -344,7 +289,7 @@ impl GizmoState {
                 viewport.min,
                 viewport.max,
                 set,
-                current_direction(target, set),
+                current_direction(selected_direction_target(target).state, set),
                 hovered_direction,
             );
         } else if values.is_some() {
@@ -361,6 +306,147 @@ impl GizmoState {
                 || self.direction.is_some()
                 || hovered.is_some(),
         }
+    }
+
+    pub(crate) fn placement_coord(&self) -> Option<Coord> {
+        self.direction.and_then(|gesture| {
+            (gesture.target == DirectionGestureTarget::Placement)
+                .then_some(gesture.placement_coord)
+                .flatten()
+        })
+    }
+
+    pub(crate) fn draw_placement_direction(
+        &mut self, ui: &Ui, session: &mut Session, camera: &Controller, coord: Option<Coord>, viewport: GizmoViewport,
+    ) -> GizmoResponse {
+        self.drag = None;
+        let Some(state) = session.placement_direction() else {
+            self.direction = None;
+
+            return GizmoResponse::default();
+        };
+        let coord = self.placement_coord().or(coord);
+        let origin = coord.map(|coord| tile_center_origin(camera, viewport.min, coord, session.options.tile_size));
+        let target = DirectionTarget {
+            id: DirectionGestureTarget::Placement,
+            state,
+        };
+        let was_direction_active = self.update_direction(ui, session, target, origin, coord, viewport);
+        let state = session.placement_direction().unwrap_or(state);
+        let open_wheel = self.direction.and_then(|gesture| match gesture.phase {
+            DirectionPhase::Open {
+                origin, last_hovered, ..
+            } => Some((origin, gesture.set, last_hovered)),
+            DirectionPhase::Pending => None,
+        });
+
+        if let Some((wheel_origin, set, hovered_direction)) = open_wheel {
+            if hovered_direction.is_some() {
+                ui.set_mouse_cursor(Some(MouseCursor::Hand));
+            }
+            draw_direction_wheel(
+                ui,
+                wheel_origin,
+                viewport.min,
+                viewport.max,
+                set,
+                current_direction(state, set),
+                hovered_direction,
+            );
+        }
+
+        GizmoResponse {
+            captures_mouse: was_direction_active || self.direction.is_some(),
+        }
+    }
+
+    fn update_direction(
+        &mut self, ui: &Ui, session: &mut Session, target: DirectionTarget, origin: Option<[f32; 2]>,
+        placement_coord: Option<Coord>, viewport: GizmoViewport,
+    ) -> bool {
+        if self.direction.is_some_and(|gesture| gesture.target != target.id) {
+            self.direction = None;
+        }
+        if self.direction.is_none()
+            && self.drag.is_none()
+            && viewport.hovered
+            && ui.is_key_pressed_with_repeat(Key::R, false)
+            && origin.is_some()
+            && let Some(set) = direction_set(target.state.dmi_directions, target.state.directional_types)
+        {
+            self.direction = Some(DirectionGesture {
+                target: target.id,
+                placement_coord,
+                pressed_at: ui.time(),
+                set,
+                phase: DirectionPhase::Pending,
+            });
+        }
+        let was_direction_active = self.direction.is_some();
+        let key_down = ui.is_key_down(Key::R);
+        let key_released = ui.is_key_released(Key::R);
+        let mut requested_direction = None;
+
+        if let Some(mut gesture) = self.direction {
+            if matches!(gesture.phase, DirectionPhase::Pending) {
+                match pending_direction_outcome(gesture.pressed_at, ui.time(), key_down, key_released) {
+                    PendingDirectionOutcome::Pending => {},
+                    PendingDirectionOutcome::Open => {
+                        if let Some(origin) = origin {
+                            gesture.phase = DirectionPhase::Open {
+                                origin,
+                                group: EditGroupId::new(),
+                                last_hovered: None,
+                            };
+                        } else {
+                            self.direction = None;
+                        }
+                    },
+                    PendingDirectionOutcome::Tap => {
+                        requested_direction =
+                            next_clockwise_direction(gesture.set, current_direction(target.state, gesture.set))
+                                .map(|direction| (direction, None));
+                        self.direction = None;
+                    },
+                    PendingDirectionOutcome::Cancel => self.direction = None,
+                }
+            }
+
+            if let DirectionPhase::Open {
+                origin,
+                group,
+                mut last_hovered,
+            } = gesture.phase
+            {
+                if key_released || !key_down {
+                    self.direction = None;
+                } else {
+                    let hovered = direction_at(ui.io().mouse_pos(), origin, viewport.min, viewport.max, gesture.set);
+                    if hovered != last_hovered {
+                        last_hovered = hovered;
+                        if let Some(direction) = hovered
+                            && current_direction(target.state, gesture.set) != Some(direction)
+                        {
+                            requested_direction = Some((direction, Some(group)));
+                        }
+                    }
+                    gesture.phase = DirectionPhase::Open {
+                        origin,
+                        group,
+                        last_hovered,
+                    };
+                    self.direction = Some(gesture);
+                }
+            } else if self.direction.is_some() {
+                self.direction = Some(gesture);
+            }
+        }
+
+        if let Some((direction, group)) = requested_direction {
+            apply_direction(session, target, direction, group);
+        }
+
+        was_direction_active
     }
 }
 
@@ -445,6 +531,17 @@ fn direction_set(dmi_directions: Option<u32>, directional_types: Option<Directio
     (set.len() > 1).then_some(set)
 }
 
+fn selected_direction_target(target: SelectedTransform) -> DirectionTarget {
+    DirectionTarget {
+        id: DirectionGestureTarget::Selection(target.selected),
+        state: DirectionState {
+            dir: target.dir,
+            dmi_directions: target.dmi_directions,
+            directional_types: target.directional_types,
+        },
+    }
+}
+
 fn clockwise_index(direction: Dir) -> usize {
     CLOCKWISE_DIRECTIONS
         .iter()
@@ -459,11 +556,11 @@ const fn is_diagonal(direction: Dir) -> bool {
     )
 }
 
-fn current_direction(target: SelectedTransform, set: DirectionSet) -> Option<Dir> {
-    target
+fn current_direction(state: DirectionState, set: DirectionSet) -> Option<Dir> {
+    state
         .directional_types
         .and_then(|types| types.current)
-        .or_else(|| Dir::from_bits(target.dir))
+        .or_else(|| Dir::from_bits(state.dir))
         .filter(|direction| set.contains(*direction))
 }
 
@@ -496,11 +593,17 @@ fn pending_direction_outcome(pressed_at: f64, now: f64, key_down: bool, key_rele
     }
 }
 
-fn apply_direction(session: &mut Session, target: SelectedTransform, direction: Dir, group: Option<EditGroupId>) {
-    if target.directional_types.is_some() {
-        session.set_selected_directional_type(direction, group);
-    } else {
-        session.edit_selected_instance_vars("set dir", &[direction_mutation(direction)], group);
+fn apply_direction(session: &mut Session, target: DirectionTarget, direction: Dir, group: Option<EditGroupId>) {
+    match target.id {
+        DirectionGestureTarget::Selection(_) if target.state.directional_types.is_some() => {
+            session.set_selected_directional_type(direction, group);
+        },
+        DirectionGestureTarget::Selection(_) => {
+            session.edit_selected_instance_vars("set dir", &[direction_mutation(direction)], group);
+        },
+        DirectionGestureTarget::Placement => {
+            session.set_placement_direction(direction);
+        },
     }
 }
 

@@ -65,6 +65,8 @@ impl TextureCatalog {
 
     pub fn textures(&self) -> &[TextureData] { &self.textures }
 
+    pub fn texture(&self, index: u32) -> Option<&TextureData> { self.textures.get(usize::try_from(index).ok()?) }
+
     pub fn cell_count(&self) -> usize { self.cell_count }
 
     pub fn decoded_bytes(&self) -> usize {
@@ -256,6 +258,8 @@ mod tests {
         let texture = catalog.textures().first().expect("sheet texture");
         assert_eq!(texture.path(), PathBuf::from("test.dmi"));
         assert_eq!((texture.width(), texture.height()), (4, 2));
+        assert_eq!(catalog.texture(0), Some(texture));
+        assert_eq!(catalog.texture(1), None);
         assert_eq!(texture.decoded_bytes(), 32);
         assert_eq!(catalog.decoded_bytes(), 32);
     }

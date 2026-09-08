@@ -343,6 +343,12 @@ impl MapDocument {
         self.clear_stale_instance_selection();
     }
 
+    pub fn apply_grouped(&mut self, edit: Edit, group: Option<EditGroupId>) {
+        self.history
+            .apply_grouped(&mut self.map, &mut self.instances, &mut self.key_usage, edit, group);
+        self.clear_stale_instance_selection();
+    }
+
     pub fn undo(&mut self) -> bool {
         let changed = self
             .history

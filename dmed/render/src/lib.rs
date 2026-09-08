@@ -26,11 +26,18 @@ impl VisibilityId {
     pub const fn sprite_index(self) -> usize { self.get() as usize - 1 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlacementFlash {
+    pub owner: PrefabInstanceId,
+    pub strength: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ViewportInteraction {
     pub cursor: Option<[u32; 2]>,
     pub hovered_area: Option<PrefabInstanceId>,
     pub selected: Option<PrefabInstanceId>,
+    pub placement_flash: Option<PlacementFlash>,
     pub pick: bool,
 }
 

@@ -13,7 +13,14 @@ mod ui;
 
 use std::{path::PathBuf, process::ExitCode, sync::Arc};
 
-use dear_imgui_rs::{BackendFlags, ConfigFlags, Context, render::SynchronousRendererConsumer};
+use dear_imgui_rs::{
+    BackendFlags,
+    ConfigFlags,
+    Context,
+    FontSource,
+    StbTrueTypeFontData,
+    render::SynchronousRendererConsumer,
+};
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use render::{Device, PickResult, Renderer};
@@ -26,6 +33,9 @@ use winit::{
 };
 
 use crate::{camera::Controller, session::Session, ui::UiState};
+
+const FONT_DATA: &[u8] = include_bytes!("../assets/FiraMono-Regular.ttf");
+const MDI_FONT_DATA: &[u8] = include_bytes!("../assets/materialdesignicons-webfont.ttf");
 
 fn usage() -> ExitCode {
     eprintln!("usage: dmede <file.dme> [file.dmm] [z]");
@@ -168,6 +178,13 @@ impl App {
         let device = Device::new(window.window_handle()?.as_raw(), window.display_handle()?.as_raw())?;
 
         let mut imgui = Context::create();
+        let text_font = StbTrueTypeFontData::from_slice(FONT_DATA)?;
+        let mdi_font = StbTrueTypeFontData::from_slice(MDI_FONT_DATA)?;
+        imgui.font_atlas().add_font(&[
+            FontSource::stb_truetype_with_size(text_font, 16.0),
+            FontSource::stb_truetype_with_size(mdi_font, 16.0),
+        ]);
+
         imgui.set_ini_filename(Some("imgui.ini"))?;
         imgui.set_renderer_name(Some("dmed vir"))?;
         let config = imgui.io().config_flags() | ConfigFlags::DOCKING_ENABLE;

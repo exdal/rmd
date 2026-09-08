@@ -12,10 +12,11 @@ use editor::{
     command::EditGroupId,
     document::{MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
     frame::{self, FrameInstances, FrameOptions, PrefabUpdate},
+    tool::{Tool, ToolContext, is_placeable},
     visual,
 };
 use objtree::{ObjectTree, TypeId};
-use render::{Frame, FrameUpdate, SpriteInstance, texture::TextureCatalog};
+use render::{Frame, FrameUpdate, SpriteInstance, SpriteTexture, texture::TextureCatalog};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct SelectedTransform {
@@ -33,6 +34,27 @@ pub(crate) struct SelectedTransform {
 pub(crate) struct DirectionalTypes {
     pub supported: [bool; 8],
     pub current: Option<Dir>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DirectionState {
+    pub dir: u32,
+    pub dmi_directions: Option<u32>,
+    pub directional_types: Option<DirectionalTypes>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PrefabThumbnail {
+    pub texture: SpriteTexture,
+    pub uv0: [f32; 2],
+    pub uv1: [f32; 2],
+    pub tint: [f32; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PlacementPreview {
+    pub thumbnail: PrefabThumbnail,
+    pub offset: [i32; 2],
 }
 
 pub struct Session {
@@ -152,6 +174,132 @@ impl Session {
         self.state.active_document().and_then(MapDocument::selected_instance)
     }
 
+    pub fn tool(&self) -> Tool { self.state.tool }
+
+    pub fn set_tool(&mut self, tool: Tool) { self.state.tool = tool; }
+
+    pub fn palette(&self) -> Option<&Prefab> { self.state.palette.as_ref() }
+
+    pub fn recent_prefabs(&self) -> &[Prefab] { self.state.recent_prefabs() }
+
+    pub(crate) fn prefab_thumbnail(&self, prefab: &Prefab) -> Option<PrefabThumbnail> {
+        let environment = self.state.environment.as_ref()?;
+        let appearance = visual::resolve(&environment.tree, prefab);
+
+        self.prefab_thumbnail_for(environment, &appearance)
+    }
+
+    pub(crate) fn placement_preview(&self) -> Option<PlacementPreview> {
+        if self.tool() != Tool::Place {
+            return None;
+        }
+
+        let prefab = self.palette()?;
+        let environment = self.state.environment.as_ref()?;
+        let appearance = visual::resolve(&environment.tree, prefab);
+        let thumbnail = self.prefab_thumbnail_for(environment, &appearance)?;
+        let offset = [
+            appearance
+                .step_x
+                .saturating_add(appearance.pixel_x)
+                .saturating_add(appearance.pixel_w),
+            appearance
+                .step_y
+                .saturating_add(appearance.pixel_y)
+                .saturating_add(appearance.pixel_z),
+        ];
+
+        Some(PlacementPreview { thumbnail, offset })
+    }
+
+    fn prefab_thumbnail_for(
+        &self, environment: &Environment, appearance: &visual::Appearance,
+    ) -> Option<PrefabThumbnail> {
+        let texture = frame::sprite_texture(&environment.icons, &self.textures, appearance)?;
+        let sheet = self.textures.texture(texture.index)?;
+        let sheet_width = sheet.width() as f32;
+        let sheet_height = sheet.height() as f32;
+        let right = texture.source_position[0].checked_add(texture.width)?;
+        let bottom = texture.source_position[1].checked_add(texture.height)?;
+        let mut tint = appearance
+            .color
+            .as_deref()
+            .and_then(render::color::parse)
+            .unwrap_or([1.0; 4]);
+        tint[3] *= f32::from(appearance.alpha) / 255.0;
+
+        Some(PrefabThumbnail {
+            texture,
+            uv0: [
+                texture.source_position[0] as f32 / sheet_width,
+                texture.source_position[1] as f32 / sheet_height,
+            ],
+            uv1: [right as f32 / sheet_width, bottom as f32 / sheet_height],
+            tint,
+        })
+    }
+
+    pub fn choose_type(&mut self, selected: TypeId) -> bool {
+        let prefab = self.state.environment.as_ref().and_then(|environment| {
+            is_placeable(&environment.tree, selected)
+                .then(|| environment.tree.get(selected))
+                .flatten()
+                .map(|declaration| Prefab::new(TreePath::parse(&declaration.path.to_string())))
+        });
+        let Some(prefab) = prefab else {
+            return false;
+        };
+
+        self.state.choose_prefab(prefab);
+        self.state.tool = Tool::Place;
+
+        true
+    }
+
+    pub fn choose_recent(&mut self, index: usize) -> bool {
+        if !self.state.choose_recent(index) {
+            return false;
+        }
+        self.state.tool = Tool::Place;
+
+        true
+    }
+
+    pub fn place_at(&mut self, coord: Coord, group: Option<EditGroupId>) -> Option<PrefabInstanceId> {
+        if self.state.tool != Tool::Place {
+            return None;
+        }
+        let prefab = self.state.palette.clone()?;
+        let action = {
+            let environment = self.state.environment.as_ref()?;
+            let active = self.state.active?;
+            let document = self.state.documents.get_mut(active)?;
+
+            Tool::Place.build_edit(&mut ToolContext {
+                document,
+                tree: &environment.tree,
+                prefab: Some(&prefab),
+                coord,
+                anchor: None,
+            })
+        }?;
+        let selected = action.selected;
+        let affected = action.affected;
+        if let Some(document) = self.state.active_document_mut() {
+            document.apply_grouped(action.edit, group);
+            document.select_instance(Some(selected));
+        }
+        self.state.choose_prefab(prefab);
+
+        if affected.len() == 1 {
+            self.update_instance(affected[0]);
+        } else {
+            self.rebuild_instances();
+        }
+
+        Some(selected)
+    }
+
     pub fn selected_prefab(&self) -> Option<&Prefab> {
         let document = self.state.active_document()?;
         let selected = document.selected_instance()?;
@@ -175,6 +323,19 @@ impl Session {
         directional_types_for(&environment.tree, id)
     }
 
+    pub(crate) fn placement_direction(&self) -> Option<DirectionState> {
+        if self.tool() != Tool::Place {
+            return None;
+        }
+
+        let environment = self.state.environment.as_ref()?;
+        let prefab = self.palette()?;
+        let id = environment.tree.id_of(&prefab.path)?;
+        let appearance = visual::resolve_id(&environment.tree, id, prefab);
+
+        Some(direction_state(environment, id, &appearance))
+    }
+
     pub(crate) fn selected_transform(&self) -> Option<SelectedTransform> {
         let environment = self.state.environment.as_ref()?;
         let document = self.state.active_document()?;
@@ -192,13 +353,7 @@ impl Session {
             .roots()
             .movable
             .is_some_and(|movable| environment.tree.is_subtype_of(id, movable));
-        let dmi_directions = appearance
-            .icon
-            .as_deref()
-            .and_then(|icon| environment.icon(icon))
-            .and_then(|metadata| metadata.find(appearance.icon_state.as_deref().unwrap_or_default()))
-            .map(|state| state.dirs);
-        let directional_types = directional_types_for(&environment.tree, id);
+        let direction = direction_state(environment, id, &appearance);
 
         Some(SelectedTransform {
             selected,
@@ -206,9 +361,9 @@ impl Session {
             pixel: [appearance.pixel_x, appearance.pixel_y],
             step: [appearance.step_x, appearance.step_y],
             is_movable,
-            dir: appearance.dir,
-            dmi_directions,
-            directional_types,
+            dir: direction.dir,
+            dmi_directions: direction.dmi_directions,
+            directional_types: direction.directional_types,
         })
     }
 
@@ -217,8 +372,16 @@ impl Session {
     }
 
     pub fn select_instance(&mut self, selected: Option<PrefabInstanceId>) {
+        let prefab = self.state.active_document().and_then(|document| {
+            let selected = selected?;
+
+            document.prefab_instance(selected).map(|(prefab, _)| prefab.clone())
+        });
         if let Some(document) = self.state.active_document_mut() {
             document.select_instance(selected);
+        }
+        if let Some(prefab) = prefab {
+            self.state.choose_prefab(prefab);
         }
     }
 
@@ -267,6 +430,31 @@ impl Session {
         }
 
         Some(changed)
+    }
+
+    pub(crate) fn set_placement_direction(&mut self, direction: Dir) -> Option<bool> {
+        if self.tool() != Tool::Place {
+            return None;
+        }
+
+        let mut prefab = self.palette()?.clone();
+        let id = self.state.environment.as_ref()?.tree.id_of(&prefab.path)?;
+        let directional = self
+            .state
+            .environment
+            .as_ref()
+            .and_then(|environment| directional_types_for(&environment.tree, id))
+            .is_some();
+
+        if directional {
+            let environment = self.state.environment.as_ref()?;
+            prefab.path = directional_type_target(&environment.tree, id, direction)?;
+            prefab.remove_var(&Identifier::from("dir"));
+        } else {
+            prefab.set_var(Identifier::from("dir"), Value::Num(direction.to_bits() as f32));
+        }
+
+        Some(self.state.replace_palette(prefab))
     }
 
     pub fn move_selected_instance(
@@ -380,6 +568,21 @@ impl Session {
             },
             PrefabUpdate::Rebuild => self.rebuild_instances(),
         }
+    }
+}
+
+fn direction_state(environment: &Environment, id: TypeId, appearance: &visual::Appearance) -> DirectionState {
+    let dmi_directions = appearance
+        .icon
+        .as_deref()
+        .and_then(|icon| environment.icon(icon))
+        .and_then(|metadata| metadata.find(appearance.icon_state.as_deref().unwrap_or_default()))
+        .map(|state| state.dirs);
+
+    DirectionState {
+        dir: appearance.dir,
+        dmi_directions,
+        directional_types: directional_types_for(&environment.tree, id),
     }
 }
 
@@ -526,8 +729,8 @@ mod tests {
     use std::path::PathBuf;
 
     use dmi::{IconFile, metadata::Dir};
-    use dmm::{Coord, Map, Size};
-    use editor::{Environment, document::MapDocument};
+    use dmm::{Coord, Map, Prefab, Size};
+    use editor::{Environment, command::EditGroupId, document::MapDocument, tool::Tool};
     use objtree::ObjectTree;
 
     use super::{Session, build_textures, directional_type_target, directional_types_for, validate_level};
@@ -581,6 +784,61 @@ mod tests {
     }
 
     #[test]
+    fn prefab_thumbnails_resolve_overrides_and_sheet_coordinates() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        let mut prefab = Prefab::new(TreePath::parse("/obj/structure/table"));
+        let inherited = session.prefab_thumbnail(&prefab).expect("inherited table thumbnail");
+
+        prefab.set_var("icon_state".into(), Value::Text(String::from("light")));
+        prefab.set_var("color".into(), Value::Text(String::from("#ff000080")));
+        prefab.set_var("alpha".into(), Value::Num(128.0));
+        let overridden = session.prefab_thumbnail(&prefab).expect("overridden light thumbnail");
+
+        assert_eq!(inherited.texture.width, 32);
+        assert_eq!(inherited.texture.height, 32);
+        assert_ne!(inherited.uv0, overridden.uv0);
+        assert_ne!(inherited.uv1, overridden.uv1);
+        assert_eq!(overridden.tint[0..3], [1.0, 0.0, 0.0]);
+        assert!((overridden.tint[3] - (128.0 / 255.0) * (128.0 / 255.0)).abs() < f32::EPSILON);
+        assert!(
+            session
+                .prefab_thumbnail(&Prefab::new(TreePath::parse("/area/station")))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn placement_previews_require_place_mode_and_preserve_visual_offsets() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        let mut prefab = Prefab::new(TreePath::parse("/obj/structure/table"));
+        prefab.set_var("step_x".into(), Value::Num(-2.0));
+        prefab.set_var("pixel_x".into(), Value::Num(5.0));
+        prefab.set_var("pixel_w".into(), Value::Num(1.0));
+        prefab.set_var("step_y".into(), Value::Num(3.0));
+        prefab.set_var("pixel_y".into(), Value::Num(-4.0));
+        prefab.set_var("pixel_z".into(), Value::Num(2.0));
+
+        assert!(session.placement_preview().is_none());
+        session.state.choose_prefab(prefab.clone());
+        assert!(session.placement_preview().is_none());
+
+        session.set_tool(Tool::Place);
+        let preview = session.placement_preview().expect("resolved placement preview");
+
+        assert_eq!(preview.thumbnail, session.prefab_thumbnail(&prefab).unwrap());
+        assert_eq!(preview.offset, [4, 1]);
+
+        session
+            .state
+            .choose_prefab(Prefab::new(TreePath::parse("/obj/unresolved")));
+        assert!(session.placement_preview().is_none());
+    }
+
+    #[test]
     fn directional_type_groups_are_discovered_from_base_group_and_direction_paths() {
         let mut tree = ObjectTree::new();
         let base = tree.register(&TreePath::parse("/obj/alarm"), Location::default());
@@ -612,6 +870,38 @@ mod tests {
     }
 
     #[test]
+    fn placement_rotation_replaces_directional_paths_in_one_recent_slot() {
+        let mut tree = ObjectTree::new();
+        tree.register(&TreePath::parse("/obj/alarm/directional/north"), Location::default());
+        tree.register(&TreePath::parse("/obj/alarm/directional/east"), Location::default());
+        let mut session = Session::new();
+        session.state.environment = Some(Environment::new(".", tree));
+        let mut prefab = Prefab::new(TreePath::parse("/obj/alarm/directional/north"));
+        prefab.set_var("dir".into(), Value::Num(Dir::South.to_bits() as f32));
+        session.state.choose_prefab(prefab);
+        session.set_tool(Tool::Place);
+
+        let before = session.placement_direction().unwrap();
+        assert_eq!(before.directional_types.unwrap().current, Some(Dir::North));
+        assert_eq!(session.set_placement_direction(Dir::East), Some(true));
+
+        let rotated = session.palette().unwrap();
+        assert_eq!(rotated.path, TreePath::parse("/obj/alarm/directional/east"));
+        assert_eq!(rotated.var(&"dir".into()), None);
+        assert_eq!(session.recent_prefabs(), std::slice::from_ref(rotated));
+        assert_eq!(
+            session
+                .placement_direction()
+                .unwrap()
+                .directional_types
+                .unwrap()
+                .current,
+            Some(Dir::East)
+        );
+        assert_eq!(session.set_placement_direction(Dir::East), Some(false));
+    }
+
+    #[test]
     fn view_changes_do_not_change_the_sprite_revision() {
         let mut session = Session::new();
         session
@@ -623,7 +913,7 @@ mod tests {
         session.set_underlay_depth(1);
         session.toggle_areas();
         assert!(session.options.show_areas);
-        assert!(!session.options.show_area_outlines);
+        assert!(session.options.show_area_outlines);
         session.toggle_area_outlines();
 
         let frame = session.frame(Default::default());
@@ -631,7 +921,7 @@ mod tests {
         assert_eq!(frame.active_z, 2);
         assert_eq!(frame.underlay_depth, 1);
         assert!(frame.show_areas);
-        assert!(frame.show_area_outlines);
+        assert!(!frame.show_area_outlines);
     }
 
     #[test]
@@ -748,5 +1038,128 @@ mod tests {
         assert_eq!(update.previous_revision, revision);
         assert!(update.sprites.is_some());
         assert!(update.area_tiles.is_none());
+    }
+
+    #[test]
+    fn tree_choices_place_new_objects_incrementally_and_select_them() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        session.open_map(&root.join("test.dmm"), 1).unwrap();
+        let table = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/structure/table"))
+            .unwrap();
+        let coord = Coord::new(2, 2, 1);
+        let before_len = session.map().unwrap().tile_at(coord).unwrap().len();
+        let revision = session.revision;
+
+        assert_eq!(session.place_at(coord, None), None);
+        assert!(session.choose_type(table));
+        assert_eq!(session.tool(), Tool::Place);
+        let selected = session.place_at(coord, None).unwrap();
+
+        assert_eq!(session.selected_instance(), Some(selected));
+        assert_eq!(session.map().unwrap().tile_at(coord).unwrap().len(), before_len + 1);
+        assert_eq!(
+            session.selected_prefab().unwrap().path,
+            TreePath::parse("/obj/structure/table")
+        );
+        assert_eq!(session.recent_prefabs()[0], *session.selected_prefab().unwrap());
+        assert!(session.instances.sprite(selected).is_some());
+        assert_eq!(session.revision, revision.wrapping_add(1));
+        assert_eq!(session.frame_update.unwrap().previous_revision, revision);
+    }
+
+    #[test]
+    fn grouped_placements_are_undone_and_redone_as_one_stroke() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        session.open_map(&root.join("test.dmm"), 1).unwrap();
+        let table = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/structure/table"))
+            .unwrap();
+        let first = Coord::new(2, 2, 1);
+        let second = Coord::new(3, 2, 1);
+        let first_before = session.state.active_document().unwrap().placed_tile(first).unwrap();
+        let second_before = session.state.active_document().unwrap().placed_tile(second).unwrap();
+
+        assert!(session.choose_type(table));
+        let group = EditGroupId::new();
+        session.place_at(first, Some(group)).unwrap();
+        session.place_at(second, Some(group)).unwrap();
+        let first_after = session.state.active_document().unwrap().placed_tile(first).unwrap();
+        let second_after = session.state.active_document().unwrap().placed_tile(second).unwrap();
+
+        let document = session.state.active_document_mut().unwrap();
+        assert!(document.undo());
+        assert_eq!(document.placed_tile(first), Some(first_before));
+        assert_eq!(document.placed_tile(second), Some(second_before));
+        assert!(!document.undo());
+
+        assert!(document.redo());
+        assert_eq!(document.placed_tile(first), Some(first_after));
+        assert_eq!(document.placed_tile(second), Some(second_after));
+        assert!(!document.redo());
+    }
+
+    #[test]
+    fn turf_placement_reuses_the_existing_id_and_picks_preserve_overrides() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        session.open_map(&root.join("test.dmm"), 1).unwrap();
+        let coord = Coord::new(2, 2, 1);
+        let turf_root = session.tree().unwrap().roots().turf.unwrap();
+        let turf_id = session
+            .state
+            .active_document()
+            .unwrap()
+            .map
+            .tile_at(coord)
+            .unwrap()
+            .iter()
+            .zip(session.state.active_document().unwrap().instance_ids_at(coord))
+            .find_map(|(prefab, id)| {
+                let candidate = session.tree().unwrap().id_of(&prefab.path)?;
+
+                session
+                    .tree()
+                    .unwrap()
+                    .is_subtype_of(candidate, turf_root)
+                    .then_some(*id)
+            })
+            .unwrap();
+        let wall = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/turf/closed/wall"))
+            .unwrap();
+
+        assert!(session.choose_type(wall));
+        assert_eq!(session.place_at(coord, None), Some(turf_id));
+        assert_eq!(session.place_at(coord, None), None);
+        assert_eq!(session.selected_instance(), Some(turf_id));
+        assert_eq!(
+            session.selected_prefab().unwrap().path,
+            TreePath::parse("/turf/closed/wall")
+        );
+
+        assert_eq!(
+            session.set_selected_instance_var("name".into(), Value::Text("custom wall".into())),
+            Some(true)
+        );
+        session.set_tool(Tool::Select);
+        session.select_instance(Some(turf_id));
+        assert_eq!(session.tool(), Tool::Select);
+        assert_eq!(
+            session.palette().unwrap().var(&"name".into()),
+            Some(&Value::Text("custom wall".into()))
+        );
+        assert_eq!(session.recent_prefabs().len(), 2);
     }
 }

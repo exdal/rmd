@@ -46,7 +46,7 @@ use vir::{
     allocator::Allocator,
 };
 
-use crate::{device::Device, error::GpuError, read_spirv};
+use crate::{device::Device, error::GpuError, read_spirv, renderer::TextureImage};
 
 const VERTEX_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/imgui.vert.spv"));
 const FRAGMENT_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/imgui.frag.spv"));
@@ -55,6 +55,16 @@ const TEXTURE_RESTING: Access = Access::FragmentSampled;
 pub const VIEWPORT_TEXTURE: TextureId = TextureId::new(1);
 
 const FIRST_MINTED_TEXTURE: u64 = 2;
+const SPRITE_TEXTURE_TAG: u64 = 1 << 63;
+
+pub const fn sprite_texture(index: u32) -> TextureId { TextureId::new(SPRITE_TEXTURE_TAG | index as u64) }
+
+fn sprite_texture_index(texture: TextureId) -> Option<usize> {
+    let raw = texture.id();
+    let index = raw & !SPRITE_TEXTURE_TAG;
+
+    (raw & SPRITE_TEXTURE_TAG != 0 && index <= u32::MAX as u64).then_some(index as usize)
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -255,8 +265,8 @@ impl ImGuiPass {
         );
     }
 
-    pub fn prepare(
-        &self, allocator: &mut FrameAllocator, data: &DrawData, target: vk::Extent2D,
+    pub(crate) fn prepare(
+        &self, allocator: &mut FrameAllocator, data: &DrawData, target: vk::Extent2D, sprite_textures: &[TextureImage],
     ) -> Result<ImGuiFrame, GpuError> {
         if data.requirements().requires_raw_callback_support() {
             return Err(GpuError::RawDrawCallback);
@@ -294,14 +304,20 @@ impl ImGuiPass {
                             continue;
                         }
 
-                        let source = if cmd_params.texture_id == VIEWPORT_TEXTURE {
-                            Source::Viewport
+                        let (source, draw_sampler) = if cmd_params.texture_id == VIEWPORT_TEXTURE {
+                            (Source::Viewport, sampler)
+                        } else if let Some(index) = sprite_texture_index(cmd_params.texture_id) {
+                            let Some(texture) = sprite_textures.get(index) else {
+                                return Err(GpuError::UnknownTexture(cmd_params.texture_id.id()));
+                            };
+
+                            (Source::Owned(texture.attachment(TEXTURE_RESTING.into())), self.nearest)
                         } else {
                             let Some(texture) = self.textures.get(&cmd_params.texture_id) else {
                                 return Err(GpuError::UnknownTexture(cmd_params.texture_id.id()));
                             };
 
-                            Source::Owned(texture.attachment(TEXTURE_RESTING.into()))
+                            (Source::Owned(texture.attachment(TEXTURE_RESTING.into())), sampler)
                         };
 
                         if !appended {
@@ -319,7 +335,7 @@ impl ImGuiPass {
                         draws.push(MeshDraw {
                             clip,
                             source,
-                            sampler,
+                            sampler: draw_sampler,
                             index_offset: indices.len() as u32,
                             index_count: count as u32,
                             vertex_offset: (vertex_offset + cmd_params.vtx_offset) as i32,
@@ -518,9 +534,11 @@ impl ImGuiPass {
         &mut self, device: &mut Device, snapshot: SnapshotTextureId, extent: vk::Extent2D, format: TextureFormat,
         discarded: &mut Vec<Texture>,
     ) -> Result<TextureId, GpuError> {
-        let next = self.next_texture.checked_add(1).ok_or(GpuError::TextureIdExhausted)?;
         let id = TextureId::new(self.next_texture);
-        self.next_texture = next;
+        if sprite_texture_index(id).is_some() {
+            return Err(GpuError::TextureIdExhausted);
+        }
+        self.next_texture = self.next_texture.checked_add(1).ok_or(GpuError::TextureIdExhausted)?;
 
         let info = ImageInfo::texture(extent, TEXTURE_FORMAT).with_name(format!("imgui texture {}", id.id()));
         let image = device.allocator.allocate_image(&info)?;
@@ -772,6 +790,24 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn sprite_texture_ids_round_trip_without_using_ui_texture_ids() {
+        for index in [0, 1, u32::MAX] {
+            let texture = sprite_texture(index);
+
+            assert_eq!(sprite_texture_index(texture), Some(index as usize));
+            assert_ne!(texture, VIEWPORT_TEXTURE);
+            assert!(texture.id() >= SPRITE_TEXTURE_TAG);
+        }
+
+        assert_eq!(sprite_texture_index(TextureId::new(0)), None);
+        assert_eq!(sprite_texture_index(TextureId::new(FIRST_MINTED_TEXTURE)), None);
+        assert_eq!(
+            sprite_texture_index(TextureId::new(SPRITE_TEXTURE_TAG | (1 << 32))),
+            None
+        );
+    }
 
     fn reflect(spirv: &[u8]) -> shader::Reflection {
         shader::reflect(&read_spirv(spirv).expect("valid spirv")).expect("shader reflects")

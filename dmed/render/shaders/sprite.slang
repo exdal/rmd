@@ -12,6 +12,7 @@ struct VSOutput {
     f32x2 uv;
     f32x2 local;
     nointerpolation u32 sprite_id;
+    nointerpolation f32 placement_flash_strength;
 };
 
 static const f32x2 CORNERS[4] = {
@@ -30,7 +31,9 @@ func vs_main(
     uniform f32 zoom,
     uniform u32 base,
     uniform u32 show_areas,
-    uniform u32 show_area_outlines
+    uniform u32 show_area_outlines,
+    uniform u32x2 placement_flash_owner,
+    uniform f32 placement_flash_strength
 ) -> VSOutput {
     let sprite_index = instance_id + base;
     let sprite = sprites[sprite_index];
@@ -52,8 +55,17 @@ func vs_main(
     let hidden = (is_area_outline && show_area_outlines == 0) ||
         (is_area && !is_area_outline && show_areas == 0);
     output.sprite_id = hidden ? 0 : sprite_index + 1;
+    output.placement_flash_strength = all(sprite.owner == placement_flash_owner)
+        ? saturate(placement_flash_strength)
+        : 0.0;
 
     return output;
+}
+
+func apply_placement_flash(f32x4 color, f32 strength) -> f32x4 {
+    let green = f32x4(0.0, color.a, 0.0, color.a);
+
+    return lerp(color, green, strength);
 }
 
 func sample_sprite(VSOutput input) -> f32x4 {
@@ -75,7 +87,7 @@ func sample_sprite(VSOutput input) -> f32x4 {
             discard;
         }
 
-        return color;
+        return apply_placement_flash(color, input.placement_flash_strength);
     }
 
     let texture_index = NonUniformResourceIndex(sprite.texture());
@@ -90,7 +102,7 @@ func sample_sprite(VSOutput input) -> f32x4 {
         discard;
     }
 
-    return shaded;
+    return apply_placement_flash(shaded, input.placement_flash_strength);
 }
 
 [shader("fragment")]

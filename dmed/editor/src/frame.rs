@@ -51,6 +51,7 @@ pub struct FrameInstances {
     sprite_ranges: HashMap<PrefabInstanceId, UpdateRange>,
     area_tile_indices: HashMap<PrefabInstanceId, usize>,
     placement_orders: HashMap<PrefabInstanceId, usize>,
+    next_placement_order: usize,
     placements: HashMap<PrefabInstanceId, CachedPlacement>,
     area_owners_by_coord: HashMap<Coord, Vec<PrefabInstanceId>>,
 }
@@ -95,7 +96,7 @@ impl Default for FrameOptions {
     fn default() -> Self {
         Self {
             show_areas: false,
-            show_area_outlines: false,
+            show_area_outlines: true,
             tile_size: 32,
             underlay_depth: 3,
         }
@@ -154,6 +155,7 @@ pub fn build(
     let mut area_owners_by_coord = HashMap::<Coord, Vec<PrefabInstanceId>>::new();
     let area = tree.roots().area;
     let map = &document.map;
+    let mut order = 0usize;
     let render = RenderContext {
         tree,
         icons,
@@ -164,8 +166,6 @@ pub fn build(
     };
 
     for z in 1..=map.size.z.max(1) {
-        let mut order = 0usize;
-
         for y in (1..=map.size.y).rev() {
             for x in 1..=map.size.x {
                 let Some(tile) = map.tile_at(Coord::new(x, y, z)) else {
@@ -213,6 +213,7 @@ pub fn build(
         sprite_ranges: HashMap::new(),
         area_tile_indices,
         placement_orders,
+        next_placement_order: order.saturating_add(1),
         placements,
         area_owners_by_coord,
     };
@@ -233,7 +234,9 @@ pub fn update_prefab(
         Some((prefab, location, id, is_area))
     });
     if old.is_none() && current.is_some() {
-        return PrefabUpdate::Rebuild;
+        let order = instances.next_placement_order;
+        instances.next_placement_order = instances.next_placement_order.saturating_add(1);
+        instances.placement_orders.insert(owner, order);
     }
     if old.is_none() && current.is_none() {
         return PrefabUpdate::Unchanged;
@@ -610,7 +613,7 @@ fn same_area(left: &Prefab, right: &Prefab) -> bool {
             .all(|(name, value)| right.var(name).is_some_and(|other| other == &value.value))
 }
 
-fn sprite_texture(
+pub fn sprite_texture(
     icons: &HashMap<String, Metadata>, textures: &TextureCatalog, appearance: &Appearance,
 ) -> Option<SpriteTexture> {
     let icon = appearance.icon.as_deref()?;
@@ -633,7 +636,7 @@ mod tests {
 
     use dmi::{
         IconFile,
-        metadata::{IconState, Metadata},
+        metadata::{Dir, IconState, Metadata},
     };
     use dmm::{Map, Prefab, Size};
     use objtree::{ObjectTree, VarDecl};
@@ -957,6 +960,42 @@ mod tests {
             textures(&["floor", "table"]).lookup(ICON, 1).unwrap()
         );
         assert_eq!([sprites[0].owner, sprites[1].owner], [owners[1], owners[0]]);
+    }
+
+    #[test]
+    fn sprite_textures_use_the_resolved_direction_and_first_frame() {
+        let metadata = Metadata {
+            version: String::from("4.0"),
+            width: 32,
+            height: 32,
+            states: vec![IconState {
+                name: String::from("animated"),
+                dirs: 4,
+                frames: 2,
+                ..Default::default()
+            }],
+        };
+        let file = IconFile {
+            path: PathBuf::from(ICON),
+            metadata: metadata.clone(),
+            sheet_width: 32 * 8,
+            sheet_height: 32,
+            pixels: vec![255; 32 * 8 * 32 * 4],
+        };
+        let icons = HashMap::from([(String::from(ICON), metadata)]);
+        let mut textures = TextureCatalog::new();
+        textures.insert(ICON, &file).expect("insert directional icon");
+        let appearance = Appearance {
+            icon: Some(String::from(ICON)),
+            icon_state: Some(String::from("animated")),
+            dir: Dir::East.to_bits(),
+            ..Default::default()
+        };
+
+        let texture = super::sprite_texture(&icons, &textures, &appearance).expect("east thumbnail");
+
+        assert_eq!(texture.source_position, [64, 0]);
+        assert_eq!(texture, textures.lookup(ICON, 2).unwrap());
     }
 
     #[test]
