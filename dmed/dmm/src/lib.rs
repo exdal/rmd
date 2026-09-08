@@ -7,9 +7,26 @@ use core::{
     path::TreePath,
     types::{Identifier, Value},
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, num::NonZeroU64};
 
 use crate::key::Key;
+
+/// Stable runtime identity for one prefab placement in a map document.
+///
+/// Placement IDs are editor state and are not serialized into DMM files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PrefabInstanceId(NonZeroU64);
+
+impl PrefabInstanceId {
+    pub const fn from_raw(raw: u64) -> Option<Self> {
+        match NonZeroU64::new(raw) {
+            Some(raw) => Some(Self(raw)),
+            None => None,
+        }
+    }
+
+    pub const fn get(self) -> u64 { self.0.get() }
+}
 
 /// DM counts `y` from the bottom
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

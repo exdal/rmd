@@ -11,8 +11,10 @@ use editor::{
 };
 use objtree::{ObjectTree, TypeId};
 
-use crate::session::{DirectionalTypes, Session};
-use crate::transform::anchor_axis;
+use crate::{
+    session::{DirectionalTypes, Session},
+    transform::anchor_axis,
+};
 
 const DISPLAY_PROPERTIES: &[&str] = &[
     "name",
@@ -854,9 +856,7 @@ fn transform_axis(mode: TransformMode, name: &Identifier) -> Option<usize> {
     }
 }
 
-fn commit_int_property(
-    session: &mut Session, mode: TransformMode, name: &Identifier, value: i32, group: EditGroupId,
-) {
+fn commit_int_property(session: &mut Session, mode: TransformMode, name: &Identifier, value: i32, group: EditGroupId) {
     let label = format!("change {name}");
     let mut committed = value;
     let mut to_coord = None;
@@ -869,7 +869,11 @@ fn commit_int_property(
             TransformMode::Pixel => transform.pixel[axis],
             TransformMode::Step => transform.step[axis],
         };
-        let anchor = if axis == 0 { transform.sprite.x } else { transform.sprite.y };
+        let anchor = if axis == 0 {
+            transform.sprite.x
+        } else {
+            transform.sprite.y
+        };
         let (origin, limit) = if axis == 0 {
             (location.coord.x, session.map().map_or(1, |map| map.size.x.max(1)))
         } else {
@@ -1063,15 +1067,9 @@ mod tests {
             direction_choices(8, Some(types)),
             [Dir::North, Dir::East, Dir::Northwest]
         );
-        assert_eq!(
-            selected_direction(Dir::South.to_bits(), Some(types)),
-            Some(Dir::North)
-        );
+        assert_eq!(selected_direction(Dir::South.to_bits(), Some(types)), Some(Dir::North));
         assert_eq!(direction_choices(4, None), Dir::ORDER[..4]);
-        assert_eq!(
-            selected_direction(Dir::South.to_bits(), None),
-            Some(Dir::South)
-        );
+        assert_eq!(selected_direction(Dir::South.to_bits(), None), Some(Dir::South));
     }
 
     #[test]

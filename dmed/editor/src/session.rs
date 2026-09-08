@@ -11,16 +11,11 @@ use editor::{
     Environment,
     command::EditGroupId,
     document::{MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
+    frame::{self, FrameInstances, FrameOptions, PrefabUpdate},
     visual,
 };
 use objtree::{ObjectTree, TypeId};
-use render::{
-    Frame,
-    FrameUpdate,
-    SpriteInstance,
-    frame::{FrameInstances, FrameOptions, PrefabUpdate},
-    texture::TextureCatalog,
-};
+use render::{Frame, FrameUpdate, SpriteInstance, texture::TextureCatalog};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct SelectedTransform {
@@ -90,7 +85,7 @@ impl Session {
             .environment
             .as_ref()
             .map_or_else(FrameInstances::default, |environment| {
-                render::frame::build(
+                frame::build(
                     &environment.tree,
                     &environment.icons,
                     &self.textures,
@@ -342,7 +337,7 @@ impl Session {
 
     fn rebuild_instances(&mut self) {
         self.instances = match (self.state.environment.as_ref(), self.state.active_document()) {
-            (Some(environment), Some(document)) => render::frame::build(
+            (Some(environment), Some(document)) => frame::build(
                 &environment.tree,
                 &environment.icons,
                 &self.textures,
@@ -358,7 +353,7 @@ impl Session {
     fn update_instance(&mut self, selected: PrefabInstanceId) {
         let update = match (self.state.environment.as_ref(), self.state.active) {
             (Some(environment), Some(active)) => self.state.documents.get(active).map(|document| {
-                render::frame::update_prefab(
+                frame::update_prefab(
                     &mut self.instances,
                     &environment.tree,
                     &environment.icons,

@@ -69,8 +69,7 @@ mod tests {
             let before = [40.0, 80.0][axis];
             let origin_cell = [origin.x, origin.y][axis] as f32 - 1.0;
             let offset = before - origin_cell * 32.0 + anchored.adjust[axis] as f32;
-            let rendered =
-                ([anchored.coord.x, anchored.coord.y][axis] as f32 - 1.0) * 32.0 + offset;
+            let rendered = ([anchored.coord.x, anchored.coord.y][axis] as f32 - 1.0) * 32.0 + offset;
 
             assert_eq!(rendered, before);
         }

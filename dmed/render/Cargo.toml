@@ -7,10 +7,7 @@ edition = "2024"
 path = "src/lib.rs"
 
 [dependencies]
-core = { path = "../core" }
-objtree = { path = "../objtree" }
 dmm = { path = "../dmm" }
-editor = { path = "../editor" }
 dmi = { path = "../dmi" }
 
 vir = { git = "https://github.com/exdal/vir.git", package = "vir" }

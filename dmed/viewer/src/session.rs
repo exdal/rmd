@@ -2,8 +2,12 @@ use std::path::{Path, PathBuf};
 
 use dmi::IconFile;
 use dmm::Map;
-use editor::{Environment, document::MapDocument};
-use render::{Frame, SpriteInstance, frame::FrameOptions, texture::TextureCatalog};
+use editor::{
+    Environment,
+    document::MapDocument,
+    frame::{self, FrameOptions},
+};
+use render::{Frame, SpriteInstance, texture::TextureCatalog};
 
 pub struct Session {
     pub environment: Option<Environment>,
@@ -49,7 +53,7 @@ impl Session {
         let document = MapDocument::open(path, map, z);
 
         self.sprite_instances = self.environment.as_ref().map_or_else(Vec::new, |environment| {
-            render::frame::build(
+            frame::build(
                 &environment.tree,
                 &environment.icons,
                 &self.textures,

@@ -1,6 +1,7 @@
 use core::types::{Identifier, Value};
 use std::{collections::HashMap, path::PathBuf};
 
+pub use dmm::PrefabInstanceId;
 use dmm::{Coord, Map, Prefab, key::Key};
 
 use crate::command::{Edit, EditGroupId, History};
@@ -14,13 +15,6 @@ pub struct MapDocument {
     selected_instance: Option<PrefabInstanceId>,
     instances: PrefabInstances,
     key_usage: HashMap<Key, usize>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PrefabInstanceId(u64);
-
-impl PrefabInstanceId {
-    pub const fn get(self) -> u64 { self.0 }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +76,7 @@ impl PrefabInstances {
     }
 
     pub(crate) fn allocate(&mut self) -> PrefabInstanceId {
-        let id = PrefabInstanceId(self.next_id);
+        let id = PrefabInstanceId::from_raw(self.next_id).expect("prefab instance IDs start at one");
         self.next_id = self.next_id.checked_add(1).expect("prefab instance ID space exhausted");
 
         id

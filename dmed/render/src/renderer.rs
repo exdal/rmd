@@ -208,12 +208,12 @@ pub struct Renderer {
     sprite_capacity: usize,
     area_tiles: Option<Buffer>,
     area_tile_capacity: usize,
-    area_tile_indices: HashMap<editor::document::PrefabInstanceId, u32>,
+    area_tile_indices: HashMap<dmm::PrefabInstanceId, u32>,
     pick_readback: Option<Buffer>,
     uploaded_revision: Option<u64>,
     uploaded_sprite_count: usize,
     uploaded_area_tile_count: usize,
-    uploaded_area_owners: Vec<editor::document::PrefabInstanceId>,
+    uploaded_area_owners: Vec<dmm::PrefabInstanceId>,
     ranges: Vec<LevelRange>,
     imgui: Option<ImGuiPass>,
     highlight_started_at: Instant,
@@ -1181,9 +1181,8 @@ fn valid_update_range(range: Option<crate::UpdateRange>, len: usize) -> bool {
 }
 
 fn patch_area_tile_indices(
-    indices: &mut HashMap<editor::document::PrefabInstanceId, u32>,
-    uploaded_owners: &mut Vec<editor::document::PrefabInstanceId>, area_tiles: &[SpriteInstance],
-    range: crate::UpdateRange,
+    indices: &mut HashMap<dmm::PrefabInstanceId, u32>, uploaded_owners: &mut Vec<dmm::PrefabInstanceId>,
+    area_tiles: &[SpriteInstance], range: crate::UpdateRange,
 ) -> Result<(), GpuError> {
     let old_len = uploaded_owners.len();
     for owner in uploaded_owners.iter().take(range.end.min(old_len)).skip(range.start) {
@@ -1258,7 +1257,7 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
     })
 }
 
-fn owner_words(owner: editor::document::PrefabInstanceId) -> [u32; 2] { split_owner(owner.get()) }
+fn owner_words(owner: dmm::PrefabInstanceId) -> [u32; 2] { split_owner(owner.get()) }
 
 fn split_owner(owner: u64) -> [u32; 2] { [owner as u32, (owner >> 32) as u32] }
 
@@ -1607,11 +1606,9 @@ fn batch_ranges(sizes: &[usize], budget: usize) -> Option<Vec<Range<usize>>> {
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
     use std::collections::HashMap;
 
-    use dmm::{Coord, Map, Prefab, Size};
-    use editor::document::{MapDocument, PrefabInstanceId};
+    use dmm::PrefabInstanceId;
     use vir::resource::shader;
 
     use super::{
@@ -1647,14 +1644,7 @@ mod tests {
     };
     use crate::{AREA_EDGE_EAST, AREA_EDGE_NORTH, GpuError, SpriteInstance, SpriteTexture, UpdateRange, read_spirv};
 
-    fn owner() -> PrefabInstanceId {
-        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
-        let key = map.intern_tile(vec![Prefab::new(TreePath::parse("/obj/test"))]);
-        map.grid[0][0][0] = key;
-        let document = MapDocument::new(map, 1);
-
-        document.instance_ids_at(Coord::new(1, 1, 1))[0]
-    }
+    fn owner() -> PrefabInstanceId { PrefabInstanceId::from_raw(1).expect("nonzero prefab instance ID") }
 
     fn sprite(z: u32) -> SpriteInstance {
         SpriteInstance {
@@ -1673,13 +1663,9 @@ mod tests {
     }
 
     fn owners(count: usize) -> Vec<PrefabInstanceId> {
-        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
-        let tile = (0..count).map(|_| Prefab::new(TreePath::parse("/area/test"))).collect();
-        let key = map.intern_tile(tile);
-        map.grid[0][0][0] = key;
-        let document = MapDocument::new(map, 1);
-
-        document.instance_ids_at(Coord::new(1, 1, 1)).to_vec()
+        (1..=count)
+            .map(|raw| PrefabInstanceId::from_raw(raw as u64).expect("nonzero prefab instance ID"))
+            .collect()
     }
 
     #[test]

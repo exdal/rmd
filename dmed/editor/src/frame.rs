@@ -2,21 +2,21 @@ use std::collections::{HashMap, HashSet};
 
 use dmi::metadata::{Dir, Metadata};
 use dmm::{Coord, Map, Prefab};
-use editor::{
-    document::{MapDocument, PrefabInstanceId},
-    visual::{self, Appearance},
-};
 use objtree::{ObjectTree, TypeId};
-
-use crate::{
+use render::{
     AREA_EDGE_EAST,
     AREA_EDGE_NORTH,
     AREA_EDGE_SOUTH,
     AREA_EDGE_WEST,
     SpriteInstance,
+    SpriteTexture,
     UpdateRange,
-    instance_for,
     texture::TextureCatalog,
+};
+
+use crate::{
+    document::{MapDocument, PrefabInstanceId},
+    visual::{self, Appearance},
 };
 
 type SpriteKey = (u32, i32, i32, usize);
@@ -99,6 +99,45 @@ impl Default for FrameOptions {
             tile_size: 32,
             underlay_depth: 3,
         }
+    }
+}
+
+/// Turn a resolved [`Appearance`] into a renderable sprite instance.
+///
+/// An icon wider or taller than `tile_size` is anchored to the tile's bottom left and grows up and
+/// to the right, the way BYOND draws one, so `pixel_x = -16` is what centres a 64 wide icon.
+pub fn instance_for(
+    owner: PrefabInstanceId, appearance: &Appearance, texture: SpriteTexture, tile: Coord, tile_size: u32,
+    is_area: bool,
+) -> SpriteInstance {
+    let alpha = f32::from(appearance.alpha) / 255.0;
+    let tint = appearance
+        .color
+        .as_deref()
+        .and_then(render::color::parse)
+        .unwrap_or([1.0; 4]);
+    let alpha = alpha * tint[3];
+    let offset_x = appearance
+        .step_x
+        .saturating_add(appearance.pixel_x)
+        .saturating_add(appearance.pixel_w);
+    let offset_y = appearance
+        .step_y
+        .saturating_add(appearance.pixel_y)
+        .saturating_add(appearance.pixel_z);
+
+    SpriteInstance {
+        owner,
+        texture,
+        x: (tile.x.saturating_sub(1) * tile_size) as f32 + offset_x as f32,
+        y: (tile.y.saturating_sub(1) * tile_size) as f32 + offset_y as f32,
+        width: texture.width as f32,
+        height: texture.height as f32,
+        z: tile.z,
+        is_area,
+        area_edges: 0,
+        color: [tint[0] * alpha, tint[1] * alpha, tint[2] * alpha, alpha],
+        depth: appearance.plane * 1000.0 + appearance.layer,
     }
 }
 
@@ -315,7 +354,7 @@ impl RenderContext<'_> {
             }
 
             let mut tile = area_outline(owner, &appearance, texture.unwrap_or_default(), coord, self.tile_size);
-            tile.area_edges = crate::AREA_EDGES_ALL;
+            tile.area_edges = render::AREA_EDGES_ALL;
             area_tile = Some(tile);
 
             let edges = self
@@ -340,7 +379,7 @@ impl RenderContext<'_> {
 }
 
 fn area_outline(
-    owner: PrefabInstanceId, appearance: &Appearance, texture: crate::SpriteTexture, coord: Coord, tile_size: u32,
+    owner: PrefabInstanceId, appearance: &Appearance, texture: SpriteTexture, coord: Coord, tile_size: u32,
 ) -> SpriteInstance {
     let mut outline = instance_for(owner, appearance, texture, coord, tile_size, true);
     outline.x = (coord.x.saturating_sub(1) * tile_size) as f32;
@@ -573,7 +612,7 @@ fn same_area(left: &Prefab, right: &Prefab) -> bool {
 
 fn sprite_texture(
     icons: &HashMap<String, Metadata>, textures: &TextureCatalog, appearance: &Appearance,
-) -> Option<crate::SpriteTexture> {
+) -> Option<SpriteTexture> {
     let icon = appearance.icon.as_deref()?;
     let state = appearance.icon_state.as_deref().unwrap_or("");
     let metadata = icons.get(icon)?;
@@ -597,23 +636,147 @@ mod tests {
         metadata::{IconState, Metadata},
     };
     use dmm::{Map, Prefab, Size};
-    use editor::document::{MapDocument, VarMutation};
     use objtree::{ObjectTree, VarDecl};
-
-    use crate::{
+    use render::{
         AREA_EDGE_EAST,
         AREA_EDGE_NORTH,
         AREA_EDGE_SOUTH,
         AREA_EDGE_WEST,
         AREA_EDGES_ALL,
+        SpriteTexture,
         UpdateRange,
-        frame::{FrameInstances, PrefabUpdate, build, update_prefab},
         texture::TextureCatalog,
+    };
+
+    use super::{FrameInstances, PrefabUpdate, build, instance_for, update_prefab};
+    use crate::{
+        document::{MapDocument, PrefabInstanceId, VarMutation},
+        visual::Appearance,
     };
 
     const ICON: &str = "test.dmi";
 
     fn document(map: Map) -> MapDocument { MapDocument::new(map, 1) }
+
+    fn owner() -> PrefabInstanceId { PrefabInstanceId::from_raw(1).expect("nonzero prefab instance ID") }
+
+    fn appearance(color: Option<&str>, alpha: u8) -> Appearance {
+        Appearance {
+            color: color.map(String::from),
+            alpha,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_tint_is_premultiplied_by_alpha() {
+        let instance = instance_for(
+            owner(),
+            &appearance(Some("#ff0000"), 128),
+            SpriteTexture::default(),
+            dmm::Coord::new(1, 1, 1),
+            32,
+            false,
+        );
+        let alpha = 128.0 / 255.0;
+
+        assert_eq!(instance.color, [alpha, 0.0, 0.0, alpha]);
+    }
+
+    #[test]
+    fn an_untinted_sprite_keeps_its_alpha_on_every_channel() {
+        let instance = instance_for(
+            owner(),
+            &appearance(None, 255),
+            SpriteTexture::default(),
+            dmm::Coord::new(1, 1, 1),
+            32,
+            false,
+        );
+
+        assert_eq!(instance.color, [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn an_unreadable_color_falls_back_to_no_tint() {
+        let instance = instance_for(
+            owner(),
+            &appearance(Some("chartreuse"), 255),
+            SpriteTexture::default(),
+            dmm::Coord::new(1, 1, 1),
+            32,
+            false,
+        );
+
+        assert_eq!(instance.color, [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    /// Step and both pixel offset pairs stack rather than replacing each other.
+    #[test]
+    fn all_offset_pairs_shift_the_sprite() {
+        let appearance = Appearance {
+            pixel_x: -16,
+            pixel_y: 4,
+            pixel_w: 2,
+            pixel_z: -1,
+            step_x: 3,
+            step_y: -2,
+            ..Default::default()
+        };
+        let instance = instance_for(
+            owner(),
+            &appearance,
+            SpriteTexture::default(),
+            dmm::Coord::new(2, 3, 1),
+            32,
+            false,
+        );
+
+        assert_eq!((instance.x, instance.y), (32.0 - 11.0, 64.0 + 1.0));
+    }
+
+    /// A 64x64 icon hangs off the top and the right of its tile, so `pixel_x = -16` centres it.
+    #[test]
+    fn a_larger_than_tile_icon_anchors_to_the_bottom_left_of_its_tile() {
+        let texture = SpriteTexture {
+            index: 0,
+            source_position: [0, 0],
+            width: 64,
+            height: 64,
+        };
+        let centred = Appearance {
+            pixel_x: -16,
+            ..Default::default()
+        };
+
+        let plain = instance_for(
+            owner(),
+            &Appearance::default(),
+            texture,
+            dmm::Coord::new(1, 1, 1),
+            32,
+            false,
+        );
+        assert_eq!((plain.x, plain.y), (0.0, 0.0));
+
+        let shifted = instance_for(owner(), &centred, texture, dmm::Coord::new(1, 1, 1), 32, false);
+        assert_eq!((shifted.x, shifted.y), (-16.0, 0.0));
+    }
+
+    #[test]
+    fn an_instance_keeps_its_level_and_area_classification() {
+        let instance = instance_for(
+            owner(),
+            &Appearance::default(),
+            SpriteTexture::default(),
+            dmm::Coord::new(1, 1, 7),
+            32,
+            true,
+        );
+
+        assert_eq!(instance.z, 7);
+        assert!(instance.is_area);
+    }
 
     fn icon_file(states: &[&str]) -> IconFile {
         let cells = states.len() as u32;
@@ -1273,9 +1436,10 @@ mod example_environment {
     use std::path::PathBuf;
 
     use dmi::IconFile;
-    use editor::{Environment, document::MapDocument};
+    use render::texture::TextureCatalog;
 
-    use crate::{frame::build, texture::TextureCatalog};
+    use super::build;
+    use crate::{Environment, document::MapDocument};
 
     fn examples() -> PathBuf {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");

@@ -432,32 +432,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
-name = "edit"
-version = "1.0.0"
-dependencies = [
- "core",
- "dear-imgui-rs",
- "dear-imgui-winit",
- "dmi",
- "dmm",
- "editor",
- "objtree",
- "raw-window-handle",
- "render",
- "winit",
-]
-
-[[package]]
 name = "editor"
 version = "1.0.0"
 dependencies = [
  "ast",
  "core",
+ "dear-imgui-rs",
+ "dear-imgui-winit",
  "dmi",
  "dmm",
  "objtree",
  "preprocessor",
+ "raw-window-handle",
+ "render",
  "sema",
+ "winit",
 ]
 
 [[package]]
@@ -1365,12 +1354,9 @@ name = "render"
 version = "1.0.0"
 dependencies = [
  "ash",
- "core",
  "dear-imgui-rs",
  "dmi",
  "dmm",
- "editor",
- "objtree",
  "raw-window-handle",
  "shader-slang",
  "vir",
