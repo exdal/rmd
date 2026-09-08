@@ -30,13 +30,9 @@ impl VisibilityId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ViewportInteraction {
-    /// Pixel coordinate relative to the top-left of the rendered viewport.
     pub cursor: Option<[u32; 2]>,
-    /// Area instance occupying the hovered tile, used for the colored tile outline.
     pub hovered_area: Option<PrefabInstanceId>,
-    /// Persistently selected prefab instance.
     pub selected: Option<PrefabInstanceId>,
-    /// Request a CPU-visible pick result for this frame.
     pub pick: bool,
 }
 
@@ -61,14 +57,10 @@ pub struct SpriteInstance {
     pub texture: SpriteTexture,
     pub x: f32,
     pub y: f32,
-    /// Draw size in map pixels. This normally matches the texture cell, while area outlines use one map tile.
     pub width: f32,
     pub height: f32,
-    /// One-based map level containing this instance.
     pub z: u32,
-    /// Whether this instance belongs to an `/area` subtype.
     pub is_area: bool,
-    /// Exposed tile edges for area outlines.
     pub area_edges: u32,
     /// premultiplied RGBA
     pub color: [f32; 4],
@@ -105,30 +97,26 @@ impl Default for Camera {
 
 #[derive(Debug)]
 pub struct Frame<'a> {
-    /// Every placed sprite in the map, ordered by z and then draw order.
     pub sprite_instances: &'a [SpriteInstance],
-    /// One tile-sized, fully outlined proxy for every placed area, used by viewport hover feedback.
     pub area_tiles: &'a [SpriteInstance],
-    /// The level drawn sharp and above the blurred underlays.
     pub active_z: u32,
-    /// How many levels immediately below `active_z` to draw as underlays.
     pub underlay_depth: u32,
-    /// Whether normal area sprites participate in either draw pass.
     pub show_areas: bool,
-    /// Whether area outline instances participate in either draw pass.
     pub show_area_outlines: bool,
     pub camera: Camera,
-    /// Changes only when `sprite_instances` changes.
     pub revision: u64,
-    /// The changed sprite range from the immediately preceding revision.
-    /// Renderers that already hold that revision can upload only this range
-    /// instead of rebuilding the complete sprite buffer.
-    pub sprite_update: Option<SpriteUpdate>,
+    pub pending_update: Option<FrameUpdate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SpriteUpdate {
+pub struct FrameUpdate {
     pub previous_revision: u64,
+    pub sprites: Option<UpdateRange>,
+    pub area_tiles: Option<UpdateRange>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpdateRange {
     pub start: usize,
     pub end: usize,
 }

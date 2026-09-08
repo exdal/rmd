@@ -79,6 +79,7 @@ const SPRITE_TEXTURE_CAPACITY: u32 = SPRITE_TEXTURE_MASK + 1;
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct AreaColorPush {
+    first_sprite: u32,
     sprite_count: u32,
     group_count: u32,
 }
@@ -212,6 +213,7 @@ pub struct Renderer {
     uploaded_revision: Option<u64>,
     uploaded_sprite_count: usize,
     uploaded_area_tile_count: usize,
+    uploaded_area_owners: Vec<editor::document::PrefabInstanceId>,
     ranges: Vec<LevelRange>,
     imgui: Option<ImGuiPass>,
     highlight_started_at: Instant,
@@ -343,6 +345,7 @@ impl Renderer {
             uploaded_revision: None,
             uploaded_sprite_count: 0,
             uploaded_area_tile_count: 0,
+            uploaded_area_owners: Vec::new(),
             ranges: Vec::new(),
             imgui: None,
             highlight_started_at: Instant::now(),
@@ -835,7 +838,7 @@ impl Renderer {
             return Ok(());
         }
 
-        if self.prepare_sprite_update(frame)? {
+        if self.prepare_frame_update(frame)? {
             return Ok(());
         }
 
@@ -914,9 +917,15 @@ impl Renderer {
         }
 
         let sprites = *self.sprites.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
-        self.color_area_outlines(sprites, total)?;
+        self.color_area_outlines(sprites, crate::UpdateRange { start: 0, end: total })?;
         if let Some(area_tiles) = self.area_tiles {
-            self.color_area_outlines(area_tiles, area_total)?;
+            self.color_area_outlines(
+                area_tiles,
+                crate::UpdateRange {
+                    start: 0,
+                    end: area_total,
+                },
+            )?;
         }
 
         self.ranges = ranges;
@@ -925,6 +934,7 @@ impl Renderer {
             let index = u32::try_from(index).map_err(|_| GpuError::SpriteUploadTooLarge)?;
             self.area_tile_indices.insert(area.owner, index);
         }
+        self.uploaded_area_owners = frame.area_tiles.iter().map(|area| area.owner).collect();
         self.uploaded_revision = Some(frame.revision);
         self.uploaded_sprite_count = total;
         self.uploaded_area_tile_count = area_total;
@@ -932,43 +942,79 @@ impl Renderer {
         Ok(())
     }
 
-    fn prepare_sprite_update(&mut self, frame: &Frame<'_>) -> Result<bool, GpuError> {
-        let Some(update) = frame.sprite_update else {
+    fn prepare_frame_update(&mut self, frame: &Frame<'_>) -> Result<bool, GpuError> {
+        let Some(update) = frame.pending_update else {
             return Ok(false);
         };
         if self.uploaded_revision != Some(update.previous_revision)
-            || self.uploaded_area_tile_count != frame.area_tiles.len()
             || frame.sprite_instances.len() > self.sprite_capacity
-            || update.start > update.end
-            || update.end > frame.sprite_instances.len()
+            || frame.area_tiles.len() > self.area_tile_capacity
+            || !valid_update_range(update.sprites, frame.sprite_instances.len())
+            || !valid_update_range(update.area_tiles, frame.area_tiles.len())
+            || (self.uploaded_sprite_count != frame.sprite_instances.len() && update.sprites.is_none())
+            || (self.uploaded_area_tile_count != frame.area_tiles.len() && update.area_tiles.is_none())
         {
             return Ok(false);
         }
-        let Some(buffer) = self.sprites.as_mut() else {
+        let Some(sprites) = self.sprites else {
             return Ok(false);
         };
-        let byte_offset = update
-            .start
-            .checked_mul(size_of::<GpuSprite>())
-            .and_then(|offset| u64::try_from(offset).ok())
-            .ok_or(GpuError::SpriteUploadTooLarge)?;
-        let payload = frame.sprite_instances[update.start..update.end]
-            .iter()
-            .enumerate()
-            .map(|(offset, sprite)| gpu_sprite(update.start + offset, sprite))
-            .collect::<Result<Vec<_>, _>>()?;
+        if !frame.area_tiles.is_empty() && self.area_tiles.is_none() {
+            return Ok(false);
+        }
 
-        self.graph.wait()?;
-        buffer.write(byte_offset, &payload)?;
+        let sprite_payload = update
+            .sprites
+            .map(|range| gpu_sprite_range(frame.sprite_instances, range))
+            .transpose()?;
+        let area_payload = update
+            .area_tiles
+            .map(|range| gpu_sprite_range(frame.area_tiles, range))
+            .transpose()?;
+        if sprite_payload.as_ref().is_some_and(|payload| !payload.is_empty())
+            || area_payload.as_ref().is_some_and(|payload| !payload.is_empty())
+        {
+            self.graph.wait()?;
+        }
+        if let (Some(range), Some(payload), Some(buffer)) =
+            (update.sprites, sprite_payload.as_ref(), self.sprites.as_mut())
+            && !payload.is_empty()
+        {
+            buffer.write(gpu_sprite_offset(range.start)?, payload)?;
+        }
+        if let (Some(range), Some(payload), Some(buffer)) =
+            (update.area_tiles, area_payload.as_ref(), self.area_tiles.as_mut())
+            && !payload.is_empty()
+        {
+            buffer.write(gpu_sprite_offset(range.start)?, payload)?;
+        }
+        if let Some(range) = update.sprites {
+            self.color_area_outlines(sprites, range)?;
+        }
+        if let (Some(buffer), Some(range)) = (self.area_tiles, update.area_tiles) {
+            self.color_area_outlines(buffer, range)?;
+            patch_area_tile_indices(
+                &mut self.area_tile_indices,
+                &mut self.uploaded_area_owners,
+                frame.area_tiles,
+                range,
+            )?;
+        }
+
+        if self.uploaded_sprite_count != frame.sprite_instances.len() {
+            self.ranges = level_ranges(frame.sprite_instances);
+        }
         self.uploaded_revision = Some(frame.revision);
         self.uploaded_sprite_count = frame.sprite_instances.len();
-        self.ranges = level_ranges(frame.sprite_instances);
+        self.uploaded_area_tile_count = frame.area_tiles.len();
 
         Ok(true)
     }
 
-    fn color_area_outlines(&mut self, buffer: Buffer, count: usize) -> Result<(), GpuError> {
-        let sprite_count = u32::try_from(count).map_err(|_| GpuError::SpriteUploadTooLarge)?;
+    fn color_area_outlines(&mut self, buffer: Buffer, range: crate::UpdateRange) -> Result<(), GpuError> {
+        let first_sprite = u32::try_from(range.start).map_err(|_| GpuError::SpriteUploadTooLarge)?;
+        let sprite_count =
+            u32::try_from(range.end.saturating_sub(range.start)).map_err(|_| GpuError::SpriteUploadTooLarge)?;
         if sprite_count == 0 {
             return Ok(());
         }
@@ -978,6 +1024,7 @@ impl Renderer {
         self.area_colors.program.set_bytes(
             self.area_colors.push,
             &AreaColorPush {
+                first_sprite,
                 sprite_count,
                 group_count,
             },
@@ -1127,6 +1174,57 @@ impl Renderer {
 
         Ok(textures)
     }
+}
+
+fn valid_update_range(range: Option<crate::UpdateRange>, len: usize) -> bool {
+    range.is_none_or(|range| range.start <= range.end && range.end <= len)
+}
+
+fn patch_area_tile_indices(
+    indices: &mut HashMap<editor::document::PrefabInstanceId, u32>,
+    uploaded_owners: &mut Vec<editor::document::PrefabInstanceId>, area_tiles: &[SpriteInstance],
+    range: crate::UpdateRange,
+) -> Result<(), GpuError> {
+    let old_len = uploaded_owners.len();
+    for owner in uploaded_owners.iter().take(range.end.min(old_len)).skip(range.start) {
+        indices.remove(owner);
+    }
+    for owner in uploaded_owners.iter().take(old_len).skip(area_tiles.len()) {
+        indices.remove(owner);
+    }
+
+    uploaded_owners.truncate(area_tiles.len());
+    if uploaded_owners.len() < area_tiles.len() {
+        uploaded_owners.extend(area_tiles[uploaded_owners.len()..].iter().map(|area| area.owner));
+    }
+    for (index, (uploaded_owner, area)) in uploaded_owners
+        .iter_mut()
+        .zip(area_tiles)
+        .enumerate()
+        .take(range.end)
+        .skip(range.start)
+    {
+        *uploaded_owner = area.owner;
+        let index = u32::try_from(index).map_err(|_| GpuError::SpriteUploadTooLarge)?;
+        indices.insert(area.owner, index);
+    }
+
+    Ok(())
+}
+
+fn gpu_sprite_offset(start: usize) -> Result<u64, GpuError> {
+    start
+        .checked_mul(size_of::<GpuSprite>())
+        .and_then(|offset| u64::try_from(offset).ok())
+        .ok_or(GpuError::SpriteUploadTooLarge)
+}
+
+fn gpu_sprite_range(sprites: &[SpriteInstance], range: crate::UpdateRange) -> Result<Vec<GpuSprite>, GpuError> {
+    sprites[range.start..range.end]
+        .iter()
+        .enumerate()
+        .map(|(offset, sprite)| gpu_sprite(range.start + offset, sprite))
+        .collect()
 }
 
 fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuError> {
@@ -1510,6 +1608,7 @@ fn batch_ranges(sizes: &[usize], budget: usize) -> Option<Vec<Range<usize>>> {
 #[cfg(test)]
 mod tests {
     use core::path::TreePath;
+    use std::collections::HashMap;
 
     use dmm::{Coord, Map, Prefab, Size};
     use editor::document::{MapDocument, PrefabInstanceId};
@@ -1541,10 +1640,12 @@ mod tests {
         meshopt_dequantize_unorm,
         meshopt_quantize_half,
         pack_unorm4x8,
+        patch_area_tile_indices,
         split_owner,
+        valid_update_range,
         visible_ranges,
     };
-    use crate::{AREA_EDGE_EAST, AREA_EDGE_NORTH, GpuError, SpriteInstance, SpriteTexture, read_spirv};
+    use crate::{AREA_EDGE_EAST, AREA_EDGE_NORTH, GpuError, SpriteInstance, SpriteTexture, UpdateRange, read_spirv};
 
     fn owner() -> PrefabInstanceId {
         let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
@@ -1569,6 +1670,63 @@ mod tests {
             color: [1.0; 4],
             depth: 0.0,
         }
+    }
+
+    fn owners(count: usize) -> Vec<PrefabInstanceId> {
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        let tile = (0..count).map(|_| Prefab::new(TreePath::parse("/area/test"))).collect();
+        let key = map.intern_tile(tile);
+        map.grid[0][0][0] = key;
+        let document = MapDocument::new(map, 1);
+
+        document.instance_ids_at(Coord::new(1, 1, 1)).to_vec()
+    }
+
+    #[test]
+    fn update_ranges_must_fit_their_current_buffer() {
+        assert!(valid_update_range(None, 2));
+        assert!(valid_update_range(Some(UpdateRange { start: 1, end: 2 }), 2));
+        assert!(valid_update_range(Some(UpdateRange { start: 2, end: 2 }), 2));
+        assert!(!valid_update_range(Some(UpdateRange { start: 2, end: 1 }), 2));
+        assert!(!valid_update_range(Some(UpdateRange { start: 0, end: 3 }), 2));
+    }
+
+    #[test]
+    fn area_owner_indices_follow_swapped_removals_and_appends() {
+        let owners = owners(4);
+        let mut tiles = owners[..3]
+            .iter()
+            .map(|owner| {
+                let mut sprite = sprite(1);
+                sprite.owner = *owner;
+                sprite
+            })
+            .collect::<Vec<_>>();
+        let mut uploaded = owners[..3].to_vec();
+        let mut indices = uploaded
+            .iter()
+            .enumerate()
+            .map(|(index, owner)| (*owner, index as u32))
+            .collect::<HashMap<_, _>>();
+
+        tiles.swap_remove(1);
+        patch_area_tile_indices(&mut indices, &mut uploaded, &tiles, UpdateRange { start: 1, end: 2 }).unwrap();
+        assert_eq!(uploaded, vec![owners[0], owners[2]]);
+        assert_eq!(indices.get(&owners[0]), Some(&0));
+        assert_eq!(indices.get(&owners[1]), None);
+        assert_eq!(indices.get(&owners[2]), Some(&1));
+
+        let mut appended = sprite(1);
+        appended.owner = owners[3];
+        tiles.push(appended);
+        patch_area_tile_indices(&mut indices, &mut uploaded, &tiles, UpdateRange { start: 2, end: 3 }).unwrap();
+        assert_eq!(uploaded, vec![owners[0], owners[2], owners[3]]);
+        assert_eq!(indices.get(&owners[3]), Some(&2));
+
+        tiles.pop();
+        patch_area_tile_indices(&mut indices, &mut uploaded, &tiles, UpdateRange { start: 2, end: 2 }).unwrap();
+        assert_eq!(uploaded, vec![owners[0], owners[2]]);
+        assert_eq!(indices.get(&owners[3]), None);
     }
 
     #[test]

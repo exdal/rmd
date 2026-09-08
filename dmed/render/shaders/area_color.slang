@@ -16,11 +16,13 @@ groupshared f32x4 partial[WORKGROUP_SIZE];
 func cs_main(
     u32x3 group : SV_GroupID,
     u32x3 thread : SV_GroupThreadID,
+    uniform u32 first_sprite,
     uniform u32 sprite_count,
     uniform u32 group_count
 ) {
     let lane = thread.x;
-    for (u32 sprite_index = group.x; sprite_index < sprite_count; sprite_index += group_count) {
+    for (u32 relative_index = group.x; relative_index < sprite_count; relative_index += group_count) {
+        let sprite_index = first_sprite + relative_index;
         let sprite = sprites[sprite_index];
         if ((sprite.flags() & SPRITE_AREA_EDGE_MASK) == 0) {
             continue;

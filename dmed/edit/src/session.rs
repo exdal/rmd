@@ -16,8 +16,8 @@ use editor::{
 use objtree::{ObjectTree, TypeId};
 use render::{
     Frame,
+    FrameUpdate,
     SpriteInstance,
-    SpriteUpdate,
     frame::{FrameInstances, FrameOptions, PrefabUpdate},
     texture::TextureCatalog,
 };
@@ -46,7 +46,7 @@ pub struct Session {
     pub options: FrameOptions,
     instances: FrameInstances,
     revision: u64,
-    sprite_update: Option<SpriteUpdate>,
+    frame_update: Option<FrameUpdate>,
     texture_revision: u64,
 }
 
@@ -58,7 +58,7 @@ impl Session {
             options: FrameOptions::default(),
             instances: FrameInstances::default(),
             revision: 0,
-            sprite_update: None,
+            frame_update: None,
             texture_revision: 0,
         }
     }
@@ -100,7 +100,7 @@ impl Session {
             });
         self.state.open_document(document);
         self.revision = self.revision.wrapping_add(1);
-        self.sprite_update = None;
+        self.frame_update = None;
 
         Ok(())
     }
@@ -326,7 +326,7 @@ impl Session {
             show_area_outlines: self.options.show_area_outlines,
             camera,
             revision: self.revision,
-            sprite_update: self.sprite_update,
+            pending_update: self.frame_update,
         }
     }
 
@@ -352,7 +352,7 @@ impl Session {
             _ => FrameInstances::default(),
         };
         self.revision = self.revision.wrapping_add(1);
-        self.sprite_update = None;
+        self.frame_update = None;
     }
 
     fn update_instance(&mut self, selected: PrefabInstanceId) {
@@ -374,13 +374,13 @@ impl Session {
 
         match update {
             PrefabUpdate::Unchanged => {},
-            PrefabUpdate::Sprites { start, end } => {
+            PrefabUpdate::Buffers { sprites, area_tiles } => {
                 let previous_revision = self.revision;
                 self.revision = self.revision.wrapping_add(1);
-                self.sprite_update = Some(SpriteUpdate {
+                self.frame_update = Some(FrameUpdate {
                     previous_revision,
-                    start,
-                    end,
+                    sprites,
+                    area_tiles,
                 });
             },
             PrefabUpdate::Rebuild => self.rebuild_instances(),
@@ -705,10 +705,11 @@ mod tests {
             Some(true),
         );
         assert_eq!(session.revision, revision.wrapping_add(1));
-        let update = session.sprite_update.unwrap();
+        let update = session.frame_update.unwrap();
         assert_eq!(update.previous_revision, revision);
-        assert_eq!(update.end, update.start + 1);
-        assert_eq!(session.instances.sprites[update.start].owner, selected);
+        let sprites = update.sprites.unwrap();
+        assert_eq!(sprites.end, sprites.start + 1);
+        assert_eq!(session.instances.sprites[sprites.start].owner, selected);
         assert_eq!(session.selected_transform().unwrap().pixel, [7, 0]);
         assert_eq!(
             session
@@ -731,5 +732,26 @@ mod tests {
             session.selected_prefab().and_then(|prefab| prefab.var(&"name".into())),
             Some(&Value::Text("edited".into())),
         );
+    }
+
+    #[test]
+    fn editing_an_area_uses_a_partial_frame_update() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        session.open_map(&root.join("test.dmm"), 1).unwrap();
+        let area = session.area_at(Coord::new(3, 3, 1)).unwrap();
+        session.select_instance(Some(area));
+        let revision = session.revision;
+
+        assert_eq!(
+            session.set_selected_instance_var("name".into(), Value::Text(String::from("Engineering"))),
+            Some(true),
+        );
+        assert_eq!(session.revision, revision.wrapping_add(1));
+        let update = session.frame_update.expect("area edit must remain incremental");
+        assert_eq!(update.previous_revision, revision);
+        assert!(update.sprites.is_some());
+        assert!(update.area_tiles.is_none());
     }
 }

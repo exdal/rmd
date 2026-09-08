@@ -107,7 +107,7 @@ impl Session {
             show_area_outlines: self.options.show_area_outlines,
             camera,
             revision: self.revision,
-            sprite_update: None,
+            pending_update: None,
         }
     }
 
