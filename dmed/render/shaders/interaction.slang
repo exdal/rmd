@@ -53,32 +53,75 @@ func is_highlighted_owner(u32x2 owner, u32x2 selected_owner, u32x2 hovered_owner
         (any(hovered_owner != u32x2(0)) && same_owner(owner, hovered_owner));
 }
 
+func marching_color(f32 path_position, f32 stripe_offset) -> f32x4 {
+    let stripe_position = path_position - stripe_offset;
+    let wrapped = stripe_position - floor(stripe_position / 12.0) * 12.0;
+
+    return wrapped < 6.0 ? f32x4(1.0) : f32x4(0.0, 1.0, 0.0, 1.0);
+}
+
+func guide_color(f32 path_position, f32 stripe_offset) -> f32x4 {
+    let stripe_position = path_position - stripe_offset;
+    let wrapped = stripe_position - floor(stripe_position / 12.0) * 12.0;
+
+    return wrapped < 6.0 ? f32x4(1.0) : f32x4(1.0, 0.5, 0.0, 1.0);
+}
+
 [shader("fragment")]
 func fs_main(
     VSOutput input,
     uniform u32x2 cursor,
     uniform u32 cursor_valid,
     uniform u32x2 selected_owner,
-    uniform f32 stripe_offset
+    uniform f32 stripe_offset,
+    uniform f32x2 guide_origin,
+    uniform f32x2 guide_target,
+    uniform u32 guide_valid
 ) -> f32x4 {
     let color = scene.Sample(input.uv);
     let pixel = i32x2(input.position.xy);
+    let fragment = input.position.xy;
     u32 width;
     u32 height;
     visibility.GetDimensions(width, height);
+
+    let guide_active = guide_valid != 0 && any(selected_owner != u32x2(0));
+    var on_guide = false;
+    var guide_path_position = 0.0;
+    if (guide_active) {
+        let segment = guide_target - guide_origin;
+        let segment_length_squared = dot(segment, segment);
+        if (segment_length_squared > 0.0001) {
+            let along = saturate(dot(fragment - guide_origin, segment) / segment_length_squared);
+            let nearest_guide = guide_origin + segment * along;
+            on_guide = distance(fragment, nearest_guide) <= 1.5;
+            guide_path_position = along * sqrt(segment_length_squared);
+        }
+    }
 
     var hovered_owner = u32x2(0);
     if (cursor_valid != 0) {
         hovered_owner = owner_at(i32x2(cursor), width, height);
     }
 
-    if (!any(selected_owner != u32x2(0)) && !any(hovered_owner != u32x2(0))) {
+    if (!any(selected_owner != u32x2(0)) && !any(hovered_owner != u32x2(0)) && !guide_active) {
         return color;
     }
 
     let owner = owner_at(pixel, width, height);
-    if (is_highlighted_owner(owner, selected_owner, hovered_owner)) {
+    let on_selected = any(selected_owner != u32x2(0)) && same_owner(owner, selected_owner);
+    if (on_selected) {
         return color;
+    }
+
+    // origin needs to stay under sprite, otherwise it looks annoying
+    if (guide_active && distance(fragment, guide_origin) <= 6.0) {
+        return f32x4(1.0, 0.5, 0.0, 1.0);
+    }
+
+    let on_hovered = any(hovered_owner != u32x2(0)) && same_owner(owner, hovered_owner);
+    if (on_hovered) {
+        return on_guide ? guide_color(guide_path_position, stripe_offset) : color;
     }
 
     var nearest = i32x2(0);
@@ -98,22 +141,23 @@ func fs_main(
         }
     }
 
-    if (nearest_distance == 5) {
-        return color;
+    if (nearest_distance != 5) {
+        var path_position = 0.0;
+        if (abs(nearest.y) >= abs(nearest.x)) {
+            path_position = nearest.y > 0 ? f32(pixel.x) : -f32(pixel.x);
+        }
+        else {
+            path_position = nearest.x < 0 ? f32(pixel.y) : -f32(pixel.y);
+        }
+
+        return marching_color(path_position, stripe_offset);
     }
 
-    var path_position = 0.0;
-    if (abs(nearest.y) >= abs(nearest.x)) {
-        path_position = nearest.y > 0 ? f32(pixel.x) : -f32(pixel.x);
-    }
-    else {
-        path_position = nearest.x < 0 ? f32(pixel.y) : -f32(pixel.y);
+    if (on_guide) {
+        return guide_color(guide_path_position, stripe_offset);
     }
 
-    let stripe_position = path_position - stripe_offset;
-    let wrapped = stripe_position - floor(stripe_position / 12.0) * 12.0;
-
-    return wrapped < 6.0 ? f32x4(1.0) : f32x4(0.0, 1.0, 0.0, 1.0);
+    return color;
 }
 
 [shader("compute")]

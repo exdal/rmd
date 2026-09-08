@@ -112,6 +112,9 @@ struct InteractionPush {
     cursor_valid: u32,
     selected_owner: [u32; 2],
     stripe_offset: f32,
+    guide_origin: [f32; 2],
+    guide_target: [f32; 2],
+    guide_valid: u32,
 }
 
 #[repr(C)]
@@ -766,6 +769,16 @@ impl Renderer {
         if let Some(slots) = recorded.interaction.as_ref() {
             let selected_owner = interaction.selected.map(owner_words).unwrap_or([0; 2]);
             let cursor_value = cursor.unwrap_or([0; 2]);
+            let guide = interaction
+                .selection_guide
+                .filter(|guide| {
+                    interaction.selected.is_some()
+                        && guide.origin.iter().chain(&guide.target).all(|value| value.is_finite())
+                })
+                .map(|guide| project_selection_guide(guide, frame.camera, viewport))
+                .filter(|(origin, target)| origin.iter().chain(target).all(|value| value.is_finite()));
+            let (guide_origin, guide_target, guide_valid) =
+                guide.map_or(([0.0; 2], [0.0; 2], 0), |(origin, target)| (origin, target, 1));
             recorded.program.set_bytes(
                 slots.push,
                 &InteractionPush {
@@ -773,6 +786,9 @@ impl Renderer {
                     cursor_valid: u32::from(cursor.is_some()),
                     selected_owner,
                     stripe_offset,
+                    guide_origin,
+                    guide_target,
+                    guide_valid,
                 },
             );
             recorded.program.set_bytes(
@@ -1283,6 +1299,19 @@ fn owner_words(owner: dmm::PrefabInstanceId) -> [u32; 2] { split_owner(owner.get
 
 fn split_owner(owner: u64) -> [u32; 2] { [owner as u32, (owner >> 32) as u32] }
 
+fn project_selection_guide(
+    guide: crate::SelectionGuide, camera: crate::Camera, viewport: vk::Extent2D,
+) -> ([f32; 2], [f32; 2]) {
+    let project = |point: [f32; 2]| {
+        [
+            (point[0] - camera.x) * camera.zoom + viewport.width as f32 * 0.5,
+            (camera.y - point[1]) * camera.zoom + viewport.height as f32 * 0.5,
+        ]
+    };
+
+    (project(guide.origin), project(guide.target))
+}
+
 fn pack_half2(x: f32, y: f32) -> Option<u32> {
     let x = meshopt_quantize_half(x);
     let y = meshopt_quantize_half(y);
@@ -1660,11 +1689,22 @@ mod tests {
         meshopt_quantize_half,
         pack_unorm4x8,
         patch_area_tile_indices,
+        project_selection_guide,
         split_owner,
         valid_update_range,
         visible_ranges,
     };
-    use crate::{AREA_EDGE_EAST, AREA_EDGE_NORTH, GpuError, SpriteInstance, SpriteTexture, UpdateRange, read_spirv};
+    use crate::{
+        AREA_EDGE_EAST,
+        AREA_EDGE_NORTH,
+        Camera,
+        GpuError,
+        SelectionGuide,
+        SpriteInstance,
+        SpriteTexture,
+        UpdateRange,
+        read_spirv,
+    };
 
     fn owner() -> PrefabInstanceId { PrefabInstanceId::from_raw(1).expect("nonzero prefab instance ID") }
 
@@ -1983,6 +2023,32 @@ mod tests {
     #[test]
     fn owner_ids_keep_both_words() {
         assert_eq!(split_owner(0x1234_5678_9abc_def0), [0x9abc_def0, 0x1234_5678]);
+    }
+
+    #[test]
+    fn selection_guides_project_from_map_to_framebuffer_coordinates() {
+        let guide = SelectionGuide {
+            origin: [110.0, 40.0],
+            target: [130.0, 60.0],
+        };
+        let camera = Camera {
+            x: 100.0,
+            y: 50.0,
+            zoom: 2.0,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            project_selection_guide(
+                guide,
+                camera,
+                ash::vk::Extent2D {
+                    width: 800,
+                    height: 600,
+                },
+            ),
+            ([420.0, 320.0], [460.0, 280.0]),
+        );
     }
 
     #[test]

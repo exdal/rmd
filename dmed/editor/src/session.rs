@@ -16,7 +16,7 @@ use editor::{
     visual,
 };
 use objtree::{ObjectTree, TypeId};
-use render::{Frame, FrameUpdate, SpriteInstance, SpriteTexture, texture::TextureCatalog};
+use render::{Frame, FrameUpdate, SelectionGuide, SpriteInstance, SpriteTexture, texture::TextureCatalog};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct SelectedTransform {
@@ -376,6 +376,43 @@ impl Session {
             dir: direction.dir,
             dmi_directions: direction.dmi_directions,
             directional_types: direction.directional_types,
+        })
+    }
+
+    pub(crate) fn selected_offset_guide(&self) -> Option<SelectionGuide> {
+        let environment = self.state.environment.as_ref()?;
+        let document = self.state.active_document()?;
+        let selected = document.selected_instance()?;
+        let (prefab, location) = document.prefab_instance(selected)?;
+        if location.coord.z != document.z {
+            return None;
+        }
+
+        let id = environment.tree.id_of(&prefab.path)?;
+        let appearance = visual::resolve_id(&environment.tree, id, prefab);
+        let displacement = [
+            appearance
+                .step_x
+                .saturating_add(appearance.pixel_x)
+                .saturating_add(appearance.pixel_w),
+            appearance
+                .step_y
+                .saturating_add(appearance.pixel_y)
+                .saturating_add(appearance.pixel_z),
+        ];
+        if displacement == [0, 0] {
+            return None;
+        }
+
+        let sprite = self.instances.sprite(selected)?;
+        let tile_size = self.options.tile_size.max(1) as f32;
+
+        Some(SelectionGuide {
+            origin: [
+                (location.coord.x as f32 - 0.5) * tile_size,
+                (location.coord.y as f32 - 0.5) * tile_size,
+            ],
+            target: [sprite.x + sprite.width * 0.5, sprite.y + sprite.height * 0.5],
         })
     }
 
@@ -789,7 +826,12 @@ mod tests {
 
     use dmi::{IconFile, metadata::Dir};
     use dmm::{Coord, Map, Prefab, Size};
-    use editor::{Environment, command::EditGroupId, document::MapDocument, tool::Tool};
+    use editor::{
+        Environment,
+        command::EditGroupId,
+        document::{MapDocument, VarMutation},
+        tool::Tool,
+    };
     use objtree::ObjectTree;
 
     use super::{Session, build_textures, directional_type_target, directional_types_for, validate_level};
@@ -916,6 +958,63 @@ mod tests {
             .state
             .choose_prefab(Prefab::new(TreePath::parse("/obj/unresolved")));
         assert!(session.placement_preview().is_none());
+    }
+
+    #[test]
+    fn selection_guides_connect_the_tile_center_to_the_rendered_offset() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        session.open_map(&root.join("test.dmm"), 1).unwrap();
+        let coord = Coord::new(6, 3, 1);
+        let selected = session
+            .state
+            .active_document()
+            .and_then(|document| document.instance_ids_at(coord).first())
+            .copied()
+            .unwrap();
+        session.select_instance(Some(selected));
+
+        assert_eq!(session.selected_offset_guide(), None);
+        assert_eq!(
+            session.edit_selected_instance_vars(
+                "offset selected object",
+                &[
+                    VarMutation::Set("step_x".into(), Value::Num(-2.0)),
+                    VarMutation::Set("pixel_x".into(), Value::Num(5.0)),
+                    VarMutation::Set("pixel_w".into(), Value::Num(1.0)),
+                    VarMutation::Set("step_y".into(), Value::Num(3.0)),
+                    VarMutation::Set("pixel_y".into(), Value::Num(-4.0)),
+                    VarMutation::Set("pixel_z".into(), Value::Num(2.0)),
+                ],
+                None,
+            ),
+            Some(true),
+        );
+
+        let guide = session.selected_offset_guide().unwrap();
+        assert_eq!(guide.origin, [176.0, 80.0]);
+        assert_eq!(guide.target, [180.0, 81.0]);
+
+        session.state.active_document_mut().unwrap().z = 2;
+        assert_eq!(session.selected_offset_guide(), None);
+        session.state.active_document_mut().unwrap().z = 1;
+        assert_eq!(
+            session.edit_selected_instance_vars(
+                "cancel selected object offset",
+                &[
+                    VarMutation::Set("step_x".into(), Value::Num(-5.0)),
+                    VarMutation::Set("pixel_x".into(), Value::Num(5.0)),
+                    VarMutation::Set("pixel_w".into(), Value::Num(0.0)),
+                    VarMutation::Set("step_y".into(), Value::Num(4.0)),
+                    VarMutation::Set("pixel_y".into(), Value::Num(-4.0)),
+                    VarMutation::Set("pixel_z".into(), Value::Num(0.0)),
+                ],
+                None,
+            ),
+            Some(true),
+        );
+        assert_eq!(session.selected_offset_guide(), None);
     }
 
     #[test]

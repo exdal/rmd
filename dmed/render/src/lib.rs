@@ -32,11 +32,19 @@ pub struct PlacementFlash {
     pub strength: f32,
 }
 
+// this is for our tile origin -> pixel_x/y override indicator
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SelectionGuide {
+    pub origin: [f32; 2],
+    pub target: [f32; 2],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ViewportInteraction {
     pub cursor: Option<[u32; 2]>,
     pub hovered_area: Option<PrefabInstanceId>,
     pub selected: Option<PrefabInstanceId>,
+    pub selection_guide: Option<SelectionGuide>,
     pub placement_flash: Option<PlacementFlash>,
     pub pick: bool,
 }

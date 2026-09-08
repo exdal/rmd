@@ -167,6 +167,7 @@ impl UiState {
         let mut refit = false;
         let mut interaction = ViewportInteraction {
             selected: session.selected_instance(),
+            selection_guide: session.selected_offset_guide(),
             ..Default::default()
         };
 
@@ -233,6 +234,7 @@ impl UiState {
         self.draw_object_tree(ui, session);
         self.draw_inspector(ui, session);
         self.draw_viewport(ui, session, camera, &mut interaction, &mut exit, &mut refit);
+        interaction.selection_guide = interaction.selected.and_then(|_| session.selected_offset_guide());
 
         Ok(UiOutput {
             exit,
@@ -583,6 +585,7 @@ fn suppress_place_highlights(tool: Tool, interaction: &mut ViewportInteraction) 
         interaction.cursor = None;
         interaction.hovered_area = None;
         interaction.selected = None;
+        interaction.selection_guide = None;
         interaction.pick = false;
     }
 }
@@ -955,6 +958,7 @@ mod tests {
             cursor: Some([10, 20]),
             hovered_area: Some(owner),
             selected: Some(owner),
+            selection_guide: None,
             placement_flash: Some(PlacementFlash { owner, strength: 0.5 }),
             pick: true,
         };
