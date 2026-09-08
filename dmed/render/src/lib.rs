@@ -59,6 +59,7 @@ pub struct SpriteTexture {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpriteInstance {
     pub owner: PrefabInstanceId,
+    pub area_owner: Option<PrefabInstanceId>,
     pub texture: SpriteTexture,
     pub x: f32,
     pub y: f32,
@@ -104,6 +105,7 @@ impl Default for Camera {
 pub struct Frame<'a> {
     pub sprite_instances: &'a [SpriteInstance],
     pub area_tiles: &'a [SpriteInstance],
+    pub focused_area: Option<PrefabInstanceId>,
     pub active_z: u32,
     pub underlay_depth: u32,
     pub show_areas: bool,

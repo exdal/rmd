@@ -63,6 +63,7 @@ const HIGHLIGHT_STRIPE_SPEED: f32 = 12.0;
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct GpuSprite {
     owner: [u32; 2],
+    area_owner: [u32; 2],
     position: [f32; 2],
     packed_size: u32,
     color: u32,
@@ -93,6 +94,7 @@ struct CameraPush {
     base: u32,
     show_areas: u32,
     show_area_outlines: u32,
+    focused_area_owner: [u32; 2],
     placement_flash_owner: [u32; 2],
     placement_flash_strength: f32,
 }
@@ -724,6 +726,7 @@ impl Renderer {
             base: 0,
             show_areas: u32::from(frame.show_areas),
             show_area_outlines: u32::from(frame.show_area_outlines),
+            focused_area_owner: frame.focused_area.map(owner_words).unwrap_or([0; 2]),
             placement_flash_owner,
             placement_flash_strength,
         };
@@ -1267,6 +1270,7 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
 
     Ok(GpuSprite {
         owner: owner_words(sprite.owner),
+        area_owner: sprite.area_owner.map(owner_words).unwrap_or([0; 2]),
         position,
         packed_size: size,
         color,
@@ -1667,6 +1671,7 @@ mod tests {
     fn sprite(z: u32) -> SpriteInstance {
         SpriteInstance {
             owner: owner(),
+            area_owner: None,
             texture: SpriteTexture::default(),
             x: 0.0,
             y: 0.0,
@@ -1736,6 +1741,7 @@ mod tests {
     #[test]
     fn area_edges_and_tile_geometry_reach_the_gpu() {
         let mut area = sprite(1);
+        area.area_owner = PrefabInstanceId::from_raw(0x1234_5678_9abc_def0);
         area.x = 32.0;
         area.y = 64.0;
         area.width = 32.0;
@@ -1753,6 +1759,7 @@ mod tests {
         let gpu = gpu_sprite(0, &area).expect("pack");
 
         assert_eq!(gpu.owner, [area.owner.get() as u32, 0]);
+        assert_eq!(gpu.area_owner, [0x9abc_def0, 0x1234_5678]);
         assert_eq!(gpu.position, [32.0, 64.0]);
         assert_eq!(gpu.packed_size, 0x5000_5000);
         assert_eq!(gpu.color, 0);
@@ -1968,7 +1975,7 @@ mod tests {
     fn sprite_and_camera_layouts_match_the_shader_scalar_layout() {
         let reflection = shader::reflect(&read_spirv(GEOMETRY_VS_SPV).expect("valid SPIR-V")).expect("shader reflects");
 
-        assert_eq!(size_of::<GpuSprite>(), 36);
+        assert_eq!(size_of::<GpuSprite>(), 44);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<CameraPush>());
     }

@@ -105,6 +105,7 @@ impl Session {
         Frame {
             sprite_instances: &self.sprite_instances,
             area_tiles: &[],
+            focused_area: None,
             active_z: self.z(),
             underlay_depth: self.options.underlay_depth,
             show_areas: self.options.show_areas,

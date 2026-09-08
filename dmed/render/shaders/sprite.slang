@@ -12,6 +12,7 @@ struct VSOutput {
     f32x2 uv;
     f32x2 local;
     nointerpolation u32 sprite_id;
+    nointerpolation f32 focus_brightness;
     nointerpolation f32 placement_flash_strength;
 };
 
@@ -32,6 +33,7 @@ func vs_main(
     uniform u32 base,
     uniform u32 show_areas,
     uniform u32 show_area_outlines,
+    uniform u32x2 focused_area_owner,
     uniform u32x2 placement_flash_owner,
     uniform f32 placement_flash_strength
 ) -> VSOutput {
@@ -52,9 +54,12 @@ func vs_main(
     output.local = corner;
     let is_area = (flags & SPRITE_FLAG_AREA) != 0;
     let is_area_outline = (flags & SPRITE_AREA_EDGE_MASK) != 0;
-    let hidden = (is_area_outline && show_area_outlines == 0) ||
+    let focus_active = any(focused_area_owner != u32x2(0));
+    let inside_focus = all(sprite.area_owner == focused_area_owner);
+    let hidden = (is_area_outline && (focus_active ? !inside_focus : show_area_outlines == 0)) ||
         (is_area && !is_area_outline && show_areas == 0);
     output.sprite_id = hidden ? 0 : sprite_index + 1;
+    output.focus_brightness = focus_active && !inside_focus ? 0.33 : 1.0;
     output.placement_flash_strength = all(sprite.owner == placement_flash_owner)
         ? saturate(placement_flash_strength)
         : 0.0;
@@ -66,6 +71,10 @@ func apply_placement_flash(f32x4 color, f32 strength) -> f32x4 {
     let green = f32x4(0.0, color.a, 0.0, color.a);
 
     return lerp(color, green, strength);
+}
+
+func apply_focus_brightness(f32x4 color, f32 brightness) -> f32x4 {
+    return f32x4(color.rgb * brightness, color.a);
 }
 
 func sample_sprite(VSOutput input) -> f32x4 {
@@ -87,7 +96,10 @@ func sample_sprite(VSOutput input) -> f32x4 {
             discard;
         }
 
-        return apply_placement_flash(color, input.placement_flash_strength);
+        return apply_focus_brightness(
+            apply_placement_flash(color, input.placement_flash_strength),
+            input.focus_brightness
+        );
     }
 
     let texture_index = NonUniformResourceIndex(sprite.texture());
@@ -102,7 +114,10 @@ func sample_sprite(VSOutput input) -> f32x4 {
         discard;
     }
 
-    return apply_placement_flash(shaded, input.placement_flash_strength);
+    return apply_focus_brightness(
+        apply_placement_flash(shaded, input.placement_flash_strength),
+        input.focus_brightness
+    );
 }
 
 [shader("fragment")]

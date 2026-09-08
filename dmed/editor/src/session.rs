@@ -57,6 +57,12 @@ pub(crate) struct PlacementPreview {
     pub offset: [i32; 2],
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct FocusedArea {
+    seed: Coord,
+    prefab: Prefab,
+}
+
 pub struct Session {
     pub state: EditorState,
     pub textures: TextureCatalog,
@@ -65,6 +71,7 @@ pub struct Session {
     revision: u64,
     frame_update: Option<FrameUpdate>,
     texture_revision: u64,
+    focused_area: Option<FocusedArea>,
 }
 
 impl Session {
@@ -77,6 +84,7 @@ impl Session {
             revision: 0,
             frame_update: None,
             texture_revision: 0,
+            focused_area: None,
         }
     }
 
@@ -87,6 +95,7 @@ impl Session {
         self.textures = build_textures(&environment);
         self.texture_revision = self.texture_revision.wrapping_add(1);
         self.state.environment = Some(environment);
+        self.focused_area = None;
 
         Ok(())
     }
@@ -118,6 +127,7 @@ impl Session {
         self.state.open_document(document);
         self.revision = self.revision.wrapping_add(1);
         self.frame_update = None;
+        self.focused_area = None;
 
         Ok(())
     }
@@ -155,6 +165,7 @@ impl Session {
         }
 
         document.z = z;
+        self.focused_area = None;
     }
 
     pub fn change_level(&mut self, delta: i32) {
@@ -167,6 +178,7 @@ impl Session {
 
         if next != document.z {
             document.z = next;
+            self.focused_area = None;
         }
     }
 
@@ -266,7 +278,7 @@ impl Session {
     }
 
     pub fn place_at(&mut self, coord: Coord, group: Option<EditGroupId>) -> Option<PrefabInstanceId> {
-        if self.state.tool != Tool::Place {
+        if self.state.tool != Tool::Place || !self.can_place_at(coord) {
             return None;
         }
         let prefab = self.state.palette.clone()?;
@@ -487,6 +499,49 @@ impl Session {
             })
     }
 
+    pub fn focused_area(&self) -> Option<PrefabInstanceId> {
+        let focused = self.focused_area.as_ref()?;
+        let owner = self.area_at(focused.seed)?;
+        let (prefab, _) = self.state.active_document()?.prefab_instance(owner)?;
+        if !frame::same_area(&focused.prefab, prefab) {
+            return None;
+        }
+
+        self.instances.area_component_at(focused.seed)
+    }
+
+    pub fn toggle_focus_at(&mut self, coord: Option<Coord>) {
+        let candidate = coord.and_then(|coord| {
+            let owner = self.area_at(coord)?;
+            let prefab = self.state.active_document()?.prefab_instance(owner)?.0.clone();
+            let component = self.instances.area_component_at(coord)?;
+
+            Some((coord, prefab, component))
+        });
+        let Some((seed, prefab, component)) = candidate else {
+            self.focused_area = None;
+
+            return;
+        };
+
+        if self.focused_area() == Some(component) {
+            self.focused_area = None;
+        } else {
+            self.focused_area = Some(FocusedArea { seed, prefab });
+        }
+    }
+
+    pub fn can_place_at(&self, coord: Coord) -> bool {
+        let Some(_) = self.focused_area.as_ref() else {
+            return true;
+        };
+        let Some(focused) = self.focused_area() else {
+            return false;
+        };
+
+        self.instances.area_component_at(coord) == Some(focused)
+    }
+
     pub fn toggle_areas(&mut self) { self.options.show_areas = !self.options.show_areas; }
 
     pub fn toggle_area_outlines(&mut self) { self.options.show_area_outlines = !self.options.show_area_outlines; }
@@ -503,6 +558,7 @@ impl Session {
         Frame {
             sprite_instances: &self.instances.sprites,
             area_tiles: &self.instances.area_tiles,
+            focused_area: self.focused_area(),
             active_z: self.z(),
             underlay_depth: self.options.underlay_depth,
             show_areas: self.options.show_areas,
@@ -536,6 +592,9 @@ impl Session {
         };
         self.revision = self.revision.wrapping_add(1);
         self.frame_update = None;
+        if self.focused_area.is_some() && self.focused_area().is_none() {
+            self.focused_area = None;
+        }
     }
 
     fn update_instance(&mut self, selected: PrefabInstanceId) {
@@ -741,6 +800,27 @@ mod tests {
         path.canonicalize().unwrap_or(path)
     }
 
+    fn focus_session() -> Session {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+
+        let mut map = Map::new(Size { x: 4, y: 1, z: 2 });
+        let base = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/turf/open/floor")),
+            Prefab::new(TreePath::parse("/area/station")),
+        ]);
+        let mut engineering = Prefab::new(TreePath::parse("/area/station"));
+        engineering.set_var("name".into(), Value::Text(String::from("Engineering")));
+        let other = map.intern_tile(vec![Prefab::new(TreePath::parse("/turf/open/floor")), engineering]);
+        map.grid[0][0] = vec![base, base, other, base];
+        map.grid[1][0] = vec![base, base, other, base];
+        session.state.open_document(MapDocument::new(map, 1));
+        session.rebuild_instances();
+
+        session
+    }
+
     #[test]
     fn validates_one_based_map_levels() {
         assert!(validate_level(1, 3).is_ok());
@@ -925,6 +1005,93 @@ mod tests {
     }
 
     #[test]
+    fn focus_toggles_connected_regions_and_clears_without_an_area() {
+        let mut session = focus_session();
+        let first = Coord::new(1, 1, 1);
+        let same_region = Coord::new(2, 1, 1);
+        let different_area = Coord::new(3, 1, 1);
+        let disconnected_match = Coord::new(4, 1, 1);
+
+        session.toggle_focus_at(Some(first));
+        let first_focus = session.focused_area().unwrap();
+        assert!(session.can_place_at(first));
+        assert!(session.can_place_at(same_region));
+        assert!(!session.can_place_at(different_area));
+        assert!(!session.can_place_at(disconnected_match));
+
+        session.toggle_focus_at(Some(same_region));
+        assert_eq!(session.focused_area(), None);
+
+        session.toggle_focus_at(Some(first));
+        session.toggle_focus_at(Some(disconnected_match));
+        assert_ne!(session.focused_area(), Some(first_focus));
+        assert!(session.can_place_at(disconnected_match));
+        assert!(!session.can_place_at(first));
+
+        session.toggle_focus_at(None);
+        assert_eq!(session.focused_area(), None);
+        assert!(session.can_place_at(first));
+    }
+
+    #[test]
+    fn focus_blocks_direct_placement_outside_the_region() {
+        let mut session = focus_session();
+        let inside = Coord::new(1, 1, 1);
+        let outside = Coord::new(4, 1, 1);
+        let table = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/structure/table"))
+            .unwrap();
+        let outside_before = session.map().unwrap().tile_at(outside).unwrap().clone();
+
+        assert!(session.choose_type(table));
+        session.toggle_focus_at(Some(inside));
+        assert_eq!(session.place_at(outside, None), None);
+        assert_eq!(session.map().unwrap().tile_at(outside), Some(&outside_before));
+        assert!(session.place_at(inside, None).is_some());
+    }
+
+    #[test]
+    fn changing_levels_clears_focus() {
+        let mut session = focus_session();
+        session.toggle_focus_at(Some(Coord::new(1, 1, 1)));
+        assert!(session.focused_area().is_some());
+
+        session.change_level(1);
+
+        assert_eq!(session.z(), 2);
+        assert_eq!(session.focused_area(), None);
+        assert!(session.can_place_at(Coord::new(4, 1, 2)));
+    }
+
+    #[test]
+    fn area_edits_retain_the_seed_component_or_clear_an_invalid_seed() {
+        let mut session = focus_session();
+        let seed = Coord::new(1, 1, 1);
+        let neighbor = Coord::new(2, 1, 1);
+        session.toggle_focus_at(Some(seed));
+
+        let neighbor_area = session.area_at(neighbor).unwrap();
+        session.select_instance(Some(neighbor_area));
+        assert_eq!(
+            session.set_selected_instance_var("name".into(), Value::Text(String::from("Engineering"))),
+            Some(true),
+        );
+        assert!(session.focused_area().is_some());
+        assert!(session.can_place_at(seed));
+        assert!(!session.can_place_at(neighbor));
+
+        let seed_area = session.area_at(seed).unwrap();
+        session.select_instance(Some(seed_area));
+        assert_eq!(
+            session.set_selected_instance_var("name".into(), Value::Text(String::from("Engineering"))),
+            Some(true),
+        );
+        assert_eq!(session.focused_area(), None);
+    }
+
+    #[test]
     fn reanchoring_the_selected_instance_keeps_its_rendered_position() {
         let root = examples();
         let mut session = Session::new();
@@ -1020,7 +1187,7 @@ mod tests {
     }
 
     #[test]
-    fn editing_an_area_uses_a_partial_frame_update() {
+    fn editing_an_area_rebuilds_component_membership() {
         let root = examples();
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
@@ -1034,10 +1201,7 @@ mod tests {
             Some(true),
         );
         assert_eq!(session.revision, revision.wrapping_add(1));
-        let update = session.frame_update.expect("area edit must remain incremental");
-        assert_eq!(update.previous_revision, revision);
-        assert!(update.sprites.is_some());
-        assert!(update.area_tiles.is_none());
+        assert_eq!(session.frame_update, None);
     }
 
     #[test]

@@ -379,6 +379,10 @@ impl UiState {
 
                 camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
             });
+            if hovered && !ui.io().want_text_input() && !has_modifiers(ui) && ui.is_key_pressed(Key::F) {
+                session.toggle_focus_at(pointed_coord);
+                self.placement_stroke = None;
+            }
             let tool = session.tool();
             let preview_coord = (tool == Tool::Place)
                 .then(|| self.gizmo.placement_coord().or(pointed_coord))
@@ -386,6 +390,7 @@ impl UiState {
             let active_flash = active_placement_flash(&mut self.placement_flash, ui.time());
             interaction.placement_flash = active_flash.map(|(_, flash)| flash);
             if let Some(coord) = preview_coord
+                && session.can_place_at(coord)
                 && active_flash.is_none_or(|(flash_coord, _)| flash_coord != coord)
             {
                 draw_placement_preview(ui, session, camera, coord, viewport_min, viewport_max);
@@ -441,7 +446,10 @@ impl UiState {
                                     .cloned()
                                     .map(|prefab| PlacementStroke::new(prefab, session.z()));
                             }
-                            let group = self.placement_stroke.as_mut().and_then(|stroke| stroke.visit(coord));
+                            let group = session
+                                .can_place_at(coord)
+                                .then(|| self.placement_stroke.as_mut().and_then(|stroke| stroke.visit(coord)))
+                                .flatten();
                             if let Some(group) = group
                                 && let Some(owner) = session.place_at(coord, Some(group))
                             {
@@ -465,6 +473,9 @@ impl UiState {
             draw_top_overlay(ui, session, top_overlay);
             draw_history_overlay(ui, session, bottom_overlay);
             suppress_place_highlights(session.tool(), interaction);
+            if session.focused_area().is_some() {
+                interaction.hovered_area = None;
+            }
 
             if ui.is_key_pressed(Key::Escape) {
                 *exit = true;

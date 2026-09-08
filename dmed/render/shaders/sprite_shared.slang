@@ -14,6 +14,7 @@ public static const u32 SPRITE_TEXTURE_MASK = (1 << SPRITE_FLAGS_SHIFT) - 1;
 
 public struct Sprite {
     public u32x2 owner;
+    public u32x2 area_owner;
     public f32x2 position;
     public u32 packed_size;
     public u32 packed_color;
