@@ -11,8 +11,9 @@ use editor::{
     Environment,
     command::EditGroupId,
     document::{MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
+    focus::AreaFocus,
     frame::{self, FrameInstances, FrameOptions, PrefabUpdate},
-    tool::{Tool, ToolContext, is_placeable},
+    tool::{Tool, ToolContext, ToolEdit, is_placeable},
     visual,
 };
 use objtree::{ObjectTree, TypeId};
@@ -57,12 +58,6 @@ pub(crate) struct PlacementPreview {
     pub offset: [i32; 2],
 }
 
-#[derive(Debug, Clone, PartialEq)]
-struct FocusedArea {
-    seed: Coord,
-    prefab: Prefab,
-}
-
 pub struct Session {
     pub state: EditorState,
     pub textures: TextureCatalog,
@@ -71,7 +66,6 @@ pub struct Session {
     revision: u64,
     frame_update: Option<FrameUpdate>,
     texture_revision: u64,
-    focused_area: Option<FocusedArea>,
 }
 
 impl Session {
@@ -84,7 +78,6 @@ impl Session {
             revision: 0,
             frame_update: None,
             texture_revision: 0,
-            focused_area: None,
         }
     }
 
@@ -95,7 +88,6 @@ impl Session {
         self.textures = build_textures(&environment);
         self.texture_revision = self.texture_revision.wrapping_add(1);
         self.state.environment = Some(environment);
-        self.focused_area = None;
 
         Ok(())
     }
@@ -127,7 +119,6 @@ impl Session {
         self.state.open_document(document);
         self.revision = self.revision.wrapping_add(1);
         self.frame_update = None;
-        self.focused_area = None;
 
         Ok(())
     }
@@ -165,7 +156,7 @@ impl Session {
         }
 
         document.z = z;
-        self.focused_area = None;
+        document.set_focus(None);
     }
 
     pub fn change_level(&mut self, delta: i32) {
@@ -178,7 +169,7 @@ impl Session {
 
         if next != document.z {
             document.z = next;
-            self.focused_area = None;
+            document.set_focus(None);
         }
     }
 
@@ -278,7 +269,7 @@ impl Session {
     }
 
     pub fn place_at(&mut self, coord: Coord, group: Option<EditGroupId>) -> Option<PrefabInstanceId> {
-        if self.state.tool != Tool::Place || !self.can_place_at(coord) {
+        if self.state.tool != Tool::Place || !self.can_edit_at(coord) {
             return None;
         }
         let prefab = self.state.palette.clone()?;
@@ -291,25 +282,60 @@ impl Session {
                 document,
                 tree: &environment.tree,
                 prefab: Some(&prefab),
+                target: None,
                 coord,
                 anchor: None,
             })
         }?;
-        let selected = action.selected;
-        let affected = action.affected;
+        let selected = action.selected?;
+        if !self.commit(action, group) {
+            return None;
+        }
+
         if let Some(document) = self.state.active_document_mut() {
-            document.apply_grouped(action.edit, group);
             document.select_instance(Some(selected));
         }
         self.state.choose_prefab(prefab);
 
-        if affected.len() == 1 {
-            self.update_instance(affected[0]);
-        } else {
-            self.rebuild_instances();
+        Some(selected)
+    }
+
+    pub fn delete_instance(&mut self, target: PrefabInstanceId) -> bool {
+        if self.state.tool != Tool::Delete {
+            return false;
         }
 
-        Some(selected)
+        self.build_delete(target)
+            .is_some_and(|action| self.commit(action, None))
+    }
+
+    fn build_delete(&mut self, target: PrefabInstanceId) -> Option<ToolEdit> {
+        let environment = self.state.environment.as_ref()?;
+        let active = self.state.active?;
+        let document = self.state.documents.get_mut(active)?;
+        let coord = Coord::new(1, 1, document.z);
+
+        Tool::Delete.build_edit(&mut ToolContext {
+            document,
+            tree: &environment.tree,
+            prefab: None,
+            target: Some(target),
+            coord,
+            anchor: None,
+        })
+    }
+
+    fn commit(&mut self, action: ToolEdit, group: Option<EditGroupId>) -> bool {
+        let affected = action.affected;
+        let applied = self
+            .state
+            .active_document_mut()
+            .is_some_and(|document| document.apply_grouped(action.edit, group));
+        if applied {
+            self.update_instances(&affected);
+        }
+
+        applied
     }
 
     pub fn selected_prefab(&self) -> Option<&Prefab> {
@@ -536,47 +562,59 @@ impl Session {
             })
     }
 
-    pub fn focused_area(&self) -> Option<PrefabInstanceId> {
-        let focused = self.focused_area.as_ref()?;
-        let owner = self.area_at(focused.seed)?;
-        let (prefab, _) = self.state.active_document()?.prefab_instance(owner)?;
-        if !frame::same_area(&focused.prefab, prefab) {
-            return None;
-        }
-
-        self.instances.area_component_at(focused.seed)
-    }
+    pub fn focused_area(&self) -> Option<PrefabInstanceId> { Some(self.state.active_document()?.focus()?.component()) }
 
     pub fn toggle_focus_at(&mut self, coord: Option<Coord>) {
-        let candidate = coord.and_then(|coord| {
-            let owner = self.area_at(coord)?;
-            let prefab = self.state.active_document()?.prefab_instance(owner)?.0.clone();
-            let component = self.instances.area_component_at(coord)?;
+        if self.focused_area().is_some()
+            && coord.is_none_or(|coord| self.instances.area_component_at(coord) == self.focused_area())
+        {
+            self.set_focus(None);
 
-            Some((coord, prefab, component))
-        });
-        let Some((seed, prefab, component)) = candidate else {
-            self.focused_area = None;
+            return;
+        }
 
+        let focus = coord.and_then(|seed| self.resolve_focus(seed));
+        self.set_focus(focus);
+    }
+
+    pub fn can_edit_at(&self, coord: Coord) -> bool {
+        self.state
+            .active_document()
+            .is_none_or(|document| document.allows_edit_at(coord))
+    }
+
+    fn set_focus(&mut self, focus: Option<AreaFocus>) {
+        if let Some(document) = self.state.active_document_mut() {
+            document.set_focus(focus);
+        }
+    }
+
+    fn resolve_focus(&self, seed: Coord) -> Option<AreaFocus> {
+        let owner = self.area_at(seed)?;
+        let prefab = self.state.active_document()?.prefab_instance(owner)?.0.clone();
+        let component = self.instances.area_component_at(seed)?;
+
+        Some(AreaFocus::new(
+            seed,
+            prefab,
+            component,
+            self.instances.area_component_tiles(component),
+        ))
+    }
+
+    fn revalidate_focus(&mut self) {
+        let Some(seed) = self.state.active_document().and_then(|document| {
+            let focus = document.focus()?;
+
+            Some((focus.seed(), focus.prefab().clone()))
+        }) else {
             return;
         };
 
-        if self.focused_area() == Some(component) {
-            self.focused_area = None;
-        } else {
-            self.focused_area = Some(FocusedArea { seed, prefab });
-        }
-    }
-
-    pub fn can_place_at(&self, coord: Coord) -> bool {
-        let Some(_) = self.focused_area.as_ref() else {
-            return true;
-        };
-        let Some(focused) = self.focused_area() else {
-            return false;
-        };
-
-        self.instances.area_component_at(coord) == Some(focused)
+        let resolved = self
+            .resolve_focus(seed.0)
+            .filter(|focus| frame::same_area(&seed.1, focus.prefab()));
+        self.set_focus(resolved);
     }
 
     pub fn toggle_areas(&mut self) { self.options.show_areas = !self.options.show_areas; }
@@ -629,21 +667,21 @@ impl Session {
         };
         self.revision = self.revision.wrapping_add(1);
         self.frame_update = None;
-        if self.focused_area.is_some() && self.focused_area().is_none() {
-            self.focused_area = None;
-        }
+        self.revalidate_focus();
     }
 
-    fn update_instance(&mut self, selected: PrefabInstanceId) {
+    fn update_instance(&mut self, selected: PrefabInstanceId) { self.update_instances(&[selected]); }
+
+    fn update_instances(&mut self, affected: &[PrefabInstanceId]) {
         let update = match (self.state.environment.as_ref(), self.state.active) {
             (Some(environment), Some(active)) => self.state.documents.get(active).map(|document| {
-                frame::update_prefab(
+                frame::update_prefabs(
                     &mut self.instances,
                     &environment.tree,
                     &environment.icons,
                     &self.textures,
                     document,
-                    selected,
+                    affected,
                     self.options.tile_size,
                 )
             }),
@@ -664,6 +702,7 @@ impl Session {
             },
             PrefabUpdate::Rebuild => self.rebuild_instances(),
         }
+        self.revalidate_focus();
     }
 }
 
@@ -1113,10 +1152,10 @@ mod tests {
 
         session.toggle_focus_at(Some(first));
         let first_focus = session.focused_area().unwrap();
-        assert!(session.can_place_at(first));
-        assert!(session.can_place_at(same_region));
-        assert!(!session.can_place_at(different_area));
-        assert!(!session.can_place_at(disconnected_match));
+        assert!(session.can_edit_at(first));
+        assert!(session.can_edit_at(same_region));
+        assert!(!session.can_edit_at(different_area));
+        assert!(!session.can_edit_at(disconnected_match));
 
         session.toggle_focus_at(Some(same_region));
         assert_eq!(session.focused_area(), None);
@@ -1124,12 +1163,12 @@ mod tests {
         session.toggle_focus_at(Some(first));
         session.toggle_focus_at(Some(disconnected_match));
         assert_ne!(session.focused_area(), Some(first_focus));
-        assert!(session.can_place_at(disconnected_match));
-        assert!(!session.can_place_at(first));
+        assert!(session.can_edit_at(disconnected_match));
+        assert!(!session.can_edit_at(first));
 
         session.toggle_focus_at(None);
         assert_eq!(session.focused_area(), None);
-        assert!(session.can_place_at(first));
+        assert!(session.can_edit_at(first));
     }
 
     #[test]
@@ -1152,6 +1191,44 @@ mod tests {
     }
 
     #[test]
+    fn focus_blocks_every_tool_not_just_placement() {
+        let mut session = focus_session();
+        let inside = Coord::new(1, 1, 1);
+        let outside = Coord::new(4, 1, 1);
+        session.toggle_focus_at(Some(inside));
+        assert!(session.can_edit_at(inside));
+        assert!(!session.can_edit_at(outside));
+
+        let outside_target = session.state.active_document().unwrap().instance_ids_at(outside)[0];
+        let inside_target = session.state.active_document().unwrap().instance_ids_at(inside)[0];
+        let outside_before = session.map().unwrap().tile_at(outside).unwrap().clone();
+
+        session.set_tool(Tool::Delete);
+        assert!(!session.delete_instance(outside_target));
+        assert!(session.delete_instance(inside_target));
+        assert_eq!(session.map().unwrap().tile_at(outside), Some(&outside_before));
+        assert_eq!(
+            session
+                .state
+                .active_document()
+                .unwrap()
+                .instance_location(inside_target),
+            None
+        );
+
+        // the gizmo drags the selection, and dragging it out of the region is the same escape
+        let neighbor = Coord::new(2, 1, 1);
+        let movable = session.state.active_document().unwrap().instance_ids_at(neighbor)[0];
+        session.select_instance(Some(movable));
+        assert_eq!(
+            session.move_selected_instance(outside, "move out", &[], None),
+            Some(false)
+        );
+        assert_eq!(session.selected_location().unwrap().coord, neighbor);
+        assert_eq!(session.move_selected_instance(inside, "move in", &[], None), Some(true));
+    }
+
+    #[test]
     fn changing_levels_clears_focus() {
         let mut session = focus_session();
         session.toggle_focus_at(Some(Coord::new(1, 1, 1)));
@@ -1161,7 +1238,7 @@ mod tests {
 
         assert_eq!(session.z(), 2);
         assert_eq!(session.focused_area(), None);
-        assert!(session.can_place_at(Coord::new(4, 1, 2)));
+        assert!(session.can_edit_at(Coord::new(4, 1, 2)));
     }
 
     #[test]
@@ -1178,8 +1255,8 @@ mod tests {
             Some(true),
         );
         assert!(session.focused_area().is_some());
-        assert!(session.can_place_at(seed));
-        assert!(!session.can_place_at(neighbor));
+        assert!(session.can_edit_at(seed));
+        assert!(!session.can_edit_at(neighbor));
 
         let seed_area = session.area_at(seed).unwrap();
         session.select_instance(Some(seed_area));
@@ -1286,7 +1363,7 @@ mod tests {
     }
 
     #[test]
-    fn editing_an_area_rebuilds_component_membership() {
+    fn editing_an_area_updates_component_membership_incrementally() {
         let root = examples();
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
@@ -1300,7 +1377,9 @@ mod tests {
             Some(true),
         );
         assert_eq!(session.revision, revision.wrapping_add(1));
-        assert_eq!(session.frame_update, None);
+        let update = session.frame_update.expect("area edit must remain incremental");
+        assert_eq!(update.previous_revision, revision);
+        assert!(update.sprites.is_some());
     }
 
     #[test]
@@ -1333,6 +1412,55 @@ mod tests {
         assert!(session.instances.sprite(selected).is_some());
         assert_eq!(session.revision, revision.wrapping_add(1));
         assert_eq!(session.frame_update.unwrap().previous_revision, revision);
+    }
+
+    #[test]
+    fn delete_tool_removes_the_target_instance_and_its_cached_sprites() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        session.open_map(&root.join("test.dmm"), 1).unwrap();
+        let coord = Coord::new(6, 3, 1);
+        let target = session
+            .state
+            .active_document()
+            .and_then(|document| document.instance_ids_at(coord).first())
+            .copied()
+            .unwrap();
+        let before_len = session.map().unwrap().tile_at(coord).unwrap().len();
+        session.select_instance(Some(target));
+
+        assert!(!session.delete_instance(target));
+        assert_eq!(session.selected_instance(), Some(target));
+
+        session.set_tool(Tool::Delete);
+        let revision = session.revision;
+        assert!(session.delete_instance(target));
+        assert_eq!(session.map().unwrap().tile_at(coord).unwrap().len(), before_len - 1);
+        assert_eq!(session.selected_instance(), None);
+        assert_eq!(session.state.active_document().unwrap().instance_location(target), None);
+        assert!(session.instances.sprites.iter().all(|sprite| sprite.owner != target));
+        assert_eq!(session.revision, revision.wrapping_add(1));
+        assert!(!session.delete_instance(target));
+    }
+
+    #[test]
+    fn deleting_areas_revalidates_or_clears_the_active_focus() {
+        let mut session = focus_session();
+        let seed = Coord::new(1, 1, 1);
+        let neighbor = Coord::new(2, 1, 1);
+        session.toggle_focus_at(Some(seed));
+        session.set_tool(Tool::Delete);
+
+        let neighbor_area = session.area_at(neighbor).unwrap();
+        assert!(session.delete_instance(neighbor_area));
+        assert!(session.focused_area().is_some());
+        assert!(session.can_edit_at(seed));
+        assert!(!session.can_edit_at(neighbor));
+
+        let seed_area = session.area_at(seed).unwrap();
+        assert!(session.delete_instance(seed_area));
+        assert_eq!(session.focused_area(), None);
     }
 
     #[test]

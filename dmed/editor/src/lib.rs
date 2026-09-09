@@ -2,6 +2,7 @@ pub mod command;
 pub mod document;
 pub mod environment;
 pub mod error;
+pub mod focus;
 pub mod frame;
 pub mod icons;
 pub mod tool;

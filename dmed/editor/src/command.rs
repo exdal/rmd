@@ -70,12 +70,6 @@ pub struct History {
 impl History {
     pub fn new() -> Self { Self::default() }
 
-    pub(crate) fn apply(
-        &mut self, map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>, edit: Edit,
-    ) {
-        self.apply_grouped(map, instances, key_usage, edit, None);
-    }
-
     pub(crate) fn apply_grouped(
         &mut self, map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>, edit: Edit,
         group: Option<EditGroupId>,

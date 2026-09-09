@@ -53,11 +53,12 @@ func is_highlighted_owner(u32x2 owner, u32x2 selected_owner, u32x2 hovered_owner
         (any(hovered_owner != u32x2(0)) && same_owner(owner, hovered_owner));
 }
 
-func marching_color(f32 path_position, f32 stripe_offset) -> f32x4 {
+func marching_color(f32 path_position, f32 stripe_offset, u32 interaction_mode) -> f32x4 {
     let stripe_position = path_position - stripe_offset;
     let wrapped = stripe_position - floor(stripe_position / 12.0) * 12.0;
+    let accent = interaction_mode != 0 ? f32x4(1.0, 0.0, 0.0, 1.0) : f32x4(0.0, 1.0, 0.0, 1.0);
 
-    return wrapped < 6.0 ? f32x4(1.0) : f32x4(0.0, 1.0, 0.0, 1.0);
+    return wrapped < 6.0 ? f32x4(1.0) : accent;
 }
 
 func guide_color(f32 path_position, f32 stripe_offset) -> f32x4 {
@@ -76,7 +77,9 @@ func fs_main(
     uniform f32 stripe_offset,
     uniform f32x2 guide_origin,
     uniform f32x2 guide_target,
-    uniform u32 guide_valid
+    uniform u32 guide_valid,
+    uniform u32 interaction_mode,
+    uniform u32x2 focused_area_owner
 ) -> f32x4 {
     let color = scene.Sample(input.uv);
     let pixel = i32x2(input.position.xy);
@@ -101,7 +104,13 @@ func fs_main(
 
     var hovered_owner = u32x2(0);
     if (cursor_valid != 0) {
-        hovered_owner = owner_at(i32x2(cursor), width, height);
+        let hovered = visibility.Load(i32x3(i32x2(cursor), 0));
+        // a focused area makes every tool inert outside it, so nothing out there highlights
+        let reachable = !any(focused_area_owner != u32x2(0)) ||
+            (hovered != 0 && all(sprites[hovered - 1].area_owner == focused_area_owner));
+        if (reachable) {
+            hovered_owner = owner_for(hovered);
+        }
     }
 
     if (!any(selected_owner != u32x2(0)) && !any(hovered_owner != u32x2(0)) && !guide_active) {
@@ -150,7 +159,7 @@ func fs_main(
             path_position = nearest.x < 0 ? f32(pixel.y) : -f32(pixel.y);
         }
 
-        return marching_color(path_position, stripe_offset);
+        return marching_color(path_position, stripe_offset, interaction_mode);
     }
 
     if (on_guide) {

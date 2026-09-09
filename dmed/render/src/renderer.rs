@@ -115,6 +115,8 @@ struct InteractionPush {
     guide_origin: [f32; 2],
     guide_target: [f32; 2],
     guide_valid: u32,
+    interaction_mode: u32,
+    focused_area_owner: [u32; 2],
 }
 
 #[repr(C)]
@@ -763,9 +765,9 @@ impl Renderer {
             }),
         );
 
-        let cursor = interaction
-            .cursor
-            .filter(|cursor| cursor[0] < viewport.width && cursor[1] < viewport.height);
+        let inside = |cursor: &[u32; 2]| cursor[0] < viewport.width && cursor[1] < viewport.height;
+        let cursor = interaction.cursor.filter(inside);
+        let pick = interaction.mode.pick();
         if let Some(slots) = recorded.interaction.as_ref() {
             let selected_owner = interaction.selected.map(owner_words).unwrap_or([0; 2]);
             let cursor_value = cursor.unwrap_or([0; 2]);
@@ -789,6 +791,8 @@ impl Renderer {
                     guide_origin,
                     guide_target,
                     guide_valid,
+                    interaction_mode: u32::from(interaction.mode.is_delete()),
+                    focused_area_owner: frame.focused_area.map(owner_words).unwrap_or([0; 2]),
                 },
             );
             recorded.program.set_bytes(
@@ -851,7 +855,7 @@ impl Renderer {
                 Err(error) => return Err(error.into()),
             };
 
-        if !executed || !interaction.pick || cursor.is_none() {
+        if !executed || pick.is_none() || cursor.is_none() {
             return Ok(None);
         }
 

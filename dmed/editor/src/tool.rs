@@ -18,13 +18,14 @@ pub struct ToolContext<'a> {
     pub document: &'a mut MapDocument,
     pub tree: &'a ObjectTree,
     pub prefab: Option<&'a Prefab>,
+    pub target: Option<PrefabInstanceId>,
     pub coord: Coord,
     pub anchor: Option<Coord>,
 }
 
 pub struct ToolEdit {
     pub edit: Edit,
-    pub selected: PrefabInstanceId,
+    pub selected: Option<PrefabInstanceId>,
     pub affected: Vec<PrefabInstanceId>,
 }
 
@@ -47,7 +48,8 @@ impl Tool {
     pub fn build_edit(self, context: &mut ToolContext<'_>) -> Option<ToolEdit> {
         match self {
             Self::Place => place(context),
-            Self::Select | Self::Delete => None,
+            Self::Delete => delete(context),
+            Self::Select => None,
         }
     }
 }
@@ -107,8 +109,33 @@ fn place(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
 
     Some(ToolEdit {
         edit,
-        selected,
+        selected: Some(selected),
         affected,
+    })
+}
+
+fn delete(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
+    let target = context.target?;
+    let location = context.document.instance_location(target)?;
+    if !context.document.allows_edit_at(location.coord) {
+        return None;
+    }
+    let mut after = context.document.placed_tile(location.coord)?;
+    if after
+        .get(location.prefab_index)
+        .is_none_or(|placed| placed.id() != target)
+    {
+        return None;
+    }
+    let placed = after.remove(location.prefab_index);
+
+    let mut edit = Edit::new(format!("delete {}", placed.prefab().path));
+    edit.change(context.document, location.coord, after);
+
+    Some(ToolEdit {
+        edit,
+        selected: None,
+        affected: vec![target],
     })
 }
 
@@ -207,6 +234,7 @@ mod tests {
             document,
             tree,
             prefab: Some(prefab),
+            target: None,
             coord: dmm::Coord::new(1, 1, 1),
             anchor: None,
         })
@@ -219,7 +247,7 @@ mod tests {
         let mut chair = Prefab::new(TreePath::parse("/obj/chair"));
         chair.set_var("name".into(), Value::Text("custom".into()));
         let action = place(&mut document, &tree, &chair).unwrap();
-        let selected = action.selected;
+        let selected = action.selected.unwrap();
         document.apply(action.edit);
 
         let paths = document
@@ -243,7 +271,7 @@ mod tests {
         let turf_id = document.instance_ids_at(dmm::Coord::new(1, 1, 1))[0];
         let before = document.placed_tile(dmm::Coord::new(1, 1, 1)).unwrap();
         let action = place(&mut document, &tree, &Prefab::new(TreePath::parse("/turf/wall"))).unwrap();
-        assert_eq!(action.selected, turf_id);
+        assert_eq!(action.selected, Some(turf_id));
         assert_eq!(action.affected.len(), 2);
         document.apply(action.edit);
 
@@ -257,7 +285,7 @@ mod tests {
         let mut document = map_document(&["/obj/table", "/turf/floor", "/area/station"]);
         let area_id = document.instance_ids_at(dmm::Coord::new(1, 1, 1))[2];
         let action = place(&mut document, &tree, &Prefab::new(TreePath::parse("/area/space"))).unwrap();
-        assert_eq!(action.selected, area_id);
+        assert_eq!(action.selected, Some(area_id));
         document.apply(action.edit);
         let tile = document.map.tile_at(dmm::Coord::new(1, 1, 1)).unwrap();
         assert_eq!(tile[2].path, TreePath::parse("/area/space"));
@@ -271,5 +299,57 @@ mod tests {
 
         assert!(place(&mut document, &tree, &Prefab::new(TreePath::parse("/turf/floor"))).is_none());
         assert!(place(&mut document, &tree, &Prefab::new(TreePath::parse("/datum"))).is_none());
+    }
+
+    #[test]
+    fn delete_removes_only_the_target_and_undo_restores_its_id() {
+        let tree = tree();
+        let coord = dmm::Coord::new(1, 1, 1);
+        let mut document = map_document(&["/obj/table", "/turf/floor", "/area/station"]);
+        let target = document.instance_ids_at(coord)[0];
+        document.select_instance(Some(target));
+
+        let action = Tool::Delete
+            .build_edit(&mut ToolContext {
+                document: &mut document,
+                tree: &tree,
+                prefab: None,
+                target: Some(target),
+                coord,
+                anchor: None,
+            })
+            .unwrap();
+        assert_eq!(action.selected, None);
+        assert_eq!(action.affected, [target]);
+        document.apply(action.edit);
+
+        let paths = document
+            .map
+            .tile_at(coord)
+            .unwrap()
+            .iter()
+            .map(|prefab| prefab.path.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(paths, ["/turf/floor", "/area/station"]);
+        assert_eq!(document.selected_instance(), None);
+        assert_eq!(document.instance_location(target), None);
+
+        assert!(
+            Tool::Delete
+                .build_edit(&mut ToolContext {
+                    document: &mut document,
+                    tree: &tree,
+                    prefab: None,
+                    target: Some(target),
+                    coord,
+                    anchor: None,
+                })
+                .is_none()
+        );
+
+        assert!(document.undo());
+        assert_eq!(document.instance_ids_at(coord)[0], target);
+        assert!(document.redo());
+        assert_eq!(document.instance_location(target), None);
     }
 }

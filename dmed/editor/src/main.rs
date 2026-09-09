@@ -22,6 +22,7 @@ use dear_imgui_rs::{
     render::SynchronousRendererConsumer,
 };
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
+use editor::tool::Tool;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use render::{Device, PickResult, Renderer};
 use winit::{
@@ -247,11 +248,18 @@ impl App {
         let pending = frame.try_render(consumer)?;
         window.pre_present_notify();
         let picked = renderer.draw_imgui(&scene, output.viewport, pending, output.interaction)?;
-        if output.interaction.pick {
-            match picked {
-                Some(PickResult::Hit(owner)) => session.select_instance(Some(owner)),
-                Some(PickResult::Miss) => session.select_instance(None),
-                None => {},
+        if let Some(pick) = picked {
+            match session.tool() {
+                Tool::Select => match pick {
+                    PickResult::Hit(owner) => session.select_instance(Some(owner)),
+                    PickResult::Miss => session.select_instance(None),
+                },
+                Tool::Delete => {
+                    if let PickResult::Hit(owner) = pick {
+                        session.delete_instance(owner);
+                    }
+                },
+                Tool::Place => {},
             }
         }
 

@@ -46,11 +46,41 @@ pub struct ViewportInteraction {
     pub selected: Option<PrefabInstanceId>,
     pub selection_guide: Option<SelectionGuide>,
     pub placement_flash: Option<PlacementFlash>,
-    pub pick: bool,
+    pub mode: InteractionMode,
+}
+
+// parallel to tool::Tool to avoid circular dep
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InteractionMode {
+    #[default]
+    Place,
+    Select {
+        pick: Option<PickRequest>,
+    },
+    Delete {
+        pick: Option<PickRequest>,
+    },
+}
+
+impl InteractionMode {
+    pub const fn pick(self) -> Option<PickRequest> {
+        match self {
+            Self::Place => None,
+            Self::Select { pick } | Self::Delete { pick } => pick,
+        }
+    }
+
+    pub const fn is_delete(self) -> bool { matches!(self, Self::Delete { .. }) }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickRequest {
+    Cursor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PickResult {
+    #[default]
     Miss,
     Hit(PrefabInstanceId),
 }

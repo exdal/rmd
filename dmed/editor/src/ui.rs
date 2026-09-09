@@ -17,11 +17,11 @@ use dear_imgui_rs::{
 use dmm::{Coord, Prefab};
 use editor::{
     command::EditGroupId,
-    icons::materialdesignicons::{ICON_EYEDROPPER, ICON_IMAGE_BROKEN, ICON_PENCIL},
+    icons::materialdesignicons::{ICON_ERASER, ICON_EYEDROPPER, ICON_IMAGE_BROKEN, ICON_PENCIL},
     tool::{Tool, is_placeable},
 };
 use objtree::{ObjectTree, TypeId};
-use render::{PlacementFlash, Renderer, ViewportInteraction};
+use render::{InteractionMode, PickRequest, PlacementFlash, Renderer, ViewportInteraction};
 
 use crate::{
     camera::Controller,
@@ -168,6 +168,7 @@ impl UiState {
         let mut interaction = ViewportInteraction {
             selected: session.selected_instance(),
             selection_guide: session.selected_offset_guide(),
+            mode: interaction_mode(session.tool()),
             ..Default::default()
         };
 
@@ -357,6 +358,9 @@ impl UiState {
                 if ui.is_key_pressed(Key::S) {
                     session.set_tool(Tool::Select);
                 }
+                if ui.is_key_pressed(Key::X) {
+                    session.set_tool(Tool::Delete);
+                }
 
                 if *refit {
                     let (width, height) = session.extent_px();
@@ -364,18 +368,18 @@ impl UiState {
                     *refit = false;
                 }
             }
+            configure_tool_interaction(session.tool(), interaction);
 
-            let cursor = hovered
-                .then(|| {
-                    let mouse = ui.io().mouse_pos();
+            let in_viewport = |point: [f32; 2]| {
+                let local = [point[0] - viewport_min[0], point[1] - viewport_min[1]];
 
-                    [mouse[0] - viewport_min[0], mouse[1] - viewport_min[1]]
-                })
-                .filter(|cursor| {
-                    cursor.iter().all(|value| value.is_finite() && *value >= 0.0)
-                        && cursor[0] < viewport.0 as f32
-                        && cursor[1] < viewport.1 as f32
-                });
+                local
+                    .iter()
+                    .all(|value| value.is_finite() && *value >= 0.0)
+                    .then_some(local)
+                    .filter(|local| local[0] < viewport.0 as f32 && local[1] < viewport.1 as f32)
+            };
+            let cursor = hovered.then(|| ui.io().mouse_pos()).and_then(in_viewport);
             let pointed_coord = cursor.and_then(|cursor| {
                 let size = session.map()?.size;
 
@@ -392,7 +396,7 @@ impl UiState {
             let active_flash = active_placement_flash(&mut self.placement_flash, ui.time());
             interaction.placement_flash = active_flash.map(|(_, flash)| flash);
             if let Some(coord) = preview_coord
-                && session.can_place_at(coord)
+                && session.can_edit_at(coord)
                 && active_flash.is_none_or(|(flash_coord, _)| flash_coord != coord)
             {
                 draw_placement_preview(ui, session, camera, coord, viewport_min, viewport_max);
@@ -434,9 +438,9 @@ impl UiState {
             }) {
                 self.placement_stroke = None;
             }
-
             if !gizmo_captures_mouse && let Some(cursor) = cursor {
-                interaction.cursor = Some([cursor[0].floor() as u32, cursor[1].floor() as u32]);
+                let pixel = [cursor[0].floor() as u32, cursor[1].floor() as u32];
+                interaction.cursor = Some(pixel);
 
                 if let Some(coord) = pointed_coord {
                     interaction.hovered_area = session.area_at(coord);
@@ -449,7 +453,7 @@ impl UiState {
                                     .map(|prefab| PlacementStroke::new(prefab, session.z()));
                             }
                             let group = session
-                                .can_place_at(coord)
+                                .can_edit_at(coord)
                                 .then(|| self.placement_stroke.as_mut().and_then(|stroke| stroke.visit(coord)))
                                 .flatten();
                             if let Some(group) = group
@@ -464,9 +468,11 @@ impl UiState {
                                 interaction.placement_flash = flash.sample(ui.time());
                             }
                         },
-                        Tool::Select if left_clicked => interaction.pick = true,
-                        Tool::Select | Tool::Delete => {
+                        tool @ (Tool::Select | Tool::Delete) => {
                             self.placement_stroke = None;
+                            if tool_requests_pick(tool, left_clicked, left_down) {
+                                request_pick(interaction, PickRequest::Cursor);
+                            }
                         },
                     }
                 }
@@ -474,7 +480,7 @@ impl UiState {
 
             draw_top_overlay(ui, session, top_overlay);
             draw_history_overlay(ui, session, bottom_overlay);
-            suppress_place_highlights(session.tool(), interaction);
+            configure_tool_interaction(session.tool(), interaction);
             if session.focused_area().is_some() {
                 interaction.hovered_area = None;
             }
@@ -580,13 +586,49 @@ fn placement_preview_opacity(time: f64) -> f32 {
     (0.9 + 0.1 * phase.cos()) as f32
 }
 
-fn suppress_place_highlights(tool: Tool, interaction: &mut ViewportInteraction) {
-    if tool == Tool::Place {
-        interaction.cursor = None;
-        interaction.hovered_area = None;
-        interaction.selected = None;
-        interaction.selection_guide = None;
-        interaction.pick = false;
+fn configure_tool_interaction(tool: Tool, interaction: &mut ViewportInteraction) {
+    interaction.mode = match (tool, interaction.mode) {
+        (Tool::Place, _) => InteractionMode::Place,
+        (Tool::Select, InteractionMode::Select { pick }) => InteractionMode::Select { pick },
+        (Tool::Delete, InteractionMode::Delete { pick }) => InteractionMode::Delete { pick },
+        (Tool::Select, _) => InteractionMode::Select { pick: None },
+        (Tool::Delete, _) => InteractionMode::Delete { pick: None },
+    };
+    match tool {
+        Tool::Place => {
+            interaction.cursor = None;
+            interaction.hovered_area = None;
+            interaction.selected = None;
+            interaction.selection_guide = None;
+        },
+        Tool::Delete => {
+            interaction.selected = None;
+            interaction.selection_guide = None;
+        },
+        Tool::Select => {},
+    }
+}
+
+fn interaction_mode(tool: Tool) -> InteractionMode {
+    match tool {
+        Tool::Place => InteractionMode::Place,
+        Tool::Select => InteractionMode::Select { pick: None },
+        Tool::Delete => InteractionMode::Delete { pick: None },
+    }
+}
+
+fn request_pick(interaction: &mut ViewportInteraction, request: PickRequest) {
+    match &mut interaction.mode {
+        InteractionMode::Place => {},
+        InteractionMode::Select { pick } | InteractionMode::Delete { pick } => *pick = Some(request),
+    }
+}
+
+fn tool_requests_pick(tool: Tool, left_clicked: bool, left_down: bool) -> bool {
+    match tool {
+        Tool::Place => false,
+        Tool::Select => left_clicked,
+        Tool::Delete => left_down,
     }
 }
 
@@ -600,8 +642,10 @@ fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect) {
     draw_tool_button(ui, session, Tool::Place, ICON_PENCIL);
     ui.same_line();
     draw_tool_button(ui, session, Tool::Select, ICON_EYEDROPPER);
+    ui.same_line();
+    draw_tool_button(ui, session, Tool::Delete, ICON_ERASER);
 
-    let tools_end = bounds.min[0] + OVERLAY_PADDING + button_size * 2.0 + ui.clone_style().item_spacing()[0];
+    let tools_end = bounds.min[0] + OVERLAY_PADDING + button_size * 3.0 + ui.clone_style().item_spacing()[0] * 2.0;
     let levels_width = z_level_width(ui, session.level_count());
     let levels_x = (bounds.max[0] - OVERLAY_PADDING - levels_width).max(tools_end + OVERLAY_PADDING);
     ui.set_cursor_screen_pos([levels_x, bounds.min[1] + OVERLAY_PADDING]);
@@ -609,8 +653,12 @@ fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect) {
 }
 
 fn draw_tool_button(ui: &Ui, session: &mut Session, tool: Tool, icon: char) {
-    let _active = (session.tool() == tool)
-        .then(|| ui.push_style_color(StyleColor::Button, ui.style_color(StyleColor::PlotHistogramHovered)));
+    let color = match tool {
+        Tool::Delete => [1.0, 0.0, 0.0, 1.0],
+        _ => ui.style_color(StyleColor::PlotHistogramHovered),
+    };
+
+    let _color = (session.tool() == tool).then(|| ui.push_style_color(StyleColor::Button, color));
     if ui.button(icon.to_string()) {
         session.set_tool(tool);
     }
@@ -645,7 +693,7 @@ fn draw_history_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect) {
             Some(thumbnail) => {
                 let image_size = fit_recent_icon(thumbnail.texture.width, thumbnail.texture.height);
                 let padding = [(button_size - image_size[0]) * 0.5, (button_size - image_size[1]) * 0.5];
-                let _ = ui.push_style_var(StyleVar::FramePadding(padding));
+                let _padding = ui.push_style_var(StyleVar::FramePadding(padding));
 
                 ui.image_button_config(
                     format!("recent-{index}"),
@@ -952,7 +1000,7 @@ mod tests {
     }
 
     #[test]
-    fn place_mode_suppresses_viewport_highlights_and_pick_requests() {
+    fn tool_interaction_configures_highlights_and_pick_requests() {
         let owner = PrefabInstanceId::from_raw(7).unwrap();
         let interaction = ViewportInteraction {
             cursor: Some([10, 20]),
@@ -960,14 +1008,28 @@ mod tests {
             selected: Some(owner),
             selection_guide: None,
             placement_flash: Some(PlacementFlash { owner, strength: 0.5 }),
-            pick: true,
+            mode: InteractionMode::Select {
+                pick: Some(PickRequest::Cursor),
+            },
         };
         let mut selected = interaction;
 
-        suppress_place_highlights(Tool::Select, &mut selected);
+        configure_tool_interaction(Tool::Select, &mut selected);
         assert_eq!(selected, interaction);
 
-        suppress_place_highlights(Tool::Place, &mut selected);
+        let mut delete = interaction;
+        configure_tool_interaction(Tool::Delete, &mut delete);
+        assert_eq!(
+            delete,
+            ViewportInteraction {
+                selected: None,
+                selection_guide: None,
+                mode: InteractionMode::Delete { pick: None },
+                ..interaction
+            }
+        );
+
+        configure_tool_interaction(Tool::Place, &mut selected);
         assert_eq!(
             selected,
             ViewportInteraction {
@@ -975,6 +1037,15 @@ mod tests {
                 ..Default::default()
             }
         );
+    }
+
+    #[test]
+    fn delete_picks_for_every_frame_the_mouse_is_held() {
+        assert!(tool_requests_pick(Tool::Delete, true, true));
+        assert!(tool_requests_pick(Tool::Delete, false, true));
+        assert!(!tool_requests_pick(Tool::Delete, false, false));
+        assert!(tool_requests_pick(Tool::Select, true, true));
+        assert!(!tool_requests_pick(Tool::Select, false, true));
     }
 
     #[test]

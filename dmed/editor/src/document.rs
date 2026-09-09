@@ -4,7 +4,10 @@ use std::{collections::HashMap, path::PathBuf};
 pub use dmm::PrefabInstanceId;
 use dmm::{Coord, Map, Prefab, key::Key};
 
-use crate::command::{Edit, EditGroupId, History};
+use crate::{
+    command::{Edit, EditGroupId, History},
+    focus::AreaFocus,
+};
 
 pub struct MapDocument {
     pub path: Option<PathBuf>,
@@ -15,6 +18,7 @@ pub struct MapDocument {
     selected_instance: Option<PrefabInstanceId>,
     instances: PrefabInstances,
     key_usage: HashMap<Key, usize>,
+    focus: Option<AreaFocus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +160,7 @@ impl MapDocument {
             selected_instance: None,
             instances,
             key_usage,
+            focus: None,
         }
     }
 
@@ -259,11 +264,8 @@ impl MapDocument {
 
         let mut edit = Edit::new(label);
         edit.change(self, location.coord, after);
-        self.history
-            .apply_grouped(&mut self.map, &mut self.instances, &mut self.key_usage, edit, group);
-        self.clear_stale_instance_selection();
 
-        Some(true)
+        Some(self.apply_grouped(edit, group))
     }
 
     /// this function keeps the ID stable
@@ -291,11 +293,8 @@ impl MapDocument {
 
         let mut edit = Edit::new(label);
         edit.change(self, location.coord, after);
-        self.history
-            .apply_grouped(&mut self.map, &mut self.instances, &mut self.key_usage, edit, group);
-        self.clear_stale_instance_selection();
 
-        Some(true)
+        Some(self.apply_grouped(edit, group))
     }
 
     pub fn move_instance(
@@ -330,23 +329,28 @@ impl MapDocument {
         let mut edit = Edit::new(label);
         edit.change(self, location.coord, source);
         edit.change(self, to_coord, destination);
+
+        Some(self.apply_grouped(edit, group))
+    }
+
+    pub fn set_focus(&mut self, focus: Option<AreaFocus>) { self.focus = focus; }
+
+    pub fn focus(&self) -> Option<&AreaFocus> { self.focus.as_ref() }
+
+    pub fn allows_edit_at(&self, coord: Coord) -> bool { self.focus.as_ref().is_none_or(|focus| focus.allows(coord)) }
+
+    pub fn apply(&mut self, edit: Edit) -> bool { self.apply_grouped(edit, None) }
+
+    pub fn apply_grouped(&mut self, edit: Edit, group: Option<EditGroupId>) -> bool {
+        if self.focus.as_ref().is_some_and(|focus| !focus.allows_edit(&edit)) {
+            return false;
+        }
+
         self.history
             .apply_grouped(&mut self.map, &mut self.instances, &mut self.key_usage, edit, group);
         self.clear_stale_instance_selection();
 
-        Some(true)
-    }
-
-    pub fn apply(&mut self, edit: Edit) {
-        self.history
-            .apply(&mut self.map, &mut self.instances, &mut self.key_usage, edit);
-        self.clear_stale_instance_selection();
-    }
-
-    pub fn apply_grouped(&mut self, edit: Edit, group: Option<EditGroupId>) {
-        self.history
-            .apply_grouped(&mut self.map, &mut self.instances, &mut self.key_usage, edit, group);
-        self.clear_stale_instance_selection();
+        true
     }
 
     pub fn undo(&mut self) -> bool {
@@ -398,13 +402,16 @@ impl MapDocument {
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
+    use core::{path::TreePath, types::Value};
     use std::collections::HashSet;
 
     use dmm::{Map, Prefab, Size, writer::MapWriter};
 
     use super::{Coord, MapDocument, VarMutation};
-    use crate::command::{Edit, EditGroupId};
+    use crate::{
+        command::{Edit, EditGroupId},
+        focus::AreaFocus,
+    };
 
     fn shared_tile_map() -> Map {
         let mut map = Map::new(Size { x: 2, y: 1, z: 2 });
@@ -774,5 +781,68 @@ mod tests {
         let prefab = document.prefab_instance(id).unwrap().0;
         assert_eq!(prefab.var(&"pixel_x".into()), None);
         assert_eq!(prefab.var(&"pixel_y".into()), None);
+    }
+    #[test]
+    fn a_focused_area_confines_every_edit_without_blocking_undo() {
+        let mut map = Map::new(Size { x: 3, y: 1, z: 1 });
+        let key = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/turf/floor")),
+            Prefab::new(TreePath::parse("/obj/table")),
+        ]);
+        map.grid[0][0] = vec![key, key, key];
+        let mut document = MapDocument::new(map, 1);
+        let inside = Coord::new(1, 1, 1);
+        let outside = Coord::new(3, 1, 1);
+        let table = document.instance_ids_at(outside)[1];
+
+        // an edit made before the focus was taken has to stay reversible
+        assert_eq!(
+            document.set_instance_var(table, "name".into(), Value::Text("early".into())),
+            Some(true),
+        );
+
+        document.set_focus(Some(AreaFocus::new(
+            inside,
+            Prefab::new(TreePath::parse("/area/station")),
+            document.instance_ids_at(inside)[0],
+            [inside, Coord::new(2, 1, 1)].into_iter().collect(),
+        )));
+        assert!(document.allows_edit_at(inside));
+        assert!(!document.allows_edit_at(outside));
+
+        let outside_before = document.placed_tile(outside);
+        let mut refused = Edit::new("delete outside the region");
+        refused.change(&document, outside, Vec::new());
+        assert!(!document.apply(refused));
+        assert_eq!(document.placed_tile(outside), outside_before);
+        assert_eq!(
+            document.set_instance_var(table, "name".into(), Value::Text("late".into())),
+            Some(false),
+        );
+
+        let mut allowed = Edit::new("delete inside the region");
+        allowed.change(&document, inside, Vec::new());
+        assert!(document.apply(allowed));
+        assert_eq!(document.placed_tile(inside), Some(Vec::new()));
+
+        // a move that leaves the region would otherwise clear its source and drop the instance
+        let moved = document.instance_ids_at(Coord::new(2, 1, 1))[1];
+        assert_eq!(
+            document.move_instance(moved, outside, "move out", &[], None),
+            Some(false)
+        );
+        assert_eq!(
+            document.instance_location(moved).map(|at| at.coord),
+            Some(Coord::new(2, 1, 1))
+        );
+
+        assert!(document.undo());
+        assert!(document.undo());
+        assert_eq!(
+            document
+                .prefab_instance(table)
+                .map(|(prefab, _)| prefab.var(&"name".into())),
+            Some(None),
+        );
     }
 }

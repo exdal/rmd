@@ -134,7 +134,9 @@ struct VisibilityOutput {
 func fs_visibility(VSOutput input) -> VisibilityOutput {
     VisibilityOutput output;
     output.color = sample_sprite(input);
-    output.visibility = input.sprite_id;
+
+    let flags = sprites[input.sprite_id - 1].flags();
+    output.visibility = (flags & SPRITE_AREA_EDGE_MASK) != 0 ? 0 : input.sprite_id;
 
     return output;
 }
