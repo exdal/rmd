@@ -49,6 +49,7 @@ use crate::{
 const GEOMETRY_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.vert.spv"));
 const SPRITE_SHADE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.frag.spv"));
 const SPRITE_VIS_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_visibility.frag.spv"));
+const SPRITE_OUTLINE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_outline.frag.spv"));
 const AREA_COLOR_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/area_color.comp.spv"));
 const BLUR_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blur.vert.spv"));
 const BLUR_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blur.frag.spv"));
@@ -143,6 +144,7 @@ struct Recorded {
     blur_push: ValueId,
     underlay_draws: ValueId,
     active_draws: ValueId,
+    outline_draws: ValueId,
     interaction: Option<InteractionSlots>,
     ui: Option<ImGuiSlots>,
 }
@@ -210,6 +212,7 @@ pub struct Renderer {
     swapchain: Option<SwapChain>,
     sprite_pipeline: PipelineId,
     visibility_pipeline: PipelineId,
+    outline_pipeline: PipelineId,
     blur_pipeline: PipelineId,
     interaction_pipeline: PipelineId,
     pick_pipeline: PipelineId,
@@ -267,6 +270,20 @@ impl Renderer {
             GraphicsPipelineInfo::new()
                 .with_shader(&geometry_vs)
                 .with_shader(&read_spirv(SPRITE_VIS_FS_SPV)?)
+                .with_bindless_set(1, bindless.layout, bindless.set),
+        ) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                drop(graph);
+                bindless.destroy(&device);
+
+                return Err(error.into());
+            },
+        };
+        let outline_pipeline = match graph.declare_pipeline(
+            GraphicsPipelineInfo::new()
+                .with_shader(&geometry_vs)
+                .with_shader(&read_spirv(SPRITE_OUTLINE_FS_SPV)?)
                 .with_bindless_set(1, bindless.layout, bindless.set),
         ) {
             Ok(pipeline) => pipeline,
@@ -344,6 +361,7 @@ impl Renderer {
             swapchain: None,
             sprite_pipeline,
             visibility_pipeline,
+            outline_pipeline,
             blur_pipeline,
             interaction_pipeline,
             pick_pipeline,
@@ -535,6 +553,7 @@ impl Renderer {
         let blur_push = module.declare_bytes_var("blur", size_of::<BlurPush>() as u32);
         let underlay_draws = module.declare_callback_var("underlay draws");
         let active_draws = module.declare_callback_var("active draws");
+        let outline_draws = module.declare_callback_var("area outline draws");
 
         let [underlays_attachment] = module
             .begin_rendering([(underlays_attachment, Access::ColorRW)])
@@ -584,6 +603,23 @@ impl Renderer {
             .bind_buffer(0, 1, sprites)
             .push_constants_from(camera)
             .record_from(active_draws)
+            .end_rendering();
+
+        let [scene_attachment] = module
+            .begin_rendering([(scene_attachment, Access::ColorRW)])
+            .with_name("area outlines")
+            .bind_graphics_pipeline(self.outline_pipeline)
+            .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+            .set_viewport(0, Rect2D::framebuffer())
+            .set_scissor(0, Rect2D::framebuffer())
+            .broadcast_color_blend(BlendPreset::PremultipliedAlphaBlend)
+            .set_rasterization(RasterizationState {
+                cull_mode: vk::CullModeFlags::NONE,
+                ..Default::default()
+            })
+            .bind_buffer(0, 1, sprites)
+            .push_constants_from(camera)
+            .record_from(outline_draws)
             .end_rendering();
 
         let (scene_attachment, interaction, pick_host) = if with_imgui {
@@ -686,6 +722,7 @@ impl Renderer {
             blur_push,
             underlay_draws,
             active_draws,
+            outline_draws,
             interaction,
             ui,
         });
@@ -758,6 +795,14 @@ impl Renderer {
         );
         recorded.program.set(
             recorded.active_draws,
+            PassCallback::new(move |cmd| {
+                let (base, count) = active_range;
+                cmd.push_constants_at(std::mem::offset_of!(CameraPush, base) as u32, &base)
+                    .draw(4, count);
+            }),
+        );
+        recorded.program.set(
+            recorded.outline_draws,
             PassCallback::new(move |cmd| {
                 let (base, count) = active_range;
                 cmd.push_constants_at(std::mem::offset_of!(CameraPush, base) as u32, &base)
@@ -1679,6 +1724,7 @@ mod tests {
         PickPush,
         SPRITE_FLAG_AREA,
         SPRITE_FLAGS_SHIFT,
+        SPRITE_OUTLINE_FS_SPV,
         SPRITE_TEXTURE_MASK,
         SPRITE_VIS_FS_SPV,
         UPLOAD_BATCH_BYTES,
@@ -2121,17 +2167,18 @@ mod tests {
     }
 
     #[test]
-    fn visibility_fragment_reads_sprites_and_textures() {
-        let reflection =
-            shader::reflect(&read_spirv(SPRITE_VIS_FS_SPV).expect("valid SPIR-V")).expect("shader reflects");
-        let mut bindings = reflection
-            .bindings
-            .iter()
-            .map(|binding| (binding.set, binding.binding))
-            .collect::<Vec<_>>();
-        bindings.sort_unstable();
+    fn sprite_fragment_passes_read_sprites_and_textures() {
+        for spirv in [SPRITE_VIS_FS_SPV, SPRITE_OUTLINE_FS_SPV] {
+            let reflection = shader::reflect(&read_spirv(spirv).expect("valid SPIR-V")).expect("shader reflects");
+            let mut bindings = reflection
+                .bindings
+                .iter()
+                .map(|binding| (binding.set, binding.binding))
+                .collect::<Vec<_>>();
+            bindings.sort_unstable();
 
-        assert_eq!(bindings, [(0, 1), (1, 0)]);
+            assert_eq!(bindings, [(0, 1), (1, 0)]);
+        }
     }
 
     #[test]
