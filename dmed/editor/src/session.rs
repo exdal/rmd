@@ -13,7 +13,7 @@ use editor::{
     document::{MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
     focus::AreaFocus,
     frame::{self, FrameInstances, FrameOptions, PrefabUpdate},
-    tool::{Tool, ToolContext, ToolEdit, is_placeable},
+    tool::{FillError, FillMode, MAX_FILL_TILES, Tool, ToolContext, ToolEdit, is_placeable},
     visual,
 };
 use objtree::{ObjectTree, TypeId};
@@ -66,6 +66,13 @@ pub struct Session {
     revision: u64,
     frame_update: Option<FrameUpdate>,
     texture_revision: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FillOutcome {
+    Applied,
+    NoChange,
+    TooLarge { limit: usize },
 }
 
 impl Session {
@@ -254,7 +261,9 @@ impl Session {
         };
 
         self.state.choose_prefab(prefab);
-        self.state.tool = Tool::Place;
+        if self.state.tool != Tool::Fill {
+            self.state.tool = Tool::Place;
+        }
 
         true
     }
@@ -263,7 +272,9 @@ impl Session {
         if !self.state.choose_recent(index) {
             return false;
         }
-        self.state.tool = Tool::Place;
+        if self.state.tool != Tool::Fill {
+            self.state.tool = Tool::Place;
+        }
 
         true
     }
@@ -285,6 +296,8 @@ impl Session {
                 target: None,
                 coord,
                 anchor: None,
+                fill_mode: FillMode::default(),
+                custom_fill_boundaries: &[],
             })
         }?;
         let selected = action.selected?;
@@ -298,6 +311,68 @@ impl Session {
         self.state.choose_prefab(prefab);
 
         Some(selected)
+    }
+
+    pub fn fill_at(&mut self, coord: Coord, fill_mode: FillMode, custom_fill_boundaries: &[TreePath]) -> FillOutcome {
+        self.fill_at_with_limit(coord, fill_mode, custom_fill_boundaries, Some(MAX_FILL_TILES))
+    }
+
+    pub(crate) fn fill_at_unlimited(
+        &mut self, coord: Coord, fill_mode: FillMode, custom_fill_boundaries: &[TreePath],
+    ) -> FillOutcome {
+        self.fill_at_with_limit(coord, fill_mode, custom_fill_boundaries, None)
+    }
+
+    fn fill_at_with_limit(
+        &mut self, coord: Coord, fill_mode: FillMode, custom_fill_boundaries: &[TreePath], max_tiles: Option<usize>,
+    ) -> FillOutcome {
+        if self.state.tool != Tool::Fill || !self.can_edit_at(coord) {
+            return FillOutcome::NoChange;
+        }
+
+        let Some(prefab) = self.state.palette.clone() else {
+            return FillOutcome::NoChange;
+        };
+
+        let action = {
+            let Some(environment) = self.state.environment.as_ref() else {
+                return FillOutcome::NoChange;
+            };
+            let Some(active) = self.state.active else {
+                return FillOutcome::NoChange;
+            };
+            let Some(document) = self.state.documents.get_mut(active) else {
+                return FillOutcome::NoChange;
+            };
+
+            Tool::Fill.build_fill_edit(
+                &mut ToolContext {
+                    document,
+                    tree: &environment.tree,
+                    prefab: Some(&prefab),
+                    target: None,
+                    coord,
+                    anchor: None,
+                    fill_mode,
+                    custom_fill_boundaries,
+                },
+                max_tiles,
+            )
+        };
+
+        let action = match action {
+            Ok(Some(action)) => action,
+            Ok(None) => return FillOutcome::NoChange,
+            Err(FillError::TooLarge { limit }) => return FillOutcome::TooLarge { limit },
+        };
+
+        if !self.commit(action, None) {
+            return FillOutcome::NoChange;
+        }
+
+        self.state.choose_prefab(prefab);
+
+        FillOutcome::Applied
     }
 
     pub fn delete_instance(&mut self, target: PrefabInstanceId) -> bool {
@@ -322,6 +397,8 @@ impl Session {
             target: Some(target),
             coord,
             anchor: None,
+            fill_mode: FillMode::default(),
+            custom_fill_boundaries: &[],
         })
     }
 
@@ -869,11 +946,11 @@ mod tests {
         Environment,
         command::EditGroupId,
         document::{MapDocument, VarMutation},
-        tool::Tool,
+        tool::{FillMode, Tool},
     };
     use objtree::ObjectTree;
 
-    use super::{Session, build_textures, directional_type_target, directional_types_for, validate_level};
+    use super::{FillOutcome, Session, build_textures, directional_type_target, directional_types_for, validate_level};
 
     fn examples() -> PathBuf {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
@@ -1412,6 +1489,88 @@ mod tests {
         assert!(session.instances.sprite(selected).is_some());
         assert_eq!(session.revision, revision.wrapping_add(1));
         assert_eq!(session.frame_update.unwrap().previous_revision, revision);
+    }
+
+    #[test]
+    fn palette_choices_preserve_fill_mode() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        let floor = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/turf/open/floor"))
+            .unwrap();
+
+        session.set_tool(Tool::Fill);
+        assert!(session.choose_type(floor));
+        assert_eq!(session.tool(), Tool::Fill);
+
+        assert!(session.choose_recent(0));
+        assert_eq!(session.tool(), Tool::Fill);
+    }
+
+    #[test]
+    fn fill_commits_through_the_session_and_updates_rendered_turfs() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        session.open_map(&root.join("test.dmm"), 1).unwrap();
+        let coord = Coord::new(2, 2, 1);
+        let boundary = Coord::new(1, 1, 1);
+        let turf = session.tree().unwrap().roots().turf.unwrap();
+        let turf_id = session
+            .state
+            .active_document()
+            .unwrap()
+            .map
+            .tile_at(coord)
+            .unwrap()
+            .iter()
+            .zip(session.state.active_document().unwrap().instance_ids_at(coord))
+            .find_map(|(prefab, id)| {
+                let candidate = session.tree().unwrap().id_of(&prefab.path)?;
+
+                session.tree().unwrap().is_subtype_of(candidate, turf).then_some(*id)
+            })
+            .unwrap();
+        let before_sprite = *session.instances.sprite(turf_id).unwrap();
+        let mut floor = Prefab::new(TreePath::parse("/turf/open/floor"));
+        floor.set_var("color".into(), Value::Text("#ff0000".into()));
+        session.state.choose_prefab(floor.clone());
+
+        assert_eq!(session.fill_at(coord, FillMode::Wall, &[]), FillOutcome::NoChange);
+        session.set_tool(Tool::Fill);
+        let revision = session.revision;
+        assert_eq!(session.fill_at(coord, FillMode::Wall, &[]), FillOutcome::Applied);
+
+        assert_eq!(session.revision, revision.wrapping_add(1));
+        assert!(session.frame_update.is_some());
+        assert_ne!(*session.instances.sprite(turf_id).unwrap(), before_sprite);
+        assert_eq!(
+            session
+                .map()
+                .unwrap()
+                .tile_at(coord)
+                .unwrap()
+                .iter()
+                .find(|prefab| prefab.path == floor.path)
+                .unwrap(),
+            &floor
+        );
+        assert_eq!(
+            session
+                .map()
+                .unwrap()
+                .tile_at(boundary)
+                .unwrap()
+                .iter()
+                .find(|prefab| prefab.path.to_string().starts_with("/turf"))
+                .unwrap()
+                .path,
+            TreePath::parse("/turf/closed/wall")
+        );
+        assert_eq!(session.palette(), Some(&floor));
     }
 
     #[test]

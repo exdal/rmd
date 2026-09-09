@@ -1,3 +1,4 @@
+use core::path::TreePath;
 use std::collections::HashSet;
 
 use dear_imgui_rs::{
@@ -11,14 +12,22 @@ use dear_imgui_rs::{
     StyleColor,
     StyleVar,
     Ui,
+    WindowFlags,
     WindowKey,
     WindowKeyError,
 };
 use dmm::{Coord, Prefab};
 use editor::{
     command::EditGroupId,
-    icons::materialdesignicons::{ICON_ERASER, ICON_EYEDROPPER, ICON_IMAGE_BROKEN, ICON_PENCIL},
-    tool::{Tool, is_placeable},
+    icons::materialdesignicons::{
+        ICON_ERASER,
+        ICON_EYEDROPPER,
+        ICON_FORMAT_COLOR_FILL,
+        ICON_IMAGE_BROKEN,
+        ICON_MENU_DOWN,
+        ICON_PENCIL,
+    },
+    tool::{FillMode, Tool, is_placeable},
 };
 use objtree::{ObjectTree, TypeId};
 use render::{InteractionMode, PickRequest, PlacementFlash, Renderer, ViewportInteraction};
@@ -27,7 +36,7 @@ use crate::{
     camera::Controller,
     gizmo::{GizmoState, GizmoViewport},
     inspector::InspectorState,
-    session::{PlacementPreview, Session},
+    session::{FillOutcome, PlacementPreview, Session},
 };
 
 /// How far down the "Blur below" menu goes. The option itself takes any depth.
@@ -41,6 +50,9 @@ const RECENT_BADGE_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.8];
 const RECENT_BADGE_TEXT: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const PLACEMENT_FLASH_DURATION: f64 = 0.25;
 const PLACEMENT_PREVIEW_PERIOD: f64 = 1.5;
+const DEFAULT_CUSTOM_FILL_BOUNDARY: &str = "/turf/closed/wall";
+const MAX_CUSTOM_FILL_SEARCH_RESULTS: usize = 50;
+const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warning";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ActivePlacementFlash {
@@ -106,6 +118,14 @@ impl DeletionStroke {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingFillWarning {
+    coord: Coord,
+    fill_mode: FillMode,
+    custom_fill_boundaries: Vec<TreePath>,
+    limit: usize,
+}
+
 fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
     ui.get_window_draw_list()
         .add_rect(bounds.min, bounds.max, OVERLAY_BG)
@@ -130,6 +150,10 @@ pub struct UiState {
     placement_flash: Option<ActivePlacementFlash>,
     placement_stroke: Option<PlacementStroke>,
     deletion_stroke: Option<DeletionStroke>,
+    fill_mode: FillMode,
+    custom_fill_boundaries: Vec<TreePath>,
+    custom_fill_search: String,
+    pending_fill_warning: Option<PendingFillWarning>,
     viewport: (u32, u32),
     initial_refit: bool,
 }
@@ -162,6 +186,10 @@ impl UiState {
             placement_flash: None,
             placement_stroke: None,
             deletion_stroke: None,
+            fill_mode: FillMode::default(),
+            custom_fill_boundaries: vec![TreePath::parse(DEFAULT_CUSTOM_FILL_BOUNDARY)],
+            custom_fill_search: String::new(),
+            pending_fill_warning: None,
             viewport: (1, 1),
             initial_refit: true,
         })
@@ -379,6 +407,9 @@ impl UiState {
                 if ui.is_key_pressed(Key::X) {
                     session.set_tool(Tool::Delete);
                 }
+                if ui.is_key_pressed(Key::Q) {
+                    session.set_tool(Tool::Fill);
+                }
 
                 if *refit {
                     let (width, height) = session.extent_px();
@@ -437,6 +468,11 @@ impl UiState {
                         .captures_mouse
                 },
                 Tool::Delete => {
+                    self.gizmo.cancel();
+
+                    false
+                },
+                Tool::Fill => {
                     self.gizmo.cancel();
 
                     false
@@ -513,11 +549,33 @@ impl UiState {
                                 request_pick(interaction, PickRequest::Cursor);
                             }
                         },
+                        Tool::Fill => {
+                            self.placement_stroke = None;
+                            if left_clicked
+                                && let FillOutcome::TooLarge { limit } =
+                                    session.fill_at(coord, self.fill_mode, &self.custom_fill_boundaries)
+                            {
+                                self.pending_fill_warning = Some(PendingFillWarning {
+                                    coord,
+                                    fill_mode: self.fill_mode,
+                                    custom_fill_boundaries: self.custom_fill_boundaries.clone(),
+                                    limit,
+                                });
+                                ui.open_popup(FILL_LIMIT_WARNING_POPUP);
+                            }
+                        },
                     }
                 }
             }
 
-            draw_top_overlay(ui, session, top_overlay);
+            draw_top_overlay(
+                ui,
+                session,
+                top_overlay,
+                &mut self.fill_mode,
+                &mut self.custom_fill_boundaries,
+                &mut self.custom_fill_search,
+            );
             let recent_prefabs = session.recent_prefabs();
             if !recent_prefabs.is_empty() {
                 draw_history_overlay(ui, session, bottom_overlay, recent_prefabs.to_vec());
@@ -527,7 +585,8 @@ impl UiState {
                 interaction.hovered_area = None;
             }
 
-            if ui.is_key_pressed(Key::Escape) {
+            let fill_warning_handles_escape = draw_fill_limit_warning(ui, session, &mut self.pending_fill_warning);
+            if ui.is_key_pressed(Key::Escape) && !fill_warning_handles_escape {
                 *exit = true;
             }
         });
@@ -630,14 +689,14 @@ fn placement_preview_opacity(time: f64) -> f32 {
 
 fn configure_tool_interaction(tool: Tool, interaction: &mut ViewportInteraction) {
     interaction.mode = match (tool, interaction.mode) {
-        (Tool::Place, _) => InteractionMode::Place,
+        (Tool::Place | Tool::Fill, _) => InteractionMode::Place,
         (Tool::Select, InteractionMode::Select { pick }) => InteractionMode::Select { pick },
         (Tool::Delete, InteractionMode::Delete { pick }) => InteractionMode::Delete { pick },
         (Tool::Select, _) => InteractionMode::Select { pick: None },
         (Tool::Delete, _) => InteractionMode::Delete { pick: None },
     };
     match tool {
-        Tool::Place => {
+        Tool::Place | Tool::Fill => {
             interaction.cursor = None;
             interaction.hovered_area = None;
             interaction.selected = None;
@@ -653,7 +712,7 @@ fn configure_tool_interaction(tool: Tool, interaction: &mut ViewportInteraction)
 
 fn interaction_mode(tool: Tool) -> InteractionMode {
     match tool {
-        Tool::Place => InteractionMode::Place,
+        Tool::Place | Tool::Fill => InteractionMode::Place,
         Tool::Select => InteractionMode::Select { pick: None },
         Tool::Delete => InteractionMode::Delete { pick: None },
     }
@@ -666,24 +725,211 @@ fn request_pick(interaction: &mut ViewportInteraction, request: PickRequest) {
     }
 }
 
-fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect) {
+fn draw_top_overlay(
+    ui: &Ui, session: &mut Session, bounds: OverlayRect, fill_mode: &mut FillMode,
+    custom_fill_boundaries: &mut Vec<TreePath>, custom_fill_search: &mut String,
+) {
     draw_overlay_underlay(ui, bounds);
 
-    let button_size = ui.frame_height();
     ui.set_cursor_screen_pos([bounds.min[0] + OVERLAY_PADDING, bounds.min[1] + OVERLAY_PADDING]);
 
-    ui.set_cursor_screen_pos([bounds.min[0] + OVERLAY_PADDING, bounds.min[1] + OVERLAY_PADDING]);
     draw_tool_button(ui, session, Tool::Place, ICON_PENCIL);
     ui.same_line();
     draw_tool_button(ui, session, Tool::Select, ICON_EYEDROPPER);
     ui.same_line();
     draw_tool_button(ui, session, Tool::Delete, ICON_ERASER);
+    ui.same_line();
+    let tools_end = draw_fill_tool_button(ui, session, fill_mode, custom_fill_boundaries, custom_fill_search);
 
-    let tools_end = bounds.min[0] + OVERLAY_PADDING + button_size * 3.0 + ui.clone_style().item_spacing()[0] * 2.0;
     let levels_width = z_level_width(ui, session.level_count());
     let levels_x = (bounds.max[0] - OVERLAY_PADDING - levels_width).max(tools_end + OVERLAY_PADDING);
     ui.set_cursor_screen_pos([levels_x, bounds.min[1] + OVERLAY_PADDING]);
     draw_z_levels(ui, session);
+}
+
+fn draw_fill_limit_warning(ui: &Ui, session: &mut Session, pending: &mut Option<PendingFillWarning>) -> bool {
+    let was_pending = pending.is_some();
+    let mut fill_anyway = false;
+    let mut dismiss = false;
+
+    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
+        | WindowFlags::NO_RESIZE
+        | WindowFlags::NO_MOVE
+        | WindowFlags::NO_COLLAPSE
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::NO_DOCKING;
+    if let Some(warning) = pending.as_ref()
+        && let Some(_modal) = ui
+            .begin_modal_popup_config(FILL_LIMIT_WARNING_POPUP)
+            .flags(flags)
+            .begin()
+    {
+        ui.text(format!("This fill would change more than {} tiles.", warning.limit));
+        ui.text("The operation may make the editor unresponsive.");
+        ui.text("Do you want to fill it anyway?");
+        ui.separator();
+
+        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+            dismiss = true;
+            ui.close_current_popup();
+        }
+        ui.same_line();
+        if ui.button("Fill Anyway") {
+            fill_anyway = true;
+            dismiss = true;
+            ui.close_current_popup();
+        }
+    }
+
+    if dismiss
+        && let Some(warning) = pending.take()
+        && fill_anyway
+    {
+        session.fill_at_unlimited(warning.coord, warning.fill_mode, &warning.custom_fill_boundaries);
+    }
+
+    was_pending
+}
+
+fn draw_fill_tool_button(
+    ui: &Ui, session: &mut Session, fill_mode: &mut FillMode, custom_fill_boundaries: &mut Vec<TreePath>,
+    custom_fill_search: &mut String,
+) -> f32 {
+    const POPUP: &str = "fill-mode-popup";
+
+    let active_color = ui.style_color(StyleColor::PlotHistogramHovered);
+    let active = (session.tool() == Tool::Fill).then(|| ui.push_style_color(StyleColor::Button, active_color));
+    let spacing = ui.clone_style().item_spacing();
+    let connected = ui.push_style_var(StyleVar::ItemSpacing([0.0, spacing[1]]));
+
+    if ui.button(format!("{ICON_FORMAT_COLOR_FILL}##fill-tool")) {
+        session.set_tool(Tool::Fill);
+    }
+    let separator_x = ui.item_rect_max()[0];
+    let separator_min_y = ui.item_rect_min()[1];
+    let separator_max_y = ui.item_rect_max()[1];
+    ui.set_item_tooltip(format!("Fill ({})", fill_mode.label()));
+    ui.same_line();
+
+    let button_size = ui.frame_height();
+    let arrow_width = (button_size * 0.65)
+        .ceil()
+        .max((ui.calc_text_size(ICON_MENU_DOWN.to_string())[0] + 2.0).ceil());
+    let frame_padding = ui.clone_style().frame_padding();
+    let arrow_clicked = {
+        let _padding = ui.push_style_var(StyleVar::FramePadding([0.0, frame_padding[1]]));
+        let _alignment = ui.push_style_var(StyleVar::ButtonTextAlign([0.5, 0.5]));
+        ui.button_with_size(format!("{ICON_MENU_DOWN}##fill-mode"), [arrow_width, button_size])
+    };
+    if arrow_clicked {
+        ui.open_popup(POPUP);
+    }
+    let tools_end = ui.item_rect_max()[0];
+    ui.set_item_tooltip(format!("Fill mode: {}", fill_mode.label()));
+    ui.get_window_draw_list().add_line_v(
+        separator_x,
+        separator_min_y + frame_padding[1],
+        separator_max_y - frame_padding[1],
+        [0.0, 0.0, 0.0, 0.7],
+        1.0,
+    );
+
+    drop(connected);
+    drop(active);
+
+    if let Some(_popup) = ui.begin_popup(POPUP) {
+        for mode in [FillMode::Wall, FillMode::EntireArea, FillMode::Custom] {
+            if ui.menu_item_enabled_selected_no_shortcut(mode.label(), *fill_mode == mode, true) {
+                *fill_mode = mode;
+                ui.close_current_popup();
+            }
+        }
+
+        ui.separator();
+        let selected = session.palette().map(|prefab| prefab.path.clone());
+        let can_add = selected
+            .as_ref()
+            .is_some_and(|path| !custom_fill_boundaries.contains(path));
+        let add_label = selected
+            .as_ref()
+            .map_or_else(|| "Add selected type".to_owned(), |path| format!("Add {path}"));
+        if ui.menu_item_enabled_selected_no_shortcut(add_label, false, can_add)
+            && let Some(path) = selected
+        {
+            custom_fill_boundaries.push(path);
+            *fill_mode = FillMode::Custom;
+        }
+
+        let mut searched_path = None;
+        if let Some(_menu) = ui.begin_menu("Search type paths") {
+            ui.set_next_item_width(320.0);
+            ui.input_text("##custom-fill-boundary-search", custom_fill_search)
+                .build();
+
+            if custom_fill_search.trim().is_empty() {
+                ui.text_disabled("Type a path to search");
+            } else if let Some(tree) = session.tree() {
+                let matches = matching_type_paths(tree, custom_fill_search);
+                if matches.is_empty() {
+                    ui.text_disabled("No matching types");
+                } else {
+                    for path in matches {
+                        let enabled = !custom_fill_boundaries.contains(&path);
+                        if ui.menu_item_enabled_selected_no_shortcut(path.to_string(), false, enabled) {
+                            searched_path = Some(path);
+                        }
+                    }
+                }
+            } else {
+                ui.text_disabled("No environment loaded");
+            }
+        }
+        if let Some(path) = searched_path {
+            custom_fill_boundaries.push(path);
+            *fill_mode = FillMode::Custom;
+        }
+
+        let mut remove = None;
+        if let Some(_menu) = ui.begin_menu_with_enabled(
+            format!("Remove boundary ({})", custom_fill_boundaries.len()),
+            !custom_fill_boundaries.is_empty(),
+        ) {
+            for (index, path) in custom_fill_boundaries.iter().enumerate() {
+                if ui.menu_item(format!("{path}##custom-fill-boundary-{index}")) {
+                    remove = Some(index);
+                }
+            }
+        }
+        if let Some(index) = remove {
+            custom_fill_boundaries.remove(index);
+        }
+
+        let default = TreePath::parse(DEFAULT_CUSTOM_FILL_BOUNDARY);
+        let is_default = custom_fill_boundaries.as_slice() == [default.clone()];
+        if ui.menu_item_enabled_selected_no_shortcut("Reset custom boundaries", false, !is_default) {
+            custom_fill_boundaries.clear();
+            custom_fill_boundaries.push(default);
+        }
+    }
+
+    tools_end
+}
+
+fn matching_type_paths(tree: &ObjectTree, query: &str) -> Vec<TreePath> {
+    let query = query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let mut matches = tree
+        .iter()
+        .filter(|decl| decl.path.to_string().to_ascii_lowercase().contains(&query))
+        .map(|decl| decl.path.clone())
+        .take(MAX_CUSTOM_FILL_SEARCH_RESULTS)
+        .collect::<Vec<_>>();
+    matches.sort_by_key(ToString::to_string);
+
+    matches
 }
 
 fn draw_tool_button(ui: &Ui, session: &mut Session, tool: Tool, icon: char) {
@@ -907,6 +1153,36 @@ mod tests {
         let state = UiState::new().expect("valid window keys");
 
         assert_eq!(state.layout.validate(), Ok(()));
+        assert_eq!(state.fill_mode, FillMode::Wall);
+        assert_eq!(
+            state.custom_fill_boundaries,
+            [TreePath::parse(DEFAULT_CUSTOM_FILL_BOUNDARY)]
+        );
+        assert!(state.custom_fill_search.is_empty());
+        assert!(state.pending_fill_warning.is_none());
+    }
+
+    #[test]
+    fn custom_fill_search_includes_parent_types_and_ignores_case() {
+        let mut tree = ObjectTree::new();
+        tree.register(&TreePath::parse("/obj/structure/table"), Location::default());
+        tree.register(&TreePath::parse("/turf/closed/wall"), Location::default());
+
+        assert_eq!(
+            matching_type_paths(&tree, "STRUCT")
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["/obj/structure", "/obj/structure/table"]
+        );
+        assert_eq!(
+            matching_type_paths(&tree, "wall")
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["/turf/closed/wall"]
+        );
+        assert!(matching_type_paths(&tree, "  ").is_empty());
     }
 
     #[test]
@@ -1056,6 +1332,16 @@ mod tests {
         configure_tool_interaction(Tool::Place, &mut selected);
         assert_eq!(
             selected,
+            ViewportInteraction {
+                placement_flash: interaction.placement_flash,
+                ..Default::default()
+            }
+        );
+
+        let mut fill = interaction;
+        configure_tool_interaction(Tool::Fill, &mut fill);
+        assert_eq!(
+            fill,
             ViewportInteraction {
                 placement_flash: interaction.placement_flash,
                 ..Default::default()
