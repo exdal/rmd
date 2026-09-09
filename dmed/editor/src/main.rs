@@ -8,6 +8,7 @@ mod camera;
 mod gizmo;
 mod inspector;
 mod session;
+mod settings;
 mod transform;
 mod ui;
 
@@ -33,7 +34,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::{camera::Controller, session::Session, ui::UiState};
+use crate::{camera::Controller, session::Session, settings::Settings, ui::UiState};
 
 const FONT_DATA: &[u8] = include_bytes!("../assets/FiraMono-Regular.ttf");
 const MDI_FONT_DATA: &[u8] = include_bytes!("../assets/materialdesignicons-webfont.ttf");
@@ -57,7 +58,9 @@ fn main() -> ExitCode {
         },
     };
 
+    let settings = Settings::load();
     let mut session = Session::new();
+    settings.apply_to(&mut session.options);
     if let Some(entry) = arguments.environment.as_ref()
         && let Err(e) = session.load_environment(entry)
     {
@@ -99,6 +102,7 @@ fn main() -> ExitCode {
 
     let mut app = App {
         session,
+        settings,
         camera: Controller::new(),
         ui,
         uploaded_texture_revision: None,
@@ -110,7 +114,11 @@ fn main() -> ExitCode {
         window: None,
     };
 
-    match event_loop.run_app(&mut app) {
+    let result = event_loop.run_app(&mut app);
+    app.settings.capture_from(&app.session.options);
+    app.settings.save();
+
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
@@ -157,6 +165,7 @@ fn is_map(path: &std::path::Path) -> bool {
 
 struct App {
     session: Session,
+    settings: Settings,
     camera: Controller,
     ui: UiState,
     uploaded_texture_revision: Option<u64>,
@@ -215,6 +224,7 @@ impl App {
     fn redraw(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
         let Self {
             session,
+            settings,
             camera,
             ui,
             uploaded_texture_revision,
@@ -242,7 +252,7 @@ impl App {
 
         platform.prepare_frame(imgui, window)?;
         let frame = imgui.try_begin_frame()?;
-        let output = ui.draw(frame.ui(), session, camera)?;
+        let output = ui.draw(frame.ui(), session, settings, camera)?;
         platform.prepare_render(frame.ui(), window)?;
         let scene = session.frame(camera.camera);
         let pending = frame.try_render(consumer)?;

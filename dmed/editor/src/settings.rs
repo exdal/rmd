@@ -1,0 +1,548 @@
+use std::{
+    env,
+    error::Error,
+    fs,
+    io,
+    path::{Path, PathBuf},
+};
+
+use dear_imgui_rs::{Key, Ui};
+use editor::frame::FrameOptions;
+use serde::{Deserialize, Serialize};
+
+pub(crate) const BINDABLE_KEYS: &[Key] = &[
+    Key::Tab,
+    Key::LeftArrow,
+    Key::RightArrow,
+    Key::UpArrow,
+    Key::DownArrow,
+    Key::PageUp,
+    Key::PageDown,
+    Key::Home,
+    Key::End,
+    Key::Insert,
+    Key::Delete,
+    Key::Backspace,
+    Key::Space,
+    Key::Enter,
+    Key::Key0,
+    Key::Key1,
+    Key::Key2,
+    Key::Key3,
+    Key::Key4,
+    Key::Key5,
+    Key::Key6,
+    Key::Key7,
+    Key::Key8,
+    Key::Key9,
+    Key::A,
+    Key::B,
+    Key::C,
+    Key::D,
+    Key::E,
+    Key::F,
+    Key::G,
+    Key::H,
+    Key::I,
+    Key::J,
+    Key::K,
+    Key::L,
+    Key::M,
+    Key::N,
+    Key::O,
+    Key::P,
+    Key::Q,
+    Key::S,
+    Key::T,
+    Key::U,
+    Key::V,
+    Key::W,
+    Key::X,
+    Key::Y,
+    Key::Z,
+    Key::F1,
+    Key::F2,
+    Key::F3,
+    Key::F4,
+    Key::F5,
+    Key::F6,
+    Key::F7,
+    Key::F8,
+    Key::F9,
+    Key::F10,
+    Key::F11,
+    Key::F12,
+    Key::F13,
+    Key::F14,
+    Key::F15,
+    Key::F16,
+    Key::F17,
+    Key::F18,
+    Key::F19,
+    Key::F20,
+    Key::F21,
+    Key::F22,
+    Key::F23,
+    Key::F24,
+    Key::Apostrophe,
+    Key::Comma,
+    Key::Minus,
+    Key::Period,
+    Key::Slash,
+    Key::Semicolon,
+    Key::Equal,
+    Key::LeftBracket,
+    Key::Backslash,
+    Key::RightBracket,
+    Key::GraveAccent,
+    Key::PrintScreen,
+    Key::Pause,
+    Key::Keypad0,
+    Key::Keypad1,
+    Key::Keypad2,
+    Key::Keypad3,
+    Key::Keypad4,
+    Key::Keypad5,
+    Key::Keypad6,
+    Key::Keypad7,
+    Key::Keypad8,
+    Key::Keypad9,
+    Key::KeypadDecimal,
+    Key::KeypadDivide,
+    Key::KeypadMultiply,
+    Key::KeypadSubtract,
+    Key::KeypadAdd,
+    Key::KeypadEnter,
+    Key::KeypadEqual,
+    Key::Oem102,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct KeyBinding {
+    key: Key,
+    #[serde(default, skip_serializing_if = "is_false")]
+    ctrl: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    shift: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    alt: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    super_key: bool,
+}
+
+impl KeyBinding {
+    pub const fn new(key: Key) -> Self {
+        Self {
+            key,
+            ctrl: false,
+            shift: false,
+            alt: false,
+            super_key: false,
+        }
+    }
+
+    pub fn from_input(ui: &Ui, key: Key) -> Self {
+        let io = ui.io();
+
+        Self {
+            key,
+            ctrl: io.key_ctrl(),
+            shift: io.key_shift(),
+            alt: io.key_alt(),
+            super_key: io.key_super(),
+        }
+    }
+
+    pub fn is_pressed(self, ui: &Ui) -> bool {
+        let io = ui.io();
+
+        ui.is_key_pressed_with_repeat(self.key, false)
+            && self.ctrl == io.key_ctrl()
+            && self.shift == io.key_shift()
+            && self.alt == io.key_alt()
+            && self.super_key == io.key_super()
+    }
+
+    pub fn label(self, ui: &Ui) -> String {
+        let mut label = String::new();
+        for (enabled, name) in [
+            (self.ctrl, "Ctrl"),
+            (self.shift, "Shift"),
+            (self.alt, "Alt"),
+            (self.super_key, "Super"),
+        ] {
+            if enabled {
+                if !label.is_empty() {
+                    label.push('+');
+                }
+                label.push_str(name);
+            }
+        }
+        if !label.is_empty() {
+            label.push('+');
+        }
+        label.push_str(ui.get_key_name(self.key));
+
+        label
+    }
+}
+
+const fn is_false(value: &bool) -> bool { !*value }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeybindAction {
+    ShowAreas,
+    ShowAreaOutlines,
+    LevelUp,
+    LevelDown,
+    Refit,
+    PlaceTool,
+    SelectTool,
+    DeleteTool,
+    FillTool,
+}
+
+impl KeybindAction {
+    pub const ALL: [Self; 9] = [
+        Self::ShowAreas,
+        Self::ShowAreaOutlines,
+        Self::LevelUp,
+        Self::LevelDown,
+        Self::Refit,
+        Self::PlaceTool,
+        Self::SelectTool,
+        Self::DeleteTool,
+        Self::FillTool,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ShowAreas => "Show areas",
+            Self::ShowAreaOutlines => "Show area outlines",
+            Self::LevelUp => "Z up",
+            Self::LevelDown => "Z down",
+            Self::Refit => "Refit",
+            Self::PlaceTool => "Place tool",
+            Self::SelectTool => "Select tool",
+            Self::DeleteTool => "Delete tool",
+            Self::FillTool => "Fill tool",
+        }
+    }
+
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::ShowAreas => "show-areas",
+            Self::ShowAreaOutlines => "show-area-outlines",
+            Self::LevelUp => "level-up",
+            Self::LevelDown => "level-down",
+            Self::Refit => "refit",
+            Self::PlaceTool => "place-tool",
+            Self::SelectTool => "select-tool",
+            Self::DeleteTool => "delete-tool",
+            Self::FillTool => "fill-tool",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct KeyBindings {
+    show_areas: KeyBinding,
+    show_area_outlines: KeyBinding,
+    level_up: KeyBinding,
+    level_down: KeyBinding,
+    refit: KeyBinding,
+    place_tool: KeyBinding,
+    select_tool: KeyBinding,
+    delete_tool: KeyBinding,
+    fill_tool: KeyBinding,
+}
+
+impl Default for KeyBindings {
+    fn default() -> Self {
+        Self {
+            show_areas: KeyBinding::new(Key::A),
+            show_area_outlines: KeyBinding::new(Key::O),
+            level_up: KeyBinding::new(Key::PageUp),
+            level_down: KeyBinding::new(Key::PageDown),
+            refit: KeyBinding::new(Key::Home),
+            place_tool: KeyBinding::new(Key::W),
+            select_tool: KeyBinding::new(Key::S),
+            delete_tool: KeyBinding::new(Key::X),
+            fill_tool: KeyBinding::new(Key::Q),
+        }
+    }
+}
+
+impl KeyBindings {
+    pub const fn get(self, action: KeybindAction) -> KeyBinding {
+        match action {
+            KeybindAction::ShowAreas => self.show_areas,
+            KeybindAction::ShowAreaOutlines => self.show_area_outlines,
+            KeybindAction::LevelUp => self.level_up,
+            KeybindAction::LevelDown => self.level_down,
+            KeybindAction::Refit => self.refit,
+            KeybindAction::PlaceTool => self.place_tool,
+            KeybindAction::SelectTool => self.select_tool,
+            KeybindAction::DeleteTool => self.delete_tool,
+            KeybindAction::FillTool => self.fill_tool,
+        }
+    }
+
+    pub fn rebind(&mut self, action: KeybindAction, binding: KeyBinding) {
+        let previous = self.get(action);
+        if previous == binding {
+            return;
+        }
+        if let Some(displaced) = KeybindAction::ALL
+            .into_iter()
+            .find(|candidate| *candidate != action && self.get(*candidate) == binding)
+        {
+            self.set(displaced, previous);
+        }
+        self.set(action, binding);
+    }
+
+    pub fn is_any_pressed(self, ui: &Ui) -> bool {
+        KeybindAction::ALL
+            .into_iter()
+            .any(|action| self.get(action).is_pressed(ui))
+    }
+
+    fn set(&mut self, action: KeybindAction, binding: KeyBinding) {
+        match action {
+            KeybindAction::ShowAreas => self.show_areas = binding,
+            KeybindAction::ShowAreaOutlines => self.show_area_outlines = binding,
+            KeybindAction::LevelUp => self.level_up = binding,
+            KeybindAction::LevelDown => self.level_down = binding,
+            KeybindAction::Refit => self.refit = binding,
+            KeybindAction::PlaceTool => self.place_tool = binding,
+            KeybindAction::SelectTool => self.select_tool = binding,
+            KeybindAction::DeleteTool => self.delete_tool = binding,
+            KeybindAction::FillTool => self.fill_tool = binding,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct Settings {
+    pub show_areas: bool,
+    pub show_area_outlines: bool,
+    pub tile_place_flash: bool,
+    pub selection_guide_line: bool,
+    pub keybindings: KeyBindings,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            show_areas: false,
+            show_area_outlines: true,
+            tile_place_flash: true,
+            selection_guide_line: true,
+            keybindings: KeyBindings::default(),
+        }
+    }
+}
+
+impl Settings {
+    pub fn load() -> Self {
+        match Self::try_load() {
+            Ok(settings) => settings,
+            Err(error) => {
+                eprintln!("error loading settings: {error}");
+
+                Self::default()
+            },
+        }
+    }
+
+    pub fn save(&self) {
+        if let Err(error) = self.try_save() {
+            eprintln!("error saving settings: {error}");
+        }
+    }
+
+    pub fn apply_to(&self, options: &mut FrameOptions) {
+        options.show_areas = self.show_areas;
+        options.show_area_outlines = self.show_area_outlines;
+    }
+
+    pub fn capture_from(&mut self, options: &FrameOptions) {
+        self.show_areas = options.show_areas;
+        self.show_area_outlines = options.show_area_outlines;
+    }
+
+    fn try_load() -> Result<Self, Box<dyn Error>> {
+        let path = settings_path()?;
+        let source = match fs::read_to_string(&path) {
+            Ok(source) => source,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(error) => return Err(error.into()),
+        };
+
+        Ok(toml::from_str(&source)?)
+    }
+
+    fn try_save(&self) -> Result<(), Box<dyn Error>> {
+        let path = settings_path()?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, toml::to_string_pretty(self)?)?;
+
+        Ok(())
+    }
+}
+
+fn settings_path() -> io::Result<PathBuf> {
+    #[cfg(target_os = "windows")]
+    let variable = "LOCALAPPDATA";
+    #[cfg(not(target_os = "windows"))]
+    let variable = "HOME";
+
+    let root = env::var_os(variable)
+        .filter(|root| !root.is_empty())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{variable} is not set")))?;
+
+    Ok(settings_path_from(Path::new(&root), cfg!(target_os = "windows")))
+}
+
+fn settings_path_from(root: &Path, windows: bool) -> PathBuf {
+    if windows {
+        root.join("rmd/settings.toml")
+    } else {
+        root.join(".config/rmd/settings.toml")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_preserve_existing_editor_behavior() {
+        assert_eq!(
+            Settings::default(),
+            Settings {
+                show_areas: false,
+                show_area_outlines: true,
+                tile_place_flash: true,
+                selection_guide_line: true,
+                keybindings: KeyBindings::default(),
+            }
+        );
+    }
+
+    #[test]
+    fn default_keybindings_match_the_replaced_shortcuts() {
+        let bindings = KeyBindings::default();
+        let expected = [
+            (KeybindAction::ShowAreas, Key::A),
+            (KeybindAction::ShowAreaOutlines, Key::O),
+            (KeybindAction::LevelUp, Key::PageUp),
+            (KeybindAction::LevelDown, Key::PageDown),
+            (KeybindAction::Refit, Key::Home),
+            (KeybindAction::PlaceTool, Key::W),
+            (KeybindAction::SelectTool, Key::S),
+            (KeybindAction::DeleteTool, Key::X),
+            (KeybindAction::FillTool, Key::Q),
+        ];
+
+        for (action, key) in expected {
+            assert_eq!(bindings.get(action), KeyBinding::new(key));
+        }
+    }
+
+    #[test]
+    fn missing_fields_use_their_defaults() {
+        let settings: Settings = toml::from_str("show_areas = true\n").unwrap();
+
+        assert_eq!(
+            settings,
+            Settings {
+                show_areas: true,
+                ..Settings::default()
+            }
+        );
+    }
+
+    #[test]
+    fn settings_round_trip_through_toml() {
+        let mut settings = Settings {
+            show_areas: true,
+            show_area_outlines: false,
+            tile_place_flash: false,
+            selection_guide_line: false,
+            keybindings: KeyBindings::default(),
+        };
+        settings.keybindings.rebind(
+            KeybindAction::ShowAreas,
+            KeyBinding {
+                key: Key::G,
+                ctrl: true,
+                shift: false,
+                alt: false,
+                super_key: false,
+            },
+        );
+        let encoded = toml::to_string_pretty(&settings).unwrap();
+
+        assert!(encoded.contains("[keybindings.show_areas]"));
+        assert!(encoded.contains("key = \"G\""));
+        assert!(encoded.contains("ctrl = true"));
+        assert_eq!(toml::from_str::<Settings>(&encoded).unwrap(), settings);
+    }
+
+    #[test]
+    fn frame_options_apply_and_capture_without_touching_other_settings() {
+        let mut settings = Settings {
+            show_areas: true,
+            show_area_outlines: false,
+            tile_place_flash: false,
+            selection_guide_line: false,
+            keybindings: KeyBindings::default(),
+        };
+        let mut options = FrameOptions::default();
+
+        settings.apply_to(&mut options);
+        assert!(options.show_areas);
+        assert!(!options.show_area_outlines);
+
+        options.show_areas = false;
+        options.show_area_outlines = true;
+        settings.capture_from(&options);
+        assert_eq!(
+            settings,
+            Settings {
+                tile_place_flash: false,
+                selection_guide_line: false,
+                ..Settings::default()
+            }
+        );
+    }
+
+    #[test]
+    fn malformed_toml_is_rejected() {
+        assert!(toml::from_str::<Settings>("show_areas = maybe").is_err());
+    }
+
+    #[test]
+    fn rebinding_to_an_assigned_chord_swaps_the_actions() {
+        let mut bindings = KeyBindings::default();
+
+        bindings.rebind(KeybindAction::ShowAreas, KeyBinding::new(Key::W));
+
+        assert_eq!(bindings.get(KeybindAction::ShowAreas), KeyBinding::new(Key::W));
+        assert_eq!(bindings.get(KeybindAction::PlaceTool), KeyBinding::new(Key::A));
+    }
+
+    #[test]
+    fn platform_paths_use_the_requested_application_directory() {
+        let root = Path::new("profile");
+
+        assert_eq!(settings_path_from(root, true), root.join("rmd/settings.toml"));
+        assert_eq!(settings_path_from(root, false), root.join(".config/rmd/settings.toml"));
+    }
+}

@@ -21,5 +21,7 @@ dmi = { path = "../dmi" }
 render = { path = "../render" }
 winit = "0.30.12"
 raw-window-handle = "0.6.0"
-dear-imgui-rs = "=0.17.0"
+dear-imgui-rs = { version = "=0.17.0", features = ["serde"] }
 dear-imgui-winit = "=0.17.0"
+serde = { version = "1", features = ["derive"] }
+toml = "1"

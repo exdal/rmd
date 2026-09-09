@@ -37,6 +37,7 @@ use crate::{
     gizmo::{GizmoState, GizmoViewport},
     inspector::InspectorState,
     session::{FillOutcome, PlacementPreview, Session},
+    settings::{BINDABLE_KEYS, KeyBinding, KeyBindings, KeybindAction, Settings},
 };
 
 /// How far down the "Blur below" menu goes. The option itself takes any depth.
@@ -143,6 +144,7 @@ pub struct UiState {
     object_tree: WindowKey,
     viewport_window: WindowKey,
     inspector_window: WindowKey,
+    settings_window: WindowKey,
     layout: DockLayout,
     selected: Option<TypeId>,
     inspector: InspectorState,
@@ -156,6 +158,8 @@ pub struct UiState {
     pending_fill_warning: Option<PendingFillWarning>,
     viewport: (u32, u32),
     initial_refit: bool,
+    show_settings: bool,
+    capturing_keybind: Option<KeybindAction>,
 }
 
 impl UiState {
@@ -163,6 +167,7 @@ impl UiState {
         let object_tree = WindowKey::new("object-tree", "Object tree")?;
         let viewport_window = WindowKey::new("viewport", "Viewport")?;
         let inspector_window = WindowKey::new("inspector", "Inspector")?;
+        let settings_window = WindowKey::new("settings", "Settings")?;
         let layout = DockLayout::split(
             DockSplit::Left,
             0.25,
@@ -179,6 +184,7 @@ impl UiState {
             object_tree,
             viewport_window,
             inspector_window,
+            settings_window,
             layout,
             selected: None,
             inspector: InspectorState::default(),
@@ -192,11 +198,13 @@ impl UiState {
             pending_fill_warning: None,
             viewport: (1, 1),
             initial_refit: true,
+            show_settings: false,
+            capturing_keybind: None,
         })
     }
 
     pub fn draw(
-        &mut self, ui: &Ui, session: &mut Session, camera: &mut Controller,
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, camera: &mut Controller,
     ) -> Result<UiOutput, DockspaceError> {
         ui.dockspace()
             .main_viewport()
@@ -213,33 +221,45 @@ impl UiState {
         let mut refit = false;
         let mut interaction = ViewportInteraction {
             selected: session.selected_instance(),
-            selection_guide: session.selected_offset_guide(),
+            selection_guide: settings
+                .selection_guide_line
+                .then(|| session.selected_offset_guide())
+                .flatten(),
             mode: interaction_mode(session.tool()),
             ..Default::default()
         };
 
         ui.main_menu_bar(|| {
             ui.menu("File", || {
+                if ui.menu_item("Settings...") {
+                    self.show_settings = true;
+                }
+                ui.separator();
                 if ui.menu_item_with_shortcut("Exit", "Esc") {
                     exit = true;
                 }
             });
             ui.menu("View", || {
-                if ui.menu_item_enabled_selected_with_shortcut("Show areas", "A", session.options.show_areas, true) {
+                if ui.menu_item_enabled_selected_with_shortcut(
+                    "Show areas",
+                    settings.keybindings.get(KeybindAction::ShowAreas).label(ui),
+                    session.options.show_areas,
+                    true,
+                ) {
                     toggle_areas = true;
                 }
                 if ui.menu_item_enabled_selected_with_shortcut(
                     "Show area outlines",
-                    "O",
+                    settings.keybindings.get(KeybindAction::ShowAreaOutlines).label(ui),
                     session.options.show_area_outlines,
                     true,
                 ) {
                     toggle_area_outlines = true;
                 }
-                if ui.menu_item_with_shortcut("Z up", "Page Up") {
+                if ui.menu_item_with_shortcut("Z up", settings.keybindings.get(KeybindAction::LevelUp).label(ui)) {
                     level_delta += 1;
                 }
-                if ui.menu_item_with_shortcut("Z down", "Page Down") {
+                if ui.menu_item_with_shortcut("Z down", settings.keybindings.get(KeybindAction::LevelDown).label(ui)) {
                     level_delta -= 1;
                 }
                 ui.menu("Blur below", || {
@@ -259,7 +279,7 @@ impl UiState {
                         }
                     }
                 });
-                if ui.menu_item_with_shortcut("Refit", "Home") {
+                if ui.menu_item_with_shortcut("Refit", settings.keybindings.get(KeybindAction::Refit).label(ui)) {
                     refit = true;
                 }
             });
@@ -278,10 +298,22 @@ impl UiState {
             session.set_underlay_depth(depth);
         }
 
+        draw_settings_window(
+            ui,
+            &self.settings_window,
+            &mut self.show_settings,
+            &mut self.capturing_keybind,
+            session,
+            settings,
+        );
         self.draw_object_tree(ui, session);
         self.draw_inspector(ui, session);
-        self.draw_viewport(ui, session, camera, &mut interaction, &mut exit, &mut refit);
-        interaction.selection_guide = interaction.selected.and_then(|_| session.selected_offset_guide());
+        exit |= self.draw_viewport(ui, session, settings, camera, &mut interaction, &mut refit);
+        finish_keybind_capture(ui, &mut self.capturing_keybind, &mut settings.keybindings);
+        interaction.selection_guide = settings
+            .selection_guide_line
+            .then(|| interaction.selected.and_then(|_| session.selected_offset_guide()))
+            .flatten();
 
         Ok(UiOutput {
             exit,
@@ -324,9 +356,10 @@ impl UiState {
     }
 
     fn draw_viewport(
-        &mut self, ui: &Ui, session: &mut Session, camera: &mut Controller, interaction: &mut ViewportInteraction,
-        exit: &mut bool, refit: &mut bool,
-    ) {
+        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, camera: &mut Controller,
+        interaction: &mut ViewportInteraction, refit: &mut bool,
+    ) -> bool {
+        let mut exit = false;
         ui.window(&self.viewport_window).build(|| {
             let (image_size, viewport) = panel_extent(ui.content_region_avail());
             self.viewport = viewport;
@@ -366,6 +399,7 @@ impl UiState {
             if focused
                 && !ui.io().want_text_input()
                 && !has_modifiers(ui)
+                && (!hovered || !settings.keybindings.is_any_pressed(ui))
                 && let Some(index) = pressed_recent(ui)
             {
                 session.choose_recent(index);
@@ -383,31 +417,31 @@ impl UiState {
                     camera.zoom_by(wheel, [mouse[0] - viewport_min[0], mouse[1] - viewport_min[1]]);
                 }
 
-                if ui.is_key_pressed(Key::A) {
+                if settings.keybindings.get(KeybindAction::ShowAreas).is_pressed(ui) {
                     session.toggle_areas();
                 }
-                if ui.is_key_pressed(Key::O) {
+                if settings.keybindings.get(KeybindAction::ShowAreaOutlines).is_pressed(ui) {
                     session.toggle_area_outlines();
                 }
-                if ui.is_key_pressed(Key::PageUp) {
+                if settings.keybindings.get(KeybindAction::LevelUp).is_pressed(ui) {
                     session.change_level(1);
                 }
-                if ui.is_key_pressed(Key::PageDown) {
+                if settings.keybindings.get(KeybindAction::LevelDown).is_pressed(ui) {
                     session.change_level(-1);
                 }
-                if ui.is_key_pressed(Key::Home) {
+                if settings.keybindings.get(KeybindAction::Refit).is_pressed(ui) {
                     *refit = true;
                 }
-                if ui.is_key_pressed(Key::W) {
+                if settings.keybindings.get(KeybindAction::PlaceTool).is_pressed(ui) {
                     session.set_tool(Tool::Place);
                 }
-                if ui.is_key_pressed(Key::S) {
+                if settings.keybindings.get(KeybindAction::SelectTool).is_pressed(ui) {
                     session.set_tool(Tool::Select);
                 }
-                if ui.is_key_pressed(Key::X) {
+                if settings.keybindings.get(KeybindAction::DeleteTool).is_pressed(ui) {
                     session.set_tool(Tool::Delete);
                 }
-                if ui.is_key_pressed(Key::Q) {
+                if settings.keybindings.get(KeybindAction::FillTool).is_pressed(ui) {
                     session.set_tool(Tool::Fill);
                 }
 
@@ -434,7 +468,12 @@ impl UiState {
 
                 camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
             });
-            if hovered && !ui.io().want_text_input() && !has_modifiers(ui) && ui.is_key_pressed(Key::F) {
+            if hovered
+                && !ui.io().want_text_input()
+                && !has_modifiers(ui)
+                && !settings.keybindings.is_any_pressed(ui)
+                && ui.is_key_pressed(Key::F)
+            {
                 session.toggle_focus_at(pointed_coord);
                 self.placement_stroke = None;
             }
@@ -442,7 +481,7 @@ impl UiState {
             let preview_coord = (tool == Tool::Place)
                 .then(|| self.gizmo.placement_coord().or(pointed_coord))
                 .flatten();
-            let active_flash = active_placement_flash(&mut self.placement_flash, ui.time());
+            let active_flash = active_placement_flash(&mut self.placement_flash, ui.time(), settings.tile_place_flash);
             interaction.placement_flash = active_flash.map(|(_, flash)| flash);
             if let Some(coord) = preview_coord
                 && session.can_edit_at(coord)
@@ -514,8 +553,9 @@ impl UiState {
                                 .can_edit_at(coord)
                                 .then(|| self.placement_stroke.as_mut().and_then(|stroke| stroke.visit(coord)))
                                 .flatten();
-                            if let Some(group) = group
-                                && let Some(owner) = session.place_at(coord, Some(group))
+                            let placed = group.and_then(|group| session.place_at(coord, Some(group)));
+                            if settings.tile_place_flash
+                                && let Some(owner) = placed
                             {
                                 let flash = ActivePlacementFlash {
                                     owner,
@@ -586,10 +626,12 @@ impl UiState {
             }
 
             let fill_warning_handles_escape = draw_fill_limit_warning(ui, session, &mut self.pending_fill_warning);
-            if ui.is_key_pressed(Key::Escape) && !fill_warning_handles_escape {
-                *exit = true;
+            if ui.is_key_pressed(Key::Escape) && !fill_warning_handles_escape && self.capturing_keybind.is_none() {
+                exit = true;
             }
         });
+
+        exit
     }
 
     fn draw_inspector(&mut self, ui: &Ui, session: &mut Session) {
@@ -599,7 +641,81 @@ impl UiState {
     }
 }
 
-fn active_placement_flash(active: &mut Option<ActivePlacementFlash>, now: f64) -> Option<(Coord, PlacementFlash)> {
+fn draw_settings_window(
+    ui: &Ui, window: &WindowKey, open: &mut bool, capturing: &mut Option<KeybindAction>, session: &mut Session,
+    settings: &mut Settings,
+) {
+    if !*open {
+        *capturing = None;
+
+        return;
+    }
+
+    let flags = WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_COLLAPSE | WindowFlags::NO_DOCKING;
+    ui.window(window).opened(open).flags(flags).build(|| {
+        ui.checkbox("Show areas", &mut session.options.show_areas);
+        ui.checkbox("Show area outlines", &mut session.options.show_area_outlines);
+        ui.checkbox("Tile placement flash", &mut settings.tile_place_flash);
+        ui.checkbox("Selection guide line", &mut settings.selection_guide_line);
+
+        ui.separator();
+        ui.text("Keybindings");
+        for action in KeybindAction::ALL {
+            ui.text(action.label());
+            ui.same_line_with_pos(180.0);
+
+            let binding = settings.keybindings.get(action).label(ui);
+            let visible = if *capturing == Some(action) {
+                "Press a key..."
+            } else {
+                binding.as_str()
+            };
+            if ui.button_with_size(format!("{visible}##keybind-{}", action.id()), [140.0, 0.0]) {
+                *capturing = (*capturing != Some(action)).then_some(action);
+            }
+        }
+
+        if ui.button("Reset keybindings") {
+            settings.keybindings = KeyBindings::default();
+            *capturing = None;
+        }
+    });
+
+    if !*open {
+        *capturing = None;
+    }
+}
+
+fn finish_keybind_capture(ui: &Ui, capturing: &mut Option<KeybindAction>, keybindings: &mut KeyBindings) {
+    let Some(action) = *capturing else {
+        return;
+    };
+    if ui.is_key_pressed_with_repeat(Key::Escape, false) {
+        *capturing = None;
+
+        return;
+    }
+    let Some(key) = BINDABLE_KEYS
+        .iter()
+        .copied()
+        .find(|key| ui.is_key_pressed_with_repeat(*key, false))
+    else {
+        return;
+    };
+
+    keybindings.rebind(action, KeyBinding::from_input(ui, key));
+    *capturing = None;
+}
+
+fn active_placement_flash(
+    active: &mut Option<ActivePlacementFlash>, now: f64, enabled: bool,
+) -> Option<(Coord, PlacementFlash)> {
+    if !enabled {
+        *active = None;
+
+        return None;
+    }
+
     let placement = (*active)?;
     let Some(flash) = placement.sample(now) else {
         *active = None;
@@ -1240,6 +1356,19 @@ mod tests {
         assert_eq!(flash.sample(10.125), Some(PlacementFlash { owner, strength: 0.5 }));
         assert_eq!(flash.sample(10.25), None);
         assert_eq!(flash.sample(11.0), None);
+    }
+
+    #[test]
+    fn disabling_placement_flash_clears_an_active_effect() {
+        let owner = PrefabInstanceId::from_raw(7).unwrap();
+        let mut active = Some(ActivePlacementFlash {
+            owner,
+            coord: Coord::new(2, 3, 1),
+            started_at: 10.0,
+        });
+
+        assert_eq!(active_placement_flash(&mut active, 10.0, false), None);
+        assert_eq!(active, None);
     }
 
     #[test]
