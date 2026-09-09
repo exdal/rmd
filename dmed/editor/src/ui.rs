@@ -90,6 +90,22 @@ impl PlacementStroke {
     }
 }
 
+#[derive(Debug)]
+struct DeletionStroke {
+    cursor: [u32; 2],
+}
+
+impl DeletionStroke {
+    const fn new(cursor: [u32; 2]) -> Self { Self { cursor } }
+
+    fn move_to(&mut self, cursor: [u32; 2]) -> bool {
+        let moved = self.cursor != cursor;
+        self.cursor = cursor;
+
+        moved
+    }
+}
+
 fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
     ui.get_window_draw_list()
         .add_rect(bounds.min, bounds.max, OVERLAY_BG)
@@ -113,6 +129,7 @@ pub struct UiState {
     gizmo: GizmoState,
     placement_flash: Option<ActivePlacementFlash>,
     placement_stroke: Option<PlacementStroke>,
+    deletion_stroke: Option<DeletionStroke>,
     viewport: (u32, u32),
     initial_refit: bool,
 }
@@ -144,6 +161,7 @@ impl UiState {
             gizmo: GizmoState::default(),
             placement_flash: None,
             placement_stroke: None,
+            deletion_stroke: None,
             viewport: (1, 1),
             initial_refit: true,
         })
@@ -429,6 +447,10 @@ impl UiState {
             let left_down = ui.is_mouse_down(MouseButton::Left);
             if left_clicked {
                 self.placement_stroke = None;
+                self.deletion_stroke = None;
+            }
+            if !left_down || session.tool() != Tool::Delete {
+                self.deletion_stroke = None;
             }
 
             if self.placement_stroke.as_ref().is_some_and(|stroke| {
@@ -468,9 +490,26 @@ impl UiState {
                                 interaction.placement_flash = flash.sample(ui.time());
                             }
                         },
-                        tool @ (Tool::Select | Tool::Delete) => {
+                        Tool::Select => {
                             self.placement_stroke = None;
-                            if tool_requests_pick(tool, left_clicked, left_down) {
+                            if left_clicked {
+                                request_pick(interaction, PickRequest::Cursor);
+                            }
+                        },
+                        Tool::Delete => {
+                            self.placement_stroke = None;
+                            let requests_pick = if left_clicked {
+                                self.deletion_stroke = Some(DeletionStroke::new(pixel));
+
+                                true
+                            } else {
+                                left_down
+                                    && self
+                                        .deletion_stroke
+                                        .as_mut()
+                                        .is_some_and(|stroke| stroke.move_to(pixel))
+                            };
+                            if requests_pick {
                                 request_pick(interaction, PickRequest::Cursor);
                             }
                         },
@@ -624,14 +663,6 @@ fn request_pick(interaction: &mut ViewportInteraction, request: PickRequest) {
     match &mut interaction.mode {
         InteractionMode::Place => {},
         InteractionMode::Select { pick } | InteractionMode::Delete { pick } => *pick = Some(request),
-    }
-}
-
-fn tool_requests_pick(tool: Tool, left_clicked: bool, left_down: bool) -> bool {
-    match tool {
-        Tool::Place => false,
-        Tool::Select => left_clicked,
-        Tool::Delete => left_down,
     }
 }
 
@@ -1033,12 +1064,13 @@ mod tests {
     }
 
     #[test]
-    fn delete_picks_for_every_frame_the_mouse_is_held() {
-        assert!(tool_requests_pick(Tool::Delete, true, true));
-        assert!(tool_requests_pick(Tool::Delete, false, true));
-        assert!(!tool_requests_pick(Tool::Delete, false, false));
-        assert!(tool_requests_pick(Tool::Select, true, true));
-        assert!(!tool_requests_pick(Tool::Select, false, true));
+    fn deletion_strokes_only_continue_when_the_cursor_moves() {
+        let mut stroke = DeletionStroke::new([10, 20]);
+
+        assert!(!stroke.move_to([10, 20]));
+        assert!(stroke.move_to([11, 20]));
+        assert!(!stroke.move_to([11, 20]));
+        assert!(stroke.move_to([10, 20]));
     }
 
     #[test]
