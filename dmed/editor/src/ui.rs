@@ -479,7 +479,10 @@ impl UiState {
             }
 
             draw_top_overlay(ui, session, top_overlay);
-            draw_history_overlay(ui, session, bottom_overlay);
+            let recent_prefabs = session.recent_prefabs();
+            if !recent_prefabs.is_empty() {
+                draw_history_overlay(ui, session, bottom_overlay, recent_prefabs.to_vec());
+            }
             configure_tool_interaction(session.tool(), interaction);
             if session.focused_area().is_some() {
                 interaction.hovered_area = None;
@@ -664,25 +667,15 @@ fn draw_tool_button(ui: &Ui, session: &mut Session, tool: Tool, icon: char) {
     }
 }
 
-fn draw_history_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect) {
+fn draw_history_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect, recent_prefabs: Vec<Prefab>) {
     draw_overlay_underlay(ui, bounds);
-
-    let recent = session.recent_prefabs().to_vec();
-    if recent.is_empty() {
-        let y = bounds.min[1] + ((bounds.max[1] - bounds.min[1] - ui.frame_height()) * 0.5).max(0.0);
-        ui.set_cursor_screen_pos([bounds.min[0] + OVERLAY_PADDING, y]);
-        ui.align_text_to_frame_padding();
-        ui.text_disabled("No recent objects");
-
-        return;
-    }
 
     let button_size = recent_button_size(ui);
     let palette = session.palette().cloned();
     let mut chosen = None;
     ui.set_cursor_screen_pos([bounds.min[0] + OVERLAY_PADDING, bounds.min[1] + OVERLAY_PADDING]);
 
-    for (index, prefab) in recent.iter().enumerate() {
+    for (index, prefab) in recent_prefabs.iter().enumerate() {
         if index > 0 {
             ui.same_line();
         }
