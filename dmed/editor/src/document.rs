@@ -130,10 +130,38 @@ impl Selection {
         }
     }
 
+    pub fn is_well_formed(&self) -> bool {
+        self.min.x >= 1
+            && self.min.y >= 1
+            && self.min.z >= 1
+            && self.max.x >= self.min.x
+            && self.max.y >= self.min.y
+            && self.max.z == self.min.z
+    }
+
     pub fn contains(&self, coord: Coord) -> bool {
         coord.z == self.min.z
             && (self.min.x..=self.max.x).contains(&coord.x)
             && (self.min.y..=self.max.y).contains(&coord.y)
+    }
+
+    pub fn width(&self) -> u32 { self.max.x - self.min.x + 1 }
+
+    pub fn height(&self) -> u32 { self.max.y - self.min.y + 1 }
+
+    pub fn with_min(&self, min: Coord) -> Option<Self> {
+        if min.z != self.min.z || self.max.z != self.min.z || self.max.x < self.min.x || self.max.y < self.min.y {
+            return None;
+        }
+
+        Some(Self {
+            min,
+            max: Coord::new(
+                min.x.checked_add(self.width().checked_sub(1)?)?,
+                min.y.checked_add(self.height().checked_sub(1)?)?,
+                min.z,
+            ),
+        })
     }
 
     pub fn iter(&self) -> impl Iterator<Item = Coord> + '_ {

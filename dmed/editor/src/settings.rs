@@ -141,6 +141,16 @@ impl KeyBinding {
         }
     }
 
+    pub const fn with_shift(key: Key) -> Self {
+        Self {
+            key,
+            ctrl: false,
+            shift: true,
+            alt: false,
+            super_key: false,
+        }
+    }
+
     pub fn from_input(ui: &Ui, key: Key) -> Self {
         let io = ui.io();
 
@@ -154,10 +164,17 @@ impl KeyBinding {
     }
 
     pub fn is_pressed(self, ui: &Ui) -> bool {
+        ui.is_key_pressed_with_repeat(self.key, false) && self.modifiers_match(ui)
+    }
+
+    pub fn is_down(self, ui: &Ui) -> bool { ui.is_key_down(self.key) && self.modifiers_match(ui) }
+
+    pub fn is_released(self, ui: &Ui) -> bool { ui.is_key_released(self.key) && self.modifiers_match(ui) }
+
+    fn modifiers_match(self, ui: &Ui) -> bool {
         let io = ui.io();
 
-        ui.is_key_pressed_with_repeat(self.key, false)
-            && self.ctrl == io.key_ctrl()
+        self.ctrl == io.key_ctrl()
             && self.shift == io.key_shift()
             && self.alt == io.key_alt()
             && self.super_key == io.key_super()
@@ -198,12 +215,14 @@ pub(crate) enum KeybindAction {
     Refit,
     PlaceTool,
     SelectTool,
+    BlockSelectTool,
     DeleteTool,
     FillTool,
+    Rotate,
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::ShowAreas,
         Self::ShowAreaOutlines,
         Self::LevelUp,
@@ -211,8 +230,10 @@ impl KeybindAction {
         Self::Refit,
         Self::PlaceTool,
         Self::SelectTool,
+        Self::BlockSelectTool,
         Self::DeleteTool,
         Self::FillTool,
+        Self::Rotate,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -224,8 +245,10 @@ impl KeybindAction {
             Self::Refit => "Refit",
             Self::PlaceTool => "Place tool",
             Self::SelectTool => "Select tool",
+            Self::BlockSelectTool => "Block select tool",
             Self::DeleteTool => "Delete tool",
             Self::FillTool => "Fill tool",
+            Self::Rotate => "Rotate",
         }
     }
 
@@ -238,8 +261,10 @@ impl KeybindAction {
             Self::Refit => "refit",
             Self::PlaceTool => "place-tool",
             Self::SelectTool => "select-tool",
+            Self::BlockSelectTool => "block-select-tool",
             Self::DeleteTool => "delete-tool",
             Self::FillTool => "fill-tool",
+            Self::Rotate => "rotate",
         }
     }
 }
@@ -254,8 +279,10 @@ pub(crate) struct KeyBindings {
     refit: KeyBinding,
     place_tool: KeyBinding,
     select_tool: KeyBinding,
+    block_select_tool: KeyBinding,
     delete_tool: KeyBinding,
     fill_tool: KeyBinding,
+    rotate: KeyBinding,
 }
 
 impl Default for KeyBindings {
@@ -268,8 +295,10 @@ impl Default for KeyBindings {
             refit: KeyBinding::new(Key::Home),
             place_tool: KeyBinding::new(Key::W),
             select_tool: KeyBinding::new(Key::S),
+            block_select_tool: KeyBinding::with_shift(Key::S),
             delete_tool: KeyBinding::new(Key::X),
             fill_tool: KeyBinding::new(Key::Q),
+            rotate: KeyBinding::new(Key::R),
         }
     }
 }
@@ -284,8 +313,10 @@ impl KeyBindings {
             KeybindAction::Refit => self.refit,
             KeybindAction::PlaceTool => self.place_tool,
             KeybindAction::SelectTool => self.select_tool,
+            KeybindAction::BlockSelectTool => self.block_select_tool,
             KeybindAction::DeleteTool => self.delete_tool,
             KeybindAction::FillTool => self.fill_tool,
+            KeybindAction::Rotate => self.rotate,
         }
     }
 
@@ -318,8 +349,10 @@ impl KeyBindings {
             KeybindAction::Refit => self.refit = binding,
             KeybindAction::PlaceTool => self.place_tool = binding,
             KeybindAction::SelectTool => self.select_tool = binding,
+            KeybindAction::BlockSelectTool => self.block_select_tool = binding,
             KeybindAction::DeleteTool => self.delete_tool = binding,
             KeybindAction::FillTool => self.fill_tool = binding,
+            KeybindAction::Rotate => self.rotate = binding,
         }
     }
 }
@@ -448,11 +481,16 @@ mod tests {
             (KeybindAction::SelectTool, Key::S),
             (KeybindAction::DeleteTool, Key::X),
             (KeybindAction::FillTool, Key::Q),
+            (KeybindAction::Rotate, Key::R),
         ];
 
         for (action, key) in expected {
             assert_eq!(bindings.get(action), KeyBinding::new(key));
         }
+        assert_eq!(
+            bindings.get(KeybindAction::BlockSelectTool),
+            KeyBinding::with_shift(Key::S)
+        );
     }
 
     #[test]

@@ -19,6 +19,7 @@ use dear_imgui_rs::{
 use dmm::{Coord, Prefab};
 use editor::{
     command::EditGroupId,
+    document::Selection,
     icons::materialdesignicons::{
         ICON_ERASER,
         ICON_EYEDROPPER,
@@ -26,17 +27,26 @@ use editor::{
         ICON_IMAGE_BROKEN,
         ICON_MENU_DOWN,
         ICON_PENCIL,
+        ICON_SELECT_DRAG,
     },
-    tool::{FillMode, Tool, is_placeable},
+    tool::{
+        FillMode,
+        SelectionPlacement,
+        SelectionRotation,
+        SelectionTransform,
+        Tool,
+        is_placeable,
+        rotated_selection_at,
+    },
 };
 use objtree::{ObjectTree, TypeId};
 use render::{InteractionMode, PickRequest, PlacementFlash, Renderer, ViewportInteraction};
 
 use crate::{
     camera::Controller,
-    gizmo::{GizmoState, GizmoViewport},
+    gizmo::{BlockGizmoTarget, GizmoState, GizmoViewport},
     inspector::InspectorState,
-    session::{FillOutcome, PlacementPreview, Session},
+    session::{BlockPreviewSprite, FillOutcome, PlacementPreview, Session},
     settings::{BINDABLE_KEYS, KeyBinding, KeyBindings, KeybindAction, Settings},
 };
 
@@ -54,6 +64,13 @@ const PLACEMENT_PREVIEW_PERIOD: f64 = 1.5;
 const DEFAULT_CUSTOM_FILL_BOUNDARY: &str = "/turf/closed/wall";
 const MAX_CUSTOM_FILL_SEARCH_RESULTS: usize = 50;
 const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warning";
+const BLOCK_SELECTION_POPUP: &str = "Block selection##block-selection";
+const BLOCK_SELECTION_GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+const BLOCK_SELECTION_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+const BLOCK_SELECTION_SHADOW: [f32; 4] = [0.0, 0.0, 0.0, 0.85];
+const BLOCK_GHOST_OPACITY: f32 = 0.55;
+const BLOCK_STRIPE_LENGTH: f32 = 6.0;
+const BLOCK_STRIPE_SPEED: f32 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ActivePlacementFlash {
@@ -127,6 +144,20 @@ struct PendingFillWarning {
     limit: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingBlockPlacement {
+    source: Selection,
+    target: Selection,
+    rotation: SelectionRotation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockPlacementAction {
+    Move,
+    Copy,
+    Cancel,
+}
+
 fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
     ui.get_window_draw_list()
         .add_rect(bounds.min, bounds.max, OVERLAY_BG)
@@ -152,6 +183,8 @@ pub struct UiState {
     placement_flash: Option<ActivePlacementFlash>,
     placement_stroke: Option<PlacementStroke>,
     deletion_stroke: Option<DeletionStroke>,
+    block_selection_anchor: Option<Coord>,
+    block_placement: Option<PendingBlockPlacement>,
     fill_mode: FillMode,
     custom_fill_boundaries: Vec<TreePath>,
     custom_fill_search: String,
@@ -192,6 +225,8 @@ impl UiState {
             placement_flash: None,
             placement_stroke: None,
             deletion_stroke: None,
+            block_selection_anchor: None,
+            block_placement: None,
             fill_mode: FillMode::default(),
             custom_fill_boundaries: vec![TreePath::parse(DEFAULT_CUSTOM_FILL_BOUNDARY)],
             custom_fill_search: String::new(),
@@ -438,6 +473,9 @@ impl UiState {
                 if settings.keybindings.get(KeybindAction::SelectTool).is_pressed(ui) {
                     session.set_tool(Tool::Select);
                 }
+                if settings.keybindings.get(KeybindAction::BlockSelectTool).is_pressed(ui) {
+                    session.set_tool(Tool::BlockSelect);
+                }
                 if settings.keybindings.get(KeybindAction::DeleteTool).is_pressed(ui) {
                     session.set_tool(Tool::Delete);
                 }
@@ -451,6 +489,7 @@ impl UiState {
                     *refit = false;
                 }
             }
+
             configure_tool_interaction(session.tool(), interaction);
 
             let in_viewport = |point: [f32; 2]| {
@@ -468,6 +507,7 @@ impl UiState {
 
                 camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
             });
+
             if hovered
                 && !ui.io().want_text_input()
                 && !has_modifiers(ui)
@@ -477,12 +517,14 @@ impl UiState {
                 session.toggle_focus_at(pointed_coord);
                 self.placement_stroke = None;
             }
+
             let tool = session.tool();
             let preview_coord = (tool == Tool::Place)
                 .then(|| self.gizmo.placement_coord().or(pointed_coord))
                 .flatten();
             let active_flash = active_placement_flash(&mut self.placement_flash, ui.time(), settings.tile_place_flash);
             interaction.placement_flash = active_flash.map(|(_, flash)| flash);
+
             if let Some(coord) = preview_coord
                 && session.can_edit_at(coord)
                 && active_flash.is_none_or(|(flash_coord, _)| flash_coord != coord)
@@ -495,16 +537,90 @@ impl UiState {
                 max: viewport_max,
                 hovered,
             };
+
+            if tool != Tool::BlockSelect {
+                self.block_selection_anchor = None;
+                self.block_placement = None;
+            } else {
+                if self
+                    .block_selection_anchor
+                    .is_some_and(|anchor| anchor.z != session.z())
+                {
+                    self.block_selection_anchor = None;
+                }
+
+                if self
+                    .block_placement
+                    .is_some_and(|placement| Some(placement.source) != session.selection())
+                {
+                    self.block_placement = None;
+                }
+            }
+
             let gizmo_captures_mouse = match tool {
                 Tool::Select => {
                     self.gizmo
-                        .draw(ui, session, camera, self.inspector.transform_mode(), gizmo_viewport)
+                        .draw(
+                            ui,
+                            session,
+                            settings,
+                            camera,
+                            self.inspector.transform_mode(),
+                            gizmo_viewport,
+                        )
                         .captures_mouse
                 },
                 Tool::Place => {
                     self.gizmo
-                        .draw_placement_direction(ui, session, camera, pointed_coord, gizmo_viewport)
+                        .draw_placement_direction(ui, session, settings, camera, pointed_coord, gizmo_viewport)
                         .captures_mouse
+                },
+                Tool::BlockSelect => {
+                    if self.block_selection_anchor.is_some() {
+                        self.gizmo.cancel();
+
+                        false
+                    } else if let (Some(source), Some(size)) = (session.selection(), session.map().map(|map| map.size))
+                    {
+                        let (displayed, rotation) = self
+                            .block_placement
+                            .map_or((source, SelectionRotation::Original), |placement| {
+                                (placement.target, placement.rotation)
+                            });
+
+                        let response = self.gizmo.draw_block(
+                            ui,
+                            settings,
+                            camera,
+                            BlockGizmoTarget {
+                                selection: displayed,
+                                rotation,
+                                map_size: size,
+                                tile_size: session.options.tile_size,
+                            },
+                            gizmo_viewport,
+                        );
+
+                        if response.selection != displayed || response.rotation != rotation {
+                            self.block_selection_anchor = None;
+                            self.block_placement =
+                                rotated_selection_at(source, response.selection.min, response.rotation)
+                                    .filter(|target| {
+                                        *target != source || response.rotation != SelectionRotation::Original
+                                    })
+                                    .map(|target| PendingBlockPlacement {
+                                        source,
+                                        target,
+                                        rotation: response.rotation,
+                                    });
+                        }
+
+                        response.captures_mouse
+                    } else {
+                        self.gizmo.cancel();
+
+                        false
+                    }
                 },
                 Tool::Delete => {
                     self.gizmo.cancel();
@@ -527,7 +643,6 @@ impl UiState {
             if !left_down || session.tool() != Tool::Delete {
                 self.deletion_stroke = None;
             }
-
             if self.placement_stroke.as_ref().is_some_and(|stroke| {
                 !left_down
                     || gizmo_captures_mouse
@@ -572,6 +687,29 @@ impl UiState {
                                 request_pick(interaction, PickRequest::Cursor);
                             }
                         },
+                        Tool::BlockSelect => {
+                            self.placement_stroke = None;
+                            if self.block_placement.is_none() {
+                                if left_clicked && session.can_edit_at(coord) {
+                                    self.block_placement = None;
+                                    let selection = Selection::from_drag(coord, coord);
+                                    if session.select_block(Some(selection)) {
+                                        self.block_selection_anchor = Some(coord);
+                                    }
+                                }
+
+                                if left_down && let Some(anchor) = self.block_selection_anchor {
+                                    session.select_block(Some(Selection::from_drag(anchor, coord)));
+                                }
+
+                                if ui.is_mouse_clicked(MouseButton::Right)
+                                    && self.block_selection_anchor.is_none()
+                                    && session.selection().is_some_and(|selection| selection.contains(coord))
+                                {
+                                    ui.open_popup(BLOCK_SELECTION_POPUP);
+                                }
+                            }
+                        },
                         Tool::Delete => {
                             self.placement_stroke = None;
                             let requests_pick = if left_clicked {
@@ -608,6 +746,73 @@ impl UiState {
                 }
             }
 
+            if !left_down {
+                self.block_selection_anchor = None;
+            }
+
+            if session.tool() == Tool::BlockSelect
+                && let Some(source) = session.selection()
+            {
+                let (displayed, rotation) = self
+                    .block_placement
+                    .map_or((source, SelectionRotation::Original), |placement| {
+                        (placement.target, placement.rotation)
+                    });
+                draw_block_selection(
+                    ui,
+                    session,
+                    camera,
+                    displayed,
+                    self.block_placement,
+                    viewport_min,
+                    viewport_max,
+                );
+
+                if self.block_selection_anchor.is_none()
+                    && let Some(map_size) = session.map().map(|map| map.size)
+                {
+                    self.gizmo.draw_block_overlay(
+                        ui,
+                        camera,
+                        BlockGizmoTarget {
+                            selection: displayed,
+                            rotation,
+                            map_size,
+                            tile_size: session.options.tile_size,
+                        },
+                        gizmo_viewport,
+                    );
+                }
+            }
+
+            let block_menu_handles_escape = draw_block_selection_menu(ui, session);
+            let placement_action = (!self.gizmo.block_rotation_open())
+                .then_some(self.block_placement)
+                .flatten()
+                .and_then(|placement| {
+                    let can_move = session.can_place_selected_block(
+                        placement.target.min,
+                        placement.rotation,
+                        SelectionPlacement::Move,
+                    );
+                    let can_copy = session.can_place_selected_block(
+                        placement.target.min,
+                        placement.rotation,
+                        SelectionPlacement::Copy,
+                    );
+                    draw_block_placement_controls(
+                        ui,
+                        camera,
+                        placement,
+                        session.options.tile_size,
+                        viewport_min,
+                        OverlayRect {
+                            min: [viewport_min[0], top_overlay.max[1]],
+                            max: [viewport_max[0], bottom_overlay.min[1]],
+                        },
+                        (can_move, can_copy),
+                    )
+                });
             draw_top_overlay(
                 ui,
                 session,
@@ -616,6 +821,23 @@ impl UiState {
                 &mut self.custom_fill_boundaries,
                 &mut self.custom_fill_search,
             );
+            if let Some(action) = placement_action
+                && let Some(placement) = self.block_placement
+            {
+                let finished = match action {
+                    BlockPlacementAction::Move => {
+                        session.place_selected_block(placement.target.min, placement.rotation, SelectionPlacement::Move)
+                    },
+                    BlockPlacementAction::Copy => {
+                        session.place_selected_block(placement.target.min, placement.rotation, SelectionPlacement::Copy)
+                    },
+                    BlockPlacementAction::Cancel => true,
+                };
+                if finished {
+                    self.block_placement = None;
+                    self.gizmo.cancel();
+                }
+            }
             let recent_prefabs = session.recent_prefabs();
             if !recent_prefabs.is_empty() {
                 draw_history_overlay(ui, session, bottom_overlay, recent_prefabs.to_vec());
@@ -626,7 +848,17 @@ impl UiState {
             }
 
             let fill_warning_handles_escape = draw_fill_limit_warning(ui, session, &mut self.pending_fill_warning);
-            if ui.is_key_pressed(Key::Escape) && !fill_warning_handles_escape && self.capturing_keybind.is_none() {
+            let block_placement_handles_escape = self.block_placement.is_some();
+            if ui.is_key_pressed(Key::Escape) && block_placement_handles_escape {
+                self.block_placement = None;
+                self.gizmo.cancel();
+            }
+            if ui.is_key_pressed(Key::Escape)
+                && !fill_warning_handles_escape
+                && !block_menu_handles_escape
+                && !block_placement_handles_escape
+                && self.capturing_keybind.is_none()
+            {
                 exit = true;
             }
         });
@@ -803,16 +1035,270 @@ fn placement_preview_opacity(time: f64) -> f32 {
     (0.9 + 0.1 * phase.cos()) as f32
 }
 
+fn block_selection_bounds(
+    camera: &Controller, viewport_min: [f32; 2], selection: Selection, tile_size: u32,
+) -> OverlayRect {
+    let tile_size = tile_size.max(1) as f32;
+    let left = selection.min.x.saturating_sub(1) as f32 * tile_size;
+    let right = selection.max.x as f32 * tile_size;
+    let bottom = selection.min.y.saturating_sub(1) as f32 * tile_size;
+    let top = selection.max.y as f32 * tile_size;
+    let top_left = camera.map_to_screen([left, top]);
+    let bottom_right = camera.map_to_screen([right, bottom]);
+
+    OverlayRect {
+        min: [viewport_min[0] + top_left[0], viewport_min[1] + top_left[1]],
+        max: [viewport_min[0] + bottom_right[0], viewport_min[1] + bottom_right[1]],
+    }
+}
+
+fn draw_block_selection(
+    ui: &Ui, session: &Session, camera: &Controller, displayed: Selection, placement: Option<PendingBlockPlacement>,
+    viewport_min: [f32; 2], viewport_max: [f32; 2],
+) {
+    if let Some(placement) = placement {
+        draw_block_ghost(ui, session, camera, placement, viewport_min, viewport_max);
+    }
+
+    let bounds = block_selection_bounds(camera, viewport_min, displayed, session.options.tile_size);
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(viewport_min, viewport_max, || {
+        draw.add_rect(bounds.min, bounds.max, BLOCK_SELECTION_SHADOW)
+            .thickness(4.0)
+            .build();
+        let offset = (ui.time() as f32 * BLOCK_STRIPE_SPEED).rem_euclid(BLOCK_STRIPE_LENGTH * 2.0);
+        let clip = OverlayRect {
+            min: viewport_min,
+            max: viewport_max,
+        };
+        for (start, end, green) in block_border_segments(bounds, clip, offset) {
+            draw.add_line(
+                start,
+                end,
+                if green {
+                    BLOCK_SELECTION_GREEN
+                } else {
+                    BLOCK_SELECTION_WHITE
+                },
+            )
+            .thickness(2.0)
+            .build();
+        }
+    });
+}
+
+fn draw_block_ghost(
+    ui: &Ui, session: &Session, camera: &Controller, placement: PendingBlockPlacement, viewport_min: [f32; 2],
+    viewport_max: [f32; 2],
+) {
+    let previews = session.block_preview_sprites(placement.source, placement.target, placement.rotation);
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(viewport_min, viewport_max, || {
+        for BlockPreviewSprite {
+            sprite,
+            uv0,
+            uv1,
+            mut tint,
+        } in previews
+        {
+            let left = sprite.x;
+            let bottom = sprite.y;
+            let top_left = camera.map_to_screen([left, bottom + sprite.height]);
+            let bottom_right = camera.map_to_screen([left + sprite.width, bottom]);
+            tint[3] *= BLOCK_GHOST_OPACITY;
+            draw.add_image(
+                Renderer::sprite_texture(sprite.texture.index),
+                [viewport_min[0] + top_left[0], viewport_min[1] + top_left[1]],
+                [viewport_min[0] + bottom_right[0], viewport_min[1] + bottom_right[1]],
+                uv0,
+                uv1,
+                tint,
+            );
+        }
+    });
+}
+
+fn block_border_segments(bounds: OverlayRect, clip: OverlayRect, offset: f32) -> Vec<([f32; 2], [f32; 2], bool)> {
+    let width = (bounds.max[0] - bounds.min[0]).max(0.0);
+    let height = (bounds.max[1] - bounds.min[1]).max(0.0);
+    let perimeter = 2.0 * (width + height);
+    if perimeter <= f32::EPSILON {
+        return Vec::new();
+    }
+
+    let mut segments = Vec::new();
+    for (path_start, start, end) in [
+        (0.0, bounds.min, [bounds.max[0], bounds.min[1]]),
+        (width, [bounds.max[0], bounds.min[1]], bounds.max),
+        (width + height, bounds.max, [bounds.min[0], bounds.max[1]]),
+        (width * 2.0 + height, [bounds.min[0], bounds.max[1]], bounds.min),
+    ] {
+        if let Some((visible_start, visible_end)) = visible_edge_interval(start, end, path_start, clip) {
+            let mut stripe = ((visible_start - offset) / BLOCK_STRIPE_LENGTH).floor() as i64;
+            let mut part_start = visible_start;
+            while part_start < visible_end {
+                let stripe_end = offset + (stripe + 1) as f32 * BLOCK_STRIPE_LENGTH;
+                let part_end = if stripe_end.is_finite() && stripe_end > part_start {
+                    stripe_end.min(visible_end)
+                } else {
+                    visible_end
+                };
+                let green = stripe.rem_euclid(2) != 0;
+                segments.push((
+                    block_border_point(bounds, part_start),
+                    block_border_point(bounds, part_end),
+                    green,
+                ));
+                part_start = part_end;
+                stripe += 1;
+            }
+        }
+    }
+
+    segments
+}
+
+fn visible_edge_interval(start: [f32; 2], end: [f32; 2], path_start: f32, clip: OverlayRect) -> Option<(f32, f32)> {
+    if start[1] == end[1] {
+        if !(clip.min[1]..=clip.max[1]).contains(&start[1]) {
+            return None;
+        }
+        let low = start[0].min(end[0]).max(clip.min[0]);
+        let high = start[0].max(end[0]).min(clip.max[0]);
+        if high <= low {
+            return None;
+        }
+        let (local_start, local_end) = if end[0] >= start[0] {
+            (low - start[0], high - start[0])
+        } else {
+            (start[0] - high, start[0] - low)
+        };
+
+        Some((path_start + local_start, path_start + local_end))
+    } else {
+        if !(clip.min[0]..=clip.max[0]).contains(&start[0]) {
+            return None;
+        }
+        let low = start[1].min(end[1]).max(clip.min[1]);
+        let high = start[1].max(end[1]).min(clip.max[1]);
+        if high <= low {
+            return None;
+        }
+        let (local_start, local_end) = if end[1] >= start[1] {
+            (low - start[1], high - start[1])
+        } else {
+            (start[1] - high, start[1] - low)
+        };
+
+        Some((path_start + local_start, path_start + local_end))
+    }
+}
+
+fn block_border_point(bounds: OverlayRect, distance: f32) -> [f32; 2] {
+    let width = (bounds.max[0] - bounds.min[0]).max(0.0);
+    let height = (bounds.max[1] - bounds.min[1]).max(0.0);
+    if distance <= width {
+        [bounds.min[0] + distance, bounds.min[1]]
+    } else if distance <= width + height {
+        [bounds.max[0], bounds.min[1] + distance - width]
+    } else if distance <= width * 2.0 + height {
+        [bounds.max[0] - (distance - width - height), bounds.max[1]]
+    } else {
+        [bounds.min[0], bounds.max[1] - (distance - width * 2.0 - height)]
+    }
+}
+
+fn draw_block_selection_menu(ui: &Ui, session: &mut Session) -> bool {
+    let was_open = ui.is_popup_open(BLOCK_SELECTION_POPUP);
+    let mut requested = None;
+    if let Some(_popup) = ui.begin_popup(BLOCK_SELECTION_POPUP) {
+        for (label, transform) in [
+            ("Mirror horizontally", SelectionTransform::MirrorHorizontal),
+            ("Mirror vertically", SelectionTransform::MirrorVertical),
+        ] {
+            let enabled = session.can_transform_selected_block(transform);
+            if ui.menu_item_enabled_selected_no_shortcut(label, false, enabled) {
+                requested = Some(transform);
+            }
+        }
+    }
+    if let Some(transform) = requested {
+        session.transform_selected_block(transform);
+    }
+
+    was_open
+}
+
+fn draw_block_placement_controls(
+    ui: &Ui, camera: &Controller, placement: PendingBlockPlacement, tile_size: u32, viewport_min: [f32; 2],
+    controls_bounds: OverlayRect, enabled: (bool, bool),
+) -> Option<BlockPlacementAction> {
+    const LABELS: [&str; 3] = ["Move", "Copy", "Cancel"];
+    let (can_move, can_copy) = enabled;
+
+    let style = ui.clone_style();
+    let padding = style.frame_padding();
+    let spacing = style.item_spacing()[0];
+    let width = LABELS
+        .iter()
+        .map(|label| ui.calc_text_size(*label)[0] + padding[0] * 2.0)
+        .sum::<f32>()
+        + spacing * (LABELS.len() - 1) as f32;
+    let height = ui.frame_height();
+    let selection = block_selection_bounds(camera, viewport_min, placement.target, tile_size);
+    let center = [
+        (selection.min[0] + selection.max[0]) * 0.5,
+        (selection.min[1] + selection.max[1]) * 0.5,
+    ];
+    let min_x = controls_bounds.min[0] + OVERLAY_PADDING;
+    let min_y = controls_bounds.min[1] + OVERLAY_PADDING;
+    let max_x = (controls_bounds.max[0] - width - OVERLAY_PADDING).max(min_x);
+    let max_y = (controls_bounds.max[1] - height - OVERLAY_PADDING).max(min_y);
+    let position = [
+        (center[0] - width * 0.5).clamp(min_x, max_x),
+        (center[1] + 14.0).clamp(min_y, max_y),
+    ];
+    draw_overlay_underlay(
+        ui,
+        OverlayRect {
+            min: [position[0] - OVERLAY_PADDING, position[1] - OVERLAY_PADDING],
+            max: [
+                position[0] + width + OVERLAY_PADDING,
+                position[1] + height + OVERLAY_PADDING,
+            ],
+        },
+    );
+    ui.set_cursor_screen_pos(position);
+
+    let mut action = None;
+    if ui.with_disabled_if(!can_move, || ui.button(LABELS[0])) {
+        action = Some(BlockPlacementAction::Move);
+    }
+    ui.same_line();
+    if ui.with_disabled_if(!can_copy, || ui.button(LABELS[1])) {
+        action = Some(BlockPlacementAction::Copy);
+    }
+    ui.same_line();
+    if ui.button(LABELS[2]) {
+        action = Some(BlockPlacementAction::Cancel);
+    }
+    if action.is_none() && !ui.io().want_text_input() && ui.is_key_pressed(Key::Enter) && can_move {
+        action = Some(BlockPlacementAction::Move);
+    }
+
+    action
+}
+
 fn configure_tool_interaction(tool: Tool, interaction: &mut ViewportInteraction) {
     interaction.mode = match (tool, interaction.mode) {
-        (Tool::Place | Tool::Fill, _) => InteractionMode::Place,
+        (Tool::Place | Tool::BlockSelect | Tool::Fill, _) => InteractionMode::Place,
         (Tool::Select, InteractionMode::Select { pick }) => InteractionMode::Select { pick },
         (Tool::Delete, InteractionMode::Delete { pick }) => InteractionMode::Delete { pick },
         (Tool::Select, _) => InteractionMode::Select { pick: None },
         (Tool::Delete, _) => InteractionMode::Delete { pick: None },
     };
     match tool {
-        Tool::Place | Tool::Fill => {
+        Tool::Place | Tool::BlockSelect | Tool::Fill => {
             interaction.cursor = None;
             interaction.hovered_area = None;
             interaction.selected = None;
@@ -828,7 +1314,7 @@ fn configure_tool_interaction(tool: Tool, interaction: &mut ViewportInteraction)
 
 fn interaction_mode(tool: Tool) -> InteractionMode {
     match tool {
-        Tool::Place | Tool::Fill => InteractionMode::Place,
+        Tool::Place | Tool::BlockSelect | Tool::Fill => InteractionMode::Place,
         Tool::Select => InteractionMode::Select { pick: None },
         Tool::Delete => InteractionMode::Delete { pick: None },
     }
@@ -852,6 +1338,8 @@ fn draw_top_overlay(
     draw_tool_button(ui, session, Tool::Place, ICON_PENCIL);
     ui.same_line();
     draw_tool_button(ui, session, Tool::Select, ICON_EYEDROPPER);
+    ui.same_line();
+    draw_tool_button(ui, session, Tool::BlockSelect, ICON_SELECT_DRAG);
     ui.same_line();
     draw_tool_button(ui, session, Tool::Delete, ICON_ERASER);
     ui.same_line();
@@ -1055,7 +1543,15 @@ fn draw_tool_button(ui: &Ui, session: &mut Session, tool: Tool, icon: char) {
     };
 
     let _color = (session.tool() == tool).then(|| ui.push_style_color(StyleColor::Button, color));
-    if ui.button(icon.to_string()) {
+    let clicked = ui.button(icon.to_string());
+    ui.set_item_tooltip(match tool {
+        Tool::BlockSelect => {
+            "Block Select\nDrag a rectangle, then use the center gizmo to stage a move. Hold R to rotate; right-click \
+             to mirror."
+        },
+        _ => tool.label(),
+    });
+    if clicked {
         session.set_tool(tool);
     }
 }
@@ -1429,6 +1925,61 @@ mod tests {
     }
 
     #[test]
+    fn block_selection_bounds_follow_whole_tile_edges() {
+        let mut camera = Controller::new();
+        camera.resize(64, 64);
+        camera.camera.x = 32.0;
+        camera.camera.y = 32.0;
+        let selection = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 1, 1));
+
+        assert_eq!(
+            block_selection_bounds(&camera, [10.0, 20.0], selection, 32),
+            OverlayRect {
+                min: [10.0, 52.0],
+                max: [74.0, 84.0],
+            }
+        );
+    }
+
+    #[test]
+    fn block_border_stripes_stay_on_each_rectangle_edge() {
+        let bounds = OverlayRect {
+            min: [10.0, 20.0],
+            max: [42.0, 68.0],
+        };
+        let segments = block_border_segments(bounds, bounds, 3.0);
+
+        assert!(!segments.is_empty());
+        assert!(segments.iter().any(|(_, _, green)| *green));
+        assert!(segments.iter().any(|(_, _, green)| !*green));
+        assert!(segments.iter().all(|(start, end, _)| {
+            (start[0] == end[0] || start[1] == end[1])
+                && [start, end].into_iter().flatten().all(|value| value.is_finite())
+        }));
+    }
+
+    #[test]
+    fn block_border_generation_is_limited_to_visible_edges() {
+        let bounds = OverlayRect {
+            min: [-1_000_000.0, 20.0],
+            max: [1_000_000.0, 68.0],
+        };
+        let clip = OverlayRect {
+            min: [0.0, 0.0],
+            max: [100.0, 100.0],
+        };
+        let segments = block_border_segments(bounds, clip, 0.0);
+
+        assert!(segments.len() < 40);
+        assert!(segments.iter().all(|(start, end, _)| {
+            [start, end]
+                .into_iter()
+                .flatten()
+                .all(|value| (-f32::EPSILON..=100.0 + f32::EPSILON).contains(value))
+        }));
+    }
+
+    #[test]
     fn tool_interaction_configures_highlights_and_pick_requests() {
         let owner = PrefabInstanceId::from_raw(7).unwrap();
         let interaction = ViewportInteraction {
@@ -1471,6 +2022,16 @@ mod tests {
         configure_tool_interaction(Tool::Fill, &mut fill);
         assert_eq!(
             fill,
+            ViewportInteraction {
+                placement_flash: interaction.placement_flash,
+                ..Default::default()
+            }
+        );
+
+        let mut block = interaction;
+        configure_tool_interaction(Tool::BlockSelect, &mut block);
+        assert_eq!(
+            block,
             ViewportInteraction {
                 placement_flash: interaction.placement_flash,
                 ..Default::default()

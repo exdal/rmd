@@ -10,10 +10,27 @@ use editor::{
     EditorState,
     Environment,
     command::EditGroupId,
-    document::{MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
+    document::{MapDocument, PrefabInstanceId, PrefabLocation, Selection, VarMutation},
     focus::AreaFocus,
     frame::{self, FrameInstances, FrameOptions, PrefabUpdate},
-    tool::{FillError, FillMode, MAX_FILL_TILES, Tool, ToolContext, ToolEdit, is_placeable},
+    tool::{
+        FillError,
+        FillMode,
+        MAX_FILL_TILES,
+        SelectionPlacement,
+        SelectionRotation,
+        SelectionTransform,
+        Tool,
+        ToolContext,
+        ToolEdit,
+        is_placeable,
+        place_selection as build_selection_placement,
+        rotate_point,
+        rotate_prefab,
+        rotated_selection_at,
+        transform_selection as build_selection_transform,
+        transformed_selection,
+    },
     visual,
 };
 use objtree::{ObjectTree, TypeId};
@@ -56,6 +73,14 @@ pub(crate) struct PrefabThumbnail {
 pub(crate) struct PlacementPreview {
     pub thumbnail: PrefabThumbnail,
     pub offset: [i32; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct BlockPreviewSprite {
+    pub sprite: SpriteInstance,
+    pub uv0: [f32; 2],
+    pub uv1: [f32; 2],
+    pub tint: [f32; 4],
 }
 
 pub struct Session {
@@ -164,6 +189,7 @@ impl Session {
 
         document.z = z;
         document.set_focus(None);
+        document.selection = None;
     }
 
     pub fn change_level(&mut self, delta: i32) {
@@ -177,6 +203,7 @@ impl Session {
         if next != document.z {
             document.z = next;
             document.set_focus(None);
+            document.selection = None;
         }
     }
 
@@ -186,7 +213,281 @@ impl Session {
 
     pub fn tool(&self) -> Tool { self.state.tool }
 
-    pub fn set_tool(&mut self, tool: Tool) { self.state.tool = tool; }
+    pub fn set_tool(&mut self, tool: Tool) {
+        self.state.tool = tool;
+        if tool == Tool::BlockSelect
+            && let Some(document) = self.state.active_document_mut()
+        {
+            document.select_instance(None);
+        }
+    }
+
+    pub fn selection(&self) -> Option<Selection> {
+        let document = self.state.active_document()?;
+
+        document.selection.filter(|selection| selection.min.z == document.z)
+    }
+
+    pub fn select_block(&mut self, selection: Option<Selection>) -> bool {
+        let Some(document) = self.state.active_document_mut() else {
+            return false;
+        };
+
+        let selection = selection.filter(|selection| {
+            selection.is_well_formed()
+                && selection.min.z == document.z
+                && selection.max.x <= document.map.size.x
+                && selection.max.y <= document.map.size.y
+                && selection.iter().all(|coord| document.allows_edit_at(coord))
+        });
+        document.selection = selection;
+        document.select_instance(None);
+
+        selection.is_some()
+    }
+
+    pub fn place_selected_block(
+        &mut self, target_min: Coord, rotation: SelectionRotation, placement: SelectionPlacement,
+    ) -> bool {
+        if !self.can_place_selected_block(target_min, rotation, placement) {
+            return false;
+        }
+
+        let built = {
+            let Some(environment) = self.state.environment.as_ref() else {
+                return false;
+            };
+            let Some(active) = self.state.active else {
+                return false;
+            };
+            let Some(document) = self.state.documents.get_mut(active) else {
+                return false;
+            };
+            let Some(selection) = document.selection else {
+                return false;
+            };
+
+            build_selection_placement(document, &environment.tree, selection, target_min, rotation, placement)
+        };
+
+        let Some((action, selection)) = built else {
+            return false;
+        };
+
+        if !self.commit(action, None) {
+            return false;
+        }
+
+        if let Some(document) = self.state.active_document_mut() {
+            document.selection = Some(selection);
+            document.select_instance(None);
+        }
+
+        true
+    }
+
+    pub fn can_place_selected_block(
+        &self, target_min: Coord, rotation: SelectionRotation, _placement: SelectionPlacement,
+    ) -> bool {
+        if self.tool() != Tool::BlockSelect {
+            return false;
+        }
+
+        let Some(environment) = self.state.environment.as_ref() else {
+            return false;
+        };
+
+        let roots = environment.tree.roots();
+        if roots.turf.is_none() || roots.area.is_none() {
+            return false;
+        }
+
+        let Some(document) = self.state.active_document() else {
+            return false;
+        };
+
+        let Some(selection) = self.selection() else {
+            return false;
+        };
+
+        let Some(target) = rotated_selection_at(selection, target_min, rotation) else {
+            return false;
+        };
+
+        if target == selection && rotation == SelectionRotation::Original {
+            // why do you want to select and place? get help
+            return false;
+        }
+
+        target.max.x <= document.map.size.x
+            && target.max.y <= document.map.size.y
+            && selection
+                .iter()
+                .chain(target.iter())
+                .all(|coord| document.allows_edit_at(coord))
+    }
+
+    pub fn transform_selected_block(&mut self, transform: SelectionTransform) -> bool {
+        if self.tool() != Tool::BlockSelect || !self.can_transform_selected_block(transform) {
+            return false;
+        }
+
+        let built = {
+            let Some(environment) = self.state.environment.as_ref() else {
+                return false;
+            };
+            let Some(active) = self.state.active else {
+                return false;
+            };
+            let Some(document) = self.state.documents.get_mut(active) else {
+                return false;
+            };
+            let Some(selection) = document.selection else {
+                return false;
+            };
+
+            build_selection_transform(document, &environment.tree, selection, transform)
+        };
+
+        let Some((action, selection)) = built else {
+            return false;
+        };
+
+        if !self.commit(action, None) {
+            return false;
+        }
+
+        if let Some(document) = self.state.active_document_mut() {
+            document.selection = Some(selection);
+            document.select_instance(None);
+        }
+
+        true
+    }
+
+    pub fn can_transform_selected_block(&self, transform: SelectionTransform) -> bool {
+        // holy fuck we need a better solution to this, just copy pasting  same shit over and over
+
+        if self.tool() != Tool::BlockSelect {
+            return false;
+        }
+
+        let Some(environment) = self.state.environment.as_ref() else {
+            return false;
+        };
+
+        let roots = environment.tree.roots();
+        if roots.turf.is_none() || roots.area.is_none() {
+            return false;
+        }
+
+        let Some(document) = self.state.active_document() else {
+            return false;
+        };
+
+        let Some(selection) = self.selection() else {
+            return false;
+        };
+
+        let Some(target) = transformed_selection(selection, transform) else {
+            return false;
+        };
+
+        target.max.x <= document.map.size.x
+            && target.max.y <= document.map.size.y
+            && selection
+                .iter()
+                .chain(target.iter())
+                .all(|coord| document.allows_edit_at(coord))
+    }
+
+    pub(crate) fn block_preview_sprites(
+        &self, source: Selection, target: Selection, rotation: SelectionRotation,
+    ) -> Vec<BlockPreviewSprite> {
+        let Some(document) = self.state.active_document() else {
+            return Vec::new();
+        };
+
+        let Some(environment) = self.state.environment.as_ref() else {
+            return Vec::new();
+        };
+
+        let area = environment.tree.roots().area;
+        let mut previews = Vec::new();
+        for coord in source.iter() {
+            let relative = (coord.x - source.min.x, coord.y - source.min.y);
+            let transformed = rotate_point(relative, source.width(), source.height(), rotation);
+            let destination = Coord::new(target.min.x + transformed.0, target.min.y + transformed.1, target.min.z);
+            let Some(tile) = document.placed_tile(coord) else {
+                continue;
+            };
+            for placed in tile {
+                let mut prefab = placed.prefab().clone();
+                rotate_prefab(&environment.tree, &mut prefab, rotation);
+
+                let Some(id) = environment.tree.id_of(&prefab.path) else {
+                    continue;
+                };
+
+                let is_area = area.is_some_and(|area| environment.tree.is_subtype_of(id, area));
+                if is_area && !self.options.show_areas {
+                    continue;
+                }
+
+                let appearance = visual::resolve_id(&environment.tree, id, &prefab);
+                let Some(texture) = frame::sprite_texture(&environment.icons, &self.textures, &appearance) else {
+                    continue;
+                };
+
+                let sprite = frame::instance_for(
+                    placed.id(),
+                    &appearance,
+                    texture,
+                    destination,
+                    self.options.tile_size,
+                    is_area,
+                );
+
+                if let Some(preview) = self.block_preview_sprite(sprite) {
+                    previews.push(preview);
+                }
+            }
+        }
+
+        previews.sort_by(|left, right| left.sprite.depth.total_cmp(&right.sprite.depth));
+
+        previews
+    }
+
+    fn block_preview_sprite(&self, sprite: SpriteInstance) -> Option<BlockPreviewSprite> {
+        let sheet = self.textures.texture(sprite.texture.index)?;
+        let right = sprite.texture.source_position[0].checked_add(sprite.texture.width)?;
+        let bottom = sprite.texture.source_position[1].checked_add(sprite.texture.height)?;
+        let alpha = sprite.color[3];
+        let tint = if alpha > f32::EPSILON {
+            [
+                sprite.color[0] / alpha,
+                sprite.color[1] / alpha,
+                sprite.color[2] / alpha,
+                alpha,
+            ]
+        } else {
+            [1.0, 1.0, 1.0, 0.0]
+        };
+
+        Some(BlockPreviewSprite {
+            sprite,
+            uv0: [
+                sprite.texture.source_position[0] as f32 / sheet.width() as f32,
+                sprite.texture.source_position[1] as f32 / sheet.height() as f32,
+            ],
+            uv1: [
+                right as f32 / sheet.width() as f32,
+                bottom as f32 / sheet.height() as f32,
+            ],
+            tint,
+        })
+    }
 
     pub fn palette(&self) -> Option<&Prefab> { self.state.palette.as_ref() }
 
@@ -945,7 +1246,7 @@ mod tests {
     use editor::{
         Environment,
         command::EditGroupId,
-        document::{MapDocument, VarMutation},
+        document::{MapDocument, Selection, VarMutation},
         tool::{FillMode, Tool},
     };
     use objtree::ObjectTree;
@@ -1309,13 +1610,38 @@ mod tests {
     fn changing_levels_clears_focus() {
         let mut session = focus_session();
         session.toggle_focus_at(Some(Coord::new(1, 1, 1)));
+        session.set_tool(Tool::BlockSelect);
+        assert!(session.select_block(Some(Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 1, 1),))));
         assert!(session.focused_area().is_some());
+        assert!(session.selection().is_some());
 
         session.change_level(1);
 
         assert_eq!(session.z(), 2);
         assert_eq!(session.focused_area(), None);
+        assert_eq!(session.selection(), None);
         assert!(session.can_edit_at(Coord::new(4, 1, 2)));
+    }
+
+    #[test]
+    fn block_selection_clears_object_selection_and_respects_focus() {
+        let mut session = focus_session();
+        let inside = Coord::new(1, 1, 1);
+        let outside = Coord::new(3, 1, 1);
+        let object = session.state.active_document().unwrap().instance_ids_at(inside)[0];
+        session.select_instance(Some(object));
+        session.set_tool(Tool::BlockSelect);
+        assert_eq!(session.selected_instance(), None);
+        session.toggle_focus_at(Some(inside));
+
+        assert!(!session.select_block(Some(Selection::from_drag(inside, outside))));
+        assert_eq!(session.selection(), None);
+        assert_eq!(session.selected_instance(), None);
+        assert!(session.select_block(Some(Selection::from_drag(inside, Coord::new(2, 1, 1)))));
+        assert_eq!(
+            session.selection(),
+            Some(Selection::from_drag(inside, Coord::new(2, 1, 1)))
+        );
     }
 
     #[test]

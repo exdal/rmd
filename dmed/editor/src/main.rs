@@ -269,7 +269,7 @@ impl App {
                         session.delete_instance(owner);
                     }
                 },
-                Tool::Place | Tool::Fill => {},
+                Tool::Place | Tool::BlockSelect | Tool::Fill => {},
             }
         }
 

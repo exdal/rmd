@@ -1,12 +1,17 @@
-use core::path::TreePath;
-use std::collections::{HashSet, VecDeque};
+use core::{
+    path::TreePath,
+    types::{Identifier, Value},
+};
+use std::collections::{HashMap, HashSet, VecDeque};
 
+use dmi::metadata::Dir;
 use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
 
 use crate::{
     command::Edit,
-    document::{MapDocument, PrefabInstanceId},
+    document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection},
+    visual,
 };
 
 pub const MAX_FILL_TILES: usize = 5_000;
@@ -16,8 +21,52 @@ pub enum Tool {
     Place,
     #[default]
     Select,
+    BlockSelect,
     Delete,
     Fill,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionTransform {
+    RotateClockwise,
+    RotateCounterClockwise,
+    MirrorHorizontal,
+    MirrorVertical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SelectionRotation {
+    #[default]
+    Original,
+    Clockwise,
+    Half,
+    CounterClockwise,
+}
+
+impl SelectionRotation {
+    pub const fn clockwise(self) -> Self {
+        match self {
+            Self::Original => Self::Clockwise,
+            Self::Clockwise => Self::Half,
+            Self::Half => Self::CounterClockwise,
+            Self::CounterClockwise => Self::Original,
+        }
+    }
+
+    const fn transforms(self) -> &'static [SelectionTransform] {
+        match self {
+            Self::Original => &[],
+            Self::Clockwise => &[SelectionTransform::RotateClockwise],
+            Self::Half => &[SelectionTransform::RotateClockwise, SelectionTransform::RotateClockwise],
+            Self::CounterClockwise => &[SelectionTransform::RotateCounterClockwise],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionPlacement {
+    Move,
+    Copy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -72,6 +121,7 @@ impl Tool {
         match self {
             Tool::Place => "Place",
             Tool::Select => "Select",
+            Tool::BlockSelect => "Block Select",
             Tool::Delete => "Delete",
             Tool::Fill => "Fill",
         }
@@ -81,7 +131,7 @@ impl Tool {
         match self {
             Self::Place => place(context),
             Self::Delete => delete(context),
-            Self::Select => None,
+            Self::Select | Self::BlockSelect => None,
             Self::Fill => fill(context, Some(MAX_FILL_TILES)).ok().flatten(),
         }
     }
@@ -95,6 +145,418 @@ impl Tool {
             Ok(self.build_edit(context))
         }
     }
+}
+
+pub fn move_selection(
+    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, target_min: Coord,
+) -> Option<(ToolEdit, Selection)> {
+    place_selection(
+        document,
+        tree,
+        selection,
+        target_min,
+        SelectionRotation::Original,
+        SelectionPlacement::Move,
+    )
+}
+
+pub fn copy_selection(
+    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, target_min: Coord,
+) -> Option<(ToolEdit, Selection)> {
+    place_selection(
+        document,
+        tree,
+        selection,
+        target_min,
+        SelectionRotation::Original,
+        SelectionPlacement::Copy,
+    )
+}
+
+pub fn place_selection(
+    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, target_min: Coord,
+    rotation: SelectionRotation, placement: SelectionPlacement,
+) -> Option<(ToolEdit, Selection)> {
+    let target = rotated_selection_at(selection, target_min, rotation)?;
+    if target == selection && rotation == SelectionRotation::Original {
+        return None;
+    }
+    let label = match placement {
+        SelectionPlacement::Move => "move block",
+        SelectionPlacement::Copy => "copy block",
+    };
+
+    build_selection_edit(
+        document,
+        tree,
+        selection,
+        target,
+        rotation.transforms(),
+        placement,
+        label,
+    )
+}
+
+pub fn transform_selection(
+    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, transform: SelectionTransform,
+) -> Option<(ToolEdit, Selection)> {
+    if !selection.is_well_formed() {
+        return None;
+    }
+    let target = transformed_selection(selection, transform)?;
+    let label = match transform {
+        SelectionTransform::RotateClockwise => "rotate block clockwise",
+        SelectionTransform::RotateCounterClockwise => "rotate block counterclockwise",
+        SelectionTransform::MirrorHorizontal => "mirror block horizontally",
+        SelectionTransform::MirrorVertical => "mirror block vertically",
+    };
+
+    build_selection_edit(
+        document,
+        tree,
+        selection,
+        target,
+        std::slice::from_ref(&transform),
+        SelectionPlacement::Move,
+        label,
+    )
+}
+
+pub fn rotated_selection_at(selection: Selection, target_min: Coord, rotation: SelectionRotation) -> Option<Selection> {
+    let mut target = selection.with_min(target_min)?;
+    for transform in rotation.transforms() {
+        target = transformed_selection(target, *transform)?;
+    }
+
+    Some(target)
+}
+
+pub fn rotate_point(point: (u32, u32), width: u32, height: u32, rotation: SelectionRotation) -> (u32, u32) {
+    match rotation {
+        SelectionRotation::Original => point,
+        SelectionRotation::Clockwise => transform_point(point, width, height, SelectionTransform::RotateClockwise),
+        SelectionRotation::Half => (width - 1 - point.0, height - 1 - point.1),
+        SelectionRotation::CounterClockwise => {
+            transform_point(point, width, height, SelectionTransform::RotateCounterClockwise)
+        },
+    }
+}
+
+pub fn rotate_prefab(tree: &ObjectTree, prefab: &mut Prefab, rotation: SelectionRotation) {
+    for transform in rotation.transforms() {
+        transform_prefab(tree, prefab, *transform);
+    }
+}
+
+pub fn transformed_selection(selection: Selection, transform: SelectionTransform) -> Option<Selection> {
+    if !selection.is_well_formed() {
+        return None;
+    }
+    let (width, height) = match transform {
+        SelectionTransform::RotateClockwise | SelectionTransform::RotateCounterClockwise => {
+            (selection.height(), selection.width())
+        },
+        SelectionTransform::MirrorHorizontal | SelectionTransform::MirrorVertical => {
+            (selection.width(), selection.height())
+        },
+    };
+    let target = Selection {
+        min: selection.min,
+        max: Coord::new(
+            selection.min.x.checked_add(width.checked_sub(1)?)?,
+            selection.min.y.checked_add(height.checked_sub(1)?)?,
+            selection.min.z,
+        ),
+    };
+
+    Some(target)
+}
+
+fn build_selection_edit(
+    document: &mut MapDocument, tree: &ObjectTree, source: Selection, target: Selection,
+    transforms: &[SelectionTransform], placement: SelectionPlacement, label: &str,
+) -> Option<(ToolEdit, Selection)> {
+    let size = document.map.size;
+    let touched = source.iter().chain(target.iter()).collect::<HashSet<_>>();
+    if touched
+        .iter()
+        .any(|coord| !coord_in_bounds(*coord, size) || !document.allows_edit_at(*coord))
+    {
+        return None;
+    }
+
+    let defaults = if placement == SelectionPlacement::Move {
+        Some(default_tile_paths(tree)?)
+    } else {
+        None
+    };
+    let width = source.width();
+    let height = source.height();
+    let mut payload = Vec::with_capacity(source.width() as usize * source.height() as usize);
+    for coord in source.iter() {
+        let mut transformed = (coord.x - source.min.x, coord.y - source.min.y);
+        let (mut current_width, mut current_height) = (width, height);
+        for transform in transforms {
+            transformed = transform_point(transformed, current_width, current_height, *transform);
+            if matches!(
+                transform,
+                SelectionTransform::RotateClockwise | SelectionTransform::RotateCounterClockwise
+            ) {
+                (current_width, current_height) = (current_height, current_width);
+            }
+        }
+        let destination = Coord::new(target.min.x + transformed.0, target.min.y + transformed.1, target.min.z);
+        let mut tile = document.placed_tile(coord)?;
+        if placement == SelectionPlacement::Copy {
+            tile = tile
+                .into_iter()
+                .map(|placed| document.instantiate(placed.prefab().clone()))
+                .collect();
+        }
+        for transform in transforms {
+            for placed in &mut tile {
+                transform_prefab(tree, placed.prefab_mut(), *transform);
+            }
+        }
+        payload.push((destination, tile));
+    }
+
+    let mut staged = HashMap::<Coord, PlacedTile>::new();
+    if let Some((default_turf, default_area)) = defaults {
+        for coord in source.iter() {
+            staged.insert(
+                coord,
+                vec![
+                    document.instantiate(Prefab::new(default_turf.clone())),
+                    document.instantiate(Prefab::new(default_area.clone())),
+                ],
+            );
+        }
+    }
+    for (coord, incoming) in payload {
+        staged.insert(coord, incoming);
+    }
+
+    let mut coords = staged.keys().copied().collect::<Vec<_>>();
+    coords.sort_unstable_by_key(|coord| (coord.z, coord.y, coord.x));
+    let mut edit = Edit::new(label);
+    let mut affected = HashSet::new();
+    for coord in coords {
+        let after = staged.remove(&coord)?;
+        let before = document.placed_tile(coord)?;
+        if before == after {
+            continue;
+        }
+        affected.extend(before.iter().map(PlacedPrefab::id));
+        affected.extend(after.iter().map(PlacedPrefab::id));
+        edit.change(document, coord, after);
+    }
+    if edit.is_empty() {
+        return None;
+    }
+
+    let mut affected = affected.into_iter().collect::<Vec<_>>();
+    affected.sort_unstable_by_key(|id| id.get());
+
+    Some((
+        ToolEdit {
+            edit,
+            selected: None,
+            affected,
+        },
+        target,
+    ))
+}
+
+fn default_tile_paths(tree: &ObjectTree) -> Option<(TreePath, TreePath)> {
+    Some((
+        default_path(tree, "turf", tree.roots().turf?)?,
+        default_path(tree, "area", tree.roots().area?)?,
+    ))
+}
+
+fn default_path(tree: &ObjectTree, variable: &str, root: TypeId) -> Option<TreePath> {
+    let configured = tree
+        .id_of(&TreePath::parse("/world"))
+        .and_then(|world| tree.var_inherited(world, &Identifier::from(variable)))
+        .and_then(|var| match &var.value {
+            Value::Path(path) => Some(path),
+            _ => None,
+        })
+        .and_then(|path| tree.id_of(path).map(|id| (path, id)))
+        .filter(|(_, id)| tree.is_subtype_of(*id, root))
+        .map(|(path, _)| path.clone());
+
+    configured.or_else(|| tree.get(root).map(|decl| TreePath::parse(&decl.path.to_string())))
+}
+
+fn transform_point((x, y): (u32, u32), width: u32, height: u32, transform: SelectionTransform) -> (u32, u32) {
+    match transform {
+        SelectionTransform::RotateClockwise => (y, width - 1 - x),
+        SelectionTransform::RotateCounterClockwise => (height - 1 - y, x),
+        SelectionTransform::MirrorHorizontal => (width - 1 - x, y),
+        SelectionTransform::MirrorVertical => (x, height - 1 - y),
+    }
+}
+
+fn transform_prefab(tree: &ObjectTree, prefab: &mut Prefab, transform: SelectionTransform) {
+    let Some(id) = tree.id_of(&prefab.path) else {
+        return;
+    };
+    let appearance = visual::resolve_id(tree, id, prefab);
+    let path_direction = directional_type_group(tree, id).and_then(|(_, direction)| direction);
+    let dir_name = Identifier::from("dir");
+    let direction = path_direction.or_else(|| match visual::resolve_value(tree, id, prefab, &dir_name) {
+        Some(resolved) => resolved.value.as_num().and_then(|value| Dir::from_bits(value as u32)),
+        None => Dir::from_bits(appearance.dir),
+    });
+    let target_direction = direction.map(|direction| transform_direction(direction, transform));
+
+    if let Some(direction) = target_direction {
+        if let Some(path) = directional_type_target(tree, id, direction) {
+            prefab.path = path;
+            prefab.remove_var(&Identifier::from("dir"));
+        } else {
+            set_resolved_number(tree, prefab, "dir", direction.to_bits() as i32);
+        }
+    }
+
+    for (x_name, y_name, values) in [
+        ("pixel_x", "pixel_y", [appearance.pixel_x, appearance.pixel_y]),
+        ("pixel_w", "pixel_z", [appearance.pixel_w, appearance.pixel_z]),
+        ("step_x", "step_y", [appearance.step_x, appearance.step_y]),
+    ] {
+        let [x, y] = transform_vector(values, transform);
+        set_resolved_number(tree, prefab, x_name, x);
+        set_resolved_number(tree, prefab, y_name, y);
+    }
+}
+
+fn set_resolved_number(tree: &ObjectTree, prefab: &mut Prefab, name: &str, value: i32) {
+    let inherited = tree
+        .id_of(&prefab.path)
+        .map(|id| visual::resolve_id(tree, id, &Prefab::new(prefab.path.clone())))
+        .map(|appearance| match name {
+            "dir" => appearance.dir as i32,
+            "pixel_x" => appearance.pixel_x,
+            "pixel_y" => appearance.pixel_y,
+            "pixel_w" => appearance.pixel_w,
+            "pixel_z" => appearance.pixel_z,
+            "step_x" => appearance.step_x,
+            "step_y" => appearance.step_y,
+            _ => value,
+        });
+    let name = Identifier::from(name);
+    if inherited == Some(value) {
+        prefab.remove_var(&name);
+    } else {
+        prefab.set_var(name, Value::Num(value as f32));
+    }
+}
+
+fn transform_vector([x, y]: [i32; 2], transform: SelectionTransform) -> [i32; 2] {
+    match transform {
+        SelectionTransform::RotateClockwise => [y, x.saturating_neg()],
+        SelectionTransform::RotateCounterClockwise => [y.saturating_neg(), x],
+        SelectionTransform::MirrorHorizontal => [x.saturating_neg(), y],
+        SelectionTransform::MirrorVertical => [x, y.saturating_neg()],
+    }
+}
+
+fn transform_direction(direction: Dir, transform: SelectionTransform) -> Dir {
+    use Dir::{East, North, Northeast, Northwest, South, Southeast, Southwest, West};
+
+    match transform {
+        SelectionTransform::RotateClockwise => match direction {
+            North => East,
+            East => South,
+            South => West,
+            West => North,
+            Northeast => Southeast,
+            Southeast => Southwest,
+            Southwest => Northwest,
+            Northwest => Northeast,
+        },
+        SelectionTransform::RotateCounterClockwise => match direction {
+            North => West,
+            West => South,
+            South => East,
+            East => North,
+            Northeast => Northwest,
+            Northwest => Southwest,
+            Southwest => Southeast,
+            Southeast => Northeast,
+        },
+        SelectionTransform::MirrorHorizontal => match direction {
+            North => North,
+            South => South,
+            East => West,
+            West => East,
+            Northeast => Northwest,
+            Northwest => Northeast,
+            Southeast => Southwest,
+            Southwest => Southeast,
+        },
+        SelectionTransform::MirrorVertical => match direction {
+            North => South,
+            South => North,
+            East => East,
+            West => West,
+            Northeast => Southeast,
+            Southeast => Northeast,
+            Northwest => Southwest,
+            Southwest => Northwest,
+        },
+    }
+}
+
+fn direction_from_name(name: &str) -> Option<Dir> {
+    match name {
+        "south" => Some(Dir::South),
+        "north" => Some(Dir::North),
+        "east" => Some(Dir::East),
+        "west" => Some(Dir::West),
+        "southeast" => Some(Dir::Southeast),
+        "southwest" => Some(Dir::Southwest),
+        "northeast" => Some(Dir::Northeast),
+        "northwest" => Some(Dir::Northwest),
+        _ => None,
+    }
+}
+
+fn directional_type_group(tree: &ObjectTree, selected: TypeId) -> Option<(TypeId, Option<Dir>)> {
+    let declaration = tree.get(selected)?;
+    let name = declaration.path.name()?.as_str();
+    if name == "directional" {
+        return Some((selected, None));
+    }
+    if let Some(direction) = direction_from_name(name)
+        && let Some(parent) = declaration.parent
+        && tree
+            .get(parent)
+            .and_then(|parent| parent.path.name())
+            .is_some_and(|name| name.as_str() == "directional")
+    {
+        return Some((parent, Some(direction)));
+    }
+
+    declaration.children.iter().copied().find_map(|child| {
+        tree.get(child)
+            .and_then(|child| child.path.name())
+            .is_some_and(|name| name.as_str() == "directional")
+            .then_some((child, None))
+    })
+}
+
+fn directional_type_target(tree: &ObjectTree, selected: TypeId, direction: Dir) -> Option<TreePath> {
+    let (group, _) = directional_type_group(tree, selected)?;
+
+    tree.get(group)?.children.iter().find_map(|child| {
+        let child = tree.get(*child)?;
+
+        (child.path.name().and_then(|name| direction_from_name(name.as_str())) == Some(direction))
+            .then(|| TreePath::parse(&child.path.to_string()))
+    })
 }
 
 fn place(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
@@ -455,12 +917,36 @@ pub fn is_placeable(tree: &ObjectTree, id: TypeId) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use core::{location::Location, path::TreePath, types::Value};
+    use core::{
+        location::Location,
+        path::TreePath,
+        types::{Value, VarModifiers},
+    };
     use std::collections::HashSet;
 
     use dmm::{Coord, Map, Prefab, Size};
+    use objtree::VarDecl;
 
-    use super::{FillError, FillMode, MAX_FILL_TILES, Tool, ToolContext};
+    use super::{
+        Dir,
+        FillError,
+        FillMode,
+        MAX_FILL_TILES,
+        Selection,
+        SelectionPlacement,
+        SelectionRotation,
+        SelectionTransform,
+        Tool,
+        ToolContext,
+        copy_selection,
+        move_selection,
+        place_selection,
+        rotate_point,
+        transform_direction,
+        transform_point,
+        transform_selection,
+        transformed_selection,
+    };
     use crate::{document::MapDocument, focus::AreaFocus};
 
     fn tree() -> objtree::ObjectTree {
@@ -471,6 +957,12 @@ mod tests {
             "/obj",
             "/obj/table",
             "/obj/chair",
+            "/obj/sign",
+            "/obj/sign/directional",
+            "/obj/sign/directional/north",
+            "/obj/sign/directional/south",
+            "/obj/sign/directional/east",
+            "/obj/sign/directional/west",
             "/obj/window",
             "/obj/window/reinforced",
             "/obj/machinery/door/airlock",
@@ -1171,5 +1663,461 @@ mod tests {
             TreePath::parse("/turf/open/space")
         );
         assert!(!document.undo());
+    }
+
+    #[test]
+    fn block_moves_are_overlap_safe_and_replace_every_destination_tile() {
+        let tree = tree();
+        let mut document = grid_document(4, 1, |coord| {
+            prefabs(match coord.x {
+                1 => &["/obj/table", "/turf/floor", "/area/station"],
+                2 => &["/obj/chair", "/turf/wall", "/area/space"],
+                3 => &["/obj/window", "/turf/open/space", "/area/station"],
+                _ => &["/turf/floor", "/area/station"],
+            })
+        });
+        let source = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 1, 1));
+        let before = (1..=3)
+            .map(|x| {
+                let coord = Coord::new(x, 1, 1);
+
+                (coord, document.placed_tile(coord).unwrap())
+            })
+            .collect::<Vec<_>>();
+        let table = document.instance_ids_at(Coord::new(1, 1, 1))[0];
+        let chair = document.instance_ids_at(Coord::new(2, 1, 1))[0];
+        let window = document.instance_ids_at(Coord::new(3, 1, 1))[0];
+
+        let (action, moved) = move_selection(&mut document, &tree, source, Coord::new(2, 1, 1)).unwrap();
+        assert_eq!(moved, Selection::from_drag(Coord::new(2, 1, 1), Coord::new(3, 1, 1)));
+        assert_eq!(action.edit.changes.len(), 3);
+        document.apply(action.edit);
+
+        assert_eq!(
+            document
+                .map
+                .tile_at(Coord::new(1, 1, 1))
+                .unwrap()
+                .iter()
+                .map(|prefab| prefab.path.to_string())
+                .collect::<Vec<_>>(),
+            ["/turf", "/area"]
+        );
+        assert_eq!(document.instance_location(table).unwrap().coord, Coord::new(2, 1, 1));
+        assert_eq!(document.instance_location(chair).unwrap().coord, Coord::new(3, 1, 1));
+        assert_eq!(document.instance_location(window), None);
+        assert_eq!(
+            document
+                .map
+                .tile_at(Coord::new(3, 1, 1))
+                .unwrap()
+                .iter()
+                .map(|prefab| prefab.path.to_string())
+                .collect::<Vec<_>>(),
+            ["/obj/chair", "/turf/wall", "/area/space"]
+        );
+
+        assert!(document.undo());
+        for (coord, tile) in before {
+            assert_eq!(document.placed_tile(coord).unwrap(), tile);
+        }
+        assert!(!document.undo());
+        assert!(document.redo());
+        assert_eq!(document.instance_location(table).unwrap().coord, Coord::new(2, 1, 1));
+    }
+
+    #[test]
+    fn block_moves_restore_configured_world_turf_and_area() {
+        let mut tree = tree();
+        let world = tree.register(&TreePath::parse("/world"), Location::default());
+        for (name, path) in [("turf", "/turf/open/space"), ("area", "/area/space")] {
+            tree.get_mut(world).unwrap().vars.insert(
+                name.into(),
+                VarDecl {
+                    name: name.into(),
+                    declared_type: None,
+                    modifiers: VarModifiers::default(),
+                    value: Value::Path(TreePath::parse(path)),
+                    location: Location::default(),
+                },
+            );
+        }
+        let mut document = grid_document(2, 1, |coord| {
+            if coord.x == 1 {
+                prefabs(&["/obj/table", "/turf/floor", "/area/station"])
+            } else {
+                prefabs(&["/turf/floor", "/area/station"])
+            }
+        });
+        let source = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(1, 1, 1));
+
+        let (action, _) = move_selection(&mut document, &tree, source, Coord::new(2, 1, 1)).unwrap();
+        document.apply(action.edit);
+
+        assert_eq!(
+            document
+                .map
+                .tile_at(Coord::new(1, 1, 1))
+                .unwrap()
+                .iter()
+                .map(|prefab| prefab.path.to_string())
+                .collect::<Vec<_>>(),
+            ["/turf/open/space", "/area/space"]
+        );
+    }
+
+    #[test]
+    fn block_copies_keep_the_source_and_replace_the_destination_with_new_ids() {
+        let tree = tree();
+        let mut document = grid_document(2, 1, |coord| {
+            prefabs(if coord.x == 1 {
+                &["/obj/table", "/turf/floor", "/area/station"]
+            } else {
+                &["/obj/chair", "/turf/wall", "/area/space"]
+            })
+        });
+        let source_coord = Coord::new(1, 1, 1);
+        let destination_coord = Coord::new(2, 1, 1);
+        let selection = Selection::from_drag(source_coord, source_coord);
+        let source_before = document.placed_tile(source_coord).unwrap();
+        let destination_before = document.placed_tile(destination_coord).unwrap();
+        let source_table = source_before[0].id();
+        let destination_chair = destination_before[0].id();
+
+        let (action, copied) = copy_selection(&mut document, &tree, selection, destination_coord).unwrap();
+        assert_eq!(copied, Selection::from_drag(destination_coord, destination_coord));
+        document.apply(action.edit);
+
+        assert_eq!(document.placed_tile(source_coord).unwrap(), source_before);
+        assert_eq!(document.instance_location(source_table).unwrap().coord, source_coord);
+        assert_eq!(document.instance_location(destination_chair), None);
+        let destination = document.placed_tile(destination_coord).unwrap();
+        assert_eq!(
+            destination
+                .iter()
+                .map(|placed| placed.prefab().path.to_string())
+                .collect::<Vec<_>>(),
+            ["/obj/table", "/turf/floor", "/area/station"]
+        );
+        let copied_table = destination
+            .iter()
+            .find(|placed| placed.prefab().path == TreePath::parse("/obj/table"))
+            .unwrap();
+        assert_ne!(copied_table.id(), source_table);
+
+        assert!(document.undo());
+        assert_eq!(document.placed_tile(source_coord).unwrap(), source_before);
+        assert_eq!(document.placed_tile(destination_coord).unwrap(), destination_before);
+        assert!(!document.undo());
+    }
+
+    #[test]
+    fn rotated_block_moves_relocate_and_rotate_every_object_in_one_edit() {
+        let tree = tree();
+        let mut document = grid_document(6, 4, |coord| {
+            let mut tile = Vec::new();
+            if coord.x <= 2 && coord.y <= 3 {
+                let mut object = Prefab::new(TreePath::parse("/obj/table"));
+                object.set_var("dir".into(), Value::Num(Dir::North.to_bits() as f32));
+                tile.push(object);
+            }
+            tile.extend(prefabs(&["/turf/floor", "/area/station"]));
+
+            tile
+        });
+        let source = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 3, 1));
+        let target_min = Coord::new(4, 1, 1);
+        let before = (1..=4)
+            .flat_map(|y| (1..=6).map(move |x| Coord::new(x, y, 1)))
+            .map(|coord| (coord, document.placed_tile(coord).unwrap()))
+            .collect::<Vec<_>>();
+        let objects = source
+            .iter()
+            .map(|coord| (coord, document.instance_ids_at(coord)[0]))
+            .collect::<Vec<_>>();
+
+        let (action, target) = place_selection(
+            &mut document,
+            &tree,
+            source,
+            target_min,
+            SelectionRotation::Clockwise,
+            SelectionPlacement::Move,
+        )
+        .unwrap();
+        assert_eq!(target, Selection::from_drag(Coord::new(4, 1, 1), Coord::new(6, 2, 1)));
+        document.apply(action.edit);
+
+        for (coord, object) in objects {
+            let relative = (coord.x - source.min.x, coord.y - source.min.y);
+            let (x, y) = rotate_point(relative, source.width(), source.height(), SelectionRotation::Clockwise);
+            let (prefab, location) = document.prefab_instance(object).unwrap();
+            assert_eq!(location.coord, Coord::new(target.min.x + x, target.min.y + y, 1));
+            assert_eq!(prefab.var(&"dir".into()), Some(&Value::Num(Dir::East.to_bits() as f32)));
+        }
+        assert!(source.iter().all(|coord| {
+            document
+                .map
+                .tile_at(coord)
+                .is_some_and(|tile| tile.iter().all(|prefab| !prefab.path.to_string().starts_with("/obj")))
+        }));
+
+        assert!(document.undo());
+        for (coord, tile) in before {
+            assert_eq!(document.placed_tile(coord).unwrap(), tile);
+        }
+        assert!(!document.undo());
+    }
+
+    #[test]
+    fn block_moves_are_rejected_atomically_outside_the_active_focus() {
+        let tree = tree();
+        let mut document = grid_document(2, 1, |_| prefabs(&["/turf/floor", "/area/station"]));
+        let source = Coord::new(1, 1, 1);
+        let area = document.instance_ids_at(source)[1];
+        document.set_focus(Some(AreaFocus::new(
+            source,
+            Prefab::new(TreePath::parse("/area/station")),
+            area,
+            HashSet::from([source]),
+        )));
+        let before = (1..=2)
+            .map(|x| document.placed_tile(Coord::new(x, 1, 1)).unwrap())
+            .collect::<Vec<_>>();
+        let selection = Selection::from_drag(source, source);
+
+        assert!(move_selection(&mut document, &tree, selection, Coord::new(2, 1, 1)).is_none());
+        assert_eq!(
+            (1..=2)
+                .map(|x| document.placed_tile(Coord::new(x, 1, 1)).unwrap())
+                .collect::<Vec<_>>(),
+            before
+        );
+        assert!(!document.undo());
+    }
+
+    #[test]
+    fn block_rotation_swaps_dimensions_positions_and_atom_appearance() {
+        let tree = tree();
+        let mut document = grid_document(4, 4, |coord| {
+            let mut object = Prefab::new(TreePath::parse(if coord == Coord::new(1, 1, 1) {
+                "/obj/table"
+            } else {
+                "/obj/chair"
+            }));
+            if coord == Coord::new(1, 1, 1) {
+                object.set_var("dir".into(), Value::Num(Dir::North.to_bits() as f32));
+                object.set_var("pixel_x".into(), Value::Num(2.0));
+                object.set_var("pixel_y".into(), Value::Num(3.0));
+                object.set_var("pixel_w".into(), Value::Num(4.0));
+                object.set_var("pixel_z".into(), Value::Num(5.0));
+                object.set_var("step_x".into(), Value::Num(6.0));
+                object.set_var("step_y".into(), Value::Num(7.0));
+            } else if coord == Coord::new(2, 1, 1) {
+                object.set_var("dir".into(), Value::Num(3.0));
+            } else if coord == Coord::new(1, 2, 1) {
+                object.set_var("dir".into(), Value::Text(String::from("sideways")));
+            }
+
+            vec![
+                object,
+                Prefab::new(TreePath::parse("/turf/floor")),
+                Prefab::new(TreePath::parse("/area/station")),
+            ]
+        });
+        let source = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 3, 1));
+        let objects = source
+            .iter()
+            .map(|coord| (coord, document.instance_ids_at(coord)[0]))
+            .collect::<Vec<_>>();
+        let invalid_numeric = document.instance_ids_at(Coord::new(2, 1, 1))[0];
+        let invalid_text = document.instance_ids_at(Coord::new(1, 2, 1))[0];
+
+        let (action, rotated) =
+            transform_selection(&mut document, &tree, source, SelectionTransform::RotateClockwise).unwrap();
+        assert_eq!(rotated, Selection::from_drag(Coord::new(1, 1, 1), Coord::new(3, 2, 1)));
+        document.apply(action.edit);
+
+        for (coord, object) in objects {
+            let relative = (coord.x - source.min.x, coord.y - source.min.y);
+            let (x, y) = transform_point(
+                relative,
+                source.width(),
+                source.height(),
+                SelectionTransform::RotateClockwise,
+            );
+            assert_eq!(
+                document.instance_location(object).unwrap().coord,
+                Coord::new(rotated.min.x + x, rotated.min.y + y, 1)
+            );
+        }
+        let table = document
+            .map
+            .tile_at(Coord::new(1, 2, 1))
+            .unwrap()
+            .iter()
+            .find(|prefab| prefab.path == TreePath::parse("/obj/table"))
+            .unwrap();
+        for (name, value) in [
+            ("dir", Dir::East.to_bits() as f32),
+            ("pixel_x", 3.0),
+            ("pixel_y", -2.0),
+            ("pixel_w", 5.0),
+            ("pixel_z", -4.0),
+            ("step_x", 7.0),
+            ("step_y", -6.0),
+        ] {
+            assert_eq!(table.var(&name.into()), Some(&Value::Num(value)), "{name}");
+        }
+        assert_eq!(
+            document.prefab_instance(invalid_numeric).unwrap().0.var(&"dir".into()),
+            Some(&Value::Num(3.0))
+        );
+        assert_eq!(
+            document.prefab_instance(invalid_text).unwrap().0.var(&"dir".into()),
+            Some(&Value::Text(String::from("sideways")))
+        );
+    }
+
+    #[test]
+    fn block_rotation_preserves_spacing_between_offset_directional_objects() {
+        let mut tree = tree();
+        for (path, variables) in [
+            ("/obj/sign/directional/north", [("dir", 1.0), ("pixel_y", 32.0)]),
+            ("/obj/sign/directional/south", [("dir", 2.0), ("pixel_y", -32.0)]),
+            ("/obj/sign/directional/east", [("dir", 4.0), ("pixel_x", 32.0)]),
+            ("/obj/sign/directional/west", [("dir", 8.0), ("pixel_x", -32.0)]),
+        ] {
+            let id = tree.id_of(&TreePath::parse(path)).unwrap();
+            for (name, value) in variables {
+                tree.get_mut(id).unwrap().vars.insert(
+                    name.into(),
+                    VarDecl {
+                        name: name.into(),
+                        declared_type: None,
+                        modifiers: VarModifiers::default(),
+                        value: Value::Num(value),
+                        location: Location::default(),
+                    },
+                );
+            }
+        }
+        let mut document = grid_document(1, 1, |_| {
+            let mut upper = Prefab::new(TreePath::parse("/obj/sign"));
+            upper.set_var("pixel_y".into(), Value::Num(5.0));
+            upper.set_var("step_y".into(), Value::Num(3.0));
+            let center = Prefab::new(TreePath::parse("/obj/sign"));
+            let mut lower = Prefab::new(TreePath::parse("/obj/sign"));
+            lower.set_var("pixel_y".into(), Value::Num(-5.0));
+            lower.set_var("step_y".into(), Value::Num(-3.0));
+
+            vec![
+                upper,
+                center,
+                lower,
+                Prefab::new(TreePath::parse("/turf")),
+                Prefab::new(TreePath::parse("/area")),
+            ]
+        });
+        let coord = Coord::new(1, 1, 1);
+        let selection = Selection::from_drag(coord, coord);
+
+        let (action, _) = place_selection(
+            &mut document,
+            &tree,
+            selection,
+            coord,
+            SelectionRotation::Clockwise,
+            SelectionPlacement::Move,
+        )
+        .unwrap();
+        document.apply(action.edit);
+
+        let appearances = document
+            .map
+            .tile_at(coord)
+            .unwrap()
+            .iter()
+            .take(3)
+            .map(|prefab| {
+                assert_eq!(prefab.path, TreePath::parse("/obj/sign/directional/west"));
+                let id = tree.id_of(&prefab.path).unwrap();
+
+                crate::visual::resolve_id(&tree, id, prefab)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            appearances
+                .iter()
+                .map(|appearance| (
+                    appearance.pixel_x + appearance.step_x,
+                    appearance.pixel_y + appearance.step_y
+                ))
+                .collect::<Vec<_>>(),
+            [(8, 0), (0, 0), (-8, 0)]
+        );
+        assert!(
+            appearances
+                .iter()
+                .all(|appearance| appearance.dir == Dir::West.to_bits())
+        );
+    }
+
+    #[test]
+    fn block_transforms_use_the_lower_left_anchor_and_planar_directions() {
+        let selection = Selection::from_drag(Coord::new(4, 7, 2), Coord::new(5, 9, 2));
+        assert_eq!(
+            transformed_selection(selection, SelectionTransform::RotateCounterClockwise),
+            Some(Selection::from_drag(Coord::new(4, 7, 2), Coord::new(6, 8, 2)))
+        );
+        assert_eq!(
+            transform_point((0, 0), 2, 3, SelectionTransform::RotateClockwise),
+            (0, 1)
+        );
+        assert_eq!(
+            transform_point((0, 2), 2, 3, SelectionTransform::RotateCounterClockwise),
+            (0, 0)
+        );
+        assert_eq!(
+            transform_point((0, 1), 2, 3, SelectionTransform::MirrorHorizontal),
+            (1, 1)
+        );
+        assert_eq!(
+            transform_point((0, 0), 2, 3, SelectionTransform::MirrorVertical),
+            (0, 2)
+        );
+        assert_eq!(
+            transform_direction(Dir::Northwest, SelectionTransform::RotateClockwise),
+            Dir::Northeast
+        );
+        assert_eq!(
+            transform_direction(Dir::Southeast, SelectionTransform::MirrorHorizontal),
+            Dir::Southwest
+        );
+        assert_eq!(
+            transform_direction(Dir::Northeast, SelectionTransform::MirrorVertical),
+            Dir::Southeast
+        );
+    }
+
+    #[test]
+    fn block_rotation_prefers_directional_sibling_paths_and_preserves_ids() {
+        let mut tree = tree();
+        tree.register(&TreePath::parse("/obj/alarm/directional/north"), Location::default());
+        tree.register(&TreePath::parse("/obj/alarm/directional/east"), Location::default());
+        tree.resolve_parent_types();
+        let mut document = map_document(&["/obj/alarm/directional/north", "/turf/floor", "/area/station"]);
+        let coord = Coord::new(1, 1, 1);
+        let object = document.instance_ids_at(coord)[0];
+        let selection = Selection::from_drag(coord, coord);
+
+        let (action, _) =
+            transform_selection(&mut document, &tree, selection, SelectionTransform::RotateClockwise).unwrap();
+        document.apply(action.edit);
+
+        let (prefab, location) = document.prefab_instance(object).unwrap();
+        assert_eq!(location.coord, coord);
+        assert_eq!(prefab.path, TreePath::parse("/obj/alarm/directional/east"));
+        assert_eq!(prefab.var(&"dir".into()), None);
     }
 }
