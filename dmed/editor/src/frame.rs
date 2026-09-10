@@ -46,6 +46,7 @@ struct RenderContext<'a> {
     textures: &'a TextureCatalog,
     map: &'a Map,
     area: Option<TypeId>,
+    visibility: &'a TypeVisibility,
     tile_size: u32,
 }
 
@@ -96,6 +97,38 @@ impl std::ops::Deref for FrameInstances {
     type Target = [SpriteInstance];
 
     fn deref(&self) -> &Self::Target { &self.sprites }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TypeVisibility {
+    hidden: HashSet<TypeId>,
+}
+
+impl TypeVisibility {
+    pub fn is_visible(&self, id: TypeId) -> bool { !self.hidden.contains(&id) }
+
+    pub fn set_subtree(&mut self, tree: &ObjectTree, root: TypeId, visible: bool) -> bool {
+        if tree.get(root).is_none() {
+            return false;
+        }
+
+        let mut changed = false;
+        for id in tree.descendants(root) {
+            changed |= if visible {
+                self.hidden.remove(&id)
+            } else {
+                self.hidden.insert(id)
+            };
+        }
+
+        changed
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FrameRenderOptions<'a> {
+    pub visibility: &'a TypeVisibility,
+    pub tile_size: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,6 +196,22 @@ pub fn build(
     tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, document: &MapDocument,
     tile_size: u32,
 ) -> FrameInstances {
+    build_with_options(
+        tree,
+        icons,
+        textures,
+        document,
+        FrameRenderOptions {
+            visibility: &TypeVisibility::default(),
+            tile_size,
+        },
+    )
+}
+
+pub fn build_with_options(
+    tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, document: &MapDocument,
+    options: FrameRenderOptions<'_>,
+) -> FrameInstances {
     let mut keyed_sprites = Vec::new();
     let mut area_tiles = Vec::new();
     let mut sprite_keys = HashMap::new();
@@ -181,7 +230,8 @@ pub fn build(
         textures,
         map,
         area,
-        tile_size,
+        visibility: options.visibility,
+        tile_size: options.tile_size,
     };
 
     for z in 1..=map.size.z.max(1) {
@@ -253,6 +303,24 @@ pub fn update_prefab(
 pub fn update_prefabs(
     instances: &mut FrameInstances, tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog,
     document: &MapDocument, owners: &[PrefabInstanceId], tile_size: u32,
+) -> PrefabUpdate {
+    update_prefabs_with_options(
+        instances,
+        tree,
+        icons,
+        textures,
+        document,
+        owners,
+        FrameRenderOptions {
+            visibility: &TypeVisibility::default(),
+            tile_size,
+        },
+    )
+}
+
+pub fn update_prefabs_with_options(
+    instances: &mut FrameInstances, tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog,
+    document: &MapDocument, owners: &[PrefabInstanceId], options: FrameRenderOptions<'_>,
 ) -> PrefabUpdate {
     let mut owners = owners
         .iter()
@@ -341,7 +409,8 @@ pub fn update_prefabs(
         textures,
         map,
         area: tree.roots().area,
-        tile_size,
+        visibility: options.visibility,
+        tile_size: options.tile_size,
     };
     let mut affected = affected.into_iter().collect::<Vec<_>>();
     affected.sort_unstable_by_key(|candidate| candidate.get());
@@ -445,6 +514,15 @@ impl RenderContext<'_> {
         let texture = sprite_texture(self.icons, self.textures, &appearance);
         let mut sprites = Vec::with_capacity(if is_area { 2 } else { 1 });
         let mut area_tile = None;
+
+        if !self.visibility.is_visible(id) {
+            return RenderedPrefab {
+                key,
+                is_area,
+                sprites,
+                area_tile,
+            };
+        }
 
         if is_area {
             if let Some(texture) = texture {
@@ -1049,7 +1127,17 @@ mod tests {
         texture::TextureCatalog,
     };
 
-    use super::{FrameInstances, PrefabUpdate, build, instance_for, update_prefab, update_prefabs};
+    use super::{
+        FrameInstances,
+        FrameRenderOptions,
+        PrefabUpdate,
+        TypeVisibility,
+        build,
+        build_with_options,
+        instance_for,
+        update_prefab,
+        update_prefabs,
+    };
     use crate::{
         command::Edit,
         document::{MapDocument, PrefabInstanceId, VarMutation},
@@ -1241,6 +1329,74 @@ mod tests {
         }
 
         tree
+    }
+
+    #[test]
+    fn type_visibility_toggles_complete_subtrees_without_changing_siblings() {
+        let tree = tree(&[
+            ("/obj/parent", "floor", 1.0),
+            ("/obj/parent/child", "floor", 1.0),
+            ("/obj/sibling", "floor", 1.0),
+        ]);
+        let parent = tree.id_of(&TreePath::parse("/obj/parent")).unwrap();
+        let child = tree.id_of(&TreePath::parse("/obj/parent/child")).unwrap();
+        let sibling = tree.id_of(&TreePath::parse("/obj/sibling")).unwrap();
+        let mut visibility = TypeVisibility::default();
+
+        assert!(visibility.set_subtree(&tree, parent, false));
+        assert!(!visibility.is_visible(parent));
+        assert!(!visibility.is_visible(child));
+        assert!(visibility.is_visible(sibling));
+
+        assert!(visibility.set_subtree(&tree, child, true));
+        assert!(!visibility.is_visible(parent));
+        assert!(visibility.is_visible(child));
+        assert!(visibility.is_visible(sibling));
+    }
+
+    #[test]
+    fn hidden_types_emit_neither_sprites_nor_area_tiles() {
+        let tree = tree(&[("/obj/table", "table", 2.0), ("/area/station", "floor", 1.0)]);
+        let document = document(one_tile_map(&["/obj/table", "/area/station"]));
+        let coord = Coord::new(1, 1, 1);
+        let object_owner = document.instance_ids_at(coord)[0];
+        let area_owner = document.instance_ids_at(coord)[1];
+        let icons = icons(&["floor", "table"]);
+        let textures = textures(&["floor", "table"]);
+        let object = tree.id_of(&TreePath::parse("/obj")).unwrap();
+        let area = tree.id_of(&TreePath::parse("/area")).unwrap();
+        let mut visibility = TypeVisibility::default();
+
+        visibility.set_subtree(&tree, object, false);
+        let without_objects = build_with_options(
+            &tree,
+            &icons,
+            &textures,
+            &document,
+            FrameRenderOptions {
+                visibility: &visibility,
+                tile_size: 32,
+            },
+        );
+        assert!(without_objects.iter().all(|sprite| sprite.owner != object_owner));
+        assert!(without_objects.iter().any(|sprite| sprite.owner == area_owner));
+        assert_eq!(without_objects.area_tiles.len(), 1);
+
+        visibility.set_subtree(&tree, object, true);
+        visibility.set_subtree(&tree, area, false);
+        let without_areas = build_with_options(
+            &tree,
+            &icons,
+            &textures,
+            &document,
+            FrameRenderOptions {
+                visibility: &visibility,
+                tile_size: 32,
+            },
+        );
+        assert!(without_areas.iter().any(|sprite| sprite.owner == object_owner));
+        assert!(without_areas.iter().all(|sprite| sprite.owner != area_owner));
+        assert!(without_areas.area_tiles.is_empty());
     }
 
     fn one_tile_map(paths: &[&str]) -> Map {

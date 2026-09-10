@@ -1,5 +1,5 @@
 use core::path::TreePath;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use dear_imgui_rs::{
     DockLayout,
@@ -11,6 +11,8 @@ use dear_imgui_rs::{
     MouseButton,
     StyleColor,
     StyleVar,
+    TableFlags,
+    TableSizingPolicy,
     Ui,
     WindowFlags,
     WindowKey,
@@ -22,6 +24,8 @@ use editor::{
     document::Selection,
     icons::materialdesignicons::{
         ICON_ERASER,
+        ICON_EYE,
+        ICON_EYE_OFF,
         ICON_EYEDROPPER,
         ICON_FORMAT_COLOR_FILL,
         ICON_IMAGE_BROKEN,
@@ -29,15 +33,7 @@ use editor::{
         ICON_PENCIL,
         ICON_SELECT_DRAG,
     },
-    tool::{
-        FillMode,
-        SelectionPlacement,
-        SelectionRotation,
-        SelectionTransform,
-        Tool,
-        is_placeable,
-        rotated_selection_at,
-    },
+    tool::{FillMode, SelectionPlacement, SelectionRotation, SelectionTransform, Tool, rotated_selection_at},
 };
 use objtree::{ObjectTree, TypeId};
 use render::{InteractionMode, PickRequest, PlacementFlash, Renderer, ViewportInteraction};
@@ -171,6 +167,43 @@ pub struct UiOutput {
     pub interaction: ViewportInteraction,
 }
 
+#[derive(Debug, Default)]
+struct ObjectTreeFilter {
+    roots: Vec<TypeId>,
+    children: HashMap<TypeId, Vec<TypeId>>,
+}
+
+impl ObjectTreeFilter {
+    fn new(tree: &ObjectTree, atom: TypeId, query: &str) -> Self {
+        let matches = all_matching_type_paths(tree, query)
+            .into_iter()
+            .filter_map(|path| tree.id_of(&path))
+            .filter(|id| tree.is_subtype_of(*id, atom))
+            .collect::<Vec<_>>();
+        let match_set = matches.iter().copied().collect::<HashSet<_>>();
+        let mut filter = Self::default();
+
+        for id in matches {
+            let matching_parent = tree
+                .ancestors(id)
+                .skip(1)
+                .find(|ancestor| match_set.contains(&ancestor.id))
+                .map(|ancestor| ancestor.id);
+            if let Some(parent) = matching_parent {
+                filter.children.entry(parent).or_default().push(id);
+            } else {
+                filter.roots.push(id);
+            }
+        }
+
+        filter
+    }
+
+    fn is_empty(&self) -> bool { self.roots.is_empty() }
+
+    fn children(&self, id: TypeId) -> &[TypeId] { self.children.get(&id).map_or(&[], Vec::as_slice) }
+}
+
 pub struct UiState {
     object_tree: WindowKey,
     viewport_window: WindowKey,
@@ -178,6 +211,9 @@ pub struct UiState {
     settings_window: WindowKey,
     layout: DockLayout,
     selected: Option<TypeId>,
+    object_tree_search: String,
+    object_tree_filter: Option<ObjectTreeFilter>,
+    object_tree_filter_revision: u64,
     inspector: InspectorState,
     gizmo: GizmoState,
     placement_flash: Option<ActivePlacementFlash>,
@@ -220,6 +256,9 @@ impl UiState {
             settings_window,
             layout,
             selected: None,
+            object_tree_search: String::new(),
+            object_tree_filter: None,
+            object_tree_filter_revision: 0,
             inspector: InspectorState::default(),
             gizmo: GizmoState::default(),
             placement_flash: None,
@@ -360,32 +399,74 @@ impl UiState {
     fn draw_object_tree(&mut self, ui: &Ui, session: &mut Session) {
         ui.window(&self.object_tree).build(|| {
             let mut chosen = None;
+            let mut visibility_toggle = None;
+            ui.set_next_item_width(ui.content_region_avail()[0]);
+            let search_changed = ui
+                .input_text("##object-tree-search", &mut self.object_tree_search)
+                .hint("Search type paths")
+                .build();
+
+            let tree_revision = session.texture_revision();
             let Some(tree) = session.tree() else {
                 ui.text_disabled("No environment loaded");
 
                 return;
             };
-
-            for child in sorted_children(tree, TypeId::ROOT) {
-                draw_type(ui, tree, child, &mut self.selected, &mut chosen);
-            }
-
-            ui.separator();
-            let Some(selected) = self.selected.and_then(|id| tree.get(id)) else {
-                ui.text_disabled("No type selected");
+            let Some(atom) = tree.roots().atom else {
+                ui.text_disabled("No /atom type available");
 
                 return;
             };
-
-            ui.text(selected.path.to_string());
-            ui.text(format!("{} variables", selected.vars.len()));
-            ui.text(format!("{} procedures", selected.procs.len()));
-            if !is_placeable(tree, selected.id) {
-                ui.text_disabled("This type cannot be placed on a map");
+            let rebuild_filter = search_changed || self.object_tree_filter_revision != tree_revision;
+            if rebuild_filter {
+                self.object_tree_filter = (!self.object_tree_search.trim().is_empty())
+                    .then(|| ObjectTreeFilter::new(tree, atom, &self.object_tree_search));
+                self.object_tree_filter_revision = tree_revision;
             }
+
+            if self.object_tree_filter.as_ref().is_some_and(ObjectTreeFilter::is_empty) {
+                ui.text_disabled("No matching types");
+
+                return;
+            }
+
+            let mut alternate_row = ui.style_color(StyleColor::TableRowBgAlt);
+            alternate_row[3] *= 0.4;
+            let _alternate_row = ui.push_style_color(StyleColor::TableRowBgAlt, alternate_row);
+            ui.table("object-tree-types")
+                .flags(TableFlags::BORDERS_INNER_V | TableFlags::ROW_BG)
+                .sizing_policy(TableSizingPolicy::StretchProp)
+                .column("Type")
+                .weight(1.0)
+                .done()
+                .column("Visibility")
+                .width(ui.frame_height() * 2.0)
+                .done()
+                .build(|ui| {
+                    let roots = self
+                        .object_tree_filter
+                        .as_ref()
+                        .map_or_else(|| vec![atom], |filter| filter.roots.clone());
+                    for root in roots {
+                        draw_type(
+                            ui,
+                            session,
+                            tree,
+                            root,
+                            &mut self.selected,
+                            &mut chosen,
+                            &mut visibility_toggle,
+                            self.object_tree_filter.as_ref(),
+                            rebuild_filter && self.object_tree_filter.is_some(),
+                        );
+                    }
+                });
 
             if let Some(chosen) = chosen {
                 session.choose_type(chosen);
+            }
+            if let Some(id) = visibility_toggle {
+                session.toggle_type_visibility(id);
             }
         });
     }
@@ -1520,6 +1601,14 @@ fn draw_fill_tool_button(
 }
 
 fn matching_type_paths(tree: &ObjectTree, query: &str) -> Vec<TreePath> {
+    matching_type_paths_up_to(tree, query, MAX_CUSTOM_FILL_SEARCH_RESULTS)
+}
+
+fn all_matching_type_paths(tree: &ObjectTree, query: &str) -> Vec<TreePath> {
+    matching_type_paths_up_to(tree, query, usize::MAX)
+}
+
+fn matching_type_paths_up_to(tree: &ObjectTree, query: &str, limit: usize) -> Vec<TreePath> {
     let query = query.trim().to_ascii_lowercase();
     if query.is_empty() {
         return Vec::new();
@@ -1529,7 +1618,7 @@ fn matching_type_paths(tree: &ObjectTree, query: &str) -> Vec<TreePath> {
         .iter()
         .filter(|decl| decl.path.to_string().to_ascii_lowercase().contains(&query))
         .map(|decl| decl.path.clone())
-        .take(MAX_CUSTOM_FILL_SEARCH_RESULTS)
+        .take(limit)
         .collect::<Vec<_>>();
     matches.sort_by_key(ToString::to_string);
 
@@ -1638,10 +1727,12 @@ fn recent_button_size(ui: &Ui) -> f32 {
     RECENT_ICON_SIZE + padding[0].max(padding[1]) * 2.0
 }
 
-fn fit_recent_icon(width: u32, height: u32) -> [f32; 2] {
+fn fit_recent_icon(width: u32, height: u32) -> [f32; 2] { fit_icon(width, height, RECENT_ICON_SIZE) }
+
+fn fit_icon(width: u32, height: u32, extent: f32) -> [f32; 2] {
     let width = width.max(1) as f32;
     let height = height.max(1) as f32;
-    let scale = RECENT_ICON_SIZE / width.max(height);
+    let scale = extent.max(1.0) / width.max(height);
 
     [width * scale, height * scale]
 }
@@ -1683,10 +1774,15 @@ fn z_level_width(ui: &Ui, levels: u32) -> f32 {
     width
 }
 
-fn draw_type(ui: &Ui, tree: &ObjectTree, id: TypeId, selected: &mut Option<TypeId>, chosen: &mut Option<TypeId>) {
+fn draw_type(
+    ui: &Ui, session: &Session, tree: &ObjectTree, id: TypeId, selected: &mut Option<TypeId>,
+    chosen: &mut Option<TypeId>, visibility_toggle: &mut Option<TypeId>, filter: Option<&ObjectTreeFilter>,
+    expand: bool,
+) {
     let Some(decl) = tree.get(id) else {
         return;
     };
+    let children = filter.map_or_else(|| sorted_children(tree, id), |filter| filter.children(id).to_vec());
 
     let label = decl
         .path
@@ -1694,27 +1790,110 @@ fn draw_type(ui: &Ui, tree: &ObjectTree, id: TypeId, selected: &mut Option<TypeI
         .last()
         .map_or_else(|| decl.path.to_string(), ToString::to_string);
     let node_id = decl.path.to_string();
-    let leaf = decl.children.is_empty();
+    let leaf = children.is_empty();
+    ui.table_next_row();
+    ui.table_next_column();
+    let cursor = ui.cursor_screen_pos();
+    let icon_extent = ui.text_line_height();
+    let icon_spacing = ui.clone_style().item_inner_spacing()[0];
+    let space_width = ui.calc_text_size(" ")[0].max(1.0);
+    let icon_padding = " ".repeat(((icon_extent + icon_spacing) / space_width).ceil() as usize);
+    if expand && !leaf {
+        ui.set_next_item_open(true);
+    }
     let token = ui
-        .tree_node_config(node_id)
-        .label(label)
+        .tree_node_config(&node_id)
+        .label(format!("{icon_padding}{label}"))
         .selected(*selected == Some(id))
         .leaf(leaf)
         .no_tree_push_on_open(leaf)
+        .frame_padding(true)
         .span_avail_width(true)
         .push();
+    draw_type_icon(ui, session.type_thumbnail(id), cursor);
 
     if ui.is_item_clicked() {
         *selected = Some(id);
         *chosen = Some(id);
     }
+    ui.set_item_tooltip(&node_id);
+
+    ui.table_next_column();
+    let visible = session.is_type_visible(id);
+    let icon = if visible { ICON_EYE } else { ICON_EYE_OFF };
+    let transparent = [0.0, 0.0, 0.0, 0.0];
+    let _button = ui.push_style_color(StyleColor::Button, transparent);
+    let _button_hovered = ui.push_style_color(StyleColor::ButtonHovered, transparent);
+    let _button_active = ui.push_style_color(StyleColor::ButtonActive, transparent);
+    let _text = (!visible).then(|| ui.push_style_color(StyleColor::Text, ui.style_color(StyleColor::TextDisabled)));
+    if ui.button_with_size(
+        format!("{icon}##object-type-visibility-{node_id}"),
+        [ui.content_region_avail()[0], ui.frame_height()],
+    ) {
+        *visibility_toggle = Some(id);
+    }
+    ui.set_item_tooltip(if visible {
+        format!("Hide {node_id} and its descendants")
+    } else {
+        format!("Show {node_id} and its descendants")
+    });
 
     if !leaf && let Some(token) = token {
-        for child in sorted_children(tree, id) {
-            draw_type(ui, tree, child, selected, chosen);
+        for child in children {
+            draw_type(
+                ui,
+                session,
+                tree,
+                child,
+                selected,
+                chosen,
+                visibility_toggle,
+                filter,
+                expand,
+            );
         }
 
         token.pop();
+    }
+}
+
+fn draw_type_icon(ui: &Ui, thumbnail: Option<crate::session::PrefabThumbnail>, cursor: [f32; 2]) {
+    let row_min = ui.item_rect_min();
+    let row_max = ui.item_rect_max();
+    let row_height = (row_max[1] - row_min[1]).max(1.0);
+    let icon_extent = ui.text_line_height().min(row_height);
+    let icon_slot_x = cursor[0] + ui.tree_node_to_label_spacing();
+    let draw = ui.get_window_draw_list();
+
+    match thumbnail {
+        Some(thumbnail) => {
+            let image_size = fit_icon(thumbnail.texture.width, thumbnail.texture.height, icon_extent);
+            let image_min = [
+                icon_slot_x + (icon_extent - image_size[0]) * 0.5,
+                row_min[1] + (row_height - image_size[1]) * 0.5,
+            ];
+            let image_max = [image_min[0] + image_size[0], image_min[1] + image_size[1]];
+            draw.add_image(
+                Renderer::sprite_texture(thumbnail.texture.index),
+                image_min,
+                image_max,
+                thumbnail.uv0,
+                thumbnail.uv1,
+                thumbnail.tint,
+            );
+        },
+        None => {
+            let fallback = ICON_IMAGE_BROKEN.to_string();
+            let fallback_width = ui.calc_text_size(&fallback)[0];
+            draw.add_text(
+                [
+                    icon_slot_x + (icon_extent - fallback_width) * 0.5,
+                    row_min[1] + (row_height - ui.text_line_height()) * 0.5,
+                ],
+                ui.style_color(StyleColor::TextDisabled),
+                fallback,
+            );
+        },
     }
 }
 
@@ -1766,6 +1945,8 @@ mod tests {
 
         assert_eq!(state.layout.validate(), Ok(()));
         assert_eq!(state.fill_mode, FillMode::Wall);
+        assert!(state.object_tree_search.is_empty());
+        assert!(state.object_tree_filter.is_none());
         assert_eq!(
             state.custom_fill_boundaries,
             [TreePath::parse(DEFAULT_CUSTOM_FILL_BOUNDARY)]
@@ -1795,6 +1976,23 @@ mod tests {
             ["/turf/closed/wall"]
         );
         assert!(matching_type_paths(&tree, "  ").is_empty());
+    }
+
+    #[test]
+    fn object_tree_search_is_not_limited_to_custom_fill_result_count() {
+        let mut tree = ObjectTree::new();
+        for index in 0..60 {
+            tree.register(
+                &TreePath::parse(&format!("/obj/floor/type_{index}")),
+                Location::default(),
+            );
+        }
+
+        assert_eq!(
+            matching_type_paths(&tree, "floor").len(),
+            MAX_CUSTOM_FILL_SEARCH_RESULTS
+        );
+        assert_eq!(all_matching_type_paths(&tree, "floor").len(), 61);
     }
 
     #[test]

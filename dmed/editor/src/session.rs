@@ -2,7 +2,10 @@ use core::{
     path::TreePath,
     types::{Identifier, Value},
 };
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use dmi::{IconFile, metadata::Dir};
 use dmm::{Coord, Map, Prefab};
@@ -12,7 +15,7 @@ use editor::{
     command::EditGroupId,
     document::{MapDocument, PrefabInstanceId, PrefabLocation, Selection, VarMutation},
     focus::AreaFocus,
-    frame::{self, FrameInstances, FrameOptions, PrefabUpdate},
+    frame::{self, FrameInstances, FrameOptions, FrameRenderOptions, PrefabUpdate, TypeVisibility},
     tool::{
         FillError,
         FillMode,
@@ -88,6 +91,8 @@ pub struct Session {
     pub textures: TextureCatalog,
     pub options: FrameOptions,
     instances: FrameInstances,
+    type_visibility: TypeVisibility,
+    type_thumbnails: HashMap<TypeId, Option<PrefabThumbnail>>,
     revision: u64,
     frame_update: Option<FrameUpdate>,
     texture_revision: u64,
@@ -107,6 +112,8 @@ impl Session {
             textures: TextureCatalog::default(),
             options: FrameOptions::default(),
             instances: FrameInstances::default(),
+            type_visibility: TypeVisibility::default(),
+            type_thumbnails: HashMap::new(),
             revision: 0,
             frame_update: None,
             texture_revision: 0,
@@ -118,8 +125,22 @@ impl Session {
 
         report(&environment, &diagnostics);
         self.textures = build_textures(&environment);
+        self.type_thumbnails = environment
+            .tree
+            .iter()
+            .map(|declaration| {
+                let prefab = Prefab::new(declaration.path.clone());
+                let appearance = visual::resolve_id(&environment.tree, declaration.id, &prefab);
+
+                (declaration.id, self.prefab_thumbnail_for(&environment, &appearance))
+            })
+            .collect();
         self.texture_revision = self.texture_revision.wrapping_add(1);
+        self.type_visibility = TypeVisibility::default();
         self.state.environment = Some(environment);
+        if self.state.active_document().is_some() {
+            self.rebuild_instances();
+        }
 
         Ok(())
     }
@@ -140,12 +161,15 @@ impl Session {
             .environment
             .as_ref()
             .map_or_else(FrameInstances::default, |environment| {
-                frame::build(
+                frame::build_with_options(
                     &environment.tree,
                     &environment.icons,
                     &self.textures,
                     &document,
-                    self.options.tile_size,
+                    FrameRenderOptions {
+                        visibility: &self.type_visibility,
+                        tile_size: self.options.tile_size,
+                    },
                 )
             });
         self.state.open_document(document);
@@ -428,6 +452,9 @@ impl Session {
                 let Some(id) = environment.tree.id_of(&prefab.path) else {
                     continue;
                 };
+                if !self.type_visibility.is_visible(id) {
+                    continue;
+                }
 
                 let is_area = area.is_some_and(|area| environment.tree.is_subtype_of(id, area));
                 if is_area && !self.options.show_areas {
@@ -498,6 +525,10 @@ impl Session {
         let appearance = visual::resolve(&environment.tree, prefab);
 
         self.prefab_thumbnail_for(environment, &appearance)
+    }
+
+    pub(crate) fn type_thumbnail(&self, id: TypeId) -> Option<PrefabThumbnail> {
+        self.type_thumbnails.get(&id).copied().flatten()
     }
 
     pub(crate) fn placement_preview(&self) -> Option<PlacementPreview> {
@@ -999,6 +1030,29 @@ impl Session {
 
     pub fn toggle_area_outlines(&mut self) { self.options.show_area_outlines = !self.options.show_area_outlines; }
 
+    pub fn is_type_visible(&self, id: TypeId) -> bool {
+        self.tree().is_some_and(|tree| tree.get(id).is_some()) && self.type_visibility.is_visible(id)
+    }
+
+    pub fn toggle_type_visibility(&mut self, id: TypeId) -> bool {
+        let visible = !self.type_visibility.is_visible(id);
+        let changed = {
+            let Some(environment) = self.state.environment.as_ref() else {
+                return false;
+            };
+            if environment.tree.get(id).is_none() {
+                return false;
+            }
+
+            self.type_visibility.set_subtree(&environment.tree, id, visible)
+        };
+        if changed {
+            self.rebuild_instances();
+        }
+
+        changed
+    }
+
     pub fn set_underlay_depth(&mut self, depth: u32) {
         if depth == self.options.underlay_depth {
             return;
@@ -1034,12 +1088,15 @@ impl Session {
 
     fn rebuild_instances(&mut self) {
         self.instances = match (self.state.environment.as_ref(), self.state.active_document()) {
-            (Some(environment), Some(document)) => frame::build(
+            (Some(environment), Some(document)) => frame::build_with_options(
                 &environment.tree,
                 &environment.icons,
                 &self.textures,
                 document,
-                self.options.tile_size,
+                FrameRenderOptions {
+                    visibility: &self.type_visibility,
+                    tile_size: self.options.tile_size,
+                },
             ),
             _ => FrameInstances::default(),
         };
@@ -1053,14 +1110,17 @@ impl Session {
     fn update_instances(&mut self, affected: &[PrefabInstanceId]) {
         let update = match (self.state.environment.as_ref(), self.state.active) {
             (Some(environment), Some(active)) => self.state.documents.get(active).map(|document| {
-                frame::update_prefabs(
+                frame::update_prefabs_with_options(
                     &mut self.instances,
                     &environment.tree,
                     &environment.icons,
                     &self.textures,
                     document,
                     affected,
-                    self.options.tile_size,
+                    FrameRenderOptions {
+                        visibility: &self.type_visibility,
+                        tile_size: self.options.tile_size,
+                    },
                 )
             }),
             _ => None,
@@ -1299,12 +1359,15 @@ mod tests {
     fn assert_render_cache_matches_rebuild(session: &Session) {
         let environment = session.state.environment.as_ref().unwrap();
         let document = session.state.active_document().unwrap();
-        let expected = editor::frame::build(
+        let expected = editor::frame::build_with_options(
             &environment.tree,
             &environment.icons,
             &session.textures,
             document,
-            session.options.tile_size,
+            editor::frame::FrameRenderOptions {
+                visibility: &session.type_visibility,
+                tile_size: session.options.tile_size,
+            },
         );
 
         assert_same_sprites(&session.instances.sprites, &expected.sprites);
@@ -1819,6 +1882,72 @@ mod tests {
             session.selected_prefab().and_then(|prefab| prefab.var(&"name".into())),
             Some(&Value::Text("edited".into())),
         );
+    }
+
+    #[test]
+    fn editing_a_hidden_type_keeps_it_hidden_and_showing_it_uses_the_latest_appearance() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        session.open_map(&root.join("test.dmm"), 1).unwrap();
+        let table = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/structure/table"))
+            .unwrap();
+        let light = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/machinery/light"))
+            .unwrap();
+        let coord = Coord::new(6, 3, 1);
+        let selected = session.state.active_document().unwrap().instance_ids_at(coord)[0];
+        session.select_instance(Some(selected));
+        let light_texture = session.type_thumbnail(light).unwrap().texture;
+        let before_revision = session.revision;
+
+        assert!(session.toggle_type_visibility(table));
+        assert!(!session.is_type_visible(table));
+        assert_eq!(session.revision, before_revision.wrapping_add(1));
+        assert!(session.instances.sprite(selected).is_none());
+        assert_eq!(
+            session.set_selected_instance_var("icon_state".into(), Value::Text(String::from("light"))),
+            Some(true),
+        );
+        assert!(session.instances.sprite(selected).is_none());
+
+        assert!(session.toggle_type_visibility(table));
+        assert!(session.is_type_visible(table));
+        assert_eq!(session.instances.sprite(selected).unwrap().texture, light_texture);
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    fn reloading_an_environment_resets_type_visibility() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        session.open_map(&root.join("test.dmm"), 1).unwrap();
+        let table = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/structure/table"))
+            .unwrap();
+        let coord = Coord::new(6, 3, 1);
+        let selected = session.state.active_document().unwrap().instance_ids_at(coord)[0];
+
+        assert!(session.toggle_type_visibility(table));
+        assert!(session.instances.sprite(selected).is_none());
+        session.load_environment(&root.join("test.dme")).unwrap();
+        let reloaded_table = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/structure/table"))
+            .unwrap();
+
+        assert!(session.is_type_visible(reloaded_table));
+        assert!(session.instances.sprite(selected).is_some());
+        assert_render_cache_matches_rebuild(&session);
     }
 
     #[test]
