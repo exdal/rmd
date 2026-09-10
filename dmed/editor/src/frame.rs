@@ -345,32 +345,54 @@ pub fn update_prefabs(
     };
     let mut affected = affected.into_iter().collect::<Vec<_>>();
     affected.sort_unstable_by_key(|candidate| candidate.get());
-    let mut sprite_update = None;
+    let rendered = affected
+        .into_iter()
+        .map(|affected_owner| {
+            let rendered = document.prefab_instance(affected_owner).and_then(|(prefab, location)| {
+                let id = tree.id_of(&prefab.path)?;
+                let order = instances.placement_orders.get(&affected_owner).copied()?;
+
+                Some(render.prefab(
+                    affected_owner,
+                    prefab,
+                    id,
+                    location.coord,
+                    order,
+                    instances.area_component_at(location.coord),
+                ))
+            });
+
+            (affected_owner, rendered)
+        })
+        .collect::<Vec<_>>();
+    let structural_sprite_updates = rendered
+        .iter()
+        .filter(|(owner, rendered)| owner_sprite_update_is_structural(instances, *owner, rendered.as_ref()))
+        .count();
+
+    // Each structural replacement shifts later ranges. Batch multiple replacements so the global
+    // sprite array and its ranges are traversed once, regardless of how many Z levels are loaded.
+    let mut sprite_update = if structural_sprite_updates > 1 {
+        replace_owner_sprites_batch(instances, &rendered)
+    } else {
+        let mut update = None;
+        for (owner, rendered) in &rendered {
+            let next_key = rendered.as_ref().map(|rendered| rendered.key);
+            let next_sprites = rendered
+                .as_ref()
+                .map(|rendered| rendered.sprites.as_slice())
+                .unwrap_or_default();
+            merge_update_range(
+                &mut update,
+                replace_owner_sprites(instances, *owner, next_key, next_sprites),
+            );
+        }
+
+        update
+    };
     let mut area_tile_update = None;
 
-    for affected_owner in affected {
-        let rendered = document.prefab_instance(affected_owner).and_then(|(prefab, location)| {
-            let id = tree.id_of(&prefab.path)?;
-            let order = instances.placement_orders.get(&affected_owner).copied()?;
-
-            Some(render.prefab(
-                affected_owner,
-                prefab,
-                id,
-                location.coord,
-                order,
-                instances.area_component_at(location.coord),
-            ))
-        });
-        let next_key = rendered.as_ref().map(|rendered| rendered.key);
-        let next_sprites = rendered
-            .as_ref()
-            .map(|rendered| rendered.sprites.as_slice())
-            .unwrap_or_default();
-        merge_update_range(
-            &mut sprite_update,
-            replace_owner_sprites(instances, affected_owner, next_key, next_sprites),
-        );
+    for (affected_owner, rendered) in rendered {
         merge_update_range(
             &mut area_tile_update,
             replace_area_tile(
@@ -529,6 +551,111 @@ fn remove_area_owner(instances: &mut FrameInstances, coord: Coord, owner: Prefab
     if owners.is_empty() {
         instances.area_owners_by_coord.remove(&coord);
     }
+}
+
+fn owner_sprite_update_is_structural(
+    instances: &FrameInstances, owner: PrefabInstanceId, rendered: Option<&RenderedPrefab>,
+) -> bool {
+    let previous = instances.sprite_ranges.get(&owner).copied();
+    let previous_key = instances.sprite_keys.get(&owner).copied();
+    let next_key = rendered.map(|rendered| rendered.key);
+    let next_len = rendered.map_or(0, |rendered| rendered.sprites.len());
+
+    match previous {
+        Some(previous) => previous_key != next_key || previous.end - previous.start != next_len,
+        None => next_len != 0,
+    }
+}
+
+fn replace_owner_sprites_batch(
+    instances: &mut FrameInstances, rendered: &[(PrefabInstanceId, Option<RenderedPrefab>)],
+) -> Option<UpdateRange> {
+    let affected = rendered.iter().map(|(owner, _)| *owner).collect::<HashSet<_>>();
+    let previous = std::mem::take(&mut instances.sprites);
+
+    for (owner, rendered) in rendered {
+        match rendered {
+            Some(rendered) => {
+                instances.sprite_keys.insert(*owner, rendered.key);
+            },
+            None => {
+                instances.sprite_keys.remove(owner);
+            },
+        }
+    }
+
+    let mut replacement_runs = rendered
+        .iter()
+        .filter_map(|(_, rendered)| {
+            let rendered = rendered.as_ref()?;
+
+            (!rendered.sprites.is_empty()).then_some((rendered.key, rendered.sprites.as_slice()))
+        })
+        .collect::<Vec<_>>();
+    replacement_runs.sort_unstable_by_key(|(key, _)| *key);
+
+    let replacement_len = replacement_runs.iter().map(|(_, sprites)| sprites.len()).sum::<usize>();
+    let mut retained = previous
+        .iter()
+        .copied()
+        .filter(|sprite| !affected.contains(&sprite.owner))
+        .map(|sprite| {
+            let key = instances
+                .sprite_keys
+                .get(&sprite.owner)
+                .copied()
+                .expect("every cached sprite has a render key");
+
+            (key, sprite)
+        })
+        .peekable();
+    let mut replacements = replacement_runs.into_iter().peekable();
+    let mut next = Vec::with_capacity(previous.len().saturating_add(replacement_len));
+
+    loop {
+        match (retained.peek(), replacements.peek()) {
+            (Some((retained_key, _)), Some((replacement_key, _))) if retained_key <= replacement_key => {
+                let (_, sprite) = retained.next().expect("peeked retained sprite");
+                next.push(sprite);
+            },
+            (Some(_), Some(_)) | (None, Some(_)) => {
+                let (_, sprites) = replacements.next().expect("peeked replacement run");
+                next.extend_from_slice(sprites);
+            },
+            (Some(_), None) => {
+                next.extend(retained.map(|(_, sprite)| sprite));
+                break;
+            },
+            (None, None) => break,
+        }
+    }
+
+    let update = changed_sprite_range(&previous, &next);
+    instances.sprites = next;
+    instances.sprite_ranges.clear();
+    refresh_sprite_ranges(instances, 0);
+
+    update
+}
+
+fn changed_sprite_range(previous: &[SpriteInstance], next: &[SpriteInstance]) -> Option<UpdateRange> {
+    let shared_len = previous.len().min(next.len());
+    let start = previous
+        .iter()
+        .zip(next)
+        .position(|(previous, next)| previous != next)
+        .or_else(|| (previous.len() != next.len()).then_some(shared_len))?;
+    let end = if previous.len() == next.len() {
+        previous
+            .iter()
+            .zip(next)
+            .rposition(|(previous, next)| previous != next)
+            .map_or(start, |index| index + 1)
+    } else {
+        next.len()
+    };
+
+    Some(UpdateRange { start, end })
 }
 
 fn replace_owner_sprites(

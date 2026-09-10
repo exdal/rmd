@@ -1247,9 +1247,10 @@ mod tests {
         Environment,
         command::EditGroupId,
         document::{MapDocument, Selection, VarMutation},
-        tool::{FillMode, Tool},
+        tool::{FillMode, SelectionPlacement, SelectionRotation, Tool},
     };
     use objtree::ObjectTree;
+    use render::SpriteInstance;
 
     use super::{FillOutcome, Session, build_textures, directional_type_target, directional_types_for, validate_level};
 
@@ -1264,7 +1265,7 @@ mod tests {
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
 
-        let mut map = Map::new(Size { x: 4, y: 1, z: 2 });
+        let mut map = Map::new(Size { x: 4, y: 1, z: 5 });
         let base = map.intern_tile(vec![
             Prefab::new(TreePath::parse("/turf/open/floor")),
             Prefab::new(TreePath::parse("/area/station")),
@@ -1273,11 +1274,41 @@ mod tests {
         engineering.set_var("name".into(), Value::Text(String::from("Engineering")));
         let other = map.intern_tile(vec![Prefab::new(TreePath::parse("/turf/open/floor")), engineering]);
         map.grid[0][0] = vec![base, base, other, base];
-        map.grid[1][0] = vec![base, base, other, base];
+        for level in &mut map.grid {
+            level[0] = vec![base, base, other, base];
+        }
         session.state.open_document(MapDocument::new(map, 1));
         session.rebuild_instances();
 
         session
+    }
+
+    fn assert_same_sprites(actual: &[SpriteInstance], expected: &[SpriteInstance]) {
+        let mut remaining = expected.to_vec();
+        assert_eq!(actual.len(), remaining.len());
+        for sprite in actual {
+            let index = remaining
+                .iter()
+                .position(|expected| expected == sprite)
+                .expect("updated sprite must match a clean frame build");
+            remaining.swap_remove(index);
+        }
+        assert!(remaining.is_empty());
+    }
+
+    fn assert_render_cache_matches_rebuild(session: &Session) {
+        let environment = session.state.environment.as_ref().unwrap();
+        let document = session.state.active_document().unwrap();
+        let expected = editor::frame::build(
+            &environment.tree,
+            &environment.icons,
+            &session.textures,
+            document,
+            session.options.tile_size,
+        );
+
+        assert_same_sprites(&session.instances.sprites, &expected.sprites);
+        assert_same_sprites(&session.instances.area_tiles, &expected.area_tiles);
     }
 
     #[test]
@@ -1642,6 +1673,31 @@ mod tests {
             session.selection(),
             Some(Selection::from_drag(inside, Coord::new(2, 1, 1)))
         );
+    }
+
+    #[test]
+    fn one_tile_block_placements_update_multi_level_render_caches() {
+        for placement in [SelectionPlacement::Move, SelectionPlacement::Copy] {
+            let mut session = focus_session();
+            let source = Coord::new(1, 1, 1);
+            let destination = Coord::new(2, 1, 1);
+            let untouched = Coord::new(1, 1, 5);
+            let untouched_before = session.map().unwrap().tile_at(untouched).unwrap().clone();
+            session.set_tool(Tool::BlockSelect);
+            assert!(session.select_block(Some(Selection::from_drag(source, source))));
+            let revision = session.revision;
+
+            assert!(session.place_selected_block(destination, SelectionRotation::Original, placement));
+
+            assert_eq!(
+                session.selection(),
+                Some(Selection::from_drag(destination, destination))
+            );
+            assert_eq!(session.map().unwrap().tile_at(untouched), Some(&untouched_before));
+            assert_eq!(session.revision, revision.wrapping_add(1));
+            assert_eq!(session.frame_update.unwrap().previous_revision, revision);
+            assert_render_cache_matches_rebuild(&session);
+        }
     }
 
     #[test]
