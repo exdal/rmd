@@ -16,6 +16,7 @@ use editor::{
     document::{MapDocument, PrefabInstanceId, PrefabLocation, Selection, VarMutation},
     focus::AreaFocus,
     frame::{self, FrameInstances, FrameOptions, FrameRenderOptions, PrefabUpdate, TypeVisibility},
+    progress::{Progress, Stage},
     tool::{
         BlockSelectionMode,
         FillError,
@@ -41,6 +42,8 @@ use editor::{
 };
 use objtree::{ObjectTree, TypeId};
 use render::{Frame, FrameUpdate, SelectionGuide, SpriteInstance, SpriteTexture, texture::TextureCatalog};
+
+use crate::loader::{LoadedCodebase, LoadedMap};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct SelectedTransform {
@@ -89,6 +92,8 @@ pub(crate) struct BlockPreviewSprite {
     pub tint: [f32; 4],
 }
 
+const MAX_REPORTED_DIAGNOSTICS: usize = 500;
+
 pub struct Session {
     pub state: EditorState,
     pub textures: TextureCatalog,
@@ -125,44 +130,37 @@ impl Session {
         }
     }
 
-    pub fn load_environment(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        let (environment, diagnostics) = Environment::load(path)?;
+    pub fn apply_codebase(&mut self, loaded: LoadedCodebase) -> LoadReport {
+        let LoadedCodebase {
+            environment,
+            diagnostics,
+            textures,
+            thumbnails,
+            maps,
+        } = loaded;
 
-        report(&environment, &diagnostics);
-        self.textures = build_textures(&environment);
-        self.type_thumbnails = environment
-            .tree
-            .iter()
-            .map(|declaration| {
-                let prefab = Prefab::new(declaration.path.clone());
-                let appearance = visual::resolve_id(&environment.tree, declaration.id, &prefab);
-
-                (declaration.id, self.prefab_thumbnail_for(&environment, &appearance))
-            })
-            .collect();
+        let report = report(&environment, &diagnostics);
+        self.textures = textures;
+        self.type_thumbnails = thumbnails;
         self.texture_revision = self.texture_revision.wrapping_add(1);
         self.type_visibility = TypeVisibility::default();
-        self.maps = discover_maps(environment.base_dir());
+        self.maps = maps;
         self.state.environment = Some(environment);
         if self.state.active_document().is_some() {
             self.rebuild_instances();
         }
 
-        Ok(())
+        report
     }
 
-    pub fn open_map(&mut self, path: &Path, z: u32) -> Result<(), Box<dyn std::error::Error>> {
-        let source = std::fs::read_to_string(path)?;
-        let (map, errors) = dmm::parser::parse(&source);
+    pub fn apply_map(&mut self, loaded: LoadedMap) {
+        let LoadedMap { path, map, z, errors } = loaded;
 
         for error in &errors {
             eprintln!("{}: {error}", path.display());
         }
 
-        validate_level(z, map.size.z)?;
         self.activate_document(MapDocument::open(path, map, z));
-
-        Ok(())
     }
 
     pub fn create_map(&mut self, path: &Path, size: Size, format: MapFormat) -> Result<(), Box<dyn std::error::Error>> {
@@ -738,28 +736,7 @@ impl Session {
     fn prefab_thumbnail_for(
         &self, environment: &Environment, appearance: &visual::Appearance,
     ) -> Option<PrefabThumbnail> {
-        let texture = frame::sprite_texture(&environment.icons, &self.textures, appearance)?;
-        let sheet = self.textures.texture(texture.index)?;
-        let sheet_width = sheet.width() as f32;
-        let sheet_height = sheet.height() as f32;
-        let right = texture.source_position[0].checked_add(texture.width)?;
-        let bottom = texture.source_position[1].checked_add(texture.height)?;
-        let mut tint = appearance
-            .color
-            .as_deref()
-            .and_then(render::color::parse)
-            .unwrap_or([1.0; 4]);
-        tint[3] *= f32::from(appearance.alpha) / 255.0;
-
-        Some(PrefabThumbnail {
-            texture,
-            uv0: [
-                texture.source_position[0] as f32 / sheet_width,
-                texture.source_position[1] as f32 / sheet_height,
-            ],
-            uv1: [right as f32 / sheet_width, bottom as f32 / sheet_height],
-            tint,
-        })
+        prefab_thumbnail_for(&self.textures, environment, appearance)
     }
 
     pub fn choose_type(&mut self, selected: TypeId) -> bool {
@@ -1418,7 +1395,7 @@ fn directional_type_target(tree: &ObjectTree, selected: TypeId, direction: Dir) 
     })
 }
 
-fn validate_level(z: u32, levels: u32) -> std::io::Result<()> {
+pub(crate) fn validate_level(z: u32, levels: u32) -> std::io::Result<()> {
     let levels = levels.max(1);
 
     if !(1..=levels).contains(&z) {
@@ -1431,7 +1408,7 @@ fn validate_level(z: u32, levels: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-fn discover_maps(root: &Path) -> Vec<PathBuf> {
+pub(crate) fn discover_maps(root: &Path) -> Vec<PathBuf> {
     let mut maps = Vec::new();
     let mut pending = vec![root.to_path_buf()];
 
@@ -1473,11 +1450,45 @@ fn is_map(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("dmm"))
 }
 
-fn build_textures(environment: &Environment) -> TextureCatalog {
+pub(crate) fn prefab_thumbnail_for(
+    textures: &TextureCatalog, environment: &Environment, appearance: &visual::Appearance,
+) -> Option<PrefabThumbnail> {
+    let texture = frame::sprite_texture(&environment.icons, textures, appearance)?;
+    let sheet = textures.texture(texture.index)?;
+    let sheet_width = sheet.width() as f32;
+    let sheet_height = sheet.height() as f32;
+    let right = texture.source_position[0].checked_add(texture.width)?;
+    let bottom = texture.source_position[1].checked_add(texture.height)?;
+    let mut tint = appearance
+        .color
+        .as_deref()
+        .and_then(render::color::parse)
+        .unwrap_or([1.0; 4]);
+    tint[3] *= f32::from(appearance.alpha) / 255.0;
+
+    Some(PrefabThumbnail {
+        texture,
+        uv0: [
+            texture.source_position[0] as f32 / sheet_width,
+            texture.source_position[1] as f32 / sheet_height,
+        ],
+        uv1: [right as f32 / sheet_width, bottom as f32 / sheet_height],
+        tint,
+    })
+}
+
+pub(crate) fn build_textures(environment: &Environment, progress: &Progress) -> TextureCatalog {
     let mut textures = TextureCatalog::default();
     let base = environment.base_dir();
+    let names = environment.icon_paths();
 
-    for name in environment.icon_paths() {
+    progress.enter(Stage::Textures, names.len());
+    for name in names {
+        if progress.is_cancelled() {
+            break;
+        }
+        progress.advance(name);
+
         if !environment.icons.contains_key(name) {
             continue;
         }
@@ -1503,24 +1514,87 @@ fn build_textures(environment: &Environment) -> TextureCatalog {
     textures
 }
 
-fn report(environment: &Environment, diagnostics: &editor::environment::LoadDiagnostics) {
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct LoadReport {
+    pub preprocess: usize,
+    pub sema: usize,
+    pub icons: usize,
+    pub lines: Vec<String>,
+}
+
+impl LoadReport {
+    pub fn is_empty(&self) -> bool { self.preprocess == 0 && self.sema == 0 && self.icons == 0 }
+
+    pub fn total(&self) -> usize { self.preprocess + self.sema + self.icons }
+
+    pub fn summary(&self) -> String {
+        let parts = [
+            (self.preprocess, "preprocessor"),
+            (self.sema, "analysis"),
+            (self.icons, "icon"),
+        ]
+        .into_iter()
+        .filter(|(count, _)| *count > 0)
+        .map(|(count, label)| format!("{count} {label}"))
+        .collect::<Vec<_>>();
+        let plural = if self.total() == 1 { "" } else { "s" };
+
+        match parts.split_last() {
+            None => String::from("No diagnostics"),
+            Some((last, [])) => format!("{last} diagnostic{plural}"),
+            Some((last, rest)) => format!("{} and {last} diagnostic{plural}", rest.join(", ")),
+        }
+    }
+}
+
+pub(crate) fn report(environment: &Environment, diagnostics: &editor::environment::LoadDiagnostics) -> LoadReport {
     let root = environment.base_dir();
     let path = |file| {
         let path = environment.file(file)?;
 
         Some(path.strip_prefix(root).unwrap_or(path))
     };
+    let mut lines = Vec::new();
+    let mut collect = |line: String| {
+        eprintln!("{line}");
+        if lines.len() < MAX_REPORTED_DIAGNOSTICS {
+            lines.push(line);
+        }
+    };
 
     for error in &diagnostics.preprocess {
-        eprintln!("{}", error.display(path(error.location.file)));
+        collect(error.display(path(error.location.file)).to_string());
     }
 
     for error in &diagnostics.sema {
-        eprintln!("{}", error.display(path(error.location.file)));
+        collect(error.display(path(error.location.file)).to_string());
     }
 
     for (name, error) in &diagnostics.icons {
-        eprintln!("warning: could not read '{name}': {error}");
+        collect(format!("warning: could not read '{name}': {error}"));
+    }
+
+    LoadReport {
+        preprocess: diagnostics.preprocess.len(),
+        sema: diagnostics.sema.len(),
+        icons: diagnostics.icons.len(),
+        lines,
+    }
+}
+
+/// The editor always loads in the background, but tests want one blocking call.
+#[cfg(test)]
+impl Session {
+    fn load_environment(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        self.apply_codebase(crate::loader::load_codebase(path, &Progress::new())?);
+
+        Ok(())
+    }
+
+    fn open_map(&mut self, path: &Path, z: u32) -> Result<(), Box<dyn std::error::Error>> {
+        self.apply_map(crate::loader::load_map(path, z, &Progress::new())?);
+
+        Ok(())
     }
 }
 
@@ -1542,6 +1616,8 @@ mod tests {
 
     use super::{
         FillOutcome,
+        LoadReport,
+        Progress,
         Session,
         build_textures,
         directional_type_target,
@@ -1554,6 +1630,23 @@ mod tests {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
 
         path.canonicalize().unwrap_or(path)
+    }
+
+    #[test]
+    fn a_report_summarises_only_the_kinds_of_diagnostic_it_saw() {
+        let mut report = LoadReport::default();
+        assert!(report.is_empty());
+        assert_eq!(report.summary(), "No diagnostics");
+
+        report.icons = 1;
+        assert!(!report.is_empty());
+        assert_eq!(report.summary(), "1 icon diagnostic");
+
+        report.preprocess = 12;
+        assert_eq!(report.summary(), "12 preprocessor and 1 icon diagnostics");
+
+        report.sema = 3;
+        assert_eq!(report.summary(), "12 preprocessor, 3 analysis and 1 icon diagnostics");
     }
 
     #[test]
@@ -1745,7 +1838,7 @@ mod tests {
         );
         let file = IconFile::load(root.join("icons/test.dmi")).expect("load icon");
 
-        let textures = build_textures(&environment);
+        let textures = build_textures(&environment, &Progress::new());
 
         assert_eq!(textures.len(), 1);
         assert_eq!(textures.cell_count(), file.cell_count());

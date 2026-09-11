@@ -5,6 +5,7 @@ pub mod error;
 pub mod focus;
 pub mod frame;
 pub mod icons;
+pub mod progress;
 pub mod tool;
 pub mod visual;
 
@@ -17,7 +18,13 @@ use std::{
 use dmi::{IconFile, error::IconError, metadata::Metadata};
 use objtree::ObjectTree;
 
-use crate::{document::MapDocument, environment::LoadDiagnostics, error::LoadError, tool::Tool};
+use crate::{
+    document::MapDocument,
+    environment::LoadDiagnostics,
+    error::LoadError,
+    progress::{Progress, Stage},
+    tool::Tool,
+};
 
 pub const RECENT_PREFAB_CAPACITY: usize = 10;
 
@@ -44,8 +51,14 @@ impl Environment {
     }
 
     pub fn load(entry: impl AsRef<Path>) -> Result<(Self, LoadDiagnostics), LoadError> {
+        Self::load_with_progress(entry, &Progress::new())
+    }
+
+    pub fn load_with_progress(
+        entry: impl AsRef<Path>, progress: &Progress,
+    ) -> Result<(Self, LoadDiagnostics), LoadError> {
         let entry = entry.as_ref();
-        let (tree, compiled) = environment::compile(entry)?;
+        let (tree, compiled) = environment::compile(entry, progress)?;
 
         let mut environment = Self {
             root: compiled.root,
@@ -57,7 +70,10 @@ impl Environment {
         };
 
         let search_dirs = environment.resource_dirs.clone();
-        let icons = environment.load_icons(&search_dirs);
+        let icons = environment.load_icons(&search_dirs, progress);
+        if progress.is_cancelled() {
+            return Err(LoadError::Cancelled);
+        }
 
         Ok((
             environment,
@@ -90,12 +106,17 @@ impl Environment {
     }
 
     /// `#define FILE_DIR "icons"`
-    pub fn load_icons(&mut self, search_dirs: &[PathBuf]) -> Vec<(String, IconError)> {
+    pub fn load_icons(&mut self, search_dirs: &[PathBuf], progress: &Progress) -> Vec<(String, IconError)> {
         let names: Vec<String> = self.icon_paths().into_iter().map(String::from).collect();
         let base = self.base_dir().to_path_buf();
         let mut failures = Vec::new();
 
+        progress.enter(Stage::Icons, names.len());
         for name in names {
+            if progress.is_cancelled() {
+                break;
+            }
+            progress.advance(&name);
             // TODO: BYOND resolves resource paths case-insensitively
             let mut candidates = std::iter::once(base.join(&name)).chain(search_dirs.iter().map(|dir| dir.join(&name)));
 
@@ -208,7 +229,7 @@ mod tests {
 
     use objtree::{ObjectTree, VarDecl};
 
-    use crate::{EditorState, Environment, RECENT_PREFAB_CAPACITY};
+    use crate::{EditorState, Environment, RECENT_PREFAB_CAPACITY, progress::Progress};
 
     fn tree_with_vars(vars: &[(&str, Value)]) -> ObjectTree {
         let mut tree = ObjectTree::new();
@@ -253,7 +274,7 @@ mod tests {
         let tree = tree_with_vars(&[("icon", Value::Resource(String::from("icons/nope.dmi")))]);
         let mut environment = Environment::new("/project/game/tgstation.dme", tree);
 
-        let failures = environment.load_icons(&[]);
+        let failures = environment.load_icons(&[], &Progress::new());
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].0, "icons/nope.dmi");
         assert!(environment.icons.is_empty());

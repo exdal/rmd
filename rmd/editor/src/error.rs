@@ -10,6 +10,7 @@ use crate::environment;
 pub enum LoadError {
     Preprocess(PreprocessError),
     Parse { error: ParseError, file: Option<PathBuf> },
+    Cancelled,
 }
 
 impl LoadError {
@@ -35,6 +36,7 @@ impl std::fmt::Display for LoadError {
                     error.kind
                 )
             },
+            Self::Cancelled => write!(f, "cancelled"),
         }
     }
 }

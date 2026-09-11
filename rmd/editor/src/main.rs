@@ -10,6 +10,7 @@
 mod camera;
 mod gizmo;
 mod inspector;
+mod loader;
 mod session;
 mod settings;
 mod transform;
@@ -39,9 +40,10 @@ use winit::{
 
 use crate::{
     camera::Controller,
+    loader::{Job, Loader, Outcome},
     session::Session,
     settings::{Settings, imgui_ini_path},
-    ui::{OpenRequest, UiState},
+    ui::{LoadNotice, OpenRequest, UiState},
 };
 
 const FONT_DATA: &[u8] = include_bytes!("../assets/FiraMono-Regular.ttf");
@@ -67,29 +69,27 @@ fn main() -> ExitCode {
         },
     };
 
-    let mut settings = Settings::load();
+    let settings = Settings::load();
     let mut session = Session::new();
     settings.apply_to(&mut session.options);
-    if let Some(entry) = arguments.environment.as_ref() {
-        if let Err(e) = session.load_environment(entry) {
-            eprintln!("error: {e}");
 
-            return ExitCode::FAILURE;
-        }
-        settings.record_codebase(entry);
-    }
-
-    let named = arguments.map.is_some();
-    if let Some(map) = arguments.map.or_else(|| session.first_map()) {
-        if let Err(e) = session.open_map(&map, arguments.z) {
-            eprintln!("error: {}: {e}", map.display());
-
-            if named {
-                return ExitCode::FAILURE;
+    // The window comes up first and the arguments load behind the progress popup, so a big
+    // codebase no longer looks like a hang before anything is on screen.
+    let mut loader = Loader::new();
+    let mut pending_map = None;
+    match arguments.environment {
+        Some(entry) => {
+            loader.start(Job::Codebase(entry));
+            pending_map = Some(PendingMap {
+                path: arguments.map,
+                z: arguments.z,
+            });
+        },
+        None => {
+            if let Some(path) = arguments.map {
+                loader.start(Job::Map { path, z: arguments.z });
             }
-        } else {
-            settings.record_recent(arguments.environment.as_deref(), &map);
-        }
+        },
     }
 
     let ui = match UiState::new() {
@@ -116,6 +116,8 @@ fn main() -> ExitCode {
         settings,
         camera: Controller::new(),
         ui,
+        loader,
+        pending_map,
         uploaded_texture_revision: None,
         title,
         consumer: None,
@@ -194,6 +196,8 @@ struct Redraw {
     exit: bool,
     open: Option<OpenRequest>,
     pick_new_map_path: bool,
+    cancel_load: bool,
+    copy_to_clipboard: Option<String>,
 }
 
 enum Opened {
@@ -201,11 +205,18 @@ enum Opened {
     Map(PathBuf),
 }
 
+struct PendingMap {
+    path: Option<PathBuf>,
+    z: u32,
+}
+
 struct App {
     session: Session,
     settings: Settings,
     camera: Controller,
     ui: UiState,
+    loader: Loader,
+    pending_map: Option<PendingMap>,
     uploaded_texture_revision: Option<u64>,
     title: String,
     consumer: Option<SynchronousRendererConsumer>,
@@ -269,6 +280,7 @@ impl App {
             settings,
             camera,
             ui,
+            loader,
             uploaded_texture_revision,
             title,
             consumer,
@@ -289,6 +301,8 @@ impl App {
                 exit: false,
                 open: None,
                 pick_new_map_path: false,
+                cancel_load: false,
+                copy_to_clipboard: None,
             });
         };
 
@@ -308,7 +322,8 @@ impl App {
 
         platform.prepare_frame(imgui, window)?;
         let frame = imgui.try_begin_frame()?;
-        let output = ui.draw(frame.ui(), session, settings, camera)?;
+        let load = loader.view();
+        let output = ui.draw(frame.ui(), session, settings, camera, load.as_ref())?;
         platform.prepare_render(frame.ui(), window)?;
         let scene = session.frame(camera.camera);
         let pending = frame.try_render(consumer)?;
@@ -333,10 +348,11 @@ impl App {
             exit: output.exit,
             open: output.open,
             pick_new_map_path: output.pick_new_map_path,
+            cancel_load: output.cancel_load,
+            copy_to_clipboard: output.copy_to_clipboard,
         })
     }
 
-    /// Carry out an open the welcome page asked for, then re-point the editor at the result.
     fn apply_open(&mut self, request: OpenRequest) {
         let resolved = match request {
             OpenRequest::PickCodebase => self.pick_file("BYOND environment", "dme").map(Opened::Codebase),
@@ -348,28 +364,60 @@ impl App {
             return;
         };
 
-        let result = match &resolved {
-            Opened::Codebase(path) => self.session.load_environment(path),
-            Opened::Map(path) => self
-                .session
-                .open_map(path, 1)
-                .map_err(|e| format!("{}: {e}", path.display()).into()),
-        };
-        if let Err(e) = result {
-            eprintln!("error: {e}");
-            self.ui.set_open_error(Some(e.to_string()));
-
-            return;
-        }
-
         self.ui.set_open_error(None);
-        match resolved {
-            Opened::Codebase(path) => self.settings.record_codebase(&path),
-            Opened::Map(path) => {
+        self.ui.set_load_notice(None);
+        self.pending_map = None;
+        self.loader.start(match resolved {
+            Opened::Codebase(path) => Job::Codebase(path),
+            Opened::Map(path) => Job::Map { path, z: 1 },
+        });
+    }
+
+    fn apply_outcome(&mut self, outcome: Outcome) {
+        match outcome {
+            Outcome::Codebase { path, loaded } => {
+                let report = self.session.apply_codebase(*loaded);
+                self.settings.record_codebase(&path);
+                self.ui.set_open_error(None);
+                self.ui.set_load_notice(
+                    (!report.is_empty()).then(|| LoadNotice::diagnostics(&path, report.summary(), report.lines)),
+                );
+                self.start_pending_map();
+            },
+
+            Outcome::Map(loaded) => {
+                let path = loaded.path.clone();
+                self.session.apply_map(*loaded);
                 self.ui.request_refit();
+                self.ui.set_open_error(None);
+                self.ui.set_load_notice(None);
                 self.settings.record_recent(self.session.environment_path(), &path);
             },
+
+            Outcome::Failed { job, error } => {
+                eprintln!("error: {error}");
+                self.pending_map = None;
+                self.ui.set_open_error(Some(error.clone()));
+                self.ui
+                    .set_load_notice(Some(LoadNotice::failed(job.title(), job.path(), error)));
+            },
+
+            Outcome::Cancelled => {
+                self.pending_map = None;
+                self.ui.set_load_notice(None);
+            },
         }
+    }
+
+    fn start_pending_map(&mut self) {
+        let Some(pending) = self.pending_map.take() else {
+            return;
+        };
+        let Some(path) = pending.path.or_else(|| self.session.first_map()) else {
+            return;
+        };
+
+        self.loader.start(Job::Map { path, z: pending.z });
     }
 
     fn pick_file(&self, label: &str, extension: &str) -> Option<PathBuf> {
@@ -487,15 +535,26 @@ impl ApplicationHandler for App {
                             exit: false,
                             open: None,
                             pick_new_map_path: false,
+                            cancel_load: false,
+                            copy_to_clipboard: None,
                         }
                     },
                 };
 
+                if let (Some(text), Some(imgui)) = (redraw.copy_to_clipboard, self.imgui.as_ref()) {
+                    imgui.set_clipboard_text(text);
+                }
+                if redraw.cancel_load {
+                    self.loader.cancel();
+                }
                 if redraw.pick_new_map_path {
                     self.pick_new_map_path();
                 }
                 if let Some(request) = redraw.open {
                     self.apply_open(request);
+                }
+                if let Some(outcome) = self.loader.poll() {
+                    self.apply_outcome(outcome);
                 }
 
                 if redraw.exit {

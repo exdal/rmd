@@ -1,6 +1,6 @@
 use core::location::Location;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LexErrorKind {
     UnexpectedCharacter(char),
     UnterminatedString,

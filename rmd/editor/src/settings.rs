@@ -468,6 +468,17 @@ impl Settings {
         self.recent.truncate(MAX_RECENT);
     }
 
+    pub fn forget_recent(&mut self, map: &Path) {
+        self.remove_recent(map);
+        self.save();
+    }
+
+    fn remove_recent(&mut self, map: &Path) {
+        let map = absolute(map);
+
+        self.recent.retain(|recent| recent.map != map);
+    }
+
     pub fn record_codebase(&mut self, codebase: &Path) {
         self.push_codebase(codebase);
         self.save();
@@ -479,6 +490,17 @@ impl Settings {
         self.recent_codebases.retain(|recent| *recent != codebase);
         self.recent_codebases.insert(0, codebase);
         self.recent_codebases.truncate(MAX_RECENT);
+    }
+
+    pub fn forget_codebase(&mut self, codebase: &Path) {
+        self.remove_codebase(codebase);
+        self.save();
+    }
+
+    fn remove_codebase(&mut self, codebase: &Path) {
+        let codebase = absolute(codebase);
+
+        self.recent_codebases.retain(|recent| *recent != codebase);
     }
 
     pub fn recent_maps_for(&self, environment: &Path) -> impl Iterator<Item = &RecentMap> {

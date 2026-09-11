@@ -5,12 +5,14 @@ use std::{
 };
 
 use dear_imgui_rs::{
+    Condition,
     DockLayout,
     DockLayoutApply,
     DockNodeFlags,
     DockSplit,
     DockspaceError,
     DragFlags,
+    InputTextMultilineFlags,
     Key,
     MouseButton,
     StyleColor,
@@ -28,6 +30,7 @@ use editor::{
     command::EditGroupId,
     document::Selection,
     icons::materialdesignicons::{
+        ICON_CLOSE_THICK,
         ICON_DOTS_HORIZONTAL,
         ICON_ERASER,
         ICON_EYE,
@@ -39,6 +42,7 @@ use editor::{
         ICON_PENCIL,
         ICON_SELECT_DRAG,
     },
+    progress::{Snapshot, Stage},
     tool::{
         BlockSelectionMode,
         FillMode,
@@ -56,6 +60,7 @@ use crate::{
     camera::Controller,
     gizmo::{BlockGizmoTarget, GizmoState, GizmoViewport},
     inspector::InspectorState,
+    loader::LoadView,
     session::{BlockPreviewSprite, FillOutcome, PlacementPreview, Session},
     settings::{BINDABLE_KEYS, KeyBinding, KeyBindings, KeybindAction, SelectionHighlight, Settings},
 };
@@ -83,6 +88,12 @@ const NEW_MAP_DEFAULT_HEIGHT: i32 = 255;
 const NEW_MAP_DEFAULT_LEVELS: i32 = 1;
 const NEW_MAP_MAX_DIMENSION: i32 = 255;
 const SAVE_MAP_POPUP: &str = "Save map##save-map";
+const LOAD_POPUP_WIDTH: f32 = 420.0;
+const LOAD_TEXT_WIDTH: f32 = 620.0;
+const LOAD_DIAGNOSTICS_LINES: usize = 14;
+const LOAD_TEXT_MIN_LINES: usize = 4;
+const LOAD_ERROR_MAX_LINES: usize = 10;
+const LOAD_PATH_MAX_CHARS: usize = 60;
 const SAVE_MAP_PATH_WIDTH: f32 = 460.0;
 const SAVE_ERROR_COLOR: [f32; 4] = [1.0, 0.4, 0.4, 1.0];
 const WELCOME_TITLE_SIZE: f32 = 40.0;
@@ -266,6 +277,27 @@ pub struct UiOutput {
     pub interaction: ViewportInteraction,
     pub open: Option<OpenRequest>,
     pub pick_new_map_path: bool,
+    pub cancel_load: bool,
+    pub copy_to_clipboard: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ForgetRequest {
+    Codebase(PathBuf),
+    Map(PathBuf),
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct WelcomeOutput {
+    open: Option<OpenRequest>,
+    new_map_dialog: bool,
+    forget: Option<ForgetRequest>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RecentEntry {
+    open: bool,
+    forget: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -345,6 +377,10 @@ pub struct UiState {
     welcome_map_filter: String,
     welcome_maps_expanded: bool,
     open_error: Option<String>,
+    load_window: WindowKey,
+    load_notice: Option<LoadNotice>,
+    load_window_size: [f32; 2],
+    load_popup_active: bool,
     capturing_keybind: Option<KeybindAction>,
 }
 
@@ -355,6 +391,7 @@ impl UiState {
         let welcome_window = WindowKey::new("welcome", "Welcome")?;
         let inspector_window = WindowKey::new("inspector", "Inspector")?;
         let settings_window = WindowKey::new("settings", "Settings")?;
+        let load_window = WindowKey::new("load", "Loading")?;
         let layout = DockLayout::split(
             DockSplit::Left,
             0.25,
@@ -399,11 +436,17 @@ impl UiState {
             welcome_map_filter: String::new(),
             welcome_maps_expanded: false,
             open_error: None,
+            load_window,
+            load_notice: None,
+            load_window_size: [0.0, 0.0],
+            load_popup_active: false,
             capturing_keybind: None,
         })
     }
 
     pub fn set_open_error(&mut self, error: Option<String>) { self.open_error = error; }
+
+    pub fn set_load_notice(&mut self, notice: Option<LoadNotice>) { self.load_notice = notice; }
 
     pub fn request_refit(&mut self) { self.initial_refit = true; }
 
@@ -418,7 +461,10 @@ impl UiState {
 
     pub fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, camera: &mut Controller,
+        load: Option<&LoadView>,
     ) -> Result<UiOutput, DockspaceError> {
+        self.load_popup_active = load.is_some() || self.load_notice.is_some();
+        let loading = self.load_popup_active;
         ui.dockspace()
             .main_viewport()
             .root_id(ui.get_id(DOCKSPACE_ID))
@@ -450,10 +496,15 @@ impl UiState {
 
         ui.main_menu_bar(|| {
             ui.menu("File", || {
-                if ui.menu_item_enabled_selected_no_shortcut("Open codebase...", false, session.tree().is_none()) {
+                if ui.menu_item_enabled_selected_no_shortcut(
+                    "Open codebase...",
+                    false,
+                    session.tree().is_none() && !loading,
+                ) {
                     open = Some(OpenRequest::PickCodebase);
                 }
-                if ui.menu_item_enabled_selected_no_shortcut("Open map...", false, session.tree().is_some()) {
+                if ui.menu_item_enabled_selected_no_shortcut("Open map...", false, session.tree().is_some() && !loading)
+                {
                     open = Some(OpenRequest::PickMap);
                 }
                 ui.separator();
@@ -556,7 +607,15 @@ impl UiState {
 
         self.draw_object_tree(ui, session);
         self.draw_inspector(ui, session);
-        self.draw_welcome(ui, session, settings, &mut open, &mut open_new_map_dialog);
+        let mut welcome = WelcomeOutput::default();
+        self.draw_welcome(ui, session, settings, loading, &mut welcome);
+        open = welcome.open.or(open);
+        open_new_map_dialog |= welcome.new_map_dialog;
+        match welcome.forget {
+            Some(ForgetRequest::Codebase(path)) => settings.forget_codebase(&path),
+            Some(ForgetRequest::Map(path)) => settings.forget_recent(&path),
+            None => {},
+        }
         if open_new_map_dialog {
             self.new_map_dialog = Some(NewMapDialog::default());
             ui.open_popup(NEW_MAP_POPUP);
@@ -567,10 +626,24 @@ impl UiState {
             self.show_welcome = false;
             self.initial_refit = true;
         }
+        let load_popup = draw_load_popup(
+            ui,
+            &self.load_window,
+            &mut self.load_window_size,
+            load,
+            self.load_notice.as_mut(),
+        );
+        if load_popup.dismiss {
+            self.load_notice = None;
+        }
+
         exit |= if session.map().is_some() {
             self.draw_viewport(ui, session, settings, camera, &mut interaction, &mut refit)
         } else {
-            ui.is_key_pressed(Key::Escape) && self.save_dialog.is_none() && self.capturing_keybind.is_none()
+            ui.is_key_pressed(Key::Escape)
+                && self.save_dialog.is_none()
+                && self.capturing_keybind.is_none()
+                && !load_popup.handles_escape
         };
         finish_keybind_capture(ui, &mut self.capturing_keybind, &mut settings.keybindings);
         interaction.selection_guide = settings
@@ -584,12 +657,13 @@ impl UiState {
             interaction,
             open,
             pick_new_map_path,
+            cancel_load: load_popup.cancel,
+            copy_to_clipboard: load_popup.copy,
         })
     }
 
     fn draw_welcome(
-        &mut self, ui: &Ui, session: &Session, settings: &Settings, open: &mut Option<OpenRequest>,
-        open_new_map_dialog: &mut bool,
+        &mut self, ui: &Ui, session: &Session, settings: &Settings, loading: bool, out: &mut WelcomeOutput,
     ) {
         if !self.show_welcome {
             return;
@@ -615,6 +689,7 @@ impl UiState {
                 None => draw_welcome_subtitle(ui),
             }
 
+            // the load popup says this too, but only until it is dismissed
             if let Some(error) = open_error {
                 ui.dummy([0.0, WELCOME_MIN_INDENT]);
                 ui.text_colored(SAVE_ERROR_COLOR, error);
@@ -622,11 +697,12 @@ impl UiState {
 
             ui.dummy([0.0, WELCOME_MIN_INDENT]);
 
+            let _disabled = ui.begin_disabled_with_cond(loading);
             match codebase {
                 None => {
                     ui.text("Start");
                     if ui.text_link("Open codebase...") {
-                        *open = Some(OpenRequest::PickCodebase);
+                        out.open = Some(OpenRequest::PickCodebase);
                     }
 
                     ui.dummy([0.0, WELCOME_MIN_INDENT]);
@@ -635,8 +711,12 @@ impl UiState {
                         ui.text_disabled("No recent codebases");
                     }
                     for (index, recent) in settings.recent_codebases.iter().enumerate() {
-                        if ui.text_link(format!("{}##codebase-{index}", recent.display())) {
-                            *open = Some(OpenRequest::Codebase(recent.clone()));
+                        let entry = draw_recent_entry(ui, &recent.display().to_string(), &format!("codebase-{index}"));
+                        if entry.open {
+                            out.open = Some(OpenRequest::Codebase(recent.clone()));
+                        }
+                        if entry.forget {
+                            out.forget = Some(ForgetRequest::Codebase(recent.clone()));
                         }
                     }
                 },
@@ -646,10 +726,10 @@ impl UiState {
 
                     ui.text("Start");
                     if ui.text_link("New map...") {
-                        *open_new_map_dialog = true;
+                        out.new_map_dialog = true;
                     }
                     if ui.text_link("Open map...") {
-                        *open = Some(OpenRequest::PickMap);
+                        out.open = Some(OpenRequest::PickMap);
                     }
 
                     ui.dummy([0.0, WELCOME_MIN_INDENT]);
@@ -658,8 +738,12 @@ impl UiState {
                     for (index, recent) in settings.recent_maps_for(codebase).enumerate() {
                         empty = false;
                         let label = codebase_relative(base, &recent.map);
-                        if ui.text_link(format!("{label}##recent-{index}")) {
-                            *open = Some(OpenRequest::Map(recent.map.clone()));
+                        let entry = draw_recent_entry(ui, &label, &format!("recent-{index}"));
+                        if entry.open {
+                            out.open = Some(OpenRequest::Map(recent.map.clone()));
+                        }
+                        if entry.forget {
+                            out.forget = Some(ForgetRequest::Map(recent.map.clone()));
                         }
                     }
 
@@ -694,7 +778,7 @@ impl UiState {
                     for (index, map) in matching.clone().take(limit) {
                         shown += 1;
                         if ui.text_link(format!("{}##map-{index}", codebase_relative(base, map))) {
-                            *open = Some(OpenRequest::Map(map.clone()));
+                            out.open = Some(OpenRequest::Map(map.clone()));
                         }
                     }
 
@@ -1327,6 +1411,7 @@ impl UiState {
                 && !fill_warning_handles_escape
                 && !block_menu_handles_escape
                 && !block_placement_handles_escape
+                && !self.load_popup_active
                 && self.save_dialog.is_none()
                 && self.capturing_keybind.is_none()
             {
@@ -1370,12 +1455,235 @@ fn draw_welcome_subtitle(ui: &Ui) {
     ui.text_disabled("A map editor for BYOND");
 }
 
+fn draw_recent_entry(ui: &Ui, label: &str, id: &str) -> RecentEntry {
+    let icon = ICON_CLOSE_THICK.to_string();
+    let icon_width = ui.calc_text_size(&icon)[0];
+
+    let open = ui.text_link(format!("{label}##{id}"));
+    let link_min = ui.item_rect_min();
+    let link_max = ui.item_rect_max();
+    let icon_min = [link_max[0] + ui.clone_style().item_spacing()[0], link_min[1]];
+    let icon_max = [icon_min[0] + icon_width, link_max[1]];
+    let mut forget = false;
+
+    if ui.is_mouse_hovering_rect(link_min, icon_max) {
+        let hovered = ui.is_mouse_hovering_rect(icon_min, icon_max);
+        let color = if hovered {
+            StyleColor::Text
+        } else {
+            StyleColor::TextDisabled
+        };
+
+        ui.get_window_draw_list()
+            .add_text([icon_min[0], icon_min[1] + 2.0], ui.style_color(color), &icon);
+
+        if hovered {
+            ui.tooltip_text("Remove from this list");
+            forget = ui.is_mouse_clicked(MouseButton::Left);
+        }
+    }
+
+    RecentEntry { open, forget }
+}
+
 fn map_matches(base: &Path, map: &Path, needle: &str) -> bool {
     needle.is_empty() || codebase_relative(base, map).to_ascii_lowercase().contains(needle)
 }
 
 fn codebase_relative(base: &Path, path: &Path) -> String {
     path.strip_prefix(base).unwrap_or(path).display().to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadNotice {
+    Failed {
+        title: String,
+        path: String,
+        message: String,
+    },
+    Diagnostics {
+        path: String,
+        summary: String,
+        text: String,
+    },
+}
+
+impl LoadNotice {
+    pub fn failed(title: &str, path: &Path, message: impl Into<String>) -> Self {
+        Self::Failed {
+            title: format!("{title} failed"),
+            path: path.display().to_string(),
+            message: message.into(),
+        }
+    }
+
+    pub fn diagnostics(path: &Path, summary: String, lines: Vec<String>) -> Self {
+        Self::Diagnostics {
+            path: path.display().to_string(),
+            summary,
+            text: lines.join("\n"),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct LoadPopup {
+    cancel: bool,
+    dismiss: bool,
+    copy: Option<String>,
+    handles_escape: bool,
+}
+
+fn draw_load_popup(
+    ui: &Ui, window: &WindowKey, measured: &mut [f32; 2], load: Option<&LoadView>, notice: Option<&mut LoadNotice>,
+) -> LoadPopup {
+    let mut popup = LoadPopup::default();
+    if load.is_none() && notice.is_none() {
+        return popup;
+    }
+
+    popup.handles_escape = true;
+    let center = ui.main_viewport().work_center();
+    let position = [center[0] - measured[0] / 2.0, center[1] - measured[1] / 2.0];
+    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
+        | WindowFlags::NO_TITLE_BAR
+        | WindowFlags::NO_RESIZE
+        | WindowFlags::NO_MOVE
+        | WindowFlags::NO_COLLAPSE
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::NO_DOCKING;
+
+    ui.window(window)
+        .flags(flags)
+        .position(position, Condition::Always)
+        .build(|| draw_load_body(ui, measured, load, notice, &mut popup));
+
+    popup
+}
+
+fn draw_load_body(
+    ui: &Ui, measured: &mut [f32; 2], load: Option<&LoadView>, notice: Option<&mut LoadNotice>, popup: &mut LoadPopup,
+) {
+    let escape = ui.is_key_pressed(Key::Escape);
+    match (load, notice) {
+        (Some(view), _) => {
+            draw_load_heading(ui, view.title, &view.path);
+            draw_load_progress(ui, &view.snapshot);
+            ui.separator();
+
+            let _disabled = ui.begin_disabled_with_cond(view.cancelling);
+            if ui.button(if view.cancelling { "Cancelling..." } else { "Cancel" }) || escape {
+                popup.cancel = true;
+            }
+        },
+
+        (None, Some(LoadNotice::Failed { title, path, message })) => {
+            draw_load_heading(ui, title, path);
+            let lines = wrapped_lines(ui, message).clamp(LOAD_TEXT_MIN_LINES, LOAD_ERROR_MAX_LINES);
+            draw_selectable_text(ui, "##load-error", message, lines, Some(SAVE_ERROR_COLOR));
+            ui.separator();
+
+            if ui.button("Close") || escape {
+                popup.dismiss = true;
+            }
+            ui.same_line();
+            if ui.button("Copy") {
+                popup.copy = Some(message.clone());
+            }
+        },
+
+        (None, Some(LoadNotice::Diagnostics { path, summary, text })) => {
+            draw_load_heading(ui, "Loaded with diagnostics", path);
+            ui.text(summary);
+            let lines = wrapped_lines(ui, text).clamp(LOAD_TEXT_MIN_LINES, LOAD_DIAGNOSTICS_LINES);
+            draw_selectable_text(ui, "##load-diagnostics", text, lines, None);
+            ui.separator();
+
+            if ui.button("Close") || escape {
+                popup.dismiss = true;
+            }
+            ui.same_line();
+            if ui.button("Copy") {
+                popup.copy = Some(text.clone());
+            }
+        },
+
+        (None, None) => {},
+    }
+
+    *measured = ui.window_size();
+}
+
+fn draw_selectable_text(ui: &Ui, id: &str, text: &mut String, lines: usize, color: Option<[f32; 4]>) {
+    let _color = color.map(|color| ui.push_style_color(StyleColor::Text, color));
+    let height = ui.text_line_height_with_spacing() * lines as f32 + ui.clone_style().frame_padding()[1] * 2.0;
+
+    ui.input_text_multiline(id, text, [LOAD_TEXT_WIDTH, height])
+        .flags(InputTextMultilineFlags::READ_ONLY | InputTextMultilineFlags::WORD_WRAP)
+        .build();
+}
+
+fn wrapped_lines(ui: &Ui, text: &str) -> usize {
+    text.lines()
+        .map(|line| {
+            let width = ui.calc_text_size(line)[0];
+
+            ((width / LOAD_TEXT_WIDTH).ceil() as usize).max(1)
+        })
+        .sum::<usize>()
+        .max(1)
+}
+
+fn draw_load_heading(ui: &Ui, title: &str, path: &str) {
+    ui.text(title);
+    ui.text_disabled(shorten_path(path, LOAD_PATH_MAX_CHARS));
+    ui.separator();
+}
+
+fn draw_load_progress(ui: &Ui, snapshot: &Snapshot) {
+    match snapshot.fraction() {
+        Some(fraction) => ui
+            .progress_bar(fraction)
+            .size([LOAD_POPUP_WIDTH, 0.0])
+            .overlay_text(format!("{} / {}", grouped(snapshot.done), grouped(snapshot.total)))
+            .build(),
+
+        None => {
+            let bar = ui.progress_bar(-(ui.time() as f32)).size([LOAD_POPUP_WIDTH, 0.0]);
+            match (snapshot.stage, snapshot.done) {
+                (Stage::Preprocess, done) if done > 0 => bar.overlay_text(format!("{} files", grouped(done))).build(),
+                _ => bar.overlay_text("").build(),
+            }
+        },
+    }
+
+    ui.text(snapshot.stage.label());
+    ui.text_disabled(shorten_path(&snapshot.detail, LOAD_PATH_MAX_CHARS));
+}
+
+fn shorten_path(path: &str, max: usize) -> String {
+    let count = path.chars().count();
+    if count <= max {
+        return String::from(path);
+    }
+
+    let kept = path.chars().skip(count - max.saturating_sub(1)).collect::<String>();
+
+    format!("\u{2026}{kept}")
+}
+
+fn grouped(value: usize) -> String {
+    let digits = value.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+
+    out
 }
 
 fn draw_settings_window(
@@ -2681,6 +2989,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_short_path_is_left_alone_and_a_long_one_keeps_its_tail() {
+        assert_eq!(shorten_path("code/game/area.dm", 60), "code/game/area.dm");
+        assert_eq!(shorten_path("abcdef", 6), "abcdef");
+        assert_eq!(shorten_path("abcdef", 4), "\u{2026}def");
+        assert_eq!(shorten_path("", 8), "");
+    }
+
+    #[test]
+    fn file_counts_are_grouped_in_threes() {
+        assert_eq!(grouped(0), "0");
+        assert_eq!(grouped(7), "7");
+        assert_eq!(grouped(999), "999");
+        assert_eq!(grouped(1482), "1,482");
+        assert_eq!(grouped(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn a_load_notice_keeps_the_job_title_and_message() {
+        let notice = LoadNotice::failed("Opening codebase", Path::new("game/tg.dme"), "no such file");
+
+        assert_eq!(
+            notice,
+            LoadNotice::Failed {
+                title: String::from("Opening codebase failed"),
+                path: String::from("game/tg.dme"),
+                message: String::from("no such file"),
+            }
+        );
+    }
+
+    #[test]
+    fn diagnostics_are_joined_into_one_selectable_buffer() {
+        let notice = LoadNotice::diagnostics(
+            Path::new("game/tg.dme"),
+            String::from("2 preprocessor diagnostics"),
+            vec![String::from("first"), String::from("second")],
+        );
+
+        assert_eq!(
+            notice,
+            LoadNotice::Diagnostics {
+                path: String::from("game/tg.dme"),
+                summary: String::from("2 preprocessor diagnostics"),
+                text: String::from("first\nsecond"),
+            }
+        );
+    }
+
+    #[test]
     fn the_default_dock_layout_is_valid() {
         let state = UiState::new().expect("valid window keys");
 
@@ -2696,6 +3053,8 @@ mod tests {
         assert!(state.custom_fill_search.is_empty());
         assert!(state.pending_fill_warning.is_none());
         assert!(state.new_map_dialog.is_none());
+        assert!(state.load_notice.is_none());
+        assert!(!state.load_popup_active);
         assert!(state.save_dialog.is_none());
         assert!(state.show_welcome);
         assert!(state.open_error.is_none());

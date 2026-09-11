@@ -5,7 +5,11 @@ use dmi::error::IconError;
 use preprocessor::error::PreprocessError;
 use sema::error::SemaError;
 
-use crate::{LoadError, ObjectTree};
+use crate::{
+    LoadError,
+    ObjectTree,
+    progress::{Progress, Stage},
+};
 
 #[derive(Debug, Default)]
 pub struct LoadDiagnostics {
@@ -34,14 +38,33 @@ pub(crate) fn source_root<'a>(sources: &'a SourceMap<'_>, entry: Option<FileId>,
         .unwrap_or_else(|| Path::new(""))
 }
 
-pub(crate) fn compile(entry: &Path) -> Result<(ObjectTree, Compiled), LoadError> {
+pub(crate) fn compile(entry: &Path, progress: &Progress) -> Result<(ObjectTree, Compiled), LoadError> {
     let arena = StrArena::new();
-    let preprocessed = preprocessor::preprocess(&arena, entry)?;
+    progress.enter(Stage::Preprocess, 0);
+    let preprocessed = preprocessor::preprocess_with_progress(&arena, entry, |path| {
+        progress.advance(&path.display().to_string());
+
+        !progress.is_cancelled()
+    })?;
+    if progress.is_cancelled() {
+        return Err(LoadError::Cancelled);
+    }
+
+    progress.enter(Stage::Parse, 0);
+    progress.set_detail(&format!("{} tokens", preprocessed.tokens.len()));
     let ast = ast::parse(&preprocessed.tokens)
         .map_err(|error| LoadError::parse(error, &preprocessed.sources, preprocessed.entry, entry))?;
     drop(preprocessed.tokens);
     drop(preprocessed.defines);
+    if progress.is_cancelled() {
+        return Err(LoadError::Cancelled);
+    }
+
+    progress.enter(Stage::Analyze, 0);
     let (tree, sema_errors) = sema::analyze(&ast);
+    if progress.is_cancelled() {
+        return Err(LoadError::Cancelled);
+    }
 
     let root = preprocessed
         .entry

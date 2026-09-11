@@ -20,6 +20,15 @@ enum BraceKind {
 pub struct IndentState {
     stack: Vec<usize>,
     pending_dedents: usize,
+    errors: Option<usize>,
+}
+
+impl IndentState {
+    pub fn without_errors(mut self) -> Self {
+        self.errors = None;
+
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -82,12 +91,24 @@ impl<'a> Lexer<'a> {
         IndentState {
             stack: self.indent_stack.clone(),
             pending_dedents: self.pending_dedents,
+            errors: Some(self.errors.len()),
         }
     }
 
     pub fn restore_indent(&mut self, state: IndentState) {
         self.indent_stack = state.stack;
         self.pending_dedents = state.pending_dedents;
+
+        let Some(reported) = state.errors.filter(|reported| *reported < self.errors.len()) else {
+            return;
+        };
+
+        let since = self.errors.split_off(reported);
+        self.errors.extend(
+            since
+                .into_iter()
+                .filter(|error| error.kind != LexErrorKind::InconsistentIndent),
+        );
     }
 
     pub fn nesting_state(&self) -> NestingState {
@@ -981,8 +1002,11 @@ pub fn tokenize(buffer_view: &str) -> (Vec<(Token<'_>, Location)>, Vec<LexError>
 mod tests {
     use crate::{
         Lexer,
+        error::LexErrorKind,
         token::{SoftKeyword, Token},
     };
+
+    fn drain(lexer: &mut Lexer<'_>) { while lexer.next(true).0 != Token::Eof {} }
 
     fn tokens(source: &str) -> Vec<Token<'_>> {
         let mut lexer = Lexer::new(source);
@@ -998,6 +1022,60 @@ mod tests {
         }
 
         out
+    }
+
+    #[test]
+    fn restoring_an_indent_snapshot_drops_the_indentation_errors_it_measured() {
+        // The dedent to one tab matches no open block, so the lexer reports it.
+        let mut lexer = Lexer::new("a\n\t\tb\n\tc\n");
+        let start = lexer.indent_state();
+        drain(&mut lexer);
+
+        assert_eq!(lexer.errors().len(), 1);
+        assert_eq!(lexer.errors()[0].kind, LexErrorKind::InconsistentIndent);
+
+        // Restoring says those lines never counted, so neither does what they measured.
+        lexer.restore_indent(start);
+        assert!(lexer.errors().is_empty());
+    }
+
+    #[test]
+    fn restoring_an_indent_snapshot_keeps_every_other_error() {
+        let mut lexer = Lexer::new("a\n\t\tb `\n\tc\n");
+        let start = lexer.indent_state();
+        drain(&mut lexer);
+
+        assert_eq!(lexer.errors().len(), 2);
+
+        lexer.restore_indent(start);
+        assert_eq!(lexer.errors().len(), 1);
+        assert_eq!(lexer.errors()[0].kind, LexErrorKind::UnexpectedCharacter('`'));
+    }
+
+    #[test]
+    fn restoring_an_indent_snapshot_keeps_errors_from_before_it() {
+        let mut lexer = Lexer::new("a\n\t\tb\n\tc\n\t\t\td\n\t\te\n");
+        drain(&mut lexer);
+        assert_eq!(lexer.errors().len(), 2);
+
+        // A snapshot taken now cannot speak for what came before it.
+        let mark = lexer.indent_state();
+        lexer.restore_indent(mark);
+        assert_eq!(lexer.errors().len(), 2);
+    }
+
+    #[test]
+    fn an_indent_state_carried_to_another_lexer_leaves_its_errors_alone() {
+        let mut source = Lexer::new("a\n\tb\n");
+        drain(&mut source);
+
+        let mut target = Lexer::new("a\n\t\tb\n\tc\n");
+        drain(&mut target);
+        assert_eq!(target.errors().len(), 1);
+
+        // The mark counts the *source* lexer's errors, so it must not be applied to the target.
+        target.restore_indent(source.indent_state().without_errors());
+        assert_eq!(target.errors().len(), 1);
     }
 
     #[test]

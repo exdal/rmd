@@ -157,6 +157,8 @@ impl Preprocessed<'_> {
     pub fn is_ok(&self) -> bool { !self.errors.iter().any(PreprocessError::is_fatal) }
 }
 
+type ProgressHook<'a> = Box<dyn FnMut(&Path) -> bool + 'a>;
+
 pub struct Preprocessor<'a> {
     arena: &'a StrArena,
     sources: SourceMap<'a>,
@@ -184,6 +186,8 @@ pub struct Preprocessor<'a> {
     last_if: Location,
 
     prelude: Vec<PreludeFile>,
+    progress: Option<ProgressHook<'a>>,
+    aborted: bool,
 }
 
 impl<'a> Preprocessor<'a> {
@@ -209,11 +213,19 @@ impl<'a> Preprocessor<'a> {
             last_file_line: None,
             last_if: Location::default(),
             prelude: prelude_files(),
+            progress: None,
+            aborted: false,
         }
     }
 
     pub fn with_prelude(mut self, files: impl IntoIterator<Item = PreludeFile>) -> Self {
         self.prelude = files.into_iter().collect();
+
+        self
+    }
+
+    pub fn with_progress(mut self, progress: impl FnMut(&Path) -> bool + 'a) -> Self {
+        self.progress = Some(Box::new(progress));
 
         self
     }
@@ -289,6 +301,12 @@ impl<'a> Preprocessor<'a> {
 
     fn drain(&mut self) {
         while !self.include_stack.is_empty() {
+            if self.aborted {
+                self.include_stack.clear();
+
+                break;
+            }
+
             self.pump();
         }
     }
@@ -408,7 +426,7 @@ impl<'a> Preprocessor<'a> {
             self.flush_layout();
 
             for error in errors {
-                self.diagnose(Code::ErrorDirective, error.location, error.kind.to_string());
+                self.diagnose(Code::BadToken, error.location, error.kind.to_string());
             }
         }
     }
@@ -416,7 +434,9 @@ impl<'a> Preprocessor<'a> {
     /// Include indentation returns to its parent
     fn hand_back_indent(&mut self, finished: &IncludeState<'a>) {
         if let Some(parent) = self.include_stack.last_mut() {
-            parent.lexer.restore_indent(finished.lexer.indent_state());
+            parent
+                .lexer
+                .restore_indent(finished.lexer.indent_state().without_errors());
             return;
         }
 
@@ -1377,6 +1397,14 @@ impl<'a> Preprocessor<'a> {
             },
         };
 
+        if let Some(progress) = self.progress.as_mut()
+            && !progress(path)
+        {
+            self.aborted = true;
+
+            return;
+        }
+
         self.push_file(file, path);
     }
 
@@ -1396,7 +1424,7 @@ impl<'a> Preprocessor<'a> {
         lexer.keep_indents_at_eof();
 
         if let Some(state) = self.include_stack.last() {
-            lexer.restore_indent(state.lexer.indent_state());
+            lexer.restore_indent(state.lexer.indent_state().without_errors());
 
             // `new /datum/tgs_version(\n #include "version.dm"\n)`
             if state.lexer.layout_suppressed() {
@@ -1479,6 +1507,13 @@ pub fn preprocess(arena: &StrArena, entry: impl AsRef<Path>) -> PreprocessResult
     Preprocessor::new(arena).run(entry)
 }
 
+/// [`preprocess`], reporting each opened file. Returning `false` from `progress` aborts the run.
+pub fn preprocess_with_progress<'a>(
+    arena: &'a StrArena, entry: impl AsRef<Path>, progress: impl FnMut(&Path) -> bool + 'a,
+) -> PreprocessResult<Preprocessed<'a>> {
+    Preprocessor::new(arena).with_progress(progress).run(entry)
+}
+
 pub fn render(tokens: &[Spanned<'_>]) -> String {
     let mut out = String::new();
 
@@ -1508,6 +1543,13 @@ mod tests {
     use super::*;
 
     fn pp(files: &[(&str, &str)]) -> String {
+        let (rendered, _) = pp_with_errors(files);
+
+        rendered
+    }
+
+    /// [`pp`], also handing back what the run complained about.
+    fn pp_with_errors(files: &[(&str, &str)]) -> (String, Vec<String>) {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
 
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -1524,9 +1566,53 @@ mod tests {
             .run(dir.join(files[0].0))
             .expect("preprocess");
         let rendered = render(&result.tokens);
+        let errors = result.errors.iter().map(ToString::to_string).collect();
         let _ = fs::remove_dir_all(&dir);
 
-        rendered
+        (rendered, errors)
+    }
+
+    fn indent_errors(source: &str) -> Vec<String> {
+        let (_, errors) = pp_with_errors(&[("a.dm", source)]);
+
+        errors
+            .into_iter()
+            .filter(|error| error.contains("inconsistent indentation"))
+            .collect()
+    }
+
+    #[test]
+    fn an_indented_directive_is_not_part_of_the_code_indentation() {
+        // The `#endif` lines up with the `#if`, not with anything the code opened.
+        assert_eq!(
+            indent_errors("\t#if 0\n\t\t#warn skipped\n\t#endif\n"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            indent_errors("\t#if 1\n\t\t#warn taken\n\t#endif\n"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_conditional_compiled_out_mid_block_leaves_the_indentation_alone() {
+        let source =
+            "/proc/a()\n\tif(1)\n#if 0\n\t\tskipped()\n\t\t\tdeeper()\n#endif\n\t\tone()\n\t\t\ttwo()\n\tthree()\n";
+
+        assert_eq!(indent_errors(source), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_real_indentation_mistake_is_still_reported_around_directives() {
+        // The dedent lands between two open blocks, which no directive explains away.
+        assert_eq!(
+            indent_errors("/proc/a()\n\tif(1)\n\t\t\tdeep()\n\t\tmiddle()\n").len(),
+            1
+        );
+        assert_eq!(
+            indent_errors("/proc/a()\n\tif(1)\n#if 0\n\t\tskipped()\n#endif\n\t\t\tdeep()\n\t\tmiddle()\n").len(),
+            1
+        );
     }
 
     #[test]
