@@ -299,6 +299,15 @@ impl<'a, 't> Parser<'a, 't> {
         !block
     }
 
+    fn at_operator_proc_name(&mut self) -> bool {
+        let checkpoint = self.cursor;
+        self.cursor += 1;
+        let operator_proc = self.parse_operator_name().is_ok() && self.peek_is(Token::ParenLeft);
+        self.cursor = checkpoint;
+
+        operator_proc
+    }
+
     fn parse_path(&mut self) -> ParseResult<TreePath> {
         let absolute = self.peek_is(Token::Slash);
         // `/datum/manipulator_task/cargo/dropoff_base/throw`
@@ -318,7 +327,7 @@ impl<'a, 't> Parser<'a, 't> {
                     self.advance()?;
                     segments.push(Identifier(s.to_string()));
                 },
-                Token::Soft(SoftKeyword::Operator) => {
+                Token::Soft(SoftKeyword::Operator) if self.at_operator_proc_name() => {
                     self.advance()?;
                     flags |= PathFlags::IS_PROC | PathFlags::IS_OPERATOR;
                     keyword_offset.get_or_insert(segments.len());
@@ -2093,6 +2102,40 @@ mod tests {
 
         let ast = parse_source("/proc/f()\n\tvar/matrix/final = null\n\tfinal.Turn(1)\n\tstep(src, 1)\n\tvar x = 1\n");
         assert_eq!(proc_body(&ast).len(), 4);
+    }
+
+    #[test]
+    fn operator_stays_usable_as_a_variable_and_path_name() {
+        let ast = parse_source(
+            "/datum/example\n\tvar/operator\n\tvar/mob/operator = null\n\tvar/operator[]\n/datum/operator/child\n",
+        );
+        let Declaration::Type { body, .. } = &ast.declarations[0] else {
+            panic!("expected a type declaration")
+        };
+
+        let Declaration::Var { path, var_type, .. } = &body[0] else {
+            panic!("expected an untyped variable")
+        };
+        assert_eq!(path.name().map(Identifier::as_str), Some("operator"));
+        assert!(var_type.is_none());
+        assert!(!path.flags.contains(PathFlags::IS_OPERATOR));
+
+        let Declaration::Var { path, var_type, .. } = &body[1] else {
+            panic!("expected a typed variable")
+        };
+        assert_eq!(path.name().map(Identifier::as_str), Some("operator"));
+        assert_eq!(var_type.as_ref().map(ToString::to_string).as_deref(), Some("/mob"));
+
+        let Declaration::Var { path, dimensions, .. } = &body[2] else {
+            panic!("expected an array variable")
+        };
+        assert_eq!(path.name().map(Identifier::as_str), Some("operator"));
+        assert_eq!(dimensions.len(), 1);
+
+        let Declaration::Type { path, .. } = &ast.declarations[1] else {
+            panic!("expected a type declaration with an operator segment")
+        };
+        assert_eq!(path.to_string(), "/datum/operator/child");
     }
 
     #[test]
