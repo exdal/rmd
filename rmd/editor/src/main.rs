@@ -1,8 +1,11 @@
 //! ```sh
+//! rmde
 //! rmde <file.dme> [file.dmm] [z]
 //! rmde <file.dme> [z]
 //! rmde <file.dmm> [z]
 //! ```
+//!
+//! With no arguments the editor opens on its welcome page, which can open a codebase or a map.
 
 mod camera;
 mod gizmo;
@@ -34,13 +37,19 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::{camera::Controller, session::Session, settings::Settings, ui::UiState};
+use crate::{
+    camera::Controller,
+    session::Session,
+    settings::Settings,
+    ui::{OpenRequest, UiState},
+};
 
 const FONT_DATA: &[u8] = include_bytes!("../assets/FiraMono-Regular.ttf");
 const MDI_FONT_DATA: &[u8] = include_bytes!("../assets/materialdesignicons-webfont.ttf");
 
 fn usage() -> ExitCode {
-    eprintln!("usage: rmde <file.dme> [file.dmm] [z]");
+    eprintln!("usage: rmde");
+    eprintln!("       rmde <file.dme> [file.dmm] [z]");
     eprintln!("       rmde <file.dme> [z]");
     eprintln!("       rmde <file.dmm> [z]");
 
@@ -58,28 +67,29 @@ fn main() -> ExitCode {
         },
     };
 
-    let settings = Settings::load();
+    let mut settings = Settings::load();
     let mut session = Session::new();
     settings.apply_to(&mut session.options);
-    if let Some(entry) = arguments.environment.as_ref()
-        && let Err(e) = session.load_environment(entry)
-    {
-        eprintln!("error: {e}");
+    if let Some(entry) = arguments.environment.as_ref() {
+        if let Err(e) = session.load_environment(entry) {
+            eprintln!("error: {e}");
 
-        return ExitCode::FAILURE;
+            return ExitCode::FAILURE;
+        }
+        settings.record_codebase(entry);
     }
 
-    let map = arguments.map.or_else(|| session.first_map());
-    let Some(map) = map else {
-        eprintln!("error: the environment includes no map, and none was named");
+    let named = arguments.map.is_some();
+    if let Some(map) = arguments.map.or_else(|| session.first_map()) {
+        if let Err(e) = session.open_map(&map, arguments.z) {
+            eprintln!("error: {}: {e}", map.display());
 
-        return ExitCode::FAILURE;
-    };
-
-    if let Err(e) = session.open_map(&map, arguments.z) {
-        eprintln!("error: {}: {e}", map.display());
-
-        return ExitCode::FAILURE;
+            if named {
+                return ExitCode::FAILURE;
+            }
+        } else {
+            settings.record_recent(arguments.environment.as_deref(), &map);
+        }
     }
 
     let ui = match UiState::new() {
@@ -138,6 +148,7 @@ struct Arguments {
 
 fn parse_arguments(arguments: &[PathBuf]) -> Result<Arguments, String> {
     let (environment, map, z) = match arguments {
+        [] => (None, None, 1),
         [entry] if is_map(entry) => (None, Some(entry.clone()), 1),
         [entry] => (Some(entry.clone()), None, 1),
         [entry, z] if is_map(entry) => (None, Some(entry.clone()), parse_z(z)?),
@@ -176,6 +187,16 @@ fn window_title(session: &Session) -> String {
         (None, Some(map)) => format!("Rapid Map Editor: {map}"),
         (None, None) => "Rapid Map Editor".to_string(),
     }
+}
+
+struct Redraw {
+    exit: bool,
+    open: Option<OpenRequest>,
+}
+
+enum Opened {
+    Codebase(PathBuf),
+    Map(PathBuf),
 }
 
 struct App {
@@ -235,7 +256,7 @@ impl App {
         Ok(())
     }
 
-    fn redraw(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
+    fn redraw(&mut self) -> Result<Redraw, Box<dyn std::error::Error>> {
         let Self {
             session,
             settings,
@@ -257,7 +278,10 @@ impl App {
             imgui.as_mut(),
             window.as_ref(),
         ) else {
-            return Ok(false);
+            return Ok(Redraw {
+                exit: false,
+                open: None,
+            });
         };
 
         let current = window_title(session);
@@ -267,8 +291,11 @@ impl App {
         }
 
         if *uploaded_texture_revision != Some(session.texture_revision()) {
-            renderer.upload_textures(&session.textures)?;
             *uploaded_texture_revision = Some(session.texture_revision());
+            if let Err(e) = renderer.upload_textures(&session.textures) {
+                eprintln!("error: {e}");
+                ui.set_open_error(Some(e.to_string()));
+            }
         }
 
         platform.prepare_frame(imgui, window)?;
@@ -294,7 +321,56 @@ impl App {
             }
         }
 
-        Ok(output.exit)
+        Ok(Redraw {
+            exit: output.exit,
+            open: output.open,
+        })
+    }
+
+    /// Carry out an open the welcome page asked for, then re-point the editor at the result.
+    fn apply_open(&mut self, request: OpenRequest) {
+        let resolved = match request {
+            OpenRequest::PickCodebase => self.pick_file("BYOND environment", "dme").map(Opened::Codebase),
+            OpenRequest::PickMap => self.pick_file("BYOND map", "dmm").map(Opened::Map),
+            OpenRequest::Codebase(path) => Some(Opened::Codebase(path)),
+            OpenRequest::Map(path) => Some(Opened::Map(path)),
+        };
+        let Some(resolved) = resolved else {
+            return;
+        };
+
+        let result = match &resolved {
+            Opened::Codebase(path) => self.session.load_environment(path),
+            Opened::Map(path) => self
+                .session
+                .open_map(path, 1)
+                .map_err(|e| format!("{}: {e}", path.display()).into()),
+        };
+        if let Err(e) = result {
+            eprintln!("error: {e}");
+            self.ui.set_open_error(Some(e.to_string()));
+
+            return;
+        }
+
+        self.ui.set_open_error(None);
+        match resolved {
+            Opened::Codebase(path) => self.settings.record_codebase(&path),
+            Opened::Map(path) => {
+                self.ui.request_refit();
+                self.settings.record_recent(self.session.environment_path(), &path);
+            },
+        }
+    }
+
+    fn pick_file(&self, label: &str, extension: &str) -> Option<PathBuf> {
+        let dialog = rfd::FileDialog::new().add_filter(label, &[extension]);
+        let dialog = match self.window.as_ref() {
+            Some(window) => dialog.set_parent(window),
+            None => dialog,
+        };
+
+        dialog.pick_file()
     }
 
     fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -367,16 +443,23 @@ impl ApplicationHandler for App {
             },
 
             WindowEvent::RedrawRequested => {
-                let exit = match self.redraw() {
-                    Ok(exit) => exit,
+                let redraw = match self.redraw() {
+                    Ok(redraw) => redraw,
                     Err(e) => {
                         eprintln!("error: {e}");
 
-                        false
+                        Redraw {
+                            exit: false,
+                            open: None,
+                        }
                     },
                 };
 
-                if exit {
+                if let Some(request) = redraw.open {
+                    self.apply_open(request);
+                }
+
+                if redraw.exit {
                     if let Err(e) = self.shutdown() {
                         eprintln!("error: {e}");
                     }
@@ -466,8 +549,19 @@ mod tests {
     }
 
     #[test]
+    fn no_arguments_open_nothing() {
+        assert_eq!(
+            parse(&[]),
+            Ok(Arguments {
+                environment: None,
+                map: None,
+                z: 1,
+            })
+        );
+    }
+
+    #[test]
     fn rejects_invalid_arguments_and_levels() {
-        assert!(parse(&[]).is_err());
         assert!(parse(&["map.dmm", "0"]).is_err());
         assert!(parse(&["map.dmm", "two"]).is_err());
         assert!(parse(&["environment.dme", "not-a-map", "2"]).is_err());

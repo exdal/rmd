@@ -10,6 +10,8 @@ use dear_imgui_rs::{Key, Ui};
 use editor::frame::FrameOptions;
 use serde::{Deserialize, Serialize};
 
+const MAX_RECENT: usize = 10;
+
 pub(crate) const BINDABLE_KEYS: &[Key] = &[
     Key::Tab,
     Key::LeftArrow,
@@ -357,7 +359,14 @@ impl KeyBindings {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct RecentMap {
+    pub map: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
     pub show_areas: bool,
@@ -365,6 +374,8 @@ pub(crate) struct Settings {
     pub tile_place_flash: bool,
     pub selection_guide_line: bool,
     pub keybindings: KeyBindings,
+    pub recent_codebases: Vec<PathBuf>,
+    pub recent: Vec<RecentMap>,
 }
 
 impl Default for Settings {
@@ -375,6 +386,8 @@ impl Default for Settings {
             tile_place_flash: true,
             selection_guide_line: true,
             keybindings: KeyBindings::default(),
+            recent_codebases: Vec::new(),
+            recent: Vec::new(),
         }
     }
 }
@@ -407,6 +420,43 @@ impl Settings {
         self.show_area_outlines = options.show_area_outlines;
     }
 
+    pub fn record_recent(&mut self, environment: Option<&Path>, map: &Path) {
+        self.push_recent(environment, map);
+        self.save();
+    }
+
+    fn push_recent(&mut self, environment: Option<&Path>, map: &Path) {
+        let entry = RecentMap {
+            map: absolute(map),
+            environment: environment.map(absolute),
+        };
+
+        self.recent.retain(|recent| recent.map != entry.map);
+        self.recent.insert(0, entry);
+        self.recent.truncate(MAX_RECENT);
+    }
+
+    pub fn record_codebase(&mut self, codebase: &Path) {
+        self.push_codebase(codebase);
+        self.save();
+    }
+
+    fn push_codebase(&mut self, codebase: &Path) {
+        let codebase = absolute(codebase);
+
+        self.recent_codebases.retain(|recent| *recent != codebase);
+        self.recent_codebases.insert(0, codebase);
+        self.recent_codebases.truncate(MAX_RECENT);
+    }
+
+    pub fn recent_maps_for(&self, environment: &Path) -> impl Iterator<Item = &RecentMap> {
+        let environment = absolute(environment);
+
+        self.recent
+            .iter()
+            .filter(move |recent| recent.environment.as_deref() == Some(environment.as_path()))
+    }
+
     fn try_load() -> Result<Self, Box<dyn Error>> {
         let path = settings_path()?;
         let source = match fs::read_to_string(&path) {
@@ -428,6 +478,8 @@ impl Settings {
         Ok(())
     }
 }
+
+fn absolute(path: &Path) -> PathBuf { std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()) }
 
 fn settings_path() -> io::Result<PathBuf> {
     #[cfg(target_os = "windows")]
@@ -464,6 +516,8 @@ mod tests {
                 tile_place_flash: true,
                 selection_guide_line: true,
                 keybindings: KeyBindings::default(),
+                recent_codebases: Vec::new(),
+                recent: Vec::new(),
             }
         );
     }
@@ -514,6 +568,8 @@ mod tests {
             tile_place_flash: false,
             selection_guide_line: false,
             keybindings: KeyBindings::default(),
+            recent_codebases: Vec::new(),
+            recent: Vec::new(),
         };
         settings.keybindings.rebind(
             KeybindAction::ShowAreas,
@@ -541,6 +597,8 @@ mod tests {
             tile_place_flash: false,
             selection_guide_line: false,
             keybindings: KeyBindings::default(),
+            recent_codebases: Vec::new(),
+            recent: Vec::new(),
         };
         let mut options = FrameOptions::default();
 
@@ -574,6 +632,129 @@ mod tests {
 
         assert_eq!(bindings.get(KeybindAction::ShowAreas), KeyBinding::new(Key::W));
         assert_eq!(bindings.get(KeybindAction::PlaceTool), KeyBinding::new(Key::A));
+    }
+
+    #[test]
+    fn recent_maps_move_to_the_front_without_duplicating() {
+        let mut settings = Settings::default();
+        let env = Path::new("station.dme");
+
+        settings.push_recent(Some(env), Path::new("a.dmm"));
+        settings.push_recent(Some(env), Path::new("b.dmm"));
+        settings.push_recent(Some(env), Path::new("a.dmm"));
+
+        assert_eq!(
+            settings.recent,
+            vec![
+                RecentMap {
+                    map: absolute(Path::new("a.dmm")),
+                    environment: Some(absolute(env)),
+                },
+                RecentMap {
+                    map: absolute(Path::new("b.dmm")),
+                    environment: Some(absolute(env)),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recent_entries_are_stored_absolute_so_they_survive_a_different_working_directory() {
+        let mut settings = Settings::default();
+
+        settings.push_recent(Some(Path::new("env/test.dme")), Path::new("env/test.dmm"));
+
+        assert!(settings.recent[0].map.is_absolute());
+        assert!(
+            settings.recent[0]
+                .environment
+                .as_ref()
+                .is_some_and(|path| path.is_absolute())
+        );
+    }
+
+    #[test]
+    fn the_same_map_named_two_ways_is_one_recent_entry() {
+        let mut settings = Settings::default();
+        let relative = Path::new("maps/station.dmm");
+
+        settings.push_recent(None, relative);
+        settings.push_recent(None, &absolute(relative));
+
+        assert_eq!(settings.recent.len(), 1);
+    }
+
+    #[test]
+    fn recent_maps_remember_a_map_opened_without_an_environment() {
+        let mut settings = Settings::default();
+
+        settings.push_recent(None, Path::new("lone.dmm"));
+
+        assert_eq!(settings.recent[0].environment, None);
+    }
+
+    #[test]
+    fn the_recent_list_is_capped() {
+        let mut settings = Settings::default();
+
+        for index in 0..MAX_RECENT + 5 {
+            settings.push_recent(None, Path::new(&format!("map{index}.dmm")));
+        }
+
+        assert_eq!(settings.recent.len(), MAX_RECENT);
+        assert_eq!(settings.recent[0].map, absolute(Path::new("map14.dmm")));
+    }
+
+    #[test]
+    fn recent_maps_round_trip_through_toml() {
+        let mut settings = Settings::default();
+        settings.push_recent(Some(Path::new("station.dme")), Path::new("station.dmm"));
+        let encoded = toml::to_string_pretty(&settings).unwrap();
+
+        assert_eq!(toml::from_str::<Settings>(&encoded).unwrap(), settings);
+    }
+
+    #[test]
+    fn recent_codebases_move_to_the_front_without_duplicating() {
+        let mut settings = Settings::default();
+
+        settings.push_codebase(Path::new("a.dme"));
+        settings.push_codebase(Path::new("b.dme"));
+        settings.push_codebase(Path::new("a.dme"));
+
+        assert_eq!(
+            settings.recent_codebases,
+            vec![absolute(Path::new("a.dme")), absolute(Path::new("b.dme"))]
+        );
+    }
+
+    #[test]
+    fn recent_maps_are_filtered_to_one_codebase() {
+        let mut settings = Settings::default();
+        let station = Path::new("station.dme");
+
+        settings.push_recent(Some(station), Path::new("one.dmm"));
+        settings.push_recent(Some(Path::new("other.dme")), Path::new("two.dmm"));
+        settings.push_recent(Some(station), Path::new("three.dmm"));
+
+        let maps = settings
+            .recent_maps_for(station)
+            .map(|recent| &recent.map)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            maps,
+            [&absolute(Path::new("three.dmm")), &absolute(Path::new("one.dmm"))]
+        );
+    }
+
+    #[test]
+    fn a_map_opened_without_a_codebase_belongs_to_no_codebase() {
+        let mut settings = Settings::default();
+
+        settings.push_recent(None, Path::new("lone.dmm"));
+
+        assert_eq!(settings.recent_maps_for(Path::new("station.dme")).count(), 0);
     }
 
     #[test]

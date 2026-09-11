@@ -25,3 +25,4 @@ dear-imgui-rs = { version = "=0.17.0", features = ["serde"] }
 dear-imgui-winit = "=0.17.0"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+rfd = "0.17.2"

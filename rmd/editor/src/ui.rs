@@ -1,7 +1,7 @@
 use core::path::TreePath;
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use dear_imgui_rs::{
@@ -20,6 +20,7 @@ use dear_imgui_rs::{
     WindowFlags,
     WindowKey,
     WindowKeyError,
+    WindowLabel,
 };
 use dmm::{Coord, MapFormat, Prefab};
 use editor::{
@@ -52,7 +53,7 @@ use crate::{
 /// How far down the "Blur below" menu goes. The option itself takes any depth.
 const MAX_UNDERLAY_DEPTH: u32 = 3;
 
-const DOCKSPACE_ID: &str = "rmd-main-dockspace";
+const DOCKSPACE_ID: &str = "rmd-main-dockspace-v2";
 const OVERLAY_PADDING: f32 = 4.0;
 const OVERLAY_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 const RECENT_ICON_SIZE: f32 = 48.0;
@@ -66,6 +67,10 @@ const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warning";
 const SAVE_MAP_POPUP: &str = "Save map##save-map";
 const SAVE_MAP_PATH_WIDTH: f32 = 460.0;
 const SAVE_ERROR_COLOR: [f32; 4] = [1.0, 0.4, 0.4, 1.0];
+const WELCOME_TITLE_SIZE: f32 = 40.0;
+const WELCOME_CONTENT_WIDTH: f32 = 640.0;
+const WELCOME_MIN_INDENT: f32 = 24.0;
+const WELCOME_MAP_PREVIEW: usize = 10;
 const BLOCK_SELECTION_POPUP: &str = "Block selection##block-selection";
 const BLOCK_SELECTION_GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 const BLOCK_SELECTION_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -178,6 +183,15 @@ pub struct UiOutput {
     pub exit: bool,
     pub viewport: (u32, u32),
     pub interaction: ViewportInteraction,
+    pub open: Option<OpenRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenRequest {
+    PickCodebase,
+    PickMap,
+    Codebase(PathBuf),
+    Map(PathBuf),
 }
 
 #[derive(Debug, Default)]
@@ -220,6 +234,7 @@ impl ObjectTreeFilter {
 pub struct UiState {
     object_tree: WindowKey,
     viewport_window: WindowKey,
+    welcome_window: WindowKey,
     inspector_window: WindowKey,
     settings_window: WindowKey,
     layout: DockLayout,
@@ -242,6 +257,10 @@ pub struct UiState {
     viewport: (u32, u32),
     initial_refit: bool,
     show_settings: bool,
+    show_welcome: bool,
+    welcome_map_filter: String,
+    welcome_maps_expanded: bool,
+    open_error: Option<String>,
     capturing_keybind: Option<KeybindAction>,
 }
 
@@ -249,6 +268,7 @@ impl UiState {
     pub fn new() -> Result<Self, WindowKeyError> {
         let object_tree = WindowKey::new("object-tree", "Object tree")?;
         let viewport_window = WindowKey::new("viewport", "Viewport")?;
+        let welcome_window = WindowKey::new("welcome", "Welcome")?;
         let inspector_window = WindowKey::new("inspector", "Inspector")?;
         let settings_window = WindowKey::new("settings", "Settings")?;
         let layout = DockLayout::split(
@@ -259,13 +279,14 @@ impl UiState {
                 DockSplit::Right,
                 0.20 / 0.75,
                 DockLayout::tabs([&inspector_window]),
-                DockLayout::tabs([&viewport_window]),
+                DockLayout::tabs([&welcome_window, &viewport_window]),
             ),
         );
 
         Ok(Self {
             object_tree,
             viewport_window,
+            welcome_window,
             inspector_window,
             settings_window,
             layout,
@@ -288,9 +309,17 @@ impl UiState {
             viewport: (1, 1),
             initial_refit: true,
             show_settings: false,
+            show_welcome: true,
+            welcome_map_filter: String::new(),
+            welcome_maps_expanded: false,
+            open_error: None,
             capturing_keybind: None,
         })
     }
+
+    pub fn set_open_error(&mut self, error: Option<String>) { self.open_error = error; }
+
+    pub fn request_refit(&mut self) { self.initial_refit = true; }
 
     pub fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, camera: &mut Controller,
@@ -303,6 +332,8 @@ impl UiState {
             .build()?;
 
         let mut exit = false;
+        let mut open = None;
+        let mut show_welcome = false;
         let mut open_save_dialog = false;
         let mut toggle_areas = false;
         let mut toggle_area_outlines = false;
@@ -321,10 +352,20 @@ impl UiState {
 
         ui.main_menu_bar(|| {
             ui.menu("File", || {
+                if ui.menu_item_enabled_selected_no_shortcut("Open codebase...", false, session.tree().is_none()) {
+                    open = Some(OpenRequest::PickCodebase);
+                }
+                if ui.menu_item_enabled_selected_no_shortcut("Open map...", false, session.tree().is_some()) {
+                    open = Some(OpenRequest::PickMap);
+                }
+                ui.separator();
                 if ui.menu_item_enabled_selected_no_shortcut("Save...", false, session.map().is_some()) {
                     open_save_dialog = true;
                 }
                 ui.separator();
+                if ui.menu_item("Welcome") {
+                    show_welcome = true;
+                }
                 if ui.menu_item("Settings...") {
                     self.show_settings = true;
                 }
@@ -413,9 +454,16 @@ impl UiState {
             session,
             settings,
         );
+        self.show_welcome |= show_welcome;
+
         self.draw_object_tree(ui, session);
         self.draw_inspector(ui, session);
-        exit |= self.draw_viewport(ui, session, settings, camera, &mut interaction, &mut refit);
+        self.draw_welcome(ui, session, settings, &mut open);
+        exit |= if session.map().is_some() {
+            self.draw_viewport(ui, session, settings, camera, &mut interaction, &mut refit)
+        } else {
+            ui.is_key_pressed(Key::Escape) && self.save_dialog.is_none() && self.capturing_keybind.is_none()
+        };
         finish_keybind_capture(ui, &mut self.capturing_keybind, &mut settings.keybindings);
         interaction.selection_guide = settings
             .selection_guide_line
@@ -426,7 +474,129 @@ impl UiState {
             exit,
             viewport: self.viewport,
             interaction,
+            open,
         })
+    }
+
+    fn draw_welcome(&mut self, ui: &Ui, session: &Session, settings: &Settings, open: &mut Option<OpenRequest>) {
+        if !self.show_welcome {
+            return;
+        }
+
+        let show_welcome = &mut self.show_welcome;
+        let map_filter = &mut self.welcome_map_filter;
+        let maps_expanded = &mut self.welcome_maps_expanded;
+        let open_error = self.open_error.as_deref();
+        let codebase = session.environment_path();
+        let subtitle = match codebase {
+            Some(codebase) => codebase.display().to_string(),
+            None => String::from("A map editor for BYOND environments"),
+        };
+        ui.window(&self.welcome_window).opened(show_welcome).build(|| {
+            let indent = ((ui.content_region_avail()[0] - WELCOME_CONTENT_WIDTH) / 2.0).max(WELCOME_MIN_INDENT);
+            ui.dummy([0.0, WELCOME_MIN_INDENT]);
+            ui.indent_by(indent);
+
+            {
+                let _font = ui.push_font_with_size(None, WELCOME_TITLE_SIZE);
+                ui.text("Rapid Map Editor");
+            }
+            ui.text_disabled(&subtitle);
+
+            if let Some(error) = open_error {
+                ui.dummy([0.0, WELCOME_MIN_INDENT]);
+                ui.text_colored(SAVE_ERROR_COLOR, error);
+            }
+
+            ui.dummy([0.0, WELCOME_MIN_INDENT]);
+
+            match codebase {
+                None => {
+                    ui.text("Start");
+                    if ui.text_link("Open codebase...") {
+                        *open = Some(OpenRequest::PickCodebase);
+                    }
+
+                    ui.dummy([0.0, WELCOME_MIN_INDENT]);
+                    ui.text("Recent codebases");
+                    if settings.recent_codebases.is_empty() {
+                        ui.text_disabled("No recent codebases");
+                    }
+                    for (index, recent) in settings.recent_codebases.iter().enumerate() {
+                        if ui.text_link(format!("{}##codebase-{index}", recent.display())) {
+                            *open = Some(OpenRequest::Codebase(recent.clone()));
+                        }
+                    }
+                },
+
+                Some(codebase) => {
+                    let base = session.codebase_dir().unwrap_or(codebase);
+
+                    ui.text("Start");
+                    if ui.text_link("Open map...") {
+                        *open = Some(OpenRequest::PickMap);
+                    }
+
+                    ui.dummy([0.0, WELCOME_MIN_INDENT]);
+                    ui.text("Recent maps");
+                    let mut empty = true;
+                    for (index, recent) in settings.recent_maps_for(codebase).enumerate() {
+                        empty = false;
+                        let label = codebase_relative(base, &recent.map);
+                        if ui.text_link(format!("{label}##recent-{index}")) {
+                            *open = Some(OpenRequest::Map(recent.map.clone()));
+                        }
+                    }
+                    
+                    if empty {
+                        ui.text_disabled("No recent maps in this codebase");
+                    }
+
+                    ui.dummy([0.0, WELCOME_MIN_INDENT]);
+                    ui.text("Maps");
+                    if session.maps().is_empty() {
+                        ui.text_disabled("No maps found in this codebase");
+                    } else {
+                        ui.set_next_item_width(WELCOME_CONTENT_WIDTH);
+                        ui.input_text("##welcome-map-filter", map_filter)
+                            .hint("Filter maps")
+                            .build();
+                    }
+
+                    let needle = map_filter.trim().to_ascii_lowercase();
+                    let matching = session
+                        .maps()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, map)| map_matches(base, map, &needle));
+                    let limit = if *maps_expanded {
+                        usize::MAX
+                    } else {
+                        WELCOME_MAP_PREVIEW
+                    };
+                    
+                    let mut shown = 0;
+                    for (index, map) in matching.clone().take(limit) {
+                        shown += 1;
+                        if ui.text_link(format!("{}##map-{index}", codebase_relative(base, map))) {
+                            *open = Some(OpenRequest::Map(map.clone()));
+                        }
+                    }
+
+                    if shown == 0 && !session.maps().is_empty() {
+                        ui.text_disabled("No maps match the filter");
+                    }
+                    let hidden = matching.count().saturating_sub(shown);
+                    if hidden > 0 {
+                        if ui.text_link(format!("Show more... ({hidden})")) {
+                            *maps_expanded = true;
+                        }
+                    } else if *maps_expanded && shown > WELCOME_MAP_PREVIEW && ui.text_link("Show less") {
+                        *maps_expanded = false;
+                    }
+                },
+            }
+        });
     }
 
     fn draw_object_tree(&mut self, ui: &Ui, session: &mut Session) {
@@ -510,7 +680,16 @@ impl UiState {
         interaction: &mut ViewportInteraction, refit: &mut bool,
     ) -> bool {
         let mut exit = false;
-        ui.window(&self.viewport_window).build(|| {
+        let title = session
+            .map_path()
+            .and_then(Path::file_name)
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        let window = if title.is_empty() {
+            WindowLabel::from(&self.viewport_window)
+        } else {
+            self.viewport_window.label(title.as_str())
+        };
+        ui.window(window).build(|| {
             let (image_size, viewport) = panel_extent(ui.content_region_avail());
             self.viewport = viewport;
             camera.resize(viewport.0, viewport.1);
@@ -987,6 +1166,14 @@ impl UiState {
             self.inspector.draw(ui, session);
         });
     }
+}
+
+fn map_matches(base: &Path, map: &Path, needle: &str) -> bool {
+    needle.is_empty() || codebase_relative(base, map).to_ascii_lowercase().contains(needle)
+}
+
+fn codebase_relative(base: &Path, path: &Path) -> String {
+    path.strip_prefix(base).unwrap_or(path).display().to_string()
 }
 
 fn draw_settings_window(
@@ -2052,6 +2239,66 @@ mod tests {
         assert!(state.custom_fill_search.is_empty());
         assert!(state.pending_fill_warning.is_none());
         assert!(state.save_dialog.is_none());
+        assert!(state.show_welcome);
+        assert!(state.open_error.is_none());
+    }
+
+    #[test]
+    fn the_welcome_window_shares_the_central_node_with_the_viewport() {
+        let state = UiState::new().expect("valid window keys");
+        let DockLayout::Split { second, .. } = &state.layout else {
+            panic!("the root is split between the object tree and everything else");
+        };
+        let DockLayout::Split { second, .. } = second.as_ref() else {
+            panic!("the remainder is split between the inspector and the central node");
+        };
+
+        assert_eq!(
+            second.as_ref(),
+            &DockLayout::tabs([&state.welcome_window, &state.viewport_window])
+        );
+    }
+
+    #[test]
+    fn a_map_reads_as_its_path_inside_the_codebase() {
+        let base = Path::new("/tg");
+        let map = PathBuf::from("/tg/_maps/map_files/station.dmm");
+
+        assert_eq!(
+            codebase_relative(base, &map),
+            Path::new("_maps/map_files/station.dmm").display().to_string()
+        );
+    }
+
+    #[test]
+    fn the_map_filter_matches_any_part_of_the_codebase_relative_path() {
+        let base = Path::new("/tg");
+        let map = Path::new("/tg/_maps/map_files/MetaStation/MetaStation.dmm");
+
+        assert!(map_matches(base, map, ""), "an empty filter keeps everything");
+        assert!(map_matches(base, map, "metastation"), "matching ignores case");
+        assert!(map_matches(base, map, "map_files"), "a directory segment matches");
+        assert!(!map_matches(base, map, "deltastation"));
+    }
+
+    #[test]
+    fn the_map_filter_does_not_match_the_codebase_directory_itself() {
+        // The label is relative, so a codebase living under a directory called "maps" must not make
+        // every one of its maps match the word.
+        let base = Path::new("/home/maps/tg");
+        let map = Path::new("/home/maps/tg/station.dmm");
+
+        assert!(!map_matches(base, map, "home"));
+    }
+
+    #[test]
+    fn a_map_outside_the_codebase_keeps_its_full_path() {
+        let outside = PathBuf::from("/elsewhere/station.dmm");
+
+        assert_eq!(
+            codebase_relative(Path::new("/tg"), &outside),
+            outside.display().to_string()
+        );
     }
 
     #[test]

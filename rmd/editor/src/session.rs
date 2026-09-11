@@ -96,6 +96,7 @@ pub struct Session {
     revision: u64,
     frame_update: Option<FrameUpdate>,
     texture_revision: u64,
+    maps: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +118,7 @@ impl Session {
             revision: 0,
             frame_update: None,
             texture_revision: 0,
+            maps: Vec::new(),
         }
     }
 
@@ -137,6 +139,7 @@ impl Session {
             .collect();
         self.texture_revision = self.texture_revision.wrapping_add(1);
         self.type_visibility = TypeVisibility::default();
+        self.maps = discover_maps(environment.base_dir());
         self.state.environment = Some(environment);
         if self.state.active_document().is_some() {
             self.rebuild_instances();
@@ -203,6 +206,17 @@ impl Session {
             .as_text()
             .filter(|name| !name.is_empty())
     }
+
+    pub fn environment_path(&self) -> Option<&Path> {
+        self.state
+            .environment
+            .as_ref()
+            .map(|environment| environment.root.as_path())
+    }
+
+    pub fn codebase_dir(&self) -> Option<&Path> { self.state.environment.as_ref().map(Environment::base_dir) }
+
+    pub fn maps(&self) -> &[PathBuf] { &self.maps }
 
     pub fn map_path(&self) -> Option<&Path> {
         self.state
@@ -1271,6 +1285,48 @@ fn validate_level(z: u32, levels: u32) -> std::io::Result<()> {
     Ok(())
 }
 
+fn discover_maps(root: &Path) -> Vec<PathBuf> {
+    let mut maps = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+
+            if kind.is_dir() {
+                if !is_hidden(&path) {
+                    pending.push(path);
+                }
+            } else if kind.is_file() && is_map(&path) {
+                maps.push(path);
+            }
+        }
+    }
+
+    maps.sort();
+
+    maps
+}
+
+fn is_hidden(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with('.'))
+}
+
+fn is_map(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("dmm"))
+}
+
 fn build_textures(environment: &Environment) -> TextureCatalog {
     let mut textures = TextureCatalog::default();
     let base = environment.base_dir();
@@ -1338,12 +1394,41 @@ mod tests {
     use objtree::ObjectTree;
     use render::SpriteInstance;
 
-    use super::{FillOutcome, Session, build_textures, directional_type_target, directional_types_for, validate_level};
+    use super::{
+        FillOutcome,
+        Session,
+        build_textures,
+        directional_type_target,
+        directional_types_for,
+        discover_maps,
+        validate_level,
+    };
 
     fn examples() -> PathBuf {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
 
         path.canonicalize().unwrap_or(path)
+    }
+
+    #[test]
+    fn map_discovery_finds_maps_the_environment_never_includes() {
+        let maps = discover_maps(&examples());
+
+        assert!(
+            maps.iter().any(|map| map.ends_with("test.dmm")),
+            "expected test.dmm in {maps:?}"
+        );
+        assert!(maps.iter().all(|map| map.extension().is_some_and(|e| e == "dmm")));
+    }
+
+    #[test]
+    fn map_discovery_is_sorted_and_skips_missing_roots() {
+        let maps = discover_maps(&examples());
+        let mut sorted = maps.clone();
+        sorted.sort();
+
+        assert_eq!(maps, sorted);
+        assert!(discover_maps(&examples().join("does-not-exist")).is_empty());
     }
 
     fn focus_session() -> Session {

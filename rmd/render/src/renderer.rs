@@ -77,6 +77,7 @@ const SPRITE_AREA_EDGE_SHIFT: u32 = 1;
 const SPRITE_FLAGS_SHIFT: u32 = 27;
 const SPRITE_TEXTURE_MASK: u32 = (1 << SPRITE_FLAGS_SHIFT) - 1;
 const SPRITE_TEXTURE_CAPACITY: u32 = SPRITE_TEXTURE_MASK + 1;
+const TEXTURE_RESERVE: usize = 8192;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -247,7 +248,8 @@ impl Renderer {
 
     pub fn new(device: Device, width: u32, height: u32, texture_capacity: usize) -> Result<Self, GpuError> {
         let texture_limit = device.max_bindless_textures.min(SPRITE_TEXTURE_CAPACITY);
-        let texture_capacity = descriptor_capacity(texture_capacity, texture_limit)?;
+        let reserve = TEXTURE_RESERVE.min(texture_limit as usize);
+        let texture_capacity = descriptor_capacity(texture_capacity.max(reserve), texture_limit)?;
         let bindless = BindlessDescriptorSet::create(&device, texture_capacity)?;
         let mut graph = RenderGraph::new(&device.context);
 
