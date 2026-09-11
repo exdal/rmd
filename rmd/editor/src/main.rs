@@ -15,7 +15,7 @@ mod settings;
 mod transform;
 mod ui;
 
-use std::{path::PathBuf, process::ExitCode, sync::Arc};
+use std::{fs, path::PathBuf, process::ExitCode, sync::Arc};
 
 use dear_imgui_rs::{
     BackendFlags,
@@ -40,7 +40,7 @@ use winit::{
 use crate::{
     camera::Controller,
     session::Session,
-    settings::Settings,
+    settings::{Settings, imgui_ini_path},
     ui::{OpenRequest, UiState},
 };
 
@@ -231,7 +231,11 @@ impl App {
             FontSource::stb_truetype_with_size(mdi_font, 16.0),
         ]);
 
-        imgui.set_ini_filename(Some("imgui.ini"))?;
+        let ini_filename = imgui_ini_path()?;
+        if let Some(parent) = ini_filename.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        imgui.set_ini_filename(Some(ini_filename))?;
         imgui.set_renderer_name(Some("rmd vir"))?;
         let config = imgui.io().config_flags() | ConfigFlags::DOCKING_ENABLE;
         imgui.io_mut().set_config_flags(config);

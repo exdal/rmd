@@ -494,6 +494,8 @@ fn settings_path() -> io::Result<PathBuf> {
     Ok(settings_path_from(Path::new(&root), cfg!(target_os = "windows")))
 }
 
+pub(crate) fn imgui_ini_path() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("imgui.ini")) }
+
 fn settings_path_from(root: &Path, windows: bool) -> PathBuf {
     if windows {
         root.join("rmd/settings.toml")
@@ -763,5 +765,13 @@ mod tests {
 
         assert_eq!(settings_path_from(root, true), root.join("rmd/settings.toml"));
         assert_eq!(settings_path_from(root, false), root.join(".config/rmd/settings.toml"));
+        assert_eq!(
+            settings_path_from(root, true).with_file_name("imgui.ini"),
+            root.join("rmd/imgui.ini")
+        );
+        assert_eq!(
+            settings_path_from(root, false).with_file_name("imgui.ini"),
+            root.join(".config/rmd/imgui.ini")
+        );
     }
 }
