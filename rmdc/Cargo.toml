@@ -1,0 +1,19 @@
+[package]
+name = "rmdc"
+version = "1.0.0"
+edition = "2024"
+resolver = "3"
+
+[[bin]]
+name = "rmdc"
+path = "src/main.rs"
+
+[dependencies]
+core = { path = "../rmd/core" }
+lexer = { path = "../rmd/lexer" }
+preprocessor = { path = "../rmd/preprocessor" }
+ast = { path = "../rmd/ast" }
+sema = { path = "../rmd/sema" }
+objtree = { path = "../rmd/objtree" }
+dmm = { path = "../rmd/dmm" }
+dmi = { path = "../rmd/dmi" }

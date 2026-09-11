@@ -52,7 +52,7 @@ use crate::{
 /// How far down the "Blur below" menu goes. The option itself takes any depth.
 const MAX_UNDERLAY_DEPTH: u32 = 3;
 
-const DOCKSPACE_ID: &str = "dmed-main-dockspace";
+const DOCKSPACE_ID: &str = "rmd-main-dockspace";
 const OVERLAY_PADDING: f32 = 4.0;
 const OVERLAY_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 const RECENT_ICON_SIZE: f32 = 48.0;

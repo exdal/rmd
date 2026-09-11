@@ -1,4 +1,4 @@
-# dmed
+# rmd
 
 A map editor for Space Station 13.
 

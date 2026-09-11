@@ -4,7 +4,7 @@ version = "1.0.0"
 edition = "2024"
 
 [[bin]]
-name = "dmedv"
+name = "rmdv"
 path = "src/main.rs"
 
 [dependencies]

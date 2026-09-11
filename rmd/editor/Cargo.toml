@@ -7,7 +7,7 @@ edition = "2024"
 path = "src/lib.rs"
 
 [[bin]]
-name = "dmede"
+name = "rmde"
 path = "src/main.rs"
 
 [dependencies]

@@ -886,7 +886,7 @@ mod tests {
 
     #[test]
     fn save_as_writes_the_chosen_format_and_retargets_the_document() {
-        let dir = std::env::temp_dir().join(format!("dmed-save-as-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rmd-save-as-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let original = dir.join("original.dmm");
         let exported = dir.join("exported.dmm");

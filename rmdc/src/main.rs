@@ -1,12 +1,12 @@
 //! Frontend driver. The editor is a library; this is how the compiler gets exercised without one.
 //!
 //! ```text
-//! dmedc tokens <file.dm>     dump the token stream, layout tokens included
-//! dmedc pp     <file.dme>    preprocess and print the flattened source back out
-//! dmedc tree   <file.dme>    preprocess, parse and print the object tree
-//! dmedc map    <file.dmm>    parse a map and summarise it
-//! dmedc roundtrip <file.dmm> parse a map, write it back out and diff the bytes
-//! dmedc icon   <file.dmi>    decode an icon and list its states
+//! rmdc tokens <file.dm>     dump the token stream, layout tokens included
+//! rmdc pp     <file.dme>    preprocess and print the flattened source back out
+//! rmdc tree   <file.dme>    preprocess, parse and print the object tree
+//! rmdc map    <file.dmm>    parse a map and summarise it
+//! rmdc roundtrip <file.dmm> parse a map, write it back out and diff the bytes
+//! rmdc icon   <file.dmi>    decode an icon and list its states
 //! ```
 
 use core::{
@@ -24,7 +24,7 @@ use dmi::{IconFile, metadata::IconState};
 use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
 
 fn usage() -> ExitCode {
-    eprintln!("usage: dmedc <tokens|pp|tree|map|roundtrip|icon> <file>");
+    eprintln!("usage: rmdc <tokens|pp|tree|map|roundtrip|icon> <file>");
 
     ExitCode::FAILURE
 }

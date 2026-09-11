@@ -113,7 +113,7 @@ fn create_instance(entry: &ash::Entry, window: RawWindowHandle) -> Result<ash::I
     let pointers = extensions.iter().map(|name| name.as_ptr()).collect::<Vec<_>>();
 
     let app_info = vk::ApplicationInfo::default()
-        .application_name(c"dmed")
+        .application_name(c"rmd")
         .application_version(vk::make_api_version(0, 0, 0, 0))
         .engine_name(c"vir")
         .engine_version(vk::make_api_version(0, 0, 0, 0))

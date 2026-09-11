@@ -3,7 +3,7 @@
 A minimal DM environment for exercising the viewer and `render`'s end-to-end test:
 
 ```sh
-cargo run --bin dmedv -- examples/env/test.dme
+cargo run --bin rmdv -- examples/env/test.dme
 ```
 
 `icons/test.dmi` is generated, not drawn: a 128x32 sheet of four 32x32 states (`floor`, `wall`,

@@ -393,20 +393,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dmedc"
-version = "1.0.0"
-dependencies = [
- "ast",
- "core",
- "dmi",
- "dmm",
- "lexer",
- "objtree",
- "preprocessor",
- "sema",
-]
-
-[[package]]
 name = "dmi"
 version = "1.0.0"
 dependencies = [
@@ -1363,6 +1349,20 @@ dependencies = [
  "raw-window-handle",
  "shader-slang",
  "vir",
+]
+
+[[package]]
+name = "rmdc"
+version = "1.0.0"
+dependencies = [
+ "ast",
+ "core",
+ "dmi",
+ "dmm",
+ "lexer",
+ "objtree",
+ "preprocessor",
+ "sema",
 ]
 
 [[package]]

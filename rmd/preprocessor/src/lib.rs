@@ -1511,7 +1511,7 @@ mod tests {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
 
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("dmed-pp-{}-{id}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rmd-pp-{}-{id}", std::process::id()));
         fs::create_dir_all(&dir).expect("temp dir");
 
         for (name, source) in files {
@@ -1716,7 +1716,7 @@ mod tests {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
 
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("dmed-prelude-{}-{id}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rmd-prelude-{}-{id}", std::process::id()));
         fs::create_dir_all(&dir).expect("temp dir");
 
         fs::write(dir.join("first.dm"), "#define FROM_FIRST 1\n").expect("write first");

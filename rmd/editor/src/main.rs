@@ -1,7 +1,7 @@
 //! ```sh
-//! dmede <file.dme> [file.dmm] [z]
-//! dmede <file.dme> [z]
-//! dmede <file.dmm> [z]
+//! rmde <file.dme> [file.dmm] [z]
+//! rmde <file.dme> [z]
+//! rmde <file.dmm> [z]
 //! ```
 
 mod camera;
@@ -40,9 +40,9 @@ const FONT_DATA: &[u8] = include_bytes!("../assets/FiraMono-Regular.ttf");
 const MDI_FONT_DATA: &[u8] = include_bytes!("../assets/materialdesignicons-webfont.ttf");
 
 fn usage() -> ExitCode {
-    eprintln!("usage: dmede <file.dme> [file.dmm] [z]");
-    eprintln!("       dmede <file.dme> [z]");
-    eprintln!("       dmede <file.dmm> [z]");
+    eprintln!("usage: rmde <file.dme> [file.dmm] [z]");
+    eprintln!("       rmde <file.dme> [z]");
+    eprintln!("       rmde <file.dmm> [z]");
 
     ExitCode::FAILURE
 }
@@ -100,13 +100,14 @@ fn main() -> ExitCode {
     };
     event_loop.set_control_flow(ControlFlow::Poll);
 
+    let title = window_title(&session);
     let mut app = App {
         session,
         settings,
         camera: Controller::new(),
         ui,
         uploaded_texture_revision: None,
-        title: map.file_name().map(|name| name.to_string_lossy().into_owned()),
+        title,
         consumer: None,
         renderer: None,
         platform: None,
@@ -163,13 +164,27 @@ fn is_map(path: &std::path::Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("dmm"))
 }
 
+fn window_title(session: &Session) -> String {
+    let map = session
+        .map_path()
+        .and_then(|path| path.file_name())
+        .map(|name| name.to_string_lossy().into_owned());
+
+    match (session.codebase_name(), map) {
+        (Some(codebase), Some(map)) => format!("Rapid Map Editor: {codebase} - {map}"),
+        (Some(codebase), None) => format!("Rapid Map Editor: {codebase}"),
+        (None, Some(map)) => format!("Rapid Map Editor: {map}"),
+        (None, None) => "Rapid Map Editor".to_string(),
+    }
+}
+
 struct App {
     session: Session,
     settings: Settings,
     camera: Controller,
     ui: UiState,
     uploaded_texture_revision: Option<u64>,
-    title: Option<String>,
+    title: String,
     consumer: Option<SynchronousRendererConsumer>,
     renderer: Option<Renderer>,
     platform: Option<WinitPlatform>,
@@ -179,9 +194,8 @@ struct App {
 
 impl App {
     fn start(&mut self, event_loop: &ActiveEventLoop) -> Result<(), Box<dyn std::error::Error>> {
-        let title = self.title.as_deref().unwrap_or("dmed");
         let attributes = Window::default_attributes()
-            .with_title(format!("dmed - {title}"))
+            .with_title(&self.title)
             .with_inner_size(LogicalSize::new(1280, 720));
         let window = Arc::new(event_loop.create_window(attributes)?);
         let size = window.inner_size();
@@ -196,7 +210,7 @@ impl App {
         ]);
 
         imgui.set_ini_filename(Some("imgui.ini"))?;
-        imgui.set_renderer_name(Some("dmed vir"))?;
+        imgui.set_renderer_name(Some("rmd vir"))?;
         let config = imgui.io().config_flags() | ConfigFlags::DOCKING_ENABLE;
         imgui.io_mut().set_config_flags(config);
 
@@ -228,6 +242,7 @@ impl App {
             camera,
             ui,
             uploaded_texture_revision,
+            title,
             consumer,
             renderer,
             platform,
@@ -244,6 +259,12 @@ impl App {
         ) else {
             return Ok(false);
         };
+
+        let current = window_title(session);
+        if *title != current {
+            window.set_title(&current);
+            *title = current;
+        }
 
         if *uploaded_texture_revision != Some(session.texture_revision()) {
             renderer.upload_textures(&session.textures)?;

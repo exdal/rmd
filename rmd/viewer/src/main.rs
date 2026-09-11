@@ -1,7 +1,7 @@
 //! ```sh
-//! dmedv <file.dme> [file.dmm] [z]
-//! dmedv <file.dme> [z]
-//! dmedv <file.dmm> [z]
+//! rmdv <file.dme> [file.dmm] [z]
+//! rmdv <file.dme> [z]
+//! rmdv <file.dmm> [z]
 //! ```
 //!
 //! Drag to pan, scroll to zoom, PageUp/PageDown to change z level, A to toggle areas, O to toggle area outlines.
@@ -25,9 +25,9 @@ use winit::{
 use crate::{camera::Controller, session::Session};
 
 fn usage() -> ExitCode {
-    eprintln!("usage: dmedv <file.dme> [file.dmm] [z]");
-    eprintln!("       dmedv <file.dme> [z]");
-    eprintln!("       dmedv <file.dmm> [z]");
+    eprintln!("usage: rmdv <file.dme> [file.dmm] [z]");
+    eprintln!("       rmdv <file.dme> [z]");
+    eprintln!("       rmdv <file.dmm> [z]");
 
     ExitCode::FAILURE
 }
@@ -154,9 +154,9 @@ struct App {
 
 impl App {
     fn start(&mut self, event_loop: &ActiveEventLoop) -> Result<(), Box<dyn std::error::Error>> {
-        let title = self.title.as_deref().unwrap_or("dmed");
+        let title = self.title.as_deref().unwrap_or("rmd");
         let attributes = Window::default_attributes()
-            .with_title(format!("dmed - {title}"))
+            .with_title(format!("rmd - {title}"))
             .with_inner_size(LogicalSize::new(1280, 720));
 
         let window = event_loop.create_window(attributes)?;

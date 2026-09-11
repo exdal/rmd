@@ -194,6 +194,16 @@ impl Session {
 
     pub fn map(&self) -> Option<&Map> { self.state.active_document().map(|document| &document.map) }
 
+    pub fn codebase_name(&self) -> Option<&str> {
+        let tree = self.tree()?;
+        let world = tree.id_of(&TreePath::parse("/world"))?;
+
+        tree.var_inherited(world, &Identifier::from("name"))?
+            .value
+            .as_text()
+            .filter(|name| !name.is_empty())
+    }
+
     pub fn map_path(&self) -> Option<&Path> {
         self.state
             .active_document()
@@ -2248,7 +2258,7 @@ mod tests {
         let source = root.join("test.dmm");
         session.open_map(&source, 1).unwrap();
 
-        let dir = std::env::temp_dir().join(format!("dmed-session-export-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rmd-session-export-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let exported = dir.join("exported.dmm");
 
