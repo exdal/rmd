@@ -27,6 +27,7 @@ use editor::{
         ToolContext,
         ToolEdit,
         default_tile_paths,
+        fill_selection as build_selection_fill,
         is_placeable,
         place_selection as build_selection_placement,
         rotate_point,
@@ -429,6 +430,86 @@ impl Session {
                 .all(|coord| document.allows_edit_at(coord))
     }
 
+    pub fn fill_selected_block(&mut self, target_min: Coord, rotation: SelectionRotation) -> bool {
+        if !self.can_fill_selected_block(target_min, rotation) {
+            return false;
+        }
+
+        let Some(prefab) = self.state.palette.clone() else {
+            return false;
+        };
+        let built = {
+            let Some(environment) = self.state.environment.as_ref() else {
+                return false;
+            };
+            let Some(active) = self.state.active else {
+                return false;
+            };
+            let Some(document) = self.state.documents.get_mut(active) else {
+                return false;
+            };
+            let Some(selection) = document.selection else {
+                return false;
+            };
+            let Some(target) = rotated_selection_at(selection, target_min, rotation) else {
+                return false;
+            };
+
+            build_selection_fill(document, &environment.tree, target, &prefab).map(|action| (action, target))
+        };
+
+        let Some((action, target)) = built else {
+            return false;
+        };
+
+        if !self.commit(action, None) {
+            return false;
+        }
+
+        if let Some(document) = self.state.active_document_mut() {
+            document.selection = Some(target);
+            document.select_instance(None);
+        }
+        self.state.choose_prefab(prefab);
+
+        true
+    }
+
+    pub fn can_fill_selected_block(&self, target_min: Coord, rotation: SelectionRotation) -> bool {
+        if self.tool() != Tool::BlockSelect {
+            return false;
+        }
+
+        let Some(environment) = self.state.environment.as_ref() else {
+            return false;
+        };
+        let Some(prefab) = self.state.palette.as_ref() else {
+            return false;
+        };
+        let Some(prefab_id) = environment.tree.id_of(&prefab.path) else {
+            return false;
+        };
+
+        if !is_placeable(&environment.tree, prefab_id) {
+            return false;
+        }
+
+        let Some(document) = self.state.active_document() else {
+            return false;
+        };
+        let Some(selection) = self.selection() else {
+            return false;
+        };
+        let Some(target) = rotated_selection_at(selection, target_min, rotation) else {
+            return false;
+        };
+
+        target.is_well_formed()
+            && target.max.x <= document.map.size.x
+            && target.max.y <= document.map.size.y
+            && target.iter().all(|coord| document.allows_edit_at(coord))
+    }
+
     pub fn transform_selected_block(&mut self, transform: SelectionTransform) -> bool {
         if self.tool() != Tool::BlockSelect || !self.can_transform_selected_block(transform) {
             return false;
@@ -671,7 +752,7 @@ impl Session {
         };
 
         self.state.choose_prefab(prefab);
-        if self.state.tool != Tool::Fill {
+        if !matches!(self.state.tool, Tool::Fill | Tool::BlockSelect) {
             self.state.tool = Tool::Place;
         }
 
@@ -682,7 +763,7 @@ impl Session {
         if !self.state.choose_recent(index) {
             return false;
         }
-        if self.state.tool != Tool::Fill {
+        if !matches!(self.state.tool, Tool::Fill | Tool::BlockSelect) {
             self.state.tool = Tool::Place;
         }
 
@@ -1977,6 +2058,48 @@ mod tests {
     }
 
     #[test]
+    fn block_fill_commits_the_palette_across_the_target_and_updates_render_caches() {
+        let mut session = focus_session();
+        let source = Coord::new(1, 1, 1);
+        let destination = Coord::new(2, 1, 1);
+        let untouched = Coord::new(1, 1, 5);
+        let untouched_before = session.map().unwrap().tile_at(untouched).unwrap().clone();
+        let table = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/structure/table"))
+            .unwrap();
+        assert!(session.choose_type(table));
+        let prefab = session.palette().unwrap().clone();
+        session.set_tool(Tool::BlockSelect);
+        assert!(session.select_block(Some(Selection::from_drag(source, source))));
+        let revision = session.revision;
+
+        assert!(session.can_fill_selected_block(source, SelectionRotation::Original));
+        assert!(session.can_fill_selected_block(destination, SelectionRotation::Original));
+        assert!(session.fill_selected_block(destination, SelectionRotation::Original));
+
+        assert_eq!(
+            session.selection(),
+            Some(Selection::from_drag(destination, destination))
+        );
+        assert_eq!(session.palette(), Some(&prefab));
+        assert!(
+            session
+                .map()
+                .unwrap()
+                .tile_at(destination)
+                .unwrap()
+                .iter()
+                .any(|placed| placed == &prefab)
+        );
+        assert_eq!(session.map().unwrap().tile_at(untouched), Some(&untouched_before));
+        assert_eq!(session.revision, revision.wrapping_add(1));
+        assert_eq!(session.frame_update.unwrap().previous_revision, revision);
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
     fn area_edits_retain_the_seed_component_or_clear_an_invalid_seed() {
         let mut session = focus_session();
         let seed = Coord::new(1, 1, 1);
@@ -2216,7 +2339,7 @@ mod tests {
     }
 
     #[test]
-    fn palette_choices_preserve_fill_mode() {
+    fn palette_choices_preserve_fill_and_block_select_modes() {
         let root = examples();
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
@@ -2226,12 +2349,14 @@ mod tests {
             .id_of(&TreePath::parse("/turf/open/floor"))
             .unwrap();
 
-        session.set_tool(Tool::Fill);
-        assert!(session.choose_type(floor));
-        assert_eq!(session.tool(), Tool::Fill);
+        for tool in [Tool::Fill, Tool::BlockSelect] {
+            session.set_tool(tool);
+            assert!(session.choose_type(floor));
+            assert_eq!(session.tool(), tool);
 
-        assert!(session.choose_recent(0));
-        assert_eq!(session.tool(), Tool::Fill);
+            assert!(session.choose_recent(0));
+            assert_eq!(session.tool(), tool);
+        }
     }
 
     #[test]

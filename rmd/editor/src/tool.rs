@@ -173,6 +173,42 @@ pub fn copy_selection(
     )
 }
 
+pub fn fill_selection(
+    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, prefab: &Prefab,
+) -> Option<ToolEdit> {
+    if !selection.is_well_formed()
+        || selection
+            .iter()
+            .any(|coord| !coord_in_bounds(coord, document.map.size) || !document.allows_edit_at(coord))
+    {
+        return None;
+    }
+
+    let kind = placement_kind(tree, prefab)?;
+    let mut edit = Edit::new(format!("fill block with {}", prefab.path));
+    let mut affected = Vec::new();
+    for coord in selection.iter() {
+        let Some((after, _, tile_affected)) = place_prefab_on_tile(document, tree, coord, prefab, kind) else {
+            continue;
+        };
+
+        edit.change(document, coord, after);
+        affected.extend(tile_affected);
+    }
+
+    if edit.is_empty() {
+        return None;
+    }
+
+    affected.sort_unstable_by_key(|id| id.get());
+
+    Some(ToolEdit {
+        edit,
+        selected: None,
+        affected,
+    })
+}
+
 pub fn place_selection(
     document: &mut MapDocument, tree: &ObjectTree, selection: Selection, target_min: Coord,
     rotation: SelectionRotation, placement: SelectionPlacement,
@@ -562,7 +598,23 @@ fn directional_type_target(tree: &ObjectTree, selected: TypeId, direction: Dir) 
 fn place(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
     let prefab = context.prefab?.clone();
     let kind = placement_kind(context.tree, &prefab)?;
-    let mut after = context.document.placed_tile(context.coord)?;
+    let (after, selected, affected) =
+        place_prefab_on_tile(context.document, context.tree, context.coord, &prefab, kind)?;
+
+    let mut edit = Edit::new(format!("place {}", prefab.path));
+    edit.change(context.document, context.coord, after);
+
+    Some(ToolEdit {
+        edit,
+        selected: Some(selected),
+        affected,
+    })
+}
+
+fn place_prefab_on_tile(
+    document: &mut MapDocument, tree: &ObjectTree, coord: Coord, prefab: &Prefab, kind: PlacementKind,
+) -> Option<(PlacedTile, PrefabInstanceId, Vec<PrefabInstanceId>)> {
+    let mut after = document.placed_tile(coord)?;
     let mut affected = Vec::new();
 
     let selected = match kind {
@@ -570,9 +622,7 @@ fn place(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
             let matching = after
                 .iter()
                 .enumerate()
-                .filter_map(|(index, placed)| {
-                    (placement_kind(context.tree, placed.prefab()) == Some(kind)).then_some(index)
-                })
+                .filter_map(|(index, placed)| (placement_kind(tree, placed.prefab()) == Some(kind)).then_some(index))
                 .collect::<Vec<_>>();
 
             if let Some(first) = matching.first().copied() {
@@ -585,9 +635,9 @@ fn place(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
 
                 selected
             } else {
-                let placed = context.document.instantiate(prefab.clone());
+                let placed = document.instantiate(prefab.clone());
                 let selected = placed.id();
-                let index = insertion_index(context.tree, &after, kind);
+                let index = insertion_index(tree, &after, kind);
                 after.insert(index, placed);
                 affected.push(selected);
 
@@ -595,9 +645,9 @@ fn place(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
             }
         },
         PlacementKind::Atom => {
-            let placed = context.document.instantiate(prefab.clone());
+            let placed = document.instantiate(prefab.clone());
             let selected = placed.id();
-            let index = insertion_index(context.tree, &after, kind);
+            let index = insertion_index(tree, &after, kind);
             after.insert(index, placed);
             affected.push(selected);
 
@@ -605,18 +655,7 @@ fn place(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
         },
     };
 
-    if context.document.placed_tile(context.coord).as_ref() == Some(&after) {
-        return None;
-    }
-
-    let mut edit = Edit::new(format!("place {}", prefab.path));
-    edit.change(context.document, context.coord, after);
-
-    Some(ToolEdit {
-        edit,
-        selected: Some(selected),
-        affected,
-    })
+    (document.placed_tile(coord).as_ref() != Some(&after)).then_some((after, selected, affected))
 }
 
 fn delete(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
@@ -940,6 +979,7 @@ mod tests {
         ToolContext,
         copy_selection,
         default_tile_paths,
+        fill_selection,
         move_selection,
         place_selection,
         rotate_point,
@@ -1662,6 +1702,134 @@ mod tests {
         assert_eq!(
             turf_at(&document, Coord::new(width, 1, 1)).path,
             TreePath::parse("/turf/open/space")
+        );
+        assert!(!document.undo());
+    }
+
+    #[test]
+    fn block_fill_replaces_turfs_across_exactly_the_target_and_preserves_ids() {
+        let tree = tree();
+        let mut document = grid_document(3, 1, |_| prefabs(&["/obj/table", "/turf/floor", "/area/station"]));
+        let target = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 1, 1));
+        let before = (1..=3)
+            .map(|x| {
+                let coord = Coord::new(x, 1, 1);
+
+                (coord, document.placed_tile(coord).unwrap())
+            })
+            .collect::<Vec<_>>();
+        let turf_ids = (1..=2)
+            .map(|x| document.instance_ids_at(Coord::new(x, 1, 1))[1])
+            .collect::<Vec<_>>();
+        let wall = Prefab::new(TreePath::parse("/turf/wall"));
+
+        let action = fill_selection(&mut document, &tree, target, &wall).unwrap();
+        assert_eq!(action.edit.label, "fill block with /turf/wall");
+        assert_eq!(action.edit.changes.len(), 2);
+        assert_eq!(action.selected, None);
+        document.apply(action.edit);
+
+        for (x, turf_id) in (1..=2).zip(turf_ids) {
+            let coord = Coord::new(x, 1, 1);
+            assert_eq!(
+                document
+                    .map
+                    .tile_at(coord)
+                    .unwrap()
+                    .iter()
+                    .map(|prefab| prefab.path.to_string())
+                    .collect::<Vec<_>>(),
+                ["/obj/table", "/turf/wall", "/area/station"]
+            );
+            assert_eq!(document.instance_ids_at(coord)[1], turf_id);
+        }
+        assert_eq!(document.placed_tile(Coord::new(3, 1, 1)).unwrap(), before[2].1);
+
+        assert!(document.undo());
+        for (coord, tile) in before {
+            assert_eq!(document.placed_tile(coord).unwrap(), tile);
+        }
+        assert!(!document.undo());
+    }
+
+    #[test]
+    fn block_fill_appends_distinct_objects_and_undoes_as_one_edit() {
+        let tree = tree();
+        let mut document = grid_document(2, 1, |_| prefabs(&["/turf/floor", "/area/station"]));
+        let target = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 1, 1));
+        let before = (1..=2)
+            .map(|x| document.placed_tile(Coord::new(x, 1, 1)).unwrap())
+            .collect::<Vec<_>>();
+        let chair = Prefab::new(TreePath::parse("/obj/chair"));
+
+        let action = fill_selection(&mut document, &tree, target, &chair).unwrap();
+        assert_eq!(action.edit.changes.len(), 2);
+        assert_eq!(action.affected.len(), 2);
+        assert_ne!(action.affected[0], action.affected[1]);
+        document.apply(action.edit);
+
+        for x in 1..=2 {
+            assert_eq!(
+                document
+                    .map
+                    .tile_at(Coord::new(x, 1, 1))
+                    .unwrap()
+                    .iter()
+                    .map(|prefab| prefab.path.to_string())
+                    .collect::<Vec<_>>(),
+                ["/obj/chair", "/turf/floor", "/area/station"]
+            );
+        }
+
+        assert!(document.undo());
+        for (index, tile) in before.into_iter().enumerate() {
+            assert_eq!(document.placed_tile(Coord::new(index as u32 + 1, 1, 1)).unwrap(), tile);
+        }
+        assert!(!document.undo());
+    }
+
+    #[test]
+    fn block_fill_rejects_invalid_targets_atomically() {
+        let tree = tree();
+        let mut document = grid_document(2, 1, |_| prefabs(&["/turf/floor", "/area/station"]));
+        let source = Coord::new(1, 1, 1);
+        let area = document.instance_ids_at(source)[1];
+        let before = (1..=2)
+            .map(|x| document.placed_tile(Coord::new(x, 1, 1)).unwrap())
+            .collect::<Vec<_>>();
+        let chair = Prefab::new(TreePath::parse("/obj/chair"));
+
+        assert!(
+            fill_selection(
+                &mut document,
+                &tree,
+                Selection::from_drag(source, Coord::new(3, 1, 1)),
+                &chair,
+            )
+            .is_none()
+        );
+
+        document.set_focus(Some(AreaFocus::new(
+            source,
+            Prefab::new(TreePath::parse("/area/station")),
+            area,
+            HashSet::from([source]),
+        )));
+        assert!(
+            fill_selection(
+                &mut document,
+                &tree,
+                Selection::from_drag(source, Coord::new(2, 1, 1)),
+                &chair,
+            )
+            .is_none()
+        );
+
+        assert_eq!(
+            (1..=2)
+                .map(|x| document.placed_tile(Coord::new(x, 1, 1)).unwrap())
+                .collect::<Vec<_>>(),
+            before
         );
         assert!(!document.undo());
     }

@@ -65,6 +65,7 @@ const PLACEMENT_FLASH_DURATION: f64 = 0.25;
 const PLACEMENT_PREVIEW_PERIOD: f64 = 1.5;
 const DEFAULT_CUSTOM_FILL_BOUNDARY: &str = "/turf/closed/wall";
 const MAX_CUSTOM_FILL_SEARCH_RESULTS: usize = 50;
+const BLOCK_PLACEMENT_LABELS: [&str; 4] = ["Move", "Copy", "Fill", "Cancel"];
 const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warning";
 const NEW_MAP_POPUP: &str = "New map##new-map";
 const NEW_MAP_PATH_WIDTH: f32 = 460.0;
@@ -204,6 +205,7 @@ struct PendingBlockPlacement {
 enum BlockPlacementAction {
     Move,
     Copy,
+    Fill,
     Cancel,
 }
 
@@ -993,6 +995,29 @@ impl UiState {
                     false
                 },
             };
+            let block_controls_area = OverlayRect {
+                min: [viewport_min[0], top_overlay.max[1]],
+                max: [viewport_max[0], bottom_overlay.min[1]],
+            };
+            let block_controls_capture_mouse = block_controls_placement(
+                tool,
+                self.block_selection_anchor.is_some(),
+                self.gizmo.block_rotation_open(),
+                session.selection(),
+                self.block_placement,
+            )
+            .is_some_and(|placement| {
+                let (_, bounds) = block_placement_controls_layout(
+                    ui,
+                    camera,
+                    placement,
+                    session.options.tile_size,
+                    viewport_min,
+                    block_controls_area,
+                );
+
+                bounds.contains(mouse)
+            });
 
             let left_clicked = ui.is_mouse_clicked(MouseButton::Left);
             let left_down = ui.is_mouse_down(MouseButton::Left);
@@ -1010,7 +1035,10 @@ impl UiState {
             }) {
                 self.placement_stroke = None;
             }
-            if !gizmo_captures_mouse && let Some(cursor) = cursor {
+            if !gizmo_captures_mouse
+                && !block_controls_capture_mouse
+                && let Some(cursor) = cursor
+            {
                 let pixel = [cursor[0].floor() as u32, cursor[1].floor() as u32];
                 interaction.cursor = Some(pixel);
 
@@ -1146,33 +1174,36 @@ impl UiState {
             }
 
             let block_menu_handles_escape = draw_block_selection_menu(ui, session);
-            let placement_action = (!self.gizmo.block_rotation_open())
-                .then_some(self.block_placement)
-                .flatten()
-                .and_then(|placement| {
-                    let can_move = session.can_place_selected_block(
-                        placement.target.min,
-                        placement.rotation,
-                        SelectionPlacement::Move,
-                    );
-                    let can_copy = session.can_place_selected_block(
-                        placement.target.min,
-                        placement.rotation,
-                        SelectionPlacement::Copy,
-                    );
-                    draw_block_placement_controls(
-                        ui,
-                        camera,
-                        placement,
-                        session.options.tile_size,
-                        viewport_min,
-                        OverlayRect {
-                            min: [viewport_min[0], top_overlay.max[1]],
-                            max: [viewport_max[0], bottom_overlay.min[1]],
-                        },
-                        (can_move, can_copy),
-                    )
-                });
+            let controls_placement = block_controls_placement(
+                tool,
+                self.block_selection_anchor.is_some(),
+                self.gizmo.block_rotation_open(),
+                session.selection(),
+                self.block_placement,
+            );
+            let placement_action = controls_placement.and_then(|placement| {
+                let can_move = session.can_place_selected_block(
+                    placement.target.min,
+                    placement.rotation,
+                    SelectionPlacement::Move,
+                );
+                let can_copy = session.can_place_selected_block(
+                    placement.target.min,
+                    placement.rotation,
+                    SelectionPlacement::Copy,
+                );
+                let can_fill = session.can_fill_selected_block(placement.target.min, placement.rotation);
+                draw_block_placement_controls(
+                    ui,
+                    camera,
+                    placement,
+                    session.options.tile_size,
+                    viewport_min,
+                    block_controls_area,
+                    (can_move, can_copy, can_fill),
+                )
+                .map(|action| (action, placement))
+            });
             draw_top_overlay(
                 ui,
                 session,
@@ -1181,9 +1212,7 @@ impl UiState {
                 &mut self.custom_fill_boundaries,
                 &mut self.custom_fill_search,
             );
-            if let Some(action) = placement_action
-                && let Some(placement) = self.block_placement
-            {
+            if let Some((action, placement)) = placement_action {
                 let finished = match action {
                     BlockPlacementAction::Move => {
                         session.place_selected_block(placement.target.min, placement.rotation, SelectionPlacement::Move)
@@ -1191,7 +1220,14 @@ impl UiState {
                     BlockPlacementAction::Copy => {
                         session.place_selected_block(placement.target.min, placement.rotation, SelectionPlacement::Copy)
                     },
-                    BlockPlacementAction::Cancel => true,
+                    BlockPlacementAction::Fill => session.fill_selected_block(placement.target.min, placement.rotation),
+                    BlockPlacementAction::Cancel => {
+                        if self.block_placement.is_none() {
+                            session.select_block(None);
+                        }
+
+                        true
+                    },
                 };
                 if finished {
                     self.block_placement = None;
@@ -1624,21 +1660,35 @@ fn draw_block_selection_menu(ui: &Ui, session: &mut Session) -> bool {
     was_open
 }
 
-fn draw_block_placement_controls(
-    ui: &Ui, camera: &Controller, placement: PendingBlockPlacement, tile_size: u32, viewport_min: [f32; 2],
-    controls_bounds: OverlayRect, enabled: (bool, bool),
-) -> Option<BlockPlacementAction> {
-    const LABELS: [&str; 3] = ["Move", "Copy", "Cancel"];
-    let (can_move, can_copy) = enabled;
+fn block_controls_placement(
+    tool: Tool, selecting: bool, rotation_open: bool, selection: Option<Selection>,
+    pending: Option<PendingBlockPlacement>,
+) -> Option<PendingBlockPlacement> {
+    (tool == Tool::BlockSelect && !selecting && !rotation_open)
+        .then(|| {
+            selection.map(|source| {
+                pending.unwrap_or(PendingBlockPlacement {
+                    source,
+                    target: source,
+                    rotation: SelectionRotation::Original,
+                })
+            })
+        })
+        .flatten()
+}
 
+fn block_placement_controls_layout(
+    ui: &Ui, camera: &Controller, placement: PendingBlockPlacement, tile_size: u32, viewport_min: [f32; 2],
+    controls_bounds: OverlayRect,
+) -> ([f32; 2], OverlayRect) {
     let style = ui.clone_style();
     let padding = style.frame_padding();
     let spacing = style.item_spacing()[0];
-    let width = LABELS
+    let width = BLOCK_PLACEMENT_LABELS
         .iter()
         .map(|label| ui.calc_text_size(*label)[0] + padding[0] * 2.0)
         .sum::<f32>()
-        + spacing * (LABELS.len() - 1) as f32;
+        + spacing * (BLOCK_PLACEMENT_LABELS.len() - 1) as f32;
     let height = ui.frame_height();
     let selection = block_selection_bounds(camera, viewport_min, placement.target, tile_size);
     let center = [
@@ -1653,28 +1703,41 @@ fn draw_block_placement_controls(
         (center[0] - width * 0.5).clamp(min_x, max_x),
         (center[1] + 14.0).clamp(min_y, max_y),
     ];
-    draw_overlay_underlay(
-        ui,
-        OverlayRect {
-            min: [position[0] - OVERLAY_PADDING, position[1] - OVERLAY_PADDING],
-            max: [
-                position[0] + width + OVERLAY_PADDING,
-                position[1] + height + OVERLAY_PADDING,
-            ],
-        },
-    );
+    let bounds = OverlayRect {
+        min: [position[0] - OVERLAY_PADDING, position[1] - OVERLAY_PADDING],
+        max: [
+            position[0] + width + OVERLAY_PADDING,
+            position[1] + height + OVERLAY_PADDING,
+        ],
+    };
+
+    (position, bounds)
+}
+
+fn draw_block_placement_controls(
+    ui: &Ui, camera: &Controller, placement: PendingBlockPlacement, tile_size: u32, viewport_min: [f32; 2],
+    controls_bounds: OverlayRect, enabled: (bool, bool, bool),
+) -> Option<BlockPlacementAction> {
+    let (can_move, can_copy, can_fill) = enabled;
+    let (position, bounds) =
+        block_placement_controls_layout(ui, camera, placement, tile_size, viewport_min, controls_bounds);
+    draw_overlay_underlay(ui, bounds);
     ui.set_cursor_screen_pos(position);
 
     let mut action = None;
-    if ui.with_disabled_if(!can_move, || ui.button(LABELS[0])) {
+    if ui.with_disabled_if(!can_move, || ui.button(BLOCK_PLACEMENT_LABELS[0])) {
         action = Some(BlockPlacementAction::Move);
     }
     ui.same_line();
-    if ui.with_disabled_if(!can_copy, || ui.button(LABELS[1])) {
+    if ui.with_disabled_if(!can_copy, || ui.button(BLOCK_PLACEMENT_LABELS[1])) {
         action = Some(BlockPlacementAction::Copy);
     }
     ui.same_line();
-    if ui.button(LABELS[2]) {
+    if ui.with_disabled_if(!can_fill, || ui.button(BLOCK_PLACEMENT_LABELS[2])) {
+        action = Some(BlockPlacementAction::Fill);
+    }
+    ui.same_line();
+    if ui.button(BLOCK_PLACEMENT_LABELS[3]) {
         action = Some(BlockPlacementAction::Cancel);
     }
     if action.is_none() && !ui.io().want_text_input() && ui.is_key_pressed(Key::Enter) && can_move {
@@ -2151,10 +2214,7 @@ fn draw_tool_button(ui: &Ui, session: &mut Session, tool: Tool, icon: char) {
     let _color = (session.tool() == tool).then(|| ui.push_style_color(StyleColor::Button, color));
     let clicked = ui.button(icon.to_string());
     ui.set_item_tooltip(match tool {
-        Tool::BlockSelect => {
-            "Block Select\nDrag a rectangle, then use the center gizmo to stage a move. Hold R to rotate; right-click \
-             to mirror."
-        },
+        Tool::BlockSelect => "Block Select",
         _ => tool.label(),
     });
     if clicked {
@@ -2763,6 +2823,29 @@ mod tests {
                 min: [10.0, 52.0],
                 max: [74.0, 84.0],
             }
+        );
+    }
+
+    #[test]
+    fn block_controls_are_available_before_a_selection_is_moved() {
+        let selection = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 2, 1));
+        let expected = PendingBlockPlacement {
+            source: selection,
+            target: selection,
+            rotation: SelectionRotation::Original,
+        };
+
+        assert_eq!(
+            block_controls_placement(Tool::BlockSelect, false, false, Some(selection), None),
+            Some(expected)
+        );
+        assert_eq!(
+            block_controls_placement(Tool::BlockSelect, true, false, Some(selection), None),
+            None
+        );
+        assert_eq!(
+            block_controls_placement(Tool::BlockSelect, false, true, Some(selection), None),
+            None
         );
     }
 
