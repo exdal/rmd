@@ -87,6 +87,41 @@ impl FillMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BlockSelectionMode {
+    #[default]
+    Full,
+    Hollow {
+        line_width: u32,
+    },
+}
+
+impl BlockSelectionMode {
+    /// all the tiles of `selection` this mode actually edits, hollow mode will
+    /// only edit tiles that are inside the ring
+    pub fn tiles(self, selection: Selection) -> impl Iterator<Item = Coord> {
+        selection.iter().filter(move |coord| self.includes(selection, *coord))
+    }
+
+    pub fn includes(self, selection: Selection, coord: Coord) -> bool {
+        if !selection.contains(coord) {
+            return false;
+        }
+
+        match self {
+            Self::Full => true,
+            Self::Hollow { line_width } => {
+                let line_width = line_width.max(1);
+
+                coord.x - selection.min.x < line_width
+                    || selection.max.x - coord.x < line_width
+                    || coord.y - selection.min.y < line_width
+                    || selection.max.y - coord.y < line_width
+            },
+        }
+    }
+}
+
 pub struct ToolContext<'a> {
     pub document: &'a mut MapDocument,
     pub tree: &'a ObjectTree,
@@ -174,12 +209,12 @@ pub fn copy_selection(
 }
 
 pub fn fill_selection(
-    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, prefab: &Prefab,
+    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, prefab: &Prefab, mode: BlockSelectionMode,
 ) -> Option<ToolEdit> {
     if !selection.is_well_formed()
-        || selection
-            .iter()
-            .any(|coord| !coord_in_bounds(coord, document.map.size) || !document.allows_edit_at(coord))
+        || !coord_in_bounds(selection.min, document.map.size)
+        || !coord_in_bounds(selection.max, document.map.size)
+        || mode.tiles(selection).any(|coord| !document.allows_edit_at(coord))
     {
         return None;
     }
@@ -187,7 +222,7 @@ pub fn fill_selection(
     let kind = placement_kind(tree, prefab)?;
     let mut edit = Edit::new(format!("fill block with {}", prefab.path));
     let mut affected = Vec::new();
-    for coord in selection.iter() {
+    for coord in mode.tiles(selection) {
         let Some((after, _, tile_affected)) = place_prefab_on_tile(document, tree, coord, prefab, kind) else {
             continue;
         };
@@ -213,6 +248,21 @@ pub fn place_selection(
     document: &mut MapDocument, tree: &ObjectTree, selection: Selection, target_min: Coord,
     rotation: SelectionRotation, placement: SelectionPlacement,
 ) -> Option<(ToolEdit, Selection)> {
+    place_selection_with_mode(
+        document,
+        tree,
+        selection,
+        target_min,
+        rotation,
+        placement,
+        BlockSelectionMode::Full,
+    )
+}
+
+pub fn place_selection_with_mode(
+    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, target_min: Coord,
+    rotation: SelectionRotation, placement: SelectionPlacement, mode: BlockSelectionMode,
+) -> Option<(ToolEdit, Selection)> {
     let target = rotated_selection_at(selection, target_min, rotation)?;
     if target == selection && rotation == SelectionRotation::Original {
         return None;
@@ -225,16 +275,26 @@ pub fn place_selection(
     build_selection_edit(
         document,
         tree,
-        selection,
-        target,
-        rotation.transforms(),
-        placement,
-        label,
+        SelectionEditRequest {
+            source: selection,
+            target,
+            transforms: rotation.transforms(),
+            placement,
+            mode,
+            label,
+        },
     )
 }
 
 pub fn transform_selection(
     document: &mut MapDocument, tree: &ObjectTree, selection: Selection, transform: SelectionTransform,
+) -> Option<(ToolEdit, Selection)> {
+    transform_selection_with_mode(document, tree, selection, transform, BlockSelectionMode::Full)
+}
+
+pub fn transform_selection_with_mode(
+    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, transform: SelectionTransform,
+    mode: BlockSelectionMode,
 ) -> Option<(ToolEdit, Selection)> {
     if !selection.is_well_formed() {
         return None;
@@ -250,11 +310,14 @@ pub fn transform_selection(
     build_selection_edit(
         document,
         tree,
-        selection,
-        target,
-        std::slice::from_ref(&transform),
-        SelectionPlacement::Move,
-        label,
+        SelectionEditRequest {
+            source: selection,
+            target,
+            transforms: std::slice::from_ref(&transform),
+            placement: SelectionPlacement::Move,
+            mode,
+            label,
+        },
     )
 }
 
@@ -308,12 +371,46 @@ pub fn transformed_selection(selection: Selection, transform: SelectionTransform
     Some(target)
 }
 
+struct SelectionEditRequest<'a> {
+    source: Selection,
+    target: Selection,
+    transforms: &'a [SelectionTransform],
+    placement: SelectionPlacement,
+    mode: BlockSelectionMode,
+    label: &'a str,
+}
+
+impl SelectionEditRequest<'_> {
+    fn source_tiles(&self) -> impl Iterator<Item = Coord> { self.mode.tiles(self.source) }
+
+    fn touched_tiles(&self) -> impl Iterator<Item = Coord> { self.source_tiles().chain(self.mode.tiles(self.target)) }
+
+    fn destination_of(&self, coord: Coord) -> Coord {
+        let mut point = (coord.x - self.source.min.x, coord.y - self.source.min.y);
+        let (mut width, mut height) = (self.source.width(), self.source.height());
+        for transform in self.transforms {
+            point = transform_point(point, width, height, *transform);
+            if matches!(
+                transform,
+                SelectionTransform::RotateClockwise | SelectionTransform::RotateCounterClockwise
+            ) {
+                (width, height) = (height, width);
+            }
+        }
+
+        Coord::new(
+            self.target.min.x + point.0,
+            self.target.min.y + point.1,
+            self.target.min.z,
+        )
+    }
+}
+
 fn build_selection_edit(
-    document: &mut MapDocument, tree: &ObjectTree, source: Selection, target: Selection,
-    transforms: &[SelectionTransform], placement: SelectionPlacement, label: &str,
+    document: &mut MapDocument, tree: &ObjectTree, request: SelectionEditRequest<'_>,
 ) -> Option<(ToolEdit, Selection)> {
     let size = document.map.size;
-    let touched = source.iter().chain(target.iter()).collect::<HashSet<_>>();
+    let touched = request.touched_tiles().collect::<HashSet<_>>();
     if touched
         .iter()
         .any(|coord| !coord_in_bounds(*coord, size) || !document.allows_edit_at(*coord))
@@ -321,35 +418,22 @@ fn build_selection_edit(
         return None;
     }
 
-    let defaults = if placement == SelectionPlacement::Move {
+    let defaults = if request.placement == SelectionPlacement::Move {
         Some(default_tile_paths(tree)?)
     } else {
         None
     };
-    let width = source.width();
-    let height = source.height();
-    let mut payload = Vec::with_capacity(source.width() as usize * source.height() as usize);
-    for coord in source.iter() {
-        let mut transformed = (coord.x - source.min.x, coord.y - source.min.y);
-        let (mut current_width, mut current_height) = (width, height);
-        for transform in transforms {
-            transformed = transform_point(transformed, current_width, current_height, *transform);
-            if matches!(
-                transform,
-                SelectionTransform::RotateClockwise | SelectionTransform::RotateCounterClockwise
-            ) {
-                (current_width, current_height) = (current_height, current_width);
-            }
-        }
-        let destination = Coord::new(target.min.x + transformed.0, target.min.y + transformed.1, target.min.z);
+    let mut payload = Vec::with_capacity(touched.len());
+    for coord in request.source_tiles() {
+        let destination = request.destination_of(coord);
         let mut tile = document.placed_tile(coord)?;
-        if placement == SelectionPlacement::Copy {
+        if request.placement == SelectionPlacement::Copy {
             tile = tile
                 .into_iter()
                 .map(|placed| document.instantiate(placed.prefab().clone()))
                 .collect();
         }
-        for transform in transforms {
+        for transform in request.transforms {
             for placed in &mut tile {
                 transform_prefab(tree, placed.prefab_mut(), *transform);
             }
@@ -359,7 +443,7 @@ fn build_selection_edit(
 
     let mut staged = HashMap::<Coord, PlacedTile>::new();
     if let Some((default_turf, default_area)) = defaults {
-        for coord in source.iter() {
+        for coord in request.source_tiles() {
             staged.insert(
                 coord,
                 vec![
@@ -375,7 +459,7 @@ fn build_selection_edit(
 
     let mut coords = staged.keys().copied().collect::<Vec<_>>();
     coords.sort_unstable_by_key(|coord| (coord.z, coord.y, coord.x));
-    let mut edit = Edit::new(label);
+    let mut edit = Edit::new(request.label);
     let mut affected = HashSet::new();
     for coord in coords {
         let after = staged.remove(&coord)?;
@@ -400,7 +484,7 @@ fn build_selection_edit(
             selected: None,
             affected,
         },
-        target,
+        request.target,
     ))
 }
 
@@ -961,12 +1045,13 @@ mod tests {
         path::TreePath,
         types::{Value, VarModifiers},
     };
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
     use dmm::{Coord, Map, Prefab, Size};
     use objtree::VarDecl;
 
     use super::{
+        BlockSelectionMode,
         Dir,
         FillError,
         FillMode,
@@ -982,10 +1067,12 @@ mod tests {
         fill_selection,
         move_selection,
         place_selection,
+        place_selection_with_mode,
         rotate_point,
         transform_direction,
         transform_point,
         transform_selection,
+        transform_selection_with_mode,
         transformed_selection,
     };
     use crate::{document::MapDocument, focus::AreaFocus};
@@ -1063,6 +1150,16 @@ mod tests {
     }
 
     fn prefabs(paths: &[&str]) -> Vec<Prefab> { paths.iter().map(|path| Prefab::new(TreePath::parse(path))).collect() }
+
+    fn tile_paths(document: &MapDocument, coord: Coord) -> Vec<String> {
+        document
+            .map
+            .tile_at(coord)
+            .unwrap()
+            .iter()
+            .map(|prefab| prefab.path.to_string())
+            .collect()
+    }
 
     fn turf_at(document: &MapDocument, coord: Coord) -> &Prefab {
         document
@@ -1723,7 +1820,7 @@ mod tests {
             .collect::<Vec<_>>();
         let wall = Prefab::new(TreePath::parse("/turf/wall"));
 
-        let action = fill_selection(&mut document, &tree, target, &wall).unwrap();
+        let action = fill_selection(&mut document, &tree, target, &wall, BlockSelectionMode::Full).unwrap();
         assert_eq!(action.edit.label, "fill block with /turf/wall");
         assert_eq!(action.edit.changes.len(), 2);
         assert_eq!(action.selected, None);
@@ -1753,6 +1850,384 @@ mod tests {
     }
 
     #[test]
+    fn hollow_block_fill_mode_uses_the_configured_distance_from_each_edge() {
+        let selection = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(6, 5, 1));
+        let included = |line_width| {
+            selection
+                .iter()
+                .filter(|coord| BlockSelectionMode::Hollow { line_width }.includes(selection, *coord))
+                .collect::<HashSet<_>>()
+        };
+
+        let one_tile = included(1);
+        assert_eq!(one_tile.len(), 18);
+        assert!(one_tile.contains(&Coord::new(1, 1, 1)));
+        assert!(one_tile.contains(&Coord::new(6, 5, 1)));
+        assert!(!one_tile.contains(&Coord::new(2, 2, 1)));
+
+        let two_tiles = included(2);
+        assert_eq!(two_tiles.len(), 28);
+        assert!(!two_tiles.contains(&Coord::new(3, 3, 1)));
+        assert!(!two_tiles.contains(&Coord::new(4, 3, 1)));
+
+        assert_eq!(included(3).len(), 30);
+        assert_eq!(included(0), one_tile);
+
+        let one_row = Selection::from_drag(Coord::new(2, 3, 1), Coord::new(5, 3, 1));
+        assert!(
+            one_row
+                .iter()
+                .all(|coord| BlockSelectionMode::Hollow { line_width: 1 }.includes(one_row, coord))
+        );
+    }
+
+    #[test]
+    fn hollow_block_fill_changes_only_the_border_and_undoes_as_one_edit() {
+        let tree = tree();
+        let mut document = grid_document(5, 5, |_| prefabs(&["/turf/floor", "/area/station"]));
+        let selection = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(5, 5, 1));
+        let before = selection
+            .iter()
+            .map(|coord| (coord, document.placed_tile(coord).unwrap()))
+            .collect::<Vec<_>>();
+        let turf_ids = selection
+            .iter()
+            .map(|coord| (coord, document.instance_ids_at(coord)[0]))
+            .collect::<HashMap<_, _>>();
+        let wall = Prefab::new(TreePath::parse("/turf/wall"));
+
+        let action = fill_selection(
+            &mut document,
+            &tree,
+            selection,
+            &wall,
+            BlockSelectionMode::Hollow { line_width: 1 },
+        )
+        .unwrap();
+        assert_eq!(action.edit.changes.len(), 16);
+        document.apply(action.edit);
+
+        for coord in selection.iter() {
+            let expected = if coord.x == 1 || coord.x == 5 || coord.y == 1 || coord.y == 5 {
+                "/turf/wall"
+            } else {
+                "/turf/floor"
+            };
+            assert_eq!(turf_at(&document, coord).path, TreePath::parse(expected));
+            assert_eq!(document.instance_ids_at(coord)[0], turf_ids[&coord]);
+        }
+
+        assert!(document.undo());
+        for (coord, tile) in before {
+            assert_eq!(document.placed_tile(coord).unwrap(), tile);
+        }
+        assert!(!document.undo());
+    }
+
+    #[test]
+    fn hollow_block_mode_saturates_instead_of_overflowing_on_thin_or_wide_lines() {
+        let single = Selection::from_drag(Coord::new(4, 4, 1), Coord::new(4, 4, 1));
+        assert!(BlockSelectionMode::Hollow { line_width: 1 }.includes(single, Coord::new(4, 4, 1)));
+        assert!(BlockSelectionMode::Hollow { line_width: u32::MAX }.includes(single, Coord::new(4, 4, 1)));
+
+        let block = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(4, 4, 1));
+        for line_width in [2, 3, u32::MAX] {
+            assert!(
+                block
+                    .iter()
+                    .all(|coord| BlockSelectionMode::Hollow { line_width }.includes(block, coord)),
+                "a {line_width}-tile line should leave no hole in a 4x4 block"
+            );
+        }
+
+        for mode in [BlockSelectionMode::Full, BlockSelectionMode::Hollow { line_width: 1 }] {
+            assert!(!mode.includes(block, Coord::new(5, 1, 1)));
+            assert!(!mode.includes(block, Coord::new(1, 5, 1)));
+            assert!(!mode.includes(block, Coord::new(1, 1, 2)));
+        }
+    }
+
+    #[test]
+    fn hollow_block_edits_ignore_tiles_blocked_inside_the_hole() {
+        let tree = tree();
+        let mut document = grid_document(5, 5, |_| prefabs(&["/turf/floor", "/area/station"]));
+        let selection = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(5, 5, 1));
+        let border = BlockSelectionMode::Hollow { line_width: 1 };
+        let seed = Coord::new(1, 1, 1);
+        let area = document.instance_ids_at(seed)[1];
+        document.set_focus(Some(AreaFocus::new(
+            seed,
+            Prefab::new(TreePath::parse("/area/station")),
+            area,
+            selection
+                .iter()
+                .filter(|coord| border.includes(selection, *coord))
+                .collect(),
+        )));
+        let wall = Prefab::new(TreePath::parse("/turf/wall"));
+
+        // the focus only covers the ring, so a full-rectangle fill has to be rejected outright
+        assert!(fill_selection(&mut document, &tree, selection, &wall, BlockSelectionMode::Full).is_none());
+        // ...and so does a thicker ring, which reaches one tile further into the blocked interior
+        assert!(
+            fill_selection(
+                &mut document,
+                &tree,
+                selection,
+                &wall,
+                BlockSelectionMode::Hollow { line_width: 2 }
+            )
+            .is_none()
+        );
+
+        let action = fill_selection(&mut document, &tree, selection, &wall, border).unwrap();
+        assert_eq!(action.edit.changes.len(), 16);
+        assert!(document.apply(action.edit));
+        assert_eq!(
+            turf_at(&document, Coord::new(3, 1, 1)).path,
+            TreePath::parse("/turf/wall")
+        );
+        assert_eq!(
+            turf_at(&document, Coord::new(3, 3, 1)).path,
+            TreePath::parse("/turf/floor")
+        );
+    }
+
+    #[test]
+    fn hollow_block_moves_relocate_the_ring_and_leave_both_interiors_alone() {
+        let tree = tree();
+        let mut document = grid_document(10, 4, |coord| {
+            prefabs(if coord.x <= 5 {
+                &["/obj/table", "/turf/floor", "/area/station"]
+            } else {
+                &["/obj/chair", "/turf/wall", "/area/space"]
+            })
+        });
+        let source = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(5, 4, 1));
+        let target = Selection::from_drag(Coord::new(6, 1, 1), Coord::new(10, 4, 1));
+        let border = BlockSelectionMode::Hollow { line_width: 1 };
+        let before = source
+            .iter()
+            .chain(target.iter())
+            .map(|coord| (coord, document.placed_tile(coord).unwrap()))
+            .collect::<Vec<_>>();
+        let moved_table = document.instance_ids_at(Coord::new(1, 1, 1))[0];
+        let interior_table = document.instance_ids_at(Coord::new(2, 2, 1))[0];
+
+        let (action, selected) = place_selection_with_mode(
+            &mut document,
+            &tree,
+            source,
+            target.min,
+            SelectionRotation::Original,
+            SelectionPlacement::Move,
+            border,
+        )
+        .unwrap();
+        assert_eq!(selected, target);
+        // fourteen ring tiles cleared at the source, fourteen overwritten at the destination
+        assert_eq!(action.edit.changes.len(), 28);
+        document.apply(action.edit);
+
+        for coord in source.iter() {
+            let expected: &[&str] = if border.includes(source, coord) {
+                &["/turf", "/area"]
+            } else {
+                &["/obj/table", "/turf/floor", "/area/station"]
+            };
+            assert_eq!(tile_paths(&document, coord), expected, "source tile {coord:?}");
+        }
+        for coord in target.iter() {
+            let expected: &[&str] = if border.includes(target, coord) {
+                &["/obj/table", "/turf/floor", "/area/station"]
+            } else {
+                &["/obj/chair", "/turf/wall", "/area/space"]
+            };
+            assert_eq!(tile_paths(&document, coord), expected, "target tile {coord:?}");
+        }
+        assert_eq!(
+            document.instance_location(moved_table).unwrap().coord,
+            Coord::new(6, 1, 1)
+        );
+        assert_eq!(
+            document.instance_location(interior_table).unwrap().coord,
+            Coord::new(2, 2, 1)
+        );
+
+        assert!(document.undo());
+        for (coord, tile) in before {
+            assert_eq!(document.placed_tile(coord).unwrap(), tile);
+        }
+        assert!(!document.undo());
+    }
+
+    #[test]
+    fn overlapping_hollow_block_moves_clear_ring_tiles_the_new_ring_does_not_cover() {
+        let tree = tree();
+        let mut document = grid_document(6, 4, |_| prefabs(&["/obj/table", "/turf/floor", "/area/station"]));
+        let source = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(5, 4, 1));
+        let target = Selection::from_drag(Coord::new(2, 1, 1), Coord::new(6, 4, 1));
+        let border = BlockSelectionMode::Hollow { line_width: 1 };
+        let tables = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(6, 4, 1))
+            .iter()
+            .map(|coord| (coord, document.instance_ids_at(coord)[0]))
+            .collect::<HashMap<_, _>>();
+
+        let (action, selected) = place_selection_with_mode(
+            &mut document,
+            &tree,
+            source,
+            target.min,
+            SelectionRotation::Original,
+            SelectionPlacement::Move,
+            border,
+        )
+        .unwrap();
+        assert_eq!(selected, target);
+        // the two rings overlap on eight tiles, so twenty tiles change in total
+        assert_eq!(action.edit.changes.len(), 20);
+        document.apply(action.edit);
+
+        // tiles inside both holes are never staged, so their original instances survive untouched
+        for coord in [
+            Coord::new(3, 2, 1),
+            Coord::new(4, 2, 1),
+            Coord::new(3, 3, 1),
+            Coord::new(4, 3, 1),
+        ] {
+            assert_eq!(
+                tile_paths(&document, coord),
+                ["/obj/table", "/turf/floor", "/area/station"]
+            );
+            assert_eq!(document.instance_ids_at(coord)[0], tables[&coord]);
+        }
+
+        // ring tiles the shifted ring no longer covers fall back to the world defaults
+        for coord in [
+            Coord::new(1, 1, 1),
+            Coord::new(1, 2, 1),
+            Coord::new(1, 3, 1),
+            Coord::new(1, 4, 1),
+            Coord::new(5, 2, 1),
+            Coord::new(5, 3, 1),
+        ] {
+            assert_eq!(
+                tile_paths(&document, coord),
+                ["/turf", "/area"],
+                "cleared tile {coord:?}"
+            );
+        }
+
+        // everything on the new ring came from the tile one step to its left
+        for coord in target.iter().filter(|coord| border.includes(target, *coord)) {
+            let origin = Coord::new(coord.x - 1, coord.y, coord.z);
+            assert_eq!(
+                document.instance_ids_at(coord)[0],
+                tables[&origin],
+                "ring tile {coord:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rotated_hollow_block_moves_land_the_ring_on_the_rotated_ring() {
+        let tree = tree();
+        let mut document = grid_document(9, 5, |coord| {
+            prefabs(if coord.x <= 5 {
+                &["/obj/table", "/turf/floor", "/area/station"]
+            } else {
+                &["/obj/chair", "/turf/wall", "/area/space"]
+            })
+        });
+        let source = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(5, 4, 1));
+        let border = BlockSelectionMode::Hollow { line_width: 1 };
+
+        let (action, target) = place_selection_with_mode(
+            &mut document,
+            &tree,
+            source,
+            Coord::new(6, 1, 1),
+            SelectionRotation::Clockwise,
+            SelectionPlacement::Move,
+            border,
+        )
+        .unwrap();
+        // the 5x4 source rotates into a 4x5 destination
+        assert_eq!(target, Selection::from_drag(Coord::new(6, 1, 1), Coord::new(9, 5, 1)));
+        assert_eq!(action.edit.changes.len(), 28);
+        document.apply(action.edit);
+
+        // the rotated ring covers exactly the destination ring, so only its hole keeps the old tiles
+        for coord in target.iter() {
+            let expected: &[&str] = if border.includes(target, coord) {
+                &["/obj/table", "/turf/floor", "/area/station"]
+            } else {
+                &["/obj/chair", "/turf/wall", "/area/space"]
+            };
+            assert_eq!(tile_paths(&document, coord), expected, "target tile {coord:?}");
+        }
+        for coord in source.iter().filter(|coord| !border.includes(source, *coord)) {
+            assert_eq!(
+                tile_paths(&document, coord),
+                ["/obj/table", "/turf/floor", "/area/station"]
+            );
+        }
+    }
+
+    #[test]
+    fn mirrored_hollow_block_transforms_only_swap_the_ring() {
+        let tree = tree();
+        let mut document = grid_document(5, 4, |coord| {
+            prefabs(match coord.x {
+                1 => &["/turf/wall", "/area/station"],
+                5 => &["/turf/open/space", "/area/station"],
+                _ => &["/turf/floor", "/area/station"],
+            })
+        });
+        let selection = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(5, 4, 1));
+        let border = BlockSelectionMode::Hollow { line_width: 1 };
+        let before = selection
+            .iter()
+            .map(|coord| (coord, document.placed_tile(coord).unwrap()))
+            .collect::<Vec<_>>();
+
+        let (action, mirrored) = transform_selection_with_mode(
+            &mut document,
+            &tree,
+            selection,
+            SelectionTransform::MirrorHorizontal,
+            border,
+        )
+        .unwrap();
+        assert_eq!(mirrored, selection);
+        // the centre column mirrors onto itself, leaving twelve of the fourteen ring tiles changed
+        assert_eq!(action.edit.changes.len(), 12);
+        document.apply(action.edit);
+
+        for y in [1, 2, 3, 4] {
+            assert_eq!(
+                turf_at(&document, Coord::new(1, y, 1)).path,
+                TreePath::parse("/turf/open/space")
+            );
+            assert_eq!(
+                turf_at(&document, Coord::new(5, y, 1)).path,
+                TreePath::parse("/turf/wall")
+            );
+        }
+        // the hole never took part, so no tile there was reset to the world default either
+        for coord in selection.iter().filter(|coord| !border.includes(selection, *coord)) {
+            assert_eq!(turf_at(&document, coord).path, TreePath::parse("/turf/floor"));
+            assert_eq!(area_at(&document, coord).path, TreePath::parse("/area/station"));
+        }
+
+        assert!(document.undo());
+        for (coord, tile) in before {
+            assert_eq!(document.placed_tile(coord).unwrap(), tile);
+        }
+        assert!(!document.undo());
+    }
+
+    #[test]
     fn block_fill_appends_distinct_objects_and_undoes_as_one_edit() {
         let tree = tree();
         let mut document = grid_document(2, 1, |_| prefabs(&["/turf/floor", "/area/station"]));
@@ -1762,7 +2237,7 @@ mod tests {
             .collect::<Vec<_>>();
         let chair = Prefab::new(TreePath::parse("/obj/chair"));
 
-        let action = fill_selection(&mut document, &tree, target, &chair).unwrap();
+        let action = fill_selection(&mut document, &tree, target, &chair, BlockSelectionMode::Full).unwrap();
         assert_eq!(action.edit.changes.len(), 2);
         assert_eq!(action.affected.len(), 2);
         assert_ne!(action.affected[0], action.affected[1]);
@@ -1805,6 +2280,7 @@ mod tests {
                 &tree,
                 Selection::from_drag(source, Coord::new(3, 1, 1)),
                 &chair,
+                BlockSelectionMode::Full,
             )
             .is_none()
         );
@@ -1821,6 +2297,7 @@ mod tests {
                 &tree,
                 Selection::from_drag(source, Coord::new(2, 1, 1)),
                 &chair,
+                BlockSelectionMode::Full,
             )
             .is_none()
         );

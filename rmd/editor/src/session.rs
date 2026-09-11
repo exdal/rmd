@@ -17,6 +17,7 @@ use editor::{
     focus::AreaFocus,
     frame::{self, FrameInstances, FrameOptions, FrameRenderOptions, PrefabUpdate, TypeVisibility},
     tool::{
+        BlockSelectionMode,
         FillError,
         FillMode,
         MAX_FILL_TILES,
@@ -29,11 +30,11 @@ use editor::{
         default_tile_paths,
         fill_selection as build_selection_fill,
         is_placeable,
-        place_selection as build_selection_placement,
+        place_selection_with_mode as build_selection_placement,
         rotate_point,
         rotate_prefab,
         rotated_selection_at,
-        transform_selection as build_selection_transform,
+        transform_selection_with_mode as build_selection_transform,
         transformed_selection,
     },
     visual,
@@ -332,6 +333,10 @@ impl Session {
     }
 
     pub fn select_block(&mut self, selection: Option<Selection>) -> bool {
+        self.select_block_with_mode(selection, BlockSelectionMode::Full)
+    }
+
+    pub fn select_block_with_mode(&mut self, selection: Option<Selection>, mode: BlockSelectionMode) -> bool {
         let Some(document) = self.state.active_document_mut() else {
             return false;
         };
@@ -341,7 +346,7 @@ impl Session {
                 && selection.min.z == document.z
                 && selection.max.x <= document.map.size.x
                 && selection.max.y <= document.map.size.y
-                && selection.iter().all(|coord| document.allows_edit_at(coord))
+                && mode.tiles(*selection).all(|coord| document.allows_edit_at(coord))
         });
         document.selection = selection;
         document.select_instance(None);
@@ -349,10 +354,11 @@ impl Session {
         selection.is_some()
     }
 
-    pub fn place_selected_block(
+    pub fn place_selected_block_with_mode(
         &mut self, target_min: Coord, rotation: SelectionRotation, placement: SelectionPlacement,
+        mode: BlockSelectionMode,
     ) -> bool {
-        if !self.can_place_selected_block(target_min, rotation, placement) {
+        if !self.can_place_selected_block_with_mode(target_min, rotation, placement, mode) {
             return false;
         }
 
@@ -370,7 +376,15 @@ impl Session {
                 return false;
             };
 
-            build_selection_placement(document, &environment.tree, selection, target_min, rotation, placement)
+            build_selection_placement(
+                document,
+                &environment.tree,
+                selection,
+                target_min,
+                rotation,
+                placement,
+                mode,
+            )
         };
 
         let Some((action, selection)) = built else {
@@ -389,8 +403,8 @@ impl Session {
         true
     }
 
-    pub fn can_place_selected_block(
-        &self, target_min: Coord, rotation: SelectionRotation, _placement: SelectionPlacement,
+    pub fn can_place_selected_block_with_mode(
+        &self, target_min: Coord, rotation: SelectionRotation, _placement: SelectionPlacement, mode: BlockSelectionMode,
     ) -> bool {
         if self.tool() != Tool::BlockSelect {
             return false;
@@ -424,14 +438,16 @@ impl Session {
 
         target.max.x <= document.map.size.x
             && target.max.y <= document.map.size.y
-            && selection
-                .iter()
-                .chain(target.iter())
+            && mode
+                .tiles(selection)
+                .chain(mode.tiles(target))
                 .all(|coord| document.allows_edit_at(coord))
     }
 
-    pub fn fill_selected_block(&mut self, target_min: Coord, rotation: SelectionRotation) -> bool {
-        if !self.can_fill_selected_block(target_min, rotation) {
+    pub fn fill_selected_block(
+        &mut self, target_min: Coord, rotation: SelectionRotation, mode: BlockSelectionMode,
+    ) -> bool {
+        if !self.can_fill_selected_block(target_min, rotation, mode) {
             return false;
         }
 
@@ -455,7 +471,7 @@ impl Session {
                 return false;
             };
 
-            build_selection_fill(document, &environment.tree, target, &prefab).map(|action| (action, target))
+            build_selection_fill(document, &environment.tree, target, &prefab, mode).map(|action| (action, target))
         };
 
         let Some((action, target)) = built else {
@@ -475,7 +491,9 @@ impl Session {
         true
     }
 
-    pub fn can_fill_selected_block(&self, target_min: Coord, rotation: SelectionRotation) -> bool {
+    pub fn can_fill_selected_block(
+        &self, target_min: Coord, rotation: SelectionRotation, mode: BlockSelectionMode,
+    ) -> bool {
         if self.tool() != Tool::BlockSelect {
             return false;
         }
@@ -507,11 +525,13 @@ impl Session {
         target.is_well_formed()
             && target.max.x <= document.map.size.x
             && target.max.y <= document.map.size.y
-            && target.iter().all(|coord| document.allows_edit_at(coord))
+            && mode.tiles(target).all(|coord| document.allows_edit_at(coord))
     }
 
-    pub fn transform_selected_block(&mut self, transform: SelectionTransform) -> bool {
-        if self.tool() != Tool::BlockSelect || !self.can_transform_selected_block(transform) {
+    pub fn transform_selected_block_with_mode(
+        &mut self, transform: SelectionTransform, mode: BlockSelectionMode,
+    ) -> bool {
+        if self.tool() != Tool::BlockSelect || !self.can_transform_selected_block_with_mode(transform, mode) {
             return false;
         }
 
@@ -529,7 +549,7 @@ impl Session {
                 return false;
             };
 
-            build_selection_transform(document, &environment.tree, selection, transform)
+            build_selection_transform(document, &environment.tree, selection, transform, mode)
         };
 
         let Some((action, selection)) = built else {
@@ -548,7 +568,9 @@ impl Session {
         true
     }
 
-    pub fn can_transform_selected_block(&self, transform: SelectionTransform) -> bool {
+    pub fn can_transform_selected_block_with_mode(
+        &self, transform: SelectionTransform, mode: BlockSelectionMode,
+    ) -> bool {
         // holy fuck we need a better solution to this, just copy pasting  same shit over and over
 
         if self.tool() != Tool::BlockSelect {
@@ -578,14 +600,14 @@ impl Session {
 
         target.max.x <= document.map.size.x
             && target.max.y <= document.map.size.y
-            && selection
-                .iter()
-                .chain(target.iter())
+            && mode
+                .tiles(selection)
+                .chain(mode.tiles(target))
                 .all(|coord| document.allows_edit_at(coord))
     }
 
     pub(crate) fn block_preview_sprites(
-        &self, source: Selection, target: Selection, rotation: SelectionRotation,
+        &self, source: Selection, target: Selection, rotation: SelectionRotation, mode: BlockSelectionMode,
     ) -> Vec<BlockPreviewSprite> {
         let Some(document) = self.state.active_document() else {
             return Vec::new();
@@ -597,7 +619,7 @@ impl Session {
 
         let area = environment.tree.roots().area;
         let mut previews = Vec::new();
-        for coord in source.iter() {
+        for coord in mode.tiles(source) {
             let relative = (coord.x - source.min.x, coord.y - source.min.y);
             let transformed = rotate_point(relative, source.width(), source.height(), rotation);
             let destination = Coord::new(target.min.x + transformed.0, target.min.y + transformed.1, target.min.z);
@@ -1513,7 +1535,7 @@ mod tests {
         Environment,
         command::EditGroupId,
         document::{MapDocument, Selection, VarMutation},
-        tool::{FillMode, SelectionPlacement, SelectionRotation, Tool},
+        tool::{BlockSelectionMode, FillMode, SelectionPlacement, SelectionRotation, Tool},
     };
     use objtree::ObjectTree;
     use render::SpriteInstance;
@@ -1630,6 +1652,26 @@ mod tests {
         map.grid[0][0] = vec![base, base, other, base];
         for level in &mut map.grid {
             level[0] = vec![base, base, other, base];
+        }
+        session.state.open_document(MapDocument::new(map, 1));
+        session.rebuild_instances();
+
+        session
+    }
+
+    fn flat_session(width: u32, height: u32) -> Session {
+        let mut session = focus_session();
+        let mut map = Map::new(Size {
+            x: width,
+            y: height,
+            z: 1,
+        });
+        let base = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/turf/open/floor")),
+            Prefab::new(TreePath::parse("/area/station")),
+        ]);
+        for row in &mut map.grid[0] {
+            row.fill(base);
         }
         session.state.open_document(MapDocument::new(map, 1));
         session.rebuild_instances();
@@ -2044,7 +2086,12 @@ mod tests {
             assert!(session.select_block(Some(Selection::from_drag(source, source))));
             let revision = session.revision;
 
-            assert!(session.place_selected_block(destination, SelectionRotation::Original, placement));
+            assert!(session.place_selected_block_with_mode(
+                destination,
+                SelectionRotation::Original,
+                placement,
+                BlockSelectionMode::Full,
+            ));
 
             assert_eq!(
                 session.selection(),
@@ -2075,9 +2122,9 @@ mod tests {
         assert!(session.select_block(Some(Selection::from_drag(source, source))));
         let revision = session.revision;
 
-        assert!(session.can_fill_selected_block(source, SelectionRotation::Original));
-        assert!(session.can_fill_selected_block(destination, SelectionRotation::Original));
-        assert!(session.fill_selected_block(destination, SelectionRotation::Original));
+        assert!(session.can_fill_selected_block(source, SelectionRotation::Original, BlockSelectionMode::Full,));
+        assert!(session.can_fill_selected_block(destination, SelectionRotation::Original, BlockSelectionMode::Full,));
+        assert!(session.fill_selected_block(destination, SelectionRotation::Original, BlockSelectionMode::Full,));
 
         assert_eq!(
             session.selection(),
@@ -2097,6 +2144,119 @@ mod tests {
         assert_eq!(session.revision, revision.wrapping_add(1));
         assert_eq!(session.frame_update.unwrap().previous_revision, revision);
         assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    fn hollow_block_fill_passes_the_border_mode_through_the_session() {
+        let mut session = flat_session(5, 5);
+
+        let table = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/structure/table"))
+            .unwrap();
+        assert!(session.choose_type(table));
+        let prefab = session.palette().unwrap().clone();
+        let selection = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(5, 5, 1));
+        session.set_tool(Tool::BlockSelect);
+        assert!(session.select_block(Some(selection)));
+        let revision = session.revision;
+
+        assert!(session.fill_selected_block(
+            selection.min,
+            SelectionRotation::Original,
+            BlockSelectionMode::Hollow { line_width: 1 },
+        ));
+
+        let has_prefab = |coord| {
+            session
+                .map()
+                .unwrap()
+                .tile_at(coord)
+                .unwrap()
+                .iter()
+                .any(|placed| placed == &prefab)
+        };
+        assert!(has_prefab(Coord::new(1, 3, 1)));
+        assert!(has_prefab(Coord::new(5, 3, 1)));
+        assert!(!has_prefab(Coord::new(3, 3, 1)));
+        assert_eq!(session.revision, revision.wrapping_add(1));
+        assert_eq!(session.frame_update.unwrap().previous_revision, revision);
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    fn hollow_block_moves_pass_the_border_mode_through_the_session() {
+        let mut session = flat_session(7, 5);
+        let table = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/structure/table"))
+            .unwrap();
+        assert!(session.choose_type(table));
+        let prefab = session.palette().unwrap().clone();
+        // (1, 3) sits on the ring and (4, 3) inside the hole of both the source and the destination
+        let on_ring = session.place_at(Coord::new(1, 3, 1), None).unwrap();
+        let in_hole = session.place_at(Coord::new(4, 3, 1), None).unwrap();
+
+        let selection = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(5, 5, 1));
+        let mode = BlockSelectionMode::Hollow { line_width: 1 };
+        session.set_tool(Tool::BlockSelect);
+        assert!(session.select_block_with_mode(Some(selection), mode));
+        let revision = session.revision;
+
+        assert!(session.place_selected_block_with_mode(
+            Coord::new(3, 1, 1),
+            SelectionRotation::Original,
+            SelectionPlacement::Move,
+            mode,
+        ));
+
+        let target = Selection::from_drag(Coord::new(3, 1, 1), Coord::new(7, 5, 1));
+        assert_eq!(session.selection(), Some(target));
+        let document = session.state.active_document().unwrap();
+        assert_eq!(document.instance_location(on_ring).unwrap().coord, Coord::new(3, 3, 1));
+        assert_eq!(document.instance_location(in_hole).unwrap().coord, Coord::new(4, 3, 1));
+        let has_prefab = |coord| {
+            session
+                .map()
+                .unwrap()
+                .tile_at(coord)
+                .unwrap()
+                .iter()
+                .any(|placed| placed == &prefab)
+        };
+        assert!(!has_prefab(Coord::new(1, 3, 1)));
+        assert!(has_prefab(Coord::new(3, 3, 1)));
+        assert!(has_prefab(Coord::new(4, 3, 1)));
+
+        assert_eq!(session.revision, revision.wrapping_add(1));
+        assert_eq!(session.frame_update.unwrap().previous_revision, revision);
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    fn hollow_block_previews_ghost_only_the_ring_tiles() {
+        let session = flat_session(5, 5);
+        let selection = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(5, 5, 1));
+
+        let full = session.block_preview_sprites(
+            selection,
+            selection,
+            SelectionRotation::Original,
+            BlockSelectionMode::Full,
+        );
+        let hollow = session.block_preview_sprites(
+            selection,
+            selection,
+            SelectionRotation::Original,
+            BlockSelectionMode::Hollow { line_width: 1 },
+        );
+
+        // every tile of the flat map ghosts the same sprites, so the ring is 16/25ths of the whole block
+        assert!(!full.is_empty());
+        assert_eq!(full.len() % 25, 0);
+        assert_eq!(hollow.len(), full.len() / 25 * 16);
     }
 
     #[test]

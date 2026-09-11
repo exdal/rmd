@@ -39,7 +39,15 @@ use editor::{
         ICON_PENCIL,
         ICON_SELECT_DRAG,
     },
-    tool::{FillMode, SelectionPlacement, SelectionRotation, SelectionTransform, Tool, rotated_selection_at},
+    tool::{
+        BlockSelectionMode,
+        FillMode,
+        SelectionPlacement,
+        SelectionRotation,
+        SelectionTransform,
+        Tool,
+        rotated_selection_at,
+    },
 };
 use objtree::{ObjectTree, TypeId};
 use render::{InteractionMode, PickRequest, PlacementFlash, Renderer, ViewportInteraction};
@@ -66,6 +74,7 @@ const PLACEMENT_PREVIEW_PERIOD: f64 = 1.5;
 const DEFAULT_CUSTOM_FILL_BOUNDARY: &str = "/turf/closed/wall";
 const MAX_CUSTOM_FILL_SEARCH_RESULTS: usize = 50;
 const BLOCK_PLACEMENT_LABELS: [&str; 4] = ["Move", "Copy", "Fill", "Cancel"];
+const BLOCK_SELECTION_LINE_WIDTH_DRAG_WIDTH: f32 = 140.0;
 const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warning";
 const NEW_MAP_POPUP: &str = "New map##new-map";
 const NEW_MAP_PATH_WIDTH: f32 = 460.0;
@@ -153,6 +162,41 @@ impl DeletionStroke {
         self.cursor = cursor;
 
         moved
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BlockSelectionOptions {
+    full_rectangle: bool,
+    line_width: i32,
+}
+
+impl Default for BlockSelectionOptions {
+    fn default() -> Self {
+        Self {
+            full_rectangle: true,
+            line_width: 1,
+        }
+    }
+}
+
+impl BlockSelectionOptions {
+    fn mode(self) -> BlockSelectionMode {
+        if self.full_rectangle {
+            BlockSelectionMode::Full
+        } else {
+            BlockSelectionMode::Hollow {
+                line_width: self.line_width.max(1) as u32,
+            }
+        }
+    }
+
+    fn label(self) -> String {
+        match self.mode() {
+            BlockSelectionMode::Full => String::from("Full rectangle"),
+            BlockSelectionMode::Hollow { line_width: 1 } => String::from("Hollow, 1-tile line"),
+            BlockSelectionMode::Hollow { line_width } => format!("Hollow, {line_width}-tile line"),
+        }
     }
 }
 
@@ -287,6 +331,7 @@ pub struct UiState {
     deletion_stroke: Option<DeletionStroke>,
     block_selection_anchor: Option<Coord>,
     block_placement: Option<PendingBlockPlacement>,
+    block_selection_options: BlockSelectionOptions,
     fill_mode: FillMode,
     custom_fill_boundaries: Vec<TreePath>,
     custom_fill_search: String,
@@ -340,6 +385,7 @@ impl UiState {
             deletion_stroke: None,
             block_selection_anchor: None,
             block_placement: None,
+            block_selection_options: BlockSelectionOptions::default(),
             fill_mode: FillMode::default(),
             custom_fill_boundaries: vec![TreePath::parse(DEFAULT_CUSTOM_FILL_BOUNDARY)],
             custom_fill_search: String::new(),
@@ -1081,18 +1127,25 @@ impl UiState {
                                 if left_clicked && session.can_edit_at(coord) {
                                     self.block_placement = None;
                                     let selection = Selection::from_drag(coord, coord);
-                                    if session.select_block(Some(selection)) {
+                                    if session
+                                        .select_block_with_mode(Some(selection), self.block_selection_options.mode())
+                                    {
                                         self.block_selection_anchor = Some(coord);
                                     }
                                 }
 
                                 if left_down && let Some(anchor) = self.block_selection_anchor {
-                                    session.select_block(Some(Selection::from_drag(anchor, coord)));
+                                    session.select_block_with_mode(
+                                        Some(Selection::from_drag(anchor, coord)),
+                                        self.block_selection_options.mode(),
+                                    );
                                 }
 
                                 if ui.is_mouse_clicked(MouseButton::Right)
                                     && self.block_selection_anchor.is_none()
-                                    && session.selection().is_some_and(|selection| selection.contains(coord))
+                                    && session.selection().is_some_and(|selection| {
+                                        self.block_selection_options.mode().includes(selection, coord)
+                                    })
                                 {
                                     ui.open_popup(BLOCK_SELECTION_POPUP);
                                 }
@@ -1152,8 +1205,11 @@ impl UiState {
                     camera,
                     displayed,
                     self.block_placement,
-                    viewport_min,
-                    viewport_max,
+                    self.block_selection_options.mode(),
+                    OverlayRect {
+                        min: viewport_min,
+                        max: viewport_max,
+                    },
                 );
 
                 if self.block_selection_anchor.is_none()
@@ -1173,7 +1229,7 @@ impl UiState {
                 }
             }
 
-            let block_menu_handles_escape = draw_block_selection_menu(ui, session);
+            let block_menu_handles_escape = draw_block_selection_menu(ui, session, self.block_selection_options.mode());
             let controls_placement = block_controls_placement(
                 tool,
                 self.block_selection_anchor.is_some(),
@@ -1182,17 +1238,23 @@ impl UiState {
                 self.block_placement,
             );
             let placement_action = controls_placement.and_then(|placement| {
-                let can_move = session.can_place_selected_block(
+                let can_move = session.can_place_selected_block_with_mode(
                     placement.target.min,
                     placement.rotation,
                     SelectionPlacement::Move,
+                    self.block_selection_options.mode(),
                 );
-                let can_copy = session.can_place_selected_block(
+                let can_copy = session.can_place_selected_block_with_mode(
                     placement.target.min,
                     placement.rotation,
                     SelectionPlacement::Copy,
+                    self.block_selection_options.mode(),
                 );
-                let can_fill = session.can_fill_selected_block(placement.target.min, placement.rotation);
+                let can_fill = session.can_fill_selected_block(
+                    placement.target.min,
+                    placement.rotation,
+                    self.block_selection_options.mode(),
+                );
                 draw_block_placement_controls(
                     ui,
                     camera,
@@ -1208,19 +1270,30 @@ impl UiState {
                 ui,
                 session,
                 top_overlay,
+                &mut self.block_selection_options,
                 &mut self.fill_mode,
                 &mut self.custom_fill_boundaries,
                 &mut self.custom_fill_search,
             );
             if let Some((action, placement)) = placement_action {
                 let finished = match action {
-                    BlockPlacementAction::Move => {
-                        session.place_selected_block(placement.target.min, placement.rotation, SelectionPlacement::Move)
-                    },
-                    BlockPlacementAction::Copy => {
-                        session.place_selected_block(placement.target.min, placement.rotation, SelectionPlacement::Copy)
-                    },
-                    BlockPlacementAction::Fill => session.fill_selected_block(placement.target.min, placement.rotation),
+                    BlockPlacementAction::Move => session.place_selected_block_with_mode(
+                        placement.target.min,
+                        placement.rotation,
+                        SelectionPlacement::Move,
+                        self.block_selection_options.mode(),
+                    ),
+                    BlockPlacementAction::Copy => session.place_selected_block_with_mode(
+                        placement.target.min,
+                        placement.rotation,
+                        SelectionPlacement::Copy,
+                        self.block_selection_options.mode(),
+                    ),
+                    BlockPlacementAction::Fill => session.fill_selected_block(
+                        placement.target.min,
+                        placement.rotation,
+                        self.block_selection_options.mode(),
+                    ),
                     BlockPlacementAction::Cancel => {
                         if self.block_placement.is_none() {
                             session.select_block(None);
@@ -1485,46 +1558,70 @@ fn block_selection_bounds(
 
 fn draw_block_selection(
     ui: &Ui, session: &Session, camera: &Controller, displayed: Selection, placement: Option<PendingBlockPlacement>,
-    viewport_min: [f32; 2], viewport_max: [f32; 2],
+    mode: BlockSelectionMode, viewport: OverlayRect,
 ) {
     if let Some(placement) = placement {
-        draw_block_ghost(ui, session, camera, placement, viewport_min, viewport_max);
+        draw_block_ghost(ui, session, camera, placement, mode, viewport);
     }
 
-    let bounds = block_selection_bounds(camera, viewport_min, displayed, session.options.tile_size);
+    let bounds = block_selection_bounds(camera, viewport.min, displayed, session.options.tile_size);
+    let inner_bounds = hollow_selection_inner(displayed, mode)
+        .map(|inner| block_selection_bounds(camera, viewport.min, inner, session.options.tile_size));
     let draw = ui.get_window_draw_list();
-    draw.with_clip_rect(viewport_min, viewport_max, || {
+    draw.with_clip_rect(viewport.min, viewport.max, || {
         draw.add_rect(bounds.min, bounds.max, BLOCK_SELECTION_SHADOW)
             .thickness(4.0)
             .build();
+        if let Some(inner) = inner_bounds {
+            draw.add_rect(inner.min, inner.max, BLOCK_SELECTION_SHADOW)
+                .thickness(4.0)
+                .build();
+        }
         let offset = (ui.time() as f32 * BLOCK_STRIPE_SPEED).rem_euclid(BLOCK_STRIPE_LENGTH * 2.0);
-        let clip = OverlayRect {
-            min: viewport_min,
-            max: viewport_max,
-        };
-        for (start, end, green) in block_border_segments(bounds, clip, offset) {
-            draw.add_line(
-                start,
-                end,
-                if green {
-                    BLOCK_SELECTION_GREEN
-                } else {
-                    BLOCK_SELECTION_WHITE
-                },
-            )
-            .thickness(2.0)
-            .build();
+        for border in std::iter::once(bounds).chain(inner_bounds) {
+            for (start, end, green) in block_border_segments(border, viewport, offset) {
+                draw.add_line(
+                    start,
+                    end,
+                    if green {
+                        BLOCK_SELECTION_GREEN
+                    } else {
+                        BLOCK_SELECTION_WHITE
+                    },
+                )
+                .thickness(2.0)
+                .build();
+            }
         }
     });
 }
 
+fn hollow_selection_inner(selection: Selection, mode: BlockSelectionMode) -> Option<Selection> {
+    let BlockSelectionMode::Hollow { line_width } = mode else {
+        return None;
+    };
+    let line_width = line_width.max(1);
+    let min = Coord::new(
+        selection.min.x.checked_add(line_width)?,
+        selection.min.y.checked_add(line_width)?,
+        selection.min.z,
+    );
+    let max = Coord::new(
+        selection.max.x.checked_sub(line_width)?,
+        selection.max.y.checked_sub(line_width)?,
+        selection.max.z,
+    );
+
+    (min.x <= max.x && min.y <= max.y).then_some(Selection { min, max })
+}
+
 fn draw_block_ghost(
-    ui: &Ui, session: &Session, camera: &Controller, placement: PendingBlockPlacement, viewport_min: [f32; 2],
-    viewport_max: [f32; 2],
+    ui: &Ui, session: &Session, camera: &Controller, placement: PendingBlockPlacement, mode: BlockSelectionMode,
+    viewport: OverlayRect,
 ) {
-    let previews = session.block_preview_sprites(placement.source, placement.target, placement.rotation);
+    let previews = session.block_preview_sprites(placement.source, placement.target, placement.rotation, mode);
     let draw = ui.get_window_draw_list();
-    draw.with_clip_rect(viewport_min, viewport_max, || {
+    draw.with_clip_rect(viewport.min, viewport.max, || {
         for BlockPreviewSprite {
             sprite,
             uv0,
@@ -1539,8 +1636,8 @@ fn draw_block_ghost(
             tint[3] *= BLOCK_GHOST_OPACITY;
             draw.add_image(
                 Renderer::sprite_texture(sprite.texture.index),
-                [viewport_min[0] + top_left[0], viewport_min[1] + top_left[1]],
-                [viewport_min[0] + bottom_right[0], viewport_min[1] + bottom_right[1]],
+                [viewport.min[0] + top_left[0], viewport.min[1] + top_left[1]],
+                [viewport.min[0] + bottom_right[0], viewport.min[1] + bottom_right[1]],
                 uv0,
                 uv1,
                 tint,
@@ -1639,7 +1736,7 @@ fn block_border_point(bounds: OverlayRect, distance: f32) -> [f32; 2] {
     }
 }
 
-fn draw_block_selection_menu(ui: &Ui, session: &mut Session) -> bool {
+fn draw_block_selection_menu(ui: &Ui, session: &mut Session, mode: BlockSelectionMode) -> bool {
     let was_open = ui.is_popup_open(BLOCK_SELECTION_POPUP);
     let mut requested = None;
     if let Some(_popup) = ui.begin_popup(BLOCK_SELECTION_POPUP) {
@@ -1647,14 +1744,14 @@ fn draw_block_selection_menu(ui: &Ui, session: &mut Session) -> bool {
             ("Mirror horizontally", SelectionTransform::MirrorHorizontal),
             ("Mirror vertically", SelectionTransform::MirrorVertical),
         ] {
-            let enabled = session.can_transform_selected_block(transform);
+            let enabled = session.can_transform_selected_block_with_mode(transform, mode);
             if ui.menu_item_enabled_selected_no_shortcut(label, false, enabled) {
                 requested = Some(transform);
             }
         }
     }
     if let Some(transform) = requested {
-        session.transform_selected_block(transform);
+        session.transform_selected_block_with_mode(transform, mode);
     }
 
     was_open
@@ -1786,8 +1883,8 @@ fn request_pick(interaction: &mut ViewportInteraction, request: PickRequest) {
 }
 
 fn draw_top_overlay(
-    ui: &Ui, session: &mut Session, bounds: OverlayRect, fill_mode: &mut FillMode,
-    custom_fill_boundaries: &mut Vec<TreePath>, custom_fill_search: &mut String,
+    ui: &Ui, session: &mut Session, bounds: OverlayRect, block_selection_options: &mut BlockSelectionOptions,
+    fill_mode: &mut FillMode, custom_fill_boundaries: &mut Vec<TreePath>, custom_fill_search: &mut String,
 ) {
     draw_overlay_underlay(ui, bounds);
 
@@ -1797,7 +1894,7 @@ fn draw_top_overlay(
     ui.same_line();
     draw_tool_button(ui, session, Tool::Select, ICON_EYEDROPPER);
     ui.same_line();
-    draw_tool_button(ui, session, Tool::BlockSelect, ICON_SELECT_DRAG);
+    draw_block_select_tool_button(ui, session, block_selection_options);
     ui.same_line();
     draw_tool_button(ui, session, Tool::Delete, ICON_ERASER);
     ui.same_line();
@@ -2054,6 +2151,64 @@ fn draw_fill_limit_warning(ui: &Ui, session: &mut Session, pending: &mut Option<
     }
 
     was_pending
+}
+
+fn draw_block_select_tool_button(ui: &Ui, session: &mut Session, options: &mut BlockSelectionOptions) {
+    const POPUP: &str = "block-selection-options-popup";
+
+    let active_color = ui.style_color(StyleColor::PlotHistogramHovered);
+    let active = (session.tool() == Tool::BlockSelect).then(|| ui.push_style_color(StyleColor::Button, active_color));
+    let spacing = ui.clone_style().item_spacing();
+    let connected = ui.push_style_var(StyleVar::ItemSpacing([0.0, spacing[1]]));
+
+    if ui.button(format!("{ICON_SELECT_DRAG}##block-select-tool")) {
+        session.set_tool(Tool::BlockSelect);
+    }
+    let separator_x = ui.item_rect_max()[0];
+    let separator_min_y = ui.item_rect_min()[1];
+    let separator_max_y = ui.item_rect_max()[1];
+    ui.set_item_tooltip(format!("Block Select ({})", options.label()));
+    ui.same_line();
+
+    let button_size = ui.frame_height();
+    let arrow_width = (button_size * 0.65)
+        .ceil()
+        .max((ui.calc_text_size(ICON_MENU_DOWN.to_string())[0] + 2.0).ceil());
+    let frame_padding = ui.clone_style().frame_padding();
+    let arrow_clicked = {
+        let _padding = ui.push_style_var(StyleVar::FramePadding([0.0, frame_padding[1]]));
+        let _alignment = ui.push_style_var(StyleVar::ButtonTextAlign([0.5, 0.5]));
+        ui.button_with_size(
+            format!("{ICON_MENU_DOWN}##block-fill-options"),
+            [arrow_width, button_size],
+        )
+    };
+    if arrow_clicked {
+        ui.open_popup(POPUP);
+    }
+    ui.set_item_tooltip(format!("Block selection: {}", options.label()));
+    ui.get_window_draw_list().add_line_v(
+        separator_x,
+        separator_min_y + frame_padding[1],
+        separator_max_y - frame_padding[1],
+        [0.0, 0.0, 0.0, 0.7],
+        1.0,
+    );
+
+    drop(connected);
+    drop(active);
+
+    if let Some(_popup) = ui.begin_popup(POPUP) {
+        ui.checkbox("Full rectangle", &mut options.full_rectangle);
+        if !options.full_rectangle {
+            ui.text("Line width");
+            ui.set_next_item_width(BLOCK_SELECTION_LINE_WIDTH_DRAG_WIDTH);
+            ui.drag_int_config("##block-selection-line-width")
+                .range(1, i32::MAX)
+                .flags(DragFlags::ALWAYS_CLAMP)
+                .build(ui, &mut options.line_width);
+        }
+    }
 }
 
 fn draw_fill_tool_button(
@@ -2521,6 +2676,7 @@ mod tests {
         let state = UiState::new().expect("valid window keys");
 
         assert_eq!(state.layout.validate(), Ok(()));
+        assert_eq!(state.block_selection_options, BlockSelectionOptions::default());
         assert_eq!(state.fill_mode, FillMode::Wall);
         assert!(state.object_tree_search.is_empty());
         assert!(state.object_tree_filter.is_none());
@@ -2823,6 +2979,50 @@ mod tests {
                 min: [10.0, 52.0],
                 max: [74.0, 84.0],
             }
+        );
+    }
+
+    #[test]
+    fn block_selection_options_clamp_the_line_width_and_label_the_active_mode() {
+        let mut options = BlockSelectionOptions::default();
+        assert_eq!(options.mode(), BlockSelectionMode::Full);
+        assert_eq!(options.label(), "Full rectangle");
+
+        // the width stays configured while the full rectangle is selected, and is ignored
+        options.line_width = 4;
+        assert_eq!(options.mode(), BlockSelectionMode::Full);
+
+        options.full_rectangle = false;
+        assert_eq!(options.mode(), BlockSelectionMode::Hollow { line_width: 4 });
+        assert_eq!(options.label(), "Hollow, 4-tile line");
+
+        options.line_width = 1;
+        assert_eq!(options.mode(), BlockSelectionMode::Hollow { line_width: 1 });
+        assert_eq!(options.label(), "Hollow, 1-tile line");
+
+        // the drag widget clamps to one, but a stale or hand-edited value must not wrap round the cast
+        for line_width in [0, -1, i32::MIN] {
+            options.line_width = line_width;
+            assert_eq!(options.mode(), BlockSelectionMode::Hollow { line_width: 1 });
+        }
+    }
+
+    #[test]
+    fn hollow_block_selection_exposes_the_inset_hole() {
+        let selection = Selection::from_drag(Coord::new(2, 3, 1), Coord::new(6, 7, 1));
+
+        assert_eq!(hollow_selection_inner(selection, BlockSelectionMode::Full), None);
+        assert_eq!(
+            hollow_selection_inner(selection, BlockSelectionMode::Hollow { line_width: 1 }),
+            Some(Selection::from_drag(Coord::new(3, 4, 1), Coord::new(5, 6, 1)))
+        );
+        assert_eq!(
+            hollow_selection_inner(selection, BlockSelectionMode::Hollow { line_width: 2 }),
+            Some(Selection::from_drag(Coord::new(4, 5, 1), Coord::new(4, 5, 1)))
+        );
+        assert_eq!(
+            hollow_selection_inner(selection, BlockSelectionMode::Hollow { line_width: 3 }),
+            None
         );
     }
 

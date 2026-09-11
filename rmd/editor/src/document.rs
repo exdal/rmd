@@ -165,10 +165,10 @@ impl Selection {
         })
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = Coord> + '_ {
-        let z = self.min.z;
+    pub fn iter(self) -> impl Iterator<Item = Coord> {
+        let (min, max) = (self.min, self.max);
 
-        (self.min.y..=self.max.y).flat_map(move |y| (self.min.x..=self.max.x).map(move |x| Coord::new(x, y, z)))
+        (min.y..=max.y).flat_map(move |y| (min.x..=max.x).map(move |x| Coord::new(x, y, min.z)))
     }
 }
 
