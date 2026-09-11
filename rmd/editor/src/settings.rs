@@ -429,7 +429,7 @@ impl Settings {
         match Self::try_load() {
             Ok(settings) => settings,
             Err(error) => {
-                eprintln!("error loading settings: {error}");
+                log::error!("loading settings: {error}");
 
                 Self::default()
             },
@@ -438,7 +438,7 @@ impl Settings {
 
     pub fn save(&self) {
         if let Err(error) = self.try_save() {
-            eprintln!("error saving settings: {error}");
+            log::error!("saving settings: {error}");
         }
     }
 
@@ -549,6 +549,8 @@ fn settings_path() -> io::Result<PathBuf> {
 }
 
 pub(crate) fn imgui_ini_path() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("imgui.ini")) }
+
+pub(crate) fn log_path() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("latest.log")) }
 
 fn settings_path_from(root: &Path, windows: bool) -> PathBuf {
     if windows {
@@ -845,6 +847,14 @@ mod tests {
         assert_eq!(
             settings_path_from(root, false).with_file_name("imgui.ini"),
             root.join(".config/rmd/imgui.ini")
+        );
+        assert_eq!(
+            settings_path_from(root, true).with_file_name("latest.log"),
+            root.join("rmd/latest.log")
+        );
+        assert_eq!(
+            settings_path_from(root, false).with_file_name("latest.log"),
+            root.join(".config/rmd/latest.log")
         );
     }
 }

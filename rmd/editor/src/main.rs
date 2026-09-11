@@ -1,3 +1,5 @@
+#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+
 //! ```sh
 //! rmde
 //! rmde <file.dme> [file.dmm] [z]
@@ -11,6 +13,7 @@ mod camera;
 mod gizmo;
 mod inspector;
 mod loader;
+mod logging;
 mod session;
 mod settings;
 mod transform;
@@ -50,20 +53,21 @@ const FONT_DATA: &[u8] = include_bytes!("../assets/FiraMono-Regular.ttf");
 const MDI_FONT_DATA: &[u8] = include_bytes!("../assets/materialdesignicons-webfont.ttf");
 
 fn usage() -> ExitCode {
-    eprintln!("usage: rmde");
-    eprintln!("       rmde <file.dme> [file.dmm] [z]");
-    eprintln!("       rmde <file.dme> [z]");
-    eprintln!("       rmde <file.dmm> [z]");
+    log::error!(
+        "usage: rmde\n       rmde <file.dme> [file.dmm] [z]\n       rmde <file.dme> [z]\n       rmde <file.dmm> [z]"
+    );
 
     ExitCode::FAILURE
 }
 
 fn main() -> ExitCode {
+    logging::init();
+
     let arguments = std::env::args().skip(1).map(PathBuf::from).collect::<Vec<_>>();
     let arguments = match parse_arguments(&arguments) {
         Ok(arguments) => arguments,
         Err(error) => {
-            eprintln!("error: {error}");
+            log::error!("{error}");
 
             return usage();
         },
@@ -95,7 +99,7 @@ fn main() -> ExitCode {
     let ui = match UiState::new() {
         Ok(ui) => ui,
         Err(e) => {
-            eprintln!("error: {e}");
+            log::error!("{e}");
 
             return ExitCode::FAILURE;
         },
@@ -103,7 +107,7 @@ fn main() -> ExitCode {
     let event_loop = match EventLoop::new() {
         Ok(event_loop) => event_loop,
         Err(e) => {
-            eprintln!("error: {e}");
+            log::error!("{e}");
 
             return ExitCode::FAILURE;
         },
@@ -135,7 +139,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("error: {e}");
+            log::error!("{e}");
 
             ExitCode::FAILURE
         },
@@ -315,7 +319,7 @@ impl App {
         if *uploaded_texture_revision != Some(session.texture_revision()) {
             *uploaded_texture_revision = Some(session.texture_revision());
             if let Err(e) = renderer.upload_textures(&session.textures) {
-                eprintln!("error: {e}");
+                log::error!("{e}");
                 ui.set_open_error(Some(e.to_string()));
             }
         }
@@ -395,7 +399,7 @@ impl App {
             },
 
             Outcome::Failed { job, error } => {
-                eprintln!("error: {error}");
+                log::error!("{error}");
                 self.pending_map = None;
                 self.ui.set_open_error(Some(error.clone()));
                 self.ui
@@ -487,7 +491,7 @@ impl ApplicationHandler for App {
         }
 
         if let Err(e) = self.start(event_loop) {
-            eprintln!("error: {e}");
+            log::error!("{e}");
             event_loop.exit();
 
             return;
@@ -508,13 +512,13 @@ impl ApplicationHandler for App {
             (self.platform.as_mut(), self.imgui.as_mut(), self.window.as_ref())
             && let Err(e) = platform.handle_window_event(imgui, window, &event)
         {
-            eprintln!("error: {e}");
+            log::error!("{e}");
         }
 
         match event {
             WindowEvent::CloseRequested => {
                 if let Err(e) = self.shutdown() {
-                    eprintln!("error: {e}");
+                    log::error!("{e}");
                 }
                 event_loop.exit();
             },
@@ -529,7 +533,7 @@ impl ApplicationHandler for App {
                 let redraw = match self.redraw() {
                     Ok(redraw) => redraw,
                     Err(e) => {
-                        eprintln!("error: {e}");
+                        log::error!("{e}");
 
                         Redraw {
                             exit: false,
@@ -559,7 +563,7 @@ impl ApplicationHandler for App {
 
                 if redraw.exit {
                     if let Err(e) = self.shutdown() {
-                        eprintln!("error: {e}");
+                        log::error!("{e}");
                     }
                     event_loop.exit();
                 } else if let Some(window) = self.window.as_ref() {
@@ -575,7 +579,7 @@ impl ApplicationHandler for App {
 impl Drop for App {
     fn drop(&mut self) {
         if let Err(e) = self.shutdown() {
-            eprintln!("error while shutting down: {e}");
+            log::error!("error while shutting down: {e}");
         }
     }
 }

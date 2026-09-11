@@ -157,7 +157,7 @@ impl Session {
         let LoadedMap { path, map, z, errors } = loaded;
 
         for error in &errors {
-            eprintln!("{}: {error}", path.display());
+            log::error!("{}: {error}", path.display());
         }
 
         self.activate_document(MapDocument::open(path, map, z));
@@ -1497,17 +1497,17 @@ pub(crate) fn build_textures(environment: &Environment, progress: &Progress) -> 
             std::iter::once(base.join(name)).chain(environment.resource_dirs.iter().map(|dir| dir.join(name)));
 
         let Some(path) = candidates.find(|path| path.is_file()) else {
-            eprintln!("warning: could not find '{name}' on disk");
+            log::warn!("could not find '{name}' on disk");
             continue;
         };
 
         match IconFile::load_info(&path) {
             Ok(info) => {
                 if let Err(e) = textures.insert_info(name, &info) {
-                    eprintln!("warning: {e}");
+                    log::warn!("{e}");
                 }
             },
-            Err(e) => eprintln!("warning: could not read '{name}': {e}"),
+            Err(e) => log::warn!("could not read '{name}': {e}"),
         }
     }
 
@@ -1555,23 +1555,35 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
         Some(path.strip_prefix(root).unwrap_or(path))
     };
     let mut lines = Vec::new();
-    let mut collect = |line: String| {
-        eprintln!("{line}");
+    let mut collect = |level, line: String, prefix: &str| {
+        log::log!(level, "{}", line.strip_prefix(prefix).unwrap_or(&line));
         if lines.len() < MAX_REPORTED_DIAGNOSTICS {
             lines.push(line);
         }
     };
 
     for error in &diagnostics.preprocess {
-        collect(error.display(path(error.location.file)).to_string());
+        collect(
+            log::Level::Error,
+            error.display(path(error.location.file)).to_string(),
+            "",
+        );
     }
 
     for error in &diagnostics.sema {
-        collect(error.display(path(error.location.file)).to_string());
+        collect(
+            log::Level::Error,
+            error.display(path(error.location.file)).to_string(),
+            "",
+        );
     }
 
     for (name, error) in &diagnostics.icons {
-        collect(format!("warning: could not read '{name}': {error}"));
+        collect(
+            log::Level::Warn,
+            format!("warning: could not read '{name}': {error}"),
+            "warning: ",
+        );
     }
 
     LoadReport {
