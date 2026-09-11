@@ -381,6 +381,7 @@ pub struct UiState {
     load_notice: Option<LoadNotice>,
     load_window_size: [f32; 2],
     load_popup_active: bool,
+    settings_window_size: [f32; 2],
     capturing_keybind: Option<KeybindAction>,
 }
 
@@ -440,6 +441,7 @@ impl UiState {
             load_notice: None,
             load_window_size: [0.0, 0.0],
             load_popup_active: false,
+            settings_window_size: [420.0, 480.0],
             capturing_keybind: None,
         })
     }
@@ -600,6 +602,7 @@ impl UiState {
             &self.settings_window,
             &mut self.show_settings,
             &mut self.capturing_keybind,
+            &mut self.settings_window_size,
             session,
             settings,
         );
@@ -1680,8 +1683,8 @@ fn grouped(value: usize) -> String {
 }
 
 fn draw_settings_window(
-    ui: &Ui, window: &WindowKey, open: &mut bool, capturing: &mut Option<KeybindAction>, session: &mut Session,
-    settings: &mut Settings,
+    ui: &Ui, window: &WindowKey, open: &mut bool, capturing: &mut Option<KeybindAction>, measured: &mut [f32; 2],
+    session: &mut Session, settings: &mut Settings,
 ) {
     if !*open {
         *capturing = None;
@@ -1689,43 +1692,51 @@ fn draw_settings_window(
         return;
     }
 
+    let center = ui.main_viewport().work_center();
+    let position = [center[0] - measured[0] / 2.0, center[1] - measured[1] / 2.0];
     let flags = WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_COLLAPSE | WindowFlags::NO_DOCKING;
-    ui.window(window).opened(open).flags(flags).build(|| {
-        ui.checkbox("Show areas", &mut session.options.show_areas);
-        ui.checkbox("Show area outlines", &mut session.options.show_area_outlines);
-        ui.checkbox("Tile placement flash", &mut settings.tile_place_flash);
-        ui.checkbox("Selection guide line", &mut settings.selection_guide_line);
+    ui.window(window)
+        .opened(open)
+        .position(position, Condition::Appearing)
+        .flags(flags)
+        .build(|| {
+            ui.checkbox("Show areas", &mut session.options.show_areas);
+            ui.checkbox("Show area outlines", &mut session.options.show_area_outlines);
+            ui.checkbox("Tile placement flash", &mut settings.tile_place_flash);
+            ui.checkbox("Selection guide line", &mut settings.selection_guide_line);
 
-        ui.text("Highlight");
-        for highlight in SelectionHighlight::ALL {
-            ui.same_line();
-            if ui.radio_button(highlight.label(), settings.selection_highlight == highlight) {
-                settings.selection_highlight = highlight;
+            ui.text("Highlight");
+            for highlight in SelectionHighlight::ALL {
+                ui.same_line();
+                if ui.radio_button(highlight.label(), settings.selection_highlight == highlight) {
+                    settings.selection_highlight = highlight;
+                }
             }
-        }
 
-        ui.separator();
-        ui.text("Keybindings");
-        for action in KeybindAction::ALL {
-            ui.text(action.label());
-            ui.same_line_with_pos(180.0);
+            ui.separator();
+            ui.text("Keybindings");
+            for action in KeybindAction::ALL {
+                ui.text(action.label());
+                ui.same_line_with_pos(180.0);
 
-            let binding = settings.keybindings.get(action).label(ui);
-            let visible = if *capturing == Some(action) {
-                "Press a key..."
-            } else {
-                binding.as_str()
-            };
-            if ui.button_with_size(format!("{visible}##keybind-{}", action.id()), [140.0, 0.0]) {
-                *capturing = (*capturing != Some(action)).then_some(action);
+                let binding = settings.keybindings.get(action).label(ui);
+                let visible = if *capturing == Some(action) {
+                    "Press a key..."
+                } else {
+                    binding.as_str()
+                };
+                if ui.button_with_size(format!("{visible}##keybind-{}", action.id()), [140.0, 0.0]) {
+                    *capturing = (*capturing != Some(action)).then_some(action);
+                }
             }
-        }
 
-        if ui.button("Reset keybindings") {
-            settings.keybindings = KeyBindings::default();
-            *capturing = None;
-        }
-    });
+            if ui.button("Reset keybindings") {
+                settings.keybindings = KeyBindings::default();
+                *capturing = None;
+            }
+
+            *measured = ui.window_size();
+        });
 
     if !*open {
         *capturing = None;
