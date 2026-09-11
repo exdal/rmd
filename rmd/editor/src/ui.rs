@@ -10,6 +10,7 @@ use dear_imgui_rs::{
     DockNodeFlags,
     DockSplit,
     DockspaceError,
+    DragFlags,
     Key,
     MouseButton,
     StyleColor,
@@ -22,11 +23,12 @@ use dear_imgui_rs::{
     WindowKeyError,
     WindowLabel,
 };
-use dmm::{Coord, MapFormat, Prefab};
+use dmm::{Coord, MapFormat, Prefab, Size};
 use editor::{
     command::EditGroupId,
     document::Selection,
     icons::materialdesignicons::{
+        ICON_DOTS_HORIZONTAL,
         ICON_ERASER,
         ICON_EYE,
         ICON_EYE_OFF,
@@ -64,6 +66,12 @@ const PLACEMENT_PREVIEW_PERIOD: f64 = 1.5;
 const DEFAULT_CUSTOM_FILL_BOUNDARY: &str = "/turf/closed/wall";
 const MAX_CUSTOM_FILL_SEARCH_RESULTS: usize = 50;
 const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warning";
+const NEW_MAP_POPUP: &str = "New map##new-map";
+const NEW_MAP_PATH_WIDTH: f32 = 460.0;
+const NEW_MAP_DEFAULT_WIDTH: i32 = 255;
+const NEW_MAP_DEFAULT_HEIGHT: i32 = 255;
+const NEW_MAP_DEFAULT_LEVELS: i32 = 1;
+const NEW_MAP_MAX_DIMENSION: i32 = 255;
 const SAVE_MAP_POPUP: &str = "Save map##save-map";
 const SAVE_MAP_PATH_WIDTH: f32 = 460.0;
 const SAVE_ERROR_COLOR: [f32; 4] = [1.0, 0.4, 0.4, 1.0];
@@ -158,6 +166,29 @@ struct SaveDialog {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NewMapDialog {
+    path: String,
+    format: MapFormat,
+    width: i32,
+    height: i32,
+    levels: i32,
+    error: Option<String>,
+}
+
+impl Default for NewMapDialog {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            format: MapFormat::Tgm,
+            width: NEW_MAP_DEFAULT_WIDTH,
+            height: NEW_MAP_DEFAULT_HEIGHT,
+            levels: NEW_MAP_DEFAULT_LEVELS,
+            error: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PendingBlockPlacement {
     source: Selection,
@@ -184,6 +215,7 @@ pub struct UiOutput {
     pub viewport: (u32, u32),
     pub interaction: ViewportInteraction,
     pub open: Option<OpenRequest>,
+    pub pick_new_map_path: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,6 +285,7 @@ pub struct UiState {
     custom_fill_boundaries: Vec<TreePath>,
     custom_fill_search: String,
     pending_fill_warning: Option<PendingFillWarning>,
+    new_map_dialog: Option<NewMapDialog>,
     save_dialog: Option<SaveDialog>,
     viewport: (u32, u32),
     initial_refit: bool,
@@ -305,6 +338,7 @@ impl UiState {
             custom_fill_boundaries: vec![TreePath::parse(DEFAULT_CUSTOM_FILL_BOUNDARY)],
             custom_fill_search: String::new(),
             pending_fill_warning: None,
+            new_map_dialog: None,
             save_dialog: None,
             viewport: (1, 1),
             initial_refit: true,
@@ -321,6 +355,15 @@ impl UiState {
 
     pub fn request_refit(&mut self) { self.initial_refit = true; }
 
+    pub fn set_new_map_path(&mut self, path: PathBuf, codebase_dir: &Path) {
+        let Some(dialog) = self.new_map_dialog.as_mut() else {
+            return;
+        };
+
+        dialog.path = path.strip_prefix(codebase_dir).unwrap_or(&path).display().to_string();
+        dialog.error = None;
+    }
+
     pub fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, camera: &mut Controller,
     ) -> Result<UiOutput, DockspaceError> {
@@ -334,7 +377,9 @@ impl UiState {
         let mut exit = false;
         let mut open = None;
         let mut show_welcome = false;
+        let mut open_new_map_dialog = false;
         let mut open_save_dialog = false;
+        let mut pick_new_map_path = false;
         let mut toggle_areas = false;
         let mut toggle_area_outlines = false;
         let mut level_delta = 0;
@@ -458,7 +503,17 @@ impl UiState {
 
         self.draw_object_tree(ui, session);
         self.draw_inspector(ui, session);
-        self.draw_welcome(ui, session, settings, &mut open);
+        self.draw_welcome(ui, session, settings, &mut open, &mut open_new_map_dialog);
+        if open_new_map_dialog {
+            self.new_map_dialog = Some(NewMapDialog::default());
+            ui.open_popup(NEW_MAP_POPUP);
+        }
+        let (pick_path, created) = draw_new_map_dialog(ui, session, &mut self.new_map_dialog);
+        pick_new_map_path |= pick_path;
+        if created {
+            self.show_welcome = false;
+            self.initial_refit = true;
+        }
         exit |= if session.map().is_some() {
             self.draw_viewport(ui, session, settings, camera, &mut interaction, &mut refit)
         } else {
@@ -475,10 +530,14 @@ impl UiState {
             viewport: self.viewport,
             interaction,
             open,
+            pick_new_map_path,
         })
     }
 
-    fn draw_welcome(&mut self, ui: &Ui, session: &Session, settings: &Settings, open: &mut Option<OpenRequest>) {
+    fn draw_welcome(
+        &mut self, ui: &Ui, session: &Session, settings: &Settings, open: &mut Option<OpenRequest>,
+        open_new_map_dialog: &mut bool,
+    ) {
         if !self.show_welcome {
             return;
         }
@@ -533,6 +592,9 @@ impl UiState {
                     let base = session.codebase_dir().unwrap_or(codebase);
 
                     ui.text("Start");
+                    if ui.text_link("New map...") {
+                        *open_new_map_dialog = true;
+                    }
                     if ui.text_link("Open map...") {
                         *open = Some(OpenRequest::PickMap);
                     }
@@ -547,7 +609,7 @@ impl UiState {
                             *open = Some(OpenRequest::Map(recent.map.clone()));
                         }
                     }
-                    
+
                     if empty {
                         ui.text_disabled("No recent maps in this codebase");
                     }
@@ -574,7 +636,7 @@ impl UiState {
                     } else {
                         WELCOME_MAP_PREVIEW
                     };
-                    
+
                     let mut shown = 0;
                     for (index, map) in matching.clone().take(limit) {
                         shown += 1;
@@ -1654,6 +1716,146 @@ fn draw_top_overlay(
     draw_z_levels(ui, session);
 }
 
+fn draw_new_map_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<NewMapDialog>) -> (bool, bool) {
+    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
+        | WindowFlags::NO_RESIZE
+        | WindowFlags::NO_MOVE
+        | WindowFlags::NO_COLLAPSE
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::NO_DOCKING;
+    let mut close = false;
+    let mut pick_path = false;
+    let mut created = false;
+
+    if let Some(state) = dialog.as_mut()
+        && let Some(_modal) = ui.begin_modal_popup_config(NEW_MAP_POPUP).flags(flags).begin()
+    {
+        ui.text("Path");
+        let button_size = ui.frame_height();
+        let spacing = ui.clone_style().item_spacing()[0];
+        ui.set_next_item_width(NEW_MAP_PATH_WIDTH - button_size - spacing);
+        let submitted = ui
+            .input_text("##new-map-path", &mut state.path)
+            .enter_returns_true(true)
+            .build();
+        ui.same_line();
+        if ui.button_with_size(
+            format!("{ICON_DOTS_HORIZONTAL}##new-map-path-picker"),
+            [button_size, button_size],
+        ) {
+            pick_path = true;
+        }
+        ui.set_item_tooltip("Choose a map path");
+
+        ui.text("Format");
+        if ui.radio_button("DMM", state.format == MapFormat::Standard) {
+            state.format = MapFormat::Standard;
+        }
+        ui.same_line();
+        if ui.radio_button("TGM", state.format == MapFormat::Tgm) {
+            state.format = MapFormat::Tgm;
+        }
+
+        for (label, id, value) in [
+            ("Width", "##new-map-width", &mut state.width),
+            ("Height", "##new-map-height", &mut state.height),
+            ("Z levels", "##new-map-levels", &mut state.levels),
+        ] {
+            ui.text(label);
+            ui.set_next_item_width(NEW_MAP_PATH_WIDTH);
+            ui.drag_int_config(id)
+                .range(1, NEW_MAP_MAX_DIMENSION)
+                .flags(DragFlags::ALWAYS_CLAMP)
+                .build(ui, value);
+        }
+
+        if let Some(error) = state.error.as_deref() {
+            ui.text_colored(SAVE_ERROR_COLOR, error);
+        }
+        ui.separator();
+
+        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+            close = true;
+            ui.close_current_popup();
+        }
+        ui.same_line();
+
+        let valid_dimensions = [state.width, state.height, state.levels]
+            .into_iter()
+            .all(|dimension| (1..=NEW_MAP_MAX_DIMENSION).contains(&dimension));
+        let can_create = !state.path.trim().is_empty() && valid_dimensions;
+        let clicked = {
+            let _disabled = ui.begin_disabled_with_cond(!can_create);
+
+            ui.button("Create")
+        };
+
+        if can_create && (clicked || submitted) {
+            let result = session
+                .codebase_dir()
+                .ok_or_else(|| String::from("no codebase is loaded"))
+                .and_then(|base| resolve_new_map_path(base, &state.path))
+                .and_then(|path| {
+                    session
+                        .create_map(
+                            &path,
+                            Size {
+                                x: state.width as u32,
+                                y: state.height as u32,
+                                z: state.levels as u32,
+                            },
+                            state.format,
+                        )
+                        .map_err(|error| error.to_string())
+                });
+            match result {
+                Ok(()) => {
+                    created = true;
+                    close = true;
+                    ui.close_current_popup();
+                },
+                Err(error) => state.error = Some(error),
+            }
+        }
+    }
+
+    if close {
+        *dialog = None;
+    }
+
+    (pick_path, created)
+}
+
+fn resolve_new_map_path(codebase_dir: &Path, input: &str) -> Result<PathBuf, String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(String::from("enter a map path"));
+    }
+
+    let mut path = PathBuf::from(input);
+    match path.extension().and_then(|extension| extension.to_str()) {
+        None => {
+            path.set_extension("dmm");
+        },
+        Some(extension) if extension.eq_ignore_ascii_case("dmm") => {},
+        Some(_) => return Err(String::from("map path must use the .dmm extension")),
+    }
+
+    let path = if path.is_absolute() {
+        path
+    } else {
+        codebase_dir.join(path)
+    };
+    if path.exists() {
+        return Err(format!("{} already exists", path.display()));
+    }
+    if !path.parent().is_some_and(Path::is_dir) {
+        return Err(format!("parent directory for {} does not exist", path.display()));
+    }
+
+    Ok(path)
+}
+
 fn draw_save_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<SaveDialog>) {
     let flags = WindowFlags::ALWAYS_AUTO_RESIZE
         | WindowFlags::NO_RESIZE
@@ -2238,6 +2440,7 @@ mod tests {
         );
         assert!(state.custom_fill_search.is_empty());
         assert!(state.pending_fill_warning.is_none());
+        assert!(state.new_map_dialog.is_none());
         assert!(state.save_dialog.is_none());
         assert!(state.show_welcome);
         assert!(state.open_error.is_none());
@@ -2299,6 +2502,54 @@ mod tests {
             codebase_relative(Path::new("/tg"), &outside),
             outside.display().to_string()
         );
+    }
+
+    #[test]
+    fn new_map_defaults_are_255_by_255_with_one_level() {
+        let dialog = NewMapDialog::default();
+
+        assert!(dialog.path.is_empty());
+        assert_eq!(dialog.format, MapFormat::Tgm);
+        assert_eq!((dialog.width, dialog.height, dialog.levels), (255, 255, 1));
+        assert!(dialog.error.is_none());
+    }
+
+    #[test]
+    fn new_map_paths_resolve_from_the_codebase_and_validate_the_target() {
+        let root = std::env::temp_dir().join(format!("rmd-new-map-paths-{}", std::process::id()));
+        let codebase = root.join("codebase");
+        let maps = codebase.join("maps");
+        std::fs::create_dir_all(&maps).unwrap();
+
+        assert_eq!(
+            resolve_new_map_path(&codebase, "maps/station").unwrap(),
+            maps.join("station.dmm")
+        );
+        let outside = root.join("outside.dmm");
+        assert_eq!(
+            resolve_new_map_path(&codebase, &outside.display().to_string()).unwrap(),
+            outside
+        );
+        assert!(
+            resolve_new_map_path(&codebase, "station.txt")
+                .unwrap_err()
+                .contains(".dmm extension")
+        );
+        assert!(
+            resolve_new_map_path(&codebase, "missing/station.dmm")
+                .unwrap_err()
+                .contains("does not exist")
+        );
+
+        let existing = maps.join("existing.dmm");
+        std::fs::write(&existing, "existing").unwrap();
+        assert!(
+            resolve_new_map_path(&codebase, &existing.display().to_string())
+                .unwrap_err()
+                .contains("already exists")
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

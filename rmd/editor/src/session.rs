@@ -8,7 +8,7 @@ use std::{
 };
 
 use dmi::{IconFile, metadata::Dir};
-use dmm::{Coord, Map, MapFormat, Prefab};
+use dmm::{Coord, Map, MapFormat, Prefab, Size};
 use editor::{
     EditorState,
     Environment,
@@ -26,6 +26,7 @@ use editor::{
         Tool,
         ToolContext,
         ToolEdit,
+        default_tile_paths,
         is_placeable,
         place_selection as build_selection_placement,
         rotate_point,
@@ -157,27 +158,64 @@ impl Session {
         }
 
         validate_level(z, map.size.z)?;
-        let document = MapDocument::open(path, map, z);
+        self.activate_document(MapDocument::open(path, map, z));
 
-        self.instances = self
-            .state
-            .environment
-            .as_ref()
-            .map_or_else(FrameInstances::default, |environment| {
-                frame::build_with_options(
-                    &environment.tree,
-                    &environment.icons,
-                    &self.textures,
-                    &document,
-                    FrameRenderOptions {
-                        visibility: &self.type_visibility,
-                        tile_size: self.options.tile_size,
-                    },
-                )
-            });
-        self.state.open_document(document);
-        self.revision = self.revision.wrapping_add(1);
-        self.frame_update = None;
+        Ok(())
+    }
+
+    pub fn create_map(&mut self, path: &Path, size: Size, format: MapFormat) -> Result<(), Box<dyn std::error::Error>> {
+        const MAX_DIMENSION: u32 = 255;
+
+        if size.x == 0
+            || size.y == 0
+            || size.z == 0
+            || size.x > MAX_DIMENSION
+            || size.y > MAX_DIMENSION
+            || size.z > MAX_DIMENSION
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("map dimensions must each be between 1 and {MAX_DIMENSION}"),
+            )
+            .into());
+        }
+        if !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("dmm"))
+        {
+            return Err(
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "map path must use the .dmm extension").into(),
+            );
+        }
+        if path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("{} already exists", path.display()),
+            )
+            .into());
+        }
+        if !path.parent().is_some_and(Path::is_dir) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("parent directory for {} does not exist", path.display()),
+            )
+            .into());
+        }
+
+        let tree = self
+            .tree()
+            .ok_or_else(|| std::io::Error::other("no codebase is loaded"))?;
+        let (turf, area) = default_tile_paths(tree)
+            .ok_or_else(|| std::io::Error::other("the codebase does not define usable /turf and /area types"))?;
+        let mut map = Map::new(size);
+        map.format = format;
+        let key = map.intern_tile(vec![Prefab::new(turf), Prefab::new(area)]);
+        for cell in map.grid.iter_mut().flatten().flatten() {
+            *cell = key;
+        }
+
+        self.activate_document(MapDocument::create(path, map, 1));
 
         Ok(())
     }
@@ -1145,6 +1183,11 @@ impl Session {
         self.revalidate_focus();
     }
 
+    fn activate_document(&mut self, document: MapDocument) {
+        self.state.open_document(document);
+        self.rebuild_instances();
+    }
+
     fn update_instance(&mut self, selected: PrefabInstanceId) { self.update_instances(&[selected]); }
 
     fn update_instances(&mut self, affected: &[PrefabInstanceId]) {
@@ -1384,7 +1427,7 @@ mod tests {
     use std::path::PathBuf;
 
     use dmi::{IconFile, metadata::Dir};
-    use dmm::{Coord, Map, Prefab, Size};
+    use dmm::{Coord, Map, MapFormat, Prefab, Size};
     use editor::{
         Environment,
         command::EditGroupId,
@@ -1429,6 +1472,65 @@ mod tests {
 
         assert_eq!(maps, sorted);
         assert!(discover_maps(&examples().join("does-not-exist")).is_empty());
+    }
+
+    #[test]
+    fn a_new_map_uses_the_requested_size_and_codebase_tile_defaults() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        let path = std::env::temp_dir().join(format!("rmd-new-map-{}.dmm", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        session
+            .create_map(&path, Size { x: 3, y: 2, z: 2 }, MapFormat::Tgm)
+            .unwrap();
+
+        let document = session.state.active_document().unwrap();
+        assert_eq!(document.path.as_deref(), Some(path.as_path()));
+        assert_eq!(document.map.size, Size { x: 3, y: 2, z: 2 });
+        assert_eq!(document.map.format, MapFormat::Tgm);
+        assert_eq!(document.z, 1);
+        assert!(document.is_dirty());
+        assert_eq!(document.map.dictionary.len(), 1);
+        for coord in [Coord::new(1, 1, 1), Coord::new(3, 2, 2)] {
+            assert_eq!(
+                document
+                    .map
+                    .tile_at(coord)
+                    .unwrap()
+                    .iter()
+                    .map(|prefab| prefab.path.to_string())
+                    .collect::<Vec<_>>(),
+                ["/turf", "/area"]
+            );
+        }
+
+        session.save_map_as(&path, MapFormat::Tgm).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .starts_with("//MAP CONVERTED BY dmm2tgm.py")
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn new_map_creation_rejects_invalid_dimensions_and_existing_targets() {
+        let mut session = Session::new();
+        let path = std::env::temp_dir().join(format!("rmd-new-map-collision-{}.dmm", std::process::id()));
+
+        let error = session
+            .create_map(&path, Size { x: 0, y: 1, z: 1 }, MapFormat::Standard)
+            .unwrap_err();
+        assert!(error.to_string().contains("between 1 and 255"));
+
+        std::fs::write(&path, "existing").unwrap();
+        let error = session
+            .create_map(&path, Size { x: 1, y: 1, z: 1 }, MapFormat::Standard)
+            .unwrap_err();
+        assert!(error.to_string().contains("already exists"));
+        let _ = std::fs::remove_file(path);
     }
 
     fn focus_session() -> Session {

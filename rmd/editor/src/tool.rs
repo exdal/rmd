@@ -368,7 +368,7 @@ fn build_selection_edit(
     ))
 }
 
-fn default_tile_paths(tree: &ObjectTree) -> Option<(TreePath, TreePath)> {
+pub fn default_tile_paths(tree: &ObjectTree) -> Option<(TreePath, TreePath)> {
     Some((
         default_path(tree, "turf", tree.roots().turf?)?,
         default_path(tree, "area", tree.roots().area?)?,
@@ -939,6 +939,7 @@ mod tests {
         Tool,
         ToolContext,
         copy_selection,
+        default_tile_paths,
         move_selection,
         place_selection,
         rotate_point,
@@ -1742,6 +1743,10 @@ mod tests {
                 },
             );
         }
+        assert_eq!(
+            default_tile_paths(&tree),
+            Some((TreePath::parse("/turf/open/space"), TreePath::parse("/area/space")))
+        );
         let mut document = grid_document(2, 1, |coord| {
             if coord.x == 1 {
                 prefabs(&["/obj/table", "/turf/floor", "/area/station"])

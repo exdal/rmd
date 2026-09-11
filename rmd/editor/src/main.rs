@@ -192,6 +192,7 @@ fn window_title(session: &Session) -> String {
 struct Redraw {
     exit: bool,
     open: Option<OpenRequest>,
+    pick_new_map_path: bool,
 }
 
 enum Opened {
@@ -281,6 +282,7 @@ impl App {
             return Ok(Redraw {
                 exit: false,
                 open: None,
+                pick_new_map_path: false,
             });
         };
 
@@ -324,6 +326,7 @@ impl App {
         Ok(Redraw {
             exit: output.exit,
             open: output.open,
+            pick_new_map_path: output.pick_new_map_path,
         })
     }
 
@@ -371,6 +374,24 @@ impl App {
         };
 
         dialog.pick_file()
+    }
+
+    fn pick_new_map_path(&mut self) {
+        let Some(codebase_dir) = self.session.codebase_dir().map(ToOwned::to_owned) else {
+            return;
+        };
+        let dialog = rfd::FileDialog::new()
+            .add_filter("BYOND map", &["dmm"])
+            .set_title("Choose new map path")
+            .set_directory(&codebase_dir);
+        let dialog = match self.window.as_ref() {
+            Some(window) => dialog.set_parent(window),
+            None => dialog,
+        };
+
+        if let Some(path) = dialog.save_file() {
+            self.ui.set_new_map_path(path, &codebase_dir);
+        }
     }
 
     fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -451,10 +472,14 @@ impl ApplicationHandler for App {
                         Redraw {
                             exit: false,
                             open: None,
+                            pick_new_map_path: false,
                         }
                     },
                 };
 
+                if redraw.pick_new_map_path {
+                    self.pick_new_map_path();
+                }
                 if let Some(request) = redraw.open {
                     self.apply_open(request);
                 }

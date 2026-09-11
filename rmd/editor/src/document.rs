@@ -1,5 +1,5 @@
 use core::types::{Identifier, Value};
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, io::Write, path::PathBuf};
 
 pub use dmm::PrefabInstanceId;
 use dmm::{Coord, Map, MapFormat, Prefab, key::Key};
@@ -15,6 +15,7 @@ pub struct MapDocument {
     pub history: History,
     pub z: u32,
     pub selection: Option<Selection>,
+    needs_initial_save: bool,
     selected_instance: Option<PrefabInstanceId>,
     instances: PrefabInstances,
     key_usage: HashMap<Key, usize>,
@@ -185,6 +186,7 @@ impl MapDocument {
             history: History::new(),
             z,
             selection: None,
+            needs_initial_save: false,
             selected_instance: None,
             instances,
             key_usage,
@@ -195,6 +197,14 @@ impl MapDocument {
     pub fn open(path: impl Into<PathBuf>, map: Map, z: u32) -> Self {
         Self {
             path: Some(path.into()),
+            ..Self::new(map, z)
+        }
+    }
+
+    pub fn create(path: impl Into<PathBuf>, map: Map, z: u32) -> Self {
+        Self {
+            path: Some(path.into()),
+            needs_initial_save: true,
             ..Self::new(map, z)
         }
     }
@@ -210,7 +220,7 @@ impl MapDocument {
         if self.is_dirty() { format!("{name} *") } else { name }
     }
 
-    pub fn is_dirty(&self) -> bool { self.history.is_dirty() }
+    pub fn is_dirty(&self) -> bool { self.needs_initial_save || self.history.is_dirty() }
 
     pub fn instance_ids_at(&self, coord: Coord) -> &[PrefabInstanceId] { self.instances.ids_at(coord) }
 
@@ -414,10 +424,17 @@ impl MapDocument {
         let path = path.into();
 
         self.map.prune_dictionary();
-        dmm::writer::MapWriter::new(&self.map).with_format(format).save(&path)?;
+        let writer = dmm::writer::MapWriter::new(&self.map).with_format(format);
+        if self.needs_initial_save {
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+            file.write_all(writer.write().as_bytes())?;
+        } else {
+            writer.save(&path)?;
+        }
 
         self.map.format = format;
         self.path = Some(path);
+        self.needs_initial_save = false;
         self.history.mark_saved();
 
         Ok(())
@@ -915,6 +932,34 @@ mod tests {
                 .expect("written map")
                 .starts_with("//MAP CONVERTED BY dmm2tgm.py")
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_created_document_is_dirty_and_will_not_replace_its_first_target() {
+        let dir = std::env::temp_dir().join(format!("rmd-created-document-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let target = dir.join("new-map.dmm");
+        let _ = std::fs::remove_file(&target);
+        let mut document = MapDocument::create(&target, shared_tile_map(), 1);
+
+        assert_eq!(document.path.as_deref(), Some(target.as_path()));
+        assert!(document.is_dirty());
+
+        std::fs::write(&target, "existing map").expect("existing target");
+        let error = document.save().expect_err("the first save must not overwrite");
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "existing map");
+        assert!(document.is_dirty());
+
+        std::fs::remove_file(&target).expect("remove collision");
+        document.save().expect("first save");
+        assert!(!document.is_dirty());
+
+        std::fs::write(&target, "replace me").expect("replace target contents");
+        document.save().expect("subsequent save");
+        assert_ne!(std::fs::read_to_string(&target).unwrap(), "replace me");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
