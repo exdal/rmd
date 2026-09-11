@@ -119,6 +119,7 @@ struct InteractionPush {
     guide_valid: u32,
     interaction_mode: u32,
     focused_area_owner: [u32; 2],
+    highlight_tint: u32,
 }
 
 #[repr(C)]
@@ -840,6 +841,7 @@ impl Renderer {
                     guide_valid,
                     interaction_mode: u32::from(interaction.mode.is_delete()),
                     focused_area_owner: frame.focused_area.map(owner_words).unwrap_or([0; 2]),
+                    highlight_tint: u32::from(interaction.highlight.is_tint()),
                 },
             );
             recorded.program.set_bytes(

@@ -8,6 +8,7 @@ use std::{
 
 use dear_imgui_rs::{Key, Ui};
 use editor::frame::FrameOptions;
+use render::HighlightStyle;
 use serde::{Deserialize, Serialize};
 
 const MAX_RECENT: usize = 10;
@@ -359,6 +360,33 @@ impl KeyBindings {
     }
 }
 
+/// how a selected or hovered sprite is marked in the viewport
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SelectionHighlight {
+    #[default]
+    Outline,
+    Tint,
+}
+
+impl SelectionHighlight {
+    pub const ALL: [Self; 2] = [Self::Outline, Self::Tint];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Outline => "Outline",
+            Self::Tint => "Tint",
+        }
+    }
+
+    pub const fn style(self) -> HighlightStyle {
+        match self {
+            Self::Outline => HighlightStyle::Outline,
+            Self::Tint => HighlightStyle::Tint,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RecentMap {
     pub map: PathBuf,
@@ -374,6 +402,7 @@ pub(crate) struct Settings {
     pub show_area_outlines: bool,
     pub tile_place_flash: bool,
     pub selection_guide_line: bool,
+    pub selection_highlight: SelectionHighlight,
     pub keybindings: KeyBindings,
     pub recent_codebases: Vec<PathBuf>,
     pub recent: Vec<RecentMap>,
@@ -387,6 +416,7 @@ impl Default for Settings {
             show_area_outlines: true,
             tile_place_flash: true,
             selection_guide_line: true,
+            selection_highlight: SelectionHighlight::Outline,
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
@@ -520,6 +550,7 @@ mod tests {
                 show_area_outlines: true,
                 tile_place_flash: true,
                 selection_guide_line: true,
+                selection_highlight: SelectionHighlight::Outline,
                 keybindings: KeyBindings::default(),
                 recent_codebases: Vec::new(),
                 recent: Vec::new(),
@@ -566,6 +597,15 @@ mod tests {
     }
 
     #[test]
+    fn settings_written_before_the_option_existed_keep_the_marching_outline() {
+        let settings: Settings = toml::from_str("tile_place_flash = false\n").unwrap();
+
+        assert_eq!(settings.selection_highlight, SelectionHighlight::Outline);
+        assert_eq!(settings.selection_highlight.style(), HighlightStyle::Outline);
+        assert_eq!(SelectionHighlight::Tint.style(), HighlightStyle::Tint);
+    }
+
+    #[test]
     fn settings_round_trip_through_toml() {
         let mut settings = Settings {
             maximized: true,
@@ -573,6 +613,7 @@ mod tests {
             show_area_outlines: false,
             tile_place_flash: false,
             selection_guide_line: false,
+            selection_highlight: SelectionHighlight::Tint,
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
@@ -591,6 +632,7 @@ mod tests {
 
         assert!(encoded.contains("[keybindings.show_areas]"));
         assert!(encoded.contains("maximized = true"));
+        assert!(encoded.contains("selection_highlight = \"tint\""));
         assert!(encoded.contains("key = \"G\""));
         assert!(encoded.contains("ctrl = true"));
         assert_eq!(toml::from_str::<Settings>(&encoded).unwrap(), settings);
@@ -604,6 +646,7 @@ mod tests {
             show_area_outlines: false,
             tile_place_flash: false,
             selection_guide_line: false,
+            selection_highlight: SelectionHighlight::Tint,
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
@@ -623,6 +666,7 @@ mod tests {
                 maximized: true,
                 tile_place_flash: false,
                 selection_guide_line: false,
+                selection_highlight: SelectionHighlight::Tint,
                 ..Settings::default()
             }
         );

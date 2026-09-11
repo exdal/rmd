@@ -57,7 +57,7 @@ use crate::{
     gizmo::{BlockGizmoTarget, GizmoState, GizmoViewport},
     inspector::InspectorState,
     session::{BlockPreviewSprite, FillOutcome, PlacementPreview, Session},
-    settings::{BINDABLE_KEYS, KeyBinding, KeyBindings, KeybindAction, Settings},
+    settings::{BINDABLE_KEYS, KeyBinding, KeyBindings, KeybindAction, SelectionHighlight, Settings},
 };
 
 /// How far down the "Blur below" menu goes. The option itself takes any depth.
@@ -443,6 +443,7 @@ impl UiState {
                 .selection_guide_line
                 .then(|| session.selected_offset_guide())
                 .flatten(),
+            highlight: settings.selection_highlight.style(),
             mode: interaction_mode(session.tool()),
             ..Default::default()
         };
@@ -1393,6 +1394,14 @@ fn draw_settings_window(
         ui.checkbox("Show area outlines", &mut session.options.show_area_outlines);
         ui.checkbox("Tile placement flash", &mut settings.tile_place_flash);
         ui.checkbox("Selection guide line", &mut settings.selection_guide_line);
+
+        ui.text("Highlight");
+        for highlight in SelectionHighlight::ALL {
+            ui.same_line();
+            if ui.radio_button(highlight.label(), settings.selection_highlight == highlight) {
+                settings.selection_highlight = highlight;
+            }
+        }
 
         ui.separator();
         ui.text("Keybindings");
@@ -2667,7 +2676,7 @@ mod tests {
     use core::{location::Location, path::TreePath};
 
     use dmm::PrefabInstanceId;
-    use render::SpriteTexture;
+    use render::{HighlightStyle, SpriteTexture};
 
     use super::*;
 
@@ -3096,6 +3105,7 @@ mod tests {
             selected: Some(owner),
             selection_guide: None,
             placement_flash: Some(PlacementFlash { owner, strength: 0.5 }),
+            highlight: HighlightStyle::Tint,
             mode: InteractionMode::Select {
                 pick: Some(PickRequest::Cursor),
             },
@@ -3122,6 +3132,7 @@ mod tests {
             selected,
             ViewportInteraction {
                 placement_flash: interaction.placement_flash,
+                highlight: interaction.highlight,
                 ..Default::default()
             }
         );
@@ -3132,6 +3143,7 @@ mod tests {
             fill,
             ViewportInteraction {
                 placement_flash: interaction.placement_flash,
+                highlight: interaction.highlight,
                 ..Default::default()
             }
         );
@@ -3142,6 +3154,7 @@ mod tests {
             block,
             ViewportInteraction {
                 placement_flash: interaction.placement_flash,
+                highlight: interaction.highlight,
                 ..Default::default()
             }
         );

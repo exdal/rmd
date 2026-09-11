@@ -39,6 +39,20 @@ pub struct SelectionGuide {
     pub target: [f32; 2],
 }
 
+// parallel to settings::SelectionHighlight to avoid circular dep
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HighlightStyle {
+    /// marching stripes traced around the highlighted sprite
+    #[default]
+    Outline,
+    /// flat accent tint over the highlighted sprite
+    Tint,
+}
+
+impl HighlightStyle {
+    pub const fn is_tint(self) -> bool { matches!(self, Self::Tint) }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ViewportInteraction {
     pub cursor: Option<[u32; 2]>,
@@ -46,6 +60,7 @@ pub struct ViewportInteraction {
     pub selected: Option<PrefabInstanceId>,
     pub selection_guide: Option<SelectionGuide>,
     pub placement_flash: Option<PlacementFlash>,
+    pub highlight: HighlightStyle,
     pub mode: InteractionMode,
 }
 

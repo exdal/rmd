@@ -53,12 +53,26 @@ func is_highlighted_owner(u32x2 owner, u32x2 selected_owner, u32x2 hovered_owner
         (any(hovered_owner != u32x2(0)) && same_owner(owner, hovered_owner));
 }
 
+static const f32 SELECTED_TINT_STRENGTH = 0.45;
+static const f32 HOVERED_TINT_STRENGTH = 0.22;
+
+func accent_color(u32 interaction_mode) -> f32x4 {
+    return interaction_mode != 0 ? f32x4(1.0, 0.0, 0.0, 1.0) : f32x4(0.0, 1.0, 0.0, 1.0);
+}
+
 func marching_color(f32 path_position, f32 stripe_offset, u32 interaction_mode) -> f32x4 {
     let stripe_position = path_position - stripe_offset;
     let wrapped = stripe_position - floor(stripe_position / 12.0) * 12.0;
-    let accent = interaction_mode != 0 ? f32x4(1.0, 0.0, 0.0, 1.0) : f32x4(0.0, 1.0, 0.0, 1.0);
 
-    return wrapped < 6.0 ? f32x4(1.0) : accent;
+    return wrapped < 6.0 ? f32x4(1.0) : accent_color(interaction_mode);
+}
+
+func tint_color(f32x4 color, u32 interaction_mode, f32 strength) -> f32x4 {
+    let accent = accent_color(interaction_mode);
+    // premultiplied, like the scene it blends over
+    let tint = f32x4(accent.rgb * color.a, color.a);
+
+    return lerp(color, tint, strength);
 }
 
 func guide_color(f32 path_position, f32 stripe_offset) -> f32x4 {
@@ -79,7 +93,8 @@ func fs_main(
     uniform f32x2 guide_target,
     uniform u32 guide_valid,
     uniform u32 interaction_mode,
-    uniform u32x2 focused_area_owner
+    uniform u32x2 focused_area_owner,
+    uniform u32 highlight_tint
 ) -> f32x4 {
     let color = scene.Sample(input.uv);
     let pixel = i32x2(input.position.xy);
@@ -120,7 +135,7 @@ func fs_main(
     let owner = owner_at(pixel, width, height);
     let on_selected = any(selected_owner != u32x2(0)) && same_owner(owner, selected_owner);
     if (on_selected) {
-        return color;
+        return highlight_tint != 0 ? tint_color(color, interaction_mode, SELECTED_TINT_STRENGTH) : color;
     }
 
     // origin needs to stay under sprite, otherwise it looks annoying
@@ -130,36 +145,43 @@ func fs_main(
 
     let on_hovered = any(hovered_owner != u32x2(0)) && same_owner(owner, hovered_owner);
     if (on_hovered) {
-        return on_guide ? guide_color(guide_path_position, stripe_offset) : color;
+        if (on_guide) {
+            return guide_color(guide_path_position, stripe_offset);
+        }
+
+        return highlight_tint != 0 ? tint_color(color, interaction_mode, HOVERED_TINT_STRENGTH) : color;
     }
 
-    var nearest = i32x2(0);
-    var nearest_distance = 5;
-    for (i32 y = -2; y <= 2; y++) {
-        for (i32 x = -2; x <= 2; x++) {
-            let distance = x * x + y * y;
-            if (distance == 0 || distance > 4 || distance >= nearest_distance) {
-                continue;
+    // tinting fills the sprite itself, so nothing is traced around it
+    if (highlight_tint == 0) {
+        var nearest = i32x2(0);
+        var nearest_distance = 5;
+        for (i32 y = -2; y <= 2; y++) {
+            for (i32 x = -2; x <= 2; x++) {
+                let distance = x * x + y * y;
+                if (distance == 0 || distance > 4 || distance >= nearest_distance) {
+                    continue;
+                }
+
+                let neighbor = owner_at(pixel + i32x2(x, y), width, height);
+                if (is_highlighted_owner(neighbor, selected_owner, hovered_owner)) {
+                    nearest = i32x2(x, y);
+                    nearest_distance = distance;
+                }
+            }
+        }
+
+        if (nearest_distance != 5) {
+            var path_position = 0.0;
+            if (abs(nearest.y) >= abs(nearest.x)) {
+                path_position = nearest.y > 0 ? f32(pixel.x) : -f32(pixel.x);
+            }
+            else {
+                path_position = nearest.x < 0 ? f32(pixel.y) : -f32(pixel.y);
             }
 
-            let neighbor = owner_at(pixel + i32x2(x, y), width, height);
-            if (is_highlighted_owner(neighbor, selected_owner, hovered_owner)) {
-                nearest = i32x2(x, y);
-                nearest_distance = distance;
-            }
+            return marching_color(path_position, stripe_offset, interaction_mode);
         }
-    }
-
-    if (nearest_distance != 5) {
-        var path_position = 0.0;
-        if (abs(nearest.y) >= abs(nearest.x)) {
-            path_position = nearest.y > 0 ? f32(pixel.x) : -f32(pixel.x);
-        }
-        else {
-            path_position = nearest.x < 0 ? f32(pixel.y) : -f32(pixel.y);
-        }
-
-        return marching_color(path_position, stripe_offset, interaction_mode);
     }
 
     if (on_guide) {
