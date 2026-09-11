@@ -325,8 +325,8 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        // `1.#INF` and `1.#IND` are how BYOND spells infinity and not-a-number.
-        if is_float && self.peek(0) == b'#' {
+        // BYOND accepts the non-finite markers with or without a decimal point.
+        if self.peek(0) == b'#' {
             let marker_offset = self.offset;
             self.consume();
             while self.peek(0).is_ascii_alphanumeric() {
@@ -334,6 +334,8 @@ impl<'a> Lexer<'a> {
             }
             if !NUMBER_MARKERS.contains(&self.slice(marker_offset).to_ascii_uppercase().as_str()) {
                 self.offset = marker_offset;
+            } else {
+                is_float = true;
             }
         }
 
@@ -1198,6 +1200,14 @@ mod tests {
         );
         assert_eq!(tokens("1.#INF"), vec![Token::FloatingPointLiteral("1.#INF")]);
         assert_eq!(tokens("1.#IND"), vec![Token::FloatingPointLiteral("1.#IND")]);
+        assert_eq!(tokens("1#INF"), vec![Token::FloatingPointLiteral("1#INF")]);
+        assert_eq!(tokens("1#ind"), vec![Token::FloatingPointLiteral("1#ind")]);
+        assert_eq!(tokens("1#QNAN"), vec![Token::FloatingPointLiteral("1#QNAN")]);
+        assert_eq!(tokens("1#snan"), vec![Token::FloatingPointLiteral("1#snan")]);
+        assert_eq!(
+            tokens("1#NOPE"),
+            vec![Token::IntegerLiteral("1"), Token::Hash, Token::Identifier("NOPE")]
+        );
     }
 
     #[test]
