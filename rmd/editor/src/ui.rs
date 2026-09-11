@@ -79,6 +79,10 @@ const WELCOME_TITLE_SIZE: f32 = 40.0;
 const WELCOME_CONTENT_WIDTH: f32 = 640.0;
 const WELCOME_MIN_INDENT: f32 = 24.0;
 const WELCOME_MAP_PREVIEW: usize = 10;
+const BUILD_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+const BUILD_GIT_SHORT_HASH: Option<&str> = option_env!("RMD_GIT_SHORT_HASH");
+const BUILD_VERSION_URL: Option<&str> = option_env!("RMD_VERSION_URL");
+const BUILD_COMMIT_URL: Option<&str> = option_env!("RMD_COMMIT_URL");
 const BLOCK_SELECTION_POPUP: &str = "Block selection##block-selection";
 const BLOCK_SELECTION_GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 const BLOCK_SELECTION_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -547,10 +551,6 @@ impl UiState {
         let maps_expanded = &mut self.welcome_maps_expanded;
         let open_error = self.open_error.as_deref();
         let codebase = session.environment_path();
-        let subtitle = match codebase {
-            Some(codebase) => codebase.display().to_string(),
-            None => String::from("A map editor for BYOND environments"),
-        };
         ui.window(&self.welcome_window).opened(show_welcome).build(|| {
             let indent = ((ui.content_region_avail()[0] - WELCOME_CONTENT_WIDTH) / 2.0).max(WELCOME_MIN_INDENT);
             ui.dummy([0.0, WELCOME_MIN_INDENT]);
@@ -560,7 +560,11 @@ impl UiState {
                 let _font = ui.push_font_with_size(None, WELCOME_TITLE_SIZE);
                 ui.text("Rapid Map Editor");
             }
-            ui.text_disabled(&subtitle);
+
+            match codebase {
+                Some(codebase) => ui.text_disabled(codebase.display().to_string()),
+                None => draw_welcome_subtitle(ui),
+            }
 
             if let Some(error) = open_error {
                 ui.dummy([0.0, WELCOME_MIN_INDENT]);
@@ -1228,6 +1232,32 @@ impl UiState {
             self.inspector.draw(ui, session);
         });
     }
+}
+
+fn draw_welcome_subtitle(ui: &Ui) {
+    match BUILD_VERSION_URL {
+        Some(url) => {
+            ui.text_link_open_url(BUILD_VERSION, url);
+        },
+        None => ui.text_disabled(BUILD_VERSION),
+    }
+
+    ui.same_line();
+    ui.text_disabled("\u{2022}");
+    ui.same_line();
+
+    let hash = BUILD_GIT_SHORT_HASH.unwrap_or("unknown");
+    match (BUILD_GIT_SHORT_HASH, BUILD_COMMIT_URL) {
+        (Some(_), Some(url)) => {
+            ui.text_link_open_url(hash, url);
+        },
+        _ => ui.text_disabled(hash),
+    }
+
+    ui.same_line();
+    ui.text_disabled("\u{2022}");
+    ui.same_line();
+    ui.text_disabled("A map editor for BYOND");
 }
 
 fn map_matches(base: &Path, map: &Path, needle: &str) -> bool {
