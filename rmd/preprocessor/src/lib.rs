@@ -410,11 +410,7 @@ impl<'a> Preprocessor<'a> {
             }
 
             let state = self.include_stack.last_mut()?;
-            if let Some(token) = state.peeked.take() {
-                return Some(RawToken::source(token));
-            }
-
-            let spanned = state.lexer.advance();
+            let spanned = state.peeked.take().unwrap_or_else(|| state.lexer.advance());
             if spanned.0 != Token::Eof {
                 return Some(RawToken::source(spanned));
             }
@@ -1794,6 +1790,16 @@ mod tests {
             ("nothing.dm", ""),
         ]);
         assert_eq!(empty, "/ datum / a\n> var / x = 1\nvar / y = 2\n<");
+    }
+
+    #[test]
+    fn an_included_file_cannot_leak_a_peeked_eof() {
+        let rendered = pp(&[
+            ("outer.dm", "/datum/a\n\tvar/x = 1\n#include \"tail.dm\"\n/datum/b\n"),
+            ("tail.dm", "\tvar/deep = LAST"),
+        ]);
+
+        assert_eq!(rendered, "/ datum / a\n> var / x = 1\nvar / deep = LAST\n< / datum / b");
     }
 
     /// `stddef.dm`, then `demir.dm`, then the entry. The second prelude file may lean on the first.
