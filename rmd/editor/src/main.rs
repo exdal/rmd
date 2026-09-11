@@ -126,6 +126,7 @@ fn main() -> ExitCode {
     };
 
     let result = event_loop.run_app(&mut app);
+    app.capture_window_settings();
     app.settings.capture_from(&app.session.options);
     app.settings.save();
 
@@ -218,6 +219,7 @@ impl App {
     fn start(&mut self, event_loop: &ActiveEventLoop) -> Result<(), Box<dyn std::error::Error>> {
         let attributes = Window::default_attributes()
             .with_title(&self.title)
+            .with_maximized(self.settings.maximized)
             .with_inner_size(LogicalSize::new(1280, 720));
         let window = Arc::new(event_loop.create_window(attributes)?);
         let size = window.inner_size();
@@ -399,6 +401,8 @@ impl App {
     }
 
     fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.capture_window_settings();
+
         if let (Some(context), Some(consumer), Some(renderer)) =
             (self.imgui.as_mut(), self.consumer.as_ref(), self.renderer.as_mut())
         {
@@ -419,6 +423,12 @@ impl App {
         drop(self.window.take());
 
         Ok(())
+    }
+
+    fn capture_window_settings(&mut self) {
+        if let Some(window) = self.window.as_ref() {
+            self.settings.maximized = window.is_maximized();
+        }
     }
 }
 

@@ -369,6 +369,7 @@ pub(crate) struct RecentMap {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
+    pub maximized: bool,
     pub show_areas: bool,
     pub show_area_outlines: bool,
     pub tile_place_flash: bool,
@@ -381,6 +382,7 @@ pub(crate) struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            maximized: false,
             show_areas: false,
             show_area_outlines: true,
             tile_place_flash: true,
@@ -513,6 +515,7 @@ mod tests {
         assert_eq!(
             Settings::default(),
             Settings {
+                maximized: false,
                 show_areas: false,
                 show_area_outlines: true,
                 tile_place_flash: true,
@@ -565,6 +568,7 @@ mod tests {
     #[test]
     fn settings_round_trip_through_toml() {
         let mut settings = Settings {
+            maximized: true,
             show_areas: true,
             show_area_outlines: false,
             tile_place_flash: false,
@@ -586,6 +590,7 @@ mod tests {
         let encoded = toml::to_string_pretty(&settings).unwrap();
 
         assert!(encoded.contains("[keybindings.show_areas]"));
+        assert!(encoded.contains("maximized = true"));
         assert!(encoded.contains("key = \"G\""));
         assert!(encoded.contains("ctrl = true"));
         assert_eq!(toml::from_str::<Settings>(&encoded).unwrap(), settings);
@@ -594,6 +599,7 @@ mod tests {
     #[test]
     fn frame_options_apply_and_capture_without_touching_other_settings() {
         let mut settings = Settings {
+            maximized: true,
             show_areas: true,
             show_area_outlines: false,
             tile_place_flash: false,
@@ -614,6 +620,7 @@ mod tests {
         assert_eq!(
             settings,
             Settings {
+                maximized: true,
                 tile_place_flash: false,
                 selection_guide_line: false,
                 ..Settings::default()
