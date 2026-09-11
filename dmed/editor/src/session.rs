@@ -8,7 +8,7 @@ use std::{
 };
 
 use dmi::{IconFile, metadata::Dir};
-use dmm::{Coord, Map, Prefab};
+use dmm::{Coord, Map, MapFormat, Prefab};
 use editor::{
     EditorState,
     Environment,
@@ -193,6 +193,22 @@ impl Session {
     pub fn tree(&self) -> Option<&ObjectTree> { self.state.environment.as_ref().map(|environment| &environment.tree) }
 
     pub fn map(&self) -> Option<&Map> { self.state.active_document().map(|document| &document.map) }
+
+    pub fn map_path(&self) -> Option<&Path> {
+        self.state
+            .active_document()
+            .and_then(|document| document.path.as_deref())
+    }
+
+    pub fn map_format(&self) -> Option<MapFormat> { self.map().map(|map| map.format) }
+
+    pub fn save_map_as(&mut self, path: &Path, format: MapFormat) -> std::io::Result<()> {
+        let Some(document) = self.state.active_document_mut() else {
+            return Err(std::io::Error::other("no map is open"));
+        };
+
+        document.save_as(path, format)
+    }
 
     pub fn z(&self) -> u32 { self.state.active_document().map_or(1, |document| document.z) }
 
@@ -2222,5 +2238,32 @@ mod tests {
             Some(&Value::Text("custom wall".into()))
         );
         assert_eq!(session.recent_prefabs().len(), 2);
+    }
+
+    #[test]
+    fn exporting_the_open_map_as_tgm_round_trips_through_the_parser() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        let source = root.join("test.dmm");
+        session.open_map(&source, 1).unwrap();
+
+        let dir = std::env::temp_dir().join(format!("dmed-session-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let exported = dir.join("exported.dmm");
+
+        let before = session.map().cloned().unwrap();
+        session.save_map_as(&exported, dmm::MapFormat::Tgm).expect("export");
+
+        assert_eq!(session.map_path(), Some(exported.as_path()));
+        assert_eq!(session.map_format(), Some(dmm::MapFormat::Tgm));
+
+        let (reparsed, errors) = dmm::parser::parse(&std::fs::read_to_string(&exported).expect("written map"));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(reparsed.format, dmm::MapFormat::Tgm);
+        assert_eq!(reparsed.grid, before.grid);
+        assert_eq!(reparsed.dictionary, before.dictionary);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

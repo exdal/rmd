@@ -1,5 +1,8 @@
 use core::path::TreePath;
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use dear_imgui_rs::{
     DockLayout,
@@ -18,7 +21,7 @@ use dear_imgui_rs::{
     WindowKey,
     WindowKeyError,
 };
-use dmm::{Coord, Prefab};
+use dmm::{Coord, MapFormat, Prefab};
 use editor::{
     command::EditGroupId,
     document::Selection,
@@ -60,6 +63,9 @@ const PLACEMENT_PREVIEW_PERIOD: f64 = 1.5;
 const DEFAULT_CUSTOM_FILL_BOUNDARY: &str = "/turf/closed/wall";
 const MAX_CUSTOM_FILL_SEARCH_RESULTS: usize = 50;
 const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warning";
+const SAVE_MAP_POPUP: &str = "Save map##save-map";
+const SAVE_MAP_PATH_WIDTH: f32 = 460.0;
+const SAVE_ERROR_COLOR: [f32; 4] = [1.0, 0.4, 0.4, 1.0];
 const BLOCK_SELECTION_POPUP: &str = "Block selection##block-selection";
 const BLOCK_SELECTION_GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 const BLOCK_SELECTION_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -138,6 +144,13 @@ struct PendingFillWarning {
     fill_mode: FillMode,
     custom_fill_boundaries: Vec<TreePath>,
     limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SaveDialog {
+    path: String,
+    format: MapFormat,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,6 +238,7 @@ pub struct UiState {
     custom_fill_boundaries: Vec<TreePath>,
     custom_fill_search: String,
     pending_fill_warning: Option<PendingFillWarning>,
+    save_dialog: Option<SaveDialog>,
     viewport: (u32, u32),
     initial_refit: bool,
     show_settings: bool,
@@ -270,6 +284,7 @@ impl UiState {
             custom_fill_boundaries: vec![TreePath::parse(DEFAULT_CUSTOM_FILL_BOUNDARY)],
             custom_fill_search: String::new(),
             pending_fill_warning: None,
+            save_dialog: None,
             viewport: (1, 1),
             initial_refit: true,
             show_settings: false,
@@ -288,6 +303,7 @@ impl UiState {
             .build()?;
 
         let mut exit = false;
+        let mut open_save_dialog = false;
         let mut toggle_areas = false;
         let mut toggle_area_outlines = false;
         let mut level_delta = 0;
@@ -305,6 +321,10 @@ impl UiState {
 
         ui.main_menu_bar(|| {
             ui.menu("File", || {
+                if ui.menu_item_enabled_selected_no_shortcut("Save...", false, session.map().is_some()) {
+                    open_save_dialog = true;
+                }
+                ui.separator();
                 if ui.menu_item("Settings...") {
                     self.show_settings = true;
                 }
@@ -372,6 +392,19 @@ impl UiState {
             session.set_underlay_depth(depth);
         }
 
+        if open_save_dialog {
+            self.save_dialog = Some(SaveDialog {
+                path: session
+                    .map_path()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default(),
+                format: session.map_format().unwrap_or_default(),
+                error: None,
+            });
+            ui.open_popup(SAVE_MAP_POPUP);
+        }
+        draw_save_dialog(ui, session, &mut self.save_dialog);
+
         draw_settings_window(
             ui,
             &self.settings_window,
@@ -431,6 +464,7 @@ impl UiState {
             }
 
             let mut alternate_row = ui.style_color(StyleColor::TableRowBgAlt);
+            // need to handle this in themes, not here but lazy
             alternate_row[3] *= 0.4;
             let _alternate_row = ui.push_style_color(StyleColor::TableRowBgAlt, alternate_row);
             ui.table("object-tree-types")
@@ -938,6 +972,7 @@ impl UiState {
                 && !fill_warning_handles_escape
                 && !block_menu_handles_escape
                 && !block_placement_handles_escape
+                && self.save_dialog.is_none()
                 && self.capturing_keybind.is_none()
             {
                 exit = true;
@@ -1430,6 +1465,69 @@ fn draw_top_overlay(
     let levels_x = (bounds.max[0] - OVERLAY_PADDING - levels_width).max(tools_end + OVERLAY_PADDING);
     ui.set_cursor_screen_pos([levels_x, bounds.min[1] + OVERLAY_PADDING]);
     draw_z_levels(ui, session);
+}
+
+fn draw_save_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<SaveDialog>) {
+    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
+        | WindowFlags::NO_RESIZE
+        | WindowFlags::NO_MOVE
+        | WindowFlags::NO_COLLAPSE
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::NO_DOCKING;
+    let mut close = false;
+
+    if let Some(state) = dialog.as_mut()
+        && let Some(_modal) = ui.begin_modal_popup_config(SAVE_MAP_POPUP).flags(flags).begin()
+    {
+        ui.text("Path");
+        ui.set_next_item_width(SAVE_MAP_PATH_WIDTH);
+        let submitted = ui
+            .input_text("##save-map-path", &mut state.path)
+            .enter_returns_true(true)
+            .build();
+
+        ui.text("Format");
+        if ui.radio_button("DMM", state.format == MapFormat::Standard) {
+            state.format = MapFormat::Standard;
+        }
+        ui.same_line();
+        if ui.radio_button("TGM", state.format == MapFormat::Tgm) {
+            state.format = MapFormat::Tgm;
+        }
+
+        if let Some(error) = state.error.as_deref() {
+            ui.text_colored(SAVE_ERROR_COLOR, error);
+        }
+        ui.separator();
+
+        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+            close = true;
+            ui.close_current_popup();
+        }
+        ui.same_line();
+
+        let path = state.path.trim();
+        let can_save = !path.is_empty();
+        let clicked = {
+            let _disabled = ui.begin_disabled_with_cond(!can_save);
+
+            ui.button("Save")
+        };
+
+        if can_save && (clicked || submitted) {
+            match session.save_map_as(Path::new(path), state.format) {
+                Ok(()) => {
+                    close = true;
+                    ui.close_current_popup();
+                },
+                Err(error) => state.error = Some(error.to_string()),
+            }
+        }
+    }
+
+    if close {
+        *dialog = None;
+    }
 }
 
 fn draw_fill_limit_warning(ui: &Ui, session: &mut Session, pending: &mut Option<PendingFillWarning>) -> bool {
@@ -1953,6 +2051,7 @@ mod tests {
         );
         assert!(state.custom_fill_search.is_empty());
         assert!(state.pending_fill_warning.is_none());
+        assert!(state.save_dialog.is_none());
     }
 
     #[test]

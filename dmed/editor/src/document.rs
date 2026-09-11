@@ -2,7 +2,7 @@ use core::types::{Identifier, Value};
 use std::{collections::HashMap, path::PathBuf};
 
 pub use dmm::PrefabInstanceId;
-use dmm::{Coord, Map, Prefab, key::Key};
+use dmm::{Coord, Map, MapFormat, Prefab, key::Key};
 
 use crate::{
     command::{Edit, EditGroupId, History},
@@ -405,9 +405,19 @@ impl MapDocument {
         let Some(path) = self.path.clone() else {
             return Err(std::io::Error::other("document has no path"));
         };
+        let format = self.map.format;
+
+        self.save_as(path, format)
+    }
+
+    pub fn save_as(&mut self, path: impl Into<PathBuf>, format: MapFormat) -> std::io::Result<()> {
+        let path = path.into();
 
         self.map.prune_dictionary();
-        dmm::writer::MapWriter::new(&self.map).save(path)?;
+        dmm::writer::MapWriter::new(&self.map).with_format(format).save(&path)?;
+
+        self.map.format = format;
+        self.path = Some(path);
         self.history.mark_saved();
 
         Ok(())
@@ -872,5 +882,40 @@ mod tests {
                 .map(|(prefab, _)| prefab.var(&"name".into())),
             Some(None),
         );
+    }
+
+    #[test]
+    fn save_as_writes_the_chosen_format_and_retargets_the_document() {
+        let dir = std::env::temp_dir().join(format!("dmed-save-as-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let original = dir.join("original.dmm");
+        let exported = dir.join("exported.dmm");
+
+        let mut document = MapDocument::open(&original, shared_tile_map(), 1);
+        let coord = Coord::new(1, 1, 1);
+        let mut edit = Edit::new("clear a tile");
+        edit.change(&document, coord, Vec::new());
+        assert!(document.apply(edit));
+        assert!(document.is_dirty());
+
+        document.save_as(&exported, dmm::MapFormat::Tgm).expect("save as tgm");
+
+        let written = std::fs::read_to_string(&exported).expect("written map");
+        assert!(written.starts_with("//MAP CONVERTED BY dmm2tgm.py"), "{written}");
+        assert_eq!(document.path.as_deref(), Some(exported.as_path()));
+        assert_eq!(document.map.format, dmm::MapFormat::Tgm);
+        assert!(!document.is_dirty());
+        assert!(!original.exists(), "the original path must not be written to");
+
+        // the format sticks, so a plain save keeps writing TGM
+        std::fs::remove_file(&exported).expect("remove export");
+        document.save().expect("save");
+        assert!(
+            std::fs::read_to_string(&exported)
+                .expect("written map")
+                .starts_with("//MAP CONVERTED BY dmm2tgm.py")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
