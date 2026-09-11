@@ -672,7 +672,6 @@ impl UiState {
         let show_welcome = &mut self.show_welcome;
         let map_filter = &mut self.welcome_map_filter;
         let maps_expanded = &mut self.welcome_maps_expanded;
-        let open_error = self.open_error.as_deref();
         let codebase = session.environment_path();
         ui.window(&self.welcome_window).opened(show_welcome).build(|| {
             let indent = ((ui.content_region_avail()[0] - WELCOME_CONTENT_WIDTH) / 2.0).max(WELCOME_MIN_INDENT);
@@ -687,12 +686,6 @@ impl UiState {
             match codebase {
                 Some(codebase) => ui.text_disabled(codebase.display().to_string()),
                 None => draw_welcome_subtitle(ui),
-            }
-
-            // the load popup says this too, but only until it is dismissed
-            if let Some(error) = open_error {
-                ui.dummy([0.0, WELCOME_MIN_INDENT]);
-                ui.text_colored(SAVE_ERROR_COLOR, error);
             }
 
             ui.dummy([0.0, WELCOME_MIN_INDENT]);

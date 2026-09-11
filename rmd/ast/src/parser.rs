@@ -278,6 +278,17 @@ impl<'a, 't> Parser<'a, 't> {
         dangling
     }
 
+    /// `/obj/item/ in contents` is accepted as `/obj/item in contents` by BYOND.
+    fn skip_dangling_path_separator(&mut self) -> bool {
+        let dangling = self.peek_is(Token::Slash) && self.peek_at_is(1, Token::In) && !self.token_touches_next(0);
+
+        if dangling {
+            self.cursor += 1;
+        }
+
+        dangling
+    }
+
     /// `/mob.proc/Life`, `.proc/Life`, `/mob/proc/Life`, `proc/Life`
     fn at_path_dot(&self) -> bool {
         self.peek_is(Token::Dot)
@@ -361,7 +372,9 @@ impl<'a, 't> Parser<'a, 't> {
                 },
             }
 
-            if self.peek_is(Token::Slash) || self.at_path_dot() {
+            if self.skip_dangling_path_separator() {
+                break;
+            } else if self.peek_is(Token::Slash) || self.at_path_dot() {
                 self.advance()?;
                 after_separator = true;
             } else if segments.is_empty()
@@ -2471,7 +2484,7 @@ mod tests {
 
     /// `CLERIC_T3 = /datum/action/bloodrage.` is a typo BYOND compiles, so it cannot be fatal
     #[test]
-    fn a_dangling_access_is_not_fatal() {
+    fn dangling_access_and_path_separators_are_not_fatal() {
         let (expressions, root) = parse_expr("list(a = /datum/foo.)");
         assert!(matches!(&expressions[root.index()], Expression::List(args) if args.len() == 1));
 
@@ -2480,6 +2493,21 @@ mod tests {
 
         let (expressions, root) = parse_expr("src.name");
         assert!(matches!(&expressions[root.index()], Expression::Field { .. }));
+
+        let (expressions, root) = parse_expr("/obj/effect/decal/cleanable/ in M");
+        let Expression::Binary {
+            op: BinaryOp::In,
+            lhs_expr,
+            ..
+        } = &expressions[root.index()]
+        else {
+            panic!("expected a membership expression")
+        };
+        assert!(matches!(&expressions[lhs_expr.index()], Expression::Path(path)
+            if path.to_string() == "/obj/effect/decal/cleanable"));
+
+        let (expressions, root) = parse_expr("/datum/in");
+        assert!(matches!(&expressions[root.index()], Expression::Path(path) if path.to_string() == "/datum/in"));
     }
 
     #[test]
