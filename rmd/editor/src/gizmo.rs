@@ -139,6 +139,14 @@ struct DirectionTarget {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct DirectionUpdate {
+    target: DirectionTarget,
+    origin: Option<[f32; 2]>,
+    placement_coord: Option<Coord>,
+    map_view: GizmoMapView,
+}
+
+#[derive(Debug, Clone, Copy)]
 enum DirectionPhase {
     Pending,
     Open {
@@ -259,10 +267,12 @@ impl GizmoState {
             ui,
             session,
             settings,
-            selected_direction_target(target),
-            direction_origin,
-            None,
-            map_view,
+            DirectionUpdate {
+                target: selected_direction_target(target),
+                origin: direction_origin,
+                placement_coord: None,
+                map_view,
+            },
         );
         if let Some(updated) = session.selected_transform() {
             target = updated;
@@ -573,7 +583,17 @@ impl GizmoState {
             id: DirectionGestureTarget::Placement,
             state,
         };
-        let was_direction_active = self.update_direction(ui, session, settings, target, origin, coord, map_view);
+        let was_direction_active = self.update_direction(
+            ui,
+            session,
+            settings,
+            DirectionUpdate {
+                target,
+                origin,
+                placement_coord: coord,
+                map_view,
+            },
+        );
         let state = session.placement_direction().unwrap_or(state);
         let open_wheel = self.direction.and_then(|gesture| match gesture.phase {
             DirectionPhase::Open {
@@ -603,9 +623,14 @@ impl GizmoState {
     }
 
     fn update_direction(
-        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, target: DirectionTarget,
-        origin: Option<[f32; 2]>, placement_coord: Option<Coord>, map_view: GizmoMapView,
+        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, update: DirectionUpdate,
     ) -> bool {
+        let DirectionUpdate {
+            target,
+            origin,
+            placement_coord,
+            map_view,
+        } = update;
         let rotation_key = settings.keybindings.get(KeybindAction::Rotate);
         if self.direction.is_some_and(|gesture| gesture.target != target.id) {
             self.direction = None;

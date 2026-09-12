@@ -269,7 +269,7 @@ impl<'a, 't> Parser<'a, 't> {
     /// `list(a = /datum/foo.)`
     fn skip_dangling_access(&mut self) -> bool {
         let dangling = matches!(self.peek(), Some((Token::Dot | Token::SafeDot, _)))
-            && !self.peek_at(1).is_some_and(|(token, _)| token.word().is_some());
+            && self.peek_at(1).is_none_or(|(token, _)| token.word().is_none());
 
         if dangling {
             self.cursor += 1;

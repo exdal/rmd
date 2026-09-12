@@ -15,6 +15,7 @@ use dear_imgui_rs::{
     Id,
     InputTextMultilineFlags,
     Key,
+    ListClipper,
     MouseButton,
     StyleColor,
     StyleVar,
@@ -336,6 +337,19 @@ struct ObjectTreeFilter {
     children: HashMap<TypeId, Vec<TypeId>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ObjectTreeRow {
+    id: TypeId,
+    parent: Option<usize>,
+    leaf: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ObjectTreeOutput {
+    chosen: Option<TypeId>,
+    visibility_toggle: Option<TypeId>,
+}
+
 impl ObjectTreeFilter {
     fn new(tree: &ObjectTree, atom: TypeId, query: &str) -> Self {
         let matches = all_matching_type_paths(tree, query)
@@ -377,6 +391,15 @@ struct MapViewState {
     block_selection_anchor: Option<Coord>,
     block_placement: Option<PendingBlockPlacement>,
     paste: Option<PendingPaste>,
+}
+
+struct MapViewDraw<'a> {
+    id: DocumentId,
+    index: usize,
+    view: &'a mut MapViewState,
+    interaction: &'a mut MapViewInteraction,
+    refit_requested: bool,
+    keep_open: &'a mut bool,
 }
 
 impl MapViewState {
@@ -850,8 +873,7 @@ impl UiState {
 
     fn draw_object_tree(&mut self, ui: &Ui, session: &mut Session) {
         ui.window(&self.object_tree).build(|| {
-            let mut chosen = None;
-            let mut visibility_toggle = None;
+            let mut output = ObjectTreeOutput::default();
             ui.set_next_item_width(ui.content_region_avail()[0]);
             let search_changed = ui
                 .input_text("##object-tree-search", &mut self.object_tree_search)
@@ -900,25 +922,27 @@ impl UiState {
                         .object_tree_filter
                         .as_ref()
                         .map_or_else(|| vec![atom], |filter| filter.roots.clone());
+                    let mut rows = Vec::new();
                     for root in roots {
-                        draw_type(
+                        collect_type_rows(
                             ui,
-                            session,
                             tree,
                             root,
-                            &mut self.selected,
-                            &mut chosen,
-                            &mut visibility_toggle,
+                            None,
+                            &mut rows,
                             self.object_tree_filter.as_ref(),
                             rebuild_filter && self.object_tree_filter.is_some(),
                         );
                     }
+                    for index in ListClipper::new(rows.len()).begin(ui).iter() {
+                        draw_type_row(ui, session, tree, &rows, index, &mut self.selected, &mut output);
+                    }
                 });
 
-            if let Some(chosen) = chosen {
+            if let Some(chosen) = output.chosen {
                 session.choose_type(chosen);
             }
-            if let Some(id) = visibility_toggle {
+            if let Some(id) = output.visibility_toggle {
                 session.toggle_type_visibility(id);
             }
         });
@@ -961,12 +985,14 @@ impl UiState {
                 ui,
                 session,
                 settings,
-                id,
-                map_view_index,
-                &mut view,
-                &mut interaction,
-                refit,
-                &mut keep_open,
+                MapViewDraw {
+                    id,
+                    index: map_view_index,
+                    view: &mut view,
+                    interaction: &mut interaction,
+                    refit_requested: refit,
+                    keep_open: &mut keep_open,
+                },
             );
 
             if view.visible && !view.rect.is_empty() {
@@ -1072,9 +1098,16 @@ impl UiState {
     }
 
     fn draw_map_view(
-        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, id: DocumentId, map_view_index: usize,
-        view: &mut MapViewState, interaction: &mut MapViewInteraction, refit_requested: bool, keep_open: &mut bool,
+        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, draw: MapViewDraw<'_>,
     ) -> bool {
+        let MapViewDraw {
+            id,
+            index: map_view_index,
+            view,
+            interaction,
+            refit_requested,
+            keep_open,
+        } = draw;
         let mut exit = false;
         let Some(title) = session.state.document(id).map(MapDocument::title) else {
             return exit;
@@ -3255,15 +3288,63 @@ fn z_level_width(ui: &Ui, levels: u32) -> f32 {
     width
 }
 
-fn draw_type(
-    ui: &Ui, session: &Session, tree: &ObjectTree, id: TypeId, selected: &mut Option<TypeId>,
-    chosen: &mut Option<TypeId>, visibility_toggle: &mut Option<TypeId>, filter: Option<&ObjectTreeFilter>,
-    expand: bool,
+fn collect_type_rows(
+    ui: &Ui, tree: &ObjectTree, id: TypeId, parent: Option<usize>, rows: &mut Vec<ObjectTreeRow>,
+    filter: Option<&ObjectTreeFilter>, expand: bool,
 ) {
     let Some(decl) = tree.get(id) else {
         return;
     };
     let children = filter.map_or_else(|| sorted_children(tree, id), |filter| filter.children(id).to_vec());
+    let leaf = children.is_empty();
+    let row = rows.len();
+    rows.push(ObjectTreeRow { id, parent, leaf });
+
+    if leaf {
+        return;
+    }
+
+    let node_id = decl.path.to_string();
+    let storage_id = ui.get_id(&node_id);
+    if expand {
+        ui.with_current_state_storage(|mut storage| storage.set_bool(storage_id, true));
+    }
+    if !ui.tree_node_get_open(storage_id) {
+        return;
+    }
+
+    let _id = ui.push_id(&node_id);
+    for child in children {
+        collect_type_rows(ui, tree, child, Some(row), rows, filter, expand);
+    }
+}
+
+fn draw_type_row(
+    ui: &Ui, session: &Session, tree: &ObjectTree, rows: &[ObjectTreeRow], row: usize, selected: &mut Option<TypeId>,
+    output: &mut ObjectTreeOutput,
+) {
+    let Some(row) = rows.get(row).copied() else {
+        return;
+    };
+    let Some(decl) = tree.get(row.id) else {
+        return;
+    };
+
+    let mut ancestors = Vec::new();
+    let mut parent = row.parent;
+    while let Some(index) = parent {
+        let Some(ancestor) = rows.get(index) else {
+            break;
+        };
+        ancestors.push(ancestor.id);
+        parent = ancestor.parent;
+    }
+    let mut scopes = Vec::with_capacity(ancestors.len());
+    for ancestor in ancestors.into_iter().rev() {
+        if let Some(ancestor) = tree.get(ancestor) {
+            scopes.push(ui.tree_push(ancestor.path.to_string()));
+        }
+    }
 
     let label = decl
         .path
@@ -3271,70 +3352,54 @@ fn draw_type(
         .last()
         .map_or_else(|| decl.path.to_string(), ToString::to_string);
     let node_id = decl.path.to_string();
-    let leaf = children.is_empty();
-    ui.table_next_row();
-    ui.table_next_column();
-    let cursor = ui.cursor_screen_pos();
-    let icon_extent = ui.text_line_height();
-    let icon_spacing = ui.clone_style().item_inner_spacing()[0];
-    let space_width = ui.calc_text_size(" ")[0].max(1.0);
-    let icon_padding = " ".repeat(((icon_extent + icon_spacing) / space_width).ceil() as usize);
-    if expand && !leaf {
-        ui.set_next_item_open(true);
-    }
-    let token = ui
-        .tree_node_config(&node_id)
-        .label(format!("{icon_padding}{label}"))
-        .selected(*selected == Some(id))
-        .leaf(leaf)
-        .no_tree_push_on_open(leaf)
-        .frame_padding(true)
-        .span_avail_width(true)
-        .push();
-    draw_type_icon(ui, session.type_thumbnail(id), cursor);
+    {
+        ui.table_next_row();
+        ui.table_next_column();
+        let cursor = ui.cursor_screen_pos();
+        let icon_extent = ui.text_line_height();
+        let icon_spacing = ui.clone_style().item_inner_spacing()[0];
+        let space_width = ui.calc_text_size(" ")[0].max(1.0);
+        let icon_padding = " ".repeat(((icon_extent + icon_spacing) / space_width).ceil() as usize);
+        let _token = ui
+            .tree_node_config(&node_id)
+            .label(format!("{icon_padding}{label}"))
+            .selected(*selected == Some(row.id))
+            .leaf(row.leaf)
+            .no_tree_push_on_open(true)
+            .frame_padding(true)
+            .span_avail_width(true)
+            .push();
+        draw_type_icon(ui, session.type_thumbnail(row.id), cursor);
 
-    if ui.is_item_clicked() {
-        *selected = Some(id);
-        *chosen = Some(id);
-    }
-    ui.set_item_tooltip(&node_id);
-
-    ui.table_next_column();
-    let visible = session.is_type_visible(id);
-    let icon = if visible { ICON_EYE } else { ICON_EYE_OFF };
-    let transparent = [0.0, 0.0, 0.0, 0.0];
-    let _button = ui.push_style_color(StyleColor::Button, transparent);
-    let _button_hovered = ui.push_style_color(StyleColor::ButtonHovered, transparent);
-    let _button_active = ui.push_style_color(StyleColor::ButtonActive, transparent);
-    let _text = (!visible).then(|| ui.push_style_color(StyleColor::Text, ui.style_color(StyleColor::TextDisabled)));
-    if ui.button_with_size(
-        format!("{icon}##object-type-visibility-{node_id}"),
-        [ui.content_region_avail()[0], ui.frame_height()],
-    ) {
-        *visibility_toggle = Some(id);
-    }
-    ui.set_item_tooltip(if visible {
-        format!("Hide {node_id} and its descendants")
-    } else {
-        format!("Show {node_id} and its descendants")
-    });
-
-    if !leaf && let Some(token) = token {
-        for child in children {
-            draw_type(
-                ui,
-                session,
-                tree,
-                child,
-                selected,
-                chosen,
-                visibility_toggle,
-                filter,
-                expand,
-            );
+        if ui.is_item_clicked() {
+            *selected = Some(row.id);
+            output.chosen = Some(row.id);
         }
+        ui.set_item_tooltip(&node_id);
 
-        token.pop();
+        ui.table_next_column();
+        let visible = session.is_type_visible(row.id);
+        let icon = if visible { ICON_EYE } else { ICON_EYE_OFF };
+        let transparent = [0.0, 0.0, 0.0, 0.0];
+        let _button = ui.push_style_color(StyleColor::Button, transparent);
+        let _button_hovered = ui.push_style_color(StyleColor::ButtonHovered, transparent);
+        let _button_active = ui.push_style_color(StyleColor::ButtonActive, transparent);
+        let _text = (!visible).then(|| ui.push_style_color(StyleColor::Text, ui.style_color(StyleColor::TextDisabled)));
+        if ui.button_with_size(
+            format!("{icon}##object-type-visibility-{node_id}"),
+            [ui.content_region_avail()[0], ui.frame_height()],
+        ) {
+            output.visibility_toggle = Some(row.id);
+        }
+        ui.set_item_tooltip(if visible {
+            format!("Hide {node_id} and its descendants")
+        } else {
+            format!("Show {node_id} and its descendants")
+        });
+    }
+
+    while let Some(scope) = scopes.pop() {
+        scope.pop();
     }
 }
 
@@ -3725,6 +3790,84 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(paths, ["/obj/alpha", "/obj/zeta"]);
+    }
+
+    #[test]
+    fn object_tree_rows_follow_expansion_and_render_a_clipped_search() {
+        let mut tree = ObjectTree::new();
+        tree.register(&TreePath::parse("/atom/structure/thing"), Location::default());
+        tree.register(&TreePath::parse("/atom/movable/item"), Location::default());
+        let atom = tree.roots().atom.expect("registered /atom root");
+        let mut context = dear_imgui_rs::Context::create();
+        context
+            .font_atlas()
+            .try_claim_legacy_renderer()
+            .expect("legacy renderer font atlas should be available")
+            .build();
+        context.io_mut().set_display_size([128.0, 128.0]);
+        context.io_mut().set_delta_time(1.0 / 60.0);
+        let ui = context.frame();
+
+        let expanded = ui
+            .window("object-tree-expanded")
+            .build(|| {
+                let mut rows = Vec::new();
+                collect_type_rows(ui, &tree, atom, None, &mut rows, None, true);
+                rows
+            })
+            .expect("test window should be visible");
+        let paths = expanded
+            .iter()
+            .filter_map(|row| tree.get(row.id))
+            .map(|decl| decl.path.to_string())
+            .collect::<Vec<_>>();
+        let parents = expanded.iter().map(|row| row.parent).collect::<Vec<_>>();
+
+        assert_eq!(
+            paths,
+            [
+                "/atom",
+                "/atom/movable",
+                "/atom/movable/item",
+                "/atom/structure",
+                "/atom/structure/thing"
+            ]
+        );
+        assert_eq!(parents, [None, Some(0), Some(1), Some(0), Some(3)]);
+
+        let collapsed = ui
+            .window("object-tree-collapsed")
+            .build(|| {
+                let mut rows = Vec::new();
+                collect_type_rows(ui, &tree, atom, None, &mut rows, None, false);
+                rows
+            })
+            .expect("test window should be visible");
+        assert_eq!(
+            collapsed,
+            [ObjectTreeRow {
+                id: atom,
+                parent: None,
+                leaf: false
+            }]
+        );
+
+        let mut tree = ObjectTree::new();
+        for index in 0..500 {
+            tree.register(
+                &TreePath::parse(&format!("/atom/common/type_{index}")),
+                Location::default(),
+            );
+        }
+        let mut session = Session::new();
+        session.state.environment = Some(editor::Environment::new(".", tree));
+        let mut state = UiState::new().expect("valid window keys");
+        state.object_tree_search = String::from("atom");
+        state.object_tree_filter_revision = u64::MAX;
+
+        state.draw_object_tree(ui, &mut session);
+
+        assert!(context.render_legacy().valid());
     }
 
     #[test]
