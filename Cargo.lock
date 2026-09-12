@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "ast"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "core",
  "lexer",
@@ -441,7 +441,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "editor"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ast",
  "core",
@@ -1412,7 +1412,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "render"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ash",
  "dear-imgui-rs",
@@ -1911,7 +1911,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "viewer"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "core",
  "dmi",
