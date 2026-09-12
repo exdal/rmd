@@ -1,15 +1,15 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  release:
+    types:
+      - published
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.release.id }}
   cancel-in-progress: false
 
 jobs:
@@ -17,20 +17,15 @@ jobs:
     name: Validate, test, and build
     uses: ./.github/workflows/ci.yml
     with:
-      expected_tag: ${{ github.ref_name }}
+      expected_tag: ${{ github.event.release.tag_name }}
 
   publish:
-    name: Publish GitHub Release
+    name: Upload release assets
     needs: ci
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - name: Check out the release commit and tags
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
       - name: Download the release artifacts
         uses: actions/download-artifact@v5
         with:
@@ -54,56 +49,16 @@ jobs:
             throw "Release assets did not match the expected Windows and Linux files. Found: $($actual -join ', ')"
           }
 
-      - name: Generate release notes from commits
-        shell: pwsh
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $previousTag = & git describe --tags --abbrev=0 --match 'v[0-9]*' "$env:RELEASE_TAG^" 2>$null
-          if ($LASTEXITCODE -ne 0) {
-            $previousTag = $null
-          }
-          $range = if ($previousTag) { "$previousTag..$env:RELEASE_TAG" } else { $env:RELEASE_TAG }
-          $commits = @(& git log --reverse --no-merges --format='%s%x09%h%x09%H' $range)
-          if ($LASTEXITCODE -ne 0 -or $commits.Count -eq 0) {
-            throw "No commits were found for release range '$range'."
-          }
-
-          $notes = @("# $env:RELEASE_TAG", '', '## Changes', '')
-          foreach ($commit in $commits) {
-            $parts = $commit -split "`t", 3
-            if ($parts.Count -ne 3) {
-              throw "Could not parse release commit '$commit'."
-            }
-            $notes += "- $($parts[0]) ([$($parts[1])]($env:REPOSITORY_URL/commit/$($parts[2])))"
-          }
-          if ($previousTag) {
-            $notes += @('', "**Full diff:** [$previousTag...$env:RELEASE_TAG]($env:REPOSITORY_URL/compare/$previousTag...$env:RELEASE_TAG)")
-          }
-
-          [IO.File]::WriteAllText(
-            (Join-Path $env:RUNNER_TEMP 'release-notes.md'),
-            (($notes -join "`n") + "`n"),
-            [Text.UTF8Encoding]::new($false)
-          )
-
-      - name: Create the GitHub Release
+      - name: Upload assets to the GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           $ErrorActionPreference = 'Stop'
 
           $assets = @(Get-ChildItem -File -LiteralPath 'dist' | Sort-Object Name | ForEach-Object FullName)
-          & gh release create $env:RELEASE_TAG @assets `
-            --verify-tag `
-            --fail-on-no-commits `
-            --title $env:RELEASE_TAG `
-            --notes-file (Join-Path $env:RUNNER_TEMP 'release-notes.md')
+          & gh release upload $env:RELEASE_TAG @assets --clobber
           if ($LASTEXITCODE -ne 0) {
-            throw "Could not publish release '$env:RELEASE_TAG'."
+            throw "Could not upload assets to release '$env:RELEASE_TAG'."
           }
