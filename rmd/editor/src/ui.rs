@@ -38,6 +38,7 @@ use editor::{
         ICON_EYE,
         ICON_EYE_OFF,
         ICON_EYEDROPPER,
+        ICON_FILTER,
         ICON_FORMAT_COLOR_FILL,
         ICON_IMAGE_BROKEN,
         ICON_MENU_DOWN,
@@ -69,6 +70,7 @@ use crate::{
         KeyBinding,
         KeyBindings,
         KeybindAction,
+        ObjectTreeFilterOptions,
         ObjectTreeSearchOptions,
         SelectionHighlight,
         Settings,
@@ -123,6 +125,7 @@ const BLOCK_SELECTION_SHADOW: [f32; 4] = [0.0, 0.0, 0.0, 0.85];
 const BLOCK_GHOST_OPACITY: f32 = 0.55;
 const BLOCK_STRIPE_LENGTH: f32 = 6.0;
 const BLOCK_STRIPE_SPEED: f32 = 12.0;
+const OBJECT_TREE_FILTER_OPTIONS_POPUP: &str = "object-tree-filter-options-popup";
 const OBJECT_TREE_SEARCH_OPTIONS_POPUP: &str = "object-tree-search-options-popup";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -347,6 +350,52 @@ struct ObjectTreeFilter {
     children: HashMap<TypeId, Vec<TypeId>>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ObjectTreeTypeFilter {
+    atom: Option<TypeId>,
+    movable: Option<TypeId>,
+    obj: Option<TypeId>,
+    turf: Option<TypeId>,
+    custom: Option<TypeId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObjectTreeFilterAction {
+    Keep,
+    Prune,
+}
+
+impl ObjectTreeTypeFilter {
+    fn new(tree: &ObjectTree, options: &ObjectTreeFilterOptions) -> Self {
+        let roots = tree.roots();
+        let custom = options
+            .custom_enabled
+            .then(|| options.custom_type_path.trim())
+            .filter(|path| !path.is_empty())
+            .and_then(|path| tree.id_of(&TreePath::parse(path)));
+
+        Self {
+            atom: options.atom.then_some(roots.atom).flatten(),
+            movable: options.movable.then_some(roots.movable).flatten(),
+            obj: options.obj.then_some(roots.obj).flatten(),
+            turf: options.turf.then_some(roots.turf).flatten(),
+            custom,
+        }
+    }
+
+    fn action(self, tree: &ObjectTree, id: TypeId) -> ObjectTreeFilterAction {
+        let filtered_by_builtin = [self.atom, self.movable, self.obj, self.turf]
+            .into_iter()
+            .flatten()
+            .any(|filtered| tree.is_subtype_of(id, filtered));
+        if filtered_by_builtin || self.custom.is_some_and(|custom| tree.is_subtype_of(id, custom)) {
+            ObjectTreeFilterAction::Prune
+        } else {
+            ObjectTreeFilterAction::Keep
+        }
+    }
+}
+
 impl ObjectTreeSearchOptions {
     const fn hint(self) -> &'static str {
         match (self.type_paths, self.names) {
@@ -372,10 +421,14 @@ struct ObjectTreeOutput {
 }
 
 impl ObjectTreeFilter {
-    fn new(tree: &ObjectTree, atom: TypeId, query: &str, options: ObjectTreeSearchOptions) -> Self {
+    fn new(
+        tree: &ObjectTree, atom: TypeId, query: &str, options: ObjectTreeSearchOptions,
+        type_filter: ObjectTreeTypeFilter,
+    ) -> Self {
         let matches = matching_object_types(tree, query, options)
             .into_iter()
             .filter(|id| tree.is_subtype_of(*id, atom))
+            .filter(|id| type_filter.action(tree, *id) == ObjectTreeFilterAction::Keep)
             .collect::<Vec<_>>();
         let match_set = matches.iter().copied().collect::<HashSet<_>>();
         let mut filter = Self::default();
@@ -897,11 +950,19 @@ impl UiState {
             let available_width = ui.content_region_avail()[0];
             let button_size = ui.frame_height();
             let spacing = ui.clone_style().item_spacing()[0];
-            ui.set_next_item_width((available_width - button_size - spacing).max(1.0));
+            ui.set_next_item_width((available_width - button_size * 2.0 - spacing * 2.0).max(1.0));
             let search_changed = ui
                 .input_text("##object-tree-search", &mut self.object_tree_search)
                 .hint(settings.object_tree_search.hint())
                 .build();
+            ui.same_line();
+            let filter_clicked = ui.button_with_size("##object-tree-filter-options", [button_size, button_size]);
+            draw_centered_icon(ui, ICON_FILTER);
+            if filter_clicked {
+                ui.open_popup(OBJECT_TREE_FILTER_OPTIONS_POPUP);
+            }
+            ui.set_item_tooltip("Type filters");
+
             ui.same_line();
             let options_clicked = ui.button_with_size("##object-tree-search-options", [button_size, button_size]);
             draw_centered_icon(ui, ICON_COG);
@@ -909,6 +970,29 @@ impl UiState {
                 ui.open_popup(OBJECT_TREE_SEARCH_OPTIONS_POPUP);
             }
             ui.set_item_tooltip("Search options");
+
+            let mut type_filter_changed = false;
+            if let Some(_popup) = ui.begin_popup(OBJECT_TREE_FILTER_OPTIONS_POPUP) {
+                type_filter_changed |= ui.checkbox("Filter /atom", &mut settings.object_tree_filter.atom);
+                type_filter_changed |= ui.checkbox("Filter /movable", &mut settings.object_tree_filter.movable);
+                type_filter_changed |= ui.checkbox("Filter /obj", &mut settings.object_tree_filter.obj);
+                type_filter_changed |= ui.checkbox("Filter /turf", &mut settings.object_tree_filter.turf);
+
+                ui.separator();
+                type_filter_changed |= ui.checkbox(
+                    "Filter custom type path and subtypes",
+                    &mut settings.object_tree_filter.custom_enabled,
+                );
+                let _disabled = ui.begin_disabled_with_cond(!settings.object_tree_filter.custom_enabled);
+                ui.set_next_item_width(280.0);
+                type_filter_changed |= ui
+                    .input_text(
+                        "##object-tree-custom-type-filter",
+                        &mut settings.object_tree_filter.custom_type_path,
+                    )
+                    .hint("/path/to/type")
+                    .build();
+            }
 
             let mut search_options_changed = false;
             if let Some(_popup) = ui.begin_popup(OBJECT_TREE_SEARCH_OPTIONS_POPUP) {
@@ -936,16 +1020,35 @@ impl UiState {
 
                 return;
             };
-            let rebuild_filter =
-                search_changed || search_options_changed || self.object_tree_filter_revision != tree_revision;
+            let type_filter = ObjectTreeTypeFilter::new(tree, &settings.object_tree_filter);
+            let rebuild_filter = search_changed
+                || search_options_changed
+                || type_filter_changed
+                || self.object_tree_filter_revision != tree_revision;
             if rebuild_filter {
-                self.object_tree_filter = (!self.object_tree_search.trim().is_empty())
-                    .then(|| ObjectTreeFilter::new(tree, atom, &self.object_tree_search, settings.object_tree_search));
+                self.object_tree_filter = (!self.object_tree_search.trim().is_empty()).then(|| {
+                    ObjectTreeFilter::new(
+                        tree,
+                        atom,
+                        &self.object_tree_search,
+                        settings.object_tree_search,
+                        type_filter,
+                    )
+                });
                 self.object_tree_filter_revision = tree_revision;
             }
 
             if self.object_tree_filter.as_ref().is_some_and(ObjectTreeFilter::is_empty) {
                 ui.text_disabled("No matching types");
+
+                return;
+            }
+            let roots = self.object_tree_filter.as_ref().map_or_else(
+                || visible_type_roots(tree, atom, type_filter),
+                |filter| filter.roots.clone(),
+            );
+            if roots.is_empty() {
+                ui.text_disabled("No types pass filters");
 
                 return;
             }
@@ -964,12 +1067,8 @@ impl UiState {
                 .width(ui.frame_height() * 2.0)
                 .done()
                 .build(|ui| {
-                    let roots = self
-                        .object_tree_filter
-                        .as_ref()
-                        .map_or_else(|| vec![atom], |filter| filter.roots.clone());
                     let mut rows = Vec::new();
-                    for root in roots {
+                    for root in roots.iter().copied() {
                         collect_type_rows(
                             ui,
                             tree,
@@ -977,6 +1076,7 @@ impl UiState {
                             None,
                             &mut rows,
                             self.object_tree_filter.as_ref(),
+                            type_filter,
                             rebuild_filter && self.object_tree_filter.is_some(),
                         );
                     }
@@ -3383,12 +3483,15 @@ fn z_level_width(ui: &Ui, levels: u32) -> f32 {
 
 fn collect_type_rows(
     ui: &Ui, tree: &ObjectTree, id: TypeId, parent: Option<usize>, rows: &mut Vec<ObjectTreeRow>,
-    filter: Option<&ObjectTreeFilter>, expand: bool,
+    filter: Option<&ObjectTreeFilter>, type_filter: ObjectTreeTypeFilter, expand: bool,
 ) {
     let Some(decl) = tree.get(id) else {
         return;
     };
-    let children = filter.map_or_else(|| sorted_children(tree, id), |filter| filter.children(id).to_vec());
+    let children = filter.map_or_else(
+        || visible_type_children(tree, id, type_filter),
+        |filter| filter.children(id).to_vec(),
+    );
     let leaf = children.is_empty();
     let row = rows.len();
     rows.push(ObjectTreeRow { id, parent, leaf });
@@ -3399,16 +3502,19 @@ fn collect_type_rows(
 
     let node_id = decl.path.to_string();
     let storage_id = ui.get_id(&node_id);
-    if expand {
-        ui.with_current_state_storage(|mut storage| storage.set_bool(storage_id, true));
-    }
+    ui.with_current_state_storage(|mut storage| {
+        let initialize_atom = tree.roots().atom == Some(id) && storage.get_int(storage_id, -1) == -1;
+        if expand || initialize_atom {
+            storage.set_bool(storage_id, true);
+        }
+    });
     if !ui.tree_node_get_open(storage_id) {
         return;
     }
 
     let _id = ui.push_id(&node_id);
     for child in children {
-        collect_type_rows(ui, tree, child, Some(row), rows, filter, expand);
+        collect_type_rows(ui, tree, child, Some(row), rows, filter, type_filter, expand);
     }
 }
 
@@ -3552,6 +3658,25 @@ fn sorted_children(tree: &ObjectTree, parent: TypeId) -> Vec<TypeId> {
     });
 
     children
+}
+
+fn visible_type_roots(tree: &ObjectTree, root: TypeId, filter: ObjectTreeTypeFilter) -> Vec<TypeId> {
+    match filter.action(tree, root) {
+        ObjectTreeFilterAction::Keep => vec![root],
+        ObjectTreeFilterAction::Prune => Vec::new(),
+    }
+}
+
+fn visible_type_children(tree: &ObjectTree, parent: TypeId, filter: ObjectTreeTypeFilter) -> Vec<TypeId> {
+    let mut visible = Vec::new();
+    for child in sorted_children(tree, parent) {
+        match filter.action(tree, child) {
+            ObjectTreeFilterAction::Keep => visible.push(child),
+            ObjectTreeFilterAction::Prune => {},
+        }
+    }
+
+    visible
 }
 
 fn panel_extent(available: [f32; 2]) -> ([f32; 2], (u32, u32)) {
@@ -3906,7 +4031,7 @@ mod tests {
             names: true,
         };
         let matches = matching_object_types(&tree, "PORTABLE", options);
-        let filter = ObjectTreeFilter::new(&tree, atom, "PORTABLE", options);
+        let filter = ObjectTreeFilter::new(&tree, atom, "PORTABLE", options, ObjectTreeTypeFilter::default());
 
         assert_eq!(matches, [parent, child]);
         assert_eq!(filter.roots, [parent]);
@@ -3967,6 +4092,105 @@ mod tests {
     }
 
     #[test]
+    fn built_in_object_tree_filters_prune_the_base_types_and_all_subtypes() {
+        let mut tree = ObjectTree::new();
+        let atom = tree.register(&TreePath::parse("/atom"), Location::default());
+        let movable = tree.register(&TreePath::parse("/atom/movable"), Location::default());
+        let item = tree.register(&TreePath::parse("/obj/item"), Location::default());
+        let open_turf = tree.register(&TreePath::parse("/turf/open"), Location::default());
+        let roots = tree.roots();
+        tree.get_mut(roots.obj.unwrap()).unwrap().parent_type = Some(TreePath::parse("/atom/movable"));
+        tree.get_mut(roots.turf.unwrap()).unwrap().parent_type = Some(TreePath::parse("/atom"));
+        tree.resolve_parent_types();
+
+        for (options, filtered_root, filtered_subtype) in [
+            (
+                ObjectTreeFilterOptions {
+                    atom: true,
+                    ..ObjectTreeFilterOptions::default()
+                },
+                atom,
+                open_turf,
+            ),
+            (
+                ObjectTreeFilterOptions {
+                    movable: true,
+                    ..ObjectTreeFilterOptions::default()
+                },
+                movable,
+                item,
+            ),
+            (
+                ObjectTreeFilterOptions {
+                    obj: true,
+                    ..ObjectTreeFilterOptions::default()
+                },
+                roots.obj.unwrap(),
+                item,
+            ),
+            (
+                ObjectTreeFilterOptions {
+                    turf: true,
+                    ..ObjectTreeFilterOptions::default()
+                },
+                roots.turf.unwrap(),
+                open_turf,
+            ),
+        ] {
+            let filter = ObjectTreeTypeFilter::new(&tree, &options);
+
+            assert_eq!(filter.action(&tree, filtered_root), ObjectTreeFilterAction::Prune);
+            assert_eq!(filter.action(&tree, filtered_subtype), ObjectTreeFilterAction::Prune);
+        }
+    }
+
+    #[test]
+    fn custom_object_tree_filter_prunes_the_type_and_all_subtypes() {
+        let mut tree = ObjectTree::new();
+        let atom = tree.register(&TreePath::parse("/atom"), Location::default());
+        let keep = tree.register(&TreePath::parse("/atom/keep"), Location::default());
+        let removed = tree.register(&TreePath::parse("/atom/remove"), Location::default());
+        let removed_child = tree.register(&TreePath::parse("/atom/remove/child"), Location::default());
+        let options = ObjectTreeFilterOptions {
+            custom_enabled: true,
+            custom_type_path: String::from("/atom/remove"),
+            ..ObjectTreeFilterOptions::default()
+        };
+        let filter = ObjectTreeTypeFilter::new(&tree, &options);
+
+        assert_eq!(visible_type_children(&tree, atom, filter), [keep]);
+        assert_eq!(filter.action(&tree, removed), ObjectTreeFilterAction::Prune);
+        assert_eq!(filter.action(&tree, removed_child), ObjectTreeFilterAction::Prune);
+    }
+
+    #[test]
+    fn object_tree_search_respects_the_active_type_filters() {
+        let mut tree = ObjectTree::new();
+        let atom = tree.register(&TreePath::parse("/atom"), Location::default());
+        let keep = tree.register(&TreePath::parse("/atom/keep_match"), Location::default());
+        tree.register(&TreePath::parse("/atom/remove/keep_match"), Location::default());
+        let type_filter = ObjectTreeTypeFilter::new(
+            &tree,
+            &ObjectTreeFilterOptions {
+                custom_enabled: true,
+                custom_type_path: String::from("/atom/remove"),
+                ..ObjectTreeFilterOptions::default()
+            },
+        );
+
+        let filter = ObjectTreeFilter::new(
+            &tree,
+            atom,
+            "keep_match",
+            ObjectTreeSearchOptions::default(),
+            type_filter,
+        );
+
+        assert_eq!(filter.roots, [keep]);
+        assert!(filter.children(keep).is_empty());
+    }
+
+    #[test]
     fn object_tree_rows_follow_expansion_and_render_a_clipped_search() {
         let mut tree = ObjectTree::new();
         tree.register(&TreePath::parse("/atom/structure/thing"), Location::default());
@@ -3986,7 +4210,16 @@ mod tests {
             .window("object-tree-expanded")
             .build(|| {
                 let mut rows = Vec::new();
-                collect_type_rows(ui, &tree, atom, None, &mut rows, None, true);
+                collect_type_rows(
+                    ui,
+                    &tree,
+                    atom,
+                    None,
+                    &mut rows,
+                    None,
+                    ObjectTreeTypeFilter::default(),
+                    true,
+                );
                 rows
             })
             .expect("test window should be visible");
@@ -4009,11 +4242,46 @@ mod tests {
         );
         assert_eq!(parents, [None, Some(0), Some(1), Some(0), Some(3)]);
 
+        let opened_by_default = ui
+            .window("object-tree-default-open")
+            .build(|| {
+                let mut rows = Vec::new();
+                collect_type_rows(
+                    ui,
+                    &tree,
+                    atom,
+                    None,
+                    &mut rows,
+                    None,
+                    ObjectTreeTypeFilter::default(),
+                    false,
+                );
+                rows
+            })
+            .expect("test window should be visible");
+        let default_paths = opened_by_default
+            .iter()
+            .filter_map(|row| tree.get(row.id))
+            .map(|decl| decl.path.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(default_paths, ["/atom", "/atom/movable", "/atom/structure"]);
+
         let collapsed = ui
             .window("object-tree-collapsed")
             .build(|| {
+                let atom_storage_id = ui.get_id("/atom");
+                ui.with_current_state_storage(|mut storage| storage.set_bool(atom_storage_id, false));
                 let mut rows = Vec::new();
-                collect_type_rows(ui, &tree, atom, None, &mut rows, None, false);
+                collect_type_rows(
+                    ui,
+                    &tree,
+                    atom,
+                    None,
+                    &mut rows,
+                    None,
+                    ObjectTreeTypeFilter::default(),
+                    false,
+                );
                 rows
             })
             .expect("test window should be visible");

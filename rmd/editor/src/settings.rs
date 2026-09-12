@@ -430,6 +430,30 @@ impl Default for ObjectTreeSearchOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct ObjectTreeFilterOptions {
+    pub atom: bool,
+    pub movable: bool,
+    pub obj: bool,
+    pub turf: bool,
+    pub custom_enabled: bool,
+    pub custom_type_path: String,
+}
+
+impl Default for ObjectTreeFilterOptions {
+    fn default() -> Self {
+        Self {
+            atom: false,
+            movable: false,
+            obj: false,
+            turf: false,
+            custom_enabled: false,
+            custom_type_path: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RecentMap {
     pub map: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -446,6 +470,7 @@ pub(crate) struct Settings {
     pub selection_guide_line: bool,
     pub selection_highlight: SelectionHighlight,
     pub object_tree_search: ObjectTreeSearchOptions,
+    pub object_tree_filter: ObjectTreeFilterOptions,
     pub keybindings: KeyBindings,
     pub recent_codebases: Vec<PathBuf>,
     pub recent: Vec<RecentMap>,
@@ -461,6 +486,7 @@ impl Default for Settings {
             selection_guide_line: true,
             selection_highlight: SelectionHighlight::Outline,
             object_tree_search: ObjectTreeSearchOptions::default(),
+            object_tree_filter: ObjectTreeFilterOptions::default(),
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
@@ -630,6 +656,7 @@ mod tests {
                 selection_guide_line: true,
                 selection_highlight: SelectionHighlight::Outline,
                 object_tree_search: ObjectTreeSearchOptions::default(),
+                object_tree_filter: ObjectTreeFilterOptions::default(),
                 keybindings: KeyBindings::default(),
                 recent_codebases: Vec::new(),
                 recent: Vec::new(),
@@ -683,6 +710,7 @@ mod tests {
         assert_eq!(settings.selection_highlight.style(), HighlightStyle::Outline);
         assert_eq!(SelectionHighlight::Tint.style(), HighlightStyle::Tint);
         assert_eq!(settings.object_tree_search, ObjectTreeSearchOptions::default());
+        assert_eq!(settings.object_tree_filter, ObjectTreeFilterOptions::default());
     }
 
     #[test]
@@ -708,6 +736,14 @@ mod tests {
                 type_paths: false,
                 names: true,
             },
+            object_tree_filter: ObjectTreeFilterOptions {
+                atom: true,
+                movable: false,
+                obj: true,
+                turf: false,
+                custom_enabled: true,
+                custom_type_path: String::from("/atom/movable/lighting"),
+            },
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
@@ -730,6 +766,11 @@ mod tests {
         assert!(encoded.contains("[object_tree_search]"));
         assert!(encoded.contains("type_paths = false"));
         assert!(encoded.contains("names = true"));
+        assert!(encoded.contains("[object_tree_filter]"));
+        assert!(encoded.contains("atom = true"));
+        assert!(encoded.contains("obj = true"));
+        assert!(encoded.contains("custom_enabled = true"));
+        assert!(encoded.contains("custom_type_path = \"/atom/movable/lighting\""));
         assert!(encoded.contains("key = \"G\""));
         assert!(encoded.contains("ctrl = true"));
         assert_eq!(toml::from_str::<Settings>(&encoded).unwrap(), settings);
@@ -748,6 +789,7 @@ mod tests {
                 type_paths: false,
                 names: true,
             },
+            object_tree_filter: ObjectTreeFilterOptions::default(),
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
