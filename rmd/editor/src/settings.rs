@@ -181,6 +181,10 @@ impl KeyBinding {
         ui.is_key_pressed_with_repeat(self.key, false) && self.modifiers_match(ui)
     }
 
+    pub fn is_pressed_repeating(self, ui: &Ui) -> bool {
+        ui.is_key_pressed_with_repeat(self.key, true) && self.modifiers_match(ui)
+    }
+
     pub fn is_down(self, ui: &Ui) -> bool { ui.is_key_down(self.key) && self.modifiers_match(ui) }
 
     pub fn is_released(self, ui: &Ui) -> bool { ui.is_key_released(self.key) && self.modifiers_match(ui) }

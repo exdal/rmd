@@ -1582,8 +1582,8 @@ impl UiState {
 
             if is_active {
                 if focused && !ui.io().want_text_input() {
-                    let undo = settings.keybindings.get(KeybindAction::Undo).is_pressed(ui);
-                    let redo = settings.keybindings.get(KeybindAction::Redo).is_pressed(ui);
+                    let undo = settings.keybindings.get(KeybindAction::Undo).is_pressed_repeating(ui);
+                    let redo = settings.keybindings.get(KeybindAction::Redo).is_pressed_repeating(ui);
                     if undo || redo {
                         self.gizmo.cancel();
                         self.placement_flash = None;
