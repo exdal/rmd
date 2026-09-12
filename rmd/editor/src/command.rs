@@ -34,6 +34,14 @@ impl Edit {
     }
 
     pub fn is_empty(&self) -> bool { self.changes.is_empty() }
+
+    pub(crate) fn affected_instances(&self) -> Vec<dmm::PrefabInstanceId> {
+        self.changes
+            .iter()
+            .flat_map(|change| change.before.iter().chain(&change.after))
+            .map(|placed| placed.id())
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -59,12 +67,22 @@ struct HistoryEntry {
     group: Option<EditGroupId>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct History {
     undo_stack: Vec<HistoryEntry>,
     redo_stack: Vec<HistoryEntry>,
     /// Saved undo position
-    saved_at: usize,
+    saved_at: Option<usize>,
+}
+
+impl Default for History {
+    fn default() -> Self {
+        Self {
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            saved_at: Some(0),
+        }
+    }
 }
 
 impl History {
@@ -80,21 +98,25 @@ impl History {
 
         apply_changes(map, instances, key_usage, &edit.changes, ChangeSide::After);
 
+        let undo_len = self.undo_stack.len();
         if group.is_some()
             && let Some(previous) = self.undo_stack.last_mut()
             && previous.group == group
         {
+            if self.saved_at == Some(undo_len) {
+                self.saved_at = None;
+            }
             merge_changes(&mut previous.edit.changes, edit.changes);
             if previous.edit.changes.is_empty() {
                 self.undo_stack.pop();
             }
-            self.redo_stack.clear();
+            self.discard_redo();
 
             return;
         }
 
+        self.discard_redo();
         self.undo_stack.push(HistoryEntry { edit, group });
-        self.redo_stack.clear();
     }
 
     pub(crate) fn undo(
@@ -119,13 +141,24 @@ impl History {
         self.undo_stack.last().map(|entry| &entry.edit)
     }
 
-    pub fn mark_saved(&mut self) { self.saved_at = self.undo_stack.len(); }
+    pub fn mark_saved(&mut self) { self.saved_at = Some(self.undo_stack.len()); }
 
-    pub fn is_dirty(&self) -> bool { self.undo_stack.len() != self.saved_at }
+    pub fn is_dirty(&self) -> bool { self.saved_at != Some(self.undo_stack.len()) }
 
     pub fn can_undo(&self) -> bool { !self.undo_stack.is_empty() }
 
     pub fn can_redo(&self) -> bool { !self.redo_stack.is_empty() }
+
+    pub fn undo_label(&self) -> Option<&str> { self.undo_stack.last().map(|entry| entry.edit.label.as_str()) }
+
+    pub fn redo_label(&self) -> Option<&str> { self.redo_stack.last().map(|entry| entry.edit.label.as_str()) }
+
+    fn discard_redo(&mut self) {
+        if self.saved_at.is_some_and(|saved_at| saved_at > self.undo_stack.len()) {
+            self.saved_at = None;
+        }
+        self.redo_stack.clear();
+    }
 }
 
 fn merge_changes(previous: &mut Vec<TileChange>, next: Vec<TileChange>) {
@@ -213,7 +246,7 @@ mod tests {
 
     use dmm::{Coord, Map, Prefab, Size};
 
-    use super::Edit;
+    use super::{Edit, EditGroupId};
     use crate::document::MapDocument;
 
     fn document() -> MapDocument {
@@ -293,5 +326,62 @@ mod tests {
         assert_eq!(document.instance_location(copied_id), None);
         assert!(document.undo());
         assert_eq!(document.instance_location(copied_id).unwrap().coord, destination);
+    }
+
+    #[test]
+    fn undo_and_redo_move_through_the_saved_position() {
+        let mut document = document();
+        let coord = Coord::new(1, 1, 1);
+        let mut edit = Edit::new("clear tile");
+        edit.change(&document, coord, Vec::new());
+        document.apply(edit);
+        document.history.mark_saved();
+
+        assert!(!document.is_dirty());
+        assert_eq!(document.undo_label(), Some("clear tile"));
+        assert!(document.undo());
+        assert!(document.is_dirty());
+        assert_eq!(document.redo_label(), Some("clear tile"));
+        assert!(document.redo());
+        assert!(!document.is_dirty());
+    }
+
+    #[test]
+    fn replacing_the_saved_redo_branch_stays_dirty() {
+        let mut document = document();
+        let mut saved = Edit::new("clear first tile");
+        saved.change(&document, Coord::new(1, 1, 1), Vec::new());
+        document.apply(saved);
+        document.history.mark_saved();
+        assert!(document.undo());
+
+        let mut replacement = Edit::new("clear second tile");
+        replacement.change(&document, Coord::new(2, 1, 1), Vec::new());
+        document.apply(replacement);
+
+        assert!(document.is_dirty());
+        assert_eq!(document.undo_label(), Some("clear second tile"));
+        assert_eq!(document.redo_label(), None);
+    }
+
+    #[test]
+    fn extending_a_saved_edit_group_stays_dirty() {
+        let mut document = document();
+        let coord = Coord::new(1, 1, 1);
+        let group = EditGroupId::new();
+        let mut first = document.placed_tile(coord).unwrap();
+        first.pop();
+        let mut edit = Edit::new("change tile");
+        edit.change(&document, coord, first);
+        document.apply_grouped(edit, Some(group));
+        document.history.mark_saved();
+
+        let mut edit = Edit::new("change tile");
+        edit.change(&document, coord, Vec::new());
+        document.apply_grouped(edit, Some(group));
+
+        assert!(document.is_dirty());
+        assert!(document.undo());
+        assert!(!document.undo());
     }
 }

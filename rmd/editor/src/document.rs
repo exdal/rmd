@@ -419,25 +419,33 @@ impl MapDocument {
         true
     }
 
-    pub fn undo(&mut self) -> bool {
-        let changed = self
+    pub fn undo(&mut self) -> bool { self.undo_with_affected().is_some() }
+
+    pub fn undo_with_affected(&mut self) -> Option<Vec<PrefabInstanceId>> {
+        let affected = self
             .history
             .undo(&mut self.map, &mut self.instances, &mut self.key_usage)
-            .is_some();
+            .map(Edit::affected_instances);
         self.clear_stale_instance_selection();
 
-        changed
+        affected
     }
 
-    pub fn redo(&mut self) -> bool {
-        let changed = self
+    pub fn redo(&mut self) -> bool { self.redo_with_affected().is_some() }
+
+    pub fn redo_with_affected(&mut self) -> Option<Vec<PrefabInstanceId>> {
+        let affected = self
             .history
             .redo(&mut self.map, &mut self.instances, &mut self.key_usage)
-            .is_some();
+            .map(Edit::affected_instances);
         self.clear_stale_instance_selection();
 
-        changed
+        affected
     }
+
+    pub fn undo_label(&self) -> Option<&str> { self.history.undo_label() }
+
+    pub fn redo_label(&self) -> Option<&str> { self.history.redo_label() }
 
     pub fn save(&mut self) -> std::io::Result<()> {
         let Some(path) = self.path.clone() else {

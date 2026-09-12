@@ -315,6 +315,38 @@ impl Session {
 
     pub fn map_format(&self) -> Option<MapFormat> { self.map().map(|map| map.format) }
 
+    pub fn undo_label(&self) -> Option<&str> { self.state.active_document()?.undo_label() }
+
+    pub fn redo_label(&self) -> Option<&str> { self.state.active_document()?.redo_label() }
+
+    pub fn undo(&mut self) -> bool {
+        let Some(affected) = self
+            .state
+            .active_document_mut()
+            .and_then(MapDocument::undo_with_affected)
+        else {
+            return false;
+        };
+
+        self.update_instances(&affected);
+
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(affected) = self
+            .state
+            .active_document_mut()
+            .and_then(MapDocument::redo_with_affected)
+        else {
+            return false;
+        };
+
+        self.update_instances(&affected);
+
+        true
+    }
+
     pub fn save_map_as(&mut self, path: &Path, format: MapFormat) -> std::io::Result<()> {
         let Some(document) = self.state.active_document_mut() else {
             return Err(std::io::Error::other("no map is open"));
@@ -2083,6 +2115,92 @@ mod tests {
                 .and_then(|document| document.placed_tile(Coord::new(3, 3, 1))),
             Some(before)
         );
+    }
+
+    #[test]
+    fn session_undo_and_redo_update_the_active_render_cache() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        session.open_map(&root.join("test.dmm"), 1).unwrap();
+        let coord = Coord::new(2, 2, 1);
+        let before = session.state.active_document().unwrap().placed_tile(coord).unwrap();
+        let table = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/structure/table"))
+            .unwrap();
+
+        assert_eq!(session.undo_label(), None);
+        assert_eq!(session.redo_label(), None);
+        assert!(session.choose_type(table));
+        let placed = session.place_at(coord, None).unwrap();
+        assert_eq!(session.undo_label(), Some("place /obj/structure/table"));
+        assert!(session.state.active_document().unwrap().is_dirty());
+
+        let edit_revision = session.revision();
+        assert!(session.undo());
+        assert_eq!(
+            session.state.active_document().unwrap().placed_tile(coord),
+            Some(before)
+        );
+        assert_eq!(session.redo_label(), Some("place /obj/structure/table"));
+        assert!(!session.state.active_document().unwrap().is_dirty());
+        assert_eq!(session.revision(), edit_revision.wrapping_add(1));
+        assert_render_cache_matches_rebuild(&session);
+
+        let undo_revision = session.revision();
+        assert!(session.redo());
+        assert_eq!(
+            session
+                .state
+                .active_document()
+                .unwrap()
+                .instance_location(placed)
+                .map(|location| location.coord),
+            Some(coord)
+        );
+        assert_eq!(session.undo_label(), Some("place /obj/structure/table"));
+        assert_eq!(session.redo_label(), None);
+        assert!(session.state.active_document().unwrap().is_dirty());
+        assert_eq!(session.revision(), undo_revision.wrapping_add(1));
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    fn session_history_commands_only_change_the_active_document() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        session.open_map(&root.join("test.dmm"), 1).unwrap();
+        let first = session.state.active().unwrap();
+        let coord = Coord::new(2, 2, 1);
+        let first_before = session.state.active_document().unwrap().placed_tile(coord).unwrap();
+        let table = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/structure/table"))
+            .unwrap();
+        assert!(session.choose_type(table));
+        session.place_at(coord, None).unwrap();
+
+        session.open_map(&root.join("test2.dmm"), 1).unwrap();
+        let second = session.state.active().unwrap();
+        session.place_at(coord, None).unwrap();
+        let second_after = session.state.active_document().unwrap().placed_tile(coord).unwrap();
+
+        session.state.set_active(first);
+        assert!(session.undo());
+
+        assert_eq!(
+            session.state.document(first).unwrap().placed_tile(coord),
+            Some(first_before)
+        );
+        assert_eq!(
+            session.state.document(second).unwrap().placed_tile(coord),
+            Some(second_after)
+        );
+        assert_render_cache_matches_rebuild(&session);
     }
 
     #[test]

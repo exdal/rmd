@@ -607,6 +607,19 @@ impl UiState {
         }
     }
 
+    fn cancel_edit_gestures(&mut self, id: Option<DocumentId>) {
+        self.gizmo.cancel();
+        self.placement_flash = None;
+        self.placement_stroke = None;
+        self.deletion_stroke = None;
+
+        if let Some(view) = id.and_then(|id| self.map_views.get_mut(&id)) {
+            view.block_selection_anchor = None;
+            view.block_placement = None;
+            view.paste = None;
+        }
+    }
+
     pub fn set_new_map_path(&mut self, path: PathBuf, codebase_dir: &Path) {
         let Some(dialog) = self.new_map_dialog.as_mut() else {
             return;
@@ -641,6 +654,8 @@ impl UiState {
         let mut level_delta = 0;
         let mut underlay_depth = None;
         let mut refit = false;
+        let mut undo = false;
+        let mut redo = false;
 
         ui.main_menu_bar(|| {
             ui.menu("File", || {
@@ -669,6 +684,29 @@ impl UiState {
                 ui.separator();
                 if ui.menu_item_with_shortcut("Exit", "Esc") {
                     exit = true;
+                }
+            });
+            ui.menu("Edit", || {
+                let next = session.undo_label();
+                let label = next.map_or_else(|| String::from("Undo"), |edit| format!("Undo {edit}"));
+                if ui.menu_item_enabled_selected_with_shortcut(
+                    label,
+                    settings.keybindings.get(KeybindAction::Undo).label(ui),
+                    false,
+                    next.is_some(),
+                ) {
+                    undo = true;
+                }
+
+                let next = session.redo_label();
+                let label = next.map_or_else(|| String::from("Redo"), |edit| format!("Redo {edit}"));
+                if ui.menu_item_enabled_selected_with_shortcut(
+                    label,
+                    settings.keybindings.get(KeybindAction::Redo).label(ui),
+                    false,
+                    next.is_some(),
+                ) {
+                    redo = true;
                 }
             });
             ui.menu("View", || {
@@ -716,6 +754,15 @@ impl UiState {
                 }
             });
         });
+
+        if undo || redo {
+            self.cancel_edit_gestures(session.state.active());
+            if undo {
+                session.undo();
+            } else {
+                session.redo();
+            }
+        }
 
         if toggle_areas {
             session.toggle_areas();
@@ -1422,6 +1469,23 @@ impl UiState {
 
             if is_active {
                 if focused && !ui.io().want_text_input() {
+                    let undo = settings.keybindings.get(KeybindAction::Undo).is_pressed(ui);
+                    let redo = settings.keybindings.get(KeybindAction::Redo).is_pressed(ui);
+                    if undo || redo {
+                        self.gizmo.cancel();
+                        self.placement_flash = None;
+                        self.placement_stroke = None;
+                        self.deletion_stroke = None;
+                        *block_selection_anchor = None;
+                        *block_placement = None;
+                        *paste = None;
+
+                        if undo {
+                            session.undo();
+                        } else {
+                            session.redo();
+                        }
+                    }
                     if settings.keybindings.get(KeybindAction::Copy).is_pressed(ui) {
                         session.copy_selection(self.block_selection_options.mode());
                     }
@@ -4486,9 +4550,17 @@ mod tests {
     }
 
     #[test]
-    fn copy_and_paste_are_bound_to_the_usual_chords() {
+    fn editing_commands_are_bound_to_the_usual_chords() {
         let bindings = KeyBindings::default();
 
+        assert_eq!(
+            bindings.get(KeybindAction::Undo),
+            KeyBinding::with_ctrl(dear_imgui_rs::Key::Z)
+        );
+        assert_eq!(
+            bindings.get(KeybindAction::Redo),
+            KeyBinding::with_ctrl(dear_imgui_rs::Key::Y)
+        );
         assert_eq!(
             bindings.get(KeybindAction::Copy),
             KeyBinding::with_ctrl(dear_imgui_rs::Key::C)
@@ -4498,7 +4570,9 @@ mod tests {
             KeyBinding::with_ctrl(dear_imgui_rs::Key::V)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 13);
+        assert_eq!(KeybindAction::ALL.len(), 15);
+        assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));
+        assert!(KeybindAction::ALL.contains(&KeybindAction::Redo));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Copy));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Paste));
     }
