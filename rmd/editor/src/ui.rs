@@ -700,7 +700,12 @@ impl UiState {
                     open = Some(OpenRequest::PickMap);
                 }
                 ui.separator();
-                if ui.menu_item_enabled_selected_no_shortcut("Save...", false, session.map().is_some()) {
+                if ui.menu_item_enabled_selected_with_shortcut(
+                    "Save...",
+                    settings.keybindings.get(KeybindAction::Save).label(ui),
+                    false,
+                    session.map().is_some(),
+                ) {
                     open_save_dialog = true;
                 }
                 ui.separator();
@@ -783,6 +788,30 @@ impl UiState {
                 }
             });
         });
+
+        if session.map().is_some()
+            && !open_save_dialog
+            && self.save_dialog.is_none()
+            && self.capturing_keybind.is_none()
+            && !ui.io().want_text_input()
+            && settings.keybindings.get(KeybindAction::Save).is_pressed(ui)
+        {
+            if session.can_save_map_in_place() {
+                if let Err(error) = session.save_map() {
+                    self.save_dialog = Some(SaveDialog {
+                        path: session
+                            .map_path()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_default(),
+                        format: session.map_format().unwrap_or_default(),
+                        error: Some(error.to_string()),
+                    });
+                    ui.open_popup(SAVE_MAP_POPUP);
+                }
+            } else {
+                open_save_dialog = true;
+            }
+        }
 
         if undo || redo {
             self.cancel_edit_gestures(session.state.active());
@@ -4831,6 +4860,10 @@ mod tests {
         let bindings = KeyBindings::default();
 
         assert_eq!(
+            bindings.get(KeybindAction::Save),
+            KeyBinding::with_ctrl(dear_imgui_rs::Key::S)
+        );
+        assert_eq!(
             bindings.get(KeybindAction::Undo),
             KeyBinding::with_ctrl(dear_imgui_rs::Key::Z)
         );
@@ -4847,7 +4880,8 @@ mod tests {
             KeyBinding::with_ctrl(dear_imgui_rs::Key::V)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 15);
+        assert_eq!(KeybindAction::ALL.len(), 16);
+        assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Redo));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Copy));

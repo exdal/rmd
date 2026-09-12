@@ -347,6 +347,20 @@ impl Session {
         true
     }
 
+    pub fn can_save_map_in_place(&self) -> bool {
+        self.state
+            .active_document()
+            .is_some_and(|document| document.path.is_some() && !document.needs_initial_save())
+    }
+
+    pub fn save_map(&mut self) -> std::io::Result<()> {
+        let Some(document) = self.state.active_document_mut() else {
+            return Err(std::io::Error::other("no map is open"));
+        };
+
+        document.save()
+    }
+
     pub fn save_map_as(&mut self, path: &Path, format: MapFormat) -> std::io::Result<()> {
         let Some(document) = self.state.active_document_mut() else {
             return Err(std::io::Error::other("no map is open"));
@@ -2323,6 +2337,30 @@ mod tests {
                 .unwrap()
                 .starts_with("//MAP CONVERTED BY dmm2tgm.py")
         );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn in_place_save_reuses_the_confirmed_path_and_format() {
+        let path = std::env::temp_dir().join(format!("rmd-save-map-{}.dmm", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut session = Session::new();
+        session
+            .state
+            .open_document(MapDocument::create(&path, Map::new(Size { x: 1, y: 1, z: 1 }), 1));
+
+        assert!(!session.can_save_map_in_place());
+        session.save_map_as(&path, MapFormat::Tgm).expect("initial save");
+        assert!(session.can_save_map_in_place());
+
+        std::fs::write(&path, "replace me").expect("replace target contents");
+        session.save_map().expect("in-place save");
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("written map")
+                .starts_with("//MAP CONVERTED BY dmm2tgm.py")
+        );
+
         let _ = std::fs::remove_file(path);
     }
 

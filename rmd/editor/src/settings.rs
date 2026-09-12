@@ -222,6 +222,7 @@ const fn is_false(value: &bool) -> bool { !*value }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeybindAction {
+    Save,
     Undo,
     Redo,
     ShowAreas,
@@ -240,7 +241,8 @@ pub(crate) enum KeybindAction {
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
+        Self::Save,
         Self::Undo,
         Self::Redo,
         Self::ShowAreas,
@@ -260,6 +262,7 @@ impl KeybindAction {
 
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Save => "Save",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
             Self::ShowAreas => "Show areas",
@@ -280,6 +283,7 @@ impl KeybindAction {
 
     pub const fn id(self) -> &'static str {
         match self {
+            Self::Save => "save",
             Self::Undo => "undo",
             Self::Redo => "redo",
             Self::ShowAreas => "show-areas",
@@ -302,6 +306,7 @@ impl KeybindAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct KeyBindings {
+    save: KeyBinding,
     undo: KeyBinding,
     redo: KeyBinding,
     show_areas: KeyBinding,
@@ -322,6 +327,7 @@ pub(crate) struct KeyBindings {
 impl Default for KeyBindings {
     fn default() -> Self {
         Self {
+            save: KeyBinding::with_ctrl(Key::S),
             undo: KeyBinding::with_ctrl(Key::Z),
             redo: KeyBinding::with_ctrl(Key::Y),
             show_areas: KeyBinding::new(Key::A),
@@ -344,6 +350,7 @@ impl Default for KeyBindings {
 impl KeyBindings {
     pub const fn get(self, action: KeybindAction) -> KeyBinding {
         match action {
+            KeybindAction::Save => self.save,
             KeybindAction::Undo => self.undo,
             KeybindAction::Redo => self.redo,
             KeybindAction::ShowAreas => self.show_areas,
@@ -384,6 +391,7 @@ impl KeyBindings {
 
     fn set(&mut self, action: KeybindAction, binding: KeyBinding) {
         match action {
+            KeybindAction::Save => self.save = binding,
             KeybindAction::Undo => self.undo = binding,
             KeybindAction::Redo => self.redo = binding,
             KeybindAction::ShowAreas => self.show_areas = binding,
@@ -697,6 +705,7 @@ mod tests {
         );
         assert_eq!(bindings.get(KeybindAction::Undo), KeyBinding::with_ctrl(Key::Z));
         assert_eq!(bindings.get(KeybindAction::Redo), KeyBinding::with_ctrl(Key::Y));
+        assert_eq!(bindings.get(KeybindAction::Save), KeyBinding::with_ctrl(Key::S));
     }
 
     #[test]
@@ -713,14 +722,16 @@ mod tests {
     }
 
     #[test]
-    fn older_keybinding_tables_receive_undo_and_redo_defaults() {
+    fn older_keybinding_tables_receive_new_action_defaults() {
         let mut stored = toml::Value::try_from(KeyBindings::default()).unwrap();
         let table = stored.as_table_mut().unwrap();
+        table.remove("save");
         table.remove("undo");
         table.remove("redo");
 
         let bindings: KeyBindings = stored.try_into().unwrap();
 
+        assert_eq!(bindings.get(KeybindAction::Save), KeyBinding::with_ctrl(Key::S));
         assert_eq!(bindings.get(KeybindAction::Undo), KeyBinding::with_ctrl(Key::Z));
         assert_eq!(bindings.get(KeybindAction::Redo), KeyBinding::with_ctrl(Key::Y));
     }
