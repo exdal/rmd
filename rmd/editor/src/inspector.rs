@@ -12,6 +12,7 @@ use editor::{
 use objtree::{ObjectTree, TypeId};
 
 use crate::{
+    external_editor::SourceLocation,
     session::{DirectionalTypes, Session},
     transform::anchor_axis,
 };
@@ -92,6 +93,7 @@ struct InspectorProperty {
 struct InspectorSnapshot {
     selected: PrefabInstanceId,
     path: String,
+    source: Option<SourceLocation>,
     location: PrefabLocation,
     is_atom: bool,
     is_movable: bool,
@@ -114,16 +116,23 @@ enum TextPropertyKind {
 impl InspectorState {
     pub(crate) const fn transform_mode(&self) -> TransformMode { self.transform_mode }
 
-    pub fn draw(&mut self, ui: &Ui, session: &mut Session) {
+    pub fn draw(&mut self, ui: &Ui, session: &mut Session) -> Option<SourceLocation> {
         let Some(snapshot) = inspector_snapshot(session) else {
             self.clear();
             ui.text_disabled("No object selected");
 
-            return;
+            return None;
         };
 
         self.sync(&snapshot);
-        ui.text_wrapped(&snapshot.path);
+        let open_source = match &snapshot.source {
+            Some(source) if ui.text_link(&snapshot.path) => Some(source.clone()),
+            Some(_) => None,
+            None => {
+                ui.text_wrapped(&snapshot.path);
+                None
+            },
+        };
         ui.text_disabled(format!(
             "Tile {}, {}, {}",
             snapshot.location.coord.x, snapshot.location.coord.y, snapshot.location.coord.z
@@ -151,6 +160,8 @@ impl InspectorState {
             "Other defaults",
             &snapshot.defaults,
         );
+
+        open_source
     }
 
     fn draw_transform(&mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot) {
@@ -599,6 +610,7 @@ fn inspector_snapshot(session: &Session) -> Option<InspectorSnapshot> {
     let prefab = session.selected_prefab()?;
     let tree = session.tree();
     let type_id = tree.and_then(|tree| tree.id_of(&prefab.path));
+    let source = type_id.and_then(|id| session.type_source(id));
     let is_atom = matches!((tree, type_id), (Some(tree), Some(id)) if tree.roots().atom.is_some_and(|atom| tree.is_subtype_of(id, atom)));
     let is_movable = matches!((tree, type_id), (Some(tree), Some(id)) if tree.roots().movable.is_some_and(|movable| tree.is_subtype_of(id, movable)));
     let mut special = HashSet::new();
@@ -645,6 +657,7 @@ fn inspector_snapshot(session: &Session) -> Option<InspectorSnapshot> {
     Some(InspectorSnapshot {
         selected,
         path: prefab.path.to_string(),
+        source,
         location,
         is_atom,
         is_movable,

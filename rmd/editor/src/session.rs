@@ -54,7 +54,10 @@ use render::{
     texture::TextureCatalog,
 };
 
-use crate::loader::{LoadedCodebase, LoadedMap};
+use crate::{
+    external_editor::SourceLocation,
+    loader::{LoadedCodebase, LoadedMap},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct SelectedTransform {
@@ -266,6 +269,20 @@ impl Session {
     }
 
     pub fn tree(&self) -> Option<&ObjectTree> { self.state.environment.as_ref().map(|environment| &environment.tree) }
+
+    pub(crate) fn type_source(&self, id: TypeId) -> Option<SourceLocation> {
+        let environment = self.state.environment.as_ref()?;
+        let location = environment.tree.get(id)?.location;
+        if location.begin.line == 0 || location.begin.col == 0 {
+            return None;
+        }
+
+        Some(SourceLocation {
+            path: environment.file(location.file)?.to_path_buf(),
+            line: location.begin.line,
+            column: location.begin.col,
+        })
+    }
 
     pub fn map(&self) -> Option<&Map> { self.state.active_document().map(|document| &document.map) }
 
@@ -1783,7 +1800,11 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::{location::Location, path::TreePath, types::Value};
+    use core::{
+        location::{FileId, Location, Position},
+        path::TreePath,
+        types::Value,
+    };
     use std::path::PathBuf;
 
     use dmi::{IconFile, metadata::Dir};
@@ -1813,6 +1834,23 @@ mod tests {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
 
         path.canonicalize().unwrap_or(path)
+    }
+
+    #[test]
+    fn type_sources_resolve_compiler_locations_to_loaded_files() {
+        let location = Location::in_file(FileId(0), Position::new(42, 7), Position::new(42, 16));
+        let mut tree = ObjectTree::new();
+        let id = tree.register(&TreePath::parse("/obj/item/tool"), location);
+        let mut environment = Environment::new("station.dme", tree);
+        environment.files.push(PathBuf::from("code/items.dm"));
+        let mut session = Session::new();
+        session.state.environment = Some(environment);
+
+        let source = session.type_source(id).expect("known type source");
+
+        assert_eq!(source.path, PathBuf::from("code/items.dm"));
+        assert_eq!(source.line, 42);
+        assert_eq!(source.column, 7);
     }
 
     #[test]

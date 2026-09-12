@@ -12,6 +12,7 @@ use render::HighlightStyle;
 use serde::{Deserialize, Serialize};
 
 const MAX_RECENT: usize = 10;
+const DEFAULT_PREFERRED_EDITOR: &str = "code --goto {file}:{line}:{column}";
 
 pub(crate) const BINDABLE_KEYS: &[Key] = &[
     Key::Tab,
@@ -464,6 +465,7 @@ pub(crate) struct RecentMap {
 #[serde(default)]
 pub(crate) struct Settings {
     pub maximized: bool,
+    pub preferred_editor: String,
     pub show_areas: bool,
     pub show_area_outlines: bool,
     pub tile_place_flash: bool,
@@ -480,6 +482,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             maximized: false,
+            preferred_editor: String::from(DEFAULT_PREFERRED_EDITOR),
             show_areas: false,
             show_area_outlines: true,
             tile_place_flash: true,
@@ -650,6 +653,7 @@ mod tests {
             Settings::default(),
             Settings {
                 maximized: false,
+                preferred_editor: String::from(DEFAULT_PREFERRED_EDITOR),
                 show_areas: false,
                 show_area_outlines: true,
                 tile_place_flash: true,
@@ -707,6 +711,7 @@ mod tests {
         let settings: Settings = toml::from_str("tile_place_flash = false\n").unwrap();
 
         assert_eq!(settings.selection_highlight, SelectionHighlight::Outline);
+        assert_eq!(settings.preferred_editor, DEFAULT_PREFERRED_EDITOR);
         assert_eq!(settings.selection_highlight.style(), HighlightStyle::Outline);
         assert_eq!(SelectionHighlight::Tint.style(), HighlightStyle::Tint);
         assert_eq!(settings.object_tree_search, ObjectTreeSearchOptions::default());
@@ -727,6 +732,7 @@ mod tests {
     fn settings_round_trip_through_toml() {
         let mut settings = Settings {
             maximized: true,
+            preferred_editor: String::from("zed {file}:{line}:{column}"),
             show_areas: true,
             show_area_outlines: false,
             tile_place_flash: false,
@@ -762,6 +768,7 @@ mod tests {
 
         assert!(encoded.contains("[keybindings.show_areas]"));
         assert!(encoded.contains("maximized = true"));
+        assert!(encoded.contains("preferred_editor = \"zed {file}:{line}:{column}\""));
         assert!(encoded.contains("selection_highlight = \"tint\""));
         assert!(encoded.contains("[object_tree_search]"));
         assert!(encoded.contains("type_paths = false"));
@@ -780,6 +787,7 @@ mod tests {
     fn frame_options_apply_and_capture_without_touching_other_settings() {
         let mut settings = Settings {
             maximized: true,
+            preferred_editor: String::from("editor {file}"),
             show_areas: true,
             show_area_outlines: false,
             tile_place_flash: false,
@@ -807,6 +815,7 @@ mod tests {
             settings,
             Settings {
                 maximized: true,
+                preferred_editor: String::from("editor {file}"),
                 tile_place_flash: false,
                 selection_guide_line: false,
                 selection_highlight: SelectionHighlight::Tint,

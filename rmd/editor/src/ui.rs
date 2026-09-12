@@ -61,6 +61,7 @@ use render::{Camera, InteractionMode, MapViewInteraction, MapViewRect, PickReque
 
 use crate::{
     camera::Controller,
+    external_editor::SourceLocation,
     gizmo::{BlockGizmoTarget, GizmoMapView, GizmoState},
     inspector::InspectorState,
     loader::LoadView,
@@ -312,6 +313,7 @@ pub struct UiOutput {
     pub map_views: Vec<VisibleMapView>,
     pub picking: Option<usize>,
     pub open: Option<OpenRequest>,
+    pub open_source: Option<SourceLocation>,
     pub pick_new_map_path: bool,
     pub cancel_load: bool,
     pub copy_to_clipboard: Option<String>,
@@ -414,10 +416,11 @@ struct ObjectTreeRow {
     leaf: bool,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct ObjectTreeOutput {
     chosen: Option<TypeId>,
     visibility_toggle: Option<TypeId>,
+    open_source: Option<SourceLocation>,
 }
 
 impl ObjectTreeFilter {
@@ -751,8 +754,8 @@ impl UiState {
         );
         self.show_welcome |= show_welcome;
 
-        self.draw_object_tree(ui, session, settings);
-        self.draw_inspector(ui, session);
+        let mut open_source = self.draw_object_tree(ui, session, settings);
+        open_source = self.draw_inspector(ui, session).or(open_source);
         let mut welcome = WelcomeOutput::default();
         self.draw_welcome(ui, session, settings, loading, &mut welcome);
         open = welcome.open.or(open);
@@ -803,6 +806,7 @@ impl UiState {
             map_views,
             picking,
             open,
+            open_source,
             pick_new_map_path,
             cancel_load: load_popup.cancel,
             copy_to_clipboard: load_popup.copy,
@@ -944,7 +948,8 @@ impl UiState {
         });
     }
 
-    fn draw_object_tree(&mut self, ui: &Ui, session: &mut Session, settings: &mut Settings) {
+    fn draw_object_tree(&mut self, ui: &Ui, session: &mut Session, settings: &mut Settings) -> Option<SourceLocation> {
+        let mut open_source = None;
         ui.window(&self.object_tree).build(|| {
             let mut output = ObjectTreeOutput::default();
             let available_width = ui.content_region_avail()[0];
@@ -1091,7 +1096,10 @@ impl UiState {
             if let Some(id) = output.visibility_toggle {
                 session.toggle_type_visibility(id);
             }
+            open_source = output.open_source;
         });
+
+        open_source
     }
 
     fn draw_map_views(
@@ -1243,9 +1251,7 @@ impl UiState {
         }
     }
 
-    fn draw_map_view(
-        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, draw: MapViewDraw<'_>,
-    ) -> bool {
+    fn draw_map_view(&mut self, ui: &Ui, session: &mut Session, settings: &Settings, draw: MapViewDraw<'_>) -> bool {
         let MapViewDraw {
             id,
             index: map_view_index,
@@ -1938,10 +1944,13 @@ impl UiState {
         exit
     }
 
-    fn draw_inspector(&mut self, ui: &Ui, session: &mut Session) {
+    fn draw_inspector(&mut self, ui: &Ui, session: &mut Session) -> Option<SourceLocation> {
+        let mut open_source = None;
         ui.window(&self.inspector_window).build(|| {
-            self.inspector.draw(ui, session);
+            open_source = self.inspector.draw(ui, session);
         });
+
+        open_source
     }
 }
 
@@ -2232,6 +2241,13 @@ fn draw_settings_window(
                     settings.selection_highlight = highlight;
                 }
             }
+
+            ui.separator();
+            ui.text("Preferred editor");
+            ui.set_next_item_width(360.0);
+            ui.input_text("##preferred-editor", &mut settings.preferred_editor)
+                .build();
+            ui.text_disabled("Placeholders: {file}, {line}, {column}");
 
             ui.separator();
             ui.text("Keybindings");
@@ -3575,6 +3591,12 @@ fn draw_type_row(
             output.chosen = Some(row.id);
         }
         ui.set_item_tooltip(&node_id);
+        let source = session.type_source(row.id);
+        if let Some(_popup) = ui.begin_popup_context_item()
+            && ui.menu_item_enabled_selected_no_shortcut("Open in editor", false, source.is_some())
+        {
+            output.open_source = source;
+        }
 
         ui.table_next_column();
         let visible = session.is_type_visible(row.id);

@@ -10,6 +10,7 @@
 //! With no arguments the editor opens on its welcome page, which can open a codebase or a map.
 
 mod camera;
+mod external_editor;
 mod gizmo;
 mod inspector;
 mod loader;
@@ -42,6 +43,7 @@ use winit::{
 };
 
 use crate::{
+    external_editor::SourceLocation,
     loader::{Job, Loader, Outcome},
     session::Session,
     settings::{Settings, imgui_ini_path},
@@ -197,6 +199,7 @@ fn window_title(session: &Session) -> String {
 struct Redraw {
     exit: bool,
     open: Option<OpenRequest>,
+    open_source: Option<SourceLocation>,
     pick_new_map_path: bool,
     cancel_load: bool,
     copy_to_clipboard: Option<String>,
@@ -300,6 +303,7 @@ impl App {
             return Ok(Redraw {
                 exit: false,
                 open: None,
+                open_source: None,
                 pick_new_map_path: false,
                 cancel_load: false,
                 copy_to_clipboard: None,
@@ -363,6 +367,7 @@ impl App {
         Ok(Redraw {
             exit: output.exit,
             open: output.open,
+            open_source: output.open_source,
             pick_new_map_path: output.pick_new_map_path,
             cancel_load: output.cancel_load,
             copy_to_clipboard: output.copy_to_clipboard,
@@ -387,6 +392,19 @@ impl App {
             Opened::Codebase(path) => Job::Codebase(path),
             Opened::Map(path) => Job::Map { path, z: 1 },
         });
+    }
+
+    fn open_source(&mut self, source: SourceLocation) {
+        if let Err(error) = external_editor::open(&self.settings.preferred_editor, &source) {
+            log::error!(
+                "opening {}:{}:{} in the preferred editor: {error}",
+                source.path.display(),
+                source.line,
+                source.column
+            );
+            self.ui
+                .set_load_notice(Some(LoadNotice::failed("Opening source", &source.path, error)));
+        }
     }
 
     fn apply_outcome(&mut self, outcome: Outcome) {
@@ -550,6 +568,7 @@ impl ApplicationHandler for App {
                         Redraw {
                             exit: false,
                             open: None,
+                            open_source: None,
                             pick_new_map_path: false,
                             cancel_load: false,
                             copy_to_clipboard: None,
@@ -569,6 +588,11 @@ impl ApplicationHandler for App {
                 if let Some(request) = redraw.open {
                     self.apply_open(request);
                 }
+
+                if let Some(source) = redraw.open_source {
+                    self.open_source(source);
+                }
+
                 if let Some(outcome) = self.loader.poll() {
                     self.apply_outcome(outcome);
                 }
