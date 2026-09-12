@@ -119,6 +119,7 @@ const BUILD_GIT_SHORT_HASH: Option<&str> = option_env!("RMD_GIT_SHORT_HASH");
 const BUILD_VERSION_URL: Option<&str> = option_env!("RMD_VERSION_URL");
 const BUILD_COMMIT_URL: Option<&str> = option_env!("RMD_COMMIT_URL");
 const CLOSE_MAP_POPUP: &str = "Unsaved changes##close-map";
+const EXIT_POPUP: &str = "Unsaved changes##exit";
 const BLOCK_SELECTION_POPUP: &str = "Block selection##block-selection";
 const BLOCK_SELECTION_GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 const BLOCK_SELECTION_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -546,6 +547,7 @@ pub struct UiState {
     new_map_dialog: Option<NewMapDialog>,
     save_dialog: Option<SaveDialog>,
     pending_close: Option<DocumentId>,
+    exit_requested: bool,
     show_settings: bool,
     show_welcome: bool,
     welcome_map_filter: String,
@@ -554,7 +556,6 @@ pub struct UiState {
     load_window: WindowKey,
     load_notice: Option<LoadNotice>,
     load_window_size: [f32; 2],
-    load_popup_active: bool,
     settings_window_size: [f32; 2],
     capturing_keybind: Option<KeybindAction>,
 }
@@ -607,6 +608,7 @@ impl UiState {
             new_map_dialog: None,
             save_dialog: None,
             pending_close: None,
+            exit_requested: false,
             show_settings: false,
             show_welcome: true,
             welcome_map_filter: String::new(),
@@ -615,7 +617,6 @@ impl UiState {
             load_window,
             load_notice: None,
             load_window_size: [0.0, 0.0],
-            load_popup_active: false,
             settings_window_size: [420.0, 480.0],
             capturing_keybind: None,
         })
@@ -624,6 +625,8 @@ impl UiState {
     pub fn set_open_error(&mut self, error: Option<String>) { self.open_error = error; }
 
     pub fn set_load_notice(&mut self, notice: Option<LoadNotice>) { self.load_notice = notice; }
+
+    pub fn request_exit(&mut self) { self.exit_requested = true; }
 
     pub fn request_refit(&mut self, id: Option<DocumentId>) {
         match id.and_then(|id| self.map_views.get_mut(&id)) {
@@ -661,8 +664,7 @@ impl UiState {
     pub fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, load: Option<&LoadView>,
     ) -> Result<UiOutput, DockspaceError> {
-        self.load_popup_active = load.is_some() || self.load_notice.is_some();
-        let loading = self.load_popup_active;
+        let loading = load.is_some() || self.load_notice.is_some();
         let root = ui.get_id(DOCKSPACE_ID);
         ui.dockspace()
             .main_viewport()
@@ -672,7 +674,6 @@ impl UiState {
             .build()?;
         self.dockspace_root = Some(root);
 
-        let mut exit = false;
         let mut open = None;
         let mut show_welcome = false;
         let mut open_new_map_dialog = false;
@@ -716,8 +717,8 @@ impl UiState {
                     self.show_settings = true;
                 }
                 ui.separator();
-                if ui.menu_item_with_shortcut("Exit", "Esc") {
-                    exit = true;
+                if ui.menu_item("Exit") {
+                    self.request_exit();
                 }
             });
             ui.menu("Edit", || {
@@ -899,19 +900,12 @@ impl UiState {
         }
 
         let (map_views, picking) = if session.state.is_empty() {
-            exit |= ui.is_key_pressed(Key::Escape)
-                && self.save_dialog.is_none()
-                && self.capturing_keybind.is_none()
-                && !load_popup.handles_escape;
-
             (Vec::new(), None)
         } else {
-            let (map_view_exit, map_views, picking) = self.draw_map_views(ui, session, settings, refit);
-            exit |= map_view_exit;
-
-            (map_views, picking)
+            self.draw_map_views(ui, session, settings, refit)
         };
         finish_keybind_capture(ui, &mut self.capturing_keybind, &mut settings.keybindings);
+        let exit = self.draw_exit_confirmation(ui, session);
 
         Ok(UiOutput {
             exit,
@@ -1212,8 +1206,7 @@ impl UiState {
 
     fn draw_map_views(
         &mut self, ui: &Ui, session: &mut Session, settings: &Settings, refit_active: bool,
-    ) -> (bool, Vec<VisibleMapView>, Option<usize>) {
-        let mut exit = false;
+    ) -> (Vec<VisibleMapView>, Option<usize>) {
         let mut closing = None;
         let mut visible = Vec::new();
 
@@ -1243,7 +1236,7 @@ impl UiState {
                 ..Default::default()
             };
             let map_view_index = visible.len();
-            exit |= self.draw_map_view(
+            self.draw_map_view(
                 ui,
                 session,
                 settings,
@@ -1286,7 +1279,62 @@ impl UiState {
 
         let picking = visible.iter().position(|view| view.interaction.cursor.is_some());
 
-        (exit, visible, picking)
+        (visible, picking)
+    }
+
+    fn draw_exit_confirmation(&mut self, ui: &Ui, session: &Session) -> bool {
+        if !self.exit_requested {
+            return false;
+        }
+
+        let unsaved = session
+            .state
+            .documents()
+            .iter()
+            .filter(|document| document.is_dirty())
+            .count();
+        if unsaved == 0 {
+            self.exit_requested = false;
+
+            return true;
+        }
+
+        if !ui.is_popup_open(EXIT_POPUP) {
+            ui.open_popup(EXIT_POPUP);
+        }
+        let flags = WindowFlags::ALWAYS_AUTO_RESIZE
+            | WindowFlags::NO_RESIZE
+            | WindowFlags::NO_MOVE
+            | WindowFlags::NO_COLLAPSE
+            | WindowFlags::NO_SAVED_SETTINGS
+            | WindowFlags::NO_DOCKING;
+        let Some(_modal) = ui.begin_modal_popup_config(EXIT_POPUP).flags(flags).begin() else {
+            return false;
+        };
+
+        if unsaved == 1 {
+            ui.text("A map has unsaved changes.");
+        } else {
+            ui.text(format!("{unsaved} maps have unsaved changes."));
+        }
+        ui.text("Exit without saving?");
+        ui.dummy([0.0, ui.frame_height() * 0.25]);
+
+        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+            self.exit_requested = false;
+            ui.close_current_popup();
+
+            return false;
+        }
+        ui.same_line();
+        if ui.button("Exit without saving") {
+            self.exit_requested = false;
+            ui.close_current_popup();
+
+            return true;
+        }
+
+        false
     }
 
     fn draw_close_confirmation(&mut self, ui: &Ui, session: &mut Session) {
@@ -1359,7 +1407,7 @@ impl UiState {
         }
     }
 
-    fn draw_map_view(&mut self, ui: &Ui, session: &mut Session, settings: &Settings, draw: MapViewDraw<'_>) -> bool {
+    fn draw_map_view(&mut self, ui: &Ui, session: &mut Session, settings: &Settings, draw: MapViewDraw<'_>) {
         let MapViewDraw {
             id,
             index: map_view_index,
@@ -1368,9 +1416,8 @@ impl UiState {
             refit_requested,
             keep_open,
         } = draw;
-        let mut exit = false;
         let Some(title) = session.state.document(id).map(MapDocument::title) else {
-            return exit;
+            return;
         };
         let MapViewState {
             window,
@@ -1934,8 +1981,7 @@ impl UiState {
                     );
                 }
 
-                let block_menu_handles_escape =
-                    draw_block_selection_menu(ui, session, self.block_selection_options.mode());
+                draw_block_selection_menu(ui, session, self.block_selection_options.mode());
                 let paste_action = paste
                     .zip(paste_controls(self.gizmo.block_rotation_open(), paste_target))
                     .and_then(|(pending, target)| {
@@ -2051,27 +2097,15 @@ impl UiState {
                     interaction.hovered_area = None;
                 }
 
-                let fill_warning_handles_escape = draw_fill_limit_warning(ui, session, &mut self.pending_fill_warning);
+                draw_fill_limit_warning(ui, session, &mut self.pending_fill_warning);
                 let block_placement_handles_escape = block_placement.is_some() || paste.is_some();
                 if ui.is_key_pressed(Key::Escape) && block_placement_handles_escape {
                     *block_placement = None;
                     *paste = None;
                     self.gizmo.cancel();
                 }
-                if ui.is_key_pressed(Key::Escape)
-                    && !fill_warning_handles_escape
-                    && !block_menu_handles_escape
-                    && !block_placement_handles_escape
-                    && !self.load_popup_active
-                    && self.save_dialog.is_none()
-                    && self.capturing_keybind.is_none()
-                {
-                    exit = true;
-                }
             }
         });
-
-        exit
     }
 
     fn draw_inspector(&mut self, ui: &Ui, session: &mut Session) -> InspectorOutput {
@@ -2345,7 +2379,6 @@ struct LoadPopup {
     cancel: bool,
     dismiss: bool,
     copy: Option<String>,
-    handles_escape: bool,
 }
 
 fn draw_load_popup(
@@ -2356,7 +2389,6 @@ fn draw_load_popup(
         return popup;
     }
 
-    popup.handles_escape = true;
     let center = ui.main_viewport().work_center();
     let position = [center[0] - measured[0] / 2.0, center[1] - measured[1] / 2.0];
     let flags = WindowFlags::ALWAYS_AUTO_RESIZE
@@ -2894,8 +2926,7 @@ fn block_border_point(bounds: OverlayRect, distance: f32) -> [f32; 2] {
     }
 }
 
-fn draw_block_selection_menu(ui: &Ui, session: &mut Session, mode: BlockSelectionMode) -> bool {
-    let was_open = ui.is_popup_open(BLOCK_SELECTION_POPUP);
+fn draw_block_selection_menu(ui: &Ui, session: &mut Session, mode: BlockSelectionMode) {
     let mut requested = None;
     if let Some(_popup) = ui.begin_popup(BLOCK_SELECTION_POPUP) {
         for (label, transform) in [
@@ -2911,8 +2942,6 @@ fn draw_block_selection_menu(ui: &Ui, session: &mut Session, mode: BlockSelectio
     if let Some(transform) = requested {
         session.transform_selected_block_with_mode(transform, mode);
     }
-
-    was_open
 }
 
 fn block_controls_placement(
@@ -3342,8 +3371,7 @@ fn draw_save_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<SaveDial
     }
 }
 
-fn draw_fill_limit_warning(ui: &Ui, session: &mut Session, pending: &mut Option<PendingFillWarning>) -> bool {
-    let was_pending = pending.is_some();
+fn draw_fill_limit_warning(ui: &Ui, session: &mut Session, pending: &mut Option<PendingFillWarning>) {
     let mut fill_anyway = false;
     let mut dismiss = false;
 
@@ -3382,8 +3410,6 @@ fn draw_fill_limit_warning(ui: &Ui, session: &mut Session, pending: &mut Option<
     {
         session.fill_at_unlimited(warning.coord, warning.fill_mode, &warning.custom_fill_boundaries);
     }
-
-    was_pending
 }
 
 fn draw_block_select_tool_button(ui: &Ui, session: &mut Session, options: &mut BlockSelectionOptions) {
@@ -4121,8 +4147,8 @@ mod tests {
         assert!(state.pending_fill_warning.is_none());
         assert!(state.new_map_dialog.is_none());
         assert!(state.load_notice.is_none());
-        assert!(!state.load_popup_active);
         assert!(state.save_dialog.is_none());
+        assert!(!state.exit_requested);
         assert!(state.show_welcome);
         assert!(state.open_error.is_none());
     }

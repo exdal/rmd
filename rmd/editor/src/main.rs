@@ -547,10 +547,10 @@ impl ApplicationHandler for App {
 
         match event {
             WindowEvent::CloseRequested => {
-                if let Err(e) = self.shutdown() {
-                    log::error!("{e}");
+                self.ui.request_exit();
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
                 }
-                event_loop.exit();
             },
 
             WindowEvent::Resized(size) => {
