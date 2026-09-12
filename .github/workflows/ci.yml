@@ -12,6 +12,10 @@ on:
         description: Optional release tag that must match the editor package version
         required: false
         type: string
+      checkout_ref:
+        description: Optional branch, tag, or commit to build
+        required: false
+        type: string
     outputs:
       version:
         description: Editor package version used in artifact names
@@ -36,6 +40,8 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref || github.ref }}
 
       - name: Read and validate the editor version
         id: package
@@ -76,6 +82,8 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref || github.ref }}
 
       - name: Install the Slang build dependency
         shell: pwsh
@@ -118,6 +126,8 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref || github.ref }}
 
       - name: Install Linux build dependencies
         run: |

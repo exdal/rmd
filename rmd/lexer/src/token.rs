@@ -1,9 +1,5 @@
 #![allow(dead_code)]
 
-/// A word DM reserves only in one position and leaves as an ordinary name everywhere else:
-/// `final` is a var modifier inside a path but a local in `var/matrix/final`, `step` closes a range in
-/// `1 to 10 step 2` but is the builtin proc in `step(src, NORTH)`. Lexing them as one class keeps that
-/// choice in the parser, where the position is known, instead of in string comparisons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SoftKeyword {
     Args,
@@ -89,7 +85,6 @@ pub enum Token<'a> {
     Soft(SoftKeyword),
 
     Newline,
-    /// A physical newline whose layout is suppressed by parentheses, brackets, or an include.
     SuppressedNewline,
     Indent,
     Dedent,

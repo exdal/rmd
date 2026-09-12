@@ -21,6 +21,7 @@ pkgs.mkShell {
     pkgs.wayland
     pkgs.shader-slang
     pkgs.llvmPackages.libclang
+    pkgs.zenity
   ];
 
   SLANG_INCLUDE_DIR = "${pkgs.shader-slang.dev}/include";

@@ -123,10 +123,8 @@ impl<'a> Lexer<'a> {
         self.brace_stack = state.brace_stack;
     }
 
-    /// Leave open blocks open at end of file, for a stream that continues in another buffer.
     pub fn keep_indents_at_eof(&mut self) { self.close_indents_at_eof = false; }
 
-    /// How many `Dedent`s it would take to close everything still open.
     pub fn open_indents(&self) -> usize { self.pending_dedents + self.indent_stack.len().saturating_sub(1) }
 
     pub fn position(&self) -> Position { Position::new(self.line + 1, self.offset - self.line_offset + 1) }
@@ -167,11 +165,8 @@ impl<'a> Lexer<'a> {
 
     pub fn layout_suppressed(&self) -> bool { self.suppress_layout() }
 
-    /// For a file spliced in by `#include` from inside an expression: its lines are continuations of
-    /// the one holding the directive, so none of its layout means anything.
     pub fn disable_layout(&mut self) { self.layout_disabled = true; }
 
-    /// Let a preprocessor observe physical line endings even when they do not create parser layout.
     pub fn emit_suppressed_newlines(&mut self) { self.emit_suppressed_newlines = true; }
 
     fn suppress_layout(&self) -> bool { self.layout_disabled || self.paren_depth > 0 || !self.brace_stack.is_empty() }
@@ -188,8 +183,6 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// A `\` at end of line continues a string onto the next one, and the empty lines writers leave
-    /// between the halves belong to that continuation rather than ending the string.
     fn skip_blank_lines(&mut self) {
         loop {
             let (_, next) = self.measure_indent();
@@ -240,8 +233,6 @@ impl<'a> Lexer<'a> {
                     self.offset = next;
                     self.skip_to_end_of_line();
                 },
-                // Comments come out before indentation is measured, so a `/* */` opening a line
-                // neither opens a block nor closes the one around it, however many lines it spans.
                 b'/' if self.byte_at(next + 1) == b'*' => {
                     self.offset = next;
                     self.read_block_comment();
@@ -314,8 +305,6 @@ impl<'a> Lexer<'a> {
             self.consume();
         }
 
-        // `0. SECONDS` — numbers have no members, so a trailing `.` is the decimal point unless
-        // something that could be a member name follows it.
         let trailing_point = !(self.peek(1).is_ascii_alphabetic() || self.peek(1) == b'_' || self.peek(1) == b'.');
         if self.peek(0) == b'.' && (self.peek(1).is_ascii_digit() || trailing_point) {
             is_float = true;
@@ -325,7 +314,6 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        // BYOND accepts the non-finite markers with or without a decimal point.
         if self.peek(0) == b'#' {
             let marker_offset = self.offset;
             self.consume();
@@ -453,9 +441,6 @@ impl<'a> Lexer<'a> {
     }
 
     /// `@"raw"` and `@{"raw"}`. TODO: the `@(delim)text(delim)`
-    /// The character after `@` is the delimiter and the string runs to its next occurrence, so
-    /// `@"..."`, `@/.../` and `@@regex@` are all raw strings. `@{"` is the one two-character
-    /// delimiter, and the only form that may span lines.
     fn read_raw_string(&mut self) -> Token<'a> {
         let at_offset = self.offset;
         self.consume();
@@ -505,7 +490,6 @@ impl<'a> Lexer<'a> {
         Token::LineComment(self.slice(start_offset))
     }
 
-    /// DM block comments nest, unlike C
     fn read_block_comment(&mut self) -> Token<'a> {
         let start_offset = self.offset;
         self.consume();
