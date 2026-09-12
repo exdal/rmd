@@ -352,7 +352,10 @@ impl App {
             }
             match session.tool() {
                 Tool::Select => match pick {
-                    PickResult::Hit(owner) => session.select_instance(Some(owner)),
+                    PickResult::Hit(owner) => {
+                        session.select_instance(Some(owner));
+                        ui.reveal_selected_instance(session);
+                    },
                     PickResult::Miss => session.select_instance(None),
                 },
                 Tool::Delete => {

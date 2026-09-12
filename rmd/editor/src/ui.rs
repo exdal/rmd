@@ -352,6 +352,7 @@ pub enum OpenRequest {
 struct ObjectTreeFilter {
     roots: Vec<TypeId>,
     children: HashMap<TypeId, Vec<TypeId>>,
+    matches: HashSet<TypeId>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -423,6 +424,7 @@ struct ObjectTreeRowOptions<'a> {
     filter: Option<&'a ObjectTreeFilter>,
     type_filter: ObjectTreeTypeFilter,
     expand: bool,
+    reveal: Option<TypeId>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -430,6 +432,7 @@ struct ObjectTreeOutput {
     chosen: Option<TypeId>,
     visibility_toggle: Option<TypeId>,
     open_source: Option<SourceLocation>,
+    reveal: Option<TypeId>,
 }
 
 impl ObjectTreeFilter {
@@ -457,11 +460,14 @@ impl ObjectTreeFilter {
                 filter.roots.push(id);
             }
         }
+        filter.matches = match_set;
 
         filter
     }
 
     fn is_empty(&self) -> bool { self.roots.is_empty() }
+
+    fn contains(&self, id: TypeId) -> bool { self.matches.contains(&id) }
 
     fn children(&self, id: TypeId) -> &[TypeId] { self.children.get(&id).map_or(&[], Vec::as_slice) }
 }
@@ -530,6 +536,7 @@ pub struct UiState {
     settings_window: WindowKey,
     layout: DockLayout,
     selected: Option<TypeId>,
+    object_tree_reveal: Option<TypeId>,
     object_tree_search: String,
     object_tree_filter: Option<ObjectTreeFilter>,
     object_tree_filter_revision: u64,
@@ -591,6 +598,7 @@ impl UiState {
             settings_window,
             layout,
             selected: None,
+            object_tree_reveal: None,
             object_tree_search: String::new(),
             object_tree_filter: None,
             object_tree_filter_revision: 0,
@@ -623,6 +631,18 @@ impl UiState {
     }
 
     pub fn set_open_error(&mut self, error: Option<String>) { self.open_error = error; }
+
+    pub fn reveal_selected_instance(&mut self, session: &Session) {
+        let Some(selected) = session
+            .selected_prefab()
+            .and_then(|prefab| session.tree()?.id_of(&prefab.path))
+        else {
+            return;
+        };
+
+        self.selected = Some(selected);
+        self.object_tree_reveal = Some(selected);
+    }
 
     pub fn set_load_notice(&mut self, notice: Option<LoadNotice>) { self.load_notice = notice; }
 
@@ -1057,7 +1077,10 @@ impl UiState {
     fn draw_object_tree(&mut self, ui: &Ui, session: &mut Session, settings: &mut Settings) -> Option<SourceLocation> {
         let mut open_source = None;
         ui.window(&self.object_tree).build(|| {
-            let mut output = ObjectTreeOutput::default();
+            let mut output = ObjectTreeOutput {
+                reveal: self.object_tree_reveal,
+                ..ObjectTreeOutput::default()
+            };
             let available_width = ui.content_region_avail()[0];
             let button_size = ui.frame_height();
             let spacing = ui.clone_style().item_spacing()[0];
@@ -1183,16 +1206,28 @@ impl UiState {
                         filter: self.object_tree_filter.as_ref(),
                         type_filter,
                         expand: rebuild_filter && self.object_tree_filter.is_some(),
+                        reveal: self.object_tree_reveal,
                     };
                     for root in roots.iter().copied() {
                         collect_type_rows(ui, tree, root, None, &mut rows, &options);
                     }
-                    for index in ListClipper::new(rows.len()).begin(ui).iter() {
+                    let reveal_row = self
+                        .object_tree_reveal
+                        .and_then(|target| rows.iter().position(|row| row.id == target));
+                    let mut clipper = ListClipper::new(rows.len()).begin(ui);
+                    if let Some(index) = reveal_row {
+                        clipper.include_item_by_index(index);
+                    }
+                    for index in clipper.iter() {
                         draw_type_row(ui, session, tree, &rows, index, &mut self.selected, &mut output);
+                    }
+                    if reveal_row.is_some() {
+                        self.object_tree_reveal = None;
                     }
                 });
 
             if let Some(chosen) = output.chosen {
+                self.object_tree_reveal = None;
                 session.choose_type(chosen);
             }
             if let Some(id) = output.visibility_toggle {
@@ -3835,7 +3870,13 @@ fn collect_type_rows(
     let storage_id = ui.get_id(&node_id);
     ui.with_current_state_storage(|mut storage| {
         let initialize_atom = tree.roots().atom == Some(id) && storage.get_int(storage_id, -1) == -1;
-        if options.expand || initialize_atom {
+        let reveal_descendant = options.reveal.is_some_and(|target| {
+            target != id
+                && options.filter.is_none_or(|filter| filter.contains(target))
+                && options.type_filter.action(tree, target) == ObjectTreeFilterAction::Keep
+                && tree.is_subtype_of(target, id)
+        });
+        if options.expand || initialize_atom || reveal_descendant {
             storage.set_bool(storage_id, true);
         }
     });
@@ -3904,6 +3945,9 @@ fn draw_type_row(
         if ui.is_item_clicked() {
             *selected = Some(row.id);
             output.chosen = Some(row.id);
+        }
+        if output.reveal == Some(row.id) {
+            ui.set_scroll_here_y(0.5);
         }
         ui.set_item_tooltip(&node_id);
         let source = session.type_source(row.id);
@@ -4136,6 +4180,7 @@ mod tests {
         assert_eq!(state.layout.validate(), Ok(()));
         assert_eq!(state.block_selection_options, BlockSelectionOptions::default());
         assert_eq!(state.fill_mode, FillMode::Wall);
+        assert!(state.object_tree_reveal.is_none());
         assert!(state.object_tree_search.is_empty());
         assert!(state.object_tree_filter.is_none());
         assert!(state.similar_instances.is_none());
@@ -4623,12 +4668,37 @@ mod tests {
 
         assert_eq!(filter.roots, [keep]);
         assert!(filter.children(keep).is_empty());
+        assert!(filter.contains(keep));
+    }
+
+    #[test]
+    fn a_selected_map_instance_queues_its_type_for_object_tree_reveal() {
+        let path = TreePath::parse("/atom/structure/table");
+        let mut tree = ObjectTree::new();
+        let selected_type = tree.register(&path, Location::default());
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        let tile = map.intern_tile(vec![Prefab::new(path)]);
+        map.grid[0][0][0] = tile;
+        let document = MapDocument::new(map, 1);
+        let selected_instance = document.instance_ids_at(Coord::new(1, 1, 1))[0];
+        let mut session = Session::new();
+        session.state.environment = Some(editor::Environment::new(".", tree));
+        session.state.open_document(document);
+        session.set_tool(Tool::Select);
+        session.select_instance(Some(selected_instance));
+        let mut state = UiState::new().expect("valid window keys");
+
+        state.reveal_selected_instance(&session);
+
+        assert_eq!(state.selected, Some(selected_type));
+        assert_eq!(state.object_tree_reveal, Some(selected_type));
+        assert_eq!(session.tool(), Tool::Select);
     }
 
     #[test]
     fn object_tree_rows_follow_expansion_and_render_a_clipped_search() {
         let mut tree = ObjectTree::new();
-        tree.register(&TreePath::parse("/atom/structure/thing"), Location::default());
+        let thing = tree.register(&TreePath::parse("/atom/structure/thing"), Location::default());
         tree.register(&TreePath::parse("/atom/movable/item"), Location::default());
         let atom = tree.roots().atom.expect("registered /atom root");
         let mut context = dear_imgui_rs::Context::create();
@@ -4705,6 +4775,70 @@ mod tests {
             .expect("test window should be visible");
         assert_eq!(
             collapsed,
+            [ObjectTreeRow {
+                id: atom,
+                parent: None,
+                leaf: false
+            }]
+        );
+
+        let revealed = ui
+            .window("object-tree-revealed")
+            .build(|| {
+                let atom_storage_id = ui.get_id("/atom");
+                ui.with_current_state_storage(|mut storage| storage.set_bool(atom_storage_id, false));
+                let mut rows = Vec::new();
+                collect_type_rows(
+                    ui,
+                    &tree,
+                    atom,
+                    None,
+                    &mut rows,
+                    &ObjectTreeRowOptions {
+                        reveal: Some(thing),
+                        ..ObjectTreeRowOptions::default()
+                    },
+                );
+                rows
+            })
+            .expect("test window should be visible");
+        let revealed_paths = revealed
+            .iter()
+            .filter_map(|row| tree.get(row.id))
+            .map(|decl| decl.path.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            revealed_paths,
+            ["/atom", "/atom/movable", "/atom/structure", "/atom/structure/thing"]
+        );
+
+        let structure = tree.id_of(&TreePath::parse("/atom/structure")).unwrap();
+        let filtered = ui
+            .window("object-tree-filtered-reveal")
+            .build(|| {
+                let atom_storage_id = ui.get_id("/atom");
+                ui.with_current_state_storage(|mut storage| storage.set_bool(atom_storage_id, false));
+                let mut rows = Vec::new();
+                collect_type_rows(
+                    ui,
+                    &tree,
+                    atom,
+                    None,
+                    &mut rows,
+                    &ObjectTreeRowOptions {
+                        type_filter: ObjectTreeTypeFilter {
+                            custom: Some(structure),
+                            ..ObjectTreeTypeFilter::default()
+                        },
+                        reveal: Some(thing),
+                        ..ObjectTreeRowOptions::default()
+                    },
+                );
+                rows
+            })
+            .expect("test window should be visible");
+        assert_eq!(
+            filtered,
             [ObjectTreeRow {
                 id: atom,
                 parent: None,
