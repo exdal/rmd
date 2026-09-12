@@ -34,6 +34,12 @@ impl Controller {
         self.camera.viewport_height = height;
     }
 
+    pub fn center_on_tile(&mut self, coord: Coord, tile_size: u32) {
+        let tile_size = tile_size.max(1) as f32;
+        self.camera.x = (coord.x.saturating_sub(1) as f32 + 0.5) * tile_size;
+        self.camera.y = (coord.y.saturating_sub(1) as f32 + 0.5) * tile_size;
+    }
+
     pub fn pan_by(&mut self, delta: [f32; 2]) {
         let zoom = self.camera.zoom.max(f32::EPSILON);
         self.camera.x -= delta[0] / zoom;
@@ -159,5 +165,17 @@ mod tests {
 
         assert_eq!(controller.screen_to_tile([64.0, 32.0], size, 32, 1), None);
         assert_eq!(controller.screen_to_tile([32.0, 0.0], size, 32, 1), None);
+    }
+
+    #[test]
+    fn centering_on_a_tile_preserves_zoom() {
+        let mut controller = Controller::new();
+        controller.camera.zoom = 2.5;
+
+        controller.center_on_tile(Coord::new(3, 4, 2), 32);
+
+        assert_eq!(controller.camera.x, 80.0);
+        assert_eq!(controller.camera.y, 112.0);
+        assert_eq!(controller.camera.zoom, 2.5);
     }
 }

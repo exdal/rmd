@@ -106,6 +106,12 @@ struct InspectorSnapshot {
     icon_state_known: bool,
 }
 
+#[derive(Default)]
+pub(crate) struct InspectorOutput {
+    pub open_source: Option<SourceLocation>,
+    pub find_similar: bool,
+}
+
 #[derive(Clone, Copy)]
 enum TextPropertyKind {
     Text,
@@ -116,12 +122,12 @@ enum TextPropertyKind {
 impl InspectorState {
     pub(crate) const fn transform_mode(&self) -> TransformMode { self.transform_mode }
 
-    pub fn draw(&mut self, ui: &Ui, session: &mut Session) -> Option<SourceLocation> {
+    pub fn draw(&mut self, ui: &Ui, session: &mut Session) -> InspectorOutput {
         let Some(snapshot) = inspector_snapshot(session) else {
             self.clear();
             ui.text_disabled("No object selected");
 
-            return None;
+            return InspectorOutput::default();
         };
 
         self.sync(&snapshot);
@@ -137,6 +143,7 @@ impl InspectorState {
             "Tile {}, {}, {}",
             snapshot.location.coord.x, snapshot.location.coord.y, snapshot.location.coord.z
         ));
+        let find_similar = ui.text_link("Find similar...");
         ui.separator();
 
         if snapshot.is_atom {
@@ -161,7 +168,10 @@ impl InspectorState {
             &snapshot.defaults,
         );
 
-        open_source
+        InspectorOutput {
+            open_source,
+            find_similar,
+        }
     }
 
     fn draw_transform(&mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot) {

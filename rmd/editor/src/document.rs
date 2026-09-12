@@ -261,6 +261,14 @@ impl MapDocument {
         Some((prefab, location))
     }
 
+    pub fn prefab_instances(&self) -> impl Iterator<Item = (PrefabInstanceId, &Prefab, PrefabLocation)> {
+        self.instances.locations.iter().filter_map(|(id, location)| {
+            let prefab = self.map.tile_at(location.coord)?.get(location.prefab_index)?;
+
+            Some((*id, prefab, *location))
+        })
+    }
+
     pub fn selected_instance(&self) -> Option<PrefabInstanceId> {
         self.selected_instance
             .filter(|id| self.instance_location(*id).is_some())

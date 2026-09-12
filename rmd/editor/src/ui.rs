@@ -29,7 +29,7 @@ use dear_imgui_rs::{
 use dmm::{Coord, MapFormat, Prefab, Size};
 use editor::{
     command::EditGroupId,
-    document::{DocumentId, MapDocument, Selection},
+    document::{DocumentId, MapDocument, PrefabInstanceId, PrefabLocation, Selection},
     icons::materialdesignicons::{
         ICON_CLOSE_THICK,
         ICON_COG,
@@ -63,7 +63,7 @@ use crate::{
     camera::Controller,
     external_editor::SourceLocation,
     gizmo::{BlockGizmoTarget, GizmoMapView, GizmoState},
-    inspector::InspectorState,
+    inspector::{InspectorOutput, InspectorState},
     loader::LoadView,
     session::{BlockPreviewSprite, FillOutcome, PlacementPreview, Session},
     settings::{
@@ -128,6 +128,7 @@ const BLOCK_STRIPE_LENGTH: f32 = 6.0;
 const BLOCK_STRIPE_SPEED: f32 = 12.0;
 const OBJECT_TREE_FILTER_OPTIONS_POPUP: &str = "object-tree-filter-options-popup";
 const OBJECT_TREE_SEARCH_OPTIONS_POPUP: &str = "object-tree-search-options-popup";
+const SIMILAR_INSTANCES_WINDOW_SIZE: [f32; 2] = [420.0, 320.0];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ActivePlacementFlash {
@@ -464,6 +465,7 @@ struct MapViewState {
     rect: MapViewRect,
     visible: bool,
     refit: bool,
+    focus: bool,
     block_selection_anchor: Option<Coord>,
     block_placement: Option<PendingBlockPlacement>,
     paste: Option<PendingPaste>,
@@ -487,11 +489,26 @@ impl MapViewState {
             rect: MapViewRect::default(),
             visible: false,
             refit: true,
+            focus: false,
             block_selection_anchor: None,
             block_placement: None,
             paste: None,
         })
     }
+}
+
+#[derive(Debug)]
+struct SimilarInstancesState {
+    document: DocumentId,
+    prefab_path: String,
+    instances: Vec<PrefabInstanceId>,
+    focus: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct JumpTarget {
+    document: DocumentId,
+    instance: PrefabInstanceId,
 }
 
 pub struct UiState {
@@ -501,6 +518,7 @@ pub struct UiState {
     dockspace_root: Option<Id>,
     welcome_window: WindowKey,
     inspector_window: WindowKey,
+    similar_instances_window: WindowKey,
     settings_window: WindowKey,
     layout: DockLayout,
     selected: Option<TypeId>,
@@ -508,6 +526,7 @@ pub struct UiState {
     object_tree_filter: Option<ObjectTreeFilter>,
     object_tree_filter_revision: u64,
     inspector: InspectorState,
+    similar_instances: Option<SimilarInstancesState>,
     gizmo: GizmoState,
     placement_flash: Option<ActivePlacementFlash>,
     placement_stroke: Option<PlacementStroke>,
@@ -538,6 +557,7 @@ impl UiState {
         let object_tree = WindowKey::new("object-tree", "Object tree")?;
         let welcome_window = WindowKey::new("welcome", "Welcome")?;
         let inspector_window = WindowKey::new("inspector", "Inspector")?;
+        let similar_instances_window = WindowKey::new("similar-instances", "Similar prefab instances")?;
         let settings_window = WindowKey::new("settings", "Settings")?;
         let load_window = WindowKey::new("load", "Loading")?;
         let layout = DockLayout::split(
@@ -559,6 +579,7 @@ impl UiState {
             dockspace_root: None,
             welcome_window,
             inspector_window,
+            similar_instances_window,
             settings_window,
             layout,
             selected: None,
@@ -566,6 +587,7 @@ impl UiState {
             object_tree_filter: None,
             object_tree_filter_revision: 0,
             inspector: InspectorState::default(),
+            similar_instances: None,
             gizmo: GizmoState::default(),
             placement_flash: None,
             placement_stroke: None,
@@ -802,7 +824,14 @@ impl UiState {
         self.show_welcome |= show_welcome;
 
         let mut open_source = self.draw_object_tree(ui, session, settings);
-        open_source = self.draw_inspector(ui, session).or(open_source);
+        let inspector = self.draw_inspector(ui, session);
+        open_source = inspector.open_source.or(open_source);
+        if inspector.find_similar {
+            self.open_similar_instances(session);
+        }
+        if let Some(target) = self.draw_similar_instances(ui, session) {
+            self.jump_to_instance(session, target);
+        }
         let mut welcome = WelcomeOutput::default();
         self.draw_welcome(ui, session, settings, loading, &mut welcome);
         open = welcome.open.or(open);
@@ -1318,6 +1347,7 @@ impl UiState {
             rect: view_rect,
             visible: view_visible,
             refit: view_refit,
+            focus: view_focus,
             block_selection_anchor,
             block_placement,
             paste,
@@ -1329,7 +1359,11 @@ impl UiState {
         if let Some(node) = self.central_node.or(self.dockspace_root) {
             ui.set_next_window_dock_id_with_cond(node, Condition::FirstUseEver);
         }
-        ui.window(window.label(title.as_str())).opened(keep_open).build(|| {
+        let map_window = ui
+            .window(window.label(title.as_str()))
+            .opened(keep_open)
+            .focused(std::mem::take(view_focus));
+        map_window.build(|| {
             if ui.is_window_focused() {
                 session.state.set_active(id);
             }
@@ -2008,14 +2042,173 @@ impl UiState {
         exit
     }
 
-    fn draw_inspector(&mut self, ui: &Ui, session: &mut Session) -> Option<SourceLocation> {
-        let mut open_source = None;
+    fn draw_inspector(&mut self, ui: &Ui, session: &mut Session) -> InspectorOutput {
+        let mut output = InspectorOutput::default();
         ui.window(&self.inspector_window).build(|| {
-            open_source = self.inspector.draw(ui, session);
+            output = self.inspector.draw(ui, session);
         });
 
-        open_source
+        output
     }
+
+    fn open_similar_instances(&mut self, session: &Session) {
+        let Some(document) = session.state.active_document() else {
+            return;
+        };
+        let Some(selected) = document.selected_instance() else {
+            return;
+        };
+        let Some((prefab, _)) = document.prefab_instance(selected) else {
+            return;
+        };
+
+        self.similar_instances = Some(SimilarInstancesState {
+            document: document.id(),
+            prefab_path: prefab.path.to_string(),
+            instances: find_similar_instances(document, prefab),
+            focus: true,
+        });
+    }
+
+    fn draw_similar_instances(&mut self, ui: &Ui, session: &Session) -> Option<JumpTarget> {
+        let document_id = self.similar_instances.as_ref()?.document;
+        let Some(document) = session.state.document(document_id) else {
+            self.similar_instances = None;
+
+            return None;
+        };
+        let search = self.similar_instances.as_mut()?;
+        let rows = resolve_similar_instances(document, &search.instances);
+        let mut open = true;
+        let mut jump = None;
+        let focus = std::mem::take(&mut search.focus);
+
+        ui.window(&self.similar_instances_window)
+            .opened(&mut open)
+            .size(SIMILAR_INSTANCES_WINDOW_SIZE, Condition::FirstUseEver)
+            .focused(focus)
+            .build(|| {
+                ui.text_wrapped(&search.prefab_path);
+                let suffix = if rows.len() == 1 { "instance" } else { "instances" };
+                ui.text_disabled(format!("{} matching {suffix}", rows.len()));
+                ui.separator();
+
+                if rows.is_empty() {
+                    ui.text_disabled("No matching instances remain");
+
+                    return;
+                }
+
+                ui.table("similar-instances-table")
+                    .flags(TableFlags::BORDERS_INNER_V | TableFlags::RESIZABLE | TableFlags::ROW_BG)
+                    .sizing_policy(TableSizingPolicy::StretchProp)
+                    .column("Tile")
+                    .weight(0.7)
+                    .done()
+                    .column("Action")
+                    .weight(0.3)
+                    .done()
+                    .build(|ui| {
+                        for index in ListClipper::new(rows.len()).begin(ui).iter() {
+                            let (instance, location) = rows[index];
+                            let row_id = instance.get().to_string();
+                            let _id = ui.push_id(&row_id);
+
+                            ui.table_next_row();
+                            ui.table_next_column();
+                            ui.align_text_to_frame_padding();
+                            ui.text(format!(
+                                "{}, {}, {}",
+                                location.coord.x, location.coord.y, location.coord.z
+                            ));
+                            ui.table_next_column();
+                            if ui.small_button("Jump to") {
+                                jump = Some(JumpTarget {
+                                    document: document_id,
+                                    instance,
+                                });
+                            }
+                        }
+                    });
+            });
+
+        if !open {
+            self.similar_instances = None;
+        }
+
+        jump
+    }
+
+    fn jump_to_instance(&mut self, session: &mut Session, target: JumpTarget) {
+        let Some(location) = session
+            .state
+            .document(target.document)
+            .and_then(|document| document.instance_location(target.instance))
+        else {
+            return;
+        };
+
+        self.cancel_edit_gestures(Some(target.document));
+        session.state.set_active(target.document);
+        session.set_level(location.coord.z);
+        if let Some(document) = session.state.active_document_mut() {
+            document.set_focus(None);
+            document.selection = None;
+        }
+        session.select_instance(Some(target.instance));
+
+        let view = match self.map_views.get_mut(&target.document) {
+            Some(view) => view,
+            None => {
+                let Ok(view) = MapViewState::new(target.document) else {
+                    log::error!(
+                        "could not create a map view window for document {}",
+                        target.document.get()
+                    );
+
+                    return;
+                };
+                self.map_views.insert(target.document, view);
+                self.map_views
+                    .get_mut(&target.document)
+                    .expect("the inserted map view is available")
+            },
+        };
+        view.camera.center_on_tile(location.coord, session.options.tile_size);
+        view.refit = false;
+        view.focus = true;
+    }
+}
+
+fn find_similar_instances(document: &MapDocument, target: &Prefab) -> Vec<PrefabInstanceId> {
+    let mut matches = document
+        .prefab_instances()
+        .filter_map(|(instance, prefab, location)| (prefab == target).then_some((instance, location)))
+        .collect::<Vec<_>>();
+    matches.sort_unstable_by_key(|(instance, location)| {
+        (
+            location.coord.z,
+            location.coord.y,
+            location.coord.x,
+            location.prefab_index,
+            instance.get(),
+        )
+    });
+
+    matches.into_iter().map(|(instance, _)| instance).collect()
+}
+
+fn resolve_similar_instances(
+    document: &MapDocument, instances: &[PrefabInstanceId],
+) -> Vec<(PrefabInstanceId, PrefabLocation)> {
+    instances
+        .iter()
+        .filter_map(|instance| {
+            document
+                .instance_location(*instance)
+                .map(|location| (*instance, location))
+        })
+        .collect()
 }
 
 fn draw_welcome_subtitle(ui: &Ui) {
@@ -3788,7 +3981,8 @@ mod tests {
         types::{Identifier, Value, VarModifiers},
     };
 
-    use dmm::PrefabInstanceId;
+    use dmm::{Map, PrefabInstanceId, Size};
+    use editor::command::Edit;
     use objtree::VarDecl;
     use render::{HighlightStyle, SpriteTexture};
 
@@ -3806,6 +4000,26 @@ mod tests {
                 location: Location::default(),
             },
         );
+    }
+
+    fn similar_instances_map() -> (Map, Prefab) {
+        let mut target = Prefab::new(TreePath::parse("/obj/table"));
+        target.set_var("name".into(), Value::Text(String::from("Conference")));
+        let mut different_override = target.clone();
+        different_override.set_var("name".into(), Value::Text(String::from("Coffee")));
+        let different_path = Prefab::new(TreePath::parse("/obj/chair"));
+
+        let mut map = Map::new(Size { x: 2, y: 1, z: 2 });
+        let first = map.intern_tile(vec![target.clone(), different_override.clone()]);
+        let second = map.intern_tile(vec![different_path, target.clone()]);
+        let third = map.intern_tile(vec![target.clone()]);
+        let fourth = map.intern_tile(vec![different_override]);
+        map.grid[0][0][0] = first;
+        map.grid[0][0][1] = second;
+        map.grid[1][0][0] = third;
+        map.grid[1][0][1] = fourth;
+
+        (map, target)
     }
 
     #[test]
@@ -3866,6 +4080,7 @@ mod tests {
         assert_eq!(state.fill_mode, FillMode::Wall);
         assert!(state.object_tree_search.is_empty());
         assert!(state.object_tree_filter.is_none());
+        assert!(state.similar_instances.is_none());
         assert_eq!(
             state.custom_fill_boundaries,
             [TreePath::parse(DEFAULT_CUSTOM_FILL_BOUNDARY)]
@@ -3966,8 +4181,84 @@ mod tests {
         let view = MapViewState::new(DocumentId::new()).expect("valid window key");
 
         assert!(view.refit);
+        assert!(!view.focus);
         assert!(view.block_selection_anchor.is_none());
         assert!(view.block_placement.is_none());
+    }
+
+    #[test]
+    fn similar_instances_match_the_exact_prefab_across_levels_in_tile_order() {
+        let (map, target) = similar_instances_map();
+        let document = MapDocument::new(map, 1);
+
+        assert_eq!(
+            find_similar_instances(&document, &target),
+            [
+                document.instance_ids_at(Coord::new(1, 1, 1))[0],
+                document.instance_ids_at(Coord::new(2, 1, 1))[1],
+                document.instance_ids_at(Coord::new(1, 1, 2))[0],
+            ]
+        );
+    }
+
+    #[test]
+    fn similar_instance_snapshots_follow_moves_and_drop_deleted_placements() {
+        let (map, target) = similar_instances_map();
+        let mut document = MapDocument::new(map, 1);
+        let matches = find_similar_instances(&document, &target);
+        let moved = matches[0];
+        let deleted = matches[2];
+
+        assert_eq!(
+            document.move_instance(moved, Coord::new(2, 1, 1), "move table", &[], None),
+            Some(true)
+        );
+        let deleted_location = document.instance_location(deleted).unwrap();
+        let mut after = document.placed_tile(deleted_location.coord).unwrap();
+        after.remove(deleted_location.prefab_index);
+        let mut edit = Edit::new("delete table");
+        edit.change(&document, deleted_location.coord, after);
+        assert!(document.apply(edit));
+
+        let rows = resolve_similar_instances(&document, &matches);
+        assert_eq!(rows.len(), matches.len() - 1);
+        assert_eq!(
+            rows.iter()
+                .find(|(instance, _)| *instance == moved)
+                .map(|(_, location)| location.coord),
+            Some(Coord::new(2, 1, 1))
+        );
+        assert!(rows.iter().all(|(instance, _)| *instance != deleted));
+    }
+
+    #[test]
+    fn jumping_to_an_instance_selects_its_level_and_centers_the_map_view() {
+        let (map, _) = similar_instances_map();
+        let document = MapDocument::new(map, 1);
+        let instance = document.instance_ids_at(Coord::new(1, 1, 2))[0];
+        let mut session = Session::new();
+        let document_id = session.state.open_document(document);
+        let mut state = UiState::new().expect("valid window keys");
+        let mut view = MapViewState::new(document_id).expect("valid map view key");
+        view.camera.camera.zoom = 2.5;
+        state.map_views.insert(document_id, view);
+
+        state.jump_to_instance(
+            &mut session,
+            JumpTarget {
+                document: document_id,
+                instance,
+            },
+        );
+
+        assert_eq!(session.state.active(), Some(document_id));
+        assert_eq!(session.z(), 2);
+        assert_eq!(session.selected_instance(), Some(instance));
+        let view = state.map_views.get(&document_id).unwrap();
+        assert_eq!((view.camera.camera.x, view.camera.camera.y), (16.0, 16.0));
+        assert_eq!(view.camera.camera.zoom, 2.5);
+        assert!(view.focus);
+        assert!(!view.refit);
     }
 
     #[test]
