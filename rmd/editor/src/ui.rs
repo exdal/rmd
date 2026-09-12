@@ -1,4 +1,4 @@
-use core::path::TreePath;
+use core::{path::TreePath, types::Identifier};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -32,6 +32,7 @@ use editor::{
     document::{DocumentId, MapDocument, Selection},
     icons::materialdesignicons::{
         ICON_CLOSE_THICK,
+        ICON_COG,
         ICON_DOTS_HORIZONTAL,
         ICON_ERASER,
         ICON_EYE,
@@ -63,7 +64,15 @@ use crate::{
     inspector::InspectorState,
     loader::LoadView,
     session::{BlockPreviewSprite, FillOutcome, PlacementPreview, Session},
-    settings::{BINDABLE_KEYS, KeyBinding, KeyBindings, KeybindAction, SelectionHighlight, Settings},
+    settings::{
+        BINDABLE_KEYS,
+        KeyBinding,
+        KeyBindings,
+        KeybindAction,
+        ObjectTreeSearchOptions,
+        SelectionHighlight,
+        Settings,
+    },
 };
 
 /// How far down the "Blur below" menu goes. The option itself takes any depth.
@@ -114,6 +123,7 @@ const BLOCK_SELECTION_SHADOW: [f32; 4] = [0.0, 0.0, 0.0, 0.85];
 const BLOCK_GHOST_OPACITY: f32 = 0.55;
 const BLOCK_STRIPE_LENGTH: f32 = 6.0;
 const BLOCK_STRIPE_SPEED: f32 = 12.0;
+const OBJECT_TREE_SEARCH_OPTIONS_POPUP: &str = "object-tree-search-options-popup";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ActivePlacementFlash {
@@ -337,6 +347,17 @@ struct ObjectTreeFilter {
     children: HashMap<TypeId, Vec<TypeId>>,
 }
 
+impl ObjectTreeSearchOptions {
+    const fn hint(self) -> &'static str {
+        match (self.type_paths, self.names) {
+            (true, true) => "Search type paths or names",
+            (true, false) => "Search type paths",
+            (false, true) => "Search names",
+            (false, false) => "Search types",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ObjectTreeRow {
     id: TypeId,
@@ -351,10 +372,9 @@ struct ObjectTreeOutput {
 }
 
 impl ObjectTreeFilter {
-    fn new(tree: &ObjectTree, atom: TypeId, query: &str) -> Self {
-        let matches = all_matching_type_paths(tree, query)
+    fn new(tree: &ObjectTree, atom: TypeId, query: &str, options: ObjectTreeSearchOptions) -> Self {
+        let matches = matching_object_types(tree, query, options)
             .into_iter()
-            .filter_map(|path| tree.id_of(&path))
             .filter(|id| tree.is_subtype_of(*id, atom))
             .collect::<Vec<_>>();
         let match_set = matches.iter().copied().collect::<HashSet<_>>();
@@ -678,7 +698,7 @@ impl UiState {
         );
         self.show_welcome |= show_welcome;
 
-        self.draw_object_tree(ui, session);
+        self.draw_object_tree(ui, session, settings);
         self.draw_inspector(ui, session);
         let mut welcome = WelcomeOutput::default();
         self.draw_welcome(ui, session, settings, loading, &mut welcome);
@@ -871,14 +891,39 @@ impl UiState {
         });
     }
 
-    fn draw_object_tree(&mut self, ui: &Ui, session: &mut Session) {
+    fn draw_object_tree(&mut self, ui: &Ui, session: &mut Session, settings: &mut Settings) {
         ui.window(&self.object_tree).build(|| {
             let mut output = ObjectTreeOutput::default();
-            ui.set_next_item_width(ui.content_region_avail()[0]);
+            let available_width = ui.content_region_avail()[0];
+            let button_size = ui.frame_height();
+            let spacing = ui.clone_style().item_spacing()[0];
+            ui.set_next_item_width((available_width - button_size - spacing).max(1.0));
             let search_changed = ui
                 .input_text("##object-tree-search", &mut self.object_tree_search)
-                .hint("Search type paths")
+                .hint(settings.object_tree_search.hint())
                 .build();
+            ui.same_line();
+            let options_clicked = ui.button_with_size("##object-tree-search-options", [button_size, button_size]);
+            draw_centered_icon(ui, ICON_COG);
+            if options_clicked {
+                ui.open_popup(OBJECT_TREE_SEARCH_OPTIONS_POPUP);
+            }
+            ui.set_item_tooltip("Search options");
+
+            let mut search_options_changed = false;
+            if let Some(_popup) = ui.begin_popup(OBJECT_TREE_SEARCH_OPTIONS_POPUP) {
+                let disable_type_paths = settings.object_tree_search.type_paths && !settings.object_tree_search.names;
+                {
+                    let _disabled = ui.begin_disabled_with_cond(disable_type_paths);
+                    search_options_changed |= ui.checkbox("Type paths", &mut settings.object_tree_search.type_paths);
+                }
+
+                let disable_names = settings.object_tree_search.names && !settings.object_tree_search.type_paths;
+                {
+                    let _disabled = ui.begin_disabled_with_cond(disable_names);
+                    search_options_changed |= ui.checkbox("Names (atom/name)", &mut settings.object_tree_search.names);
+                }
+            }
 
             let tree_revision = session.texture_revision();
             let Some(tree) = session.tree() else {
@@ -891,10 +936,11 @@ impl UiState {
 
                 return;
             };
-            let rebuild_filter = search_changed || self.object_tree_filter_revision != tree_revision;
+            let rebuild_filter =
+                search_changed || search_options_changed || self.object_tree_filter_revision != tree_revision;
             if rebuild_filter {
                 self.object_tree_filter = (!self.object_tree_search.trim().is_empty())
-                    .then(|| ObjectTreeFilter::new(tree, atom, &self.object_tree_search));
+                    .then(|| ObjectTreeFilter::new(tree, atom, &self.object_tree_search, settings.object_tree_search));
                 self.object_tree_filter_revision = tree_revision;
             }
 
@@ -3121,8 +3167,55 @@ fn matching_type_paths(tree: &ObjectTree, query: &str) -> Vec<TreePath> {
     matching_type_paths_up_to(tree, query, MAX_CUSTOM_FILL_SEARCH_RESULTS)
 }
 
-fn all_matching_type_paths(tree: &ObjectTree, query: &str) -> Vec<TreePath> {
-    matching_type_paths_up_to(tree, query, usize::MAX)
+fn matching_object_types(tree: &ObjectTree, query: &str, options: ObjectTreeSearchOptions) -> Vec<TypeId> {
+    let query = query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let name = Identifier::from("name");
+    let mut matches = tree
+        .iter()
+        .filter(|decl| {
+            let path_matches = options.type_paths && decl.path.to_string().to_ascii_lowercase().contains(&query);
+            let name_matches = options.names
+                && tree
+                    .var_inherited(decl.id, &name)
+                    .and_then(|variable| variable.value.as_text())
+                    .is_some_and(|value| value.to_ascii_lowercase().contains(&query));
+
+            path_matches || name_matches
+        })
+        .map(|decl| decl.id)
+        .collect::<Vec<_>>();
+    matches.sort_by_key(|id| tree.get(*id).map(|decl| decl.path.to_string()).unwrap_or_default());
+
+    matches
+}
+
+// im not sure why every single fucking icons appear not centered fuck you
+fn draw_centered_icon(ui: &Ui, icon: char) {
+    let item_min = ui.item_rect_min();
+    let item_max = ui.item_rect_max();
+    let center = [(item_min[0] + item_max[0]) * 0.5, (item_min[1] + item_max[1]) * 0.5];
+    let glyph = ui.current_baked_font().glyph(icon);
+    let icon = icon.to_string();
+    let position = glyph.map_or_else(
+        || {
+            let size = ui.calc_text_size(&icon);
+            [center[0] - size[0] * 0.5, center[1] - size[1] * 0.5]
+        },
+        |glyph| {
+            let (glyph_min, glyph_max) = glyph.position_and_size();
+            [
+                center[0] - (glyph_min[0] + glyph_max[0]) * 0.5,
+                center[1] - (glyph_min[1] + glyph_max[1]) * 0.5,
+            ]
+        },
+    );
+
+    ui.get_window_draw_list()
+        .add_text(position, ui.style_color(StyleColor::Text), icon);
 }
 
 fn matching_type_paths_up_to(tree: &ObjectTree, query: &str, limit: usize) -> Vec<TreePath> {
@@ -3478,12 +3571,31 @@ fn panel_extent(available: [f32; 2]) -> ([f32; 2], (u32, u32)) {
 
 #[cfg(test)]
 mod tests {
-    use core::{location::Location, path::TreePath};
+    use core::{
+        location::Location,
+        path::TreePath,
+        types::{Identifier, Value, VarModifiers},
+    };
 
     use dmm::PrefabInstanceId;
+    use objtree::VarDecl;
     use render::{HighlightStyle, SpriteTexture};
 
     use super::*;
+
+    fn set_type_name(tree: &mut ObjectTree, id: TypeId, value: &str) {
+        let name = Identifier::from("name");
+        tree.get_mut(id).unwrap().vars.insert(
+            name.clone(),
+            VarDecl {
+                name,
+                declared_type: None,
+                modifiers: VarModifiers::default(),
+                value: Value::Text(value.to_owned()),
+                location: Location::default(),
+            },
+        );
+    }
 
     #[test]
     fn a_short_path_is_left_alone_and_a_long_one_keeps_its_tail() {
@@ -3774,7 +3886,69 @@ mod tests {
             matching_type_paths(&tree, "floor").len(),
             MAX_CUSTOM_FILL_SEARCH_RESULTS
         );
-        assert_eq!(all_matching_type_paths(&tree, "floor").len(), 61);
+        assert_eq!(
+            matching_object_types(&tree, "floor", ObjectTreeSearchOptions::default()).len(),
+            61
+        );
+    }
+
+    #[test]
+    fn object_tree_search_matches_inherited_atom_names() {
+        let mut tree = ObjectTree::new();
+        let atom = tree.register(&TreePath::parse("/atom"), Location::default());
+        let parent = tree.register(&TreePath::parse("/atom/movable/tool"), Location::default());
+        let child = tree.register(&TreePath::parse("/atom/movable/tool/wrench"), Location::default());
+        tree.register(&TreePath::parse("/atom/structure/table"), Location::default());
+        set_type_name(&mut tree, parent, "Portable Tool");
+
+        let options = ObjectTreeSearchOptions {
+            type_paths: false,
+            names: true,
+        };
+        let matches = matching_object_types(&tree, "PORTABLE", options);
+        let filter = ObjectTreeFilter::new(&tree, atom, "PORTABLE", options);
+
+        assert_eq!(matches, [parent, child]);
+        assert_eq!(filter.roots, [parent]);
+        assert_eq!(filter.children(parent), [child]);
+    }
+
+    #[test]
+    fn object_tree_search_combines_enabled_fields() {
+        let mut tree = ObjectTree::new();
+        tree.register(&TreePath::parse("/atom"), Location::default());
+        let path_match = tree.register(&TreePath::parse("/atom/movable/needle"), Location::default());
+        let name_match = tree.register(&TreePath::parse("/atom/movable/scalpel"), Location::default());
+        set_type_name(&mut tree, name_match, "Needle tool");
+
+        let path_only = matching_object_types(
+            &tree,
+            "needle",
+            ObjectTreeSearchOptions {
+                type_paths: true,
+                names: false,
+            },
+        );
+        let name_only = matching_object_types(
+            &tree,
+            "needle",
+            ObjectTreeSearchOptions {
+                type_paths: false,
+                names: true,
+            },
+        );
+        let combined = matching_object_types(
+            &tree,
+            "needle",
+            ObjectTreeSearchOptions {
+                type_paths: true,
+                names: true,
+            },
+        );
+
+        assert_eq!(path_only, [path_match]);
+        assert_eq!(name_only, [name_match]);
+        assert_eq!(combined, [path_match, name_match]);
     }
 
     #[test]
@@ -3864,8 +4038,9 @@ mod tests {
         let mut state = UiState::new().expect("valid window keys");
         state.object_tree_search = String::from("atom");
         state.object_tree_filter_revision = u64::MAX;
+        let mut settings = Settings::default();
 
-        state.draw_object_tree(ui, &mut session);
+        state.draw_object_tree(ui, &mut session, &mut settings);
 
         assert!(context.render_legacy().valid());
     }

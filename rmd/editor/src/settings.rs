@@ -413,6 +413,22 @@ impl SelectionHighlight {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct ObjectTreeSearchOptions {
+    pub type_paths: bool,
+    pub names: bool,
+}
+
+impl Default for ObjectTreeSearchOptions {
+    fn default() -> Self {
+        Self {
+            type_paths: true,
+            names: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RecentMap {
     pub map: PathBuf,
@@ -429,6 +445,7 @@ pub(crate) struct Settings {
     pub tile_place_flash: bool,
     pub selection_guide_line: bool,
     pub selection_highlight: SelectionHighlight,
+    pub object_tree_search: ObjectTreeSearchOptions,
     pub keybindings: KeyBindings,
     pub recent_codebases: Vec<PathBuf>,
     pub recent: Vec<RecentMap>,
@@ -443,6 +460,7 @@ impl Default for Settings {
             tile_place_flash: true,
             selection_guide_line: true,
             selection_highlight: SelectionHighlight::Outline,
+            object_tree_search: ObjectTreeSearchOptions::default(),
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
@@ -453,7 +471,11 @@ impl Default for Settings {
 impl Settings {
     pub fn load() -> Self {
         match Self::try_load() {
-            Ok(settings) => settings,
+            Ok(mut settings) => {
+                settings.normalize();
+
+                settings
+            },
             Err(error) => {
                 log::error!("loading settings: {error}");
 
@@ -476,6 +498,12 @@ impl Settings {
     pub fn capture_from(&mut self, options: &FrameOptions) {
         self.show_areas = options.show_areas;
         self.show_area_outlines = options.show_area_outlines;
+    }
+
+    fn normalize(&mut self) {
+        if !self.object_tree_search.type_paths && !self.object_tree_search.names {
+            self.object_tree_search = ObjectTreeSearchOptions::default();
+        }
     }
 
     pub fn record_recent(&mut self, environment: Option<&Path>, map: &Path) {
@@ -601,6 +629,7 @@ mod tests {
                 tile_place_flash: true,
                 selection_guide_line: true,
                 selection_highlight: SelectionHighlight::Outline,
+                object_tree_search: ObjectTreeSearchOptions::default(),
                 keybindings: KeyBindings::default(),
                 recent_codebases: Vec::new(),
                 recent: Vec::new(),
@@ -653,6 +682,17 @@ mod tests {
         assert_eq!(settings.selection_highlight, SelectionHighlight::Outline);
         assert_eq!(settings.selection_highlight.style(), HighlightStyle::Outline);
         assert_eq!(SelectionHighlight::Tint.style(), HighlightStyle::Tint);
+        assert_eq!(settings.object_tree_search, ObjectTreeSearchOptions::default());
+    }
+
+    #[test]
+    fn object_tree_search_settings_keep_one_mode_enabled() {
+        let mut settings: Settings =
+            toml::from_str("[object_tree_search]\ntype_paths = false\nnames = false\n").unwrap();
+
+        settings.normalize();
+
+        assert_eq!(settings.object_tree_search, ObjectTreeSearchOptions::default());
     }
 
     #[test]
@@ -664,6 +704,10 @@ mod tests {
             tile_place_flash: false,
             selection_guide_line: false,
             selection_highlight: SelectionHighlight::Tint,
+            object_tree_search: ObjectTreeSearchOptions {
+                type_paths: false,
+                names: true,
+            },
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
@@ -683,6 +727,9 @@ mod tests {
         assert!(encoded.contains("[keybindings.show_areas]"));
         assert!(encoded.contains("maximized = true"));
         assert!(encoded.contains("selection_highlight = \"tint\""));
+        assert!(encoded.contains("[object_tree_search]"));
+        assert!(encoded.contains("type_paths = false"));
+        assert!(encoded.contains("names = true"));
         assert!(encoded.contains("key = \"G\""));
         assert!(encoded.contains("ctrl = true"));
         assert_eq!(toml::from_str::<Settings>(&encoded).unwrap(), settings);
@@ -697,6 +744,10 @@ mod tests {
             tile_place_flash: false,
             selection_guide_line: false,
             selection_highlight: SelectionHighlight::Tint,
+            object_tree_search: ObjectTreeSearchOptions {
+                type_paths: false,
+                names: true,
+            },
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
@@ -717,6 +768,10 @@ mod tests {
                 tile_place_flash: false,
                 selection_guide_line: false,
                 selection_highlight: SelectionHighlight::Tint,
+                object_tree_search: ObjectTreeSearchOptions {
+                    type_paths: false,
+                    names: true,
+                },
                 ..Settings::default()
             }
         );
