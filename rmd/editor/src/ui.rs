@@ -128,7 +128,16 @@ const BLOCK_GHOST_OPACITY: f32 = 0.55;
 const BLOCK_STRIPE_LENGTH: f32 = 6.0;
 const BLOCK_STRIPE_SPEED: f32 = 12.0;
 const OBJECT_TREE_FILTER_OPTIONS_POPUP: &str = "object-tree-filter-options-popup";
-const OBJECT_TREE_SEARCH_OPTIONS_POPUP: &str = "object-tree-search-options-popup";
+const OBJECT_TREE_OPTIONS_POPUP: &str = "object-tree-options-popup";
+const OBJECT_TREE_LINE_COLORS: [[f32; 4]; 4] = [
+    [254.0 / 255.0, 112.0 / 255.0, 246.0 / 255.0, 1.0],
+    [142.0 / 255.0, 112.0 / 255.0, 254.0 / 255.0, 1.0],
+    [112.0 / 255.0, 180.0 / 255.0, 254.0 / 255.0, 1.0],
+    [48.0 / 255.0, 134.0 / 255.0, 198.0 / 255.0, 1.0],
+];
+const OBJECT_TREE_LINE_THICKNESS: f32 = 1.5;
+const OBJECT_TREE_BRANCH_LENGTH: f32 = 9.0;
+const OBJECT_TREE_LEAF_BRANCH_LENGTH: f32 = 18.0;
 const SIMILAR_INSTANCES_WINDOW_SIZE: [f32; 2] = [420.0, 320.0];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -417,6 +426,7 @@ struct ObjectTreeRow {
     id: TypeId,
     parent: Option<usize>,
     leaf: bool,
+    last_sibling: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1101,9 +1111,9 @@ impl UiState {
             let options_clicked = ui.button_with_size("##object-tree-search-options", [button_size, button_size]);
             draw_centered_icon(ui, ICON_COG);
             if options_clicked {
-                ui.open_popup(OBJECT_TREE_SEARCH_OPTIONS_POPUP);
+                ui.open_popup(OBJECT_TREE_OPTIONS_POPUP);
             }
-            ui.set_item_tooltip("Search options");
+            ui.set_item_tooltip("Object tree settings");
 
             let mut type_filter_changed = false;
             if let Some(_popup) = ui.begin_popup(OBJECT_TREE_FILTER_OPTIONS_POPUP) {
@@ -1129,7 +1139,7 @@ impl UiState {
             }
 
             let mut search_options_changed = false;
-            if let Some(_popup) = ui.begin_popup(OBJECT_TREE_SEARCH_OPTIONS_POPUP) {
+            if let Some(_popup) = ui.begin_popup(OBJECT_TREE_OPTIONS_POPUP) {
                 let disable_type_paths = settings.object_tree_search.type_paths && !settings.object_tree_search.names;
                 {
                     let _disabled = ui.begin_disabled_with_cond(disable_type_paths);
@@ -1141,6 +1151,9 @@ impl UiState {
                     let _disabled = ui.begin_disabled_with_cond(disable_names);
                     search_options_changed |= ui.checkbox("Names (atom/name)", &mut settings.object_tree_search.names);
                 }
+
+                ui.separator();
+                ui.checkbox("Line indicators", &mut settings.object_tree_line_indicators);
             }
 
             ui.child_window("object-tree-content").build(ui, || {
@@ -1210,7 +1223,7 @@ impl UiState {
                             reveal: self.object_tree_reveal,
                         };
                         for root in roots.iter().copied() {
-                            collect_type_rows(ui, tree, root, None, &mut rows, &options);
+                            collect_type_rows(ui, tree, root, None, true, &mut rows, &options);
                         }
                         let reveal_row = self
                             .object_tree_reveal
@@ -1220,7 +1233,15 @@ impl UiState {
                             clipper.include_item_by_index(index);
                         }
                         for index in clipper.iter() {
-                            draw_type_row(ui, session, tree, &rows, index, &mut self.selected, &mut output);
+                            draw_type_row(
+                                ui,
+                                session,
+                                &rows,
+                                index,
+                                settings.object_tree_line_indicators,
+                                &mut self.selected,
+                                &mut output,
+                            );
                         }
                         if reveal_row.is_some() {
                             self.object_tree_reveal = None;
@@ -3850,7 +3871,7 @@ fn z_level_width(ui: &Ui, levels: u32) -> f32 {
 }
 
 fn collect_type_rows(
-    ui: &Ui, tree: &ObjectTree, id: TypeId, parent: Option<usize>, rows: &mut Vec<ObjectTreeRow>,
+    ui: &Ui, tree: &ObjectTree, id: TypeId, parent: Option<usize>, last_sibling: bool, rows: &mut Vec<ObjectTreeRow>,
     options: &ObjectTreeRowOptions<'_>,
 ) {
     let Some(decl) = tree.get(id) else {
@@ -3862,7 +3883,12 @@ fn collect_type_rows(
     );
     let leaf = children.is_empty();
     let row = rows.len();
-    rows.push(ObjectTreeRow { id, parent, leaf });
+    rows.push(ObjectTreeRow {
+        id,
+        parent,
+        leaf,
+        last_sibling,
+    });
 
     if leaf {
         return;
@@ -3887,16 +3913,20 @@ fn collect_type_rows(
     }
 
     let _id = ui.push_id(&node_id);
-    for child in children {
-        collect_type_rows(ui, tree, child, Some(row), rows, options);
+    let child_count = children.len();
+    for (index, child) in children.into_iter().enumerate() {
+        collect_type_rows(ui, tree, child, Some(row), index + 1 == child_count, rows, options);
     }
 }
 
 fn draw_type_row(
-    ui: &Ui, session: &Session, tree: &ObjectTree, rows: &[ObjectTreeRow], row: usize, selected: &mut Option<TypeId>,
-    output: &mut ObjectTreeOutput,
+    ui: &Ui, session: &Session, rows: &[ObjectTreeRow], row_index: usize, draw_line_indicators: bool,
+    selected: &mut Option<TypeId>, output: &mut ObjectTreeOutput,
 ) {
-    let Some(row) = rows.get(row).copied() else {
+    let Some(tree) = session.tree() else {
+        return;
+    };
+    let Some(row) = rows.get(row_index).copied() else {
         return;
     };
     let Some(decl) = tree.get(row.id) else {
@@ -3909,12 +3939,13 @@ fn draw_type_row(
         let Some(ancestor) = rows.get(index) else {
             break;
         };
-        ancestors.push(ancestor.id);
+        ancestors.push(index);
         parent = ancestor.parent;
     }
+    ancestors.reverse();
     let mut scopes = Vec::with_capacity(ancestors.len());
-    for ancestor in ancestors.into_iter().rev() {
-        if let Some(ancestor) = tree.get(ancestor) {
+    for ancestor in &ancestors {
+        if let Some(ancestor) = rows.get(*ancestor).and_then(|row| tree.get(row.id)) {
             scopes.push(ui.tree_push(ancestor.path.to_string()));
         }
     }
@@ -3933,7 +3964,7 @@ fn draw_type_row(
         let icon_spacing = ui.clone_style().item_inner_spacing()[0];
         let space_width = ui.calc_text_size(" ")[0].max(1.0);
         let icon_padding = " ".repeat(((icon_extent + icon_spacing) / space_width).ceil() as usize);
-        let _token = ui
+        let opened = ui
             .tree_node_config(&node_id)
             .label(format!("{icon_padding}{label}"))
             .selected(*selected == Some(row.id))
@@ -3941,8 +3972,16 @@ fn draw_type_row(
             .no_tree_push_on_open(true)
             .frame_padding(true)
             .span_avail_width(true)
-            .push();
+            .push()
+            .is_some();
         draw_type_icon(ui, session.type_thumbnail(row.id), cursor);
+        if draw_line_indicators {
+            let node_rect = OverlayRect {
+                min: ui.item_rect_min(),
+                max: ui.item_rect_max(),
+            };
+            draw_object_tree_lines(ui, rows, row_index, &ancestors, cursor, node_rect, opened);
+        }
 
         if ui.is_item_clicked() {
             *selected = Some(row.id);
@@ -3982,6 +4021,77 @@ fn draw_type_row(
 
     while let Some(scope) = scopes.pop() {
         scope.pop();
+    }
+}
+
+fn draw_object_tree_lines(
+    ui: &Ui, rows: &[ObjectTreeRow], row_index: usize, ancestors: &[usize], cursor: [f32; 2], node_rect: OverlayRect,
+    opened: bool,
+) {
+    let Some(row) = rows.get(row_index).copied() else {
+        return;
+    };
+    let depth = ancestors.len();
+    let midpoint = (node_rect.min[1] + node_rect.max[1]) * 0.5;
+    let style = ui.clone_style();
+    let indent = style.indent_spacing();
+    let arrow_center_offset = style.frame_padding()[0] + ui.current_font_size() * 0.5;
+    let draw = ui.get_window_draw_list();
+
+    if depth > 0 {
+        for (ancestor_depth, child) in ancestors
+            .iter()
+            .copied()
+            .skip(1)
+            .chain(std::iter::once(row_index))
+            .enumerate()
+        {
+            let Some(child) = rows.get(child) else {
+                continue;
+            };
+            let x = cursor[0] - indent * (depth - ancestor_depth) as f32 + arrow_center_offset;
+            let end = if child.last_sibling && ancestor_depth + 1 < depth {
+                continue;
+            } else if child.last_sibling {
+                midpoint
+            } else {
+                node_rect.max[1]
+            };
+            draw.add_line(
+                [x, node_rect.min[1]],
+                [x, end],
+                OBJECT_TREE_LINE_COLORS[ancestor_depth % OBJECT_TREE_LINE_COLORS.len()],
+            )
+            .thickness(OBJECT_TREE_LINE_THICKNESS)
+            .build();
+        }
+    }
+
+    if depth > 0 {
+        let x = cursor[0] - indent + arrow_center_offset;
+        let length = if row.leaf {
+            OBJECT_TREE_LEAF_BRANCH_LENGTH
+        } else {
+            OBJECT_TREE_BRANCH_LENGTH
+        };
+        draw.add_line(
+            [x, midpoint],
+            [cursor[0] + length, midpoint],
+            OBJECT_TREE_LINE_COLORS[(depth - 1) % OBJECT_TREE_LINE_COLORS.len()],
+        )
+        .thickness(OBJECT_TREE_LINE_THICKNESS)
+        .build();
+    }
+
+    if opened && !row.leaf {
+        let x = cursor[0] + arrow_center_offset;
+        draw.add_line(
+            [x, midpoint],
+            [x, node_rect.max[1]],
+            OBJECT_TREE_LINE_COLORS[depth % OBJECT_TREE_LINE_COLORS.len()],
+        )
+        .thickness(OBJECT_TREE_LINE_THICKNESS)
+        .build();
     }
 }
 
@@ -4722,6 +4832,7 @@ mod tests {
                     &tree,
                     atom,
                     None,
+                    true,
                     &mut rows,
                     &ObjectTreeRowOptions {
                         expand: true,
@@ -4737,6 +4848,7 @@ mod tests {
             .map(|decl| decl.path.to_string())
             .collect::<Vec<_>>();
         let parents = expanded.iter().map(|row| row.parent).collect::<Vec<_>>();
+        let last_siblings = expanded.iter().map(|row| row.last_sibling).collect::<Vec<_>>();
 
         assert_eq!(
             paths,
@@ -4749,12 +4861,13 @@ mod tests {
             ]
         );
         assert_eq!(parents, [None, Some(0), Some(1), Some(0), Some(3)]);
+        assert_eq!(last_siblings, [true, false, true, true, true]);
 
         let opened_by_default = ui
             .window("object-tree-default-open")
             .build(|| {
                 let mut rows = Vec::new();
-                collect_type_rows(ui, &tree, atom, None, &mut rows, &ObjectTreeRowOptions::default());
+                collect_type_rows(ui, &tree, atom, None, true, &mut rows, &ObjectTreeRowOptions::default());
                 rows
             })
             .expect("test window should be visible");
@@ -4771,7 +4884,7 @@ mod tests {
                 let atom_storage_id = ui.get_id("/atom");
                 ui.with_current_state_storage(|mut storage| storage.set_bool(atom_storage_id, false));
                 let mut rows = Vec::new();
-                collect_type_rows(ui, &tree, atom, None, &mut rows, &ObjectTreeRowOptions::default());
+                collect_type_rows(ui, &tree, atom, None, true, &mut rows, &ObjectTreeRowOptions::default());
                 rows
             })
             .expect("test window should be visible");
@@ -4780,7 +4893,8 @@ mod tests {
             [ObjectTreeRow {
                 id: atom,
                 parent: None,
-                leaf: false
+                leaf: false,
+                last_sibling: true
             }]
         );
 
@@ -4795,6 +4909,7 @@ mod tests {
                     &tree,
                     atom,
                     None,
+                    true,
                     &mut rows,
                     &ObjectTreeRowOptions {
                         reveal: Some(thing),
@@ -4826,6 +4941,7 @@ mod tests {
                     &tree,
                     atom,
                     None,
+                    true,
                     &mut rows,
                     &ObjectTreeRowOptions {
                         type_filter: ObjectTreeTypeFilter {
@@ -4844,7 +4960,8 @@ mod tests {
             [ObjectTreeRow {
                 id: atom,
                 parent: None,
-                leaf: false
+                leaf: false,
+                last_sibling: true
             }]
         );
 

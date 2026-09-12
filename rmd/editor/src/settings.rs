@@ -486,6 +486,7 @@ pub(crate) struct Settings {
     pub tile_place_flash: bool,
     pub selection_guide_line: bool,
     pub selection_highlight: SelectionHighlight,
+    pub object_tree_line_indicators: bool,
     pub object_tree_search: ObjectTreeSearchOptions,
     pub object_tree_filter: ObjectTreeFilterOptions,
     pub keybindings: KeyBindings,
@@ -503,6 +504,7 @@ impl Default for Settings {
             tile_place_flash: true,
             selection_guide_line: true,
             selection_highlight: SelectionHighlight::Outline,
+            object_tree_line_indicators: true,
             object_tree_search: ObjectTreeSearchOptions::default(),
             object_tree_filter: ObjectTreeFilterOptions::default(),
             keybindings: KeyBindings::default(),
@@ -675,6 +677,7 @@ mod tests {
                 tile_place_flash: true,
                 selection_guide_line: true,
                 selection_highlight: SelectionHighlight::Outline,
+                object_tree_line_indicators: true,
                 object_tree_search: ObjectTreeSearchOptions::default(),
                 object_tree_filter: ObjectTreeFilterOptions::default(),
                 keybindings: KeyBindings::default(),
@@ -748,6 +751,7 @@ mod tests {
         assert_eq!(settings.preferred_editor, DEFAULT_PREFERRED_EDITOR);
         assert_eq!(settings.selection_highlight.style(), HighlightStyle::Outline);
         assert_eq!(SelectionHighlight::Tint.style(), HighlightStyle::Tint);
+        assert!(settings.object_tree_line_indicators);
         assert_eq!(settings.object_tree_search, ObjectTreeSearchOptions::default());
         assert_eq!(settings.object_tree_filter, ObjectTreeFilterOptions::default());
     }
@@ -772,6 +776,7 @@ mod tests {
             tile_place_flash: false,
             selection_guide_line: false,
             selection_highlight: SelectionHighlight::Tint,
+            object_tree_line_indicators: false,
             object_tree_search: ObjectTreeSearchOptions {
                 type_paths: false,
                 names: true,
@@ -804,6 +809,7 @@ mod tests {
         assert!(encoded.contains("maximized = true"));
         assert!(encoded.contains("preferred_editor = \"zed {file}:{line}:{column}\""));
         assert!(encoded.contains("selection_highlight = \"tint\""));
+        assert!(encoded.contains("object_tree_line_indicators = false"));
         assert!(encoded.contains("[object_tree_search]"));
         assert!(encoded.contains("type_paths = false"));
         assert!(encoded.contains("names = true"));
@@ -827,6 +833,7 @@ mod tests {
             tile_place_flash: false,
             selection_guide_line: false,
             selection_highlight: SelectionHighlight::Tint,
+            object_tree_line_indicators: false,
             object_tree_search: ObjectTreeSearchOptions {
                 type_paths: false,
                 names: true,
@@ -853,6 +860,7 @@ mod tests {
                 tile_place_flash: false,
                 selection_guide_line: false,
                 selection_highlight: SelectionHighlight::Tint,
+                object_tree_line_indicators: false,
                 object_tree_search: ObjectTreeSearchOptions {
                     type_paths: false,
                     names: true,
