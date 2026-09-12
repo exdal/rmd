@@ -1143,88 +1143,90 @@ impl UiState {
                 }
             }
 
-            let tree_revision = session.texture_revision();
-            let Some(tree) = session.tree() else {
-                ui.text_disabled("No environment loaded");
+            ui.child_window("object-tree-content").build(ui, || {
+                let tree_revision = session.texture_revision();
+                let Some(tree) = session.tree() else {
+                    ui.text_disabled("No environment loaded");
 
-                return;
-            };
-            let Some(atom) = tree.roots().atom else {
-                ui.text_disabled("No /atom type available");
+                    return;
+                };
+                let Some(atom) = tree.roots().atom else {
+                    ui.text_disabled("No /atom type available");
 
-                return;
-            };
-            let type_filter = ObjectTreeTypeFilter::new(tree, &settings.object_tree_filter);
-            let rebuild_filter = search_changed
-                || search_options_changed
-                || type_filter_changed
-                || self.object_tree_filter_revision != tree_revision;
-            if rebuild_filter {
-                self.object_tree_filter = (!self.object_tree_search.trim().is_empty()).then(|| {
-                    ObjectTreeFilter::new(
-                        tree,
-                        atom,
-                        &self.object_tree_search,
-                        settings.object_tree_search,
-                        type_filter,
-                    )
-                });
-                self.object_tree_filter_revision = tree_revision;
-            }
+                    return;
+                };
+                let type_filter = ObjectTreeTypeFilter::new(tree, &settings.object_tree_filter);
+                let rebuild_filter = search_changed
+                    || search_options_changed
+                    || type_filter_changed
+                    || self.object_tree_filter_revision != tree_revision;
+                if rebuild_filter {
+                    self.object_tree_filter = (!self.object_tree_search.trim().is_empty()).then(|| {
+                        ObjectTreeFilter::new(
+                            tree,
+                            atom,
+                            &self.object_tree_search,
+                            settings.object_tree_search,
+                            type_filter,
+                        )
+                    });
+                    self.object_tree_filter_revision = tree_revision;
+                }
 
-            if self.object_tree_filter.as_ref().is_some_and(ObjectTreeFilter::is_empty) {
-                ui.text_disabled("No matching types");
+                if self.object_tree_filter.as_ref().is_some_and(ObjectTreeFilter::is_empty) {
+                    ui.text_disabled("No matching types");
 
-                return;
-            }
-            let roots = self.object_tree_filter.as_ref().map_or_else(
-                || visible_type_roots(tree, atom, type_filter),
-                |filter| filter.roots.clone(),
-            );
-            if roots.is_empty() {
-                ui.text_disabled("No types pass filters");
+                    return;
+                }
+                let roots = self.object_tree_filter.as_ref().map_or_else(
+                    || visible_type_roots(tree, atom, type_filter),
+                    |filter| filter.roots.clone(),
+                );
+                if roots.is_empty() {
+                    ui.text_disabled("No types pass filters");
 
-                return;
-            }
+                    return;
+                }
 
-            let mut alternate_row = ui.style_color(StyleColor::TableRowBgAlt);
-            // need to handle this in themes, not here but lazy
-            alternate_row[3] *= 0.4;
-            let _alternate_row = ui.push_style_color(StyleColor::TableRowBgAlt, alternate_row);
-            ui.table("object-tree-types")
-                .flags(TableFlags::BORDERS_INNER_V | TableFlags::ROW_BG)
-                .sizing_policy(TableSizingPolicy::StretchProp)
-                .column("Type")
-                .weight(1.0)
-                .done()
-                .column("Visibility")
-                .width(ui.frame_height() * 2.0)
-                .done()
-                .build(|ui| {
-                    let mut rows = Vec::new();
-                    let options = ObjectTreeRowOptions {
-                        filter: self.object_tree_filter.as_ref(),
-                        type_filter,
-                        expand: rebuild_filter && self.object_tree_filter.is_some(),
-                        reveal: self.object_tree_reveal,
-                    };
-                    for root in roots.iter().copied() {
-                        collect_type_rows(ui, tree, root, None, &mut rows, &options);
-                    }
-                    let reveal_row = self
-                        .object_tree_reveal
-                        .and_then(|target| rows.iter().position(|row| row.id == target));
-                    let mut clipper = ListClipper::new(rows.len()).begin(ui);
-                    if let Some(index) = reveal_row {
-                        clipper.include_item_by_index(index);
-                    }
-                    for index in clipper.iter() {
-                        draw_type_row(ui, session, tree, &rows, index, &mut self.selected, &mut output);
-                    }
-                    if reveal_row.is_some() {
-                        self.object_tree_reveal = None;
-                    }
-                });
+                let mut alternate_row = ui.style_color(StyleColor::TableRowBgAlt);
+                // need to handle this in themes, not here but lazy
+                alternate_row[3] *= 0.4;
+                let _alternate_row = ui.push_style_color(StyleColor::TableRowBgAlt, alternate_row);
+                ui.table("object-tree-types")
+                    .flags(TableFlags::BORDERS_INNER_V | TableFlags::ROW_BG)
+                    .sizing_policy(TableSizingPolicy::StretchProp)
+                    .column("Type")
+                    .weight(1.0)
+                    .done()
+                    .column("Visibility")
+                    .width(ui.frame_height() * 2.0)
+                    .done()
+                    .build(|ui| {
+                        let mut rows = Vec::new();
+                        let options = ObjectTreeRowOptions {
+                            filter: self.object_tree_filter.as_ref(),
+                            type_filter,
+                            expand: rebuild_filter && self.object_tree_filter.is_some(),
+                            reveal: self.object_tree_reveal,
+                        };
+                        for root in roots.iter().copied() {
+                            collect_type_rows(ui, tree, root, None, &mut rows, &options);
+                        }
+                        let reveal_row = self
+                            .object_tree_reveal
+                            .and_then(|target| rows.iter().position(|row| row.id == target));
+                        let mut clipper = ListClipper::new(rows.len()).begin(ui);
+                        if let Some(index) = reveal_row {
+                            clipper.include_item_by_index(index);
+                        }
+                        for index in clipper.iter() {
+                            draw_type_row(ui, session, tree, &rows, index, &mut self.selected, &mut output);
+                        }
+                        if reveal_row.is_some() {
+                            self.object_tree_reveal = None;
+                        }
+                    });
+            });
 
             if let Some(chosen) = output.chosen {
                 self.object_tree_reveal = None;
