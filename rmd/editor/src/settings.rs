@@ -446,7 +446,7 @@ impl Default for ObjectTreeSearchOptions {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct ObjectTreeFilterOptions {
     pub atom: bool,
@@ -455,19 +455,6 @@ pub(crate) struct ObjectTreeFilterOptions {
     pub turf: bool,
     pub custom_enabled: bool,
     pub custom_type_path: String,
-}
-
-impl Default for ObjectTreeFilterOptions {
-    fn default() -> Self {
-        Self {
-            atom: false,
-            movable: false,
-            obj: false,
-            turf: false,
-            custom_enabled: false,
-            custom_type_path: String::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

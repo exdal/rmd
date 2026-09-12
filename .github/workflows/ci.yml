@@ -1,0 +1,166 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      expected_tag:
+        description: Optional release tag that must match the editor package version
+        required: false
+        type: string
+    outputs:
+      version:
+        description: Editor package version used in artifact names
+        value: ${{ jobs.metadata.outputs.version }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  metadata:
+    name: Read package metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6
+
+      - name: Read and validate the editor version
+        id: package
+        shell: pwsh
+        env:
+          EXPECTED_TAG: ${{ inputs.expected_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $metadata = & cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not read Cargo workspace metadata.'
+          }
+          $editor = @($metadata.packages | Where-Object { $_.name -eq 'editor' })
+          if ($editor.Count -ne 1) {
+            throw "Expected one editor package, found $($editor.Count)."
+          }
+          $version = [string] $editor[0].version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Editor version '$version' is not MAJOR.MINOR.PATCH."
+          }
+
+          if ($env:EXPECTED_TAG) {
+            if ($env:EXPECTED_TAG -notmatch '^v\d+\.\d+\.\d+$') {
+              throw "Release tag '$env:EXPECTED_TAG' is not vMAJOR.MINOR.PATCH."
+            }
+            if ($env:EXPECTED_TAG -ne "v$version") {
+              throw "Release tag '$env:EXPECTED_TAG' does not match editor version '$version'."
+            }
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+  windows:
+    name: Check, test, and build Windows x64
+    needs: metadata
+    runs-on: windows-2025
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6
+
+      - name: Install the Slang build dependency
+        shell: pwsh
+        run: ./.github/scripts/setup-slang.ps1 -Platform windows-x86_64
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace --all-targets --all-features --locked
+
+      - name: Build the editor
+        run: cargo build --release --locked --package editor --bin rmde --target x86_64-pc-windows-msvc
+
+      - name: Stage the Windows artifact
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          $destination = Join-Path 'dist' "rmd-$env:VERSION-x86_64-pc-windows-msvc.exe"
+          New-Item -ItemType Directory -Path 'dist' -Force | Out-Null
+          Copy-Item -LiteralPath 'target/x86_64-pc-windows-msvc/release/rmde.exe' -Destination $destination
+
+      - name: Upload the Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmd-${{ needs.metadata.outputs.version }}-x86_64-pc-windows-msvc.exe
+          path: dist/rmd-${{ needs.metadata.outputs.version }}-x86_64-pc-windows-msvc.exe
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  linux:
+    name: Build Linux x64
+    needs: metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libclang-dev \
+            libvulkan-dev \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libxrandr-dev \
+            pkg-config
+
+      - name: Install the Slang build dependency
+        shell: pwsh
+        run: ./.github/scripts/setup-slang.ps1 -Platform linux-x86_64
+
+      - name: Build the editor
+        run: cargo build --release --locked --package editor --bin rmde --target x86_64-unknown-linux-gnu
+
+      - name: Stage and inspect the Linux artifact
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          mkdir -p dist
+          destination="dist/rmd-$VERSION-x86_64-unknown-linux-gnu"
+          cp target/x86_64-unknown-linux-gnu/release/rmde "$destination"
+          chmod +x "$destination"
+          file "$destination"
+          if ldd "$destination" | grep --quiet 'not found'; then
+            ldd "$destination"
+            exit 1
+          fi
+
+      - name: Upload the Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmd-${{ needs.metadata.outputs.version }}-x86_64-unknown-linux-gnu
+          path: dist/rmd-${{ needs.metadata.outputs.version }}-x86_64-unknown-linux-gnu
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

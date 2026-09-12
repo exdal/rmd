@@ -417,6 +417,13 @@ struct ObjectTreeRow {
     leaf: bool,
 }
 
+#[derive(Clone, Copy, Default)]
+struct ObjectTreeRowOptions<'a> {
+    filter: Option<&'a ObjectTreeFilter>,
+    type_filter: ObjectTreeTypeFilter,
+    expand: bool,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct ObjectTreeOutput {
     chosen: Option<TypeId>,
@@ -1149,17 +1156,13 @@ impl UiState {
                 .done()
                 .build(|ui| {
                     let mut rows = Vec::new();
+                    let options = ObjectTreeRowOptions {
+                        filter: self.object_tree_filter.as_ref(),
+                        type_filter,
+                        expand: rebuild_filter && self.object_tree_filter.is_some(),
+                    };
                     for root in roots.iter().copied() {
-                        collect_type_rows(
-                            ui,
-                            tree,
-                            root,
-                            None,
-                            &mut rows,
-                            self.object_tree_filter.as_ref(),
-                            type_filter,
-                            rebuild_filter && self.object_tree_filter.is_some(),
-                        );
+                        collect_type_rows(ui, tree, root, None, &mut rows, &options);
                     }
                     for index in ListClipper::new(rows.len()).begin(ui).iter() {
                         draw_type_row(ui, session, tree, &rows, index, &mut self.selected, &mut output);
@@ -3756,13 +3759,13 @@ fn z_level_width(ui: &Ui, levels: u32) -> f32 {
 
 fn collect_type_rows(
     ui: &Ui, tree: &ObjectTree, id: TypeId, parent: Option<usize>, rows: &mut Vec<ObjectTreeRow>,
-    filter: Option<&ObjectTreeFilter>, type_filter: ObjectTreeTypeFilter, expand: bool,
+    options: &ObjectTreeRowOptions<'_>,
 ) {
     let Some(decl) = tree.get(id) else {
         return;
     };
-    let children = filter.map_or_else(
-        || visible_type_children(tree, id, type_filter),
+    let children = options.filter.map_or_else(
+        || visible_type_children(tree, id, options.type_filter),
         |filter| filter.children(id).to_vec(),
     );
     let leaf = children.is_empty();
@@ -3777,7 +3780,7 @@ fn collect_type_rows(
     let storage_id = ui.get_id(&node_id);
     ui.with_current_state_storage(|mut storage| {
         let initialize_atom = tree.roots().atom == Some(id) && storage.get_int(storage_id, -1) == -1;
-        if expand || initialize_atom {
+        if options.expand || initialize_atom {
             storage.set_bool(storage_id, true);
         }
     });
@@ -3787,7 +3790,7 @@ fn collect_type_rows(
 
     let _id = ui.push_id(&node_id);
     for child in children {
-        collect_type_rows(ui, tree, child, Some(row), rows, filter, type_filter, expand);
+        collect_type_rows(ui, tree, child, Some(row), rows, options);
     }
 }
 
@@ -4593,9 +4596,10 @@ mod tests {
                     atom,
                     None,
                     &mut rows,
-                    None,
-                    ObjectTreeTypeFilter::default(),
-                    true,
+                    &ObjectTreeRowOptions {
+                        expand: true,
+                        ..ObjectTreeRowOptions::default()
+                    },
                 );
                 rows
             })
@@ -4623,16 +4627,7 @@ mod tests {
             .window("object-tree-default-open")
             .build(|| {
                 let mut rows = Vec::new();
-                collect_type_rows(
-                    ui,
-                    &tree,
-                    atom,
-                    None,
-                    &mut rows,
-                    None,
-                    ObjectTreeTypeFilter::default(),
-                    false,
-                );
+                collect_type_rows(ui, &tree, atom, None, &mut rows, &ObjectTreeRowOptions::default());
                 rows
             })
             .expect("test window should be visible");
@@ -4649,16 +4644,7 @@ mod tests {
                 let atom_storage_id = ui.get_id("/atom");
                 ui.with_current_state_storage(|mut storage| storage.set_bool(atom_storage_id, false));
                 let mut rows = Vec::new();
-                collect_type_rows(
-                    ui,
-                    &tree,
-                    atom,
-                    None,
-                    &mut rows,
-                    None,
-                    ObjectTreeTypeFilter::default(),
-                    false,
-                );
+                collect_type_rows(ui, &tree, atom, None, &mut rows, &ObjectTreeRowOptions::default());
                 rows
             })
             .expect("test window should be visible");
