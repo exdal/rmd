@@ -1,8 +1,12 @@
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::File,
     io::{self, Write},
-    path::Path,
     sync::{Mutex, OnceLock},
+};
+#[cfg(any(target_os = "windows", test))]
+use std::{
+    fs::{self, OpenOptions},
+    path::Path,
 };
 
 use log::{Level, LevelFilter, Log, Metadata, Record};
@@ -84,6 +88,7 @@ impl Log for FileLogger {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn open_log_file(path: &Path) -> io::Result<File> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

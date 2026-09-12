@@ -320,8 +320,6 @@ fn build_swapchain(
 ) -> Result<(vk::SwapchainKHR, vk::Format, vk::Extent2D), GpuError> {
     let capabilities = unsafe { surface_loader.get_physical_device_surface_capabilities(physical_device, surface) }?;
     let formats = unsafe { surface_loader.get_physical_device_surface_formats(physical_device, surface) }?;
-    let present_modes = unsafe { surface_loader.get_physical_device_surface_present_modes(physical_device, surface) }?;
-
     let mut image_count = capabilities.min_image_count.saturating_add(1);
     if capabilities.max_image_count > 0 {
         image_count = image_count.min(capabilities.max_image_count);
@@ -353,12 +351,6 @@ fn build_swapchain(
         .or_else(|| formats.first().copied())
         .ok_or(GpuError::Vulkan(vk::Result::ERROR_FORMAT_NOT_SUPPORTED))?;
 
-    let present_mode = present_modes
-        .iter()
-        .copied()
-        .find(|mode| *mode == vk::PresentModeKHR::MAILBOX)
-        .unwrap_or(vk::PresentModeKHR::FIFO);
-
     let create_info = vk::SwapchainCreateInfoKHR::default()
         .surface(surface)
         .min_image_count(image_count)
@@ -368,7 +360,7 @@ fn build_swapchain(
         .image_extent(extent)
         .image_array_layers(1)
         .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .present_mode(present_mode)
+        .present_mode(vk::PresentModeKHR::FIFO)
         .pre_transform(capabilities.current_transform)
         .clipped(true)
         .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)

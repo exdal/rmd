@@ -636,6 +636,7 @@ fn settings_path() -> io::Result<PathBuf> {
 
 pub(crate) fn imgui_ini_path() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("imgui.ini")) }
 
+#[cfg(target_os = "windows")]
 pub(crate) fn log_path() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("latest.log")) }
 
 fn settings_path_from(root: &Path, windows: bool) -> PathBuf {
