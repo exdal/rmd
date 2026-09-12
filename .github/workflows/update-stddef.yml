@@ -1,0 +1,299 @@
+name: Update stddef.dm
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-stddef
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Extract current BYOND definitions
+    runs-on: windows-latest
+    env:
+      STDDEF_BRANCH_PREFIX: automation/update-stddef-
+      STDDEF_PR_MARKER: "<!-- stddef-update-workflow -->"
+
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Discover the current stable BYOND release
+        id: byond
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $versionSourceUrl = 'https://byond-builds.dm-lang.org/version.txt'
+          $versionResponse = & curl.exe `
+            --fail `
+            --silent `
+            --show-error `
+            --location `
+            --retry 3 `
+            --retry-all-errors `
+            $versionSourceUrl
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not fetch BYOND release metadata from $versionSourceUrl."
+          }
+
+          $publishedVersions = @(
+            ($versionResponse -join "`n") -split "`r?`n" |
+              ForEach-Object { $_.Trim() } |
+              Where-Object { $_ }
+          )
+          if ($publishedVersions.Count -lt 1 -or
+              $publishedVersions[0] -notmatch '^\d+\.\d+$') {
+            throw "The BYOND release metadata from $versionSourceUrl is invalid."
+          }
+
+          # The first line is the current stable release; a beta may follow it.
+          $version = $publishedVersions[0]
+          $majorVersion = $version.Split('.')[0]
+          $archiveUrl = "https://byond-builds.dm-lang.org/$majorVersion/${version}_byond.zip"
+
+          $versionFile = Join-Path $env:GITHUB_WORKSPACE '.github\BYOND_VERSION'
+          if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
+            throw "The tracked BYOND version file '$versionFile' is missing."
+          }
+
+          $savedVersion = (Get-Content -Raw -LiteralPath $versionFile).Trim()
+          if ($savedVersion -notmatch '^\d+\.\d+$') {
+            throw "The tracked BYOND version '$savedVersion' is invalid."
+          }
+
+          $needsUpdate = ($savedVersion -ne $version).ToString().ToLowerInvariant()
+          Write-Host "Tracked BYOND version: $savedVersion; current stable version: $version."
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "archive_url=$archiveUrl" >> $env:GITHUB_OUTPUT
+          "version_source_url=$versionSourceUrl" >> $env:GITHUB_OUTPUT
+          "needs_update=$needsUpdate" >> $env:GITHUB_OUTPUT
+
+      - name: Download BYOND and extract stddef.dm
+        if: steps.byond.outputs.needs_update == 'true'
+        shell: pwsh
+        env:
+          BYOND_VERSION: ${{ steps.byond.outputs.version }}
+          BYOND_ARCHIVE_URL: ${{ steps.byond.outputs.archive_url }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $version = $env:BYOND_VERSION
+          $archiveUrl = $env:BYOND_ARCHIVE_URL
+          $archiveFile = Join-Path $env:RUNNER_TEMP "byond-$version.zip"
+          $extractRoot = Join-Path $env:RUNNER_TEMP "byond-$version"
+
+          Write-Host "Downloading BYOND $version from $archiveUrl."
+          & curl.exe `
+            --fail `
+            --silent `
+            --show-error `
+            --location `
+            --retry 3 `
+            --retry-all-errors `
+            --output $archiveFile `
+            $archiveUrl
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not download the BYOND $version Windows archive."
+          }
+          Expand-Archive -LiteralPath $archiveFile -DestinationPath $extractRoot
+
+          $extractor = Join-Path $env:GITHUB_WORKSPACE '.github\scripts\extract-stddef.ps1'
+          $byondBin = Join-Path $extractRoot 'byond\bin'
+          $outputPath = Join-Path $env:GITHUB_WORKSPACE 'dm\stddef.dm'
+          $windowsPowerShell32 = Join-Path $env:WINDIR 'SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
+
+          & $windowsPowerShell32 `
+            -NoProfile `
+            -NonInteractive `
+            -ExecutionPolicy Bypass `
+            -File $extractor `
+            -ByondBin $byondBin `
+            -OutputPath $outputPath `
+            -ExpectedVersion $version
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "The stddef.dm extractor exited with code $LASTEXITCODE."
+          }
+
+          $versionFile = Join-Path $env:GITHUB_WORKSPACE '.github\BYOND_VERSION'
+          [IO.File]::WriteAllText(
+            $versionFile,
+            "$version`n",
+            [Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Open or reconcile the update pull request
+        shell: pwsh
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          BYOND_VERSION: ${{ steps.byond.outputs.version }}
+          BYOND_ARCHIVE_URL: ${{ steps.byond.outputs.archive_url }}
+          BYOND_VERSION_SOURCE_URL: ${{ steps.byond.outputs.version_source_url }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Close-AutomationPullRequest {
+            param(
+              [Parameter(Mandatory = $true)] $PullRequest,
+              [Parameter(Mandatory = $true)] [string] $Comment
+            )
+
+            & gh pr close $PullRequest.number `
+              --repo $env:GITHUB_REPOSITORY `
+              --comment $Comment `
+              --delete-branch
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not close pull request #$($PullRequest.number)."
+            }
+          }
+
+          $pullRequestJson = & gh pr list `
+            --repo $env:GITHUB_REPOSITORY `
+            --state open `
+            --limit 100 `
+            --json number,title,body,baseRefName,headRefName,isCrossRepository,url
+
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not list the repository pull requests.'
+          }
+
+          $openPullRequests = @($pullRequestJson | ConvertFrom-Json)
+          $automationPullRequests = @(
+            $openPullRequests | Where-Object {
+              -not $_.isCrossRepository -and
+              $_.headRefName.StartsWith($env:STDDEF_BRANCH_PREFIX) -and
+              ([string] $_.body).Contains($env:STDDEF_PR_MARKER)
+            }
+          )
+
+          & git diff --quiet -- dm/stddef.dm .github/BYOND_VERSION
+          $diffExitCode = $LASTEXITCODE
+          if ($diffExitCode -gt 1) {
+            throw "git diff failed with code $diffExitCode."
+          }
+
+          if ($diffExitCode -eq 0) {
+            foreach ($pullRequest in $automationPullRequests) {
+              Close-AutomationPullRequest `
+                -PullRequest $pullRequest `
+                -Comment 'The default branch already tracks this BYOND version and its generated stddef.dm, so this update is no longer needed.'
+            }
+
+            Write-Host 'The tracked version already matches the current stable BYOND release.'
+            exit 0
+          }
+
+          $title = "Update stddef.dm for BYOND $env:BYOND_VERSION"
+          $matchingPullRequests = @(
+            $automationPullRequests |
+              Where-Object {
+                $_.title -eq $title -and
+                $_.baseRefName -eq $env:BASE_BRANCH
+              } |
+              Sort-Object number -Descending
+          )
+
+          if ($matchingPullRequests.Count -gt 0) {
+            $currentPullRequest = $matchingPullRequests[0]
+
+            foreach ($pullRequest in $automationPullRequests) {
+              if ($pullRequest.number -ne $currentPullRequest.number) {
+                Close-AutomationPullRequest `
+                  -PullRequest $pullRequest `
+                  -Comment "Superseded by #$($currentPullRequest.number) for BYOND $env:BYOND_VERSION."
+              }
+            }
+
+            Write-Host "Keeping current pull request $($currentPullRequest.url)."
+            exit 0
+          }
+
+          $branch = "$env:STDDEF_BRANCH_PREFIX$env:BYOND_VERSION-$env:GITHUB_RUN_ID"
+          & git config user.name 'github-actions[bot]'
+          & git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          & git switch -c $branch
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not create branch '$branch'."
+          }
+
+          & git add -- dm/stddef.dm .github/BYOND_VERSION
+          & git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            throw 'The generated update changed only through ignored or normalized content.'
+          }
+          if ($LASTEXITCODE -gt 1) {
+            throw "The staged diff check failed with code $LASTEXITCODE."
+          }
+
+          & git commit -m $title
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not commit the generated BYOND update.'
+          }
+
+          & git push --set-upstream origin $branch
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not push branch '$branch'."
+          }
+
+          $bodyLines = @(
+            $env:STDDEF_PR_MARKER,
+            '',
+            "Updates ``.github/BYOND_VERSION`` and ``dm/stddef.dm`` for BYOND $env:BYOND_VERSION.",
+            '',
+            "Release metadata: $env:BYOND_VERSION_SOURCE_URL",
+            "Archive mirror: $env:BYOND_ARCHIVE_URL",
+            '',
+            'This pull request was created by the daily stddef.dm update workflow.'
+          )
+          $bodyFile = Join-Path $env:RUNNER_TEMP 'stddef-pull-request.md'
+          [IO.File]::WriteAllText(
+            $bodyFile,
+            (($bodyLines -join "`n") + "`n"),
+            [Text.UTF8Encoding]::new($false)
+          )
+
+          $createOutput = & gh pr create `
+            --repo $env:GITHUB_REPOSITORY `
+            --base $env:BASE_BRANCH `
+            --head $branch `
+            --title $title `
+            --body-file $bodyFile 2>&1
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Pull request creation failed: $($createOutput | Out-String)"
+            & git push origin --delete $branch
+            if ($LASTEXITCODE -ne 0) {
+              Write-Warning "Could not remove orphan branch '$branch'."
+            }
+            throw 'Could not create the stddef.dm pull request.'
+          }
+
+          $newPullRequestJson = & gh pr view $branch `
+            --repo $env:GITHUB_REPOSITORY `
+            --json number,url
+          if ($LASTEXITCODE -ne 0) {
+            throw "The new pull request for '$branch' could not be read."
+          }
+          $newPullRequest = $newPullRequestJson | ConvertFrom-Json
+
+          foreach ($pullRequest in $automationPullRequests) {
+            Close-AutomationPullRequest `
+              -PullRequest $pullRequest `
+              -Comment "Superseded by #$($newPullRequest.number) for BYOND $env:BYOND_VERSION."
+          }
+
+          Write-Host "Created $($newPullRequest.url)."
