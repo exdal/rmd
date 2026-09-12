@@ -42,7 +42,6 @@ use winit::{
 };
 
 use crate::{
-    camera::Controller,
     loader::{Job, Loader, Outcome},
     session::Session,
     settings::{Settings, imgui_ini_path},
@@ -118,7 +117,6 @@ fn main() -> ExitCode {
     let mut app = App {
         session,
         settings,
-        camera: Controller::new(),
         ui,
         loader,
         pending_map,
@@ -189,10 +187,10 @@ fn window_title(session: &Session) -> String {
         .map(|name| name.to_string_lossy().into_owned());
 
     match (session.codebase_name(), map) {
-        (Some(codebase), Some(map)) => format!("Rapid Map Editor: {codebase} - {map}"),
-        (Some(codebase), None) => format!("Rapid Map Editor: {codebase}"),
-        (None, Some(map)) => format!("Rapid Map Editor: {map}"),
-        (None, None) => "Rapid Map Editor".to_string(),
+        (Some(codebase), Some(map)) => format!("Rapid Mapping Device: {codebase} - {map}"),
+        (Some(codebase), None) => format!("Rapid Mapping Device: {codebase}"),
+        (None, Some(map)) => format!("Rapid Mapping Device: {map}"),
+        (None, None) => "Rapid Mapping Device".to_string(),
     }
 }
 
@@ -217,7 +215,6 @@ struct PendingMap {
 struct App {
     session: Session,
     settings: Settings,
-    camera: Controller,
     ui: UiState,
     loader: Loader,
     pending_map: Option<PendingMap>,
@@ -282,7 +279,6 @@ impl App {
         let Self {
             session,
             settings,
-            camera,
             ui,
             loader,
             uploaded_texture_revision,
@@ -327,13 +323,29 @@ impl App {
         platform.prepare_frame(imgui, window)?;
         let frame = imgui.try_begin_frame()?;
         let load = loader.view();
-        let output = ui.draw(frame.ui(), session, settings, camera, load.as_ref())?;
+        let output = ui.draw(frame.ui(), session, settings, load.as_ref())?;
         platform.prepare_render(frame.ui(), window)?;
-        let scene = session.frame(camera.camera);
+        let mut drawn = Vec::with_capacity(output.map_views.len());
+        let mut map_views = Vec::with_capacity(output.map_views.len());
+        let mut picking = None;
+        for (index, view) in output.map_views.iter().enumerate() {
+            let Some(frame) = session.map_view_frame(view.document, view.rect, view.camera, view.interaction) else {
+                continue;
+            };
+            if output.picking == Some(index) {
+                picking = Some(map_views.len());
+            }
+            drawn.push(view.document);
+            map_views.push(frame);
+        }
+        let scene = session.frame(&map_views, picking);
         let pending = frame.try_render(consumer)?;
         window.pre_present_notify();
-        let picked = renderer.draw_imgui(&scene, output.viewport, pending, output.interaction)?;
-        if let Some(pick) = picked {
+        let picked = renderer.draw_imgui(&scene, pending)?;
+        if let Some((index, pick)) = picked {
+            if let Some(document) = drawn.get(index).copied() {
+                session.state.set_active(document);
+            }
             match session.tool() {
                 Tool::Select => match pick {
                     PickResult::Hit(owner) => session.select_instance(Some(owner)),
@@ -392,7 +404,7 @@ impl App {
             Outcome::Map(loaded) => {
                 let path = loaded.path.clone();
                 self.session.apply_map(*loaded);
-                self.ui.request_refit();
+                self.ui.request_refit(self.session.state.active());
                 self.ui.set_open_error(None);
                 self.ui.set_load_notice(None);
                 self.settings.record_recent(self.session.environment_path(), &path);

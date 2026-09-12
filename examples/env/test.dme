@@ -7,4 +7,5 @@
 // BEGIN_INCLUDE
 #include "test.dm"
 #include "test.dmm"
+#include "test2.dmm"
 // END_INCLUDE

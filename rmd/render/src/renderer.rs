@@ -38,7 +38,6 @@ use crate::{
     GpuError,
     PickResult,
     SpriteInstance,
-    ViewportInteraction,
     VisibilityId,
     extent3d,
     imgui::{ImGuiPass, ImGuiSlots},
@@ -88,7 +87,7 @@ struct AreaColorPush {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct CameraPush {
     center: [f32; 2],
     viewport: [f32; 2],
@@ -102,7 +101,7 @@ struct CameraPush {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct BlurPush {
     sample_step: [f32; 2],
 }
@@ -132,23 +131,65 @@ struct PickPush {
 struct InteractionSlots {
     push: ValueId,
     pick_push: ValueId,
-    pick_result: ValueId,
     area_tiles: ValueId,
-    hover_draws: ValueId,
+    hover_draw: ValueId,
+    highlight_draw: ValueId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FrameGraphState {
+    extent: [u32; 2],
+    with_imgui: bool,
+    map_views: Vec<MapViewGraphState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MapViewGraphState {
+    rect: crate::MapViewRect,
+    has_underlays: bool,
+}
+
+impl FrameGraphState {
+    fn new(viewport: vk::Extent2D, with_imgui: bool, map_views: &[crate::MapViewFrame<'_>]) -> Self {
+        Self {
+            extent: [viewport.width, viewport.height],
+            with_imgui,
+            map_views: map_views
+                .iter()
+                .filter(|view| !view.rect.is_empty())
+                .map(|view| MapViewGraphState {
+                    rect: view.rect,
+                    has_underlays: view.level_count > 1,
+                })
+                .collect(),
+        }
+    }
 }
 
 struct Recorded {
     program: Program,
-    scene_extent: ValueId,
-    underlay_extent: ValueId,
     sprites: ValueId,
+    map_views: Vec<MapViewPass>,
+    pick_result: Option<ValueId>,
+    state: FrameGraphState,
+    ui: Option<ImGuiSlots>,
+}
+
+struct MapViewPass {
+    scene_attachment: ValueId,
+    visibility_attachment: ValueId,
+    underlays_attachment: ValueId,
+    output_attachment: ValueId,
+    extent: ValueId,
+    underlay_extent: ValueId,
     camera: ValueId,
     blur_push: ValueId,
-    underlay_draws: ValueId,
-    active_draws: ValueId,
-    outline_draws: ValueId,
+    blur_draw: ValueId,
+    underlay_draw: Option<ValueId>,
+    active_draw: ValueId,
+    outline_draw: ValueId,
+    should_pick: Option<ValueId>,
     interaction: Option<InteractionSlots>,
-    ui: Option<ImGuiSlots>,
 }
 
 struct AreaColorPass {
@@ -207,6 +248,35 @@ struct LevelRange {
     count: u32,
 }
 
+#[derive(Debug, Clone)]
+struct MapViewPlan {
+    camera: CameraPush,
+    blur: BlurPush,
+    sprite_base: u32,
+    underlay_ranges: Vec<(u32, u32)>,
+    active_range: (u32, u32),
+}
+
+impl MapViewPlan {
+    fn bind_scene(&self, cmd: &mut vir::Recorder<'_>) {
+        cmd.set_viewport(0, Rect2D::framebuffer())
+            .set_scissor(0, Rect2D::framebuffer())
+            .push_constants(&self.camera);
+    }
+}
+
+#[derive(Debug, Default)]
+struct UploadedMapView {
+    revision: u64,
+    base: u32,
+    count: usize,
+    area_base: u32,
+    area_count: usize,
+    area_owners: Vec<dmm::PrefabInstanceId>,
+    area_tile_indices: HashMap<dmm::PrefabInstanceId, u32>,
+    ranges: Vec<LevelRange>,
+}
+
 pub struct Renderer {
     graph: RenderGraph,
     recorded: Option<Recorded>,
@@ -228,13 +298,8 @@ pub struct Renderer {
     sprite_capacity: usize,
     area_tiles: Option<Buffer>,
     area_tile_capacity: usize,
-    area_tile_indices: HashMap<dmm::PrefabInstanceId, u32>,
     pick_readback: Option<Buffer>,
-    uploaded_revision: Option<u64>,
-    uploaded_sprite_count: usize,
-    uploaded_area_tile_count: usize,
-    uploaded_area_owners: Vec<dmm::PrefabInstanceId>,
-    ranges: Vec<LevelRange>,
+    uploaded: Vec<UploadedMapView>,
     imgui: Option<ImGuiPass>,
     highlight_started_at: Instant,
     extent: vk::Extent2D,
@@ -243,7 +308,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub const VIEWPORT_TEXTURE: dear_imgui_rs::TextureId = crate::imgui::VIEWPORT_TEXTURE;
+    pub const fn map_view_texture(index: usize) -> dear_imgui_rs::TextureId { crate::imgui::map_view_texture(index) }
 
     pub const fn sprite_texture(index: u32) -> dear_imgui_rs::TextureId { crate::imgui::sprite_texture(index) }
 
@@ -378,13 +443,8 @@ impl Renderer {
             sprite_capacity: 0,
             area_tiles: None,
             area_tile_capacity: 0,
-            area_tile_indices: HashMap::new(),
             pick_readback: None,
-            uploaded_revision: None,
-            uploaded_sprite_count: 0,
-            uploaded_area_tile_count: 0,
-            uploaded_area_owners: Vec::new(),
-            ranges: Vec::new(),
+            uploaded: Vec::new(),
             imgui: None,
             highlight_started_at: Instant::now(),
             extent: vk::Extent2D {
@@ -453,7 +513,7 @@ impl Renderer {
         }
 
         self.recorded = None;
-        self.uploaded_revision = None;
+        self.uploaded.clear();
         let old = std::mem::replace(&mut self.textures, textures);
         destroy_images(&mut self.device, old);
 
@@ -461,14 +521,14 @@ impl Renderer {
     }
 
     pub fn draw(&mut self, frame: &Frame<'_>) -> Result<(), GpuError> {
-        self.draw_inner(frame, None, None, ViewportInteraction::default())?;
+        self.draw_inner(frame, None, None)?;
 
         Ok(())
     }
 
     pub fn draw_imgui(
-        &mut self, frame: &Frame<'_>, viewport: (u32, u32), pending: PendingFrame<'_>, interaction: ViewportInteraction,
-    ) -> Result<Option<PickResult>, GpuError> {
+        &mut self, frame: &Frame<'_>, pending: PendingFrame<'_>,
+    ) -> Result<Option<(usize, PickResult)>, GpuError> {
         if pending.draw_requirements().requires_raw_callback_support() {
             return Err(GpuError::RawDrawCallback);
         }
@@ -484,12 +544,7 @@ impl Renderer {
             self.imgui = Some(imgui);
         }
 
-        let viewport = vk::Extent2D {
-            width: viewport.0.max(1),
-            height: viewport.1.max(1),
-        };
-
-        self.draw_inner(frame, Some(viewport), Some(pending), interaction)
+        self.draw_inner(frame, None, Some(pending))
     }
 
     pub fn reset_imgui_textures(&mut self) -> Result<(), GpuError> {
@@ -520,141 +575,127 @@ impl Renderer {
         Ok(())
     }
 
-    fn record(&mut self, viewport: vk::Extent2D, with_imgui: bool) -> Result<(), GpuError> {
+    fn record(&mut self, state: FrameGraphState) -> Result<(), GpuError> {
         let swapchain = self.swapchain.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+        let with_imgui = state.with_imgui;
         let mut module = Module::default();
         let swapchain_image = module.acquire_next_image(swapchain);
-
-        let scene_extent = module.declare_extent_3d_var("scene extent", extent3d(viewport));
-        let scene_attachment = module.transient_image_sized(
-            &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
-                .with_usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
-                .with_name("scene"),
-            scene_extent,
-        );
-        let scene_attachment = module.clear(scene_attachment, vir::clear::f32::BLACK);
-
-        let visibility_attachment = module.transient_image_sized(
-            &ImageInfo::color_target(viewport, vk::Format::R32_UINT)
-                .with_usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
-                .with_name("visibility"),
-            scene_extent,
-        );
-        let visibility_attachment = module.clear(visibility_attachment, vir::clear::u32::TRANSPARENT);
-
-        let underlay_extent = module.declare_extent_3d_var("underlay extent", extent3d(viewport));
-        let underlays = module.transient_image_sized(
-            &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
-                .with_usage(vk::ImageUsageFlags::SAMPLED)
-                .with_name("underlays"),
-            underlay_extent,
-        );
-        let underlays_attachment = module.clear(underlays, vir::clear::f32::BLACK);
-
         let sprites = module.declare_buffer_var("sprites", Access::ComputeWrite);
-        let camera = module.declare_bytes_var("camera", size_of::<CameraPush>() as u32);
-        let blur_push = module.declare_bytes_var("blur", size_of::<BlurPush>() as u32);
-        let underlay_draws = module.declare_callback_var("underlay draws");
-        let active_draws = module.declare_callback_var("active draws");
-        let outline_draws = module.declare_callback_var("area outline draws");
+        let pick_result = (with_imgui && !state.map_views.is_empty())
+            .then(|| module.declare_buffer_var("pick result", Access::HostRead));
+        let mut pick_after = pick_result;
+        let mut map_views = Vec::with_capacity(state.map_views.len());
 
-        let [underlays_attachment] = module
-            .begin_rendering([(underlays_attachment, Access::ColorRW)])
-            .with_name("underlays")
-            .bind_graphics_pipeline(self.sprite_pipeline)
-            .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-            .set_viewport(0, Rect2D::framebuffer())
-            .set_scissor(0, Rect2D::framebuffer())
-            .broadcast_color_blend(BlendPreset::PremultipliedAlphaBlend)
-            .set_rasterization(RasterizationState {
-                cull_mode: vk::CullModeFlags::NONE,
-                ..Default::default()
-            })
-            .bind_buffer(0, 1, sprites)
-            .push_constants_from(camera)
-            .record_from(underlay_draws)
-            .end_rendering();
-
-        let [scene_attachment] = module
-            .begin_rendering([(scene_attachment, Access::ColorRW)])
-            .with_name("underlay blur")
-            .bind_graphics_pipeline(self.blur_pipeline)
-            .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-            .set_viewport(0, Rect2D::framebuffer())
-            .set_scissor(0, Rect2D::framebuffer())
-            .bind_texture(0, 0, underlays_attachment, self.blur_sampler)
-            .push_constants_from(blur_push)
-            .draw(4u32, 1u32)
-            .end_rendering();
-
-        let [scene_attachment, visibility_attachment] = module
-            .begin_rendering([
-                (scene_attachment, Access::ColorRW),
-                (visibility_attachment, Access::ColorRW),
-            ])
-            .with_name("sprites")
-            .bind_graphics_pipeline(self.visibility_pipeline)
-            .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-            .set_viewport(0, Rect2D::framebuffer())
-            .set_scissor(0, Rect2D::framebuffer())
-            .set_color_blend(0, BlendPreset::PremultipliedAlphaBlend)
-            .set_color_blend(1, BlendPreset::Off)
-            .set_rasterization(RasterizationState {
-                cull_mode: vk::CullModeFlags::NONE,
-                ..Default::default()
-            })
-            .bind_buffer(0, 1, sprites)
-            .push_constants_from(camera)
-            .record_from(active_draws)
-            .end_rendering();
-
-        let [scene_attachment] = module
-            .begin_rendering([(scene_attachment, Access::ColorRW)])
-            .with_name("area outlines")
-            .bind_graphics_pipeline(self.outline_pipeline)
-            .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-            .set_viewport(0, Rect2D::framebuffer())
-            .set_scissor(0, Rect2D::framebuffer())
-            .broadcast_color_blend(BlendPreset::PremultipliedAlphaBlend)
-            .set_rasterization(RasterizationState {
-                cull_mode: vk::CullModeFlags::NONE,
-                ..Default::default()
-            })
-            .bind_buffer(0, 1, sprites)
-            .push_constants_from(camera)
-            .record_from(outline_draws)
-            .end_rendering();
-
-        let (scene_attachment, interaction, pick_host) = if with_imgui {
-            let interaction_push =
-                module.declare_bytes_var("viewport interaction", size_of::<InteractionPush>() as u32);
-            let highlighted = module.transient_image_sized(
+        for (index, view_state) in state.map_views.iter().copied().enumerate() {
+            let rect = view_state.rect;
+            let viewport = vk::Extent2D {
+                width: rect.width.max(1),
+                height: rect.height.max(1),
+            };
+            let underlay_viewport = if view_state.has_underlays {
+                viewport
+            } else {
+                vk::Extent2D { width: 1, height: 1 }
+            };
+            let extent = module.declare_extent_3d_var(&format!("map view {index} extent"), extent3d(viewport));
+            let underlay_extent = module.declare_extent_3d_var(
+                &format!("map view {index} underlay extent"),
+                extent3d(underlay_viewport),
+            );
+            let scene = module.transient_image_sized(
+                &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
+                    .with_usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
+                    .with_name(format!("map view {index} scene")),
+                extent,
+            );
+            let mut scene_attachment = module.clear(scene, vir::clear::f32::BLACK);
+            let visibility = module.transient_image_sized(
+                &ImageInfo::color_target(viewport, vk::Format::R32_UINT)
+                    .with_usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
+                    .with_name(format!("map view {index} visibility")),
+                extent,
+            );
+            let mut visibility_attachment = module.clear(visibility, vir::clear::u32::TRANSPARENT);
+            let underlays = module.transient_image_sized(
                 &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
                     .with_usage(vk::ImageUsageFlags::SAMPLED)
-                    .with_name("highlighted scene"),
-                scene_extent,
+                    .with_name(format!("map view {index} underlays")),
+                underlay_extent,
             );
-            let highlighted = module.clear(highlighted, vir::clear::f32::BLACK);
-            let [highlighted] = module
-                .begin_rendering([(highlighted, Access::ColorRW)])
-                .with_name("viewport highlights")
-                .bind_graphics_pipeline(self.interaction_pipeline)
+            let mut underlays_attachment = module.clear(
+                underlays,
+                if view_state.has_underlays {
+                    vir::clear::f32::BLACK
+                } else {
+                    vir::clear::f32::TRANSPARENT
+                },
+            );
+
+            let camera = module.declare_bytes_var(&format!("map view {index} camera"), size_of::<CameraPush>() as u32);
+            let blur_push = module.declare_bytes_var(&format!("map view {index} blur"), size_of::<BlurPush>() as u32);
+            let underlay_draw = view_state
+                .has_underlays
+                .then(|| module.declare_callback_var(&format!("map view {index} underlay draws")));
+            let blur_draw = module.declare_callback_var(&format!("map view {index} blur draw"));
+            let active_draw = module.declare_callback_var(&format!("map view {index} active draws"));
+            let outline_draw = module.declare_callback_var(&format!("map view {index} area outline draws"));
+
+            if let Some(underlay_draw) = underlay_draw {
+                [underlays_attachment] = module
+                    .begin_rendering([(underlays_attachment, Access::ColorRW)])
+                    .with_name(format!("map view {index} underlays"))
+                    .bind_graphics_pipeline(self.sprite_pipeline)
+                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                    .set_viewport(0, Rect2D::framebuffer())
+                    .set_scissor(0, Rect2D::framebuffer())
+                    .broadcast_color_blend(BlendPreset::PremultipliedAlphaBlend)
+                    .set_rasterization(RasterizationState {
+                        cull_mode: vk::CullModeFlags::NONE,
+                        ..Default::default()
+                    })
+                    .bind_buffer(0, 1, sprites)
+                    .push_constants_from(camera)
+                    .record_from(underlay_draw)
+                    .end_rendering();
+
+                [scene_attachment] = module
+                    .begin_rendering([(scene_attachment, Access::ColorRW)])
+                    .with_name(format!("map view {index} underlay blur"))
+                    .bind_graphics_pipeline(self.blur_pipeline)
+                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                    .set_viewport(0, Rect2D::framebuffer())
+                    .set_scissor(0, Rect2D::framebuffer())
+                    .bind_texture(0, 0, underlays_attachment, self.blur_sampler)
+                    .push_constants_from(blur_push)
+                    .record_from(blur_draw)
+                    .end_rendering();
+            }
+
+            [scene_attachment, visibility_attachment] = module
+                .begin_rendering([
+                    (scene_attachment, Access::ColorRW),
+                    (visibility_attachment, Access::ColorRW),
+                ])
+                .with_name(format!("map view {index} sprites"))
+                .bind_graphics_pipeline(self.visibility_pipeline)
                 .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
                 .set_viewport(0, Rect2D::framebuffer())
                 .set_scissor(0, Rect2D::framebuffer())
-                .bind_texture(0, 0, scene_attachment, self.sampler)
-                .bind_image(0, 1, visibility_attachment)
-                .bind_buffer(0, 2, sprites)
-                .push_constants_from(interaction_push)
-                .draw(4u32, 1u32)
+                .set_color_blend(0, BlendPreset::PremultipliedAlphaBlend)
+                .set_color_blend(1, BlendPreset::Off)
+                .set_rasterization(RasterizationState {
+                    cull_mode: vk::CullModeFlags::NONE,
+                    ..Default::default()
+                })
+                .bind_buffer(0, 1, sprites)
+                .push_constants_from(camera)
+                .record_from(active_draw)
                 .end_rendering();
 
-            let area_tiles = module.declare_buffer_var("hover area tiles", Access::ComputeWrite);
-            let hover_draws = module.declare_callback_var("hover tile outline");
-            let [highlighted] = module
-                .begin_rendering([(highlighted, Access::ColorRW)])
-                .with_name("hover tile outline")
-                .bind_graphics_pipeline(self.sprite_pipeline)
+            [scene_attachment] = module
+                .begin_rendering([(scene_attachment, Access::ColorRW)])
+                .with_name(format!("map view {index} area outlines"))
+                .bind_graphics_pipeline(self.outline_pipeline)
                 .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
                 .set_viewport(0, Rect2D::framebuffer())
                 .set_scissor(0, Rect2D::framebuffer())
@@ -663,70 +704,156 @@ impl Renderer {
                     cull_mode: vk::CullModeFlags::NONE,
                     ..Default::default()
                 })
-                .bind_buffer(0, 1, area_tiles)
+                .bind_buffer(0, 1, sprites)
                 .push_constants_from(camera)
-                .record_from(hover_draws)
+                .record_from(outline_draw)
                 .end_rendering();
 
-            let pick_push = module.declare_bytes_var("pick cursor", size_of::<PickPush>() as u32);
-            let pick_result = module.declare_buffer_var("pick result", Access::HostRead);
-            let [_, pick_result_after] = module
-                .begin_compute([
-                    (visibility_attachment, Access::ComputeSampled),
-                    (pick_result, Access::ComputeWrite),
-                ])
-                .with_name("mouse pick")
-                .bind_compute_pipeline(self.pick_pipeline)
-                .bind_image(0, 1, visibility_attachment)
-                .bind_buffer(0, 3, pick_result)
-                .push_constants_from(pick_push)
-                .dispatch(1u32, 1u32, 1u32)
-                .end_compute();
-            let pick_host = module.release(pick_result_after, Access::HostRead, DomainFlag::Host);
+            let (output_attachment, interaction, should_pick) = if with_imgui {
+                let push = module.declare_bytes_var(
+                    &format!("map view {index} interaction"),
+                    size_of::<InteractionPush>() as u32,
+                );
+                let highlighted = module.transient_image_sized(
+                    &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
+                        .with_usage(vk::ImageUsageFlags::SAMPLED)
+                        .with_name(format!("map view {index} highlighted scene")),
+                    extent,
+                );
+                let mut highlighted = module.clear(highlighted, vir::clear::f32::BLACK);
+                let area_tiles =
+                    module.declare_buffer_var(&format!("map view {index} hover area tiles"), Access::ComputeWrite);
+                let highlight_draw = module.declare_callback_var(&format!("map view {index} highlight draw"));
+                let hover_draw = module.declare_callback_var(&format!("map view {index} hover area draw"));
 
-            (
-                highlighted,
-                Some(InteractionSlots {
-                    push: interaction_push,
-                    pick_push,
-                    pick_result,
-                    area_tiles,
-                    hover_draws,
-                }),
-                Some(pick_host),
-            )
-        } else {
-            (scene_attachment, None, None)
-        };
+                [highlighted] = module
+                    .begin_rendering([(highlighted, Access::ColorRW)])
+                    .with_name(format!("map view {index} highlights"))
+                    .bind_graphics_pipeline(self.interaction_pipeline)
+                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                    .set_viewport(0, Rect2D::framebuffer())
+                    .set_scissor(0, Rect2D::framebuffer())
+                    .bind_texture(0, 0, scene_attachment, self.sampler)
+                    .bind_image(0, 1, visibility_attachment)
+                    .bind_buffer(0, 2, sprites)
+                    .push_constants_from(push)
+                    .record_from(highlight_draw)
+                    .end_rendering();
 
+                [highlighted] = module
+                    .begin_rendering([(highlighted, Access::ColorRW)])
+                    .with_name(format!("map view {index} hover area outline"))
+                    .bind_graphics_pipeline(self.sprite_pipeline)
+                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                    .set_viewport(0, Rect2D::framebuffer())
+                    .set_scissor(0, Rect2D::framebuffer())
+                    .broadcast_color_blend(BlendPreset::PremultipliedAlphaBlend)
+                    .set_rasterization(RasterizationState {
+                        cull_mode: vk::CullModeFlags::NONE,
+                        ..Default::default()
+                    })
+                    .bind_buffer(0, 1, area_tiles)
+                    .push_constants_from(camera)
+                    .record_from(hover_draw)
+                    .end_rendering();
+
+                let pick_push =
+                    module.declare_bytes_var(&format!("map view {index} pick cursor"), size_of::<PickPush>() as u32);
+                let should_pick = module.declare_bool_var(&format!("map view {index} should pick"), false);
+                let pick_buffer = pick_after.ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+                let next_pick = module.set_condition(
+                    should_pick,
+                    |m| {
+                        let [_visibility, next_pick] = m
+                            .begin_compute([
+                                (visibility_attachment, Access::ComputeSampled),
+                                (pick_buffer, Access::ComputeWrite),
+                            ])
+                            .with_name(format!("map view {index} mouse pick"))
+                            .bind_compute_pipeline(self.pick_pipeline)
+                            .bind_image(0, 1, visibility_attachment)
+                            .bind_buffer(0, 3, pick_buffer)
+                            .push_constants_from(pick_push)
+                            .dispatch(1u32, 1u32, 1u32)
+                            .end_compute();
+                        next_pick
+                    },
+                    |_| pick_buffer,
+                );
+                pick_after = Some(next_pick);
+
+                (
+                    highlighted,
+                    Some(InteractionSlots {
+                        push,
+                        pick_push,
+                        area_tiles,
+                        hover_draw,
+                        highlight_draw,
+                    }),
+                    Some(should_pick),
+                )
+            } else {
+                (scene_attachment, None, None)
+            };
+
+            map_views.push(MapViewPass {
+                scene_attachment,
+                visibility_attachment,
+                underlays_attachment,
+                output_attachment,
+                extent,
+                underlay_extent,
+                camera,
+                blur_push,
+                blur_draw,
+                underlay_draw,
+                active_draw,
+                outline_draw,
+                should_pick,
+                interaction,
+            });
+        }
+
+        let pick_host = pick_after.map(|pick| module.release(pick, Access::HostRead, DomainFlag::Host));
+        let mut sampled_map_view_roots = Vec::new();
         let (presented, ui) = if with_imgui {
+            for map_view in &map_views {
+                let sampled = module.release(
+                    map_view.output_attachment,
+                    Access::FragmentSampled,
+                    DomainFlag::Graphics,
+                );
+                sampled_map_view_roots.push(sampled);
+            }
+
             let imgui = self.imgui.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
             let target = module.clear(swapchain_image, vir::clear::f32::BLACK);
+            let map_view_outputs = map_views.iter().map(|view| view.output_attachment).collect::<Vec<_>>();
 
-            imgui.record(&mut module, target, scene_attachment)
-        } else {
+            imgui.record(&mut module, target, &map_view_outputs)
+        } else if let Some(map_view) = map_views.first() {
             (
-                module.blit_filtered(scene_attachment, swapchain_image, vk::Filter::NEAREST),
+                module.blit_filtered(map_view.output_attachment, swapchain_image, vk::Filter::NEAREST),
                 None,
             )
+        } else {
+            (module.clear(swapchain_image, vir::clear::f32::BLACK), None)
         };
         let present = module.present(presented);
-        let program = match pick_host {
-            Some(pick_host) => module.compile_all(&self.graph, &[present, pick_host])?,
-            None => module.compile(&self.graph, present)?,
-        };
+        let mut roots = sampled_map_view_roots;
+        if let Some(pick_host) = pick_host {
+            roots.push(pick_host);
+        }
+        roots.push(present);
+        let program = module.compile_all(&self.graph, &roots)?;
 
         self.recorded = Some(Recorded {
             program,
-            scene_extent,
-            underlay_extent,
             sprites,
-            camera,
-            blur_push,
-            underlay_draws,
-            active_draws,
-            outline_draws,
-            interaction,
+            map_views,
+            pick_result,
+            state,
             ui,
         });
 
@@ -735,16 +862,20 @@ impl Renderer {
 
     fn draw_inner(
         &mut self, frame: &Frame<'_>, viewport: Option<vk::Extent2D>, pending: Option<PendingFrame<'_>>,
-        interaction: ViewportInteraction,
-    ) -> Result<Option<PickResult>, GpuError> {
+    ) -> Result<Option<(usize, PickResult)>, GpuError> {
         if self.stale {
             self.recreate_swapchain()?;
         }
 
         let viewport = viewport.unwrap_or(self.extent);
         let with_imgui = pending.is_some();
-        if self.recorded.as_ref().is_none_or(|r| r.ui.is_some() != with_imgui) {
-            self.record(viewport, with_imgui)?;
+        let graph_state = FrameGraphState::new(viewport, with_imgui, frame.map_views);
+        if self
+            .recorded
+            .as_ref()
+            .is_none_or(|recorded| recorded.state != graph_state)
+        {
+            self.record(graph_state)?;
         }
 
         self.prepare_sprites(frame)?;
@@ -754,125 +885,239 @@ impl Renderer {
         let recorded = self.recorded.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
         let frames = self.frames.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
         let sprites = self.sprites.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
-        recorded.program.set(recorded.scene_extent, extent3d(viewport));
-        recorded.program.set(recorded.underlay_extent, extent3d(viewport));
         recorded.program.set(recorded.sprites, sprites);
 
-        let (placement_flash_owner, placement_flash_strength) = interaction
-            .placement_flash
-            .filter(|flash| flash.strength.is_finite() && flash.strength > 0.0)
-            .map_or(([0; 2], 0.0), |flash| {
-                (owner_words(flash.owner), flash.strength.min(1.0))
-            });
-        let push = CameraPush {
-            center: [frame.camera.x, frame.camera.y],
-            viewport: [viewport.width as f32, viewport.height as f32],
-            zoom: frame.camera.zoom,
-            base: 0,
-            show_areas: u32::from(frame.show_areas),
-            show_area_outlines: u32::from(frame.show_area_outlines),
-            focused_area_owner: frame.focused_area.map(owner_words).unwrap_or([0; 2]),
-            placement_flash_owner,
-            placement_flash_strength,
-        };
-        recorded.program.set_bytes(recorded.camera, &push);
-        recorded.program.set_bytes(
-            recorded.blur_push,
-            &BlurPush {
-                sample_step: [
-                    frame.camera.zoom / viewport.width as f32,
-                    frame.camera.zoom / viewport.height as f32,
-                ],
-            },
-        );
+        let plans: Vec<MapViewPlan> = frame
+            .map_views
+            .iter()
+            .zip(&self.uploaded)
+            .filter(|(view, _)| !view.rect.is_empty())
+            .map(|(view, uploaded)| {
+                let rect = view.rect;
+                let (placement_flash_owner, placement_flash_strength) = view
+                    .interaction
+                    .placement_flash
+                    .filter(|flash| flash.strength.is_finite() && flash.strength > 0.0)
+                    .map_or(([0; 2], 0.0), |flash| {
+                        (owner_words(flash.owner), flash.strength.min(1.0))
+                    });
+                let (underlay_ranges, active_range) =
+                    visible_ranges(&uploaded.ranges, view.active_z, frame.underlay_depth);
 
-        let (underlay_ranges, active_range) = visible_ranges(&self.ranges, frame.active_z, frame.underlay_depth);
-        recorded.program.set(
-            recorded.underlay_draws,
-            PassCallback::new(move |cmd| {
-                for &(base, count) in &underlay_ranges {
+                let logical = [
+                    view.camera.viewport_width.max(1) as f32,
+                    view.camera.viewport_height.max(1) as f32,
+                ];
+                let scale = [rect.width as f32 / logical[0], rect.height as f32 / logical[1]];
+
+                MapViewPlan {
+                    camera: CameraPush {
+                        center: [view.camera.x, view.camera.y],
+                        viewport: logical,
+                        zoom: view.camera.zoom,
+                        base: uploaded.base,
+                        show_areas: u32::from(frame.show_areas),
+                        show_area_outlines: u32::from(frame.show_area_outlines),
+                        focused_area_owner: view.focused_area.map(owner_words).unwrap_or([0; 2]),
+                        placement_flash_owner,
+                        placement_flash_strength,
+                    },
+                    blur: BlurPush {
+                        sample_step: [
+                            view.camera.zoom * scale[0] / rect.width.max(1) as f32,
+                            view.camera.zoom * scale[1] / rect.height.max(1) as f32,
+                        ],
+                    },
+                    sprite_base: uploaded.base,
+                    underlay_ranges,
+                    active_range,
+                }
+            })
+            .collect();
+
+        let visible: Vec<_> = frame
+            .map_views
+            .iter()
+            .zip(&self.uploaded)
+            .filter(|(view, _)| !view.rect.is_empty())
+            .collect();
+        if plans.len() != recorded.map_views.len() || visible.len() != recorded.map_views.len() {
+            return Err(vk::Result::ERROR_INITIALIZATION_FAILED.into());
+        }
+
+        let picking = frame
+            .picking
+            .filter(|index| frame.map_views.get(*index).is_some_and(|view| !view.rect.is_empty()));
+        let picking_map = picking.map(|index| {
+            frame.map_views[..index]
+                .iter()
+                .filter(|view| !view.rect.is_empty())
+                .count()
+        });
+        let cursor = picking.and_then(|index| {
+            let view = &frame.map_views[index];
+            view.interaction
+                .cursor
+                .filter(|cursor| cursor[0] < view.rect.width && cursor[1] < view.rect.height)
+        });
+        let pick = picking.and_then(|index| frame.map_views[index].interaction.mode.pick());
+        let area_tiles = self.area_tiles.as_ref().unwrap_or(sprites);
+
+        if let Some(slot) = recorded.pick_result {
+            let pick_readback = self
+                .pick_readback
+                .as_ref()
+                .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+            recorded.program.set(slot, pick_readback);
+        }
+
+        for (index, map_view) in recorded.map_views.iter().enumerate() {
+            let ((view, uploaded), plan) = (visible[index], plans[index].clone());
+            let map_extent = vk::Extent2D {
+                width: view.rect.width.max(1),
+                height: view.rect.height.max(1),
+            };
+            recorded.program.set(map_view.extent, extent3d(map_extent));
+            let underlay_extent = if map_view.underlay_draw.is_some() {
+                map_extent
+            } else {
+                vk::Extent2D { width: 1, height: 1 }
+            };
+            recorded
+                .program
+                .set(map_view.underlay_extent, extent3d(underlay_extent));
+            recorded.program.set_bytes(map_view.camera, &plan.camera);
+            recorded.program.set_bytes(map_view.blur_push, &plan.blur);
+
+            if let Some(underlay_draw) = map_view.underlay_draw {
+                let underlay_plan = plan.clone();
+                recorded.program.set(
+                    underlay_draw,
+                    PassCallback::new(move |cmd| {
+                        underlay_plan.bind_scene(cmd);
+                        for &(base, count) in &underlay_plan.underlay_ranges {
+                            let base = underlay_plan.sprite_base + base;
+                            cmd.push_constants_at(std::mem::offset_of!(CameraPush, base) as u32, &base)
+                                .draw(4, count);
+                        }
+                    }),
+                );
+            }
+
+            let blur = plan.blur;
+            recorded.program.set(
+                map_view.blur_draw,
+                PassCallback::new(move |cmd| {
+                    cmd.set_viewport(0, Rect2D::framebuffer())
+                        .set_scissor(0, Rect2D::framebuffer())
+                        .push_constants(&blur)
+                        .draw(4, 1);
+                }),
+            );
+
+            let active_plan = plan.clone();
+            recorded.program.set(
+                map_view.active_draw,
+                PassCallback::new(move |cmd| {
+                    active_plan.bind_scene(cmd);
+                    let (base, count) = active_plan.active_range;
+                    let base = active_plan.sprite_base + base;
                     cmd.push_constants_at(std::mem::offset_of!(CameraPush, base) as u32, &base)
                         .draw(4, count);
-                }
-            }),
-        );
-        recorded.program.set(
-            recorded.active_draws,
-            PassCallback::new(move |cmd| {
-                let (base, count) = active_range;
-                cmd.push_constants_at(std::mem::offset_of!(CameraPush, base) as u32, &base)
-                    .draw(4, count);
-            }),
-        );
-        recorded.program.set(
-            recorded.outline_draws,
-            PassCallback::new(move |cmd| {
-                let (base, count) = active_range;
-                cmd.push_constants_at(std::mem::offset_of!(CameraPush, base) as u32, &base)
-                    .draw(4, count);
-            }),
-        );
+                }),
+            );
 
-        let inside = |cursor: &[u32; 2]| cursor[0] < viewport.width && cursor[1] < viewport.height;
-        let cursor = interaction.cursor.filter(inside);
-        let pick = interaction.mode.pick();
-        if let Some(slots) = recorded.interaction.as_ref() {
-            let selected_owner = interaction.selected.map(owner_words).unwrap_or([0; 2]);
-            let cursor_value = cursor.unwrap_or([0; 2]);
+            let outline_plan = plan.clone();
+            recorded.program.set(
+                map_view.outline_draw,
+                PassCallback::new(move |cmd| {
+                    outline_plan.bind_scene(cmd);
+                    let (base, count) = outline_plan.active_range;
+                    let base = outline_plan.sprite_base + base;
+                    cmd.push_constants_at(std::mem::offset_of!(CameraPush, base) as u32, &base)
+                        .draw(4, count);
+                }),
+            );
+
+            let Some(slots) = map_view.interaction.as_ref() else {
+                continue;
+            };
+            let interaction = view.interaction;
+            let local_cursor = interaction
+                .cursor
+                .filter(|cursor| cursor[0] < view.rect.width && cursor[1] < view.rect.height);
             let guide = interaction
                 .selection_guide
                 .filter(|guide| {
                     interaction.selected.is_some()
                         && guide.origin.iter().chain(&guide.target).all(|value| value.is_finite())
                 })
-                .map(|guide| project_selection_guide(guide, frame.camera, viewport))
+                .map(|guide| project_selection_guide(guide, view.camera, view.rect))
                 .filter(|(origin, target)| origin.iter().chain(target).all(|value| value.is_finite()));
             let (guide_origin, guide_target, guide_valid) =
                 guide.map_or(([0.0; 2], [0.0; 2], 0), |(origin, target)| (origin, target, 1));
-            recorded.program.set_bytes(
-                slots.push,
-                &InteractionPush {
-                    cursor: cursor_value,
-                    cursor_valid: u32::from(cursor.is_some()),
-                    selected_owner,
-                    stripe_offset,
-                    guide_origin,
-                    guide_target,
-                    guide_valid,
-                    interaction_mode: u32::from(interaction.mode.is_delete()),
-                    focused_area_owner: frame.focused_area.map(owner_words).unwrap_or([0; 2]),
-                    highlight_tint: u32::from(interaction.highlight.is_tint()),
-                },
-            );
+            let push = InteractionPush {
+                cursor: local_cursor.unwrap_or([0; 2]),
+                cursor_valid: u32::from(local_cursor.is_some()),
+                selected_owner: interaction.selected.map(owner_words).unwrap_or([0; 2]),
+                stripe_offset,
+                guide_origin,
+                guide_target,
+                guide_valid,
+                interaction_mode: u32::from(interaction.mode.is_delete()),
+                focused_area_owner: view.focused_area.map(owner_words).unwrap_or([0; 2]),
+                highlight_tint: u32::from(interaction.highlight.is_tint()),
+            };
+            recorded.program.set_bytes(slots.push, &push);
             recorded.program.set_bytes(
                 slots.pick_push,
                 &PickPush {
-                    cursor: cursor_value,
-                    cursor_valid: u32::from(cursor.is_some()),
+                    cursor: local_cursor.unwrap_or([0; 2]),
+                    cursor_valid: u32::from(local_cursor.is_some()),
                 },
             );
-
-            let area_tiles = self.area_tiles.as_ref().unwrap_or(sprites);
-            let pick_readback = self
-                .pick_readback
-                .as_ref()
-                .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
-            recorded.program.set(slots.area_tiles, area_tiles);
-            recorded.program.set(slots.pick_result, pick_readback);
-
-            let hovered_area = interaction
-                .hovered_area
-                .and_then(|owner| self.area_tile_indices.get(&owner).copied());
+            let should_pick = map_view.should_pick.ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
             recorded.program.set(
-                slots.hover_draws,
+                should_pick,
+                pick.is_some() && picking_map == Some(index) && local_cursor.is_some(),
+            );
+            recorded.program.set(slots.area_tiles, area_tiles);
+
+            recorded.program.set(
+                slots.highlight_draw,
                 PassCallback::new(move |cmd| {
-                    if let Some(base) = hovered_area {
-                        let show = 1u32;
-                        cmd.push_constants_at(std::mem::offset_of!(CameraPush, base) as u32, &base);
-                        cmd.push_constants_at(std::mem::offset_of!(CameraPush, show_area_outlines) as u32, &show);
-                        cmd.draw(4, 1);
-                    }
+                    cmd.set_viewport(0, Rect2D::framebuffer())
+                        .set_scissor(0, Rect2D::framebuffer())
+                        .push_constants(&push)
+                        .draw(4, 1);
                 }),
+            );
+
+            let hover = view
+                .interaction
+                .hovered_area
+                .and_then(|owner| uploaded.area_tile_indices.get(&owner).copied())
+                .map(|base| (plan, uploaded.area_base + base));
+            recorded.program.set(
+                slots.hover_draw,
+                PassCallback::new(move |cmd| {
+                    let Some((plan, base)) = hover.as_ref() else {
+                        return;
+                    };
+                    let show = 1u32;
+
+                    plan.bind_scene(cmd);
+                    cmd.push_constants_at(std::mem::offset_of!(CameraPush, base) as u32, base);
+                    cmd.push_constants_at(std::mem::offset_of!(CameraPush, show_area_outlines) as u32, &show);
+                    cmd.draw(4, 1);
+                }),
+            );
+
+            let _ = (
+                map_view.scene_attachment,
+                map_view.visibility_attachment,
+                map_view.underlays_attachment,
+                map_view.output_attachment,
             );
         }
 
@@ -904,7 +1149,10 @@ impl Renderer {
                 Err(error) => return Err(error.into()),
             };
 
-        if !executed || pick.is_none() || cursor.is_none() {
+        let (Some(index), true, true) = (picking, pick.is_some(), cursor.is_some()) else {
+            return Ok(None);
+        };
+        if !executed {
             return Ok(None);
         }
 
@@ -916,39 +1164,71 @@ impl Renderer {
             .and_then(|bytes| bytes.get(..4))
             .ok_or(vk::Result::ERROR_MEMORY_MAP_FAILED)?;
         let raw = u32::from_ne_bytes(bytes.try_into().map_err(|_| vk::Result::ERROR_MEMORY_MAP_FAILED)?);
+        let base = self.uploaded.get(index).map_or(0, |uploaded| uploaded.base) as usize;
         let picked = VisibilityId::from_raw(raw)
-            .and_then(|id| frame.sprite_instances.get(id.sprite_index()))
+            .map(VisibilityId::sprite_index)
+            .and_then(|sprite| sprite.checked_sub(base))
+            .and_then(|sprite| frame.map_views.get(index)?.sprite_instances.get(sprite))
             .map_or(PickResult::Miss, |sprite| PickResult::Hit(sprite.owner));
 
-        Ok(Some(picked))
+        Ok(Some((index, picked)))
     }
 
     fn prepare_sprites(&mut self, frame: &Frame<'_>) -> Result<(), GpuError> {
-        if self.uploaded_revision == Some(frame.revision) {
+        if self.sprites.is_some()
+            && self.uploaded.len() == frame.map_views.len()
+            && self
+                .uploaded
+                .iter()
+                .zip(frame.map_views)
+                .all(|(uploaded, view)| uploaded.revision == view.revision)
+        {
             return Ok(());
         }
 
-        if self.prepare_frame_update(frame)? {
+        if frame.map_views.len() == 1 && self.uploaded.len() == 1 && self.prepare_frame_update(frame)? {
             return Ok(());
         }
 
-        let total = frame.sprite_instances.len();
+        let total: usize = frame.map_views.iter().map(|view| view.sprite_instances.len()).sum();
         u32::try_from(total).map_err(|_| GpuError::SpriteUploadTooLarge)?;
         let mut payload = Vec::with_capacity(total);
-        let area_total = frame.area_tiles.len();
+        let area_total: usize = frame.map_views.iter().map(|view| view.area_tiles.len()).sum();
         u32::try_from(area_total).map_err(|_| GpuError::SpriteUploadTooLarge)?;
         let mut area_payload = Vec::with_capacity(area_total);
-        let ranges = level_ranges(frame.sprite_instances);
 
-        for (index, sprite) in frame.sprite_instances.iter().enumerate() {
-            payload.push(gpu_sprite(index, sprite)?);
-        }
-        for (index, area) in frame.area_tiles.iter().enumerate() {
-            area_payload.push(gpu_sprite(index, area)?);
+        let mut uploaded = Vec::with_capacity(frame.map_views.len());
+        for view in frame.map_views {
+            let base = u32::try_from(payload.len()).map_err(|_| GpuError::SpriteUploadTooLarge)?;
+            let area_base = u32::try_from(area_payload.len()).map_err(|_| GpuError::SpriteUploadTooLarge)?;
+
+            for sprite in view.sprite_instances {
+                let index = payload.len();
+                payload.push(gpu_sprite(index, sprite)?);
+            }
+
+            let mut area_tile_indices = HashMap::with_capacity(view.area_tiles.len());
+            for area in view.area_tiles {
+                let index = area_payload.len();
+                let local = u32::try_from(index).map_err(|_| GpuError::SpriteUploadTooLarge)? - area_base;
+                area_tile_indices.insert(area.owner, local);
+                area_payload.push(gpu_sprite(index, area)?);
+            }
+
+            uploaded.push(UploadedMapView {
+                revision: view.revision,
+                base,
+                count: view.sprite_instances.len(),
+                area_base,
+                area_count: view.area_tiles.len(),
+                area_owners: view.area_tiles.iter().map(|area| area.owner).collect(),
+                area_tile_indices,
+                ranges: level_ranges(view.sprite_instances),
+            });
         }
 
         self.device.wait_idle()?;
-        self.uploaded_revision = None;
+        self.uploaded.clear();
 
         if self.sprites.is_none() || self.sprite_capacity < total {
             let capacity = total
@@ -1018,48 +1298,44 @@ impl Renderer {
             )?;
         }
 
-        self.ranges = ranges;
-        self.area_tile_indices.clear();
-        for (index, area) in frame.area_tiles.iter().enumerate() {
-            let index = u32::try_from(index).map_err(|_| GpuError::SpriteUploadTooLarge)?;
-            self.area_tile_indices.insert(area.owner, index);
-        }
-        self.uploaded_area_owners = frame.area_tiles.iter().map(|area| area.owner).collect();
-        self.uploaded_revision = Some(frame.revision);
-        self.uploaded_sprite_count = total;
-        self.uploaded_area_tile_count = area_total;
+        self.uploaded = uploaded;
 
         Ok(())
     }
 
     fn prepare_frame_update(&mut self, frame: &Frame<'_>) -> Result<bool, GpuError> {
-        let Some(update) = frame.pending_update else {
+        let (Some(view), Some(uploaded)) = (frame.map_views.first(), self.uploaded.first()) else {
             return Ok(false);
         };
-        if self.uploaded_revision != Some(update.previous_revision)
-            || frame.sprite_instances.len() > self.sprite_capacity
-            || frame.area_tiles.len() > self.area_tile_capacity
-            || !valid_update_range(update.sprites, frame.sprite_instances.len())
-            || !valid_update_range(update.area_tiles, frame.area_tiles.len())
-            || (self.uploaded_sprite_count != frame.sprite_instances.len() && update.sprites.is_none())
-            || (self.uploaded_area_tile_count != frame.area_tiles.len() && update.area_tiles.is_none())
+        let Some(update) = view.pending_update else {
+            return Ok(false);
+        };
+        if uploaded.base != 0
+            || uploaded.area_base != 0
+            || uploaded.revision != update.previous_revision
+            || view.sprite_instances.len() > self.sprite_capacity
+            || view.area_tiles.len() > self.area_tile_capacity
+            || !valid_update_range(update.sprites, view.sprite_instances.len())
+            || !valid_update_range(update.area_tiles, view.area_tiles.len())
+            || (uploaded.count != view.sprite_instances.len() && update.sprites.is_none())
+            || (uploaded.area_count != view.area_tiles.len() && update.area_tiles.is_none())
         {
             return Ok(false);
         }
         let Some(sprites) = self.sprites else {
             return Ok(false);
         };
-        if !frame.area_tiles.is_empty() && self.area_tiles.is_none() {
+        if !view.area_tiles.is_empty() && self.area_tiles.is_none() {
             return Ok(false);
         }
 
         let sprite_payload = update
             .sprites
-            .map(|range| gpu_sprite_range(frame.sprite_instances, range))
+            .map(|range| gpu_sprite_range(view.sprite_instances, range))
             .transpose()?;
         let area_payload = update
             .area_tiles
-            .map(|range| gpu_sprite_range(frame.area_tiles, range))
+            .map(|range| gpu_sprite_range(view.area_tiles, range))
             .transpose()?;
         if sprite_payload.as_ref().is_some_and(|payload| !payload.is_empty())
             || area_payload.as_ref().is_some_and(|payload| !payload.is_empty())
@@ -1083,20 +1359,26 @@ impl Renderer {
         }
         if let (Some(buffer), Some(range)) = (self.area_tiles, update.area_tiles) {
             self.color_area_outlines(buffer, range)?;
+            let Some(uploaded) = self.uploaded.first_mut() else {
+                return Ok(false);
+            };
             patch_area_tile_indices(
-                &mut self.area_tile_indices,
-                &mut self.uploaded_area_owners,
-                frame.area_tiles,
+                &mut uploaded.area_tile_indices,
+                &mut uploaded.area_owners,
+                view.area_tiles,
                 range,
             )?;
         }
 
-        if self.uploaded_sprite_count != frame.sprite_instances.len() {
-            self.ranges = level_ranges(frame.sprite_instances);
+        let Some(uploaded) = self.uploaded.first_mut() else {
+            return Ok(false);
+        };
+        if uploaded.count != view.sprite_instances.len() {
+            uploaded.ranges = level_ranges(view.sprite_instances);
         }
-        self.uploaded_revision = Some(frame.revision);
-        self.uploaded_sprite_count = frame.sprite_instances.len();
-        self.uploaded_area_tile_count = frame.area_tiles.len();
+        uploaded.revision = view.revision;
+        uploaded.count = view.sprite_instances.len();
+        uploaded.area_count = view.area_tiles.len();
 
         Ok(true)
     }
@@ -1353,12 +1635,12 @@ fn owner_words(owner: dmm::PrefabInstanceId) -> [u32; 2] { split_owner(owner.get
 fn split_owner(owner: u64) -> [u32; 2] { [owner as u32, (owner >> 32) as u32] }
 
 fn project_selection_guide(
-    guide: crate::SelectionGuide, camera: crate::Camera, viewport: vk::Extent2D,
+    guide: crate::SelectionGuide, camera: crate::Camera, rect: crate::MapViewRect,
 ) -> ([f32; 2], [f32; 2]) {
     let project = |point: [f32; 2]| {
         [
-            (point[0] - camera.x) * camera.zoom + viewport.width as f32 * 0.5,
-            (camera.y - point[1]) * camera.zoom + viewport.height as f32 * 0.5,
+            (point[0] - camera.x) * camera.zoom + rect.width as f32 * 0.5,
+            (camera.y - point[1]) * camera.zoom + rect.height as f32 * 0.5,
         ]
     };
 
@@ -1712,6 +1994,7 @@ fn batch_ranges(sizes: &[usize], budget: usize) -> Option<Vec<Range<usize>>> {
 mod tests {
     use std::collections::HashMap;
 
+    use ash::vk;
     use dmm::PrefabInstanceId;
     use vir::resource::shader;
 
@@ -1719,6 +2002,7 @@ mod tests {
         AREA_COLOR_CS_SPV,
         AreaColorPush,
         CameraPush,
+        FrameGraphState,
         GEOMETRY_VS_SPV,
         GpuSprite,
         INTERACTION_FS_SPV,
@@ -1753,6 +2037,8 @@ mod tests {
         AREA_EDGE_NORTH,
         Camera,
         GpuError,
+        MapViewFrame,
+        MapViewRect,
         SelectionGuide,
         SpriteInstance,
         SpriteTexture,
@@ -1783,6 +2069,148 @@ mod tests {
         (1..=count)
             .map(|raw| PrefabInstanceId::from_raw(raw as u64).expect("nonzero prefab instance ID"))
             .collect()
+    }
+
+    fn map_view(rect: MapViewRect) -> MapViewFrame<'static> {
+        MapViewFrame {
+            rect,
+            camera: Camera::default(),
+            sprite_instances: &[],
+            area_tiles: &[],
+            focused_area: None,
+            active_z: 1,
+            level_count: 1,
+            revision: 1,
+            pending_update: None,
+            interaction: Default::default(),
+        }
+    }
+
+    #[test]
+    fn frame_graph_state_ignores_dynamic_frame_data() {
+        let target = vk::Extent2D {
+            width: 1280,
+            height: 720,
+        };
+        let rect = MapViewRect {
+            x: 100,
+            y: 50,
+            width: 640,
+            height: 480,
+        };
+        let unchanged = [map_view(rect)];
+        let mut dynamic = map_view(rect);
+        dynamic.camera.x = 32.0;
+        dynamic.camera.zoom = 2.0;
+        dynamic.interaction.cursor = Some([120, 80]);
+        dynamic.interaction.selected = Some(owner());
+        let dynamic = [dynamic];
+
+        assert_eq!(
+            FrameGraphState::new(target, true, &unchanged),
+            FrameGraphState::new(target, true, &dynamic),
+        );
+    }
+
+    #[test]
+    fn frame_graph_state_changes_with_the_layout() {
+        let target = vk::Extent2D {
+            width: 1280,
+            height: 720,
+        };
+        let left = MapViewRect {
+            x: 0,
+            y: 0,
+            width: 640,
+            height: 720,
+        };
+        let right = MapViewRect {
+            x: 640,
+            y: 0,
+            width: 640,
+            height: 720,
+        };
+        let base = FrameGraphState::new(target, true, &[map_view(left), map_view(right)]);
+
+        let moved = MapViewRect { x: 32, ..left };
+        assert_ne!(
+            base,
+            FrameGraphState::new(target, true, &[map_view(moved), map_view(right)])
+        );
+
+        let resized = MapViewRect { width: 600, ..left };
+        assert_ne!(
+            base,
+            FrameGraphState::new(target, true, &[map_view(resized), map_view(right)])
+        );
+        assert_ne!(base, FrameGraphState::new(target, true, &[map_view(left)]));
+        assert_ne!(
+            base,
+            FrameGraphState::new(target, true, &[map_view(right), map_view(left)])
+        );
+        assert_ne!(
+            base,
+            FrameGraphState::new(
+                vk::Extent2D {
+                    width: 1920,
+                    height: 1080,
+                },
+                true,
+                &[map_view(left), map_view(right)],
+            )
+        );
+        assert_ne!(
+            base,
+            FrameGraphState::new(target, false, &[map_view(left), map_view(right)])
+        );
+    }
+
+    #[test]
+    fn frame_graph_state_tracks_whether_underlay_passes_are_needed() {
+        let target = vk::Extent2D {
+            width: 1280,
+            height: 720,
+        };
+        let rect = MapViewRect {
+            width: 640,
+            height: 480,
+            ..Default::default()
+        };
+        let single_level = map_view(rect);
+        let mut layered = map_view(rect);
+        layered.level_count = 2;
+
+        let single_level = FrameGraphState::new(target, true, &[single_level]);
+        let layered = FrameGraphState::new(target, true, &[layered]);
+
+        assert!(!single_level.map_views[0].has_underlays);
+        assert!(layered.map_views[0].has_underlays);
+        assert_ne!(single_level, layered);
+    }
+
+    #[test]
+    fn empty_map_views_do_not_create_graph_passes() {
+        let target = vk::Extent2D {
+            width: 1280,
+            height: 720,
+        };
+        let rect = MapViewRect {
+            x: 0,
+            y: 0,
+            width: 640,
+            height: 720,
+        };
+        let visible = FrameGraphState::new(target, true, &[map_view(rect)]);
+        let visible_with_empty =
+            FrameGraphState::new(target, true, &[map_view(rect), map_view(MapViewRect::default())]);
+        let hidden = FrameGraphState::new(target, true, &[map_view(MapViewRect::default())]);
+
+        assert_eq!(visible, visible_with_empty);
+        assert_ne!(visible, hidden);
+        assert!(
+            hidden.map_views.is_empty(),
+            "an empty editor declares no map-view attachments"
+        );
     }
 
     #[test]
@@ -2079,8 +2507,36 @@ mod tests {
         assert_eq!(split_owner(0x1234_5678_9abc_def0), [0x9abc_def0, 0x1234_5678]);
     }
 
+    /// The shader computes `clip = (map - center) * zoom / (viewport * 0.5)`.
+    /// `zoom` is logical pixels per map unit, matching the camera maths the UI
+    /// uses for overlays, so the projection must divide by the camera's logical
+    /// size — not by the physical rectangle it lands in.
+    fn projected_tile_size(zoom: f32, pushed_viewport: f32, rect_width: f32) -> f32 {
+        // One map unit, in NDC, scaled onto the physical rectangle.
+        let ndc = zoom / (pushed_viewport * 0.5);
+
+        ndc * rect_width * 0.5
+    }
+
     #[test]
-    fn selection_guides_project_from_map_to_framebuffer_coordinates() {
+    fn a_map_unit_covers_the_same_screen_space_at_any_display_scale() {
+        let zoom = 4.0;
+        let logical = 800.0;
+
+        // At 1x the logical and physical rectangles agree.
+        assert_eq!(projected_tile_size(zoom, logical, 800.0), 4.0);
+
+        // At 2x the rectangle doubles. Projecting against the logical size
+        // keeps the map the same on-screen size, just at twice the resolution.
+        assert_eq!(projected_tile_size(zoom, logical, 1600.0), 8.0);
+
+        // Projecting against the physical size instead halves the map relative
+        // to every ImGui overlay, which is the 2x mismatch this guards.
+        assert_eq!(projected_tile_size(zoom, 1600.0, 1600.0), 4.0);
+    }
+
+    #[test]
+    fn selection_guides_project_into_map_view_coordinates() {
         let guide = SelectionGuide {
             origin: [110.0, 40.0],
             target: [130.0, 60.0],
@@ -2092,15 +2548,27 @@ mod tests {
             ..Default::default()
         };
 
+        let full = crate::MapViewRect {
+            x: 0,
+            y: 0,
+            width: 800,
+            height: 600,
+        };
         assert_eq!(
-            project_selection_guide(
-                guide,
-                camera,
-                ash::vk::Extent2D {
-                    width: 800,
-                    height: 600,
-                },
-            ),
+            project_selection_guide(guide, camera, full),
+            ([420.0, 320.0], [460.0, 280.0]),
+        );
+
+        // Moving the ImGui window does not move coordinates inside its private
+        // render attachment.
+        let right = crate::MapViewRect {
+            x: 800,
+            y: 100,
+            width: 800,
+            height: 600,
+        };
+        assert_eq!(
+            project_selection_guide(guide, camera, right),
             ([420.0, 320.0], [460.0, 280.0]),
         );
     }

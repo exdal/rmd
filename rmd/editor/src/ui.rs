@@ -12,6 +12,7 @@ use dear_imgui_rs::{
     DockSplit,
     DockspaceError,
     DragFlags,
+    Id,
     InputTextMultilineFlags,
     Key,
     MouseButton,
@@ -23,12 +24,11 @@ use dear_imgui_rs::{
     WindowFlags,
     WindowKey,
     WindowKeyError,
-    WindowLabel,
 };
 use dmm::{Coord, MapFormat, Prefab, Size};
 use editor::{
     command::EditGroupId,
-    document::Selection,
+    document::{DocumentId, MapDocument, Selection},
     icons::materialdesignicons::{
         ICON_CLOSE_THICK,
         ICON_DOTS_HORIZONTAL,
@@ -54,11 +54,11 @@ use editor::{
     },
 };
 use objtree::{ObjectTree, TypeId};
-use render::{InteractionMode, PickRequest, PlacementFlash, Renderer, ViewportInteraction};
+use render::{Camera, InteractionMode, MapViewInteraction, MapViewRect, PickRequest, PlacementFlash, Renderer};
 
 use crate::{
     camera::Controller,
-    gizmo::{BlockGizmoTarget, GizmoState, GizmoViewport},
+    gizmo::{BlockGizmoTarget, GizmoMapView, GizmoState},
     inspector::InspectorState,
     loader::LoadView,
     session::{BlockPreviewSprite, FillOutcome, PlacementPreview, Session},
@@ -68,7 +68,7 @@ use crate::{
 /// How far down the "Blur below" menu goes. The option itself takes any depth.
 const MAX_UNDERLAY_DEPTH: u32 = 3;
 
-const DOCKSPACE_ID: &str = "rmd-main-dockspace-v2";
+const DOCKSPACE_ID: &str = "rmd-main-dockspace-v3";
 const OVERLAY_PADDING: f32 = 4.0;
 const OVERLAY_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 const RECENT_ICON_SIZE: f32 = 48.0;
@@ -79,6 +79,7 @@ const PLACEMENT_PREVIEW_PERIOD: f64 = 1.5;
 const DEFAULT_CUSTOM_FILL_BOUNDARY: &str = "/turf/closed/wall";
 const MAX_CUSTOM_FILL_SEARCH_RESULTS: usize = 50;
 const BLOCK_PLACEMENT_LABELS: [&str; 4] = ["Move", "Copy", "Fill", "Cancel"];
+const PASTE_LABELS: [&str; 2] = ["Paste", "Cancel"];
 const BLOCK_SELECTION_LINE_WIDTH_DRAG_WIDTH: f32 = 140.0;
 const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warning";
 const NEW_MAP_POPUP: &str = "New map##new-map";
@@ -104,6 +105,7 @@ const BUILD_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 const BUILD_GIT_SHORT_HASH: Option<&str> = option_env!("RMD_GIT_SHORT_HASH");
 const BUILD_VERSION_URL: Option<&str> = option_env!("RMD_VERSION_URL");
 const BUILD_COMMIT_URL: Option<&str> = option_env!("RMD_COMMIT_URL");
+const CLOSE_MAP_POPUP: &str = "Unsaved changes##close-map";
 const BLOCK_SELECTION_POPUP: &str = "Block selection##block-selection";
 const BLOCK_SELECTION_GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 const BLOCK_SELECTION_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -264,6 +266,19 @@ enum BlockPlacementAction {
     Cancel,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingPaste {
+    /// lower left corner of the footprint, in destination-map tiles
+    min: Coord,
+    rotation: SelectionRotation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PasteAction {
+    Paste,
+    Cancel,
+}
+
 fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
     ui.get_window_draw_list()
         .add_rect(bounds.min, bounds.max, OVERLAY_BG)
@@ -271,10 +286,17 @@ fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
         .build();
 }
 
+pub struct VisibleMapView {
+    pub document: DocumentId,
+    pub rect: MapViewRect,
+    pub camera: Camera,
+    pub interaction: MapViewInteraction,
+}
+
 pub struct UiOutput {
     pub exit: bool,
-    pub viewport: (u32, u32),
-    pub interaction: ViewportInteraction,
+    pub map_views: Vec<VisibleMapView>,
+    pub picking: Option<usize>,
     pub open: Option<OpenRequest>,
     pub pick_new_map_path: bool,
     pub cancel_load: bool,
@@ -345,9 +367,39 @@ impl ObjectTreeFilter {
     fn children(&self, id: TypeId) -> &[TypeId] { self.children.get(&id).map_or(&[], Vec::as_slice) }
 }
 
+struct MapViewState {
+    window: WindowKey,
+    camera: Controller,
+    size: (u32, u32),
+    rect: MapViewRect,
+    visible: bool,
+    refit: bool,
+    block_selection_anchor: Option<Coord>,
+    block_placement: Option<PendingBlockPlacement>,
+    paste: Option<PendingPaste>,
+}
+
+impl MapViewState {
+    fn new(id: DocumentId) -> Result<Self, WindowKeyError> {
+        Ok(Self {
+            window: WindowKey::new(format!("viewport-{}", id.get()), "Map View")?,
+            camera: Controller::new(),
+            size: (1, 1),
+            rect: MapViewRect::default(),
+            visible: false,
+            refit: true,
+            block_selection_anchor: None,
+            block_placement: None,
+            paste: None,
+        })
+    }
+}
+
 pub struct UiState {
     object_tree: WindowKey,
-    viewport_window: WindowKey,
+    map_views: HashMap<DocumentId, MapViewState>,
+    central_node: Option<Id>,
+    dockspace_root: Option<Id>,
     welcome_window: WindowKey,
     inspector_window: WindowKey,
     settings_window: WindowKey,
@@ -361,8 +413,6 @@ pub struct UiState {
     placement_flash: Option<ActivePlacementFlash>,
     placement_stroke: Option<PlacementStroke>,
     deletion_stroke: Option<DeletionStroke>,
-    block_selection_anchor: Option<Coord>,
-    block_placement: Option<PendingBlockPlacement>,
     block_selection_options: BlockSelectionOptions,
     fill_mode: FillMode,
     custom_fill_boundaries: Vec<TreePath>,
@@ -370,8 +420,7 @@ pub struct UiState {
     pending_fill_warning: Option<PendingFillWarning>,
     new_map_dialog: Option<NewMapDialog>,
     save_dialog: Option<SaveDialog>,
-    viewport: (u32, u32),
-    initial_refit: bool,
+    pending_close: Option<DocumentId>,
     show_settings: bool,
     show_welcome: bool,
     welcome_map_filter: String,
@@ -388,7 +437,6 @@ pub struct UiState {
 impl UiState {
     pub fn new() -> Result<Self, WindowKeyError> {
         let object_tree = WindowKey::new("object-tree", "Object tree")?;
-        let viewport_window = WindowKey::new("viewport", "Viewport")?;
         let welcome_window = WindowKey::new("welcome", "Welcome")?;
         let inspector_window = WindowKey::new("inspector", "Inspector")?;
         let settings_window = WindowKey::new("settings", "Settings")?;
@@ -401,13 +449,15 @@ impl UiState {
                 DockSplit::Right,
                 0.20 / 0.75,
                 DockLayout::tabs([&inspector_window]),
-                DockLayout::tabs([&welcome_window, &viewport_window]),
+                DockLayout::tabs([&welcome_window]),
             ),
         );
 
         Ok(Self {
             object_tree,
-            viewport_window,
+            map_views: HashMap::new(),
+            central_node: None,
+            dockspace_root: None,
             welcome_window,
             inspector_window,
             settings_window,
@@ -421,8 +471,6 @@ impl UiState {
             placement_flash: None,
             placement_stroke: None,
             deletion_stroke: None,
-            block_selection_anchor: None,
-            block_placement: None,
             block_selection_options: BlockSelectionOptions::default(),
             fill_mode: FillMode::default(),
             custom_fill_boundaries: vec![TreePath::parse(DEFAULT_CUSTOM_FILL_BOUNDARY)],
@@ -430,8 +478,7 @@ impl UiState {
             pending_fill_warning: None,
             new_map_dialog: None,
             save_dialog: None,
-            viewport: (1, 1),
-            initial_refit: true,
+            pending_close: None,
             show_settings: false,
             show_welcome: true,
             welcome_map_filter: String::new(),
@@ -450,7 +497,16 @@ impl UiState {
 
     pub fn set_load_notice(&mut self, notice: Option<LoadNotice>) { self.load_notice = notice; }
 
-    pub fn request_refit(&mut self) { self.initial_refit = true; }
+    pub fn request_refit(&mut self, id: Option<DocumentId>) {
+        match id.and_then(|id| self.map_views.get_mut(&id)) {
+            Some(view) => view.refit = true,
+            None => {
+                for view in self.map_views.values_mut() {
+                    view.refit = true;
+                }
+            },
+        }
+    }
 
     pub fn set_new_map_path(&mut self, path: PathBuf, codebase_dir: &Path) {
         let Some(dialog) = self.new_map_dialog.as_mut() else {
@@ -462,17 +518,18 @@ impl UiState {
     }
 
     pub fn draw(
-        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, camera: &mut Controller,
-        load: Option<&LoadView>,
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, load: Option<&LoadView>,
     ) -> Result<UiOutput, DockspaceError> {
         self.load_popup_active = load.is_some() || self.load_notice.is_some();
         let loading = self.load_popup_active;
+        let root = ui.get_id(DOCKSPACE_ID);
         ui.dockspace()
             .main_viewport()
-            .root_id(ui.get_id(DOCKSPACE_ID))
+            .root_id(root)
             .flags(DockNodeFlags::PASSTHRU_CENTRAL_NODE)
             .layout(&self.layout, DockLayoutApply::IfMissing)
             .build()?;
+        self.dockspace_root = Some(root);
 
         let mut exit = false;
         let mut open = None;
@@ -485,16 +542,6 @@ impl UiState {
         let mut level_delta = 0;
         let mut underlay_depth = None;
         let mut refit = false;
-        let mut interaction = ViewportInteraction {
-            selected: session.selected_instance(),
-            selection_guide: settings
-                .selection_guide_line
-                .then(|| session.selected_offset_guide())
-                .flatten(),
-            highlight: settings.selection_highlight.style(),
-            mode: interaction_mode(session.tool()),
-            ..Default::default()
-        };
 
         ui.main_menu_bar(|| {
             ui.menu("File", || {
@@ -627,7 +674,7 @@ impl UiState {
         pick_new_map_path |= pick_path;
         if created {
             self.show_welcome = false;
-            self.initial_refit = true;
+            self.request_refit(None);
         }
         let load_popup = draw_load_popup(
             ui,
@@ -640,24 +687,25 @@ impl UiState {
             self.load_notice = None;
         }
 
-        exit |= if session.map().is_some() {
-            self.draw_viewport(ui, session, settings, camera, &mut interaction, &mut refit)
-        } else {
-            ui.is_key_pressed(Key::Escape)
+        let (map_views, picking) = if session.state.is_empty() {
+            exit |= ui.is_key_pressed(Key::Escape)
                 && self.save_dialog.is_none()
                 && self.capturing_keybind.is_none()
-                && !load_popup.handles_escape
+                && !load_popup.handles_escape;
+
+            (Vec::new(), None)
+        } else {
+            let (map_view_exit, map_views, picking) = self.draw_map_views(ui, session, settings, refit);
+            exit |= map_view_exit;
+
+            (map_views, picking)
         };
         finish_keybind_capture(ui, &mut self.capturing_keybind, &mut settings.keybindings);
-        interaction.selection_guide = settings
-            .selection_guide_line
-            .then(|| interaction.selected.and_then(|_| session.selected_offset_guide()))
-            .flatten();
 
         Ok(UiOutput {
             exit,
-            viewport: self.viewport,
-            interaction,
+            map_views,
+            picking,
             open,
             pick_new_map_path,
             cancel_load: load_popup.cancel,
@@ -673,17 +721,23 @@ impl UiState {
         }
 
         let show_welcome = &mut self.show_welcome;
+        let central_node = &mut self.central_node;
         let map_filter = &mut self.welcome_map_filter;
         let maps_expanded = &mut self.welcome_maps_expanded;
         let codebase = session.environment_path();
         ui.window(&self.welcome_window).opened(show_welcome).build(|| {
+            let dock = ui.get_window_dock_id();
+            if dock.raw() != 0 {
+                *central_node = Some(dock);
+            }
+
             let indent = ((ui.content_region_avail()[0] - WELCOME_CONTENT_WIDTH) / 2.0).max(WELCOME_MIN_INDENT);
             ui.dummy([0.0, WELCOME_MIN_INDENT]);
             ui.indent_by(indent);
 
             {
                 let _font = ui.push_font_with_size(None, WELCOME_TITLE_SIZE);
-                ui.text("Rapid Map Editor");
+                ui.text("Rapid Mapping Device");
             }
 
             match codebase {
@@ -870,31 +924,205 @@ impl UiState {
         });
     }
 
-    fn draw_viewport(
-        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, camera: &mut Controller,
-        interaction: &mut ViewportInteraction, refit: &mut bool,
+    fn draw_map_views(
+        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, refit_active: bool,
+    ) -> (bool, Vec<VisibleMapView>, Option<usize>) {
+        let mut exit = false;
+        let mut closing = None;
+        let mut visible = Vec::new();
+
+        for id in session.state.document_ids() {
+            let mut view = match self.map_views.remove(&id) {
+                Some(view) => view,
+                None => match MapViewState::new(id) {
+                    Ok(view) => view,
+                    Err(e) => {
+                        log::error!("could not create a map view window for document {}: {e}", id.get());
+
+                        continue;
+                    },
+                },
+            };
+
+            let refit = refit_active && session.state.active() == Some(id);
+            let mut keep_open = true;
+            let active = session.state.active() == Some(id);
+            let mut interaction = MapViewInteraction {
+                selected: session.selected_instance_of(id),
+                selection_guide: (active && settings.selection_guide_line)
+                    .then(|| session.selected_offset_guide())
+                    .flatten(),
+                highlight: settings.selection_highlight.style(),
+                mode: interaction_mode(session.tool()),
+                ..Default::default()
+            };
+            let map_view_index = visible.len();
+            exit |= self.draw_map_view(
+                ui,
+                session,
+                settings,
+                id,
+                map_view_index,
+                &mut view,
+                &mut interaction,
+                refit,
+                &mut keep_open,
+            );
+
+            if view.visible && !view.rect.is_empty() {
+                visible.push(VisibleMapView {
+                    document: id,
+                    rect: view.rect,
+                    camera: view.camera.camera,
+                    interaction,
+                });
+            }
+            self.map_views.insert(id, view);
+
+            if !keep_open {
+                closing = Some(id);
+            }
+        }
+
+        if let Some(id) = closing {
+            if session.state.document(id).is_some_and(MapDocument::is_dirty) {
+                self.pending_close = Some(id);
+                ui.open_popup(CLOSE_MAP_POPUP);
+            } else {
+                session.close_map(id);
+            }
+        }
+        self.draw_close_confirmation(ui, session);
+
+        self.map_views.retain(|id, _| session.state.document(*id).is_some());
+
+        let picking = visible.iter().position(|view| view.interaction.cursor.is_some());
+
+        (exit, visible, picking)
+    }
+
+    fn draw_close_confirmation(&mut self, ui: &Ui, session: &mut Session) {
+        let Some(id) = self.pending_close else {
+            return;
+        };
+        let Some(title) = session.state.document(id).map(MapDocument::title) else {
+            self.pending_close = None;
+
+            return;
+        };
+
+        let flags = WindowFlags::ALWAYS_AUTO_RESIZE
+            | WindowFlags::NO_RESIZE
+            | WindowFlags::NO_MOVE
+            | WindowFlags::NO_COLLAPSE
+            | WindowFlags::NO_SAVED_SETTINGS
+            | WindowFlags::NO_DOCKING;
+
+        let Some(_modal) = ui.begin_modal_popup_config(CLOSE_MAP_POPUP).flags(flags).begin() else {
+            return;
+        };
+        let writable = session
+            .state
+            .document(id)
+            .is_some_and(|document| document.path.is_some() && !document.needs_initial_save());
+
+        ui.text(format!("{} has unsaved changes.", title.trim_end_matches(" *")));
+        ui.dummy([0.0, ui.frame_height() * 0.25]);
+
+        if ui.button("Save") {
+            session.state.set_active(id);
+            match session.map_path().map(Path::to_path_buf).filter(|_| writable) {
+                Some(path) => {
+                    let format = session.map_format().unwrap_or_default();
+                    match session.save_map_as(&path, format) {
+                        Ok(()) => {
+                            session.close_map(id);
+                            self.pending_close = None;
+                            ui.close_current_popup();
+                        },
+                        Err(e) => self.open_error = Some(e.to_string()),
+                    }
+                },
+                None => {
+                    self.save_dialog = Some(SaveDialog {
+                        path: session
+                            .map_path()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_default(),
+                        format: session.map_format().unwrap_or_default(),
+                        error: None,
+                    });
+                    self.pending_close = None;
+                    ui.close_current_popup();
+                    ui.open_popup(SAVE_MAP_POPUP);
+                },
+            }
+        }
+        ui.same_line();
+        if ui.button("Discard") {
+            session.close_map(id);
+            self.pending_close = None;
+            ui.close_current_popup();
+        }
+        ui.same_line();
+        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+            self.pending_close = None;
+            ui.close_current_popup();
+        }
+    }
+
+    fn draw_map_view(
+        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, id: DocumentId, map_view_index: usize,
+        view: &mut MapViewState, interaction: &mut MapViewInteraction, refit_requested: bool, keep_open: &mut bool,
     ) -> bool {
         let mut exit = false;
-        let title = session
-            .map_path()
-            .and_then(Path::file_name)
-            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-        let window = if title.is_empty() {
-            WindowLabel::from(&self.viewport_window)
-        } else {
-            self.viewport_window.label(title.as_str())
+        let Some(title) = session.state.document(id).map(MapDocument::title) else {
+            return exit;
         };
-        ui.window(window).build(|| {
+        let MapViewState {
+            window,
+            camera,
+            size: view_size,
+            rect: view_rect,
+            visible: view_visible,
+            refit: view_refit,
+            block_selection_anchor,
+            block_placement,
+            paste,
+        } = view;
+        *view_visible = false;
+        *view_refit |= refit_requested;
+        let refit = view_refit;
+
+        if let Some(node) = self.central_node.or(self.dockspace_root) {
+            ui.set_next_window_dock_id_with_cond(node, Condition::FirstUseEver);
+        }
+        ui.window(window.label(title.as_str())).opened(keep_open).build(|| {
+            if ui.is_window_focused() {
+                session.state.set_active(id);
+            }
+            let is_active = session.state.active() == Some(id);
+            let dock = ui.get_window_dock_id();
+            if dock.raw() != 0 {
+                self.central_node = Some(dock);
+            }
+
             let (image_size, viewport) = panel_extent(ui.content_region_avail());
-            self.viewport = viewport;
+            *view_size = viewport;
             camera.resize(viewport.0, viewport.1);
-            if self.initial_refit || *refit {
-                let (width, height) = session.extent_px();
+            if *refit {
+                let (width, height) = session.extent_px_of(id);
                 camera.frame_map(width, height);
-                self.initial_refit = false;
                 *refit = false;
             }
-            ui.image(Renderer::VIEWPORT_TEXTURE, image_size);
+
+            *view_visible = true;
+
+            let origin = ui.cursor_screen_pos();
+            let scale = ui.io().display_framebuffer_scale();
+            let target = ui.io().display_size();
+            *view_rect = framebuffer_rect(origin, image_size, scale, target);
+            ui.image(Renderer::map_view_texture(map_view_index), image_size);
 
             let image_hovered = ui.is_item_hovered();
             let viewport_min = ui.item_rect_min();
@@ -918,7 +1146,7 @@ impl UiState {
 
             let mouse = ui.io().mouse_pos();
             let over_overlay = top_overlay.contains(mouse) || bottom_overlay.contains(mouse);
-            let hovered = image_hovered && !over_overlay;
+            let hovered = image_hovered && !over_overlay && is_active;
             let focused = ui.is_window_focused();
             if focused
                 && !ui.io().want_text_input()
@@ -1007,293 +1235,375 @@ impl UiState {
                 self.placement_stroke = None;
             }
 
-            let tool = session.tool();
-            let preview_coord = (tool == Tool::Place)
-                .then(|| self.gizmo.placement_coord().or(pointed_coord))
-                .flatten();
-            let active_flash = active_placement_flash(&mut self.placement_flash, ui.time(), settings.tile_place_flash);
-            interaction.placement_flash = active_flash.map(|(_, flash)| flash);
+            if is_active {
+                if focused && !ui.io().want_text_input() {
+                    if settings.keybindings.get(KeybindAction::Copy).is_pressed(ui) {
+                        session.copy_selection(self.block_selection_options.mode());
+                    }
+                    if settings.keybindings.get(KeybindAction::Paste).is_pressed(ui)
+                        && let Some(block) = session.clipboard()
+                    {
+                        let (width, height) = (block.width(), block.height());
+                        let anchor = pointed_coord.or_else(|| {
+                            let size = session.map()?.size;
+                            let center = [viewport.0 as f32 * 0.5, viewport.1 as f32 * 0.5];
 
-            if let Some(coord) = preview_coord
-                && session.can_edit_at(coord)
-                && active_flash.is_none_or(|(flash_coord, _)| flash_coord != coord)
-            {
-                draw_placement_preview(ui, session, camera, coord, viewport_min, viewport_max);
-            }
-
-            let gizmo_viewport = GizmoViewport {
-                min: viewport_min,
-                max: viewport_max,
-                hovered,
-            };
-
-            if tool != Tool::BlockSelect {
-                self.block_selection_anchor = None;
-                self.block_placement = None;
-            } else {
-                if self
-                    .block_selection_anchor
-                    .is_some_and(|anchor| anchor.z != session.z())
-                {
-                    self.block_selection_anchor = None;
+                            camera.screen_to_tile(center, size, session.options.tile_size, session.z())
+                        });
+                        if let (Some(anchor), Some(size)) = (anchor, session.map().map(|map| map.size)) {
+                            session.set_tool(Tool::BlockSelect);
+                            self.gizmo.cancel();
+                            *block_placement = None;
+                            *block_selection_anchor = None;
+                            *paste = Some(PendingPaste {
+                                min: centered_paste_min(width, height, anchor, size),
+                                rotation: SelectionRotation::Original,
+                            });
+                        }
+                    }
                 }
 
-                if self
-                    .block_placement
-                    .is_some_and(|placement| Some(placement.source) != session.selection())
-                {
-                    self.block_placement = None;
-                }
-            }
+                let tool = session.tool();
+                let preview_coord = (tool == Tool::Place)
+                    .then(|| self.gizmo.placement_coord().or(pointed_coord))
+                    .flatten();
+                let active_flash =
+                    active_placement_flash(&mut self.placement_flash, ui.time(), settings.tile_place_flash);
+                interaction.placement_flash = active_flash.map(|(_, flash)| flash);
 
-            let gizmo_captures_mouse = match tool {
-                Tool::Select => {
-                    self.gizmo
-                        .draw(
-                            ui,
-                            session,
-                            settings,
-                            camera,
-                            self.inspector.transform_mode(),
-                            gizmo_viewport,
-                        )
-                        .captures_mouse
-                },
-                Tool::Place => {
-                    self.gizmo
-                        .draw_placement_direction(ui, session, settings, camera, pointed_coord, gizmo_viewport)
-                        .captures_mouse
-                },
-                Tool::BlockSelect => {
-                    if self.block_selection_anchor.is_some() {
+                if let Some(coord) = preview_coord
+                    && session.can_edit_at(coord)
+                    && active_flash.is_none_or(|(flash_coord, _)| flash_coord != coord)
+                {
+                    draw_placement_preview(ui, session, camera, coord, viewport_min, viewport_max);
+                }
+
+                let gizmo_map_view = GizmoMapView {
+                    min: viewport_min,
+                    max: viewport_max,
+                    hovered,
+                };
+
+                if tool != Tool::BlockSelect {
+                    *block_selection_anchor = None;
+                    *block_placement = None;
+                    *paste = None;
+                } else {
+                    if block_selection_anchor.is_some_and(|anchor| anchor.z != session.z()) {
+                        *block_selection_anchor = None;
+                    }
+
+                    if block_placement.is_some_and(|placement| Some(placement.source) != session.selection()) {
+                        *block_placement = None;
+                    }
+
+                    if let Some(pending) = paste.as_mut() {
+                        pending.min.z = session.z();
+                    }
+                }
+
+                let paste_target = paste.and_then(|pending| session.clipboard_footprint(pending.min, pending.rotation));
+                if paste.is_some() && paste_target.is_none() {
+                    *paste = None;
+                }
+
+                let gizmo_captures_mouse = match tool {
+                    Tool::Select => {
+                        self.gizmo
+                            .draw(
+                                ui,
+                                session,
+                                settings,
+                                camera,
+                                self.inspector.transform_mode(),
+                                gizmo_map_view,
+                            )
+                            .captures_mouse
+                    },
+                    Tool::Place => {
+                        self.gizmo
+                            .draw_placement_direction(ui, session, settings, camera, pointed_coord, gizmo_map_view)
+                            .captures_mouse
+                    },
+                    Tool::BlockSelect => {
+                        if let (Some(pending), Some(target), Some(size)) =
+                            (*paste, paste_target, session.map().map(|map| map.size))
+                        {
+                            let response = self.gizmo.draw_block(
+                                ui,
+                                settings,
+                                camera,
+                                BlockGizmoTarget {
+                                    selection: target,
+                                    rotation: pending.rotation,
+                                    map_size: size,
+                                    tile_size: session.options.tile_size,
+                                },
+                                gizmo_map_view,
+                            );
+
+                            if response.selection.min != target.min || response.rotation != pending.rotation {
+                                *paste = Some(PendingPaste {
+                                    min: response.selection.min,
+                                    rotation: response.rotation,
+                                });
+                            }
+
+                            response.captures_mouse
+                        } else if block_selection_anchor.is_some() {
+                            self.gizmo.cancel();
+
+                            false
+                        } else if let (Some(source), Some(size)) =
+                            (session.selection(), session.map().map(|map| map.size))
+                        {
+                            let (displayed, rotation) = block_placement
+                                .map_or((source, SelectionRotation::Original), |placement| {
+                                    (placement.target, placement.rotation)
+                                });
+
+                            let response = self.gizmo.draw_block(
+                                ui,
+                                settings,
+                                camera,
+                                BlockGizmoTarget {
+                                    selection: displayed,
+                                    rotation,
+                                    map_size: size,
+                                    tile_size: session.options.tile_size,
+                                },
+                                gizmo_map_view,
+                            );
+
+                            if response.selection != displayed || response.rotation != rotation {
+                                *block_selection_anchor = None;
+                                *block_placement =
+                                    rotated_selection_at(source, response.selection.min, response.rotation)
+                                        .filter(|target| {
+                                            *target != source || response.rotation != SelectionRotation::Original
+                                        })
+                                        .map(|target| PendingBlockPlacement {
+                                            source,
+                                            target,
+                                            rotation: response.rotation,
+                                        });
+                            }
+
+                            response.captures_mouse
+                        } else {
+                            self.gizmo.cancel();
+
+                            false
+                        }
+                    },
+                    Tool::Delete => {
                         self.gizmo.cancel();
 
                         false
-                    } else if let (Some(source), Some(size)) = (session.selection(), session.map().map(|map| map.size))
-                    {
-                        let (displayed, rotation) = self
-                            .block_placement
+                    },
+                    Tool::Fill => {
+                        self.gizmo.cancel();
+
+                        false
+                    },
+                };
+                let block_controls_area = OverlayRect {
+                    min: [viewport_min[0], top_overlay.max[1]],
+                    max: [viewport_max[0], bottom_overlay.min[1]],
+                };
+
+                let controls_hit_test = match *paste {
+                    Some(_) => paste_controls(self.gizmo.block_rotation_open(), paste_target)
+                        .map(|target| (PASTE_LABELS.as_slice(), target)),
+                    None => block_controls_placement(
+                        tool,
+                        block_selection_anchor.is_some(),
+                        self.gizmo.block_rotation_open(),
+                        session.selection(),
+                        *block_placement,
+                    )
+                    .map(|placement| (BLOCK_PLACEMENT_LABELS.as_slice(), placement.target)),
+                };
+                let block_controls_capture_mouse = controls_hit_test.is_some_and(|(labels, target)| {
+                    let (_, bounds) = block_placement_controls_layout(
+                        ui,
+                        camera,
+                        labels,
+                        target,
+                        session.options.tile_size,
+                        viewport_min,
+                        block_controls_area,
+                    );
+
+                    bounds.contains(mouse)
+                });
+
+                let left_clicked = ui.is_mouse_clicked(MouseButton::Left);
+                let left_down = ui.is_mouse_down(MouseButton::Left);
+                if left_clicked {
+                    self.placement_stroke = None;
+                    self.deletion_stroke = None;
+                }
+                if !left_down || session.tool() != Tool::Delete {
+                    self.deletion_stroke = None;
+                }
+                if self.placement_stroke.as_ref().is_some_and(|stroke| {
+                    !left_down
+                        || gizmo_captures_mouse
+                        || !stroke.matches_context(session.tool(), session.palette(), session.z())
+                }) {
+                    self.placement_stroke = None;
+                }
+                if !gizmo_captures_mouse
+                    && !block_controls_capture_mouse
+                    && let Some(cursor) = cursor
+                {
+                    let pixel = [cursor[0].floor() as u32, cursor[1].floor() as u32];
+                    interaction.cursor = Some(cursor_in_map_view(cursor, scale));
+
+                    if let Some(coord) = pointed_coord {
+                        interaction.hovered_area = session.area_at(coord);
+                        match session.tool() {
+                            Tool::Place => {
+                                if left_clicked {
+                                    self.placement_stroke = session
+                                        .palette()
+                                        .cloned()
+                                        .map(|prefab| PlacementStroke::new(prefab, session.z()));
+                                }
+                                let group = session
+                                    .can_edit_at(coord)
+                                    .then(|| self.placement_stroke.as_mut().and_then(|stroke| stroke.visit(coord)))
+                                    .flatten();
+                                let placed = group.and_then(|group| session.place_at(coord, Some(group)));
+                                if settings.tile_place_flash
+                                    && let Some(owner) = placed
+                                {
+                                    let flash = ActivePlacementFlash {
+                                        owner,
+                                        coord,
+                                        started_at: ui.time(),
+                                    };
+                                    self.placement_flash = Some(flash);
+                                    interaction.placement_flash = flash.sample(ui.time());
+                                }
+                            },
+                            Tool::Select => {
+                                self.placement_stroke = None;
+                                if left_clicked {
+                                    request_pick(interaction, PickRequest::Cursor);
+                                }
+                            },
+                            Tool::BlockSelect => {
+                                self.placement_stroke = None;
+                                if block_placement.is_none() && paste.is_none() {
+                                    if left_clicked && session.can_edit_at(coord) {
+                                        *block_placement = None;
+                                        let selection = Selection::from_drag(coord, coord);
+                                        if session.select_block_with_mode(
+                                            Some(selection),
+                                            self.block_selection_options.mode(),
+                                        ) {
+                                            *block_selection_anchor = Some(coord);
+                                        }
+                                    }
+
+                                    if left_down && let Some(anchor) = block_selection_anchor {
+                                        session.select_block_with_mode(
+                                            Some(Selection::from_drag(*anchor, coord)),
+                                            self.block_selection_options.mode(),
+                                        );
+                                    }
+
+                                    if ui.is_mouse_clicked(MouseButton::Right)
+                                        && block_selection_anchor.is_none()
+                                        && session.selection().is_some_and(|selection| {
+                                            self.block_selection_options.mode().includes(selection, coord)
+                                        })
+                                    {
+                                        ui.open_popup(BLOCK_SELECTION_POPUP);
+                                    }
+                                }
+                            },
+                            Tool::Delete => {
+                                self.placement_stroke = None;
+                                let requests_pick = if left_clicked {
+                                    self.deletion_stroke = Some(DeletionStroke::new(pixel));
+
+                                    true
+                                } else {
+                                    left_down
+                                        && self
+                                            .deletion_stroke
+                                            .as_mut()
+                                            .is_some_and(|stroke| stroke.move_to(pixel))
+                                };
+                                if requests_pick {
+                                    request_pick(interaction, PickRequest::Cursor);
+                                }
+                            },
+                            Tool::Fill => {
+                                self.placement_stroke = None;
+                                if left_clicked
+                                    && let FillOutcome::TooLarge { limit } =
+                                        session.fill_at(coord, self.fill_mode, &self.custom_fill_boundaries)
+                                {
+                                    self.pending_fill_warning = Some(PendingFillWarning {
+                                        coord,
+                                        fill_mode: self.fill_mode,
+                                        custom_fill_boundaries: self.custom_fill_boundaries.clone(),
+                                        limit,
+                                    });
+                                    ui.open_popup(FILL_LIMIT_WARNING_POPUP);
+                                }
+                            },
+                        }
+                    }
+                }
+
+                if !left_down {
+                    *block_selection_anchor = None;
+                }
+
+                let overlay_viewport = OverlayRect {
+                    min: viewport_min,
+                    max: viewport_max,
+                };
+
+                let block_overlay = match (*paste, paste_target) {
+                    (Some(pending), Some(target)) => {
+                        draw_ghost_sprites(
+                            ui,
+                            camera,
+                            session.clipboard_preview_sprites(target, pending.rotation),
+                            overlay_viewport,
+                        );
+                        draw_block_outline(ui, session, camera, target, BlockSelectionMode::Full, overlay_viewport);
+
+                        Some((target, pending.rotation))
+                    },
+                    _ if session.tool() == Tool::BlockSelect => session.selection().map(|source| {
+                        let (displayed, rotation) = block_placement
                             .map_or((source, SelectionRotation::Original), |placement| {
                                 (placement.target, placement.rotation)
                             });
-
-                        let response = self.gizmo.draw_block(
+                        draw_block_selection(
                             ui,
-                            settings,
+                            session,
                             camera,
-                            BlockGizmoTarget {
-                                selection: displayed,
-                                rotation,
-                                map_size: size,
-                                tile_size: session.options.tile_size,
-                            },
-                            gizmo_viewport,
+                            displayed,
+                            *block_placement,
+                            self.block_selection_options.mode(),
+                            overlay_viewport,
                         );
 
-                        if response.selection != displayed || response.rotation != rotation {
-                            self.block_selection_anchor = None;
-                            self.block_placement =
-                                rotated_selection_at(source, response.selection.min, response.rotation)
-                                    .filter(|target| {
-                                        *target != source || response.rotation != SelectionRotation::Original
-                                    })
-                                    .map(|target| PendingBlockPlacement {
-                                        source,
-                                        target,
-                                        rotation: response.rotation,
-                                    });
-                        }
+                        (displayed, rotation)
+                    }),
+                    _ => None,
+                };
 
-                        response.captures_mouse
-                    } else {
-                        self.gizmo.cancel();
-
-                        false
-                    }
-                },
-                Tool::Delete => {
-                    self.gizmo.cancel();
-
-                    false
-                },
-                Tool::Fill => {
-                    self.gizmo.cancel();
-
-                    false
-                },
-            };
-            let block_controls_area = OverlayRect {
-                min: [viewport_min[0], top_overlay.max[1]],
-                max: [viewport_max[0], bottom_overlay.min[1]],
-            };
-            let block_controls_capture_mouse = block_controls_placement(
-                tool,
-                self.block_selection_anchor.is_some(),
-                self.gizmo.block_rotation_open(),
-                session.selection(),
-                self.block_placement,
-            )
-            .is_some_and(|placement| {
-                let (_, bounds) = block_placement_controls_layout(
-                    ui,
-                    camera,
-                    placement,
-                    session.options.tile_size,
-                    viewport_min,
-                    block_controls_area,
-                );
-
-                bounds.contains(mouse)
-            });
-
-            let left_clicked = ui.is_mouse_clicked(MouseButton::Left);
-            let left_down = ui.is_mouse_down(MouseButton::Left);
-            if left_clicked {
-                self.placement_stroke = None;
-                self.deletion_stroke = None;
-            }
-            if !left_down || session.tool() != Tool::Delete {
-                self.deletion_stroke = None;
-            }
-            if self.placement_stroke.as_ref().is_some_and(|stroke| {
-                !left_down
-                    || gizmo_captures_mouse
-                    || !stroke.matches_context(session.tool(), session.palette(), session.z())
-            }) {
-                self.placement_stroke = None;
-            }
-            if !gizmo_captures_mouse
-                && !block_controls_capture_mouse
-                && let Some(cursor) = cursor
-            {
-                let pixel = [cursor[0].floor() as u32, cursor[1].floor() as u32];
-                interaction.cursor = Some(pixel);
-
-                if let Some(coord) = pointed_coord {
-                    interaction.hovered_area = session.area_at(coord);
-                    match session.tool() {
-                        Tool::Place => {
-                            if left_clicked {
-                                self.placement_stroke = session
-                                    .palette()
-                                    .cloned()
-                                    .map(|prefab| PlacementStroke::new(prefab, session.z()));
-                            }
-                            let group = session
-                                .can_edit_at(coord)
-                                .then(|| self.placement_stroke.as_mut().and_then(|stroke| stroke.visit(coord)))
-                                .flatten();
-                            let placed = group.and_then(|group| session.place_at(coord, Some(group)));
-                            if settings.tile_place_flash
-                                && let Some(owner) = placed
-                            {
-                                let flash = ActivePlacementFlash {
-                                    owner,
-                                    coord,
-                                    started_at: ui.time(),
-                                };
-                                self.placement_flash = Some(flash);
-                                interaction.placement_flash = flash.sample(ui.time());
-                            }
-                        },
-                        Tool::Select => {
-                            self.placement_stroke = None;
-                            if left_clicked {
-                                request_pick(interaction, PickRequest::Cursor);
-                            }
-                        },
-                        Tool::BlockSelect => {
-                            self.placement_stroke = None;
-                            if self.block_placement.is_none() {
-                                if left_clicked && session.can_edit_at(coord) {
-                                    self.block_placement = None;
-                                    let selection = Selection::from_drag(coord, coord);
-                                    if session
-                                        .select_block_with_mode(Some(selection), self.block_selection_options.mode())
-                                    {
-                                        self.block_selection_anchor = Some(coord);
-                                    }
-                                }
-
-                                if left_down && let Some(anchor) = self.block_selection_anchor {
-                                    session.select_block_with_mode(
-                                        Some(Selection::from_drag(anchor, coord)),
-                                        self.block_selection_options.mode(),
-                                    );
-                                }
-
-                                if ui.is_mouse_clicked(MouseButton::Right)
-                                    && self.block_selection_anchor.is_none()
-                                    && session.selection().is_some_and(|selection| {
-                                        self.block_selection_options.mode().includes(selection, coord)
-                                    })
-                                {
-                                    ui.open_popup(BLOCK_SELECTION_POPUP);
-                                }
-                            }
-                        },
-                        Tool::Delete => {
-                            self.placement_stroke = None;
-                            let requests_pick = if left_clicked {
-                                self.deletion_stroke = Some(DeletionStroke::new(pixel));
-
-                                true
-                            } else {
-                                left_down
-                                    && self
-                                        .deletion_stroke
-                                        .as_mut()
-                                        .is_some_and(|stroke| stroke.move_to(pixel))
-                            };
-                            if requests_pick {
-                                request_pick(interaction, PickRequest::Cursor);
-                            }
-                        },
-                        Tool::Fill => {
-                            self.placement_stroke = None;
-                            if left_clicked
-                                && let FillOutcome::TooLarge { limit } =
-                                    session.fill_at(coord, self.fill_mode, &self.custom_fill_boundaries)
-                            {
-                                self.pending_fill_warning = Some(PendingFillWarning {
-                                    coord,
-                                    fill_mode: self.fill_mode,
-                                    custom_fill_boundaries: self.custom_fill_boundaries.clone(),
-                                    limit,
-                                });
-                                ui.open_popup(FILL_LIMIT_WARNING_POPUP);
-                            }
-                        },
-                    }
-                }
-            }
-
-            if !left_down {
-                self.block_selection_anchor = None;
-            }
-
-            if session.tool() == Tool::BlockSelect
-                && let Some(source) = session.selection()
-            {
-                let (displayed, rotation) = self
-                    .block_placement
-                    .map_or((source, SelectionRotation::Original), |placement| {
-                        (placement.target, placement.rotation)
-                    });
-                draw_block_selection(
-                    ui,
-                    session,
-                    camera,
-                    displayed,
-                    self.block_placement,
-                    self.block_selection_options.mode(),
-                    OverlayRect {
-                        min: viewport_min,
-                        max: viewport_max,
-                    },
-                );
-
-                if self.block_selection_anchor.is_none()
+                if let Some((displayed, rotation)) = block_overlay
+                    && block_selection_anchor.is_none()
                     && let Some(map_size) = session.map().map(|map| map.size)
                 {
                     self.gizmo.draw_block_overlay(
@@ -1305,113 +1615,144 @@ impl UiState {
                             map_size,
                             tile_size: session.options.tile_size,
                         },
-                        gizmo_viewport,
+                        gizmo_map_view,
                     );
                 }
-            }
 
-            let block_menu_handles_escape = draw_block_selection_menu(ui, session, self.block_selection_options.mode());
-            let controls_placement = block_controls_placement(
-                tool,
-                self.block_selection_anchor.is_some(),
-                self.gizmo.block_rotation_open(),
-                session.selection(),
-                self.block_placement,
-            );
-            let placement_action = controls_placement.and_then(|placement| {
-                let can_move = session.can_place_selected_block_with_mode(
-                    placement.target.min,
-                    placement.rotation,
-                    SelectionPlacement::Move,
-                    self.block_selection_options.mode(),
-                );
-                let can_copy = session.can_place_selected_block_with_mode(
-                    placement.target.min,
-                    placement.rotation,
-                    SelectionPlacement::Copy,
-                    self.block_selection_options.mode(),
-                );
-                let can_fill = session.can_fill_selected_block(
-                    placement.target.min,
-                    placement.rotation,
-                    self.block_selection_options.mode(),
-                );
-                draw_block_placement_controls(
-                    ui,
-                    camera,
-                    placement,
-                    session.options.tile_size,
-                    viewport_min,
-                    block_controls_area,
-                    (can_move, can_copy, can_fill),
-                )
-                .map(|action| (action, placement))
-            });
-            draw_top_overlay(
-                ui,
-                session,
-                top_overlay,
-                &mut self.block_selection_options,
-                &mut self.fill_mode,
-                &mut self.custom_fill_boundaries,
-                &mut self.custom_fill_search,
-            );
-            if let Some((action, placement)) = placement_action {
-                let finished = match action {
-                    BlockPlacementAction::Move => session.place_selected_block_with_mode(
+                let block_menu_handles_escape =
+                    draw_block_selection_menu(ui, session, self.block_selection_options.mode());
+                let paste_action = paste
+                    .zip(paste_controls(self.gizmo.block_rotation_open(), paste_target))
+                    .and_then(|(pending, target)| {
+                        let can_paste = session.can_paste_clipboard(pending.min, pending.rotation);
+
+                        draw_paste_controls(
+                            ui,
+                            camera,
+                            target,
+                            session.options.tile_size,
+                            viewport_min,
+                            block_controls_area,
+                            can_paste,
+                        )
+                        .map(|action| (action, pending))
+                    });
+
+                let controls_placement = paste
+                    .is_none()
+                    .then(|| {
+                        block_controls_placement(
+                            tool,
+                            block_selection_anchor.is_some(),
+                            self.gizmo.block_rotation_open(),
+                            session.selection(),
+                            *block_placement,
+                        )
+                    })
+                    .flatten();
+                let placement_action = controls_placement.and_then(|placement| {
+                    let can_move = session.can_place_selected_block_with_mode(
                         placement.target.min,
                         placement.rotation,
                         SelectionPlacement::Move,
                         self.block_selection_options.mode(),
-                    ),
-                    BlockPlacementAction::Copy => session.place_selected_block_with_mode(
+                    );
+                    let can_copy = session.can_place_selected_block_with_mode(
                         placement.target.min,
                         placement.rotation,
                         SelectionPlacement::Copy,
                         self.block_selection_options.mode(),
-                    ),
-                    BlockPlacementAction::Fill => session.fill_selected_block(
+                    );
+                    let can_fill = session.can_fill_selected_block(
                         placement.target.min,
                         placement.rotation,
                         self.block_selection_options.mode(),
-                    ),
-                    BlockPlacementAction::Cancel => {
-                        if self.block_placement.is_none() {
-                            session.select_block(None);
-                        }
-
-                        true
-                    },
-                };
-                if finished {
-                    self.block_placement = None;
+                    );
+                    draw_block_placement_controls(
+                        ui,
+                        camera,
+                        placement,
+                        session.options.tile_size,
+                        viewport_min,
+                        block_controls_area,
+                        (can_move, can_copy, can_fill),
+                    )
+                    .map(|action| (action, placement))
+                });
+                draw_top_overlay(
+                    ui,
+                    session,
+                    top_overlay,
+                    &mut self.block_selection_options,
+                    &mut self.fill_mode,
+                    &mut self.custom_fill_boundaries,
+                    &mut self.custom_fill_search,
+                );
+                if let Some((action, pending)) = paste_action {
+                    if action == PasteAction::Paste {
+                        session.paste_clipboard(pending.min, pending.rotation);
+                    }
+                    *paste = None;
                     self.gizmo.cancel();
                 }
-            }
-            let recent_prefabs = session.recent_prefabs();
-            if !recent_prefabs.is_empty() {
-                draw_history_overlay(ui, session, bottom_overlay, recent_prefabs.to_vec());
-            }
-            configure_tool_interaction(session.tool(), interaction);
-            if session.focused_area().is_some() {
-                interaction.hovered_area = None;
-            }
+                if let Some((action, placement)) = placement_action {
+                    let finished = match action {
+                        BlockPlacementAction::Move => session.place_selected_block_with_mode(
+                            placement.target.min,
+                            placement.rotation,
+                            SelectionPlacement::Move,
+                            self.block_selection_options.mode(),
+                        ),
+                        BlockPlacementAction::Copy => session.place_selected_block_with_mode(
+                            placement.target.min,
+                            placement.rotation,
+                            SelectionPlacement::Copy,
+                            self.block_selection_options.mode(),
+                        ),
+                        BlockPlacementAction::Fill => session.fill_selected_block(
+                            placement.target.min,
+                            placement.rotation,
+                            self.block_selection_options.mode(),
+                        ),
+                        BlockPlacementAction::Cancel => {
+                            if block_placement.is_none() {
+                                session.select_block(None);
+                            }
 
-            let fill_warning_handles_escape = draw_fill_limit_warning(ui, session, &mut self.pending_fill_warning);
-            let block_placement_handles_escape = self.block_placement.is_some();
-            if ui.is_key_pressed(Key::Escape) && block_placement_handles_escape {
-                self.block_placement = None;
-                self.gizmo.cancel();
-            }
-            if ui.is_key_pressed(Key::Escape)
-                && !fill_warning_handles_escape
-                && !block_menu_handles_escape
-                && !block_placement_handles_escape
-                && !self.load_popup_active
-                && self.save_dialog.is_none()
-                && self.capturing_keybind.is_none()
-            {
-                exit = true;
+                            true
+                        },
+                    };
+                    if finished {
+                        *block_placement = None;
+                        self.gizmo.cancel();
+                    }
+                }
+                let recent_prefabs = session.recent_prefabs();
+                if !recent_prefabs.is_empty() {
+                    draw_history_overlay(ui, session, bottom_overlay, recent_prefabs.to_vec());
+                }
+                configure_tool_interaction(session.tool(), interaction);
+                if session.focused_area().is_some() {
+                    interaction.hovered_area = None;
+                }
+
+                let fill_warning_handles_escape = draw_fill_limit_warning(ui, session, &mut self.pending_fill_warning);
+                let block_placement_handles_escape = block_placement.is_some() || paste.is_some();
+                if ui.is_key_pressed(Key::Escape) && block_placement_handles_escape {
+                    *block_placement = None;
+                    *paste = None;
+                    self.gizmo.cancel();
+                }
+                if ui.is_key_pressed(Key::Escape)
+                    && !fill_warning_handles_escape
+                    && !block_menu_handles_escape
+                    && !block_placement_handles_escape
+                    && !self.load_popup_active
+                    && self.save_dialog.is_none()
+                    && self.capturing_keybind.is_none()
+                {
+                    exit = true;
+                }
             }
         });
 
@@ -1885,6 +2226,13 @@ fn draw_block_selection(
         draw_block_ghost(ui, session, camera, placement, mode, viewport);
     }
 
+    draw_block_outline(ui, session, camera, displayed, mode, viewport);
+}
+
+fn draw_block_outline(
+    ui: &Ui, session: &Session, camera: &Controller, displayed: Selection, mode: BlockSelectionMode,
+    viewport: OverlayRect,
+) {
     let bounds = block_selection_bounds(camera, viewport.min, displayed, session.options.tile_size);
     let inner_bounds = hollow_selection_inner(displayed, mode)
         .map(|inner| block_selection_bounds(camera, viewport.min, inner, session.options.tile_size));
@@ -1941,6 +2289,11 @@ fn draw_block_ghost(
     viewport: OverlayRect,
 ) {
     let previews = session.block_preview_sprites(placement.source, placement.target, placement.rotation, mode);
+
+    draw_ghost_sprites(ui, camera, previews, viewport);
+}
+
+fn draw_ghost_sprites(ui: &Ui, camera: &Controller, previews: Vec<BlockPreviewSprite>, viewport: OverlayRect) {
     let draw = ui.get_window_draw_list();
     draw.with_clip_rect(viewport.min, viewport.max, || {
         for BlockPreviewSprite {
@@ -2096,19 +2449,19 @@ fn block_controls_placement(
 }
 
 fn block_placement_controls_layout(
-    ui: &Ui, camera: &Controller, placement: PendingBlockPlacement, tile_size: u32, viewport_min: [f32; 2],
+    ui: &Ui, camera: &Controller, labels: &[&str], target: Selection, tile_size: u32, viewport_min: [f32; 2],
     controls_bounds: OverlayRect,
 ) -> ([f32; 2], OverlayRect) {
     let style = ui.clone_style();
     let padding = style.frame_padding();
     let spacing = style.item_spacing()[0];
-    let width = BLOCK_PLACEMENT_LABELS
+    let width = labels
         .iter()
         .map(|label| ui.calc_text_size(*label)[0] + padding[0] * 2.0)
         .sum::<f32>()
-        + spacing * (BLOCK_PLACEMENT_LABELS.len() - 1) as f32;
+        + spacing * labels.len().saturating_sub(1) as f32;
     let height = ui.frame_height();
-    let selection = block_selection_bounds(camera, viewport_min, placement.target, tile_size);
+    let selection = block_selection_bounds(camera, viewport_min, target, tile_size);
     let center = [
         (selection.min[0] + selection.max[0]) * 0.5,
         (selection.min[1] + selection.max[1]) * 0.5,
@@ -2137,8 +2490,15 @@ fn draw_block_placement_controls(
     controls_bounds: OverlayRect, enabled: (bool, bool, bool),
 ) -> Option<BlockPlacementAction> {
     let (can_move, can_copy, can_fill) = enabled;
-    let (position, bounds) =
-        block_placement_controls_layout(ui, camera, placement, tile_size, viewport_min, controls_bounds);
+    let (position, bounds) = block_placement_controls_layout(
+        ui,
+        camera,
+        &BLOCK_PLACEMENT_LABELS,
+        placement.target,
+        tile_size,
+        viewport_min,
+        controls_bounds,
+    );
     draw_overlay_underlay(ui, bounds);
     ui.set_cursor_screen_pos(position);
 
@@ -2165,7 +2525,57 @@ fn draw_block_placement_controls(
     action
 }
 
-fn configure_tool_interaction(tool: Tool, interaction: &mut ViewportInteraction) {
+fn paste_controls(rotation_open: bool, target: Option<Selection>) -> Option<Selection> {
+    (!rotation_open).then_some(target).flatten()
+}
+
+fn draw_paste_controls(
+    ui: &Ui, camera: &Controller, target: Selection, tile_size: u32, viewport_min: [f32; 2],
+    controls_bounds: OverlayRect, can_paste: bool,
+) -> Option<PasteAction> {
+    let (position, bounds) = block_placement_controls_layout(
+        ui,
+        camera,
+        &PASTE_LABELS,
+        target,
+        tile_size,
+        viewport_min,
+        controls_bounds,
+    );
+    draw_overlay_underlay(ui, bounds);
+    ui.set_cursor_screen_pos(position);
+
+    let mut action = None;
+    if ui.with_disabled_if(!can_paste, || ui.button(PASTE_LABELS[0])) {
+        action = Some(PasteAction::Paste);
+    }
+    ui.same_line();
+    if ui.button(PASTE_LABELS[1]) {
+        action = Some(PasteAction::Cancel);
+    }
+    if action.is_none() && !ui.io().want_text_input() && ui.is_key_pressed(Key::Enter) && can_paste {
+        action = Some(PasteAction::Paste);
+    }
+
+    action
+}
+
+fn centered_paste_min(width: u32, height: u32, anchor: Coord, map_size: Size) -> Coord {
+    let place = |anchor: u32, extent: u32, limit: u32| {
+        let extent = extent.max(1);
+        let last = limit.saturating_sub(extent - 1).max(1);
+
+        anchor.saturating_sub((extent - 1) / 2).max(1).min(last)
+    };
+
+    Coord::new(
+        place(anchor.x, width, map_size.x),
+        place(anchor.y, height, map_size.y),
+        anchor.z,
+    )
+}
+
+fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewInteraction) {
     interaction.mode = match (tool, interaction.mode) {
         (Tool::Place | Tool::BlockSelect | Tool::Fill, _) => InteractionMode::Place,
         (Tool::Select, InteractionMode::Select { pick }) => InteractionMode::Select { pick },
@@ -2196,11 +2606,29 @@ fn interaction_mode(tool: Tool) -> InteractionMode {
     }
 }
 
-fn request_pick(interaction: &mut ViewportInteraction, request: PickRequest) {
+fn request_pick(interaction: &mut MapViewInteraction, request: PickRequest) {
     match &mut interaction.mode {
         InteractionMode::Place => {},
         InteractionMode::Select { pick } | InteractionMode::Delete { pick } => *pick = Some(request),
     }
+}
+
+fn framebuffer_rect(origin: [f32; 2], size: [f32; 2], scale: [f32; 2], target: [f32; 2]) -> MapViewRect {
+    let limit = |value: f32, max: f32| value.max(0.0).min(max.max(0.0)).floor() as u32;
+    let (max_x, max_y) = (target[0] * scale[0], target[1] * scale[1]);
+    MapViewRect {
+        x: limit(origin[0] * scale[0], max_x),
+        y: limit(origin[1] * scale[1], max_y),
+        width: limit(size[0] * scale[0], u32::MAX as f32),
+        height: limit(size[1] * scale[1], u32::MAX as f32),
+    }
+}
+
+fn cursor_in_map_view(local: [f32; 2], scale: [f32; 2]) -> [u32; 2] {
+    [
+        (local[0] * scale[0]).max(0.0) as u32,
+        (local[1] * scale[1]).max(0.0) as u32,
+    ]
 }
 
 fn draw_top_overlay(
@@ -3065,7 +3493,60 @@ mod tests {
     }
 
     #[test]
-    fn the_welcome_window_shares_the_central_node_with_the_viewport() {
+    fn a_map_view_rect_is_measured_in_framebuffer_pixels() {
+        // ImGui lays out in logical units; the render target is physical pixels.
+        let rect = framebuffer_rect([100.0, 50.0], [400.0, 300.0], [1.5, 1.5], [1000.0, 800.0]);
+
+        assert_eq!(rect.x, 150);
+        assert_eq!(rect.y, 75);
+        assert_eq!(rect.width, 600);
+        assert_eq!(rect.height, 450);
+    }
+
+    #[test]
+    fn a_map_view_rect_is_the_same_at_unit_scale() {
+        let rect = framebuffer_rect([0.0, 22.0], [640.0, 480.0], [1.0, 1.0], [1280.0, 720.0]);
+
+        assert_eq!(
+            rect,
+            MapViewRect {
+                x: 0,
+                y: 22,
+                width: 640,
+                height: 480,
+            }
+        );
+    }
+
+    #[test]
+    fn a_map_view_rect_is_clamped_to_the_target() {
+        // Position stays inside the main framebuffer, while the independent map
+        // attachment keeps its full size when the ImGui window is clipped.
+        let rect = framebuffer_rect([-40.0, -10.0], [200.0, 100.0], [1.0, 1.0], [120.0, 60.0]);
+
+        assert_eq!(rect.x, 0);
+        assert_eq!(rect.y, 0);
+        assert_eq!(rect.width, 200);
+        assert_eq!(rect.height, 100);
+
+        let collapsed = framebuffer_rect([10.0, 10.0], [0.0, 0.0], [1.0, 1.0], [100.0, 100.0]);
+        assert!(collapsed.is_empty(), "a zero-size split contributes no draw");
+    }
+
+    #[test]
+    fn a_cursor_is_local_to_its_map_view() {
+        // Picking chooses a visibility attachment by hovered ImGui window, so
+        // its cursor stays local regardless of where that window is placed.
+        assert_eq!(cursor_in_map_view([10.0, 20.0], [1.0, 1.0]), [10, 20]);
+    }
+
+    #[test]
+    fn a_cursor_scales_with_the_display() {
+        assert_eq!(cursor_in_map_view([30.0, 40.0], [2.0, 2.0]), [60, 80]);
+    }
+
+    #[test]
+    fn the_central_node_holds_only_the_welcome_window() {
         let state = UiState::new().expect("valid window keys");
         let DockLayout::Split { second, .. } = &state.layout else {
             panic!("the root is split between the object tree and everything else");
@@ -3074,10 +3555,31 @@ mod tests {
             panic!("the remainder is split between the inspector and the central node");
         };
 
-        assert_eq!(
-            second.as_ref(),
-            &DockLayout::tabs([&state.welcome_window, &state.viewport_window])
-        );
+        // Map views are minted per open map and dock themselves in at runtime,
+        // so the declared layout cannot name them.
+        assert_eq!(second.as_ref(), &DockLayout::tabs([&state.welcome_window]));
+    }
+
+    #[test]
+    fn every_document_gets_its_own_map_view_window_key() {
+        let first = DocumentId::new();
+        let second = DocumentId::new();
+        let first = MapViewState::new(first).expect("valid window key");
+        let second = MapViewState::new(second).expect("valid window key");
+
+        // Two windows sharing a key would be one window, and the dock layout
+        // compiler rejects the duplicate outright.
+        assert_ne!(first.window.stable_id(), second.window.stable_id());
+        assert!(DockLayout::tabs([&first.window, &second.window]).validate().is_ok());
+    }
+
+    #[test]
+    fn a_new_map_view_starts_out_wanting_to_frame_its_map() {
+        let view = MapViewState::new(DocumentId::new()).expect("valid window key");
+
+        assert!(view.refit);
+        assert!(view.block_selection_anchor.is_none());
+        assert!(view.block_placement.is_none());
     }
 
     #[test]
@@ -3338,6 +3840,62 @@ mod tests {
     }
 
     #[test]
+    fn a_pasted_block_lands_centered_on_the_cursor() {
+        let size = Size { x: 20, y: 20, z: 1 };
+
+        // An odd extent sits dead centre; an even one leans one tile left/down.
+        assert_eq!(
+            centered_paste_min(3, 3, Coord::new(10, 10, 1), size),
+            Coord::new(9, 9, 1)
+        );
+        assert_eq!(
+            centered_paste_min(4, 4, Coord::new(10, 10, 1), size),
+            Coord::new(9, 9, 1)
+        );
+        assert_eq!(
+            centered_paste_min(1, 1, Coord::new(10, 10, 1), size),
+            Coord::new(10, 10, 1)
+        );
+    }
+
+    #[test]
+    fn a_pasted_block_is_nudged_back_inside_the_map() {
+        let size = Size { x: 10, y: 10, z: 1 };
+
+        // Centring near an edge would hang the block off the map, so it slides
+        // back until the whole footprint fits.
+        assert_eq!(centered_paste_min(5, 5, Coord::new(1, 1, 1), size), Coord::new(1, 1, 1));
+        assert_eq!(
+            centered_paste_min(5, 5, Coord::new(10, 10, 1), size),
+            Coord::new(6, 6, 1)
+        );
+        // A block larger than the map still starts at the origin rather than
+        // clamping to nothing.
+        assert_eq!(
+            centered_paste_min(40, 40, Coord::new(5, 5, 1), size),
+            Coord::new(1, 1, 1)
+        );
+    }
+
+    #[test]
+    fn copy_and_paste_are_bound_to_the_usual_chords() {
+        let bindings = KeyBindings::default();
+
+        assert_eq!(
+            bindings.get(KeybindAction::Copy),
+            KeyBinding::with_ctrl(dear_imgui_rs::Key::C)
+        );
+        assert_eq!(
+            bindings.get(KeybindAction::Paste),
+            KeyBinding::with_ctrl(dear_imgui_rs::Key::V)
+        );
+        // Every action is reachable from the settings list, or it cannot be rebound.
+        assert_eq!(KeybindAction::ALL.len(), 13);
+        assert!(KeybindAction::ALL.contains(&KeybindAction::Copy));
+        assert!(KeybindAction::ALL.contains(&KeybindAction::Paste));
+    }
+
+    #[test]
     fn block_selection_bounds_follow_whole_tile_edges() {
         let mut camera = Controller::new();
         camera.resize(64, 64);
@@ -3462,7 +4020,7 @@ mod tests {
     #[test]
     fn tool_interaction_configures_highlights_and_pick_requests() {
         let owner = PrefabInstanceId::from_raw(7).unwrap();
-        let interaction = ViewportInteraction {
+        let interaction = MapViewInteraction {
             cursor: Some([10, 20]),
             hovered_area: Some(owner),
             selected: Some(owner),
@@ -3482,7 +4040,7 @@ mod tests {
         configure_tool_interaction(Tool::Delete, &mut delete);
         assert_eq!(
             delete,
-            ViewportInteraction {
+            MapViewInteraction {
                 selected: None,
                 selection_guide: None,
                 mode: InteractionMode::Delete { pick: None },
@@ -3493,7 +4051,7 @@ mod tests {
         configure_tool_interaction(Tool::Place, &mut selected);
         assert_eq!(
             selected,
-            ViewportInteraction {
+            MapViewInteraction {
                 placement_flash: interaction.placement_flash,
                 highlight: interaction.highlight,
                 ..Default::default()
@@ -3504,7 +4062,7 @@ mod tests {
         configure_tool_interaction(Tool::Fill, &mut fill);
         assert_eq!(
             fill,
-            ViewportInteraction {
+            MapViewInteraction {
                 placement_flash: interaction.placement_flash,
                 highlight: interaction.highlight,
                 ..Default::default()
@@ -3515,7 +4073,7 @@ mod tests {
         configure_tool_interaction(Tool::BlockSelect, &mut block);
         assert_eq!(
             block,
-            ViewportInteraction {
+            MapViewInteraction {
                 placement_flash: interaction.placement_flash,
                 highlight: interaction.highlight,
                 ..Default::default()

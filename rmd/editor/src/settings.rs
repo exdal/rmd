@@ -144,6 +144,16 @@ impl KeyBinding {
         }
     }
 
+    pub const fn with_ctrl(key: Key) -> Self {
+        Self {
+            key,
+            ctrl: true,
+            shift: false,
+            alt: false,
+            super_key: false,
+        }
+    }
+
     pub const fn with_shift(key: Key) -> Self {
         Self {
             key,
@@ -222,10 +232,12 @@ pub(crate) enum KeybindAction {
     DeleteTool,
     FillTool,
     Rotate,
+    Copy,
+    Paste,
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::ShowAreas,
         Self::ShowAreaOutlines,
         Self::LevelUp,
@@ -237,6 +249,8 @@ impl KeybindAction {
         Self::DeleteTool,
         Self::FillTool,
         Self::Rotate,
+        Self::Copy,
+        Self::Paste,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -252,6 +266,8 @@ impl KeybindAction {
             Self::DeleteTool => "Delete tool",
             Self::FillTool => "Fill tool",
             Self::Rotate => "Rotate",
+            Self::Copy => "Copy block",
+            Self::Paste => "Paste block",
         }
     }
 
@@ -268,6 +284,8 @@ impl KeybindAction {
             Self::DeleteTool => "delete-tool",
             Self::FillTool => "fill-tool",
             Self::Rotate => "rotate",
+            Self::Copy => "copy",
+            Self::Paste => "paste",
         }
     }
 }
@@ -286,6 +304,8 @@ pub(crate) struct KeyBindings {
     delete_tool: KeyBinding,
     fill_tool: KeyBinding,
     rotate: KeyBinding,
+    copy: KeyBinding,
+    paste: KeyBinding,
 }
 
 impl Default for KeyBindings {
@@ -302,6 +322,8 @@ impl Default for KeyBindings {
             delete_tool: KeyBinding::new(Key::X),
             fill_tool: KeyBinding::new(Key::Q),
             rotate: KeyBinding::new(Key::R),
+            copy: KeyBinding::with_ctrl(Key::C),
+            paste: KeyBinding::with_ctrl(Key::V),
         }
     }
 }
@@ -320,6 +342,8 @@ impl KeyBindings {
             KeybindAction::DeleteTool => self.delete_tool,
             KeybindAction::FillTool => self.fill_tool,
             KeybindAction::Rotate => self.rotate,
+            KeybindAction::Copy => self.copy,
+            KeybindAction::Paste => self.paste,
         }
     }
 
@@ -356,6 +380,8 @@ impl KeyBindings {
             KeybindAction::DeleteTool => self.delete_tool = binding,
             KeybindAction::FillTool => self.fill_tool = binding,
             KeybindAction::Rotate => self.rotate = binding,
+            KeybindAction::Copy => self.copy = binding,
+            KeybindAction::Paste => self.paste = binding,
         }
     }
 }

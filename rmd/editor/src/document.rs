@@ -1,5 +1,10 @@
 use core::types::{Identifier, Value};
-use std::{collections::HashMap, io::Write, path::PathBuf};
+use std::{
+    collections::HashMap,
+    io::Write,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 pub use dmm::PrefabInstanceId;
 use dmm::{Coord, Map, MapFormat, Prefab, key::Key};
@@ -9,7 +14,25 @@ use crate::{
     focus::AreaFocus,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DocumentId(u64);
+
+impl DocumentId {
+    pub fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+
+    pub const fn get(self) -> u64 { self.0 }
+}
+
+impl Default for DocumentId {
+    fn default() -> Self { Self::new() }
+}
+
 pub struct MapDocument {
+    id: DocumentId,
     pub path: Option<PathBuf>,
     pub map: Map,
     pub history: History,
@@ -181,6 +204,7 @@ impl MapDocument {
         }
 
         Self {
+            id: DocumentId::new(),
             path: None,
             map,
             history: History::new(),
@@ -193,6 +217,8 @@ impl MapDocument {
             focus: None,
         }
     }
+
+    pub fn id(&self) -> DocumentId { self.id }
 
     pub fn open(path: impl Into<PathBuf>, map: Map, z: u32) -> Self {
         Self {
@@ -221,6 +247,8 @@ impl MapDocument {
     }
 
     pub fn is_dirty(&self) -> bool { self.needs_initial_save || self.history.is_dirty() }
+
+    pub fn needs_initial_save(&self) -> bool { self.needs_initial_save }
 
     pub fn instance_ids_at(&self, coord: Coord) -> &[PrefabInstanceId] { self.instances.ids_at(coord) }
 

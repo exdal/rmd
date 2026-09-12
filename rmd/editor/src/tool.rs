@@ -844,7 +844,7 @@ fn fill(context: &mut ToolContext<'_>, max_tiles: Option<usize>) -> Result<Optio
     }))
 }
 
-fn coord_in_bounds(coord: Coord, size: dmm::Size) -> bool {
+pub(crate) fn coord_in_bounds(coord: Coord, size: dmm::Size) -> bool {
     (1..=size.x).contains(&coord.x) && (1..=size.y).contains(&coord.y) && (1..=size.z).contains(&coord.z)
 }
 

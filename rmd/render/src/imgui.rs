@@ -52,10 +52,19 @@ const VERTEX_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/imgui.vert
 const FRAGMENT_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/imgui.frag.spv"));
 const TEXTURE_FORMAT: vk::Format = vk::Format::R8G8B8A8_SRGB;
 const TEXTURE_RESTING: Access = Access::FragmentSampled;
-pub const VIEWPORT_TEXTURE: TextureId = TextureId::new(1);
-
 const FIRST_MINTED_TEXTURE: u64 = 2;
+const MAP_VIEW_TEXTURE_TAG: u64 = 1 << 62;
 const SPRITE_TEXTURE_TAG: u64 = 1 << 63;
+
+pub const fn map_view_texture(index: usize) -> TextureId { TextureId::new(MAP_VIEW_TEXTURE_TAG | index as u64) }
+
+fn map_view_texture_index(texture: TextureId) -> Option<usize> {
+    let raw = texture.id();
+    let index = raw & !(MAP_VIEW_TEXTURE_TAG | SPRITE_TEXTURE_TAG);
+
+    (raw & MAP_VIEW_TEXTURE_TAG != 0 && raw & SPRITE_TEXTURE_TAG == 0 && index <= usize::MAX as u64)
+        .then_some(index as usize)
+}
 
 pub const fn sprite_texture(index: u32) -> TextureId { TextureId::new(SPRITE_TEXTURE_TAG | index as u64) }
 
@@ -91,7 +100,7 @@ impl Texture {
 #[derive(Clone)]
 enum Source {
     Owned(ImageAttachment),
-    Viewport,
+    MapView(usize),
 }
 
 #[derive(Clone)]
@@ -127,7 +136,7 @@ pub struct ImGuiSlots {
     indices: ValueId,
     push: ValueId,
     body: ValueId,
-    viewport: ValueId,
+    map_views: Vec<ValueId>,
 }
 
 pub struct ImGuiPass {
@@ -177,7 +186,7 @@ impl ImGuiPass {
         Ok(())
     }
 
-    pub fn record(&self, module: &mut Module, target: ValueId, viewport: ValueId) -> (ValueId, Option<ImGuiSlots>) {
+    pub fn record(&self, module: &mut Module, target: ValueId, map_views: &[ValueId]) -> (ValueId, Option<ImGuiSlots>) {
         let Some(pipeline) = self.pipeline else {
             return (target, None);
         };
@@ -188,14 +197,14 @@ impl ImGuiPass {
             indices: module.declare_buffer_var("imgui indices", Access::HostWrite),
             push: module.declare_bytes_var("imgui push block", size_of::<PushConstants>() as u32),
             body: module.declare_callback_var("imgui draws"),
-            viewport,
+            map_views: map_views.to_vec(),
         };
 
         let drawn = module.set_condition(
             slots.has_draws,
             |m| {
-                let [drawn, _viewport] = m
-                    .begin_rendering([(target, Access::ColorRW), (viewport, TEXTURE_RESTING)])
+                let [drawn] = m
+                    .begin_rendering([(target, Access::ColorRW)])
                     .with_name("imgui")
                     .bind_graphics_pipeline(pipeline)
                     .set_dynamic_state(DynamicStateFlags::Viewport | DynamicStateFlags::Scissor)
@@ -233,14 +242,17 @@ impl ImGuiPass {
         }
 
         let draws = frame.draws.clone();
-        let viewport = slots.viewport;
+        let map_views = slots.map_views.clone();
         program.set(
             slots.body,
             PassCallback::new(move |cmd| {
                 for draw in draws.iter() {
                     let attachment = match &draw.source {
-                        Source::Owned(attachment) => attachment.clone(),
-                        Source::Viewport => cmd.image(viewport),
+                        Source::Owned(attachment) => Some(attachment.clone()),
+                        Source::MapView(index) => map_views.get(*index).map(|view| cmd.image(*view)),
+                    };
+                    let Some(attachment) = attachment else {
+                        continue;
                     };
 
                     cmd.set_scissor(
@@ -304,8 +316,9 @@ impl ImGuiPass {
                             continue;
                         }
 
-                        let (source, draw_sampler) = if cmd_params.texture_id == VIEWPORT_TEXTURE {
-                            (Source::Viewport, sampler)
+                        let (source, draw_sampler) = if let Some(index) = map_view_texture_index(cmd_params.texture_id)
+                        {
+                            (Source::MapView(index), sampler)
                         } else if let Some(index) = sprite_texture_index(cmd_params.texture_id) {
                             let Some(texture) = sprite_textures.get(index) else {
                                 return Err(GpuError::UnknownTexture(cmd_params.texture_id.id()));
@@ -535,7 +548,7 @@ impl ImGuiPass {
         discarded: &mut Vec<Texture>,
     ) -> Result<TextureId, GpuError> {
         let id = TextureId::new(self.next_texture);
-        if sprite_texture_index(id).is_some() {
+        if sprite_texture_index(id).is_some() || map_view_texture_index(id).is_some() {
             return Err(GpuError::TextureIdExhausted);
         }
         self.next_texture = self.next_texture.checked_add(1).ok_or(GpuError::TextureIdExhausted)?;
@@ -797,7 +810,7 @@ mod tests {
             let texture = sprite_texture(index);
 
             assert_eq!(sprite_texture_index(texture), Some(index as usize));
-            assert_ne!(texture, VIEWPORT_TEXTURE);
+            assert_eq!(map_view_texture_index(texture), None);
             assert!(texture.id() >= SPRITE_TEXTURE_TAG);
         }
 
@@ -807,6 +820,20 @@ mod tests {
             sprite_texture_index(TextureId::new(SPRITE_TEXTURE_TAG | (1 << 32))),
             None
         );
+    }
+
+    #[test]
+    fn map_view_texture_ids_select_independent_attachments() {
+        for index in [0, 1, 17] {
+            let texture = map_view_texture(index);
+
+            assert_eq!(map_view_texture_index(texture), Some(index));
+            assert_eq!(sprite_texture_index(texture), None);
+            assert!(texture.id() >= MAP_VIEW_TEXTURE_TAG);
+            assert!(texture.id() < SPRITE_TEXTURE_TAG);
+        }
+
+        assert_eq!(map_view_texture_index(TextureId::new(FIRST_MINTED_TEXTURE)), None);
     }
 
     fn reflect(spirv: &[u8]) -> shader::Reflection {

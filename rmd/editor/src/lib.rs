@@ -1,3 +1,4 @@
+pub mod clipboard;
 pub mod command;
 pub mod document;
 pub mod environment;
@@ -19,7 +20,8 @@ use dmi::{IconFile, error::IconError, metadata::Metadata};
 use objtree::ObjectTree;
 
 use crate::{
-    document::MapDocument,
+    clipboard::TileBlock,
+    document::{DocumentId, MapDocument},
     environment::LoadDiagnostics,
     error::LoadError,
     progress::{Progress, Stage},
@@ -138,11 +140,12 @@ impl Environment {
 
 pub struct EditorState {
     pub environment: Option<Environment>,
-    pub documents: Vec<MapDocument>,
-    pub active: Option<usize>,
+    documents: Vec<MapDocument>,
+    active: Option<DocumentId>,
     pub tool: Tool,
     pub palette: Option<dmm::Prefab>,
     recent_prefabs: Vec<dmm::Prefab>,
+    clipboard: Option<TileBlock>,
 }
 
 impl Default for EditorState {
@@ -158,26 +161,105 @@ impl EditorState {
             tool: Tool::default(),
             palette: None,
             recent_prefabs: Vec::new(),
+            clipboard: None,
         }
     }
 
-    pub fn active_document(&self) -> Option<&MapDocument> { self.documents.get(self.active?) }
+    pub fn documents(&self) -> &[MapDocument] { &self.documents }
 
-    pub fn active_document_mut(&mut self) -> Option<&mut MapDocument> {
-        let index = self.active?;
+    pub fn document_ids(&self) -> Vec<DocumentId> { self.documents.iter().map(MapDocument::id).collect() }
 
-        self.documents.get_mut(index)
+    pub fn is_empty(&self) -> bool { self.documents.is_empty() }
+
+    pub fn document(&self, id: DocumentId) -> Option<&MapDocument> {
+        self.documents.iter().find(|document| document.id() == id)
     }
 
-    pub fn open_document(&mut self, document: MapDocument) -> usize {
-        self.documents.push(document);
-        let index = self.documents.len() - 1;
-        self.active = Some(index);
+    pub fn document_mut(&mut self, id: DocumentId) -> Option<&mut MapDocument> {
+        self.documents.iter_mut().find(|document| document.id() == id)
+    }
 
-        index
+    pub fn document_for_path(&self, path: &Path) -> Option<DocumentId> {
+        self.documents
+            .iter()
+            .find(|document| document.path.as_deref() == Some(path))
+            .map(MapDocument::id)
+    }
+
+    pub fn active(&self) -> Option<DocumentId> { self.active }
+
+    pub fn set_active(&mut self, id: DocumentId) {
+        if self.document(id).is_some() {
+            self.active = Some(id);
+        }
+    }
+
+    pub fn active_document(&self) -> Option<&MapDocument> { self.document(self.active?) }
+
+    pub fn active_document_mut(&mut self) -> Option<&mut MapDocument> { self.document_mut(self.active?) }
+
+    pub fn open_document(&mut self, document: MapDocument) -> DocumentId {
+        let id = document.id();
+        self.documents.push(document);
+        self.active = Some(id);
+
+        id
+    }
+
+    pub fn close_document(&mut self, id: DocumentId) -> Option<MapDocument> {
+        let index = self.documents.iter().position(|document| document.id() == id)?;
+        let document = self.documents.remove(index);
+
+        if self.active == Some(id) {
+            self.active = self
+                .documents
+                .get(index)
+                .or_else(|| self.documents.get(index.wrapping_sub(1)))
+                .map(MapDocument::id);
+        }
+
+        Some(document)
     }
 
     pub fn has_unsaved_changes(&self) -> bool { self.documents.iter().any(MapDocument::is_dirty) }
+
+    pub fn active_pair_mut(&mut self) -> Option<(&Environment, &mut MapDocument)> {
+        let Self {
+            environment,
+            documents,
+            active,
+            ..
+        } = self;
+        let environment = environment.as_ref()?;
+        let id = (*active)?;
+        let document = documents.iter_mut().find(|document| document.id() == id)?;
+
+        Some((environment, document))
+    }
+
+    pub fn active_pair(&self) -> Option<(&Environment, &MapDocument)> {
+        Some((self.environment.as_ref()?, self.active_document()?))
+    }
+
+    pub fn active_paste_mut(&mut self) -> Option<(&Environment, &mut MapDocument, &TileBlock)> {
+        let Self {
+            environment,
+            documents,
+            active,
+            clipboard,
+            ..
+        } = self;
+        let environment = environment.as_ref()?;
+        let block = clipboard.as_ref()?;
+        let id = (*active)?;
+        let document = documents.iter_mut().find(|document| document.id() == id)?;
+
+        Some((environment, document, block))
+    }
+
+    pub fn clipboard(&self) -> Option<&TileBlock> { self.clipboard.as_ref() }
+
+    pub fn set_clipboard(&mut self, block: TileBlock) { self.clipboard = Some(block); }
 
     pub fn recent_prefabs(&self) -> &[dmm::Prefab] { &self.recent_prefabs }
 
@@ -226,6 +308,7 @@ mod tests {
         path::TreePath,
         types::{Identifier, Value, VarModifiers},
     };
+    use std::path::Path;
 
     use objtree::{ObjectTree, VarDecl};
 
@@ -278,6 +361,82 @@ mod tests {
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].0, "icons/nope.dmi");
         assert!(environment.icons.is_empty());
+    }
+
+    fn document(path: &str) -> crate::document::MapDocument {
+        crate::document::MapDocument::open(path, dmm::Map::new(dmm::Size { x: 1, y: 1, z: 1 }), 1)
+    }
+
+    #[test]
+    fn every_open_document_gets_its_own_identity() {
+        let mut state = EditorState::new();
+        let first = state.open_document(document("a.dmm"));
+        let second = state.open_document(document("b.dmm"));
+        let third = state.open_document(document("c.dmm"));
+
+        assert_ne!(first, second);
+        assert_ne!(second, third);
+        assert_eq!(state.active(), Some(third));
+        assert_eq!(state.documents().len(), 3);
+    }
+
+    #[test]
+    fn closing_a_document_leaves_the_others_addressable() {
+        let mut state = EditorState::new();
+        let first = state.open_document(document("a.dmm"));
+        let second = state.open_document(document("b.dmm"));
+        let third = state.open_document(document("c.dmm"));
+
+        state.close_document(second);
+
+        // An index would have shifted `third` out from under its handle here.
+        assert!(state.document(first).is_some());
+        assert!(state.document(second).is_none());
+        assert!(state.document(third).is_some());
+        assert_eq!(state.active(), Some(third));
+    }
+
+    #[test]
+    fn closing_the_active_document_focuses_a_neighbour() {
+        let mut state = EditorState::new();
+        let first = state.open_document(document("a.dmm"));
+        let second = state.open_document(document("b.dmm"));
+        state.set_active(first);
+
+        state.close_document(first);
+        assert_eq!(state.active(), Some(second));
+
+        state.close_document(second);
+        assert_eq!(state.active(), None);
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn an_already_open_map_is_found_by_path() {
+        let mut state = EditorState::new();
+        let first = state.open_document(document("a.dmm"));
+        state.open_document(document("b.dmm"));
+
+        assert_eq!(state.document_for_path(Path::new("a.dmm")), Some(first));
+        assert_eq!(state.document_for_path(Path::new("missing.dmm")), None);
+
+        state.close_document(first);
+        assert_eq!(state.document_for_path(Path::new("a.dmm")), None);
+    }
+
+    #[test]
+    fn a_closed_document_stops_reporting_unsaved_changes() {
+        let mut state = EditorState::new();
+        let dirty = state.open_document(crate::document::MapDocument::create(
+            "new.dmm",
+            dmm::Map::new(dmm::Size { x: 1, y: 1, z: 1 }),
+            1,
+        ));
+
+        assert!(state.has_unsaved_changes());
+
+        state.close_document(dirty);
+        assert!(!state.has_unsaved_changes());
     }
 
     #[test]

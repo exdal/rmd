@@ -12,8 +12,9 @@ use dmm::{Coord, Map, MapFormat, Prefab, Size};
 use editor::{
     EditorState,
     Environment,
+    clipboard::{self, TileBlock},
     command::EditGroupId,
-    document::{MapDocument, PrefabInstanceId, PrefabLocation, Selection, VarMutation},
+    document::{DocumentId, MapDocument, PrefabInstanceId, PrefabLocation, Selection, VarMutation},
     focus::AreaFocus,
     frame::{self, FrameInstances, FrameOptions, FrameRenderOptions, PrefabUpdate, TypeVisibility},
     progress::{Progress, Stage},
@@ -41,7 +42,17 @@ use editor::{
     visual,
 };
 use objtree::{ObjectTree, TypeId};
-use render::{Frame, FrameUpdate, SelectionGuide, SpriteInstance, SpriteTexture, texture::TextureCatalog};
+use render::{
+    Frame,
+    FrameUpdate,
+    MapViewFrame,
+    MapViewInteraction,
+    MapViewRect,
+    SelectionGuide,
+    SpriteInstance,
+    SpriteTexture,
+    texture::TextureCatalog,
+};
 
 use crate::loader::{LoadedCodebase, LoadedMap};
 
@@ -94,15 +105,26 @@ pub(crate) struct BlockPreviewSprite {
 
 const MAX_REPORTED_DIAGNOSTICS: usize = 500;
 
+const PREVIEW_OWNER: PrefabInstanceId = match PrefabInstanceId::from_raw(1) {
+    Some(id) => id,
+    None => unreachable!(),
+};
+
+#[derive(Default)]
+struct DocumentCache {
+    instances: FrameInstances,
+    revision: u64,
+    frame_update: Option<FrameUpdate>,
+}
+
 pub struct Session {
     pub state: EditorState,
     pub textures: TextureCatalog,
     pub options: FrameOptions,
-    instances: FrameInstances,
+    caches: HashMap<DocumentId, DocumentCache>,
+    next_revision: u64,
     type_visibility: TypeVisibility,
     type_thumbnails: HashMap<TypeId, Option<PrefabThumbnail>>,
-    revision: u64,
-    frame_update: Option<FrameUpdate>,
     texture_revision: u64,
     maps: Vec<PathBuf>,
 }
@@ -120,11 +142,10 @@ impl Session {
             state: EditorState::new(),
             textures: TextureCatalog::default(),
             options: FrameOptions::default(),
-            instances: FrameInstances::default(),
+            caches: HashMap::new(),
+            next_revision: 1,
             type_visibility: TypeVisibility::default(),
             type_thumbnails: HashMap::new(),
-            revision: 0,
-            frame_update: None,
             texture_revision: 0,
             maps: Vec::new(),
         }
@@ -146,9 +167,7 @@ impl Session {
         self.type_visibility = TypeVisibility::default();
         self.maps = maps;
         self.state.environment = Some(environment);
-        if self.state.active_document().is_some() {
-            self.rebuild_instances();
-        }
+        self.rebuild_all_instances();
 
         report
     }
@@ -160,7 +179,22 @@ impl Session {
             log::error!("{}: {error}", path.display());
         }
 
+        if let Some(id) = self.state.document_for_path(&path) {
+            self.state.set_active(id);
+
+            return;
+        }
+
         self.activate_document(MapDocument::open(path, map, z));
+    }
+
+    pub fn close_map(&mut self, id: DocumentId) -> bool {
+        let closed = self.state.close_document(id).is_some();
+        if closed {
+            self.caches.remove(&id);
+        }
+
+        closed
     }
 
     pub fn create_map(&mut self, path: &Path, size: Size, format: MapFormat) -> Result<(), Box<dyn std::error::Error>> {
@@ -361,13 +395,7 @@ impl Session {
         }
 
         let built = {
-            let Some(environment) = self.state.environment.as_ref() else {
-                return false;
-            };
-            let Some(active) = self.state.active else {
-                return false;
-            };
-            let Some(document) = self.state.documents.get_mut(active) else {
+            let Some((environment, document)) = self.state.active_pair_mut() else {
                 return false;
             };
             let Some(selection) = document.selection else {
@@ -453,13 +481,7 @@ impl Session {
             return false;
         };
         let built = {
-            let Some(environment) = self.state.environment.as_ref() else {
-                return false;
-            };
-            let Some(active) = self.state.active else {
-                return false;
-            };
-            let Some(document) = self.state.documents.get_mut(active) else {
+            let Some((environment, document)) = self.state.active_pair_mut() else {
                 return false;
             };
             let Some(selection) = document.selection else {
@@ -534,13 +556,7 @@ impl Session {
         }
 
         let built = {
-            let Some(environment) = self.state.environment.as_ref() else {
-                return false;
-            };
-            let Some(active) = self.state.active else {
-                return false;
-            };
-            let Some(document) = self.state.documents.get_mut(active) else {
+            let Some((environment, document)) = self.state.active_pair_mut() else {
                 return false;
             };
             let Some(selection) = document.selection else {
@@ -604,6 +620,63 @@ impl Session {
                 .all(|coord| document.allows_edit_at(coord))
     }
 
+    pub fn copy_selection(&mut self, mode: BlockSelectionMode) -> bool {
+        let Some(selection) = self.selection() else {
+            return false;
+        };
+        let Some(document) = self.state.active_document() else {
+            return false;
+        };
+        let Some(block) = clipboard::copy_block(document, selection, mode) else {
+            return false;
+        };
+        self.state.set_clipboard(block);
+
+        true
+    }
+
+    pub fn clipboard(&self) -> Option<&TileBlock> { self.state.clipboard() }
+
+    pub fn clipboard_footprint(&self, min: Coord, rotation: SelectionRotation) -> Option<Selection> {
+        self.state.clipboard()?.footprint(min, rotation)
+    }
+
+    pub fn can_paste_clipboard(&self, min: Coord, rotation: SelectionRotation) -> bool {
+        let Some(block) = self.state.clipboard() else {
+            return false;
+        };
+        let Some(document) = self.state.active_document() else {
+            return false;
+        };
+
+        clipboard::can_paste(document, block, min, rotation)
+    }
+
+    pub fn paste_clipboard(&mut self, min: Coord, rotation: SelectionRotation) -> bool {
+        let built = {
+            let Some((environment, document, block)) = self.state.active_paste_mut() else {
+                return false;
+            };
+
+            clipboard::paste_block(document, &environment.tree, block, min, rotation)
+        };
+
+        let Some((action, target)) = built else {
+            return false;
+        };
+
+        if !self.commit(action, None) {
+            return false;
+        }
+
+        if let Some(document) = self.state.active_document_mut() {
+            document.selection = Some(target);
+            document.select_instance(None);
+        }
+
+        true
+    }
+
     pub(crate) fn block_preview_sprites(
         &self, source: Selection, target: Selection, rotation: SelectionRotation, mode: BlockSelectionMode,
     ) -> Vec<BlockPreviewSprite> {
@@ -615,7 +688,6 @@ impl Session {
             return Vec::new();
         };
 
-        let area = environment.tree.roots().area;
         let mut previews = Vec::new();
         for coord in mode.tiles(source) {
             let relative = (coord.x - source.min.x, coord.y - source.min.y);
@@ -625,44 +697,70 @@ impl Session {
                 continue;
             };
             for placed in tile {
-                let mut prefab = placed.prefab().clone();
-                rotate_prefab(&environment.tree, &mut prefab, rotation);
-
-                let Some(id) = environment.tree.id_of(&prefab.path) else {
-                    continue;
-                };
-                if !self.type_visibility.is_visible(id) {
-                    continue;
-                }
-
-                let is_area = area.is_some_and(|area| environment.tree.is_subtype_of(id, area));
-                if is_area && !self.options.show_areas {
-                    continue;
-                }
-
-                let appearance = visual::resolve_id(&environment.tree, id, &prefab);
-                let Some(texture) = frame::sprite_texture(&environment.icons, &self.textures, &appearance) else {
-                    continue;
-                };
-
-                let sprite = frame::instance_for(
-                    placed.id(),
-                    &appearance,
-                    texture,
-                    destination,
-                    self.options.tile_size,
-                    is_area,
-                );
-
-                if let Some(preview) = self.block_preview_sprite(sprite) {
-                    previews.push(preview);
-                }
+                previews.extend(self.preview_sprite(environment, placed.id(), placed.prefab(), destination, rotation));
             }
         }
 
         previews.sort_by(|left, right| left.sprite.depth.total_cmp(&right.sprite.depth));
 
         previews
+    }
+
+    pub(crate) fn clipboard_preview_sprites(
+        &self, target: Selection, rotation: SelectionRotation,
+    ) -> Vec<BlockPreviewSprite> {
+        let Some(environment) = self.state.environment.as_ref() else {
+            return Vec::new();
+        };
+        let Some(block) = self.state.clipboard() else {
+            return Vec::new();
+        };
+
+        let mut previews = Vec::new();
+        for (destination, tile) in block.destinations(target, rotation) {
+            for prefab in tile {
+                previews.extend(self.preview_sprite(environment, PREVIEW_OWNER, prefab, destination, rotation));
+            }
+        }
+
+        previews.sort_by(|left, right| left.sprite.depth.total_cmp(&right.sprite.depth));
+
+        previews
+    }
+
+    fn preview_sprite(
+        &self, environment: &Environment, owner: PrefabInstanceId, prefab: &Prefab, destination: Coord,
+        rotation: SelectionRotation,
+    ) -> Option<BlockPreviewSprite> {
+        let mut prefab = prefab.clone();
+        rotate_prefab(&environment.tree, &mut prefab, rotation);
+
+        let id = environment.tree.id_of(&prefab.path)?;
+        if !self.type_visibility.is_visible(id) {
+            return None;
+        }
+
+        let is_area = environment
+            .tree
+            .roots()
+            .area
+            .is_some_and(|area| environment.tree.is_subtype_of(id, area));
+        if is_area && !self.options.show_areas {
+            return None;
+        }
+
+        let appearance = visual::resolve_id(&environment.tree, id, &prefab);
+        let texture = frame::sprite_texture(&environment.icons, &self.textures, &appearance)?;
+        let sprite = frame::instance_for(
+            owner,
+            &appearance,
+            texture,
+            destination,
+            self.options.tile_size,
+            is_area,
+        );
+
+        self.block_preview_sprite(sprite)
     }
 
     fn block_preview_sprite(&self, sprite: SpriteInstance) -> Option<BlockPreviewSprite> {
@@ -775,9 +873,7 @@ impl Session {
         }
         let prefab = self.state.palette.clone()?;
         let action = {
-            let environment = self.state.environment.as_ref()?;
-            let active = self.state.active?;
-            let document = self.state.documents.get_mut(active)?;
+            let (environment, document) = self.state.active_pair_mut()?;
 
             Tool::Place.build_edit(&mut ToolContext {
                 document,
@@ -825,13 +921,7 @@ impl Session {
         };
 
         let action = {
-            let Some(environment) = self.state.environment.as_ref() else {
-                return FillOutcome::NoChange;
-            };
-            let Some(active) = self.state.active else {
-                return FillOutcome::NoChange;
-            };
-            let Some(document) = self.state.documents.get_mut(active) else {
+            let Some((environment, document)) = self.state.active_pair_mut() else {
                 return FillOutcome::NoChange;
             };
 
@@ -875,9 +965,7 @@ impl Session {
     }
 
     fn build_delete(&mut self, target: PrefabInstanceId) -> Option<ToolEdit> {
-        let environment = self.state.environment.as_ref()?;
-        let active = self.state.active?;
-        let document = self.state.documents.get_mut(active)?;
+        let (environment, document) = self.state.active_pair_mut()?;
         let coord = Coord::new(1, 1, document.z);
 
         Tool::Delete.build_edit(&mut ToolContext {
@@ -962,7 +1050,7 @@ impl Session {
 
         Some(SelectedTransform {
             selected,
-            sprite: *self.instances.sprite(selected)?,
+            sprite: *self.instances()?.sprite(selected)?,
             pixel: [appearance.pixel_x, appearance.pixel_y],
             step: [appearance.step_x, appearance.step_y],
             is_movable,
@@ -997,7 +1085,7 @@ impl Session {
             return None;
         }
 
-        let sprite = self.instances.sprite(selected)?;
+        let sprite = self.instances()?.sprite(selected)?;
         let tile_size = self.options.tile_size.max(1) as f32;
 
         Some(SelectionGuide {
@@ -1131,9 +1219,31 @@ impl Session {
 
     pub fn focused_area(&self) -> Option<PrefabInstanceId> { Some(self.state.active_document()?.focus()?.component()) }
 
+    fn instances(&self) -> Option<&FrameInstances> {
+        self.caches.get(&self.state.active()?).map(|cache| &cache.instances)
+    }
+
+    #[cfg(test)]
+    fn active_cache(&self) -> &DocumentCache {
+        self.state
+            .active()
+            .and_then(|id| self.caches.get(&id))
+            .expect("a document is open")
+    }
+
+    #[cfg(test)]
+    fn revision(&self) -> u64 { self.active_cache().revision }
+
+    #[cfg(test)]
+    fn frame_update(&self) -> Option<FrameUpdate> { self.active_cache().frame_update }
+
     pub fn toggle_focus_at(&mut self, coord: Option<Coord>) {
         if self.focused_area().is_some()
-            && coord.is_none_or(|coord| self.instances.area_component_at(coord) == self.focused_area())
+            && coord.is_none_or(|coord| {
+                self.instances()
+                    .and_then(|instances| instances.area_component_at(coord))
+                    == self.focused_area()
+            })
         {
             self.set_focus(None);
 
@@ -1159,13 +1269,14 @@ impl Session {
     fn resolve_focus(&self, seed: Coord) -> Option<AreaFocus> {
         let owner = self.area_at(seed)?;
         let prefab = self.state.active_document()?.prefab_instance(owner)?.0.clone();
-        let component = self.instances.area_component_at(seed)?;
+        let instances = self.instances()?;
+        let component = instances.area_component_at(seed)?;
 
         Some(AreaFocus::new(
             seed,
             prefab,
             component,
-            self.instances.area_component_tiles(component),
+            instances.area_component_tiles(component),
         ))
     }
 
@@ -1205,7 +1316,7 @@ impl Session {
             self.type_visibility.set_subtree(&environment.tree, id, visible)
         };
         if changed {
-            self.rebuild_instances();
+            self.rebuild_all_instances();
         }
 
         changed
@@ -1219,33 +1330,68 @@ impl Session {
         self.options.underlay_depth = depth;
     }
 
-    pub fn frame(&self, camera: render::Camera) -> Frame<'_> {
+    pub fn map_view_frame(
+        &self, id: DocumentId, rect: MapViewRect, camera: render::Camera, interaction: MapViewInteraction,
+    ) -> Option<MapViewFrame<'_>> {
+        let document = self.state.document(id)?;
+        let cache = self.caches.get(&id)?;
+
+        Some(MapViewFrame {
+            rect,
+            camera,
+            sprite_instances: &cache.instances.sprites,
+            area_tiles: &cache.instances.area_tiles,
+            focused_area: document.focus().map(AreaFocus::component),
+            active_z: document.z,
+            level_count: document.map.size.z.max(1),
+            revision: cache.revision,
+            pending_update: cache.frame_update,
+            interaction,
+        })
+    }
+
+    pub fn frame<'a>(&self, map_views: &'a [MapViewFrame<'a>], picking: Option<usize>) -> Frame<'a> {
         Frame {
-            sprite_instances: &self.instances.sprites,
-            area_tiles: &self.instances.area_tiles,
-            focused_area: self.focused_area(),
-            active_z: self.z(),
+            map_views,
             underlay_depth: self.options.underlay_depth,
             show_areas: self.options.show_areas,
             show_area_outlines: self.options.show_area_outlines,
-            camera,
-            revision: self.revision,
-            pending_update: self.frame_update,
+            picking,
         }
     }
 
     pub fn texture_revision(&self) -> u64 { self.texture_revision }
 
     pub fn extent_px(&self) -> (f32, f32) {
+        self.state
+            .active()
+            .map_or_else(|| self.tile_extent(None), |id| self.extent_px_of(id))
+    }
+
+    pub fn selected_instance_of(&self, id: DocumentId) -> Option<PrefabInstanceId> {
+        self.state.document(id).and_then(MapDocument::selected_instance)
+    }
+
+    pub fn extent_px_of(&self, id: DocumentId) -> (f32, f32) {
+        self.tile_extent(self.state.document(id).map(|document| document.map.size))
+    }
+
+    fn tile_extent(&self, size: Option<Size>) -> (f32, f32) {
         let tile = self.options.tile_size.max(1) as f32;
 
-        self.map().map_or((tile, tile), |map| {
-            (map.size.x.max(1) as f32 * tile, map.size.y.max(1) as f32 * tile)
+        size.map_or((tile, tile), |size| {
+            (size.x.max(1) as f32 * tile, size.y.max(1) as f32 * tile)
         })
     }
 
-    fn rebuild_instances(&mut self) {
-        self.instances = match (self.state.environment.as_ref(), self.state.active_document()) {
+    fn rebuild_all_instances(&mut self) {
+        for id in self.state.document_ids() {
+            self.rebuild_instances(id);
+        }
+    }
+
+    fn rebuild_instances(&mut self, id: DocumentId) {
+        let instances = match (self.state.environment.as_ref(), self.state.document(id)) {
             (Some(environment), Some(document)) => frame::build_with_options(
                 &environment.tree,
                 &environment.icons,
@@ -1258,50 +1404,75 @@ impl Session {
             ),
             _ => FrameInstances::default(),
         };
-        self.revision = self.revision.wrapping_add(1);
-        self.frame_update = None;
+
+        let revision = self.bump_revision();
+        let cache = self.caches.entry(id).or_default();
+        cache.instances = instances;
+        cache.revision = revision;
+        cache.frame_update = None;
         self.revalidate_focus();
     }
 
-    fn activate_document(&mut self, document: MapDocument) {
-        self.state.open_document(document);
-        self.rebuild_instances();
+    fn bump_revision(&mut self) -> u64 {
+        let revision = self.next_revision;
+        self.next_revision = self.next_revision.wrapping_add(1).max(1);
+
+        revision
+    }
+
+    fn activate_document(&mut self, document: MapDocument) -> DocumentId {
+        let id = self.state.open_document(document);
+        self.rebuild_instances(id);
+
+        id
     }
 
     fn update_instance(&mut self, selected: PrefabInstanceId) { self.update_instances(&[selected]); }
 
     fn update_instances(&mut self, affected: &[PrefabInstanceId]) {
-        let update = match (self.state.environment.as_ref(), self.state.active) {
-            (Some(environment), Some(active)) => self.state.documents.get(active).map(|document| {
-                frame::update_prefabs_with_options(
-                    &mut self.instances,
-                    &environment.tree,
-                    &environment.icons,
-                    &self.textures,
-                    document,
-                    affected,
-                    FrameRenderOptions {
-                        visibility: &self.type_visibility,
-                        tile_size: self.options.tile_size,
-                    },
-                )
-            }),
-            _ => None,
-        }
-        .unwrap_or(PrefabUpdate::Unchanged);
+        let Some(id) = self.state.active() else {
+            return;
+        };
+
+        let Self {
+            state,
+            textures,
+            caches,
+            type_visibility,
+            options,
+            next_revision,
+            ..
+        } = self;
+        let cache = caches.entry(id).or_default();
+        let update = match (state.environment.as_ref(), state.document(id)) {
+            (Some(environment), Some(document)) => frame::update_prefabs_with_options(
+                &mut cache.instances,
+                &environment.tree,
+                &environment.icons,
+                textures,
+                document,
+                affected,
+                FrameRenderOptions {
+                    visibility: type_visibility,
+                    tile_size: options.tile_size,
+                },
+            ),
+            _ => PrefabUpdate::Unchanged,
+        };
 
         match update {
             PrefabUpdate::Unchanged => {},
             PrefabUpdate::Buffers { sprites, area_tiles } => {
-                let previous_revision = self.revision;
-                self.revision = self.revision.wrapping_add(1);
-                self.frame_update = Some(FrameUpdate {
+                let previous_revision = cache.revision;
+                cache.revision = *next_revision;
+                *next_revision = next_revision.wrapping_add(1).max(1);
+                cache.frame_update = Some(FrameUpdate {
                     previous_revision,
                     sprites,
                     area_tiles,
                 });
             },
-            PrefabUpdate::Rebuild => self.rebuild_instances(),
+            PrefabUpdate::Rebuild => self.rebuild_instances(id),
         }
         self.revalidate_focus();
     }
@@ -1620,7 +1791,7 @@ mod tests {
     use editor::{
         Environment,
         command::EditGroupId,
-        document::{MapDocument, Selection, VarMutation},
+        document::{MapDocument, PlacedPrefab, Selection, VarMutation},
         tool::{BlockSelectionMode, FillMode, SelectionPlacement, SelectionRotation, Tool},
     };
     use objtree::ObjectTree;
@@ -1642,6 +1813,282 @@ mod tests {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
 
         path.canonicalize().unwrap_or(path)
+    }
+
+    #[test]
+    fn both_open_maps_contribute_their_own_sprites_to_one_frame() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("first map");
+        session.open_map(&root.join("test2.dmm"), 1).expect("second map");
+        let ids = session.state.document_ids();
+
+        // Two maps docked side by side in one window.
+        let left = render::MapViewRect {
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 600,
+        };
+        let right = render::MapViewRect {
+            x: 400,
+            y: 0,
+            width: 400,
+            height: 600,
+        };
+        let map_views = [
+            session
+                .map_view_frame(ids[0], left, Default::default(), Default::default())
+                .expect("left map view"),
+            session
+                .map_view_frame(ids[1], right, Default::default(), Default::default())
+                .expect("right map view"),
+        ];
+        let frame = session.frame(&map_views, Some(1));
+
+        assert_eq!(frame.map_views.len(), 2, "both maps are in the frame");
+        assert_eq!(frame.picking, Some(1));
+        assert_ne!(frame.map_views[0].rect, frame.map_views[1].rect);
+        // Each map view carries its own map's sprites, not a shared cache.
+        assert!(!frame.map_views[0].sprite_instances.is_empty());
+        assert!(!frame.map_views[1].sprite_instances.is_empty());
+        assert_ne!(
+            frame.map_views[0].sprite_instances.len(),
+            frame.map_views[1].sprite_instances.len(),
+        );
+    }
+
+    #[test]
+    fn a_map_view_frame_follows_its_own_documents_z_level() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("first map");
+        let first = session.state.active().expect("first is active");
+        // test2.dmm has two z levels.
+        session.open_map(&root.join("test2.dmm"), 2).expect("second map");
+        let second = session.state.active().expect("second is active");
+
+        let rect = render::MapViewRect::default();
+        let a = session
+            .map_view_frame(first, rect, Default::default(), Default::default())
+            .expect("first map view");
+        let b = session
+            .map_view_frame(second, rect, Default::default(), Default::default())
+            .expect("second map view");
+
+        assert_eq!(a.active_z, 1);
+        assert_eq!(b.active_z, 2, "z is per document, not per editor");
+    }
+
+    #[test]
+    fn two_open_maps_never_share_a_sprite_revision() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("first map");
+        session.open_map(&root.join("test2.dmm"), 1).expect("second map");
+
+        let ids = session.state.document_ids();
+        assert_eq!(ids.len(), 2, "both maps stay open");
+
+        // The renderer holds a single `uploaded_revision` for whatever is on the
+        // GPU. Two documents claiming one revision makes it skip the upload and
+        // keep drawing the map that got there first.
+        let revisions: Vec<u64> = ids.iter().map(|id| session.caches[id].revision).collect();
+        assert_ne!(revisions[0], revisions[1]);
+
+        // And the caches really do describe different maps.
+        let first = session
+            .map_view_frame(
+                ids[0],
+                render::MapViewRect::default(),
+                render::Camera::default(),
+                Default::default(),
+            )
+            .expect("first frame");
+        let second = session
+            .map_view_frame(
+                ids[1],
+                render::MapViewRect::default(),
+                render::Camera::default(),
+                Default::default(),
+            )
+            .expect("second frame");
+        assert_ne!(first.revision, second.revision);
+        assert_ne!(first.sprite_instances.len(), second.sprite_instances.len());
+    }
+
+    #[test]
+    fn editing_one_open_map_leaves_the_other_cache_alone() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("first map");
+        let first = session.state.active().expect("first is active");
+        session.open_map(&root.join("test2.dmm"), 1).expect("second map");
+        let second = session.state.active().expect("second is active");
+
+        let untouched = session.caches[&first].revision;
+        let before = session.caches[&second].revision;
+
+        session.choose_type(
+            session
+                .tree()
+                .and_then(|tree| tree.id_of(&TreePath::parse("/obj/structure/table")))
+                .expect("a placeable type"),
+        );
+        assert!(session.place_at(Coord::new(2, 2, 1), None).is_some(), "edit applied");
+
+        assert_eq!(session.caches[&first].revision, untouched, "the other map is untouched");
+        assert_ne!(session.caches[&second].revision, before, "the edited map re-uploads");
+    }
+
+    #[test]
+    fn a_block_copied_from_one_map_pastes_into_another() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("first map");
+        let first = session.state.active().expect("first is active");
+
+        session.set_tool(Tool::BlockSelect);
+        session.choose_type(
+            session
+                .tree()
+                .and_then(|tree| tree.id_of(&TreePath::parse("/obj/structure/table")))
+                .expect("a placeable type"),
+        );
+        session.set_tool(Tool::Place);
+        assert!(
+            session.place_at(Coord::new(1, 1, 1), None).is_some(),
+            "something to copy"
+        );
+        session.set_tool(Tool::BlockSelect);
+
+        let source = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 2, 1));
+        assert!(session.select_block(Some(source)));
+        assert!(session.copy_selection(BlockSelectionMode::Full));
+        let copied = session
+            .state
+            .active_document()
+            .and_then(|document| document.placed_tile(Coord::new(1, 1, 1)))
+            .expect("source tile");
+
+        session.open_map(&root.join("test2.dmm"), 1).expect("second map");
+        let second = session.state.active().expect("second is active");
+        assert_ne!(first, second);
+
+        let target_min = Coord::new(3, 3, 1);
+        assert!(session.can_paste_clipboard(target_min, SelectionRotation::Original));
+        assert!(session.paste_clipboard(target_min, SelectionRotation::Original));
+
+        let pasted = session
+            .state
+            .document(second)
+            .and_then(|document| document.placed_tile(target_min))
+            .expect("pasted tile");
+        assert_eq!(
+            pasted.iter().map(PlacedPrefab::prefab).collect::<Vec<_>>(),
+            copied.iter().map(PlacedPrefab::prefab).collect::<Vec<_>>(),
+            "the prefabs survive the trip"
+        );
+        assert_eq!(
+            session.selection(),
+            Some(Selection::from_drag(target_min, Coord::new(4, 4, 1))),
+            "what landed is selected"
+        );
+
+        // The block is still on the clipboard, and the map it came from never moved.
+        assert!(session.clipboard().is_some());
+        assert_eq!(
+            session
+                .state
+                .document(first)
+                .and_then(|document| document.placed_tile(Coord::new(1, 1, 1))),
+            Some(copied)
+        );
+    }
+
+    #[test]
+    fn a_paste_is_one_undo_in_the_map_it_landed_in() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("first map");
+        session.set_tool(Tool::BlockSelect);
+        assert!(session.select_block(Some(Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 2, 1)))));
+        assert!(session.copy_selection(BlockSelectionMode::Full));
+
+        session.open_map(&root.join("test2.dmm"), 1).expect("second map");
+        let second = session.state.active().expect("second is active");
+        let before = session
+            .state
+            .document(second)
+            .and_then(|document| document.placed_tile(Coord::new(3, 3, 1)))
+            .expect("tile");
+
+        assert!(session.paste_clipboard(Coord::new(3, 3, 1), SelectionRotation::Original));
+        assert!(session.state.document(second).is_some_and(MapDocument::is_dirty));
+
+        // `History` is per document and the paste went in as a single edit, so
+        // one undo takes all of it back.
+        assert!(
+            session.state.document_mut(second).is_some_and(MapDocument::undo),
+            "the paste is undoable"
+        );
+        assert_eq!(
+            session
+                .state
+                .document(second)
+                .and_then(|document| document.placed_tile(Coord::new(3, 3, 1))),
+            Some(before)
+        );
+    }
+
+    #[test]
+    fn reopening_an_open_map_focuses_it_instead_of_duplicating_it() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("first map");
+        let first = session.state.active().expect("first is active");
+        session.open_map(&root.join("test2.dmm"), 1).expect("second map");
+
+        session
+            .open_map(&root.join("test.dmm"), 1)
+            .expect("reopen the first map");
+
+        assert_eq!(session.state.document_ids().len(), 2, "no duplicate document");
+        assert_eq!(session.state.active(), Some(first), "the existing tab is focused");
+    }
+
+    #[test]
+    fn closing_a_map_drops_its_render_cache() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("first map");
+        let first = session.state.active().expect("first is active");
+        session.open_map(&root.join("test2.dmm"), 1).expect("second map");
+        let second = session.state.active().expect("second is active");
+
+        assert!(session.close_map(first));
+
+        assert!(!session.caches.contains_key(&first));
+        assert!(session.caches.contains_key(&second));
+        assert_eq!(session.state.active(), Some(second));
+        assert!(
+            session
+                .map_view_frame(
+                    first,
+                    render::MapViewRect::default(),
+                    render::Camera::default(),
+                    Default::default()
+                )
+                .is_none()
+        );
     }
 
     #[test]
@@ -1758,8 +2205,8 @@ mod tests {
         for level in &mut map.grid {
             level[0] = vec![base, base, other, base];
         }
-        session.state.open_document(MapDocument::new(map, 1));
-        session.rebuild_instances();
+        let id = session.state.open_document(MapDocument::new(map, 1));
+        session.rebuild_instances(id);
 
         session
     }
@@ -1778,8 +2225,8 @@ mod tests {
         for row in &mut map.grid[0] {
             row.fill(base);
         }
-        session.state.open_document(MapDocument::new(map, 1));
-        session.rebuild_instances();
+        let id = session.state.open_document(MapDocument::new(map, 1));
+        session.rebuild_instances(id);
 
         session
     }
@@ -1811,8 +2258,8 @@ mod tests {
             },
         );
 
-        assert_same_sprites(&session.instances.sprites, &expected.sprites);
-        assert_same_sprites(&session.instances.area_tiles, &expected.area_tiles);
+        assert_same_sprites(&session.instances().unwrap().sprites, &expected.sprites);
+        assert_same_sprites(&session.instances().unwrap().area_tiles, &expected.area_tiles);
     }
 
     #[test]
@@ -2035,10 +2482,10 @@ mod tests {
     #[test]
     fn view_changes_do_not_change_the_sprite_revision() {
         let mut session = Session::new();
-        session
+        let id = session
             .state
             .open_document(MapDocument::new(Map::new(Size { x: 1, y: 1, z: 3 }), 1));
-        session.revision = 7;
+        session.caches.entry(id).or_default().revision = 7;
 
         session.set_level(2);
         session.set_underlay_depth(1);
@@ -2047,9 +2494,19 @@ mod tests {
         assert!(session.options.show_area_outlines);
         session.toggle_area_outlines();
 
-        let frame = session.frame(Default::default());
-        assert_eq!(frame.revision, 7);
-        assert_eq!(frame.active_z, 2);
+        let view = session
+            .map_view_frame(
+                id,
+                render::MapViewRect::default(),
+                Default::default(),
+                Default::default(),
+            )
+            .expect("the open map has a map view");
+        assert_eq!(view.revision, 7, "changing the view does not re-upload sprites");
+        assert_eq!(view.active_z, 2);
+
+        let map_views = [view];
+        let frame = session.frame(&map_views, None);
         assert_eq!(frame.underlay_depth, 1);
         assert!(frame.show_areas);
         assert!(!frame.show_area_outlines);
@@ -2189,7 +2646,7 @@ mod tests {
             let untouched_before = session.map().unwrap().tile_at(untouched).unwrap().clone();
             session.set_tool(Tool::BlockSelect);
             assert!(session.select_block(Some(Selection::from_drag(source, source))));
-            let revision = session.revision;
+            let revision = session.revision();
 
             assert!(session.place_selected_block_with_mode(
                 destination,
@@ -2203,8 +2660,8 @@ mod tests {
                 Some(Selection::from_drag(destination, destination))
             );
             assert_eq!(session.map().unwrap().tile_at(untouched), Some(&untouched_before));
-            assert_eq!(session.revision, revision.wrapping_add(1));
-            assert_eq!(session.frame_update.unwrap().previous_revision, revision);
+            assert_eq!(session.revision(), revision.wrapping_add(1));
+            assert_eq!(session.frame_update().unwrap().previous_revision, revision);
             assert_render_cache_matches_rebuild(&session);
         }
     }
@@ -2225,7 +2682,7 @@ mod tests {
         let prefab = session.palette().unwrap().clone();
         session.set_tool(Tool::BlockSelect);
         assert!(session.select_block(Some(Selection::from_drag(source, source))));
-        let revision = session.revision;
+        let revision = session.revision();
 
         assert!(session.can_fill_selected_block(source, SelectionRotation::Original, BlockSelectionMode::Full,));
         assert!(session.can_fill_selected_block(destination, SelectionRotation::Original, BlockSelectionMode::Full,));
@@ -2246,8 +2703,8 @@ mod tests {
                 .any(|placed| placed == &prefab)
         );
         assert_eq!(session.map().unwrap().tile_at(untouched), Some(&untouched_before));
-        assert_eq!(session.revision, revision.wrapping_add(1));
-        assert_eq!(session.frame_update.unwrap().previous_revision, revision);
+        assert_eq!(session.revision(), revision.wrapping_add(1));
+        assert_eq!(session.frame_update().unwrap().previous_revision, revision);
         assert_render_cache_matches_rebuild(&session);
     }
 
@@ -2265,7 +2722,7 @@ mod tests {
         let selection = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(5, 5, 1));
         session.set_tool(Tool::BlockSelect);
         assert!(session.select_block(Some(selection)));
-        let revision = session.revision;
+        let revision = session.revision();
 
         assert!(session.fill_selected_block(
             selection.min,
@@ -2285,8 +2742,8 @@ mod tests {
         assert!(has_prefab(Coord::new(1, 3, 1)));
         assert!(has_prefab(Coord::new(5, 3, 1)));
         assert!(!has_prefab(Coord::new(3, 3, 1)));
-        assert_eq!(session.revision, revision.wrapping_add(1));
-        assert_eq!(session.frame_update.unwrap().previous_revision, revision);
+        assert_eq!(session.revision(), revision.wrapping_add(1));
+        assert_eq!(session.frame_update().unwrap().previous_revision, revision);
         assert_render_cache_matches_rebuild(&session);
     }
 
@@ -2308,7 +2765,7 @@ mod tests {
         let mode = BlockSelectionMode::Hollow { line_width: 1 };
         session.set_tool(Tool::BlockSelect);
         assert!(session.select_block_with_mode(Some(selection), mode));
-        let revision = session.revision;
+        let revision = session.revision();
 
         assert!(session.place_selected_block_with_mode(
             Coord::new(3, 1, 1),
@@ -2335,8 +2792,8 @@ mod tests {
         assert!(has_prefab(Coord::new(3, 3, 1)));
         assert!(has_prefab(Coord::new(4, 3, 1)));
 
-        assert_eq!(session.revision, revision.wrapping_add(1));
-        assert_eq!(session.frame_update.unwrap().previous_revision, revision);
+        assert_eq!(session.revision(), revision.wrapping_add(1));
+        assert_eq!(session.frame_update().unwrap().previous_revision, revision);
         assert_render_cache_matches_rebuild(&session);
     }
 
@@ -2448,23 +2905,24 @@ mod tests {
         assert_eq!(transform.dmi_directions, Some(1));
         assert_eq!(transform.directional_types, None);
         assert_eq!(transform.sprite.owner, selected);
-        let revision = session.revision;
-        let before = session.instances.sprites.clone();
+        let revision = session.revision();
+        let before = session.instances().unwrap().sprites.clone();
 
         assert_eq!(
             session.set_selected_instance_var("pixel_x".into(), Value::Num(7.0)),
             Some(true),
         );
-        assert_eq!(session.revision, revision.wrapping_add(1));
-        let update = session.frame_update.unwrap();
+        assert_eq!(session.revision(), revision.wrapping_add(1));
+        let update = session.frame_update().unwrap();
         assert_eq!(update.previous_revision, revision);
         let sprites = update.sprites.unwrap();
         assert_eq!(sprites.end, sprites.start + 1);
-        assert_eq!(session.instances.sprites[sprites.start].owner, selected);
+        assert_eq!(session.instances().unwrap().sprites[sprites.start].owner, selected);
         assert_eq!(session.selected_transform().unwrap().pixel, [7, 0]);
         assert_eq!(
             session
-                .instances
+                .instances()
+                .unwrap()
                 .sprites
                 .iter()
                 .zip(before)
@@ -2473,12 +2931,12 @@ mod tests {
             1,
         );
 
-        let rendered_revision = session.revision;
+        let rendered_revision = session.revision();
         assert_eq!(
             session.set_selected_instance_var("name".into(), Value::Text("edited".into())),
             Some(true),
         );
-        assert_eq!(session.revision, rendered_revision);
+        assert_eq!(session.revision(), rendered_revision);
         assert_eq!(
             session.selected_prefab().and_then(|prefab| prefab.var(&"name".into())),
             Some(&Value::Text("edited".into())),
@@ -2505,21 +2963,24 @@ mod tests {
         let selected = session.state.active_document().unwrap().instance_ids_at(coord)[0];
         session.select_instance(Some(selected));
         let light_texture = session.type_thumbnail(light).unwrap().texture;
-        let before_revision = session.revision;
+        let before_revision = session.revision();
 
         assert!(session.toggle_type_visibility(table));
         assert!(!session.is_type_visible(table));
-        assert_eq!(session.revision, before_revision.wrapping_add(1));
-        assert!(session.instances.sprite(selected).is_none());
+        assert_eq!(session.revision(), before_revision.wrapping_add(1));
+        assert!(session.instances().unwrap().sprite(selected).is_none());
         assert_eq!(
             session.set_selected_instance_var("icon_state".into(), Value::Text(String::from("light"))),
             Some(true),
         );
-        assert!(session.instances.sprite(selected).is_none());
+        assert!(session.instances().unwrap().sprite(selected).is_none());
 
         assert!(session.toggle_type_visibility(table));
         assert!(session.is_type_visible(table));
-        assert_eq!(session.instances.sprite(selected).unwrap().texture, light_texture);
+        assert_eq!(
+            session.instances().unwrap().sprite(selected).unwrap().texture,
+            light_texture
+        );
         assert_render_cache_matches_rebuild(&session);
     }
 
@@ -2538,7 +2999,7 @@ mod tests {
         let selected = session.state.active_document().unwrap().instance_ids_at(coord)[0];
 
         assert!(session.toggle_type_visibility(table));
-        assert!(session.instances.sprite(selected).is_none());
+        assert!(session.instances().unwrap().sprite(selected).is_none());
         session.load_environment(&root.join("test.dme")).unwrap();
         let reloaded_table = session
             .tree()
@@ -2547,7 +3008,7 @@ mod tests {
             .unwrap();
 
         assert!(session.is_type_visible(reloaded_table));
-        assert!(session.instances.sprite(selected).is_some());
+        assert!(session.instances().unwrap().sprite(selected).is_some());
         assert_render_cache_matches_rebuild(&session);
     }
 
@@ -2559,14 +3020,14 @@ mod tests {
         session.open_map(&root.join("test.dmm"), 1).unwrap();
         let area = session.area_at(Coord::new(3, 3, 1)).unwrap();
         session.select_instance(Some(area));
-        let revision = session.revision;
+        let revision = session.revision();
 
         assert_eq!(
             session.set_selected_instance_var("name".into(), Value::Text(String::from("Engineering"))),
             Some(true),
         );
-        assert_eq!(session.revision, revision.wrapping_add(1));
-        let update = session.frame_update.expect("area edit must remain incremental");
+        assert_eq!(session.revision(), revision.wrapping_add(1));
+        let update = session.frame_update().expect("area edit must remain incremental");
         assert_eq!(update.previous_revision, revision);
         assert!(update.sprites.is_some());
     }
@@ -2584,7 +3045,7 @@ mod tests {
             .unwrap();
         let coord = Coord::new(2, 2, 1);
         let before_len = session.map().unwrap().tile_at(coord).unwrap().len();
-        let revision = session.revision;
+        let revision = session.revision();
 
         assert_eq!(session.place_at(coord, None), None);
         assert!(session.choose_type(table));
@@ -2598,9 +3059,9 @@ mod tests {
             TreePath::parse("/obj/structure/table")
         );
         assert_eq!(session.recent_prefabs()[0], *session.selected_prefab().unwrap());
-        assert!(session.instances.sprite(selected).is_some());
-        assert_eq!(session.revision, revision.wrapping_add(1));
-        assert_eq!(session.frame_update.unwrap().previous_revision, revision);
+        assert!(session.instances().unwrap().sprite(selected).is_some());
+        assert_eq!(session.revision(), revision.wrapping_add(1));
+        assert_eq!(session.frame_update().unwrap().previous_revision, revision);
     }
 
     #[test]
@@ -2648,19 +3109,19 @@ mod tests {
                 session.tree().unwrap().is_subtype_of(candidate, turf).then_some(*id)
             })
             .unwrap();
-        let before_sprite = *session.instances.sprite(turf_id).unwrap();
+        let before_sprite = *session.instances().unwrap().sprite(turf_id).unwrap();
         let mut floor = Prefab::new(TreePath::parse("/turf/open/floor"));
         floor.set_var("color".into(), Value::Text("#ff0000".into()));
         session.state.choose_prefab(floor.clone());
 
         assert_eq!(session.fill_at(coord, FillMode::Wall, &[]), FillOutcome::NoChange);
         session.set_tool(Tool::Fill);
-        let revision = session.revision;
+        let revision = session.revision();
         assert_eq!(session.fill_at(coord, FillMode::Wall, &[]), FillOutcome::Applied);
 
-        assert_eq!(session.revision, revision.wrapping_add(1));
-        assert!(session.frame_update.is_some());
-        assert_ne!(*session.instances.sprite(turf_id).unwrap(), before_sprite);
+        assert_eq!(session.revision(), revision.wrapping_add(1));
+        assert!(session.frame_update().is_some());
+        assert_ne!(*session.instances().unwrap().sprite(turf_id).unwrap(), before_sprite);
         assert_eq!(
             session
                 .map()
@@ -2707,13 +3168,20 @@ mod tests {
         assert_eq!(session.selected_instance(), Some(target));
 
         session.set_tool(Tool::Delete);
-        let revision = session.revision;
+        let revision = session.revision();
         assert!(session.delete_instance(target));
         assert_eq!(session.map().unwrap().tile_at(coord).unwrap().len(), before_len - 1);
         assert_eq!(session.selected_instance(), None);
         assert_eq!(session.state.active_document().unwrap().instance_location(target), None);
-        assert!(session.instances.sprites.iter().all(|sprite| sprite.owner != target));
-        assert_eq!(session.revision, revision.wrapping_add(1));
+        assert!(
+            session
+                .instances()
+                .unwrap()
+                .sprites
+                .iter()
+                .all(|sprite| sprite.owner != target)
+        );
+        assert_eq!(session.revision(), revision.wrapping_add(1));
         assert!(!session.delete_instance(target));
     }
 

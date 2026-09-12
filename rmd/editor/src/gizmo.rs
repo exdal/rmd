@@ -192,7 +192,7 @@ pub(crate) struct BlockGizmoTarget {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct GizmoViewport {
+pub(crate) struct GizmoMapView {
     pub min: [f32; 2],
     pub max: [f32; 2],
     pub hovered: bool,
@@ -227,7 +227,7 @@ impl GizmoState {
 
     pub(crate) fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &Settings, camera: &Controller, mode: TransformMode,
-        viewport: GizmoViewport,
+        map_view: GizmoMapView,
     ) -> GizmoResponse {
         self.block_drag = None;
         self.block_direction = None;
@@ -250,10 +250,10 @@ impl GizmoState {
         }
 
         let mouse = ui.io().mouse_pos();
-        let initial_origin = gizmo_origin(camera, viewport.min, target.sprite);
+        let initial_origin = gizmo_origin(camera, map_view.min, target.sprite);
         let direction_origin = session
             .selected_location()
-            .map(|location| tile_center_origin(camera, viewport.min, location.coord, session.options.tile_size));
+            .map(|location| tile_center_origin(camera, map_view.min, location.coord, session.options.tile_size));
         let was_dragging = self.drag.is_some();
         let was_direction_active = self.update_direction(
             ui,
@@ -262,15 +262,15 @@ impl GizmoState {
             selected_direction_target(target),
             direction_origin,
             None,
-            viewport,
+            map_view,
         );
         if let Some(updated) = session.selected_transform() {
             target = updated;
         }
 
         let hovered_handle = values
-            .filter(|_| viewport.hovered)
-            .and_then(|_| handle_at(mouse, initial_origin, viewport.min, viewport.max));
+            .filter(|_| map_view.hovered)
+            .and_then(|_| handle_at(mouse, initial_origin, map_view.min, map_view.max));
 
         if self.direction.is_none()
             && self.drag.is_none()
@@ -322,11 +322,11 @@ impl GizmoState {
             }
         }
 
-        let origin = gizmo_origin(camera, viewport.min, target.sprite);
+        let origin = gizmo_origin(camera, map_view.min, target.sprite);
         let hovered = if self.drag.is_some() {
             None
-        } else if viewport.hovered && values.is_some() {
-            handle_at(mouse, origin, viewport.min, viewport.max)
+        } else if map_view.hovered && values.is_some() {
+            handle_at(mouse, origin, map_view.min, map_view.max)
         } else {
             None
         };
@@ -345,8 +345,8 @@ impl GizmoState {
             draw_direction_wheel(
                 ui,
                 wheel_origin,
-                viewport.min,
-                viewport.max,
+                map_view.min,
+                map_view.max,
                 set,
                 current_direction(selected_direction_target(target).state, set),
                 hovered_direction,
@@ -355,7 +355,7 @@ impl GizmoState {
             if let Some(handle) = hot {
                 ui.set_mouse_cursor(Some(handle.cursor()));
             }
-            draw_gizmo(ui, origin, viewport.min, viewport.max, hot);
+            draw_gizmo(ui, origin, map_view.min, map_view.max, hot);
         }
 
         GizmoResponse {
@@ -368,7 +368,7 @@ impl GizmoState {
     }
 
     pub(crate) fn draw_block(
-        &mut self, ui: &Ui, settings: &Settings, camera: &Controller, target: BlockGizmoTarget, viewport: GizmoViewport,
+        &mut self, ui: &Ui, settings: &Settings, camera: &Controller, target: BlockGizmoTarget, map_view: GizmoMapView,
     ) -> BlockGizmoResponse {
         self.drag = None;
         self.direction = None;
@@ -381,17 +381,17 @@ impl GizmoState {
         } = target;
 
         let mouse = ui.io().mouse_pos();
-        let initial_origin = block_center_origin(camera, viewport.min, selection, tile_size);
+        let initial_origin = block_center_origin(camera, map_view.min, selection, tile_size);
         let was_dragging = self.block_drag.is_some();
         let (was_direction_active, requested_rotation) =
-            self.update_block_direction(ui, settings, initial_origin, rotation, viewport);
+            self.update_block_direction(ui, settings, initial_origin, rotation, map_view);
         if let Some(requested) = requested_rotation {
             rotation = requested;
         }
 
-        let hovered_handle = viewport
+        let hovered_handle = map_view
             .hovered
-            .then(|| handle_at(mouse, initial_origin, viewport.min, viewport.max))
+            .then(|| handle_at(mouse, initial_origin, map_view.min, map_view.max))
             .flatten();
         if self.block_direction.is_none()
             && self.block_drag.is_none()
@@ -416,11 +416,11 @@ impl GizmoState {
             }
         }
 
-        let origin = block_center_origin(camera, viewport.min, selection, tile_size);
+        let origin = block_center_origin(camera, map_view.min, selection, tile_size);
         let hovered = if self.block_drag.is_some() {
             None
-        } else if viewport.hovered {
-            handle_at(mouse, origin, viewport.min, viewport.max)
+        } else if map_view.hovered {
+            handle_at(mouse, origin, map_view.min, map_view.max)
         } else {
             None
         };
@@ -437,13 +437,13 @@ impl GizmoState {
     }
 
     pub(crate) fn draw_block_overlay(
-        &self, ui: &Ui, camera: &Controller, target: BlockGizmoTarget, viewport: GizmoViewport,
+        &self, ui: &Ui, camera: &Controller, target: BlockGizmoTarget, map_view: GizmoMapView,
     ) {
-        let origin = block_center_origin(camera, viewport.min, target.selection, target.tile_size);
+        let origin = block_center_origin(camera, map_view.min, target.selection, target.tile_size);
         let hovered = if self.block_drag.is_some() {
             None
-        } else if viewport.hovered {
-            handle_at(ui.io().mouse_pos(), origin, viewport.min, viewport.max)
+        } else if map_view.hovered {
+            handle_at(ui.io().mouse_pos(), origin, map_view.min, map_view.max)
         } else {
             None
         };
@@ -465,8 +465,8 @@ impl GizmoState {
             draw_direction_wheel(
                 ui,
                 wheel_origin,
-                viewport.min,
-                viewport.max,
+                map_view.min,
+                map_view.max,
                 set,
                 Some(rotation_direction(target.rotation)),
                 hovered_direction,
@@ -476,17 +476,17 @@ impl GizmoState {
                 ui.set_mouse_cursor(Some(handle.cursor()));
             }
 
-            draw_gizmo(ui, origin, viewport.min, viewport.max, hot);
+            draw_gizmo(ui, origin, map_view.min, map_view.max, hot);
         }
     }
 
     fn update_block_direction(
-        &mut self, ui: &Ui, settings: &Settings, origin: [f32; 2], rotation: SelectionRotation, viewport: GizmoViewport,
+        &mut self, ui: &Ui, settings: &Settings, origin: [f32; 2], rotation: SelectionRotation, map_view: GizmoMapView,
     ) -> (bool, Option<SelectionRotation>) {
         let rotation_key = settings.keybindings.get(KeybindAction::Rotate);
         if self.block_direction.is_none()
             && self.block_drag.is_none()
-            && viewport.hovered
+            && map_view.hovered
             && rotation_key.is_pressed(ui)
         {
             self.block_direction = Some(BlockDirectionGesture {
@@ -528,8 +528,8 @@ impl GizmoState {
                     let hovered = direction_at(
                         ui.io().mouse_pos(),
                         origin,
-                        viewport.min,
-                        viewport.max,
+                        map_view.min,
+                        map_view.max,
                         cardinal_direction_set(),
                     );
                     if hovered != last_hovered {
@@ -557,7 +557,7 @@ impl GizmoState {
 
     pub(crate) fn draw_placement_direction(
         &mut self, ui: &Ui, session: &mut Session, settings: &Settings, camera: &Controller, coord: Option<Coord>,
-        viewport: GizmoViewport,
+        map_view: GizmoMapView,
     ) -> GizmoResponse {
         self.drag = None;
         self.block_drag = None;
@@ -568,12 +568,12 @@ impl GizmoState {
             return GizmoResponse::default();
         };
         let coord = self.placement_coord().or(coord);
-        let origin = coord.map(|coord| tile_center_origin(camera, viewport.min, coord, session.options.tile_size));
+        let origin = coord.map(|coord| tile_center_origin(camera, map_view.min, coord, session.options.tile_size));
         let target = DirectionTarget {
             id: DirectionGestureTarget::Placement,
             state,
         };
-        let was_direction_active = self.update_direction(ui, session, settings, target, origin, coord, viewport);
+        let was_direction_active = self.update_direction(ui, session, settings, target, origin, coord, map_view);
         let state = session.placement_direction().unwrap_or(state);
         let open_wheel = self.direction.and_then(|gesture| match gesture.phase {
             DirectionPhase::Open {
@@ -589,8 +589,8 @@ impl GizmoState {
             draw_direction_wheel(
                 ui,
                 wheel_origin,
-                viewport.min,
-                viewport.max,
+                map_view.min,
+                map_view.max,
                 set,
                 current_direction(state, set),
                 hovered_direction,
@@ -604,7 +604,7 @@ impl GizmoState {
 
     fn update_direction(
         &mut self, ui: &Ui, session: &mut Session, settings: &Settings, target: DirectionTarget,
-        origin: Option<[f32; 2]>, placement_coord: Option<Coord>, viewport: GizmoViewport,
+        origin: Option<[f32; 2]>, placement_coord: Option<Coord>, map_view: GizmoMapView,
     ) -> bool {
         let rotation_key = settings.keybindings.get(KeybindAction::Rotate);
         if self.direction.is_some_and(|gesture| gesture.target != target.id) {
@@ -612,7 +612,7 @@ impl GizmoState {
         }
         if self.direction.is_none()
             && self.drag.is_none()
-            && viewport.hovered
+            && map_view.hovered
             && rotation_key.is_pressed(ui)
             && origin.is_some()
             && let Some(set) = direction_set(target.state.dmi_directions, target.state.directional_types)
@@ -664,7 +664,7 @@ impl GizmoState {
                 if key_released || !key_down {
                     self.direction = None;
                 } else {
-                    let hovered = direction_at(ui.io().mouse_pos(), origin, viewport.min, viewport.max, gesture.set);
+                    let hovered = direction_at(ui.io().mouse_pos(), origin, map_view.min, map_view.max, gesture.set);
                     if hovered != last_hovered {
                         last_hovered = hovered;
                         if let Some(direction) = hovered

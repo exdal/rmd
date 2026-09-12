@@ -54,7 +54,7 @@ impl HighlightStyle {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct ViewportInteraction {
+pub struct MapViewInteraction {
     pub cursor: Option<[u32; 2]>,
     pub hovered_area: Option<PrefabInstanceId>,
     pub selected: Option<PrefabInstanceId>,
@@ -154,18 +154,41 @@ impl Default for Camera {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MapViewRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl MapViewRect {
+    pub const fn is_empty(self) -> bool { self.width == 0 || self.height == 0 }
+}
+
 #[derive(Debug)]
-pub struct Frame<'a> {
+pub struct MapViewFrame<'a> {
+    pub rect: MapViewRect,
+    pub camera: Camera,
     pub sprite_instances: &'a [SpriteInstance],
     pub area_tiles: &'a [SpriteInstance],
     pub focused_area: Option<PrefabInstanceId>,
     pub active_z: u32,
+    pub level_count: u32,
+    pub revision: u64,
+    pub pending_update: Option<FrameUpdate>,
+    pub interaction: MapViewInteraction,
+}
+
+#[derive(Debug)]
+pub struct Frame<'a> {
+    pub map_views: &'a [MapViewFrame<'a>],
     pub underlay_depth: u32,
     pub show_areas: bool,
     pub show_area_outlines: bool,
-    pub camera: Camera,
-    pub revision: u64,
-    pub pending_update: Option<FrameUpdate>,
+    /// Index into `map_views` of the map under the mouse, if any. Only that one
+    /// runs the pick pass.
+    pub picking: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,0 +1,24 @@
+"a" = (/turf/closed/wall,/area/station)
+"b" = (/turf/open/floor,/area/station)
+"c" = (/obj/structure/table,/turf/open/floor,/area/station)
+"d" = (/obj/machinery/light,/turf/open/floor,/area/station)
+
+(1,1,1) = {"
+aaaaaaaaaa
+abbbbbbbba
+abccbbddba
+abbbbbbbba
+abddbbccba
+abbbbbbbba
+aaaaaaaaaa
+"}
+
+(1,1,2) = {"
+aaaaaaaaaa
+abbbbbbbba
+abbbddbbba
+abbdccdbba
+abbbddbbba
+abbbbbbbba
+aaaaaaaaaa
+"}

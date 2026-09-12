@@ -182,7 +182,8 @@ impl App {
             return;
         };
 
-        let frame = self.session.frame(self.camera.camera);
+        let map_views = [self.session.map_view(self.camera.camera)];
+        let frame = self.session.frame(&map_views);
         window.pre_present_notify();
         if let Err(e) = renderer.draw(&frame) {
             eprintln!("error: {e}");

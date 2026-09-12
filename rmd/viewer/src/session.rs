@@ -7,7 +7,7 @@ use editor::{
     document::MapDocument,
     frame::{self, FrameOptions},
 };
-use render::{Frame, SpriteInstance, texture::TextureCatalog};
+use render::{Frame, MapViewFrame, MapViewInteraction, MapViewRect, SpriteInstance, texture::TextureCatalog};
 
 pub struct Session {
     pub environment: Option<Environment>,
@@ -101,18 +101,33 @@ impl Session {
 
     pub fn toggle_area_outlines(&mut self) { self.options.show_area_outlines = !self.options.show_area_outlines; }
 
-    pub fn frame(&self, camera: render::Camera) -> Frame<'_> {
-        Frame {
+    pub fn map_view(&self, camera: render::Camera) -> MapViewFrame<'_> {
+        MapViewFrame {
+            rect: MapViewRect {
+                x: 0,
+                y: 0,
+                width: camera.viewport_width,
+                height: camera.viewport_height,
+            },
+            camera,
             sprite_instances: &self.sprite_instances,
             area_tiles: &[],
             focused_area: None,
             active_z: self.z(),
+            level_count: self.document.as_ref().map_or(1, |document| document.map.size.z.max(1)),
+            revision: self.revision,
+            pending_update: None,
+            interaction: MapViewInteraction::default(),
+        }
+    }
+
+    pub fn frame<'a>(&self, map_views: &'a [MapViewFrame<'a>]) -> Frame<'a> {
+        Frame {
+            map_views,
             underlay_depth: self.options.underlay_depth,
             show_areas: self.options.show_areas,
             show_area_outlines: self.options.show_area_outlines,
-            camera,
-            revision: self.revision,
-            pending_update: None,
+            picking: None,
         }
     }
 

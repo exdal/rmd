@@ -2144,7 +2144,7 @@ mod example_environment {
         assert!(diagnostics.icons.is_empty(), "{:?}", diagnostics.icons);
         assert!(environment.icons.contains_key("icons/test.dmi"));
         // `resources` holds paths the preprocessor already resolved against the includer.
-        assert_eq!(environment.maps, vec![root.join("test.dmm")]);
+        assert_eq!(environment.maps, vec![root.join("test.dmm"), root.join("test2.dmm")]);
 
         let mut textures = TextureCatalog::default();
         let file = IconFile::load(root.join("icons/test.dmi")).expect("icon");
