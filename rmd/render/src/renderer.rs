@@ -1637,10 +1637,15 @@ fn split_owner(owner: u64) -> [u32; 2] { [owner as u32, (owner >> 32) as u32] }
 fn project_selection_guide(
     guide: crate::SelectionGuide, camera: crate::Camera, rect: crate::MapViewRect,
 ) -> ([f32; 2], [f32; 2]) {
+    let logical = [
+        camera.viewport_width.max(1) as f32,
+        camera.viewport_height.max(1) as f32,
+    ];
+    let scale = [rect.width as f32 / logical[0], rect.height as f32 / logical[1]];
     let project = |point: [f32; 2]| {
         [
-            (point[0] - camera.x) * camera.zoom + rect.width as f32 * 0.5,
-            (camera.y - point[1]) * camera.zoom + rect.height as f32 * 0.5,
+            ((point[0] - camera.x) * camera.zoom + logical[0] * 0.5) * scale[0],
+            ((camera.y - point[1]) * camera.zoom + logical[1] * 0.5) * scale[1],
         ]
     };
 
@@ -2545,7 +2550,8 @@ mod tests {
             x: 100.0,
             y: 50.0,
             zoom: 2.0,
-            ..Default::default()
+            viewport_width: 800,
+            viewport_height: 600,
         };
 
         let full = crate::MapViewRect {
@@ -2570,6 +2576,27 @@ mod tests {
         assert_eq!(
             project_selection_guide(guide, camera, right),
             ([420.0, 320.0], [460.0, 280.0]),
+        );
+
+        let scaled = crate::MapViewRect {
+            x: 0,
+            y: 0,
+            width: 1600,
+            height: 1200,
+        };
+        assert_eq!(
+            project_selection_guide(guide, camera, scaled),
+            ([840.0, 640.0], [920.0, 560.0]),
+        );
+
+        let panned = Camera {
+            x: 110.0,
+            y: 60.0,
+            ..camera
+        };
+        assert_eq!(
+            project_selection_guide(guide, panned, scaled),
+            ([800.0, 680.0], [880.0, 600.0]),
         );
     }
 
