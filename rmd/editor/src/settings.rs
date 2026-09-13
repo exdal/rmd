@@ -56,6 +56,7 @@ pub(crate) const BINDABLE_KEYS: &[Key] = &[
     Key::O,
     Key::P,
     Key::Q,
+    Key::R,
     Key::S,
     Key::T,
     Key::U,
@@ -832,6 +833,20 @@ mod tests {
             assert_eq!(bindings.recent(index), Some(KeyBinding::new(key)));
         }
         assert_eq!(bindings.recent(recent.len()), None);
+    }
+
+    #[test]
+    fn every_default_keybinding_uses_a_bindable_key() {
+        let bindings = KeyBindings::default();
+
+        for action in KeybindAction::ALL {
+            let binding = bindings.get(action);
+            assert!(
+                BINDABLE_KEYS.contains(&binding.key),
+                "default binding for {action:?} uses non-bindable key {:?}",
+                binding.key
+            );
+        }
     }
 
     #[test]
