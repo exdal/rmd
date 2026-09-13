@@ -1343,7 +1343,7 @@ mod tests {
         let instance = document.instance_ids_at(Coord::new(1, 1, 2))[0];
         let mut session = Session::new();
         let document_id = session.state.open_document(document);
-        let mut state = UiState::new().expect("valid window keys");
+        let mut state = UiState::new(false).expect("valid window keys");
         let mut view = MapViewState::new(document_id).expect("valid map view key");
         view.camera.camera.zoom = 2.5;
         state.map_views.insert(document_id, view);

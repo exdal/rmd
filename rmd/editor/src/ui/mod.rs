@@ -68,7 +68,7 @@ use crate::{
     gizmo::{BlockGizmoTarget, GizmoMapView, GizmoState},
     loader::LoadView,
     session::{BlockPreviewSprite, FillOutcome, LevelChange, PlacementPreview, Session},
-    settings::{KeyBindings, KeybindAction, Settings},
+    settings::{KeyBindings, KeybindAction, KeybindPreset, Settings},
 };
 
 /// How far down the "Blur below" menu goes. The option itself takes any depth.
@@ -98,6 +98,7 @@ const NEW_MAP_DEFAULT_HEIGHT: i32 = 255;
 const NEW_MAP_DEFAULT_LEVELS: i32 = 1;
 const NEW_MAP_MAX_DIMENSION: i32 = 255;
 const SAVE_MAP_POPUP: &str = "Save map##save-map";
+const KEYBIND_PRESET_POPUP: &str = "Choose keybindings##keybind-preset";
 const LOAD_POPUP_WIDTH: f32 = 420.0;
 const LOAD_TEXT_WIDTH: f32 = 620.0;
 const LOAD_DIAGNOSTICS_LINES: usize = 14;
@@ -320,6 +321,7 @@ pub struct UiOutput {
     pub pick_new_map_path: bool,
     pub cancel_load: bool,
     pub copy_to_clipboard: Option<String>,
+    pub(crate) keybind_preset: Option<KeybindPreset>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -419,10 +421,11 @@ pub struct UiState {
     load_window: WindowKey,
     load_notice: Option<LoadNotice>,
     load_window_size: [f32; 2],
+    keybind_preset_prompt: bool,
 }
 
 impl UiState {
-    pub fn new() -> Result<Self, WindowKeyError> {
+    pub fn new(keybind_preset_prompt: bool) -> Result<Self, WindowKeyError> {
         let object_tree = ObjectTreePanel::new()?;
         let welcome_window = WindowKey::new("welcome", "Welcome")?;
         let inspector = InspectorPanel::new()?;
@@ -471,6 +474,7 @@ impl UiState {
             load_window,
             load_notice: None,
             load_window_size: [0.0, 0.0],
+            keybind_preset_prompt,
         })
     }
 
@@ -529,6 +533,23 @@ impl UiState {
             .layout(&self.layout, DockLayoutApply::IfMissing)
             .build()?;
         self.dockspace_root = Some(root);
+
+        if self.keybind_preset_prompt {
+            let keybind_preset = draw_keybind_preset_dialog(ui, &mut self.keybind_preset_prompt);
+            let exit = self.draw_exit_confirmation(ui, session);
+
+            return Ok(UiOutput {
+                exit,
+                map_views: Vec::new(),
+                picking: None,
+                open: None,
+                open_source: None,
+                pick_new_map_path: false,
+                cancel_load: false,
+                copy_to_clipboard: None,
+                keybind_preset,
+            });
+        }
 
         let mut open = None;
         let mut show_welcome = false;
@@ -771,6 +792,7 @@ impl UiState {
             pick_new_map_path,
             cancel_load: load_popup.cancel,
             copy_to_clipboard: load_popup.copy,
+            keybind_preset: None,
         })
     }
 
@@ -1860,6 +1882,41 @@ impl UiState {
         view.refit = false;
         view.focus = true;
     }
+}
+
+fn draw_keybind_preset_dialog(ui: &Ui, open: &mut bool) -> Option<KeybindPreset> {
+    if !*open {
+        return None;
+    }
+    if !ui.is_popup_open(KEYBIND_PRESET_POPUP) {
+        ui.open_popup(KEYBIND_PRESET_POPUP);
+    }
+
+    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
+        | WindowFlags::NO_RESIZE
+        | WindowFlags::NO_MOVE
+        | WindowFlags::NO_COLLAPSE
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::NO_DOCKING;
+    let _modal = ui.begin_modal_popup_config(KEYBIND_PRESET_POPUP).flags(flags).begin()?;
+
+    ui.text("Which keybinding preset would you prefer?");
+    ui.text_disabled("You can customize individual bindings later in Settings.");
+    ui.dummy([0.0, ui.frame_height() * 0.25]);
+
+    let selected = if ui.button("Default") {
+        Some(KeybindPreset::Default)
+    } else {
+        ui.same_line();
+        ui.button("StrongDMM").then_some(KeybindPreset::StrongDmm)
+    };
+
+    if selected.is_some() {
+        *open = false;
+        ui.close_current_popup();
+    }
+
+    selected
 }
 
 fn draw_welcome_subtitle(ui: &Ui) {
@@ -3454,7 +3511,7 @@ mod tests {
 
     #[test]
     fn the_default_dock_layout_is_valid() {
-        let state = UiState::new().expect("valid window keys");
+        let state = UiState::new(false).expect("valid window keys");
 
         assert_eq!(state.layout.validate(), Ok(()));
         assert_eq!(state.block_selection_options, BlockSelectionOptions::default());
@@ -3471,6 +3528,27 @@ mod tests {
         assert!(!state.exit_requested);
         assert!(state.show_welcome);
         assert!(state.open_error.is_none());
+        assert!(!state.keybind_preset_prompt);
+    }
+
+    #[test]
+    fn first_launch_opens_the_keybinding_preset_dialog() {
+        let _context = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = dear_imgui_rs::Context::create();
+        context
+            .font_atlas()
+            .try_claim_legacy_renderer()
+            .expect("legacy renderer font atlas should be available")
+            .build();
+        context.io_mut().set_display_size([1280.0, 720.0]);
+        context.io_mut().set_delta_time(1.0 / 60.0);
+        let ui = context.frame();
+        let mut open = true;
+
+        assert_eq!(draw_keybind_preset_dialog(ui, &mut open), None);
+        assert!(open);
+        assert!(ui.is_popup_open(KEYBIND_PRESET_POPUP));
+        assert!(context.render_legacy().valid());
     }
 
     #[test]
@@ -3528,7 +3606,7 @@ mod tests {
 
     #[test]
     fn the_central_node_holds_only_the_welcome_window() {
-        let state = UiState::new().expect("valid window keys");
+        let state = UiState::new(false).expect("valid window keys");
         let DockLayout::Split { second, .. } = &state.layout else {
             panic!("the root is split between the object tree and everything else");
         };

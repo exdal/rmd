@@ -75,30 +75,34 @@ fn main() -> ExitCode {
         },
     };
 
-    let settings = Settings::load();
+    let loaded_settings = Settings::load();
+    let settings_ready = !loaded_settings.needs_keybind_preset;
+    let settings = loaded_settings.settings;
     let mut session = Session::new();
     settings.apply_to(&mut session.options);
 
-    // The window comes up first and the arguments load behind the progress popup, so a big
-    // codebase no longer looks like a hang before anything is on screen.
-    let mut loader = Loader::new();
-    let mut pending_map = None;
-    match arguments.environment {
-        Some(entry) => {
-            loader.start(Job::Codebase(entry));
-            pending_map = Some(PendingMap {
+    let (startup_job, pending_map) = match arguments.environment {
+        Some(entry) => (
+            Some(Job::Codebase(entry)),
+            Some(PendingMap {
                 path: arguments.map,
                 z: arguments.z,
-            });
-        },
-        None => {
-            if let Some(path) = arguments.map {
-                loader.start(Job::Map { path, z: arguments.z });
-            }
-        },
-    }
+            }),
+        ),
+        None => (arguments.map.map(|path| Job::Map { path, z: arguments.z }), None),
+    };
 
-    let ui = match UiState::new() {
+    let mut loader = Loader::new();
+    let deferred_job = if settings_ready {
+        if let Some(job) = startup_job {
+            loader.start(job);
+        }
+        None
+    } else {
+        startup_job
+    };
+
+    let ui = match UiState::new(!settings_ready) {
         Ok(ui) => ui,
         Err(e) => {
             log::error!("{e}");
@@ -123,6 +127,8 @@ fn main() -> ExitCode {
         ui,
         loader,
         pending_map,
+        deferred_job,
+        settings_ready,
         uploaded_texture_revision: None,
         title,
         consumer: None,
@@ -133,9 +139,11 @@ fn main() -> ExitCode {
     };
 
     let result = event_loop.run_app(&mut app);
-    app.capture_window_settings();
-    app.settings.capture_from(&app.session.options);
-    app.settings.save();
+    if app.settings_ready {
+        app.capture_window_settings();
+        app.settings.capture_from(&app.session.options);
+        app.settings.save();
+    }
 
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -222,6 +230,8 @@ struct App {
     ui: UiState,
     loader: Loader,
     pending_map: Option<PendingMap>,
+    deferred_job: Option<Job>,
+    settings_ready: bool,
     uploaded_texture_revision: Option<u64>,
     title: String,
     consumer: Option<SynchronousRendererConsumer>,
@@ -288,6 +298,8 @@ impl App {
             settings,
             ui,
             loader,
+            deferred_job,
+            settings_ready,
             uploaded_texture_revision,
             title,
             consumer,
@@ -332,6 +344,14 @@ impl App {
         let frame = imgui.try_begin_frame()?;
         let load = loader.view();
         let output = ui.draw(frame.ui(), session, settings, load.as_ref())?;
+        if let Some(preset) = output.keybind_preset {
+            settings.keybindings = preset.bindings();
+            settings.save();
+            *settings_ready = true;
+            if let Some(job) = deferred_job.take() {
+                loader.start(job);
+            }
+        }
         platform.prepare_render(frame.ui(), window)?;
         let mut drawn = Vec::with_capacity(output.map_views.len());
         let mut map_views = Vec::with_capacity(output.map_views.len());

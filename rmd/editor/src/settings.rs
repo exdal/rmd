@@ -166,6 +166,30 @@ impl KeyBinding {
         }
     }
 
+    const fn with_primary(key: Key) -> Self {
+        if cfg!(target_os = "macos") {
+            Self {
+                key,
+                ctrl: false,
+                shift: false,
+                alt: false,
+                super_key: true,
+            }
+        } else {
+            Self::with_ctrl(key)
+        }
+    }
+
+    const fn with_primary_shift(key: Key) -> Self {
+        Self {
+            key,
+            ctrl: !cfg!(target_os = "macos"),
+            shift: true,
+            alt: false,
+            super_key: cfg!(target_os = "macos"),
+        }
+    }
+
     pub fn from_input(ui: &Ui, key: Key) -> Self {
         let io = ui.io();
 
@@ -205,7 +229,7 @@ impl KeyBinding {
             (self.ctrl, "Ctrl"),
             (self.shift, "Shift"),
             (self.alt, "Alt"),
-            (self.super_key, "Super"),
+            (self.super_key, if cfg!(target_os = "macos") { "Cmd" } else { "Super" }),
         ] {
             if enabled {
                 if !label.is_empty() {
@@ -224,6 +248,21 @@ impl KeyBinding {
 }
 
 const fn is_false(value: &bool) -> bool { !*value }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeybindPreset {
+    Default,
+    StrongDmm,
+}
+
+impl KeybindPreset {
+    pub fn bindings(self) -> KeyBindings {
+        match self {
+            Self::Default => KeyBindings::default(),
+            Self::StrongDmm => KeyBindings::strong_dmm(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeybindAction {
@@ -425,6 +464,37 @@ impl Default for KeyBindings {
 }
 
 impl KeyBindings {
+    fn strong_dmm() -> Self {
+        Self {
+            save: KeyBinding::with_primary(Key::S),
+            undo: KeyBinding::with_primary(Key::Z),
+            redo: KeyBinding::with_primary_shift(Key::Z),
+            show_areas: KeyBinding::with_primary(Key::Key1),
+            show_area_outlines: KeyBinding::with_shift(Key::O),
+            level_up: KeyBinding::with_primary(Key::UpArrow),
+            level_down: KeyBinding::with_primary(Key::DownArrow),
+            refit: KeyBinding::new(Key::Home),
+            place_tool: KeyBinding::new(Key::Key1),
+            select_tool: KeyBinding::new(Key::S),
+            block_select_tool: KeyBinding::new(Key::Key3),
+            delete_tool: KeyBinding::new(Key::D),
+            fill_tool: KeyBinding::new(Key::Key2),
+            rotate: KeyBinding::with_shift(Key::R),
+            copy: KeyBinding::with_primary(Key::C),
+            paste: KeyBinding::with_primary(Key::V),
+            recent_1: KeyBinding::new(Key::Q),
+            recent_2: KeyBinding::new(Key::W),
+            recent_3: KeyBinding::new(Key::E),
+            recent_4: KeyBinding::new(Key::R),
+            recent_5: KeyBinding::new(Key::T),
+            recent_6: KeyBinding::new(Key::Y),
+            recent_7: KeyBinding::new(Key::U),
+            recent_8: KeyBinding::new(Key::I),
+            recent_9: KeyBinding::new(Key::O),
+            recent_0: KeyBinding::new(Key::P),
+        }
+    }
+
     pub const fn get(self, action: KeybindAction) -> KeyBinding {
         match action {
             KeybindAction::Save => self.save,
@@ -597,6 +667,38 @@ pub(crate) struct Settings {
     pub recent: Vec<RecentMap>,
 }
 
+pub(crate) struct SettingsLoad {
+    pub settings: Settings,
+    pub needs_keybind_preset: bool,
+}
+
+impl SettingsLoad {
+    fn from_file_result(result: Result<Option<Settings>, Box<dyn Error>>) -> Self {
+        match result {
+            Ok(Some(mut settings)) => {
+                settings.normalize();
+
+                Self {
+                    settings,
+                    needs_keybind_preset: false,
+                }
+            },
+            Ok(None) => Self {
+                settings: Settings::default(),
+                needs_keybind_preset: true,
+            },
+            Err(error) => {
+                log::error!("loading settings: {error}");
+
+                Self {
+                    settings: Settings::default(),
+                    needs_keybind_preset: false,
+                }
+            },
+        }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -618,20 +720,7 @@ impl Default for Settings {
 }
 
 impl Settings {
-    pub fn load() -> Self {
-        match Self::try_load() {
-            Ok(mut settings) => {
-                settings.normalize();
-
-                settings
-            },
-            Err(error) => {
-                log::error!("loading settings: {error}");
-
-                Self::default()
-            },
-        }
-    }
+    pub fn load() -> SettingsLoad { SettingsLoad::from_file_result(Self::try_load()) }
 
     pub fn save(&self) {
         if let Err(error) = self.try_save() {
@@ -714,15 +803,19 @@ impl Settings {
             .filter(move |recent| recent.environment.as_deref() == Some(environment.as_path()))
     }
 
-    fn try_load() -> Result<Self, Box<dyn Error>> {
+    fn try_load() -> Result<Option<Self>, Box<dyn Error>> {
         let path = settings_path()?;
-        let source = match fs::read_to_string(&path) {
+        Self::from_file_read(fs::read_to_string(path))
+    }
+
+    fn from_file_read(read: io::Result<String>) -> Result<Option<Self>, Box<dyn Error>> {
+        let source = match read {
             Ok(source) => source,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error.into()),
         };
 
-        Ok(toml::from_str(&source)?)
+        Ok(Some(toml::from_str(&source)?))
     }
 
     fn try_save(&self) -> Result<(), Box<dyn Error>> {
@@ -836,16 +929,70 @@ mod tests {
     }
 
     #[test]
-    fn every_default_keybinding_uses_a_bindable_key() {
-        let bindings = KeyBindings::default();
+    fn strong_dmm_keybindings_match_the_selected_shortcuts() {
+        let bindings = KeybindPreset::StrongDmm.bindings();
+        let expected = [
+            (KeybindAction::Save, KeyBinding::with_primary(Key::S)),
+            (KeybindAction::Undo, KeyBinding::with_primary(Key::Z)),
+            (KeybindAction::Redo, KeyBinding::with_primary_shift(Key::Z)),
+            (KeybindAction::ShowAreas, KeyBinding::with_primary(Key::Key1)),
+            (KeybindAction::ShowAreaOutlines, KeyBinding::with_shift(Key::O)),
+            (KeybindAction::LevelUp, KeyBinding::with_primary(Key::UpArrow)),
+            (KeybindAction::LevelDown, KeyBinding::with_primary(Key::DownArrow)),
+            (KeybindAction::Refit, KeyBinding::new(Key::Home)),
+            (KeybindAction::PlaceTool, KeyBinding::new(Key::Key1)),
+            (KeybindAction::SelectTool, KeyBinding::new(Key::S)),
+            (KeybindAction::BlockSelectTool, KeyBinding::new(Key::Key3)),
+            (KeybindAction::DeleteTool, KeyBinding::new(Key::D)),
+            (KeybindAction::FillTool, KeyBinding::new(Key::Key2)),
+            (KeybindAction::Rotate, KeyBinding::with_shift(Key::R)),
+            (KeybindAction::Copy, KeyBinding::with_primary(Key::C)),
+            (KeybindAction::Paste, KeyBinding::with_primary(Key::V)),
+        ];
 
-        for action in KeybindAction::ALL {
-            let binding = bindings.get(action);
-            assert!(
-                BINDABLE_KEYS.contains(&binding.key),
-                "default binding for {action:?} uses non-bindable key {:?}",
-                binding.key
-            );
+        for (action, binding) in expected {
+            assert_eq!(bindings.get(action), binding);
+        }
+
+        for (index, key) in [
+            Key::Q,
+            Key::W,
+            Key::E,
+            Key::R,
+            Key::T,
+            Key::Y,
+            Key::U,
+            Key::I,
+            Key::O,
+            Key::P,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(bindings.recent(index), Some(KeyBinding::new(key)));
+        }
+    }
+
+    #[test]
+    fn every_preset_uses_unique_bindable_keys() {
+        for preset in [KeybindPreset::Default, KeybindPreset::StrongDmm] {
+            let bindings = preset.bindings();
+
+            for (index, action) in KeybindAction::ALL.into_iter().enumerate() {
+                let binding = bindings.get(action);
+                assert!(
+                    BINDABLE_KEYS.contains(&binding.key),
+                    "{preset:?} binding for {action:?} uses non-bindable key {:?}",
+                    binding.key
+                );
+                for candidate in KeybindAction::ALL.into_iter().skip(index + 1) {
+                    assert_ne!(
+                        binding,
+                        bindings.get(candidate),
+                        "{preset:?} assigns the same binding to {action:?} and {candidate:?}"
+                    );
+                }
+            }
         }
     }
 
@@ -1019,6 +1166,26 @@ mod tests {
     #[test]
     fn malformed_toml_is_rejected() {
         assert!(toml::from_str::<Settings>("show_areas = maybe").is_err());
+    }
+
+    #[test]
+    fn only_a_missing_settings_file_requests_a_keybinding_preset() {
+        let missing = Settings::from_file_read(Err(io::Error::from(io::ErrorKind::NotFound))).unwrap();
+        let missing = SettingsLoad::from_file_result(Ok(missing));
+        assert!(missing.needs_keybind_preset);
+
+        let present = Settings::from_file_read(Ok(String::new())).unwrap();
+        let present = SettingsLoad::from_file_result(Ok(present));
+        assert!(!present.needs_keybind_preset);
+        assert_eq!(present.settings, Settings::default());
+
+        let malformed = Settings::from_file_read(Ok(String::from("show_areas = maybe")));
+        let malformed = SettingsLoad::from_file_result(malformed);
+        assert!(!malformed.needs_keybind_preset);
+
+        let unreadable = Settings::from_file_read(Err(io::Error::from(io::ErrorKind::PermissionDenied)));
+        let unreadable = SettingsLoad::from_file_result(unreadable);
+        assert!(!unreadable.needs_keybind_preset);
     }
 
     #[test]
