@@ -139,6 +139,9 @@ const OBJECT_TREE_LINE_THICKNESS: f32 = 1.5;
 const OBJECT_TREE_BRANCH_LENGTH: f32 = 9.0;
 const OBJECT_TREE_LEAF_BRANCH_LENGTH: f32 = 18.0;
 const SIMILAR_INSTANCES_WINDOW_SIZE: [f32; 2] = [420.0, 320.0];
+const SETTINGS_WINDOW_SIZE: [f32; 2] = [760.0, 560.0];
+const SETTINGS_WINDOW_MIN_SIZE: [f32; 2] = [620.0, 420.0];
+const SETTINGS_CATEGORY_WIDTH: f32 = 160.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ActivePlacementFlash {
@@ -535,6 +538,70 @@ struct JumpTarget {
     instance: PrefabInstanceId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum SettingsCategory {
+    #[default]
+    General,
+    Viewport,
+    ObjectTree,
+    Keybindings,
+}
+
+struct SettingsWindowState<'a> {
+    open: &'a mut bool,
+    category: &'a mut SettingsCategory,
+    capturing: &'a mut Option<KeybindAction>,
+    measured: &'a mut [f32; 2],
+}
+
+impl SettingsCategory {
+    const ALL: [Self; 4] = [Self::General, Self::Viewport, Self::ObjectTree, Self::Keybindings];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Viewport => "Viewport",
+            Self::ObjectTree => "Object Tree",
+            Self::Keybindings => "Keybindings",
+        }
+    }
+}
+
+const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
+    ("Application", &[KeybindAction::Save]),
+    (
+        "Editing",
+        &[
+            KeybindAction::Undo,
+            KeybindAction::Redo,
+            KeybindAction::Copy,
+            KeybindAction::Paste,
+        ],
+    ),
+    (
+        "Viewport",
+        &[
+            KeybindAction::ShowAreas,
+            KeybindAction::ShowAreaOutlines,
+            KeybindAction::LevelUp,
+            KeybindAction::LevelDown,
+            KeybindAction::Refit,
+        ],
+    ),
+    (
+        "Tools",
+        &[
+            KeybindAction::PlaceTool,
+            KeybindAction::SelectTool,
+            KeybindAction::BlockSelectTool,
+            KeybindAction::DeleteTool,
+            KeybindAction::FillTool,
+            KeybindAction::Rotate,
+        ],
+    ),
+    ("Recent", &KeybindAction::RECENT),
+];
+
 pub struct UiState {
     object_tree: WindowKey,
     map_views: HashMap<DocumentId, MapViewState>,
@@ -574,6 +641,7 @@ pub struct UiState {
     load_notice: Option<LoadNotice>,
     load_window_size: [f32; 2],
     settings_window_size: [f32; 2],
+    settings_category: SettingsCategory,
     capturing_keybind: Option<KeybindAction>,
 }
 
@@ -583,7 +651,7 @@ impl UiState {
         let welcome_window = WindowKey::new("welcome", "Welcome")?;
         let inspector_window = WindowKey::new("inspector", "Inspector")?;
         let similar_instances_window = WindowKey::new("similar-instances", "Similar prefab instances")?;
-        let settings_window = WindowKey::new("settings", "Settings")?;
+        let settings_window = WindowKey::new("settings-v2", "Settings")?;
         let load_window = WindowKey::new("load", "Loading")?;
         let layout = DockLayout::split(
             DockSplit::Left,
@@ -635,7 +703,8 @@ impl UiState {
             load_window,
             load_notice: None,
             load_window_size: [0.0, 0.0],
-            settings_window_size: [420.0, 480.0],
+            settings_window_size: SETTINGS_WINDOW_SIZE,
+            settings_category: SettingsCategory::default(),
             capturing_keybind: None,
         })
     }
@@ -879,15 +948,21 @@ impl UiState {
         }
         draw_save_dialog(ui, session, &mut self.save_dialog);
 
-        draw_settings_window(
+        let object_tree_settings_changed = draw_settings_window(
             ui,
             &self.settings_window,
-            &mut self.show_settings,
-            &mut self.capturing_keybind,
-            &mut self.settings_window_size,
+            SettingsWindowState {
+                open: &mut self.show_settings,
+                category: &mut self.settings_category,
+                capturing: &mut self.capturing_keybind,
+                measured: &mut self.settings_window_size,
+            },
             session,
             settings,
         );
+        if object_tree_settings_changed {
+            self.object_tree_filter_revision = u64::MAX;
+        }
         self.show_welcome |= show_welcome;
 
         let mut open_source = self.draw_object_tree(ui, session, settings);
@@ -1117,40 +1192,12 @@ impl UiState {
 
             let mut type_filter_changed = false;
             if let Some(_popup) = ui.begin_popup(OBJECT_TREE_FILTER_OPTIONS_POPUP) {
-                type_filter_changed |= ui.checkbox("Filter /atom", &mut settings.object_tree_filter.atom);
-                type_filter_changed |= ui.checkbox("Filter /movable", &mut settings.object_tree_filter.movable);
-                type_filter_changed |= ui.checkbox("Filter /obj", &mut settings.object_tree_filter.obj);
-                type_filter_changed |= ui.checkbox("Filter /turf", &mut settings.object_tree_filter.turf);
-
-                ui.separator();
-                type_filter_changed |= ui.checkbox(
-                    "Filter custom type path and subtypes",
-                    &mut settings.object_tree_filter.custom_enabled,
-                );
-                let _disabled = ui.begin_disabled_with_cond(!settings.object_tree_filter.custom_enabled);
-                ui.set_next_item_width(280.0);
-                type_filter_changed |= ui
-                    .input_text(
-                        "##object-tree-custom-type-filter",
-                        &mut settings.object_tree_filter.custom_type_path,
-                    )
-                    .hint("/path/to/type")
-                    .build();
+                type_filter_changed |= draw_object_tree_filter_settings(ui, &mut settings.object_tree_filter);
             }
 
             let mut search_options_changed = false;
             if let Some(_popup) = ui.begin_popup(OBJECT_TREE_OPTIONS_POPUP) {
-                let disable_type_paths = settings.object_tree_search.type_paths && !settings.object_tree_search.names;
-                {
-                    let _disabled = ui.begin_disabled_with_cond(disable_type_paths);
-                    search_options_changed |= ui.checkbox("Type paths", &mut settings.object_tree_search.type_paths);
-                }
-
-                let disable_names = settings.object_tree_search.names && !settings.object_tree_search.type_paths;
-                {
-                    let _disabled = ui.begin_disabled_with_cond(disable_names);
-                    search_options_changed |= ui.checkbox("Names (atom/name)", &mut settings.object_tree_search.names);
-                }
+                search_options_changed |= draw_object_tree_search_settings(ui, &mut settings.object_tree_search);
 
                 ui.separator();
                 ui.checkbox("Line indicators", &mut settings.object_tree_line_indicators);
@@ -1201,10 +1248,6 @@ impl UiState {
                     return;
                 }
 
-                let mut alternate_row = ui.style_color(StyleColor::TableRowBgAlt);
-                // need to handle this in themes, not here but lazy
-                alternate_row[3] *= 0.4;
-                let _alternate_row = ui.push_style_color(StyleColor::TableRowBgAlt, alternate_row);
                 ui.table("object-tree-types")
                     .flags(TableFlags::BORDERS_INNER_V | TableFlags::ROW_BG)
                     .sizing_policy(TableSizingPolicy::StretchProp)
@@ -2595,70 +2638,198 @@ fn grouped(value: usize) -> String {
 }
 
 fn draw_settings_window(
-    ui: &Ui, window: &WindowKey, open: &mut bool, capturing: &mut Option<KeybindAction>, measured: &mut [f32; 2],
-    session: &mut Session, settings: &mut Settings,
-) {
+    ui: &Ui, window: &WindowKey, state: SettingsWindowState<'_>, session: &mut Session, settings: &mut Settings,
+) -> bool {
+    let SettingsWindowState {
+        open,
+        category,
+        capturing,
+        measured,
+    } = state;
     if !*open {
         *capturing = None;
 
-        return;
+        return false;
     }
 
     let center = ui.main_viewport().work_center();
     let position = [center[0] - measured[0] / 2.0, center[1] - measured[1] / 2.0];
-    let flags = WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_COLLAPSE | WindowFlags::NO_DOCKING;
+    let flags = WindowFlags::NO_COLLAPSE | WindowFlags::NO_DOCKING;
+    let mut object_tree_changed = false;
     ui.window(window)
         .opened(open)
         .position(position, Condition::Appearing)
+        .size(SETTINGS_WINDOW_SIZE, Condition::FirstUseEver)
+        .size_constraints(SETTINGS_WINDOW_MIN_SIZE, [f32::MAX, f32::MAX])
         .flags(flags)
         .build(|| {
-            ui.checkbox("Show areas", &mut session.options.show_areas);
-            ui.checkbox("Show area outlines", &mut session.options.show_area_outlines);
-            ui.checkbox("Tile placement flash", &mut settings.tile_place_flash);
-            ui.checkbox("Selection guide line", &mut settings.selection_guide_line);
+            let content_height = ui.content_region_avail()[1].max(1.0);
+            ui.child_window("settings-categories")
+                .size([SETTINGS_CATEGORY_WIDTH, content_height])
+                .border(true)
+                .build(ui, || {
+                    for candidate in SettingsCategory::ALL {
+                        if ui
+                            .selectable_config(candidate.label())
+                            .selected(*category == candidate)
+                            .build()
+                            && *category != candidate
+                        {
+                            *category = candidate;
+                            *capturing = None;
+                        }
+                    }
+                });
 
-            ui.text("Highlight");
-            for highlight in SelectionHighlight::ALL {
-                ui.same_line();
-                if ui.radio_button(highlight.label(), settings.selection_highlight == highlight) {
-                    settings.selection_highlight = highlight;
-                }
-            }
+            ui.same_line();
+            ui.child_window(format!("settings-content-{}", category.label()))
+                .size([0.0, content_height])
+                .border(true)
+                .build(ui, || {
+                    ui.text(category.label());
+                    ui.separator();
 
-            ui.separator();
-            ui.text("Preferred editor");
-            ui.set_next_item_width(360.0);
-            ui.input_text("##preferred-editor", &mut settings.preferred_editor)
-                .build();
-            ui.text_disabled("Placeholders: {file}, {line}, {column}");
-
-            ui.separator();
-            ui.text("Keybindings");
-            for action in KeybindAction::ALL {
-                ui.text(action.label());
-                ui.same_line_with_pos(180.0);
-
-                let binding = settings.keybindings.get(action).label(ui);
-                let visible = if *capturing == Some(action) {
-                    "Press a key..."
-                } else {
-                    binding.as_str()
-                };
-                if ui.button_with_size(format!("{visible}##keybind-{}", action.id()), [140.0, 0.0]) {
-                    *capturing = (*capturing != Some(action)).then_some(action);
-                }
-            }
-
-            if ui.button("Reset keybindings") {
-                settings.keybindings = KeyBindings::default();
-                *capturing = None;
-            }
+                    match category {
+                        SettingsCategory::General => draw_general_settings(ui, settings),
+                        SettingsCategory::Viewport => draw_viewport_settings(ui, session, settings),
+                        SettingsCategory::ObjectTree => {
+                            object_tree_changed |= draw_object_tree_settings(ui, settings);
+                        },
+                        SettingsCategory::Keybindings => draw_keybinding_settings(ui, capturing, settings),
+                    }
+                });
 
             *measured = ui.window_size();
         });
 
     if !*open {
         *capturing = None;
+    }
+
+    object_tree_changed
+}
+
+fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
+    ui.text("External editor");
+    ui.text("Command");
+    ui.set_next_item_width(-1.0);
+    ui.input_text("##preferred-editor", &mut settings.preferred_editor)
+        .build();
+    ui.text_disabled("Placeholders: {file}, {line}, {column}");
+}
+
+fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Settings) {
+    ui.text("Areas");
+    ui.checkbox("Show areas", &mut session.options.show_areas);
+    ui.checkbox("Show area outlines", &mut session.options.show_area_outlines);
+
+    ui.separator();
+    ui.text("Feedback");
+    ui.checkbox("Tile placement flash", &mut settings.tile_place_flash);
+    ui.checkbox("Selection guide line", &mut settings.selection_guide_line);
+
+    ui.separator();
+    ui.text("Selection");
+    ui.text("Highlight style");
+    for (index, highlight) in SelectionHighlight::ALL.into_iter().enumerate() {
+        if index > 0 {
+            ui.same_line();
+        }
+        if ui.radio_button(highlight.label(), settings.selection_highlight == highlight) {
+            settings.selection_highlight = highlight;
+        }
+    }
+}
+
+fn draw_object_tree_settings(ui: &Ui, settings: &mut Settings) -> bool {
+    ui.text("Search fields");
+    let mut changed = draw_object_tree_search_settings(ui, &mut settings.object_tree_search);
+
+    ui.separator();
+    ui.text("Type filters");
+    changed |= draw_object_tree_filter_settings(ui, &mut settings.object_tree_filter);
+
+    ui.separator();
+    ui.text("Appearance");
+    ui.checkbox("Line indicators", &mut settings.object_tree_line_indicators);
+
+    changed
+}
+
+fn draw_object_tree_search_settings(ui: &Ui, options: &mut ObjectTreeSearchOptions) -> bool {
+    let mut changed = false;
+    let disable_type_paths = options.type_paths && !options.names;
+    {
+        let _disabled = ui.begin_disabled_with_cond(disable_type_paths);
+        changed |= ui.checkbox("Type paths", &mut options.type_paths);
+    }
+
+    let disable_names = options.names && !options.type_paths;
+    {
+        let _disabled = ui.begin_disabled_with_cond(disable_names);
+        changed |= ui.checkbox("Names (atom/name)", &mut options.names);
+    }
+
+    changed
+}
+
+fn draw_object_tree_filter_settings(ui: &Ui, options: &mut ObjectTreeFilterOptions) -> bool {
+    let mut changed = false;
+    changed |= ui.checkbox("Filter /atom", &mut options.atom);
+    changed |= ui.checkbox("Filter /movable", &mut options.movable);
+    changed |= ui.checkbox("Filter /obj", &mut options.obj);
+    changed |= ui.checkbox("Filter /turf", &mut options.turf);
+
+    ui.separator();
+    changed |= ui.checkbox("Filter custom type path and subtypes", &mut options.custom_enabled);
+    let _disabled = ui.begin_disabled_with_cond(!options.custom_enabled);
+    ui.set_next_item_width(ui.content_region_avail()[0].clamp(1.0, 360.0));
+    changed |= ui
+        .input_text("##object-tree-custom-type-filter", &mut options.custom_type_path)
+        .hint("/path/to/type")
+        .build();
+
+    changed
+}
+
+fn draw_keybinding_settings(ui: &Ui, capturing: &mut Option<KeybindAction>, settings: &mut Settings) {
+    if ui.button("Reset keybindings") {
+        settings.keybindings = KeyBindings::default();
+        *capturing = None;
+    }
+
+    for (index, &(group, actions)) in SETTINGS_KEYBINDING_GROUPS.iter().enumerate() {
+        ui.separator();
+        ui.text(group);
+        ui.table(format!("settings-keybindings-{index}"))
+            .flags(TableFlags::BORDERS_INNER_V | TableFlags::ROW_BG)
+            .sizing_policy(TableSizingPolicy::StretchProp)
+            .column("Action")
+            .weight(1.0)
+            .done()
+            .column("Binding")
+            .width(170.0)
+            .done()
+            .build(|ui| {
+                for &action in actions {
+                    ui.table_next_row();
+                    ui.table_next_column();
+                    ui.align_text_to_frame_padding();
+                    ui.text(action.label());
+                    ui.table_next_column();
+
+                    let binding = settings.keybindings.get(action).label(ui);
+                    let visible = if *capturing == Some(action) {
+                        "Press a key..."
+                    } else {
+                        binding.as_str()
+                    };
+                    let width = ui.content_region_avail()[0].max(1.0);
+                    if ui.button_with_size(format!("{visible}##keybind-{}", action.id()), [width, 0.0]) {
+                        *capturing = (*capturing != Some(action)).then_some(action);
+                    }
+                }
+            });
     }
 }
 
@@ -4177,6 +4348,7 @@ mod tests {
         path::TreePath,
         types::{Identifier, Value, VarModifiers},
     };
+    use std::sync::Mutex;
 
     use dmm::{Map, PrefabInstanceId, Size};
     use editor::command::Edit;
@@ -4184,6 +4356,8 @@ mod tests {
     use render::{HighlightStyle, SpriteTexture};
 
     use super::*;
+
+    static IMGUI_CONTEXT: Mutex<()> = Mutex::new(());
 
     fn set_type_name(tree: &mut ObjectTree, id: TypeId, value: &str) {
         let name = Identifier::from("name");
@@ -4792,6 +4966,7 @@ mod tests {
 
     #[test]
     fn object_tree_rows_follow_expansion_and_render_a_clipped_search() {
+        let _context = IMGUI_CONTEXT.lock().unwrap();
         let mut tree = ObjectTree::new();
         let thing = tree.register(&TreePath::parse("/atom/structure/thing"), Location::default());
         tree.register(&TreePath::parse("/atom/movable/item"), Location::default());
@@ -4971,6 +5146,66 @@ mod tests {
     fn panel_extent_rejects_non_finite_or_empty_sizes() {
         assert_eq!(panel_extent([0.0, f32::NAN]), ([1.0, 1.0], (1, 1)));
         assert_eq!(panel_extent([320.75, 200.25]), ([320.75, 200.25], (320, 200)));
+    }
+
+    #[test]
+    fn settings_categories_have_a_stable_order_and_default() {
+        assert_eq!(SettingsCategory::default(), SettingsCategory::General);
+        assert_eq!(
+            SettingsCategory::ALL.map(SettingsCategory::label),
+            ["General", "Viewport", "Object Tree", "Keybindings"]
+        );
+    }
+
+    #[test]
+    fn settings_keybinding_groups_include_every_action_once() {
+        let grouped = SETTINGS_KEYBINDING_GROUPS
+            .iter()
+            .flat_map(|(_, actions)| actions.iter().copied())
+            .collect::<Vec<_>>();
+
+        assert_eq!(grouped.len(), KeybindAction::ALL.len());
+        for action in KeybindAction::ALL {
+            assert_eq!(grouped.iter().filter(|candidate| **candidate == action).count(), 1);
+        }
+    }
+
+    #[test]
+    fn every_settings_category_renders_in_the_two_pane_window() {
+        let _context = IMGUI_CONTEXT.lock().unwrap();
+        for mut category in SettingsCategory::ALL {
+            let mut context = dear_imgui_rs::Context::create();
+            context
+                .font_atlas()
+                .try_claim_legacy_renderer()
+                .expect("legacy renderer font atlas should be available")
+                .build();
+            context.io_mut().set_display_size([1280.0, 720.0]);
+            context.io_mut().set_delta_time(1.0 / 60.0);
+            let ui = context.frame();
+            let window = WindowKey::new(format!("settings-test-{}", category.label()), "Settings")
+                .expect("valid settings window key");
+            let mut open = true;
+            let mut capturing = None;
+            let mut measured = SETTINGS_WINDOW_SIZE;
+            let mut session = Session::new();
+            let mut settings = Settings::default();
+
+            draw_settings_window(
+                ui,
+                &window,
+                SettingsWindowState {
+                    open: &mut open,
+                    category: &mut category,
+                    capturing: &mut capturing,
+                    measured: &mut measured,
+                },
+                &mut session,
+                &mut settings,
+            );
+
+            assert!(context.render_legacy().valid());
+        }
     }
 
     #[test]

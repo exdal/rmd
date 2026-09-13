@@ -28,6 +28,7 @@ use dear_imgui_rs::{
     Context,
     FontSource,
     StbTrueTypeFontData,
+    StyleColor,
     render::SynchronousRendererConsumer,
 };
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
@@ -52,6 +53,7 @@ use crate::{
 
 const FONT_DATA: &[u8] = include_bytes!("../assets/FiraMono-Regular.ttf");
 const MDI_FONT_DATA: &[u8] = include_bytes!("../assets/materialdesignicons-webfont.ttf");
+const TABLE_ROW_ALT_ALPHA_SCALE: f32 = 0.4;
 
 fn usage() -> ExitCode {
     log::error!(
@@ -241,6 +243,9 @@ impl App {
         let device = Device::new(window.window_handle()?.as_raw(), window.display_handle()?.as_raw())?;
 
         let mut imgui = Context::create();
+        let mut alternate_row = imgui.style().color(StyleColor::TableRowBgAlt);
+        alternate_row[3] *= TABLE_ROW_ALT_ALPHA_SCALE;
+        imgui.style_mut().set_color(StyleColor::TableRowBgAlt, alternate_row);
         let text_font = StbTrueTypeFontData::from_slice(FONT_DATA)?;
         let mdi_font = StbTrueTypeFontData::from_slice(MDI_FONT_DATA)?;
         imgui.font_atlas().add_font(&[
