@@ -441,7 +441,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "editor"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "ast",
  "core",
@@ -1413,7 +1413,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "render"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "ash",
  "dear-imgui-rs",
