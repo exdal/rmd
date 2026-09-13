@@ -13,6 +13,7 @@ use crate::{
 pub struct TileBlock {
     width: u32,
     height: u32,
+    selection_mode: BlockSelectionMode,
     /// row major, `tiles[y * width + x]`, `y` ascending = dmm north
     tiles: Vec<Tile>,
 }
@@ -21,6 +22,8 @@ impl TileBlock {
     pub fn width(&self) -> u32 { self.width }
 
     pub fn height(&self) -> u32 { self.height }
+
+    pub fn selection_mode(&self) -> BlockSelectionMode { self.selection_mode }
 
     pub fn tile(&self, x: u32, y: u32) -> Option<&Tile> {
         (x < self.width && y < self.height).then(|| &self.tiles[(y * self.width + x) as usize])
@@ -84,10 +87,12 @@ pub fn copy_block(document: &MapDocument, selection: Selection, mode: BlockSelec
         }
     }
 
-    tiles
-        .iter()
-        .any(|tile| !tile.is_empty())
-        .then_some(TileBlock { width, height, tiles })
+    tiles.iter().any(|tile| !tile.is_empty()).then_some(TileBlock {
+        width,
+        height,
+        selection_mode: mode,
+        tiles,
+    })
 }
 
 pub fn placements<'a>(
@@ -218,6 +223,7 @@ mod tests {
         .expect("block");
 
         assert_eq!(block.filled().count(), 8);
+        assert_eq!(block.selection_mode(), BlockSelectionMode::Hollow { line_width: 1 });
         assert!(block.tile(1, 1).expect("tile").is_empty());
     }
 
@@ -303,6 +309,7 @@ mod tests {
         let block = TileBlock {
             width: 1,
             height: 1,
+            selection_mode: BlockSelectionMode::Full,
             tiles: vec![vec![Prefab::new(TreePath::parse("/turf/from/another/codebase"))]],
         };
 

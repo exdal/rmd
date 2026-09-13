@@ -12,6 +12,7 @@ use dmm::{Coord, Map, MapFormat, Prefab, key::Key};
 use crate::{
     command::{Edit, EditGroupId, History},
     focus::AreaFocus,
+    tool::{BlockSelectionMode, SelectionMask},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -38,6 +39,7 @@ pub struct MapDocument {
     pub history: History,
     pub z: u32,
     pub selection: Option<Selection>,
+    pub selection_mode: BlockSelectionMode,
     needs_initial_save: bool,
     selected_instance: Option<PrefabInstanceId>,
     instances: PrefabInstances,
@@ -246,6 +248,7 @@ impl MapDocument {
             history: History::new(),
             z,
             selection: None,
+            selection_mode: BlockSelectionMode::Full,
             needs_initial_save: false,
             selected_instance: None,
             instances,
@@ -257,6 +260,15 @@ impl MapDocument {
     }
 
     pub fn id(&self) -> DocumentId { self.id }
+
+    pub fn selection_mask(&self) -> Option<SelectionMask> {
+        self.selection
+            .filter(|bounds| bounds.min.z == self.z)
+            .map(|bounds| SelectionMask {
+                bounds,
+                mode: self.selection_mode,
+            })
+    }
 
     pub fn open(path: impl Into<PathBuf>, map: Map, z: u32) -> Self {
         Self {

@@ -40,6 +40,7 @@ use crate::{
     GpuError,
     PickResult,
     SpriteInstance,
+    SpritePreview,
     VisibilityId,
     extent3d,
     imgui::{ImGuiPass, ImGuiSlots},
@@ -322,6 +323,7 @@ struct MapViewState {
     rect: crate::MapViewRect,
     highlight_tint: bool,
     delete_mode: bool,
+    preview: bool,
 }
 
 impl FrameGraphState {
@@ -339,6 +341,7 @@ impl FrameGraphState {
                     rect: view.rect,
                     highlight_tint: view.interaction.highlight.is_tint(),
                     delete_mode: view.interaction.mode.is_delete(),
+                    preview: view.preview.is_some_and(|preview| !preview.sprites.is_empty()),
                 })
                 .collect(),
         }
@@ -363,6 +366,7 @@ struct MapViewPass {
     underlay_camera: ValueId,
     active_camera: ValueId,
     cull: CullSlots,
+    preview: Option<PreviewSlots>,
     should_pick: Option<ValueId>,
     interaction: Option<InteractionSlots>,
 }
@@ -372,6 +376,12 @@ struct AreaColorPass {
     sprites: ValueId,
     push: ValueId,
     groups: ValueId,
+}
+
+struct PreviewSlots {
+    sprites: ValueId,
+    camera: ValueId,
+    cull: CullSlots,
 }
 
 impl AreaColorPass {
@@ -475,6 +485,81 @@ struct UploadedMapView {
     ranges: Vec<LevelRange>,
 }
 
+struct UploadedPreview {
+    revision: u64,
+    sprites: Buffer,
+    cull: CullBuffers,
+}
+
+impl UploadedPreview {
+    fn allocate(device: &mut Device, preview: SpritePreview<'_>) -> Result<Self, GpuError> {
+        let payload = gpu_sprite_range(
+            preview.sprites,
+            crate::UpdateRange {
+                start: 0,
+                end: preview.sprites.len(),
+            },
+        )?;
+        let cull = CullBuffers::allocate(device, payload.len())?;
+        let size = cull
+            .sprite_capacity
+            .checked_mul(size_of::<GpuSprite>())
+            .and_then(|size| u64::try_from(size).ok());
+        let Some(size) = size else {
+            cull.destroy(device);
+            return Err(GpuError::SpriteUploadTooLarge);
+        };
+        let mut sprites = match device.allocator.allocate_buffer(
+            &BufferInfo::new(size, vk::BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::CpuToGpu)
+                .with_name("block preview sprites"),
+        ) {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                cull.destroy(device);
+                return Err(error.into());
+            },
+        };
+        if let Err(error) = sprites.write(0, &payload) {
+            device.allocator.deallocate_buffer(sprites);
+            cull.destroy(device);
+            return Err(error.into());
+        }
+        Ok(Self {
+            revision: preview.revision,
+            sprites,
+            cull,
+        })
+    }
+
+    fn destroy(self, device: &mut Device) {
+        device.allocator.deallocate_buffer(self.sprites);
+        self.cull.destroy(device);
+    }
+}
+
+fn preview_plan(camera: crate::Camera, preview: SpritePreview<'_>) -> Result<MapViewPlan, GpuError> {
+    Ok(MapViewPlan {
+        camera: CameraPush {
+            center: [camera.x - preview.offset[0], camera.y - preview.offset[1]],
+            viewport: [
+                camera.viewport_width.max(1) as f32,
+                camera.viewport_height.max(1) as f32,
+            ],
+            zoom: camera.zoom,
+            base: 0,
+            focused_area_owner: [0; 2],
+            placement_flash_owner: [0; 2],
+            placement_flash_strength: 0.0,
+        },
+        sprite_base: 0,
+        visible: VisibleRange {
+            base: 0,
+            count: u32::try_from(preview.sprites.len()).map_err(|_| GpuError::SpriteUploadTooLarge)?,
+            underlay_count: 0,
+        },
+    })
+}
+
 pub struct Renderer {
     graph: RenderGraph,
     recorded: Option<Recorded>,
@@ -497,6 +582,7 @@ pub struct Renderer {
     cull: Vec<CullBuffers>,
     pick_readback: Option<Buffer>,
     uploaded: Vec<UploadedMapView>,
+    previews: Vec<Option<UploadedPreview>>,
     imgui: Option<ImGuiPass>,
     highlight_started_at: Instant,
     extent: vk::Extent2D,
@@ -629,6 +715,7 @@ impl Renderer {
             cull: Vec::new(),
             pick_readback: None,
             uploaded: Vec::new(),
+            previews: Vec::new(),
             imgui: None,
             highlight_started_at: Instant::now(),
             extent: vk::Extent2D {
@@ -891,7 +978,7 @@ impl Renderer {
                 )
                 .end_rendering();
 
-            let (output_attachment, interaction, should_pick) = if with_imgui {
+            let (mut output_attachment, interaction, should_pick) = if with_imgui {
                 // TODO: vir doesnt support explicit barriers, fix this shit
                 [visibility_attachment] = module
                     .begin_compute([(visibility_attachment, Access::FragmentSampled | Access::ComputeSampled)])
@@ -995,6 +1082,60 @@ impl Renderer {
                 (scene_attachment, None, None)
             };
 
+            let preview = if view.preview {
+                let name = format!("map view {index} block preview");
+                let sprites = module.declare_buffer_var(&format!("{name} sprites"), Access::HostWrite);
+                let camera = module.declare_bytes_var(&format!("{name} camera"), size_of::<CameraPush>() as u32);
+                let visible = module.declare_buffer_var(&format!("{name} visible indices"), Access::VertexRead);
+                let chunks = module.declare_buffer_var(&format!("{name} chunks"), Access::ComputeRead);
+                let commands = module.declare_buffer_var(&format!("{name} draw commands"), Access::IndirectRead);
+                let (values, cull) = record_sprite_cull(
+                    &mut module,
+                    self.cull_pipelines,
+                    sprites,
+                    CullValues {
+                        visible,
+                        chunks,
+                        commands,
+                    },
+                    &state,
+                    &name,
+                );
+                [output_attachment, _, _] = module
+                    .begin_rendering([
+                        (output_attachment, Access::ColorRW),
+                        (values.commands, Access::IndirectRead),
+                        (values.visible, Access::VertexRead),
+                    ])
+                    .with_name(name)
+                    .bind_graphics_pipeline(self.sprite_pipeline)
+                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                    .set_viewport(0, Rect2D::framebuffer())
+                    .set_scissor(0, Rect2D::framebuffer())
+                    .broadcast_color_blend(BlendPreset::PremultipliedAlphaBlend)
+                    .set_rasterization(RasterizationState {
+                        cull_mode: vk::CullModeFlags::NONE,
+                        ..Default::default()
+                    })
+                    .bind_buffer(0, 1, sprites)
+                    .bind_buffer(0, 2, values.visible)
+                    .specialize_constant(spec::SPRITE_INDIRECT, true)
+                    .specialize_constant(spec::SHOW_AREAS, state.show_areas)
+                    .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
+                    .specialize_constant(spec::SPRITE_EDGE_ONLY, false)
+                    .push_constants_from(camera)
+                    .draw_indirect_at(
+                        values.commands,
+                        u64::from(DRAW_INDIRECT_STRIDE),
+                        1u32,
+                        DRAW_INDIRECT_STRIDE,
+                    )
+                    .end_rendering();
+                Some(PreviewSlots { sprites, camera, cull })
+            } else {
+                None
+            };
+
             map_views.push(MapViewPass {
                 scene_attachment,
                 visibility_attachment,
@@ -1004,6 +1145,7 @@ impl Renderer {
                 underlay_camera,
                 active_camera,
                 cull,
+                preview,
                 should_pick,
                 interaction,
             });
@@ -1074,6 +1216,7 @@ impl Renderer {
 
         self.prepare_sprites(frame)?;
         self.prepare_cull_buffers(frame)?;
+        self.prepare_previews(frame)?;
         let stripe_offset =
             (self.highlight_started_at.elapsed().as_secs_f32() * HIGHLIGHT_STRIPE_SPEED) % HIGHLIGHT_STRIPE_PERIOD;
 
@@ -1177,6 +1320,22 @@ impl Renderer {
             recorded.program.set(map_view.cull.chunks, buffers.chunks);
             recorded.program.set(map_view.cull.commands, buffers.commands);
             bind_sprite_cull(&mut recorded.program, &map_view.cull, &plan);
+
+            if let Some(slots) = &map_view.preview {
+                let preview = view.preview.ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+                let uploaded = self
+                    .previews
+                    .get(index)
+                    .and_then(Option::as_ref)
+                    .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+                let plan = preview_plan(view.camera, preview)?;
+                recorded.program.set(slots.sprites, uploaded.sprites);
+                recorded.program.set_bytes(slots.camera, &plan.camera);
+                recorded.program.set(slots.cull.visible, uploaded.cull.visible);
+                recorded.program.set(slots.cull.chunks, uploaded.cull.chunks);
+                recorded.program.set(slots.cull.commands, uploaded.cull.commands);
+                bind_sprite_cull(&mut recorded.program, &slots.cull, &plan);
+            }
 
             let Some(slots) = map_view.interaction.as_ref() else {
                 continue;
@@ -1434,6 +1593,61 @@ impl Renderer {
 
         self.uploaded = uploaded;
 
+        Ok(())
+    }
+
+    fn prepare_previews(&mut self, frame: &Frame<'_>) -> Result<(), GpuError> {
+        let wanted: Vec<_> = frame
+            .map_views
+            .iter()
+            .filter(|view| !view.rect.is_empty())
+            .map(|view| view.preview.filter(|preview| !preview.sprites.is_empty()))
+            .collect();
+        if wanted.len() == self.previews.len()
+            && wanted.iter().zip(&self.previews).all(|(preview, uploaded)| {
+                preview.is_none_or(|preview| {
+                    uploaded
+                        .as_ref()
+                        .is_some_and(|uploaded| uploaded.revision == preview.revision)
+                })
+            })
+        {
+            return Ok(());
+        }
+
+        self.graph.wait()?;
+        for preview in self.previews.drain(wanted.len().min(self.previews.len())..).flatten() {
+            preview.destroy(&mut self.device);
+        }
+        self.previews.resize_with(wanted.len(), || None);
+        for (slot, preview) in self.previews.iter_mut().zip(wanted) {
+            let Some(preview) = preview else { continue };
+            if slot
+                .as_ref()
+                .is_some_and(|uploaded| uploaded.revision == preview.revision)
+            {
+                continue;
+            }
+            if let Some(uploaded) = slot
+                .as_mut()
+                .filter(|uploaded| uploaded.cull.sprite_capacity >= preview.sprites.len())
+            {
+                let payload = gpu_sprite_range(
+                    preview.sprites,
+                    crate::UpdateRange {
+                        start: 0,
+                        end: preview.sprites.len(),
+                    },
+                )?;
+                uploaded.sprites.write(0, &payload)?;
+                uploaded.revision = preview.revision;
+            } else {
+                let uploaded = UploadedPreview::allocate(&mut self.device, preview)?;
+                if let Some(previous) = slot.replace(uploaded) {
+                    previous.destroy(&mut self.device);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1923,6 +2137,9 @@ impl Drop for Renderer {
         for buffers in std::mem::take(&mut self.cull) {
             buffers.destroy(&mut self.device);
         }
+        for preview in std::mem::take(&mut self.previews).into_iter().flatten() {
+            preview.destroy(&mut self.device);
+        }
         if let Some(buffer) = self.sprites.take() {
             self.device.allocator.deallocate_buffer(buffer);
         }
@@ -2287,6 +2504,7 @@ mod tests {
             revision: 1,
             pending_update: None,
             interaction: Default::default(),
+            preview: None,
         }
     }
 

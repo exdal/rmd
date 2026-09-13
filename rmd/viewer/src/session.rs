@@ -118,6 +118,7 @@ impl Session {
             revision: self.revision,
             pending_update: None,
             interaction: MapViewInteraction::default(),
+            preview: None,
         }
     }
 

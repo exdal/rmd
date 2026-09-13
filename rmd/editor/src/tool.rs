@@ -96,6 +96,16 @@ pub enum BlockSelectionMode {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectionMask {
+    pub bounds: Selection,
+    pub mode: BlockSelectionMode,
+}
+
+impl SelectionMask {
+    pub fn includes(self, coord: Coord) -> bool { self.mode.includes(self.bounds, coord) }
+}
+
 impl BlockSelectionMode {
     /// all the tiles of `selection` this mode actually edits, hollow mode will
     /// only edit tiles that are inside the ring
@@ -167,15 +177,21 @@ impl Tool {
             Self::Place => place(context),
             Self::Delete => delete(context),
             Self::Select | Self::BlockSelect => None,
-            Self::Fill => fill(context, Some(MAX_FILL_TILES)).ok().flatten(),
+            Self::Fill => fill(context, Some(MAX_FILL_TILES), None).ok().flatten(),
         }
     }
 
     pub fn build_fill_edit(
         self, context: &mut ToolContext<'_>, max_tiles: Option<usize>,
     ) -> Result<Option<ToolEdit>, FillError> {
+        self.build_fill_edit_with_mask(context, max_tiles, None)
+    }
+
+    pub fn build_fill_edit_with_mask(
+        self, context: &mut ToolContext<'_>, max_tiles: Option<usize>, mask: Option<SelectionMask>,
+    ) -> Result<Option<ToolEdit>, FillError> {
         if self == Self::Fill {
-            fill(context, max_tiles)
+            fill(context, max_tiles, mask)
         } else {
             Ok(self.build_edit(context))
         }
@@ -767,8 +783,13 @@ fn delete(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
     })
 }
 
-fn fill(context: &mut ToolContext<'_>, max_tiles: Option<usize>) -> Result<Option<ToolEdit>, FillError> {
-    if !coord_in_bounds(context.coord, context.document.map.size) || !context.document.allows_edit_at(context.coord) {
+fn fill(
+    context: &mut ToolContext<'_>, max_tiles: Option<usize>, mask: Option<SelectionMask>,
+) -> Result<Option<ToolEdit>, FillError> {
+    if !coord_in_bounds(context.coord, context.document.map.size)
+        || !context.document.allows_edit_at(context.coord)
+        || mask.is_some_and(|mask| !mask.includes(context.coord))
+    {
         return Ok(None);
     }
 
@@ -789,11 +810,11 @@ fn fill(context: &mut ToolContext<'_>, max_tiles: Option<usize>) -> Result<Optio
     let wall = context.tree.id_of(&TreePath::parse("/turf/closed"));
     let coords = match context.fill_mode {
         FillMode::Wall => match wall {
-            Some(wall) => wall_region(context, wall),
+            Some(wall) => boundary_region(context, &[wall], mask),
             None => return Ok(None),
         },
-        FillMode::EntireArea => area_region(context),
-        FillMode::Custom => custom_region(context),
+        FillMode::EntireArea => area_region(context, mask),
+        FillMode::Custom => custom_region(context, mask),
     };
 
     if coords.is_empty() {
@@ -848,9 +869,7 @@ pub(crate) fn coord_in_bounds(coord: Coord, size: dmm::Size) -> bool {
     (1..=size.x).contains(&coord.x) && (1..=size.y).contains(&coord.y) && (1..=size.z).contains(&coord.z)
 }
 
-fn wall_region(context: &ToolContext<'_>, wall: TypeId) -> Vec<Coord> { boundary_region(context, &[wall]) }
-
-fn custom_region(context: &ToolContext<'_>) -> Vec<Coord> {
+fn custom_region(context: &ToolContext<'_>, mask: Option<SelectionMask>) -> Vec<Coord> {
     let boundaries = context
         .custom_fill_boundaries
         .iter()
@@ -861,10 +880,10 @@ fn custom_region(context: &ToolContext<'_>) -> Vec<Coord> {
         return Vec::new();
     }
 
-    boundary_region(context, &boundaries)
+    boundary_region(context, &boundaries, mask)
 }
 
-fn boundary_region(context: &ToolContext<'_>, boundaries: &[TypeId]) -> Vec<Coord> {
+fn boundary_region(context: &ToolContext<'_>, boundaries: &[TypeId], mask: Option<SelectionMask>) -> Vec<Coord> {
     let is_boundary = |coord| tile_has_any_subtype(context.tree, context.document, coord, boundaries);
 
     if is_boundary(context.coord) {
@@ -876,7 +895,10 @@ fn boundary_region(context: &ToolContext<'_>, boundaries: &[TypeId]) -> Vec<Coor
     let mut visited = HashSet::from([context.coord]);
 
     while let Some(coord) = pending.pop_front() {
-        if !context.document.allows_edit_at(coord) || is_boundary(coord) {
+        if !context.document.allows_edit_at(coord)
+            || mask.is_some_and(|mask| !mask.includes(coord))
+            || is_boundary(coord)
+        {
             continue;
         }
 
@@ -891,7 +913,7 @@ fn boundary_region(context: &ToolContext<'_>, boundaries: &[TypeId]) -> Vec<Coor
     region
 }
 
-fn area_region(context: &ToolContext<'_>) -> Vec<Coord> {
+fn area_region(context: &ToolContext<'_>, mask: Option<SelectionMask>) -> Vec<Coord> {
     let area = match context.tree.roots().area {
         Some(area) => area,
         None => return Vec::new(),
@@ -906,6 +928,7 @@ fn area_region(context: &ToolContext<'_>) -> Vec<Coord> {
 
     while let Some(coord) = pending.pop_front() {
         if !context.document.allows_edit_at(coord)
+            || mask.is_some_and(|mask| !mask.includes(coord))
             || !prefab_of_subtype(context.tree, &context.document.map, coord, area)
                 .is_some_and(|candidate| crate::frame::same_area(&seed, candidate))
         {
@@ -1057,6 +1080,7 @@ mod tests {
         FillMode,
         MAX_FILL_TILES,
         Selection,
+        SelectionMask,
         SelectionPlacement,
         SelectionRotation,
         SelectionTransform,
@@ -1233,6 +1257,135 @@ mod tests {
             fill_mode: FillMode::default(),
             custom_fill_boundaries: &[],
         })
+    }
+
+    fn scoped_fill(
+        document: &mut MapDocument, coord: Coord, fill_mode: FillMode, mask: SelectionMask, limit: Option<usize>,
+    ) -> Result<Option<super::ToolEdit>, FillError> {
+        Tool::Fill.build_fill_edit_with_mask(
+            &mut ToolContext {
+                document,
+                tree: &tree(),
+                prefab: Some(&Prefab::new(TreePath::parse("/turf/open/floor/blue"))),
+                target: None,
+                coord,
+                anchor: None,
+                fill_mode,
+                custom_fill_boundaries: &[TreePath::parse("/obj/window")],
+            },
+            limit,
+            Some(mask),
+        )
+    }
+
+    #[test]
+    fn every_bucket_mode_obeys_full_and_hollow_selection_masks() {
+        for fill_mode in [FillMode::Wall, FillMode::EntireArea, FillMode::Custom] {
+            for mode in [
+                BlockSelectionMode::Full,
+                BlockSelectionMode::Hollow { line_width: 1 },
+                BlockSelectionMode::Hollow { line_width: 2 },
+            ] {
+                let mut document = grid_document(7, 7, |_| prefabs(&["/turf/open/floor", "/area/station"]));
+                let mask = SelectionMask {
+                    bounds: Selection::from_drag(Coord::new(2, 2, 1), Coord::new(6, 6, 1)),
+                    mode,
+                };
+                let action = scoped_fill(&mut document, mask.bounds.min, fill_mode, mask, None)
+                    .unwrap()
+                    .unwrap();
+                let actual = action
+                    .edit
+                    .changes
+                    .iter()
+                    .map(|change| change.coord)
+                    .collect::<HashSet<_>>();
+                assert_eq!(actual, mode.tiles(mask.bounds).collect(), "{fill_mode:?}, {mode:?}");
+                assert!(
+                    scoped_fill(&mut document, Coord::new(1, 1, 1), fill_mode, mask, None)
+                        .unwrap()
+                        .is_none()
+                );
+                if mode != BlockSelectionMode::Full {
+                    assert!(
+                        scoped_fill(&mut document, Coord::new(4, 4, 1), fill_mode, mask, None)
+                            .unwrap()
+                            .is_none()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bucket_traversal_cannot_leave_the_selection_to_reach_a_disconnected_part() {
+        for fill_mode in [FillMode::Wall, FillMode::EntireArea, FillMode::Custom] {
+            let mut document = grid_document(5, 5, |coord| {
+                if coord.x == 3 && (2..=4).contains(&coord.y) {
+                    match fill_mode {
+                        FillMode::Wall => prefabs(&["/turf/closed/wall", "/area/station"]),
+                        FillMode::EntireArea => prefabs(&["/turf/open/floor", "/area/space"]),
+                        FillMode::Custom => prefabs(&["/turf/open/floor", "/area/station", "/obj/window"]),
+                    }
+                } else {
+                    prefabs(&["/turf/open/floor", "/area/station"])
+                }
+            });
+            let mask = SelectionMask {
+                bounds: Selection::from_drag(Coord::new(2, 2, 1), Coord::new(4, 4, 1)),
+                mode: BlockSelectionMode::Full,
+            };
+            let action = scoped_fill(&mut document, mask.bounds.min, fill_mode, mask, None)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                action
+                    .edit
+                    .changes
+                    .iter()
+                    .map(|change| change.coord)
+                    .collect::<HashSet<_>>(),
+                (2..=4).map(|y| Coord::new(2, y, 1)).collect(),
+                "{fill_mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scoped_fill_limit_counts_only_selected_changes_and_never_partially_applies() {
+        let mut document = grid_document(80, 80, |_| prefabs(&["/turf/open/floor", "/area/station"]));
+        let mask = SelectionMask {
+            bounds: Selection::from_drag(Coord::new(2, 2, 1), Coord::new(6, 6, 1)),
+            mode: BlockSelectionMode::Full,
+        };
+        assert!(matches!(
+            scoped_fill(&mut document, mask.bounds.min, FillMode::Wall, mask, Some(24)),
+            Err(FillError::TooLarge { limit: 24 })
+        ));
+        assert_eq!(
+            turf_at(&document, mask.bounds.min).path,
+            TreePath::parse("/turf/open/floor")
+        );
+        let action = scoped_fill(
+            &mut document,
+            mask.bounds.min,
+            FillMode::Wall,
+            mask,
+            Some(MAX_FILL_TILES),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(action.edit.changes.len(), 25);
+        document.apply(action.edit);
+        assert_eq!(
+            turf_at(&document, Coord::new(1, 1, 1)).path,
+            TreePath::parse("/turf/open/floor")
+        );
+        assert!(document.undo());
+        assert_eq!(
+            turf_at(&document, mask.bounds.min).path,
+            TreePath::parse("/turf/open/floor")
+        );
     }
 
     #[test]

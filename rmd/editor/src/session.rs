@@ -23,6 +23,7 @@ use editor::{
         FillError,
         FillMode,
         MAX_FILL_TILES,
+        SelectionMask,
         SelectionPlacement,
         SelectionRotation,
         SelectionTransform,
@@ -50,6 +51,7 @@ use render::{
     MapViewRect,
     SelectionGuide,
     SpriteInstance,
+    SpritePreview,
     SpriteTexture,
     texture::TextureCatalog,
 };
@@ -98,12 +100,29 @@ pub(crate) struct PlacementPreview {
     pub offset: [i32; 2],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct BlockPreviewSprite {
-    pub sprite: SpriteInstance,
-    pub uv0: [f32; 2],
-    pub uv1: [f32; 2],
-    pub tint: [f32; 4],
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlockPreviewSource {
+    Selection(SelectionMask),
+    Clipboard,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BlockPreviewKey {
+    source: BlockPreviewSource,
+    rotation: SelectionRotation,
+    document_revision: u64,
+    clipboard_revision: u64,
+    texture_revision: u64,
+    tile_size: u32,
+    show_areas: bool,
+}
+
+struct BlockPreviewCache {
+    key: BlockPreviewKey,
+    sprites: Vec<SpriteInstance>,
+    revision: u64,
+    destination: Coord,
+    visible: bool,
 }
 
 const MAX_REPORTED_DIAGNOSTICS: usize = 500;
@@ -119,6 +138,7 @@ struct DocumentCache {
     instances: FrameInstances,
     revision: u64,
     frame_update: Option<FrameUpdate>,
+    preview: Option<BlockPreviewCache>,
 }
 
 pub struct Session {
@@ -127,6 +147,7 @@ pub struct Session {
     pub options: FrameOptions,
     caches: HashMap<DocumentId, DocumentCache>,
     next_revision: u64,
+    next_preview_revision: u64,
     type_visibility: TypeVisibility,
     type_thumbnails: HashMap<TypeId, Option<PrefabThumbnail>>,
     texture_revision: u64,
@@ -155,6 +176,7 @@ impl Session {
             options: FrameOptions::default(),
             caches: HashMap::new(),
             next_revision: 1,
+            next_preview_revision: 1,
             type_visibility: TypeVisibility::default(),
             type_thumbnails: HashMap::new(),
             texture_revision: 0,
@@ -548,6 +570,28 @@ impl Session {
         document.selection.filter(|selection| selection.min.z == document.z)
     }
 
+    pub fn selection_mask(&self) -> Option<SelectionMask> { self.state.active_document()?.selection_mask() }
+
+    pub fn selection_mode(&self) -> BlockSelectionMode {
+        self.selection_mask().map_or(BlockSelectionMode::Full, |mask| mask.mode)
+    }
+
+    pub(crate) fn edit_revision(&self) -> Option<u64> { Some(self.caches.get(&self.state.active()?)?.revision) }
+
+    pub fn can_select_block(&self, mask: SelectionMask) -> bool {
+        self.state.active_document().is_some_and(|document| {
+            mask.bounds.is_well_formed()
+                && mask.bounds.min.z == document.z
+                && mask.bounds.max.x <= document.map.size.x
+                && mask.bounds.max.y <= document.map.size.y
+                && mask.mode.tiles(mask.bounds).all(|coord| document.allows_edit_at(coord))
+        })
+    }
+
+    pub fn try_select_block(&mut self, mask: SelectionMask) -> bool {
+        self.can_select_block(mask) && self.select_block_with_mode(Some(mask.bounds), mask.mode)
+    }
+
     pub fn select_block(&mut self, selection: Option<Selection>) -> bool {
         self.select_block_with_mode(selection, BlockSelectionMode::Full)
     }
@@ -565,6 +609,7 @@ impl Session {
                 && mode.tiles(*selection).all(|coord| document.allows_edit_at(coord))
         });
         document.selection = selection;
+        document.selection_mode = mode;
         document.select_instance(None);
 
         selection.is_some()
@@ -607,6 +652,7 @@ impl Session {
 
         if let Some(document) = self.state.active_document_mut() {
             document.selection = Some(selection);
+            document.selection_mode = mode;
             document.select_instance(None);
         }
 
@@ -688,6 +734,7 @@ impl Session {
 
         if let Some(document) = self.state.active_document_mut() {
             document.selection = Some(target);
+            document.selection_mode = mode;
             document.select_instance(None);
         }
         self.state.choose_prefab(prefab);
@@ -760,6 +807,7 @@ impl Session {
 
         if let Some(document) = self.state.active_document_mut() {
             document.selection = Some(selection);
+            document.selection_mode = mode;
             document.select_instance(None);
         }
 
@@ -825,6 +873,14 @@ impl Session {
         self.state.clipboard()?.footprint(min, rotation)
     }
 
+    pub fn clipboard_selection_mask(&self, min: Coord, rotation: SelectionRotation) -> Option<SelectionMask> {
+        let block = self.state.clipboard()?;
+        Some(SelectionMask {
+            bounds: self.clipboard_footprint(min, rotation)?,
+            mode: block.selection_mode(),
+        })
+    }
+
     pub fn can_paste_clipboard(&self, min: Coord, rotation: SelectionRotation) -> bool {
         let Some(block) = self.state.clipboard() else {
             return false;
@@ -843,9 +899,10 @@ impl Session {
             };
 
             clipboard::paste_block(document, &environment.tree, block, min, rotation)
+                .map(|built| (built, block.selection_mode()))
         };
 
-        let Some((action, target)) = built else {
+        let Some(((action, target), mode)) = built else {
             return false;
         };
 
@@ -855,15 +912,75 @@ impl Session {
 
         if let Some(document) = self.state.active_document_mut() {
             document.selection = Some(target);
+            document.selection_mode = mode;
             document.select_instance(None);
         }
 
         true
     }
 
+    pub(crate) fn hide_block_preview(&mut self, id: DocumentId) {
+        if let Some(preview) = self.caches.get_mut(&id).and_then(|cache| cache.preview.as_mut()) {
+            preview.visible = false;
+        }
+    }
+
+    pub(crate) fn prepare_block_preview(
+        &mut self, id: DocumentId, source: BlockPreviewSource, destination: Coord, rotation: SelectionRotation,
+    ) {
+        let Some(cache) = self.caches.get(&id) else {
+            return;
+        };
+
+        if self.state.active() != Some(id) {
+            return;
+        }
+        let key = BlockPreviewKey {
+            source,
+            rotation,
+            document_revision: cache.revision,
+            clipboard_revision: if source == BlockPreviewSource::Clipboard {
+                self.state.clipboard_revision()
+            } else {
+                0
+            },
+            texture_revision: self.texture_revision,
+            tile_size: self.options.tile_size,
+            show_areas: self.options.show_areas,
+        };
+
+        if cache.preview.as_ref().is_none_or(|preview| preview.key != key) {
+            let origin = Coord::new(1, 1, 1);
+            let sprites = match source {
+                BlockPreviewSource::Selection(mask) => rotated_selection_at(mask.bounds, origin, rotation)
+                    .map_or_else(Vec::new, |target| {
+                        self.block_preview_sprites(mask.bounds, target, rotation, mask.mode)
+                    }),
+                BlockPreviewSource::Clipboard => self
+                    .clipboard_footprint(origin, rotation)
+                    .map_or_else(Vec::new, |target| self.clipboard_preview_sprites(target, rotation)),
+            };
+            let revision = self.next_preview_revision;
+            self.next_preview_revision = revision.wrapping_add(1).max(1);
+
+            if let Some(cache) = self.caches.get_mut(&id) {
+                cache.preview = Some(BlockPreviewCache {
+                    key,
+                    sprites,
+                    revision,
+                    destination,
+                    visible: true,
+                });
+            }
+        } else if let Some(preview) = self.caches.get_mut(&id).and_then(|cache| cache.preview.as_mut()) {
+            preview.destination = destination;
+            preview.visible = true;
+        }
+    }
+
     pub(crate) fn block_preview_sprites(
         &self, source: Selection, target: Selection, rotation: SelectionRotation, mode: BlockSelectionMode,
-    ) -> Vec<BlockPreviewSprite> {
+    ) -> Vec<SpriteInstance> {
         let Some(document) = self.state.active_document() else {
             return Vec::new();
         };
@@ -885,14 +1002,14 @@ impl Session {
             }
         }
 
-        previews.sort_by(|left, right| left.sprite.depth.total_cmp(&right.sprite.depth));
+        previews.sort_by(|left, right| left.depth.total_cmp(&right.depth));
 
         previews
     }
 
     pub(crate) fn clipboard_preview_sprites(
         &self, target: Selection, rotation: SelectionRotation,
-    ) -> Vec<BlockPreviewSprite> {
+    ) -> Vec<SpriteInstance> {
         let Some(environment) = self.state.environment.as_ref() else {
             return Vec::new();
         };
@@ -907,7 +1024,7 @@ impl Session {
             }
         }
 
-        previews.sort_by(|left, right| left.sprite.depth.total_cmp(&right.sprite.depth));
+        previews.sort_by(|left, right| left.depth.total_cmp(&right.depth));
 
         previews
     }
@@ -915,7 +1032,7 @@ impl Session {
     fn preview_sprite(
         &self, environment: &Environment, owner: PrefabInstanceId, prefab: &Prefab, destination: Coord,
         rotation: SelectionRotation,
-    ) -> Option<BlockPreviewSprite> {
+    ) -> Option<SpriteInstance> {
         let mut prefab = prefab.clone();
         rotate_prefab(&environment.tree, &mut prefab, rotation);
 
@@ -944,36 +1061,9 @@ impl Session {
             is_area,
         );
 
-        self.block_preview_sprite(sprite)
-    }
-
-    fn block_preview_sprite(&self, sprite: SpriteInstance) -> Option<BlockPreviewSprite> {
-        let sheet = self.textures.texture(sprite.texture.index)?;
-        let right = sprite.texture.source_position[0].checked_add(sprite.texture.width)?;
-        let bottom = sprite.texture.source_position[1].checked_add(sprite.texture.height)?;
-        let alpha = sprite.color[3];
-        let tint = if alpha > f32::EPSILON {
-            [
-                sprite.color[0] / alpha,
-                sprite.color[1] / alpha,
-                sprite.color[2] / alpha,
-                alpha,
-            ]
-        } else {
-            [1.0, 1.0, 1.0, 0.0]
-        };
-
-        Some(BlockPreviewSprite {
-            sprite,
-            uv0: [
-                sprite.texture.source_position[0] as f32 / sheet.width() as f32,
-                sprite.texture.source_position[1] as f32 / sheet.height() as f32,
-            ],
-            uv1: [
-                right as f32 / sheet.width() as f32,
-                bottom as f32 / sheet.height() as f32,
-            ],
-            tint,
+        Some(SpriteInstance {
+            color: sprite.color.map(|channel| channel * 0.55),
+            ..sprite
         })
     }
 
@@ -1104,12 +1194,14 @@ impl Session {
             return FillOutcome::NoChange;
         };
 
+        let mask = self.selection_mask();
+
         let action = {
             let Some((environment, document)) = self.state.active_pair_mut() else {
                 return FillOutcome::NoChange;
             };
 
-            Tool::Fill.build_fill_edit(
+            Tool::Fill.build_fill_edit_with_mask(
                 &mut ToolContext {
                     document,
                     tree: &environment.tree,
@@ -1121,6 +1213,7 @@ impl Session {
                     custom_fill_boundaries,
                 },
                 max_tiles,
+                mask,
             )
         };
 
@@ -1531,6 +1624,22 @@ impl Session {
             revision: cache.revision,
             pending_update: cache.frame_update,
             interaction,
+            preview: cache
+                .preview
+                .as_ref()
+                .filter(|preview| {
+                    preview.visible
+                        && preview.destination.z == document.z
+                        && preview.key.document_revision == cache.revision
+                })
+                .map(|preview| SpritePreview {
+                    sprites: &preview.sprites,
+                    revision: preview.revision,
+                    offset: [
+                        preview.destination.x.saturating_sub(1) as f32 * self.options.tile_size.max(1) as f32,
+                        preview.destination.y.saturating_sub(1) as f32 * self.options.tile_size.max(1) as f32,
+                    ],
+                }),
         })
     }
 
@@ -1952,7 +2061,7 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
 /// The editor always loads in the background, but tests want one blocking call.
 #[cfg(test)]
 impl Session {
-    fn load_environment(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn load_environment(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         self.apply_codebase(crate::loader::load_codebase(path, &Progress::new())?);
 
         Ok(())
@@ -1980,7 +2089,7 @@ mod tests {
         Environment,
         command::EditGroupId,
         document::{MapDocument, PlacedPrefab, PrefabInstanceId, Selection, VarMutation},
-        tool::{BlockSelectionMode, FillMode, SelectionPlacement, SelectionRotation, Tool},
+        tool::{BlockSelectionMode, FillMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
     };
     use objtree::ObjectTree;
     use render::SpriteInstance;
@@ -2252,6 +2361,100 @@ mod tests {
                 .and_then(|document| document.placed_tile(Coord::new(3, 3, 1))),
             Some(before)
         );
+    }
+
+    #[test]
+    fn cross_map_paste_preserves_the_copied_mask_contents_and_destination_hole() {
+        for mode in [
+            BlockSelectionMode::Full,
+            BlockSelectionMode::Hollow { line_width: 1 },
+            BlockSelectionMode::Hollow { line_width: 2 },
+        ] {
+            for rotation in [
+                SelectionRotation::Original,
+                SelectionRotation::Clockwise,
+                SelectionRotation::Half,
+                SelectionRotation::CounterClockwise,
+            ] {
+                let mut session = flat_session(9, 11);
+                let first = session.state.active().unwrap();
+                let source = Selection::from_drag(Coord::new(2, 2, 1), Coord::new(6, 8, 1));
+                let mut red = Prefab::new(TreePath::parse("/turf/open/floor"));
+                red.set_var("color".into(), Value::Text("#ff0000".into()));
+                session.state.choose_prefab(red.clone());
+                session.set_tool(Tool::BlockSelect);
+                assert!(session.select_block_with_mode(Some(source), mode));
+                assert!(session.fill_selected_block(source.min, SelectionRotation::Original, mode));
+                assert!(session.copy_selection(session.selection_mode()));
+                let copied = session.clipboard().unwrap().clone();
+                let source_grid = session.map().unwrap().grid.clone();
+                let source_revision = session.caches[&first].revision;
+
+                let mut map = Map::new(Size { x: 15, y: 15, z: 2 });
+                let base = map.intern_tile(vec![
+                    Prefab::new(TreePath::parse("/turf/open/floor")),
+                    Prefab::new(TreePath::parse("/area/station")),
+                ]);
+                for row in map.grid.iter_mut().flatten() {
+                    row.fill(base);
+                }
+                let second = session.activate_document(MapDocument::new(map, 2));
+                let destination_grid = session.map().unwrap().grid.clone();
+                let min = Coord::new(4, 4, 2);
+                let target = session.clipboard_footprint(min, rotation).unwrap();
+                let before = target
+                    .iter()
+                    .map(|coord| {
+                        (
+                            coord,
+                            session.state.active_document().unwrap().placed_tile(coord).unwrap(),
+                        )
+                    })
+                    .collect::<std::collections::HashMap<_, _>>();
+                assert_eq!(session.selection_mask(), None);
+                assert_eq!(
+                    session.clipboard_preview_sprites(target, rotation).len(),
+                    mode.tiles(source).count()
+                );
+                assert!(session.paste_clipboard(min, rotation));
+                for coord in target.iter() {
+                    let document = session.state.active_document().unwrap();
+                    if mode.includes(target, coord) {
+                        let mut expected = copied
+                            .destinations(target, rotation)
+                            .find(|(destination, _)| *destination == coord)
+                            .unwrap()
+                            .1
+                            .clone();
+                        for prefab in &mut expected {
+                            editor::tool::rotate_prefab(session.tree().unwrap(), prefab, rotation);
+                        }
+                        assert_eq!(
+                            document.map.tile_at(coord).unwrap(),
+                            &expected,
+                            "{mode:?}, {rotation:?}, {coord:?}"
+                        );
+                        assert_ne!(document.placed_tile(coord).unwrap()[0].id(), before[&coord][0].id());
+                    } else {
+                        assert_eq!(
+                            document.placed_tile(coord).unwrap(),
+                            before[&coord],
+                            "the hole must preserve the destination's contents and IDs"
+                        );
+                    }
+                }
+                assert_eq!(session.selection_mask(), Some(SelectionMask { bounds: target, mode }));
+                assert_render_cache_matches_rebuild(&session);
+                assert!(session.undo());
+                assert_eq!(session.map().unwrap().grid, destination_grid);
+                assert!(!session.undo());
+                assert!(session.redo());
+                assert_render_cache_matches_rebuild(&session);
+                assert_eq!(session.state.document(first).unwrap().map.grid, source_grid);
+                assert_eq!(session.caches[&first].revision, source_revision);
+                assert_eq!(session.state.active(), Some(second));
+            }
+        }
     }
 
     #[test]
@@ -3036,6 +3239,81 @@ mod tests {
             session.selection(),
             Some(Selection::from_drag(inside, Coord::new(2, 1, 1)))
         );
+    }
+
+    #[test]
+    fn resizing_selection_preserves_contents_history_and_the_last_valid_region() {
+        let mut session = focus_session();
+        session.set_tool(Tool::BlockSelect);
+        let mask = SelectionMask {
+            bounds: Selection::from_drag(Coord::new(1, 1, 1), Coord::new(1, 1, 1)),
+            mode: BlockSelectionMode::Hollow { line_width: 1 },
+        };
+        assert!(session.try_select_block(mask));
+        session.toggle_focus_at(Some(mask.bounds.min));
+        let revision = session.revision();
+        let tiles = session.map().unwrap().grid.clone();
+        let expanded = SelectionMask {
+            bounds: Selection::from_drag(mask.bounds.min, Coord::new(2, 1, 1)),
+            ..mask
+        };
+        assert!(session.try_select_block(expanded));
+        assert!(!session.try_select_block(SelectionMask {
+            bounds: Selection::from_drag(mask.bounds.min, Coord::new(3, 1, 1)),
+            ..mask
+        }));
+        assert_eq!(session.selection_mask(), Some(expanded));
+        assert_eq!(session.revision(), revision);
+        assert_eq!(session.map().unwrap().grid, tiles);
+        assert!(!session.undo());
+    }
+
+    #[test]
+    fn rectangle_fill_and_bucket_share_the_mask_across_tool_switches_and_undo() {
+        for mode in [BlockSelectionMode::Full, BlockSelectionMode::Hollow { line_width: 1 }] {
+            let mut session = flat_session(7, 7);
+            let mask = SelectionMask {
+                bounds: Selection::from_drag(Coord::new(2, 2, 1), Coord::new(6, 6, 1)),
+                mode,
+            };
+            session.set_tool(Tool::BlockSelect);
+            assert!(session.try_select_block(mask));
+            let mut red = Prefab::new(TreePath::parse("/turf/open/floor"));
+            red.set_var("color".into(), Value::Text("#ff0000".into()));
+            session.state.choose_prefab(red.clone());
+            assert!(session.fill_selected_block(
+                mask.bounds.min,
+                SelectionRotation::Original,
+                session.selection_mode()
+            ));
+            let mut blue = red.clone();
+            blue.set_var("color".into(), Value::Text("#0000ff".into()));
+            session.set_tool(Tool::Fill);
+            session.state.choose_prefab(blue.clone());
+            assert_eq!(session.selection_mask(), Some(mask));
+            assert_eq!(
+                session.fill_at(Coord::new(1, 1, 1), FillMode::Wall, &[]),
+                FillOutcome::NoChange
+            );
+            assert_eq!(
+                session.fill_at(mask.bounds.min, FillMode::Wall, &[]),
+                FillOutcome::Applied
+            );
+            for coord in Selection::from_drag(Coord::new(1, 1, 1), Coord::new(7, 7, 1)).iter() {
+                let tile = session.map().unwrap().tile_at(coord).unwrap();
+                assert_eq!(tile.contains(&blue), mask.includes(coord));
+            }
+            assert_render_cache_matches_rebuild(&session);
+            assert!(session.undo());
+            assert!(session.map().unwrap().tile_at(mask.bounds.min).unwrap().contains(&red));
+            assert!(session.undo());
+            assert!(!session.undo());
+            assert!(session.redo());
+            assert!(session.redo());
+            session.set_tool(Tool::BlockSelect);
+            assert_eq!(session.selection_mask(), Some(mask));
+            assert_render_cache_matches_rebuild(&session);
+        }
     }
 
     #[test]

@@ -179,6 +179,14 @@ pub struct MapViewFrame<'a> {
     pub revision: u64,
     pub pending_update: Option<FrameUpdate>,
     pub interaction: MapViewInteraction,
+    pub preview: Option<SpritePreview<'a>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SpritePreview<'a> {
+    pub sprites: &'a [SpriteInstance],
+    pub revision: u64,
+    pub offset: [f32; 2],
 }
 
 #[derive(Debug)]
