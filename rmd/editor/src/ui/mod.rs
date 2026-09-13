@@ -1,4 +1,8 @@
-use core::{path::TreePath, types::Identifier};
+mod inspector;
+mod object_tree;
+mod settings;
+
+use core::path::TreePath;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -15,12 +19,9 @@ use dear_imgui_rs::{
     Id,
     InputTextMultilineFlags,
     Key,
-    ListClipper,
     MouseButton,
     StyleColor,
     StyleVar,
-    TableFlags,
-    TableSizingPolicy,
     Ui,
     WindowFlags,
     WindowKey,
@@ -29,16 +30,12 @@ use dear_imgui_rs::{
 use dmm::{Coord, MapFormat, Prefab, Size};
 use editor::{
     command::EditGroupId,
-    document::{DocumentId, MapDocument, PrefabInstanceId, PrefabLocation, Selection},
+    document::{DocumentId, MapDocument, Selection},
     icons::materialdesignicons::{
         ICON_CLOSE_THICK,
-        ICON_COG,
         ICON_DOTS_HORIZONTAL,
         ICON_ERASER,
-        ICON_EYE,
-        ICON_EYE_OFF,
         ICON_EYEDROPPER,
-        ICON_FILTER,
         ICON_FORMAT_COLOR_FILL,
         ICON_IMAGE_BROKEN,
         ICON_MENU_DOWN,
@@ -56,26 +53,22 @@ use editor::{
         rotated_selection_at,
     },
 };
-use objtree::{ObjectTree, TypeId};
+pub(crate) use inspector::TransformMode;
+use objtree::ObjectTree;
 use render::{Camera, InteractionMode, MapViewInteraction, MapViewRect, PickRequest, PlacementFlash, Renderer};
 
+use self::{
+    inspector::{InspectorPanel, JumpTarget},
+    object_tree::ObjectTreePanel,
+    settings::SettingsWindow,
+};
 use crate::{
     camera::Controller,
     external_editor::SourceLocation,
     gizmo::{BlockGizmoTarget, GizmoMapView, GizmoState},
-    inspector::{InspectorOutput, InspectorState},
     loader::LoadView,
     session::{BlockPreviewSprite, FillOutcome, PlacementPreview, Session},
-    settings::{
-        BINDABLE_KEYS,
-        KeyBinding,
-        KeyBindings,
-        KeybindAction,
-        ObjectTreeFilterOptions,
-        ObjectTreeSearchOptions,
-        SelectionHighlight,
-        Settings,
-    },
+    settings::{KeyBindings, KeybindAction, Settings},
 };
 
 /// How far down the "Blur below" menu goes. The option itself takes any depth.
@@ -127,21 +120,6 @@ const BLOCK_SELECTION_SHADOW: [f32; 4] = [0.0, 0.0, 0.0, 0.85];
 const BLOCK_GHOST_OPACITY: f32 = 0.55;
 const BLOCK_STRIPE_LENGTH: f32 = 6.0;
 const BLOCK_STRIPE_SPEED: f32 = 12.0;
-const OBJECT_TREE_FILTER_OPTIONS_POPUP: &str = "object-tree-filter-options-popup";
-const OBJECT_TREE_OPTIONS_POPUP: &str = "object-tree-options-popup";
-const OBJECT_TREE_LINE_COLORS: [[f32; 4]; 4] = [
-    [254.0 / 255.0, 112.0 / 255.0, 246.0 / 255.0, 1.0],
-    [142.0 / 255.0, 112.0 / 255.0, 254.0 / 255.0, 1.0],
-    [112.0 / 255.0, 180.0 / 255.0, 254.0 / 255.0, 1.0],
-    [48.0 / 255.0, 134.0 / 255.0, 198.0 / 255.0, 1.0],
-];
-const OBJECT_TREE_LINE_THICKNESS: f32 = 1.5;
-const OBJECT_TREE_BRANCH_LENGTH: f32 = 9.0;
-const OBJECT_TREE_LEAF_BRANCH_LENGTH: f32 = 18.0;
-const SIMILAR_INSTANCES_WINDOW_SIZE: [f32; 2] = [420.0, 320.0];
-const SETTINGS_WINDOW_SIZE: [f32; 2] = [760.0, 560.0];
-const SETTINGS_WINDOW_MIN_SIZE: [f32; 2] = [620.0, 420.0];
-const SETTINGS_CATEGORY_WIDTH: f32 = 160.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ActivePlacementFlash {
@@ -360,131 +338,6 @@ pub enum OpenRequest {
     Map(PathBuf),
 }
 
-#[derive(Debug, Default)]
-struct ObjectTreeFilter {
-    roots: Vec<TypeId>,
-    children: HashMap<TypeId, Vec<TypeId>>,
-    matches: HashSet<TypeId>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct ObjectTreeTypeFilter {
-    atom: Option<TypeId>,
-    movable: Option<TypeId>,
-    obj: Option<TypeId>,
-    turf: Option<TypeId>,
-    custom: Option<TypeId>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ObjectTreeFilterAction {
-    Keep,
-    Prune,
-}
-
-impl ObjectTreeTypeFilter {
-    fn new(tree: &ObjectTree, options: &ObjectTreeFilterOptions) -> Self {
-        let roots = tree.roots();
-        let custom = options
-            .custom_enabled
-            .then(|| options.custom_type_path.trim())
-            .filter(|path| !path.is_empty())
-            .and_then(|path| tree.id_of(&TreePath::parse(path)));
-
-        Self {
-            atom: options.atom.then_some(roots.atom).flatten(),
-            movable: options.movable.then_some(roots.movable).flatten(),
-            obj: options.obj.then_some(roots.obj).flatten(),
-            turf: options.turf.then_some(roots.turf).flatten(),
-            custom,
-        }
-    }
-
-    fn action(self, tree: &ObjectTree, id: TypeId) -> ObjectTreeFilterAction {
-        let filtered_by_builtin = [self.atom, self.movable, self.obj, self.turf]
-            .into_iter()
-            .flatten()
-            .any(|filtered| tree.is_subtype_of(id, filtered));
-        if filtered_by_builtin || self.custom.is_some_and(|custom| tree.is_subtype_of(id, custom)) {
-            ObjectTreeFilterAction::Prune
-        } else {
-            ObjectTreeFilterAction::Keep
-        }
-    }
-}
-
-impl ObjectTreeSearchOptions {
-    const fn hint(self) -> &'static str {
-        match (self.type_paths, self.names) {
-            (true, true) => "Search type paths or names",
-            (true, false) => "Search type paths",
-            (false, true) => "Search names",
-            (false, false) => "Search types",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ObjectTreeRow {
-    id: TypeId,
-    parent: Option<usize>,
-    leaf: bool,
-    last_sibling: bool,
-}
-
-#[derive(Clone, Copy, Default)]
-struct ObjectTreeRowOptions<'a> {
-    filter: Option<&'a ObjectTreeFilter>,
-    type_filter: ObjectTreeTypeFilter,
-    expand: bool,
-    reveal: Option<TypeId>,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-struct ObjectTreeOutput {
-    chosen: Option<TypeId>,
-    visibility_toggle: Option<TypeId>,
-    open_source: Option<SourceLocation>,
-    reveal: Option<TypeId>,
-}
-
-impl ObjectTreeFilter {
-    fn new(
-        tree: &ObjectTree, atom: TypeId, query: &str, options: ObjectTreeSearchOptions,
-        type_filter: ObjectTreeTypeFilter,
-    ) -> Self {
-        let matches = matching_object_types(tree, query, options)
-            .into_iter()
-            .filter(|id| tree.is_subtype_of(*id, atom))
-            .filter(|id| type_filter.action(tree, *id) == ObjectTreeFilterAction::Keep)
-            .collect::<Vec<_>>();
-        let match_set = matches.iter().copied().collect::<HashSet<_>>();
-        let mut filter = Self::default();
-
-        for id in matches {
-            let matching_parent = tree
-                .ancestors(id)
-                .skip(1)
-                .find(|ancestor| match_set.contains(&ancestor.id))
-                .map(|ancestor| ancestor.id);
-            if let Some(parent) = matching_parent {
-                filter.children.entry(parent).or_default().push(id);
-            } else {
-                filter.roots.push(id);
-            }
-        }
-        filter.matches = match_set;
-
-        filter
-    }
-
-    fn is_empty(&self) -> bool { self.roots.is_empty() }
-
-    fn contains(&self, id: TypeId) -> bool { self.matches.contains(&id) }
-
-    fn children(&self, id: TypeId) -> &[TypeId] { self.children.get(&id).map_or(&[], Vec::as_slice) }
-}
-
 struct MapViewState {
     window: WindowKey,
     camera: Controller,
@@ -524,101 +377,15 @@ impl MapViewState {
     }
 }
 
-#[derive(Debug)]
-struct SimilarInstancesState {
-    document: DocumentId,
-    prefab_path: String,
-    instances: Vec<PrefabInstanceId>,
-    focus: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct JumpTarget {
-    document: DocumentId,
-    instance: PrefabInstanceId,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum SettingsCategory {
-    #[default]
-    General,
-    Viewport,
-    ObjectTree,
-    Keybindings,
-}
-
-struct SettingsWindowState<'a> {
-    open: &'a mut bool,
-    category: &'a mut SettingsCategory,
-    capturing: &'a mut Option<KeybindAction>,
-    measured: &'a mut [f32; 2],
-}
-
-impl SettingsCategory {
-    const ALL: [Self; 4] = [Self::General, Self::Viewport, Self::ObjectTree, Self::Keybindings];
-
-    const fn label(self) -> &'static str {
-        match self {
-            Self::General => "General",
-            Self::Viewport => "Viewport",
-            Self::ObjectTree => "Object Tree",
-            Self::Keybindings => "Keybindings",
-        }
-    }
-}
-
-const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
-    ("Application", &[KeybindAction::Save]),
-    (
-        "Editing",
-        &[
-            KeybindAction::Undo,
-            KeybindAction::Redo,
-            KeybindAction::Copy,
-            KeybindAction::Paste,
-        ],
-    ),
-    (
-        "Viewport",
-        &[
-            KeybindAction::ShowAreas,
-            KeybindAction::ShowAreaOutlines,
-            KeybindAction::LevelUp,
-            KeybindAction::LevelDown,
-            KeybindAction::Refit,
-        ],
-    ),
-    (
-        "Tools",
-        &[
-            KeybindAction::PlaceTool,
-            KeybindAction::SelectTool,
-            KeybindAction::BlockSelectTool,
-            KeybindAction::DeleteTool,
-            KeybindAction::FillTool,
-            KeybindAction::Rotate,
-        ],
-    ),
-    ("Recent", &KeybindAction::RECENT),
-];
-
 pub struct UiState {
-    object_tree: WindowKey,
+    object_tree: ObjectTreePanel,
     map_views: HashMap<DocumentId, MapViewState>,
     central_node: Option<Id>,
     dockspace_root: Option<Id>,
     welcome_window: WindowKey,
-    inspector_window: WindowKey,
-    similar_instances_window: WindowKey,
-    settings_window: WindowKey,
+    inspector: InspectorPanel,
+    settings_window: SettingsWindow,
     layout: DockLayout,
-    selected: Option<TypeId>,
-    object_tree_reveal: Option<TypeId>,
-    object_tree_search: String,
-    object_tree_filter: Option<ObjectTreeFilter>,
-    object_tree_filter_revision: u64,
-    inspector: InspectorState,
-    similar_instances: Option<SimilarInstancesState>,
     gizmo: GizmoState,
     placement_flash: Option<ActivePlacementFlash>,
     placement_stroke: Option<PlacementStroke>,
@@ -632,7 +399,6 @@ pub struct UiState {
     save_dialog: Option<SaveDialog>,
     pending_close: Option<DocumentId>,
     exit_requested: bool,
-    show_settings: bool,
     show_welcome: bool,
     welcome_map_filter: String,
     welcome_maps_expanded: bool,
@@ -640,27 +406,23 @@ pub struct UiState {
     load_window: WindowKey,
     load_notice: Option<LoadNotice>,
     load_window_size: [f32; 2],
-    settings_window_size: [f32; 2],
-    settings_category: SettingsCategory,
-    capturing_keybind: Option<KeybindAction>,
 }
 
 impl UiState {
     pub fn new() -> Result<Self, WindowKeyError> {
-        let object_tree = WindowKey::new("object-tree", "Object tree")?;
+        let object_tree = ObjectTreePanel::new()?;
         let welcome_window = WindowKey::new("welcome", "Welcome")?;
-        let inspector_window = WindowKey::new("inspector", "Inspector")?;
-        let similar_instances_window = WindowKey::new("similar-instances", "Similar prefab instances")?;
-        let settings_window = WindowKey::new("settings-v2", "Settings")?;
+        let inspector = InspectorPanel::new()?;
+        let settings_window = SettingsWindow::new()?;
         let load_window = WindowKey::new("load", "Loading")?;
         let layout = DockLayout::split(
             DockSplit::Left,
             0.25,
-            DockLayout::tabs([&object_tree]),
+            DockLayout::tabs([object_tree.window()]),
             DockLayout::split(
                 DockSplit::Right,
                 0.20 / 0.75,
-                DockLayout::tabs([&inspector_window]),
+                DockLayout::tabs([inspector.window()]),
                 DockLayout::tabs([&welcome_window]),
             ),
         );
@@ -671,17 +433,9 @@ impl UiState {
             central_node: None,
             dockspace_root: None,
             welcome_window,
-            inspector_window,
-            similar_instances_window,
+            inspector,
             settings_window,
             layout,
-            selected: None,
-            object_tree_reveal: None,
-            object_tree_search: String::new(),
-            object_tree_filter: None,
-            object_tree_filter_revision: 0,
-            inspector: InspectorState::default(),
-            similar_instances: None,
             gizmo: GizmoState::default(),
             placement_flash: None,
             placement_stroke: None,
@@ -695,7 +449,6 @@ impl UiState {
             save_dialog: None,
             pending_close: None,
             exit_requested: false,
-            show_settings: false,
             show_welcome: true,
             welcome_map_filter: String::new(),
             welcome_maps_expanded: false,
@@ -703,24 +456,13 @@ impl UiState {
             load_window,
             load_notice: None,
             load_window_size: [0.0, 0.0],
-            settings_window_size: SETTINGS_WINDOW_SIZE,
-            settings_category: SettingsCategory::default(),
-            capturing_keybind: None,
         })
     }
 
     pub fn set_open_error(&mut self, error: Option<String>) { self.open_error = error; }
 
     pub fn reveal_selected_instance(&mut self, session: &Session) {
-        let Some(selected) = session
-            .selected_prefab()
-            .and_then(|prefab| session.tree()?.id_of(&prefab.path))
-        else {
-            return;
-        };
-
-        self.selected = Some(selected);
-        self.object_tree_reveal = Some(selected);
+        self.object_tree.reveal_selected_instance(session);
     }
 
     pub fn set_load_notice(&mut self, notice: Option<LoadNotice>) { self.load_notice = notice; }
@@ -813,7 +555,7 @@ impl UiState {
                     show_welcome = true;
                 }
                 if ui.menu_item("Settings...") {
-                    self.show_settings = true;
+                    self.settings_window.open();
                 }
                 ui.separator();
                 if ui.menu_item("Exit") {
@@ -892,7 +634,7 @@ impl UiState {
         if session.map().is_some()
             && !open_save_dialog
             && self.save_dialog.is_none()
-            && self.capturing_keybind.is_none()
+            && !self.settings_window.is_capturing_keybind()
             && !ui.io().want_text_input()
             && settings.keybindings.get(KeybindAction::Save).is_pressed(ui)
         {
@@ -948,30 +690,16 @@ impl UiState {
         }
         draw_save_dialog(ui, session, &mut self.save_dialog);
 
-        let object_tree_settings_changed = draw_settings_window(
-            ui,
-            &self.settings_window,
-            SettingsWindowState {
-                open: &mut self.show_settings,
-                category: &mut self.settings_category,
-                capturing: &mut self.capturing_keybind,
-                measured: &mut self.settings_window_size,
-            },
-            session,
-            settings,
-        );
+        let object_tree_settings_changed = self.settings_window.draw(ui, session, settings);
         if object_tree_settings_changed {
-            self.object_tree_filter_revision = u64::MAX;
+            self.object_tree.invalidate_filter();
         }
         self.show_welcome |= show_welcome;
 
-        let mut open_source = self.draw_object_tree(ui, session, settings);
-        let inspector = self.draw_inspector(ui, session);
+        let mut open_source = self.object_tree.draw(ui, session, settings);
+        let inspector = self.inspector.draw(ui, session);
         open_source = inspector.open_source.or(open_source);
-        if inspector.find_similar {
-            self.open_similar_instances(session);
-        }
-        if let Some(target) = self.draw_similar_instances(ui, session) {
+        if let Some(target) = inspector.jump {
             self.jump_to_instance(session, target);
         }
         let mut welcome = WelcomeOutput::default();
@@ -1009,7 +737,8 @@ impl UiState {
         } else {
             self.draw_map_views(ui, session, settings, refit)
         };
-        finish_keybind_capture(ui, &mut self.capturing_keybind, &mut settings.keybindings);
+        self.settings_window
+            .finish_keybind_capture(ui, &mut settings.keybindings);
         let exit = self.draw_exit_confirmation(ui, session);
 
         Ok(UiOutput {
@@ -1157,152 +886,6 @@ impl UiState {
                 },
             }
         });
-    }
-
-    fn draw_object_tree(&mut self, ui: &Ui, session: &mut Session, settings: &mut Settings) -> Option<SourceLocation> {
-        let mut open_source = None;
-        ui.window(&self.object_tree).build(|| {
-            let mut output = ObjectTreeOutput {
-                reveal: self.object_tree_reveal,
-                ..ObjectTreeOutput::default()
-            };
-            let available_width = ui.content_region_avail()[0];
-            let button_size = ui.frame_height();
-            let spacing = ui.clone_style().item_spacing()[0];
-            ui.set_next_item_width((available_width - button_size * 2.0 - spacing * 2.0).max(1.0));
-            let search_changed = ui
-                .input_text("##object-tree-search", &mut self.object_tree_search)
-                .hint(settings.object_tree_search.hint())
-                .build();
-            ui.same_line();
-            let filter_clicked = ui.button_with_size("##object-tree-filter-options", [button_size, button_size]);
-            draw_centered_icon(ui, ICON_FILTER);
-            if filter_clicked {
-                ui.open_popup(OBJECT_TREE_FILTER_OPTIONS_POPUP);
-            }
-            ui.set_item_tooltip("Type filters");
-
-            ui.same_line();
-            let options_clicked = ui.button_with_size("##object-tree-search-options", [button_size, button_size]);
-            draw_centered_icon(ui, ICON_COG);
-            if options_clicked {
-                ui.open_popup(OBJECT_TREE_OPTIONS_POPUP);
-            }
-            ui.set_item_tooltip("Object tree settings");
-
-            let mut type_filter_changed = false;
-            if let Some(_popup) = ui.begin_popup(OBJECT_TREE_FILTER_OPTIONS_POPUP) {
-                type_filter_changed |= draw_object_tree_filter_settings(ui, &mut settings.object_tree_filter);
-            }
-
-            let mut search_options_changed = false;
-            if let Some(_popup) = ui.begin_popup(OBJECT_TREE_OPTIONS_POPUP) {
-                search_options_changed |= draw_object_tree_search_settings(ui, &mut settings.object_tree_search);
-
-                ui.separator();
-                ui.checkbox("Line indicators", &mut settings.object_tree_line_indicators);
-            }
-
-            ui.child_window("object-tree-content").build(ui, || {
-                let tree_revision = session.texture_revision();
-                let Some(tree) = session.tree() else {
-                    ui.text_disabled("No environment loaded");
-
-                    return;
-                };
-                let Some(atom) = tree.roots().atom else {
-                    ui.text_disabled("No /atom type available");
-
-                    return;
-                };
-                let type_filter = ObjectTreeTypeFilter::new(tree, &settings.object_tree_filter);
-                let rebuild_filter = search_changed
-                    || search_options_changed
-                    || type_filter_changed
-                    || self.object_tree_filter_revision != tree_revision;
-                if rebuild_filter {
-                    self.object_tree_filter = (!self.object_tree_search.trim().is_empty()).then(|| {
-                        ObjectTreeFilter::new(
-                            tree,
-                            atom,
-                            &self.object_tree_search,
-                            settings.object_tree_search,
-                            type_filter,
-                        )
-                    });
-                    self.object_tree_filter_revision = tree_revision;
-                }
-
-                if self.object_tree_filter.as_ref().is_some_and(ObjectTreeFilter::is_empty) {
-                    ui.text_disabled("No matching types");
-
-                    return;
-                }
-                let roots = self.object_tree_filter.as_ref().map_or_else(
-                    || visible_type_roots(tree, atom, type_filter),
-                    |filter| filter.roots.clone(),
-                );
-                if roots.is_empty() {
-                    ui.text_disabled("No types pass filters");
-
-                    return;
-                }
-
-                ui.table("object-tree-types")
-                    .flags(TableFlags::BORDERS_INNER_V | TableFlags::ROW_BG)
-                    .sizing_policy(TableSizingPolicy::StretchProp)
-                    .column("Type")
-                    .weight(1.0)
-                    .done()
-                    .column("Visibility")
-                    .width(ui.frame_height() * 2.0)
-                    .done()
-                    .build(|ui| {
-                        let mut rows = Vec::new();
-                        let options = ObjectTreeRowOptions {
-                            filter: self.object_tree_filter.as_ref(),
-                            type_filter,
-                            expand: rebuild_filter && self.object_tree_filter.is_some(),
-                            reveal: self.object_tree_reveal,
-                        };
-                        for root in roots.iter().copied() {
-                            collect_type_rows(ui, tree, root, None, true, &mut rows, &options);
-                        }
-                        let reveal_row = self
-                            .object_tree_reveal
-                            .and_then(|target| rows.iter().position(|row| row.id == target));
-                        let mut clipper = ListClipper::new(rows.len()).begin(ui);
-                        if let Some(index) = reveal_row {
-                            clipper.include_item_by_index(index);
-                        }
-                        for index in clipper.iter() {
-                            draw_type_row(
-                                ui,
-                                session,
-                                &rows,
-                                index,
-                                settings.object_tree_line_indicators,
-                                &mut self.selected,
-                                &mut output,
-                            );
-                        }
-                        if reveal_row.is_some() {
-                            self.object_tree_reveal = None;
-                        }
-                    });
-            });
-
-            if let Some(chosen) = output.chosen {
-                self.object_tree_reveal = None;
-                session.choose_type(chosen);
-            }
-            if let Some(id) = output.visibility_toggle {
-                session.toggle_type_visibility(id);
-            }
-            open_source = output.open_source;
-        });
-
-        open_source
     }
 
     fn draw_map_views(
@@ -2213,103 +1796,6 @@ impl UiState {
         });
     }
 
-    fn draw_inspector(&mut self, ui: &Ui, session: &mut Session) -> InspectorOutput {
-        let mut output = InspectorOutput::default();
-        ui.window(&self.inspector_window).build(|| {
-            output = self.inspector.draw(ui, session);
-        });
-
-        output
-    }
-
-    fn open_similar_instances(&mut self, session: &Session) {
-        let Some(document) = session.state.active_document() else {
-            return;
-        };
-        let Some(selected) = document.selected_instance() else {
-            return;
-        };
-        let Some((prefab, _)) = document.prefab_instance(selected) else {
-            return;
-        };
-
-        self.similar_instances = Some(SimilarInstancesState {
-            document: document.id(),
-            prefab_path: prefab.path.to_string(),
-            instances: find_similar_instances(document, prefab),
-            focus: true,
-        });
-    }
-
-    fn draw_similar_instances(&mut self, ui: &Ui, session: &Session) -> Option<JumpTarget> {
-        let document_id = self.similar_instances.as_ref()?.document;
-        let Some(document) = session.state.document(document_id) else {
-            self.similar_instances = None;
-
-            return None;
-        };
-        let search = self.similar_instances.as_mut()?;
-        let rows = resolve_similar_instances(document, &search.instances);
-        let mut open = true;
-        let mut jump = None;
-        let focus = std::mem::take(&mut search.focus);
-
-        ui.window(&self.similar_instances_window)
-            .opened(&mut open)
-            .size(SIMILAR_INSTANCES_WINDOW_SIZE, Condition::FirstUseEver)
-            .focused(focus)
-            .build(|| {
-                ui.text_wrapped(&search.prefab_path);
-                let suffix = if rows.len() == 1 { "instance" } else { "instances" };
-                ui.text_disabled(format!("{} matching {suffix}", rows.len()));
-                ui.separator();
-
-                if rows.is_empty() {
-                    ui.text_disabled("No matching instances remain");
-
-                    return;
-                }
-
-                ui.table("similar-instances-table")
-                    .flags(TableFlags::BORDERS_INNER_V | TableFlags::RESIZABLE | TableFlags::ROW_BG)
-                    .sizing_policy(TableSizingPolicy::StretchProp)
-                    .column("Tile")
-                    .weight(0.7)
-                    .done()
-                    .column("Action")
-                    .weight(0.3)
-                    .done()
-                    .build(|ui| {
-                        for index in ListClipper::new(rows.len()).begin(ui).iter() {
-                            let (instance, location) = rows[index];
-                            let row_id = instance.get().to_string();
-                            let _id = ui.push_id(&row_id);
-
-                            ui.table_next_row();
-                            ui.table_next_column();
-                            ui.align_text_to_frame_padding();
-                            ui.text(format!(
-                                "{}, {}, {}",
-                                location.coord.x, location.coord.y, location.coord.z
-                            ));
-                            ui.table_next_column();
-                            if ui.small_button("Jump to") {
-                                jump = Some(JumpTarget {
-                                    document: document_id,
-                                    instance,
-                                });
-                            }
-                        }
-                    });
-            });
-
-        if !open {
-            self.similar_instances = None;
-        }
-
-        jump
-    }
-
     fn jump_to_instance(&mut self, session: &mut Session, target: JumpTarget) {
         let Some(location) = session
             .state
@@ -2349,37 +1835,6 @@ impl UiState {
         view.refit = false;
         view.focus = true;
     }
-}
-
-fn find_similar_instances(document: &MapDocument, target: &Prefab) -> Vec<PrefabInstanceId> {
-    let mut matches = document
-        .prefab_instances()
-        .filter_map(|(instance, prefab, location)| (prefab == target).then_some((instance, location)))
-        .collect::<Vec<_>>();
-    matches.sort_unstable_by_key(|(instance, location)| {
-        (
-            location.coord.z,
-            location.coord.y,
-            location.coord.x,
-            location.prefab_index,
-            instance.get(),
-        )
-    });
-
-    matches.into_iter().map(|(instance, _)| instance).collect()
-}
-
-fn resolve_similar_instances(
-    document: &MapDocument, instances: &[PrefabInstanceId],
-) -> Vec<(PrefabInstanceId, PrefabLocation)> {
-    instances
-        .iter()
-        .filter_map(|instance| {
-            document
-                .instance_location(*instance)
-                .map(|location| (*instance, location))
-        })
-        .collect()
 }
 
 fn draw_welcome_subtitle(ui: &Ui) {
@@ -2635,223 +2090,6 @@ fn grouped(value: usize) -> String {
     }
 
     out
-}
-
-fn draw_settings_window(
-    ui: &Ui, window: &WindowKey, state: SettingsWindowState<'_>, session: &mut Session, settings: &mut Settings,
-) -> bool {
-    let SettingsWindowState {
-        open,
-        category,
-        capturing,
-        measured,
-    } = state;
-    if !*open {
-        *capturing = None;
-
-        return false;
-    }
-
-    let center = ui.main_viewport().work_center();
-    let position = [center[0] - measured[0] / 2.0, center[1] - measured[1] / 2.0];
-    let flags = WindowFlags::NO_COLLAPSE | WindowFlags::NO_DOCKING;
-    let mut object_tree_changed = false;
-    ui.window(window)
-        .opened(open)
-        .position(position, Condition::Appearing)
-        .size(SETTINGS_WINDOW_SIZE, Condition::FirstUseEver)
-        .size_constraints(SETTINGS_WINDOW_MIN_SIZE, [f32::MAX, f32::MAX])
-        .flags(flags)
-        .build(|| {
-            let content_height = ui.content_region_avail()[1].max(1.0);
-            ui.child_window("settings-categories")
-                .size([SETTINGS_CATEGORY_WIDTH, content_height])
-                .border(true)
-                .build(ui, || {
-                    for candidate in SettingsCategory::ALL {
-                        if ui
-                            .selectable_config(candidate.label())
-                            .selected(*category == candidate)
-                            .build()
-                            && *category != candidate
-                        {
-                            *category = candidate;
-                            *capturing = None;
-                        }
-                    }
-                });
-
-            ui.same_line();
-            ui.child_window(format!("settings-content-{}", category.label()))
-                .size([0.0, content_height])
-                .border(true)
-                .build(ui, || {
-                    ui.text(category.label());
-                    ui.separator();
-
-                    match category {
-                        SettingsCategory::General => draw_general_settings(ui, settings),
-                        SettingsCategory::Viewport => draw_viewport_settings(ui, session, settings),
-                        SettingsCategory::ObjectTree => {
-                            object_tree_changed |= draw_object_tree_settings(ui, settings);
-                        },
-                        SettingsCategory::Keybindings => draw_keybinding_settings(ui, capturing, settings),
-                    }
-                });
-
-            *measured = ui.window_size();
-        });
-
-    if !*open {
-        *capturing = None;
-    }
-
-    object_tree_changed
-}
-
-fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
-    ui.text("External editor");
-    ui.text("Command");
-    ui.set_next_item_width(-1.0);
-    ui.input_text("##preferred-editor", &mut settings.preferred_editor)
-        .build();
-    ui.text_disabled("Placeholders: {file}, {line}, {column}");
-}
-
-fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Settings) {
-    ui.text("Areas");
-    ui.checkbox("Show areas", &mut session.options.show_areas);
-    ui.checkbox("Show area outlines", &mut session.options.show_area_outlines);
-
-    ui.separator();
-    ui.text("Feedback");
-    ui.checkbox("Tile placement flash", &mut settings.tile_place_flash);
-    ui.checkbox("Selection guide line", &mut settings.selection_guide_line);
-
-    ui.separator();
-    ui.text("Selection");
-    ui.text("Highlight style");
-    for (index, highlight) in SelectionHighlight::ALL.into_iter().enumerate() {
-        if index > 0 {
-            ui.same_line();
-        }
-        if ui.radio_button(highlight.label(), settings.selection_highlight == highlight) {
-            settings.selection_highlight = highlight;
-        }
-    }
-}
-
-fn draw_object_tree_settings(ui: &Ui, settings: &mut Settings) -> bool {
-    ui.text("Search fields");
-    let mut changed = draw_object_tree_search_settings(ui, &mut settings.object_tree_search);
-
-    ui.separator();
-    ui.text("Type filters");
-    changed |= draw_object_tree_filter_settings(ui, &mut settings.object_tree_filter);
-
-    ui.separator();
-    ui.text("Appearance");
-    ui.checkbox("Line indicators", &mut settings.object_tree_line_indicators);
-
-    changed
-}
-
-fn draw_object_tree_search_settings(ui: &Ui, options: &mut ObjectTreeSearchOptions) -> bool {
-    let mut changed = false;
-    let disable_type_paths = options.type_paths && !options.names;
-    {
-        let _disabled = ui.begin_disabled_with_cond(disable_type_paths);
-        changed |= ui.checkbox("Type paths", &mut options.type_paths);
-    }
-
-    let disable_names = options.names && !options.type_paths;
-    {
-        let _disabled = ui.begin_disabled_with_cond(disable_names);
-        changed |= ui.checkbox("Names (atom/name)", &mut options.names);
-    }
-
-    changed
-}
-
-fn draw_object_tree_filter_settings(ui: &Ui, options: &mut ObjectTreeFilterOptions) -> bool {
-    let mut changed = false;
-    changed |= ui.checkbox("Filter /atom", &mut options.atom);
-    changed |= ui.checkbox("Filter /movable", &mut options.movable);
-    changed |= ui.checkbox("Filter /obj", &mut options.obj);
-    changed |= ui.checkbox("Filter /turf", &mut options.turf);
-
-    ui.separator();
-    changed |= ui.checkbox("Filter custom type path and subtypes", &mut options.custom_enabled);
-    let _disabled = ui.begin_disabled_with_cond(!options.custom_enabled);
-    ui.set_next_item_width(ui.content_region_avail()[0].clamp(1.0, 360.0));
-    changed |= ui
-        .input_text("##object-tree-custom-type-filter", &mut options.custom_type_path)
-        .hint("/path/to/type")
-        .build();
-
-    changed
-}
-
-fn draw_keybinding_settings(ui: &Ui, capturing: &mut Option<KeybindAction>, settings: &mut Settings) {
-    if ui.button("Reset keybindings") {
-        settings.keybindings = KeyBindings::default();
-        *capturing = None;
-    }
-
-    for (index, &(group, actions)) in SETTINGS_KEYBINDING_GROUPS.iter().enumerate() {
-        ui.separator();
-        ui.text(group);
-        ui.table(format!("settings-keybindings-{index}"))
-            .flags(TableFlags::BORDERS_INNER_V | TableFlags::ROW_BG)
-            .sizing_policy(TableSizingPolicy::StretchProp)
-            .column("Action")
-            .weight(1.0)
-            .done()
-            .column("Binding")
-            .width(170.0)
-            .done()
-            .build(|ui| {
-                for &action in actions {
-                    ui.table_next_row();
-                    ui.table_next_column();
-                    ui.align_text_to_frame_padding();
-                    ui.text(action.label());
-                    ui.table_next_column();
-
-                    let binding = settings.keybindings.get(action).label(ui);
-                    let visible = if *capturing == Some(action) {
-                        "Press a key..."
-                    } else {
-                        binding.as_str()
-                    };
-                    let width = ui.content_region_avail()[0].max(1.0);
-                    if ui.button_with_size(format!("{visible}##keybind-{}", action.id()), [width, 0.0]) {
-                        *capturing = (*capturing != Some(action)).then_some(action);
-                    }
-                }
-            });
-    }
-}
-
-fn finish_keybind_capture(ui: &Ui, capturing: &mut Option<KeybindAction>, keybindings: &mut KeyBindings) {
-    let Some(action) = *capturing else {
-        return;
-    };
-    if ui.is_key_pressed_with_repeat(Key::Escape, false) {
-        *capturing = None;
-
-        return;
-    }
-    let Some(key) = BINDABLE_KEYS
-        .iter()
-        .copied()
-        .find(|key| ui.is_key_pressed_with_repeat(*key, false))
-    else {
-        return;
-    };
-
-    keybindings.rebind(action, KeyBinding::from_input(ui, key));
-    *capturing = None;
 }
 
 fn active_placement_flash(
@@ -3831,56 +3069,7 @@ fn matching_type_paths(tree: &ObjectTree, query: &str) -> Vec<TreePath> {
     matching_type_paths_up_to(tree, query, MAX_CUSTOM_FILL_SEARCH_RESULTS)
 }
 
-fn matching_object_types(tree: &ObjectTree, query: &str, options: ObjectTreeSearchOptions) -> Vec<TypeId> {
-    let query = query.trim().to_ascii_lowercase();
-    if query.is_empty() {
-        return Vec::new();
-    }
-
-    let name = Identifier::from("name");
-    let mut matches = tree
-        .iter()
-        .filter(|decl| {
-            let path_matches = options.type_paths && decl.path.to_string().to_ascii_lowercase().contains(&query);
-            let name_matches = options.names
-                && tree
-                    .var_inherited(decl.id, &name)
-                    .and_then(|variable| variable.value.as_text())
-                    .is_some_and(|value| value.to_ascii_lowercase().contains(&query));
-
-            path_matches || name_matches
-        })
-        .map(|decl| decl.id)
-        .collect::<Vec<_>>();
-    matches.sort_by_key(|id| tree.get(*id).map(|decl| decl.path.to_string()).unwrap_or_default());
-
-    matches
-}
-
 // im not sure why every single fucking icons appear not centered fuck you
-fn draw_centered_icon(ui: &Ui, icon: char) {
-    let item_min = ui.item_rect_min();
-    let item_max = ui.item_rect_max();
-    let center = [(item_min[0] + item_max[0]) * 0.5, (item_min[1] + item_max[1]) * 0.5];
-    let glyph = ui.current_baked_font().glyph(icon);
-    let icon = icon.to_string();
-    let position = glyph.map_or_else(
-        || {
-            let size = ui.calc_text_size(&icon);
-            [center[0] - size[0] * 0.5, center[1] - size[1] * 0.5]
-        },
-        |glyph| {
-            let (glyph_min, glyph_max) = glyph.position_and_size();
-            [
-                center[0] - (glyph_min[0] + glyph_max[0]) * 0.5,
-                center[1] - (glyph_min[1] + glyph_max[1]) * 0.5,
-            ]
-        },
-    );
-
-    ui.get_window_draw_list()
-        .add_text(position, ui.style_color(StyleColor::Text), icon);
-}
 
 fn matching_type_paths_up_to(tree: &ObjectTree, query: &str, limit: usize) -> Vec<TreePath> {
     let query = query.trim().to_ascii_lowercase();
@@ -4024,308 +3213,6 @@ fn z_level_width(ui: &Ui, levels: u32) -> f32 {
     width
 }
 
-fn collect_type_rows(
-    ui: &Ui, tree: &ObjectTree, id: TypeId, parent: Option<usize>, last_sibling: bool, rows: &mut Vec<ObjectTreeRow>,
-    options: &ObjectTreeRowOptions<'_>,
-) {
-    let Some(decl) = tree.get(id) else {
-        return;
-    };
-    let children = options.filter.map_or_else(
-        || visible_type_children(tree, id, options.type_filter),
-        |filter| filter.children(id).to_vec(),
-    );
-    let leaf = children.is_empty();
-    let row = rows.len();
-    rows.push(ObjectTreeRow {
-        id,
-        parent,
-        leaf,
-        last_sibling,
-    });
-
-    if leaf {
-        return;
-    }
-
-    let node_id = decl.path.to_string();
-    let storage_id = ui.get_id(&node_id);
-    ui.with_current_state_storage(|mut storage| {
-        let initialize_atom = tree.roots().atom == Some(id) && storage.get_int(storage_id, -1) == -1;
-        let reveal_descendant = options.reveal.is_some_and(|target| {
-            target != id
-                && options.filter.is_none_or(|filter| filter.contains(target))
-                && options.type_filter.action(tree, target) == ObjectTreeFilterAction::Keep
-                && tree.is_subtype_of(target, id)
-        });
-        if options.expand || initialize_atom || reveal_descendant {
-            storage.set_bool(storage_id, true);
-        }
-    });
-    if !ui.tree_node_get_open(storage_id) {
-        return;
-    }
-
-    let _id = ui.push_id(&node_id);
-    let child_count = children.len();
-    for (index, child) in children.into_iter().enumerate() {
-        collect_type_rows(ui, tree, child, Some(row), index + 1 == child_count, rows, options);
-    }
-}
-
-fn draw_type_row(
-    ui: &Ui, session: &Session, rows: &[ObjectTreeRow], row_index: usize, draw_line_indicators: bool,
-    selected: &mut Option<TypeId>, output: &mut ObjectTreeOutput,
-) {
-    let Some(tree) = session.tree() else {
-        return;
-    };
-    let Some(row) = rows.get(row_index).copied() else {
-        return;
-    };
-    let Some(decl) = tree.get(row.id) else {
-        return;
-    };
-
-    let mut ancestors = Vec::new();
-    let mut parent = row.parent;
-    while let Some(index) = parent {
-        let Some(ancestor) = rows.get(index) else {
-            break;
-        };
-        ancestors.push(index);
-        parent = ancestor.parent;
-    }
-    ancestors.reverse();
-    let mut scopes = Vec::with_capacity(ancestors.len());
-    for ancestor in &ancestors {
-        if let Some(ancestor) = rows.get(*ancestor).and_then(|row| tree.get(row.id)) {
-            scopes.push(ui.tree_push(ancestor.path.to_string()));
-        }
-    }
-
-    let label = decl
-        .path
-        .segments
-        .last()
-        .map_or_else(|| decl.path.to_string(), ToString::to_string);
-    let node_id = decl.path.to_string();
-    {
-        ui.table_next_row();
-        ui.table_next_column();
-        let cursor = ui.cursor_screen_pos();
-        let icon_extent = ui.text_line_height();
-        let icon_spacing = ui.clone_style().item_inner_spacing()[0];
-        let space_width = ui.calc_text_size(" ")[0].max(1.0);
-        let icon_padding = " ".repeat(((icon_extent + icon_spacing) / space_width).ceil() as usize);
-        let opened = ui
-            .tree_node_config(&node_id)
-            .label(format!("{icon_padding}{label}"))
-            .selected(*selected == Some(row.id))
-            .leaf(row.leaf)
-            .no_tree_push_on_open(true)
-            .frame_padding(true)
-            .span_avail_width(true)
-            .push()
-            .is_some();
-        draw_type_icon(ui, session.type_thumbnail(row.id), cursor);
-        if draw_line_indicators {
-            let node_rect = OverlayRect {
-                min: ui.item_rect_min(),
-                max: ui.item_rect_max(),
-            };
-            draw_object_tree_lines(ui, rows, row_index, &ancestors, cursor, node_rect, opened);
-        }
-
-        if ui.is_item_clicked() {
-            *selected = Some(row.id);
-            output.chosen = Some(row.id);
-        }
-        if output.reveal == Some(row.id) {
-            ui.set_scroll_here_y(0.5);
-        }
-        ui.set_item_tooltip(&node_id);
-        let source = session.type_source(row.id);
-        if let Some(_popup) = ui.begin_popup_context_item()
-            && ui.menu_item_enabled_selected_no_shortcut("Open in editor", false, source.is_some())
-        {
-            output.open_source = source;
-        }
-
-        ui.table_next_column();
-        let visible = session.is_type_visible(row.id);
-        let icon = if visible { ICON_EYE } else { ICON_EYE_OFF };
-        let transparent = [0.0, 0.0, 0.0, 0.0];
-        let _button = ui.push_style_color(StyleColor::Button, transparent);
-        let _button_hovered = ui.push_style_color(StyleColor::ButtonHovered, transparent);
-        let _button_active = ui.push_style_color(StyleColor::ButtonActive, transparent);
-        let _text = (!visible).then(|| ui.push_style_color(StyleColor::Text, ui.style_color(StyleColor::TextDisabled)));
-        if ui.button_with_size(
-            format!("{icon}##object-type-visibility-{node_id}"),
-            [ui.content_region_avail()[0], ui.frame_height()],
-        ) {
-            output.visibility_toggle = Some(row.id);
-        }
-        ui.set_item_tooltip(if visible {
-            format!("Hide {node_id} and its descendants")
-        } else {
-            format!("Show {node_id} and its descendants")
-        });
-    }
-
-    while let Some(scope) = scopes.pop() {
-        scope.pop();
-    }
-}
-
-fn draw_object_tree_lines(
-    ui: &Ui, rows: &[ObjectTreeRow], row_index: usize, ancestors: &[usize], cursor: [f32; 2], node_rect: OverlayRect,
-    opened: bool,
-) {
-    let Some(row) = rows.get(row_index).copied() else {
-        return;
-    };
-    let depth = ancestors.len();
-    let midpoint = (node_rect.min[1] + node_rect.max[1]) * 0.5;
-    let style = ui.clone_style();
-    let indent = style.indent_spacing();
-    let arrow_center_offset = style.frame_padding()[0] + ui.current_font_size() * 0.5;
-    let draw = ui.get_window_draw_list();
-
-    if depth > 0 {
-        for (ancestor_depth, child) in ancestors
-            .iter()
-            .copied()
-            .skip(1)
-            .chain(std::iter::once(row_index))
-            .enumerate()
-        {
-            let Some(child) = rows.get(child) else {
-                continue;
-            };
-            let x = cursor[0] - indent * (depth - ancestor_depth) as f32 + arrow_center_offset;
-            let end = if child.last_sibling && ancestor_depth + 1 < depth {
-                continue;
-            } else if child.last_sibling {
-                midpoint
-            } else {
-                node_rect.max[1]
-            };
-            draw.add_line(
-                [x, node_rect.min[1]],
-                [x, end],
-                OBJECT_TREE_LINE_COLORS[ancestor_depth % OBJECT_TREE_LINE_COLORS.len()],
-            )
-            .thickness(OBJECT_TREE_LINE_THICKNESS)
-            .build();
-        }
-    }
-
-    if depth > 0 {
-        let x = cursor[0] - indent + arrow_center_offset;
-        let length = if row.leaf {
-            OBJECT_TREE_LEAF_BRANCH_LENGTH
-        } else {
-            OBJECT_TREE_BRANCH_LENGTH
-        };
-        draw.add_line(
-            [x, midpoint],
-            [cursor[0] + length, midpoint],
-            OBJECT_TREE_LINE_COLORS[(depth - 1) % OBJECT_TREE_LINE_COLORS.len()],
-        )
-        .thickness(OBJECT_TREE_LINE_THICKNESS)
-        .build();
-    }
-
-    if opened && !row.leaf {
-        let x = cursor[0] + arrow_center_offset;
-        draw.add_line(
-            [x, midpoint],
-            [x, node_rect.max[1]],
-            OBJECT_TREE_LINE_COLORS[depth % OBJECT_TREE_LINE_COLORS.len()],
-        )
-        .thickness(OBJECT_TREE_LINE_THICKNESS)
-        .build();
-    }
-}
-
-fn draw_type_icon(ui: &Ui, thumbnail: Option<crate::session::PrefabThumbnail>, cursor: [f32; 2]) {
-    let row_min = ui.item_rect_min();
-    let row_max = ui.item_rect_max();
-    let row_height = (row_max[1] - row_min[1]).max(1.0);
-    let icon_extent = ui.text_line_height().min(row_height);
-    let icon_slot_x = cursor[0] + ui.tree_node_to_label_spacing();
-    let draw = ui.get_window_draw_list();
-
-    match thumbnail {
-        Some(thumbnail) => {
-            let image_size = fit_icon(thumbnail.texture.width, thumbnail.texture.height, icon_extent);
-            let image_min = [
-                icon_slot_x + (icon_extent - image_size[0]) * 0.5,
-                row_min[1] + (row_height - image_size[1]) * 0.5,
-            ];
-            let image_max = [image_min[0] + image_size[0], image_min[1] + image_size[1]];
-            draw.add_image(
-                Renderer::sprite_texture(thumbnail.texture.index),
-                image_min,
-                image_max,
-                thumbnail.uv0,
-                thumbnail.uv1,
-                thumbnail.tint,
-            );
-        },
-        None => {
-            let fallback = ICON_IMAGE_BROKEN.to_string();
-            let fallback_width = ui.calc_text_size(&fallback)[0];
-            draw.add_text(
-                [
-                    icon_slot_x + (icon_extent - fallback_width) * 0.5,
-                    row_min[1] + (row_height - ui.text_line_height()) * 0.5,
-                ],
-                ui.style_color(StyleColor::TextDisabled),
-                fallback,
-            );
-        },
-    }
-}
-
-fn sorted_children(tree: &ObjectTree, parent: TypeId) -> Vec<TypeId> {
-    let mut children = tree
-        .get(parent)
-        .into_iter()
-        .flat_map(|decl| decl.children.iter().copied())
-        .filter(|id| tree.get(*id).is_some())
-        .collect::<Vec<_>>();
-
-    children.sort_by(|left, right| {
-        let left = tree.get(*left).map(|decl| decl.path.to_string()).unwrap_or_default();
-        let right = tree.get(*right).map(|decl| decl.path.to_string()).unwrap_or_default();
-
-        left.cmp(&right)
-    });
-
-    children
-}
-
-fn visible_type_roots(tree: &ObjectTree, root: TypeId, filter: ObjectTreeTypeFilter) -> Vec<TypeId> {
-    match filter.action(tree, root) {
-        ObjectTreeFilterAction::Keep => vec![root],
-        ObjectTreeFilterAction::Prune => Vec::new(),
-    }
-}
-
-fn visible_type_children(tree: &ObjectTree, parent: TypeId, filter: ObjectTreeTypeFilter) -> Vec<TypeId> {
-    let mut visible = Vec::new();
-    for child in sorted_children(tree, parent) {
-        match filter.action(tree, child) {
-            ObjectTreeFilterAction::Keep => visible.push(child),
-            ObjectTreeFilterAction::Prune => {},
-        }
-    }
-
-    visible
-}
-
 fn panel_extent(available: [f32; 2]) -> ([f32; 2], (u32, u32)) {
     let width = if available[0].is_finite() {
         available[0].max(1.0)
@@ -4342,56 +3229,17 @@ fn panel_extent(available: [f32; 2]) -> ([f32; 2], (u32, u32)) {
 }
 
 #[cfg(test)]
-mod tests {
-    use core::{
-        location::Location,
-        path::TreePath,
-        types::{Identifier, Value, VarModifiers},
-    };
-    use std::sync::Mutex;
+static IMGUI_CONTEXT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    use dmm::{Map, PrefabInstanceId, Size};
-    use editor::command::Edit;
-    use objtree::VarDecl;
+#[cfg(test)]
+mod tests {
+    use core::{location::Location, path::TreePath};
+
+    use dmm::{PrefabInstanceId, Size};
     use render::{HighlightStyle, SpriteTexture};
 
     use super::*;
-
-    static IMGUI_CONTEXT: Mutex<()> = Mutex::new(());
-
-    fn set_type_name(tree: &mut ObjectTree, id: TypeId, value: &str) {
-        let name = Identifier::from("name");
-        tree.get_mut(id).unwrap().vars.insert(
-            name.clone(),
-            VarDecl {
-                name,
-                declared_type: None,
-                modifiers: VarModifiers::default(),
-                value: Value::Text(value.to_owned()),
-                location: Location::default(),
-            },
-        );
-    }
-
-    fn similar_instances_map() -> (Map, Prefab) {
-        let mut target = Prefab::new(TreePath::parse("/obj/table"));
-        target.set_var("name".into(), Value::Text(String::from("Conference")));
-        let mut different_override = target.clone();
-        different_override.set_var("name".into(), Value::Text(String::from("Coffee")));
-        let different_path = Prefab::new(TreePath::parse("/obj/chair"));
-
-        let mut map = Map::new(Size { x: 2, y: 1, z: 2 });
-        let first = map.intern_tile(vec![target.clone(), different_override.clone()]);
-        let second = map.intern_tile(vec![different_path, target.clone()]);
-        let third = map.intern_tile(vec![target.clone()]);
-        let fourth = map.intern_tile(vec![different_override]);
-        map.grid[0][0][0] = first;
-        map.grid[0][0][1] = second;
-        map.grid[1][0][0] = third;
-        map.grid[1][0][1] = fourth;
-
-        (map, target)
-    }
+    use crate::settings::KeyBinding;
 
     #[test]
     fn a_short_path_is_left_alone_and_a_long_one_keeps_its_tail() {
@@ -4449,10 +3297,6 @@ mod tests {
         assert_eq!(state.layout.validate(), Ok(()));
         assert_eq!(state.block_selection_options, BlockSelectionOptions::default());
         assert_eq!(state.fill_mode, FillMode::Wall);
-        assert!(state.object_tree_reveal.is_none());
-        assert!(state.object_tree_search.is_empty());
-        assert!(state.object_tree_filter.is_none());
-        assert!(state.similar_instances.is_none());
         assert_eq!(
             state.custom_fill_boundaries,
             [TreePath::parse(DEFAULT_CUSTOM_FILL_BOUNDARY)]
@@ -4556,81 +3400,6 @@ mod tests {
         assert!(!view.focus);
         assert!(view.block_selection_anchor.is_none());
         assert!(view.block_placement.is_none());
-    }
-
-    #[test]
-    fn similar_instances_match_the_exact_prefab_across_levels_in_tile_order() {
-        let (map, target) = similar_instances_map();
-        let document = MapDocument::new(map, 1);
-
-        assert_eq!(
-            find_similar_instances(&document, &target),
-            [
-                document.instance_ids_at(Coord::new(1, 1, 1))[0],
-                document.instance_ids_at(Coord::new(2, 1, 1))[1],
-                document.instance_ids_at(Coord::new(1, 1, 2))[0],
-            ]
-        );
-    }
-
-    #[test]
-    fn similar_instance_snapshots_follow_moves_and_drop_deleted_placements() {
-        let (map, target) = similar_instances_map();
-        let mut document = MapDocument::new(map, 1);
-        let matches = find_similar_instances(&document, &target);
-        let moved = matches[0];
-        let deleted = matches[2];
-
-        assert_eq!(
-            document.move_instance(moved, Coord::new(2, 1, 1), "move table", &[], None),
-            Some(true)
-        );
-        let deleted_location = document.instance_location(deleted).unwrap();
-        let mut after = document.placed_tile(deleted_location.coord).unwrap();
-        after.remove(deleted_location.prefab_index);
-        let mut edit = Edit::new("delete table");
-        edit.change(&document, deleted_location.coord, after);
-        assert!(document.apply(edit));
-
-        let rows = resolve_similar_instances(&document, &matches);
-        assert_eq!(rows.len(), matches.len() - 1);
-        assert_eq!(
-            rows.iter()
-                .find(|(instance, _)| *instance == moved)
-                .map(|(_, location)| location.coord),
-            Some(Coord::new(2, 1, 1))
-        );
-        assert!(rows.iter().all(|(instance, _)| *instance != deleted));
-    }
-
-    #[test]
-    fn jumping_to_an_instance_selects_its_level_and_centers_the_map_view() {
-        let (map, _) = similar_instances_map();
-        let document = MapDocument::new(map, 1);
-        let instance = document.instance_ids_at(Coord::new(1, 1, 2))[0];
-        let mut session = Session::new();
-        let document_id = session.state.open_document(document);
-        let mut state = UiState::new().expect("valid window keys");
-        let mut view = MapViewState::new(document_id).expect("valid map view key");
-        view.camera.camera.zoom = 2.5;
-        state.map_views.insert(document_id, view);
-
-        state.jump_to_instance(
-            &mut session,
-            JumpTarget {
-                document: document_id,
-                instance,
-            },
-        );
-
-        assert_eq!(session.state.active(), Some(document_id));
-        assert_eq!(session.z(), 2);
-        assert_eq!(session.selected_instance(), Some(instance));
-        let view = state.map_views.get(&document_id).unwrap();
-        assert_eq!((view.camera.camera.x, view.camera.camera.y), (16.0, 16.0));
-        assert_eq!(view.camera.camera.zoom, 2.5);
-        assert!(view.focus);
-        assert!(!view.refit);
     }
 
     #[test]
@@ -4747,465 +3516,9 @@ mod tests {
     }
 
     #[test]
-    fn object_tree_search_is_not_limited_to_custom_fill_result_count() {
-        let mut tree = ObjectTree::new();
-        for index in 0..60 {
-            tree.register(
-                &TreePath::parse(&format!("/obj/floor/type_{index}")),
-                Location::default(),
-            );
-        }
-
-        assert_eq!(
-            matching_type_paths(&tree, "floor").len(),
-            MAX_CUSTOM_FILL_SEARCH_RESULTS
-        );
-        assert_eq!(
-            matching_object_types(&tree, "floor", ObjectTreeSearchOptions::default()).len(),
-            61
-        );
-    }
-
-    #[test]
-    fn object_tree_search_matches_inherited_atom_names() {
-        let mut tree = ObjectTree::new();
-        let atom = tree.register(&TreePath::parse("/atom"), Location::default());
-        let parent = tree.register(&TreePath::parse("/atom/movable/tool"), Location::default());
-        let child = tree.register(&TreePath::parse("/atom/movable/tool/wrench"), Location::default());
-        tree.register(&TreePath::parse("/atom/structure/table"), Location::default());
-        set_type_name(&mut tree, parent, "Portable Tool");
-
-        let options = ObjectTreeSearchOptions {
-            type_paths: false,
-            names: true,
-        };
-        let matches = matching_object_types(&tree, "PORTABLE", options);
-        let filter = ObjectTreeFilter::new(&tree, atom, "PORTABLE", options, ObjectTreeTypeFilter::default());
-
-        assert_eq!(matches, [parent, child]);
-        assert_eq!(filter.roots, [parent]);
-        assert_eq!(filter.children(parent), [child]);
-    }
-
-    #[test]
-    fn object_tree_search_combines_enabled_fields() {
-        let mut tree = ObjectTree::new();
-        tree.register(&TreePath::parse("/atom"), Location::default());
-        let path_match = tree.register(&TreePath::parse("/atom/movable/needle"), Location::default());
-        let name_match = tree.register(&TreePath::parse("/atom/movable/scalpel"), Location::default());
-        set_type_name(&mut tree, name_match, "Needle tool");
-
-        let path_only = matching_object_types(
-            &tree,
-            "needle",
-            ObjectTreeSearchOptions {
-                type_paths: true,
-                names: false,
-            },
-        );
-        let name_only = matching_object_types(
-            &tree,
-            "needle",
-            ObjectTreeSearchOptions {
-                type_paths: false,
-                names: true,
-            },
-        );
-        let combined = matching_object_types(
-            &tree,
-            "needle",
-            ObjectTreeSearchOptions {
-                type_paths: true,
-                names: true,
-            },
-        );
-
-        assert_eq!(path_only, [path_match]);
-        assert_eq!(name_only, [name_match]);
-        assert_eq!(combined, [path_match, name_match]);
-    }
-
-    #[test]
-    fn object_tree_children_are_sorted_by_path() {
-        let mut tree = ObjectTree::new();
-        tree.register(&TreePath::parse("/obj/zeta"), Location::default());
-        tree.register(&TreePath::parse("/obj/alpha"), Location::default());
-        let obj = tree.id_of(&TreePath::parse("/obj")).expect("registered parent");
-        let paths = sorted_children(&tree, obj)
-            .into_iter()
-            .filter_map(|id| tree.get(id))
-            .map(|decl| decl.path.to_string())
-            .collect::<Vec<_>>();
-
-        assert_eq!(paths, ["/obj/alpha", "/obj/zeta"]);
-    }
-
-    #[test]
-    fn built_in_object_tree_filters_prune_the_base_types_and_all_subtypes() {
-        let mut tree = ObjectTree::new();
-        let atom = tree.register(&TreePath::parse("/atom"), Location::default());
-        let movable = tree.register(&TreePath::parse("/atom/movable"), Location::default());
-        let item = tree.register(&TreePath::parse("/obj/item"), Location::default());
-        let open_turf = tree.register(&TreePath::parse("/turf/open"), Location::default());
-        let roots = tree.roots();
-        tree.get_mut(roots.obj.unwrap()).unwrap().parent_type = Some(TreePath::parse("/atom/movable"));
-        tree.get_mut(roots.turf.unwrap()).unwrap().parent_type = Some(TreePath::parse("/atom"));
-        tree.resolve_parent_types();
-
-        for (options, filtered_root, filtered_subtype) in [
-            (
-                ObjectTreeFilterOptions {
-                    atom: true,
-                    ..ObjectTreeFilterOptions::default()
-                },
-                atom,
-                open_turf,
-            ),
-            (
-                ObjectTreeFilterOptions {
-                    movable: true,
-                    ..ObjectTreeFilterOptions::default()
-                },
-                movable,
-                item,
-            ),
-            (
-                ObjectTreeFilterOptions {
-                    obj: true,
-                    ..ObjectTreeFilterOptions::default()
-                },
-                roots.obj.unwrap(),
-                item,
-            ),
-            (
-                ObjectTreeFilterOptions {
-                    turf: true,
-                    ..ObjectTreeFilterOptions::default()
-                },
-                roots.turf.unwrap(),
-                open_turf,
-            ),
-        ] {
-            let filter = ObjectTreeTypeFilter::new(&tree, &options);
-
-            assert_eq!(filter.action(&tree, filtered_root), ObjectTreeFilterAction::Prune);
-            assert_eq!(filter.action(&tree, filtered_subtype), ObjectTreeFilterAction::Prune);
-        }
-    }
-
-    #[test]
-    fn custom_object_tree_filter_prunes_the_type_and_all_subtypes() {
-        let mut tree = ObjectTree::new();
-        let atom = tree.register(&TreePath::parse("/atom"), Location::default());
-        let keep = tree.register(&TreePath::parse("/atom/keep"), Location::default());
-        let removed = tree.register(&TreePath::parse("/atom/remove"), Location::default());
-        let removed_child = tree.register(&TreePath::parse("/atom/remove/child"), Location::default());
-        let options = ObjectTreeFilterOptions {
-            custom_enabled: true,
-            custom_type_path: String::from("/atom/remove"),
-            ..ObjectTreeFilterOptions::default()
-        };
-        let filter = ObjectTreeTypeFilter::new(&tree, &options);
-
-        assert_eq!(visible_type_children(&tree, atom, filter), [keep]);
-        assert_eq!(filter.action(&tree, removed), ObjectTreeFilterAction::Prune);
-        assert_eq!(filter.action(&tree, removed_child), ObjectTreeFilterAction::Prune);
-    }
-
-    #[test]
-    fn object_tree_search_respects_the_active_type_filters() {
-        let mut tree = ObjectTree::new();
-        let atom = tree.register(&TreePath::parse("/atom"), Location::default());
-        let keep = tree.register(&TreePath::parse("/atom/keep_match"), Location::default());
-        tree.register(&TreePath::parse("/atom/remove/keep_match"), Location::default());
-        let type_filter = ObjectTreeTypeFilter::new(
-            &tree,
-            &ObjectTreeFilterOptions {
-                custom_enabled: true,
-                custom_type_path: String::from("/atom/remove"),
-                ..ObjectTreeFilterOptions::default()
-            },
-        );
-
-        let filter = ObjectTreeFilter::new(
-            &tree,
-            atom,
-            "keep_match",
-            ObjectTreeSearchOptions::default(),
-            type_filter,
-        );
-
-        assert_eq!(filter.roots, [keep]);
-        assert!(filter.children(keep).is_empty());
-        assert!(filter.contains(keep));
-    }
-
-    #[test]
-    fn a_selected_map_instance_queues_its_type_for_object_tree_reveal() {
-        let path = TreePath::parse("/atom/structure/table");
-        let mut tree = ObjectTree::new();
-        let selected_type = tree.register(&path, Location::default());
-        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
-        let tile = map.intern_tile(vec![Prefab::new(path)]);
-        map.grid[0][0][0] = tile;
-        let document = MapDocument::new(map, 1);
-        let selected_instance = document.instance_ids_at(Coord::new(1, 1, 1))[0];
-        let mut session = Session::new();
-        session.state.environment = Some(editor::Environment::new(".", tree));
-        session.state.open_document(document);
-        session.set_tool(Tool::Select);
-        session.select_instance(Some(selected_instance));
-        let mut state = UiState::new().expect("valid window keys");
-
-        state.reveal_selected_instance(&session);
-
-        assert_eq!(state.selected, Some(selected_type));
-        assert_eq!(state.object_tree_reveal, Some(selected_type));
-        assert_eq!(session.tool(), Tool::Select);
-    }
-
-    #[test]
-    fn object_tree_rows_follow_expansion_and_render_a_clipped_search() {
-        let _context = IMGUI_CONTEXT.lock().unwrap();
-        let mut tree = ObjectTree::new();
-        let thing = tree.register(&TreePath::parse("/atom/structure/thing"), Location::default());
-        tree.register(&TreePath::parse("/atom/movable/item"), Location::default());
-        let atom = tree.roots().atom.expect("registered /atom root");
-        let mut context = dear_imgui_rs::Context::create();
-        context
-            .font_atlas()
-            .try_claim_legacy_renderer()
-            .expect("legacy renderer font atlas should be available")
-            .build();
-        context.io_mut().set_display_size([128.0, 128.0]);
-        context.io_mut().set_delta_time(1.0 / 60.0);
-        let ui = context.frame();
-
-        let expanded = ui
-            .window("object-tree-expanded")
-            .build(|| {
-                let mut rows = Vec::new();
-                collect_type_rows(
-                    ui,
-                    &tree,
-                    atom,
-                    None,
-                    true,
-                    &mut rows,
-                    &ObjectTreeRowOptions {
-                        expand: true,
-                        ..ObjectTreeRowOptions::default()
-                    },
-                );
-                rows
-            })
-            .expect("test window should be visible");
-        let paths = expanded
-            .iter()
-            .filter_map(|row| tree.get(row.id))
-            .map(|decl| decl.path.to_string())
-            .collect::<Vec<_>>();
-        let parents = expanded.iter().map(|row| row.parent).collect::<Vec<_>>();
-        let last_siblings = expanded.iter().map(|row| row.last_sibling).collect::<Vec<_>>();
-
-        assert_eq!(
-            paths,
-            [
-                "/atom",
-                "/atom/movable",
-                "/atom/movable/item",
-                "/atom/structure",
-                "/atom/structure/thing"
-            ]
-        );
-        assert_eq!(parents, [None, Some(0), Some(1), Some(0), Some(3)]);
-        assert_eq!(last_siblings, [true, false, true, true, true]);
-
-        let opened_by_default = ui
-            .window("object-tree-default-open")
-            .build(|| {
-                let mut rows = Vec::new();
-                collect_type_rows(ui, &tree, atom, None, true, &mut rows, &ObjectTreeRowOptions::default());
-                rows
-            })
-            .expect("test window should be visible");
-        let default_paths = opened_by_default
-            .iter()
-            .filter_map(|row| tree.get(row.id))
-            .map(|decl| decl.path.to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(default_paths, ["/atom", "/atom/movable", "/atom/structure"]);
-
-        let collapsed = ui
-            .window("object-tree-collapsed")
-            .build(|| {
-                let atom_storage_id = ui.get_id("/atom");
-                ui.with_current_state_storage(|mut storage| storage.set_bool(atom_storage_id, false));
-                let mut rows = Vec::new();
-                collect_type_rows(ui, &tree, atom, None, true, &mut rows, &ObjectTreeRowOptions::default());
-                rows
-            })
-            .expect("test window should be visible");
-        assert_eq!(
-            collapsed,
-            [ObjectTreeRow {
-                id: atom,
-                parent: None,
-                leaf: false,
-                last_sibling: true
-            }]
-        );
-
-        let revealed = ui
-            .window("object-tree-revealed")
-            .build(|| {
-                let atom_storage_id = ui.get_id("/atom");
-                ui.with_current_state_storage(|mut storage| storage.set_bool(atom_storage_id, false));
-                let mut rows = Vec::new();
-                collect_type_rows(
-                    ui,
-                    &tree,
-                    atom,
-                    None,
-                    true,
-                    &mut rows,
-                    &ObjectTreeRowOptions {
-                        reveal: Some(thing),
-                        ..ObjectTreeRowOptions::default()
-                    },
-                );
-                rows
-            })
-            .expect("test window should be visible");
-        let revealed_paths = revealed
-            .iter()
-            .filter_map(|row| tree.get(row.id))
-            .map(|decl| decl.path.to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            revealed_paths,
-            ["/atom", "/atom/movable", "/atom/structure", "/atom/structure/thing"]
-        );
-
-        let structure = tree.id_of(&TreePath::parse("/atom/structure")).unwrap();
-        let filtered = ui
-            .window("object-tree-filtered-reveal")
-            .build(|| {
-                let atom_storage_id = ui.get_id("/atom");
-                ui.with_current_state_storage(|mut storage| storage.set_bool(atom_storage_id, false));
-                let mut rows = Vec::new();
-                collect_type_rows(
-                    ui,
-                    &tree,
-                    atom,
-                    None,
-                    true,
-                    &mut rows,
-                    &ObjectTreeRowOptions {
-                        type_filter: ObjectTreeTypeFilter {
-                            custom: Some(structure),
-                            ..ObjectTreeTypeFilter::default()
-                        },
-                        reveal: Some(thing),
-                        ..ObjectTreeRowOptions::default()
-                    },
-                );
-                rows
-            })
-            .expect("test window should be visible");
-        assert_eq!(
-            filtered,
-            [ObjectTreeRow {
-                id: atom,
-                parent: None,
-                leaf: false,
-                last_sibling: true
-            }]
-        );
-
-        let mut tree = ObjectTree::new();
-        for index in 0..500 {
-            tree.register(
-                &TreePath::parse(&format!("/atom/common/type_{index}")),
-                Location::default(),
-            );
-        }
-        let mut session = Session::new();
-        session.state.environment = Some(editor::Environment::new(".", tree));
-        let mut state = UiState::new().expect("valid window keys");
-        state.object_tree_search = String::from("atom");
-        state.object_tree_filter_revision = u64::MAX;
-        let mut settings = Settings::default();
-
-        state.draw_object_tree(ui, &mut session, &mut settings);
-
-        assert!(context.render_legacy().valid());
-    }
-
-    #[test]
     fn panel_extent_rejects_non_finite_or_empty_sizes() {
         assert_eq!(panel_extent([0.0, f32::NAN]), ([1.0, 1.0], (1, 1)));
         assert_eq!(panel_extent([320.75, 200.25]), ([320.75, 200.25], (320, 200)));
-    }
-
-    #[test]
-    fn settings_categories_have_a_stable_order_and_default() {
-        assert_eq!(SettingsCategory::default(), SettingsCategory::General);
-        assert_eq!(
-            SettingsCategory::ALL.map(SettingsCategory::label),
-            ["General", "Viewport", "Object Tree", "Keybindings"]
-        );
-    }
-
-    #[test]
-    fn settings_keybinding_groups_include_every_action_once() {
-        let grouped = SETTINGS_KEYBINDING_GROUPS
-            .iter()
-            .flat_map(|(_, actions)| actions.iter().copied())
-            .collect::<Vec<_>>();
-
-        assert_eq!(grouped.len(), KeybindAction::ALL.len());
-        for action in KeybindAction::ALL {
-            assert_eq!(grouped.iter().filter(|candidate| **candidate == action).count(), 1);
-        }
-    }
-
-    #[test]
-    fn every_settings_category_renders_in_the_two_pane_window() {
-        let _context = IMGUI_CONTEXT.lock().unwrap();
-        for mut category in SettingsCategory::ALL {
-            let mut context = dear_imgui_rs::Context::create();
-            context
-                .font_atlas()
-                .try_claim_legacy_renderer()
-                .expect("legacy renderer font atlas should be available")
-                .build();
-            context.io_mut().set_display_size([1280.0, 720.0]);
-            context.io_mut().set_delta_time(1.0 / 60.0);
-            let ui = context.frame();
-            let window = WindowKey::new(format!("settings-test-{}", category.label()), "Settings")
-                .expect("valid settings window key");
-            let mut open = true;
-            let mut capturing = None;
-            let mut measured = SETTINGS_WINDOW_SIZE;
-            let mut session = Session::new();
-            let mut settings = Settings::default();
-
-            draw_settings_window(
-                ui,
-                &window,
-                SettingsWindowState {
-                    open: &mut open,
-                    category: &mut category,
-                    capturing: &mut capturing,
-                    measured: &mut measured,
-                },
-                &mut session,
-                &mut settings,
-            );
-
-            assert!(context.render_legacy().valid());
-        }
     }
 
     #[test]

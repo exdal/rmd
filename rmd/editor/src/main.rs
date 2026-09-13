@@ -12,7 +12,6 @@
 mod camera;
 mod external_editor;
 mod gizmo;
-mod inspector;
 mod loader;
 mod logging;
 mod session;

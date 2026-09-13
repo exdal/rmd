@@ -11,10 +11,10 @@ use editor::{
 
 use crate::{
     camera::Controller,
-    inspector::TransformMode,
     session::{DirectionState, DirectionalTypes, SelectedTransform, Session},
     settings::{KeybindAction, Settings},
     transform::anchor_to_tile,
+    ui::TransformMode,
 };
 
 const AXIS_LENGTH: f32 = 48.0;
