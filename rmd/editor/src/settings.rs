@@ -242,10 +242,20 @@ pub(crate) enum KeybindAction {
     Rotate,
     Copy,
     Paste,
+    Recent1,
+    Recent2,
+    Recent3,
+    Recent4,
+    Recent5,
+    Recent6,
+    Recent7,
+    Recent8,
+    Recent9,
+    Recent0,
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 26] = [
         Self::Save,
         Self::Undo,
         Self::Redo,
@@ -262,6 +272,28 @@ impl KeybindAction {
         Self::Rotate,
         Self::Copy,
         Self::Paste,
+        Self::Recent1,
+        Self::Recent2,
+        Self::Recent3,
+        Self::Recent4,
+        Self::Recent5,
+        Self::Recent6,
+        Self::Recent7,
+        Self::Recent8,
+        Self::Recent9,
+        Self::Recent0,
+    ];
+    pub const RECENT: [Self; 10] = [
+        Self::Recent1,
+        Self::Recent2,
+        Self::Recent3,
+        Self::Recent4,
+        Self::Recent5,
+        Self::Recent6,
+        Self::Recent7,
+        Self::Recent8,
+        Self::Recent9,
+        Self::Recent0,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -282,6 +314,16 @@ impl KeybindAction {
             Self::Rotate => "Rotate",
             Self::Copy => "Copy block",
             Self::Paste => "Paste block",
+            Self::Recent1 => "Recent 1",
+            Self::Recent2 => "Recent 2",
+            Self::Recent3 => "Recent 3",
+            Self::Recent4 => "Recent 4",
+            Self::Recent5 => "Recent 5",
+            Self::Recent6 => "Recent 6",
+            Self::Recent7 => "Recent 7",
+            Self::Recent8 => "Recent 8",
+            Self::Recent9 => "Recent 9",
+            Self::Recent0 => "Recent 0",
         }
     }
 
@@ -303,6 +345,16 @@ impl KeybindAction {
             Self::Rotate => "rotate",
             Self::Copy => "copy",
             Self::Paste => "paste",
+            Self::Recent1 => "recent-1",
+            Self::Recent2 => "recent-2",
+            Self::Recent3 => "recent-3",
+            Self::Recent4 => "recent-4",
+            Self::Recent5 => "recent-5",
+            Self::Recent6 => "recent-6",
+            Self::Recent7 => "recent-7",
+            Self::Recent8 => "recent-8",
+            Self::Recent9 => "recent-9",
+            Self::Recent0 => "recent-0",
         }
     }
 }
@@ -326,6 +378,16 @@ pub(crate) struct KeyBindings {
     rotate: KeyBinding,
     copy: KeyBinding,
     paste: KeyBinding,
+    recent_1: KeyBinding,
+    recent_2: KeyBinding,
+    recent_3: KeyBinding,
+    recent_4: KeyBinding,
+    recent_5: KeyBinding,
+    recent_6: KeyBinding,
+    recent_7: KeyBinding,
+    recent_8: KeyBinding,
+    recent_9: KeyBinding,
+    recent_0: KeyBinding,
 }
 
 impl Default for KeyBindings {
@@ -347,6 +409,16 @@ impl Default for KeyBindings {
             rotate: KeyBinding::new(Key::R),
             copy: KeyBinding::with_ctrl(Key::C),
             paste: KeyBinding::with_ctrl(Key::V),
+            recent_1: KeyBinding::new(Key::Key1),
+            recent_2: KeyBinding::new(Key::Key2),
+            recent_3: KeyBinding::new(Key::Key3),
+            recent_4: KeyBinding::new(Key::Key4),
+            recent_5: KeyBinding::new(Key::Key5),
+            recent_6: KeyBinding::new(Key::Key6),
+            recent_7: KeyBinding::new(Key::Key7),
+            recent_8: KeyBinding::new(Key::Key8),
+            recent_9: KeyBinding::new(Key::Key9),
+            recent_0: KeyBinding::new(Key::Key0),
         }
     }
 }
@@ -370,7 +442,27 @@ impl KeyBindings {
             KeybindAction::Rotate => self.rotate,
             KeybindAction::Copy => self.copy,
             KeybindAction::Paste => self.paste,
+            KeybindAction::Recent1 => self.recent_1,
+            KeybindAction::Recent2 => self.recent_2,
+            KeybindAction::Recent3 => self.recent_3,
+            KeybindAction::Recent4 => self.recent_4,
+            KeybindAction::Recent5 => self.recent_5,
+            KeybindAction::Recent6 => self.recent_6,
+            KeybindAction::Recent7 => self.recent_7,
+            KeybindAction::Recent8 => self.recent_8,
+            KeybindAction::Recent9 => self.recent_9,
+            KeybindAction::Recent0 => self.recent_0,
         }
+    }
+
+    pub fn recent(self, index: usize) -> Option<KeyBinding> {
+        KeybindAction::RECENT.get(index).copied().map(|action| self.get(action))
+    }
+
+    pub fn pressed_recent(self, ui: &Ui) -> Option<usize> {
+        KeybindAction::RECENT
+            .into_iter()
+            .position(|action| self.get(action).is_pressed(ui))
     }
 
     pub fn rebind(&mut self, action: KeybindAction, binding: KeyBinding) {
@@ -411,6 +503,16 @@ impl KeyBindings {
             KeybindAction::Rotate => self.rotate = binding,
             KeybindAction::Copy => self.copy = binding,
             KeybindAction::Paste => self.paste = binding,
+            KeybindAction::Recent1 => self.recent_1 = binding,
+            KeybindAction::Recent2 => self.recent_2 = binding,
+            KeybindAction::Recent3 => self.recent_3 = binding,
+            KeybindAction::Recent4 => self.recent_4 = binding,
+            KeybindAction::Recent5 => self.recent_5 = binding,
+            KeybindAction::Recent6 => self.recent_6 = binding,
+            KeybindAction::Recent7 => self.recent_7 = binding,
+            KeybindAction::Recent8 => self.recent_8 = binding,
+            KeybindAction::Recent9 => self.recent_9 = binding,
+            KeybindAction::Recent0 => self.recent_0 = binding,
         }
     }
 }
@@ -713,6 +815,23 @@ mod tests {
         assert_eq!(bindings.get(KeybindAction::Undo), KeyBinding::with_ctrl(Key::Z));
         assert_eq!(bindings.get(KeybindAction::Redo), KeyBinding::with_ctrl(Key::Y));
         assert_eq!(bindings.get(KeybindAction::Save), KeyBinding::with_ctrl(Key::S));
+
+        let recent = [
+            Key::Key1,
+            Key::Key2,
+            Key::Key3,
+            Key::Key4,
+            Key::Key5,
+            Key::Key6,
+            Key::Key7,
+            Key::Key8,
+            Key::Key9,
+            Key::Key0,
+        ];
+        for (index, key) in recent.into_iter().enumerate() {
+            assert_eq!(bindings.recent(index), Some(KeyBinding::new(key)));
+        }
+        assert_eq!(bindings.recent(recent.len()), None);
     }
 
     #[test]
@@ -735,12 +854,20 @@ mod tests {
         table.remove("save");
         table.remove("undo");
         table.remove("redo");
+        for field in [
+            "recent_1", "recent_2", "recent_3", "recent_4", "recent_5", "recent_6", "recent_7", "recent_8", "recent_9",
+            "recent_0",
+        ] {
+            table.remove(field);
+        }
 
         let bindings: KeyBindings = stored.try_into().unwrap();
 
         assert_eq!(bindings.get(KeybindAction::Save), KeyBinding::with_ctrl(Key::S));
         assert_eq!(bindings.get(KeybindAction::Undo), KeyBinding::with_ctrl(Key::Z));
         assert_eq!(bindings.get(KeybindAction::Redo), KeyBinding::with_ctrl(Key::Y));
+        assert_eq!(bindings.recent(0), Some(KeyBinding::new(Key::Key1)));
+        assert_eq!(bindings.recent(9), Some(KeyBinding::new(Key::Key0)));
     }
 
     #[test]
@@ -803,9 +930,13 @@ mod tests {
                 super_key: false,
             },
         );
+        settings
+            .keybindings
+            .rebind(KeybindAction::Recent1, KeyBinding::with_shift(Key::F2));
         let encoded = toml::to_string_pretty(&settings).unwrap();
 
         assert!(encoded.contains("[keybindings.show_areas]"));
+        assert!(encoded.contains("[keybindings.recent_1]"));
         assert!(encoded.contains("maximized = true"));
         assert!(encoded.contains("preferred_editor = \"zed {file}:{line}:{column}\""));
         assert!(encoded.contains("selection_highlight = \"tint\""));

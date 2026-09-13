@@ -1553,9 +1553,7 @@ impl UiState {
             let focused = ui.is_window_focused();
             if focused
                 && !ui.io().want_text_input()
-                && !has_modifiers(ui)
-                && (!hovered || !settings.keybindings.is_any_pressed(ui))
-                && let Some(index) = pressed_recent(ui)
+                && let Some(index) = settings.keybindings.pressed_recent(ui)
             {
                 session.choose_recent(index);
             }
@@ -2148,7 +2146,13 @@ impl UiState {
                 }
                 let recent_prefabs = session.recent_prefabs();
                 if !recent_prefabs.is_empty() {
-                    draw_history_overlay(ui, session, bottom_overlay, recent_prefabs.to_vec());
+                    draw_history_overlay(
+                        ui,
+                        session,
+                        settings.keybindings,
+                        bottom_overlay,
+                        recent_prefabs.to_vec(),
+                    );
                 }
                 configure_tool_interaction(session.tool(), interaction);
                 if session.focused_area().is_some() {
@@ -3741,7 +3745,9 @@ fn draw_tool_button(ui: &Ui, session: &mut Session, tool: Tool, icon: char) {
     }
 }
 
-fn draw_history_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect, recent_prefabs: Vec<Prefab>) {
+fn draw_history_overlay(
+    ui: &Ui, session: &mut Session, keybindings: KeyBindings, bounds: OverlayRect, recent_prefabs: Vec<Prefab>,
+) {
     draw_overlay_underlay(ui, bounds);
 
     let button_size = recent_button_size(ui);
@@ -3753,7 +3759,10 @@ fn draw_history_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect, rec
         if index > 0 {
             ui.same_line();
         }
-        let key = recent_key_label(index);
+        let key = keybindings
+            .recent(index)
+            .map(|binding| binding.label(ui))
+            .unwrap_or_else(|| String::from("?"));
         let _selected = (palette.as_ref() == Some(prefab))
             .then(|| ui.push_style_color(StyleColor::Button, ui.style_color(StyleColor::ButtonActive)));
         let clicked = match session.prefab_thumbnail(prefab) {
@@ -3774,7 +3783,7 @@ fn draw_history_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect, rec
             },
             None => ui.button_with_size(format!("{ICON_IMAGE_BROKEN}##recent-{index}"), [button_size; 2]),
         };
-        draw_recent_badge(ui, key);
+        draw_recent_badge(ui, &key);
         if clicked {
             chosen = Some(index);
         }
@@ -3790,31 +3799,6 @@ fn has_modifiers(ui: &Ui) -> bool {
     let io = ui.io();
 
     io.key_ctrl() || io.key_shift() || io.key_alt() || io.key_super()
-}
-
-fn pressed_recent(ui: &Ui) -> Option<usize> {
-    RECENT_KEYS
-        .iter()
-        .position(|(number, keypad)| ui.is_key_pressed(*number) || ui.is_key_pressed(*keypad))
-}
-
-const RECENT_KEYS: [(Key, Key); 10] = [
-    (Key::Key1, Key::Keypad1),
-    (Key::Key2, Key::Keypad2),
-    (Key::Key3, Key::Keypad3),
-    (Key::Key4, Key::Keypad4),
-    (Key::Key5, Key::Keypad5),
-    (Key::Key6, Key::Keypad6),
-    (Key::Key7, Key::Keypad7),
-    (Key::Key8, Key::Keypad8),
-    (Key::Key9, Key::Keypad9),
-    (Key::Key0, Key::Keypad0),
-];
-
-fn recent_key_label(index: usize) -> char {
-    const LABELS: [char; 10] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
-
-    LABELS.get(index).copied().unwrap_or('?')
 }
 
 fn recent_button_size(ui: &Ui) -> f32 {
@@ -3833,10 +3817,9 @@ fn fit_icon(width: u32, height: u32, extent: f32) -> [f32; 2] {
     [width * scale, height * scale]
 }
 
-fn draw_recent_badge(ui: &Ui, key: char) {
-    let key = key.to_string();
+fn draw_recent_badge(ui: &Ui, key: &str) {
     let item_min = ui.item_rect_min();
-    let text_size = ui.calc_text_size(&key);
+    let text_size = ui.calc_text_size(key);
     let badge_min = [item_min[0] + 2.0, item_min[1] + 2.0];
     let badge_max = [badge_min[0] + text_size[0] + 4.0, badge_min[1] + text_size[1] + 2.0];
     let draw = ui.get_window_draw_list();
@@ -4991,11 +4974,6 @@ mod tests {
     }
 
     #[test]
-    fn recent_slots_follow_the_number_row_order() {
-        assert_eq!((0..10).map(recent_key_label).collect::<String>(), "1234567890");
-    }
-
-    #[test]
     fn recent_icons_fit_inside_a_square_without_changing_aspect_ratio() {
         assert_eq!(fit_recent_icon(32, 32), [RECENT_ICON_SIZE, RECENT_ICON_SIZE]);
         assert_eq!(fit_recent_icon(64, 32), [RECENT_ICON_SIZE, RECENT_ICON_SIZE / 2.0]);
@@ -5159,12 +5137,15 @@ mod tests {
             KeyBinding::with_ctrl(dear_imgui_rs::Key::V)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 16);
+        assert_eq!(KeybindAction::ALL.len(), 26);
+        assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Redo));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Copy));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Paste));
+        assert!(KeybindAction::ALL.contains(&KeybindAction::Recent1));
+        assert!(KeybindAction::ALL.contains(&KeybindAction::Recent0));
     }
 
     #[test]
