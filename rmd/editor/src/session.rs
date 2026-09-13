@@ -107,6 +107,7 @@ pub(crate) struct BlockPreviewSprite {
 }
 
 const MAX_REPORTED_DIAGNOSTICS: usize = 500;
+const MAX_MAP_DIMENSION: u32 = 255;
 
 const PREVIEW_OWNER: PrefabInstanceId = match PrefabInstanceId::from_raw(1) {
     Some(id) => id,
@@ -137,6 +138,13 @@ pub(crate) enum FillOutcome {
     Applied,
     NoChange,
     TooLarge { limit: usize },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LevelChange {
+    Changed,
+    NewLevelRequested,
+    Unchanged,
 }
 
 impl Session {
@@ -201,18 +209,16 @@ impl Session {
     }
 
     pub fn create_map(&mut self, path: &Path, size: Size, format: MapFormat) -> Result<(), Box<dyn std::error::Error>> {
-        const MAX_DIMENSION: u32 = 255;
-
         if size.x == 0
             || size.y == 0
             || size.z == 0
-            || size.x > MAX_DIMENSION
-            || size.y > MAX_DIMENSION
-            || size.z > MAX_DIMENSION
+            || size.x > MAX_MAP_DIMENSION
+            || size.y > MAX_MAP_DIMENSION
+            || size.z > MAX_MAP_DIMENSION
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("map dimensions must each be between 1 and {MAX_DIMENSION}"),
+                format!("map dimensions must each be between 1 and {MAX_MAP_DIMENSION}"),
             )
             .into());
         }
@@ -354,19 +360,49 @@ impl Session {
     }
 
     pub fn save_map(&mut self) -> std::io::Result<()> {
-        let Some(document) = self.state.active_document_mut() else {
+        let Some(id) = self.state.active() else {
             return Err(std::io::Error::other("no map is open"));
         };
+        let levels = self.state.document(id).map_or(0, |document| document.map.size.z);
+        let result = self
+            .state
+            .document_mut(id)
+            .ok_or_else(|| std::io::Error::other("no map is open"))?
+            .save();
 
-        document.save()
+        if result.is_ok()
+            && self
+                .state
+                .document(id)
+                .is_some_and(|document| document.map.size.z != levels)
+        {
+            self.rebuild_instances(id);
+        }
+
+        result
     }
 
     pub fn save_map_as(&mut self, path: &Path, format: MapFormat) -> std::io::Result<()> {
-        let Some(document) = self.state.active_document_mut() else {
+        let Some(id) = self.state.active() else {
             return Err(std::io::Error::other("no map is open"));
         };
+        let levels = self.state.document(id).map_or(0, |document| document.map.size.z);
+        let result = self
+            .state
+            .document_mut(id)
+            .ok_or_else(|| std::io::Error::other("no map is open"))?
+            .save_as(path, format);
 
-        document.save_as(path, format)
+        if result.is_ok()
+            && self
+                .state
+                .document(id)
+                .is_some_and(|document| document.map.size.z != levels)
+        {
+            self.rebuild_instances(id);
+        }
+
+        result
     }
 
     pub fn z(&self) -> u32 { self.state.active_document().map_or(1, |document| document.z) }
@@ -391,19 +427,104 @@ impl Session {
         document.selection = None;
     }
 
-    pub fn change_level(&mut self, delta: i32) {
-        let Some(document) = self.state.active_document_mut() else {
-            return;
+    pub fn can_change_level(&self, delta: i32) -> bool {
+        let Some(document) = self.state.active_document() else {
+            return false;
         };
 
+        if delta < 0 {
+            return document.z > 1;
+        }
+        if delta == 0 {
+            return false;
+        }
+
         let levels = document.map.size.z.max(1);
-        let next = (document.z as i32 + delta).clamp(1, levels as i32) as u32;
+        document.z < levels || (levels < MAX_MAP_DIMENSION && self.tree().is_some())
+    }
+
+    pub fn change_level(&mut self, delta: i32) -> LevelChange {
+        if delta == 0 {
+            return LevelChange::Unchanged;
+        }
+
+        let Some(id) = self.state.active() else {
+            return LevelChange::Unchanged;
+        };
+        let Some(document) = self.state.document(id) else {
+            return LevelChange::Unchanged;
+        };
+
+        let current = document.z;
+        let levels = document.map.size.z.max(1);
+        let target = if delta < 0 {
+            current.saturating_sub(delta.unsigned_abs()).max(1)
+        } else {
+            current.saturating_add(delta as u32)
+        };
+        if target > levels && levels < MAX_MAP_DIMENSION {
+            return LevelChange::NewLevelRequested;
+        }
+
+        let Some(document) = self.state.document_mut(id) else {
+            return LevelChange::Unchanged;
+        };
+        let next = target.min(levels);
 
         if next != document.z {
             document.z = next;
             document.set_focus(None);
             document.selection = None;
+
+            LevelChange::Changed
+        } else {
+            LevelChange::Unchanged
         }
+    }
+
+    pub fn create_level(&mut self, id: DocumentId, type_path: &str) -> Result<u32, String> {
+        let type_path = type_path.trim();
+        if type_path.is_empty() {
+            return Err(String::from("enter a type path"));
+        }
+
+        let requested = TreePath::parse(type_path);
+        let path = {
+            let tree = self.tree().ok_or_else(|| String::from("no codebase is loaded"))?;
+            let type_id = tree
+                .id_of(&requested)
+                .ok_or_else(|| format!("unknown type path: {type_path}"))?;
+            if !is_placeable(tree, type_id) {
+                return Err(format!("type path is not an atom: {type_path}"));
+            }
+
+            tree.get(type_id)
+                .map(|declaration| TreePath::parse(&declaration.path.to_string()))
+                .ok_or_else(|| format!("unknown type path: {type_path}"))?
+        };
+
+        let document = self
+            .state
+            .document_mut(id)
+            .ok_or_else(|| String::from("the map is no longer open"))?;
+        let levels = document.map.size.z.max(1);
+        if document.z != levels {
+            return Err(String::from("the map is no longer on its highest Z level"));
+        }
+        if levels >= MAX_MAP_DIMENSION {
+            return Err(format!("maps cannot exceed {MAX_MAP_DIMENSION} Z levels"));
+        }
+
+        let z = document
+            .append_level(&[Prefab::new(path)])
+            .ok_or_else(|| String::from("could not allocate another Z level"))?;
+        document.z = z;
+        document.set_focus(None);
+        document.selection = None;
+        self.state.set_active(id);
+        self.rebuild_instances(id);
+
+        Ok(z)
     }
 
     pub fn selected_instance(&self) -> Option<PrefabInstanceId> {
@@ -1866,7 +1987,9 @@ mod tests {
 
     use super::{
         FillOutcome,
+        LevelChange,
         LoadReport,
+        MAX_MAP_DIMENSION,
         Progress,
         Session,
         build_textures,
@@ -2807,6 +2930,87 @@ mod tests {
         assert_eq!(session.focused_area(), None);
         assert_eq!(session.selection(), None);
         assert!(session.can_edit_at(Coord::new(4, 1, 2)));
+    }
+
+    #[test]
+    fn changing_up_from_the_last_level_requests_and_uses_a_fill_type() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        let mut map = Map::new(Size { x: 2, y: 1, z: 1 });
+        let key = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/turf")),
+            Prefab::new(TreePath::parse("/area")),
+        ]);
+        for cell in map.grid.iter_mut().flatten().flatten() {
+            *cell = key;
+        }
+        let id = session.activate_document(MapDocument::new(map, 1));
+        let revision = session.revision();
+
+        assert!(session.can_change_level(1));
+        assert!(!session.can_change_level(-1));
+        assert_eq!(session.change_level(1), LevelChange::NewLevelRequested);
+        assert_eq!(session.level_count(), 1, "the request does not create a level yet");
+        assert!(session.create_level(id, "/missing/type").is_err());
+        assert_eq!(session.level_count(), 1, "an invalid fill path changes nothing");
+        assert_eq!(session.create_level(id, "/turf"), Ok(2));
+
+        let document = session.state.active_document().expect("active document");
+        assert_eq!(document.map.size.z, 2);
+        assert_eq!(document.z, 2);
+        assert!(document.is_dirty());
+        for x in 1..=2 {
+            assert_eq!(
+                document.map.tile_at(Coord::new(x, 1, 2)).expect("filled tile")[0].path,
+                TreePath::parse("/turf")
+            );
+        }
+        assert_ne!(
+            session.revision(),
+            revision,
+            "the appended level is rendered immediately"
+        );
+        assert_eq!(
+            session
+                .map_view_frame(id, Default::default(), Default::default(), Default::default())
+                .unwrap()
+                .level_count,
+            2
+        );
+
+        session.change_level(-1);
+        assert_eq!(session.z(), 1);
+        assert_eq!(
+            session.level_count(),
+            2,
+            "moving down does not delete the appended level"
+        );
+    }
+
+    #[test]
+    fn level_creation_stops_at_the_map_dimension_limit() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        let mut map = Map::new(Size {
+            x: 1,
+            y: 1,
+            z: MAX_MAP_DIMENSION,
+        });
+        let key = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/turf")),
+            Prefab::new(TreePath::parse("/area")),
+        ]);
+        for cell in map.grid.iter_mut().flatten().flatten() {
+            *cell = key;
+        }
+        session.activate_document(MapDocument::new(map, MAX_MAP_DIMENSION));
+
+        assert!(!session.can_change_level(1));
+        assert_eq!(session.change_level(1), LevelChange::Unchanged);
+        assert_eq!(session.z(), MAX_MAP_DIMENSION);
+        assert_eq!(session.level_count(), MAX_MAP_DIMENSION);
     }
 
     #[test]

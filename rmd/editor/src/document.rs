@@ -43,6 +43,8 @@ pub struct MapDocument {
     instances: PrefabInstances,
     key_usage: HashMap<Key, usize>,
     focus: Option<AreaFocus>,
+    saved_level_count: u32,
+    retained_level_count: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,15 +77,20 @@ pub enum VarMutation {
 
 #[derive(Debug)]
 pub(crate) struct PrefabInstances {
-    by_coord: HashMap<Coord, Vec<PrefabInstanceId>>,
+    levels: Vec<PrefabLevel>,
     locations: HashMap<PrefabInstanceId, PrefabLocation>,
     next_id: u64,
+}
+
+#[derive(Debug, Default)]
+struct PrefabLevel {
+    by_position: HashMap<(u32, u32), Vec<PrefabInstanceId>>,
 }
 
 impl PrefabInstances {
     fn from_map(map: &Map) -> Self {
         let mut instances = Self {
-            by_coord: HashMap::new(),
+            levels: (0..map.size.z).map(|_| PrefabLevel::default()).collect(),
             locations: HashMap::new(),
             next_id: 1,
         };
@@ -111,13 +118,24 @@ impl PrefabInstances {
     }
 
     pub(crate) fn ids_at(&self, coord: Coord) -> &[PrefabInstanceId] {
-        self.by_coord.get(&coord).map(Vec::as_slice).unwrap_or_default()
+        coord
+            .z
+            .checked_sub(1)
+            .and_then(|z| self.levels.get(z as usize))
+            .and_then(|level| level.by_position.get(&(coord.x, coord.y)))
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 
     pub(crate) fn location(&self, id: PrefabInstanceId) -> Option<PrefabLocation> { self.locations.get(&id).copied() }
 
     pub(crate) fn remove(&mut self, coord: Coord) {
-        let Some(ids) = self.by_coord.remove(&coord) else {
+        let Some(ids) = coord
+            .z
+            .checked_sub(1)
+            .and_then(|z| self.levels.get_mut(z as usize))
+            .and_then(|level| level.by_position.remove(&(coord.x, coord.y)))
+        else {
             return;
         };
 
@@ -130,13 +148,30 @@ impl PrefabInstances {
         if ids.is_empty() {
             return;
         }
+        let Some(level) = coord.z.checked_sub(1).and_then(|z| self.levels.get_mut(z as usize)) else {
+            return;
+        };
 
         for (prefab_index, id) in ids.iter().copied().enumerate() {
             let replaced = self.locations.insert(id, PrefabLocation { coord, prefab_index });
             assert!(replaced.is_none(), "prefab instance ID {} is present twice", id.get());
         }
 
-        self.by_coord.insert(coord, ids);
+        let replaced = level.by_position.insert((coord.x, coord.y), ids);
+        assert!(replaced.is_none(), "prefab instances were inserted twice at {coord:?}");
+    }
+
+    fn append_level(&mut self) { self.levels.push(PrefabLevel::default()); }
+
+    fn truncate_levels(&mut self, level_count: u32) {
+        let keep = (level_count as usize).min(self.levels.len());
+        for level in self.levels.drain(keep..) {
+            for ids in level.by_position.into_values() {
+                for id in ids {
+                    self.locations.remove(&id);
+                }
+            }
+        }
     }
 }
 
@@ -197,6 +232,7 @@ impl Selection {
 
 impl MapDocument {
     pub fn new(map: Map, z: u32) -> Self {
+        let level_count = map.size.z;
         let instances = PrefabInstances::from_map(&map);
         let mut key_usage = HashMap::new();
         for key in map.grid.iter().flatten().flatten() {
@@ -215,6 +251,8 @@ impl MapDocument {
             instances,
             key_usage,
             focus: None,
+            saved_level_count: level_count,
+            retained_level_count: level_count,
         }
     }
 
@@ -246,7 +284,9 @@ impl MapDocument {
         if self.is_dirty() { format!("{name} *") } else { name }
     }
 
-    pub fn is_dirty(&self) -> bool { self.needs_initial_save || self.history.is_dirty() }
+    pub fn is_dirty(&self) -> bool {
+        self.needs_initial_save || self.history.is_dirty() || self.map.size.z != self.saved_level_count
+    }
 
     pub fn needs_initial_save(&self) -> bool { self.needs_initial_save }
 
@@ -420,6 +460,10 @@ impl MapDocument {
             return false;
         }
 
+        if let Some(z) = edit.changes.iter().map(|change| change.coord.z).max() {
+            self.retained_level_count = self.retained_level_count.max(z);
+        }
+
         self.history
             .apply_grouped(&mut self.map, &mut self.instances, &mut self.key_usage, edit, group);
         self.clear_stale_instance_selection();
@@ -455,6 +499,27 @@ impl MapDocument {
 
     pub fn redo_label(&self) -> Option<&str> { self.history.redo_label() }
 
+    pub fn append_level(&mut self, tile: &[Prefab]) -> Option<u32> {
+        let z = self.map.size.z.checked_add(1)?;
+        let key = self.map.intern_tile(tile.to_vec());
+        let width = self.map.size.x as usize;
+        let height = self.map.size.y as usize;
+
+        self.map.grid.push(vec![vec![key; width]; height]);
+        self.map.size.z = z;
+        *self.key_usage.entry(key).or_insert(0) += width.saturating_mul(height);
+        self.instances.append_level();
+
+        for y in 1..=self.map.size.y {
+            for x in 1..=self.map.size.x {
+                let ids = tile.iter().map(|_| self.instances.allocate()).collect();
+                self.instances.insert(Coord::new(x, y, z), ids);
+            }
+        }
+
+        Some(z)
+    }
+
     pub fn save(&mut self) -> std::io::Result<()> {
         let Some(path) = self.path.clone() else {
             return Err(std::io::Error::other("document has no path"));
@@ -466,19 +531,30 @@ impl MapDocument {
 
     pub fn save_as(&mut self, path: impl Into<PathBuf>, format: MapFormat) -> std::io::Result<()> {
         let path = path.into();
+        let retained_level_count = self.retained_level_count.min(self.map.size.z);
+        let mut saved_map = self.map.clone();
+        saved_map.grid.truncate(retained_level_count as usize);
+        saved_map.size.z = retained_level_count;
+        saved_map.prune_dictionary();
+        let contents = dmm::writer::MapWriter::new(&saved_map).with_format(format).write();
 
-        self.map.prune_dictionary();
-        let writer = dmm::writer::MapWriter::new(&self.map).with_format(format);
         if self.needs_initial_save {
             let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
-            file.write_all(writer.write().as_bytes())?;
+            file.write_all(contents.as_bytes())?;
         } else {
-            writer.save(&path)?;
+            std::fs::write(&path, contents)?;
         }
 
+        if retained_level_count < self.map.size.z {
+            self.truncate_levels(retained_level_count);
+        }
+
+        self.map.prune_dictionary();
         self.map.format = format;
         self.path = Some(path);
         self.needs_initial_save = false;
+        self.saved_level_count = self.map.size.z;
+        self.retained_level_count = self.map.size.z;
         self.history.mark_saved();
 
         Ok(())
@@ -495,6 +571,23 @@ impl MapDocument {
     fn clear_stale_instance_selection(&mut self) {
         if self.selected_instance().is_none() {
             self.selected_instance = None;
+        }
+    }
+
+    fn truncate_levels(&mut self, level_count: u32) {
+        self.instances.truncate_levels(level_count);
+        self.map.grid.truncate(level_count as usize);
+        self.map.size.z = level_count;
+        if self.z > level_count {
+            self.z = level_count.max(1);
+            self.selection = None;
+            self.focus = None;
+        }
+        self.clear_stale_instance_selection();
+
+        self.key_usage.clear();
+        for key in self.map.grid.iter().flatten().flatten() {
+            *self.key_usage.entry(*key).or_insert(0) += 1;
         }
     }
 }
@@ -978,6 +1071,86 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_removes_untouched_appended_levels() {
+        let dir = std::env::temp_dir().join(format!("rmd-prune-levels-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let target = dir.join("map.dmm");
+        let mut document = MapDocument::new(shared_tile_map(), 2);
+        let retained_ids = document.instance_ids_at(Coord::new(1, 1, 2)).to_vec();
+        let fill = [Prefab::new(TreePath::parse("/turf"))];
+
+        assert_eq!(document.append_level(&fill), Some(3));
+        document.z = 3;
+        assert_eq!(document.map.size.z, 3);
+        assert!(document.is_dirty());
+        assert_eq!(document.instance_ids_at(Coord::new(1, 1, 3)).len(), 1);
+
+        document.save_as(&target, dmm::MapFormat::Standard).expect("save");
+
+        let (written, errors) = dmm::parser::parse(&std::fs::read_to_string(&target).expect("written map"));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(written.size.z, 2);
+        assert_eq!(document.map.size.z, 2);
+        assert_eq!(document.z, 2);
+        assert_eq!(document.instance_ids_at(Coord::new(1, 1, 2)), retained_ids);
+        assert!(document.instance_ids_at(Coord::new(1, 1, 3)).is_empty());
+        assert!(!document.is_dirty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_retains_the_highest_appended_level_that_received_an_edit() {
+        let dir = std::env::temp_dir().join(format!("rmd-retain-levels-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let target = dir.join("map.dmm");
+        let mut document = MapDocument::new(shared_tile_map(), 2);
+        let fill = [Prefab::new(TreePath::parse("/turf"))];
+        assert_eq!(document.append_level(&fill), Some(3));
+        assert_eq!(document.append_level(&fill), Some(4));
+
+        let coord = Coord::new(1, 1, 3);
+        let mut after = document.placed_tile(coord).expect("appended tile");
+        after.push(document.instantiate(Prefab::new(TreePath::parse("/obj/marker"))));
+        let mut edit = Edit::new("touch appended level");
+        edit.change(&document, coord, after);
+        assert!(document.apply(edit));
+        assert!(document.undo(), "undo still leaves the level marked as touched");
+        document.z = 4;
+
+        document.save_as(&target, dmm::MapFormat::Standard).expect("save");
+
+        let (written, errors) = dmm::parser::parse(&std::fs::read_to_string(&target).expect("written map"));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(written.size.z, 3);
+        assert_eq!(document.map.size.z, 3);
+        assert_eq!(document.z, 3);
+        assert!(!document.is_dirty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_save_does_not_remove_untouched_appended_levels() {
+        let missing = std::env::temp_dir().join(format!("rmd-missing-save-directory-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&missing);
+        let target = missing.join("map.dmm");
+        let mut document = MapDocument::new(shared_tile_map(), 2);
+        let fill = [Prefab::new(TreePath::parse("/turf"))];
+        assert_eq!(document.append_level(&fill), Some(3));
+        document.z = 3;
+
+        document
+            .save_as(&target, dmm::MapFormat::Standard)
+            .expect_err("the parent directory does not exist");
+
+        assert_eq!(document.map.size.z, 3);
+        assert_eq!(document.z, 3);
+        assert_eq!(document.instance_ids_at(Coord::new(1, 1, 3)).len(), 1);
+        assert!(document.is_dirty());
     }
 
     #[test]

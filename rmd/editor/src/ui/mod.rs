@@ -67,7 +67,7 @@ use crate::{
     external_editor::SourceLocation,
     gizmo::{BlockGizmoTarget, GizmoMapView, GizmoState},
     loader::LoadView,
-    session::{BlockPreviewSprite, FillOutcome, PlacementPreview, Session},
+    session::{BlockPreviewSprite, FillOutcome, LevelChange, PlacementPreview, Session},
     settings::{KeyBindings, KeybindAction, Settings},
 };
 
@@ -89,7 +89,10 @@ const PASTE_LABELS: [&str; 2] = ["Paste", "Cancel"];
 const BLOCK_SELECTION_LINE_WIDTH_DRAG_WIDTH: f32 = 140.0;
 const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warning";
 const NEW_MAP_POPUP: &str = "New map##new-map";
+const NEW_LEVEL_POPUP: &str = "Create Z level##new-z-level";
 const NEW_MAP_PATH_WIDTH: f32 = 460.0;
+const NEW_LEVEL_PATH_WIDTH: f32 = 420.0;
+const NEW_LEVEL_SEARCH_HEIGHT: f32 = 180.0;
 const NEW_MAP_DEFAULT_WIDTH: i32 = 255;
 const NEW_MAP_DEFAULT_HEIGHT: i32 = 255;
 const NEW_MAP_DEFAULT_LEVELS: i32 = 1;
@@ -245,6 +248,14 @@ struct NewMapDialog {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NewLevelDialog {
+    document: DocumentId,
+    type_path: String,
+    error: Option<String>,
+    open: bool,
+}
+
 impl Default for NewMapDialog {
     fn default() -> Self {
         Self {
@@ -396,6 +407,8 @@ pub struct UiState {
     custom_fill_search: String,
     pending_fill_warning: Option<PendingFillWarning>,
     new_map_dialog: Option<NewMapDialog>,
+    new_level_dialog: Option<NewLevelDialog>,
+    new_level_type_path: String,
     save_dialog: Option<SaveDialog>,
     pending_close: Option<DocumentId>,
     exit_requested: bool,
@@ -446,6 +459,8 @@ impl UiState {
             custom_fill_search: String::new(),
             pending_fill_warning: None,
             new_map_dialog: None,
+            new_level_dialog: None,
+            new_level_type_path: String::new(),
             save_dialog: None,
             pending_close: None,
             exit_requested: false,
@@ -671,7 +686,12 @@ impl UiState {
             session.toggle_area_outlines();
         }
         if level_delta != 0 {
-            session.change_level(level_delta);
+            request_level_change(
+                session,
+                level_delta,
+                &mut self.new_level_dialog,
+                &self.new_level_type_path,
+            );
         }
         if let Some(depth) = underlay_depth {
             session.set_underlay_depth(depth);
@@ -737,6 +757,7 @@ impl UiState {
         } else {
             self.draw_map_views(ui, session, settings, refit)
         };
+        draw_new_level_dialog(ui, session, &mut self.new_level_dialog, &mut self.new_level_type_path);
         self.settings_window
             .finish_keybind_capture(ui, &mut settings.keybindings);
         let exit = self.draw_exit_confirmation(ui, session);
@@ -1203,10 +1224,10 @@ impl UiState {
                     session.toggle_area_outlines();
                 }
                 if settings.keybindings.get(KeybindAction::LevelUp).is_pressed(ui) {
-                    session.change_level(1);
+                    request_level_change(session, 1, &mut self.new_level_dialog, &self.new_level_type_path);
                 }
                 if settings.keybindings.get(KeybindAction::LevelDown).is_pressed(ui) {
-                    session.change_level(-1);
+                    request_level_change(session, -1, &mut self.new_level_dialog, &self.new_level_type_path);
                 }
                 if settings.keybindings.get(KeybindAction::Refit).is_pressed(ui) {
                     *refit = true;
@@ -1726,10 +1747,14 @@ impl UiState {
                     ui,
                     session,
                     top_overlay,
-                    &mut self.block_selection_options,
-                    &mut self.fill_mode,
-                    &mut self.custom_fill_boundaries,
-                    &mut self.custom_fill_search,
+                    TopOverlayState {
+                        block_selection_options: &mut self.block_selection_options,
+                        fill_mode: &mut self.fill_mode,
+                        custom_fill_boundaries: &mut self.custom_fill_boundaries,
+                        custom_fill_search: &mut self.custom_fill_search,
+                        new_level_dialog: &mut self.new_level_dialog,
+                        new_level_type_path: &self.new_level_type_path,
+                    },
                 );
                 if let Some((action, pending)) = paste_action {
                     if action == PasteAction::Paste {
@@ -2111,22 +2136,50 @@ fn active_placement_flash(
     Some((placement.coord, flash))
 }
 
-fn draw_z_levels(ui: &Ui, session: &mut Session) {
-    let current = session.z();
-    let levels = session.level_count();
-    ui.align_text_to_frame_padding();
-    ui.text("Z");
-
-    let mut selected = None;
-    for z in 1..=levels {
-        ui.same_line();
-
-        if ui.radio_button(z.to_string(), current == z) {
-            selected = Some(z);
-        }
+fn request_level_change(
+    session: &mut Session, delta: i32, dialog: &mut Option<NewLevelDialog>, remembered_type_path: &str,
+) {
+    if session.change_level(delta) != LevelChange::NewLevelRequested {
+        return;
     }
-    if let Some(z) = selected {
-        session.set_level(z);
+    let Some(document) = session.state.active() else {
+        return;
+    };
+
+    *dialog = Some(NewLevelDialog {
+        document,
+        type_path: remembered_type_path.to_owned(),
+        error: None,
+        open: true,
+    });
+}
+
+fn draw_z_levels(ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDialog>, remembered_type_path: &str) {
+    let current = session.z();
+    let button_size = ui.frame_height();
+    ui.align_text_to_frame_padding();
+    ui.text("Z:");
+    ui.same_line();
+
+    let down = {
+        let _disabled = ui.begin_disabled_with_cond(!session.can_change_level(-1));
+
+        ui.button_with_size("<##z-level-down", [button_size, button_size])
+    };
+    ui.same_line();
+    ui.align_text_to_frame_padding();
+    ui.text(current.to_string());
+    ui.same_line();
+    let up = {
+        let _disabled = ui.begin_disabled_with_cond(!session.can_change_level(1));
+
+        ui.button_with_size(">##z-level-up", [button_size, button_size])
+    };
+
+    if down {
+        request_level_change(session, -1, dialog, remembered_type_path);
+    } else if up {
+        request_level_change(session, 1, dialog, remembered_type_path);
     }
 }
 
@@ -2615,10 +2668,24 @@ fn cursor_in_map_view(local: [f32; 2], scale: [f32; 2]) -> [u32; 2] {
     ]
 }
 
-fn draw_top_overlay(
-    ui: &Ui, session: &mut Session, bounds: OverlayRect, block_selection_options: &mut BlockSelectionOptions,
-    fill_mode: &mut FillMode, custom_fill_boundaries: &mut Vec<TreePath>, custom_fill_search: &mut String,
-) {
+struct TopOverlayState<'a> {
+    block_selection_options: &'a mut BlockSelectionOptions,
+    fill_mode: &'a mut FillMode,
+    custom_fill_boundaries: &'a mut Vec<TreePath>,
+    custom_fill_search: &'a mut String,
+    new_level_dialog: &'a mut Option<NewLevelDialog>,
+    new_level_type_path: &'a str,
+}
+
+fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect, state: TopOverlayState<'_>) {
+    let TopOverlayState {
+        block_selection_options,
+        fill_mode,
+        custom_fill_boundaries,
+        custom_fill_search,
+        new_level_dialog,
+        new_level_type_path,
+    } = state;
     draw_overlay_underlay(ui, bounds);
 
     ui.set_cursor_screen_pos([bounds.min[0] + OVERLAY_PADDING, bounds.min[1] + OVERLAY_PADDING]);
@@ -2636,7 +2703,7 @@ fn draw_top_overlay(
     let levels_width = z_level_width(ui, session.level_count());
     let levels_x = (bounds.max[0] - OVERLAY_PADDING - levels_width).max(tools_end + OVERLAY_PADDING);
     ui.set_cursor_screen_pos([levels_x, bounds.min[1] + OVERLAY_PADDING]);
-    draw_z_levels(ui, session);
+    draw_z_levels(ui, session, new_level_dialog, new_level_type_path);
 }
 
 fn draw_new_map_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<NewMapDialog>) -> (bool, bool) {
@@ -2747,6 +2814,104 @@ fn draw_new_map_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<NewMa
     }
 
     (pick_path, created)
+}
+
+fn draw_new_level_dialog(
+    ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDialog>, remembered_type_path: &mut String,
+) {
+    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
+        | WindowFlags::NO_RESIZE
+        | WindowFlags::NO_MOVE
+        | WindowFlags::NO_COLLAPSE
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::NO_DOCKING;
+    let mut close = false;
+
+    if let Some(state) = dialog.as_mut()
+        && state.open
+    {
+        ui.open_popup(NEW_LEVEL_POPUP);
+        state.open = false;
+    }
+
+    if let Some(state) = dialog.as_mut()
+        && let Some(_modal) = ui.begin_modal_popup_config(NEW_LEVEL_POPUP).flags(flags).begin()
+    {
+        if let Some(document) = session.state.document(state.document) {
+            ui.text(format!("Create Z level {}", document.map.size.z.saturating_add(1)));
+        }
+        ui.text("Fill type path");
+        ui.set_next_item_width(NEW_LEVEL_PATH_WIDTH);
+        if ui.is_window_appearing() {
+            ui.set_keyboard_focus_here();
+        }
+        let submitted = ui
+            .input_text("##new-z-level-type-path", &mut state.type_path)
+            .hint("/turf")
+            .enter_returns_true(true)
+            .build();
+
+        let mut selected_path = None;
+        if state.type_path.trim().is_empty() {
+            ui.text_disabled("Type a path to search");
+        } else if let Some(tree) = session.tree() {
+            let matches = matching_type_paths(tree, &state.type_path);
+            if matches.is_empty() {
+                ui.text_disabled("No matching types");
+            } else {
+                ui.child_window("new-z-level-search-results")
+                    .size([NEW_LEVEL_PATH_WIDTH, NEW_LEVEL_SEARCH_HEIGHT])
+                    .border(true)
+                    .build(ui, || {
+                        for path in matches {
+                            let label = path.to_string();
+                            if ui.selectable_config(&label).selected(state.type_path == label).build() {
+                                selected_path = Some(label);
+                            }
+                        }
+                    });
+            }
+        } else {
+            ui.text_disabled("No environment loaded");
+        }
+
+        if let Some(path) = selected_path {
+            state.type_path = path;
+            state.error = None;
+        }
+
+        if let Some(error) = state.error.as_deref() {
+            ui.text_colored(SAVE_ERROR_COLOR, error);
+        }
+        ui.separator();
+
+        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+            close = true;
+            ui.close_current_popup();
+        }
+        ui.same_line();
+
+        let can_create = !state.type_path.trim().is_empty();
+        let clicked = {
+            let _disabled = ui.begin_disabled_with_cond(!can_create);
+
+            ui.button("Create")
+        };
+        if can_create && (clicked || submitted) {
+            match session.create_level(state.document, &state.type_path) {
+                Ok(_) => {
+                    remembered_type_path.clone_from(&state.type_path);
+                    close = true;
+                    ui.close_current_popup();
+                },
+                Err(error) => state.error = Some(error),
+            }
+        }
+    }
+
+    if close {
+        *dialog = None;
+    }
 }
 
 fn resolve_new_map_path(codebase_dir: &Path, input: &str) -> Result<PathBuf, String> {
@@ -3034,6 +3199,7 @@ fn draw_fill_tool_button(
                 ui.text_disabled("No environment loaded");
             }
         }
+
         if let Some(path) = searched_path {
             custom_fill_boundaries.push(path);
             *fill_mode = FillMode::Custom;
@@ -3202,15 +3368,11 @@ fn prefab_tooltip(prefab: &Prefab) -> String {
 fn z_level_width(ui: &Ui, levels: u32) -> f32 {
     let style = ui.clone_style();
     let item_spacing = style.item_spacing()[0];
-    let inner_spacing = style.item_inner_spacing()[0];
-    let radio = ui.frame_height();
-    let mut width = ui.calc_text_size("Z")[0];
+    let button = ui.frame_height();
+    let label = ui.calc_text_size("Z:")[0];
+    let level = ui.calc_text_size(levels.to_string())[0];
 
-    for z in 1..=levels {
-        width += item_spacing + radio + inner_spacing + ui.calc_text_size(z.to_string())[0];
-    }
-
-    width
+    label + item_spacing * 3.0 + button * 2.0 + level
 }
 
 fn panel_extent(available: [f32; 2]) -> ([f32; 2], (u32, u32)) {
