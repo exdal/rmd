@@ -1,4 +1,5 @@
 import common;
+import spec;
 import sprite_shared;
 
 [[vk::binding(0, 1)]]
@@ -6,6 +7,9 @@ Sampler2D textures[];
 
 [[vk::binding(1, 0)]]
 StructuredBuffer<Sprite> sprites;
+
+[[vk::binding(2, 0)]]
+StructuredBuffer<u32> visible_sprite_indices;
 
 struct VSOutput {
     f32x4 position : SV_Position;
@@ -31,15 +35,14 @@ func vs_main(
     uniform f32x2 viewport,
     uniform f32 zoom,
     uniform u32 base,
-    uniform u32 show_areas,
-    uniform u32 show_area_outlines,
     uniform u32x2 focused_area_owner,
     uniform u32x2 placement_flash_owner,
     uniform f32 placement_flash_strength
 ) -> VSOutput {
-    let sprite_index = instance_id + base;
+    let slot = instance_id + base;
+    let sprite_index = SPRITE_INDIRECT ? visible_sprite_indices[slot] : slot;
     let sprite = sprites[sprite_index];
-    let corner = CORNERS[vertex_id];
+    let corner = CORNERS[vertex_id & 3];
     let position_size = sprite.position_size();
     let flags = sprite.flags();
 
@@ -56,8 +59,8 @@ func vs_main(
     let is_area_outline = (flags & SPRITE_AREA_EDGE_MASK) != 0;
     let focus_active = any(focused_area_owner != u32x2(0));
     let inside_focus = all(sprite.area_owner == focused_area_owner);
-    let hidden = (is_area_outline && (focus_active ? !inside_focus : show_area_outlines == 0)) ||
-        (is_area && !is_area_outline && show_areas == 0);
+    let hidden = (is_area_outline && (focus_active ? !inside_focus : !SHOW_AREA_OUTLINES)) ||
+        (is_area && !is_area_outline && !SHOW_AREAS);
     output.sprite_id = hidden ? 0 : sprite_index + 1;
     output.focus_brightness = focus_active && !inside_focus ? 0.33 : 1.0;
     output.placement_flash_strength = all(sprite.owner == placement_flash_owner)
@@ -122,6 +125,17 @@ func sample_sprite(VSOutput input) -> f32x4 {
 
 [shader("fragment")]
 func fs_main(VSOutput input) -> f32x4 {
+    if (SPRITE_EDGE_ONLY) {
+        if (input.sprite_id == 0) {
+            discard;
+        }
+
+        let flags = sprites[input.sprite_id - 1].flags();
+        if ((flags & SPRITE_AREA_EDGE_MASK) == 0) {
+            discard;
+        }
+    }
+
     return sample_sprite(input);
 }
 
@@ -143,21 +157,7 @@ func fs_visibility(VSOutput input) -> VisibilityOutput {
 
     VisibilityOutput output;
     output.color = sample_sprite(input);
-    output.visibility = input.sprite_id;
+    output.visibility = SPRITE_WRITES_ID ? input.sprite_id : 0;
 
     return output;
-}
-
-[shader("fragment")]
-func fs_outline(VSOutput input) -> f32x4 {
-    if (input.sprite_id == 0) {
-        discard;
-    }
-
-    let flags = sprites[input.sprite_id - 1].flags();
-    if ((flags & SPRITE_AREA_EDGE_MASK) == 0) {
-        discard;
-    }
-
-    return sample_sprite(input);
 }

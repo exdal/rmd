@@ -3,6 +3,7 @@ pub mod device;
 pub mod error;
 pub mod imgui;
 pub mod renderer;
+mod spec;
 pub mod texture;
 
 use dmm::PrefabInstanceId;

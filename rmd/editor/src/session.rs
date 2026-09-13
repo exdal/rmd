@@ -1386,10 +1386,10 @@ impl Session {
         Some(changed)
     }
 
-    pub fn area_at(&self, coord: Coord) -> Option<PrefabInstanceId> {
+    pub fn area_at(&self, id: DocumentId, coord: Coord) -> Option<PrefabInstanceId> {
         let environment = self.state.environment.as_ref()?;
         let area = environment.tree.roots().area?;
-        let document = self.state.active_document()?;
+        let document = self.state.document(id)?;
         let tile = document.map.tile_at(coord)?;
 
         tile.iter()
@@ -1451,7 +1451,7 @@ impl Session {
     }
 
     fn resolve_focus(&self, seed: Coord) -> Option<AreaFocus> {
-        let owner = self.area_at(seed)?;
+        let owner = self.area_at(self.state.active()?, seed)?;
         let prefab = self.state.active_document()?.prefab_instance(owner)?.0.clone();
         let instances = self.instances()?;
         let component = instances.area_component_at(seed)?;
@@ -1979,7 +1979,7 @@ mod tests {
     use editor::{
         Environment,
         command::EditGroupId,
-        document::{MapDocument, PlacedPrefab, Selection, VarMutation},
+        document::{MapDocument, PlacedPrefab, PrefabInstanceId, Selection, VarMutation},
         tool::{BlockSelectionMode, FillMode, SelectionPlacement, SelectionRotation, Tool},
     };
     use objtree::ObjectTree;
@@ -2503,6 +2503,10 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("already exists"));
         let _ = std::fs::remove_file(path);
+    }
+
+    fn area_at(session: &Session, coord: Coord) -> Option<PrefabInstanceId> {
+        session.area_at(session.state.active()?, coord)
     }
 
     fn focus_session() -> Session {
@@ -3226,7 +3230,7 @@ mod tests {
         let neighbor = Coord::new(2, 1, 1);
         session.toggle_focus_at(Some(seed));
 
-        let neighbor_area = session.area_at(neighbor).unwrap();
+        let neighbor_area = area_at(&session, neighbor).unwrap();
         session.select_instance(Some(neighbor_area));
         assert_eq!(
             session.set_selected_instance_var("name".into(), Value::Text(String::from("Engineering"))),
@@ -3236,7 +3240,7 @@ mod tests {
         assert!(session.can_edit_at(seed));
         assert!(!session.can_edit_at(neighbor));
 
-        let seed_area = session.area_at(seed).unwrap();
+        let seed_area = area_at(&session, seed).unwrap();
         session.select_instance(Some(seed_area));
         assert_eq!(
             session.set_selected_instance_var("name".into(), Value::Text(String::from("Engineering"))),
@@ -3416,7 +3420,7 @@ mod tests {
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
         session.open_map(&root.join("test.dmm"), 1).unwrap();
-        let area = session.area_at(Coord::new(3, 3, 1)).unwrap();
+        let area = area_at(&session, Coord::new(3, 3, 1)).unwrap();
         session.select_instance(Some(area));
         let revision = session.revision();
 
@@ -3591,13 +3595,13 @@ mod tests {
         session.toggle_focus_at(Some(seed));
         session.set_tool(Tool::Delete);
 
-        let neighbor_area = session.area_at(neighbor).unwrap();
+        let neighbor_area = area_at(&session, neighbor).unwrap();
         assert!(session.delete_instance(neighbor_area));
         assert!(session.focused_area().is_some());
         assert!(session.can_edit_at(seed));
         assert!(!session.can_edit_at(neighbor));
 
-        let seed_area = session.area_at(seed).unwrap();
+        let seed_area = area_at(&session, seed).unwrap();
         assert!(session.delete_instance(seed_area));
         assert_eq!(session.focused_area(), None);
     }

@@ -3,14 +3,21 @@ use std::{env, error::Error, ffi::CString, fs, path::PathBuf};
 use shader_slang as slang;
 use slang::Downcast;
 
-const MODULES: [(&str, &[(&str, &str)]); 5] = [
+const MODULES: [(&str, &[(&str, &str)]); 6] = [
     (
         "sprite.slang",
         &[
             ("vs_main", "sprite.vert.spv"),
             ("fs_main", "sprite.frag.spv"),
             ("fs_visibility", "sprite_visibility.frag.spv"),
-            ("fs_outline", "sprite_outline.frag.spv"),
+        ],
+    ),
+    (
+        "sprite_cull.slang",
+        &[
+            ("cs_classify", "sprite_cull_classify.comp.spv"),
+            ("cs_scan", "sprite_cull_scan.comp.spv"),
+            ("cs_compact", "sprite_cull_compact.comp.spv"),
         ],
     ),
     (
@@ -32,12 +39,13 @@ const MODULES: [(&str, &[(&str, &str)]); 5] = [
     ),
 ];
 
-const COMMON_MODULES: [&str; 5] = [
+const COMMON_MODULES: [&str; 6] = [
     "common.slang",
     "common/types.slang",
     "common/color.slang",
     "common/encoding.slang",
     "sprite_shared.slang",
+    "spec.slang",
 ];
 
 fn main() -> Result<(), Box<dyn Error>> {

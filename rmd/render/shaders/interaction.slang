@@ -1,4 +1,5 @@
 import common;
+import spec;
 import sprite_shared;
 
 [[vk::binding(0, 0)]]
@@ -56,19 +57,19 @@ func is_highlighted_owner(u32x2 owner, u32x2 selected_owner, u32x2 hovered_owner
 static const f32 SELECTED_TINT_STRENGTH = 0.45;
 static const f32 HOVERED_TINT_STRENGTH = 0.22;
 
-func accent_color(u32 interaction_mode) -> f32x4 {
-    return interaction_mode != 0 ? f32x4(1.0, 0.0, 0.0, 1.0) : f32x4(0.0, 1.0, 0.0, 1.0);
+func accent_color() -> f32x4 {
+    return DELETE_MODE ? f32x4(1.0, 0.0, 0.0, 1.0) : f32x4(0.0, 1.0, 0.0, 1.0);
 }
 
-func marching_color(f32 path_position, f32 stripe_offset, u32 interaction_mode) -> f32x4 {
+func marching_color(f32 path_position, f32 stripe_offset) -> f32x4 {
     let stripe_position = path_position - stripe_offset;
     let wrapped = stripe_position - floor(stripe_position / 12.0) * 12.0;
 
-    return wrapped < 6.0 ? f32x4(1.0) : accent_color(interaction_mode);
+    return wrapped < 6.0 ? f32x4(1.0) : accent_color();
 }
 
-func tint_color(f32x4 color, u32 interaction_mode, f32 strength) -> f32x4 {
-    let accent = accent_color(interaction_mode);
+func tint_color(f32x4 color, f32 strength) -> f32x4 {
+    let accent = accent_color();
     // premultiplied, like the scene it blends over
     let tint = f32x4(accent.rgb * color.a, color.a);
 
@@ -92,9 +93,7 @@ func fs_main(
     uniform f32x2 guide_origin,
     uniform f32x2 guide_target,
     uniform u32 guide_valid,
-    uniform u32 interaction_mode,
-    uniform u32x2 focused_area_owner,
-    uniform u32 highlight_tint
+    uniform u32x2 focused_area_owner
 ) -> f32x4 {
     let color = scene.Sample(input.uv);
     let pixel = i32x2(input.position.xy);
@@ -135,7 +134,7 @@ func fs_main(
     let owner = owner_at(pixel, width, height);
     let on_selected = any(selected_owner != u32x2(0)) && same_owner(owner, selected_owner);
     if (on_selected) {
-        return highlight_tint != 0 ? tint_color(color, interaction_mode, SELECTED_TINT_STRENGTH) : color;
+        return HIGHLIGHT_TINT ? tint_color(color, SELECTED_TINT_STRENGTH) : color;
     }
 
     // origin needs to stay under sprite, otherwise it looks annoying
@@ -149,11 +148,11 @@ func fs_main(
             return guide_color(guide_path_position, stripe_offset);
         }
 
-        return highlight_tint != 0 ? tint_color(color, interaction_mode, HOVERED_TINT_STRENGTH) : color;
+        return HIGHLIGHT_TINT ? tint_color(color, HOVERED_TINT_STRENGTH) : color;
     }
 
     // tinting fills the sprite itself, so nothing is traced around it
-    if (highlight_tint == 0) {
+    if (!HIGHLIGHT_TINT) {
         var nearest = i32x2(0);
         var nearest_distance = 5;
         for (i32 y = -2; y <= 2; y++) {
@@ -180,7 +179,7 @@ func fs_main(
                 path_position = nearest.x < 0 ? f32(pixel.y) : -f32(pixel.y);
             }
 
-            return marching_color(path_position, stripe_offset, interaction_mode);
+            return marching_color(path_position, stripe_offset);
         }
     }
 

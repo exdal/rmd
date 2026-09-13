@@ -1549,7 +1549,7 @@ impl UiState {
                     interaction.cursor = Some(cursor_in_map_view(cursor, scale));
 
                     if let Some(coord) = pointed_coord {
-                        interaction.hovered_area = session.area_at(coord);
+                        interaction.hovered_area = session.area_at(id, coord);
                         match session.tool() {
                             Tool::Place => {
                                 if left_clicked {

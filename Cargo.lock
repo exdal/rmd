@@ -1926,7 +1926,7 @@ dependencies = [
 [[package]]
 name = "vir"
 version = "1.0.0"
-source = "git+https://github.com/exdal/vir.git#45275bbab47ddda3580fcf1f52530f4e090bac1e"
+source = "git+https://github.com/exdal/vir.git#451a219e223d8a66c4b67205e794bbb3bc4dc7fa"
 dependencies = [
  "ash",
  "bitflags 2.13.1",
