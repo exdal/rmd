@@ -1,7 +1,7 @@
 use core::{
     location::Location,
     path::TreePath,
-    types::{Identifier, Value, VarModifiers},
+    types::{Identifier, IrNodeId, ProcId, ProcKind, ProcParam, TypeSpec, Value, VarModifiers},
 };
 use std::collections::{HashMap, HashSet};
 
@@ -51,14 +51,18 @@ pub struct VarDecl {
     pub declared_type: Option<TreePath>,
     pub modifiers: VarModifiers,
     pub value: Value,
+    pub initializer: Option<ProcId>,
     pub location: Location,
 }
 
 #[derive(Debug, Clone)]
 pub struct ProcDecl {
     pub name: Identifier,
-    pub params: Vec<Identifier>,
-    pub is_verb: bool,
+    pub params: Vec<ProcParam<IrNodeId>>,
+    pub body: Option<ProcId>,
+    pub kind: ProcKind,
+    pub variadic: bool,
+    pub return_type: Option<TypeSpec>,
     pub location: Location,
 }
 
@@ -161,11 +165,11 @@ impl ObjectTree {
 
     /// `parent_type = /some/path`
     pub fn resolve_parent_types(&mut self) {
-        let overrides: Vec<(TypeId, TreePath)> = self
+        let overrides = self
             .types
             .iter()
             .filter_map(|decl| decl.parent_type.clone().map(|path| (decl.id, path)))
-            .collect();
+            .collect::<Vec<(TypeId, TreePath)>>();
 
         for (id, path) in overrides {
             let Some(new_parent) = self.by_path.get(&path.segments).copied() else {

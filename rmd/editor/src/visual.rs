@@ -180,6 +180,7 @@ mod tests {
                 declared_type: None,
                 modifiers: VarModifiers::default(),
                 value: Value::Num(2.0),
+                initializer: None,
                 location: Location::default(),
             },
         );

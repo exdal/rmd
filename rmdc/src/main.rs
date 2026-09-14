@@ -4,6 +4,7 @@
 //! rmdc tokens <file.dm>     dump the token stream, layout tokens included
 //! rmdc pp     <file.dme>    preprocess and print the flattened source back out
 //! rmdc tree   <file.dme>    preprocess, parse and print the object tree
+//! rmdc ir     <file.dme>    preprocess, parse and print the IR module
 //! rmdc map    <file.dmm>    parse a map and summarise it
 //! rmdc roundtrip <file.dmm> parse a map, write it back out and diff the bytes
 //! rmdc icon   <file.dmi>    decode an icon and list its states
@@ -24,7 +25,7 @@ use dmi::{IconFile, metadata::IconState};
 use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
 
 fn usage() -> ExitCode {
-    eprintln!("usage: rmdc <tokens|pp|tree|map|roundtrip|icon> <file>");
+    eprintln!("usage: rmdc <tokens|pp|tree|ir|map|roundtrip|icon> <file>");
 
     ExitCode::FAILURE
 }
@@ -39,6 +40,7 @@ fn main() -> ExitCode {
         "tokens" => dump_tokens(&path),
         "pp" => dump_preprocessed(&path),
         "tree" => dump_tree(&path),
+        "ir" => dump_ir(&path),
         "map" => dump_map(&path),
         "roundtrip" => roundtrip_map(&path),
         "icon" => dump_icon(&path),
@@ -125,7 +127,7 @@ fn dump_tree(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("{} top level declarations", ast.declarations.len());
 
     println!("=== TREE ===");
-    let (tree, errors) = sema::analyze(&ast);
+    let (tree, _module, errors) = sema::analyze(&ast);
     print!("{}", render_tree(&tree, &preprocessed.sources, source_root));
 
     for error in &errors {
@@ -134,6 +136,20 @@ fn dump_tree(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             error.display(relative_path(&preprocessed.sources, source_root, error.location.file))
         );
     }
+
+    Ok(())
+}
+
+fn dump_ir(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let arena = StrArena::new();
+    let preprocessed = preprocessor::preprocess(&arena, path)?;
+    if !preprocessed.is_ok() {
+        return Err("preprocessing failed".into());
+    }
+
+    let ast = ast::parse(&preprocessed.tokens)?;
+    let (_, module, _) = sema::analyze(&ast);
+    print!("{}", ir::disasm::dump_with(&module, true));
 
     Ok(())
 }
@@ -184,7 +200,7 @@ fn render_type(
         if !decl.vars.is_empty() {
             let _ = writeln!(output, "{indent}  variables:");
 
-            let mut vars: Vec<_> = decl.vars.values().collect();
+            let mut vars = decl.vars.values().collect::<Vec<_>>();
             vars.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
             for var in vars {
                 let location = format_location(sources, source_root, var.location);
@@ -195,7 +211,7 @@ fn render_type(
         if !decl.procs.is_empty() {
             let _ = writeln!(output, "{indent}  procedures:");
 
-            let mut procs: Vec<_> = decl.procs.values().collect();
+            let mut procs = decl.procs.values().collect::<Vec<_>>();
             procs.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
             for proc in procs {
                 let location = format_location(sources, source_root, proc.location);
@@ -243,7 +259,7 @@ fn format_var(var: &VarDecl) -> String {
 }
 
 fn format_proc(proc: &ProcDecl) -> String {
-    let mut output = if proc.is_verb {
+    let mut output = if proc.kind == core::types::ProcKind::Verb {
         format!("verb/{}(", proc.name)
     } else {
         format!("proc/{}(", proc.name)
@@ -252,7 +268,7 @@ fn format_proc(proc: &ProcDecl) -> String {
         if index != 0 {
             output.push_str(", ");
         }
-        output.push_str(param.as_str());
+        output.push_str(param.spec.name.as_str());
     }
     output.push(')');
 
@@ -362,7 +378,7 @@ fn render_icon(icon: &IconFile) -> String {
         let _ = write!(out, "  {name:<28} dirs {}  frames {}", state.dirs, state.frames);
 
         if state.is_animated() {
-            let delays: Vec<String> = state.delays.iter().map(|d| format!("{d}")).collect();
+            let delays = state.delays.iter().map(|d| format!("{d}")).collect::<Vec<String>>();
             let _ = write!(out, "  delay {}", delays.join(","));
             let _ = match state.loop_count {
                 0 => write!(out, "  loop forever"),
@@ -490,7 +506,7 @@ mod tests {
         let (tokens, errors) = lexer::tokenize(source);
         assert!(errors.is_empty());
         let ast = ast::parse(&tokens).expect("fixture should parse");
-        let (tree, errors) = sema::analyze(&ast);
+        let (tree, _module, errors) = sema::analyze(&ast);
         assert!(errors.is_empty());
 
         let source_root = source_root(&sources, Some(entry), Path::new("/project/game/entry.dm"));

@@ -335,6 +335,7 @@ mod tests {
                         declared_type: None,
                         modifiers: VarModifiers::default(),
                         value: value.clone(),
+                        initializer: None,
                         location: Location::default(),
                     },
                 );

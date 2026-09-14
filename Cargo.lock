@@ -635,6 +635,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ir"
+version = "1.0.0"
+dependencies = [
+ "ast",
+ "core",
+ "lexer",
+]
+
+[[package]]
 name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1459,6 +1468,7 @@ dependencies = [
  "core",
  "dmi",
  "dmm",
+ "ir",
  "lexer",
  "objtree",
  "preprocessor",
@@ -1552,6 +1562,8 @@ version = "1.0.0"
 dependencies = [
  "ast",
  "core",
+ "ir",
+ "lexer",
  "objtree",
 ]
 
