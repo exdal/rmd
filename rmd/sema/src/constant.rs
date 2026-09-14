@@ -12,7 +12,7 @@ pub fn fold(ast: &AST, expr_id: ExpressionId) -> Value {
         Expression::Literal(literal) => match literal {
             Literal::Null => Value::Null,
             Literal::Num(v) => Value::Num(*v),
-            Literal::String(s) => Value::Text(s.clone()),
+            Literal::String(s) => Value::Text(core::types::decode_string(s)),
             Literal::Resource(s) => Value::Resource(s.clone()),
         },
 
@@ -134,6 +134,20 @@ mod tests {
                     value: None,
                 },
             ])
+        );
+    }
+
+    /// `name = "Joe\'s bar\n"` reaches the object tree decoded, not as raw source.
+    #[test]
+    fn folds_a_string_literal_with_its_escapes_decoded() {
+        let ast = ast::AST::new(
+            Vec::new(),
+            vec![Expression::Literal(Literal::String(String::from(r"Joe\'s bar\n")))],
+        );
+
+        assert_eq!(
+            fold(&ast, ExpressionId::new(0).unwrap()),
+            Value::Text(String::from("Joe's bar\n"))
         );
     }
 }
