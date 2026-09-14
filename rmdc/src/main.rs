@@ -174,35 +174,32 @@ fn render_type(
         } else {
             format_location(sources, source_root, decl.location)
         };
-        writeln!(
+        let _ = writeln!(
             output,
             "{indent}{name} ({} vars, {} procs) @ {location}",
             decl.vars.len(),
             decl.procs.len()
-        )
-        .expect("writing to a String cannot fail");
+        );
 
         if !decl.vars.is_empty() {
-            writeln!(output, "{indent}  variables:").expect("writing to a String cannot fail");
+            let _ = writeln!(output, "{indent}  variables:");
 
             let mut vars: Vec<_> = decl.vars.values().collect();
             vars.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
             for var in vars {
                 let location = format_location(sources, source_root, var.location);
-                writeln!(output, "{indent}    {} @ {location}", format_var(var))
-                    .expect("writing to a String cannot fail");
+                let _ = writeln!(output, "{indent}    {} @ {location}", format_var(var));
             }
         }
 
         if !decl.procs.is_empty() {
-            writeln!(output, "{indent}  procedures:").expect("writing to a String cannot fail");
+            let _ = writeln!(output, "{indent}  procedures:");
 
             let mut procs: Vec<_> = decl.procs.values().collect();
             procs.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
             for proc in procs {
                 let location = format_location(sources, source_root, proc.location);
-                writeln!(output, "{indent}    {} @ {location}", format_proc(proc))
-                    .expect("writing to a String cannot fail");
+                let _ = writeln!(output, "{indent}    {} @ {location}", format_proc(proc));
             }
         }
 
@@ -234,13 +231,13 @@ fn format_var(var: &VarDecl) -> String {
         (var.modifiers.is_tmp, "tmp"),
     ] {
         if enabled {
-            write!(output, "/{modifier}").expect("writing to a String cannot fail");
+            let _ = write!(output, "/{modifier}");
         }
     }
     if let Some(declared_type) = &var.declared_type {
-        write!(output, "{declared_type}").expect("writing to a String cannot fail");
+        let _ = write!(output, "{declared_type}");
     }
-    write!(output, "/{} = {}", var.name, var.value).expect("writing to a String cannot fail");
+    let _ = write!(output, "/{} = {}", var.name, var.value);
 
     output
 }

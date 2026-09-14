@@ -62,14 +62,14 @@ fn fold_binary(op: BinaryOp, lhs: Value, rhs: Value) -> Value {
         BinaryOp::Sub => a - b,
         BinaryOp::Mul => a * b,
         BinaryOp::Div if b != 0.0 => a / b,
-        BinaryOp::Mod if (b as i32) != 0 => ((a as i32) % (b as i32)) as f32,
+        BinaryOp::Mod if (b as i32) != 0 => (a as i32).checked_rem(b as i32).unwrap_or(0) as f32,
         BinaryOp::FloatMod if b != 0.0 => a % b,
         BinaryOp::Pow => a.powf(b),
         BinaryOp::BitAnd => ((a as i32) & (b as i32)) as f32,
         BinaryOp::BitOr => ((a as i32) | (b as i32)) as f32,
         BinaryOp::BitXor => ((a as i32) ^ (b as i32)) as f32,
-        BinaryOp::ShiftLeft => ((a as i32) << (b as i32)) as f32,
-        BinaryOp::ShiftRight => ((a as i32) >> (b as i32)) as f32,
+        BinaryOp::ShiftLeft => (a as i32).checked_shl(b as u32).unwrap_or(0) as f32,
+        BinaryOp::ShiftRight => (a as i32).checked_shr(b as u32).unwrap_or(0) as f32,
         BinaryOp::CompEq => bool_to_num(a == b),
         BinaryOp::CompNotEq => bool_to_num(a != b),
         BinaryOp::CompLess => bool_to_num(a < b),
@@ -101,17 +101,17 @@ mod tests {
             Vec::new(),
             vec![
                 Expression::Literal(Literal::Num(1.0)),
-                Expression::Grouped(ExpressionId::new(0)),
+                Expression::Grouped(ExpressionId::new(0).unwrap()),
                 Expression::Literal(Literal::String("key".to_string())),
                 Expression::Literal(Literal::Num(2.0)),
                 Expression::List(vec![
                     Argument {
                         key: None,
-                        value: Some(ExpressionId::new(1)),
+                        value: Some(ExpressionId::new(1).unwrap()),
                     },
                     Argument {
-                        key: Some(ExpressionId::new(2)),
-                        value: Some(ExpressionId::new(3)),
+                        key: Some(ExpressionId::new(2).unwrap()),
+                        value: Some(ExpressionId::new(3).unwrap()),
                     },
                     Argument { key: None, value: None },
                 ]),
@@ -119,7 +119,7 @@ mod tests {
         );
 
         assert_eq!(
-            fold(&ast, ExpressionId::new(4)),
+            fold(&ast, ExpressionId::new(4).unwrap()),
             Value::List(vec![
                 ListEntry {
                     key: Value::Num(1.0),

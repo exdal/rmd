@@ -96,7 +96,11 @@ impl<'a, 't> Parser<'a, 't> {
     }
 
     pub fn make_expr(&mut self, expr: Expression) -> ExpressionId {
-        let expr_id = ExpressionId::new(self.expressions.len());
+        // if we cant make new expressions, just reject the ast
+        let Some(expr_id) = ExpressionId::new(self.expressions.len()) else {
+            return ExpressionId::ROOT;
+        };
+
         self.expressions.push(expr);
 
         expr_id
@@ -109,6 +113,12 @@ impl<'a, 't> Parser<'a, 't> {
         while self.peek().is_some() && !self.peek_is(Token::Eof) {
             self.parse_declaration(None, &mut declarations)?;
             self.skip_declaration_delimiters();
+        }
+
+        if u32::try_from(self.expressions.len()).is_err() {
+            let location = self.peek().map(|(_, location)| location).unwrap_or_default();
+
+            return Err(ParseError::expression_limit(location));
         }
 
         Ok(AST::new(declarations, std::mem::take(&mut self.expressions)))

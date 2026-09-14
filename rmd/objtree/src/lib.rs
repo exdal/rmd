@@ -3,7 +3,7 @@ use core::{
     path::TreePath,
     types::{Identifier, Value, VarModifiers},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct ObjectTree {
     types: Vec<TypeDecl>,
@@ -130,7 +130,9 @@ impl ObjectTree {
                         location,
                     });
 
-                    self.types[parent.0 as usize].children.push(id);
+                    if let Some(decl) = self.get_mut(parent) {
+                        decl.children.push(id);
+                    }
                     self.by_path.insert(current.segments.clone(), id);
                     self.note_root(id, &current.segments);
 
@@ -170,19 +172,33 @@ impl ObjectTree {
                 continue;
             };
 
-            if let Some(old_parent) = self.types[id.0 as usize].parent {
-                self.types[old_parent.0 as usize].children.retain(|child| *child != id);
+            // a `parent_type` that points back into the subtree would close a cycle
+            if self.is_subtype_of(new_parent, id) {
+                continue;
             }
 
-            self.types[id.0 as usize].parent = Some(new_parent);
-            self.types[new_parent.0 as usize].children.push(id);
+            if let Some(old_parent) = self.get(id).and_then(|decl| decl.parent)
+                && let Some(parent) = self.get_mut(old_parent)
+            {
+                parent.children.retain(|child| *child != id);
+            }
+
+            if let Some(decl) = self.get_mut(id) {
+                decl.parent = Some(new_parent);
+            }
+
+            if let Some(parent) = self.get_mut(new_parent) {
+                parent.children.push(id);
+            }
         }
     }
 
     pub fn ancestors(&self, id: TypeId) -> impl Iterator<Item = &TypeDecl> {
         let mut next = Some(id);
+        let mut remaining = self.types.len();
 
         std::iter::from_fn(move || {
+            remaining = remaining.checked_sub(1)?;
             let decl = self.get(next?)?;
             next = decl.parent;
 
@@ -207,8 +223,13 @@ impl ObjectTree {
     pub fn descendants(&self, id: TypeId) -> Vec<TypeId> {
         let mut out = Vec::new();
         let mut stack = vec![id];
+        let mut seen = HashSet::new();
 
         while let Some(current) = stack.pop() {
+            if !seen.insert(current) {
+                continue;
+            }
+
             out.push(current);
 
             if let Some(decl) = self.get(current) {
@@ -224,7 +245,7 @@ impl ObjectTree {
 mod tests {
     use core::{location::Location, path::TreePath};
 
-    use crate::{ObjectTree, Roots};
+    use crate::{ObjectTree, Roots, TypeId};
 
     #[test]
     fn registers_intermediate_types() {
@@ -271,5 +292,42 @@ mod tests {
         let roots = tree.roots();
         assert!(roots.area.is_some_and(|area| tree.is_subtype_of(fake, area)));
         assert!(roots.obj.is_some_and(|obj| !tree.is_subtype_of(fake, obj)));
+    }
+
+    /// `/obj/item { parent_type = /obj/item/sword }` would make `/obj/item` its own descendant.
+    #[test]
+    fn a_parent_type_that_closes_a_cycle_is_refused() {
+        let mut tree = ObjectTree::new();
+        let item = tree.register(&TreePath::parse("/obj/item"), Location::default());
+        let sword = tree.register(&TreePath::parse("/obj/item/sword"), Location::default());
+
+        if let Some(decl) = tree.get_mut(item) {
+            decl.parent_type = Some(TreePath::parse("/obj/item/sword"));
+        }
+
+        tree.resolve_parent_types();
+
+        assert!(tree.is_subtype_of(sword, item));
+        assert!(!tree.is_subtype_of(item, sword));
+        assert_eq!(tree.ancestors(item).count(), 3);
+        assert_eq!(tree.descendants(item), vec![item, sword]);
+    }
+
+    /// A cycle reached any other way still terminates rather than hanging the editor.
+    #[test]
+    fn a_hand_built_parent_cycle_terminates() {
+        let mut tree = ObjectTree::new();
+        let item = tree.register(&TreePath::parse("/obj/item"), Location::default());
+        let sword = tree.register(&TreePath::parse("/obj/item/sword"), Location::default());
+
+        if let Some(decl) = tree.get_mut(item) {
+            decl.parent = Some(sword);
+        }
+        if let Some(decl) = tree.get_mut(sword) {
+            decl.children.push(item);
+        }
+
+        assert!(tree.ancestors(item).count() <= tree.descendants(TypeId::ROOT).len());
+        assert_eq!(tree.descendants(item).len(), 2);
     }
 }
