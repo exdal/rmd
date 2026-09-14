@@ -83,6 +83,10 @@ impl<'a> Lexer<'a> {
 
     pub fn take_errors(&mut self) -> Vec<LexError> { std::mem::take(&mut self.errors) }
 
+    pub fn error_count(&self) -> usize { self.errors.len() }
+
+    pub fn truncate_errors(&mut self, count: usize) { self.errors.truncate(count); }
+
     pub fn file(&self) -> FileId { self.file }
 
     pub fn at_line_start(&self) -> bool { self.at_line_start }
