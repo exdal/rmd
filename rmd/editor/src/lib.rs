@@ -327,7 +327,7 @@ mod tests {
 
         if let Some(decl) = tree.get_mut(id) {
             for (name, value) in vars {
-                let name = Identifier(String::from(*name));
+                let name = Identifier::from(String::from(*name));
                 decl.vars.insert(
                     name.clone(),
                     VarDecl {

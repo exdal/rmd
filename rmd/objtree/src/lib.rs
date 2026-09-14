@@ -144,13 +144,13 @@ impl ObjectTree {
 
     fn note_root(&mut self, id: TypeId, segments: &[Identifier]) {
         let slot = match segments {
-            [datum] if datum.0 == "datum" => &mut self.roots.datum,
-            [atom] if atom.0 == "atom" => &mut self.roots.atom,
-            [obj] if obj.0 == "obj" => &mut self.roots.obj,
-            [mob] if mob.0 == "mob" => &mut self.roots.mob,
-            [turf] if turf.0 == "turf" => &mut self.roots.turf,
-            [area] if area.0 == "area" => &mut self.roots.area,
-            [atom, movable] if atom.0 == "atom" && movable.0 == "movable" => &mut self.roots.movable,
+            [datum] if datum.as_str() == "datum" => &mut self.roots.datum,
+            [atom] if atom.as_str() == "atom" => &mut self.roots.atom,
+            [obj] if obj.as_str() == "obj" => &mut self.roots.obj,
+            [mob] if mob.as_str() == "mob" => &mut self.roots.mob,
+            [turf] if turf.as_str() == "turf" => &mut self.roots.turf,
+            [area] if area.as_str() == "area" => &mut self.roots.area,
+            [atom, movable] if atom.as_str() == "atom" && movable.as_str() == "movable" => &mut self.roots.movable,
             _ => return,
         };
 

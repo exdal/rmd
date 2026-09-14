@@ -168,7 +168,7 @@ fn render_type(
 ) {
     if let Some(decl) = tree.get(id) {
         let indent = "  ".repeat(depth);
-        let name = decl.path.name().map(|n| n.0.as_str()).unwrap_or("/");
+        let name = decl.path.name().map(|n| n.as_str()).unwrap_or("/");
         let location = if id == TypeId::ROOT {
             "<built-in>".to_string()
         } else {

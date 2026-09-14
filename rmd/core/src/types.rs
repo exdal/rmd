@@ -1,19 +1,5 @@
+pub use crate::interner::Symbol as Identifier;
 use crate::path::TreePath;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Identifier(pub String); // TODO: swap for crate::interner::Symbol once the tree is built through an Interner
-
-impl Identifier {
-    pub fn as_str(&self) -> &str { &self.0 }
-}
-
-impl From<&str> for Identifier {
-    fn from(s: &str) -> Self { Self(s.to_string()) }
-}
-
-impl std::fmt::Display for Identifier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
-}
 
 /// Declaration modifiers on a `var/`.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
