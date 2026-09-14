@@ -95,7 +95,7 @@ impl TreePath {
                 "const" => flags |= PathFlags::IS_CONST,
                 "final" => flags |= PathFlags::IS_FINAL,
                 "tmp" => flags |= PathFlags::IS_TMP,
-                _ => segments.push(Identifier(part.to_string())),
+                _ => segments.push(Identifier::from(part.to_string())),
             }
         }
 
