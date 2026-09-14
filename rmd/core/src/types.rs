@@ -74,3 +74,70 @@ impl std::fmt::Display for Value {
         }
     }
 }
+
+pub fn decode_string(source: &str) -> String {
+    let mut out = String::new();
+    let mut chars = source.chars();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+
+            continue;
+        }
+
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some(ch @ ('\\' | '"' | '[' | ']' | '\'')) => out.push(ch),
+            Some(ch) => {
+                out.push('\\');
+                out.push(ch);
+            },
+            None => out.push('\\'),
+        }
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_string;
+
+    #[test]
+    fn decodes_the_escapes_dm_defines() {
+        assert_eq!(decode_string(r"a\nb"), "a\nb");
+        assert_eq!(decode_string(r"a\tb"), "a\tb");
+        assert_eq!(decode_string(r"a\rb"), "a\rb");
+        assert_eq!(decode_string(r"a\\b"), r"a\b");
+        assert_eq!(decode_string(r#"a\"b"#), "a\"b");
+        assert_eq!(decode_string(r"a\'b"), "a'b");
+    }
+
+    /// `"\[x]"` is how DM writes a literal bracket where interpolation would otherwise start.
+    #[test]
+    fn decodes_escaped_interpolation_brackets() {
+        assert_eq!(decode_string(r"\[x\]"), "[x]");
+    }
+
+    #[test]
+    fn leaves_undefined_escapes_as_written() {
+        assert_eq!(decode_string(r"a\qb"), r"a\qb");
+        assert_eq!(decode_string(r"100\%"), r"100\%");
+    }
+
+    /// A string ending mid-escape must not drop the backslash or panic.
+    #[test]
+    fn a_trailing_backslash_survives() {
+        assert_eq!(decode_string(r"ab\"), r"ab\");
+        assert_eq!(decode_string(r"\"), r"\");
+    }
+
+    #[test]
+    fn passes_through_text_with_no_escapes() {
+        assert_eq!(decode_string(""), "");
+        assert_eq!(decode_string("icon_state"), "icon_state");
+    }
+}
