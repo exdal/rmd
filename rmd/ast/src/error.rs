@@ -9,6 +9,7 @@ pub enum ParseErrorKind {
     ExpectedExpression,
     UnexpectedIndent,
     InvalidVarModifier(String),
+    ExpressionLimit,
 }
 
 impl std::fmt::Display for ParseErrorKind {
@@ -21,6 +22,7 @@ impl std::fmt::Display for ParseErrorKind {
             Self::ExpectedExpression => write!(f, "expected an expression"),
             Self::UnexpectedIndent => write!(f, "unexpected indent"),
             Self::InvalidVarModifier(s) => write!(f, "invalid var modifier '{s}'"),
+            Self::ExpressionLimit => write!(f, "too many expressions in one file"),
         }
     }
 }
@@ -36,6 +38,13 @@ impl ParseError {
         Self {
             kind: ParseErrorKind::EndOfFile,
             location: Location::default(),
+        }
+    }
+
+    pub fn expression_limit(location: Location) -> Self {
+        Self {
+            kind: ParseErrorKind::ExpressionLimit,
+            location,
         }
     }
 

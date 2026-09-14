@@ -14,7 +14,9 @@ pub mod precedence;
 pub struct ExpressionId(u32);
 
 impl ExpressionId {
-    pub fn new(index: usize) -> Self { Self(u32::try_from(index).expect("expression arena exceeded u32::MAX")) }
+    pub const ROOT: Self = Self(0);
+
+    pub fn new(index: usize) -> Option<Self> { u32::try_from(index).ok().map(Self) }
 
     pub fn index(self) -> usize { self.0 as usize }
 }
