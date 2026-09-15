@@ -292,7 +292,7 @@ fn format_node(proc: &Procedure, node: &IrNode) -> String {
         IrNode::Output { target, value } => format!("output {target} {value}"),
         IrNode::Noop => String::from("noop"),
         IrNode::Blocked(what) => format!("blocked {what:?}"),
-        IrNode::Unsupported(why) => format!("unsupported {why:?}"),
+        IrNode::Trap { reason } => format!("trap {reason:?}"),
     }
 }
 

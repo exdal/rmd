@@ -22,7 +22,6 @@ pub struct IrModuleBuilder<'a> {
     phi_block: HashMap<IrNodeId, IrNodeId>,
     preds: HashMap<IrNodeId, Vec<IrNodeId>>,
     sealed: HashSet<IrNodeId>,
-    users: HashMap<IrNodeId, HashSet<IrNodeId>>,
     blocks: Vec<IrNodeId>,
     named_blocks: HashMap<Identifier, IrNodeId>,
     loops: Vec<EnclosingLoop>,
@@ -78,7 +77,6 @@ impl<'a> IrModuleBuilder<'a> {
             phi_block: HashMap::new(),
             preds: HashMap::new(),
             sealed: HashSet::new(),
-            users: HashMap::new(),
             blocks: Vec::new(),
             named_blocks: HashMap::new(),
             loops: Vec::new(),
@@ -122,6 +120,7 @@ impl<'a> IrModuleBuilder<'a> {
 
     pub fn finish(mut self) -> Module {
         self.link_global_function_calls();
+        crate::opt::simplify_phis(&mut self.module);
 
         self.module
     }
@@ -194,7 +193,6 @@ impl<'a> IrModuleBuilder<'a> {
         self.phi_block.clear();
         self.preds.clear();
         self.sealed.clear();
-        self.users.clear();
         self.blocks.clear();
         self.named_blocks.clear();
         self.loops.clear();
@@ -204,10 +202,6 @@ impl<'a> IrModuleBuilder<'a> {
 
     fn make_node(&mut self, node: IrNode) -> IrNodeId {
         let id = IrNodeId(self.module.nodes.len() as u32);
-
-        for operand in node.operands() {
-            self.users.entry(operand).or_default().insert(id);
-        }
         self.module.nodes.push(node);
 
         id
@@ -490,8 +484,9 @@ impl<'a> IrModuleBuilder<'a> {
                 _ => {
                     let phi = self.new_phi(block);
                     self.write_variable(var, block, phi);
+                    self.add_phi_operands(var, phi);
 
-                    self.add_phi_operands(var, phi)
+                    phi
                 },
             }
         };
@@ -514,9 +509,9 @@ impl<'a> IrModuleBuilder<'a> {
 
     fn undefined(&mut self) -> IrNodeId { self.intern_constant(Value::Null) }
 
-    fn add_phi_operands(&mut self, var: BindingId, phi: IrNodeId) -> IrNodeId {
+    fn add_phi_operands(&mut self, var: BindingId, phi: IrNodeId) {
         let Some(block) = self.phi_block.get(&phi).copied() else {
-            return phi;
+            return;
         };
         let preds = self.preds.get(&block).cloned().unwrap_or_default();
 
@@ -524,73 +519,11 @@ impl<'a> IrModuleBuilder<'a> {
             let value = self.read_variable(var, pred);
             self.append_phi_operand(phi, pred, value);
         }
-
-        self.try_remove_trivial_phi(phi)
     }
 
     fn append_phi_operand(&mut self, phi: IrNodeId, block: IrNodeId, value: IrNodeId) {
         if let Some(IrNode::Phi { operands, .. }) = self.module.nodes.get_mut(phi.0 as usize) {
             operands.push(PhiOperand { block, value });
-        }
-        self.users.entry(value).or_default().insert(phi);
-    }
-
-    fn try_remove_trivial_phi(&mut self, phi: IrNodeId) -> IrNodeId {
-        let Some(IrNode::Phi { operands, .. }) = self.module.node(phi) else {
-            return phi;
-        };
-
-        let mut same: Option<IrNodeId> = None;
-        for operand in operands {
-            if operand.value == phi || Some(operand.value) == same {
-                continue;
-            }
-            if same.is_some() {
-                return phi;
-            }
-            same = Some(operand.value);
-        }
-
-        let same = match same {
-            Some(same) => same,
-            None => self.undefined(),
-        };
-
-        let mut users = self.users.remove(&phi).unwrap_or_default();
-        users.remove(&phi);
-        self.replace_uses(phi, same, &users);
-
-        for user in users {
-            if matches!(self.module.node(user), Some(IrNode::Phi { .. })) {
-                self.try_remove_trivial_phi(user);
-            }
-        }
-
-        same
-    }
-
-    fn replace_uses(&mut self, from: IrNodeId, to: IrNodeId, users: &HashSet<IrNodeId>) {
-        for user in users.iter().copied() {
-            if let Some(node) = self.module.nodes.get_mut(user.0 as usize) {
-                replace_operands(node, from, to);
-            }
-            self.users.entry(to).or_default().insert(user);
-        }
-
-        for value in self.current_def.values_mut() {
-            if *value == from {
-                *value = to;
-            }
-        }
-
-        if let Some(block) = self.phi_block.remove(&from)
-            && let Some(IrNode::Label(instructions)) = self.module.nodes.get_mut(block.0 as usize)
-        {
-            instructions.retain(|id| *id != from);
-        }
-
-        if let Some(node) = self.module.nodes.get_mut(from.0 as usize) {
-            *node = IrNode::Noop;
         }
     }
 
@@ -658,7 +591,9 @@ impl<'a> IrModuleBuilder<'a> {
 
     fn lower_expr(&mut self, id: ExpressionId) -> IrNodeId {
         if self.depth >= 256 {
-            return self.emit_instr(IrNode::Unsupported("expression nesting exceeds 256".into()));
+            return self.emit_instr(IrNode::Trap {
+                reason: "expression nesting exceeds 256".into(),
+            });
         }
 
         self.depth += 1;
@@ -670,7 +605,9 @@ impl<'a> IrModuleBuilder<'a> {
 
     fn lower_expr_inner(&mut self, id: ExpressionId) -> IrNodeId {
         let node = match self.ast.get_expr(id) {
-            None => IrNode::Unsupported("missing AST expression".into()),
+            None => IrNode::Trap {
+                reason: "missing AST expression".into(),
+            },
             Some(Expression::Literal(literal)) => {
                 return self.intern_constant(match literal {
                     Literal::Null => Value::Null,
@@ -960,7 +897,9 @@ impl<'a> IrModuleBuilder<'a> {
                 self.emit_instr(IrNode::SetIndex { object, index, value });
             },
             _ => {
-                self.emit_instr(IrNode::Unsupported("assignment to a non-place".into()));
+                self.emit_instr(IrNode::Trap {
+                    reason: "assignment to a non-place".into(),
+                });
             },
         }
 
@@ -969,7 +908,9 @@ impl<'a> IrModuleBuilder<'a> {
 
     fn lower_statements(&mut self, body: &[Statement]) {
         if self.depth >= 256 {
-            self.emit_instr(IrNode::Unsupported("statement nesting exceeds 256".into()));
+            self.emit_instr(IrNode::Trap {
+                reason: "statement nesting exceeds 256".into(),
+            });
 
             return;
         }
@@ -1202,7 +1143,9 @@ impl<'a> IrModuleBuilder<'a> {
                 {
                     Some(block) => self.terminate_current_block(IrNode::Branch(block)),
                     None => {
-                        self.emit_instr(IrNode::Unsupported("break outside loop".into()));
+                        self.emit_instr(IrNode::Trap {
+                            reason: "break outside loop".into(),
+                        });
                     },
                 }
             },
@@ -1214,7 +1157,9 @@ impl<'a> IrModuleBuilder<'a> {
                 {
                     Some(block) => self.terminate_current_block(IrNode::Branch(block)),
                     None => {
-                        self.emit_instr(IrNode::Unsupported("continue outside loop".into()));
+                        self.emit_instr(IrNode::Trap {
+                            reason: "continue outside loop".into(),
+                        });
                     },
                 }
             },
@@ -1458,123 +1403,6 @@ struct EnclosingLoop {
     header: IrNodeId,
 }
 
-fn replace_operands(node: &mut IrNode, from: IrNodeId, to: IrNodeId) {
-    let swap = |id: &mut IrNodeId| {
-        if *id == from {
-            *id = to;
-        }
-    };
-    let maybe = |id: &mut Option<IrNodeId>| {
-        if *id == Some(from) {
-            *id = Some(to);
-        }
-    };
-    let arguments = |args: &mut Vec<Argument>| {
-        for arg in args {
-            if arg.key == Some(from) {
-                arg.key = Some(to);
-            }
-            if arg.value == Some(from) {
-                arg.value = Some(to);
-            }
-        }
-    };
-
-    match node {
-        IrNode::Phi { operands, .. } => {
-            for operand in operands {
-                if operand.value == from {
-                    operand.value = to;
-                }
-            }
-        },
-        IrNode::Unary { operand, .. } => swap(operand),
-        IrNode::Binary { lhs, rhs, .. } => {
-            swap(lhs);
-            swap(rhs);
-        },
-        IrNode::Load { pointer } => swap(pointer),
-        IrNode::AccessField { object, .. } => swap(object),
-        IrNode::Index { object, index, .. } => {
-            swap(object);
-            swap(index);
-        },
-        IrNode::Call { callee, args } => {
-            swap(callee);
-            arguments(args);
-        },
-        IrNode::FunctionCall { function, args } => {
-            swap(function);
-            arguments(args);
-        },
-        IrNode::Super { args } | IrNode::List(args) => arguments(args),
-        IrNode::New { ty, args } => {
-            maybe(ty);
-            arguments(args);
-        },
-        IrNode::ModifiedType { overrides, .. } => {
-            for (_, id) in overrides {
-                swap(id);
-            }
-        },
-        IrNode::Pick(choices) => {
-            for (weight, value) in choices {
-                maybe(weight);
-                swap(value);
-            }
-        },
-        IrNode::Interpolate { values, .. } => {
-            for value in values {
-                swap(value);
-            }
-        },
-        IrNode::InRange {
-            value,
-            start,
-            end,
-            step,
-        } => {
-            swap(value);
-            swap(start);
-            swap(end);
-            maybe(step);
-        },
-        IrNode::Range { start, end, step } => {
-            swap(start);
-            swap(end);
-            maybe(step);
-        },
-        IrNode::RangeTest { current, end, step } => {
-            swap(current);
-            swap(end);
-            swap(step);
-        },
-        IrNode::IterInit { list, .. } => swap(list),
-        IrNode::IterNext(id) | IrNode::IterValue(id) | IrNode::IterKey(id) => swap(id),
-        IrNode::SetField { object, value, .. } => {
-            swap(object);
-            swap(value);
-        },
-        IrNode::SetIndex { object, index, value } => {
-            swap(object);
-            swap(index);
-            swap(value);
-        },
-        IrNode::Store { pointer, value } => {
-            swap(pointer);
-            swap(value);
-        },
-        IrNode::ConditionalBranch { condition, .. } => swap(condition),
-        IrNode::Return(value) => maybe(value),
-        IrNode::Output { target, value } => {
-            swap(target);
-            swap(value);
-        },
-        IrNode::Del(id) | IrNode::Throw(id) => swap(id),
-        _ => {},
-    }
-}
-
 fn branch_targets(node: &IrNode) -> Vec<IrNodeId> {
     match node {
         IrNode::Branch(target) => vec![*target],
@@ -1615,7 +1443,7 @@ fn is_waitfor(stmt: &Statement) -> bool {
 mod tests {
     use super::*;
 
-    const SHAPES: [&str; 14] = [
+    const SHAPES: [&str; 15] = [
         "/proc/t(a)\n\treturn a\n",
         "/proc/t(a)\n\tif(a)\n\t\treturn 1\n\telse if(a)\n\t\treturn 2\n\telse\n\t\treturn 3\n",
         "/proc/t(a)\n\tvar/x = 0\n\tif(a)\n\t\tx = 1\n\treturn x\n",
@@ -1630,6 +1458,11 @@ mod tests {
         "/proc/t()\n\ttry\n\t\tthrow 1\n\tcatch(var/e)\n\t\treturn e\n",
         "/proc/t(a, b)\n\treturn a && b || a\n",
         "/proc/t(a)\n\tvar/x = 0\n\tagain:\n\t\tx += 1\n\t\tif(a)\n\t\t\ta = 0\n\t\t\tgoto again\n\t\treturn x\n",
+        "/proc/t(mean, stddev)\n\tvar/cached\n\tvar/r1\n\tvar/r2\n\tvar/working\n\tif(cached != null)\n\t\tr1 = \
+         cached\n\t\tcached = null\n\telse\n\t\tdo\n\t\t\tr1 = rand(-10000, 10000) / 10000\n\t\t\tr2 = rand(-10000, \
+         10000) / 10000\n\t\t\tworking = r1 * r1 + r2 * r2\n\t\twhile(working >= 1 || working == 0)\n\t\tworking = \
+         sqrt(-2 * log(working) / working)\n\t\tr1 *= working\n\t\tcached = r2 * working\n\treturn mean + stddev * \
+         r1\n",
         "/proc/t(list/L, a, b)\n\tvar/n = 0\n\touter:\n\t\tfor(var/mob/M in L)\n\t\t\tfor(var/i = 1 to \
          10)\n\t\t\t\tif(a && b)\n\t\t\t\t\tcontinue outer\n\t\t\t\telse if(a || i > 3)\n\t\t\t\t\tbreak\n\t\t\t\tn \
          += i\n\tswitch(n)\n\t\tif(1 to 5)\n\t\t\tn = a ? 1 : 2\n\t\telse\n\t\t\tn = 0\n\treturn n\n",
@@ -1759,7 +1592,7 @@ mod tests {
         }
     }
 
-    /// `try_remove_trivial_phi` should leave nothing that merges a single value.
+    /// The phi simplification pass should leave nothing that merges a single value.
     #[test]
     fn no_trivial_phi_survives() {
         for source in SHAPES {
@@ -1800,7 +1633,7 @@ mod tests {
                         assert!(target.is_some(), "{instruction} in {block} of `{source}` reads nothing");
                         assert!(
                             !matches!(target, Some(IrNode::Noop)),
-                            "{instruction} in {block} of `{source}` reads a removed node"
+                            "{instruction} {node:?} in {block} of `{source}` reads removed {operand}"
                         );
                     }
                 }
@@ -2118,7 +1951,7 @@ mod tests {
     /// Built directly rather than parsed: `ast::parse` overflows its own stack long before 256, so
     /// the guard here is only reachable from an AST that did not come through the parser.
     #[test]
-    fn nesting_past_the_limit_lowers_to_unsupported() {
+    fn nesting_past_the_limit_lowers_to_trap() {
         let mut expressions = vec![Expression::Literal(Literal::Num(1.0))];
         for index in 0..300 {
             expressions.push(Expression::Grouped(ExpressionId::new(index).expect("expression id")));
@@ -2129,6 +1962,8 @@ mod tests {
         let mut builder = IrModuleBuilder::new(&ast);
         builder.lower_initializer(TreePath::default(), "deep".into(), None, outermost, Location::default());
 
-        assert!(has(&builder.finish(), "nesting exceeds 256"));
+        let module = builder.finish();
+        assert!(has(&module, "Trap"));
+        assert!(has(&module, "nesting exceeds 256"));
     }
 }

@@ -5,6 +5,7 @@
 //! rmdc pp     <file.dme>    preprocess and print the flattened source back out
 //! rmdc tree   <file.dme>    preprocess, parse and print the object tree
 //! rmdc ir     <file.dme>    preprocess, parse and print the IR module
+//! rmdc bytecode <file.dme>  compile and print stack bytecode
 //! rmdc map    <file.dmm>    parse a map and summarise it
 //! rmdc roundtrip <file.dmm> parse a map, write it back out and diff the bytes
 //! rmdc icon   <file.dmi>    decode an icon and list its states
@@ -25,7 +26,7 @@ use dmi::{IconFile, metadata::IconState};
 use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
 
 fn usage() -> ExitCode {
-    eprintln!("usage: rmdc <tokens|pp|tree|ir|map|roundtrip|icon> <file>");
+    eprintln!("usage: rmdc <tokens|pp|tree|ir|bytecode|map|roundtrip|icon> <file>");
 
     ExitCode::FAILURE
 }
@@ -41,6 +42,7 @@ fn main() -> ExitCode {
         "pp" => dump_preprocessed(&path),
         "tree" => dump_tree(&path),
         "ir" => dump_ir(&path),
+        "bytecode" => dump_bytecode(&path),
         "map" => dump_map(&path),
         "roundtrip" => roundtrip_map(&path),
         "icon" => dump_icon(&path),
@@ -150,6 +152,21 @@ fn dump_ir(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let ast = ast::parse(&preprocessed.tokens)?;
     let (_, module, _) = sema::analyze(&ast);
     print!("{}", ir::disasm::dump_with(&module, true));
+
+    Ok(())
+}
+
+fn dump_bytecode(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let arena = StrArena::new();
+    let preprocessed = preprocessor::preprocess(&arena, path)?;
+    if !preprocessed.is_ok() {
+        return Err("preprocessing failed".into());
+    }
+
+    let ast = ast::parse(&preprocessed.tokens)?;
+    let (_, module, _) = sema::analyze(&ast);
+    let module = codegen::generate(&module)?;
+    print!("{}", codegen::disasm::dump(&module)?);
 
     Ok(())
 }

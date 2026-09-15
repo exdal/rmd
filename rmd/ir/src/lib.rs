@@ -9,6 +9,7 @@ pub use ast::{AccessKind, BinaryOp, Builtin, UnaryOp};
 
 pub mod ast_lowering;
 pub mod disasm;
+pub mod opt;
 pub use ast_lowering::IrModuleBuilder;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -165,7 +166,9 @@ pub enum IrNode {
     },
     Noop,
     Blocked(&'static str),
-    Unsupported(String),
+    Trap {
+        reason: String,
+    },
 }
 
 impl IrNode {
