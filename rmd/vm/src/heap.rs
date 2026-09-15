@@ -5,7 +5,7 @@ use objtree::TypeId;
 
 use crate::{
     FaultKind,
-    value::{ListId, RtList, RtValue},
+    value::{GenericValue, ListData, ListId},
     world::Position,
 };
 
@@ -14,7 +14,7 @@ struct Journal {
     objects_len: usize,
     lists_len: usize,
     objects: HashMap<ObjectId, Object>,
-    lists: HashMap<ListId, RtList>,
+    lists: HashMap<ListId, ListData>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -23,7 +23,7 @@ pub struct ObjectId(pub u32);
 #[derive(Debug, Clone)]
 pub struct Object {
     pub ty: TypeId,
-    pub vars: HashMap<Symbol, RtValue>,
+    pub vars: HashMap<Symbol, GenericValue>,
     pub loc: Option<ObjectId>,
     pub contents: Vec<ObjectId>,
     pub position: Option<Position>,
@@ -48,14 +48,14 @@ impl Object {
 #[derive(Debug, Default)]
 pub struct Heap {
     pub(crate) objects: Vec<Object>,
-    pub(crate) lists: Vec<RtList>,
+    pub(crate) lists: Vec<ListData>,
     journal: Option<Journal>,
 }
 
 impl Heap {
     pub fn object(&self, id: ObjectId) -> Option<&Object> { self.objects.get(id.0 as usize).filter(|o| !o.deleted) }
 
-    pub fn list(&self, id: ListId) -> Option<&RtList> { self.lists.get(id.0 as usize) }
+    pub fn list(&self, id: ListId) -> Option<&ListData> { self.lists.get(id.0 as usize) }
 
     pub fn objects(&self) -> impl Iterator<Item = (ObjectId, &Object)> {
         self.objects
@@ -71,7 +71,7 @@ impl Heap {
         Ok(id)
     }
 
-    pub fn alloc_list(&mut self, mut list: RtList) -> Result<ListId, FaultKind> {
+    pub fn alloc_list(&mut self, mut list: ListData) -> Result<ListId, FaultKind> {
         let id = ListId(u32::try_from(self.lists.len()).map_err(|_| FaultKind::Memory)?);
         list.reindex();
         self.lists.push(list);
@@ -88,7 +88,7 @@ impl Heap {
         Ok(value)
     }
 
-    pub fn list_mut(&mut self, id: ListId) -> Result<&mut RtList, FaultKind> {
+    pub fn list_mut(&mut self, id: ListId) -> Result<&mut ListData, FaultKind> {
         let value = self.lists.get_mut(id.0 as usize).ok_or(FaultKind::InvalidReference)?;
         if let Some(j) = &mut self.journal
             && (id.0 as usize) < j.lists_len
@@ -111,7 +111,7 @@ impl Heap {
         self.journal.as_ref()?.objects.get(&id).or_else(|| self.object(id))
     }
 
-    pub fn before_list(&self, id: ListId) -> Option<&RtList> {
+    pub fn before_list(&self, id: ListId) -> Option<&ListData> {
         self.journal.as_ref()?.lists.get(&id).or_else(|| self.list(id))
     }
 

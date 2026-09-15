@@ -1,7 +1,7 @@
 use core::types::{IrNodeId, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::{Argument, IrNode, Module};
+use crate::{Argument, IrNode, Module, OutputTarget};
 
 pub fn simplify_phis(module: &mut Module) {
     let phis = module
@@ -150,12 +150,13 @@ fn replace_operands(node: &mut IrNode, replacements: &HashMap<IrNodeId, IrNodeId
             }
         },
         IrNode::Unary { operand, .. } => replace_id(operand, replacements),
-        IrNode::Binary { lhs, rhs, .. } => {
+        IrNode::Binary { lhs, rhs, .. } | IrNode::CompoundBinary { lhs, rhs, .. } => {
             replace_id(lhs, replacements);
             replace_id(rhs, replacements);
         },
         IrNode::Load { pointer } => replace_id(pointer, replacements),
         IrNode::AccessField { object, .. } => replace_id(object, replacements),
+        IrNode::Initial { object, .. } => replace_optional(object, replacements),
         IrNode::Index { object, index, .. } => {
             replace_id(object, replacements);
             replace_id(index, replacements);
@@ -168,7 +169,7 @@ fn replace_operands(node: &mut IrNode, replacements: &HashMap<IrNodeId, IrNodeId
             replace_id(function, replacements);
             replace_arguments(args, replacements);
         },
-        IrNode::Super { args } | IrNode::List(args) => replace_arguments(args, replacements),
+        IrNode::Super { args, .. } | IrNode::List(args) => replace_arguments(args, replacements),
         IrNode::New { ty, args } => {
             replace_optional(ty, replacements);
             replace_arguments(args, replacements);
@@ -218,7 +219,9 @@ fn replace_operands(node: &mut IrNode, replacements: &HashMap<IrNodeId, IrNodeId
             replace_id(object, replacements);
             replace_id(value, replacements);
         },
-        IrNode::SetIndex { object, index, value } => {
+        IrNode::SetIndex {
+            object, index, value, ..
+        } => {
             replace_id(object, replacements);
             replace_id(index, replacements);
             replace_id(value, replacements);
@@ -231,7 +234,14 @@ fn replace_operands(node: &mut IrNode, replacements: &HashMap<IrNodeId, IrNodeId
         IrNode::ConditionalBranch { condition, .. } => replace_id(condition, replacements),
         IrNode::Return(value) => replace_optional(value, replacements),
         IrNode::Output { target, value } => {
-            replace_id(target, replacements);
+            match target {
+                OutputTarget::Value(target) => replace_id(target, replacements),
+                OutputTarget::Field { object, .. } => replace_id(object, replacements),
+                OutputTarget::Index { object, index, .. } => {
+                    replace_id(object, replacements);
+                    replace_id(index, replacements);
+                },
+            }
             replace_id(value, replacements);
         },
         IrNode::Del(value) | IrNode::Throw(value) => replace_id(value, replacements),

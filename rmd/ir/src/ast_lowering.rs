@@ -17,6 +17,7 @@ pub struct IrModuleBuilder<'a> {
     named_variables: HashMap<Identifier, IrNodeId>,
     scopes: Vec<HashMap<Identifier, BindingId>>,
     vars: Vec<VarSpec<IrNodeId>>,
+    parameters: Vec<BindingId>,
     current_def: HashMap<(BindingId, IrNodeId), IrNodeId>,
     stored_bindings: HashMap<BindingId, IrNodeId>,
     incomplete_phis: HashMap<IrNodeId, HashMap<BindingId, IrNodeId>>,
@@ -28,6 +29,8 @@ pub struct IrModuleBuilder<'a> {
     loops: Vec<EnclosingLoop>,
     current_block: Option<IrNodeId>,
     entry: IrNodeId,
+    current_owner: TreePath,
+    locals_in_memory: bool,
     depth: usize,
 }
 
@@ -73,6 +76,7 @@ impl<'a> IrModuleBuilder<'a> {
             named_variables: HashMap::new(),
             scopes: Vec::new(),
             vars: Vec::new(),
+            parameters: Vec::new(),
             current_def: HashMap::new(),
             stored_bindings: HashMap::new(),
             incomplete_phis: HashMap::new(),
@@ -84,6 +88,8 @@ impl<'a> IrModuleBuilder<'a> {
             loops: Vec::new(),
             current_block: None,
             entry: IrNodeId(0),
+            current_owner: TreePath::default(),
+            locals_in_memory: false,
             depth: 0,
         }
     }
@@ -133,6 +139,8 @@ impl<'a> IrModuleBuilder<'a> {
         location: Location,
     ) -> ProcId {
         self.reset_proc();
+        self.current_owner = owner.clone();
+        let locals_in_memory = statements_contain_try(body);
 
         let id = ProcId(self.module.procs.len() as u32);
         let function = self.make_node(IrNode::Function(id));
@@ -150,12 +158,24 @@ impl<'a> IrModuleBuilder<'a> {
         for (param, value) in params.iter().zip(parameters.iter().copied()) {
             let spec = self.spec(&param.spec);
             let var = self.declare_var(spec.clone());
+            self.parameters.push(var);
             self.write_variable(var, entry, value);
             lowered.push(ProcParam {
                 spec,
                 default: param.default.map(|id| self.lower_expr(id)),
                 in_list: param.in_list.map(|id| self.lower_expr(id)),
             });
+        }
+
+        if locals_in_memory {
+            let parameters = self.parameters.clone();
+            for binding in parameters {
+                let value = self.read_variable(binding, entry);
+                let pointer = self.frame_local(binding);
+                self.stored_bindings.insert(binding, pointer);
+                self.emit_instr(IrNode::Store { pointer, value });
+            }
+            self.locals_in_memory = true;
         }
 
         self.lower_statements(body);
@@ -190,6 +210,7 @@ impl<'a> IrModuleBuilder<'a> {
         self.scopes.push(HashMap::new());
         self.named_variables.clear();
         self.vars.clear();
+        self.parameters.clear();
         self.current_def.clear();
         self.stored_bindings.clear();
         self.incomplete_phis.clear();
@@ -200,6 +221,7 @@ impl<'a> IrModuleBuilder<'a> {
         self.named_blocks.clear();
         self.loops.clear();
         self.current_block = None;
+        self.locals_in_memory = false;
         self.depth = 0;
     }
 
@@ -553,19 +575,32 @@ impl<'a> IrModuleBuilder<'a> {
 
     fn declare_var(&mut self, spec: VarSpec<IrNodeId>) -> BindingId {
         let id = BindingId(self.vars.len() as u32);
-        let stored = spec.modifiers.is_static;
+        let stored = spec.modifiers.is_static || self.locals_in_memory;
+        let static_local = spec.modifiers.is_static;
 
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(spec.name.clone(), id);
         }
         self.vars.push(spec);
         if stored {
-            let proc = self.module.procs.len();
-            let pointer = self.make_node(IrNode::Variable(format!("__dmed_static_local_{proc}_{}", id.0).into()));
+            let pointer = if static_local {
+                let proc = self.module.procs.len();
+                self.make_node(IrNode::Variable(format!("__dmed_static_local_{proc}_{}", id.0).into()))
+            } else {
+                self.frame_local(id)
+            };
             self.stored_bindings.insert(id, pointer);
         }
 
         id
+    }
+
+    fn frame_local(&mut self, binding: BindingId) -> IrNodeId {
+        let proc = self.module.procs.len();
+
+        self.make_node(IrNode::Variable(
+            format!("__dmed_frame_local_{proc}_{}", binding.0).into(),
+        ))
     }
 
     fn declare_temp(&mut self, name: &str) -> BindingId {
@@ -717,14 +752,72 @@ impl<'a> IrModuleBuilder<'a> {
                 }
             },
             Some(Expression::Call { callee, args }) => {
+                if matches!(self.ast.get_expr(*callee), Some(Expression::Identifier(name)) if name.as_str() == "initial")
+                    && let [argument] = args.as_slice()
+                    && let Some(value) = argument.value
+                {
+                    match self.ast.get_expr(value) {
+                        Some(Expression::Field { object, name, .. }) => {
+                            let object = self.lower_expr(*object);
+
+                            return self.emit_instr(IrNode::Initial {
+                                object: Some(object),
+                                name: name.clone(),
+                            });
+                        },
+                        Some(Expression::Identifier(name)) if self.lookup(name).is_none() => {
+                            return self.emit_instr(IrNode::Initial {
+                                object: None,
+                                name: name.clone(),
+                            });
+                        },
+                        _ => {},
+                    }
+                }
                 match matches!(
                     self.ast.get_expr(*callee),
                     Some(Expression::Builtin(Builtin::SuperProc))
                 ) {
-                    true => IrNode::Super { args: self.args(args) },
-                    false if let Some(function) = self.call_target(*callee) => IrNode::FunctionCall {
-                        function,
-                        args: self.args(args),
+                    true => {
+                        let (args, forwards_extra_args) = if args.is_empty() {
+                            let bindings = self.parameters.clone();
+                            let block = self.current_block.unwrap_or(self.entry);
+                            (
+                                bindings
+                                    .into_iter()
+                                    .map(|binding| Argument {
+                                        key: None,
+                                        value: Some(self.read_variable(binding, block)),
+                                    })
+                                    .collect::<Vec<_>>(),
+                                true,
+                            )
+                        } else {
+                            (self.args(args), false)
+                        };
+                        IrNode::Super {
+                            args,
+                            forwards_extra_args,
+                        }
+                    },
+                    false if let Some(function) = self.call_target(*callee) => {
+                        let mut lowered = self.args(args);
+                        if matches!(self.ast.get_expr(*callee), Some(Expression::Identifier(name)) if name.as_str() == "istype")
+                            && args.len() == 1
+                            && let Some(ty) = args
+                                .first()
+                                .and_then(|argument| argument.value)
+                                .and_then(|expression| self.inferred_type(expression))
+                        {
+                            lowered.push(Argument {
+                                key: None,
+                                value: Some(self.intern_constant(Value::Path(ty))),
+                            });
+                        }
+                        IrNode::FunctionCall {
+                            function,
+                            args: lowered,
+                        }
                     },
                     false => {
                         let callee = self.lower_expr(*callee);
@@ -887,7 +980,7 @@ impl<'a> IrModuleBuilder<'a> {
                 let lhs = self.lower_expr(lhs_expr);
                 let rhs = self.lower_expr(rhs_expr);
 
-                self.emit_instr(IrNode::Binary { op, lhs, rhs })
+                self.emit_instr(IrNode::CompoundBinary { op, lhs, rhs })
             },
         };
 
@@ -916,6 +1009,17 @@ impl<'a> IrModuleBuilder<'a> {
         }
     }
 
+    fn inferred_type(&self, expression: ExpressionId) -> Option<TreePath> {
+        match self.ast.get_expr(expression) {
+            Some(Expression::Identifier(name)) => self
+                .lookup(name)
+                .and_then(|binding| self.vars.get(binding.0 as usize))
+                .and_then(|spec| spec.var_type.clone()),
+            Some(Expression::Builtin(Builtin::Src)) => Some(self.current_owner.clone()),
+            _ => None,
+        }
+    }
+
     fn store(&mut self, target: ExpressionId, value: IrNodeId) -> IrNodeId {
         match self.ast.get_expr(target) {
             Some(Expression::Identifier(name)) => match (self.lookup(name), self.current_block) {
@@ -936,10 +1040,19 @@ impl<'a> IrModuleBuilder<'a> {
                     value,
                 });
             },
-            Some(Expression::Index { object, index, .. }) => {
+            Some(Expression::Index {
+                object,
+                index,
+                conditional,
+            }) => {
                 let object = self.lower_expr(*object);
                 let index = self.lower_expr(*index);
-                self.emit_instr(IrNode::SetIndex { object, index, value });
+                self.emit_instr(IrNode::SetIndex {
+                    object,
+                    index,
+                    value,
+                    conditional: *conditional,
+                });
             },
             Some(Expression::Builtin(builtin)) => {
                 self.emit_instr(IrNode::StoreBuiltin {
@@ -987,7 +1100,7 @@ impl<'a> IrModuleBuilder<'a> {
             },
             Statement::Empty => {},
             Statement::Output { target, value } => {
-                let target = self.lower_expr(*target);
+                let target = self.lower_output_target(*target);
                 let value = self.lower_expr(*value);
                 self.emit_instr(IrNode::Output { target, value });
             },
@@ -1188,7 +1301,7 @@ impl<'a> IrModuleBuilder<'a> {
                 self.current_block = previous;
                 self.scopes.pop();
 
-                self.emit_instr(IrNode::TryCatch { body, catch });
+                self.emit_instr(IrNode::TryCatch { body, catch, merge });
                 self.terminate_current_block(IrNode::Branch(merge));
                 self.seal_block(merge);
                 self.resume(merge);
@@ -1242,6 +1355,36 @@ impl<'a> IrModuleBuilder<'a> {
                     _ => self.lower_statements(body),
                 }
             },
+        }
+    }
+
+    fn lower_output_target(&mut self, id: ExpressionId) -> OutputTarget {
+        match self.ast.get_expr(id) {
+            Some(Expression::Grouped(inner)) => self.lower_output_target(*inner),
+            Some(Expression::Field { object, name, access }) => {
+                let object = self.lower_expr(*object);
+
+                OutputTarget::Field {
+                    object,
+                    name: name.clone(),
+                    access: *access,
+                }
+            },
+            Some(Expression::Index {
+                object,
+                index,
+                conditional,
+            }) => {
+                let object = self.lower_expr(*object);
+                let index = self.lower_expr(*index);
+
+                OutputTarget::Index {
+                    object,
+                    index,
+                    conditional: *conditional,
+                }
+            },
+            _ => OutputTarget::Value(self.lower_expr(id)),
         }
     }
 
@@ -1360,7 +1503,11 @@ impl<'a> IrModuleBuilder<'a> {
         let value_var = self.binding(value);
         let key_var = key.as_ref().map(|key| self.binding(key));
         let ty = value.spec.var_type.clone();
-        let iterator = self.emit_instr(IrNode::IterInit { list, ty });
+        let iterator = self.emit_instr(IrNode::IterInit {
+            list,
+            ty,
+            value_is_associated: key.is_some(),
+        });
 
         let header = self.make_block();
         let taken = self.make_block();
@@ -1499,6 +1646,34 @@ fn compound(kind: ast::AssignmentKind) -> Option<BinaryOp> {
         Kind::CompoundShl => BinaryOp::ShiftLeft,
         Kind::CompoundShr => BinaryOp::ShiftRight,
     })
+}
+
+fn statements_contain_try(statements: &[Statement]) -> bool { statements.iter().any(statement_contains_try) }
+
+fn statement_contains_try(statement: &Statement) -> bool {
+    match statement {
+        Statement::TryCatch { .. } => true,
+        Statement::If { branches, else_branch } => {
+            branches.iter().any(|(_, body)| statements_contain_try(body))
+                || else_branch.as_deref().is_some_and(statements_contain_try)
+        },
+        Statement::While { body, .. } | Statement::DoWhile { body, .. } | Statement::Label { body, .. } => {
+            statements_contain_try(body)
+        },
+        Statement::For(loop_) => match loop_.as_ref() {
+            ForLoop::Standard { init, step, body, .. } => {
+                init.as_deref().is_some_and(statement_contains_try)
+                    || step.as_deref().is_some_and(statement_contains_try)
+                    || statements_contain_try(body)
+            },
+            ForLoop::List { body, .. } | ForLoop::Range { body, .. } => statements_contain_try(body),
+        },
+        Statement::Switch { cases, default, .. } => {
+            cases.iter().any(|case| statements_contain_try(&case.body))
+                || default.as_deref().is_some_and(statements_contain_try)
+        },
+        _ => false,
+    }
 }
 
 fn is_waitfor(stmt: &Statement) -> bool {

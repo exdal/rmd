@@ -8,7 +8,7 @@ use crate::{
     Module,
     PathId,
     StringId,
-    opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, Unary},
+    opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, OutputTargetKind, Unary},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,12 +121,10 @@ impl Cursor<'_> {
             | Op::IterValue
             | Op::IterKey
             | Op::RangeTest
-            | Op::SetIndex
             | Op::Return
             | Op::ReturnValue
             | Op::Del
             | Op::Throw
-            | Op::Output
             | Op::CatchValue => {},
             Op::PushConstant => {
                 let id = ConstantId(self.u32()?);
@@ -137,7 +135,7 @@ impl Cursor<'_> {
                     .ok_or(DecodeError::InvalidConstant(id))?;
                 let _ = write!(output, " {id} ; {value}");
             },
-            Op::LoadLocal | Op::StoreLocal => {
+            Op::LoadLocal | Op::StoreLocal | Op::DefaultParameter => {
                 let _ = write!(output, " {}", LocalId(self.u32()?));
             },
             Op::LoadVariable | Op::StoreVariable | Op::Blocked | Op::Trap => {
@@ -163,7 +161,7 @@ impl Cursor<'_> {
                 let value = self.enum_operand::<Unary>("unary")?;
                 let _ = write!(output, " {}", snake_case(value));
             },
-            Op::Binary => {
+            Op::Binary | Op::CompoundBinary => {
                 let value = self.enum_operand::<Binary>("binary")?;
                 let _ = write!(output, " {}", snake_case(value));
             },
@@ -172,14 +170,61 @@ impl Cursor<'_> {
                 let access = self.enum_operand::<Access>("access")?;
                 let _ = write!(output, " {}{}", access_operator(access), string(self.module, name)?);
             },
+            Op::Initial => {
+                let has_object = self.boolean()?;
+                let name = StringId(self.u32()?);
+                let prefix = if has_object { "." } else { "" };
+                let _ = write!(output, " {prefix}{}", string(self.module, name)?);
+            },
             Op::Index => {
                 if self.boolean()? {
                     output.push_str(" conditional");
                 }
             },
-            Op::Call | Op::SuperCall | Op::MakeList => {
+            Op::SetIndex => {
+                if self.boolean()? {
+                    output.push_str(" conditional");
+                }
+            },
+            Op::Output => match self.enum_operand::<OutputTargetKind>("output target")? {
+                OutputTargetKind::Value => output.push_str(" value"),
+                OutputTargetKind::Field => {
+                    let name = StringId(self.u32()?);
+                    let access = self.enum_operand::<Access>("access")?;
+                    let _ = write!(
+                        output,
+                        " field {}{}",
+                        access_operator(access),
+                        string(self.module, name)?
+                    );
+                },
+                OutputTargetKind::Index => {
+                    output.push_str(" index");
+
+                    if self.boolean()? {
+                        output.push_str(" conditional");
+                    }
+                },
+            },
+            Op::MakeList => {
                 let layout = self.argument_layout()?;
                 let _ = write!(output, " {layout}");
+            },
+            Op::Call => {
+                let layout = self.argument_layout()?;
+                let _ = write!(output, " {layout}");
+
+                if self.boolean()? {
+                    output.push_str(" conditional");
+                }
+            },
+            Op::SuperCall => {
+                let layout = self.argument_layout()?;
+                let _ = write!(output, " {layout}");
+
+                if self.boolean()? {
+                    output.push_str(" extra_args");
+                }
             },
             Op::FunctionCall => {
                 let function = FunctionId(self.u32()?);
@@ -237,6 +282,10 @@ impl Cursor<'_> {
                         .ok_or(DecodeError::InvalidPath(path))?;
                     let _ = write!(output, " ty={path} ; {value}");
                 }
+
+                if self.boolean()? {
+                    output.push_str(" values=associated");
+                }
             },
             Op::Jump | Op::JumpIfFalse => {
                 let _ = write!(output, " {}", CodeOffset(self.u32()?));
@@ -244,20 +293,14 @@ impl Cursor<'_> {
             Op::TryCatch => {
                 let body = CodeOffset(self.u32()?);
                 let catch = CodeOffset(self.u32()?);
-                let binding = self.u32()?;
-                let _ = write!(output, " body={body} catch={catch}");
-                if binding != u32::MAX {
-                    let _ = write!(output, " binding=var{binding}");
-                }
+                let merge = CodeOffset(self.u32()?);
+                let _ = write!(output, " body={body} catch={catch} merge={merge}");
             },
             Op::InitializeVariable => {
                 let id = StringId(self.u32()?);
                 let value = string(self.module, id)?;
 
                 let _ = write!(output, " {}", value);
-            },
-            Op::DefaultParameter => {
-                let _ = write!(output, " parameter_idx={}", self.u32()?);
             },
         }
 

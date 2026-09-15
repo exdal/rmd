@@ -69,6 +69,8 @@ byte_enum! {
         InitializeVariable = 0x27,
         CatchValue = 0x28,
         DefaultParameter = 0x29,
+        CompoundBinary = 0x2a,
+        Initial = 0x2b,
     }
 }
 
@@ -136,6 +138,14 @@ byte_enum! {
         SafeDot = 0x02,
         SafeColon = 0x03,
         Scope = 0x04,
+    }
+}
+
+byte_enum! {
+    pub enum OutputTargetKind {
+        Value = 0x00,
+        Field = 0x01,
+        Index = 0x02,
     }
 }
 

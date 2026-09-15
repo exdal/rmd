@@ -1,7 +1,7 @@
 use core::types::{IrNodeId, Value};
 use std::{collections::HashSet, fmt::Write};
 
-use crate::{AccessKind, Argument, IrNode, Module};
+use crate::{AccessKind, Argument, IrNode, Module, OutputTarget};
 
 pub fn dump(module: &Module) -> String { dump_with(module, false) }
 
@@ -186,13 +186,24 @@ fn format_node(node: &IrNode) -> String {
         },
         IrNode::Unary { op, operand } => format!("unary {} {operand}", snake_case(op)),
         IrNode::Binary { op, lhs, rhs } => format!("binary {} {lhs} {rhs}", snake_case(op)),
+        IrNode::CompoundBinary { op, lhs, rhs } => {
+            format!("compound_binary {} {lhs} {rhs}", snake_case(op))
+        },
         IrNode::SetField {
             object,
             name,
             access,
             value,
         } => format!("set_field {object} {}{name} {value}", access_operator(*access)),
-        IrNode::SetIndex { object, index, value } => format!("set_index {object} {index} {value}"),
+        IrNode::SetIndex {
+            object,
+            index,
+            value,
+            conditional,
+        } => {
+            let conditional = if *conditional { " conditional" } else { "" };
+            format!("set_index {object} {index} {value}{conditional}")
+        },
         IrNode::Store { pointer, value } => format!("store {pointer} {value}"),
         IrNode::Initialize { pointer, value } => format!("initialize {pointer} {value}"),
         IrNode::StoreBuiltin { builtin, value } => {
@@ -201,6 +212,10 @@ fn format_node(node: &IrNode) -> String {
         IrNode::CatchValue => String::from("catch_value"),
         IrNode::AccessField { object, name, access } => {
             format!("access_field {object} {}{name}", access_operator(*access))
+        },
+        IrNode::Initial { object, name } => match object {
+            Some(object) => format!("initial {object}.{name}"),
+            None => format!("initial {name}"),
         },
         IrNode::Index {
             object,
@@ -212,7 +227,13 @@ fn format_node(node: &IrNode) -> String {
         },
         IrNode::Call { callee, args } => format!("call {callee} {}", arguments(args)),
         IrNode::FunctionCall { function, args } => format!("function_call {function} {}", arguments(args)),
-        IrNode::Super { args } => format!("super {}", arguments(args)),
+        IrNode::Super {
+            args,
+            forwards_extra_args,
+        } => {
+            let extra = if *forwards_extra_args { " extra_args" } else { "" };
+            format!("super {}{extra}", arguments(args))
+        },
         IrNode::New { ty, args } => match ty {
             Some(ty) => format!("new ty={ty} {}", arguments(args)),
             None => format!("new {}", arguments(args)),
@@ -265,18 +286,40 @@ fn format_node(node: &IrNode) -> String {
             Some(value) => format!("return {value}"),
             None => String::from("return"),
         },
-        IrNode::IterInit { list, ty } => match ty {
-            Some(ty) => format!("iter_init {list} ty={ty}"),
-            None => format!("iter_init {list}"),
+        IrNode::IterInit {
+            list,
+            ty,
+            value_is_associated,
+        } => {
+            let association = if *value_is_associated { " values=associated" } else { "" };
+            match ty {
+                Some(ty) => format!("iter_init {list} ty={ty}{association}"),
+                None => format!("iter_init {list}{association}"),
+            }
         },
         IrNode::IterNext(id) => format!("iter_next {id}"),
         IrNode::IterValue(id) => format!("iter_value {id}"),
         IrNode::IterKey(id) => format!("iter_key {id}"),
         IrNode::RangeTest { current, end, step } => format!("range_test {current} end={end} step={step}"),
-        IrNode::TryCatch { body, catch } => format!("try_catch body={body} catch={catch}"),
+        IrNode::TryCatch { body, catch, merge } => {
+            format!("try_catch body={body} catch={catch} merge={merge}")
+        },
         IrNode::Del(id) => format!("del {id}"),
         IrNode::Throw(id) => format!("throw {id}"),
-        IrNode::Output { target, value } => format!("output {target} {value}"),
+        IrNode::Output { target, value } => match target {
+            OutputTarget::Value(target) => format!("output {value} to {target}"),
+            OutputTarget::Field { object, name, access } => {
+                format!("output {value} to {object}{}{name}", access_operator(*access))
+            },
+            OutputTarget::Index {
+                object,
+                index,
+                conditional,
+            } => {
+                let conditional = if *conditional { " conditional" } else { "" };
+                format!("output {value} to {object}[{index}]{conditional}")
+            },
+        },
         IrNode::Noop => String::from("noop"),
         IrNode::Blocked(what) => format!("blocked {what:?}"),
         IrNode::Trap { reason } => format!("trap {reason:?}"),

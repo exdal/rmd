@@ -29,6 +29,21 @@ pub struct Argument {
     pub value: Option<IrNodeId>,
 }
 
+#[derive(Debug, Clone)]
+pub enum OutputTarget {
+    Value(IrNodeId),
+    Field {
+        object: IrNodeId,
+        name: Identifier,
+        access: AccessKind,
+    },
+    Index {
+        object: IrNodeId,
+        index: IrNodeId,
+        conditional: bool,
+    },
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct PhiOperand {
     pub block: IrNodeId,
@@ -62,10 +77,19 @@ pub enum IrNode {
         lhs: IrNodeId,
         rhs: IrNodeId,
     },
+    CompoundBinary {
+        op: BinaryOp,
+        lhs: IrNodeId,
+        rhs: IrNodeId,
+    },
     AccessField {
         object: IrNodeId,
         name: Identifier,
         access: AccessKind,
+    },
+    Initial {
+        object: Option<IrNodeId>,
+        name: Identifier,
     },
     Index {
         object: IrNodeId,
@@ -82,6 +106,7 @@ pub enum IrNode {
     },
     Super {
         args: Vec<Argument>,
+        forwards_extra_args: bool,
     },
     New {
         ty: Option<IrNodeId>,
@@ -108,6 +133,7 @@ pub enum IrNode {
     IterInit {
         list: IrNodeId,
         ty: Option<TreePath>,
+        value_is_associated: bool,
     },
     /// advances and reports whether a value is now available
     IterNext(IrNodeId),
@@ -130,6 +156,7 @@ pub enum IrNode {
         object: IrNodeId,
         index: IrNodeId,
         value: IrNodeId,
+        conditional: bool,
     },
     Store {
         pointer: IrNodeId,
@@ -164,13 +191,14 @@ pub enum IrNode {
     Del(IrNodeId),
     Throw(IrNodeId),
     Output {
-        target: IrNodeId,
+        target: OutputTarget,
         value: IrNodeId,
     },
     // TODO: DM unwinding has no branch form, so this stays structured. `body` and `catch` are blocks
     TryCatch {
         body: IrNodeId,
         catch: IrNodeId,
+        merge: IrNodeId,
     },
     Noop,
     Blocked(&'static str),
@@ -197,13 +225,14 @@ impl IrNode {
         match self {
             Self::Phi { operands, .. } => operands.iter().map(|operand| operand.value).collect(),
             Self::Unary { operand, .. } => vec![*operand],
-            Self::Binary { lhs, rhs, .. } => vec![*lhs, *rhs],
+            Self::Binary { lhs, rhs, .. } | Self::CompoundBinary { lhs, rhs, .. } => vec![*lhs, *rhs],
             Self::Load { pointer } => vec![*pointer],
             Self::AccessField { object, .. } => vec![*object],
+            Self::Initial { object, .. } => object.iter().copied().collect(),
             Self::Index { object, index, .. } => vec![*object, *index],
             Self::Call { callee, args: a } => [vec![*callee], args(a)].concat(),
             Self::FunctionCall { function, args: a } => [vec![*function], args(a)].concat(),
-            Self::Super { args: a } | Self::List(a) => args(a),
+            Self::Super { args: a, .. } | Self::List(a) => args(a),
             Self::New { ty, args: a } => [ty.iter().copied().collect(), args(a)].concat(),
             Self::ModifiedType { overrides, .. } => overrides.iter().map(|(_, id)| *id).collect(),
             Self::Pick(choices) => choices.iter().flat_map(|(w, v)| [*w, Some(*v)]).flatten().collect(),
@@ -219,12 +248,23 @@ impl IrNode {
             Self::IterInit { list, .. } => vec![*list],
             Self::IterNext(id) | Self::IterValue(id) | Self::IterKey(id) => vec![*id],
             Self::SetField { object, value, .. } => vec![*object, *value],
-            Self::SetIndex { object, index, value } => vec![*object, *index, *value],
+            Self::SetIndex {
+                object, index, value, ..
+            } => vec![*object, *index, *value],
             Self::Store { pointer, value } | Self::Initialize { pointer, value } => vec![*pointer, *value],
             Self::StoreBuiltin { value, .. } => vec![*value],
             Self::ConditionalBranch { condition, .. } => vec![*condition],
             Self::Return(value) => value.iter().copied().collect(),
-            Self::Output { target, value } => vec![*target, *value],
+            Self::Output { target, value } => {
+                let mut operands = match target {
+                    OutputTarget::Value(target) => vec![*target],
+                    OutputTarget::Field { object, .. } => vec![*object],
+                    OutputTarget::Index { object, index, .. } => vec![*object, *index],
+                };
+                operands.push(*value);
+
+                operands
+            },
             Self::Del(id) | Self::Throw(id) => vec![*id],
             _ => Vec::new(),
         }

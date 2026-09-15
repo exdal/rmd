@@ -1,5 +1,7 @@
 use core::{location::Location, types::ProcId};
 
+use codegen::CodeOffset;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FaultKind {
     InstructionBudget,
@@ -11,15 +13,27 @@ pub enum FaultKind {
     Unsupported(String),
     InvalidReference,
     InvalidOperation(String),
+    Trap(String),
     Thrown,
 }
 
 #[derive(Debug, Clone)]
 pub struct Fault {
-    pub node: Option<ir::IrNodeId>,
+    pub offset: Option<CodeOffset>,
     pub proc: Option<ProcId>,
     pub location: Location,
     pub kind: FaultKind,
+}
+
+impl Fault {
+    pub fn detached(kind: FaultKind) -> Self {
+        Self {
+            offset: None,
+            proc: None,
+            location: Location::default(),
+            kind,
+        }
+    }
 }
 
 impl std::fmt::Display for Fault {

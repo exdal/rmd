@@ -10,8 +10,8 @@ use core::{
 use std::collections::{HashMap, HashSet, VecDeque};
 
 pub use error::CodegenError;
-use ir::{Argument, IrNode, Procedure};
-use opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, Unary};
+use ir::{Argument, IrNode, OutputTarget, Procedure};
+use opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, OutputTargetKind, Unary};
 
 macro_rules! id_type {
     ($name:ident, $prefix:literal) => {
@@ -443,12 +443,29 @@ impl Generator {
                 self.emit_u8(binary_code(*op) as u8);
                 self.store_result(state, id)?;
             },
+            IrNode::CompoundBinary { op, lhs, rhs } => {
+                self.emit_value(module, state, *lhs)?;
+                self.emit_value(module, state, *rhs)?;
+                self.emit_op(Op::CompoundBinary);
+                self.emit_u8(binary_code(*op) as u8);
+                self.store_result(state, id)?;
+            },
             IrNode::AccessField { object, name, access } => {
                 self.emit_value(module, state, *object)?;
                 let name = self.intern_identifier(name)?;
                 self.emit_op(Op::AccessField);
                 self.emit_u32(name.0);
                 self.emit_u8(access_code(*access) as u8);
+                self.store_result(state, id)?;
+            },
+            IrNode::Initial { object, name } => {
+                if let Some(object) = object {
+                    self.emit_value(module, state, *object)?;
+                }
+                let name = self.intern_identifier(name)?;
+                self.emit_op(Op::Initial);
+                self.emit_bool(object.is_some());
+                self.emit_u32(name.0);
                 self.store_result(state, id)?;
             },
             IrNode::Index {
@@ -465,8 +482,16 @@ impl Generator {
             IrNode::Call { callee, args } => {
                 self.emit_value(module, state, *callee)?;
                 let shapes = self.emit_arguments(module, state, args)?;
+                let conditional = matches!(
+                    module.node(*callee),
+                    Some(IrNode::AccessField {
+                        access: ir::AccessKind::SafeDot | ir::AccessKind::SafeColon,
+                        ..
+                    })
+                );
                 self.emit_op(Op::Call);
                 self.emit_argument_layout(&shapes)?;
+                self.emit_bool(conditional);
                 self.store_result(state, id)?;
             },
             IrNode::FunctionCall { function, args } => {
@@ -481,10 +506,14 @@ impl Generator {
                 self.emit_argument_layout(&shapes)?;
                 self.store_result(state, id)?;
             },
-            IrNode::Super { args } => {
+            IrNode::Super {
+                args,
+                forwards_extra_args,
+            } => {
                 let shapes = self.emit_arguments(module, state, args)?;
                 self.emit_op(Op::SuperCall);
                 self.emit_argument_layout(&shapes)?;
+                self.emit_bool(*forwards_extra_args);
                 self.store_result(state, id)?;
             },
             IrNode::New { ty, args } => {
@@ -562,11 +591,16 @@ impl Generator {
                 self.emit_bool(step.is_some());
                 self.store_result(state, id)?;
             },
-            IrNode::IterInit { list, ty } => {
+            IrNode::IterInit {
+                list,
+                ty,
+                value_is_associated,
+            } => {
                 self.emit_value(module, state, *list)?;
                 let ty = ty.clone().map(|ty| self.intern_path(ty)).transpose()?;
                 self.emit_op(Op::IterInit);
                 self.emit_optional_path(ty);
+                self.emit_bool(*value_is_associated);
                 self.store_result(state, id)?;
             },
             IrNode::IterNext(iter) => {
@@ -604,11 +638,17 @@ impl Generator {
                 self.emit_u32(name.0);
                 self.emit_u8(access_code(*access) as u8);
             },
-            IrNode::SetIndex { object, index, value } => {
+            IrNode::SetIndex {
+                object,
+                index,
+                value,
+                conditional,
+            } => {
                 self.emit_value(module, state, *object)?;
                 self.emit_value(module, state, *index)?;
                 self.emit_value(module, state, *value)?;
                 self.emit_op(Op::SetIndex);
+                self.emit_bool(*conditional);
             },
             IrNode::Store { pointer, value } => {
                 self.emit_value(module, state, *value)?;
@@ -649,14 +689,35 @@ impl Generator {
                 self.emit_op(Op::Throw);
             },
             IrNode::Output { target, value } => {
-                self.emit_value(module, state, *target)?;
+                match target {
+                    OutputTarget::Value(target) => self.emit_value(module, state, *target)?,
+                    OutputTarget::Field { object, .. } => self.emit_value(module, state, *object)?,
+                    OutputTarget::Index { object, index, .. } => {
+                        self.emit_value(module, state, *object)?;
+                        self.emit_value(module, state, *index)?;
+                    },
+                }
                 self.emit_value(module, state, *value)?;
                 self.emit_op(Op::Output);
+                match target {
+                    OutputTarget::Value(_) => self.emit_u8(OutputTargetKind::Value as u8),
+                    OutputTarget::Field { name, access, .. } => {
+                        let name = self.intern_identifier(name)?;
+                        self.emit_u8(OutputTargetKind::Field as u8);
+                        self.emit_u32(name.0);
+                        self.emit_u8(access_code(*access) as u8);
+                    },
+                    OutputTarget::Index { conditional, .. } => {
+                        self.emit_u8(OutputTargetKind::Index as u8);
+                        self.emit_bool(*conditional);
+                    },
+                }
             },
-            IrNode::TryCatch { body, catch } => {
+            IrNode::TryCatch { body, catch, merge } => {
                 self.emit_op(Op::TryCatch);
                 self.emit_block_address(*body);
                 self.emit_block_address(*catch);
+                self.emit_block_address(*merge);
             },
             IrNode::Blocked(reason) => {
                 let reason = self.intern_string((*reason).to_owned())?;
@@ -913,7 +974,9 @@ fn produces_value(node: &IrNode) -> bool {
             | IrNode::Interpolate { .. }
             | IrNode::Unary { .. }
             | IrNode::Binary { .. }
+            | IrNode::CompoundBinary { .. }
             | IrNode::AccessField { .. }
+            | IrNode::Initial { .. }
             | IrNode::Index { .. }
             | IrNode::Call { .. }
             | IrNode::FunctionCall { .. }
@@ -1083,6 +1146,33 @@ mod tests {
     }
 
     #[test]
+    fn output_preserves_field_reference_shape() {
+        let module = generate(&lower("/proc/test()\n\tworld.log << \"hello\"\n")).expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+
+        assert!(output.contains("output field .log"), "{output}");
+        assert!(!output.contains("access_field .log"), "{output}");
+    }
+
+    #[test]
+    fn try_inside_a_loop_does_not_leave_orphaned_ssa_loads() {
+        let module = lower(
+            r#"
+/proc/test(values)
+    var/total = 0
+    for(var/value in values)
+        try
+            total += value
+        catch
+            total = -1
+    return total
+"#,
+        );
+
+        generate(&module).expect("generate");
+    }
+
+    #[test]
     fn phi_cycles_load_every_source_before_storing_any_destination() {
         let module = ir::Module {
             nodes: vec![
@@ -1158,6 +1248,9 @@ mod tests {
     fn opcode_numbers_are_append_only() {
         assert_eq!(Op::Nop as u8, 0x00);
         assert_eq!(Op::Trap as u8, 0x25);
+        assert_eq!(Op::DefaultParameter as u8, 0x29);
+        assert_eq!(Op::CompoundBinary as u8, 0x2a);
+        assert_eq!(Op::Initial as u8, 0x2b);
         assert_eq!(Unary::Dereference as u8, 0x08);
         assert_eq!(Binary::In as u8, 0x17);
         assert_eq!(Builtin::SuperProc as u8, 0x08);

@@ -2070,9 +2070,13 @@ dependencies = [
 name = "vm"
 version = "1.0.0"
 dependencies = [
+ "ast",
+ "codegen",
  "core",
  "ir",
+ "lexer",
  "objtree",
+ "sema",
  "serde",
  "simd-json",
 ]

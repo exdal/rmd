@@ -1,14 +1,17 @@
 use core::types::ProcId;
 use std::collections::HashMap;
 
+mod builtins;
 mod error;
+pub mod eval;
 pub mod heap;
 pub mod json;
 pub mod value;
 pub mod world;
 
 pub use error::{Fault, FaultKind};
-pub use value::{AppearanceDelta, RtValue};
+pub use eval::Runtime;
+pub use value::{AppearanceDelta, GenericValue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
@@ -79,3 +82,6 @@ impl Diagnostics {
 
     pub fn count(&self) -> usize { self.entries.iter().map(|diagnostic| diagnostic.count).sum() }
 }
+
+#[cfg(test)]
+mod tests;
