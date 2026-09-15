@@ -14,7 +14,9 @@ pub mod precedence;
 pub struct ExpressionId(u32);
 
 impl ExpressionId {
-    pub fn new(index: usize) -> Self { Self(u32::try_from(index).expect("expression arena exceeded u32::MAX")) }
+    pub const ROOT: Self = Self(0);
+
+    pub fn new(index: usize) -> Option<Self> { u32::try_from(index).ok().map(Self) }
 
     pub fn index(self) -> usize { self.0 as usize }
 }
@@ -72,98 +74,10 @@ pub enum Declaration {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProcKind {
-    Proc,
-    Verb,
-    Override,
-    /// `operator+`, `operator[]`, ...
-    Operator,
-}
+pub use core::types::{InputType, ProcKind, TypeSpec};
 
-#[derive(Debug, Clone)]
-pub struct ProcParam {
-    pub spec: VarSpec,
-    pub default: Option<ExpressionId>,
-    /// `in list(...)`
-    pub in_list: Option<ExpressionId>,
-}
-
-#[derive(Default, Debug, Clone)]
-pub struct TypeSpec {
-    pub flags: InputType,
-    pub path: Option<TreePath>,
-}
-
-#[derive(Debug, Clone)]
-pub struct VarSpec {
-    pub name: Identifier,
-    pub var_type: Option<TreePath>,
-    pub modifiers: VarModifiers,
-    /// `var/items[5][]`
-    pub dimensions: Vec<Option<ExpressionId>>,
-    /// `as text|null` or `as /mob/player`
-    pub as_type: Option<TypeSpec>,
-}
-
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InputType(pub u32);
-
-impl InputType {
-    pub const ANYTHING: Self = Self(1 << 5);
-    pub const AREA: Self = Self(1 << 13);
-    pub const COLOR: Self = Self(1 << 7);
-    pub const COMMAND_TEXT: Self = Self(1 << 8);
-    pub const FILE: Self = Self(1 << 3);
-    pub const ICON: Self = Self(1 << 6);
-    pub const KEY: Self = Self(1 << 4);
-    pub const MESSAGE: Self = Self(1 << 9);
-    pub const MOB: Self = Self(1 << 1);
-    pub const NONE: Self = Self(0);
-    pub const NULL: Self = Self(1 << 10);
-    pub const NUM: Self = Self(1 << 0);
-    pub const OBJ: Self = Self(1 << 2);
-    pub const PASSWORD: Self = Self(1 << 14);
-    pub const PATH: Self = Self(1 << 16);
-    pub const SOUND: Self = Self(1 << 15);
-    pub const TEXT: Self = Self(1 << 11);
-    pub const TURF: Self = Self(1 << 12);
-
-    pub fn contains(self, other: Self) -> bool { (self.0 & other.0) == other.0 }
-
-    pub fn from_word(word: &str) -> Option<Self> {
-        Some(match word {
-            "anything" => Self::ANYTHING,
-            "area" => Self::AREA,
-            "color" => Self::COLOR,
-            "command_text" => Self::COMMAND_TEXT,
-            "file" => Self::FILE,
-            "icon" => Self::ICON,
-            "key" => Self::KEY,
-            "message" => Self::MESSAGE,
-            "mob" => Self::MOB,
-            "null" => Self::NULL,
-            "num" => Self::NUM,
-            "obj" => Self::OBJ,
-            "password" => Self::PASSWORD,
-            "path" => Self::PATH,
-            "sound" => Self::SOUND,
-            "text" => Self::TEXT,
-            "turf" => Self::TURF,
-            _ => return None,
-        })
-    }
-}
-
-impl std::ops::BitOr for InputType {
-    type Output = Self;
-
-    fn bitor(self, rhs: Self) -> Self { Self(self.0 | rhs.0) }
-}
-
-impl std::ops::BitOrAssign for InputType {
-    fn bitor_assign(&mut self, rhs: Self) { self.0 |= rhs.0; }
-}
+pub type VarSpec = core::types::VarSpec<ExpressionId>;
+pub type ProcParam = core::types::ProcParam<ExpressionId>;
 
 #[derive(Debug, Clone)]
 pub enum Statement {
@@ -439,10 +353,8 @@ pub enum Builtin {
     Args,
     Callee,
     Caller,
-    /// `.`
-    Dot,
-    /// `..()`
-    Super,
+    ThisProc,
+    SuperProc,
 }
 
 #[derive(Clone, Debug, PartialEq)]

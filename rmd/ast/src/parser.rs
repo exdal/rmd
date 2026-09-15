@@ -96,7 +96,11 @@ impl<'a, 't> Parser<'a, 't> {
     }
 
     pub fn make_expr(&mut self, expr: Expression) -> ExpressionId {
-        let expr_id = ExpressionId::new(self.expressions.len());
+        // if we cant make new expressions, just reject the ast
+        let Some(expr_id) = ExpressionId::new(self.expressions.len()) else {
+            return ExpressionId::ROOT;
+        };
+
         self.expressions.push(expr);
 
         expr_id
@@ -109,6 +113,12 @@ impl<'a, 't> Parser<'a, 't> {
         while self.peek().is_some() && !self.peek_is(Token::Eof) {
             self.parse_declaration(None, &mut declarations)?;
             self.skip_declaration_delimiters();
+        }
+
+        if u32::try_from(self.expressions.len()).is_err() {
+            let location = self.peek().map(|(_, location)| location).unwrap_or_default();
+
+            return Err(ParseError::expression_limit(location));
         }
 
         Ok(AST::new(declarations, std::mem::take(&mut self.expressions)))
@@ -336,13 +346,13 @@ impl<'a, 't> Parser<'a, 't> {
             match token {
                 Token::Identifier(s) => {
                     self.advance()?;
-                    segments.push(Identifier(s.to_string()));
+                    segments.push(Identifier::from(s.to_string()));
                 },
                 Token::Soft(SoftKeyword::Operator) if self.at_operator_proc_name() => {
                     self.advance()?;
                     flags |= PathFlags::IS_PROC | PathFlags::IS_OPERATOR;
                     keyword_offset.get_or_insert(segments.len());
-                    segments.push(Identifier(self.parse_operator_name()?));
+                    segments.push(Identifier::from(self.parse_operator_name()?));
                     break;
                 },
                 Token::Soft(keyword) => {
@@ -356,7 +366,7 @@ impl<'a, 't> Parser<'a, 't> {
                                 keyword_offset.get_or_insert(segments.len());
                             }
                         },
-                        None => segments.push(Identifier(keyword.as_word().to_string())),
+                        None => segments.push(Identifier::from(keyword.as_word().to_string())),
                     }
                 },
                 _ => {
@@ -368,7 +378,7 @@ impl<'a, 't> Parser<'a, 't> {
                         break;
                     };
                     self.advance()?;
-                    segments.push(Identifier(word.to_string()));
+                    segments.push(Identifier::from(word.to_string()));
                 },
             }
 
@@ -486,7 +496,7 @@ impl<'a, 't> Parser<'a, 't> {
             let value = self.parse_expression(Precedence::Lowest)?;
 
             out.push(Declaration::Override {
-                name: Identifier(name.to_string()),
+                name: Identifier::from(name.to_string()),
                 value,
                 location,
             });
@@ -612,7 +622,7 @@ impl<'a, 't> Parser<'a, 't> {
             &path.segments[..path.name_offset.min(path.segments.len())]
         };
         VarSpec {
-            name: path.name().cloned().unwrap_or_else(|| Identifier(String::new())),
+            name: path.name().cloned().unwrap_or_else(|| Identifier::from(String::new())),
             var_type: (!declared.is_empty()).then(|| TreePath::new(declared.to_vec(), true)),
             modifiers: VarModifiers {
                 is_const: path.flags.contains(PathFlags::IS_CONST),
@@ -692,7 +702,7 @@ impl<'a, 't> Parser<'a, 't> {
 
             // BYOND permits `null` as a formal name, where it shadows the keyword.
             let path = if self.consume(Token::Null) {
-                TreePath::new(vec![Identifier("null".to_string())], false)
+                TreePath::new(vec![Identifier::from("null".to_string())], false)
             } else {
                 self.parse_path()?
             };
@@ -913,7 +923,7 @@ impl<'a, 't> Parser<'a, 't> {
                 let body = self.parse_optional_statement_block()?.unwrap_or_default();
                 (
                     vec![Statement::Label {
-                        name: Identifier(token.identifier_name().unwrap_or_default().to_string()),
+                        name: Identifier::from(token.identifier_name().unwrap_or_default().to_string()),
                         body,
                     }],
                     false,
@@ -956,7 +966,7 @@ impl<'a, 't> Parser<'a, 't> {
         let (token, location) = self.advance()?;
         token
             .word()
-            .map(|name| Identifier(name.to_string()))
+            .map(|name| Identifier::from(name.to_string()))
             .ok_or_else(|| ParseError::unexpected("an identifier", token, location))
     }
 
@@ -1773,14 +1783,14 @@ impl<'a, 't> Parser<'a, 't> {
                 self.parse_path_expression()
             },
             Token::New => self.parse_new_expression(),
-            Token::Super => Ok(self.make_expr(Expression::Builtin(Builtin::Super))),
+            Token::Super => Ok(self.make_expr(Expression::Builtin(Builtin::SuperProc))),
             Token::Dot
                 if self.peek_is(Token::Soft(SoftKeyword::Proc)) || self.peek_is(Token::Soft(SoftKeyword::Verb)) =>
             {
                 self.cursor -= 1;
                 self.parse_path_expression()
             },
-            Token::Dot => Ok(self.make_expr(Expression::Builtin(Builtin::Dot))),
+            Token::Dot => Ok(self.make_expr(Expression::Builtin(Builtin::ThisProc))),
             Token::Scope => {
                 let object = self.make_expr(Expression::Builtin(Builtin::Global));
                 let name = self.parse_identifier()?;
@@ -1791,7 +1801,7 @@ impl<'a, 't> Parser<'a, 't> {
                 }))
             },
             Token::Soft(keyword) => self.parse_soft_keyword_expression(keyword),
-            Token::Identifier(name) => Ok(self.make_expr(Expression::Identifier(Identifier(name.to_string())))),
+            Token::Identifier(name) => Ok(self.make_expr(Expression::Identifier(Identifier::from(name.to_string())))),
             other => Err(ParseError::unexpected("an expression", other, location)),
         }
     }
@@ -1814,7 +1824,7 @@ impl<'a, 't> Parser<'a, 't> {
             }
         }
 
-        Ok(self.make_expr(Expression::Identifier(Identifier(keyword.as_word().to_string()))))
+        Ok(self.make_expr(Expression::Identifier(Identifier::from(keyword.as_word().to_string()))))
     }
 
     fn parse_isolated_expression(&mut self, precedence: Precedence) -> ParseResult<ExpressionId> {
@@ -1882,12 +1892,12 @@ impl<'a, 't> Parser<'a, 't> {
             Some(Token::Slash) => Some(self.parse_path_expression()?),
             Some(Token::Dot) => {
                 self.advance()?;
-                Some(self.make_expr(Expression::Builtin(Builtin::Dot)))
+                Some(self.make_expr(Expression::Builtin(Builtin::ThisProc)))
             },
             Some(Token::Scope) => Some(self.parse_primary_expression()?),
             Some(token) if token.is_identifier() => {
                 self.advance()?;
-                Some(self.make_expr(Expression::Identifier(Identifier(
+                Some(self.make_expr(Expression::Identifier(Identifier::from(
                     token.identifier_name().unwrap_or_default().to_string(),
                 ))))
             },
@@ -2187,7 +2197,7 @@ mod tests {
             panic!("expected `step` to stay a call")
         };
 
-        assert!(matches!(&expressions[callee.index()], Expression::Identifier(name) if name.0 == "step"));
+        assert!(matches!(&expressions[callee.index()], Expression::Identifier(name) if name.as_str() == "step"));
     }
 
     #[test]

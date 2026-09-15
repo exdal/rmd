@@ -93,7 +93,7 @@ pub fn resolve_id(tree: &ObjectTree, id: TypeId, prefab: &Prefab) -> Appearance 
     let mut appearance = Appearance::default();
 
     let get = |name: &str| -> Option<Value> {
-        let key = Identifier(name.to_string());
+        let key = Identifier::from(name);
 
         resolve_value(tree, id, prefab, &key).map(|resolved| resolved.value.clone())
     };
@@ -180,6 +180,7 @@ mod tests {
                 declared_type: None,
                 modifiers: VarModifiers::default(),
                 value: Value::Num(2.0),
+                initializer: None,
                 location: Location::default(),
             },
         );

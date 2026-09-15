@@ -61,7 +61,7 @@ pub(crate) fn compile(entry: &Path, progress: &Progress) -> Result<(ObjectTree, 
     }
 
     progress.enter(Stage::Analyze, 0);
-    let (tree, sema_errors) = sema::analyze(&ast);
+    let (tree, _module, sema_errors) = sema::analyze(&ast);
     if progress.is_cancelled() {
         return Err(LoadError::Cancelled);
     }

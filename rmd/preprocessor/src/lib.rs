@@ -1047,6 +1047,10 @@ impl<'a> Preprocessor<'a> {
             .include_stack
             .last()
             .map(|state| (self.include_stack.len(), state.lexer.nesting_state()));
+        let errors = self
+            .include_stack
+            .last()
+            .map(|state| (self.include_stack.len(), state.lexer.error_count()));
 
         let mut depth = 1usize;
         let mut closed = false;
@@ -1101,6 +1105,13 @@ impl<'a> Preprocessor<'a> {
             && let Some(state) = self.include_stack.last_mut()
         {
             state.lexer.restore_nesting(nesting);
+        }
+
+        if let Some((stack_depth, count)) = errors
+            && stack_depth == self.include_stack.len()
+            && let Some(state) = self.include_stack.last_mut()
+        {
+            state.lexer.truncate_errors(count);
         }
     }
 
@@ -1833,6 +1844,32 @@ mod tests {
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         assert!(rendered.contains("x = 1"), "{rendered}");
+    }
+
+    /// `#if 0` around code the lexer would reject must not diagnose the dead branch. Indentation
+    /// errors already ride along in `IndentState`; these are the ones that do not.
+    #[test]
+    fn inactive_branch_lex_errors_do_not_leak() {
+        let dir = std::env::temp_dir().join(format!("demir-inactive-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let entry = dir.join("entry.dm");
+        fs::write(
+            &entry,
+            "#if 0\n/proc/ignored()\n\tvar/x = `\n\tvar/y = \"unterminated\n#endif\n/proc/valid()\n\treturn 1\n",
+        )
+        .expect("write entry");
+
+        let arena = StrArena::new();
+        let result = Preprocessor::new(&arena)
+            .without_prelude()
+            .run(&entry)
+            .expect("preprocess");
+        let rendered = render(&result.tokens);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert!(!rendered.contains("ignored"), "{rendered}");
+        assert!(rendered.contains("valid"), "{rendered}");
     }
 
     /// Both prelude files are compiled in, so a shipped binary needs no `dm/` beside it.
