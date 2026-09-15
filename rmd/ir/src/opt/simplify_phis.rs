@@ -223,10 +223,11 @@ fn replace_operands(node: &mut IrNode, replacements: &HashMap<IrNodeId, IrNodeId
             replace_id(index, replacements);
             replace_id(value, replacements);
         },
-        IrNode::Store { pointer, value } => {
+        IrNode::Store { pointer, value } | IrNode::Initialize { pointer, value } => {
             replace_id(pointer, replacements);
             replace_id(value, replacements);
         },
+        IrNode::StoreBuiltin { value, .. } => replace_id(value, replacements),
         IrNode::ConditionalBranch { condition, .. } => replace_id(condition, replacements),
         IrNode::Return(value) => replace_optional(value, replacements),
         IrNode::Output { target, value } => {

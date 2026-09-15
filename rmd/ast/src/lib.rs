@@ -353,10 +353,8 @@ pub enum Builtin {
     Args,
     Callee,
     Caller,
-    /// `.`
-    Dot,
-    /// `..()`
-    Super,
+    ThisProc,
+    SuperProc,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -126,7 +126,8 @@ impl Cursor<'_> {
             | Op::ReturnValue
             | Op::Del
             | Op::Throw
-            | Op::Output => {},
+            | Op::Output
+            | Op::CatchValue => {},
             Op::PushConstant => {
                 let id = ConstantId(self.u32()?);
                 let value = self
@@ -144,7 +145,7 @@ impl Cursor<'_> {
                 let value = string(self.module, id)?;
                 let _ = write!(output, " {value}");
             },
-            Op::PushBuiltin => {
+            Op::PushBuiltin | Op::StoreBuiltin => {
                 let value = self.enum_operand::<Builtin>("builtin")?;
                 let _ = write!(output, " {}", snake_case(value));
             },
@@ -248,6 +249,15 @@ impl Cursor<'_> {
                 if binding != u32::MAX {
                     let _ = write!(output, " binding=var{binding}");
                 }
+            },
+            Op::InitializeVariable => {
+                let id = StringId(self.u32()?);
+                let value = string(self.module, id)?;
+
+                let _ = write!(output, " {}", value);
+            },
+            Op::DefaultParameter => {
+                let _ = write!(output, " parameter_idx={}", self.u32()?);
             },
         }
 

@@ -102,6 +102,10 @@ pub struct CompiledFunction {
     pub id: FunctionId,
     pub proc: Option<ProcId>,
     pub name: StringId,
+    pub proc_name: StringId,
+    pub owner: TreePath,
+    pub previous: Option<ProcId>,
+    pub parameter_names: Vec<StringId>,
     pub address: CodeOffset,
     pub length: u32,
     pub parameter_count: u32,
@@ -121,6 +125,7 @@ struct JumpPatch {
 struct FunctionState {
     blocks: Vec<IrNodeId>,
     locals: HashMap<IrNodeId, LocalId>,
+    parameter_defaults: HashMap<IrNodeId, LocalId>,
     next_local: u32,
 }
 
@@ -212,11 +217,21 @@ impl Generator {
         for (index, proc) in module.procs.iter().enumerate() {
             let id = FunctionId(u32::try_from(index).map_err(|_| CodegenError::PoolTooLarge("function"))?);
             let name = self.intern_string(format!("{}::{}", proc.owner, proc.name))?;
+            let proc_name = self.intern_identifier(&proc.name)?;
+            let parameter_names = proc
+                .params
+                .iter()
+                .map(|parameter| self.intern_identifier(&parameter.spec.name))
+                .collect::<Result<Vec<_>, _>>()?;
             self.function_ids.insert(proc.function, id);
             self.functions.push(CompiledFunction {
                 id,
                 proc: Some(ProcId(index as u32)),
                 name,
+                proc_name,
+                owner: proc.owner.clone(),
+                previous: proc.previous,
+                parameter_names,
                 address: CodeOffset::INVALID,
                 length: 0,
                 parameter_count: proc.parameters.len() as u32,
@@ -238,6 +253,10 @@ impl Generator {
                 id,
                 proc: None,
                 name,
+                proc_name: name,
+                owner: TreePath::default(),
+                previous: None,
+                parameter_names: Vec::new(),
                 address: CodeOffset::INVALID,
                 length: 0,
                 parameter_count: 0,
@@ -255,11 +274,25 @@ impl Generator {
         let mut state = FunctionState {
             blocks,
             locals: HashMap::new(),
+            parameter_defaults: HashMap::new(),
             next_local: 0,
         };
 
         for parameter in &proc.parameters {
             state.reserve(*parameter);
+        }
+
+        let mut constant_defaults = Vec::new();
+        for (index, parameter) in proc.params.iter().enumerate() {
+            let Some(default) = parameter.default else {
+                continue;
+            };
+            let destination = state.local(proc.parameters[index])?;
+            if matches!(module.node(default), Some(IrNode::Constant(_))) {
+                constant_defaults.push((default, destination));
+            } else {
+                state.parameter_defaults.insert(default, destination);
+            }
         }
 
         for block in state.blocks.clone() {
@@ -279,6 +312,11 @@ impl Generator {
         }
 
         let address = self.code_offset()?;
+        for (default, destination) in constant_defaults {
+            self.emit_value(module, &state, default)?;
+            self.emit_op(Op::DefaultParameter);
+            self.emit_u32(destination.0);
+        }
         for block in state.blocks.clone() {
             self.generate_block(module, block, &state)?;
         }
@@ -379,6 +417,7 @@ impl Generator {
                 for value in values {
                     self.emit_value(module, state, *value)?;
                 }
+
                 let chunks = chunks
                     .iter()
                     .map(|chunk| self.intern_string(chunk.clone()))
@@ -578,6 +617,22 @@ impl Generator {
                 self.emit_op(Op::StoreVariable);
                 self.emit_u32(name.0);
             },
+            IrNode::Initialize { pointer, value } => {
+                self.emit_value(module, state, *value)?;
+                let name = variable_name(module, *pointer)?;
+                let name = self.intern_identifier(name)?;
+                self.emit_op(Op::InitializeVariable);
+                self.emit_u32(name.0);
+            },
+            IrNode::StoreBuiltin { builtin, value } => {
+                self.emit_value(module, state, *value)?;
+                self.emit_op(Op::StoreBuiltin);
+                self.emit_u8(builtin_code(*builtin) as u8);
+            },
+            IrNode::CatchValue => {
+                self.emit_op(Op::CatchValue);
+                self.store_result(state, id)?;
+            },
             IrNode::Return(value) => match value {
                 Some(value) => {
                     self.emit_value(module, state, *value)?;
@@ -598,15 +653,10 @@ impl Generator {
                 self.emit_value(module, state, *value)?;
                 self.emit_op(Op::Output);
             },
-            IrNode::TryCatch {
-                body,
-                catch_binding,
-                catch,
-            } => {
+            IrNode::TryCatch { body, catch } => {
                 self.emit_op(Op::TryCatch);
                 self.emit_block_address(*body);
                 self.emit_block_address(*catch);
-                self.emit_u32(catch_binding.map_or(u32::MAX, |binding| binding.0));
             },
             IrNode::Blocked(reason) => {
                 let reason = self.intern_string((*reason).to_owned())?;
@@ -620,6 +670,12 @@ impl Generator {
                 self.emit_u32(reason.0);
                 self.store_result(state, id)?;
             },
+        }
+
+        if let Some(parameter) = state.parameter_defaults.get(&id) {
+            self.emit_value(module, state, id)?;
+            self.emit_op(Op::DefaultParameter);
+            self.emit_u32(parameter.0);
         }
 
         Ok(())
@@ -873,6 +929,7 @@ fn produces_value(node: &IrNode) -> bool {
             | IrNode::IterValue(_)
             | IrNode::IterKey(_)
             | IrNode::RangeTest { .. }
+            | IrNode::CatchValue
             | IrNode::Blocked(_)
             | IrNode::Trap { .. }
     )
@@ -937,8 +994,8 @@ fn builtin_code(builtin: ir::Builtin) -> Builtin {
         ir::Builtin::Args => Builtin::Args,
         ir::Builtin::Callee => Builtin::Callee,
         ir::Builtin::Caller => Builtin::Caller,
-        ir::Builtin::Dot => Builtin::Dot,
-        ir::Builtin::Super => Builtin::Super,
+        ir::Builtin::ThisProc => Builtin::ThisProc,
+        ir::Builtin::SuperProc => Builtin::SuperProc,
     }
 }
 
@@ -1103,7 +1160,7 @@ mod tests {
         assert_eq!(Op::Trap as u8, 0x25);
         assert_eq!(Unary::Dereference as u8, 0x08);
         assert_eq!(Binary::In as u8, 0x17);
-        assert_eq!(Builtin::Super as u8, 0x08);
+        assert_eq!(Builtin::SuperProc as u8, 0x08);
         assert_eq!(Access::Scope as u8, 0x04);
     }
 }

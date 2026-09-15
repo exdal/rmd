@@ -65,6 +65,10 @@ byte_enum! {
         TryCatch = 0x23,
         Blocked = 0x24,
         Trap = 0x25,
+        StoreBuiltin = 0x26,
+        InitializeVariable = 0x27,
+        CatchValue = 0x28,
+        DefaultParameter = 0x29,
     }
 }
 
@@ -120,8 +124,8 @@ byte_enum! {
         Args = 0x04,
         Callee = 0x05,
         Caller = 0x06,
-        Dot = 0x07,
-        Super = 0x08,
+        ThisProc = 0x07,
+        SuperProc = 0x08,
     }
 }
 

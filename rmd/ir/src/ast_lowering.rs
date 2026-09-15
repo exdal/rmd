@@ -18,6 +18,7 @@ pub struct IrModuleBuilder<'a> {
     scopes: Vec<HashMap<Identifier, BindingId>>,
     vars: Vec<VarSpec<IrNodeId>>,
     current_def: HashMap<(BindingId, IrNodeId), IrNodeId>,
+    stored_bindings: HashMap<BindingId, IrNodeId>,
     incomplete_phis: HashMap<IrNodeId, HashMap<BindingId, IrNodeId>>,
     phi_block: HashMap<IrNodeId, IrNodeId>,
     preds: HashMap<IrNodeId, Vec<IrNodeId>>,
@@ -73,6 +74,7 @@ impl<'a> IrModuleBuilder<'a> {
             scopes: Vec::new(),
             vars: Vec::new(),
             current_def: HashMap::new(),
+            stored_bindings: HashMap::new(),
             incomplete_phis: HashMap::new(),
             phi_block: HashMap::new(),
             preds: HashMap::new(),
@@ -189,6 +191,7 @@ impl<'a> IrModuleBuilder<'a> {
         self.named_variables.clear();
         self.vars.clear();
         self.current_def.clear();
+        self.stored_bindings.clear();
         self.incomplete_phis.clear();
         self.phi_block.clear();
         self.preds.clear();
@@ -454,10 +457,18 @@ impl<'a> IrModuleBuilder<'a> {
     fn selection_merge(&mut self, merge_block: IrNodeId) { self.emit_instr(IrNode::SelectionMerge { merge_block }); }
 
     fn write_variable(&mut self, var: BindingId, block: IrNodeId, value: IrNodeId) {
+        if let Some(pointer) = self.stored_bindings.get(&var).copied() {
+            self.emit_instr(IrNode::Store { pointer, value });
+
+            return;
+        }
         self.current_def.insert((var, block), value);
     }
 
     fn read_variable(&mut self, var: BindingId, block: IrNodeId) -> IrNodeId {
+        if let Some(pointer) = self.stored_bindings.get(&var).copied() {
+            return self.emit_instr(IrNode::Load { pointer });
+        }
         if let Some(value) = self.current_def.get(&(var, block)) {
             return *value;
         }
@@ -542,11 +553,17 @@ impl<'a> IrModuleBuilder<'a> {
 
     fn declare_var(&mut self, spec: VarSpec<IrNodeId>) -> BindingId {
         let id = BindingId(self.vars.len() as u32);
+        let stored = spec.modifiers.is_static;
 
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(spec.name.clone(), id);
         }
         self.vars.push(spec);
+        if stored {
+            let proc = self.module.procs.len();
+            let pointer = self.make_node(IrNode::Variable(format!("__dmed_static_local_{proc}_{}", id.0).into()));
+            self.stored_bindings.insert(id, pointer);
+        }
 
         id
     }
@@ -583,7 +600,10 @@ impl<'a> IrModuleBuilder<'a> {
     fn args(&mut self, args: &[ast::Argument]) -> Vec<Argument> {
         args.iter()
             .map(|a| Argument {
-                key: a.key.map(|e| self.lower_expr(e)),
+                key: a.key.map(|e| match self.ast.get_expr(e) {
+                    Some(Expression::Identifier(name)) => self.intern_constant(Value::Text(name.to_string())),
+                    _ => self.lower_expr(e),
+                }),
                 value: a.value.map(|e| self.lower_expr(e)),
             })
             .collect()
@@ -644,10 +664,10 @@ impl<'a> IrModuleBuilder<'a> {
                 if matches!(
                     op,
                     UnaryOp::PreIncrement | UnaryOp::PreDecrement | UnaryOp::PostIncrement | UnaryOp::PostDecrement
-                ) && matches!(self.ast.get_expr(*operand), Some(Expression::Identifier(name)) if self.lookup(name).is_some())
-                {
-                    return self.local_increment(*op, *operand);
+                ) {
+                    return self.increment(*op, *operand);
                 }
+
                 let operand = self.lower_expr(*operand);
 
                 IrNode::Unary { op: *op, operand }
@@ -697,7 +717,10 @@ impl<'a> IrModuleBuilder<'a> {
                 }
             },
             Some(Expression::Call { callee, args }) => {
-                match matches!(self.ast.get_expr(*callee), Some(Expression::Builtin(Builtin::Super))) {
+                match matches!(
+                    self.ast.get_expr(*callee),
+                    Some(Expression::Builtin(Builtin::SuperProc))
+                ) {
                     true => IrNode::Super { args: self.args(args) },
                     false if let Some(function) = self.call_target(*callee) => IrNode::FunctionCall {
                         function,
@@ -753,7 +776,7 @@ impl<'a> IrModuleBuilder<'a> {
         self.emit_instr(node)
     }
 
-    fn local_increment(&mut self, op: UnaryOp, target: ExpressionId) -> IrNodeId {
+    fn increment(&mut self, op: UnaryOp, target: ExpressionId) -> IrNodeId {
         let old = self.lower_expr(target);
         let one = self.intern_constant(Value::Num(1.0));
         let binary_op = match op {
@@ -868,7 +891,29 @@ impl<'a> IrModuleBuilder<'a> {
             },
         };
 
+        let inferred = match self.ast.get_expr(lhs_expr) {
+            Some(Expression::Identifier(name)) => self
+                .lookup(name)
+                .and_then(|binding| self.vars.get(binding.0 as usize))
+                .and_then(|spec| spec.var_type.clone()),
+            _ => None,
+        };
+        self.set_new_type(value, inferred);
+
         self.store(lhs_expr, value)
+    }
+
+    fn set_new_type(&mut self, value: IrNodeId, inferred: Option<TreePath>) {
+        if !matches!(self.module.node(value), Some(IrNode::New { ty: None, .. })) {
+            return;
+        }
+        let Some(inferred) = inferred else {
+            return;
+        };
+        let ty = self.intern_constant(Value::Path(inferred));
+        if let Some(IrNode::New { ty: target, .. }) = self.module.nodes.get_mut(value.0 as usize) {
+            *target = Some(ty);
+        }
     }
 
     fn store(&mut self, target: ExpressionId, value: IrNodeId) -> IrNodeId {
@@ -895,6 +940,12 @@ impl<'a> IrModuleBuilder<'a> {
                 let object = self.lower_expr(*object);
                 let index = self.lower_expr(*index);
                 self.emit_instr(IrNode::SetIndex { object, index, value });
+            },
+            Some(Expression::Builtin(builtin)) => {
+                self.emit_instr(IrNode::StoreBuiltin {
+                    builtin: *builtin,
+                    value,
+                });
             },
             _ => {
                 self.emit_instr(IrNode::Trap {
@@ -948,13 +999,19 @@ impl<'a> IrModuleBuilder<'a> {
             },
             Statement::Var { spec, initializer, .. } => {
                 let spec = self.spec(spec);
+                let inferred = spec.var_type.clone();
                 let var = self.declare_var(spec);
                 let value = match initializer {
                     Some(e) => self.lower_expr(*e),
                     None => self.undefined(),
                 };
+                self.set_new_type(value, inferred);
                 if let Some(block) = self.current_block {
-                    self.write_variable(var, block, value);
+                    if let Some(pointer) = self.stored_bindings.get(&var).copied() {
+                        self.emit_instr(IrNode::Initialize { pointer, value });
+                    } else {
+                        self.write_variable(var, block, value);
+                    }
                 }
             },
             Statement::Return(e) => {
@@ -1115,14 +1172,23 @@ impl<'a> IrModuleBuilder<'a> {
                     let spec = self.spec(s);
                     self.declare_var(spec)
                 });
-                let catch = self.block_branching_to(catch_body, merge);
+                let catch = self.make_block();
+                let previous = self.current_block;
+                if let Some(previous) = previous {
+                    self.preds.entry(catch).or_default().push(previous);
+                }
+                self.seal_block(catch);
+                self.set_current_block(catch);
+                if let Some(binding) = catch_binding {
+                    let value = self.emit_instr(IrNode::CatchValue);
+                    self.write_variable(binding, catch, value);
+                }
+                self.lower_statements(catch_body);
+                self.terminate_current_block(IrNode::Branch(merge));
+                self.current_block = previous;
                 self.scopes.pop();
 
-                self.emit_instr(IrNode::TryCatch {
-                    body,
-                    catch_binding,
-                    catch,
-                });
+                self.emit_instr(IrNode::TryCatch { body, catch });
                 self.terminate_current_block(IrNode::Branch(merge));
                 self.seal_block(merge);
                 self.resume(merge);

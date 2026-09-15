@@ -135,6 +135,15 @@ pub enum IrNode {
         pointer: IrNodeId,
         value: IrNodeId,
     },
+    Initialize {
+        pointer: IrNodeId,
+        value: IrNodeId,
+    },
+    StoreBuiltin {
+        builtin: Builtin,
+        value: IrNodeId,
+    },
+    CatchValue,
 
     Label(Vec<IrNodeId>),
     SelectionMerge {
@@ -161,7 +170,6 @@ pub enum IrNode {
     // TODO: DM unwinding has no branch form, so this stays structured. `body` and `catch` are blocks
     TryCatch {
         body: IrNodeId,
-        catch_binding: Option<BindingId>,
         catch: IrNodeId,
     },
     Noop,
@@ -212,7 +220,8 @@ impl IrNode {
             Self::IterNext(id) | Self::IterValue(id) | Self::IterKey(id) => vec![*id],
             Self::SetField { object, value, .. } => vec![*object, *value],
             Self::SetIndex { object, index, value } => vec![*object, *index, *value],
-            Self::Store { pointer, value } => vec![*pointer, *value],
+            Self::Store { pointer, value } | Self::Initialize { pointer, value } => vec![*pointer, *value],
+            Self::StoreBuiltin { value, .. } => vec![*value],
             Self::ConditionalBranch { condition, .. } => vec![*condition],
             Self::Return(value) => value.iter().copied().collect(),
             Self::Output { target, value } => vec![*target, *value],

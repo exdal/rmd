@@ -1,7 +1,7 @@
 use core::types::{IrNodeId, Value};
 use std::{collections::HashSet, fmt::Write};
 
-use crate::{AccessKind, Argument, BindingId, IrNode, Module, Procedure};
+use crate::{AccessKind, Argument, IrNode, Module};
 
 pub fn dump(module: &Module) -> String { dump_with(module, false) }
 
@@ -61,7 +61,7 @@ pub fn dump_with(module: &Module, syntax_highlighting: bool) -> String {
                 continue;
             };
 
-            line(&mut out, width, *parameter, 1, &format_node(proc, node));
+            line(&mut out, width, *parameter, 1, &format_node(node));
         }
 
         for block in reachable(module, proc.body) {
@@ -77,7 +77,7 @@ pub fn dump_with(module: &Module, syntax_highlighting: bool) -> String {
                     continue;
                 };
 
-                line(&mut out, width, *instruction, 2, &format_node(proc, node));
+                line(&mut out, width, *instruction, 2, &format_node(node));
             }
         }
     }
@@ -141,14 +141,6 @@ fn blank_line(out: &mut String) {
     }
 }
 
-fn binding_name(proc: &Procedure, id: BindingId) -> String {
-    match proc.vars.get(id.0 as usize) {
-        Some(spec) if spec.name.as_str().starts_with('$') => spec.name.as_str().to_string(),
-        Some(spec) => format!("${}", spec.name),
-        None => format!("${id}"),
-    }
-}
-
 fn constant(value: &Value) -> String {
     match value {
         Value::Text(text) => format!("{text:?}"),
@@ -171,7 +163,7 @@ fn arguments(args: &[Argument]) -> String {
         .join(" ")
 }
 
-fn format_node(proc: &Procedure, node: &IrNode) -> String {
+fn format_node(node: &IrNode) -> String {
     match node {
         IrNode::Function(id) => format!("function proc={id}"),
         IrNode::ExternalFunction(name) => format!("external_function {name}"),
@@ -202,6 +194,11 @@ fn format_node(proc: &Procedure, node: &IrNode) -> String {
         } => format!("set_field {object} {}{name} {value}", access_operator(*access)),
         IrNode::SetIndex { object, index, value } => format!("set_index {object} {index} {value}"),
         IrNode::Store { pointer, value } => format!("store {pointer} {value}"),
+        IrNode::Initialize { pointer, value } => format!("initialize {pointer} {value}"),
+        IrNode::StoreBuiltin { builtin, value } => {
+            format!("store_builtin {} {value}", snake_case(builtin))
+        },
+        IrNode::CatchValue => String::from("catch_value"),
         IrNode::AccessField { object, name, access } => {
             format!("access_field {object} {}{name}", access_operator(*access))
         },
@@ -276,17 +273,7 @@ fn format_node(proc: &Procedure, node: &IrNode) -> String {
         IrNode::IterValue(id) => format!("iter_value {id}"),
         IrNode::IterKey(id) => format!("iter_key {id}"),
         IrNode::RangeTest { current, end, step } => format!("range_test {current} end={end} step={step}"),
-        IrNode::TryCatch {
-            body,
-            catch_binding,
-            catch,
-        } => match catch_binding {
-            Some(binding) => format!(
-                "try_catch body={body} catch={catch} var={}",
-                binding_name(proc, *binding)
-            ),
-            None => format!("try_catch body={body} catch={catch}"),
-        },
+        IrNode::TryCatch { body, catch } => format!("try_catch body={body} catch={catch}"),
         IrNode::Del(id) => format!("del {id}"),
         IrNode::Throw(id) => format!("throw {id}"),
         IrNode::Output { target, value } => format!("output {target} {value}"),

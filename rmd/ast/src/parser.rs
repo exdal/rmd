@@ -1783,14 +1783,14 @@ impl<'a, 't> Parser<'a, 't> {
                 self.parse_path_expression()
             },
             Token::New => self.parse_new_expression(),
-            Token::Super => Ok(self.make_expr(Expression::Builtin(Builtin::Super))),
+            Token::Super => Ok(self.make_expr(Expression::Builtin(Builtin::SuperProc))),
             Token::Dot
                 if self.peek_is(Token::Soft(SoftKeyword::Proc)) || self.peek_is(Token::Soft(SoftKeyword::Verb)) =>
             {
                 self.cursor -= 1;
                 self.parse_path_expression()
             },
-            Token::Dot => Ok(self.make_expr(Expression::Builtin(Builtin::Dot))),
+            Token::Dot => Ok(self.make_expr(Expression::Builtin(Builtin::ThisProc))),
             Token::Scope => {
                 let object = self.make_expr(Expression::Builtin(Builtin::Global));
                 let name = self.parse_identifier()?;
@@ -1892,7 +1892,7 @@ impl<'a, 't> Parser<'a, 't> {
             Some(Token::Slash) => Some(self.parse_path_expression()?),
             Some(Token::Dot) => {
                 self.advance()?;
-                Some(self.make_expr(Expression::Builtin(Builtin::Dot)))
+                Some(self.make_expr(Expression::Builtin(Builtin::ThisProc)))
             },
             Some(Token::Scope) => Some(self.parse_primary_expression()?),
             Some(token) if token.is_identifier() => {
