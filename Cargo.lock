@@ -252,6 +252,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "codegen"
+version = "1.0.0"
+dependencies = [
+ "ast",
+ "core",
+ "ir",
+ "lexer",
+]
+
+[[package]]
 name = "combine"
 version = "4.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1465,6 +1475,7 @@ name = "rmdc"
 version = "1.0.0"
 dependencies = [
  "ast",
+ "codegen",
  "core",
  "dmi",
  "dmm",
