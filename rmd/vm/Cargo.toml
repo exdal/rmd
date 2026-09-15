@@ -1,0 +1,11 @@
+[package]
+name = "vm"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+core = { path = "../core" }
+ir = { path = "../ir" }
+objtree = { path = "../objtree" }
+serde = "1.0"
+simd-json = "0.18"
