@@ -62,7 +62,7 @@ jobs:
           $majorVersion = $version.Split('.')[0]
           $archiveUrl = "https://byond-builds.dm-lang.org/$majorVersion/${version}_byond.zip"
 
-          $versionFile = Join-Path $env:GITHUB_WORKSPACE '.github\BYOND_VERSION'
+          $versionFile = Join-Path $env:GITHUB_WORKSPACE 'prelude\BYOND_VERSION'
           if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
             throw "The tracked BYOND version file '$versionFile' is missing."
           }
@@ -72,7 +72,7 @@ jobs:
             throw "The tracked BYOND version '$savedVersion' is invalid."
           }
 
-          $stddefFile = Join-Path $env:GITHUB_WORKSPACE 'dm\stddef.dm'
+          $stddefFile = Join-Path $env:GITHUB_WORKSPACE 'prelude\stddef.dm'
           $hasCurrentHeader = $false
           if (Test-Path -LiteralPath $stddefFile -PathType Leaf) {
             $stddefContent = Get-Content -Raw -LiteralPath $stddefFile
@@ -126,7 +126,7 @@ jobs:
 
           $extractor = Join-Path $env:GITHUB_WORKSPACE '.github\scripts\extract-stddef.ps1'
           $byondBin = Join-Path $extractRoot 'byond\bin'
-          $outputPath = Join-Path $env:GITHUB_WORKSPACE 'dm\stddef.dm'
+          $outputPath = Join-Path $env:GITHUB_WORKSPACE 'prelude\stddef.dm'
           $windowsPowerShell32 = Join-Path $env:WINDIR 'SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
 
           & $windowsPowerShell32 `
@@ -142,7 +142,7 @@ jobs:
             throw "The stddef.dm extractor exited with code $LASTEXITCODE."
           }
 
-          $versionFile = Join-Path $env:GITHUB_WORKSPACE '.github\BYOND_VERSION'
+          $versionFile = Join-Path $env:GITHUB_WORKSPACE 'prelude\BYOND_VERSION'
           [IO.File]::WriteAllText(
             $versionFile,
             "$version`n",
@@ -195,7 +195,7 @@ jobs:
             }
           )
 
-          & git diff --quiet -- dm/stddef.dm .github/BYOND_VERSION
+          & git diff --quiet -- prelude/stddef.dm prelude/BYOND_VERSION
           $diffExitCode = $LASTEXITCODE
           if ($diffExitCode -gt 1) {
             throw "git diff failed with code $diffExitCode."
@@ -221,7 +221,7 @@ jobs:
             throw "Could not create branch '$branch'."
           }
 
-          & git add -- dm/stddef.dm .github/BYOND_VERSION
+          & git add -- prelude/stddef.dm prelude/BYOND_VERSION
           & git diff --cached --quiet
           if ($LASTEXITCODE -eq 0) {
             throw 'The generated update changed only through ignored or normalized content.'
@@ -243,7 +243,7 @@ jobs:
           $bodyLines = @(
             $env:STDDEF_PR_MARKER,
             '',
-            "Updates ``.github/BYOND_VERSION`` and ``dm/stddef.dm`` for BYOND $env:BYOND_VERSION.",
+            "Updates ``prelude/BYOND_VERSION`` and ``prelude/stddef.dm`` for BYOND $env:BYOND_VERSION.",
             '',
             "Release metadata: $env:BYOND_VERSION_SOURCE_URL",
             "Archive mirror: $env:BYOND_ARCHIVE_URL",

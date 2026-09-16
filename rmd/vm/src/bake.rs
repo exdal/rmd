@@ -1,5 +1,8 @@
 use core::types::{Identifier, ProcId, Value};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet, hash_map::DefaultHasher},
+    hash::{Hash, Hasher},
+};
 
 use codegen::Module;
 use objtree::{ObjectTree, TypeId};
@@ -29,8 +32,8 @@ pub struct Atom {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct CacheKey {
     ty: TypeId,
-    vars: String,
-    neighborhood: Vec<Vec<(TypeId, String)>>,
+    vars: u64,
+    neighborhood: Vec<Vec<(TypeId, u64)>>,
     position: Option<Position>,
     size: [i32; 3],
     epoch: u64,
@@ -53,7 +56,7 @@ pub struct Bake {
     pub cache_hits: usize,
     cache: HashMap<CacheKey, AppearanceDelta>,
     epoch: u64,
-    fingerprints: HashMap<u64, String>,
+    fingerprints: HashMap<u64, u64>,
     pub limits: Limits,
     atoms: HashMap<u64, Atom>,
     objects: HashMap<u64, ObjectId>,
@@ -203,7 +206,9 @@ impl Bake {
             },
         }
 
-        self.fingerprints.insert(atom.instance, format!("{:?}", atom.vars));
+        let mut hasher = DefaultHasher::new();
+        hash_constants(&atom.vars, &mut hasher);
+        self.fingerprints.insert(atom.instance, hasher.finish());
         self.cells.entry(atom.position).or_default().push(atom.instance);
         self.atoms.insert(atom.instance, atom);
     }
@@ -325,12 +330,24 @@ impl Bake {
     }
 
     fn fingerprint(&mut self, id: u64) {
-        if let Some(object) = self.object(id).and_then(|id| self.runtime.heap.object(id)) {
-            let mut vars = object.vars.iter().collect::<Vec<_>>();
-            vars.sort_by_key(|(name, _)| *name);
-            let input = self.atoms.get(&id).map(|atom| &atom.vars);
-            self.fingerprints.insert(id, format!("{input:?}/{vars:?}"));
-        }
+        let Some(atom) = self.atoms.get(&id) else {
+            return;
+        };
+        let Some(object) = self.object(id).and_then(|id| self.runtime.heap.object(id)) else {
+            return;
+        };
+
+        let mut vars = object
+            .vars
+            .iter()
+            .map(|(name, value)| (name, value.hash_key()))
+            .collect::<Vec<_>>();
+        vars.sort_unstable();
+
+        let mut hasher = DefaultHasher::new();
+        hash_constants(&atom.vars, &mut hasher);
+        vars.hash(&mut hasher);
+        self.fingerprints.insert(id, hasher.finish());
     }
 
     fn cache_key(&self, id: u64) -> Option<CacheKey> {
@@ -348,7 +365,7 @@ impl Bake {
                     .get(&position)
                     .into_iter()
                     .flatten()
-                    .filter_map(|id| Some((self.atoms.get(id)?.ty, self.fingerprints.get(id)?.clone())))
+                    .filter_map(|id| Some((self.atoms.get(id)?.ty, *self.fingerprints.get(id)?)))
                     .collect::<Vec<_>>();
                 neighborhood.push(cell);
             }
@@ -356,7 +373,7 @@ impl Bake {
 
         Some(CacheKey {
             ty: atom.ty,
-            vars: self.fingerprints.get(&id)?.clone(),
+            vars: *self.fingerprints.get(&id)?,
             neighborhood,
             position: None,
             size: self.runtime.world.size,
@@ -750,6 +767,34 @@ fn export_appearance(
     }
 
     Ok(appearance)
+}
+
+fn hash_constants(vars: &[(Identifier, Value)], hasher: &mut DefaultHasher) {
+    vars.len().hash(hasher);
+    for (name, value) in vars {
+        name.hash(hasher);
+        hash_constant(value, hasher);
+    }
+}
+
+fn hash_constant(value: &Value, hasher: &mut DefaultHasher) {
+    std::mem::discriminant(value).hash(hasher);
+    match value {
+        Value::Null | Value::Unevaluated => {},
+        Value::Num(number) => number.to_bits().hash(hasher),
+        Value::Text(text) | Value::Resource(text) => text.hash(hasher),
+        Value::Path(path) => path.hash(hasher),
+        Value::List(entries) => {
+            entries.len().hash(hasher);
+            for entry in entries {
+                hash_constant(&entry.key, hasher);
+                entry.value.is_some().hash(hasher);
+                if let Some(value) = &entry.value {
+                    hash_constant(value, hasher);
+                }
+            }
+        },
+    }
 }
 
 fn export_value(value: &GenericValue) -> Result<Value, FaultKind> {

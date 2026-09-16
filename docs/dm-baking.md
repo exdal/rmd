@@ -93,9 +93,11 @@ the surrounding 3 by 3 cell signatures, world dimensions, and the current cache 
 that reads coordinates or randomness additionally uses the atom position. Global scans and other
 nonlocal reads mark the preview unsafe to memoize. The cache holds at most 50,000 entries.
 
-The current fingerprint representation is based on stable-in-process `Debug` strings. Replacing it
-with hashes over sorted runtime values is intentionally a separate change so cache hit behavior can
-be reviewed independently.
+Each placement's fingerprint is a 64-bit hash of its map overrides, in file order, followed by its
+initialized runtime variables sorted by name. Runtime values hash through the same key that list
+lookup uses, so values that compare equal in DM share a fingerprint. Lists and objects hash by
+identity rather than contents, which makes a placement holding one a cache miss rather than a stale
+hit. Hashes are only compared within one process.
 
 `Bake::update` accepts replacement atoms and removed instance IDs. It relinks changed cells,
 initializes new objects, and rebakes the surrounding 3 by 3 by 3 neighborhood. The vertical extent is

@@ -278,7 +278,7 @@ impl<'a> Preprocessor<'a> {
     pub fn run(mut self, entry: impl AsRef<Path>) -> PreprocessResult<Preprocessed<'a>> {
         let mut files = std::mem::take(&mut self.prelude);
         if self.include_core {
-            files.insert(0, core_file());
+            files.splice(0..0, core_files());
         }
         for file in files {
             match file {
@@ -1539,14 +1539,19 @@ pub const STDDEF_ENV: &str = "DM_STDDEF";
 
 pub const DEMIR_ENV: &str = "DM_DEMIR";
 
-pub use prelude::{CORE_SOURCE, DEFAULT_PROFILE_SOURCE, DEMIR_SOURCE, STDDEF_SOURCE};
+pub use prelude::{CORE_SOURCE, DEFAULT_PROFILE_SOURCE, DEMIR_SOURCE, STDDEF_SOURCE, VERSION_SOURCE};
 
 pub enum PreludeFile {
     Embedded(&'static str, &'static str),
     Disk(PathBuf),
 }
 
-pub fn core_file() -> PreludeFile { PreludeFile::Embedded("<core.dm>", CORE_SOURCE) }
+pub fn core_files() -> [PreludeFile; 2] {
+    [
+        PreludeFile::Embedded("<version.dm>", VERSION_SOURCE),
+        PreludeFile::Embedded("<core.dm>", CORE_SOURCE),
+    ]
+}
 
 pub fn prelude_files() -> Vec<PreludeFile> {
     vec![
@@ -1950,7 +1955,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rmd-baking-{}-{id}", std::process::id()));
         fs::create_dir_all(&dir).expect("temp dir");
         let entry = dir.join("entry.dm");
-        fs::write(&entry, "/proc/test()\n\treturn 1\n").expect("write entry");
+        // tgstation's `__byond_version_compat.dm`, which only `SPACEMAN_DMM` used to skip
+        fs::write(
+            &entry,
+            "#if (DM_VERSION < 516 || DM_BUILD < 1659) && !defined(SPACEMAN_DMM)\n#error too \
+             old\n#endif\n/proc/test()\n\treturn 1\n",
+        )
+        .expect("write entry");
 
         let arena = StrArena::new();
         let result = Preprocessor::new(&arena)
@@ -1994,8 +2005,9 @@ mod tests {
 
     /// All three sources are compiled in, so a shipped binary needs no prelude directory beside it.
     #[test]
-    fn the_default_prelude_is_core_then_stddef_then_demir_and_needs_no_files() {
-        let names: Vec<_> = std::iter::once(core_file())
+    fn the_default_prelude_is_version_core_stddef_then_demir_and_needs_no_files() {
+        let names: Vec<_> = core_files()
+            .into_iter()
             .chain(prelude_files())
             .map(|file| match file {
                 PreludeFile::Embedded(name, _) => name,
@@ -2003,7 +2015,7 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(names, vec!["<core.dm>", "<stddef.dm>", "<demir.dm>"]);
+        assert_eq!(names, vec!["<version.dm>", "<core.dm>", "<stddef.dm>", "<demir.dm>"]);
         assert!(CORE_SOURCE.contains("/datum"));
         assert!(STDDEF_SOURCE.contains("#define NORTH 1"));
         assert!(DEMIR_SOURCE.contains("#define __DEMIR__"));
@@ -2026,9 +2038,12 @@ mod tests {
             .expect("preprocess");
         let _ = fs::remove_dir_all(&dir);
 
+        assert!(result.sources.find("<version.dm>").is_some());
         assert!(result.sources.find("<core.dm>").is_some());
         assert!(result.sources.find("<stddef.dm>").is_none());
         assert!(result.sources.find("<demir.dm>").is_none());
+        assert!(result.defines.is_defined("DM_VERSION"));
+        assert!(result.defines.is_defined("DM_BUILD"));
     }
 
     /// The builtins reach the tree without a single file read.
@@ -2037,6 +2052,7 @@ mod tests {
         let arena = StrArena::new();
         let mut preprocessor = Preprocessor::new(&arena);
         preprocessor.prelude = vec![
+            PreludeFile::Embedded("<version.dm>", VERSION_SOURCE),
             PreludeFile::Embedded("<core.dm>", CORE_SOURCE),
             PreludeFile::Embedded("<stddef.dm>", STDDEF_SOURCE),
             PreludeFile::Embedded("<demir.dm>", DEMIR_SOURCE),

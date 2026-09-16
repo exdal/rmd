@@ -183,7 +183,7 @@ impl PartialEq for GenericValue {
 }
 
 impl GenericValue {
-    fn hash_key(&self) -> u64 {
+    pub(crate) fn hash_key(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         std::mem::discriminant(self).hash(&mut hash);

@@ -16,6 +16,11 @@ struct Declaration {
 fn main() {
     println!("cargo:rerun-if-changed=core.dm");
     println!("cargo:rerun-if-changed=demir.dm");
+    println!("cargo:rerun-if-changed=BYOND_VERSION");
+
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    fs::write(out_dir.join("version.dm"), version_defines(Path::new("BYOND_VERSION")))
+        .expect("write generated version defines");
 
     let sources = [Path::new("core.dm"), Path::new("demir.dm")];
     let mut declarations = Vec::new();
@@ -37,8 +42,25 @@ fn main() {
          std::fmt::Result {\n\t\twrite!(formatter, \"{self:?}\")\n\t}\n}\n",
     );
 
-    let output = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR")).join("intrinsic.rs");
-    fs::write(output, generated).expect("write generated intrinsic enum");
+    fs::write(out_dir.join("intrinsic.rs"), generated).expect("write generated intrinsic enum");
+}
+
+fn version_defines(path: &Path) -> String {
+    let source = fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    let Some((version, build)) = source
+        .trim()
+        .split_once('.')
+        .filter(|(version, build)| digits(version) && digits(build))
+    else {
+        panic!(
+            "{}: expected `version.build`, found {:?}",
+            path.display(),
+            source.trim()
+        );
+    };
+
+    format!("#define DM_VERSION {version}\n#define DM_BUILD {build}\n")
 }
 
 fn read_declarations(path: &Path) -> Vec<Declaration> {
