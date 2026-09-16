@@ -54,6 +54,11 @@ pub fn dump_with(module: &Module, syntax_highlighting: bool) -> String {
         if let Some(previous) = proc.previous.and_then(|id| module.proc(id)) {
             let _ = write!(declaration, " overrides={}", previous.function);
         }
+
+        if let Some(intrinsic) = proc.intrinsic {
+            let _ = write!(declaration, " intrinsic={intrinsic}");
+        }
+
         line(&mut out, width, proc.function, 0, &declaration);
 
         for parameter in &proc.parameters {

@@ -7,7 +7,7 @@ use core::{
 };
 
 use ast::{AST, Declaration};
-use objtree::{ObjectTree, ProcDecl, VarDecl};
+use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
 
 use crate::{
     constant::fold,
@@ -44,8 +44,27 @@ impl<'a> Analyzer<'a> {
 
     pub fn finish(mut self) -> (ObjectTree, ir::Module, Vec<SemaError>) {
         self.tree.resolve_parent_types();
+        self.resolve_new_types();
 
         (self.tree, self.module.finish(), self.errors)
+    }
+
+    fn resolve_new_types(&mut self) {
+        for pending in self.module.unresolved_new().to_vec() {
+            let Some(ty) = self.declared_type(&pending.owner, &pending.name) else {
+                continue;
+            };
+
+            self.module.resolve_new(pending.node, ty);
+        }
+    }
+
+    fn declared_type(&self, owner: &TreePath, name: &Identifier) -> Option<TreePath> {
+        self.tree
+            .id_of(owner)
+            .and_then(|id| self.tree.var_inherited(id, name))
+            .or_else(|| self.tree.var_inherited(TypeId::ROOT, name))
+            .and_then(|var| var.declared_type.clone())
     }
 
     fn walk(&mut self, declaration: &Declaration, prefix: &TreePath) {
@@ -259,6 +278,102 @@ mod tests {
         assert_eq!(
             module.proc(previous).map(|proc| &proc.name),
             module.proc(latest).map(|proc| &proc.name)
+        );
+    }
+
+    fn new_type_of(source: &str, owner: &str, proc_name: &str) -> Option<String> {
+        let (tokens, errors) = lexer::tokenize(source);
+        assert!(errors.is_empty(), "{errors:?}");
+        let ast = ast::parse(&tokens).expect("fixture should parse");
+        let (tree, module, _) = analyze(&ast);
+
+        let body = tree
+            .id_of(&TreePath::parse(owner))
+            .and_then(|id| tree.proc_inherited(id, &proc_name.into()))
+            .and_then(|proc| proc.body)
+            .expect("fixture proc should exist");
+        let blocks = module.proc(body).map(|proc| proc.body).expect("proc body");
+
+        module
+            .block(blocks)
+            .expect("entry block")
+            .iter()
+            .find_map(|id| match module.node(*id) {
+                Some(ir::IrNode::New { ty, .. }) => Some(*ty),
+                _ => None,
+            })
+            .expect("fixture should lower a new")
+            .and_then(|ty| match module.node(ty) {
+                Some(ir::IrNode::Constant(Value::Path(path))) => Some(path.to_string()),
+                _ => None,
+            })
+    }
+
+    /// `x = new` reads its type off `x`, which for an object var or a global is only knowable once
+    /// every file has reopened every type.
+    #[test]
+    fn untyped_new_resolves_against_the_finished_tree() {
+        // `TreePath::parse` would carry `IS_DATUM`, and the tree keys on segments alone.
+        let tracy = String::from("/datum/tracy");
+
+        // An object var, declared after the proc that assigns it.
+        assert_eq!(
+            new_type_of(
+                "/datum/tracy\n/datum/holder\n\tproc/go()\n\t\tchild = new\n/datum/holder\n\tvar/datum/tracy/child\n",
+                "/datum/holder",
+                "go",
+            ),
+            Some(tracy.clone())
+        );
+
+        // An inherited object var, reachable only after `parent_type` is resolved.
+        assert_eq!(
+            new_type_of(
+                "/datum/tracy\n/datum/base\n\tvar/datum/tracy/inherited\n/datum/holder\n\tparent_type = \
+                 /datum/base\n\tproc/go()\n\t\tinherited = new\n",
+                "/datum/holder",
+                "go",
+            ),
+            Some(tracy.clone())
+        );
+
+        // A file-scope global.
+        assert_eq!(
+            new_type_of(
+                "/datum/tracy\nvar/global/datum/tracy/Tracy\n/datum/holder/proc/go()\n\t\tTracy = new\n",
+                "/datum/holder",
+                "go",
+            ),
+            Some(tracy.clone())
+        );
+
+        // `src.x`, whose type lives on the owner the same way a bare name's does.
+        assert_eq!(
+            new_type_of(
+                "/datum/tracy\n/datum/holder\n\tvar/datum/tracy/child\n\tproc/go()\n\t\tsrc.child = new\n",
+                "/datum/holder",
+                "go",
+            ),
+            Some(tracy)
+        );
+    }
+
+    /// A local still resolves during lowering, and a name that is no var at all stays untyped rather
+    /// than picking up someone else's type.
+    #[test]
+    fn untyped_new_leaves_unresolvable_targets_alone() {
+        assert_eq!(
+            new_type_of(
+                "/datum/tracy\n/datum/holder/proc/go()\n\t\tvar/datum/tracy/local = new\n",
+                "/datum/holder",
+                "go",
+            ),
+            Some(String::from("/datum/tracy"))
+        );
+
+        assert_eq!(
+            new_type_of("/datum/holder/proc/go()\n\t\tunknown = new\n", "/datum/holder", "go"),
+            None
         );
     }
 }

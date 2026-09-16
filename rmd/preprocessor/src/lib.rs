@@ -1885,7 +1885,7 @@ mod tests {
 
         assert_eq!(names, vec!["<stddef.dm>", "<demir.dm>"]);
         assert!(STDDEF_SOURCE.contains("#define NORTH 1"));
-        assert!(DEMIR_SOURCE.contains("#define DM_VERSION"));
+        assert!(DEMIR_SOURCE.contains("#define __DEMIR__"));
     }
 
     /// The builtins reach the tree without a single file read.

@@ -24,9 +24,10 @@ use crate::{
     Fault,
     FaultKind,
     GenericValue,
+    Intrinsic,
     Limits,
     heap::{Heap, Object, ObjectId},
-    value::{IteratorId, ListData, ListId, ModifiedType, ProcRef, RangeValue},
+    value::{IteratorId, ListData, ListId, ModifiedType, ProcRef, RangeValue, Receiver},
     world::World,
 };
 
@@ -37,6 +38,7 @@ pub struct Runtime {
     pub heap: Heap,
     pub world: World,
     pub(crate) global: Option<ObjectId>,
+    pub(crate) world_object: Option<ObjectId>,
 }
 
 impl Runtime {
@@ -44,15 +46,10 @@ impl Runtime {
         &mut self, tree: &ObjectTree, module: &Module, proc: ProcId, src: Option<ObjectId>, args: Vec<GenericValue>,
         limits: Limits,
     ) -> Result<GenericValue> {
-        if self.global.is_none() {
-            self.global = Some(
-                self.heap
-                    .alloc_object(Object::new(TypeId::ROOT))
-                    .map_err(Fault::detached)?,
-            );
-        }
-
+        self.ensure_global()?;
+        self.ensure_world(tree)?;
         self.heap.begin();
+
         let result = {
             let seed = src.or_else(|| args.first().and_then(GenericValue::object));
             let mut evaluator = Evaluator::new(self, tree, module, limits, seed);
@@ -70,6 +67,40 @@ impl Runtime {
         }
 
         result
+    }
+
+    pub fn set_var(
+        &mut self, tree: &ObjectTree, module: &Module, target: GenericValue, name: Identifier, value: GenericValue,
+        limits: Limits,
+    ) -> Result<()> {
+        self.ensure_global()?;
+
+        let mut evaluator = Evaluator::new(self, tree, module, limits, None);
+        evaluator.write_field(target, name, value)
+    }
+
+    fn ensure_global(&mut self) -> Result<()> {
+        if self.global.is_none() {
+            self.global = Some(
+                self.heap
+                    .alloc_object(Object::new(TypeId::ROOT))
+                    .map_err(Fault::detached)?,
+            );
+        }
+
+        Ok(())
+    }
+
+    fn ensure_world(&mut self, tree: &ObjectTree) -> Result<ObjectId> {
+        if let Some(world) = self.world_object {
+            return Ok(world);
+        }
+
+        let ty = tree.id_of(&TreePath::parse("/world")).unwrap_or(TypeId::ROOT);
+        let world = self.heap.alloc_object(Object::new(ty)).map_err(Fault::detached)?;
+        self.world_object = Some(world);
+
+        Ok(world)
     }
 
     pub fn constant(&mut self, value: &Value) -> std::result::Result<GenericValue, FaultKind> {
@@ -289,6 +320,24 @@ impl<'a> Evaluator<'a> {
 
         if self.depth >= self.limits.call_depth {
             return Err(self.fault(FaultKind::CallDepth));
+        }
+
+        if let Some(id) = function.intrinsic {
+            self.charge(1)?;
+
+            let params = function
+                .parameter_names
+                .iter()
+                .map(|id| {
+                    self.module
+                        .strings
+                        .get(id.0 as usize)
+                        .map(|name| Identifier::from(name.as_str()))
+                        .unwrap_or_else(|| Identifier::from(""))
+                })
+                .collect::<Vec<_>>();
+
+            return self.intrinsic(id, src.into(), &params, args);
         }
 
         let local_count = usize::try_from(function.local_count).map_err(|_| self.fault(FaultKind::Memory))?;
@@ -1105,14 +1154,6 @@ impl Evaluator<'_> {
             .cloned()
             .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
 
-        if matches!(name.as_str(), "to_chat" | "stack_trace" | "_stack_trace") {
-            return Ok(GenericValue::Null);
-        }
-
-        if crate::builtins::blocked(&name) {
-            return Err(self.fault(FaultKind::Blocked(name)));
-        }
-
         match name.as_str() {
             "arglist" => {
                 return match args.first().map(|(_, value)| value) {
@@ -1142,14 +1183,10 @@ impl Evaluator<'_> {
             return self.call_function_for_proc(proc, None, frame.usr, args);
         }
 
-        if matches!(name.as_str(), "image" | "mutable_appearance") {
-            return self.appearance_object(&name, args);
-        }
-
         self.builtin(
             &name,
             args.into_iter().map(|(_, value)| value).collect::<Vec<_>>(),
-            frame,
+            frame.src,
         )
     }
 
@@ -1173,14 +1210,10 @@ impl Evaluator<'_> {
                 self.call_function_for_proc(reference.proc, reference.src, frame.usr, args)
             },
             GenericValue::ListProc(id, name) => {
-                if crate::builtins::blocked(name.as_str()) {
-                    return Err(self.fault(FaultKind::Blocked(name.to_string())));
-                }
-                self.list_builtin(
-                    id,
-                    name.as_str(),
-                    args.into_iter().map(|(_, value)| value).collect::<Vec<_>>(),
-                )
+                let proc = Intrinsic::list_proc(name.as_str())
+                    .ok_or_else(|| self.fault(FaultKind::MissingProc(format!("list.{name}"))))?;
+
+                self.intrinsic_impl(proc, Receiver::List(id), &[], args)
             },
             GenericValue::Path(path) if path.flags.intersects(PathFlags::IS_PROC | PathFlags::IS_VERB) => {
                 let name = path
@@ -1227,11 +1260,6 @@ impl Evaluator<'_> {
             return Ok(GenericValue::Null);
         }
 
-        if crate::builtins::blocked(name.as_str()) || matches!(object, GenericValue::World) && name.as_str() == "Export"
-        {
-            return Err(self.fault(FaultKind::Blocked(name.to_string())));
-        }
-
         match object {
             GenericValue::Object(id) => {
                 if let Some(proc) = self
@@ -1255,6 +1283,13 @@ impl Evaluator<'_> {
                 } else {
                     self.read_field(GenericValue::Global, &name)
                 }
+            },
+            GenericValue::World => match self.world_type().and_then(|ty| self.find_proc(ty, &name)) {
+                Some(proc) => Ok(GenericValue::Proc(ProcRef {
+                    src: self.runtime.world_object,
+                    proc,
+                })),
+                None => self.read_field(GenericValue::World, &name),
             },
             value => self.read_field(value, &name),
         }
@@ -1280,6 +1315,36 @@ impl Evaluator<'_> {
 }
 
 impl Evaluator<'_> {
+    fn read_vars(&mut self, id: ObjectId) -> Result<GenericValue> {
+        let object = self
+            .runtime
+            .heap
+            .object(id)
+            .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
+        let ty = object.ty;
+
+        let mut names = object.vars.keys().cloned().collect::<HashSet<_>>();
+        names.extend(["type", "parent_type", "vars", "tag"].map(Identifier::from));
+        for declaration in self.tree.ancestors(ty) {
+            names.extend(declaration.vars.keys().cloned());
+        }
+
+        let mut names = names.into_iter().collect::<Vec<_>>();
+        names.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        self.reserve(names.len())?;
+
+        let mut entries = Vec::with_capacity(names.len());
+        for name in names {
+            let value = match name.as_str() {
+                "vars" => GenericValue::Null,
+                _ => self.read_field(GenericValue::Object(id), &name)?,
+            };
+            entries.push((GenericValue::Text(name.as_str().into()), Some(value)));
+        }
+
+        self.list(entries)
+    }
+
     pub fn read_field(&mut self, object: GenericValue, name: &Identifier) -> Result<GenericValue> {
         let key = name.as_str();
         match object {
@@ -1301,7 +1366,19 @@ impl Evaluator<'_> {
                         .collect::<Vec<_>>();
                     self.list(values)?
                 },
-                _ => return Err(self.fault(FaultKind::MissingVariable(format!("world.{key}")))),
+                "type" => self
+                    .world_type()
+                    .and_then(|ty| self.tree.get(ty))
+                    .map(|declaration| GenericValue::Path(declaration.path.clone()))
+                    .unwrap_or_default(),
+                _ => {
+                    let world = self
+                        .runtime
+                        .world_object
+                        .ok_or_else(|| self.fault(FaultKind::MissingVariable(format!("world.{key}"))))?;
+
+                    return self.read_field(GenericValue::Object(world), name);
+                },
             }),
             GenericValue::Global => {
                 let global = self.runtime.global.map(GenericValue::Object).unwrap_or_default();
@@ -1351,6 +1428,10 @@ impl Evaluator<'_> {
             GenericValue::Object(id) => {
                 if matches!(key, "overlays" | "underlays") {
                     self.appearance_reads.insert(id);
+                }
+
+                if key == "vars" {
+                    return self.read_vars(id);
                 }
 
                 if let Some(origin) = self.origin
@@ -1472,6 +1553,7 @@ impl Evaluator<'_> {
                 let value = match value {
                     Some(value) => self.constant(&value)?,
                     None if matches!(key, "overlays" | "underlays" | "vis_contents") => self.list(Vec::new())?,
+                    None if key == "tag" => GenericValue::Null,
                     None => return Err(self.fault(FaultKind::MissingVariable(key.into()))),
                 };
 
@@ -1504,6 +1586,8 @@ impl Evaluator<'_> {
             .unwrap_or_default()
     }
 
+    fn world_type(&self) -> Option<TypeId> { self.tree.id_of(&TreePath::parse("/world")) }
+
     fn shared_key(&self, ty: TypeId, name: &Identifier) -> Option<Identifier> {
         let owner = self
             .tree
@@ -1523,6 +1607,10 @@ impl Evaluator<'_> {
                 self.write_field(global, name, value)
             },
             GenericValue::World if key == "log" => Ok(()),
+            GenericValue::World => match self.runtime.world_object {
+                Some(world) => self.write_field(GenericValue::Object(world), name, value),
+                None => Ok(()),
+            },
             GenericValue::List(id) | GenericValue::ArgList(id) if key == "len" => {
                 let length = self.number(&value)?;
                 if length < 0.0 || !length.is_finite() {
@@ -2078,6 +2166,16 @@ impl Evaluator<'_> {
             let size = size as usize;
             self.reserve(size)?;
             return self.list(vec![(GenericValue::Null, None); size]);
+        }
+
+        if path.to_string() == "/alist" {
+            let entries = match args.first().map(|(_, value)| value.clone()) {
+                Some(value @ (GenericValue::List(_) | GenericValue::ArgList(_))) => self.iter_values(value)?,
+                _ => Vec::new(),
+            };
+            self.reserve(entries.len())?;
+
+            return self.list(entries);
         }
 
         let ty = self

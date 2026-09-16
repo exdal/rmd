@@ -1561,6 +1561,7 @@ dependencies = [
  "objtree",
  "preprocessor",
  "sema",
+ "vm",
 ]
 
 [[package]]

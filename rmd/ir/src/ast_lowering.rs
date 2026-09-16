@@ -9,9 +9,17 @@ use ast::{AST, Expression, ExpressionId, ForLoop, Literal, Statement};
 
 use crate::*;
 
+#[derive(Debug, Clone)]
+pub struct UnresolvedNew {
+    pub owner: TreePath,
+    pub name: Identifier,
+    pub node: IrNodeId,
+}
+
 pub struct IrModuleBuilder<'a> {
     ast: &'a AST,
     pub module: Module,
+    unresolved_new: Vec<UnresolvedNew>,
     constants: HashMap<ConstantKey, IrNodeId>,
     external_functions: HashMap<Identifier, IrNodeId>,
     named_variables: HashMap<Identifier, IrNodeId>,
@@ -71,6 +79,7 @@ impl<'a> IrModuleBuilder<'a> {
         Self {
             ast,
             module: Module::default(),
+            unresolved_new: Vec::new(),
             constants: HashMap::new(),
             external_functions: HashMap::new(),
             named_variables: HashMap::new(),
@@ -132,6 +141,10 @@ impl<'a> IrModuleBuilder<'a> {
 
         self.module
     }
+
+    pub fn unresolved_new(&self) -> &[UnresolvedNew] { &self.unresolved_new }
+
+    pub fn resolve_new(&mut self, node: IrNodeId, ty: TreePath) { self.set_new_type(node, Some(ty)); }
 
     #[allow(clippy::too_many_arguments)]
     pub fn lower_proc(
@@ -199,10 +212,31 @@ impl<'a> IrModuleBuilder<'a> {
             variadic,
             vars,
             body: entry,
+            intrinsic: body.iter().find_map(|stmt| self.intrinsic_id(stmt)),
             location,
         });
 
         id
+    }
+
+    fn intrinsic_id(&self, stmt: &Statement) -> Option<u32> {
+        let Statement::Setting {
+            name,
+            mode: ast::SettingMode::Assign,
+            value,
+        } = stmt
+        else {
+            return None;
+        };
+
+        if name.as_str() != "__demir_intrin" {
+            return None;
+        }
+
+        match self.ast.get_expr(*value) {
+            Some(Expression::Literal(Literal::Num(id))) if id.is_finite() && *id >= 0.0 => Some(*id as u32),
+            _ => None,
+        }
     }
 
     fn reset_proc(&mut self) {
@@ -287,20 +321,24 @@ impl<'a> IrModuleBuilder<'a> {
             .filter(|proc| proc.owner == TreePath::default())
             .map(|proc| (proc.name.clone(), proc.function))
             .collect::<HashMap<_, _>>();
+        let shadowed = self
+            .module
+            .procs
+            .iter()
+            .filter(|proc| proc.owner != TreePath::default())
+            .map(|proc| proc.name.clone())
+            .collect::<HashSet<_>>();
         let mut direct_calls = Vec::new();
 
         for (index, proc) in self.module.procs.iter().enumerate() {
-            if proc.owner != TreePath::default() {
-                continue;
-            }
-
+            let from_global = proc.owner == TreePath::default();
             let start = proc.function.0 as usize + 1;
             let end = self
                 .module
                 .procs
                 .get(index + 1)
                 .map_or(self.module.nodes.len(), |next| next.function.0 as usize);
-            for (offset, node) in self.module.nodes[start..end].iter().enumerate() {
+            for (offset, node) in self.module.nodes.get(start..end).unwrap_or_default().iter().enumerate() {
                 let IrNode::FunctionCall { function, args } = node else {
                     continue;
                 };
@@ -310,6 +348,9 @@ impl<'a> IrModuleBuilder<'a> {
                 let Some(internal) = globals.get(name) else {
                     continue;
                 };
+                if !from_global && shadowed.contains(name) {
+                    continue;
+                }
 
                 direct_calls.push((IrNodeId((start + offset) as u32), *function, *internal, args.clone()));
             }
@@ -348,9 +389,6 @@ impl<'a> IrModuleBuilder<'a> {
         let Some(Expression::Identifier(name)) = self.ast.get_expr(expression) else {
             return None;
         };
-        if self.lookup(name).is_some() {
-            return None;
-        }
 
         Some(self.intern_external_function(name.clone()))
     }
@@ -752,6 +790,14 @@ impl<'a> IrModuleBuilder<'a> {
                 }
             },
             Some(Expression::Call { callee, args }) => {
+                if matches!(self.ast.get_expr(*callee), Some(Expression::Identifier(name)) if name.as_str() == "nameof")
+                    && let [argument] = args.as_slice()
+                    && let Some(value) = argument.value
+                    && let Some(name) = self.referenced_name(value)
+                {
+                    return self.intern_constant(Value::Text(name));
+                }
+
                 if matches!(self.ast.get_expr(*callee), Some(Expression::Identifier(name)) if name.as_str() == "initial")
                     && let [argument] = args.as_slice()
                     && let Some(value) = argument.value
@@ -988,12 +1034,30 @@ impl<'a> IrModuleBuilder<'a> {
             Some(Expression::Identifier(name)) => self
                 .lookup(name)
                 .and_then(|binding| self.vars.get(binding.0 as usize))
-                .and_then(|spec| spec.var_type.clone()),
+                .and_then(|spec| spec.var_type.clone())
+                .or_else(|| self.defer_new_type(value, name)),
+            Some(Expression::Field { object, name, .. })
+                if matches!(self.ast.get_expr(*object), Some(Expression::Builtin(Builtin::Src))) =>
+            {
+                self.defer_new_type(value, name)
+            },
             _ => None,
         };
         self.set_new_type(value, inferred);
 
         self.store(lhs_expr, value)
+    }
+
+    fn defer_new_type(&mut self, value: IrNodeId, name: &Identifier) -> Option<TreePath> {
+        if matches!(self.module.node(value), Some(IrNode::New { ty: None, .. })) {
+            self.unresolved_new.push(UnresolvedNew {
+                owner: self.current_owner.clone(),
+                name: name.clone(),
+                node: value,
+            });
+        }
+
+        None
     }
 
     fn set_new_type(&mut self, value: IrNodeId, inferred: Option<TreePath>) {
@@ -1006,6 +1070,15 @@ impl<'a> IrModuleBuilder<'a> {
         let ty = self.intern_constant(Value::Path(inferred));
         if let Some(IrNode::New { ty: target, .. }) = self.module.nodes.get_mut(value.0 as usize) {
             *target = Some(ty);
+        }
+    }
+
+    /// `/datum/foo/proc/bar` and `type::bar` and `src.bar` all name `bar`.
+    fn referenced_name(&self, expression: ExpressionId) -> Option<String> {
+        match self.ast.get_expr(expression)? {
+            Expression::Path(path) => path.name().map(Identifier::to_string),
+            Expression::Field { name, .. } | Expression::Identifier(name) => Some(name.to_string()),
+            _ => None,
         }
     }
 

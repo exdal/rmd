@@ -19,3 +19,4 @@ dmm = { path = "../rmd/dmm" }
 dmi = { path = "../rmd/dmi" }
 ir = { path = "../rmd/ir" }
 codegen = { path = "../rmd/codegen" }
+vm = { path = "../rmd/vm" }

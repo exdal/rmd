@@ -602,7 +602,8 @@ fn an_instruction_fault_rolls_back_heap_changes() {
             .vars
             .is_empty()
     );
-    assert_eq!(runtime.heap.objects().count(), 2);
+    // The fixture's datum plus the global and world singletons, both allocated ahead of the journal.
+    assert_eq!(runtime.heap.objects().count(), 3);
     assert!(runtime.heap.object(ObjectId(1)).is_some());
 }
 
@@ -629,4 +630,381 @@ fn evaluation_reports_randomness_and_nonlocal_world_reads() {
         .expect("fixture should execute");
     assert!(evaluator.position_sensitive);
     assert!(!evaluator.memo_safe);
+}
+
+#[test]
+fn intrinsic_procs_run_in_rust_instead_of_their_body() {
+    let (tree, module) = compile(
+        r#"
+/world
+    proc/file2list(File, Separator)
+        set __demir_intrin = 122
+    proc/IsBanned(key, address, computer_id, type)
+        set __demir_intrin = 112
+    proc/Reboot(reason)
+        set __demir_intrin = 104
+/proc/lines()
+    return world.file2list("tips.txt")
+/proc/banned()
+    return world.IsBanned("key")
+/proc/reboot()
+    return world.Reboot()
+"#,
+    );
+
+    let root = std::env::temp_dir().join(format!("dmed-intrinsic-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("temp dir");
+    std::fs::write(root.join("tips.txt"), "first\nsecond\n").expect("fixture file");
+
+    let mut runtime = Runtime::default();
+    runtime.world.root = Some(root.clone());
+
+    let value = runtime
+        .run(
+            &tree,
+            &module,
+            proc(&tree, "lines"),
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
+        .expect("file2list should execute");
+    let GenericValue::List(id) = value else {
+        panic!("file2list should return a list, got {value:?}");
+    };
+    let entries = runtime
+        .heap
+        .list(id)
+        .expect("list")
+        .entries
+        .iter()
+        .map(|(value, _)| value.display())
+        .collect::<Vec<_>>();
+    assert_eq!(entries, ["first", "second", ""]);
+
+    assert_eq!(
+        runtime
+            .run(
+                &tree,
+                &module,
+                proc(&tree, "banned"),
+                None,
+                Vec::new(),
+                Limits::default()
+            )
+            .expect("IsBanned should execute"),
+        false.into()
+    );
+
+    let fault = runtime
+        .run(
+            &tree,
+            &module,
+            proc(&tree, "reboot"),
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
+        .expect_err("Reboot should be blocked");
+    assert_eq!(fault.kind, FaultKind::Blocked("world.Reboot".into()));
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Without a root there is no filesystem to reach, rather than an ambient one.
+#[test]
+fn file2list_without_a_root_is_blocked() {
+    let (tree, module) = compile(
+        r#"
+/world
+    proc/file2list(File, Separator)
+        set __demir_intrin = 122
+/proc/lines()
+    return world.file2list("tips.txt")
+"#,
+    );
+
+    let fault = Runtime::default()
+        .run(
+            &tree,
+            &module,
+            proc(&tree, "lines"),
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
+        .expect_err("file2list should be blocked");
+    assert_eq!(fault.kind, FaultKind::Blocked("filesystem".into()));
+}
+
+/// `/world` procs run with the world as `src`, so assignments land on it rather than on globals.
+#[test]
+fn world_vars_are_readable_and_writable_through_world_procs() {
+    assert_eq!(
+        run(
+            r#"
+/world
+    var/booted = 0
+    proc/boot()
+        booted = 7
+/proc/test()
+    world.boot()
+    return world.booted
+"#,
+            "test",
+        ),
+        7.into()
+    );
+}
+
+/// `new /image(...)` has to fill the object `new` already allocated. An intrinsic constructor that
+/// allocated its own would leave the caller holding an empty one.
+#[test]
+fn image_constructor_fills_the_object_new_allocated() {
+    assert_eq!(
+        run(
+            r#"
+/image
+    var/icon
+    var/icon_state
+    var/atom/loc
+    New(icon, loc, icon_state, layer, dir, pixel_x, pixel_y)
+        set __demir_intrin = 1025
+/proc/test()
+    var/image/I = new('thing.dmi', null, "state")
+    return I.icon_state
+"#,
+            "test",
+        ),
+        "state".into()
+    );
+}
+
+/// `matrix(M, ...)` is the in-place form every `/matrix` method in `stddef.dm` routes through.
+/// Transforms are unimplemented, so it must hand the matrix back rather than write the argument
+/// list onto `a`/`b`/`c`.
+#[test]
+fn matrix_in_place_form_leaves_the_matrix_alone() {
+    assert_eq!(
+        run(
+            r#"
+/matrix
+    var/a = 1
+    var/b = 0
+    New(m)
+        if(m) matrix(src, m, 128)
+/proc/matrix(a,b,c,d,e,f)
+    set __demir_intrin = 307
+/proc/test()
+    var/matrix/M = new(2)
+    return M.a
+"#,
+            "test",
+        ),
+        1.into()
+    );
+}
+
+/// `/alist` is a list, not a plain object, so `new` has to take the same path `/list` does.
+#[test]
+fn new_alist_is_a_list_seeded_from_its_pairs() {
+    assert_eq!(
+        run(
+            r#"
+/alist
+    var/len
+    proc/New(items)
+/proc/islist(L)
+    set __demir_intrin = 279
+/proc/test()
+    var/alist/A = new(list("a", "b"))
+    return islist(A) + A.len
+"#,
+            "test",
+        ),
+        3.into()
+    );
+}
+
+/// `/sound/New` copies its file into the resource cache first, so a blocked `fcopy_rsc` would make
+/// every `new /sound(...)` fault.
+#[test]
+fn sound_constructor_keeps_its_file() {
+    assert_eq!(
+        run(
+            r#"
+/sound
+    var/file
+    var/volume = 100
+    New(file, repeat, wait, channel, volume = 100)
+        src.file = fcopy_rsc(file)
+/proc/fcopy_rsc(File)
+    set __demir_intrin = 238
+/proc/test()
+    var/sound/S = new('beep.ogg')
+    return S.file
+"#,
+            "test",
+        ),
+        GenericValue::Resource("beep.ogg".into())
+    );
+}
+
+/// `PROC_REF(X)` is `nameof(.proc/X)`, and tgstation spells almost every callback that way.
+#[test]
+fn nameof_resolves_a_proc_path_to_its_name() {
+    assert_eq!(
+        run(
+            r#"
+/proc/nameof(X)
+    set __demir_intrin = 400
+/proc/work()
+    return 1
+/proc/test()
+    return nameof(/proc/work)
+"#,
+            "test",
+        ),
+        "work".into()
+    );
+}
+
+/// A global proc called from inside a method binds to the global. `find_proc` would reach the same
+/// body, but only after failing a lookup on the runtime type of `src` at every call.
+#[test]
+fn a_global_proc_called_from_a_method_reaches_the_global() {
+    assert_eq!(
+        run(
+            r#"
+/proc/helper(n)
+    return n * 2
+/datum/thing
+    proc/work()
+        return helper(21)
+/proc/test()
+    var/datum/thing/T = new
+    return T.work()
+"#,
+            "test",
+        ),
+        42.into()
+    );
+}
+
+/// When a type declares the same name, the method wins and the call has to stay dynamic, or a
+/// subtype's override would be linked away.
+#[test]
+fn a_method_of_the_same_name_still_shadows_the_global() {
+    assert_eq!(
+        run(
+            r#"
+/proc/helper(n)
+    return 1
+/datum/thing
+    proc/helper(n)
+        return 2
+    proc/work()
+        return helper(0)
+/datum/thing/special
+    helper(n)
+        return 3
+/proc/test()
+    var/datum/thing/T = new /datum/thing/special
+    return T.work()
+"#,
+            "test",
+        ),
+        3.into()
+    );
+}
+
+/// The positional argument names come from the prelude's own signature, so `image()`'s last two
+/// parameters land even though nothing in the VM lists them.
+#[test]
+fn appearance_arguments_follow_the_declared_signature() {
+    assert_eq!(
+        run(
+            r#"
+/image
+    var/icon
+    var/icon_state
+    var/atom/loc
+    var/layer
+    var/dir
+    var/pixel_x
+    var/pixel_y
+    var/pixel_w
+    var/pixel_z
+/proc/image(icon,loc,icon_state,layer,dir,pixel_x,pixel_y,pixel_w,pixel_z)
+    set __demir_intrin = 274
+/proc/test()
+    var/image/I = image('a.dmi', null, "s", 3, 1, 4, 5, 6, 7)
+    return I.pixel_w * 10 + I.pixel_z
+"#,
+            "test",
+        ),
+        67.into()
+    );
+}
+
+/// `mutable_appearance(appearance)` copies an appearance onto the new one, which is what BYOND's
+/// signature says and what the prelude declares. The old hardcoded list read that argument as
+/// `icon` instead.
+#[test]
+fn mutable_appearance_takes_an_appearance() {
+    assert_eq!(
+        run(
+            r#"
+/image
+    var/icon_state
+    var/appearance
+/mutable_appearance
+    parent_type = /image
+/proc/mutable_appearance(appearance,key)
+    set __demir_intrin = 312
+/proc/test()
+    var/image/source = new
+    source.icon_state = "src"
+    var/mutable_appearance/MA = mutable_appearance(source)
+    return MA.icon_state
+"#,
+            "test",
+        ),
+        "src".into()
+    );
+}
+
+/// `RemoveAll` drops every occurrence and answers how many went, which is how `list_clear_nulls`
+/// on a tgstation downstream asks whether the list held any nulls.
+#[test]
+fn list_remove_all_reports_how_many_it_dropped() {
+    assert_eq!(
+        run(
+            r#"
+/proc/test()
+    var/list/L = list(1, null, 2, null, null, 3)
+    var/dropped = L.RemoveAll(null)
+    return dropped * 100 + L.len * 10 + L[1]
+"#,
+            "test",
+        ),
+        331.into()
+    );
+}
+
+/// `Splice(Start, End, Item...)` cuts the range and drops the items in its place.
+#[test]
+fn list_splice_replaces_a_range() {
+    assert_eq!(
+        run(
+            r#"
+/proc/test()
+    var/list/L = list("a", "b", "c")
+    L.Splice(2, 3, "x", "y")
+    return L.Join("")
+"#,
+            "test",
+        ),
+        "axyc".into()
+    );
 }

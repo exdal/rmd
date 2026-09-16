@@ -151,7 +151,7 @@ fn dump_ir(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
     let ast = ast::parse(&preprocessed.tokens)?;
     let (_, module, _) = sema::analyze(&ast);
-    print!("{}", ir::disasm::dump_with(&module, true));
+    print!("{}", ir::disasm::dump_with(&module, false));
 
     Ok(())
 }

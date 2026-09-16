@@ -10,7 +10,7 @@ pub use ast::{AccessKind, BinaryOp, Builtin, UnaryOp};
 pub mod ast_lowering;
 pub mod disasm;
 pub mod opt;
-pub use ast_lowering::IrModuleBuilder;
+pub use ast_lowering::{IrModuleBuilder, UnresolvedNew};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BindingId(pub u32);
@@ -282,6 +282,7 @@ pub struct Procedure {
     pub variadic: bool,
     pub vars: Vec<VarSpec<IrNodeId>>,
     pub body: IrNodeId,
+    pub intrinsic: Option<u32>,
     pub location: Location,
 }
 

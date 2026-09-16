@@ -111,6 +111,7 @@ pub struct CompiledFunction {
     pub parameter_count: u32,
     pub local_count: u32,
     pub external: bool,
+    pub intrinsic: Option<u32>,
     pub location: Location,
 }
 
@@ -237,6 +238,7 @@ impl Generator {
                 parameter_count: proc.parameters.len() as u32,
                 local_count: 0,
                 external: false,
+                intrinsic: proc.intrinsic,
                 location: proc.location,
             });
         }
@@ -262,6 +264,7 @@ impl Generator {
                 parameter_count: 0,
                 local_count: 0,
                 external: true,
+                intrinsic: None,
                 location: Location::default(),
             });
         }
@@ -1221,6 +1224,7 @@ mod tests {
                 variadic: false,
                 vars: Vec::new(),
                 body: IrNodeId(3),
+                intrinsic: None,
                 location: Location::default(),
             }],
         };

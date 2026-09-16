@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::heap::{Heap, ObjectId};
 
@@ -26,6 +26,7 @@ pub struct World {
     pub turfs: HashMap<Position, ObjectId>,
     pub areas: HashMap<Position, ObjectId>,
     pub size: [i32; 3],
+    pub root: Option<PathBuf>,
 }
 
 impl World {

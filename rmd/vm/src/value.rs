@@ -31,6 +31,34 @@ pub struct ProcRef {
     pub proc: ProcId,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Receiver {
+    #[default]
+    None,
+    Object(ObjectId),
+    List(ListId),
+}
+
+impl Receiver {
+    pub fn object(self) -> Option<ObjectId> {
+        match self {
+            Self::Object(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    pub fn list(self) -> Option<ListId> {
+        match self {
+            Self::List(id) => Some(id),
+            _ => None,
+        }
+    }
+}
+
+impl From<Option<ObjectId>> for Receiver {
+    fn from(id: Option<ObjectId>) -> Self { id.map_or(Self::None, Self::Object) }
+}
+
 #[derive(Debug, Clone, Default)]
 pub enum GenericValue {
     #[default]
