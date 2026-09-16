@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 pub use error::CodegenError;
 use ir::{Argument, IrNode, OutputTarget, Procedure};
 use opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, OutputTargetKind, Unary};
+use prelude::Intrinsic;
 
 macro_rules! id_type {
     ($name:ident, $prefix:literal) => {
@@ -111,7 +112,7 @@ pub struct CompiledFunction {
     pub parameter_count: u32,
     pub local_count: u32,
     pub external: bool,
-    pub intrinsic: Option<u32>,
+    pub intrinsic: Option<Intrinsic>,
     pub location: Location,
 }
 

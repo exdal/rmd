@@ -271,6 +271,7 @@ dependencies = [
  "core",
  "ir",
  "lexer",
+ "prelude",
 ]
 
 [[package]]
@@ -699,6 +700,7 @@ dependencies = [
  "ast",
  "core",
  "lexer",
+ "prelude",
 ]
 
 [[package]]
@@ -1354,11 +1356,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 
 [[package]]
+name = "prelude"
+version = "1.0.0"
+dependencies = [
+ "num_enum",
+]
+
+[[package]]
 name = "preprocessor"
 version = "1.1.0"
 dependencies = [
  "core",
  "lexer",
+ "prelude",
 ]
 
 [[package]]
@@ -1660,6 +1670,7 @@ dependencies = [
  "ir",
  "lexer",
  "objtree",
+ "prelude",
 ]
 
 [[package]]
@@ -2077,6 +2088,8 @@ dependencies = [
  "ir",
  "lexer",
  "objtree",
+ "prelude",
+ "preprocessor",
  "sema",
  "serde",
  "simd-json",

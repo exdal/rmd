@@ -11,6 +11,7 @@ core = { path = "../core" }
 ast = { path = "../ast" }
 objtree = { path = "../objtree" }
 ir = { path = "../ir" }
+prelude = { path = "../../prelude" }
 
 [dev-dependencies]
 lexer = { path = "../lexer" }

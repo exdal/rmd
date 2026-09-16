@@ -6,6 +6,7 @@
 //! rmdc tree   <file.dme>    preprocess, parse and print the object tree
 //! rmdc ir     <file.dme>    preprocess, parse and print the IR module
 //! rmdc bytecode <file.dme>  compile and print stack bytecode
+//! rmdc eval   <file.dm>     compile and execute /proc/main or /world/New
 //! rmdc map    <file.dmm>    parse a map and summarise it
 //! rmdc roundtrip <file.dmm> parse a map, write it back out and diff the bytes
 //! rmdc icon   <file.dmi>    decode an icon and list its states
@@ -26,7 +27,7 @@ use dmi::{IconFile, metadata::IconState};
 use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
 
 fn usage() -> ExitCode {
-    eprintln!("usage: rmdc <tokens|pp|tree|ir|bytecode|map|roundtrip|icon> <file>");
+    eprintln!("usage: rmdc <tokens|pp|tree|ir|bytecode|eval|map|roundtrip|icon> <file>");
 
     ExitCode::FAILURE
 }
@@ -43,6 +44,7 @@ fn main() -> ExitCode {
         "tree" => dump_tree(&path),
         "ir" => dump_ir(&path),
         "bytecode" => dump_bytecode(&path),
+        "eval" => eval(&path),
         "map" => dump_map(&path),
         "roundtrip" => roundtrip_map(&path),
         "icon" => dump_icon(&path),
@@ -169,6 +171,74 @@ fn dump_bytecode(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     print!("{}", codegen::disasm::dump(&module)?);
 
     Ok(())
+}
+
+fn eval(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    for line in evaluate_file(path)? {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
+fn evaluate_file(path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let arena = StrArena::new();
+    let preprocessed = preprocessor::preprocess(&arena, path)?;
+    let source_root = source_root(&preprocessed.sources, preprocessed.entry, path);
+    for error in &preprocessed.errors {
+        eprintln!(
+            "{}",
+            error.display(relative_path(&preprocessed.sources, source_root, error.location.file))
+        );
+    }
+    if !preprocessed.is_ok() {
+        return Err("preprocessing failed".into());
+    }
+
+    let ast = ast::parse(&preprocessed.tokens).map_err(|error| {
+        std::io::Error::other(format_parse_error(
+            &error,
+            &preprocessed.sources,
+            preprocessed.entry,
+            path,
+        ))
+    })?;
+    let (tree, module, errors) = sema::analyze(&ast);
+    for error in &errors {
+        eprintln!(
+            "{}",
+            error.display(relative_path(&preprocessed.sources, source_root, error.location.file))
+        );
+    }
+    if !errors.is_empty() {
+        return Err("semantic analysis failed".into());
+    }
+
+    let main = tree
+        .proc_inherited(TypeId::ROOT, &"main".into())
+        .and_then(|proc| proc.body);
+    let world_new = tree
+        .id_of(&core::path::TreePath::parse("/world"))
+        .and_then(|world| tree.proc_inherited(world, &"New".into()))
+        .and_then(|proc| proc.body);
+    let module = codegen::generate(&module)?;
+    let mut runtime = vm::Runtime::default();
+    let result = if let Some(main) = main {
+        runtime.run(&tree, &module, main, None, Vec::new(), vm::Limits::default())
+    } else if let Some(world_new) = world_new {
+        runtime.run_world(&tree, &module, world_new, Vec::new(), vm::Limits::default())
+    } else {
+        return Err(std::io::Error::other("missing /proc/main and /world/New").into());
+    };
+    result.map_err(|fault| {
+        std::io::Error::other(format!(
+            "runtime fault at {}: {:?}",
+            format_location(&preprocessed.sources, source_root, fault.location),
+            fault.kind
+        ))
+    })?;
+
+    Ok(runtime.take_output())
 }
 
 fn render_tree(tree: &ObjectTree, sources: &SourceMap<'_>, source_root: &Path) -> String {
@@ -435,7 +505,27 @@ mod tests {
         metadata::{IconState, Metadata},
     };
 
-    use super::{format_location, format_parse_error, render_icon, render_tree, source_root};
+    use super::{evaluate_file, format_location, format_parse_error, render_icon, render_tree, source_root};
+
+    #[test]
+    fn eval_executes_main_and_prints_world_log() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/hello_world.dm");
+
+        assert_eq!(
+            evaluate_file(&path).expect("evaluate hello world"),
+            vec![String::from("55")]
+        );
+    }
+
+    #[test]
+    fn eval_falls_back_to_world_new_with_world_as_src() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/eval_world_new.dm");
+
+        assert_eq!(
+            evaluate_file(&path).expect("evaluate world.New"),
+            vec![String::from("booted")]
+        );
+    }
 
     #[test]
     fn icon_dump_lists_states_with_animation_details() {

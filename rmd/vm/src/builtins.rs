@@ -2,64 +2,11 @@ use core::{path::TreePath, types::Identifier};
 
 use objtree::TypeId;
 
-use crate::{
-    Fault,
-    FaultKind,
-    GenericValue,
-    Intrinsic,
-    eval::Evaluator,
-    heap::ObjectId,
-    value::{ListId, Receiver},
-};
+use crate::{Fault, FaultKind, GenericValue, Intrinsic, eval::Evaluator, heap::ObjectId, value::ListId};
 
 type Result<T> = std::result::Result<T, Fault>;
 
 impl Evaluator<'_> {
-    pub fn builtin(&mut self, name: &str, args: Vec<GenericValue>, src: Option<ObjectId>) -> Result<GenericValue> {
-        let arg = |n| args.get(n).cloned().unwrap_or_default();
-        match name {
-            "call" | "call_ext" => {
-                let (src, ty, name) = match arg(0) {
-                    GenericValue::Object(id) => (
-                        Some(id),
-                        self.runtime.heap.object(id).map(|o| o.ty),
-                        arg(1).text().map(Identifier::from),
-                    ),
-                    GenericValue::Path(path) => {
-                        let owner = TreePath::new(path.declaration_owner().to_vec(), true);
-                        (
-                            if owner.segments.is_empty() { None } else { src },
-                            self.tree.id_of(&owner),
-                            path.name().cloned(),
-                        )
-                    },
-                    GenericValue::Text(name) if args.len() == 1 => {
-                        (None, Some(objtree::TypeId::ROOT), Some(name.as_ref().into()))
-                    },
-                    _ => return Err(self.fault(FaultKind::Blocked("external call".into()))),
-                };
-                let proc = ty
-                    .zip(name)
-                    .and_then(|(ty, name)| self.find_proc(ty, &name))
-                    .ok_or_else(|| self.fault(FaultKind::MissingProc("dynamic DM proc".into())))?;
-
-                Ok(GenericValue::Proc(crate::value::ProcRef { src, proc }))
-            },
-            _ => {
-                let Some(intrinsic) = crate::Intrinsic::from_name(name) else {
-                    return Err(self.fault(FaultKind::MissingProc(name.into())));
-                };
-
-                self.intrinsic_impl(
-                    intrinsic,
-                    Receiver::None,
-                    &[],
-                    args.into_iter().map(|value| (None, value)).collect(),
-                )
-            },
-        }
-    }
-
     pub(crate) fn types_of(&mut self, args: Vec<GenericValue>, include_self: bool) -> Result<GenericValue> {
         let mut entries = Vec::new();
         for value in args {
@@ -91,13 +38,13 @@ impl Evaluator<'_> {
     }
 
     pub fn appearance_object(
-        &mut self, name: &str, target: Option<ObjectId>, params: &[Identifier],
+        &mut self, intrinsic: Intrinsic, target: Option<ObjectId>, params: &[Identifier],
         args: Vec<(Option<Identifier>, GenericValue)>,
     ) -> Result<GenericValue> {
-        let path = if name == "image" {
-            "/image"
-        } else {
-            "/mutable_appearance"
+        let (path, image) = match intrinsic {
+            Intrinsic::Image | Intrinsic::ImageNew => ("/image", true),
+            Intrinsic::MutableAppearance => ("/mutable_appearance", false),
+            _ => return Err(self.fault(FaultKind::InvalidReference)),
         };
 
         let id = match target {
@@ -121,8 +68,7 @@ impl Evaluator<'_> {
             let key = if let Some(key) = key {
                 key
             } else {
-                if positional == 1 && name == "image" && !matches!(value, GenericValue::Object(_) | GenericValue::Null)
-                {
+                if positional == 1 && image && !matches!(value, GenericValue::Object(_) | GenericValue::Null) {
                     positional += 1;
                 }
 
@@ -274,7 +220,7 @@ impl Evaluator<'_> {
                 }
                 entries.swap(a, b);
             },
-            _ => return Err(self.fault(FaultKind::Unsupported(format!("{} as a list proc", proc.name())))),
+            _ => return Err(self.fault(FaultKind::Unsupported(format!("{proc} as a list proc")))),
         }
 
         self.list_mut(id)?.replace(entries);

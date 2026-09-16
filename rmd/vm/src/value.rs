@@ -27,11 +27,11 @@ pub struct ModifiedType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProcRef {
-    pub src: Option<ObjectId>,
+    pub src: Receiver,
     pub proc: ProcId,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Receiver {
     #[default]
     None,
@@ -40,6 +40,14 @@ pub enum Receiver {
 }
 
 impl Receiver {
+    pub fn value(self) -> GenericValue {
+        match self {
+            Self::None => GenericValue::Null,
+            Self::Object(id) => GenericValue::Object(id),
+            Self::List(id) => GenericValue::List(id),
+        }
+    }
+
     pub fn object(self) -> Option<ObjectId> {
         match self {
             Self::Object(id) => Some(id),
@@ -68,7 +76,6 @@ pub enum GenericValue {
     Resource(Rc<str>),
     Path(TreePath),
     Proc(ProcRef),
-    ListProc(ListId, Identifier),
     List(ListId),
     Iterator(IteratorId),
     Range(RangeValue),
@@ -125,7 +132,6 @@ impl GenericValue {
             Self::ModifiedType(value) => value.path.to_string(),
             Self::Object(id) => format!("[object {}]", id.0),
             Self::Proc(p) => format!("[proc {}]", p.proc.0),
-            Self::ListProc(_, name) => format!("[list proc {name}]"),
             Self::World => "world".into(),
             Self::Global => "global".into(),
         }
@@ -171,7 +177,6 @@ impl PartialEq for GenericValue {
             (Self::ModifiedType(a), Self::ModifiedType(b)) => a == b,
             (Self::Object(a), Self::Object(b)) => a == b,
             (Self::Proc(a), Self::Proc(b)) => a == b,
-            (Self::ListProc(a, an), Self::ListProc(b, bn)) => a == b && an == bn,
             _ => false,
         }
     }
@@ -211,29 +216,42 @@ impl GenericValue {
                 p.src.hash(&mut hash);
                 p.proc.hash(&mut hash);
             },
-            Self::ListProc(id, name) => {
-                id.hash(&mut hash);
-                name.hash(&mut hash);
-            },
             _ => {},
         }
         hash.finish()
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ListKind {
+    #[default]
+    List,
+    Alist,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ListData {
     pub entries: Vec<(GenericValue, Option<GenericValue>)>,
+    pub kind: ListKind,
     index: HashMap<u64, Vec<usize>>,
 }
 
 impl PartialEq for ListData {
-    fn eq(&self, other: &Self) -> bool { self.entries == other.entries }
+    fn eq(&self, other: &Self) -> bool { self.kind == other.kind && self.entries == other.entries }
 }
 
 impl ListData {
     pub fn new(entries: Vec<(GenericValue, Option<GenericValue>)>) -> Self {
         let mut list = Self::default();
+        list.replace(entries);
+        list
+    }
+
+    pub fn alist(entries: Vec<(GenericValue, Option<GenericValue>)>) -> Self {
+        let mut list = Self {
+            kind: ListKind::Alist,
+            ..Self::default()
+        };
         list.replace(entries);
         list
     }

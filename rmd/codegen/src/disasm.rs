@@ -72,10 +72,14 @@ pub fn dump(module: &Module) -> Result<String, DecodeError> {
             continue;
         }
 
+        let intrinsic = function
+            .intrinsic
+            .map(|intrinsic| format!(" intrinsic={intrinsic}"))
+            .unwrap_or_default();
         let _ = writeln!(
             output,
-            "{} = function {name} params={} locals={} address={}",
-            function.id, function.parameter_count, function.local_count, function.address
+            "{} = function {name} params={} locals={} address={}{}",
+            function.id, function.parameter_count, function.local_count, function.address, intrinsic
         );
         let start = function.address.0 as usize;
         let end = start

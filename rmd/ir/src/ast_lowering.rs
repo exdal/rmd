@@ -151,6 +151,14 @@ impl<'a> IrModuleBuilder<'a> {
         &mut self, owner: TreePath, name: Identifier, params: &[ast::ProcParam], variadic: bool, body: &[Statement],
         location: Location,
     ) -> ProcId {
+        self.lower_proc_with_intrinsic(owner, name, params, variadic, body, None, location)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn lower_proc_with_intrinsic(
+        &mut self, owner: TreePath, name: Identifier, params: &[ast::ProcParam], variadic: bool, body: &[Statement],
+        intrinsic: Option<Intrinsic>, location: Location,
+    ) -> ProcId {
         self.reset_proc();
         self.current_owner = owner.clone();
         let locals_in_memory = statements_contain_try(body);
@@ -212,31 +220,11 @@ impl<'a> IrModuleBuilder<'a> {
             variadic,
             vars,
             body: entry,
-            intrinsic: body.iter().find_map(|stmt| self.intrinsic_id(stmt)),
+            intrinsic,
             location,
         });
 
         id
-    }
-
-    fn intrinsic_id(&self, stmt: &Statement) -> Option<u32> {
-        let Statement::Setting {
-            name,
-            mode: ast::SettingMode::Assign,
-            value,
-        } = stmt
-        else {
-            return None;
-        };
-
-        if name.as_str() != "__demir_intrin" {
-            return None;
-        }
-
-        match self.ast.get_expr(*value) {
-            Some(Expression::Literal(Literal::Num(id))) if id.is_finite() && *id >= 0.0 => Some(*id as u32),
-            _ => None,
-        }
     }
 
     fn reset_proc(&mut self) {

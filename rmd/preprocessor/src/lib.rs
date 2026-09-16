@@ -185,6 +185,7 @@ pub struct Preprocessor<'a> {
     last_file_line: Option<(FileId, usize)>,
     last_if: Location,
 
+    include_core: bool,
     prelude: Vec<PreludeFile>,
     progress: Option<ProgressHook<'a>>,
     aborted: bool,
@@ -212,6 +213,7 @@ impl<'a> Preprocessor<'a> {
             can_use_directive: true,
             last_file_line: None,
             last_if: Location::default(),
+            include_core: true,
             prelude: prelude_files(),
             progress: None,
             aborted: false,
@@ -236,11 +238,21 @@ impl<'a> Preprocessor<'a> {
         self
     }
 
+    #[cfg(test)]
+    fn without_core(mut self) -> Self {
+        self.include_core = false;
+
+        self
+    }
+
     pub fn sources(&self) -> &SourceMap<'a> { &self.sources }
 
-    /// `stddef.dm`, then `demir.dm`, then the entry `.dme`
     pub fn run(mut self, entry: impl AsRef<Path>) -> PreprocessResult<Preprocessed<'a>> {
-        for file in std::mem::take(&mut self.prelude) {
+        let mut files = std::mem::take(&mut self.prelude);
+        if self.include_core {
+            files.insert(0, core_file());
+        }
+        for file in files {
             match file {
                 PreludeFile::Embedded(name, contents) => self.open_embedded(name, contents),
                 PreludeFile::Disk(path) => self.include_file(&path, Location::default()),
@@ -1487,14 +1499,14 @@ pub const STDDEF_ENV: &str = "DM_STDDEF";
 
 pub const DEMIR_ENV: &str = "DM_DEMIR";
 
-pub const STDDEF_SOURCE: &str = include_str!("../../../dm/stddef.dm");
-
-pub const DEMIR_SOURCE: &str = include_str!("../../../dm/demir.dm");
+pub use prelude::{CORE_SOURCE, DEMIR_SOURCE, STDDEF_SOURCE};
 
 pub enum PreludeFile {
     Embedded(&'static str, &'static str),
     Disk(PathBuf),
 }
+
+pub fn core_file() -> PreludeFile { PreludeFile::Embedded("<core.dm>", CORE_SOURCE) }
 
 pub fn prelude_files() -> Vec<PreludeFile> {
     vec![
@@ -1569,6 +1581,7 @@ mod tests {
 
         let arena = StrArena::new();
         let result = Preprocessor::new(&arena)
+            .without_core()
             .without_prelude()
             .run(dir.join(files[0].0))
             .expect("preprocess");
@@ -1861,6 +1874,7 @@ mod tests {
 
         let arena = StrArena::new();
         let result = Preprocessor::new(&arena)
+            .without_core()
             .without_prelude()
             .run(&entry)
             .expect("preprocess");
@@ -1872,20 +1886,43 @@ mod tests {
         assert!(rendered.contains("valid"), "{rendered}");
     }
 
-    /// Both prelude files are compiled in, so a shipped binary needs no `dm/` beside it.
+    /// All three sources are compiled in, so a shipped binary needs no prelude directory beside it.
     #[test]
-    fn the_default_prelude_is_stddef_then_demir_and_needs_no_files() {
-        let names: Vec<_> = prelude_files()
-            .iter()
+    fn the_default_prelude_is_core_then_stddef_then_demir_and_needs_no_files() {
+        let names: Vec<_> = std::iter::once(core_file())
+            .chain(prelude_files())
             .map(|file| match file {
-                PreludeFile::Embedded(name, _) => *name,
+                PreludeFile::Embedded(name, _) => name,
                 PreludeFile::Disk(_) => "disk",
             })
             .collect();
 
-        assert_eq!(names, vec!["<stddef.dm>", "<demir.dm>"]);
+        assert_eq!(names, vec!["<core.dm>", "<stddef.dm>", "<demir.dm>"]);
+        assert!(CORE_SOURCE.contains("/datum"));
         assert!(STDDEF_SOURCE.contains("#define NORTH 1"));
         assert!(DEMIR_SOURCE.contains("#define __DEMIR__"));
+    }
+
+    #[test]
+    fn disabling_the_optional_prelude_keeps_core() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("rmd-core-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let entry = dir.join("entry.dm");
+        fs::write(&entry, "/proc/test()\n\treturn 1\n").expect("write entry");
+
+        let arena = StrArena::new();
+        let result = Preprocessor::new(&arena)
+            .without_prelude()
+            .run(&entry)
+            .expect("preprocess");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(result.sources.find("<core.dm>").is_some());
+        assert!(result.sources.find("<stddef.dm>").is_none());
+        assert!(result.sources.find("<demir.dm>").is_none());
     }
 
     /// The builtins reach the tree without a single file read.
@@ -1894,6 +1931,7 @@ mod tests {
         let arena = StrArena::new();
         let mut preprocessor = Preprocessor::new(&arena);
         preprocessor.prelude = vec![
+            PreludeFile::Embedded("<core.dm>", CORE_SOURCE),
             PreludeFile::Embedded("<stddef.dm>", STDDEF_SOURCE),
             PreludeFile::Embedded("<demir.dm>", DEMIR_SOURCE),
         ];

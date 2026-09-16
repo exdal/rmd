@@ -1,4 +1,5 @@
-use core::path::TreePath;
+use core::{arena::StrArena, path::TreePath};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use objtree::{ObjectTree, TypeId};
 
@@ -12,9 +13,15 @@ use crate::{
 };
 
 fn compile(source: &str) -> (ObjectTree, codegen::Module) {
-    let (tokens, errors) = lexer::tokenize(source);
-    assert!(errors.is_empty(), "{errors:?}");
-    let ast = ast::parse(&tokens).expect("fixture should parse");
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("rmd-vm-fixture-{}-{id}.dm", std::process::id()));
+    std::fs::write(&path, source).expect("write fixture");
+    let arena = StrArena::new();
+    let preprocessed = preprocessor::preprocess(&arena, &path).expect("fixture should preprocess");
+    let _ = std::fs::remove_file(path);
+    assert!(preprocessed.errors.is_empty(), "{:?}", preprocessed.errors);
+    let ast = ast::parse(&preprocessed.tokens).expect("fixture should parse");
     let (tree, module, errors) = sema::analyze(&ast);
     assert!(errors.is_empty(), "{errors:?}");
     let module = codegen::generate(&module).expect("fixture should compile");
@@ -165,17 +172,20 @@ fn sandbox_faults_are_not_catchable() {
 
 #[test]
 fn world_log_output_uses_a_field_reference() {
-    assert_eq!(
-        run(
-            r#"
+    let (tree, module) = compile(
+        r#"
 /proc/test()
     world.log << "hello"
     return world.log
 "#,
-            "test",
-        ),
-        GenericValue::Null
     );
+    let mut runtime = Runtime::default();
+    let result = runtime
+        .run(&tree, &module, proc(&tree, "test"), None, Vec::new(), Limits::default())
+        .expect("fixture should execute");
+
+    assert_eq!(result, GenericValue::Null);
+    assert_eq!(runtime.output(), &[String::from("hello")]);
 }
 
 #[test]
@@ -764,12 +774,6 @@ fn image_constructor_fills_the_object_new_allocated() {
     assert_eq!(
         run(
             r#"
-/image
-    var/icon
-    var/icon_state
-    var/atom/loc
-    New(icon, loc, icon_state, layer, dir, pixel_x, pixel_y)
-        set __demir_intrin = 1025
 /proc/test()
     var/image/I = new('thing.dmi', null, "state")
     return I.icon_state
@@ -788,13 +792,6 @@ fn matrix_in_place_form_leaves_the_matrix_alone() {
     assert_eq!(
         run(
             r#"
-/matrix
-    var/a = 1
-    var/b = 0
-    New(m)
-        if(m) matrix(src, m, 128)
-/proc/matrix(a,b,c,d,e,f)
-    set __demir_intrin = 307
 /proc/test()
     var/matrix/M = new(2)
     return M.a
@@ -833,13 +830,6 @@ fn sound_constructor_keeps_its_file() {
     assert_eq!(
         run(
             r#"
-/sound
-    var/file
-    var/volume = 100
-    New(file, repeat, wait, channel, volume = 100)
-        src.file = fcopy_rsc(file)
-/proc/fcopy_rsc(File)
-    set __demir_intrin = 238
 /proc/test()
     var/sound/S = new('beep.ogg')
     return S.file
@@ -925,18 +915,6 @@ fn appearance_arguments_follow_the_declared_signature() {
     assert_eq!(
         run(
             r#"
-/image
-    var/icon
-    var/icon_state
-    var/atom/loc
-    var/layer
-    var/dir
-    var/pixel_x
-    var/pixel_y
-    var/pixel_w
-    var/pixel_z
-/proc/image(icon,loc,icon_state,layer,dir,pixel_x,pixel_y,pixel_w,pixel_z)
-    set __demir_intrin = 274
 /proc/test()
     var/image/I = image('a.dmi', null, "s", 3, 1, 4, 5, 6, 7)
     return I.pixel_w * 10 + I.pixel_z
@@ -955,13 +933,6 @@ fn mutable_appearance_takes_an_appearance() {
     assert_eq!(
         run(
             r#"
-/image
-    var/icon_state
-    var/appearance
-/mutable_appearance
-    parent_type = /image
-/proc/mutable_appearance(appearance,key)
-    set __demir_intrin = 312
 /proc/test()
     var/image/source = new
     source.icon_state = "src"
@@ -1006,5 +977,61 @@ fn list_splice_replaces_a_range() {
             "test",
         ),
         "axyc".into()
+    );
+}
+
+/// List methods use the object tree like datum methods. A user declaration replaces the prelude
+/// intrinsic and receives the list itself as `src`.
+#[test]
+fn list_methods_are_overridable_dm_procs_with_list_src() {
+    assert_eq!(
+        run(
+            r#"
+/list/Add(Item1)
+    return src.len * 10 + Item1
+/proc/test()
+    var/list/L = list(1, 2)
+    return L.Add(7) * 10 + L.len
+"#,
+            "test",
+        ),
+        272.into()
+    );
+}
+
+/// The prelude declaration remains in the normal override chain, so `..()` reaches the intrinsic
+/// implementation and keeps the original list receiver.
+#[test]
+fn list_method_overrides_can_call_the_intrinsic_super_proc() {
+    assert_eq!(
+        run(
+            r#"
+/list/Add(Item1)
+    ..()
+    return src.len
+/proc/test()
+    var/list/L = list(1, 2)
+    return L.Add(7) * 10 + L.len
+"#,
+            "test",
+        ),
+        33.into()
+    );
+}
+
+/// `/alist` has its own runtime kind but inherits the ordinary `/list` proc declarations.
+#[test]
+fn alists_inherit_list_intrinsics_through_proc_dispatch() {
+    assert_eq!(
+        run(
+            r#"
+/proc/test()
+    var/alist/A = alist("first")
+    A.Add("value")
+    return istype(A, /alist) * 10 + A.len
+"#,
+            "test",
+        ),
+        12.into()
     );
 }

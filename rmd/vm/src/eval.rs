@@ -24,7 +24,6 @@ use crate::{
     Fault,
     FaultKind,
     GenericValue,
-    Intrinsic,
     Limits,
     heap::{Heap, Object, ObjectId},
     value::{IteratorId, ListData, ListId, ModifiedType, ProcRef, RangeValue, Receiver},
@@ -37,11 +36,16 @@ type Result<T, E = Fault> = std::result::Result<T, E>;
 pub struct Runtime {
     pub heap: Heap,
     pub world: World,
+    output: Vec<String>,
     pub(crate) global: Option<ObjectId>,
     pub(crate) world_object: Option<ObjectId>,
 }
 
 impl Runtime {
+    pub fn output(&self) -> &[String] { &self.output }
+
+    pub fn take_output(&mut self) -> Vec<String> { std::mem::take(&mut self.output) }
+
     pub fn run(
         &mut self, tree: &ObjectTree, module: &Module, proc: ProcId, src: Option<ObjectId>, args: Vec<GenericValue>,
         limits: Limits,
@@ -67,6 +71,14 @@ impl Runtime {
         }
 
         result
+    }
+
+    pub fn run_world(
+        &mut self, tree: &ObjectTree, module: &Module, proc: ProcId, args: Vec<GenericValue>, limits: Limits,
+    ) -> Result<GenericValue> {
+        let world = self.ensure_world(tree)?;
+
+        self.run(tree, module, proc, Some(world), args, limits)
     }
 
     pub fn set_var(
@@ -145,7 +157,7 @@ pub(crate) struct Frame {
     locals: Vec<GenericValue>,
     variables: HashMap<Identifier, GenericValue>,
     stack: Vec<GenericValue>,
-    pub(crate) src: Option<ObjectId>,
+    pub(crate) src: Receiver,
     usr: Option<ObjectId>,
     args: Option<ListId>,
     extra_args: Vec<GenericValue>,
@@ -181,6 +193,7 @@ pub(crate) struct Evaluator<'a> {
     pub allocations: usize,
     pub depth: usize,
     pub current: Option<ProcId>,
+    pub current_receiver: Receiver,
     pub current_offset: Option<CodeOffset>,
     pub memo_safe: bool,
     pub position_sensitive: bool,
@@ -214,6 +227,7 @@ impl<'a> Evaluator<'a> {
             allocations: 0,
             depth: 0,
             current: None,
+            current_receiver: Receiver::None,
             current_offset: None,
             memo_safe: true,
             position_sensitive: false,
@@ -266,6 +280,15 @@ impl<'a> Evaluator<'a> {
             .map_err(|kind| self.fault(kind))
     }
 
+    pub fn alist(&mut self, entries: Vec<(GenericValue, Option<GenericValue>)>) -> Result<GenericValue> {
+        self.reserve(entries.len().max(1))?;
+        self.runtime
+            .heap
+            .alloc_list(ListData::alist(entries))
+            .map(GenericValue::List)
+            .map_err(|kind| self.fault(kind))
+    }
+
     pub fn text(&mut self, text: String) -> Result<GenericValue> {
         if text.len() > self.limits.text_bytes {
             return Err(self.fault(FaultKind::Memory));
@@ -307,11 +330,11 @@ impl<'a> Evaluator<'a> {
             .cloned()
             .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
 
-        self.call_function(&function, src, None, args)
+        self.call_function(&function, src.into(), None, args)
     }
 
     fn call_function(
-        &mut self, function: &CompiledFunction, src: Option<ObjectId>, usr: Option<ObjectId>,
+        &mut self, function: &CompiledFunction, src: Receiver, usr: Option<ObjectId>,
         args: Vec<(Option<Identifier>, GenericValue)>,
     ) -> Result<GenericValue> {
         if function.external {
@@ -337,7 +360,8 @@ impl<'a> Evaluator<'a> {
                 })
                 .collect::<Vec<_>>();
 
-            return self.intrinsic(id, src.into(), &params, args);
+            let name = self.function_name(function);
+            return self.intrinsic_impl(id, src, &name, &params, args);
         }
 
         let local_count = usize::try_from(function.local_count).map_err(|_| self.fault(FaultKind::Memory))?;
@@ -408,13 +432,29 @@ impl<'a> Evaluator<'a> {
         // TODO: Use push pop with a tempoarary struct helper thing to not do this. this should be handled inside a RAII
         // like struct
         let previous_proc = self.current.replace(proc);
+        let previous_receiver = std::mem::replace(&mut self.current_receiver, src);
         let previous_offset = self.current_offset.take();
         self.depth += 1;
         let result = self.execute_until(&mut frame, None).map(|_| frame.dot);
         self.depth -= 1;
         self.current = previous_proc;
+        self.current_receiver = previous_receiver;
         self.current_offset = previous_offset;
         result
+    }
+
+    fn function_name(&self, function: &CompiledFunction) -> String {
+        let proc_name = self
+            .module
+            .strings
+            .get(function.proc_name.0 as usize)
+            .map(String::as_str)
+            .unwrap_or("<intrinsic>");
+        function
+            .owner
+            .name()
+            .map(|owner| format!("{owner}.{proc_name}"))
+            .unwrap_or_else(|| proc_name.to_owned())
     }
 
     fn execute_until(&mut self, frame: &mut Frame, stop: Option<usize>) -> Result<Flow> {
@@ -747,11 +787,12 @@ impl<'a> Evaluator<'a> {
                     OutputTargetKind::Field => {
                         let name = self.identifier(frame)?;
                         let _access = self.enum_operand::<Access>(frame, "access")?;
-                        let _value = self.pop(frame)?;
+                        let value = self.pop(frame)?;
                         let object = self.pop(frame)?;
                         if object != GenericValue::World || name.as_str() != "log" {
                             return Err(self.fault(FaultKind::Blocked("output".into())));
                         }
+                        self.runtime.output.push(value.display());
                     },
                     OutputTargetKind::Index => {
                         let _conditional = self.boolean(frame)?;
@@ -947,7 +988,13 @@ impl Evaluator<'_> {
     }
 
     fn name_target(&self, frame: &Frame, name: &Identifier) -> GenericValue {
-        if let Some(src) = frame.src
+        if let Some(id) = frame.src.list()
+            && name.as_str() == "len"
+        {
+            return GenericValue::List(id);
+        }
+
+        if let Some(src) = frame.src.object()
             && let Some(object) = self.runtime.heap.object(src)
             && (object.vars.contains_key(name)
                 || self
@@ -973,6 +1020,20 @@ impl Evaluator<'_> {
         }
 
         GenericValue::Global
+    }
+
+    pub(crate) fn receiver_type(&self, receiver: Receiver) -> Option<TypeId> {
+        match receiver {
+            Receiver::None => None,
+            Receiver::Object(id) => self.runtime.heap.object(id).map(|object| object.ty),
+            Receiver::List(id) => {
+                let path = match self.runtime.heap.list(id)?.kind {
+                    crate::value::ListKind::List => "/list",
+                    crate::value::ListKind::Alist => "/alist",
+                };
+                self.tree.id_of(&TreePath::parse(path))
+            },
+        }
     }
 
     fn read_name(&mut self, frame: &Frame, name: &Identifier) -> Result<GenericValue> {
@@ -1022,7 +1083,7 @@ impl Evaluator<'_> {
 
     fn builtin_value(&mut self, frame: &mut Frame, builtin: Builtin) -> Result<GenericValue> {
         Ok(match builtin {
-            Builtin::Src => frame.src.map(GenericValue::Object).unwrap_or_default(),
+            Builtin::Src => frame.src.value(),
             Builtin::Usr => frame.usr.map(GenericValue::Object).unwrap_or_default(),
             Builtin::World => GenericValue::World,
             Builtin::Global => GenericValue::Global,
@@ -1144,7 +1205,7 @@ impl Evaluator<'_> {
     ) -> Result<GenericValue> {
         let function = self.function(id)?.clone();
         if !function.external {
-            return self.call_function(&function, None, frame.usr, args);
+            return self.call_function(&function, Receiver::None, frame.usr, args);
         }
 
         let name = self
@@ -1154,45 +1215,27 @@ impl Evaluator<'_> {
             .cloned()
             .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
 
-        match name.as_str() {
-            "arglist" => {
-                return match args.first().map(|(_, value)| value) {
-                    Some(GenericValue::List(id) | GenericValue::ArgList(id)) => Ok(GenericValue::ArgList(*id)),
-                    _ => Err(self.fault(FaultKind::InvalidReference)),
-                };
-            },
-            "issaved" => {
-                return Ok(true.into());
-            },
-            "initial" => {
-                return Ok(args.first().map(|(_, value)| value.clone()).unwrap_or_default());
-            },
-            _ => {},
+        // `initial(local)` is lowered as an external call because it has no declaration to
+        // inspect
+        if name == "initial" {
+            return Ok(args.first().map(|(_, value)| value.clone()).unwrap_or_default());
         }
 
-        let src_type = frame
-            .src
-            .and_then(|id| self.runtime.heap.object(id))
-            .map(|object| object.ty);
+        let src_type = self.receiver_type(frame.src);
 
         if let Some(proc) = src_type.and_then(|ty| self.find_proc(ty, &name.as_str().into())) {
             return self.call_function_for_proc(proc, frame.src, frame.usr, args);
         }
 
         if let Some(proc) = self.find_proc(TypeId::ROOT, &name.as_str().into()) {
-            return self.call_function_for_proc(proc, None, frame.usr, args);
+            return self.call_function_for_proc(proc, Receiver::None, frame.usr, args);
         }
 
-        self.builtin(
-            &name,
-            args.into_iter().map(|(_, value)| value).collect::<Vec<_>>(),
-            frame.src,
-        )
+        Err(self.fault(FaultKind::MissingProc(name)))
     }
 
     fn call_function_for_proc(
-        &mut self, proc: ProcId, src: Option<ObjectId>, usr: Option<ObjectId>,
-        args: Vec<(Option<Identifier>, GenericValue)>,
+        &mut self, proc: ProcId, src: Receiver, usr: Option<ObjectId>, args: Vec<(Option<Identifier>, GenericValue)>,
     ) -> Result<GenericValue> {
         let function = self
             .module
@@ -1208,12 +1251,6 @@ impl Evaluator<'_> {
         match callee {
             GenericValue::Proc(reference) => {
                 self.call_function_for_proc(reference.proc, reference.src, frame.usr, args)
-            },
-            GenericValue::ListProc(id, name) => {
-                let proc = Intrinsic::list_proc(name.as_str())
-                    .ok_or_else(|| self.fault(FaultKind::MissingProc(format!("list.{name}"))))?;
-
-                self.intrinsic_impl(proc, Receiver::List(id), &[], args)
             },
             GenericValue::Path(path) if path.flags.intersects(PathFlags::IS_PROC | PathFlags::IS_VERB) => {
                 let name = path
@@ -1268,7 +1305,10 @@ impl Evaluator<'_> {
                     .object(id)
                     .and_then(|object| self.find_proc(object.ty, &name))
                 {
-                    Ok(GenericValue::Proc(ProcRef { src: Some(id), proc }))
+                    Ok(GenericValue::Proc(ProcRef {
+                        src: Receiver::Object(id),
+                        proc,
+                    }))
                 } else {
                     self.read_field(GenericValue::Object(id), &name)
                 }
@@ -1276,17 +1316,27 @@ impl Evaluator<'_> {
             GenericValue::List(id) | GenericValue::ArgList(id) if name.as_str() == "len" => {
                 self.read_field(GenericValue::List(id), &name)
             },
-            GenericValue::List(id) | GenericValue::ArgList(id) => Ok(GenericValue::ListProc(id, name)),
+            GenericValue::List(id) | GenericValue::ArgList(id) => {
+                let receiver = Receiver::List(id);
+                let proc = self
+                    .receiver_type(receiver)
+                    .and_then(|ty| self.find_proc(ty, &name))
+                    .ok_or_else(|| self.fault(FaultKind::MissingProc(format!("list.{name}"))))?;
+                Ok(GenericValue::Proc(ProcRef { src: receiver, proc }))
+            },
             GenericValue::Global => {
                 if let Some(proc) = self.find_proc(TypeId::ROOT, &name) {
-                    Ok(GenericValue::Proc(ProcRef { src: None, proc }))
+                    Ok(GenericValue::Proc(ProcRef {
+                        src: Receiver::None,
+                        proc,
+                    }))
                 } else {
                     self.read_field(GenericValue::Global, &name)
                 }
             },
             GenericValue::World => match self.world_type().and_then(|ty| self.find_proc(ty, &name)) {
                 Some(proc) => Ok(GenericValue::Proc(ProcRef {
-                    src: self.runtime.world_object,
+                    src: self.runtime.world_object.into(),
                     proc,
                 })),
                 None => self.read_field(GenericValue::World, &name),
@@ -1952,13 +2002,24 @@ impl Evaluator<'_> {
         Ok(entries)
     }
 
-    fn matches_type(&self, value: &GenericValue, path: &Option<TreePath>) -> bool {
+    pub(crate) fn matches_type(&self, value: &GenericValue, path: &Option<TreePath>) -> bool {
         let Some(path) = path else {
             return true;
         };
 
-        if path.to_string() == "/list" {
-            return matches!(value, GenericValue::List(_) | GenericValue::ArgList(_));
+        if matches!(path.to_string().as_str(), "/list" | "/alist") {
+            let Some(id) = (match value {
+                GenericValue::List(id) | GenericValue::ArgList(id) => Some(*id),
+                _ => None,
+            }) else {
+                return false;
+            };
+            return path.to_string() == "/list"
+                || self
+                    .runtime
+                    .heap
+                    .list(id)
+                    .is_some_and(|list| list.kind == crate::value::ListKind::Alist);
         }
 
         let Some(ancestor) = self.tree.id_of(path) else {
@@ -2165,7 +2226,14 @@ impl Evaluator<'_> {
             }
             let size = size as usize;
             self.reserve(size)?;
-            return self.list(vec![(GenericValue::Null, None); size]);
+            let value = self.list(vec![(GenericValue::Null, None); size])?;
+            if let GenericValue::List(id) = &value
+                && let Some(ty) = self.tree.id_of(&path)
+                && let Some(proc) = self.find_proc(ty, &"New".into())
+            {
+                self.call_function_for_proc(proc, Receiver::List(*id), None, args)?;
+            }
+            return Ok(value);
         }
 
         if path.to_string() == "/alist" {
@@ -2174,8 +2242,14 @@ impl Evaluator<'_> {
                 _ => Vec::new(),
             };
             self.reserve(entries.len())?;
-
-            return self.list(entries);
+            let value = self.alist(entries)?;
+            if let GenericValue::List(id) = &value
+                && let Some(ty) = self.tree.id_of(&path)
+                && let Some(proc) = self.find_proc(ty, &"New".into())
+            {
+                self.call_function_for_proc(proc, Receiver::List(*id), None, args)?;
+            }
+            return Ok(value);
         }
 
         let ty = self
@@ -2202,7 +2276,7 @@ impl Evaluator<'_> {
         }
 
         if let Some(proc) = self.find_proc(ty, &"New".into()) {
-            self.call_function_for_proc(proc, Some(id), None, args)?;
+            self.call_function_for_proc(proc, Receiver::Object(id), None, args)?;
         }
 
         Ok(GenericValue::Object(id))

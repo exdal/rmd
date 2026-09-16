@@ -2,12 +2,13 @@ pub mod constant;
 pub mod error;
 
 use core::{
-    path::TreePath,
+    path::{PathFlags, TreePath},
     types::{Identifier, Value},
 };
 
-use ast::{AST, Declaration};
+use ast::{AST, Declaration, Expression, Literal, SettingMode, Statement};
 use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
+use prelude::Intrinsic;
 
 use crate::{
     constant::fold,
@@ -93,16 +94,28 @@ impl<'a> Analyzer<'a> {
                     return;
                 };
 
+                let declares = path.flags.contains(PathFlags::IS_VAR);
+                let inherited = (!declares)
+                    .then(|| self.tree.var_inherited(id, &name).cloned())
+                    .flatten();
+                let declared_type = var_type
+                    .clone()
+                    .or_else(|| inherited.as_ref().and_then(|var| var.declared_type.clone()));
+                let modifiers = if declares {
+                    *modifiers
+                } else {
+                    inherited.as_ref().map(|var| var.modifiers).unwrap_or(*modifiers)
+                };
                 let value = initializer.map(|expr| fold(self.ast, expr)).unwrap_or(Value::Null);
                 let runtime_initializer = initializer.filter(|_| value == Value::Unevaluated).map(|expr| {
                     self.module
-                        .lower_initializer(owner.clone(), name.clone(), var_type.clone(), expr, *location)
+                        .lower_initializer(owner.clone(), name.clone(), declared_type.clone(), expr, *location)
                 });
                 let Some(decl) = self.tree.get_mut(id) else {
                     return;
                 };
 
-                if decl.vars.contains_key(&name) {
+                if declares && decl.vars.contains_key(&name) {
                     self.errors
                         .push(SemaError::new(SemaErrorKind::DuplicateVar(name.clone()), *location));
                 }
@@ -111,8 +124,8 @@ impl<'a> Analyzer<'a> {
                     name.clone(),
                     VarDecl {
                         name,
-                        declared_type: var_type.clone(),
-                        modifiers: *modifiers,
+                        declared_type,
+                        modifiers,
                         value,
                         initializer: runtime_initializer,
                         location: *location,
@@ -135,13 +148,16 @@ impl<'a> Analyzer<'a> {
                 let Some(name) = path.name().cloned() else {
                     return;
                 };
+                let body_statements = body.as_deref().unwrap_or_default();
+                let intrinsic = self.intrinsic(body_statements, *location);
 
-                let proc_id = self.module.lower_proc(
+                let proc_id = self.module.lower_proc_with_intrinsic(
                     owner,
                     name.clone(),
                     params,
                     *variadic,
-                    body.as_deref().unwrap_or_default(),
+                    body_statements,
+                    intrinsic,
                     *location,
                 );
                 if let Some(previous) = self
@@ -192,10 +208,9 @@ impl<'a> Analyzer<'a> {
                     return;
                 }
 
-                let declared_type = self
-                    .tree
-                    .var_inherited(id, name)
-                    .and_then(|var| var.declared_type.clone());
+                let inherited = self.tree.var_inherited(id, name).cloned();
+                let declared_type = inherited.as_ref().and_then(|var| var.declared_type.clone());
+                let modifiers = inherited.as_ref().map(|var| var.modifiers).unwrap_or_default();
 
                 let runtime_initializer = (folded == Value::Unevaluated).then(|| {
                     self.module.lower_initializer(
@@ -215,12 +230,57 @@ impl<'a> Analyzer<'a> {
                     VarDecl {
                         name: name.clone(),
                         declared_type,
-                        modifiers: Default::default(),
+                        modifiers,
                         value: folded,
                         initializer: runtime_initializer,
                         location: *location,
                     },
                 );
+            },
+        }
+    }
+
+    fn intrinsic(&mut self, body: &[Statement], location: core::location::Location) -> Option<Intrinsic> {
+        let markers = body
+            .iter()
+            .filter_map(|statement| match statement {
+                Statement::Setting { name, mode, value } if name.as_str() == "__demir_intrin" => Some((*mode, *value)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        if markers.len() > 1 {
+            self.errors
+                .push(SemaError::new(SemaErrorKind::DuplicateIntrinsic, location));
+            return None;
+        }
+
+        let Some((SettingMode::Assign, id)) = markers.first() else {
+            if !markers.is_empty() {
+                self.errors
+                    .push(SemaError::new(SemaErrorKind::InvalidIntrinsic, location));
+            }
+            return None;
+        };
+        let expression = self.ast.get_expr(*id)?;
+        let Expression::Literal(Literal::Num(number)) = expression else {
+            self.errors
+                .push(SemaError::new(SemaErrorKind::InvalidIntrinsic, location));
+            return None;
+        };
+        if !number.is_finite() || *number < 0.0 || number.fract() != 0.0 || *number > u16::MAX as f32 {
+            self.errors
+                .push(SemaError::new(SemaErrorKind::InvalidIntrinsic, location));
+            return None;
+        }
+
+        let id = *number as u16;
+        match Intrinsic::try_from(id) {
+            Ok(intrinsic) => Some(intrinsic),
+            Err(_) => {
+                self.errors
+                    .push(SemaError::new(SemaErrorKind::UnknownIntrinsic(id), location));
+                None
             },
         }
     }
@@ -251,14 +311,18 @@ pub fn lookup_var<'a>(tree: &'a ObjectTree, path: &TreePath, name: &Identifier) 
 mod tests {
     use super::*;
 
+    fn analyze_source(source: &str) -> (ObjectTree, ir::Module, Vec<SemaError>) {
+        let (tokens, lexer_errors) = lexer::tokenize(source);
+        assert!(lexer_errors.is_empty(), "{lexer_errors:?}");
+        let ast = ast::parse(&tokens).expect("fixture should parse");
+
+        analyze(&ast)
+    }
+
     #[test]
     fn retains_override_chains_and_runtime_initializers() {
         let source = "/obj\n\tvar/result = source()\n\tproc/source()\n\t\treturn 1\n\tproc/source()\n\t\treturn 2\n";
-        let (tokens, lexer_errors) = lexer::tokenize(source);
-        assert!(lexer_errors.is_empty());
-        let ast = ast::parse(&tokens).expect("fixture should parse");
-
-        let (tree, module, sema_errors) = analyze(&ast);
+        let (tree, module, sema_errors) = analyze_source(source);
         assert!(sema_errors.is_empty());
         let object = tree.id_of(&TreePath::parse("/obj")).expect("/obj type");
         let initializer = tree
@@ -279,6 +343,84 @@ mod tests {
             module.proc(previous).map(|proc| &proc.name),
             module.proc(latest).map(|proc| &proc.name)
         );
+    }
+
+    #[test]
+    fn absolute_var_assignment_overrides_an_existing_declaration() {
+        let source = "/client\n\tvar/script\n/client/script = \"override\"\n";
+        let (tree, _, errors) = analyze_source(source);
+        assert!(errors.is_empty(), "{errors:?}");
+        let client = tree.id_of(&TreePath::parse("/client")).expect("/client type");
+        let script = tree.var(client, &"script".into()).expect("script var");
+
+        assert_eq!(script.value, Value::Text("override".into()));
+    }
+
+    #[test]
+    fn repeated_var_declarations_remain_an_error() {
+        let source = "/client\n\tvar/script\n/client\n\tvar/script\n";
+        let (_, _, errors) = analyze_source(source);
+
+        assert!(matches!(
+            errors.as_slice(),
+            [SemaError {
+                kind: SemaErrorKind::DuplicateVar(name),
+                ..
+            }] if name.as_str() == "script"
+        ));
+    }
+
+    #[test]
+    fn intrinsic_markers_become_typed_ir_metadata() {
+        let (tree, module, errors) = analyze_source("/proc/test()\n\tset __demir_intrin = 1100\n");
+        assert!(errors.is_empty(), "{errors:?}");
+        let proc = tree
+            .proc_inherited(TypeId::ROOT, &"test".into())
+            .and_then(|proc| proc.body)
+            .and_then(|proc| module.proc(proc))
+            .expect("test proc");
+
+        assert_eq!(proc.intrinsic, Some(Intrinsic::ListAdd));
+    }
+
+    #[test]
+    fn intrinsic_markers_reject_malformed_unknown_and_duplicate_ids() {
+        let (_, _, malformed) = analyze_source("/proc/test()\n\tset __demir_intrin = 1100.5\n");
+        assert!(matches!(
+            malformed.as_slice(),
+            [SemaError {
+                kind: SemaErrorKind::InvalidIntrinsic,
+                ..
+            }]
+        ));
+
+        let (_, _, wrong_mode) = analyze_source("/proc/test()\n\tset __demir_intrin in 1100\n");
+        assert!(matches!(
+            wrong_mode.as_slice(),
+            [SemaError {
+                kind: SemaErrorKind::InvalidIntrinsic,
+                ..
+            }]
+        ));
+
+        let (_, _, unknown) = analyze_source("/proc/test()\n\tset __demir_intrin = 65535\n");
+        assert!(matches!(
+            unknown.as_slice(),
+            [SemaError {
+                kind: SemaErrorKind::UnknownIntrinsic(65535),
+                ..
+            }]
+        ));
+
+        let (_, _, duplicate) =
+            analyze_source("/proc/test()\n\tset __demir_intrin = 1100\n\tset __demir_intrin = 1101\n");
+        assert!(matches!(
+            duplicate.as_slice(),
+            [SemaError {
+                kind: SemaErrorKind::DuplicateIntrinsic,
+                ..
+            }]
+        ));
     }
 
     fn new_type_of(source: &str, owner: &str, proc_name: &str) -> Option<String> {

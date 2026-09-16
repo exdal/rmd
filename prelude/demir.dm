@@ -12,33 +12,6 @@
 #endif
 
 ///
-/// DATUM
-///
-
-/datum
-	var/type
-	var/parent_type
-
-	var/list/vars
-
-	var/tag
-
-	proc/New()
-		set __demir_intrin = 1000
-
-	proc/Del()
-		set __demir_intrin = 1001
-
-	proc/Topic(href, href_list)
-		set __demir_intrin = 1002
-
-	proc/Read(savefile/F)
-		set __demir_intrin = 1003
-
-	proc/Write(savefile/F)
-		set __demir_intrin = 1004
-
-///
 /// ATOM AND ITS DERIVATIVES
 ///
 
@@ -286,52 +259,6 @@
 	parent_type = /image
 	var/animate_movement = 1
 	var/screen_loc
-
-///
-/// LISTS
-///
-
-/list
-	var/len
-	var/const/type = /list
-
-	proc/New(Size)
-	proc/Add(Item1)
-		set __demir_intrin = 1100
-	proc/Copy(Start = 1, End = 0)
-		set __demir_intrin = 1101
-	proc/Cut(Start = 1, End = 0)
-		set __demir_intrin = 1102
-	proc/Find(Elem, Start = 1, End = 0)
-		set __demir_intrin = 1103
-	proc/Insert(Index, Item1)
-		set __demir_intrin = 1104
-	proc/Join(Glue, Start = 1, End = 0)
-		set __demir_intrin = 1105
-	proc/Remove(Item1)
-		set __demir_intrin = 1106
-	proc/RemoveAll(Item1)
-		set __demir_intrin = 1107
-	proc/Swap(Index1, Index2)
-		set __demir_intrin = 1108
-	proc/Splice(Start = 1, End = 0, Item1, ...)
-		set __demir_intrin = 1109
-
-/alist
-	var/len
-	var/const/type = /alist
-
-	proc/New(items)
-	proc/Add(Item1)
-	proc/Copy(Start = 1, End = 0)
-	proc/Cut(Start = 1, End = 0)
-	proc/Find(Elem, Start = 1, End = 0)
-	proc/Insert(Index, Item1)
-	proc/Join(Glue, Start = 1, End = 0)
-	proc/Remove(Item1)
-	proc/RemoveAll(Item1)
-	proc/Swap(Index1, Index2)
-	proc/Splice(Start = 1, End = 0, Item1, ...)
 
 ///
 /// CLIENT
@@ -660,6 +587,15 @@
 ///
 /// GLOBAL PROCS
 ///
+
+/proc/call(Target, ProcName)
+	set __demir_intrin = 401
+
+/proc/call_ext(Target, ProcName)
+	set __demir_intrin = 402
+
+/proc/arglist(Arguments)
+	set __demir_intrin = 403
 
 /proc/abs(A)
 	set __demir_intrin = 200

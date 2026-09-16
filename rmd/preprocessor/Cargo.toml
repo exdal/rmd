@@ -9,3 +9,4 @@ path = "src/lib.rs"
 [dependencies]
 core = { path = "../core" }
 lexer = { path = "../lexer" }
+prelude = { path = "../../prelude" }

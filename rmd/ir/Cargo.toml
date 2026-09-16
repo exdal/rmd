@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 core = { path = "../core" }
 ast = { path = "../ast" }
+prelude = { path = "../../prelude" }
 
 [dev-dependencies]
 lexer = { path = "../lexer" }

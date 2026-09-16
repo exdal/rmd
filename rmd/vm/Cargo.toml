@@ -7,6 +7,7 @@ edition = "2024"
 codegen = { path = "../codegen" }
 core = { path = "../core" }
 objtree = { path = "../objtree" }
+prelude = { path = "../../prelude" }
 serde = "1.0"
 simd-json = "0.18"
 
@@ -14,4 +15,5 @@ simd-json = "0.18"
 ast = { path = "../ast" }
 ir = { path = "../ir" }
 lexer = { path = "../lexer" }
+preprocessor = { path = "../preprocessor" }
 sema = { path = "../sema" }

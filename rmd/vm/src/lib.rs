@@ -5,14 +5,14 @@ mod builtins;
 mod error;
 pub mod eval;
 pub mod heap;
-pub mod intrinsic;
+mod intrinsic;
 pub mod json;
 pub mod value;
 pub mod world;
 
 pub use error::{Fault, FaultKind};
 pub use eval::Runtime;
-pub use intrinsic::Intrinsic;
+pub use prelude::Intrinsic;
 pub use value::{AppearanceDelta, GenericValue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
