@@ -4,15 +4,16 @@ use dmm::{Coord, Prefab, PrefabInstanceId};
 pub use vm::{AppearanceDelta, bake::Bake};
 
 use crate::{
+    BakeProgram,
     Environment,
     document::MapDocument,
     progress::{Progress, Stage},
 };
 
-fn atom(environment: &Environment, prefab: &Prefab, instance: u64, coord: Coord) -> Option<vm::bake::Atom> {
+fn atom(program: &BakeProgram, prefab: &Prefab, instance: u64, coord: Coord) -> Option<vm::bake::Atom> {
     Some(vm::bake::Atom {
         instance,
-        ty: environment.tree.id_of(&prefab.path)?,
+        ty: program.tree.id_of(&prefab.path)?,
         position: vm::world::Position::new(coord.x as i32, coord.y as i32, coord.z as i32),
         vars: prefab
             .vars
@@ -23,9 +24,10 @@ fn atom(environment: &Environment, prefab: &Prefab, instance: u64, coord: Coord)
 }
 
 fn placed(environment: &Environment, document: &MapDocument, id: PrefabInstanceId) -> Option<vm::bake::Atom> {
+    let program = environment.bake_program.as_ref()?;
     let (prefab, location) = document.prefab_instance(id)?;
 
-    atom(environment, prefab, id.get(), location.coord)
+    atom(program, prefab, id.get(), location.coord)
 }
 
 #[derive(Default)]
@@ -39,8 +41,8 @@ impl Standalone {
     const LIFETIME: usize = 256;
 
     pub fn appearance(&mut self, environment: &Environment, prefab: &Prefab) -> Option<AppearanceDelta> {
-        let module = environment.module.as_ref()?;
-        let atom = atom(environment, prefab, Self::INSTANCE, Coord::new(1, 1, 1))?;
+        let program = environment.bake_program.as_ref()?;
+        let atom = atom(program, prefab, Self::INSTANCE, Coord::new(1, 1, 1))?;
         if self.baked.is_multiple_of(Self::LIFETIME) {
             self.world = None;
         }
@@ -48,17 +50,17 @@ impl Standalone {
 
         let world = self.world.get_or_insert_with(|| {
             Bake::new(
-                &environment.tree,
-                module,
+                &program.tree,
+                &program.module,
                 Vec::new(),
                 [1, 1, 1],
                 environment.bake_options.limits,
             )
         });
 
-        world.update(&environment.tree, module, vec![atom], &[]);
+        world.update(&program.tree, &program.module, vec![atom], &[]);
         let delta = world.appearances.get(&Self::INSTANCE).cloned();
-        world.update(&environment.tree, module, Vec::new(), &[Self::INSTANCE]);
+        world.update(&program.tree, &program.module, Vec::new(), &[Self::INSTANCE]);
 
         for line in world.take_output() {
             log::info!("DM: {line}");
@@ -95,12 +97,12 @@ pub fn size(document: &MapDocument) -> [i32; 3] {
 pub fn build_atoms(
     environment: &Environment, atoms: Vec<vm::bake::Atom>, size: [i32; 3], progress: &Progress,
 ) -> Option<Bake> {
-    let module = environment.module.as_ref()?;
+    let program = environment.bake_program.as_ref()?;
     let mut current = None;
 
     Some(Bake::with_progress(
-        &environment.tree,
-        module,
+        &program.tree,
+        &program.module,
         atoms,
         size,
         environment.bake_options.limits,
@@ -127,7 +129,7 @@ pub fn build(environment: &Environment, document: &MapDocument) -> Option<Bake> 
 pub fn update(
     bake: &mut Bake, environment: &Environment, document: &MapDocument, affected: &[PrefabInstanceId],
 ) -> Vec<PrefabInstanceId> {
-    let Some(module) = environment.module.as_ref() else {
+    let Some(program) = environment.bake_program.as_ref() else {
         return affected.to_vec();
     };
 
@@ -140,7 +142,7 @@ pub fn update(
         }
     }
 
-    bake.update(&environment.tree, module, replacements, &removed)
+    bake.update(&program.tree, &program.module, replacements, &removed)
         .into_iter()
         .filter_map(PrefabInstanceId::from_raw)
         .collect()
@@ -156,7 +158,10 @@ pub fn appearances(bake: Option<&Bake>) -> &HashMap<u64, AppearanceDelta> {
 #[cfg(test)]
 mod tests {
     use core::{arena::StrArena, path::TreePath};
-    use std::path::PathBuf;
+    use std::{
+        path::PathBuf,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use dmm::{Map, Size};
 
@@ -167,23 +172,32 @@ mod tests {
 
     fn environment(profile: &'static str) -> Environment {
         let root = examples();
-        let arena = StrArena::new();
-        let prelude = preprocessor::prelude_files()
-            .into_iter()
-            .chain([preprocessor::PreludeFile::Embedded("<test-profile.dm>", profile)]);
-        let preprocessed = preprocessor::Preprocessor::new(&arena)
-            .with_prelude(prelude)
-            .with_baking(true)
-            .run(root.join("test.dm"))
-            .expect("preprocess");
-        assert!(preprocessed.is_ok(), "{:?}", preprocessed.errors);
+        let compile = |baking| {
+            let arena = StrArena::new();
+            let prelude = preprocessor::prelude_files()
+                .into_iter()
+                .chain([preprocessor::PreludeFile::Embedded("<test-profile.dm>", profile)]);
+            let preprocessed = preprocessor::Preprocessor::new(&arena)
+                .with_prelude(prelude)
+                .with_baking(baking)
+                .run(root.join("test.dm"))
+                .expect("preprocess");
+            assert!(preprocessed.is_ok(), "{:?}", preprocessed.errors);
 
-        let ast = ast::parse(&preprocessed.tokens).expect("parse");
-        let (tree, module, errors) = sema::analyze(&ast);
-        assert!(errors.is_empty(), "{errors:?}");
+            let ast = ast::parse(&preprocessed.tokens).expect("parse");
+            let (tree, module, errors) = sema::analyze(&ast);
+            assert!(errors.is_empty(), "{errors:?}");
 
-        let mut environment = Environment::new(root.join("test.dme"), tree);
-        environment.module = Some(codegen::generate(&module).expect("codegen"));
+            (tree, module)
+        };
+        let (editor_tree, _) = compile(false);
+        let (bake_tree, module) = compile(true);
+        let mut environment = Environment::new(root.join("test.dme"), editor_tree);
+        environment.bake_program = Some(BakeProgram {
+            tree: bake_tree,
+            module: codegen::generate(&module).expect("codegen"),
+            files: Default::default(),
+        });
         let failures = environment.load_icons(&[], &crate::progress::Progress::new());
         assert!(failures.is_empty(), "{failures:?}");
 
@@ -219,6 +233,119 @@ mod tests {
 "#;
 
     #[test]
+    fn compatibility_appearances_and_types_survive_runtime_baking() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("demir-compat-bake-{}-{id}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("temp dir");
+        let entry = root.join("test.dm");
+        std::fs::write(
+            &entry,
+            r#"
+/obj/plain
+#ifdef FASTDMM
+    icon_state = "editor"
+#else
+    icon_state = "runtime"
+#endif
+
+/obj/smoothed
+#ifdef FASTDMM
+    icon_state = "editor"
+#else
+    icon_state = "runtime"
+#endif
+
+#ifdef FASTDMM
+/obj/map_helper
+    icon_state = "helper"
+#endif
+
+#ifdef __DEMIR_BAKE__
+#include "profile.dm"
+#endif
+"#,
+        )
+        .expect("fixture");
+        std::fs::write(
+            root.join("profile.dm"),
+            r#"
+/proc/demir_bake(atom/target)
+    if(istype(target, /obj/smoothed))
+        target.icon_state = "baked"
+"#,
+        )
+        .expect("profile");
+
+        let (environment, diagnostics) = Environment::load(&entry).expect("environment");
+        std::fs::remove_dir_all(&root).expect("remove temp dir");
+        assert!(diagnostics.is_empty(), "unexpected diagnostics");
+
+        let plain = Prefab::new(TreePath::parse("/obj/plain"));
+        let smoothed = Prefab::new(TreePath::parse("/obj/smoothed"));
+        let helper = Prefab::new(TreePath::parse("/obj/map_helper"));
+        let plain_id = environment.tree.id_of(&plain.path).expect("editor plain");
+        let smoothed_id = environment.tree.id_of(&smoothed.path).expect("editor smoothed");
+        let helper_id = environment.tree.id_of(&helper.path).expect("editor helper");
+        let program = environment.bake_program.as_ref().expect("bake program");
+        let hook = program
+            .tree
+            .proc_inherited(objtree::TypeId::ROOT, &"demir_bake".into())
+            .expect("bake hook");
+
+        assert_eq!(
+            visual::resolve_id(&environment.tree, plain_id, &plain)
+                .icon_state
+                .as_deref(),
+            Some("editor")
+        );
+        assert_eq!(
+            visual::resolve_id(
+                &program.tree,
+                program.tree.id_of(&plain.path).expect("runtime plain"),
+                &plain
+            )
+            .icon_state
+            .as_deref(),
+            Some("runtime")
+        );
+        assert!(program.tree.id_of(&helper.path).is_none());
+        assert_eq!(
+            visual::resolve_id(&environment.tree, helper_id, &helper)
+                .icon_state
+                .as_deref(),
+            Some("helper")
+        );
+        assert_eq!(
+            environment
+                .bake_file(hook.location.file)
+                .and_then(|path| path.file_name())
+                .and_then(|name| name.to_str()),
+            Some("profile.dm")
+        );
+
+        let mut standalone = Standalone::default();
+        let plain_delta = standalone.appearance(&environment, &plain).expect("plain bake result");
+        let plain_appearance = visual::resolve_delta(&environment.tree, plain_id, &plain, &plain_delta);
+        assert_eq!(plain_appearance.icon_state.as_deref(), Some("editor"));
+        assert!(plain_delta.vars.is_empty());
+
+        let smoothed_delta = standalone
+            .appearance(&environment, &smoothed)
+            .expect("smoothed bake result");
+        let smoothed_appearance = visual::resolve_delta(&environment.tree, smoothed_id, &smoothed, &smoothed_delta);
+        assert_eq!(smoothed_appearance.icon_state.as_deref(), Some("baked"));
+        assert!(standalone.appearance(&environment, &helper).is_none());
+
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        let key = map.intern_tile(vec![plain, smoothed, helper]);
+        map.grid[0][0][0] = key;
+        let document = MapDocument::new(map, 1);
+        assert_eq!(atoms(&environment, &document).len(), 2);
+    }
+
+    #[test]
     fn only_a_codebase_with_a_profile_bakes() {
         let root = examples();
         let (profiled, _) = Environment::load(root.join("test.dme")).expect("profiled codebase");
@@ -230,9 +357,9 @@ mod tests {
         let (disabled, _) = Environment::load_with(root.join("test.dme"), disabled, &crate::progress::Progress::new())
             .expect("codebase with baking off");
 
-        assert!(profiled.module.is_some());
-        assert!(bare.module.is_none());
-        assert!(disabled.module.is_none());
+        assert!(profiled.bake_program.is_some());
+        assert!(bare.bake_program.is_none());
+        assert!(disabled.bake_program.is_none());
 
         let source = std::fs::read_to_string(root.join("test.dmm")).expect("example map");
         let (map, errors) = dmm::parser::parse(&source);
@@ -411,7 +538,7 @@ mod tests {
 
         assert_eq!(repeated, delta);
 
-        environment.module = None;
+        environment.bake_program = None;
 
         assert!(standalone.appearance(&environment, &prefab).is_none());
     }

@@ -225,6 +225,11 @@ fn report(environment: &Environment, diagnostics: &editor::environment::LoadDiag
 
         Some(path.strip_prefix(root).unwrap_or(path))
     };
+    let bake_path = |file| {
+        let path = environment.bake_file(file)?;
+
+        Some(path.strip_prefix(root).unwrap_or(path))
+    };
 
     for error in &diagnostics.preprocess {
         eprintln!("{}", error.display(path(error.location.file)));
@@ -232,6 +237,14 @@ fn report(environment: &Environment, diagnostics: &editor::environment::LoadDiag
 
     for error in &diagnostics.sema {
         eprintln!("{}", error.display(path(error.location.file)));
+    }
+
+    for error in &diagnostics.bake_preprocess {
+        eprintln!("{}", error.display(bake_path(error.location.file)));
+    }
+
+    for error in &diagnostics.bake_sema {
+        eprintln!("{}", error.display(bake_path(error.location.file)));
     }
 
     if let Some(error) = &diagnostics.codegen {

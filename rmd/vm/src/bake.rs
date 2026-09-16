@@ -721,9 +721,7 @@ impl Runtime {
                 } {
                     let mut appearance = export_appearance(&evaluator.runtime.heap, tree, id, 0, &mut export_budget)
                         .map_err(|kind| evaluator.fault(kind))?;
-                    if id != object
-                        && let Some(before) = evaluator.runtime.heap.before_object(id)
-                    {
+                    if let Some(before) = evaluator.runtime.heap.before_object(id) {
                         appearance.vars.retain(|(name, value)| {
                             before
                                 .vars

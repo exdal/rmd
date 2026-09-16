@@ -10,7 +10,7 @@ use core::{
     types::Identifier,
 };
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::{Component, Path, PathBuf},
     rc::Rc,
 };
@@ -25,6 +25,18 @@ use crate::{
 
 pub type PreprocessResult<T> = Result<T, PreprocessError>;
 pub type Spanned<'a> = (Token<'a>, Location);
+
+/// Source text shared by multiple preprocessing configurations in one compilation.
+#[derive(Clone, Default)]
+pub struct SourceCache<'a> {
+    files: HashMap<PathBuf, &'a str>,
+}
+
+impl SourceCache<'_> {
+    pub fn len(&self) -> usize { self.files.len() }
+
+    pub fn is_empty(&self) -> bool { self.files.is_empty() }
+}
 
 #[derive(Clone, Copy)]
 enum Spacing {
@@ -151,6 +163,7 @@ pub struct Preprocessed<'a> {
     pub resource_dirs: Vec<PathBuf>,
     pub defines: DefineTable<'a>,
     pub errors: Vec<PreprocessError>,
+    pub source_cache: SourceCache<'a>,
 }
 
 impl Preprocessed<'_> {
@@ -189,6 +202,7 @@ pub struct Preprocessor<'a> {
     prelude: Vec<PreludeFile>,
     progress: Option<ProgressHook<'a>>,
     aborted: bool,
+    source_cache: SourceCache<'a>,
 }
 
 impl<'a> Preprocessor<'a> {
@@ -217,7 +231,14 @@ impl<'a> Preprocessor<'a> {
             prelude: prelude_files(),
             progress: None,
             aborted: false,
+            source_cache: SourceCache::default(),
         }
+    }
+
+    pub fn with_source_cache(mut self, cache: SourceCache<'a>) -> Self {
+        self.source_cache = cache;
+
+        self
     }
 
     pub fn with_prelude(mut self, files: impl IntoIterator<Item = PreludeFile>) -> Self {
@@ -319,6 +340,7 @@ impl<'a> Preprocessor<'a> {
             resource_dirs: self.resource_dirs,
             defines: self.defines,
             errors: self.errors,
+            source_cache: self.source_cache,
         })
     }
 
@@ -1424,17 +1446,25 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn open(&mut self, path: &Path, location: Location) {
-        let file = match self.sources.load(self.arena, path) {
-            Ok(file) => file,
-            Err(error) => {
-                self.diagnose(
-                    Code::MissingIncludedFile,
-                    location,
-                    format!("could not read \"{}\": {error}", path.display()),
-                );
-                return;
+        let contents = match self.source_cache.files.get(path).copied() {
+            Some(contents) => contents,
+            None => match std::fs::read_to_string(path) {
+                Ok(contents) => {
+                    let contents = self.arena.alloc(contents);
+                    self.source_cache.files.insert(path.to_path_buf(), contents);
+                    contents
+                },
+                Err(error) => {
+                    self.diagnose(
+                        Code::MissingIncludedFile,
+                        location,
+                        format!("could not read \"{}\": {error}", path.display()),
+                    );
+                    return;
+                },
             },
         };
+        let file = self.sources.add_borrowed(path, contents);
 
         if let Some(progress) = self.progress.as_mut()
             && !progress(path)
@@ -1839,6 +1869,38 @@ mod tests {
             ("nothing.dm", ""),
         ]);
         assert_eq!(empty, "/ datum / a\n> var / x = 1\nvar / y = 2\n<");
+    }
+
+    #[test]
+    fn source_text_can_be_shared_between_configuration_passes() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("demir-source-cache-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let entry = dir.join("entry.dm");
+        fs::write(&entry, "/datum/a\n\tvar/x = 1\n").expect("first source");
+
+        let arena = StrArena::new();
+        let first = Preprocessor::new(&arena)
+            .without_core()
+            .without_prelude()
+            .run(&entry)
+            .expect("first pass");
+        let cache = first.source_cache.clone();
+        assert_eq!(cache.len(), 1);
+
+        fs::write(&entry, "/datum/a\n\tvar/x = 2\n").expect("changed source");
+        let second = Preprocessor::new(&arena)
+            .without_core()
+            .without_prelude()
+            .with_source_cache(cache)
+            .run(&entry)
+            .expect("second pass");
+        fs::remove_dir_all(&dir).expect("remove temp dir");
+
+        assert!(render(&second.tokens).contains("x = 1"));
+        assert!(!render(&second.tokens).contains("x = 2"));
     }
 
     #[test]

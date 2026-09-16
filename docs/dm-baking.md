@@ -52,10 +52,11 @@ draws from its static appearance. rmd never calls the game's own `Initialize()` 
 target-specific preparation, including any call to `target.Initialize(TRUE)`, belongs in
 `demir_prepare`. Appearance mutations belong in `demir_bake`.
 
-Baking defines `__DEMIR_BAKE__` before the normal prelude. `prelude/demir.dm` uses it to disable the
-`FASTDMM` and `SPACEMAN_DMM` compatibility defines during a bake. This exposes normal initializer
-values to profile code instead of editor-specific preview values. Regular compilation still defines
-the compatibility macros.
+The editor compiles two views of a codebase when baking is enabled. Its editor tree defines
+`__DEMIR_COMPAT__`, `FASTDMM`, and `SPACEMAN_DMM`, preserving mapping-only icons and types. Its bake
+program instead defines `__DEMIR_BAKE__`; `prelude/demir.dm` leaves the compatibility defines off so
+profile code sees normal runtime initializers. Both preprocessing passes share cached source text,
+but keep independent token streams, type IDs, and source-file tables.
 
 The prelude also declares a codebase-neutral static lighting schema on `/atom`. Profiles may fill it
 through `demir_light`; harvesting, solving, and drawing that data are later steps.
@@ -138,9 +139,10 @@ Both applications bake by default. `DM_BAKE=0` turns baking off for one run. The
 **DM Baking** settings tab turns it off and enables perspective editor walls. Both take effect on the
 next codebase load.
 
-`Environment::module` holds the bytecode. It is `None` with baking off, for a codebase without a
-profile, and when bytecode generation fails. A failure is reported with the load diagnostics and
-leaves the map drawn from static appearances.
+`Environment::tree` is the compatibility view used by editor tools and static rendering.
+`Environment::bake_program` holds the separate runtime tree, bytecode, and source-file table. It is
+`None` with baking off, for a codebase without a profile, and when bytecode generation fails. A
+failure is reported with the load diagnostics and leaves the map drawn from static appearances.
 
 `editor::bake` translates placed prefabs into `vm::bake::Atom`s, keyed by `PrefabInstanceId`. Each
 open map owns its bake. A new environment, a newly opened map, or a change in the number of z levels
@@ -148,7 +150,10 @@ bakes the whole map again. An edit, undo, or redo goes through `Bake::update`, a
 every placement it reports are rebuilt. Hiding a type rebuilds sprites from the cached bake without
 running any DM.
 
-Frame building uses a placement's delta when it has one and the static appearance otherwise.
+Frame building applies fields changed by baking over the compatibility tree's static appearance.
+This lets smoothing replace `icon_state` while an untouched atom keeps its mapping-only icon. A type
+that exists only under a compatibility define remains drawable but is omitted from the runtime
+world. Type IDs never cross between the two views; placed prefabs are resolved by path in each tree.
 Overlay and underlay deltas become extra sprites owned by the placement, drawn in list order around
 it. They inherit the owner's icon, dir, offsets, and floating layer and plane. Color and alpha
 multiply with the owner's unless the overlay sets `RESET_COLOR` or `RESET_ALPHA`.

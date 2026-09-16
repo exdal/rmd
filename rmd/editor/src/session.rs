@@ -1772,7 +1772,7 @@ impl Session {
             let Some(document) = self.state.document(id) else {
                 continue;
             };
-            if environment.module.is_none() {
+            if environment.bake_program.is_none() {
                 return;
             }
 
@@ -2165,6 +2165,11 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
 
         Some(path.strip_prefix(root).unwrap_or(path))
     };
+    let bake_path = |file| {
+        let path = environment.bake_file(file)?;
+
+        Some(path.strip_prefix(root).unwrap_or(path))
+    };
     let mut lines = Vec::new();
     let mut collect = |level, line: String, prefix: &str| {
         log::log!(level, "{}", line.strip_prefix(prefix).unwrap_or(&line));
@@ -2189,6 +2194,22 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
         );
     }
 
+    for error in &diagnostics.bake_preprocess {
+        collect(
+            log::Level::Error,
+            error.display(bake_path(error.location.file)).to_string(),
+            "",
+        );
+    }
+
+    for error in &diagnostics.bake_sema {
+        collect(
+            log::Level::Error,
+            error.display(bake_path(error.location.file)).to_string(),
+            "",
+        );
+    }
+
     if let Some(error) = &diagnostics.codegen {
         collect(
             log::Level::Warn,
@@ -2206,8 +2227,8 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
     }
 
     LoadReport {
-        preprocess: diagnostics.preprocess.len(),
-        sema: diagnostics.sema.len(),
+        preprocess: diagnostics.preprocess.len() + diagnostics.bake_preprocess.len(),
+        sema: diagnostics.sema.len() + diagnostics.bake_sema.len(),
         codegen: usize::from(diagnostics.codegen.is_some()),
         icons: diagnostics.icons.len(),
         lines,
@@ -3118,32 +3139,39 @@ mod tests {
     #[test]
     fn palette_thumbnails_fall_back_to_a_standalone_bake_when_no_sprite_matches() {
         let root = examples();
-        let arena = core::arena::StrArena::new();
-        let prelude = preprocessor::prelude_files()
-            .into_iter()
-            .chain([preprocessor::PreludeFile::Embedded(
-                "<test-standalone.dm>",
-                r#"
+        let profile = r#"
 /turf/closed/wall/smoothed
     icon_state = "smooth"
 /proc/demir_bake(atom/target)
     if(istype(target, /turf/closed/wall/smoothed))
         target.icon_state = "wall"
-"#,
-            )]);
-        let preprocessed = preprocessor::Preprocessor::new(&arena)
-            .with_prelude(prelude)
-            .with_baking(true)
-            .run(root.join("test.dm"))
-            .expect("preprocess");
-        assert!(preprocessed.is_ok(), "{:?}", preprocessed.errors);
+"#;
+        let compile = |baking| {
+            let arena = core::arena::StrArena::new();
+            let prelude = preprocessor::prelude_files()
+                .into_iter()
+                .chain([preprocessor::PreludeFile::Embedded("<test-standalone.dm>", profile)]);
+            let preprocessed = preprocessor::Preprocessor::new(&arena)
+                .with_prelude(prelude)
+                .with_baking(baking)
+                .run(root.join("test.dm"))
+                .expect("preprocess");
+            assert!(preprocessed.is_ok(), "{:?}", preprocessed.errors);
 
-        let ast = ast::parse(&preprocessed.tokens).expect("parse");
-        let (tree, module, errors) = sema::analyze(&ast);
-        assert!(errors.is_empty(), "{errors:?}");
+            let ast = ast::parse(&preprocessed.tokens).expect("parse");
+            let (tree, module, errors) = sema::analyze(&ast);
+            assert!(errors.is_empty(), "{errors:?}");
 
-        let mut environment = editor::Environment::new(root.join("test.dme"), tree);
-        environment.module = Some(codegen::generate(&module).expect("codegen"));
+            (tree, module)
+        };
+        let (editor_tree, _) = compile(false);
+        let (bake_tree, module) = compile(true);
+        let mut environment = editor::Environment::new(root.join("test.dme"), editor_tree);
+        environment.bake_program = Some(editor::BakeProgram {
+            tree: bake_tree,
+            module: codegen::generate(&module).expect("codegen"),
+            files: Default::default(),
+        });
         assert!(environment.load_icons(&[], &Progress::new()).is_empty());
 
         let mut session = Session::new();

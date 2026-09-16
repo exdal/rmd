@@ -32,11 +32,20 @@ use crate::{
 
 pub const RECENT_PREFAB_CAPACITY: usize = 10;
 
+pub struct BakeProgram {
+    pub tree: ObjectTree,
+    pub module: codegen::Module,
+    pub files: Arc<[PathBuf]>,
+}
+
 pub struct Environment {
     pub root: PathBuf,
+    /// The compatibility view used by the editor and static renderer.
     pub tree: ObjectTree,
-    /// `None` with baking off, without a profile in the codebase, or when bytecode generation failed
-    pub module: Option<codegen::Module>,
+    /// Runtime declarations and bytecode compiled without mapping compatibility defines.
+    pub bake_program: Option<BakeProgram>,
+    /// Runtime-view sources, retained even when bytecode generation fails.
+    pub bake_files: Arc<[PathBuf]>,
     pub bake_options: environment::BakeOptions,
     pub icons: HashMap<String, Metadata>,
     pub maps: Vec<PathBuf>,
@@ -50,7 +59,8 @@ impl Environment {
         Self {
             root: root.into(),
             tree,
-            module: None,
+            bake_program: None,
+            bake_files: Arc::default(),
             bake_options: environment::BakeOptions::default(),
             icons: HashMap::new(),
             maps: Vec::new(),
@@ -67,12 +77,13 @@ impl Environment {
         entry: impl AsRef<Path>, options: environment::BakeOptions, progress: &Progress,
     ) -> Result<(Self, LoadDiagnostics), LoadError> {
         let entry = entry.as_ref();
-        let (tree, compiled) = environment::compile(entry, &options, progress)?;
+        let compiled = environment::compile(entry, &options, progress)?;
 
         let mut environment = Self {
             root: compiled.root,
-            tree,
-            module: compiled.module,
+            tree: compiled.tree,
+            bake_program: compiled.bake_program,
+            bake_files: compiled.bake_files,
             bake_options: options,
             icons: HashMap::new(),
             maps: compiled.maps,
@@ -91,6 +102,8 @@ impl Environment {
             LoadDiagnostics {
                 preprocess: compiled.errors,
                 sema: compiled.sema_errors,
+                bake_preprocess: compiled.bake_errors,
+                bake_sema: compiled.bake_sema_errors,
                 codegen: compiled.codegen_error,
                 icons,
                 bake: Vec::new(),
@@ -104,6 +117,10 @@ impl Environment {
         self.files.get(id.0 as usize).map(PathBuf::as_path)
     }
 
+    pub fn bake_file(&self, id: core::location::FileId) -> Option<&Path> {
+        self.bake_files.get(id.0 as usize).map(PathBuf::as_path)
+    }
+
     pub fn icon(&self, name: &str) -> Option<&Metadata> { self.icons.get(name) }
 
     /// `'icons/obj/items.dmi'`
@@ -112,7 +129,14 @@ impl Environment {
             .iter()
             .flat_map(|decl| decl.vars.values())
             .map(|var| &var.value)
-            .chain(self.module.iter().flat_map(|module| &module.constants))
+            .chain(
+                self.bake_program
+                    .iter()
+                    .flat_map(|program| program.tree.iter())
+                    .flat_map(|decl| decl.vars.values())
+                    .map(|var| &var.value),
+            )
+            .chain(self.bake_program.iter().flat_map(|program| &program.module.constants))
             .filter_map(|value| match value {
                 Value::Resource(s) if s.to_ascii_lowercase().ends_with(".dmi") => Some(s.as_str()),
                 _ => None,

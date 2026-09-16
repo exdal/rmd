@@ -262,7 +262,7 @@ fn draw_compiler_settings(ui: &Ui, session: &Session, settings: &mut Settings) {
             .state
             .environment
             .as_ref()
-            .and_then(|environment| environment.file(fault.location.file));
+            .and_then(|environment| environment.bake_file(fault.location.file));
         ui.text_wrapped(format!(
             "{} atoms: {:?} at {}",
             diagnostic.count,
