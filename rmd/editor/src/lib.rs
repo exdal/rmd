@@ -1,3 +1,4 @@
+pub mod bake;
 pub mod clipboard;
 pub mod command;
 pub mod document;
@@ -33,6 +34,9 @@ pub const RECENT_PREFAB_CAPACITY: usize = 10;
 pub struct Environment {
     pub root: PathBuf,
     pub tree: ObjectTree,
+    /// `None` with baking off, without a profile in the codebase, or when bytecode generation failed
+    pub module: Option<codegen::Module>,
+    pub bake_options: environment::BakeOptions,
     pub icons: HashMap<String, Metadata>,
     pub maps: Vec<PathBuf>,
     pub files: Vec<PathBuf>,
@@ -45,6 +49,8 @@ impl Environment {
         Self {
             root: root.into(),
             tree,
+            module: None,
+            bake_options: environment::BakeOptions::default(),
             icons: HashMap::new(),
             maps: Vec::new(),
             files: Vec::new(),
@@ -53,18 +59,20 @@ impl Environment {
     }
 
     pub fn load(entry: impl AsRef<Path>) -> Result<(Self, LoadDiagnostics), LoadError> {
-        Self::load_with_progress(entry, &Progress::new())
+        Self::load_with(entry, environment::BakeOptions::default(), &Progress::new())
     }
 
-    pub fn load_with_progress(
-        entry: impl AsRef<Path>, progress: &Progress,
+    pub fn load_with(
+        entry: impl AsRef<Path>, options: environment::BakeOptions, progress: &Progress,
     ) -> Result<(Self, LoadDiagnostics), LoadError> {
         let entry = entry.as_ref();
-        let (tree, compiled) = environment::compile(entry, progress)?;
+        let (tree, compiled) = environment::compile(entry, &options, progress)?;
 
         let mut environment = Self {
             root: compiled.root,
             tree,
+            module: compiled.module,
+            bake_options: options,
             icons: HashMap::new(),
             maps: compiled.maps,
             files: compiled.files,
@@ -82,7 +90,9 @@ impl Environment {
             LoadDiagnostics {
                 preprocess: compiled.errors,
                 sema: compiled.sema_errors,
+                codegen: compiled.codegen_error,
                 icons,
+                bake: Vec::new(),
             },
         ))
     }
@@ -100,7 +110,9 @@ impl Environment {
         self.tree
             .iter()
             .flat_map(|decl| decl.vars.values())
-            .filter_map(|var| match &var.value {
+            .map(|var| &var.value)
+            .chain(self.module.iter().flat_map(|module| &module.constants))
+            .filter_map(|value| match value {
                 Value::Resource(s) if s.to_ascii_lowercase().ends_with(".dmi") => Some(s.as_str()),
                 _ => None,
             })

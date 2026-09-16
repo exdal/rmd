@@ -23,6 +23,7 @@ enum SettingsCategory {
     #[default]
     General,
     Viewport,
+    Compiler,
     ObjectTree,
     Keybindings,
 }
@@ -35,12 +36,19 @@ struct SettingsWindowState<'a> {
 }
 
 impl SettingsCategory {
-    const ALL: [Self; 4] = [Self::General, Self::Viewport, Self::ObjectTree, Self::Keybindings];
+    const ALL: [Self; 5] = [
+        Self::General,
+        Self::Viewport,
+        Self::Compiler,
+        Self::ObjectTree,
+        Self::Keybindings,
+    ];
 
     const fn label(self) -> &'static str {
         match self {
             Self::General => "General",
             Self::Viewport => "Viewport",
+            Self::Compiler => "Compiler",
             Self::ObjectTree => "Object Tree",
             Self::Keybindings => "Keybindings",
         }
@@ -180,6 +188,7 @@ fn draw_settings_window(
                     match category {
                         SettingsCategory::General => draw_general_settings(ui, settings),
                         SettingsCategory::Viewport => draw_viewport_settings(ui, session, settings),
+                        SettingsCategory::Compiler => draw_compiler_settings(ui, session, settings),
                         SettingsCategory::ObjectTree => {
                             object_tree_changed |= draw_object_tree_settings(ui, settings);
                         },
@@ -226,6 +235,40 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
         if ui.radio_button(highlight.label(), settings.selection_highlight == highlight) {
             settings.selection_highlight = highlight;
         }
+    }
+}
+
+fn draw_compiler_settings(ui: &Ui, session: &Session, settings: &mut Settings) {
+    ui.text("On next load");
+    ui.checkbox("Run DM appearance baking", &mut settings.bake_enabled);
+    ui.checkbox("Perspective editor walls", &mut settings.perspective_editor_wall);
+
+    ui.separator();
+    ui.text("Diagnostics");
+
+    let retained = session.diagnostics.bake.iter().map(|entry| entry.count).sum::<usize>();
+    ui.text(format!("{retained} atoms retained their static appearance"));
+    if retained == 0 {
+        return;
+    }
+
+    let Some(_tree) = ui.tree_node("Bake diagnostics") else {
+        return;
+    };
+
+    for diagnostic in &session.diagnostics.bake {
+        let fault = &diagnostic.fault;
+        let file = session
+            .state
+            .environment
+            .as_ref()
+            .and_then(|environment| environment.file(fault.location.file));
+        ui.text_wrapped(format!(
+            "{} atoms: {:?} at {}",
+            diagnostic.count,
+            fault.kind,
+            fault.location.display(file)
+        ));
     }
 }
 
@@ -351,7 +394,7 @@ mod tests {
         assert_eq!(SettingsCategory::default(), SettingsCategory::General);
         assert_eq!(
             SettingsCategory::ALL.map(SettingsCategory::label),
-            ["General", "Viewport", "Object Tree", "Keybindings"]
+            ["General", "Viewport", "Compiler", "Object Tree", "Keybindings"]
         );
     }
 

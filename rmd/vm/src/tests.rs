@@ -8,7 +8,7 @@ use crate::{
     GenericValue,
     Limits,
     Runtime,
-    bake::{Atom, Bake},
+    bake::{Atom, Bake, has_profile},
     eval::Evaluator,
     heap::{Object, ObjectId},
     world::Position,
@@ -46,7 +46,6 @@ fn run(source: &str, name: &str) -> GenericValue {
 const WALLS: &str = r#"
 /turf/wall
     icon_state = "static"
-    overlays = list()
 /proc/demir_bake(atom/target)
     if(!istype(target, /turf/wall))
         return
@@ -84,6 +83,15 @@ fn baked_state(bake: &Bake, id: u64) -> Option<&str> {
         .find(|(name, _)| name.as_str() == "icon_state")?
         .1
         .as_text()
+}
+
+#[test]
+fn only_hook_bodies_make_a_profile() {
+    let (bare, _) = compile("/turf/wall\n    proc/Initialize(mapload)\n        return\n");
+    let (profiled, _) = compile(WALLS);
+
+    assert!(!has_profile(&bare));
+    assert!(has_profile(&profiled));
 }
 
 #[test]
@@ -158,6 +166,92 @@ fn bake_cache_uses_instance_variables() {
 }
 
 #[test]
+fn initialization_runs_once_for_a_bake_and_not_for_updates() {
+    let (tree, module) = compile(
+        r#"
+var/global/demir_init_count = 0
+/turf/initialized
+    icon_state = "static"
+    var/demir_prepared = 0
+/proc/demir_initialize()
+    world.log << "hello world"
+    demir_init_count += 1
+/proc/demir_prepare(atom/target)
+    if(istype(target, /turf/initialized))
+        target.demir_prepared += 1
+/proc/demir_bake(atom/target)
+    if(istype(target, /turf/initialized))
+        target.icon_state = "[demir_init_count]-[target.demir_prepared]"
+"#,
+    );
+    let ty = tree
+        .id_of(&TreePath::parse("/turf/initialized"))
+        .expect("initialized turf should exist");
+    let atoms = (1..=2)
+        .map(|x| Atom {
+            instance: x as u64,
+            ty,
+            position: Position::new(x, 1, 1),
+            vars: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let mut progress = Vec::new();
+    let mut bake = Bake::with_progress(
+        &tree,
+        &module,
+        atoms.clone(),
+        [2, 1, 1],
+        Limits::default(),
+        |stage, done, total| {
+            if stage == crate::bake::Stage::Initialize {
+                progress.push((done, total));
+            }
+        },
+    );
+
+    assert_eq!(progress, vec![(0, 1), (1, 1)]);
+    assert_eq!(bake.take_output(), vec![String::from("hello world")]);
+    assert_eq!(baked_state(&bake, 1), Some("1-1"));
+    assert_eq!(baked_state(&bake, 2), Some("1-1"));
+
+    bake.update(&tree, &module, vec![atoms[0].clone()], &[]);
+    assert!(bake.take_output().is_empty());
+    assert_eq!(baked_state(&bake, 1), Some("1-1"));
+}
+
+#[test]
+fn initialization_fault_stops_all_object_hooks() {
+    let (tree, module) = compile(
+        r#"
+/turf/initialized
+    icon_state = "static"
+/proc/demir_initialize()
+    world.Reboot()
+/proc/demir_bake(atom/target)
+    target.icon_state = "baked"
+"#,
+    );
+    let atom = Atom {
+        instance: 1,
+        ty: tree
+            .id_of(&TreePath::parse("/turf/initialized"))
+            .expect("initialized turf should exist"),
+        position: Position::new(1, 1, 1),
+        vars: Vec::new(),
+    };
+    let mut bake = Bake::new(&tree, &module, vec![atom.clone()], [1, 1, 1], Limits::default());
+
+    assert_eq!(bake.diagnostics.count(), 1);
+    assert_eq!(bake.attempted, 0);
+    assert!(bake.appearances.is_empty());
+
+    bake.update(&tree, &module, vec![atom], &[]);
+    assert_eq!(bake.diagnostics.count(), 1);
+    assert_eq!(bake.attempted, 0);
+    assert!(bake.appearances.is_empty());
+}
+
+#[test]
 fn neighbor_overlay_changes_are_exported_and_rolled_back() {
     let (tree, module) = compile(
         r#"
@@ -167,6 +261,7 @@ fn neighbor_overlay_changes_are_exported_and_rolled_back() {
         overlays = list("base")
 /proc/demir_bake(atom/target)
     if(istype(target, /turf/overlay_test))
+        target.Initialize(TRUE)
         var/turf/east = get_step(target, 4)
         if(east)
             east.overlays.Add("edge")
@@ -300,6 +395,101 @@ fn associative_iteration_preserves_keys_and_values() {
             "test",
         ),
         14.into()
+    );
+}
+
+#[test]
+fn labelled_break_leaves_a_plain_block() {
+    assert_eq!(
+        run(
+            r#"
+/proc/test()
+    var/value = 0
+    done: {
+        value = 1
+        break done
+        value = 2
+    }
+    return value
+"#,
+            "test",
+        ),
+        1.into()
+    );
+}
+
+#[test]
+fn labelled_break_inside_do_while_leaves_the_block() {
+    assert_eq!(
+        run(
+            r#"
+/proc/test()
+    var/value = 0
+    do {
+        done: {
+            value = 1
+            break done
+            value = 2
+        }
+    } while(FALSE)
+    return value
+"#,
+            "test",
+        ),
+        1.into()
+    );
+}
+
+#[test]
+fn repeated_local_labels_create_distinct_blocks() {
+    assert_eq!(
+        run(
+            r#"
+/proc/test()
+    var/value = 0
+    do {
+        done: {
+            value += 1
+            break done
+        }
+    } while(FALSE)
+    do {
+        done: {
+            value += 1
+            break done
+        }
+    } while(FALSE)
+    return value
+"#,
+            "test",
+        ),
+        2.into()
+    );
+}
+
+#[test]
+fn repeated_local_labels_preserve_values_from_their_predecessors() {
+    assert_eq!(
+        run(
+            r#"
+/proc/test()
+    var/value = 7
+    do {
+        done: {
+            break done
+        }
+    } while(FALSE)
+    var/after_first = value
+    do {
+        done: {
+            break done
+        }
+    } while(FALSE)
+    return after_first
+"#,
+            "test",
+        ),
+        7.into()
     );
 }
 
@@ -592,6 +782,25 @@ fn args_is_a_dm_list_with_the_supplied_length() {
             "test",
         ),
         3.into()
+    );
+}
+
+#[test]
+fn a_sized_local_list_declaration_allocates_its_entries() {
+    assert_eq!(
+        run(
+            r#"
+/proc/test()
+    var/device_type = 3
+    var/list/node_connects[device_type]
+    node_connects[1] = 1
+    node_connects[2] = 2
+    node_connects[3] = 4
+    return node_connects.len * 10 + node_connects[3]
+"#,
+            "test",
+        ),
+        34.into()
     );
 }
 

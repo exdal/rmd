@@ -1,7 +1,5 @@
 #define __DEMIR__
 
-// the BYOND version we support (hopefully)
-
 #ifndef __DEMIR_BAKE__
 #define __DEMIR_COMPAT__
 #endif
@@ -294,7 +292,9 @@
 
 /proc/demir_bake(atom/target)
 
-/proc/demir_initialize(atom/target)
+/proc/demir_initialize()
+
+/proc/demir_prepare(atom/target)
 
 /proc/demir_light(atom/target)
 

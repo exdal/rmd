@@ -31,7 +31,7 @@ use dear_imgui_rs::{
     render::SynchronousRendererConsumer,
 };
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
-use editor::tool::Tool;
+use editor::{environment::BakeOptions, tool::Tool};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use render::{Device, PickResult, Renderer};
 use winit::{
@@ -83,7 +83,10 @@ fn main() -> ExitCode {
 
     let (startup_job, pending_map) = match arguments.environment {
         Some(entry) => (
-            Some(Job::Codebase(entry)),
+            Some(Job::Codebase {
+                path: entry,
+                bake: bake_options(&settings),
+            }),
             Some(PendingMap {
                 path: arguments.map,
                 z: arguments.z,
@@ -416,7 +419,10 @@ impl App {
         self.ui.set_load_notice(None);
         self.pending_map = None;
         self.loader.start(match resolved {
-            Opened::Codebase(path) => Job::Codebase(path),
+            Opened::Codebase(path) => Job::Codebase {
+                path,
+                bake: bake_options(&self.settings),
+            },
             Opened::Map(path) => Job::Map { path, z: 1 },
         });
     }
@@ -644,6 +650,14 @@ impl Drop for App {
         if let Err(e) = self.shutdown() {
             log::error!("error while shutting down: {e}");
         }
+    }
+}
+
+fn bake_options(settings: &Settings) -> BakeOptions {
+    BakeOptions {
+        enabled: editor::environment::baking_enabled(settings.bake_enabled),
+        editor_walls: settings.perspective_editor_wall,
+        ..Default::default()
     }
 }
 

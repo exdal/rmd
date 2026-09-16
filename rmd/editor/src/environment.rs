@@ -1,6 +1,7 @@
 use core::{arena::StrArena, location::FileId, source::SourceMap};
 use std::path::{Path, PathBuf};
 
+use codegen::CodegenError;
 use dmi::error::IconError;
 use preprocessor::error::PreprocessError;
 use sema::error::SemaError;
@@ -15,13 +16,27 @@ use crate::{
 pub struct LoadDiagnostics {
     pub preprocess: Vec<PreprocessError>,
     pub sema: Vec<SemaError>,
+    pub codegen: Option<CodegenError>,
     pub icons: Vec<(String, IconError)>,
+    pub bake: Vec<vm::Diagnostic>,
 }
 
 impl LoadDiagnostics {
-    pub fn is_empty(&self) -> bool { self.preprocess.is_empty() && self.sema.is_empty() && self.icons.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.preprocess.is_empty()
+            && self.sema.is_empty()
+            && self.codegen.is_none()
+            && self.icons.is_empty()
+            && self.bake.is_empty()
+    }
 
-    pub fn len(&self) -> usize { self.preprocess.len() + self.sema.len() + self.icons.len() }
+    pub fn len(&self) -> usize {
+        self.preprocess.len()
+            + self.sema.len()
+            + usize::from(self.codegen.is_some())
+            + self.icons.len()
+            + self.bake.len()
+    }
 }
 
 pub(crate) fn is_map(path: &Path) -> bool {
@@ -38,14 +53,43 @@ pub(crate) fn source_root<'a>(sources: &'a SourceMap<'_>, entry: Option<FileId>,
         .unwrap_or_else(|| Path::new(""))
 }
 
-pub(crate) fn compile(entry: &Path, progress: &Progress) -> Result<(ObjectTree, Compiled), LoadError> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BakeOptions {
+    pub enabled: bool,
+    pub editor_walls: bool,
+    pub limits: vm::Limits,
+}
+
+impl Default for BakeOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            editor_walls: false,
+            limits: vm::Limits::default(),
+        }
+    }
+}
+
+/// `DM_BAKE=0` turns baking off for one run without touching the saved setting.
+pub fn baking_enabled(setting: bool) -> bool { std::env::var_os("DM_BAKE").map_or(setting, |value| value != "0") }
+
+pub(crate) fn compile(
+    entry: &Path, options: &BakeOptions, progress: &Progress,
+) -> Result<(ObjectTree, Compiled), LoadError> {
     let arena = StrArena::new();
     progress.enter(Stage::Preprocess, 0);
-    let preprocessed = preprocessor::preprocess_with_progress(&arena, entry, |path| {
-        progress.advance(&path.display().to_string());
+    let preprocessed = preprocessor::Preprocessor::new(&arena)
+        .with_baking(options.enabled)
+        .with_editor_walls(options.editor_walls)
+        .with_progress(|path| {
+            progress.advance(&path.display().to_string());
 
-        !progress.is_cancelled()
-    })?;
+            !progress.is_cancelled()
+        })
+        .run(entry)?;
+    if let Some(error) = preprocessed.errors.iter().find(|e| e.is_fatal()) {
+        return Err(error.clone().into());
+    }
     if progress.is_cancelled() {
         return Err(LoadError::Cancelled);
     }
@@ -61,10 +105,17 @@ pub(crate) fn compile(entry: &Path, progress: &Progress) -> Result<(ObjectTree, 
     }
 
     progress.enter(Stage::Analyze, 0);
-    let (tree, _module, sema_errors) = sema::analyze(&ast);
+    let (tree, module, sema_errors) = sema::analyze(&ast);
     if progress.is_cancelled() {
         return Err(LoadError::Cancelled);
     }
+
+    let bake = options.enabled && vm::bake::has_profile(&tree);
+    let (module, codegen_error) = match bake.then(|| codegen::generate(&module)) {
+        Some(Ok(module)) => (Some(module), None),
+        Some(Err(error)) => (None, Some(error)),
+        None => (None, None),
+    };
 
     let root = preprocessed
         .entry
@@ -92,21 +143,25 @@ pub(crate) fn compile(entry: &Path, progress: &Progress) -> Result<(ObjectTree, 
     Ok((
         tree,
         Compiled {
+            module,
             root,
             files,
             maps,
             resource_dirs: preprocessed.resource_dirs,
             errors: preprocessed.errors,
             sema_errors,
+            codegen_error,
         },
     ))
 }
 
 pub(crate) struct Compiled {
+    pub module: Option<codegen::Module>,
     pub root: PathBuf,
     pub files: Vec<PathBuf>,
     pub maps: Vec<PathBuf>,
     pub resource_dirs: Vec<PathBuf>,
     pub errors: Vec<PreprocessError>,
     pub sema_errors: Vec<SemaError>,
+    pub codegen_error: Option<CodegenError>,
 }

@@ -41,6 +41,7 @@ struct RenderedPrefab {
 }
 
 struct RenderContext<'a> {
+    appearances: &'a HashMap<u64, vm::AppearanceDelta>,
     tree: &'a ObjectTree,
     icons: &'a HashMap<String, Metadata>,
     textures: &'a TextureCatalog,
@@ -129,6 +130,8 @@ impl TypeVisibility {
 pub struct FrameRenderOptions<'a> {
     pub visibility: &'a TypeVisibility,
     pub tile_size: u32,
+    /// What the bake made of each atom, keyed by `vm::bake` atom id, empty when baking is off
+    pub appearances: &'a HashMap<u64, vm::AppearanceDelta>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,6 +207,7 @@ pub fn build(
         FrameRenderOptions {
             visibility: &TypeVisibility::default(),
             tile_size,
+            appearances: &HashMap::new(),
         },
     )
 }
@@ -225,6 +229,7 @@ pub fn build_with_options(
     let area_component_tiles = index_area_component_tiles(&area_components);
     let mut order = 0usize;
     let render = RenderContext {
+        appearances: options.appearances,
         tree,
         icons,
         textures,
@@ -314,6 +319,7 @@ pub fn update_prefabs(
         FrameRenderOptions {
             visibility: &TypeVisibility::default(),
             tile_size,
+            appearances: &HashMap::new(),
         },
     )
 }
@@ -404,6 +410,7 @@ pub fn update_prefabs_with_options(
     }
 
     let render = RenderContext {
+        appearances: options.appearances,
         tree,
         icons,
         textures,
@@ -499,12 +506,40 @@ fn current_placement(tree: &ObjectTree, document: &MapDocument, owner: PrefabIns
 }
 
 impl RenderContext<'_> {
+    #[allow(clippy::too_many_arguments)]
+    fn overlay(
+        &self, sprites: &mut Vec<SpriteInstance>, owner: PrefabInstanceId, parent: &Appearance,
+        delta: &vm::AppearanceDelta, coord: Coord, area_owner: Option<PrefabInstanceId>, depth: usize,
+    ) {
+        if depth >= 32 {
+            return;
+        }
+
+        let appearance = visual::resolve_overlay(self.tree, parent, delta);
+        for extra in &delta.underlays {
+            self.overlay(sprites, owner, &appearance, extra, coord, area_owner, depth + 1);
+        }
+
+        if let Some(texture) = sprite_texture(self.icons, self.textures, &appearance) {
+            let mut sprite = instance_for(owner, &appearance, texture, coord, self.tile_size, false);
+            sprite.area_owner = area_owner;
+            sprites.push(sprite);
+        }
+
+        for extra in &delta.overlays {
+            self.overlay(sprites, owner, &appearance, extra, coord, area_owner, depth + 1);
+        }
+    }
+
     fn prefab(
         &self, owner: PrefabInstanceId, prefab: &Prefab, id: TypeId, coord: Coord, order: usize,
         area_owner: Option<PrefabInstanceId>,
     ) -> RenderedPrefab {
         let is_area = self.area.is_some_and(|area| self.tree.is_subtype_of(id, area));
-        let appearance = visual::resolve_id(self.tree, id, prefab);
+        let delta = self.appearances.get(&owner.get());
+        let appearance = delta
+            .map(|delta| visual::resolve_delta(self.tree, id, prefab, delta))
+            .unwrap_or_else(|| visual::resolve_id(self.tree, id, prefab));
         let key = (
             coord.z,
             (appearance.plane * 1000.0) as i32,
@@ -561,6 +596,22 @@ impl RenderContext<'_> {
             let mut sprite = instance_for(owner, &appearance, texture, coord, self.tile_size, false);
             sprite.area_owner = area_owner;
             sprites.push(sprite);
+        }
+
+        if let Some(delta) = delta
+            && !is_area
+        {
+            let mut layered = Vec::new();
+            for extra in &delta.underlays {
+                self.overlay(&mut layered, owner, &appearance, extra, coord, area_owner, 0);
+            }
+
+            layered.append(&mut sprites);
+            for extra in &delta.overlays {
+                self.overlay(&mut layered, owner, &appearance, extra, coord, area_owner, 0);
+            }
+
+            sprites = layered;
         }
 
         RenderedPrefab {
@@ -1377,6 +1428,7 @@ mod tests {
             FrameRenderOptions {
                 visibility: &visibility,
                 tile_size: 32,
+                appearances: &HashMap::new(),
             },
         );
         assert!(without_objects.iter().all(|sprite| sprite.owner != object_owner));
@@ -1393,6 +1445,7 @@ mod tests {
             FrameRenderOptions {
                 visibility: &visibility,
                 tile_size: 32,
+                appearances: &HashMap::new(),
             },
         );
         assert!(without_areas.iter().any(|sprite| sprite.owner == object_owner));

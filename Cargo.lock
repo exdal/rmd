@@ -467,6 +467,7 @@ name = "editor"
 version = "1.5.0"
 dependencies = [
  "ast",
+ "codegen",
  "core",
  "dear-imgui-rs",
  "dear-imgui-winit",
@@ -482,6 +483,7 @@ dependencies = [
  "serde",
  "shlex 1.3.0",
  "toml",
+ "vm",
  "winit",
 ]
 

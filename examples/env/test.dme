@@ -5,6 +5,7 @@
 // END_FILE_DIR
 
 // BEGIN_INCLUDE
+#include "profile.dm"
 #include "test.dm"
 #include "test.dmm"
 #include "test2.dmm"

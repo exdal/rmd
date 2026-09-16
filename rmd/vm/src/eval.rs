@@ -1601,8 +1601,11 @@ impl Evaluator<'_> {
 
                 let value = declaration.map(|variable| variable.value.clone());
                 let value = match value {
+                    // `var/list/overlays = null` in the prelude, which BYOND never leaves null
+                    None | Some(Value::Null) if matches!(key, "overlays" | "underlays" | "vis_contents") => {
+                        self.list(Vec::new())?
+                    },
                     Some(value) => self.constant(&value)?,
-                    None if matches!(key, "overlays" | "underlays" | "vis_contents") => self.list(Vec::new())?,
                     None if key == "tag" => GenericValue::Null,
                     None => return Err(self.fault(FaultKind::MissingVariable(key.into()))),
                 };

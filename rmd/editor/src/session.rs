@@ -61,6 +61,12 @@ use crate::{
     loader::{LoadedCodebase, LoadedMap},
 };
 
+fn report_bake_output(bake: &mut editor::bake::Bake) {
+    for line in bake.take_output() {
+        log::info!("DM: {line}");
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct SelectedTransform {
     pub selected: PrefabInstanceId,
@@ -139,12 +145,14 @@ struct DocumentCache {
     revision: u64,
     frame_update: Option<FrameUpdate>,
     preview: Option<BlockPreviewCache>,
+    bake: Option<editor::bake::Bake>,
 }
 
 pub struct Session {
     pub state: EditorState,
     pub textures: TextureCatalog,
     pub options: FrameOptions,
+    pub diagnostics: editor::environment::LoadDiagnostics,
     caches: HashMap<DocumentId, DocumentCache>,
     next_revision: u64,
     next_preview_revision: u64,
@@ -174,6 +182,7 @@ impl Session {
             state: EditorState::new(),
             textures: TextureCatalog::default(),
             options: FrameOptions::default(),
+            diagnostics: editor::environment::LoadDiagnostics::default(),
             caches: HashMap::new(),
             next_revision: 1,
             next_preview_revision: 1,
@@ -194,13 +203,14 @@ impl Session {
         } = loaded;
 
         let report = report(&environment, &diagnostics);
+        self.diagnostics = diagnostics;
         self.textures = textures;
         self.type_thumbnails = thumbnails;
         self.texture_revision = self.texture_revision.wrapping_add(1);
         self.type_visibility = TypeVisibility::default();
         self.maps = maps;
         self.state.environment = Some(environment);
-        self.rebuild_all_instances();
+        self.rebake_all();
 
         report
     }
@@ -398,7 +408,7 @@ impl Session {
                 .document(id)
                 .is_some_and(|document| document.map.size.z != levels)
         {
-            self.rebuild_instances(id);
+            self.rebake(id);
         }
 
         result
@@ -421,7 +431,7 @@ impl Session {
                 .document(id)
                 .is_some_and(|document| document.map.size.z != levels)
         {
-            self.rebuild_instances(id);
+            self.rebake(id);
         }
 
         result
@@ -544,7 +554,7 @@ impl Session {
         document.set_focus(None);
         document.selection = None;
         self.state.set_active(id);
-        self.rebuild_instances(id);
+        self.rebake(id);
 
         Ok(z)
     }
@@ -1576,6 +1586,17 @@ impl Session {
 
     pub fn toggle_area_outlines(&mut self) { self.options.show_area_outlines = !self.options.show_area_outlines; }
 
+    fn collect_bake_diagnostics(&mut self) {
+        self.diagnostics.bake = self
+            .caches
+            .values()
+            .filter_map(|cache| cache.bake.as_ref())
+            .flat_map(|bake| bake.diagnostics.entries.iter())
+            .filter(|entry| entry.count > 0)
+            .cloned()
+            .collect();
+    }
+
     pub fn is_type_visible(&self, id: TypeId) -> bool {
         self.tree().is_some_and(|tree| tree.get(id).is_some()) && self.type_visibility.is_visible(id)
     }
@@ -1683,7 +1704,28 @@ impl Session {
         }
     }
 
+    fn rebake_all(&mut self) {
+        for id in self.state.document_ids() {
+            self.rebake(id);
+        }
+    }
+
+    fn rebake(&mut self, id: DocumentId) {
+        let mut bake = match (self.state.environment.as_ref(), self.state.document(id)) {
+            (Some(environment), Some(document)) => editor::bake::build(environment, document),
+            _ => None,
+        };
+        if let Some(bake) = bake.as_mut() {
+            report_bake_output(bake);
+        }
+
+        self.caches.entry(id).or_default().bake = bake;
+        self.collect_bake_diagnostics();
+        self.rebuild_instances(id);
+    }
+
     fn rebuild_instances(&mut self, id: DocumentId) {
+        let bake = self.caches.get(&id).and_then(|cache| cache.bake.as_ref());
         let instances = match (self.state.environment.as_ref(), self.state.document(id)) {
             (Some(environment), Some(document)) => frame::build_with_options(
                 &environment.tree,
@@ -1693,6 +1735,7 @@ impl Session {
                 FrameRenderOptions {
                     visibility: &self.type_visibility,
                     tile_size: self.options.tile_size,
+                    appearances: editor::bake::appearances(bake),
                 },
             ),
             _ => FrameInstances::default(),
@@ -1715,7 +1758,7 @@ impl Session {
 
     fn activate_document(&mut self, document: MapDocument) -> DocumentId {
         let id = self.state.open_document(document);
-        self.rebuild_instances(id);
+        self.rebake(id);
 
         id
     }
@@ -1737,6 +1780,15 @@ impl Session {
             ..
         } = self;
         let cache = caches.entry(id).or_default();
+        let affected = match (cache.bake.as_mut(), state.environment.as_ref(), state.document(id)) {
+            (Some(bake), Some(environment), Some(document)) => {
+                let affected = editor::bake::update(bake, environment, document, affected);
+                report_bake_output(bake);
+
+                affected
+            },
+            _ => affected.to_vec(),
+        };
         let update = match (state.environment.as_ref(), state.document(id)) {
             (Some(environment), Some(document)) => frame::update_prefabs_with_options(
                 &mut cache.instances,
@@ -1744,10 +1796,11 @@ impl Session {
                 &environment.icons,
                 textures,
                 document,
-                affected,
+                &affected,
                 FrameRenderOptions {
                     visibility: type_visibility,
                     tile_size: options.tile_size,
+                    appearances: editor::bake::appearances(cache.bake.as_ref()),
                 },
             ),
             _ => PrefabUpdate::Unchanged,
@@ -1982,19 +2035,21 @@ pub(crate) fn build_textures(environment: &Environment, progress: &Progress) -> 
 pub(crate) struct LoadReport {
     pub preprocess: usize,
     pub sema: usize,
+    pub codegen: usize,
     pub icons: usize,
     pub lines: Vec<String>,
 }
 
 impl LoadReport {
-    pub fn is_empty(&self) -> bool { self.preprocess == 0 && self.sema == 0 && self.icons == 0 }
+    pub fn is_empty(&self) -> bool { self.total() == 0 }
 
-    pub fn total(&self) -> usize { self.preprocess + self.sema + self.icons }
+    pub fn total(&self) -> usize { self.preprocess + self.sema + self.codegen + self.icons }
 
     pub fn summary(&self) -> String {
         let parts = [
             (self.preprocess, "preprocessor"),
             (self.sema, "analysis"),
+            (self.codegen, "bytecode"),
             (self.icons, "icon"),
         ]
         .into_iter()
@@ -2042,6 +2097,14 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
         );
     }
 
+    if let Some(error) = &diagnostics.codegen {
+        collect(
+            log::Level::Warn,
+            format!("warning: baking is off, bytecode generation failed: {error}"),
+            "warning: ",
+        );
+    }
+
     for (name, error) in &diagnostics.icons {
         collect(
             log::Level::Warn,
@@ -2053,6 +2116,7 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
     LoadReport {
         preprocess: diagnostics.preprocess.len(),
         sema: diagnostics.sema.len(),
+        codegen: usize::from(diagnostics.codegen.is_some()),
         icons: diagnostics.icons.len(),
         lines,
     }
@@ -2062,7 +2126,11 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
 #[cfg(test)]
 impl Session {
     pub(crate) fn load_environment(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        self.apply_codebase(crate::loader::load_codebase(path, &Progress::new())?);
+        self.apply_codebase(crate::loader::load_codebase(
+            path,
+            &editor::environment::BakeOptions::default(),
+            &Progress::new(),
+        )?);
 
         Ok(())
     }
@@ -2172,6 +2240,33 @@ mod tests {
         assert_ne!(
             frame.map_views[0].sprite_instances.len(),
             frame.map_views[1].sprite_instances.len(),
+        );
+    }
+
+    #[test]
+    fn hiding_a_type_redraws_from_the_cached_bake() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("map");
+        let id = session.state.active().expect("active map");
+        let table = session
+            .tree()
+            .and_then(|tree| tree.id_of(&TreePath::parse("/obj/structure/table")))
+            .expect("table type");
+
+        // A bake that ran again would start its counters over.
+        session
+            .caches
+            .get_mut(&id)
+            .and_then(|cache| cache.bake.as_mut())
+            .expect("the example map is baked")
+            .cache_hits = usize::MAX;
+
+        assert!(session.toggle_type_visibility(table));
+        assert_eq!(
+            session.active_cache().bake.as_ref().map(|bake| bake.cache_hits),
+            Some(usize::MAX)
         );
     }
 
@@ -2602,6 +2697,12 @@ mod tests {
 
         report.sema = 3;
         assert_eq!(report.summary(), "12 preprocessor, 3 analysis and 1 icon diagnostics");
+
+        report.codegen = 1;
+        assert_eq!(
+            report.summary(),
+            "12 preprocessor, 3 analysis, 1 bytecode and 1 icon diagnostics"
+        );
     }
 
     #[test]
@@ -2779,6 +2880,7 @@ mod tests {
             editor::frame::FrameRenderOptions {
                 visibility: &session.type_visibility,
                 tile_size: session.options.tile_size,
+                appearances: editor::bake::appearances(session.active_cache().bake.as_ref()),
             },
         );
 

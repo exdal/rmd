@@ -665,6 +665,8 @@ pub(crate) struct Settings {
     pub keybindings: KeyBindings,
     pub recent_codebases: Vec<PathBuf>,
     pub recent: Vec<RecentMap>,
+    pub bake_enabled: bool,
+    pub perspective_editor_wall: bool,
 }
 
 pub(crate) struct SettingsLoad {
@@ -715,6 +717,8 @@ impl Default for Settings {
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
+            bake_enabled: true,
+            perspective_editor_wall: false,
         }
     }
 }
@@ -879,6 +883,8 @@ mod tests {
                 keybindings: KeyBindings::default(),
                 recent_codebases: Vec::new(),
                 recent: Vec::new(),
+                bake_enabled: true,
+                perspective_editor_wall: false,
             }
         );
     }
@@ -1081,6 +1087,8 @@ mod tests {
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
+            bake_enabled: true,
+            perspective_editor_wall: false,
         };
         settings.keybindings.rebind(
             KeybindAction::ShowAreas,
@@ -1135,6 +1143,8 @@ mod tests {
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
+            bake_enabled: true,
+            perspective_editor_wall: false,
         };
         let mut options = FrameOptions::default();
 

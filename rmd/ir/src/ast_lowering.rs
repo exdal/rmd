@@ -34,7 +34,8 @@ pub struct IrModuleBuilder<'a> {
     sealed: HashSet<IrNodeId>,
     blocks: Vec<IrNodeId>,
     named_blocks: HashMap<Identifier, IrNodeId>,
-    loops: Vec<EnclosingLoop>,
+    defined_named_blocks: HashSet<IrNodeId>,
+    controls: Vec<ControlTarget>,
     current_block: Option<IrNodeId>,
     entry: IrNodeId,
     current_owner: TreePath,
@@ -94,7 +95,8 @@ impl<'a> IrModuleBuilder<'a> {
             sealed: HashSet::new(),
             blocks: Vec::new(),
             named_blocks: HashMap::new(),
-            loops: Vec::new(),
+            defined_named_blocks: HashSet::new(),
+            controls: Vec::new(),
             current_block: None,
             entry: IrNodeId(0),
             current_owner: TreePath::default(),
@@ -202,7 +204,12 @@ impl<'a> IrModuleBuilder<'a> {
         self.lower_statements(body);
         self.terminate_current_block(IrNode::Return(None));
 
-        let named_blocks = self.named_blocks.values().copied().collect::<Vec<_>>();
+        let named_blocks = self
+            .named_blocks
+            .values()
+            .copied()
+            .chain(self.defined_named_blocks.iter().copied())
+            .collect::<HashSet<_>>();
         for block in named_blocks {
             self.seal_block(block);
         }
@@ -241,7 +248,8 @@ impl<'a> IrModuleBuilder<'a> {
         self.sealed.clear();
         self.blocks.clear();
         self.named_blocks.clear();
-        self.loops.clear();
+        self.defined_named_blocks.clear();
+        self.controls.clear();
         self.current_block = None;
         self.locals_in_memory = false;
         self.depth = 0;
@@ -458,30 +466,44 @@ impl<'a> IrModuleBuilder<'a> {
         block
     }
 
-    fn enclosing_loop(&self, name: &Option<Identifier>) -> Option<IrNodeId> {
-        let found = match name {
-            None => self.loops.last(),
+    fn define_named_block(&mut self, name: &Identifier) -> IrNodeId {
+        let block = self.named_block(name);
+        let block = if self.defined_named_blocks.contains(&block) {
+            let block = self.make_block();
+            self.named_blocks.insert(name.clone(), block);
+            block
+        } else {
+            block
+        };
+        self.defined_named_blocks.insert(block);
+
+        block
+    }
+
+    fn break_target(&self, name: &Option<Identifier>) -> Option<IrNodeId> {
+        match name {
+            None => self
+                .controls
+                .iter()
+                .rev()
+                .find(|target| target.continue_block.is_some()),
             Some(name) => self
-                .loops
+                .controls
                 .iter()
                 .rev()
                 .find(|target| target.name.as_ref() == Some(name)),
-        };
-
-        found.map(|target| target.header)
+        }
+        .map(|target| target.break_block)
     }
 
-    fn merge_targets(&self, header: IrNodeId) -> Option<(IrNodeId, IrNodeId)> {
-        self.module
-            .block(header)?
+    fn continue_target(&self, name: &Option<Identifier>) -> Option<IrNodeId> {
+        self.controls
             .iter()
-            .find_map(|id| match self.module.node(*id) {
-                Some(IrNode::LoopMerge {
-                    merge_block,
-                    continue_block,
-                }) => Some((*merge_block, *continue_block)),
-                _ => None,
+            .rev()
+            .find(|target| {
+                target.continue_block.is_some() && name.as_ref().is_none_or(|name| target.name.as_ref() == Some(name))
             })
+            .and_then(|target| target.continue_block)
     }
 
     fn enter_loop(
@@ -496,9 +518,10 @@ impl<'a> IrModuleBuilder<'a> {
             instructions.push(merge);
         }
 
-        self.loops.push(EnclosingLoop {
+        self.controls.push(ControlTarget {
             name: name.cloned(),
-            header,
+            break_block: merge_block,
+            continue_block: Some(continue_block),
         });
     }
 
@@ -668,6 +691,20 @@ impl<'a> IrModuleBuilder<'a> {
                 value: a.value.map(|e| self.lower_expr(e)),
             })
             .collect()
+    }
+
+    fn declared_array(&mut self, dimensions: &[Option<IrNodeId>]) -> IrNodeId {
+        let null = self.undefined();
+        let ty = self.intern_constant(Value::Path(TreePath::parse("/list")));
+        let args = dimensions
+            .iter()
+            .map(|dimension| Argument {
+                key: None,
+                value: Some(dimension.unwrap_or(null)),
+            })
+            .collect::<Vec<_>>();
+
+        self.emit_instr(IrNode::New { ty: Some(ty), args })
     }
 
     fn lower_expr(&mut self, id: ExpressionId) -> IrNodeId {
@@ -1174,10 +1211,12 @@ impl<'a> IrModuleBuilder<'a> {
             Statement::Var { spec, initializer, .. } => {
                 let spec = self.spec(spec);
                 let inferred = spec.var_type.clone();
+                let dimensions = spec.dimensions.clone();
                 let var = self.declare_var(spec);
                 let value = match initializer {
                     Some(e) => self.lower_expr(*e),
-                    None => self.undefined(),
+                    None if dimensions.is_empty() => self.undefined(),
+                    None => self.declared_array(&dimensions),
                 };
                 self.set_new_type(value, inferred);
                 if let Some(block) = self.current_block {
@@ -1242,7 +1281,7 @@ impl<'a> IrModuleBuilder<'a> {
                 self.set_current_block(taken);
                 self.lower_statements(body);
                 self.terminate_current_block(IrNode::Branch(header));
-                self.loops.pop();
+                self.controls.pop();
                 self.seal_block(header);
 
                 self.seal_block(exit);
@@ -1263,7 +1302,7 @@ impl<'a> IrModuleBuilder<'a> {
                 self.set_current_block(taken);
                 self.lower_statements(body);
                 self.terminate_current_block(IrNode::Branch(latch));
-                self.loops.pop();
+                self.controls.pop();
                 self.seal_block(latch);
 
                 self.set_current_block(latch);
@@ -1375,45 +1414,47 @@ impl<'a> IrModuleBuilder<'a> {
                 let value = self.lower_expr(*e);
                 self.emit_instr(IrNode::Del(value));
             },
-            Statement::Break(name) => {
-                match self
-                    .enclosing_loop(name)
-                    .and_then(|header| self.merge_targets(header))
-                    .map(|(merge, _)| merge)
-                {
-                    Some(block) => self.terminate_current_block(IrNode::Branch(block)),
-                    None => {
-                        self.emit_instr(IrNode::Trap {
-                            reason: "break outside loop".into(),
-                        });
-                    },
-                }
+            Statement::Break(name) => match self.break_target(name) {
+                Some(block) => self.terminate_current_block(IrNode::Branch(block)),
+                None => {
+                    self.emit_instr(IrNode::Trap {
+                        reason: "break outside loop".into(),
+                    });
+                },
             },
-            Statement::Continue(name) => {
-                match self
-                    .enclosing_loop(name)
-                    .and_then(|header| self.merge_targets(header))
-                    .map(|(_, target)| target)
-                {
-                    Some(block) => self.terminate_current_block(IrNode::Branch(block)),
-                    None => {
-                        self.emit_instr(IrNode::Trap {
-                            reason: "continue outside loop".into(),
-                        });
-                    },
-                }
+            Statement::Continue(name) => match self.continue_target(name) {
+                Some(block) => self.terminate_current_block(IrNode::Branch(block)),
+                None => {
+                    self.emit_instr(IrNode::Trap {
+                        reason: "continue outside loop".into(),
+                    });
+                },
             },
             Statement::Goto(name) => {
                 let block = self.named_block(name);
                 self.terminate_current_block(IrNode::Branch(block));
             },
             Statement::Label { name, body } => {
-                let block = self.named_block(name);
+                let block = self.define_named_block(name);
                 self.fall_through(block);
 
                 match body.split_first() {
-                    Some((only, [])) => self.lower_stmt(only, Some(name)),
-                    _ => self.lower_statements(body),
+                    Some((only @ (Statement::While { .. } | Statement::DoWhile { .. } | Statement::For(_)), [])) => {
+                        self.lower_stmt(only, Some(name));
+                    },
+                    _ => {
+                        let exit = self.make_block();
+                        self.controls.push(ControlTarget {
+                            name: Some(name.clone()),
+                            break_block: exit,
+                            continue_block: None,
+                        });
+                        self.lower_statements(body);
+                        self.terminate_current_block(IrNode::Branch(exit));
+                        self.controls.pop();
+                        self.seal_block(exit);
+                        self.resume(exit);
+                    },
                 }
             },
         }
@@ -1539,7 +1580,7 @@ impl<'a> IrModuleBuilder<'a> {
         self.set_current_block(taken);
         self.lower_statements(body);
         self.terminate_current_block(IrNode::Branch(stepping));
-        self.loops.pop();
+        self.controls.pop();
         self.seal_block(stepping);
 
         self.set_current_block(stepping);
@@ -1594,7 +1635,7 @@ impl<'a> IrModuleBuilder<'a> {
         }
         self.lower_statements(body);
         self.terminate_current_block(IrNode::Branch(header));
-        self.loops.pop();
+        self.controls.pop();
         self.seal_block(header);
 
         self.seal_block(exit);
@@ -1636,7 +1677,7 @@ impl<'a> IrModuleBuilder<'a> {
         self.set_current_block(taken);
         self.lower_statements(body);
         self.terminate_current_block(IrNode::Branch(stepping));
-        self.loops.pop();
+        self.controls.pop();
         self.seal_block(stepping);
 
         self.set_current_block(stepping);
@@ -1672,9 +1713,10 @@ impl<'a> IrModuleBuilder<'a> {
     }
 }
 
-struct EnclosingLoop {
+struct ControlTarget {
     name: Option<Identifier>,
-    header: IrNodeId,
+    break_block: IrNodeId,
+    continue_block: Option<IrNodeId>,
 }
 
 fn branch_targets(node: &IrNode) -> Vec<IrNodeId> {

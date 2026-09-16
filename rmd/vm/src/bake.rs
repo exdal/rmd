@@ -19,7 +19,15 @@ use crate::{
     world::Position,
 };
 
-pub fn detect_profile(_tree: &ObjectTree) -> &'static str { "default" }
+const HOOKS: [&str; 4] = ["demir_initialize", "demir_prepare", "demir_light", "demir_bake"];
+
+/// `#ifdef __DEMIR_BAKE__` around one or more bake hooks in the codebase.
+pub fn has_profile(tree: &ObjectTree) -> bool { HOOKS.iter().any(|name| hook(tree, name).is_some()) }
+
+fn hook(tree: &ObjectTree, name: &str) -> Option<ProcId> {
+    tree.proc_inherited(TypeId::ROOT, &name.into())
+        .and_then(|proc| proc.body)
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Atom {
@@ -65,7 +73,8 @@ pub struct Bake {
     faults: HashMap<u64, Fault>,
     areas: HashMap<(TypeId, String), ObjectId>,
     area_members: HashMap<ObjectId, HashSet<u64>>,
-    initialized: HashMap<ObjectId, Option<Fault>>,
+    initialized: bool,
+    prepared: HashMap<ObjectId, Option<Fault>>,
     lit: HashSet<ObjectId>,
     contributions: HashMap<u64, Vec<u64>>,
     by_target: HashMap<u64, BTreeMap<u64, AppearanceDelta>>,
@@ -76,6 +85,7 @@ pub struct Bake {
 pub enum Stage {
     Instantiate,
     Initialize,
+    Prepare,
     Light,
     Smooth,
 }
@@ -113,15 +123,26 @@ impl Bake {
             bake.link_cell(tree, position);
         }
 
+        progress(Stage::Initialize, 0, 1);
+        let initialized = bake.initialize(tree, module);
+        progress(Stage::Initialize, 1, 1);
+        if let Err(fault) = initialized {
+            bake.diagnostics.record(fault);
+
+            return bake;
+        }
+        bake.initialized = true;
+
         let ids = bake.sorted_ids();
+
         for (index, id) in ids.iter().enumerate() {
             if index.is_multiple_of(4096) {
-                progress(Stage::Initialize, index, total);
+                progress(Stage::Prepare, index, total);
             }
-            bake.initialize(tree, module, *id);
+            bake.prepare(tree, module, *id);
         }
 
-        progress(Stage::Initialize, total, total);
+        progress(Stage::Prepare, total, total);
 
         for (index, id) in ids.iter().enumerate() {
             if index.is_multiple_of(4096) {
@@ -152,6 +173,8 @@ impl Bake {
     pub fn position(&self, id: u64) -> Option<Position> { self.atoms.get(&id).map(|atom| atom.position) }
 
     pub fn object(&self, id: u64) -> Option<ObjectId> { self.objects.get(&id).copied() }
+
+    pub fn take_output(&mut self) -> Vec<String> { self.runtime.take_output() }
 
     fn sorted_ids(&self) -> Vec<u64> {
         let mut ids = self.atoms.keys().copied().collect::<Vec<_>>();
@@ -257,40 +280,38 @@ impl Bake {
         }
     }
 
-    fn initialize(&mut self, tree: &ObjectTree, module: &Module, id: u64) {
+    fn initialize(&mut self, tree: &ObjectTree, module: &Module) -> Result<(), Fault> {
+        let Some(proc) = hook(tree, "demir_initialize") else {
+            return Ok(());
+        };
+
+        self.runtime
+            .run(tree, module, proc, None, Vec::new(), self.limits)
+            .map(|_| ())
+    }
+
+    fn prepare(&mut self, tree: &ObjectTree, module: &Module, id: u64) {
         if self.failed.contains(&id) {
             return;
         }
+
         let Some(object) = self.objects.get(&id).copied() else {
             return;
         };
-        if let Some(fault) = self.initialized.get(&object).cloned() {
+
+        if let Some(fault) = self.prepared.get(&object).cloned() {
             if let Some(fault) = fault {
                 self.failed.insert(id);
                 self.record_fault(id, fault);
             }
-
             return;
         }
-        let Some(ty) = self.runtime.heap.object(object).map(|object| object.ty) else {
-            return;
-        };
 
-        let profile = tree
-            .proc_inherited(TypeId::ROOT, &"demir_initialize".into())
-            .and_then(|proc| proc.body);
-        let proc = profile.or_else(|| tree.proc_inherited(ty, &"Initialize".into()).and_then(|proc| proc.body));
-        let Some(proc) = proc else {
-            return;
-        };
-        let (src, args) = if profile.is_some() {
-            (None, vec![GenericValue::Object(object)])
-        } else {
-            (Some(object), vec![1.0.into()])
-        };
-        let fault = self.runtime.run(tree, module, proc, src, args, self.limits).err();
-        self.initialized.insert(object, fault.clone());
-
+        let fault = hook(tree, "demir_prepare").and_then(|proc| {
+            let args = vec![GenericValue::Object(object)];
+            self.runtime.run(tree, module, proc, None, args, self.limits).err()
+        });
+        self.prepared.insert(object, fault.clone());
         if let Some(fault) = fault {
             self.failed.insert(id);
             self.record_fault(id, fault);
@@ -310,10 +331,7 @@ impl Bake {
             return;
         }
 
-        let Some(proc) = tree
-            .proc_inherited(TypeId::ROOT, &"demir_light".into())
-            .and_then(|proc| proc.body)
-        else {
+        let Some(proc) = hook(tree, "demir_light") else {
             return;
         };
         let args = vec![GenericValue::Object(object)];
@@ -414,10 +432,7 @@ impl Bake {
         let Some(object) = self.objects.get(&id).copied() else {
             return;
         };
-        let Some(proc) = tree
-            .proc_inherited(TypeId::ROOT, &"demir_bake".into())
-            .and_then(|proc| proc.body)
-        else {
+        let Some(proc) = hook(tree, "demir_bake") else {
             return;
         };
 
@@ -507,7 +522,7 @@ impl Bake {
     pub fn update(&mut self, tree: &ObjectTree, module: &Module, replacements: Vec<Atom>, removed: &[u64]) -> Vec<u64> {
         self.epoch = self.epoch.wrapping_add(1);
         let mut dirty = HashSet::new();
-        let mut initialize = Vec::new();
+        let mut inserted = Vec::new();
         let remove = removed
             .iter()
             .copied()
@@ -533,7 +548,7 @@ impl Bake {
                 if !shared {
                     self.area_members.remove(&object);
                     self.areas.retain(|_, value| *value != object);
-                    self.initialized.remove(&object);
+                    self.prepared.remove(&object);
                     self.lit.remove(&object);
                     let _ = self.runtime.heap.relocate(object, None);
                     if let Ok(object) = self.runtime.heap.object_mut(object) {
@@ -551,16 +566,18 @@ impl Bake {
 
         for atom in replacements {
             dirty.insert(atom.position);
-            initialize.push(atom.instance);
+            inserted.push(atom.instance);
             self.insert(tree, atom);
         }
         for position in &dirty {
             self.link_cell(tree, *position);
         }
-        for id in initialize {
-            self.initialize(tree, module, id);
-            self.light(tree, module, id);
-            self.fingerprint(id);
+        if self.initialized {
+            for id in inserted {
+                self.prepare(tree, module, id);
+                self.light(tree, module, id);
+                self.fingerprint(id);
+            }
         }
 
         let mut affected = HashSet::new();
@@ -583,8 +600,10 @@ impl Bake {
 
         let mut affected = affected.into_iter().collect::<Vec<_>>();
         affected.sort_unstable();
-        for id in &affected {
-            self.bake_atom(tree, module, *id);
+        if self.initialized {
+            for id in &affected {
+                self.bake_atom(tree, module, *id);
+            }
         }
         affected.extend(remove);
         affected.extend(self.dirty_appearances.iter().copied());

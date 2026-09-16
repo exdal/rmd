@@ -16,23 +16,41 @@ The regular output lists each placement's coordinates, instance ID, and resolved
 `--summary` suppresses those rows. `--check-edit` removes and restores the first wall, times both
 updates, and verifies that the complete derived appearance layer returns to its original state.
 
-## Compilation and profiles
+## Profiles
 
-The compiler prelude declares three hooks:
+The compiler prelude declares four hooks without bodies:
 
 ```dm
-/proc/demir_initialize(atom/target)
+/proc/demir_initialize()
+/proc/demir_prepare(atom/target)
 /proc/demir_light(atom/target)
 /proc/demir_bake(atom/target)
 ```
 
-Profiles live in `prelude/profiles/` and are preprocessed after the project's entry file. This lets a
-profile use macros, types, variables, and procedures declared by the project. Each postlude is
-drained as its own token stream so indentation and end-of-file state cannot leak between files.
+A codebase opts in by shipping a profile, a DM file that gives one or more of them a body. The
+profile lives in the codebase and is included from its `.dme` like any other file, wrapped so that
+only a bake compiles it:
 
-The default profile makes all three hooks no-ops. Automatic codebase detection and the tgstation,
-Goonstation, and Vanderlin profiles are separate follow-up work. `DM_PROFILE` can replace the
-selected embedded profile with a file on disk.
+```dm
+#ifdef __DEMIR_BAKE__
+
+/proc/demir_bake(atom/target)
+	if(istype(target, /turf/closed/wall))
+		var/turf/closed/wall/wall = target
+		wall.smooth_icon()
+
+#endif
+```
+
+BYOND never defines `__DEMIR_BAKE__`, so the file compiles to nothing there, and a load with baking
+off sees exactly the tree BYOND does. Because the profile is part of the codebase, it can use every
+macro the codebase defined before it, and the codebase maintains it alongside the code it calls.
+`examples/env/profile.dm` is a minimal one.
+
+A codebase without a profile bakes nothing. No bytecode is generated, no DM runs, and every atom
+draws from its static appearance. rmd never calls the game's own `Initialize()` either. Persistent
+target-specific preparation, including any call to `target.Initialize(TRUE)`, belongs in
+`demir_prepare`. Appearance mutations belong in `demir_bake`.
 
 Baking defines `__DEMIR_BAKE__` before the normal prelude. `prelude/demir.dm` uses it to disable the
 `FASTDMM` and `SPACEMAN_DMM` compatibility defines during a bake. This exposes normal initializer
@@ -61,19 +79,22 @@ The caller assigns stable instance IDs and translates map prefabs into this form
 type and map-variable overrides share one runtime object while keeping all of their placement IDs.
 Turfs, areas, and movable contents are linked through the runtime world before any DM executes.
 
-A full bake has four ordered stages:
+A full bake has five ordered stages:
 
 1. **Instantiate** creates objects, applies constant map overrides, and links each map cell.
-2. **Initialize** calls `demir_initialize`, or falls back to `Initialize(TRUE)` when that hook has no
-   body. Shared areas initialize once.
-3. **Light** calls `demir_light` once per runtime object so later lighting code can harvest the
+2. **Initialize** calls `demir_initialize()` once after the complete runtime world is linked.
+3. **Prepare** calls `demir_prepare` once per runtime object and commits successful setup for use by
+   neighboring previews.
+4. **Light** calls `demir_light` once per runtime object so later lighting code can harvest the
    neutral schema.
-4. **Smooth** calls `demir_bake` for each placement and exports appearance changes.
+5. **Smooth** calls `demir_bake` for each placement and exports appearance changes.
 
-Initialization uses the VM's normal transaction behavior and commits only when it succeeds. Each
-smoothing call starts a separate heap journal. The baker runs the hook, gathers the target and any
-changed neighboring objects, recursively exports their appearance values, and then rolls the journal
-back. A failed preview exports nothing, so repeated bakes cannot accumulate runtime writes or
+Initialization uses the VM's normal transaction behavior and commits only when it succeeds. A fault
+is reported once and stops the remaining stages, leaving every atom on its static appearance.
+Preparation also commits when it succeeds; a per-object fault excludes that object from later hooks.
+Each smoothing call starts a separate heap journal. The baker runs the hook, gathers the target and
+any changed neighboring objects, recursively exports their appearance values, and then rolls the
+journal back. A failed preview exports nothing, so repeated bakes cannot accumulate runtime writes or
 overlays.
 
 Exported appearance fields are limited to renderable scalar values plus nested `overlays` and
@@ -88,26 +109,55 @@ call-depth exhaustion, and allocation exhaustion all remain visible to the calle
 
 ## Caching and edits
 
-Eligible full-load previews are cached using the atom type, map overrides, initialized variables,
+Eligible full-load previews are cached using the atom type, map overrides, runtime variables,
 the surrounding 3 by 3 cell signatures, world dimensions, and the current cache epoch. A preview
 that reads coordinates or randomness additionally uses the atom position. Global scans and other
 nonlocal reads mark the preview unsafe to memoize. The cache holds at most 50,000 entries.
 
 Each placement's fingerprint is a 64-bit hash of its map overrides, in file order, followed by its
-initialized runtime variables sorted by name. Runtime values hash through the same key that list
+runtime variables sorted by name. Runtime values hash through the same key that list
 lookup uses, so values that compare equal in DM share a fingerprint. Lists and objects hash by
 identity rather than contents, which makes a placement holding one a cache miss rather than a stale
 hit. Hashes are only compared within one process.
 
-`Bake::update` accepts replacement atoms and removed instance IDs. It relinks changed cells,
-initializes new objects, and rebakes the surrounding 3 by 3 by 3 neighborhood. The vertical extent is
-needed by codebases with pipes or other structures that connect between z levels. Incremental edits
-bypass full-load cache reuse through the epoch, avoiding results derived from stale runtime globals.
+`Bake::update` accepts replacement atoms and removed instance IDs. It relinks changed cells, applies
+the prepare and light hooks to new objects, and rebakes the surrounding 3 by 3 by 3 neighborhood. It
+reuses the runtime initialized by the full bake and never reruns `demir_initialize()`. The vertical
+extent is needed by codebases with pipes or other structures that connect between z levels.
+Incremental edits bypass full-load cache reuse through the epoch, avoiding results derived from stale
+runtime globals.
 
 Appearance effects on other placements are stored as contributions from their source instance.
 Removing or replacing a source first removes every contribution it produced, then recomposes only
 the affected target appearances in stable source-ID order. This also preserves updates made through
 shared area objects.
+
+## Editor and viewer
+
+Both applications bake by default. `DM_BAKE=0` turns baking off for one run. The editor's
+**DM Baking** settings tab turns it off and enables perspective editor walls. Both take effect on the
+next codebase load.
+
+`Environment::module` holds the bytecode. It is `None` with baking off, for a codebase without a
+profile, and when bytecode generation fails. A failure is reported with the load diagnostics and
+leaves the map drawn from static appearances.
+
+`editor::bake` translates placed prefabs into `vm::bake::Atom`s, keyed by `PrefabInstanceId`. Each
+open map owns its bake. A new environment, a newly opened map, or a change in the number of z levels
+bakes the whole map again. An edit, undo, or redo goes through `Bake::update`, and the sprites of
+every placement it reports are rebuilt. Hiding a type rebuilds sprites from the cached bake without
+running any DM.
+
+Frame building uses a placement's delta when it has one and the static appearance otherwise.
+Overlay and underlay deltas become extra sprites owned by the placement, drawn in list order around
+it. They inherit the owner's icon, dir, offsets, and floating layer and plane. Color and alpha
+multiply with the owner's unless the overlay sets `RESET_COLOR` or `RESET_ALPHA`.
+
+Palette thumbnails resolve statically. An atom whose static `icon_state` is missing from its sheet,
+which is how smoothed walls are declared, is baked alone in a one cell world at load, and the
+derived appearance is used for its thumbnail. The placement preview still resolves statically.
+
+The settings tab lists grouped bake faults. It refreshes after every full bake.
 
 ## Sandbox and limits
 
@@ -120,17 +170,25 @@ File access, native libraries, networking, sleep, spawn, timers, and interactive
 blocked. DM `catch` can handle DM throws but cannot swallow sandbox or resource-limit faults. World
 time and tick usage are deterministic, and no client or subsystem loop runs.
 
+Profiles may write debug messages with `world.log << value`. The compiler driver and viewer forward
+each line to stderr with a `DM:` prefix. The editor sends it through its normal logger, which writes
+to stderr where available and to `latest.log` on Windows. Other output targets remain blocked.
+
 ## Validation
 
 The VM tests cover neighborhood smoothing, incremental remove/restore, deterministic random results,
 instance-variable cache separation, list-backed neighbor overlays, rollback, and bounded recursive
 appearance export. The compiler-driver check exercises preprocessing, semantic analysis, bytecode
-generation, map translation, the four bake stages, summary output, and incremental restoration:
+generation, map translation, the five bake stages, summary output, and incremental restoration:
 
 ```sh
 cargo test --workspace
 cargo run --release --bin rmdc -- bake examples/env/test.dme examples/env/test.dmm --summary --check-edit
 ```
 
-Editor and viewer appearance integration, codebase-specific profiles, lighting harvest and solving,
-and the renderer lighting pass are intentionally implemented by later stack entries.
+The editor tests cover whole-map baking without changing map bytes, overlay sprites, incremental
+sprites matching a full rebuild, undo and redo through the bake, movable smoothing, standalone
+thumbnails, hiding a type without rebaking, and that only a codebase with a profile bakes.
+
+Example profiles for tgstation, Goonstation, and Vanderlin, lighting harvest and solving, and the
+renderer lighting pass are intentionally implemented by later stack entries.

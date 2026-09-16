@@ -2,7 +2,6 @@ pub const VERSION_SOURCE: &str = include_str!(concat!(env!("OUT_DIR"), "/version
 pub const CORE_SOURCE: &str = include_str!("../core.dm");
 pub const STDDEF_SOURCE: &str = include_str!("../stddef.dm");
 pub const DEMIR_SOURCE: &str = include_str!("../demir.dm");
-pub const DEFAULT_PROFILE_SOURCE: &str = include_str!("../profiles/default.dm");
 
 include!(concat!(env!("OUT_DIR"), "/intrinsic.rs"));
 

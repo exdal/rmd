@@ -31,7 +31,14 @@ impl Session {
     }
 
     pub fn load_environment(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        let (environment, diagnostics) = Environment::load(path)?;
+        let (environment, diagnostics) = Environment::load_with(
+            path,
+            editor::environment::BakeOptions {
+                enabled: editor::environment::baking_enabled(true),
+                ..Default::default()
+            },
+            &editor::progress::Progress::new(),
+        )?;
 
         report(&environment, &diagnostics);
 
@@ -52,13 +59,31 @@ impl Session {
         validate_level(z, map.size.z)?;
         let document = MapDocument::open(path, map, z);
 
+        let mut bake = self
+            .environment
+            .as_ref()
+            .and_then(|environment| editor::bake::build(environment, &document));
+        if let Some(bake) = &mut bake {
+            for line in bake.take_output() {
+                eprintln!("DM: {line}");
+            }
+            eprintln!(
+                "baked {} atoms, {} initialization or bake faults",
+                bake.succeeded,
+                bake.diagnostics.count()
+            );
+        }
         self.sprite_instances = self.environment.as_ref().map_or_else(Vec::new, |environment| {
-            frame::build(
+            frame::build_with_options(
                 &environment.tree,
                 &environment.icons,
                 &self.textures,
                 &document,
-                self.options.tile_size,
+                frame::FrameRenderOptions {
+                    visibility: &frame::TypeVisibility::default(),
+                    tile_size: self.options.tile_size,
+                    appearances: editor::bake::appearances(bake.as_ref()),
+                },
             )
             .sprites
         });
@@ -207,6 +232,10 @@ fn report(environment: &Environment, diagnostics: &editor::environment::LoadDiag
 
     for error in &diagnostics.sema {
         eprintln!("{}", error.display(path(error.location.file)));
+    }
+
+    if let Some(error) = &diagnostics.codegen {
+        eprintln!("warning: baking is off, bytecode generation failed: {error}");
     }
 
     for (name, error) in &diagnostics.icons {

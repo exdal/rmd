@@ -193,53 +193,6 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
     let compile_started = std::time::Instant::now();
     let arena = StrArena::new();
     let preprocessed = preprocessor::Preprocessor::new(&arena).with_baking(true).run(entry)?;
-    let first_source_root = source_root(&preprocessed.sources, preprocessed.entry, entry);
-    for error in &preprocessed.errors {
-        eprintln!(
-            "{}",
-            error.display(relative_path(
-                &preprocessed.sources,
-                first_source_root,
-                error.location.file,
-            ))
-        );
-    }
-    if !preprocessed.is_ok() {
-        return Err("preprocessing failed".into());
-    }
-    let ast = ast::parse(&preprocessed.tokens).map_err(|error| {
-        std::io::Error::other(format_parse_error(
-            &error,
-            &preprocessed.sources,
-            preprocessed.entry,
-            entry,
-        ))
-    })?;
-    let (tree, _, errors) = sema::analyze(&ast);
-    for error in &errors {
-        eprintln!(
-            "{}",
-            error.display(relative_path(
-                &preprocessed.sources,
-                first_source_root,
-                error.location.file,
-            ))
-        );
-    }
-    if !errors.is_empty() {
-        return Err("semantic analysis failed".into());
-    }
-    let profile = vm::bake::detect_profile(&tree);
-    drop(tree);
-    drop(ast);
-    drop(preprocessed);
-    drop(arena);
-
-    let arena = StrArena::new();
-    let preprocessed = preprocessor::Preprocessor::new(&arena)
-        .with_baking(true)
-        .with_postlude(preprocessor::postlude_files(profile))
-        .run(entry)?;
     let source_root = source_root(&preprocessed.sources, preprocessed.entry, entry);
     for error in &preprocessed.errors {
         eprintln!(
@@ -248,7 +201,7 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
         );
     }
     if !preprocessed.is_ok() {
-        return Err("profile preprocessing failed".into());
+        return Err("preprocessing failed".into());
     }
     let ast = ast::parse(&preprocessed.tokens).map_err(|error| {
         std::io::Error::other(format_parse_error(
@@ -266,14 +219,20 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
         );
     }
     if !errors.is_empty() {
-        return Err("profile semantic analysis failed".into());
+        return Err("semantic analysis failed".into());
     }
+
+    if !vm::bake::has_profile(&tree) {
+        return Err(
+            "the codebase defines no demir_bake, demir_initialize, demir_prepare or demir_light under #ifdef \
+             __DEMIR_BAKE__"
+                .into(),
+        );
+    }
+
     let module = codegen::generate(&ir_module)?;
     drop(ast);
-    eprintln!(
-        "profile {profile}, compiled in {:.2}s",
-        compile_started.elapsed().as_secs_f32()
-    );
+    eprintln!("compiled in {:.2}s", compile_started.elapsed().as_secs_f32());
 
     let source = std::fs::read_to_string(map_path)?;
     let (map, errors) = dmm::parser::parse(&source);
@@ -343,6 +302,7 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
         vm::Limits::default(),
     );
     let bake_seconds = bake_started.elapsed().as_secs_f64();
+    report_bake_output(&mut bake);
 
     let mut changed = 0;
     for (id, position, fallback) in baseline {
@@ -405,9 +365,11 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
         let before = bake.appearances.clone();
         let started = std::time::Instant::now();
         let affected = bake.update(&tree, &module, Vec::new(), &[atom.instance]);
+        report_bake_output(&mut bake);
         let remove_us = started.elapsed().as_micros();
         let started = std::time::Instant::now();
         bake.update(&tree, &module, vec![atom], &[]);
+        report_bake_output(&mut bake);
         let restore_us = started.elapsed().as_micros();
         if bake.appearances != before {
             return Err("remove/restore changed the derived appearance layer".into());
@@ -419,6 +381,12 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
     }
 
     Ok(())
+}
+
+fn report_bake_output(bake: &mut vm::bake::Bake) {
+    for line in bake.take_output() {
+        eprintln!("DM: {line}");
+    }
 }
 
 fn eval(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
