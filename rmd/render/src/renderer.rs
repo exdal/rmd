@@ -967,8 +967,6 @@ impl Renderer {
                 .specialize_constant(spec::SHOW_AREAS, state.show_areas)
                 .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
                 .specialize_constant(spec::SPRITE_EDGE_ONLY, true)
-                .push_constants_from(underlay_camera)
-                .draw_indirect_at(draw_commands, 0, 1u32, DRAW_INDIRECT_STRIDE)
                 .push_constants_from(active_camera)
                 .draw_indirect_at(
                     draw_commands,
