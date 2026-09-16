@@ -7,6 +7,7 @@
 //! rmdc ir     <file.dme>    preprocess, parse and print the IR module
 //! rmdc bytecode <file.dme>  compile and print stack bytecode
 //! rmdc eval   <file.dm>     compile and execute /proc/main or /world/New
+//! rmdc bake   <file.dme> <file.dmm>  bake map appearances through DM
 //! rmdc map    <file.dmm>    parse a map and summarise it
 //! rmdc roundtrip <file.dmm> parse a map, write it back out and diff the bytes
 //! rmdc icon   <file.dmi>    decode an icon and list its states
@@ -27,7 +28,7 @@ use dmi::{IconFile, metadata::IconState};
 use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
 
 fn usage() -> ExitCode {
-    eprintln!("usage: rmdc <tokens|pp|tree|ir|bytecode|eval|map|roundtrip|icon> <file>");
+    eprintln!("usage: rmdc <tokens|pp|tree|ir|bytecode|eval|bake|map|roundtrip|icon> <file>");
 
     ExitCode::FAILURE
 }
@@ -45,6 +46,21 @@ fn main() -> ExitCode {
         "ir" => dump_ir(&path),
         "bytecode" => dump_bytecode(&path),
         "eval" => eval(&path),
+        "bake" => match args.next() {
+            Some(map) => {
+                let flags = args.collect::<Vec<_>>();
+                if flags.iter().any(|flag| flag != "--summary" && flag != "--check-edit") {
+                    return usage();
+                }
+                bake_map(
+                    &path,
+                    Path::new(&map),
+                    flags.iter().any(|flag| flag == "--summary"),
+                    flags.iter().any(|flag| flag == "--check-edit"),
+                )
+            },
+            None => return usage(),
+        },
         "map" => dump_map(&path),
         "roundtrip" => roundtrip_map(&path),
         "icon" => dump_icon(&path),
@@ -169,6 +185,238 @@ fn dump_bytecode(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let (_, module, _) = sema::analyze(&ast);
     let module = codegen::generate(&module)?;
     print!("{}", codegen::disasm::dump(&module)?);
+
+    Ok(())
+}
+
+fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let compile_started = std::time::Instant::now();
+    let arena = StrArena::new();
+    let preprocessed = preprocessor::Preprocessor::new(&arena).with_baking(true).run(entry)?;
+    let first_source_root = source_root(&preprocessed.sources, preprocessed.entry, entry);
+    for error in &preprocessed.errors {
+        eprintln!(
+            "{}",
+            error.display(relative_path(
+                &preprocessed.sources,
+                first_source_root,
+                error.location.file,
+            ))
+        );
+    }
+    if !preprocessed.is_ok() {
+        return Err("preprocessing failed".into());
+    }
+    let ast = ast::parse(&preprocessed.tokens).map_err(|error| {
+        std::io::Error::other(format_parse_error(
+            &error,
+            &preprocessed.sources,
+            preprocessed.entry,
+            entry,
+        ))
+    })?;
+    let (tree, _, errors) = sema::analyze(&ast);
+    for error in &errors {
+        eprintln!(
+            "{}",
+            error.display(relative_path(
+                &preprocessed.sources,
+                first_source_root,
+                error.location.file,
+            ))
+        );
+    }
+    if !errors.is_empty() {
+        return Err("semantic analysis failed".into());
+    }
+    let profile = vm::bake::detect_profile(&tree);
+    drop(tree);
+    drop(ast);
+    drop(preprocessed);
+    drop(arena);
+
+    let arena = StrArena::new();
+    let preprocessed = preprocessor::Preprocessor::new(&arena)
+        .with_baking(true)
+        .with_postlude(preprocessor::postlude_files(profile))
+        .run(entry)?;
+    let source_root = source_root(&preprocessed.sources, preprocessed.entry, entry);
+    for error in &preprocessed.errors {
+        eprintln!(
+            "{}",
+            error.display(relative_path(&preprocessed.sources, source_root, error.location.file))
+        );
+    }
+    if !preprocessed.is_ok() {
+        return Err("profile preprocessing failed".into());
+    }
+    let ast = ast::parse(&preprocessed.tokens).map_err(|error| {
+        std::io::Error::other(format_parse_error(
+            &error,
+            &preprocessed.sources,
+            preprocessed.entry,
+            entry,
+        ))
+    })?;
+    let (tree, ir_module, errors) = sema::analyze(&ast);
+    for error in &errors {
+        eprintln!(
+            "{}",
+            error.display(relative_path(&preprocessed.sources, source_root, error.location.file))
+        );
+    }
+    if !errors.is_empty() {
+        return Err("profile semantic analysis failed".into());
+    }
+    let module = codegen::generate(&ir_module)?;
+    drop(ast);
+    eprintln!(
+        "profile {profile}, compiled in {:.2}s",
+        compile_started.elapsed().as_secs_f32()
+    );
+
+    let source = std::fs::read_to_string(map_path)?;
+    let (map, errors) = dmm::parser::parse(&source);
+    if !errors.is_empty() {
+        return Err(format!("{} map parse errors", errors.len()).into());
+    }
+
+    let mut atoms = Vec::new();
+    let mut instance = 0u64;
+    for z in 1..=map.size.z {
+        for y in 1..=map.size.y {
+            for x in 1..=map.size.x {
+                if let Some(tile) = map.tile_at(dmm::Coord::new(x, y, z)) {
+                    for prefab in tile {
+                        instance += 1;
+                        if let Some(ty) = tree.id_of(&prefab.path) {
+                            atoms.push(vm::bake::Atom {
+                                instance,
+                                ty,
+                                position: vm::world::Position::new(x as i32, y as i32, z as i32),
+                                vars: prefab
+                                    .vars
+                                    .iter()
+                                    .map(|(name, value)| (name.clone(), value.value.clone()))
+                                    .collect::<Vec<_>>(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let baseline = atoms
+        .iter()
+        .map(|atom| {
+            let state = atom
+                .vars
+                .iter()
+                .find(|(name, _)| name.as_str() == "icon_state")
+                .map(|(_, value)| value.clone())
+                .or_else(|| {
+                    tree.var_inherited(atom.ty, &"icon_state".into())
+                        .map(|variable| variable.value.clone())
+                });
+            (atom.instance, atom.position, state)
+        })
+        .collect::<Vec<_>>();
+    let edit_atom = check_edit
+        .then(|| {
+            atoms
+                .iter()
+                .find(|atom| {
+                    tree.get(atom.ty)
+                        .is_some_and(|ty| ty.path.to_string().contains("/wall"))
+                })
+                .cloned()
+        })
+        .flatten();
+
+    let bake_started = std::time::Instant::now();
+    let mut bake = vm::bake::Bake::new(
+        &tree,
+        &module,
+        atoms,
+        [map.size.x as i32, map.size.y as i32, map.size.z as i32],
+        vm::Limits::default(),
+    );
+    let bake_seconds = bake_started.elapsed().as_secs_f64();
+
+    let mut changed = 0;
+    for (id, position, fallback) in baseline {
+        let baked = bake.appearances.get(&id).and_then(|delta| {
+            delta
+                .vars
+                .iter()
+                .find(|(name, _)| name.as_str() == "icon_state")
+                .map(|(_, value)| value.clone())
+        });
+        if baked.is_some()
+            && baked.as_ref().unwrap_or(&core::types::Value::Null)
+                != fallback.as_ref().unwrap_or(&core::types::Value::Null)
+        {
+            changed += 1;
+        }
+        if !summary {
+            let state = baked
+                .or(fallback)
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "null".into());
+            println!("{},{},{} #{id} {state}", position.x, position.y, position.z);
+        }
+    }
+
+    eprintln!(
+        "baked {}/{} attempted, {} placed atoms, {} faults in {:.3}s",
+        bake.succeeded,
+        bake.attempted,
+        instance,
+        bake.diagnostics.count(),
+        bake_seconds
+    );
+    eprintln!("{changed} icon states changed, {} cache hits", bake.cache_hits);
+    for diagnostic in bake
+        .diagnostics
+        .entries
+        .iter()
+        .filter(|diagnostic| diagnostic.count > 0)
+    {
+        let fault = &diagnostic.fault;
+        let name = fault
+            .proc
+            .and_then(|proc| module.function_for_proc(proc))
+            .and_then(|function| module.strings.get(function.name.0 as usize))
+            .map(String::as_str)
+            .unwrap_or_default();
+        eprintln!(
+            "{}x {name} {:?} at {}",
+            diagnostic.count,
+            fault.kind,
+            fault.location.display(preprocessed.sources.path(fault.location.file))
+        );
+        if let Some(offset) = fault.offset {
+            eprintln!("  bytecode {offset}");
+        }
+    }
+
+    if let Some(atom) = edit_atom {
+        let before = bake.appearances.clone();
+        let started = std::time::Instant::now();
+        let affected = bake.update(&tree, &module, Vec::new(), &[atom.instance]);
+        let remove_us = started.elapsed().as_micros();
+        let started = std::time::Instant::now();
+        bake.update(&tree, &module, vec![atom], &[]);
+        let restore_us = started.elapsed().as_micros();
+        if bake.appearances != before {
+            return Err("remove/restore changed the derived appearance layer".into());
+        }
+        eprintln!(
+            "edit check: {} affected instances, remove {remove_us} us, restore {restore_us} us, appearances restored",
+            affected.len()
+        );
+    }
 
     Ok(())
 }

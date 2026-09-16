@@ -2,7 +2,9 @@
 
 // the BYOND version we support (hopefully)
 
+#ifndef __DEMIR_BAKE__
 #define __DEMIR_COMPAT__
+#endif
 #ifdef __DEMIR_COMPAT__
 // mapping tools set this, and codebases gate map editor icon states on it
 #define FASTDMM  // we do a little bit of lying
@@ -79,6 +81,32 @@
 	var/render_target
 	var/vis_flags
 	var/pixloc/pixloc
+
+	var/demir_light_range = 0
+	/// Radius of full brightness inside `demir_light_range`.
+	var/demir_light_inner_range = 0
+	var/demir_light_power = 0
+	var/demir_light_color = null
+	var/demir_light_angle = 360
+	var/demir_light_dir = 0
+	var/demir_light_height = 1
+	/// Falloff exponent.
+	var/demir_light_curve = 1
+	/// Combine with other peak sources by taking the strongest instead of summing.
+	var/demir_light_peak = 0
+	/// Only contribute when this cell touches one that is not fullbright.
+	var/demir_light_edge_only = 0
+	/// Use `demir_light_quadratic / distance ** 2` when nonzero.
+	var/demir_light_quadratic = 0
+	/// Constant added to the quadratic term.
+	var/demir_light_constant = 0
+	/// A value of -1 follows `opacity`.
+	var/demir_blocks_light = -1
+	var/demir_ambient_color = null
+	/// Ambient power in the range 0..1.
+	var/demir_ambient_power = 0
+	/// Suppress corner lighting for this cell.
+	var/demir_fullbright = 0
 
 	proc/Click(location, control, params)
 		set __demir_intrin = 1010
@@ -259,6 +287,18 @@
 	parent_type = /image
 	var/animate_movement = 1
 	var/screen_loc
+
+///
+/// BAKING HOOKS
+///
+
+/proc/demir_bake(atom/target)
+
+/proc/demir_initialize(atom/target)
+
+/proc/demir_light(atom/target)
+
+#define USE_PERSPECTIVE_EDITOR_WALLS
 
 ///
 /// CLIENT

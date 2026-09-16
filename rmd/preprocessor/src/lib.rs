@@ -187,6 +187,7 @@ pub struct Preprocessor<'a> {
 
     include_core: bool,
     prelude: Vec<PreludeFile>,
+    postlude: Vec<PreludeFile>,
     progress: Option<ProgressHook<'a>>,
     aborted: bool,
 }
@@ -215,6 +216,7 @@ impl<'a> Preprocessor<'a> {
             last_if: Location::default(),
             include_core: true,
             prelude: prelude_files(),
+            postlude: Vec::new(),
             progress: None,
             aborted: false,
         }
@@ -222,6 +224,32 @@ impl<'a> Preprocessor<'a> {
 
     pub fn with_prelude(mut self, files: impl IntoIterator<Item = PreludeFile>) -> Self {
         self.prelude = files.into_iter().collect();
+
+        self
+    }
+
+    pub fn with_postlude(mut self, files: impl IntoIterator<Item = PreludeFile>) -> Self {
+        self.postlude = files.into_iter().collect();
+
+        self
+    }
+
+    pub fn with_baking(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.prelude
+                .insert(0, PreludeFile::Embedded("<demir-bake.dm>", "#define __DEMIR_BAKE__\n"));
+        }
+
+        self
+    }
+
+    pub fn with_editor_walls(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.prelude.insert(
+                0,
+                PreludeFile::Embedded("<demir-editor-walls.dm>", "#define PERSPECTIVE_EDITOR_WALL\n"),
+            );
+        }
 
         self
     }
@@ -278,6 +306,18 @@ impl<'a> Preprocessor<'a> {
         }
 
         self.drain();
+        self.end_stream();
+
+        for file in std::mem::take(&mut self.postlude) {
+            match file {
+                PreludeFile::Embedded(name, contents) => self.open_embedded(name, contents),
+                PreludeFile::Disk(path) => self.include_file(&path, Location::default()),
+            }
+
+            self.drain();
+            self.end_stream();
+        }
+
         self.flush_layout();
 
         if !self.conditionals.is_empty() {
@@ -1499,7 +1539,7 @@ pub const STDDEF_ENV: &str = "DM_STDDEF";
 
 pub const DEMIR_ENV: &str = "DM_DEMIR";
 
-pub use prelude::{CORE_SOURCE, DEMIR_SOURCE, STDDEF_SOURCE};
+pub use prelude::{CORE_SOURCE, DEFAULT_PROFILE_SOURCE, DEMIR_SOURCE, STDDEF_SOURCE};
 
 pub enum PreludeFile {
     Embedded(&'static str, &'static str),
@@ -1520,6 +1560,14 @@ fn env_override(variable: &str, embedded: PreludeFile) -> PreludeFile {
         Some(path) => PreludeFile::Disk(PathBuf::from(path)),
         None => embedded,
     }
+}
+
+/// `DM_PROFILE` replaces the selected embedded postlude.
+pub fn postlude_files(_profile: &str) -> Vec<PreludeFile> {
+    vec![env_override(
+        "DM_PROFILE",
+        PreludeFile::Embedded("<profiles/default.dm>", DEFAULT_PROFILE_SOURCE),
+    )]
 }
 
 pub fn preprocess(arena: &StrArena, entry: impl AsRef<Path>) -> PreprocessResult<Preprocessed<'_>> {
@@ -1857,6 +1905,64 @@ mod tests {
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         assert!(rendered.contains("x = 1"), "{rendered}");
+    }
+
+    #[test]
+    fn postludes_run_after_the_entry_and_share_its_macros() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("rmd-postlude-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let entry = dir.join("entry.dm");
+        fs::write(&entry, "#define FROM_ENTRY 42\n/datum\n\tvar/x = 1\n").expect("write entry");
+
+        let arena = StrArena::new();
+        let result = Preprocessor::new(&arena)
+            .without_prelude()
+            .with_postlude([PreludeFile::Embedded(
+                "<test-profile.dm>",
+                "/proc/after()\n\treturn FROM_ENTRY\n",
+            )])
+            .run(&entry)
+            .expect("preprocess");
+        let rendered = render(&result.tokens);
+
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert!(rendered.contains("return 42"), "{rendered}");
+        assert!(rendered.find("var / x").or_else(|| rendered.find("x = 1")) < rendered.find("after"));
+
+        let missing = Preprocessor::new(&arena)
+            .without_prelude()
+            .with_postlude([PreludeFile::Disk(dir.join("missing.dm"))])
+            .run(&entry)
+            .expect("missing postlude is a diagnostic");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(!missing.is_ok());
+    }
+
+    #[test]
+    fn baking_disables_mapping_compatibility_defines() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("rmd-baking-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let entry = dir.join("entry.dm");
+        fs::write(&entry, "/proc/test()\n\treturn 1\n").expect("write entry");
+
+        let arena = StrArena::new();
+        let result = Preprocessor::new(&arena)
+            .with_baking(true)
+            .run(&entry)
+            .expect("preprocess");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(result.is_ok(), "{:?}", result.errors);
+        assert!(result.defines.is_defined("__DEMIR_BAKE__"));
+        assert!(!result.defines.is_defined("FASTDMM"));
+        assert!(!result.defines.is_defined("SPACEMAN_DMM"));
     }
 
     /// `#if 0` around code the lexer would reject must not diagnose the dead branch. Indentation

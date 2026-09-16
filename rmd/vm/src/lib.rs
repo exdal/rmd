@@ -1,6 +1,7 @@
 use core::types::ProcId;
 use std::collections::HashMap;
 
+pub mod bake;
 mod builtins;
 mod error;
 pub mod eval;

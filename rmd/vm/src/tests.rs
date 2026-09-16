@@ -8,8 +8,10 @@ use crate::{
     GenericValue,
     Limits,
     Runtime,
+    bake::{Atom, Bake},
     eval::Evaluator,
     heap::{Object, ObjectId},
+    world::Position,
 };
 
 fn compile(source: &str) -> (ObjectTree, codegen::Module) {
@@ -39,6 +41,194 @@ fn run(source: &str, name: &str) -> GenericValue {
     Runtime::default()
         .run(&tree, &module, proc(&tree, name), None, Vec::new(), Limits::default())
         .expect("fixture should execute")
+}
+
+const WALLS: &str = r#"
+/turf/wall
+    icon_state = "static"
+    overlays = list()
+/proc/demir_bake(atom/target)
+    if(!istype(target, /turf/wall))
+        return
+    var/junction = 0
+    for(var/direction in list(1, 2, 4, 8))
+        if(istype(get_step(target, direction), /turf/wall))
+            junction |= direction
+    target.icon_state = "wall-[junction]"
+"#;
+
+fn wall_patch(tree: &ObjectTree) -> Vec<Atom> {
+    let ty = tree
+        .id_of(&TreePath::parse("/turf/wall"))
+        .expect("wall type should exist");
+    let mut atoms = Vec::new();
+    for y in 1..=3 {
+        for x in 1..=3 {
+            atoms.push(Atom {
+                instance: ((y - 1) * 3 + x) as u64,
+                ty,
+                position: Position::new(x, y, 1),
+                vars: Vec::new(),
+            });
+        }
+    }
+
+    atoms
+}
+
+fn baked_state(bake: &Bake, id: u64) -> Option<&str> {
+    bake.appearances
+        .get(&id)?
+        .vars
+        .iter()
+        .find(|(name, _)| name.as_str() == "icon_state")?
+        .1
+        .as_text()
+}
+
+#[test]
+fn baking_updates_a_neighborhood_and_restores_removed_atoms() {
+    let (tree, module) = compile(WALLS);
+    let atoms = wall_patch(&tree);
+    let original = atoms.clone();
+    let mut bake = Bake::new(&tree, &module, atoms, [3, 3, 1], Limits::default());
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    assert_eq!(baked_state(&bake, 5), Some("wall-15"));
+    assert_eq!(baked_state(&bake, 1), Some("wall-5"));
+    assert_eq!(baked_state(&bake, 9), Some("wall-10"));
+
+    bake.update(&tree, &module, Vec::new(), &[5]);
+    assert_eq!(baked_state(&bake, 2), Some("wall-12"));
+    assert_eq!(baked_state(&bake, 4), Some("wall-3"));
+
+    bake.update(&tree, &module, vec![original[4].clone()], &[]);
+    assert_eq!(baked_state(&bake, 5), Some("wall-15"));
+    assert_eq!(baked_state(&bake, 2), Some("wall-13"));
+}
+
+#[test]
+fn baking_rolls_back_overlays_and_randomness_is_repeatable() {
+    let source = WALLS.replace(
+        "target.icon_state = \"wall-[junction]\"",
+        "target.icon_state = \"wall-[rand(1, 100)]-[pick(1, 2, 3)]\"\n    target.overlays += \"edge\"",
+    );
+    let (tree, module) = compile(&source);
+    let atoms = wall_patch(&tree);
+    let mut bake = Bake::new(&tree, &module, atoms.clone(), [3, 3, 1], Limits::default());
+    let before = bake.appearances.clone();
+
+    bake.update(&tree, &module, vec![atoms[4].clone()], &[]);
+
+    assert_eq!(bake.appearances, before);
+    assert_eq!(bake.appearances[&5].overlays.len(), 1);
+}
+
+#[test]
+fn bake_cache_uses_instance_variables() {
+    let source = r#"
+/turf/styled
+    icon_state = "static"
+    var/style = 0
+/proc/demir_bake(atom/target)
+    if(istype(target, /turf/styled))
+        target.icon_state = "[target.style]"
+"#;
+    let (tree, module) = compile(source);
+    let ty = tree
+        .id_of(&TreePath::parse("/turf/styled"))
+        .expect("styled turf should exist");
+    let atoms = (1..=20)
+        .map(|x| Atom {
+            instance: x as u64,
+            ty,
+            position: Position::new(x, 1, 1),
+            vars: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let mut bake = Bake::new(&tree, &module, atoms.clone(), [20, 1, 1], Limits::default());
+    assert!(bake.cache_hits > 10);
+
+    let mut edited = atoms[9].clone();
+    edited.vars.push(("style".into(), core::types::Value::Num(7.0)));
+    bake.update(&tree, &module, vec![edited], &[]);
+
+    assert_eq!(baked_state(&bake, 10), Some("7"));
+    assert_eq!(baked_state(&bake, 11), Some("0"));
+}
+
+#[test]
+fn neighbor_overlay_changes_are_exported_and_rolled_back() {
+    let (tree, module) = compile(
+        r#"
+/turf/overlay_test
+    var/list/overlays = list()
+    proc/Initialize(mapload)
+        overlays = list("base")
+/proc/demir_bake(atom/target)
+    if(istype(target, /turf/overlay_test))
+        var/turf/east = get_step(target, 4)
+        if(east)
+            east.overlays.Add("edge")
+"#,
+    );
+    let ty = tree
+        .id_of(&TreePath::parse("/turf/overlay_test"))
+        .expect("overlay turf should exist");
+    let atoms = (1..=2)
+        .map(|x| Atom {
+            instance: x as u64,
+            ty,
+            position: Position::new(x, 1, 1),
+            vars: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let mut bake = Bake::new(&tree, &module, atoms, [2, 1, 1], Limits::default());
+
+    assert_eq!(bake.appearances[&2].overlays.len(), 2);
+    bake.update(&tree, &module, Vec::new(), &[1]);
+    assert_eq!(bake.appearances[&2].overlays.len(), 1);
+}
+
+#[test]
+fn shared_overlay_graphs_respect_the_export_budget() {
+    let (tree, module) = compile(
+        r#"
+/turf/export_test
+    icon_state = "static"
+    overlays = list()
+/proc/demir_bake(atom/target)
+    if(istype(target, /turf/export_test))
+        var/image/previous = new
+        for(var/i = 1 to 24)
+            var/image/next = new
+            next.overlays = list(previous, previous)
+            previous = next
+        target.overlays += previous
+"#,
+    );
+    let atom = Atom {
+        instance: 1,
+        ty: tree
+            .id_of(&TreePath::parse("/turf/export_test"))
+            .expect("export turf should exist"),
+        position: Position::new(1, 1, 1),
+        vars: Vec::new(),
+    };
+    let bake = Bake::new(
+        &tree,
+        &module,
+        vec![atom],
+        [1, 1, 1],
+        Limits {
+            allocations: 1000,
+            ..Default::default()
+        },
+    );
+
+    assert!(bake.appearances.is_empty());
+    assert_eq!(bake.diagnostics.count(), 1);
+    assert_eq!(bake.diagnostics.entries[0].fault.kind, FaultKind::Memory);
 }
 
 #[test]
