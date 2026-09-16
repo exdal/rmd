@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::OnceLock};
+use std::{collections::HashMap, ops::Range, sync::OnceLock};
 
 use dmm::{Coord, Prefab, PrefabInstanceId};
 pub use vm::{AppearanceDelta, bake::Bake};
@@ -128,9 +128,12 @@ pub fn build(environment: &Environment, document: &MapDocument) -> Option<Bake> 
 
 pub fn update(
     bake: &mut Bake, environment: &Environment, document: &MapDocument, affected: &[PrefabInstanceId],
-) -> Vec<PrefabInstanceId> {
+) -> BakeUpdate {
     let Some(program) = environment.bake_program.as_ref() else {
-        return affected.to_vec();
+        return BakeUpdate {
+            appearances: affected.to_vec(),
+            lighting: None,
+        };
     };
 
     let mut replacements = Vec::new();
@@ -142,10 +145,21 @@ pub fn update(
         }
     }
 
-    bake.update(&program.tree, &program.module, replacements, &removed)
-        .into_iter()
-        .filter_map(PrefabInstanceId::from_raw)
-        .collect()
+    let update = bake.update(&program.tree, &program.module, replacements, &removed);
+    BakeUpdate {
+        appearances: update
+            .appearances
+            .into_iter()
+            .filter_map(PrefabInstanceId::from_raw)
+            .collect(),
+        lighting: update.lighting,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BakeUpdate {
+    pub appearances: Vec<PrefabInstanceId>,
+    pub lighting: Option<Range<usize>>,
 }
 
 pub fn appearances(bake: Option<&Bake>) -> &HashMap<u64, AppearanceDelta> {
@@ -209,6 +223,7 @@ mod tests {
             visibility,
             tile_size: 32,
             appearances: appearances(Some(bake)),
+            lighting: bake.lighting.as_ref(),
         }
     }
 
@@ -434,7 +449,7 @@ mod tests {
             &environment.icons,
             &textures,
             &document,
-            &affected,
+            &affected.appearances,
             options(&visibility, &bake),
         );
         let rebuilt = frame::build_with_options(

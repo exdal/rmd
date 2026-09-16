@@ -178,8 +178,29 @@ pub struct MapViewFrame<'a> {
     pub level_count: u32,
     pub revision: u64,
     pub pending_update: Option<FrameUpdate>,
+    pub lighting: Option<LightingFrame<'a>>,
     pub interaction: MapViewInteraction,
     pub preview: Option<SpritePreview<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LightTile {
+    pub corners: [[f32; 3]; 4],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LightingFrame<'a> {
+    pub size: [u32; 3],
+    pub tiles: &'a [LightTile],
+    pub tile_size: u32,
+    pub revision: u64,
+    pub pending_update: Option<LightingUpdate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LightingUpdate {
+    pub previous_revision: u64,
+    pub tiles: UpdateRange,
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -2,11 +2,13 @@ use core::types::{Identifier, ProcId, Value};
 use std::{
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
+    ops::Range,
 };
 
 use codegen::Module;
 use objtree::{ObjectTree, TypeId};
 
+pub use crate::lighting::{LightTile, LightingMap};
 use crate::{
     AppearanceDelta,
     Diagnostics,
@@ -16,6 +18,7 @@ use crate::{
     Limits,
     Runtime,
     heap::{Object, ObjectId},
+    lighting::{LightSource, LightingAtom, direction_angle, parse_color},
     world::Position,
 };
 
@@ -54,6 +57,12 @@ pub struct Atom {
     pub ty: TypeId,
     pub position: Position,
     pub vars: Vec<(Identifier, Value)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BakeUpdate {
+    pub appearances: Vec<u64>,
+    pub lighting: Option<Range<usize>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -106,6 +115,7 @@ struct Preview {
 pub struct Bake {
     pub runtime: Runtime,
     pub appearances: HashMap<u64, AppearanceDelta>,
+    pub lighting: Option<LightingMap>,
     pub diagnostics: Diagnostics,
     pub attempted: usize,
     pub succeeded: usize,
@@ -127,6 +137,7 @@ pub struct Bake {
     contributions: HashMap<u64, Vec<u64>>,
     by_target: HashMap<u64, Contributions>,
     dirty_appearances: HashSet<u64>,
+    light_atoms: HashMap<u64, LightingAtom>,
     hooks: Hooks,
 }
 
@@ -202,6 +213,15 @@ impl Bake {
         }
 
         progress(Stage::Light, total, total);
+
+        if bake.hooks.light.is_some() {
+            for id in &ids {
+                bake.harvest_light(tree, *id);
+            }
+            let mut lighting = LightingMap::new(size);
+            lighting.solve_all(bake.light_atoms.values());
+            bake.lighting = Some(lighting);
+        }
 
         for id in &ids {
             bake.fingerprint(*id);
@@ -392,6 +412,62 @@ impl Bake {
         }
     }
 
+    fn harvest_light(&mut self, tree: &ObjectTree, id: u64) {
+        let Some(atom) = self.atoms.get(&id) else {
+            return;
+        };
+
+        let position = atom.position;
+        let Some(object) = self.object(id).and_then(|id| self.runtime.heap.object(id)) else {
+            return;
+        };
+
+        let range = object_number(object, tree, "demir_light_range", 0.0).max(0.0);
+        let power = object_number(object, tree, "demir_light_power", 0.0);
+        let quadratic = object_number(object, tree, "demir_light_quadratic", 0.0);
+        let source = (range.is_finite() && range > 0.0 && power.is_finite() && power != 0.0).then(|| {
+            let inner_range = object_number(object, tree, "demir_light_inner_range", 0.0).clamp(0.0, range);
+            let angle = object_number(object, tree, "demir_light_angle", 360.0).clamp(0.0, 360.0);
+            LightSource {
+                range,
+                inner_range: finite_or(inner_range, 0.0),
+                power,
+                color: object_color(object, tree, "demir_light_color"),
+                angle: finite_or(angle, 360.0),
+                direction: direction_angle(object_number(object, tree, "demir_light_dir", 0.0)),
+                height: finite_or(object_number(object, tree, "demir_light_height", 1.0), 1.0),
+                curve: finite_or(object_number(object, tree, "demir_light_curve", 1.0), 1.0).max(f32::EPSILON),
+                peak: object_truthy(object, tree, "demir_light_peak", false),
+                edge_only: object_truthy(object, tree, "demir_light_edge_only", false),
+                quadratic: finite_or(quadratic, 0.0),
+                constant: finite_or(object_number(object, tree, "demir_light_constant", 0.0), 0.0),
+            }
+        });
+
+        let blocks_value = object_number(object, tree, "demir_blocks_light", -1.0);
+        let blocks = if blocks_value == -1.0 {
+            object_truthy(object, tree, "opacity", false)
+        } else {
+            blocks_value != 0.0
+        };
+
+        let ambient_power = finite_or(object_number(object, tree, "demir_ambient_power", 0.0), 0.0);
+        let ambient = object_color(object, tree, "demir_ambient_color").map(|channel| channel * ambient_power);
+        let light = LightingAtom {
+            position,
+            source,
+            blocks,
+            ambient,
+            fullbright: object_truthy(object, tree, "demir_fullbright", false),
+        };
+
+        if light.affects_lighting() {
+            self.light_atoms.insert(id, light);
+        } else {
+            self.light_atoms.remove(&id);
+        }
+    }
+
     fn record_fault(&mut self, id: u64, fault: Fault) {
         if let Some(previous) = self.faults.insert(id, fault.clone()) {
             self.diagnostics.remove(&previous);
@@ -577,9 +653,12 @@ impl Bake {
     }
 
     // replaces changed inputs and reevaluates the surrounding 3 by 3 by 3 neighborhood
-    pub fn update(&mut self, tree: &ObjectTree, module: &Module, replacements: Vec<Atom>, removed: &[u64]) -> Vec<u64> {
+    pub fn update(
+        &mut self, tree: &ObjectTree, module: &Module, replacements: Vec<Atom>, removed: &[u64],
+    ) -> BakeUpdate {
         self.epoch = self.epoch.wrapping_add(1);
         let mut dirty = HashSet::new();
+        let mut dirty_light_levels = HashSet::new();
         let mut inserted = Vec::new();
         let remove = removed
             .iter()
@@ -590,6 +669,10 @@ impl Bake {
         for id in &remove {
             if let Some(atom) = self.atoms.remove(id) {
                 dirty.insert(atom.position);
+                if self.light_atoms.remove(id).is_some() {
+                    dirty_light_levels.insert(atom.position.z as u32);
+                }
+
                 if let Some(cell) = self.cells.get_mut(&atom.position) {
                     cell.retain(|value| value != id);
                 }
@@ -635,8 +718,20 @@ impl Bake {
                 self.prepare(tree, module, id);
                 self.light(tree, module, id);
                 self.fingerprint(id);
+
+                if self.hooks.light.is_some() {
+                    self.harvest_light(tree, id);
+                    if let Some(position) = self.position(id) {
+                        dirty_light_levels.insert(position.z as u32);
+                    }
+                }
             }
         }
+
+        let lighting = self
+            .lighting
+            .as_mut()
+            .and_then(|lighting| lighting.solve_levels(self.light_atoms.values(), &dirty_light_levels));
 
         let mut affected = HashSet::new();
         for position in dirty {
@@ -669,8 +764,52 @@ impl Bake {
         affected.dedup();
         self.compose();
 
-        affected
+        BakeUpdate {
+            appearances: affected,
+            lighting,
+        }
     }
+}
+
+fn finite_or(value: f32, default: f32) -> f32 { if value.is_finite() { value } else { default } }
+
+fn object_number(object: &Object, tree: &ObjectTree, name: &str, default: f32) -> f32 {
+    let name = Identifier::from(name);
+    object
+        .vars
+        .get(&name)
+        .and_then(GenericValue::num)
+        .or_else(|| {
+            tree.var_inherited(object.ty, &name)
+                .and_then(|variable| match variable.value {
+                    Value::Null => Some(0.0),
+                    Value::Num(value) => Some(value),
+                    _ => None,
+                })
+        })
+        .unwrap_or(default)
+}
+
+fn object_truthy(object: &Object, tree: &ObjectTree, name: &str, default: bool) -> bool {
+    let name = Identifier::from(name);
+    object
+        .vars
+        .get(&name)
+        .map(GenericValue::truthy)
+        .or_else(|| {
+            tree.var_inherited(object.ty, &name)
+                .map(|variable| variable.value.is_truthy())
+        })
+        .unwrap_or(default)
+}
+
+fn object_color(object: &Object, tree: &ObjectTree, name: &str) -> [f32; 3] {
+    let name = Identifier::from(name);
+    let text = object.vars.get(&name).and_then(GenericValue::text).or_else(|| {
+        tree.var_inherited(object.ty, &name)
+            .and_then(|variable| variable.value.as_text())
+    });
+    parse_color(text)
 }
 
 impl Runtime {

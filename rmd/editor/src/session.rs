@@ -147,6 +147,8 @@ struct DocumentCache {
     instances: FrameInstances,
     revision: u64,
     frame_update: Option<FrameUpdate>,
+    lighting_revision: u64,
+    lighting_update: Option<render::LightingUpdate>,
     preview: Option<BlockPreviewCache>,
     bake: Option<editor::bake::Bake>,
 }
@@ -1681,6 +1683,13 @@ impl Session {
             level_count: document.map.size.z.max(1),
             revision: cache.revision,
             pending_update: cache.frame_update,
+            lighting: (!cache.instances.light_tiles.is_empty()).then_some(render::LightingFrame {
+                size: cache.instances.lighting_size,
+                tiles: &cache.instances.light_tiles,
+                tile_size: self.options.tile_size,
+                revision: cache.lighting_revision,
+                pending_update: cache.lighting_update,
+            }),
             interaction,
             preview: cache
                 .preview
@@ -1823,6 +1832,7 @@ impl Session {
                     visibility: &self.type_visibility,
                     tile_size: self.options.tile_size,
                     appearances: editor::bake::appearances(bake),
+                    lighting: bake.and_then(|bake| bake.lighting.as_ref()),
                 },
             ),
             _ => FrameInstances::default(),
@@ -1833,6 +1843,8 @@ impl Session {
         cache.instances = instances;
         cache.revision = revision;
         cache.frame_update = None;
+        cache.lighting_revision = revision;
+        cache.lighting_update = None;
         self.revalidate_focus();
     }
 
@@ -1868,19 +1880,23 @@ impl Session {
             ..
         } = self;
         let cache = caches.entry(id).or_default();
-        let affected = match (cache.bake.as_mut(), state.environment.as_ref(), state.document(id)) {
+        let bake_update = match (cache.bake.as_mut(), state.environment.as_ref(), state.document(id)) {
             (Some(bake), Some(environment), Some(document)) => {
-                let affected = editor::bake::update(bake, environment, document, affected);
+                let update = editor::bake::update(bake, environment, document, affected);
                 report_bake_output(bake);
 
-                affected
+                update
             },
             _ => {
                 baker.invalidate(id);
 
-                affected.to_vec()
+                editor::bake::BakeUpdate {
+                    appearances: affected.to_vec(),
+                    lighting: None,
+                }
             },
         };
+        let affected = bake_update.appearances;
         let update = match (state.environment.as_ref(), state.document(id)) {
             (Some(environment), Some(document)) => frame::update_prefabs_with_options(
                 &mut cache.instances,
@@ -1893,10 +1909,28 @@ impl Session {
                     visibility: type_visibility,
                     tile_size: options.tile_size,
                     appearances: editor::bake::appearances(cache.bake.as_ref()),
+                    lighting: cache.bake.as_ref().and_then(|bake| bake.lighting.as_ref()),
                 },
             ),
             _ => PrefabUpdate::Unchanged,
         };
+
+        if let Some(range) = bake_update.lighting {
+            cache.instances.update_lighting(
+                cache.bake.as_ref().and_then(|bake| bake.lighting.as_ref()),
+                Some(range.clone()),
+            );
+            let previous_revision = cache.lighting_revision;
+            cache.lighting_revision = *next_revision;
+            *next_revision = next_revision.wrapping_add(1).max(1);
+            cache.lighting_update = Some(render::LightingUpdate {
+                previous_revision,
+                tiles: render::UpdateRange {
+                    start: range.start,
+                    end: range.end,
+                },
+            });
+        }
 
         match update {
             PrefabUpdate::Unchanged => {},
@@ -3059,6 +3093,11 @@ mod tests {
                 visibility: &session.type_visibility,
                 tile_size: session.options.tile_size,
                 appearances: editor::bake::appearances(session.active_cache().bake.as_ref()),
+                lighting: session
+                    .active_cache()
+                    .bake
+                    .as_ref()
+                    .and_then(|bake| bake.lighting.as_ref()),
             },
         );
 

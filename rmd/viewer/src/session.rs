@@ -7,7 +7,16 @@ use editor::{
     document::MapDocument,
     frame::{self, FrameOptions},
 };
-use render::{Frame, MapViewFrame, MapViewInteraction, MapViewRect, SpriteInstance, texture::TextureCatalog};
+use render::{
+    Frame,
+    LightTile,
+    LightingFrame,
+    MapViewFrame,
+    MapViewInteraction,
+    MapViewRect,
+    SpriteInstance,
+    texture::TextureCatalog,
+};
 
 pub struct Session {
     pub environment: Option<Environment>,
@@ -15,6 +24,8 @@ pub struct Session {
     pub textures: TextureCatalog,
     pub options: FrameOptions,
     sprite_instances: Vec<SpriteInstance>,
+    light_tiles: Vec<LightTile>,
+    lighting_size: [u32; 3],
     revision: u64,
 }
 
@@ -26,6 +37,8 @@ impl Session {
             textures: TextureCatalog::default(),
             options: FrameOptions::default(),
             sprite_instances: Vec::new(),
+            light_tiles: Vec::new(),
+            lighting_size: [0; 3],
             revision: 0,
         }
     }
@@ -73,7 +86,7 @@ impl Session {
                 bake.diagnostics.count()
             );
         }
-        self.sprite_instances = self.environment.as_ref().map_or_else(Vec::new, |environment| {
+        let instances = self.environment.as_ref().map(|environment| {
             frame::build_with_options(
                 &environment.tree,
                 &environment.icons,
@@ -83,10 +96,20 @@ impl Session {
                     visibility: &frame::TypeVisibility::default(),
                     tile_size: self.options.tile_size,
                     appearances: editor::bake::appearances(bake.as_ref()),
+                    lighting: bake.as_ref().and_then(|bake| bake.lighting.as_ref()),
                 },
             )
-            .sprites
         });
+        if let Some(instances) = instances {
+            self.sprite_instances = instances.sprites;
+            self.light_tiles = instances.light_tiles;
+            self.lighting_size = instances.lighting_size;
+        } else {
+            self.sprite_instances.clear();
+            self.light_tiles.clear();
+            self.lighting_size = [0; 3];
+        }
+
         self.document = Some(document);
         self.revision = self.revision.wrapping_add(1);
 
@@ -142,6 +165,13 @@ impl Session {
             level_count: self.document.as_ref().map_or(1, |document| document.map.size.z.max(1)),
             revision: self.revision,
             pending_update: None,
+            lighting: (!self.light_tiles.is_empty()).then_some(LightingFrame {
+                size: self.lighting_size,
+                tiles: &self.light_tiles,
+                tile_size: self.options.tile_size,
+                revision: self.revision,
+                pending_update: None,
+            }),
             interaction: MapViewInteraction::default(),
             preview: None,
         }

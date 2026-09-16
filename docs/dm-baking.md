@@ -59,7 +59,8 @@ profile code sees normal runtime initializers. Both preprocessing passes share c
 but keep independent token streams, type IDs, and source-file tables.
 
 The prelude also declares a codebase-neutral static lighting schema on `/atom`. Profiles may fill it
-through `demir_light`; harvesting, solving, and drawing that data are later steps.
+through `demir_light`. The baker harvests those fields into a dense, z-major corner lightmap. The
+renderer bilinearly samples the four corners of each tile and applies the result to the map scene.
 
 ## Runtime model
 
@@ -86,8 +87,8 @@ A full bake has five ordered stages:
 2. **Initialize** calls `demir_initialize()` once after the complete runtime world is linked.
 3. **Prepare** calls `demir_prepare` once per runtime object and commits successful setup for use by
    neighboring previews.
-4. **Light** calls `demir_light` once per runtime object so later lighting code can harvest the
-   neutral schema.
+4. **Light** calls `demir_light` once per runtime object, harvests the neutral schema for every
+   placement, and solves each z level's shared lighting corners.
 5. **Smooth** calls `demir_bake` for each placement and exports appearance changes.
 
 Initialization uses the VM's normal transaction behavior and commits only when it succeeds. A fault
@@ -126,7 +127,8 @@ the prepare and light hooks to new objects, and rebakes the surrounding 3 by 3 b
 reuses the runtime initialized by the full bake and never reruns `demir_initialize()`. The vertical
 extent is needed by codebases with pipes or other structures that connect between z levels.
 Incremental edits bypass full-load cache reuse through the epoch, avoiding results derived from stale
-runtime globals.
+runtime globals. A changed light, blocker, ambient source, or fullbright cell resolves its complete z
+level and reports that contiguous tile range separately from changed appearances.
 
 Appearance effects on other placements are stored as contributions from their source instance.
 Removing or replacing a source first removes every contribution it produced, then recomposes only
@@ -158,6 +160,11 @@ Overlay and underlay deltas become extra sprites owned by the placement, drawn i
 it. They inherit the owner's icon, dir, offsets, and floating layer and plane. Color and alpha
 multiply with the owner's unless the overlay sets `RESET_COLOR` or `RESET_ALPHA`.
 
+When a profile defines `demir_light`, the map canvas always applies its baked lighting. The lighting
+pass runs after map sprites and before area outlines, selection feedback, and placement previews, so
+editor feedback and previews remain readable. Lighting has its own revision and GPU update range;
+ordinary appearance edits do not re-upload the lightmap.
+
 Palette thumbnails resolve statically. An atom whose static `icon_state` is missing from its sheet,
 which is how smoothed walls are declared, is baked alone in a one cell world at load, and the
 derived appearance is used for its thumbnail. The placement preview still resolves statically.
@@ -182,8 +189,9 @@ to stderr where available and to `latest.log` on Windows. Other output targets r
 ## Validation
 
 The VM tests cover neighborhood smoothing, incremental remove/restore, deterministic random results,
-instance-variable cache separation, list-backed neighbor overlays, rollback, and bounded recursive
-appearance export. The compiler-driver check exercises preprocessing, semantic analysis, bytecode
+instance-variable cache separation, list-backed neighbor overlays, rollback, bounded recursive
+appearance export, corner lighting, blockers, ambient/fullbright cells, and incremental lightmap
+restoration. The compiler-driver check exercises preprocessing, semantic analysis, bytecode
 generation, map translation, the five bake stages, summary output, and incremental restoration:
 
 ```sh
@@ -194,6 +202,3 @@ cargo run --release --bin rmdc -- bake examples/env/test.dme examples/env/test.d
 The editor tests cover whole-map baking without changing map bytes, overlay sprites, incremental
 sprites matching a full rebuild, undo and redo through the bake, movable smoothing, standalone
 thumbnails, hiding a type without rebaking, and that only a codebase with a profile bakes.
-
-Example profiles for tgstation, Goonstation, and Vanderlin, lighting harvest and solving, and the
-renderer lighting pass are intentionally implemented by later stack entries.

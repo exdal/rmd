@@ -363,6 +363,7 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
 
     if let Some(atom) = edit_atom {
         let before = bake.appearances.clone();
+        let lighting_before = bake.lighting.clone();
         let started = std::time::Instant::now();
         let affected = bake.update(&tree, &module, Vec::new(), &[atom.instance]);
         report_bake_output(&mut bake);
@@ -374,9 +375,12 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
         if bake.appearances != before {
             return Err("remove/restore changed the derived appearance layer".into());
         }
+        if bake.lighting != lighting_before {
+            return Err("remove/restore changed the derived lighting layer".into());
+        }
         eprintln!(
             "edit check: {} affected instances, remove {remove_us} us, restore {restore_us} us, appearances restored",
-            affected.len()
+            affected.appearances.len()
         );
     }
 

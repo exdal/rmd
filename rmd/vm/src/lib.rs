@@ -8,6 +8,7 @@ pub mod eval;
 pub mod heap;
 mod intrinsic;
 pub mod json;
+mod lighting;
 pub mod value;
 pub mod world;
 

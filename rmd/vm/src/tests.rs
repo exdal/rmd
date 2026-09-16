@@ -116,6 +116,64 @@ fn baking_updates_a_neighborhood_and_restores_removed_atoms() {
 }
 
 #[test]
+fn lighting_hooks_build_and_incrementally_restore_the_lightmap() {
+    let (tree, module) = compile(
+        r##"
+/obj/lamp
+/obj/ambient
+/proc/demir_light(atom/target)
+    if(istype(target, /obj/lamp))
+        target.demir_light_range = 3
+        target.demir_light_power = 1
+        target.demir_light_color = "#ff4000"
+        target.demir_light_height = 0
+    if(istype(target, /obj/ambient))
+        target.demir_ambient_color = "#0020ff"
+        target.demir_ambient_power = 0.25
+"##,
+    );
+    let lamp = tree.id_of(&TreePath::parse("/obj/lamp")).expect("lamp type");
+    let ambient = tree.id_of(&TreePath::parse("/obj/ambient")).expect("ambient type");
+    let atoms = vec![
+        Atom {
+            instance: 1,
+            ty: lamp,
+            position: Position::new(2, 2, 1),
+            vars: Vec::new(),
+        },
+        Atom {
+            instance: 2,
+            ty: ambient,
+            position: Position::new(3, 2, 1),
+            vars: Vec::new(),
+        },
+    ];
+    let mut bake = Bake::new(&tree, &module, atoms.clone(), [4, 3, 1], Limits::default());
+    let original = bake.lighting.clone().expect("light hook exports a lightmap");
+    let center = original.tile(Position::new(2, 2, 1)).expect("center tile");
+    let ambient_tile = original.tile(Position::new(3, 2, 1)).expect("ambient tile");
+    assert!(center.corners[0][0] > center.corners[0][1]);
+    assert!(ambient_tile.corners[0][2] > center.corners[0][2]);
+
+    let removed = bake.update(&tree, &module, Vec::new(), &[1]);
+    assert_eq!(removed.lighting, Some(0..12));
+    assert!(
+        bake.lighting
+            .as_ref()
+            .unwrap()
+            .tile(Position::new(2, 2, 1))
+            .unwrap()
+            .corners
+            .iter()
+            .all(|corner| corner[0] == 0.0)
+    );
+
+    let restored = bake.update(&tree, &module, vec![atoms[0].clone()], &[]);
+    assert_eq!(restored.lighting, Some(0..12));
+    assert_eq!(bake.lighting.as_ref(), Some(&original));
+}
+
+#[test]
 fn baking_rolls_back_overlays_and_randomness_is_repeatable() {
     let source = WALLS.replace(
         "target.icon_state = \"wall-[junction]\"",

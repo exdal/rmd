@@ -55,6 +55,8 @@ struct RenderContext<'a> {
 pub struct FrameInstances {
     pub sprites: Vec<SpriteInstance>,
     pub area_tiles: Vec<SpriteInstance>,
+    pub light_tiles: Vec<render::LightTile>,
+    pub lighting_size: [u32; 3],
     area_components: HashMap<Coord, PrefabInstanceId>,
     area_component_tiles: HashMap<PrefabInstanceId, HashSet<Coord>>,
     sprite_keys: HashMap<PrefabInstanceId, SpriteKey>,
@@ -80,7 +82,30 @@ impl FrameInstances {
     pub fn area_component_tiles(&self, component: PrefabInstanceId) -> HashSet<Coord> {
         self.area_component_tiles.get(&component).cloned().unwrap_or_default()
     }
+
+    pub fn update_lighting(&mut self, lighting: Option<&vm::bake::LightingMap>, range: Option<std::ops::Range<usize>>) {
+        let Some(lighting) = lighting else {
+            self.light_tiles.clear();
+            self.lighting_size = [0; 3];
+            return;
+        };
+
+        let replace = self.lighting_size != lighting.size || self.light_tiles.len() != lighting.tiles.len();
+        self.lighting_size = lighting.size;
+
+        if replace {
+            self.light_tiles = lighting.tiles.iter().copied().map(light_tile).collect();
+            return;
+        }
+
+        let range = range.unwrap_or(0..lighting.tiles.len());
+        for index in range.start.min(lighting.tiles.len())..range.end.min(lighting.tiles.len()) {
+            self.light_tiles[index] = light_tile(lighting.tiles[index]);
+        }
+    }
 }
+
+fn light_tile(tile: vm::bake::LightTile) -> render::LightTile { render::LightTile { corners: tile.corners } }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefabUpdate {
@@ -132,6 +157,7 @@ pub struct FrameRenderOptions<'a> {
     pub tile_size: u32,
     /// What the bake made of each atom, keyed by `vm::bake` atom id, empty when baking is off
     pub appearances: &'a HashMap<u64, vm::AppearanceDelta>,
+    pub lighting: Option<&'a vm::bake::LightingMap>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +234,7 @@ pub fn build(
             visibility: &TypeVisibility::default(),
             tile_size,
             appearances: &HashMap::new(),
+            lighting: None,
         },
     )
 }
@@ -283,6 +310,11 @@ pub fn build_with_options(
     let mut instances = FrameInstances {
         sprites: keyed_sprites.into_iter().map(|(_, sprite)| sprite).collect(),
         area_tiles,
+        light_tiles: options
+            .lighting
+            .map(|lighting| lighting.tiles.iter().copied().map(light_tile).collect())
+            .unwrap_or_default(),
+        lighting_size: options.lighting.map_or([0; 3], |lighting| lighting.size),
         area_components,
         area_component_tiles,
         sprite_keys,
@@ -320,6 +352,7 @@ pub fn update_prefabs(
             visibility: &TypeVisibility::default(),
             tile_size,
             appearances: &HashMap::new(),
+            lighting: None,
         },
     )
 }
@@ -1429,6 +1462,7 @@ mod tests {
                 visibility: &visibility,
                 tile_size: 32,
                 appearances: &HashMap::new(),
+                lighting: None,
             },
         );
         assert!(without_objects.iter().all(|sprite| sprite.owner != object_owner));
@@ -1446,6 +1480,7 @@ mod tests {
                 visibility: &visibility,
                 tile_size: 32,
                 appearances: &HashMap::new(),
+                lighting: None,
             },
         );
         assert!(without_areas.iter().any(|sprite| sprite.owner == object_owner));
