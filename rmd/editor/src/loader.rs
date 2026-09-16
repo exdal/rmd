@@ -81,6 +81,7 @@ pub struct LoadView {
     pub path: String,
     pub snapshot: Snapshot,
     pub cancelling: bool,
+    pub cancellable: bool,
 }
 
 impl Loader {
@@ -138,6 +139,7 @@ impl Loader {
             path: active.job.path().display().to_string(),
             snapshot: active.progress.snapshot(),
             cancelling: active.progress.is_cancelled(),
+            cancellable: true,
         })
     }
 }
@@ -216,6 +218,8 @@ fn build_thumbnails(
     environment: &Environment, textures: &TextureCatalog, progress: &Progress,
 ) -> HashMap<TypeId, Option<PrefabThumbnail>> {
     let mut thumbnails = HashMap::new();
+    let mut standalone = editor::bake::Standalone::default();
+    let mut derived = 0usize;
 
     progress.enter(Stage::Thumbnails, environment.tree.len());
     for declaration in environment.tree.iter() {
@@ -226,23 +230,40 @@ fn build_thumbnails(
 
         let prefab = Prefab::new(declaration.path.clone());
         let appearance = visual::resolve_id(&environment.tree, declaration.id, &prefab);
-        let thumbnail = prefab_thumbnail_for(textures, environment, &appearance)
-            .or_else(|| standalone_thumbnail(environment, textures, declaration.id, &prefab, &appearance));
+        let thumbnail = match prefab_thumbnail_for(textures, environment, &appearance) {
+            Some(thumbnail) => Some(thumbnail),
+            None => {
+                let standalone = standalone_thumbnail(
+                    &mut standalone,
+                    environment,
+                    textures,
+                    declaration.id,
+                    &prefab,
+                    &appearance,
+                );
+                derived += usize::from(standalone.is_some());
+
+                standalone
+            },
+        };
         thumbnails.insert(declaration.id, thumbnail);
     }
+
+    log::info!("{derived} thumbnails derived by baking");
 
     thumbnails
 }
 
 fn standalone_thumbnail(
-    environment: &Environment, textures: &TextureCatalog, id: TypeId, prefab: &Prefab, appearance: &visual::Appearance,
+    standalone: &mut editor::bake::Standalone, environment: &Environment, textures: &TextureCatalog, id: TypeId,
+    prefab: &Prefab, appearance: &visual::Appearance,
 ) -> Option<PrefabThumbnail> {
     let tree = &environment.tree;
     if appearance.icon.is_none() || !tree.roots().atom.is_some_and(|atom| tree.is_subtype_of(id, atom)) {
         return None;
     }
 
-    let delta = editor::bake::standalone(environment, prefab)?;
+    let delta = standalone.appearance(environment, prefab)?;
     let appearance = visual::resolve_delta(tree, id, prefab, &delta);
 
     prefab_thumbnail_for(textures, environment, &appearance)

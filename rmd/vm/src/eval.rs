@@ -108,7 +108,7 @@ impl Runtime {
             return Ok(world);
         }
 
-        let ty = tree.id_of(&TreePath::parse("/world")).unwrap_or(TypeId::ROOT);
+        let ty = tree.roots().world.unwrap_or(TypeId::ROOT);
         let world = self.heap.alloc_object(Object::new(ty)).map_err(Fault::detached)?;
         self.world_object = Some(world);
 
@@ -324,13 +324,12 @@ impl<'a> Evaluator<'a> {
     pub fn call(
         &mut self, proc: ProcId, src: Option<ObjectId>, args: Vec<(Option<Identifier>, GenericValue)>,
     ) -> Result<GenericValue> {
-        let function = self
-            .module
+        let module = self.module;
+        let function = module
             .function_for_proc(proc)
-            .cloned()
             .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
 
-        self.call_function(&function, src.into(), None, args)
+        self.call_function(function, src.into(), None, args)
     }
 
     fn call_function(
@@ -353,9 +352,9 @@ impl<'a> Evaluator<'a> {
                 .iter()
                 .map(|id| {
                     self.module
-                        .strings
+                        .symbols
                         .get(id.0 as usize)
-                        .map(|name| Identifier::from(name.as_str()))
+                        .cloned()
                         .unwrap_or_else(|| Identifier::from(""))
                 })
                 .collect::<Vec<_>>();
@@ -909,7 +908,14 @@ impl<'a> Evaluator<'a> {
             .ok_or_else(|| self.fault(FaultKind::InvalidReference))
     }
 
-    fn identifier(&self, frame: &mut Frame) -> Result<Identifier> { Ok(self.string(frame)?.into()) }
+    fn identifier(&self, frame: &mut Frame) -> Result<Identifier> {
+        let id = StringId(self.u32(frame)?);
+        self.module
+            .symbols
+            .get(id.0 as usize)
+            .cloned()
+            .ok_or_else(|| self.fault(FaultKind::InvalidReference))
+    }
 
     fn path(&self, frame: &mut Frame) -> Result<TreePath> {
         let id = PathId(self.u32(frame)?);
@@ -956,10 +962,8 @@ impl Evaluator<'_> {
         let mut pending = vec![value];
         while let Some(value) = pending.pop() {
             match value {
-                Value::Text(text) | Value::Resource(text) => {
-                    if text.len() > self.limits.text_bytes {
-                        return Err(self.fault(FaultKind::Memory));
-                    }
+                Value::Text(text) | Value::Resource(text) if text.len() > self.limits.text_bytes => {
+                    return Err(self.fault(FaultKind::Memory));
                 },
                 Value::List(entries) => {
                     self.reserve(entries.len().saturating_mul(2).saturating_add(1))?;
@@ -999,9 +1003,8 @@ impl Evaluator<'_> {
             && (object.vars.contains_key(name)
                 || self
                     .tree
-                    .ancestors(object.ty)
-                    .take_while(|declaration| declaration.id != TypeId::ROOT)
-                    .any(|declaration| declaration.vars.contains_key(name))
+                    .var_declaration(object.ty, name)
+                    .is_some_and(|(owner, _)| owner.id != TypeId::ROOT)
                 || matches!(
                     name.as_str(),
                     "loc"
@@ -1026,12 +1029,9 @@ impl Evaluator<'_> {
         match receiver {
             Receiver::None => None,
             Receiver::Object(id) => self.runtime.heap.object(id).map(|object| object.ty),
-            Receiver::List(id) => {
-                let path = match self.runtime.heap.list(id)?.kind {
-                    crate::value::ListKind::List => "/list",
-                    crate::value::ListKind::Alist => "/alist",
-                };
-                self.tree.id_of(&TreePath::parse(path))
+            Receiver::List(id) => match self.runtime.heap.list(id)?.kind {
+                crate::value::ListKind::List => self.tree.roots().list,
+                crate::value::ListKind::Alist => self.tree.roots().alist,
             },
         }
     }
@@ -1203,46 +1203,47 @@ impl Evaluator<'_> {
     fn invoke_function(
         &mut self, id: FunctionId, args: Vec<(Option<Identifier>, GenericValue)>, frame: &mut Frame,
     ) -> Result<GenericValue> {
-        let function = self.function(id)?.clone();
+        let module = self.module;
+        let function = module
+            .function(id)
+            .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
         if !function.external {
-            return self.call_function(&function, Receiver::None, frame.usr, args);
+            return self.call_function(function, Receiver::None, frame.usr, args);
         }
 
-        let name = self
-            .module
-            .strings
+        let identifier = module
+            .symbols
             .get(function.name.0 as usize)
-            .cloned()
             .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
 
         // `initial(local)` is lowered as an external call because it has no declaration to
         // inspect
-        if name == "initial" {
+        if identifier.as_str() == "initial" {
             return Ok(args.first().map(|(_, value)| value.clone()).unwrap_or_default());
         }
 
         let src_type = self.receiver_type(frame.src);
 
-        if let Some(proc) = src_type.and_then(|ty| self.find_proc(ty, &name.as_str().into())) {
+        if let Some(proc) = src_type.and_then(|ty| self.find_proc(ty, identifier)) {
             return self.call_function_for_proc(proc, frame.src, frame.usr, args);
         }
 
-        if let Some(proc) = self.find_proc(TypeId::ROOT, &name.as_str().into()) {
+        if let Some(proc) = self.find_proc(TypeId::ROOT, identifier) {
             return self.call_function_for_proc(proc, Receiver::None, frame.usr, args);
         }
 
-        Err(self.fault(FaultKind::MissingProc(name)))
+        Err(self.fault(FaultKind::MissingProc(identifier.as_str().to_owned())))
     }
 
     fn call_function_for_proc(
         &mut self, proc: ProcId, src: Receiver, usr: Option<ObjectId>, args: Vec<(Option<Identifier>, GenericValue)>,
     ) -> Result<GenericValue> {
-        let function = self
-            .module
+        let module = self.module;
+        let function = module
             .function_for_proc(proc)
-            .cloned()
             .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
-        self.call_function(&function, src, usr, args)
+
+        self.call_function(function, src, usr, args)
     }
 
     fn invoke(
@@ -1270,17 +1271,19 @@ impl Evaluator<'_> {
     }
 
     fn invoke_super(&mut self, args: Vec<(Option<Identifier>, GenericValue)>, frame: &Frame) -> Result<GenericValue> {
-        let function = self.function(frame.function)?.clone();
+        let module = self.module;
+        let function = module
+            .function(frame.function)
+            .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
         let parent = self
             .tree
             .id_of(&function.owner)
             .and_then(|id| self.tree.get(id))
             .and_then(|declaration| declaration.parent);
-        let name = self
-            .module
-            .strings
+        let name = module
+            .symbols
             .get(function.proc_name.0 as usize)
-            .map(|name| Identifier::from(name.as_str()))
+            .cloned()
             .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
         let proc = function
             .previous
@@ -1570,7 +1573,8 @@ impl Evaluator<'_> {
                 }
 
                 let object_type = object.ty;
-                let shared = self.shared_key(object_type, name);
+                let declaration = self.tree.var_declaration(object_type, name);
+                let shared = declaration.and_then(|(owner, variable)| shared_key(owner, variable, name));
 
                 if let Some(shared) = &shared
                     && let Some(value) = self
@@ -1582,7 +1586,7 @@ impl Evaluator<'_> {
                     return Ok(value.clone());
                 }
 
-                let declaration = self.tree.var_inherited(object_type, name);
+                let declaration = declaration.map(|(_, variable)| variable);
                 if let Some(initializer) = declaration.and_then(|variable| variable.initializer) {
                     let value = self.call(initializer, Some(id), Vec::new())?;
                     let (storage, key) = if let Some(shared) = shared {
@@ -1639,17 +1643,12 @@ impl Evaluator<'_> {
             .unwrap_or_default()
     }
 
-    fn world_type(&self) -> Option<TypeId> { self.tree.id_of(&TreePath::parse("/world")) }
+    fn world_type(&self) -> Option<TypeId> { self.tree.roots().world }
 
     fn shared_key(&self, ty: TypeId, name: &Identifier) -> Option<Identifier> {
-        let owner = self
-            .tree
-            .ancestors(ty)
-            .find(|declaration| declaration.vars.contains_key(name))?;
-        let variable = owner.vars.get(name)?;
+        let (owner, variable) = self.tree.var_declaration(ty, name)?;
 
-        (owner.id != TypeId::ROOT && (variable.modifiers.is_static || variable.modifiers.is_global))
-            .then(|| format!("__dmed_static_{}_{}", owner.id.0, name).into())
+        shared_key(owner, variable, name)
     }
 
     pub fn write_field(&mut self, object: GenericValue, name: Identifier, value: GenericValue) -> Result<()> {
@@ -2284,4 +2283,11 @@ impl Evaluator<'_> {
 
         Ok(GenericValue::Object(id))
     }
+}
+
+/// `var/static/x` and `var/global/x` share one slot on the global object, keyed by the type that
+/// declares them
+fn shared_key(owner: &objtree::TypeDecl, variable: &objtree::VarDecl, name: &Identifier) -> Option<Identifier> {
+    (owner.id != TypeId::ROOT && (variable.modifiers.is_static || variable.modifiers.is_global))
+        .then(|| format!("__dmed_static_{}_{}", owner.id.0, name).into())
 }

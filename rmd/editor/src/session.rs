@@ -5,6 +5,7 @@ use core::{
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use dmi::{IconFile, metadata::Dir};
@@ -57,6 +58,7 @@ use render::{
 };
 
 use crate::{
+    baker::{self, Baker},
     external_editor::SourceLocation,
     loader::{LoadedCodebase, LoadedMap},
 };
@@ -160,6 +162,8 @@ pub struct Session {
     type_thumbnails: HashMap<TypeId, Option<PrefabThumbnail>>,
     texture_revision: u64,
     maps: Vec<PathBuf>,
+    baker: Baker,
+    queued_bakes: Vec<DocumentId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,6 +194,8 @@ impl Session {
             type_thumbnails: HashMap::new(),
             texture_revision: 0,
             maps: Vec::new(),
+            baker: Baker::default(),
+            queued_bakes: Vec::new(),
         }
     }
 
@@ -209,7 +215,7 @@ impl Session {
         self.texture_revision = self.texture_revision.wrapping_add(1);
         self.type_visibility = TypeVisibility::default();
         self.maps = maps;
-        self.state.environment = Some(environment);
+        self.state.environment = Some(Arc::new(environment));
         self.rebake_all();
 
         report
@@ -341,7 +347,7 @@ impl Session {
             .map(|environment| environment.root.as_path())
     }
 
-    pub fn codebase_dir(&self) -> Option<&Path> { self.state.environment.as_ref().map(Environment::base_dir) }
+    pub fn codebase_dir(&self) -> Option<&Path> { self.state.environment.as_deref().map(Environment::base_dir) }
 
     pub fn maps(&self) -> &[PathBuf] { &self.maps }
 
@@ -1711,18 +1717,68 @@ impl Session {
     }
 
     fn rebake(&mut self, id: DocumentId) {
-        let mut bake = match (self.state.environment.as_ref(), self.state.document(id)) {
-            (Some(environment), Some(document)) => editor::bake::build(environment, document),
-            _ => None,
-        };
-        if let Some(bake) = bake.as_mut() {
-            report_bake_output(bake);
-        }
-
-        self.caches.entry(id).or_default().bake = bake;
+        self.caches.entry(id).or_default().bake = None;
         self.collect_bake_diagnostics();
         self.rebuild_instances(id);
+
+        if !self.queued_bakes.contains(&id) {
+            self.queued_bakes.push(id);
+        }
+
+        self.start_next_bake();
     }
+
+    fn start_next_bake(&mut self) {
+        while !self.baker.is_busy() {
+            let Some(id) = self.queued_bakes.first().copied() else {
+                return;
+            };
+            self.queued_bakes.remove(0);
+
+            let Some(environment) = self.state.environment.clone() else {
+                return;
+            };
+            let Some(document) = self.state.document(id) else {
+                continue;
+            };
+            if environment.module.is_none() {
+                return;
+            }
+
+            self.baker.start(baker::Request {
+                document: id,
+                path: document
+                    .path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default(),
+                atoms: editor::bake::atoms(&environment, document),
+                size: editor::bake::size(document),
+                environment,
+            });
+        }
+    }
+
+    pub fn poll_bake(&mut self) {
+        if let Some((id, mut bake, outdated)) = self.baker.poll() {
+            let open = self.state.document(id).is_some();
+            if outdated && open {
+                self.rebake(id);
+            } else if open {
+                if let Some(bake) = bake.as_mut() {
+                    report_bake_output(bake);
+                }
+
+                self.caches.entry(id).or_default().bake = bake;
+                self.collect_bake_diagnostics();
+                self.rebuild_instances(id);
+            }
+        }
+
+        self.start_next_bake();
+    }
+
+    pub fn bake_view(&self) -> Option<crate::loader::LoadView> { self.baker.view() }
 
     fn rebuild_instances(&mut self, id: DocumentId) {
         let bake = self.caches.get(&id).and_then(|cache| cache.bake.as_ref());
@@ -1777,6 +1833,7 @@ impl Session {
             type_visibility,
             options,
             next_revision,
+            baker,
             ..
         } = self;
         let cache = caches.entry(id).or_default();
@@ -1787,7 +1844,11 @@ impl Session {
 
                 affected
             },
-            _ => affected.to_vec(),
+            _ => {
+                baker.invalidate(id);
+
+                affected.to_vec()
+            },
         };
         let update = match (state.environment.as_ref(), state.document(id)) {
             (Some(environment), Some(document)) => frame::update_prefabs_with_options(
@@ -2149,7 +2210,7 @@ mod tests {
         path::TreePath,
         types::Value,
     };
-    use std::path::PathBuf;
+    use std::{path::PathBuf, sync::Arc};
 
     use dmi::{IconFile, metadata::Dir};
     use dmm::{Coord, Map, MapFormat, Prefab, Size};
@@ -2190,7 +2251,7 @@ mod tests {
         let mut environment = Environment::new("station.dme", tree);
         environment.files.push(PathBuf::from("code/items.dm"));
         let mut session = Session::new();
-        session.state.environment = Some(environment);
+        session.state.environment = Some(Arc::new(environment));
 
         let source = session.type_source(id).expect("known type source");
 
@@ -2244,11 +2305,66 @@ mod tests {
     }
 
     #[test]
+    fn a_map_draws_before_its_bake_lands() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("map");
+
+        assert!(session.baker.is_busy());
+        assert!(
+            session
+                .instances()
+                .is_some_and(|instances| !instances.sprites.is_empty())
+        );
+        assert!(session.active_cache().bake.is_none());
+
+        settle_bake(&mut session);
+
+        assert!(session.active_cache().bake.is_some());
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    fn an_edit_while_a_bake_is_running_throws_its_result_away_and_bakes_again() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("map");
+        let id = session.state.active().expect("active map");
+        let coord = Coord::new(6, 3, 1);
+        let target = session
+            .state
+            .active_document()
+            .and_then(|document| document.instance_ids_at(coord).first())
+            .copied()
+            .expect("an instance to delete");
+
+        session.set_tool(Tool::Delete);
+        session.select_instance(Some(target));
+
+        assert!(session.delete_instance(target));
+        assert!(session.baker.invalidated(id));
+
+        settle_bake(&mut session);
+
+        // the bake that lands is the one that ran after the delete, so it knows nothing of the atom
+        assert!(
+            session
+                .active_cache()
+                .bake
+                .as_ref()
+                .is_some_and(|bake| bake.position(target.get()).is_none())
+        );
+    }
+
+    #[test]
     fn hiding_a_type_redraws_from_the_cached_bake() {
         let root = examples();
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).expect("codebase");
         session.open_map(&root.join("test.dmm"), 1).expect("map");
+        settle_bake(&mut session);
         let id = session.state.active().expect("active map");
         let table = session
             .tree()
@@ -2869,6 +2985,16 @@ mod tests {
         assert!(remaining.is_empty());
     }
 
+    /// Waits for the background bake, since a worker thread has no deterministic finish time.
+    fn settle_bake(session: &mut Session) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+
+        while session.baker.is_busy() && std::time::Instant::now() < deadline {
+            session.poll_bake();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
     fn assert_render_cache_matches_rebuild(session: &Session) {
         let environment = session.state.environment.as_ref().unwrap();
         let document = session.state.active_document().unwrap();
@@ -3079,7 +3205,7 @@ mod tests {
         tree.register(&TreePath::parse("/obj/alarm/directional/north"), Location::default());
         tree.register(&TreePath::parse("/obj/alarm/directional/east"), Location::default());
         let mut session = Session::new();
-        session.state.environment = Some(Environment::new(".", tree));
+        session.state.environment = Some(Arc::new(Environment::new(".", tree)));
         let mut prefab = Prefab::new(TreePath::parse("/obj/alarm/directional/north"));
         prefab.set_var("dir".into(), Value::Num(Dir::South.to_bits() as f32));
         session.state.choose_prefab(prefab);

@@ -2,7 +2,7 @@ use core::{
     path::TreePath,
     types::{Identifier, ProcId},
 };
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::heap::ObjectId;
 
@@ -72,8 +72,8 @@ pub enum GenericValue {
     #[default]
     Null,
     Num(f32),
-    Text(Rc<str>),
-    Resource(Rc<str>),
+    Text(Arc<str>),
+    Resource(Arc<str>),
     Path(TreePath),
     Proc(ProcRef),
     List(ListId),

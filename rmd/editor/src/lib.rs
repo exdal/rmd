@@ -15,6 +15,7 @@ use core::types::Value;
 use std::{
     collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use dmi::{IconFile, error::IconError, metadata::Metadata};
@@ -151,7 +152,7 @@ impl Environment {
 }
 
 pub struct EditorState {
-    pub environment: Option<Environment>,
+    pub environment: Option<Arc<Environment>>,
     documents: Vec<MapDocument>,
     active: Option<DocumentId>,
     pub tool: Tool,

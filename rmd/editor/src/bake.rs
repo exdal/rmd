@@ -3,7 +3,11 @@ use std::{collections::HashMap, sync::OnceLock};
 use dmm::{Coord, Prefab, PrefabInstanceId};
 pub use vm::{AppearanceDelta, bake::Bake};
 
-use crate::{Environment, document::MapDocument};
+use crate::{
+    Environment,
+    document::MapDocument,
+    progress::{Progress, Stage},
+};
 
 fn atom(environment: &Environment, prefab: &Prefab, instance: u64, coord: Coord) -> Option<vm::bake::Atom> {
     Some(vm::bake::Atom {
@@ -24,26 +28,47 @@ fn placed(environment: &Environment, document: &MapDocument, id: PrefabInstanceI
     atom(environment, prefab, id.get(), location.coord)
 }
 
-pub fn standalone(environment: &Environment, prefab: &Prefab) -> Option<AppearanceDelta> {
-    let module = environment.module.as_ref()?;
-    let atom = atom(environment, prefab, 1, Coord::new(1, 1, 1))?;
-    let mut bake = Bake::new(
-        &environment.tree,
-        module,
-        vec![atom],
-        [1, 1, 1],
-        environment.bake_options.limits,
-    );
-
-    for line in bake.take_output() {
-        log::info!("DM: {line}");
-    }
-
-    bake.appearances.get(&1).cloned()
+#[derive(Default)]
+pub struct Standalone {
+    world: Option<Bake>,
+    baked: usize,
 }
 
-pub fn build(environment: &Environment, document: &MapDocument) -> Option<Bake> {
-    let module = environment.module.as_ref()?;
+impl Standalone {
+    const INSTANCE: u64 = 1;
+    const LIFETIME: usize = 256;
+
+    pub fn appearance(&mut self, environment: &Environment, prefab: &Prefab) -> Option<AppearanceDelta> {
+        let module = environment.module.as_ref()?;
+        let atom = atom(environment, prefab, Self::INSTANCE, Coord::new(1, 1, 1))?;
+        if self.baked.is_multiple_of(Self::LIFETIME) {
+            self.world = None;
+        }
+        self.baked += 1;
+
+        let world = self.world.get_or_insert_with(|| {
+            Bake::new(
+                &environment.tree,
+                module,
+                Vec::new(),
+                [1, 1, 1],
+                environment.bake_options.limits,
+            )
+        });
+
+        world.update(&environment.tree, module, vec![atom], &[]);
+        let delta = world.appearances.get(&Self::INSTANCE).cloned();
+        world.update(&environment.tree, module, Vec::new(), &[Self::INSTANCE]);
+
+        for line in world.take_output() {
+            log::info!("DM: {line}");
+        }
+
+        delta
+    }
+}
+
+pub fn atoms(environment: &Environment, document: &MapDocument) -> Vec<vm::bake::Atom> {
     let map = &document.map;
     let mut atoms = Vec::new();
     for z in 1..=map.size.z {
@@ -58,18 +83,45 @@ pub fn build(environment: &Environment, document: &MapDocument) -> Option<Bake> 
         }
     }
 
+    atoms
+}
+
+pub fn size(document: &MapDocument) -> [i32; 3] {
+    let size = document.map.size;
+
+    [size.x as i32, size.y as i32, size.z as i32]
+}
+
+pub fn build_atoms(
+    environment: &Environment, atoms: Vec<vm::bake::Atom>, size: [i32; 3], progress: &Progress,
+) -> Option<Bake> {
+    let module = environment.module.as_ref()?;
+    let mut current = None;
+
     Some(Bake::with_progress(
         &environment.tree,
         module,
         atoms,
-        [map.size.x as i32, map.size.y as i32, map.size.z as i32],
+        size,
         environment.bake_options.limits,
         |stage, done, total| {
-            if done == 0 || done == total {
-                log::info!("DM {stage:?}: {done}/{total}");
+            if current != Some(stage) {
+                current = Some(stage);
+                progress.enter(Stage::from_bake(stage), total);
             }
+
+            progress.set_done(done);
         },
     ))
+}
+
+pub fn build(environment: &Environment, document: &MapDocument) -> Option<Bake> {
+    build_atoms(
+        environment,
+        atoms(environment, document),
+        size(document),
+        &Progress::new(),
+    )
 }
 
 pub fn update(
@@ -340,14 +392,27 @@ mod tests {
         let mut environment = environment(WALLS);
         let prefab = Prefab::new(TreePath::parse("/turf/closed/wall"));
         let ty = environment.tree.id_of(&prefab.path).expect("wall type");
-        let delta = standalone(&environment, &prefab).expect("standalone appearance");
+        let mut standalone = Standalone::default();
+        let delta = standalone
+            .appearance(&environment, &prefab)
+            .expect("standalone appearance");
         let appearance = visual::resolve_delta(&environment.tree, ty, &prefab, &delta);
 
         assert_eq!(appearance.name.as_deref(), Some("0"));
-        assert!(standalone(&environment, &Prefab::new(TreePath::parse("/turf/closed/nonexistent"))).is_none());
+
+        let missing = Prefab::new(TreePath::parse("/turf/closed/nonexistent"));
+
+        assert!(standalone.appearance(&environment, &missing).is_none());
+
+        // the world is shared, so a second prefab must still bake against an otherwise empty cell
+        let repeated = standalone
+            .appearance(&environment, &prefab)
+            .expect("standalone appearance");
+
+        assert_eq!(repeated, delta);
 
         environment.module = None;
 
-        assert!(standalone(&environment, &prefab).is_none());
+        assert!(standalone.appearance(&environment, &prefab).is_none());
     }
 }

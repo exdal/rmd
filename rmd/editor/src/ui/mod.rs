@@ -2252,11 +2252,14 @@ fn draw_load_body(
         (Some(view), _) => {
             draw_load_heading(ui, view.title, &view.path);
             draw_load_progress(ui, &view.snapshot);
-            ui.separator();
 
-            let _disabled = ui.begin_disabled_with_cond(view.cancelling);
-            if ui.button(if view.cancelling { "Cancelling..." } else { "Cancel" }) || escape {
-                popup.cancel = true;
+            if view.cancellable {
+                ui.separator();
+
+                let _disabled = ui.begin_disabled_with_cond(view.cancelling);
+                if ui.button(if view.cancelling { "Cancelling..." } else { "Cancel" }) || escape {
+                    popup.cancel = true;
+                }
             }
         },
 

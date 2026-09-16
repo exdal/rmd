@@ -9,6 +9,7 @@
 //!
 //! With no arguments the editor opens on its welcome page, which can open a codebase or a map.
 
+mod baker;
 mod camera;
 mod external_editor;
 mod gizmo;
@@ -345,7 +346,7 @@ impl App {
 
         platform.prepare_frame(imgui, window)?;
         let frame = imgui.try_begin_frame()?;
-        let load = loader.view();
+        let load = loader.view().or_else(|| session.bake_view());
         let output = ui.draw(frame.ui(), session, settings, load.as_ref())?;
         if let Some(preset) = output.keybind_preset {
             settings.keybindings = preset.bindings();
@@ -629,6 +630,7 @@ impl ApplicationHandler for App {
                 if let Some(outcome) = self.loader.poll() {
                     self.apply_outcome(outcome);
                 }
+                self.session.poll_bake();
 
                 if redraw.exit {
                     if let Err(e) = self.shutdown() {

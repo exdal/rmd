@@ -82,9 +82,11 @@ pub struct Module {
     pub version: u16,
     pub constants: Vec<Value>,
     pub strings: Vec<String>,
+    pub symbols: Vec<Identifier>,
     pub paths: Vec<TreePath>,
     pub functions: Vec<CompiledFunction>,
     pub code: Vec<u8>,
+    proc_functions: Vec<FunctionId>,
 }
 
 impl Module {
@@ -94,7 +96,30 @@ impl Module {
     pub fn function(&self, id: FunctionId) -> Option<&CompiledFunction> { self.functions.get(id.0 as usize) }
 
     pub fn function_for_proc(&self, proc: ProcId) -> Option<&CompiledFunction> {
-        self.functions.iter().find(|function| function.proc == Some(proc))
+        let id = self.proc_functions.get(proc.0 as usize).copied()?;
+
+        self.function(id).filter(|function| function.proc == Some(proc))
+    }
+
+    fn index_procs(functions: &[CompiledFunction]) -> Vec<FunctionId> {
+        let slots = functions
+            .iter()
+            .filter_map(|function| function.proc)
+            .map(|proc| proc.0 as usize + 1)
+            .max()
+            .unwrap_or_default();
+
+        let mut index = vec![FunctionId::INVALID; slots];
+        for function in functions {
+            if let Some(proc) = function.proc
+                && let Some(slot) = index.get_mut(proc.0 as usize)
+                && slot.is_invalid()
+            {
+                *slot = function.id;
+            }
+        }
+
+        index
     }
 }
 
@@ -194,8 +219,14 @@ impl Generator {
             magic: Module::MAGIC,
             version: Module::VERSION,
             constants: self.constants,
+            symbols: self
+                .strings
+                .iter()
+                .map(|value| Identifier::from(value.as_str()))
+                .collect(),
             strings: self.strings,
             paths: self.paths,
+            proc_functions: Module::index_procs(&self.functions),
             functions: self.functions,
             code: self.code,
         })

@@ -46,6 +46,26 @@ impl std::fmt::Display for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.as_str()) }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SymbolHasher(u64);
+
+impl Hasher for SymbolHasher {
+    fn finish(&self) -> u64 { self.0 }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.write_u64(u64::from(*byte));
+        }
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.0 = (self.0 ^ value).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        self.0 ^= self.0 >> 29;
+    }
+}
+
+pub type SymbolMap<V> = HashMap<Symbol, V, std::hash::BuildHasherDefault<SymbolHasher>>;
+
 thread_local! { static IDENTIFIERS: RefCell<Interner> = RefCell::new(Interner::new()); }
 
 impl From<&str> for Symbol {

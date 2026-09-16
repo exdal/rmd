@@ -926,7 +926,7 @@ mod tests {
         let document = MapDocument::new(map, 1);
         let selected_instance = document.instance_ids_at(Coord::new(1, 1, 1))[0];
         let mut session = Session::new();
-        session.state.environment = Some(editor::Environment::new(".", tree));
+        session.state.environment = Some(std::sync::Arc::new(editor::Environment::new(".", tree)));
         session.state.open_document(document);
         session.set_tool(Tool::Select);
         session.select_instance(Some(selected_instance));
@@ -1106,7 +1106,7 @@ mod tests {
             );
         }
         let mut session = Session::new();
-        session.state.environment = Some(editor::Environment::new(".", tree));
+        session.state.environment = Some(std::sync::Arc::new(editor::Environment::new(".", tree)));
         let mut state = ObjectTreePanel::new().expect("valid window key");
         state.search = String::from("atom");
         state.filter_revision = u64::MAX;

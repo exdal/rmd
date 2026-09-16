@@ -14,6 +14,11 @@ pub enum Stage {
     FindMaps,
     ReadMap,
     ParseMap,
+    Instantiate,
+    Initialize,
+    Prepare,
+    Light,
+    Smooth,
 }
 
 impl Stage {
@@ -28,6 +33,21 @@ impl Stage {
             Self::FindMaps => "Finding maps",
             Self::ReadMap => "Reading map",
             Self::ParseMap => "Parsing map",
+            Self::Instantiate => "Instantiating atoms",
+            Self::Initialize => "Running demir_initialize",
+            Self::Prepare => "Preparing atoms",
+            Self::Light => "Collecting lights",
+            Self::Smooth => "Baking appearances",
+        }
+    }
+
+    pub const fn from_bake(stage: vm::bake::Stage) -> Self {
+        match stage {
+            vm::bake::Stage::Instantiate => Self::Instantiate,
+            vm::bake::Stage::Initialize => Self::Initialize,
+            vm::bake::Stage::Prepare => Self::Prepare,
+            vm::bake::Stage::Light => Self::Light,
+            vm::bake::Stage::Smooth => Self::Smooth,
         }
     }
 
@@ -42,6 +62,11 @@ impl Stage {
             Self::FindMaps => 6,
             Self::ReadMap => 7,
             Self::ParseMap => 8,
+            Self::Instantiate => 9,
+            Self::Initialize => 10,
+            Self::Prepare => 11,
+            Self::Light => 12,
+            Self::Smooth => 13,
         }
     }
 
@@ -55,6 +80,11 @@ impl Stage {
             6 => Self::FindMaps,
             7 => Self::ReadMap,
             8 => Self::ParseMap,
+            9 => Self::Instantiate,
+            10 => Self::Initialize,
+            11 => Self::Prepare,
+            12 => Self::Light,
+            13 => Self::Smooth,
             _ => Self::Preprocess,
         }
     }
@@ -98,6 +128,8 @@ impl Progress {
         self.set_detail(detail);
     }
 
+    pub fn set_done(&self, done: usize) { self.done.store(done, Ordering::Relaxed); }
+
     pub fn set_detail(&self, detail: &str) {
         if let Ok(mut current) = self.detail.lock() {
             current.clear();
@@ -135,6 +167,11 @@ mod tests {
             Stage::FindMaps,
             Stage::ReadMap,
             Stage::ParseMap,
+            Stage::Instantiate,
+            Stage::Initialize,
+            Stage::Prepare,
+            Stage::Light,
+            Stage::Smooth,
         ] {
             let progress = Progress::new();
             progress.enter(stage, 0);

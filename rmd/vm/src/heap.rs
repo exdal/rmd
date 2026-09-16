@@ -1,4 +1,4 @@
-use core::interner::Symbol;
+use core::interner::SymbolMap;
 use std::collections::HashMap;
 
 use objtree::TypeId;
@@ -23,7 +23,7 @@ pub struct ObjectId(pub u32);
 #[derive(Debug, Clone)]
 pub struct Object {
     pub ty: TypeId,
-    pub vars: HashMap<Symbol, GenericValue>,
+    pub vars: SymbolMap<GenericValue>,
     pub loc: Option<ObjectId>,
     pub contents: Vec<ObjectId>,
     pub position: Option<Position>,
@@ -35,7 +35,7 @@ impl Object {
     pub fn new(ty: TypeId) -> Self {
         Self {
             ty,
-            vars: HashMap::new(),
+            vars: SymbolMap::default(),
             loc: None,
             contents: Vec::new(),
             position: None,

@@ -1,6 +1,6 @@
 use core::types::{Identifier, ProcId, Value};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, hash_map::DefaultHasher},
+    collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
 
@@ -29,6 +29,25 @@ fn hook(tree: &ObjectTree, name: &str) -> Option<ProcId> {
         .and_then(|proc| proc.body)
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct Hooks {
+    initialize: Option<ProcId>,
+    prepare: Option<ProcId>,
+    light: Option<ProcId>,
+    bake: Option<ProcId>,
+}
+
+impl Hooks {
+    fn resolve(tree: &ObjectTree) -> Self {
+        Self {
+            initialize: hook(tree, "demir_initialize"),
+            prepare: hook(tree, "demir_prepare"),
+            light: hook(tree, "demir_light"),
+            bake: hook(tree, "demir_bake"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Atom {
     pub instance: u64,
@@ -37,14 +56,43 @@ pub struct Atom {
     pub vars: Vec<(Identifier, Value)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct CacheKey {
     ty: TypeId,
     vars: u64,
-    neighborhood: Vec<Vec<(TypeId, u64)>>,
+    neighborhood: u64,
     position: Option<Position>,
     size: [i32; 3],
-    epoch: u64,
+}
+
+#[derive(Debug, Default)]
+struct Contributions(Vec<(u64, AppearanceDelta)>);
+
+impl Contributions {
+    fn slot(&self, id: u64) -> Result<usize, usize> { self.0.binary_search_by_key(&id, |(current, _)| *current) }
+
+    fn insert(&mut self, id: u64, appearance: AppearanceDelta) {
+        match self.slot(id) {
+            Ok(index) => {
+                if let Some((_, slot)) = self.0.get_mut(index) {
+                    *slot = appearance;
+                }
+            },
+            Err(index) => self.0.insert(index, (id, appearance)),
+        }
+    }
+
+    fn remove(&mut self, id: u64) {
+        if let Ok(index) = self.slot(id) {
+            self.0.remove(index);
+        }
+    }
+
+    fn get(&self, id: u64) -> Option<&AppearanceDelta> {
+        self.0.get(self.slot(id).ok()?).map(|(_, appearance)| appearance)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &(u64, AppearanceDelta)> { self.0.iter() }
 }
 
 #[derive(Debug)]
@@ -71,14 +119,15 @@ pub struct Bake {
     cells: HashMap<Position, Vec<u64>>,
     failed: HashSet<u64>,
     faults: HashMap<u64, Fault>,
-    areas: HashMap<(TypeId, String), ObjectId>,
+    areas: HashMap<(TypeId, u64), ObjectId>,
     area_members: HashMap<ObjectId, HashSet<u64>>,
     initialized: bool,
     prepared: HashMap<ObjectId, Option<Fault>>,
     lit: HashSet<ObjectId>,
     contributions: HashMap<u64, Vec<u64>>,
-    by_target: HashMap<u64, BTreeMap<u64, AppearanceDelta>>,
+    by_target: HashMap<u64, Contributions>,
     dirty_appearances: HashSet<u64>,
+    hooks: Hooks,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +150,7 @@ impl Bake {
     ) -> Self {
         let mut bake = Self {
             limits,
+            hooks: Hooks::resolve(tree),
             ..Default::default()
         };
 
@@ -183,12 +233,16 @@ impl Bake {
     }
 
     fn insert(&mut self, tree: &ObjectTree, atom: Atom) {
+        let mut hasher = DefaultHasher::new();
+        hash_constants(&atom.vars, &mut hasher);
+        let fingerprint = hasher.finish();
+
         let area_key = tree
             .roots()
             .area
             .filter(|ty| tree.is_subtype_of(atom.ty, *ty))
-            .map(|_| (atom.ty, format!("{:?}", atom.vars)));
-        if let Some(object) = area_key.as_ref().and_then(|key| self.areas.get(key)).copied() {
+            .map(|_| (atom.ty, fingerprint));
+        if let Some(object) = area_key.and_then(|key| self.areas.get(&key)).copied() {
             self.objects.insert(atom.instance, object);
             self.area_members.entry(object).or_default().insert(atom.instance);
             self.cells.entry(atom.position).or_default().push(atom.instance);
@@ -229,9 +283,7 @@ impl Bake {
             },
         }
 
-        let mut hasher = DefaultHasher::new();
-        hash_constants(&atom.vars, &mut hasher);
-        self.fingerprints.insert(atom.instance, hasher.finish());
+        self.fingerprints.insert(atom.instance, fingerprint);
         self.cells.entry(atom.position).or_default().push(atom.instance);
         self.atoms.insert(atom.instance, atom);
     }
@@ -281,7 +333,7 @@ impl Bake {
     }
 
     fn initialize(&mut self, tree: &ObjectTree, module: &Module) -> Result<(), Fault> {
-        let Some(proc) = hook(tree, "demir_initialize") else {
+        let Some(proc) = self.hooks.initialize else {
             return Ok(());
         };
 
@@ -307,7 +359,7 @@ impl Bake {
             return;
         }
 
-        let fault = hook(tree, "demir_prepare").and_then(|proc| {
+        let fault = self.hooks.prepare.and_then(|proc| {
             let args = vec![GenericValue::Object(object)];
             self.runtime.run(tree, module, proc, None, args, self.limits).err()
         });
@@ -331,7 +383,7 @@ impl Bake {
             return;
         }
 
-        let Some(proc) = hook(tree, "demir_light") else {
+        let Some(proc) = self.hooks.light else {
             return;
         };
         let args = vec![GenericValue::Object(object)];
@@ -370,7 +422,7 @@ impl Bake {
 
     fn cache_key(&self, id: u64) -> Option<CacheKey> {
         let atom = self.atoms.get(&id)?;
-        let mut neighborhood = Vec::new();
+        let mut hasher = DefaultHasher::new();
         for dx in -1..=1 {
             for dy in -1..=1 {
                 let position = Position::new(
@@ -378,24 +430,30 @@ impl Bake {
                     atom.position.y.saturating_add(dy),
                     atom.position.z,
                 );
-                let cell = self
-                    .cells
-                    .get(&position)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|id| Some((self.atoms.get(id)?.ty, *self.fingerprints.get(id)?)))
-                    .collect::<Vec<_>>();
-                neighborhood.push(cell);
+                let cell = self.cells.get(&position).into_iter().flatten();
+                let mut count = 0usize;
+                for id in cell {
+                    let Some(entry) = self
+                        .atoms
+                        .get(id)
+                        .zip(self.fingerprints.get(id))
+                        .map(|(atom, fingerprint)| (atom.ty, *fingerprint))
+                    else {
+                        continue;
+                    };
+                    entry.hash(&mut hasher);
+                    count += 1;
+                }
+                count.hash(&mut hasher);
             }
         }
 
         Some(CacheKey {
             ty: atom.ty,
             vars: *self.fingerprints.get(&id)?,
-            neighborhood,
+            neighborhood: hasher.finish(),
             position: None,
             size: self.runtime.world.size,
-            epoch: self.epoch,
         })
     }
 
@@ -432,7 +490,7 @@ impl Bake {
         let Some(object) = self.objects.get(&id).copied() else {
             return;
         };
-        let Some(proc) = hook(tree, "demir_bake") else {
+        let Some(proc) = self.hooks.bake else {
             return;
         };
 
@@ -445,7 +503,7 @@ impl Bake {
             .as_ref()
             .and_then(|key| self.cache.get(key))
             .or_else(|| {
-                let mut positioned = key.clone()?;
+                let mut positioned = key?;
                 positioned.position = self.position(id);
                 self.cache.get(&positioned)
             })
@@ -483,7 +541,7 @@ impl Bake {
         if let Some(targets) = self.contributions.remove(&id) {
             for target in targets {
                 if let Some(values) = self.by_target.get_mut(&target) {
-                    values.remove(&id);
+                    values.remove(id);
                 }
                 self.dirty_appearances.insert(target);
             }
@@ -499,8 +557,8 @@ impl Bake {
             let Some(values) = self.by_target.get(&id) else {
                 continue;
             };
-            let mut composed = values.get(&id).cloned().unwrap_or_default();
-            for (root, value) in values {
+            let mut composed = values.get(id).cloned().unwrap_or_default();
+            for (root, value) in values.iter() {
                 if *root == id {
                     continue;
                 }
@@ -633,6 +691,7 @@ impl Runtime {
         }
 
         self.heap.begin();
+        let (overlays, underlays) = NAMES.with(|names| (names.overlays.clone(), names.underlays.clone()));
         let result = (|| {
             let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, Some(object));
             evaluator.call(proc, None, vec![(None, GenericValue::Object(object))])?;
@@ -640,9 +699,9 @@ impl Runtime {
             let mut ids = evaluator.runtime.heap.changed_objects();
             ids.extend(evaluator.appearance_reads.iter().copied().filter(|id| {
                 evaluator.runtime.heap.object(*id).is_some_and(|object| {
-                    ["overlays", "underlays"].iter().any(|name| {
+                    [&overlays, &underlays].iter().any(|name| {
                         matches!(
-                            object.vars.get(&Identifier::from(*name)),
+                            object.vars.get(*name),
                             Some(GenericValue::List(list)) if evaluator.runtime.heap.list_changed(*list)
                         )
                     })
@@ -678,10 +737,10 @@ impl Runtime {
                                 != Some(value)
                         });
                         for (name, extra) in [
-                            ("overlays", &mut appearance.overlays),
-                            ("underlays", &mut appearance.underlays),
+                            (&overlays, &mut appearance.overlays),
+                            (&underlays, &mut appearance.underlays),
                         ] {
-                            if let Some(GenericValue::List(list)) = before.vars.get(&Identifier::from(name)) {
+                            if let Some(GenericValue::List(list)) = before.vars.get(name) {
                                 let count = evaluator
                                     .runtime
                                     .heap
@@ -709,6 +768,28 @@ impl Runtime {
     }
 }
 
+thread_local! {
+    static NAMES: Names = Names {
+        appearance: APPEARANCE_VARS.iter().map(|name| Identifier::from(*name)).collect(),
+        overlays: Identifier::from("overlays"),
+        underlays: Identifier::from("underlays"),
+        icon_state: Identifier::from("icon_state"),
+        dir: Identifier::from("dir"),
+        layer: Identifier::from("layer"),
+        plane: Identifier::from("plane"),
+    };
+}
+
+struct Names {
+    appearance: Vec<Identifier>,
+    overlays: Identifier,
+    underlays: Identifier,
+    icon_state: Identifier,
+    dir: Identifier,
+    layer: Identifier,
+    plane: Identifier,
+}
+
 const APPEARANCE_VARS: &[&str] = &[
     "name",
     "icon",
@@ -731,6 +812,12 @@ const APPEARANCE_VARS: &[&str] = &[
 fn export_appearance(
     heap: &crate::heap::Heap, tree: &ObjectTree, id: ObjectId, depth: usize, budget: &mut usize,
 ) -> Result<AppearanceDelta, FaultKind> {
+    NAMES.with(|names| export_with_names(names, heap, tree, id, depth, budget))
+}
+
+fn export_with_names(
+    names: &Names, heap: &crate::heap::Heap, tree: &ObjectTree, id: ObjectId, depth: usize, budget: &mut usize,
+) -> Result<AppearanceDelta, FaultKind> {
     *budget = budget.checked_sub(1).ok_or(FaultKind::Memory)?;
     if depth >= 32 {
         return Err(FaultKind::Memory);
@@ -738,37 +825,38 @@ fn export_appearance(
 
     let object = heap.object(id).ok_or(FaultKind::InvalidReference)?;
     let mut appearance = AppearanceDelta::default();
-    for name in APPEARANCE_VARS {
-        let name = Identifier::from(*name);
-        let value = object.vars.get(&name).map(export_value).transpose()?.or_else(|| {
-            tree.var_inherited(object.ty, &name)
+    for name in &names.appearance {
+        let value = object.vars.get(name).map(export_value).transpose()?.or_else(|| {
+            tree.var_inherited(object.ty, name)
                 .map(|variable| variable.value.clone())
         });
         if let Some(value) = value {
             let cost = value.as_text().map_or(1, |text| text.len().div_ceil(32).max(1));
             *budget = budget.checked_sub(cost).ok_or(FaultKind::Memory)?;
-            appearance.vars.push((name, value));
+            appearance.vars.push((name.clone(), value));
         }
     }
 
-    for name in ["overlays", "underlays"] {
+    for name in [&names.overlays, &names.underlays] {
         let mut values = Vec::new();
-        if let Some(GenericValue::List(list)) = object.vars.get(&Identifier::from(name))
+        if let Some(GenericValue::List(list)) = object.vars.get(name)
             && let Some(list) = heap.list(*list)
         {
             for (value, _) in &list.entries {
                 match value {
-                    GenericValue::Object(id) => values.push(export_appearance(heap, tree, *id, depth + 1, budget)?),
+                    GenericValue::Object(id) => {
+                        values.push(export_with_names(names, heap, tree, *id, depth + 1, budget)?)
+                    },
                     GenericValue::Text(state) => {
                         *budget = budget
                             .checked_sub(state.len().div_ceil(32).saturating_add(4))
                             .ok_or(FaultKind::Memory)?;
                         values.push(AppearanceDelta {
                             vars: vec![
-                                ("icon_state".into(), Value::Text(state.to_string())),
-                                ("dir".into(), Value::Num(0.0)),
-                                ("layer".into(), Value::Num(-1.0)),
-                                ("plane".into(), Value::Num(-32767.0)),
+                                (names.icon_state.clone(), Value::Text(state.to_string())),
+                                (names.dir.clone(), Value::Num(0.0)),
+                                (names.layer.clone(), Value::Num(-1.0)),
+                                (names.plane.clone(), Value::Num(-32767.0)),
                             ],
                             ..Default::default()
                         });
@@ -778,7 +866,7 @@ fn export_appearance(
                 }
             }
         }
-        if name == "overlays" {
+        if name == &names.overlays {
             appearance.overlays = values;
         } else {
             appearance.underlays = values;

@@ -1,4 +1,4 @@
-use core::{path::TreePath, types::Identifier};
+use core::types::Identifier;
 
 use objtree::TypeId;
 
@@ -41,19 +41,16 @@ impl Evaluator<'_> {
         &mut self, intrinsic: Intrinsic, target: Option<ObjectId>, params: &[Identifier],
         args: Vec<(Option<Identifier>, GenericValue)>,
     ) -> Result<GenericValue> {
-        let (path, image) = match intrinsic {
-            Intrinsic::Image | Intrinsic::ImageNew => ("/image", true),
-            Intrinsic::MutableAppearance => ("/mutable_appearance", false),
+        let (path, root, image) = match intrinsic {
+            Intrinsic::Image | Intrinsic::ImageNew => ("/image", self.tree.roots().image, true),
+            Intrinsic::MutableAppearance => ("/mutable_appearance", self.tree.roots().mutable_appearance, false),
             _ => return Err(self.fault(FaultKind::InvalidReference)),
         };
 
         let id = match target {
             Some(id) => id,
             None => {
-                let ty = self
-                    .tree
-                    .id_of(&TreePath::parse(path))
-                    .ok_or_else(|| self.fault(FaultKind::MissingVariable(path.into())))?;
+                let ty = root.ok_or_else(|| self.fault(FaultKind::MissingVariable(path.into())))?;
                 self.reserve(1)?;
 
                 self.runtime
