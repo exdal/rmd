@@ -135,6 +135,7 @@ struct BlockPreviewCache {
 
 const MAX_REPORTED_DIAGNOSTICS: usize = 500;
 const MAX_MAP_DIMENSION: u32 = 255;
+const STANDALONE_CACHE_LIMIT: usize = 256;
 
 const PREVIEW_OWNER: PrefabInstanceId = match PrefabInstanceId::from_raw(1) {
     Some(id) => id,
@@ -164,6 +165,8 @@ pub struct Session {
     maps: Vec<PathBuf>,
     baker: Baker,
     queued_bakes: Vec<DocumentId>,
+    standalone_baker: editor::bake::Standalone,
+    standalone: Vec<(Prefab, Option<visual::Appearance>)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,6 +199,8 @@ impl Session {
             maps: Vec::new(),
             baker: Baker::default(),
             queued_bakes: Vec::new(),
+            standalone_baker: editor::bake::Standalone::default(),
+            standalone: Vec::new(),
         }
     }
 
@@ -212,6 +217,8 @@ impl Session {
         self.diagnostics = diagnostics;
         self.textures = textures;
         self.type_thumbnails = thumbnails;
+        self.standalone.clear();
+        self.standalone_baker = editor::bake::Standalone::default();
         self.texture_revision = self.texture_revision.wrapping_add(1);
         self.type_visibility = TypeVisibility::default();
         self.maps = maps;
@@ -1087,9 +1094,33 @@ impl Session {
 
     pub fn recent_prefabs(&self) -> &[Prefab] { self.state.recent_prefabs() }
 
-    pub(crate) fn prefab_thumbnail(&self, prefab: &Prefab) -> Option<PrefabThumbnail> {
-        let environment = self.state.environment.as_ref()?;
+    pub(crate) fn prefab_appearance(&mut self, prefab: &Prefab) -> Option<visual::Appearance> {
+        let environment = self.state.environment.clone()?;
         let appearance = visual::resolve(&environment.tree, prefab);
+        if frame::sprite_texture(&environment.icons, &self.textures, &appearance).is_some() {
+            return Some(appearance);
+        }
+
+        if let Some((_, cached)) = self.standalone.iter().find(|(cached, _)| cached == prefab) {
+            return cached.clone().or(Some(appearance));
+        }
+
+        let derived = environment.tree.id_of(&prefab.path).and_then(|id| {
+            let delta = self.standalone_baker.appearance(&environment, prefab)?;
+
+            Some(visual::resolve_delta(&environment.tree, id, prefab, &delta))
+        });
+        if self.standalone.len() >= STANDALONE_CACHE_LIMIT {
+            self.standalone.clear();
+        }
+        self.standalone.push((prefab.clone(), derived.clone()));
+
+        derived.or(Some(appearance))
+    }
+
+    pub(crate) fn prefab_thumbnail(&mut self, prefab: &Prefab) -> Option<PrefabThumbnail> {
+        let appearance = self.prefab_appearance(prefab)?;
+        let environment = self.state.environment.as_ref()?;
 
         self.prefab_thumbnail_for(environment, &appearance)
     }
@@ -1098,14 +1129,14 @@ impl Session {
         self.type_thumbnails.get(&id).copied().flatten()
     }
 
-    pub(crate) fn placement_preview(&self) -> Option<PlacementPreview> {
+    pub(crate) fn placement_preview(&mut self) -> Option<PlacementPreview> {
         if self.tool() != Tool::Place {
             return None;
         }
 
-        let prefab = self.palette()?;
+        let prefab = self.palette()?.clone();
+        let appearance = self.prefab_appearance(&prefab)?;
         let environment = self.state.environment.as_ref()?;
-        let appearance = visual::resolve(&environment.tree, prefab);
         let thumbnail = self.prefab_thumbnail_for(environment, &appearance)?;
         let offset = [
             appearance
@@ -3080,6 +3111,67 @@ mod tests {
                 .prefab_thumbnail(&Prefab::new(TreePath::parse("/area/station")))
                 .is_none()
         );
+    }
+
+    /// A smoothed type's static `icon_state` is only a prefix, so the sheet holds nothing under it
+    /// and the palette, the recent list and the placement preview would all draw nothing.
+    #[test]
+    fn palette_thumbnails_fall_back_to_a_standalone_bake_when_no_sprite_matches() {
+        let root = examples();
+        let arena = core::arena::StrArena::new();
+        let prelude = preprocessor::prelude_files()
+            .into_iter()
+            .chain([preprocessor::PreludeFile::Embedded(
+                "<test-standalone.dm>",
+                r#"
+/turf/closed/wall/smoothed
+    icon_state = "smooth"
+/proc/demir_bake(atom/target)
+    if(istype(target, /turf/closed/wall/smoothed))
+        target.icon_state = "wall"
+"#,
+            )]);
+        let preprocessed = preprocessor::Preprocessor::new(&arena)
+            .with_prelude(prelude)
+            .with_baking(true)
+            .run(root.join("test.dm"))
+            .expect("preprocess");
+        assert!(preprocessed.is_ok(), "{:?}", preprocessed.errors);
+
+        let ast = ast::parse(&preprocessed.tokens).expect("parse");
+        let (tree, module, errors) = sema::analyze(&ast);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let mut environment = editor::Environment::new(root.join("test.dme"), tree);
+        environment.module = Some(codegen::generate(&module).expect("codegen"));
+        assert!(environment.load_icons(&[], &Progress::new()).is_empty());
+
+        let mut session = Session::new();
+        session.textures = build_textures(&environment, &Progress::new());
+        session.state.environment = Some(Arc::new(environment));
+
+        let smoothed = Prefab::new(TreePath::parse("/turf/closed/wall/smoothed"));
+
+        // "smooth" is in no sheet, so only a standalone bake makes this drawable
+        assert_eq!(
+            session.prefab_appearance(&smoothed).and_then(|a| a.icon_state),
+            Some(String::from("wall"))
+        );
+        assert!(session.prefab_thumbnail(&smoothed).is_some());
+
+        session.state.choose_prefab(smoothed.clone());
+        session.set_tool(Tool::Place);
+
+        assert!(session.placement_preview().is_some());
+
+        // a type whose static state already matches never reaches the baker
+        let plain = Prefab::new(TreePath::parse("/turf/closed/wall"));
+
+        assert_eq!(
+            session.prefab_appearance(&plain).and_then(|a| a.icon_state),
+            Some(String::from("wall"))
+        );
+        assert_eq!(session.standalone.len(), 1);
     }
 
     #[test]

@@ -1823,6 +1823,10 @@ impl Evaluator<'_> {
             return self.list(entries);
         }
 
+        if left == GenericValue::Null && op == Add && right.num().is_none() {
+            return Ok(right);
+        }
+
         if let GenericValue::List(id) = left
             && matches!(op, Add | Sub | BitOr | BitAnd | BitXor)
         {

@@ -2451,7 +2451,7 @@ impl OverlayRect {
 }
 
 fn draw_placement_preview(
-    ui: &Ui, session: &Session, camera: &Controller, coord: Coord, viewport_min: [f32; 2], viewport_max: [f32; 2],
+    ui: &Ui, session: &mut Session, camera: &Controller, coord: Coord, viewport_min: [f32; 2], viewport_max: [f32; 2],
 ) {
     let Some(preview) = session.placement_preview() else {
         return;

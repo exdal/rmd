@@ -841,6 +841,42 @@ fn compound_list_operators_mutate_aliases_but_plain_operators_copy() {
     );
 }
 
+/// `var/x; x += thing` and `L[key] += thing` on an absent key, which real codebases spell through
+/// `LAZYADD`-style macros
+#[test]
+fn null_is_the_identity_for_addition() {
+    assert_eq!(
+        run(
+            r#"
+/proc/test()
+    var/text
+    text += "a"
+    text += "b"
+    return text
+"#,
+            "test",
+        ),
+        "ab".into()
+    );
+
+    assert_eq!(
+        run(
+            r#"
+/datum/thing
+    var/tag_name = "x"
+/proc/test()
+    var/list/entries = list()
+    var/datum/thing/thing = new
+    entries["4"] += thing
+    var/datum/thing/stored = entries["4"]
+    return stored.tag_name
+"#,
+            "test",
+        ),
+        "x".into()
+    );
+}
+
 #[test]
 fn typed_iteration_filters_the_iterated_value() {
     assert_eq!(
