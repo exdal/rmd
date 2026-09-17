@@ -433,10 +433,12 @@ impl Bake {
                 let offset_y = object_number(object, tree, "pixel_y", 0.0)
                     + object_number(object, tree, "pixel_z", 0.0)
                     + object_number(object, tree, "step_y", 0.0);
+                let light_offset_x = finite_or(object_number(object, tree, "demir_light_offset_x", 0.0), 0.0);
+                let light_offset_y = finite_or(object_number(object, tree, "demir_light_offset_y", 0.0), 0.0);
                 LightSource {
                     origin: [
-                        position.x as f32 - 0.5 + offset_x / icon_size,
-                        position.y as f32 - 0.5 + offset_y / icon_size,
+                        position.x as f32 - 0.5 + offset_x / icon_size + light_offset_x,
+                        position.y as f32 - 0.5 + offset_y / icon_size + light_offset_y,
                     ],
                     cell: [position.x, position.y],
                     range,

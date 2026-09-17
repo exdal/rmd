@@ -87,6 +87,9 @@
 	var/demir_light_color = null
 	var/demir_light_angle = 360
 	var/demir_light_dir = 0
+	/// Additional light-source origin offset in tile units.
+	var/demir_light_offset_x = 0
+	var/demir_light_offset_y = 0
 	var/demir_light_height = 1
 	/// Falloff exponent.
 	var/demir_light_curve = 1

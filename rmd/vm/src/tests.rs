@@ -262,6 +262,44 @@ fn lighting_hook_keeps_zero_radius_quadratic_sources() {
 }
 
 #[test]
+fn lighting_hook_offsets_source_origins_in_tile_units() {
+    let (tree, module) = compile(
+        r##"
+/obj/lamp
+/proc/demir_light(atom/target)
+    if(istype(target, /obj/lamp))
+        target.demir_light_range = 4
+        target.demir_light_power = 1
+        target.demir_light_color = "#ffffff"
+        target.demir_light_height = 0
+        target.demir_light_offset_x = 0.5
+"##,
+    );
+    let lamp = tree.id_of(&TreePath::parse("/obj/lamp")).expect("lamp type");
+    let bake = Bake::new(
+        &tree,
+        &module,
+        vec![Atom {
+            instance: 1,
+            ty: lamp,
+            position: Position::new(3, 2, 1),
+            vars: Vec::new(),
+        }],
+        [5, 3, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    let lighting = bake.lighting.as_ref().expect("offset source exports a lightmap");
+    let west = lighting.tile(Position::new(1, 2, 1)).unwrap().corners[1][0];
+    let east = lighting.tile(Position::new(4, 2, 1)).unwrap().corners[1][0];
+
+    assert!(
+        east > west,
+        "a positive x offset must move the light east: {east} <= {west}"
+    );
+}
+
+#[test]
 fn appearance_offset_moves_a_wall_fixture_without_leaking_through_its_wall() {
     let (tree, module) = compile(
         r##"

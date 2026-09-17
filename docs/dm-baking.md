@@ -68,7 +68,9 @@ through `demir_light`. The baker harvests those fields into a dense, z-major cor
 renderer bilinearly samples the four corners of each tile and applies the result to the map scene.
 Nested appearances marked `demir_emissive` contribute their alpha to the emissive mask without
 drawing their mask texture into the scene. `demir_overlay_light` similarly routes an appearance to
-the additive or subtractive overlay lightmap instead of the scene color.
+the additive or subtractive overlay lightmap instead of the scene color. Profiles can move a static
+source independently of its sprite with `demir_light_offset_x` and `demir_light_offset_y`, measured
+in tile units.
 
 ## Runtime model
 

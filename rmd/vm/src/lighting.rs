@@ -681,7 +681,14 @@ impl LightSource {
     }
 
     /// The source atom's one-based cell, and how many cells past it the light can land.
-    fn footprint(self) -> (i32, i32, i32) { (self.cell[0], self.cell[1], self.range.ceil().max(0.0) as i32) }
+    fn footprint(self) -> (i32, i32, i32) {
+        let center = [self.cell[0] as f32 - 0.5, self.cell[1] as f32 - 0.5];
+        let offset = (self.origin[0] - center[0])
+            .abs()
+            .max((self.origin[1] - center[1]).abs())
+            .ceil();
+        (self.cell[0], self.cell[1], (self.range + offset).ceil().max(0.0) as i32)
+    }
 
     fn in_cone(self, dx: f32, dy: f32) -> bool { self.cone_strength(dx, dy) > 0.0 }
 
@@ -851,6 +858,26 @@ mod tests {
         let edge = map.tile(Position::new(3, 3, 1)).unwrap();
         assert!(center.corners[CORNER_SW][0] > edge.corners[CORNER_NE][0]);
         assert_eq!(center.corners[CORNER_NE], edge.corners[CORNER_SW]);
+    }
+
+    #[test]
+    fn wall_fixture_offset_keeps_its_own_tile_inside_the_cone() {
+        let mut centered = source(Position::new(2, 2, 1));
+        let light = centered.source.as_mut().unwrap();
+        light.range = 8.0;
+        light.angle = 170.0;
+        light.direction = 180.0;
+        light.height = 1.0;
+        let centered_map = solved([3, 3, 1], &[centered]);
+        let centered_tile = centered_map.tile(Position::new(2, 2, 1)).unwrap();
+        assert_eq!(centered_tile.corners[CORNER_NW], [0.0; 3]);
+        assert_eq!(centered_tile.corners[CORNER_NE], [0.0; 3]);
+
+        let mut wall_offset = centered;
+        wall_offset.source.as_mut().unwrap().origin[1] += 0.5;
+        let offset_map = solved([3, 3, 1], &[wall_offset]);
+        let offset_tile = offset_map.tile(Position::new(2, 2, 1)).unwrap();
+        assert!(offset_tile.corners.iter().all(|corner| corner[0] > 0.0));
     }
 
     #[test]

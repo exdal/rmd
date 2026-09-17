@@ -357,6 +357,11 @@
 	demir_light_color = light_color
 	demir_light_angle = light_angle
 	demir_light_dir = light_dir
+	var/list/light_offset = get_light_offset()
+	// Native lighting adds these offsets to its sampling coordinates, which moves the source
+	// origin in the opposite direction.
+	demir_light_offset_x = -light_offset[1]
+	demir_light_offset_y = -light_offset[2]
 	demir_light_height = light_height
 
 // Fixtures ship with `on = FALSE` and are switched on by area power during
