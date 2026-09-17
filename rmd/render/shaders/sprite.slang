@@ -138,7 +138,8 @@ func fs_main(VSOutput input) -> f32x4 {
 
     if (input.sprite_id != 0) {
         let flags = sprites[input.sprite_id - 1].flags();
-        if ((flags & SPRITE_FLAG_EMISSIVE_BLOCKER) != 0) {
+        if ((flags & (SPRITE_FLAG_EMISSIVE_BLOCKER | SPRITE_FLAG_OVERLAY_LIGHT |
+                      SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT)) != 0) {
             discard;
         }
     }
@@ -163,6 +164,10 @@ func fs_visibility(VSOutput input) -> VisibilityOutput {
         discard;
     }
 
+    if ((flags & (SPRITE_FLAG_OVERLAY_LIGHT | SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT)) != 0) {
+        discard;
+    }
+
     VisibilityOutput output;
     let color = sample_sprite(input);
     let blocker = (flags & SPRITE_FLAG_EMISSIVE_BLOCKER) != 0;
@@ -173,4 +178,21 @@ func fs_visibility(VSOutput input) -> VisibilityOutput {
     output.visibility = SPRITE_WRITES_ID && !blocker ? input.sprite_id : 0;
 
     return output;
+}
+
+[shader("fragment")]
+func fs_overlay_light(VSOutput input) -> f32x4 {
+    if (input.sprite_id == 0) {
+        discard;
+    }
+
+    let flags = sprites[input.sprite_id - 1].flags();
+    let add = (flags & SPRITE_FLAG_OVERLAY_LIGHT) != 0;
+    let subtract = (flags & SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT) != 0;
+    if (!add && !subtract) {
+        discard;
+    }
+
+    let color = sample_sprite(input);
+    return f32x4(color.rgb * (subtract ? -1.0 : 1.0), color.a);
 }

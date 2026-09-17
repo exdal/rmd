@@ -52,6 +52,7 @@ use crate::{
 const GEOMETRY_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.vert.spv"));
 const SPRITE_SHADE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.frag.spv"));
 const SPRITE_VIS_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_visibility.frag.spv"));
+const SPRITE_OVERLAY_LIGHT_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_overlay_light.frag.spv"));
 const SPRITE_CULL_CLASSIFY_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_cull_classify.comp.spv"));
 const SPRITE_CULL_SCAN_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_cull_scan.comp.spv"));
 const SPRITE_CULL_COMPACT_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_cull_compact.comp.spv"));
@@ -89,7 +90,9 @@ const SPRITE_FLAG_AREA: u32 = 1;
 const SPRITE_AREA_EDGE_SHIFT: u32 = 1;
 const SPRITE_FLAG_EMISSIVE: u32 = 1 << 5;
 const SPRITE_FLAG_EMISSIVE_BLOCKER: u32 = 1 << 6;
-const SPRITE_FLAGS_SHIFT: u32 = 25;
+const SPRITE_FLAG_OVERLAY_LIGHT: u32 = 1 << 7;
+const SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT: u32 = 1 << 8;
+const SPRITE_FLAGS_SHIFT: u32 = 23;
 const SPRITE_TEXTURE_MASK: u32 = (1 << SPRITE_FLAGS_SHIFT) - 1;
 const SPRITE_TEXTURE_CAPACITY: u32 = SPRITE_TEXTURE_MASK + 1;
 const TEXTURE_RESERVE: usize = 8192;
@@ -605,6 +608,7 @@ pub struct Renderer {
     swapchain: Option<SwapChain>,
     sprite_pipeline: PipelineId,
     visibility_pipeline: PipelineId,
+    overlay_light_pipeline: PipelineId,
     cull_pipelines: [PipelineId; 3],
     lighting_pipeline: PipelineId,
     interaction_pipeline: PipelineId,
@@ -663,6 +667,20 @@ impl Renderer {
             GraphicsPipelineInfo::new()
                 .with_shader(&geometry_vs)
                 .with_shader(&read_spirv(SPRITE_VIS_FS_SPV)?)
+                .with_bindless_set(1, bindless.layout, bindless.set),
+        ) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                drop(graph);
+                bindless.destroy(&device);
+
+                return Err(error.into());
+            },
+        };
+        let overlay_light_pipeline = match graph.declare_pipeline(
+            GraphicsPipelineInfo::new()
+                .with_shader(&geometry_vs)
+                .with_shader(&read_spirv(SPRITE_OVERLAY_LIGHT_FS_SPV)?)
                 .with_bindless_set(1, bindless.layout, bindless.set),
         ) {
             Ok(pipeline) => pipeline,
@@ -755,6 +773,7 @@ impl Renderer {
             swapchain: None,
             sprite_pipeline,
             visibility_pipeline,
+            overlay_light_pipeline,
             cull_pipelines,
             lighting_pipeline,
             interaction_pipeline,
@@ -1020,6 +1039,42 @@ impl Renderer {
 
             let lighting = if view.lighting {
                 let light_tiles = lights.ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+                let mut overlay_lightmap = module.transient_image_sized(
+                    &ImageInfo::color_target(viewport, vk::Format::R16G16B16A16_SFLOAT)
+                        .with_usage(vk::ImageUsageFlags::SAMPLED)
+                        .with_name(format!("map view {index} overlay lightmap")),
+                    extent,
+                );
+                overlay_lightmap = module.clear(overlay_lightmap, vir::clear::f32::BLACK);
+                [overlay_lightmap, _, _] = module
+                    .begin_rendering([
+                        (overlay_lightmap, Access::ColorRW),
+                        (draw_commands, Access::IndirectRead),
+                        (visible_indices, Access::VertexRead),
+                    ])
+                    .with_name(format!("map view {index} overlay lights"))
+                    .bind_graphics_pipeline(self.overlay_light_pipeline)
+                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                    .set_viewport(0, Rect2D::framebuffer())
+                    .set_scissor(0, Rect2D::framebuffer())
+                    .broadcast_color_blend(BlendPreset::Additive)
+                    .set_rasterization(RasterizationState {
+                        cull_mode: vk::CullModeFlags::NONE,
+                        ..Default::default()
+                    })
+                    .bind_buffer(0, 1, sprites)
+                    .bind_buffer(0, 2, visible_indices)
+                    .specialize_constant(spec::SPRITE_INDIRECT, true)
+                    .specialize_constant(spec::SHOW_AREAS, state.show_areas)
+                    .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
+                    .push_constants_from(active_camera)
+                    .draw_indirect_at(
+                        draw_commands,
+                        u64::from(DRAW_INDIRECT_STRIDE),
+                        1u32,
+                        DRAW_INDIRECT_STRIDE,
+                    )
+                    .end_rendering();
                 let push =
                     module.declare_bytes_var(&format!("map view {index} lighting"), size_of::<LightingPush>() as u32);
                 let mut lit_attachment = module.transient_image_sized(
@@ -1039,6 +1094,7 @@ impl Renderer {
                     .bind_texture(0, 0, scene_attachment, self.sampler)
                     .bind_buffer(0, 1, light_tiles)
                     .bind_texture(0, 2, emissive_attachment, self.sampler)
+                    .bind_texture(0, 3, overlay_lightmap, self.sampler)
                     .push_constants_from(push)
                     .draw(3, 1)
                     .end_rendering();
@@ -2281,6 +2337,8 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
         crate::SpriteLighting::Normal => 0,
         crate::SpriteLighting::Emissive => SPRITE_FLAG_EMISSIVE,
         crate::SpriteLighting::Blocker => SPRITE_FLAG_EMISSIVE_BLOCKER,
+        crate::SpriteLighting::OverlayLight => SPRITE_FLAG_OVERLAY_LIGHT,
+        crate::SpriteLighting::OverlayLightSubtract => SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT,
     };
 
     let out_of_range = |field| GpuError::SpritePackingOutOfRange { sprite: index, field };
@@ -2719,7 +2777,10 @@ mod tests {
         SPRITE_FLAG_AREA,
         SPRITE_FLAG_EMISSIVE,
         SPRITE_FLAG_EMISSIVE_BLOCKER,
+        SPRITE_FLAG_OVERLAY_LIGHT,
+        SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT,
         SPRITE_FLAGS_SHIFT,
+        SPRITE_OVERLAY_LIGHT_FS_SPV,
         SPRITE_SHADE_FS_SPV,
         SPRITE_TEXTURE_MASK,
         SPRITE_VIS_FS_SPV,
@@ -3079,19 +3140,30 @@ mod tests {
     }
 
     #[test]
-    fn emissive_roles_reach_the_gpu_flags() {
+    fn lighting_roles_reach_the_gpu_flags() {
         let mut emissive = sprite(1);
         emissive.lighting = SpriteLighting::Emissive;
         let mut blocker = sprite(1);
         blocker.lighting = SpriteLighting::Blocker;
+        let mut overlay = sprite(1);
+        overlay.lighting = SpriteLighting::OverlayLight;
+        let mut subtract = sprite(1);
+        subtract.lighting = SpriteLighting::OverlayLightSubtract;
 
         let emissive = gpu_sprite(0, &emissive).expect("pack emissive");
         let blocker = gpu_sprite(1, &blocker).expect("pack blocker");
+        let overlay = gpu_sprite(2, &overlay).expect("pack overlay light");
+        let subtract = gpu_sprite(3, &subtract).expect("pack subtractive overlay light");
 
         assert_eq!(emissive.texture_flags >> SPRITE_FLAGS_SHIFT, SPRITE_FLAG_EMISSIVE);
         assert_eq!(
             blocker.texture_flags >> SPRITE_FLAGS_SHIFT,
             SPRITE_FLAG_EMISSIVE_BLOCKER
+        );
+        assert_eq!(overlay.texture_flags >> SPRITE_FLAGS_SHIFT, SPRITE_FLAG_OVERLAY_LIGHT);
+        assert_eq!(
+            subtract.texture_flags >> SPRITE_FLAGS_SHIFT,
+            SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT
         );
     }
 
@@ -3363,7 +3435,7 @@ mod tests {
             .collect::<Vec<_>>();
         bindings.sort_unstable();
 
-        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2)]);
+        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2), (0, 3)]);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<LightingPush>());
     }
@@ -3587,7 +3659,7 @@ mod tests {
 
     #[test]
     fn sprite_fragment_passes_read_sprites_and_textures() {
-        for spirv in [SPRITE_VIS_FS_SPV, SPRITE_SHADE_FS_SPV] {
+        for spirv in [SPRITE_VIS_FS_SPV, SPRITE_SHADE_FS_SPV, SPRITE_OVERLAY_LIGHT_FS_SPV] {
             let reflection = shader::reflect(&read_spirv(spirv).expect("valid SPIR-V")).expect("shader reflects");
             let mut bindings = reflection
                 .bindings

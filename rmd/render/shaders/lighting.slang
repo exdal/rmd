@@ -16,6 +16,9 @@ StructuredBuffer<LightTile> light_tiles;
 [[vk::binding(2, 0)]]
 Sampler2D emissive_mask;
 
+[[vk::binding(3, 0)]]
+Sampler2D overlay_lightmap;
+
 struct VSOutput {
   f32x4 position : SV_Position;
   f32x2 uv;
@@ -61,7 +64,9 @@ func fs_main(VSOutput input, uniform f32x2 center, uniform f32x2 viewport,
   let south = lerp(southwest, southeast, local.x);
   let north = lerp(northwest, northeast, local.x);
   let light = lerp(south, north, local.y);
+  let overlay_light = overlay_lightmap.Sample(input.uv).rgb;
+  let combined_light = saturate(light + overlay_light);
   let emission = emissive_mask.Sample(input.uv).r;
 
-  return f32x4(color.rgb * lerp(light, f32x3(1.0), emission), color.a);
+  return f32x4(color.rgb * lerp(combined_light, f32x3(1.0), emission), color.a);
 }

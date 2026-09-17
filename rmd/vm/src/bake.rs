@@ -138,7 +138,6 @@ pub struct Bake {
     contributions: HashMap<u64, Vec<u64>>,
     by_target: HashMap<u64, Contributions>,
     dirty_appearances: HashSet<u64>,
-    light_atoms: HashMap<u64, LightingAtom>,
     hooks: Hooks,
 }
 
@@ -216,12 +215,11 @@ impl Bake {
         progress(Stage::Light, total, total);
 
         if bake.hooks.light.is_some() {
-            for id in &ids {
-                bake.harvest_light(tree, *id);
-            }
-            let mut lighting = LightingMap::new(size);
-            lighting.solve_all(bake.light_atoms.values());
-            bake.lighting = Some(lighting);
+            let atoms = ids
+                .iter()
+                .filter_map(|id| Some((*id, bake.harvest_light(tree, *id)?)))
+                .collect::<Vec<_>>();
+            bake.lighting = Some(LightingMap::build(size, atoms));
         }
 
         for id in &ids {
@@ -413,15 +411,9 @@ impl Bake {
         }
     }
 
-    fn harvest_light(&mut self, tree: &ObjectTree, id: u64) {
-        let Some(atom) = self.atoms.get(&id) else {
-            return;
-        };
-
-        let position = atom.position;
-        let Some(object) = self.object(id).and_then(|id| self.runtime.heap.object(id)) else {
-            return;
-        };
+    fn harvest_light(&self, tree: &ObjectTree, id: u64) -> Option<LightingAtom> {
+        let position = self.atoms.get(&id)?.position;
+        let object = self.object(id).and_then(|id| self.runtime.heap.object(id))?;
 
         let range = object_number(object, tree, "demir_light_range", 0.0).max(0.0);
         let power = object_number(object, tree, "demir_light_power", 0.0);
@@ -473,11 +465,7 @@ impl Bake {
             fullbright: object_truthy(object, tree, "demir_fullbright", false),
         };
 
-        if light.affects_lighting() {
-            self.light_atoms.insert(id, light);
-        } else {
-            self.light_atoms.remove(&id);
-        }
+        light.affects_lighting().then_some(light)
     }
 
     fn record_fault(&mut self, id: u64, fault: Fault) {
@@ -636,33 +624,47 @@ impl Bake {
         }
     }
 
-    fn compose(&mut self) {
+    fn compose(&mut self) -> Vec<u64> {
+        let mut changed = Vec::new();
         for id in std::mem::take(&mut self.dirty_appearances) {
-            self.appearances.remove(&id);
-            if self.failed.contains(&id) || !self.atoms.contains_key(&id) {
-                continue;
+            let previous = self.appearances.remove(&id);
+            let composed = self.composed(id);
+            if composed != previous {
+                changed.push(id);
             }
-            let Some(values) = self.by_target.get(&id) else {
-                continue;
-            };
-            let mut composed = values.get(id).cloned().unwrap_or_default();
-            for (root, value) in values.iter() {
-                if *root == id {
-                    continue;
-                }
-                for (name, value) in &value.vars {
-                    if let Some((_, previous)) = composed.vars.iter_mut().find(|(current, _)| current == name) {
-                        *previous = value.clone();
-                    } else {
-                        composed.vars.push((name.clone(), value.clone()));
-                    }
-                }
-                composed.lighting = composed.lighting.combine(value.lighting);
-                composed.overlays.extend(value.overlays.clone());
-                composed.underlays.extend(value.underlays.clone());
+
+            if let Some(composed) = composed {
+                self.appearances.insert(id, composed);
             }
-            self.appearances.insert(id, composed);
         }
+
+        changed
+    }
+
+    fn composed(&self, id: u64) -> Option<AppearanceDelta> {
+        if self.failed.contains(&id) || !self.atoms.contains_key(&id) {
+            return None;
+        }
+
+        let values = self.by_target.get(&id)?;
+        let mut composed = values.get(id).cloned().unwrap_or_default();
+        for (root, value) in values.iter() {
+            if *root == id {
+                continue;
+            }
+            for (name, value) in &value.vars {
+                if let Some((_, previous)) = composed.vars.iter_mut().find(|(current, _)| current == name) {
+                    *previous = value.clone();
+                } else {
+                    composed.vars.push((name.clone(), value.clone()));
+                }
+            }
+            composed.lighting = composed.lighting.combine(value.lighting);
+            composed.overlays.extend(value.overlays.clone());
+            composed.underlays.extend(value.underlays.clone());
+        }
+
+        Some(composed)
     }
 
     // replaces changed inputs and reevaluates the surrounding 3 by 3 by 3 neighborhood
@@ -678,7 +680,6 @@ impl Bake {
         replacements.sort_by_key(|atom| atom.instance);
 
         let mut dirty = HashSet::new();
-        let mut dirty_light_levels = HashSet::new();
         let mut inserted = Vec::new();
         let mut remove = removed
             .iter()
@@ -692,9 +693,8 @@ impl Bake {
         for id in &remove {
             if let Some(atom) = self.atoms.remove(id) {
                 dirty.insert(atom.position);
-                self.light_atoms.remove(id);
-                if self.hooks.light.is_some() {
-                    dirty_light_levels.insert(atom.position.z as u32);
+                if let Some(lighting) = self.lighting.as_mut() {
+                    lighting.set(*id, None);
                 }
 
                 if let Some(cell) = self.cells.get_mut(&atom.position) {
@@ -743,19 +743,16 @@ impl Bake {
                 self.light(tree, module, id);
                 self.fingerprint(id);
 
-                if self.hooks.light.is_some() {
-                    self.harvest_light(tree, id);
-                    if let Some(position) = self.position(id) {
-                        dirty_light_levels.insert(position.z as u32);
+                if self.lighting.is_some() {
+                    let light = self.harvest_light(tree, id);
+                    if let Some(lighting) = self.lighting.as_mut() {
+                        lighting.set(id, light);
                     }
                 }
             }
         }
 
-        let lighting = self
-            .lighting
-            .as_mut()
-            .and_then(|lighting| lighting.solve_levels(self.light_atoms.values(), &dirty_light_levels));
+        let lighting = self.lighting.as_mut().and_then(LightingMap::solve_dirty);
 
         let mut affected = HashSet::new();
         for position in dirty {
@@ -782,14 +779,13 @@ impl Bake {
                 self.bake_atom(tree, module, *id);
             }
         }
-        affected.extend(remove);
-        affected.extend(self.dirty_appearances.iter().copied());
-        affected.sort_unstable();
-        affected.dedup();
-        self.compose();
+        let mut changed = self.compose();
+        changed.extend(remove);
+        changed.sort_unstable();
+        changed.dedup();
 
         BakeUpdate {
-            appearances: affected,
+            appearances: changed,
             lighting,
         }
     }
@@ -950,6 +946,7 @@ thread_local! {
         plane: Identifier::from("plane"),
         emissive: Identifier::from("demir_emissive"),
         emissive_blocker: Identifier::from("demir_emissive_blocker"),
+        overlay_light: Identifier::from("demir_overlay_light"),
     };
 }
 
@@ -963,6 +960,7 @@ struct Names {
     plane: Identifier,
     emissive: Identifier,
     emissive_blocker: Identifier,
+    overlay_light: Identifier,
 }
 
 const APPEARANCE_VARS: &[&str] = &[
@@ -999,10 +997,15 @@ fn export_with_names(
     }
 
     let object = heap.object(id).ok_or(FaultKind::InvalidReference)?;
+    let overlay_light = object_number(object, tree, names.overlay_light.as_str(), 0.0);
     let lighting = if object_truthy(object, tree, names.emissive_blocker.as_str(), false) {
         AppearanceLighting::Blocker
     } else if object_truthy(object, tree, names.emissive.as_str(), false) {
         AppearanceLighting::Emissive
+    } else if overlay_light > 0.0 {
+        AppearanceLighting::OverlayLight
+    } else if overlay_light < 0.0 {
+        AppearanceLighting::OverlayLightSubtract
     } else {
         AppearanceLighting::Normal
     };

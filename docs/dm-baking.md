@@ -127,8 +127,15 @@ the prepare and light hooks to new objects, and rebakes the surrounding 3 by 3 b
 reuses the runtime initialized by the full bake and never reruns `demir_initialize()`. The vertical
 extent is needed by codebases with pipes or other structures that connect between z levels.
 Incremental edits bypass full-load cache reuse through the epoch, avoiding results derived from stale
-runtime globals. A changed light, blocker, ambient source, or fullbright cell resolves its complete z
-level and reports that contiguous tile range separately from changed appearances.
+runtime globals. The update reports only the edited instances and the neighbors whose composed
+appearance actually changed.
+
+The lightmap keeps its corner samples, per-cell blockers and fullbright/ambient state, and a bucketed
+index of sources between solves. A changed light re-solves only the corners inside its reach. A
+blocker whose cell flips re-solves the reach of every source that covers it, and a fullbright or
+ambient cell re-solves its own corners plus any adjacent edge-only source. Sources are summed in
+ascending instance order in both paths, so an incremental solve matches a full one bit for bit. The
+update reports the contiguous tile range it rewrote separately from changed appearances.
 
 Appearance effects on other placements are stored as contributions from their source instance.
 Removing or replacing a source first removes every contribution it produced, then recomposes only

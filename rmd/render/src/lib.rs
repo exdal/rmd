@@ -116,6 +116,8 @@ pub enum SpriteLighting {
     Normal,
     Emissive,
     Blocker,
+    OverlayLight,
+    OverlayLightSubtract,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

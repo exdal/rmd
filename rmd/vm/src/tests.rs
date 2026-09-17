@@ -203,7 +203,7 @@ fn lighting_hooks_build_and_incrementally_restore_the_lightmap() {
 }
 
 #[test]
-fn baking_exports_emissive_atoms_overlays_and_blockers() {
+fn baking_exports_sprite_lighting_roles() {
     let (tree, module) = compile(
         r#"
 /obj/light
@@ -218,6 +218,14 @@ fn baking_exports_emissive_atoms_overlays_and_blockers() {
     blocker.icon_state = "blocker"
     blocker.demir_emissive_blocker = TRUE
     glow.overlays += blocker
+    var/image/overlay_light = new
+    overlay_light.icon_state = "overlay-light"
+    overlay_light.demir_overlay_light = 1
+    glow.overlays += overlay_light
+    var/image/darkness = new
+    darkness.icon_state = "darkness"
+    darkness.demir_overlay_light = -1
+    glow.overlays += darkness
     target.overlays += glow
 "#,
     );
@@ -242,6 +250,14 @@ fn baking_exports_emissive_atoms_overlays_and_blockers() {
     assert_eq!(
         appearance.overlays[0].overlays[0].lighting,
         crate::AppearanceLighting::Blocker
+    );
+    assert_eq!(
+        appearance.overlays[0].overlays[1].lighting,
+        crate::AppearanceLighting::OverlayLight
+    );
+    assert_eq!(
+        appearance.overlays[0].overlays[2].lighting,
+        crate::AppearanceLighting::OverlayLightSubtract
     );
 }
 

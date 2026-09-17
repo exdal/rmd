@@ -220,6 +220,8 @@ pub fn instance_for(
             vm::AppearanceLighting::Normal => render::SpriteLighting::Normal,
             vm::AppearanceLighting::Emissive => render::SpriteLighting::Emissive,
             vm::AppearanceLighting::Blocker => render::SpriteLighting::Blocker,
+            vm::AppearanceLighting::OverlayLight => render::SpriteLighting::OverlayLight,
+            vm::AppearanceLighting::OverlayLightSubtract => render::SpriteLighting::OverlayLightSubtract,
         },
         color: [tint[0] * alpha, tint[1] * alpha, tint[2] * alpha, alpha],
         depth: appearance.plane * 1000.0 + appearance.layer,

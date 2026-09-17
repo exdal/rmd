@@ -40,6 +40,102 @@
 	if(uses_integrity)
 		atom_integrity = max_integrity
 
+// Overlay lights are pre-baked masks composited on the lighting plane. Recreate the component's
+// visual without starting components, signals, or dynamic-luminosity bookkeeping.
+/proc/demir_tg_overlay_icon(pixel_bounds)
+	switch(pixel_bounds)
+		if(32)
+			return 'icons/effects/light_overlays/light_32.dmi'
+		if(64)
+			return 'icons/effects/light_overlays/light_64.dmi'
+		if(96)
+			return 'icons/effects/light_overlays/light_96.dmi'
+		if(128)
+			return 'icons/effects/light_overlays/light_128.dmi'
+		if(160)
+			return 'icons/effects/light_overlays/light_160.dmi'
+		if(192)
+			return 'icons/effects/light_overlays/light_192.dmi'
+		if(224)
+			return 'icons/effects/light_overlays/light_224.dmi'
+		if(256)
+			return 'icons/effects/light_overlays/light_256.dmi'
+		if(288)
+			return 'icons/effects/light_overlays/light_288.dmi'
+		if(320)
+			return 'icons/effects/light_overlays/light_320.dmi'
+		if(352)
+			return 'icons/effects/light_overlays/light_352.dmi'
+	return null
+
+/atom/movable/proc/demir_add_overlay_light()
+	if(!IS_OVERLAY_LIGHT_SYSTEM(light_system) || !light_on || !light_range || !light_power)
+		return
+
+	var/rounded_range = clamp(CEILING(light_range, 0.5), 1, 6)
+	var/pixel_bounds = ((rounded_range - 1) * 64) + 32
+	var/image/mask = new
+	mask.icon = demir_tg_overlay_icon(pixel_bounds)
+	mask.icon_state = "light"
+	mask.dir = dir
+	mask.plane = O_LIGHTING_VISUAL_PLANE
+	mask.appearance_flags = RESET_COLOR | RESET_ALPHA | RESET_TRANSFORM
+	mask.alpha = min(230, (abs(light_power) * 120) + 30)
+	mask.color = light_color
+	mask.demir_overlay_light = light_power > 0 ? 1 : -1
+
+	var/offset = (pixel_bounds - 32) * 0.5
+	mask.pixel_x = -offset
+	mask.pixel_y = -offset
+
+	if(IS_OVERLAY_CONE_LIGHT_SYSTEM(light_system))
+		var/cast_range
+		if(light_system == OVERLAY_LIGHT_BEAM)
+			cast_range = max(round(light_range * 0.5), 1)
+		else
+			cast_range = clamp(round(light_range * 0.5), 1, 3)
+		if(cast_range > 2 && !(ALL_CARDINALS & dir))
+			cast_range -= 1
+
+		var/final_distance = cast_range
+		var/turf/scanning = get_turf(src)
+		for(var/i in 1 to cast_range)
+			var/turf/next_turf = get_step(scanning, dir)
+			if(isnull(next_turf) || IS_OPAQUE_TURF(next_turf))
+				final_distance = i
+				break
+			scanning = next_turf
+
+		switch(dir)
+			if(NORTH)
+				mask.pixel_y += 32 * final_distance
+			if(SOUTH)
+				mask.pixel_y -= 32 * final_distance
+			if(EAST)
+				mask.pixel_x += 32 * final_distance
+			if(WEST)
+				mask.pixel_x -= 32 * final_distance
+
+		var/image/cone = new
+		cone.icon = 'icons/effects/light_overlays/light_cone.dmi'
+		cone.icon_state = "light"
+		cone.dir = dir
+		cone.plane = O_LIGHTING_VISUAL_PLANE
+		cone.appearance_flags = RESET_COLOR | RESET_ALPHA | RESET_TRANSFORM
+		cone.alpha = min(120, (abs(light_power) * 60) + 15)
+		cone.color = light_color
+		cone.pixel_x = -32
+		cone.pixel_y = -32
+		cone.demir_overlay_light = mask.demir_overlay_light
+		underlays += cone
+
+	underlays += mask
+
+// Flashlights normally apply their mapped start_on value during Initialize().
+/obj/item/flashlight/proc/demir_prepare_light_state()
+	if(start_on)
+		light_on = TRUE
+
 /turf/open/floor/light/proc/demir_prepare_light()
 	// light_floor.dm undefines these constants before this profile is included:
 	// fine = 0, flicker = 1, breaking = 2, broken = 3.
@@ -168,6 +264,9 @@
 
 /proc/demir_prepare(atom/target)
 	target.demir_prepare_smoothing()
+	if(istype(target, /obj/item/flashlight))
+		var/obj/item/flashlight/flashlight = target
+		flashlight.demir_prepare_light_state()
 	if(istype(target, /turf/open/floor/light))
 		var/turf/open/floor/light/light_floor = target
 		light_floor.demir_prepare_light()
@@ -194,6 +293,9 @@
 		duct.demir_bake_connections()
 	else if(target.smoothing_flags & USES_SMOOTHING)
 		target.smooth_icon()
+	if(ismovable(target))
+		var/atom/movable/movable_target = target
+		movable_target.demir_add_overlay_light()
 	target.demir_tag_emissive()
 
 /proc/fast_emissive_blocker(atom/target)

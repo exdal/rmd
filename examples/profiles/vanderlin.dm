@@ -20,6 +20,123 @@
 /atom/proc/demir_prepare_smoothing()
 	SETUP_SMOOTHING()
 
+// MOVABLE_LIGHT uses a pre-baked mask in vis_contents. Emit the same mask as a tagged underlay so
+// the editor can composite it after static lighting without starting components or signals.
+/proc/demir_vanderlin_overlay_icon(pixel_bounds)
+	switch(pixel_bounds)
+		if(32)
+			return 'icons/effects/light_overlays/light_32.dmi'
+		if(64)
+			return 'icons/effects/light_overlays/light_64.dmi'
+		if(96)
+			return 'icons/effects/light_overlays/light_96.dmi'
+		if(128)
+			return 'icons/effects/light_overlays/light_128.dmi'
+		if(160)
+			return 'icons/effects/light_overlays/light_160.dmi'
+		if(192)
+			return 'icons/effects/light_overlays/light_192.dmi'
+		if(224)
+			return 'icons/effects/light_overlays/light_224.dmi'
+		if(256)
+			return 'icons/effects/light_overlays/light_256.dmi'
+		if(288)
+			return 'icons/effects/light_overlays/light_288.dmi'
+		if(320)
+			return 'icons/effects/light_overlays/light_320.dmi'
+		if(352)
+			return 'icons/effects/light_overlays/light_352.dmi'
+		if(384)
+			return 'icons/effects/light_overlays/light_384.dmi'
+		if(416)
+			return 'icons/effects/light_overlays/light_416.dmi'
+		if(448)
+			return 'icons/effects/light_overlays/light_448.dmi'
+		if(480)
+			return 'icons/effects/light_overlays/light_480.dmi'
+		if(512)
+			return 'icons/effects/light_overlays/light_512.dmi'
+		if(544)
+			return 'icons/effects/light_overlays/light_544.dmi'
+	return null
+
+/atom/movable/proc/demir_add_overlay_light()
+	if(light_system != MOVABLE_LIGHT || !light_on || !light_outer_range)
+		return
+	demir_add_light_mask(light_outer_range, light_color)
+
+/atom/movable/proc/demir_add_light_mask(outer_range, mask_color)
+	var/rounded_range = clamp(CEILING(outer_range, 0.5), 1, 9)
+	var/pixel_bounds = ((rounded_range - 1) * 64) + 32
+	var/image/mask = new
+	mask.icon = demir_vanderlin_overlay_icon(pixel_bounds)
+	mask.icon_state = "light2"
+	mask.dir = dir
+	mask.plane = O_LIGHTING_VISUAL_PLANE
+	mask.appearance_flags = RESET_COLOR | RESET_ALPHA | RESET_TRANSFORM
+	mask.alpha = 255
+	mask.color = mask_color
+	mask.pixel_x = -((pixel_bounds - 32) * 0.5)
+	mask.pixel_y = mask.pixel_x
+	mask.demir_overlay_light = 1
+	underlays += mask
+
+// A sconce sparks the torch it spawns in Initialize(), and the torch's light component hangs its
+// mask on the sconce because the torch itself is not on a turf.
+/obj/machinery/light/fueled/torchholder/demir_add_overlay_light()
+	if(!ispath(torchy))
+		return
+	var/obj/item/flashlight/flare/torch/torch = torchy
+	demir_add_light_mask(initial(torch.light_outer_range), initial(torch.light_color))
+
+// Fixtures are STATIC_LIGHT, but their light vars stay at the type defaults until update() copies
+// brightness, bulb_power and bulb_colour over them through set_light().
+/obj/machinery/light/proc/demir_prepare_light_state()
+	light_on = on
+	if(!on)
+		return
+	light_power = bulb_power
+	light_color = color ? color : bulb_colour
+	light_outer_range = brightness
+	if(light_outer_range > 0 && light_outer_range < MINIMUM_USEFUL_LIGHT_RANGE)
+		light_outer_range = MINIMUM_USEFUL_LIGHT_RANGE
+	if(light_inner_range >= light_outer_range)
+		light_inner_range = light_outer_range / 4
+	light_falloff_curve = LIGHTING_DEFAULT_FALLOFF_CURVE
+
+// `seton(TRUE)` from Initialize()
+/obj/machinery/light/fueled/demir_prepare_light_state()
+	on = status == LIGHT_OK
+	..()
+
+/obj/machinery/light/fueled/torchholder/demir_prepare_light_state()
+	..()
+	if(!torchy)
+		on = FALSE
+		light_on = FALSE
+
+// `lights_on()` from Initialize()
+/obj/machinery/light/fueledstreet/demir_prepare_light_state()
+	on = TRUE
+	..()
+
+// Flashlights normally derive light_on from their mapped on/icon state during Initialize().
+/obj/item/flashlight/proc/demir_prepare_light_state()
+	if(icon_state == "[initial(icon_state)]-on")
+		on = TRUE
+	light_on = on
+
+/obj/item/flashlight/flare/torch/prelit/demir_prepare_light_state()
+	on = TRUE
+	light_on = TRUE
+
+/obj/item/flashlight/flare/torch/metal/prelit/demir_prepare_light_state()
+	on = TRUE
+	light_on = TRUE
+
+/obj/item/clothing/head/helmet/leather/shaman_hood/proc/demir_prepare_light_state()
+	light_on = on
+
 // Fluid pipes keep an associative list of connected directions keyed by the
 // direction number, and assemble their icon state from those keys in list
 // order. Each pipe links its neighbours pairwise from Initialize(), and
@@ -72,6 +189,15 @@
 
 /proc/demir_prepare(atom/target)
 	target.demir_prepare_smoothing()
+	if(istype(target, /obj/item/flashlight))
+		var/obj/item/flashlight/flashlight = target
+		flashlight.demir_prepare_light_state()
+	else if(istype(target, /obj/item/clothing/head/helmet/leather/shaman_hood))
+		var/obj/item/clothing/head/helmet/leather/shaman_hood/hood = target
+		hood.demir_prepare_light_state()
+	else if(istype(target, /obj/machinery/light))
+		var/obj/machinery/light/fixture = target
+		fixture.demir_prepare_light_state()
 
 /proc/demir_bake(atom/target)
 	if(istype(target, /obj/structure/water_pipe))
@@ -80,6 +206,9 @@
 		return
 	if(target.smoothing_flags & USES_SMOOTHING)
 		target.smooth_icon()
+	if(ismovable(target))
+		var/atom/movable/movable_target = target
+		movable_target.demir_add_overlay_light()
 
 
 /datum/controller/global_vars/demir_preview

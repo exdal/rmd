@@ -304,6 +304,8 @@ pub enum AppearanceLighting {
     Normal,
     Emissive,
     Blocker,
+    OverlayLight,
+    OverlayLightSubtract,
 }
 
 impl AppearanceLighting {
@@ -311,6 +313,8 @@ impl AppearanceLighting {
         match (self, other) {
             (Self::Blocker, _) | (_, Self::Blocker) => Self::Blocker,
             (Self::Emissive, _) | (_, Self::Emissive) => Self::Emissive,
+            (Self::OverlayLightSubtract, _) | (_, Self::OverlayLightSubtract) => Self::OverlayLightSubtract,
+            (Self::OverlayLight, _) | (_, Self::OverlayLight) => Self::OverlayLight,
             _ => Self::Normal,
         }
     }
