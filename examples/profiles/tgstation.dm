@@ -18,12 +18,21 @@
 	SSatoms = src
 	initialized = INITIALIZATION_INSSATOMS
 
+/datum/controller/configuration/demir_preview/New()
+	config = src
+
+/datum/controller/configuration/demir_preview/Get(entry_type)
+	var/datum/config_entry/entry = entry_type
+	return initial(entry.default)
+
 /datum/controller/global_vars/demir_preview/New()
 	GLOB = src
 	if(!SSmapping)
 		SSmapping = new /datum/controller/subsystem/mapping/demir_preview
 	if(!SSatoms)
 		SSatoms = new /datum/controller/subsystem/atoms/demir_preview
+	if(!config)
+		config = new /datum/controller/configuration/demir_preview
 	if(!SSoverlays)
 		SSoverlays = new /datum/controller/subsystem/overlays/demir_preview
 	bitflag_lists = list()
@@ -34,6 +43,8 @@
 	InitGlobaladjacent_direction_lookup()
 	InitGlobalpipe_color_name()
 	InitGlobalwire_node_generating_types()
+	InitGlobalemissive_color()
+	InitGlobalem_block_color()
 
 /atom/proc/demir_prepare_smoothing()
 	SETUP_SMOOTHING()
@@ -210,6 +221,12 @@
 	icon_state = "manifoldlayer_center"
 	return ..()
 
+/obj/machinery/atmospherics/pipe/multiz/demir_bake_connections()
+	icon_state = ""
+	center = mutable_appearance(icon, "adapter_center", layer = HIGH_OBJ_LAYER)
+	pipe = mutable_appearance(icon, "pipe-[piping_layer]")
+	return ..()
+
 // Fluid ducts keep an associative neighbour list and use it to assemble their
 // icon-state suffixes. Network construction is unnecessary for their preview.
 /obj/machinery/duct/proc/demir_bake_connections()
@@ -260,6 +277,11 @@
 		preview.appearance = spawned.appearance
 		overlays += preview
 
+/obj/machinery/door/airlock/proc/demir_bake_appearance()
+	if(glass)
+		airlock_material = "glass"
+	update_appearance(UPDATE_ICON)
+
 /proc/demir_initialize()
 	if(!GLOB)
 		GLOB = new /datum/controller/global_vars/demir_preview
@@ -290,6 +312,9 @@
 	else if(istype(target, /obj/machinery/duct))
 		var/obj/machinery/duct/duct = target
 		duct.demir_bake_connections()
+	else if(istype(target, /obj/machinery/door/airlock))
+		var/obj/machinery/door/airlock/airlock = target
+		airlock.demir_bake_appearance()
 	else if(istype(target, /obj/machinery/atmospherics))
 		var/obj/machinery/atmospherics/atmos_target = target
 		atmos_target.demir_bake_connections()
