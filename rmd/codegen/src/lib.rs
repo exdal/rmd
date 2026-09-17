@@ -91,7 +91,7 @@ pub struct Module {
 
 impl Module {
     pub const MAGIC: [u8; 4] = *b"RMBC";
-    pub const VERSION: u16 = 1;
+    pub const VERSION: u16 = 2;
 
     pub fn function(&self, id: FunctionId) -> Option<&CompiledFunction> { self.functions.get(id.0 as usize) }
 
@@ -186,6 +186,8 @@ struct Generator {
     labels: HashMap<IrNodeId, CodeOffset>,
     jumps: Vec<JumpPatch>,
     code: Vec<u8>,
+    /// `a.b()` looks `b` up as a proc first, and plain `a.b` as a var first
+    callees: HashSet<IrNodeId>,
 }
 
 impl Generator {
@@ -202,10 +204,19 @@ impl Generator {
             labels: HashMap::new(),
             jumps: Vec::new(),
             code: Vec::new(),
+            callees: HashSet::new(),
         }
     }
 
     fn generate(mut self, module: &ir::Module) -> Result<Module, CodegenError> {
+        self.callees = module
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                IrNode::Call { callee, .. } => Some(*callee),
+                _ => None,
+            })
+            .collect();
         self.register_constants(module)?;
         self.register_functions(module)?;
 
@@ -491,6 +502,7 @@ impl Generator {
                 self.emit_op(Op::AccessField);
                 self.emit_u32(name.0);
                 self.emit_u8(access_code(*access) as u8);
+                self.emit_bool(self.callees.contains(&id));
                 self.store_result(state, id)?;
             },
             IrNode::Initial { object, name } => {

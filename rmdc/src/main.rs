@@ -19,6 +19,7 @@ use core::{
     source::SourceMap,
 };
 use std::{
+    collections::BTreeSet,
     fmt::Write,
     path::{Path, PathBuf},
     process::ExitCode,
@@ -233,6 +234,13 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
     let module = codegen::generate(&ir_module)?;
     drop(ast);
     eprintln!("compiled in {:.2}s", compile_started.elapsed().as_secs_f32());
+    let roots = entry
+        .parent()
+        .map(Path::to_path_buf)
+        .into_iter()
+        .chain(preprocessed.resource_dirs.iter().cloned())
+        .collect::<Vec<_>>();
+    let icons = icon_states(&tree, &module, &roots);
 
     let source = std::fs::read_to_string(map_path)?;
     let (map, errors) = dmm::parser::parse(&source);
@@ -300,6 +308,7 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
         atoms,
         [map.size.x as i32, map.size.y as i32, map.size.z as i32],
         vm::Limits::default(),
+        icons,
     );
     let bake_seconds = bake_started.elapsed().as_secs_f64();
     report_bake_output(&mut bake);
@@ -337,6 +346,24 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
         bake_seconds
     );
     eprintln!("{changed} icon states changed, {} cache hits", bake.cache_hits);
+    if let Some(lighting) = &bake.lighting {
+        let lit = lighting
+            .tiles
+            .iter()
+            .filter(|tile| tile.corners.iter().flatten().any(|channel| *channel > 0.0))
+            .count();
+        let mut roles = [0usize; 3];
+        for appearance in bake.appearances.values() {
+            count_lighting_roles(appearance, &mut roles);
+        }
+        eprintln!(
+            "{lit}/{} tiles lit, {} overlay lights, {} emissive and {} blocker sprites",
+            lighting.tiles.len(),
+            roles[0],
+            roles[1],
+            roles[2]
+        );
+    }
     for diagnostic in bake
         .diagnostics
         .entries
@@ -385,6 +412,46 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
     }
 
     Ok(())
+}
+
+/// `'icons/obj/doors.dmi'` from any var initializer or proc constant, with its state names read off disk.
+fn icon_states(tree: &ObjectTree, module: &codegen::Module, roots: &[PathBuf]) -> vm::IconStates {
+    let names = tree
+        .iter()
+        .flat_map(|decl| decl.vars.values())
+        .map(|var| &var.value)
+        .chain(&module.constants)
+        .filter_map(|value| match value {
+            core::types::Value::Resource(path) if path.to_ascii_lowercase().ends_with(".dmi") => Some(path.as_str()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+
+    vm::IconStates::new(names.into_iter().filter_map(|name| {
+        let relative = name.replace('\\', "/");
+        let path = roots
+            .iter()
+            .map(|root| root.join(&relative))
+            .find(|path| path.is_file())?;
+        let metadata = IconFile::load_metadata(path).ok()?;
+
+        Some((
+            name.to_owned(),
+            metadata.states.into_iter().map(|state| state.name).collect(),
+        ))
+    }))
+}
+
+fn count_lighting_roles(appearance: &vm::AppearanceDelta, roles: &mut [usize; 3]) {
+    match appearance.lighting {
+        vm::AppearanceLighting::OverlayLight | vm::AppearanceLighting::OverlayLightSubtract => roles[0] += 1,
+        vm::AppearanceLighting::Emissive => roles[1] += 1,
+        vm::AppearanceLighting::Blocker => roles[2] += 1,
+        vm::AppearanceLighting::Normal => {},
+    }
+    for layer in appearance.overlays.iter().chain(&appearance.underlays) {
+        count_lighting_roles(layer, roles);
+    }
 }
 
 fn report_bake_output(bake: &mut vm::bake::Bake) {

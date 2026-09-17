@@ -36,6 +36,7 @@ pub struct BakeProgram {
     pub tree: ObjectTree,
     pub module: codegen::Module,
     pub files: Arc<[PathBuf]>,
+    pub icon_states: vm::IconStates,
 }
 
 pub struct Environment {
@@ -169,6 +170,14 @@ impl Environment {
                 },
                 Err(e) => failures.push((name, e)),
             }
+        }
+
+        if let Some(program) = self.bake_program.as_mut() {
+            program.icon_states = vm::IconStates::new(self.icons.iter().map(|(name, metadata)| {
+                let states = metadata.states.iter().map(|state| state.name.clone()).collect();
+
+                (name.clone(), states)
+            }));
         }
 
         failures

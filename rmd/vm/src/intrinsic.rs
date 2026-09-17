@@ -1,5 +1,5 @@
 use core::{path::TreePath, types::Identifier};
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf};
 
 use crate::{
     FaultKind,
@@ -110,6 +110,37 @@ impl Evaluator<'_> {
             | Intrinsic::MovableBump => Ok(GenericValue::Null),
 
             Intrinsic::DmNewIcon => Ok(arg(0)),
+            Intrinsic::Range | Intrinsic::Orange => self.range_list([arg(0), arg(1)], intrinsic == Intrinsic::Range),
+            Intrinsic::IconStates => {
+                let mut icon = arg(0);
+                for _ in 0..8 {
+                    let GenericValue::Object(id) = icon else {
+                        break;
+                    };
+                    icon = self
+                        .runtime
+                        .heap
+                        .object(id)
+                        .and_then(|object| object.vars.get(&Identifier::from("icon")))
+                        .cloned()
+                        .unwrap_or_default();
+                }
+
+                let states = match &icon {
+                    GenericValue::Resource(path) | GenericValue::Text(path) => {
+                        self.runtime.icons.get(path).map(<[_]>::to_vec).unwrap_or_default()
+                    },
+                    _ => Vec::new(),
+                };
+                self.charge(states.len())?;
+
+                self.list(
+                    states
+                        .into_iter()
+                        .map(|state| (GenericValue::Text(state), None))
+                        .collect(),
+                )
+            },
 
             Intrinsic::DatumRead
             | Intrinsic::DatumWrite
@@ -172,12 +203,13 @@ impl Evaluator<'_> {
             | Intrinsic::DmDatabase
             | Intrinsic::MakeGenerator => Err(self.fault(FaultKind::Blocked(name.into()))),
 
-            Intrinsic::Animate
-            | Intrinsic::Browse
+            // Both play out over time, and a bake shows the appearance from before either starts
+            Intrinsic::Animate | Intrinsic::Flick => Ok(GenericValue::Null),
+
+            Intrinsic::Browse
             | Intrinsic::BrowseRsc
             | Intrinsic::Fcopy
             | Intrinsic::Fdel
-            | Intrinsic::Flick
             | Intrinsic::Ftp
             | Intrinsic::Link
             | Intrinsic::Shell
@@ -883,7 +915,6 @@ impl Evaluator<'_> {
             | Intrinsic::Hearers
             | Intrinsic::HtmlDecode
             | Intrinsic::HtmlEncode
-            | Intrinsic::IconStates
             | Intrinsic::Isfile
             | Intrinsic::Ispointer
             | Intrinsic::JsonEncode
@@ -899,14 +930,12 @@ impl Evaluator<'_> {
             | Intrinsic::Nonspantext
             | Intrinsic::Obounds
             | Intrinsic::Ohearers
-            | Intrinsic::Orange
             | Intrinsic::Output
             | Intrinsic::Oview
             | Intrinsic::Oviewers
             | Intrinsic::Params2list
             | Intrinsic::Pixloc
             | Intrinsic::RandSeed
-            | Intrinsic::Range
             | Intrinsic::Refcount
             | Intrinsic::ReplacetextChar
             | Intrinsic::ReplacetextExChar
@@ -990,6 +1019,162 @@ impl Evaluator<'_> {
         Ok(GenericValue::Object(id))
     }
 
+    /// OpenDream's `HandleRange`. The arguments come in either order, and `"7x5"` spells a box.
+    fn range_list(&mut self, args: [GenericValue; 2], include_center: bool) -> Result<GenericValue> {
+        let mut center = None;
+        let mut size = (11, 11);
+        for value in args {
+            match value {
+                GenericValue::Object(id) => center = Some(id),
+                GenericValue::Num(distance) => {
+                    let span = (distance.max(0.0) as i32).saturating_mul(2).saturating_add(1);
+                    size = (span, span);
+                },
+                GenericValue::Text(text) => {
+                    if let Some((width, height)) = text.split_once('x')
+                        && let (Ok(width), Ok(height)) = (width.trim().parse::<i32>(), height.trim().parse::<i32>())
+                    {
+                        size = (width.max(0), height.max(0));
+                    }
+                },
+                _ => {},
+            }
+        }
+
+        let [world_width, world_height, _] = self.runtime.world.size;
+        let size = (
+            size.0.min(world_width.saturating_mul(2).saturating_add(1)),
+            size.1.min(world_height.saturating_mul(2).saturating_add(1)),
+        );
+        let Some(center) = center else {
+            return self.list(Vec::new());
+        };
+
+        // A bake caches against the 3 by 3 neighbourhood, which anything wider reaches past
+        if size.0 > 3 || size.1 > 3 {
+            self.memo_safe = false;
+        }
+
+        let roots = self.tree.roots();
+        let is = |evaluator: &Self, id: ObjectId, root: Option<objtree::TypeId>| {
+            let ty = evaluator.runtime.heap.object(id).map(|object| object.ty);
+            ty.zip(root)
+                .is_some_and(|(ty, root)| evaluator.tree.is_subtype_of(ty, root))
+        };
+
+        let mut entries = Vec::new();
+        let mut areas = HashSet::new();
+        if is(self, center, roots.area) {
+            self.memo_safe = false;
+            entries.push(GenericValue::Object(center));
+            areas.insert(center);
+            let mut positions = self
+                .runtime
+                .world
+                .areas
+                .iter()
+                .filter(|(_, area)| **area == center)
+                .map(|(position, _)| *position)
+                .collect::<Vec<_>>();
+            positions.sort_unstable_by_key(|position| (position.z, position.y, position.x));
+            for position in positions {
+                if let Some(turf) = self.runtime.world.turf_at(position) {
+                    self.range_add_with_contents(&mut entries, &mut areas, turf, None)?;
+                }
+            }
+
+            return self.range_finish(entries);
+        }
+
+        if is(self, center, roots.turf) {
+            if include_center {
+                self.range_add_with_contents(&mut entries, &mut areas, center, None)?;
+            }
+        } else {
+            if include_center {
+                for content in self.contents_of(center) {
+                    self.range_add(&mut entries, &mut areas, content)?;
+                }
+            }
+
+            let Some(loc) = self.runtime.heap.object(center).and_then(|object| object.loc) else {
+                return self.range_finish(entries);
+            };
+
+            let skip = (!include_center).then_some(center);
+            self.range_add_with_contents(&mut entries, &mut areas, loc, skip)?;
+            if !is(self, loc, roots.turf) {
+                return self.range_finish(entries);
+            }
+        }
+
+        if let Some(origin) = self.runtime.world.position(&self.runtime.heap, center) {
+            let tiles = dantom_spiral((origin.x, origin.y), size);
+            self.charge(tiles.len())?;
+            for (x, y) in tiles {
+                if let Some(turf) = self.runtime.world.turf_at(Position::new(x, y, origin.z)) {
+                    self.range_add_with_contents(&mut entries, &mut areas, turf, None)?;
+                }
+            }
+        }
+
+        self.range_finish(entries)
+    }
+
+    fn range_finish(&mut self, entries: Vec<GenericValue>) -> Result<GenericValue> {
+        self.charge(entries.len())?;
+
+        self.list(entries.into_iter().map(|entry| (entry, None)).collect())
+    }
+
+    fn contents_of(&self, id: ObjectId) -> Vec<ObjectId> {
+        self.runtime
+            .heap
+            .object(id)
+            .map(|object| object.contents.clone())
+            .unwrap_or_default()
+    }
+
+    fn range_add_with_contents(
+        &mut self, entries: &mut Vec<GenericValue>, areas: &mut HashSet<ObjectId>, id: ObjectId, skip: Option<ObjectId>,
+    ) -> Result<()> {
+        self.range_add(entries, areas, id)?;
+        for content in self.contents_of(id) {
+            if Some(content) != skip {
+                self.range_add(entries, areas, content)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// `invisibility = 101` hides an atom from every range, and a turf brings its area in once
+    fn range_add(
+        &mut self, entries: &mut Vec<GenericValue>, areas: &mut HashSet<ObjectId>, id: ObjectId,
+    ) -> Result<()> {
+        let invisibility = self.read_field(GenericValue::Object(id), &Identifier::from("invisibility"))?;
+        if invisibility.num().is_some_and(|value| value >= 101.0) {
+            return Ok(());
+        }
+
+        entries.push(GenericValue::Object(id));
+        let turf = self.tree.roots().turf;
+        let is_turf = self
+            .runtime
+            .heap
+            .object(id)
+            .zip(turf)
+            .is_some_and(|(object, turf)| self.tree.is_subtype_of(object.ty, turf));
+        if is_turf
+            && let Some(area) = self.runtime.world.area_of(&self.runtime.heap, id)
+            && areas.insert(area)
+        {
+            entries.push(GenericValue::Object(area));
+        }
+
+        Ok(())
+    }
+
     fn resource_path(&mut self, file: &GenericValue) -> Result<Option<PathBuf>> {
         let Some(name) = file.text() else {
             return Ok(None);
@@ -1034,4 +1219,40 @@ impl Evaluator<'_> {
             .map(GenericValue::List)
             .map_err(|kind| self.fault(kind))
     }
+}
+
+/// OpenDream's `DantomSpiral`: rings outward from the centre, each one left column, then the rows
+/// below and above, then right column.
+fn dantom_spiral(center: (i32, i32), size: (i32, i32)) -> Vec<(i32, i32)> {
+    let (width, height) = size;
+    let bottom = height / 2;
+    let top = (height - 1) / 2;
+    let left = width / 2;
+    let right = (width - 1) / 2;
+    let mut tiles = Vec::new();
+
+    for ring in 1..=bottom.max(left) {
+        let column_bottom = center.1 - ring.min(bottom);
+        let column_top = center.1 + ring.min(top);
+        if ring <= left {
+            tiles.extend((column_bottom..=column_top).map(|y| (center.0 - ring, y)));
+        }
+
+        if ring <= bottom {
+            let first = center.0 - ring.min(left + 1) + 1;
+            let last = center.0 + ring.min(right + 1) - 1;
+            for x in first..=last {
+                tiles.push((x, center.1 - ring));
+                if ring <= top {
+                    tiles.push((x, center.1 + ring));
+                }
+            }
+        }
+
+        if ring <= right {
+            tiles.extend((column_bottom..=column_top).map(|y| (center.0 + ring, y)));
+        }
+    }
+
+    tiles
 }

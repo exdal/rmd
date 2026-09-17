@@ -83,6 +83,7 @@ impl<'a> Analyzer<'a> {
                 path,
                 var_type,
                 modifiers,
+                dimensions,
                 initializer,
                 location,
                 ..
@@ -106,11 +107,27 @@ impl<'a> Analyzer<'a> {
                 } else {
                     inherited.as_ref().map(|var| var.modifiers).unwrap_or(*modifiers)
                 };
-                let value = initializer.map(|expr| fold(self.ast, expr)).unwrap_or(Value::Null);
-                let runtime_initializer = initializer.filter(|_| value == Value::Unevaluated).map(|expr| {
-                    self.module
-                        .lower_initializer(owner.clone(), name.clone(), declared_type.clone(), expr, *location)
-                });
+                let sized = initializer.is_none() && !dimensions.is_empty();
+                let value = match *initializer {
+                    Some(expr) => fold(self.ast, expr),
+                    None if sized => Value::Unevaluated,
+                    None => Value::Null,
+                };
+                let runtime_initializer = match *initializer {
+                    Some(expr) => (value == Value::Unevaluated).then(|| {
+                        self.module.lower_initializer(
+                            owner.clone(),
+                            name.clone(),
+                            declared_type.clone(),
+                            expr,
+                            *location,
+                        )
+                    }),
+                    None => sized.then(|| {
+                        self.module
+                            .lower_sized_initializer(owner.clone(), name.clone(), dimensions, *location)
+                    }),
+                };
                 let Some(decl) = self.tree.get_mut(id) else {
                     return;
                 };

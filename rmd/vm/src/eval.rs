@@ -36,6 +36,7 @@ type Result<T, E = Fault> = std::result::Result<T, E>;
 pub struct Runtime {
     pub heap: Heap,
     pub world: World,
+    pub icons: crate::IconStates,
     output: Vec<String>,
     pub(crate) global: Option<ObjectId>,
     pub(crate) world_object: Option<ObjectId>,
@@ -578,8 +579,9 @@ impl<'a> Evaluator<'a> {
                 Op::AccessField => {
                     let name = self.identifier(frame)?;
                     let access = self.enum_operand::<Access>(frame, "access")?;
+                    let method = self.boolean(frame)?;
                     let object = self.pop(frame)?;
-                    let value = self.access_field(object, name, access)?;
+                    let value = self.access_field(object, name, access, method)?;
                     frame.stack.push(value);
                 },
                 Op::Initial => {
@@ -1295,18 +1297,26 @@ impl Evaluator<'_> {
         }
     }
 
-    fn access_field(&mut self, object: GenericValue, name: Identifier, access: Access) -> Result<GenericValue> {
+    /// `obj.foo()` finds the proc `foo`, and `obj.foo` finds the var when the type has one of each
+    fn access_field(
+        &mut self, object: GenericValue, name: Identifier, access: Access, method: bool,
+    ) -> Result<GenericValue> {
         if object == GenericValue::Null && matches!(access, Access::SafeDot | Access::SafeColon) {
             return Ok(GenericValue::Null);
         }
 
         match object {
             GenericValue::Object(id) => {
-                if let Some(proc) = self
-                    .runtime
-                    .heap
-                    .object(id)
-                    .and_then(|object| self.find_proc(object.ty, &name))
+                let has_var = !method
+                    && self.runtime.heap.object(id).is_some_and(|object| {
+                        object.vars.contains_key(&name) || self.tree.var_declaration(object.ty, &name).is_some()
+                    });
+                if !has_var
+                    && let Some(proc) = self
+                        .runtime
+                        .heap
+                        .object(id)
+                        .and_then(|object| self.find_proc(object.ty, &name))
                 {
                     Ok(GenericValue::Proc(ProcRef {
                         src: Receiver::Object(id),
@@ -1328,7 +1338,8 @@ impl Evaluator<'_> {
                 Ok(GenericValue::Proc(ProcRef { src: receiver, proc }))
             },
             GenericValue::Global => {
-                if let Some(proc) = self.find_proc(TypeId::ROOT, &name) {
+                let has_var = !method && self.tree.var_declaration(TypeId::ROOT, &name).is_some();
+                if !has_var && let Some(proc) = self.find_proc(TypeId::ROOT, &name) {
                     Ok(GenericValue::Proc(ProcRef {
                         src: Receiver::None,
                         proc,
@@ -1536,7 +1547,7 @@ impl Evaluator<'_> {
                     },
                     "parent_type" => return Ok(self.parent_path(object.ty)),
                     "loc" => return Ok(object.loc.map(GenericValue::Object).unwrap_or_default()),
-                    "x" | "y" | "z" => {
+                    "x" | "y" | "z" if self.has_coordinates(object.ty) => {
                         self.position_sensitive = true;
                         let position = self.runtime.world.position(&self.runtime.heap, id);
                         return Ok(position
@@ -1651,6 +1662,16 @@ impl Evaluator<'_> {
         shared_key(owner, variable, name)
     }
 
+    /// `/datum/light` declares its own `x`, which only atoms and images derive from their location
+    fn has_coordinates(&self, ty: TypeId) -> bool {
+        let roots = self.tree.roots();
+
+        [roots.atom, roots.image]
+            .into_iter()
+            .flatten()
+            .any(|root| self.tree.is_subtype_of(ty, root))
+    }
+
     pub fn write_field(&mut self, object: GenericValue, name: Identifier, value: GenericValue) -> Result<()> {
         let key = name.as_str();
         match object {
@@ -1700,7 +1721,15 @@ impl Evaluator<'_> {
                 .heap
                 .relocate(id, value.object())
                 .map_err(|kind| self.fault(kind)),
-            GenericValue::Object(id) if !matches!(key, "x" | "y" | "z" | "type" | "parent_type" | "contents") => {
+            GenericValue::Object(id)
+                if !matches!(key, "type" | "parent_type" | "contents")
+                    && !(matches!(key, "x" | "y" | "z")
+                        && self
+                            .runtime
+                            .heap
+                            .object(id)
+                            .is_none_or(|object| self.has_coordinates(object.ty))) =>
+            {
                 let shared = self
                     .runtime
                     .heap

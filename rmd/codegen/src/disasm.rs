@@ -173,6 +173,9 @@ impl Cursor<'_> {
                 let name = StringId(self.u32()?);
                 let access = self.enum_operand::<Access>("access")?;
                 let _ = write!(output, " {}{}", access_operator(access), string(self.module, name)?);
+                if op == Op::AccessField && self.boolean()? {
+                    output.push_str(" method");
+                }
             },
             Op::Initial => {
                 let has_object = self.boolean()?;

@@ -329,7 +329,10 @@ impl<'a, 't> Parser<'a, 't> {
         operator_proc
     }
 
-    fn parse_path(&mut self) -> ParseResult<TreePath> {
+    fn parse_path(&mut self) -> ParseResult<TreePath> { self.parse_path_in(false) }
+
+    /// `/obj/item/paper/final` names a type, and only `var/final/x` or a `var` block makes it a modifier
+    fn parse_path_in(&mut self, declaring: bool) -> ParseResult<TreePath> {
         let absolute = self.peek_is(Token::Slash);
         // `/datum/manipulator_task/cargo/dropoff_base/throw`
         let mut after_separator = absolute || self.at_path_dot();
@@ -356,8 +359,9 @@ impl<'a, 't> Parser<'a, 't> {
                     break;
                 },
                 Token::Soft(keyword) => {
-                    let modifier =
-                        path_modifier(keyword).filter(|modifier| !(modifier.may_be_name && self.keyword_ends_path()));
+                    let modifier = path_modifier(keyword)
+                        .filter(|modifier| modifier.declares || declaring || keyword_offset.is_some())
+                        .filter(|modifier| !(modifier.may_be_name && self.keyword_ends_path()));
                     self.advance()?;
                     match modifier {
                         Some(modifier) => {
@@ -486,6 +490,11 @@ impl<'a, 't> Parser<'a, 't> {
     fn parse_declaration(&mut self, prefix: Option<&TreePath>, out: &mut Vec<Declaration>) -> ParseResult<()> {
         let (_, location) = self.peek().ok_or_else(ParseError::end_of_file)?;
         let in_var_block = prefix.is_some_and(|prefix| prefix.flags.contains(PathFlags::IS_VAR));
+        let declaring = prefix.is_some_and(|prefix| {
+            prefix
+                .flags
+                .intersects(PathFlags::IS_VAR | PathFlags::IS_PROC | PathFlags::IS_VERB)
+        });
 
         if !in_var_block
             && let (Some((token, _)), Some((Token::Equal, _))) = (self.peek(), self.peek_at(1))
@@ -504,7 +513,7 @@ impl<'a, 't> Parser<'a, 't> {
             return Ok(());
         }
 
-        let parsed = self.parse_path()?;
+        let parsed = self.parse_path_in(declaring)?;
         let path = match prefix {
             Some(prefix) => prefix.concat(&parsed),
             None => parsed,
@@ -587,7 +596,7 @@ impl<'a, 't> Parser<'a, 't> {
 
             let next = if self.consume(Token::Comma) && !self.at_statement_end() {
                 let (_, next_location) = self.peek().ok_or_else(ParseError::end_of_file)?;
-                let parsed = self.parse_path()?;
+                let parsed = self.parse_path_in(true)?;
 
                 Some((path.sibling(&parsed), next_location))
             } else {
@@ -2103,6 +2112,34 @@ mod tests {
             Declaration::Proc { body: Some(body), .. } => body,
             _ => panic!("expected a proc with a body"),
         }
+    }
+
+    #[test]
+    fn modifiers_outside_a_declaration_are_type_names() {
+        let ast = parse_source(
+            "/obj/paper/final\n\tname = \"last\"\n\tvar\n\t\tfinal\n\t\t\tsealed = 1\n/obj/static/var/tmp/cache\n",
+        );
+        let Declaration::Type { path, body, .. } = &ast.declarations[0] else {
+            panic!("expected a type declaration")
+        };
+
+        assert_eq!(path.to_string(), "/obj/paper/final");
+        assert!(!path.flags.contains(PathFlags::IS_FINAL));
+
+        let Some(Declaration::Var { path, modifiers, .. }) = body.get(1) else {
+            panic!("expected a var from the block")
+        };
+        assert_eq!(path.name().map(Identifier::as_str), Some("sealed"));
+        assert!(modifiers.is_final);
+
+        let Declaration::Var { path, modifiers, .. } = &ast.declarations[1] else {
+            panic!("expected a var")
+        };
+        assert_eq!(
+            path.owner().iter().map(Identifier::as_str).collect::<Vec<_>>(),
+            ["obj", "static"]
+        );
+        assert!(modifiers.is_tmp);
     }
 
     #[test]

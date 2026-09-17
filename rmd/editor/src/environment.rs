@@ -125,6 +125,7 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
                 tree: view.tree,
                 module,
                 files: files.clone(),
+                icon_states: vm::IconStates::default(),
             });
 
             (program, files, view.errors, view.sema_errors, view.codegen_error)

@@ -640,6 +640,8 @@ impl LightingAtom {
 pub(crate) struct LightSource {
     /// Zero-based map coordinates, where integer coordinates are tile corners.
     pub origin: [f32; 2],
+    /// One-based turf coordinates used for visibility and spatial indexing.
+    pub cell: [i32; 2],
     pub range: f32,
     pub inner_range: f32,
     pub power: f32,
@@ -658,16 +660,19 @@ impl LightSource {
     fn strength(self, dx: f32, dy: f32) -> f32 {
         let planar_squared = dx * dx + dy * dy;
         let distance_squared = (planar_squared + self.height).max(0.0);
-        let distance = distance_squared.sqrt();
-        if distance > self.range || !self.in_cone(dx, dy) {
+        if !self.in_cone(dx, dy) {
             return 0.0;
         }
 
         let cone = self.cone_strength(dx, dy);
         if self.quadratic != 0.0 {
-            let value = self.constant + self.quadratic / distance_squared.max(EPSILON);
-            let limit = self.power.abs();
-            return value.clamp(-limit, limit) * cone;
+            let attenuation = self.constant + self.quadratic / distance_squared.max(EPSILON);
+            return attenuation.max(0.0) * self.power * cone;
+        }
+
+        let distance = distance_squared.sqrt();
+        if distance > self.range {
+            return 0.0;
         }
 
         let span = (self.range - self.inner_range).max(EPSILON);
@@ -675,14 +680,8 @@ impl LightSource {
         (1.0 - normalized).powf(self.curve.max(EPSILON)) * self.power * cone
     }
 
-    /// The one-based cell holding the origin, and how many cells past it the light can land.
-    fn footprint(self) -> (i32, i32, i32) {
-        (
-            (self.origin[0].floor() as i32).saturating_add(1),
-            (self.origin[1].floor() as i32).saturating_add(1),
-            (self.range.ceil().max(0.0) as i32).saturating_add(1),
-        )
-    }
+    /// The source atom's one-based cell, and how many cells past it the light can land.
+    fn footprint(self) -> (i32, i32, i32) { (self.cell[0], self.cell[1], self.range.ceil().max(0.0) as i32) }
 
     fn in_cone(self, dx: f32, dy: f32) -> bool { self.cone_strength(dx, dy) > 0.0 }
 
@@ -823,6 +822,7 @@ mod tests {
             position,
             source: Some(LightSource {
                 origin: [position.x as f32 - 0.5, position.y as f32 - 0.5],
+                cell: [position.x, position.y],
                 range: 3.0,
                 inner_range: 0.0,
                 power: 1.0,
@@ -851,6 +851,39 @@ mod tests {
         let edge = map.tile(Position::new(3, 3, 1)).unwrap();
         assert!(center.corners[CORNER_SW][0] > edge.corners[CORNER_NE][0]);
         assert_eq!(center.corners[CORNER_NE], edge.corners[CORNER_SW]);
+    }
+
+    #[test]
+    fn quadratic_light_uses_native_attenuation_throughout_its_planar_footprint() {
+        let mut atom = source(Position::new(3, 3, 1));
+        let light = atom.source.as_mut().unwrap();
+        light.range = 3.0;
+        light.power = 1.6;
+        light.height = 2.4f32.powi(2);
+        light.quadratic = 1.6 * 2.2;
+        light.constant = -0.11;
+
+        let expected = 1.6 * ((1.6 * 2.2) / (2.5f32.powi(2) + 0.5f32.powi(2) + 2.4f32.powi(2)) - 0.11);
+        assert!((light.strength(2.5, 0.5) - expected).abs() < 1e-6);
+        assert_eq!(light.strength(10.0, 10.0), 0.0);
+        assert_eq!(light.footprint(), (3, 3, 3));
+    }
+
+    #[test]
+    fn zero_radius_quadratic_light_illuminates_its_own_turf_corners() {
+        let mut atom = source(Position::new(2, 2, 1));
+        let light = atom.source.as_mut().unwrap();
+        light.range = 0.0;
+        light.power = 0.5;
+        light.height = 2.4f32.powi(2);
+        light.quadratic = 0.5 * 2.2;
+        light.constant = -0.11;
+
+        let map = solved([3, 3, 1], &[atom]);
+        let center = map.tile(Position::new(2, 2, 1)).unwrap();
+        assert!(center.corners.iter().all(|corner| corner[0] > 0.0));
+        assert_eq!(map.tile(Position::new(1, 1, 1)).unwrap().corners[CORNER_SW], [0.0; 3]);
+        assert_eq!(map.tile(Position::new(3, 3, 1)).unwrap().corners[CORNER_NE], [0.0; 3]);
     }
 
     #[test]

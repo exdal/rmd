@@ -55,6 +55,7 @@ impl Standalone {
                 Vec::new(),
                 [1, 1, 1],
                 environment.bake_options.limits,
+                program.icon_states.clone(),
             )
         });
 
@@ -106,6 +107,7 @@ pub fn build_atoms(
         atoms,
         size,
         environment.bake_options.limits,
+        program.icon_states.clone(),
         |stage, done, total| {
             if current != Some(stage) {
                 current = Some(stage);
@@ -214,6 +216,7 @@ mod tests {
             tree: bake_tree,
             module: codegen::generate(&module).expect("codegen"),
             files: Default::default(),
+            icon_states: Default::default(),
         });
         let failures = environment.load_icons(&[], &crate::progress::Progress::new());
         assert!(failures.is_empty(), "{failures:?}");

@@ -1,5 +1,8 @@
 use core::types::ProcId;
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 pub mod bake;
 mod builtins;
@@ -35,6 +38,32 @@ impl Default for Limits {
         }
     }
 }
+
+/// What `icon_states()` answers with. The host reads the `.dmi` files, since the vm never touches disk.
+#[derive(Debug, Clone, Default)]
+pub struct IconStates(Arc<HashMap<String, Vec<Arc<str>>>>);
+
+impl IconStates {
+    pub fn new(icons: impl IntoIterator<Item = (String, Vec<String>)>) -> Self {
+        let mut table = HashMap::new();
+        for (path, states) in icons {
+            let mut seen = HashSet::new();
+            let names = states
+                .into_iter()
+                .filter(|state| seen.insert(state.clone()))
+                .map(Arc::from)
+                .collect::<Vec<_>>();
+            table.insert(icon_key(&path), names);
+        }
+
+        Self(Arc::new(table))
+    }
+
+    pub(crate) fn get(&self, path: &str) -> Option<&[Arc<str>]> { self.0.get(&icon_key(path)).map(Vec::as_slice) }
+}
+
+/// BYOND resolves resource paths case-insensitively and accepts either slash.
+fn icon_key(path: &str) -> String { path.replace('\\', "/").to_ascii_lowercase() }
 
 #[derive(Debug, Clone)]
 pub struct Diagnostic {

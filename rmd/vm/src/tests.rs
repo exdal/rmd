@@ -10,6 +10,7 @@ use objtree::{ObjectTree, TypeId};
 use crate::{
     FaultKind,
     GenericValue,
+    IconStates,
     Limits,
     Runtime,
     bake::{Atom, Bake, has_profile},
@@ -103,7 +104,14 @@ fn baking_updates_a_neighborhood_and_restores_removed_atoms() {
     let (tree, module) = compile(WALLS);
     let atoms = wall_patch(&tree);
     let original = atoms.clone();
-    let mut bake = Bake::new(&tree, &module, atoms, [3, 3, 1], Limits::default());
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        atoms,
+        [3, 3, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
 
     assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
     assert_eq!(baked_state(&bake, 5), Some("wall-15"));
@@ -152,7 +160,14 @@ fn lighting_hooks_build_and_incrementally_restore_the_lightmap() {
             vars: Vec::new(),
         },
     ];
-    let mut bake = Bake::new(&tree, &module, atoms.clone(), [4, 3, 1], Limits::default());
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        atoms.clone(),
+        [4, 3, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
     let original = bake.lighting.clone().expect("light hook exports a lightmap");
     let center = original.tile(Position::new(2, 2, 1)).expect("center tile");
     let ambient_tile = original.tile(Position::new(3, 2, 1)).expect("ambient tile");
@@ -185,6 +200,7 @@ fn lighting_hooks_build_and_incrementally_restore_the_lightmap() {
         vec![moved_lamp.clone(), atoms[1].clone()],
         [4, 3, 1],
         Limits::default(),
+        IconStates::default(),
     );
     assert_eq!(moved.lighting, Some(0..12));
     assert_eq!(bake.lighting, expected.lighting);
@@ -198,8 +214,249 @@ fn lighting_hooks_build_and_incrementally_restore_the_lightmap() {
         vec![pixel_shifted_lamp, atoms[1].clone()],
         [4, 3, 1],
         Limits::default(),
+        IconStates::default(),
     );
     assert_eq!(bake.lighting, expected.lighting);
+}
+
+#[test]
+fn lighting_hook_keeps_zero_radius_quadratic_sources() {
+    let (tree, module) = compile(
+        r##"
+/obj/runway_light
+/proc/demir_light(atom/target)
+    if(istype(target, /obj/runway_light))
+        target.demir_light_range = 0
+        target.demir_light_power = 0.5
+        target.demir_light_color = "#ffffff"
+        target.demir_light_height = 5.76
+        target.demir_light_quadratic = 1.1
+        target.demir_light_constant = -0.11
+"##,
+    );
+    let runway_light = tree
+        .id_of(&TreePath::parse("/obj/runway_light"))
+        .expect("runway light type");
+    let atoms = vec![Atom {
+        instance: 1,
+        ty: runway_light,
+        position: Position::new(2, 2, 1),
+        vars: Vec::new(),
+    }];
+
+    let bake = Bake::new(
+        &tree,
+        &module,
+        atoms,
+        [3, 3, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    let center = bake
+        .lighting
+        .as_ref()
+        .expect("quadratic source exports a lightmap")
+        .tile(Position::new(2, 2, 1))
+        .expect("source tile");
+    assert!(center.corners.iter().all(|corner| corner[0] > 0.0));
+}
+
+#[test]
+fn appearance_offset_moves_a_wall_fixture_without_leaking_through_its_wall() {
+    let (tree, module) = compile(
+        r##"
+/obj/fixture
+    pixel_y = 21
+/obj/wall
+    opacity = 1
+/proc/demir_light(atom/target)
+    if(istype(target, /obj/fixture))
+        target.demir_light_range = 3
+        target.demir_light_power = 1.6
+        target.demir_light_color = "#ffffff"
+        target.demir_light_height = 5.76
+        target.demir_light_quadratic = 3.52
+        target.demir_light_constant = -0.11
+"##,
+    );
+    let fixture = tree.id_of(&TreePath::parse("/obj/fixture")).expect("fixture type");
+    let wall = tree.id_of(&TreePath::parse("/obj/wall")).expect("wall type");
+    let mut atoms = vec![Atom {
+        instance: 1,
+        ty: fixture,
+        position: Position::new(3, 2, 1),
+        vars: Vec::new(),
+    }];
+    atoms.extend((1..=5).map(|x| Atom {
+        instance: x as u64 + 1,
+        ty: wall,
+        position: Position::new(x, 3, 1),
+        vars: Vec::new(),
+    }));
+
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        atoms.clone(),
+        [5, 5, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    let lighting = bake.lighting.as_ref().expect("fixture exports a lightmap");
+    assert!(
+        lighting
+            .tile(Position::new(3, 2, 1))
+            .unwrap()
+            .corners
+            .iter()
+            .any(|corner| corner[0] > 0.0)
+    );
+    assert_eq!(lighting.tile(Position::new(3, 4, 1)).unwrap().corners, [[0.0; 3]; 4]);
+
+    let original = bake.lighting.clone();
+    let mut moved = atoms[0].clone();
+    moved.vars = vec![(Identifier::from("pixel_y"), Value::Num(10.0))];
+    assert!(bake.update(&tree, &module, vec![moved.clone()], &[]).lighting.is_some());
+    assert_ne!(bake.lighting, original, "changing pixel_y must move the light origin");
+
+    let mut expected_atoms = atoms;
+    expected_atoms[0] = moved;
+    let expected = Bake::new(
+        &tree,
+        &module,
+        expected_atoms.clone(),
+        [5, 5, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    assert_eq!(bake.lighting, expected.lighting);
+
+    let before_tile_move = bake.lighting.clone();
+    let mut tile_moved = expected_atoms[0].clone();
+    tile_moved.position = Position::new(3, 1, 1);
+    assert!(
+        bake.update(&tree, &module, vec![tile_moved.clone()], &[])
+            .lighting
+            .is_some()
+    );
+    assert_ne!(bake.lighting, before_tile_move, "changing y must move the light source");
+
+    expected_atoms[0] = tile_moved;
+    let expected = Bake::new(
+        &tree,
+        &module,
+        expected_atoms,
+        [5, 5, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    assert_eq!(bake.lighting, expected.lighting);
+}
+
+#[test]
+fn range_and_orange_spiral_out_with_areas_once() {
+    let (tree, module) = compile(
+        r#"
+/area/zone
+/turf/floor
+/obj/thing
+/proc/describe(list/found)
+    var/list/parts = list()
+    for(var/atom/entry in found)
+        if(isturf(entry))
+            parts += "[entry.x],[entry.y]"
+        else if(isarea(entry))
+            parts += "A"
+        else
+            parts += "O"
+    return jointext(parts, " ")
+
+/proc/demir_bake(atom/target)
+    if(!istype(target, /turf/floor) || target.x != 2 || target.y != 2)
+        return
+    target.name = "[describe(orange(1, target))] | [describe(range(target, 1))]"
+"#,
+    );
+    let ty = |path: &str| tree.id_of(&TreePath::parse(path)).expect("fixture type");
+    let mut atoms = Vec::new();
+    for y in 1..=3 {
+        for x in 1..=3 {
+            for path in ["/area/zone", "/turf/floor"] {
+                atoms.push(Atom {
+                    instance: atoms.len() as u64 + 1,
+                    ty: ty(path),
+                    position: Position::new(x, y, 1),
+                    vars: Vec::new(),
+                });
+            }
+        }
+    }
+    atoms.push(Atom {
+        instance: atoms.len() as u64 + 1,
+        ty: ty("/obj/thing"),
+        position: Position::new(1, 1, 1),
+        vars: Vec::new(),
+    });
+    let bake = Bake::new(
+        &tree,
+        &module,
+        atoms,
+        [3, 3, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    let center = bake.appearances[&10]
+        .vars
+        .iter()
+        .find(|(name, _)| name.as_str() == "name")
+        .and_then(|(_, value)| value.as_text())
+        .expect("the centre turf names what it found");
+    assert_eq!(
+        center,
+        "1,1 A O 1,2 1,3 2,1 2,3 3,1 3,2 3,3 | 2,2 A 1,1 O 1,2 1,3 2,1 2,3 3,1 3,2 3,3"
+    );
+}
+
+#[test]
+fn baking_exports_icon_objects_and_ignores_timed_effects() {
+    let (tree, module) = compile(
+        r#"
+/obj/panel
+    icon = 'old.dmi'
+/proc/demir_bake(atom/target)
+    flick("opening", target)
+    animate(target, alpha = 0, time = 10)
+    target.icon = icon(icon('panels.dmi', "on"))
+    target.icon_state = "on"
+"#,
+    );
+    let panel = tree.id_of(&TreePath::parse("/obj/panel")).expect("panel type");
+    let bake = Bake::new(
+        &tree,
+        &module,
+        vec![Atom {
+            instance: 1,
+            ty: panel,
+            position: Position::new(1, 1, 1),
+            vars: Vec::new(),
+        }],
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    let vars = &bake.appearances[&1].vars;
+    assert!(
+        vars.contains(&(Identifier::from("icon"), Value::Resource("panels.dmi".into()))),
+        "{vars:?}"
+    );
+    assert!(
+        vars.contains(&(Identifier::from("icon_state"), Value::Text("on".into()))),
+        "{vars:?}"
+    );
 }
 
 #[test]
@@ -241,6 +498,7 @@ fn baking_exports_sprite_lighting_roles() {
         }],
         [1, 1, 1],
         Limits::default(),
+        IconStates::default(),
     );
 
     assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
@@ -269,7 +527,14 @@ fn baking_rolls_back_overlays_and_randomness_is_repeatable() {
     );
     let (tree, module) = compile(&source);
     let atoms = wall_patch(&tree);
-    let mut bake = Bake::new(&tree, &module, atoms.clone(), [3, 3, 1], Limits::default());
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        atoms.clone(),
+        [3, 3, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
     let before = bake.appearances.clone();
 
     bake.update(&tree, &module, vec![atoms[4].clone()], &[]);
@@ -300,7 +565,14 @@ fn bake_cache_uses_instance_variables() {
             vars: Vec::new(),
         })
         .collect::<Vec<_>>();
-    let mut bake = Bake::new(&tree, &module, atoms.clone(), [20, 1, 1], Limits::default());
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        atoms.clone(),
+        [20, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
     assert!(bake.cache_hits > 10);
 
     let mut edited = atoms[9].clone();
@@ -348,6 +620,7 @@ var/global/demir_init_count = 0
         atoms.clone(),
         [2, 1, 1],
         Limits::default(),
+        IconStates::default(),
         |stage, done, total| {
             if stage == crate::bake::Stage::Initialize {
                 progress.push((done, total));
@@ -385,7 +658,14 @@ fn initialization_fault_stops_all_object_hooks() {
         position: Position::new(1, 1, 1),
         vars: Vec::new(),
     };
-    let mut bake = Bake::new(&tree, &module, vec![atom.clone()], [1, 1, 1], Limits::default());
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        vec![atom.clone()],
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
 
     assert_eq!(bake.diagnostics.count(), 1);
     assert_eq!(bake.attempted, 0);
@@ -424,7 +704,14 @@ fn neighbor_overlay_changes_are_exported_and_rolled_back() {
             vars: Vec::new(),
         })
         .collect::<Vec<_>>();
-    let mut bake = Bake::new(&tree, &module, atoms, [2, 1, 1], Limits::default());
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        atoms,
+        [2, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
 
     assert_eq!(bake.appearances[&2].overlays.len(), 2);
     bake.update(&tree, &module, Vec::new(), &[1]);
@@ -465,6 +752,7 @@ fn shared_overlay_graphs_respect_the_export_budget() {
             allocations: 1000,
             ..Default::default()
         },
+        IconStates::default(),
     );
 
     assert!(bake.appearances.is_empty());
@@ -712,6 +1000,113 @@ fn world_log_output_uses_a_field_reference() {
 
     assert_eq!(result, GenericValue::Null);
     assert_eq!(runtime.output(), &[String::from("hello")]);
+}
+
+#[test]
+fn locate_in_searches_the_container() {
+    let result = run(
+        r#"
+/datum/a
+/datum/b
+
+/proc/test()
+    var/datum/b/wanted = new
+    var/list/things = list(new /datum/a, wanted)
+    var/datum/b/found = locate(/datum/b) in things
+    var/missing = locate(/datum/b) in list(new /datum/a)
+    return "[found == wanted] [isnull(missing)] [istype(things ? locate(/datum/a) in things : null, /datum/a)]"
+"#,
+        "test",
+    );
+
+    assert_eq!(result, GenericValue::from("1 1 1"));
+}
+
+#[test]
+fn a_var_and_a_proc_can_share_a_name() {
+    let result = run(
+        r#"
+/datum/rock
+    var/list/edges = null
+
+/datum/rock/proc/edges()
+    src.edges = list()
+    src.edges += "north"
+    edges += "south"
+    return length(src.edges)
+
+/proc/test()
+    var/datum/rock/rock = new
+    return "[rock.edges()] [length(rock.edges)] [rock.edges[2]]"
+"#,
+        "test",
+    );
+
+    assert_eq!(result, GenericValue::from("2 2 south"));
+}
+
+#[test]
+fn datums_keep_their_own_coordinate_vars() {
+    let result = run(
+        r#"
+/datum/light
+    var/x = 1
+    var/y
+
+/proc/test()
+    var/datum/light/light = new
+    light.x = 4.5
+    light.y = 2
+    return "[light.x] [light.y]"
+"#,
+        "test",
+    );
+
+    assert_eq!(result, GenericValue::from("4.5 2"));
+}
+
+#[test]
+fn sized_type_vars_start_as_lists() {
+    let result = run(
+        r#"
+/obj/thing
+    var/global/shared[8]
+    var/sized[3]
+    var/list/empty[]
+
+/proc/test()
+    var/obj/thing/first = new
+    var/obj/thing/second = new
+    first.sized[1] = 1
+    first.shared[1] = 2
+    return "[length(first.sized)] [length(first.shared)] [length(first.empty)] [second.sized[1]] [second.shared[1]]"
+"#,
+        "test",
+    );
+
+    assert_eq!(result, GenericValue::from("3 8 0  2"));
+}
+
+#[test]
+fn icon_states_answer_from_the_host_table() {
+    let (tree, module) = compile(
+        r#"
+/proc/test()
+    var/icon/wrapped = icon('Icons\Walls.dmi')
+    var/list/found = icon_states('icons/walls.dmi')
+    return "[length(found)] [found[1]] [found[2]] [length(wrapped.IconStates())] [length(icon_states('missing.dmi'))]"
+"#,
+    );
+    let mut runtime = Runtime::default();
+    runtime.icons = IconStates::new([(
+        String::from("icons/walls.dmi"),
+        vec![String::from("wall0"), String::from("wall1"), String::from("wall0")],
+    )]);
+    let result = runtime
+        .run(&tree, &module, proc(&tree, "test"), None, Vec::new(), Limits::default())
+        .expect("fixture should execute");
+
+    assert_eq!(result, GenericValue::from("2 wall0 wall1 2 0"));
 }
 
 #[test]

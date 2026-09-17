@@ -16,6 +16,7 @@ use crate::{
     Fault,
     FaultKind,
     GenericValue,
+    IconStates,
     Limits,
     Runtime,
     heap::{Object, ObjectId},
@@ -151,12 +152,14 @@ pub enum Stage {
 }
 
 impl Bake {
-    pub fn new(tree: &ObjectTree, module: &Module, atoms: Vec<Atom>, size: [i32; 3], limits: Limits) -> Self {
-        Self::with_progress(tree, module, atoms, size, limits, |_, _, _| {})
+    pub fn new(
+        tree: &ObjectTree, module: &Module, atoms: Vec<Atom>, size: [i32; 3], limits: Limits, icons: IconStates,
+    ) -> Self {
+        Self::with_progress(tree, module, atoms, size, limits, icons, |_, _, _| {})
     }
 
     pub fn with_progress(
-        tree: &ObjectTree, module: &Module, atoms: Vec<Atom>, size: [i32; 3], limits: Limits,
+        tree: &ObjectTree, module: &Module, atoms: Vec<Atom>, size: [i32; 3], limits: Limits, icons: IconStates,
         mut progress: impl FnMut(Stage, usize, usize),
     ) -> Self {
         let mut bake = Self {
@@ -166,6 +169,7 @@ impl Bake {
         };
 
         bake.runtime.world.size = size;
+        bake.runtime.icons = icons;
 
         let mut atoms = atoms;
         atoms.sort_by_key(|atom| atom.instance);
@@ -417,36 +421,38 @@ impl Bake {
 
         let range = object_number(object, tree, "demir_light_range", 0.0).max(0.0);
         let power = object_number(object, tree, "demir_light_power", 0.0);
-        let quadratic = object_number(object, tree, "demir_light_quadratic", 0.0);
-        let source = (range.is_finite() && range > 0.0 && power.is_finite() && power != 0.0).then(|| {
-            let inner_range = object_number(object, tree, "demir_light_inner_range", 0.0).clamp(0.0, range);
-            let angle = object_number(object, tree, "demir_light_angle", 360.0).clamp(0.0, 360.0);
-            let icon_size = world_icon_size(tree);
-            let offset_x = object_number(object, tree, "pixel_x", 0.0)
-                + object_number(object, tree, "pixel_w", 0.0)
-                + object_number(object, tree, "step_x", 0.0);
-            let offset_y = object_number(object, tree, "pixel_y", 0.0)
-                + object_number(object, tree, "pixel_z", 0.0)
-                + object_number(object, tree, "step_y", 0.0);
-            LightSource {
-                origin: [
-                    position.x as f32 - 0.5 + offset_x / icon_size,
-                    position.y as f32 - 0.5 + offset_y / icon_size,
-                ],
-                range,
-                inner_range: finite_or(inner_range, 0.0),
-                power,
-                color: object_color(object, tree, "demir_light_color"),
-                angle: finite_or(angle, 360.0),
-                direction: direction_angle(object_number(object, tree, "demir_light_dir", 0.0)),
-                height: finite_or(object_number(object, tree, "demir_light_height", 1.0), 1.0),
-                curve: finite_or(object_number(object, tree, "demir_light_curve", 1.0), 1.0).max(f32::EPSILON),
-                peak: object_truthy(object, tree, "demir_light_peak", false),
-                edge_only: object_truthy(object, tree, "demir_light_edge_only", false),
-                quadratic: finite_or(quadratic, 0.0),
-                constant: finite_or(object_number(object, tree, "demir_light_constant", 0.0), 0.0),
-            }
-        });
+        let quadratic = finite_or(object_number(object, tree, "demir_light_quadratic", 0.0), 0.0);
+        let source = (range.is_finite() && power.is_finite() && power != 0.0 && (range > 0.0 || quadratic != 0.0))
+            .then(|| {
+                let inner_range = object_number(object, tree, "demir_light_inner_range", 0.0).clamp(0.0, range);
+                let angle = object_number(object, tree, "demir_light_angle", 360.0).clamp(0.0, 360.0);
+                let icon_size = world_icon_size(tree);
+                let offset_x = object_number(object, tree, "pixel_x", 0.0)
+                    + object_number(object, tree, "pixel_w", 0.0)
+                    + object_number(object, tree, "step_x", 0.0);
+                let offset_y = object_number(object, tree, "pixel_y", 0.0)
+                    + object_number(object, tree, "pixel_z", 0.0)
+                    + object_number(object, tree, "step_y", 0.0);
+                LightSource {
+                    origin: [
+                        position.x as f32 - 0.5 + offset_x / icon_size,
+                        position.y as f32 - 0.5 + offset_y / icon_size,
+                    ],
+                    cell: [position.x, position.y],
+                    range,
+                    inner_range: finite_or(inner_range, 0.0),
+                    power,
+                    color: object_color(object, tree, "demir_light_color"),
+                    angle: finite_or(angle, 360.0),
+                    direction: direction_angle(object_number(object, tree, "demir_light_dir", 0.0)),
+                    height: finite_or(object_number(object, tree, "demir_light_height", 1.0), 1.0),
+                    curve: finite_or(object_number(object, tree, "demir_light_curve", 1.0), 1.0).max(f32::EPSILON),
+                    peak: object_truthy(object, tree, "demir_light_peak", false),
+                    edge_only: object_truthy(object, tree, "demir_light_edge_only", false),
+                    quadratic,
+                    constant: finite_or(object_number(object, tree, "demir_light_constant", 0.0), 0.0),
+                }
+            });
 
         let blocks_value = object_number(object, tree, "demir_blocks_light", -1.0);
         let blocks = if blocks_value == -1.0 {
@@ -940,6 +946,7 @@ thread_local! {
         appearance: APPEARANCE_VARS.iter().map(|name| Identifier::from(*name)).collect(),
         overlays: Identifier::from("overlays"),
         underlays: Identifier::from("underlays"),
+        icon: Identifier::from("icon"),
         icon_state: Identifier::from("icon_state"),
         dir: Identifier::from("dir"),
         layer: Identifier::from("layer"),
@@ -954,6 +961,7 @@ struct Names {
     appearance: Vec<Identifier>,
     overlays: Identifier,
     underlays: Identifier,
+    icon: Identifier,
     icon_state: Identifier,
     dir: Identifier,
     layer: Identifier,
@@ -1014,7 +1022,10 @@ fn export_with_names(
         ..Default::default()
     };
     for name in &names.appearance {
-        let runtime_value = object.vars.get(name);
+        let runtime_value = match object.vars.get(name) {
+            Some(GenericValue::Object(icon)) if *name == names.icon => icon_file(heap, *icon, &names.icon),
+            value => value,
+        };
         let value = if name.as_str() == "color" && matches!(runtime_value, Some(GenericValue::List(_))) {
             None
         } else {
@@ -1095,6 +1106,18 @@ fn hash_constant(value: &Value, hasher: &mut DefaultHasher) {
             }
         },
     }
+}
+
+/// `icon = icon('x.dmi', "state")` draws from the file the `/icon` wraps
+fn icon_file<'a>(heap: &'a crate::heap::Heap, mut id: ObjectId, icon: &Identifier) -> Option<&'a GenericValue> {
+    for _ in 0..8 {
+        match heap.object(id)?.vars.get(icon)? {
+            GenericValue::Object(inner) => id = *inner,
+            value => return Some(value),
+        }
+    }
+
+    None
 }
 
 fn export_value(value: &GenericValue) -> Result<Value, FaultKind> {

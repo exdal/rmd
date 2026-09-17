@@ -3210,6 +3210,7 @@ mod tests {
             tree: bake_tree,
             module: codegen::generate(&module).expect("codegen"),
             files: Default::default(),
+            icon_states: Default::default(),
         });
         assert!(environment.load_icons(&[], &Progress::new()).is_empty());
 

@@ -2333,6 +2333,9 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
     } else {
         0
     };
+    if sprite.is_area && sprite.area_edges == 0 {
+        flags |= SPRITE_FLAG_EMISSIVE;
+    }
     flags |= match sprite.lighting {
         crate::SpriteLighting::Normal => 0,
         crate::SpriteLighting::Emissive => SPRITE_FLAG_EMISSIVE,
@@ -3130,13 +3133,16 @@ mod tests {
     }
 
     #[test]
-    fn normal_area_sprites_have_no_outline_flags() {
+    fn filled_area_sprites_are_emissive_without_outline_flags() {
         let mut area = sprite(1);
         area.is_area = true;
 
         let gpu = gpu_sprite(0, &area).expect("pack");
 
-        assert_eq!(gpu.texture_flags >> SPRITE_FLAGS_SHIFT, SPRITE_FLAG_AREA);
+        assert_eq!(
+            gpu.texture_flags >> SPRITE_FLAGS_SHIFT,
+            SPRITE_FLAG_AREA | SPRITE_FLAG_EMISSIVE
+        );
     }
 
     #[test]

@@ -161,9 +161,41 @@ impl<'a> IrModuleBuilder<'a> {
         &mut self, owner: TreePath, name: Identifier, params: &[ast::ProcParam], variadic: bool, body: &[Statement],
         intrinsic: Option<Intrinsic>, location: Location,
     ) -> ProcId {
+        let locals_in_memory = statements_contain_try(body);
+
+        self.lower_function(
+            owner,
+            name,
+            params,
+            variadic,
+            intrinsic,
+            location,
+            locals_in_memory,
+            |this| this.lower_statements(body),
+        )
+    }
+
+    /// `var/cache[8]` builds a fresh list for every instance even without an initializer.
+    pub fn lower_sized_initializer(
+        &mut self, owner: TreePath, name: Identifier, dimensions: &[Option<ExpressionId>], location: Location,
+    ) -> ProcId {
+        self.lower_function(owner, name, &[], false, None, location, false, |this| {
+            let dimensions = dimensions
+                .iter()
+                .map(|dimension| dimension.map(|expression| this.lower_expr(expression)))
+                .collect::<Vec<_>>();
+            let list = this.declared_array(&dimensions);
+            this.terminate_current_block(IrNode::Return(Some(list)));
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_function(
+        &mut self, owner: TreePath, name: Identifier, params: &[ast::ProcParam], variadic: bool,
+        intrinsic: Option<Intrinsic>, location: Location, locals_in_memory: bool, body: impl FnOnce(&mut Self),
+    ) -> ProcId {
         self.reset_proc();
         self.current_owner = owner.clone();
-        let locals_in_memory = statements_contain_try(body);
 
         let id = ProcId(self.module.procs.len() as u32);
         let function = self.make_node(IrNode::Function(id));
@@ -201,7 +233,7 @@ impl<'a> IrModuleBuilder<'a> {
             self.locals_in_memory = true;
         }
 
-        self.lower_statements(body);
+        body(self);
         self.terminate_current_block(IrNode::Return(None));
 
         let named_blocks = self
@@ -773,6 +805,25 @@ impl<'a> IrModuleBuilder<'a> {
             Some(Expression::Binary { op, lhs_expr, rhs_expr }) => match op {
                 BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
                     return self.short_circuit(*op, *lhs_expr, *rhs_expr);
+                },
+                // `locate(/obj/item) in loc` searches `loc` rather than testing membership
+                BinaryOp::In
+                    if let Some(Expression::Call { callee, args }) = self.ast.get_expr(*lhs_expr)
+                        && matches!(self.ast.get_expr(*callee), Some(Expression::Identifier(name)) if name.as_str() == "locate")
+                        && args.len() == 1
+                        && let Some(function) = self.call_target(*callee) =>
+                {
+                    let mut lowered = self.args(args);
+                    let container = self.lower_expr(*rhs_expr);
+                    lowered.push(Argument {
+                        key: None,
+                        value: Some(container),
+                    });
+
+                    IrNode::FunctionCall {
+                        function,
+                        args: lowered,
+                    }
                 },
                 op => {
                     let lhs = self.lower_expr(*lhs_expr);
