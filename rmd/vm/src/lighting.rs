@@ -131,15 +131,15 @@ impl LightingMap {
                 continue;
             };
 
-            if source.edge_only && !touches_dark_cell(&cells, width, height, atom.position.x, atom.position.y) {
+            let center_x = source.origin[0];
+            let center_y = source.origin[1];
+            let source_x = center_x.floor() as i32 + 1;
+            let source_y = center_y.floor() as i32 + 1;
+            if source.edge_only && !touches_dark_cell(&cells, width, height, source_x, source_y) {
                 continue;
             }
 
-            let bound = source.range.ceil().max(0.0) as i32;
-            let source_x = atom.position.x;
-            let source_y = atom.position.y;
-            let center_x = source_x as f32 - 0.5;
-            let center_y = source_y as f32 - 0.5;
+            let bound = source.range.ceil().max(0.0) as i32 + 1;
             let mut affected = HashSet::new();
             for target_y in source_y.saturating_sub(bound)..=source_y.saturating_add(bound) {
                 for target_x in source_x.saturating_sub(bound)..=source_x.saturating_add(bound) {
@@ -239,6 +239,8 @@ impl LightingAtom {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct LightSource {
+    /// Zero-based map coordinates, where integer coordinates are tile corners.
+    pub origin: [f32; 2],
     pub range: f32,
     pub inner_range: f32,
     pub power: f32,
@@ -436,6 +438,7 @@ mod tests {
         LightingAtom {
             position,
             source: Some(LightSource {
+                origin: [position.x as f32 - 0.5, position.y as f32 - 0.5],
                 range: 3.0,
                 inner_range: 0.0,
                 power: 1.0,

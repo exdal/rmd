@@ -136,12 +136,20 @@ func fs_main(VSOutput input) -> f32x4 {
         }
     }
 
+    if (input.sprite_id != 0) {
+        let flags = sprites[input.sprite_id - 1].flags();
+        if ((flags & SPRITE_FLAG_EMISSIVE_BLOCKER) != 0) {
+            discard;
+        }
+    }
+
     return sample_sprite(input);
 }
 
 struct VisibilityOutput {
     f32x4 color : SV_Target0;
-    u32 visibility : SV_Target1;
+    f32x4 emissive : SV_Target1;
+    u32 visibility : SV_Target2;
 };
 
 [shader("fragment")]
@@ -156,8 +164,13 @@ func fs_visibility(VSOutput input) -> VisibilityOutput {
     }
 
     VisibilityOutput output;
-    output.color = sample_sprite(input);
-    output.visibility = SPRITE_WRITES_ID ? input.sprite_id : 0;
+    let color = sample_sprite(input);
+    let blocker = (flags & SPRITE_FLAG_EMISSIVE_BLOCKER) != 0;
+    output.color = blocker ? f32x4(0.0) : color;
+    output.emissive = (flags & SPRITE_FLAG_EMISSIVE) != 0
+        ? f32x4(color.a)
+        : f32x4(0.0, 0.0, 0.0, color.a);
+    output.visibility = SPRITE_WRITES_ID && !blocker ? input.sprite_id : 0;
 
     return output;
 }

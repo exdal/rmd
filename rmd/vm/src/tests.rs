@@ -1,4 +1,8 @@
-use core::{arena::StrArena, path::TreePath};
+use core::{
+    arena::StrArena,
+    path::TreePath,
+    types::{Identifier, Value},
+};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use objtree::{ObjectTree, TypeId};
@@ -171,6 +175,74 @@ fn lighting_hooks_build_and_incrementally_restore_the_lightmap() {
     let restored = bake.update(&tree, &module, vec![atoms[0].clone()], &[]);
     assert_eq!(restored.lighting, Some(0..12));
     assert_eq!(bake.lighting.as_ref(), Some(&original));
+
+    let mut moved_lamp = atoms[0].clone();
+    moved_lamp.position = Position::new(3, 2, 1);
+    let moved = bake.update(&tree, &module, vec![atoms[0].clone(), moved_lamp.clone()], &[]);
+    let expected = Bake::new(
+        &tree,
+        &module,
+        vec![moved_lamp.clone(), atoms[1].clone()],
+        [4, 3, 1],
+        Limits::default(),
+    );
+    assert_eq!(moved.lighting, Some(0..12));
+    assert_eq!(bake.lighting, expected.lighting);
+
+    let mut pixel_shifted_lamp = moved_lamp;
+    pixel_shifted_lamp.vars = vec![(Identifier::from("pixel_x"), Value::Num(16.0))];
+    bake.update(&tree, &module, vec![pixel_shifted_lamp.clone()], &[]);
+    let expected = Bake::new(
+        &tree,
+        &module,
+        vec![pixel_shifted_lamp, atoms[1].clone()],
+        [4, 3, 1],
+        Limits::default(),
+    );
+    assert_eq!(bake.lighting, expected.lighting);
+}
+
+#[test]
+fn baking_exports_emissive_atoms_overlays_and_blockers() {
+    let (tree, module) = compile(
+        r#"
+/obj/light
+/proc/demir_bake(atom/target)
+    if(!istype(target, /obj/light))
+        return
+    target.demir_emissive = TRUE
+    var/image/glow = new
+    glow.icon_state = "glow"
+    glow.demir_emissive = TRUE
+    var/image/blocker = new
+    blocker.icon_state = "blocker"
+    blocker.demir_emissive_blocker = TRUE
+    glow.overlays += blocker
+    target.overlays += glow
+"#,
+    );
+    let light = tree.id_of(&TreePath::parse("/obj/light")).expect("light type");
+    let bake = Bake::new(
+        &tree,
+        &module,
+        vec![Atom {
+            instance: 1,
+            ty: light,
+            position: Position::new(1, 1, 1),
+            vars: Vec::new(),
+        }],
+        [1, 1, 1],
+        Limits::default(),
+    );
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    let appearance = &bake.appearances[&1];
+    assert_eq!(appearance.lighting, crate::AppearanceLighting::Emissive);
+    assert_eq!(appearance.overlays[0].lighting, crate::AppearanceLighting::Emissive);
+    assert_eq!(
+        appearance.overlays[0].overlays[0].lighting,
+        crate::AppearanceLighting::Blocker
+    );
 }
 
 #[test]

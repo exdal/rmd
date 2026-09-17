@@ -129,16 +129,19 @@ pub fn build(environment: &Environment, document: &MapDocument) -> Option<Bake> 
 pub fn update(
     bake: &mut Bake, environment: &Environment, document: &MapDocument, affected: &[PrefabInstanceId],
 ) -> BakeUpdate {
+    let mut affected = affected.to_vec();
+    affected.sort_unstable();
+    affected.dedup();
     let Some(program) = environment.bake_program.as_ref() else {
         return BakeUpdate {
-            appearances: affected.to_vec(),
+            appearances: affected,
             lighting: None,
         };
     };
 
     let mut replacements = Vec::new();
     let mut removed = Vec::new();
-    for id in affected {
+    for id in &affected {
         match placed(environment, document, *id) {
             Some(atom) => replacements.push(atom),
             None => removed.push(id.get()),

@@ -36,11 +36,15 @@ impl Edit {
     pub fn is_empty(&self) -> bool { self.changes.is_empty() }
 
     pub(crate) fn affected_instances(&self) -> Vec<dmm::PrefabInstanceId> {
-        self.changes
+        let mut affected = self
+            .changes
             .iter()
             .flat_map(|change| change.before.iter().chain(&change.after))
             .map(|placed| placed.id())
-            .collect()
+            .collect::<Vec<_>>();
+        affected.sort_unstable();
+        affected.dedup();
+        affected
     }
 }
 

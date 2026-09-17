@@ -11,6 +11,7 @@ use objtree::{ObjectTree, TypeId};
 pub use crate::lighting::{LightTile, LightingMap};
 use crate::{
     AppearanceDelta,
+    AppearanceLighting,
     Diagnostics,
     Fault,
     FaultKind,
@@ -428,7 +429,18 @@ impl Bake {
         let source = (range.is_finite() && range > 0.0 && power.is_finite() && power != 0.0).then(|| {
             let inner_range = object_number(object, tree, "demir_light_inner_range", 0.0).clamp(0.0, range);
             let angle = object_number(object, tree, "demir_light_angle", 360.0).clamp(0.0, 360.0);
+            let icon_size = world_icon_size(tree);
+            let offset_x = object_number(object, tree, "pixel_x", 0.0)
+                + object_number(object, tree, "pixel_w", 0.0)
+                + object_number(object, tree, "step_x", 0.0);
+            let offset_y = object_number(object, tree, "pixel_y", 0.0)
+                + object_number(object, tree, "pixel_z", 0.0)
+                + object_number(object, tree, "step_y", 0.0);
             LightSource {
+                origin: [
+                    position.x as f32 - 0.5 + offset_x / icon_size,
+                    position.y as f32 - 0.5 + offset_y / icon_size,
+                ],
                 range,
                 inner_range: finite_or(inner_range, 0.0),
                 power,
@@ -645,6 +657,7 @@ impl Bake {
                         composed.vars.push((name.clone(), value.clone()));
                     }
                 }
+                composed.lighting = composed.lighting.combine(value.lighting);
                 composed.overlays.extend(value.overlays.clone());
                 composed.underlays.extend(value.underlays.clone());
             }
@@ -657,19 +670,30 @@ impl Bake {
         &mut self, tree: &ObjectTree, module: &Module, replacements: Vec<Atom>, removed: &[u64],
     ) -> BakeUpdate {
         self.epoch = self.epoch.wrapping_add(1);
+        let mut replacements_by_id = HashMap::new();
+        for atom in replacements {
+            replacements_by_id.insert(atom.instance, atom);
+        }
+        let mut replacements = replacements_by_id.into_values().collect::<Vec<_>>();
+        replacements.sort_by_key(|atom| atom.instance);
+
         let mut dirty = HashSet::new();
         let mut dirty_light_levels = HashSet::new();
         let mut inserted = Vec::new();
-        let remove = removed
+        let mut remove = removed
             .iter()
             .copied()
             .chain(replacements.iter().map(|atom| atom.instance))
+            .collect::<HashSet<_>>()
+            .into_iter()
             .collect::<Vec<_>>();
+        remove.sort_unstable();
 
         for id in &remove {
             if let Some(atom) = self.atoms.remove(id) {
                 dirty.insert(atom.position);
-                if self.light_atoms.remove(id).is_some() {
+                self.light_atoms.remove(id);
+                if self.hooks.light.is_some() {
                     dirty_light_levels.insert(atom.position.z as u32);
                 }
 
@@ -772,6 +796,16 @@ impl Bake {
 }
 
 fn finite_or(value: f32, default: f32) -> f32 { if value.is_finite() { value } else { default } }
+
+fn world_icon_size(tree: &ObjectTree) -> f32 {
+    let size = tree
+        .roots()
+        .world
+        .and_then(|world| tree.var_inherited(world, &Identifier::from("icon_size")))
+        .and_then(|variable| variable.value.as_num())
+        .unwrap_or(32.0);
+    if size.is_finite() && size > 0.0 { size } else { 32.0 }
+}
 
 fn object_number(object: &Object, tree: &ObjectTree, name: &str, default: f32) -> f32 {
     let name = Identifier::from(name);
@@ -914,6 +948,8 @@ thread_local! {
         dir: Identifier::from("dir"),
         layer: Identifier::from("layer"),
         plane: Identifier::from("plane"),
+        emissive: Identifier::from("demir_emissive"),
+        emissive_blocker: Identifier::from("demir_emissive_blocker"),
     };
 }
 
@@ -925,6 +961,8 @@ struct Names {
     dir: Identifier,
     layer: Identifier,
     plane: Identifier,
+    emissive: Identifier,
+    emissive_blocker: Identifier,
 }
 
 const APPEARANCE_VARS: &[&str] = &[
@@ -961,12 +999,27 @@ fn export_with_names(
     }
 
     let object = heap.object(id).ok_or(FaultKind::InvalidReference)?;
-    let mut appearance = AppearanceDelta::default();
+    let lighting = if object_truthy(object, tree, names.emissive_blocker.as_str(), false) {
+        AppearanceLighting::Blocker
+    } else if object_truthy(object, tree, names.emissive.as_str(), false) {
+        AppearanceLighting::Emissive
+    } else {
+        AppearanceLighting::Normal
+    };
+    let mut appearance = AppearanceDelta {
+        lighting,
+        ..Default::default()
+    };
     for name in &names.appearance {
-        let value = object.vars.get(name).map(export_value).transpose()?.or_else(|| {
-            tree.var_inherited(object.ty, name)
-                .map(|variable| variable.value.clone())
-        });
+        let runtime_value = object.vars.get(name);
+        let value = if name.as_str() == "color" && matches!(runtime_value, Some(GenericValue::List(_))) {
+            None
+        } else {
+            runtime_value.map(export_value).transpose()?.or_else(|| {
+                tree.var_inherited(object.ty, name)
+                    .map(|variable| variable.value.clone())
+            })
+        };
         if let Some(value) = value {
             let cost = value.as_text().map_or(1, |text| text.len().div_ceil(32).max(1));
             *budget = budget.checked_sub(cost).ok_or(FaultKind::Memory)?;

@@ -298,11 +298,30 @@ impl ListData {
     pub fn contains(&self, value: &GenericValue) -> bool { self.position(value).is_some() }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AppearanceLighting {
+    #[default]
+    Normal,
+    Emissive,
+    Blocker,
+}
+
+impl AppearanceLighting {
+    pub(crate) const fn combine(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Blocker, _) | (_, Self::Blocker) => Self::Blocker,
+            (Self::Emissive, _) | (_, Self::Emissive) => Self::Emissive,
+            _ => Self::Normal,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AppearanceDelta {
     pub vars: Vec<(Identifier, core::types::Value)>,
     pub overlays: Vec<AppearanceDelta>,
     pub underlays: Vec<AppearanceDelta>,
+    pub lighting: AppearanceLighting,
 }
 
 impl From<i32> for GenericValue {

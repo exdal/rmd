@@ -105,6 +105,10 @@
 	var/demir_ambient_power = 0
 	/// Suppress corner lighting for this cell.
 	var/demir_fullbright = 0
+	/// Render this appearance independently of the static lightmap.
+	var/demir_emissive = 0
+	/// Clear emissive pixels behind this appearance without drawing it.
+	var/demir_emissive_blocker = 0
 
 	proc/Click(location, control, params)
 		set __demir_intrin = 1010
@@ -277,6 +281,8 @@
 	var/icon
 	var/icon_state
 	var/atom/loc
+	var/demir_emissive = 0
+	var/demir_emissive_blocker = 0
 
 	New(icon, loc, icon_state, layer, dir, pixel_x, pixel_y)
 		set __demir_intrin = 1025

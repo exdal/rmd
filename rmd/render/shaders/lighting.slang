@@ -13,6 +13,9 @@ struct LightTile {
 [[vk::binding(1, 0)]]
 StructuredBuffer<LightTile> light_tiles;
 
+[[vk::binding(2, 0)]]
+Sampler2D emissive_mask;
+
 struct VSOutput {
   f32x4 position : SV_Position;
   f32x2 uv;
@@ -58,6 +61,7 @@ func fs_main(VSOutput input, uniform f32x2 center, uniform f32x2 viewport,
   let south = lerp(southwest, southeast, local.x);
   let north = lerp(northwest, northeast, local.x);
   let light = lerp(south, north, local.y);
+  let emission = emissive_mask.Sample(input.uv).r;
 
-  return f32x4(color.rgb * light, color.a);
+  return f32x4(color.rgb * lerp(light, f32x3(1.0), emission), color.a);
 }

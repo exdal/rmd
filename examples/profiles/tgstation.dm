@@ -40,6 +40,46 @@
 	if(uses_integrity)
 		atom_integrity = max_integrity
 
+/turf/open/floor/light/proc/demir_prepare_light()
+	// light_floor.dm undefines these constants before this profile is included:
+	// fine = 0, flicker = 1, breaking = 2, broken = 3.
+	if(!on || state == 3)
+		light_on = FALSE
+		light_range = 0
+		return
+	light_on = TRUE
+	light_color = currentcolor
+	if(state == 1)
+		light_range = 2
+	else if(state == 2)
+		light_range = 1
+	else
+		light_range = 3
+
+/image/proc/demir_tag_emissive()
+	if(plane == EMISSIVE_PLANE && islist(color))
+		var/list/color_matrix = color
+		if(color_matrix[17] || color_matrix[18])
+			demir_emissive = TRUE
+		else if(color_matrix[16] && !color_matrix[19])
+			demir_emissive_blocker = TRUE
+	for(var/image/underlay in underlays)
+		underlay.demir_tag_emissive()
+	for(var/image/overlay in overlays)
+		overlay.demir_tag_emissive()
+
+/atom/proc/demir_tag_emissive()
+	if(plane == EMISSIVE_PLANE && islist(color))
+		var/list/color_matrix = color
+		if(color_matrix[17] || color_matrix[18])
+			demir_emissive = TRUE
+		else if(color_matrix[16] && !color_matrix[19])
+			demir_emissive_blocker = TRUE
+	for(var/image/underlay in underlays)
+		underlay.demir_tag_emissive()
+	for(var/image/overlay in overlays)
+		overlay.demir_tag_emissive()
+
 // Cables connect by layer and store their cardinal links rather than using the
 // generic smoothing flags.
 /obj/structure/cable/proc/demir_bake_connections()
@@ -128,6 +168,9 @@
 
 /proc/demir_prepare(atom/target)
 	target.demir_prepare_smoothing()
+	if(istype(target, /turf/open/floor/light))
+		var/turf/open/floor/light/light_floor = target
+		light_floor.demir_prepare_light()
 	// Atmos Initialize() normally derives each port from dir before atmos_init().
 	// Smart pipes need those neighboring port directions for can_be_node().
 	if(istype(target, /obj/machinery/atmospherics))
@@ -140,25 +183,28 @@
 	if(istype(target, /obj/effect/spawner/structure/window))
 		var/obj/effect/spawner/structure/window/spawner = target
 		spawner.demir_bake_spawned_appearance()
-		return
-	if(istype(target, /obj/structure/cable) && !istype(target, /obj/structure/cable/multilayer))
+	else if(istype(target, /obj/structure/cable) && !istype(target, /obj/structure/cable/multilayer))
 		var/obj/structure/cable/cable = target
 		cable.demir_bake_connections()
-		return
-	if(istype(target, /obj/machinery/atmospherics/pipe/smart))
+	else if(istype(target, /obj/machinery/atmospherics/pipe/smart))
 		var/obj/machinery/atmospherics/pipe/smart/pipe = target
 		pipe.demir_bake_connections()
-		return
-	if(istype(target, /obj/machinery/duct))
+	else if(istype(target, /obj/machinery/duct))
 		var/obj/machinery/duct/duct = target
 		duct.demir_bake_connections()
-		return
-	if(target.smoothing_flags & USES_SMOOTHING)
+	else if(target.smoothing_flags & USES_SMOOTHING)
 		target.smooth_icon()
+	target.demir_tag_emissive()
 
-// Emissive rendering is deferred in the editor.
 /proc/fast_emissive_blocker(atom/target)
-	return null
+	var/mutable_appearance/blocker = new
+	blocker.icon = target.icon
+	blocker.icon_state = target.icon_state
+	blocker.dir = target.dir
+	blocker.plane = EMISSIVE_PLANE
+	blocker.appearance_flags = target.appearance_flags | EMISSIVE_APPEARANCE_FLAGS
+	blocker.demir_emissive_blocker = TRUE
+	return blocker
 
 /atom/proc/demir_apply_light()
 	if(light_system != COMPLEX_LIGHT || !light_on || !light_range || !light_power)

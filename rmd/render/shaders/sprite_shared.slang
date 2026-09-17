@@ -9,7 +9,9 @@ public static const u32 SPRITE_AREA_EDGE_SOUTH = 1 << 3;
 public static const u32 SPRITE_AREA_EDGE_WEST = 1 << 4;
 public static const u32 SPRITE_AREA_EDGE_MASK =
     SPRITE_AREA_EDGE_NORTH | SPRITE_AREA_EDGE_EAST | SPRITE_AREA_EDGE_SOUTH | SPRITE_AREA_EDGE_WEST;
-public static const u32 SPRITE_FLAGS_SHIFT = 27;
+public static const u32 SPRITE_FLAG_EMISSIVE = 1 << 5;
+public static const u32 SPRITE_FLAG_EMISSIVE_BLOCKER = 1 << 6;
+public static const u32 SPRITE_FLAGS_SHIFT = 25;
 public static const u32 SPRITE_TEXTURE_MASK = (1 << SPRITE_FLAGS_SHIFT) - 1;
 
 public struct Sprite {

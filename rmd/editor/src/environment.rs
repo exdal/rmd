@@ -153,7 +153,7 @@ fn compile_view<'a>(
     source_cache: preprocessor::SourceCache<'a>, progress: &'a Progress,
 ) -> Result<CompiledView<'a>, LoadError> {
     progress.enter(Stage::Preprocess, 0);
-    let preprocessed = preprocessor::Preprocessor::new(&arena)
+    let preprocessed = preprocessor::Preprocessor::new(arena)
         .with_source_cache(source_cache)
         .with_baking(baking)
         .with_editor_walls(editor_walls)

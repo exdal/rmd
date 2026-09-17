@@ -20,6 +20,7 @@ pub struct Appearance {
     pub color: Option<String>,
     pub alpha: u8,
     pub invisibility: i32,
+    pub lighting: vm::AppearanceLighting,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +55,7 @@ impl Default for Appearance {
             color: None,
             alpha: 255,
             invisibility: 0,
+            lighting: vm::AppearanceLighting::Normal,
         }
     }
 }
@@ -175,7 +177,9 @@ pub fn resolve_delta(tree: &ObjectTree, id: TypeId, prefab: &Prefab, delta: &vm:
         derived.set_var(name.clone(), value.clone());
     }
 
-    resolve_id(tree, id, &derived)
+    let mut appearance = resolve_id(tree, id, &derived);
+    appearance.lighting = delta.lighting;
+    appearance
 }
 
 /// `overlays += "edge"`

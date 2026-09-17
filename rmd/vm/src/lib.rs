@@ -15,7 +15,7 @@ pub mod world;
 pub use error::{Fault, FaultKind};
 pub use eval::Runtime;
 pub use prelude::Intrinsic;
-pub use value::{AppearanceDelta, GenericValue};
+pub use value::{AppearanceDelta, AppearanceLighting, GenericValue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {

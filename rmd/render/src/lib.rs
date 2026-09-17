@@ -110,6 +110,14 @@ pub struct SpriteTexture {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum SpriteLighting {
+    #[default]
+    Normal,
+    Emissive,
+    Blocker,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpriteInstance {
     pub owner: PrefabInstanceId,
@@ -122,6 +130,7 @@ pub struct SpriteInstance {
     pub z: u32,
     pub is_area: bool,
     pub area_edges: u32,
+    pub lighting: SpriteLighting,
     /// premultiplied RGBA
     pub color: [f32; 4],
     /// sort key, from plane and layer

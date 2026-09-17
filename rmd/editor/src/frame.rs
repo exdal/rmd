@@ -216,6 +216,11 @@ pub fn instance_for(
         z: tile.z,
         is_area,
         area_edges: 0,
+        lighting: match appearance.lighting {
+            vm::AppearanceLighting::Normal => render::SpriteLighting::Normal,
+            vm::AppearanceLighting::Emissive => render::SpriteLighting::Emissive,
+            vm::AppearanceLighting::Blocker => render::SpriteLighting::Blocker,
+        },
         color: [tint[0] * alpha, tint[1] * alpha, tint[2] * alpha, alpha],
         depth: appearance.plane * 1000.0 + appearance.layer,
     }

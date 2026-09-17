@@ -87,7 +87,9 @@ struct GpuLightTile {
 
 const SPRITE_FLAG_AREA: u32 = 1;
 const SPRITE_AREA_EDGE_SHIFT: u32 = 1;
-const SPRITE_FLAGS_SHIFT: u32 = 27;
+const SPRITE_FLAG_EMISSIVE: u32 = 1 << 5;
+const SPRITE_FLAG_EMISSIVE_BLOCKER: u32 = 1 << 6;
+const SPRITE_FLAGS_SHIFT: u32 = 25;
 const SPRITE_TEXTURE_MASK: u32 = (1 << SPRITE_FLAGS_SHIFT) - 1;
 const SPRITE_TEXTURE_CAPACITY: u32 = SPRITE_TEXTURE_MASK + 1;
 const TEXTURE_RESERVE: usize = 8192;
@@ -932,6 +934,13 @@ impl Renderer {
                 extent,
             );
             scene_attachment = module.clear(scene_attachment, vir::clear::f32::BLACK);
+            let mut emissive_attachment = module.transient_image_sized(
+                &ImageInfo::color_target(viewport, vk::Format::R8_UNORM)
+                    .with_usage(vk::ImageUsageFlags::SAMPLED)
+                    .with_name(format!("map view {index} emissive attachment")),
+                extent,
+            );
+            emissive_attachment = module.clear(emissive_attachment, vir::clear::f32::BLACK);
             let mut visibility_attachment = module.transient_image_sized(
                 &ImageInfo::color_target(viewport, vk::Format::R32_UINT)
                     .with_usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
@@ -971,9 +980,10 @@ impl Renderer {
             let draw_commands = cull_values.commands;
             let visible_indices = cull_values.visible;
 
-            [scene_attachment, visibility_attachment, _, _] = module
+            [scene_attachment, emissive_attachment, visibility_attachment, _, _] = module
                 .begin_rendering([
                     (scene_attachment, Access::ColorRW),
+                    (emissive_attachment, Access::ColorRW),
                     (visibility_attachment, Access::ColorRW),
                     (draw_commands, Access::IndirectRead),
                     (visible_indices, Access::VertexRead),
@@ -984,7 +994,8 @@ impl Renderer {
                 .set_viewport(0, Rect2D::framebuffer())
                 .set_scissor(0, Rect2D::framebuffer())
                 .set_color_blend(0, BlendPreset::PremultipliedAlphaBlend)
-                .set_color_blend(1, BlendPreset::Off)
+                .set_color_blend(1, BlendPreset::PremultipliedAlphaBlend)
+                .set_color_blend(2, BlendPreset::Off)
                 .set_rasterization(RasterizationState {
                     cull_mode: vk::CullModeFlags::NONE,
                     ..Default::default()
@@ -1027,6 +1038,7 @@ impl Renderer {
                     .set_scissor(0, Rect2D::framebuffer())
                     .bind_texture(0, 0, scene_attachment, self.sampler)
                     .bind_buffer(0, 1, light_tiles)
+                    .bind_texture(0, 2, emissive_attachment, self.sampler)
                     .push_constants_from(push)
                     .draw(3, 1)
                     .end_rendering();
@@ -2260,10 +2272,15 @@ fn gpu_light_offset(start: usize) -> Result<u64, GpuError> {
 }
 
 fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuError> {
-    let flags = if sprite.is_area {
+    let mut flags = if sprite.is_area {
         SPRITE_FLAG_AREA | ((sprite.area_edges & AREA_EDGES_ALL) << SPRITE_AREA_EDGE_SHIFT)
     } else {
         0
+    };
+    flags |= match sprite.lighting {
+        crate::SpriteLighting::Normal => 0,
+        crate::SpriteLighting::Emissive => SPRITE_FLAG_EMISSIVE,
+        crate::SpriteLighting::Blocker => SPRITE_FLAG_EMISSIVE_BLOCKER,
     };
 
     let out_of_range = |field| GpuError::SpritePackingOutOfRange { sprite: index, field };
@@ -2700,6 +2717,8 @@ mod tests {
         SPRITE_CULL_COMPACT_CS_SPV,
         SPRITE_CULL_SCAN_CS_SPV,
         SPRITE_FLAG_AREA,
+        SPRITE_FLAG_EMISSIVE,
+        SPRITE_FLAG_EMISSIVE_BLOCKER,
         SPRITE_FLAGS_SHIFT,
         SPRITE_SHADE_FS_SPV,
         SPRITE_TEXTURE_MASK,
@@ -2737,6 +2756,7 @@ mod tests {
         MapViewRect,
         SelectionGuide,
         SpriteInstance,
+        SpriteLighting,
         SpriteTexture,
         UpdateRange,
         read_spirv,
@@ -2756,6 +2776,7 @@ mod tests {
             z,
             is_area: false,
             area_edges: 0,
+            lighting: SpriteLighting::Normal,
             color: [1.0; 4],
             depth: 0.0,
         }
@@ -3058,6 +3079,23 @@ mod tests {
     }
 
     #[test]
+    fn emissive_roles_reach_the_gpu_flags() {
+        let mut emissive = sprite(1);
+        emissive.lighting = SpriteLighting::Emissive;
+        let mut blocker = sprite(1);
+        blocker.lighting = SpriteLighting::Blocker;
+
+        let emissive = gpu_sprite(0, &emissive).expect("pack emissive");
+        let blocker = gpu_sprite(1, &blocker).expect("pack blocker");
+
+        assert_eq!(emissive.texture_flags >> SPRITE_FLAGS_SHIFT, SPRITE_FLAG_EMISSIVE);
+        assert_eq!(
+            blocker.texture_flags >> SPRITE_FLAGS_SHIFT,
+            SPRITE_FLAG_EMISSIVE_BLOCKER
+        );
+    }
+
+    #[test]
     fn meshopt_half_conversion_matches_reference_values() {
         assert_eq!(meshopt_quantize_half(0.0), 0x0000);
         assert_eq!(meshopt_quantize_half(-0.0), 0x8000);
@@ -3325,7 +3363,7 @@ mod tests {
             .collect::<Vec<_>>();
         bindings.sort_unstable();
 
-        assert_eq!(bindings, [(0, 0), (0, 1)]);
+        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2)]);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<LightingPush>());
     }
