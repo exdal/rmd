@@ -138,8 +138,8 @@ func fs_main(VSOutput input) -> f32x4 {
 
     if (input.sprite_id != 0) {
         let flags = sprites[input.sprite_id - 1].flags();
-        if ((flags & (SPRITE_FLAG_EMISSIVE_BLOCKER | SPRITE_FLAG_OVERLAY_LIGHT |
-                      SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT)) != 0) {
+        if ((flags & (SPRITE_FLAG_EMISSIVE_MASK | SPRITE_FLAG_EMISSIVE_BLOCKER |
+                      SPRITE_FLAG_OVERLAY_LIGHT | SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT)) != 0) {
             discard;
         }
     }
@@ -170,9 +170,10 @@ func fs_visibility(VSOutput input) -> VisibilityOutput {
 
     VisibilityOutput output;
     let color = sample_sprite(input);
+    let mask = (flags & SPRITE_FLAG_EMISSIVE_MASK) != 0;
     let blocker = (flags & SPRITE_FLAG_EMISSIVE_BLOCKER) != 0;
-    output.color = blocker ? f32x4(0.0) : color;
-    output.emissive = (flags & SPRITE_FLAG_EMISSIVE) != 0
+    output.color = mask || blocker ? f32x4(0.0) : color;
+    output.emissive = (flags & (SPRITE_FLAG_EMISSIVE_MASK | SPRITE_FLAG_FULLBRIGHT)) != 0
         ? f32x4(color.a)
         : f32x4(0.0, 0.0, 0.0, color.a);
     output.visibility = SPRITE_WRITES_ID ? input.sprite_id : 0;

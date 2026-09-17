@@ -105,7 +105,7 @@
 	var/demir_ambient_power = 0
 	/// Suppress corner lighting for this cell.
 	var/demir_fullbright = 0
-	/// Render this appearance independently of the static lightmap.
+	/// Use this appearance as an emissive mask without drawing it into the scene color.
 	var/demir_emissive = 0
 	/// Clear emissive pixels behind this appearance without drawing it.
 	var/demir_emissive_blocker = 0

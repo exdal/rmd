@@ -58,9 +58,17 @@ program instead defines `__DEMIR_BAKE__`; `prelude/demir.dm` leaves the compatib
 profile code sees normal runtime initializers. Both preprocessing passes share cached source text,
 but keep independent token streams, type IDs, and source-file tables.
 
+Build defines supplied outside the `.dme` must be restored near the top of the file for the bake
+view. For example, tgstation's build tool supplies `CBT`, which makes `MAP_SWITCH` select runtime
+icons. Its `.dme` therefore defines `CBT` under `#ifdef __DEMIR_BAKE__` after the required
+`genesis_call.dme` include and before the generated include block.
+
 The prelude also declares a codebase-neutral static lighting schema on `/atom`. Profiles may fill it
 through `demir_light`. The baker harvests those fields into a dense, z-major corner lightmap. The
 renderer bilinearly samples the four corners of each tile and applies the result to the map scene.
+Nested appearances marked `demir_emissive` contribute their alpha to the emissive mask without
+drawing their mask texture into the scene. `demir_overlay_light` similarly routes an appearance to
+the additive or subtractive overlay lightmap instead of the scene color.
 
 ## Runtime model
 
@@ -160,9 +168,10 @@ every placement it reports are rebuilt. Hiding a type rebuilds sprites from the 
 running any DM.
 
 Frame building applies fields changed by baking over the compatibility tree's static appearance.
-This lets smoothing replace `icon_state` while an untouched atom keeps its mapping-only icon. A type
-that exists only under a compatibility define remains drawable but is omitted from the runtime
-world. Type IDs never cross between the two views; placed prefabs are resolved by path in each tree.
+The baker exports `icon` and `icon_state` together when either changes, so a runtime state is never
+combined with an incompatible mapping-only icon sheet. An untouched atom still keeps its mapping-only
+appearance. A type that exists only under a compatibility define remains drawable but is omitted from
+the runtime world. Type IDs never cross between the two views; placed prefabs are resolved by path in each tree.
 Overlay and underlay deltas become extra sprites owned by the placement, drawn in list order around
 it. They inherit the owner's icon, dir, offsets, and floating layer and plane. Color and alpha
 multiply with the owner's unless the overlay sets `RESET_COLOR` or `RESET_ALPHA`.

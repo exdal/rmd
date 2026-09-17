@@ -460,6 +460,66 @@ fn baking_exports_icon_objects_and_ignores_timed_effects() {
 }
 
 #[test]
+fn baking_exports_icon_and_icon_state_as_a_pair() {
+    let (tree, module) = compile(
+        r#"
+/obj/state_only
+    icon = 'state.dmi'
+    icon_state = "off"
+/obj/icon_only
+    icon = 'old.dmi'
+    icon_state = "steady"
+/proc/demir_bake(atom/target)
+    if(istype(target, /obj/state_only))
+        target.icon_state = "on"
+    else if(istype(target, /obj/icon_only))
+        target.icon = 'new.dmi'
+"#,
+    );
+    let state_only = tree
+        .id_of(&TreePath::parse("/obj/state_only"))
+        .expect("state-only type");
+    let icon_only = tree.id_of(&TreePath::parse("/obj/icon_only")).expect("icon-only type");
+    let bake = Bake::new(
+        &tree,
+        &module,
+        vec![
+            Atom {
+                instance: 1,
+                ty: state_only,
+                position: Position::new(1, 1, 1),
+                vars: Vec::new(),
+            },
+            Atom {
+                instance: 2,
+                ty: icon_only,
+                position: Position::new(2, 1, 1),
+                vars: Vec::new(),
+            },
+        ],
+        [2, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    assert_eq!(
+        bake.appearances[&1].vars,
+        [
+            (Identifier::from("icon"), Value::Resource("state.dmi".into())),
+            (Identifier::from("icon_state"), Value::Text("on".into())),
+        ]
+    );
+    assert_eq!(
+        bake.appearances[&2].vars,
+        [
+            (Identifier::from("icon"), Value::Resource("new.dmi".into())),
+            (Identifier::from("icon_state"), Value::Text("steady".into())),
+        ]
+    );
+}
+
+#[test]
 fn baking_exports_sprite_lighting_roles() {
     let (tree, module) = compile(
         r#"

@@ -1,5 +1,12 @@
 // A template, not something rmd loads on its own. Copy this file into a tgstation checkout and
-// `#include` it from `tgstation.dme`; the guard keeps BYOND compiling it to nothing.
+// `#include` it from `tgstation.dme`; the guard keeps BYOND compiling it to nothing. tgstation's
+// build tool also supplies CBT, which selects runtime values from MAP_SWITCH. Since rmd reads the
+// DME directly, add this immediately after the required `genesis_call.dme` include and before the
+// generated include block:
+//
+// #ifdef __DEMIR_BAKE__
+// #define CBT
+// #endif
 //
 // The profile runs the codebase's own smoothing and icon-state code against a map, without
 // starting any subsystem. Calling `Initialize(TRUE)` instead faults on nearly every atom, so each
@@ -170,6 +177,13 @@
 			demir_emissive = TRUE
 		else if(color_matrix[16] && !color_matrix[19])
 			demir_emissive_blocker = TRUE
+	else if(plane == LIGHTING_PLANE)
+		if(blend_mode == BLEND_ADD)
+			demir_overlay_light = 1
+		else if(blend_mode == BLEND_SUBTRACT)
+			demir_overlay_light = -1
+		else
+			alpha = 0
 	for(var/image/underlay in underlays)
 		underlay.demir_tag_emissive()
 	for(var/image/overlay in overlays)

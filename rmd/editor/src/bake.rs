@@ -260,22 +260,32 @@ mod tests {
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("demir-compat-bake-{}-{id}", std::process::id()));
         std::fs::create_dir_all(&root).expect("temp dir");
+        std::fs::copy(examples().join("icons/test.dmi"), root.join("editor.dmi")).expect("editor icon");
+        std::fs::copy(examples().join("icons/test.dmi"), root.join("runtime.dmi")).expect("runtime icon");
         let entry = root.join("test.dm");
         std::fs::write(
             &entry,
             r#"
+#ifdef __DEMIR_BAKE__
+#define RUNTIME_BUILD
+#endif
+
 /obj/plain
-#ifdef FASTDMM
-    icon_state = "editor"
+#ifdef RUNTIME_BUILD
+    icon = 'runtime.dmi'
+    icon_state = "table"
 #else
-    icon_state = "runtime"
+    icon = 'editor.dmi'
+    icon_state = "floor"
 #endif
 
 /obj/smoothed
-#ifdef FASTDMM
-    icon_state = "editor"
+#ifdef RUNTIME_BUILD
+    icon = 'runtime.dmi'
+    icon_state = "table"
 #else
-    icon_state = "runtime"
+    icon = 'editor.dmi'
+    icon_state = "floor"
 #endif
 
 #ifdef FASTDMM
@@ -294,12 +304,12 @@ mod tests {
             r#"
 /proc/demir_bake(atom/target)
     if(istype(target, /obj/smoothed))
-        target.icon_state = "baked"
+        target.icon_state = "wall"
 "#,
         )
         .expect("profile");
 
-        let (environment, diagnostics) = Environment::load(&entry).expect("environment");
+        let (mut environment, diagnostics) = Environment::load(&entry).expect("environment");
         std::fs::remove_dir_all(&root).expect("remove temp dir");
         assert!(diagnostics.is_empty(), "unexpected diagnostics");
 
@@ -316,10 +326,24 @@ mod tests {
             .expect("bake hook");
 
         assert_eq!(
+            visual::resolve_id(&environment.tree, plain_id, &plain).icon.as_deref(),
+            Some("editor.dmi")
+        );
+        assert_eq!(
             visual::resolve_id(&environment.tree, plain_id, &plain)
                 .icon_state
                 .as_deref(),
-            Some("editor")
+            Some("floor")
+        );
+        assert_eq!(
+            visual::resolve_id(
+                &program.tree,
+                program.tree.id_of(&plain.path).expect("runtime plain"),
+                &plain
+            )
+            .icon
+            .as_deref(),
+            Some("runtime.dmi")
         );
         assert_eq!(
             visual::resolve_id(
@@ -329,7 +353,7 @@ mod tests {
             )
             .icon_state
             .as_deref(),
-            Some("runtime")
+            Some("table")
         );
         assert!(program.tree.id_of(&helper.path).is_none());
         assert_eq!(
@@ -349,14 +373,27 @@ mod tests {
         let mut standalone = Standalone::default();
         let plain_delta = standalone.appearance(&environment, &plain).expect("plain bake result");
         let plain_appearance = visual::resolve_delta(&environment.tree, plain_id, &plain, &plain_delta);
-        assert_eq!(plain_appearance.icon_state.as_deref(), Some("editor"));
+        assert_eq!(plain_appearance.icon.as_deref(), Some("editor.dmi"));
+        assert_eq!(plain_appearance.icon_state.as_deref(), Some("floor"));
         assert!(plain_delta.vars.is_empty());
 
         let smoothed_delta = standalone
             .appearance(&environment, &smoothed)
             .expect("smoothed bake result");
         let smoothed_appearance = visual::resolve_delta(&environment.tree, smoothed_id, &smoothed, &smoothed_delta);
-        assert_eq!(smoothed_appearance.icon_state.as_deref(), Some("baked"));
+        assert_eq!(smoothed_appearance.icon.as_deref(), Some("runtime.dmi"));
+        assert_eq!(smoothed_appearance.icon_state.as_deref(), Some("wall"));
+        environment
+            .icons
+            .get_mut("editor.dmi")
+            .expect("editor icon metadata")
+            .states
+            .retain(|state| state.name != "wall");
+        let file = dmi::IconFile::load(examples().join("icons/test.dmi")).expect("test icon");
+        let mut textures = render::texture::TextureCatalog::new();
+        textures.insert("editor.dmi", &file).expect("pack editor icon");
+        textures.insert("runtime.dmi", &file).expect("pack runtime icon");
+        assert!(frame::sprite_texture(&environment.icons, &textures, &smoothed_appearance).is_some());
         assert!(standalone.appearance(&environment, &helper).is_none());
 
         let mut map = Map::new(Size { x: 1, y: 1, z: 1 });

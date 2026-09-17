@@ -88,11 +88,12 @@ struct GpuLightTile {
 
 const SPRITE_FLAG_AREA: u32 = 1;
 const SPRITE_AREA_EDGE_SHIFT: u32 = 1;
-const SPRITE_FLAG_EMISSIVE: u32 = 1 << 5;
+const SPRITE_FLAG_EMISSIVE_MASK: u32 = 1 << 5;
 const SPRITE_FLAG_EMISSIVE_BLOCKER: u32 = 1 << 6;
 const SPRITE_FLAG_OVERLAY_LIGHT: u32 = 1 << 7;
 const SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT: u32 = 1 << 8;
-const SPRITE_FLAGS_SHIFT: u32 = 23;
+const SPRITE_FLAG_FULLBRIGHT: u32 = 1 << 9;
+const SPRITE_FLAGS_SHIFT: u32 = 22;
 const SPRITE_TEXTURE_MASK: u32 = (1 << SPRITE_FLAGS_SHIFT) - 1;
 const SPRITE_TEXTURE_CAPACITY: u32 = SPRITE_TEXTURE_MASK + 1;
 const TEXTURE_RESERVE: usize = 8192;
@@ -2334,11 +2335,11 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
         0
     };
     if sprite.is_area && sprite.area_edges == 0 {
-        flags |= SPRITE_FLAG_EMISSIVE;
+        flags |= SPRITE_FLAG_FULLBRIGHT;
     }
     flags |= match sprite.lighting {
         crate::SpriteLighting::Normal => 0,
-        crate::SpriteLighting::Emissive => SPRITE_FLAG_EMISSIVE,
+        crate::SpriteLighting::Emissive => SPRITE_FLAG_EMISSIVE_MASK,
         crate::SpriteLighting::Blocker => SPRITE_FLAG_EMISSIVE_BLOCKER,
         crate::SpriteLighting::OverlayLight => SPRITE_FLAG_OVERLAY_LIGHT,
         crate::SpriteLighting::OverlayLightSubtract => SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT,
@@ -2778,8 +2779,9 @@ mod tests {
         SPRITE_CULL_COMPACT_CS_SPV,
         SPRITE_CULL_SCAN_CS_SPV,
         SPRITE_FLAG_AREA,
-        SPRITE_FLAG_EMISSIVE,
         SPRITE_FLAG_EMISSIVE_BLOCKER,
+        SPRITE_FLAG_EMISSIVE_MASK,
+        SPRITE_FLAG_FULLBRIGHT,
         SPRITE_FLAG_OVERLAY_LIGHT,
         SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT,
         SPRITE_FLAGS_SHIFT,
@@ -3133,7 +3135,7 @@ mod tests {
     }
 
     #[test]
-    fn filled_area_sprites_are_emissive_without_outline_flags() {
+    fn filled_area_sprites_are_fullbright_without_outline_flags() {
         let mut area = sprite(1);
         area.is_area = true;
 
@@ -3141,7 +3143,7 @@ mod tests {
 
         assert_eq!(
             gpu.texture_flags >> SPRITE_FLAGS_SHIFT,
-            SPRITE_FLAG_AREA | SPRITE_FLAG_EMISSIVE
+            SPRITE_FLAG_AREA | SPRITE_FLAG_FULLBRIGHT
         );
     }
 
@@ -3161,7 +3163,8 @@ mod tests {
         let overlay = gpu_sprite(2, &overlay).expect("pack overlay light");
         let subtract = gpu_sprite(3, &subtract).expect("pack subtractive overlay light");
 
-        assert_eq!(emissive.texture_flags >> SPRITE_FLAGS_SHIFT, SPRITE_FLAG_EMISSIVE);
+        assert_eq!(emissive.texture_flags >> SPRITE_FLAGS_SHIFT, SPRITE_FLAG_EMISSIVE_MASK);
+        assert_ne!(SPRITE_FLAG_EMISSIVE_MASK, SPRITE_FLAG_FULLBRIGHT);
         assert_eq!(
             blocker.texture_flags >> SPRITE_FLAGS_SHIFT,
             SPRITE_FLAG_EMISSIVE_BLOCKER

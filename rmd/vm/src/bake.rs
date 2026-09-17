@@ -866,7 +866,14 @@ impl Runtime {
         }
 
         self.heap.begin();
-        let (overlays, underlays) = NAMES.with(|names| (names.overlays.clone(), names.underlays.clone()));
+        let (overlays, underlays, icon, icon_state) = NAMES.with(|names| {
+            (
+                names.overlays.clone(),
+                names.underlays.clone(),
+                names.icon.clone(),
+                names.icon_state.clone(),
+            )
+        });
         let result = (|| {
             let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, Some(object));
             evaluator.call(proc, None, vec![(None, GenericValue::Object(object))])?;
@@ -897,7 +904,7 @@ impl Runtime {
                     let mut appearance = export_appearance(&evaluator.runtime.heap, tree, id, 0, &mut export_budget)
                         .map_err(|kind| evaluator.fault(kind))?;
                     if let Some(before) = evaluator.runtime.heap.before_object(id) {
-                        appearance.vars.retain(|(name, value)| {
+                        let before_value = |name: &Identifier| {
                             before
                                 .vars
                                 .get(name)
@@ -906,8 +913,13 @@ impl Runtime {
                                     tree.var_inherited(before.ty, name)
                                         .map(|variable| variable.value.clone())
                                 })
-                                .as_ref()
-                                != Some(value)
+                        };
+                        let icon_pair_changed = appearance.vars.iter().any(|(name, value)| {
+                            (name == &icon || name == &icon_state) && before_value(name).as_ref() != Some(value)
+                        });
+                        appearance.vars.retain(|(name, value)| {
+                            (icon_pair_changed && (name == &icon || name == &icon_state))
+                                || before_value(name).as_ref() != Some(value)
                         });
                         for (name, extra) in [
                             (&overlays, &mut appearance.overlays),
