@@ -19,6 +19,9 @@ Sampler2D emissive_mask;
 [[vk::binding(3, 0)]]
 Sampler2D overlay_lightmap;
 
+[[vk::binding(4, 0)]]
+Texture2D<u32> rendered_levels;
+
 struct VSOutput {
   f32x4 position : SV_Position;
   f32x2 uv;
@@ -37,10 +40,11 @@ func vs_main(u32 vertex_id: SV_VertexID)->VSOutput {
 [shader("fragment")]
 func fs_main(VSOutput input, uniform f32x2 center, uniform f32x2 viewport,
              uniform f32 zoom, uniform f32 tile_size, uniform u32x2 map_size,
-             uniform u32 level, uniform u32 base)
+             uniform u32 level_count, uniform u32 base)
     ->f32x4 {
   let color = scene.Sample(input.uv);
-  if (zoom <= 0.0 || tile_size <= 0.0 || level == 0) {
+  let level = rendered_levels.Load(i32x3(i32x2(input.position.xy), 0));
+  if (zoom <= 0.0 || tile_size <= 0.0 || level == 0 || level > level_count) {
     return color;
   }
 

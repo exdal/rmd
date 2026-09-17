@@ -21,6 +21,7 @@ public struct Sprite {
     public u32x2 owner;
     public u32x2 area_owner;
     public f32x2 position;
+    public u32 z;
     public u32 packed_size;
     public u32 packed_color;
     public u32x2 packed_source_position_size;

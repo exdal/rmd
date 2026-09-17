@@ -11,6 +11,9 @@ StructuredBuffer<Sprite> sprites;
 [[vk::binding(2, 0)]]
 StructuredBuffer<u32> visible_sprite_indices;
 
+[[vk::binding(3, 0)]]
+Texture2D<u32> rendered_levels;
+
 struct VSOutput {
     f32x4 position : SV_Position;
     f32x2 uv;
@@ -151,6 +154,7 @@ struct VisibilityOutput {
     f32x4 color : SV_Target0;
     f32x4 emissive : SV_Target1;
     u32 visibility : SV_Target2;
+    u32 level : SV_Target3;
 };
 
 [shader("fragment")]
@@ -177,6 +181,7 @@ func fs_visibility(VSOutput input) -> VisibilityOutput {
         ? f32x4(color.a)
         : f32x4(0.0, 0.0, 0.0, color.a);
     output.visibility = SPRITE_WRITES_ID ? input.sprite_id : 0;
+    output.level = sprites[input.sprite_id - 1].z;
 
     return output;
 }
@@ -191,6 +196,9 @@ func fs_overlay_light(VSOutput input) -> f32x4 {
     let add = (flags & SPRITE_FLAG_OVERLAY_LIGHT) != 0;
     let subtract = (flags & SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT) != 0;
     if (!add && !subtract) {
+        discard;
+    }
+    if (sprites[input.sprite_id - 1].z != rendered_levels.Load(i32x3(i32x2(input.position.xy), 0))) {
         discard;
     }
 

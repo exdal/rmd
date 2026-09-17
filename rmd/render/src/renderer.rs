@@ -74,6 +74,7 @@ struct GpuSprite {
     owner: [u32; 2],
     area_owner: [u32; 2],
     position: [f32; 2],
+    z: u32,
     packed_size: u32,
     color: u32,
     source_position_size: [u32; 2],
@@ -167,7 +168,7 @@ struct LightingPush {
     zoom: f32,
     tile_size: f32,
     map_size: [u32; 2],
-    level: u32,
+    level_count: u32,
     base: u32,
 }
 
@@ -968,6 +969,13 @@ impl Renderer {
                 extent,
             );
             visibility_attachment = module.clear(visibility_attachment, vir::clear::u32::TRANSPARENT);
+            let mut level_attachment = module.transient_image_sized(
+                &ImageInfo::color_target(viewport, vk::Format::R32_UINT)
+                    .with_usage(vk::ImageUsageFlags::SAMPLED)
+                    .with_name(format!("map view {index} level attachment")),
+                extent,
+            );
+            level_attachment = module.clear(level_attachment, vir::clear::u32::TRANSPARENT);
 
             let visible_indices =
                 module.declare_buffer_var(&format!("map view {index} visible sprite indices"), Access::VertexRead);
@@ -1000,11 +1008,19 @@ impl Renderer {
             let draw_commands = cull_values.commands;
             let visible_indices = cull_values.visible;
 
-            [scene_attachment, emissive_attachment, visibility_attachment, _, _] = module
+            [
+                scene_attachment,
+                emissive_attachment,
+                visibility_attachment,
+                level_attachment,
+                _,
+                _,
+            ] = module
                 .begin_rendering([
                     (scene_attachment, Access::ColorRW),
                     (emissive_attachment, Access::ColorRW),
                     (visibility_attachment, Access::ColorRW),
+                    (level_attachment, Access::ColorRW),
                     (draw_commands, Access::IndirectRead),
                     (visible_indices, Access::VertexRead),
                 ])
@@ -1016,6 +1032,7 @@ impl Renderer {
                 .set_color_blend(0, BlendPreset::PremultipliedAlphaBlend)
                 .set_color_blend(1, BlendPreset::PremultipliedAlphaBlend)
                 .set_color_blend(2, BlendPreset::Off)
+                .set_color_blend(3, BlendPreset::Off)
                 .set_rasterization(RasterizationState {
                     cull_mode: vk::CullModeFlags::NONE,
                     ..Default::default()
@@ -1047,9 +1064,10 @@ impl Renderer {
                     extent,
                 );
                 overlay_lightmap = module.clear(overlay_lightmap, vir::clear::f32::BLACK);
-                [overlay_lightmap, _, _] = module
+                [overlay_lightmap, _, _, _] = module
                     .begin_rendering([
                         (overlay_lightmap, Access::ColorRW),
+                        (level_attachment, Access::FragmentSampled),
                         (draw_commands, Access::IndirectRead),
                         (visible_indices, Access::VertexRead),
                     ])
@@ -1065,9 +1083,12 @@ impl Renderer {
                     })
                     .bind_buffer(0, 1, sprites)
                     .bind_buffer(0, 2, visible_indices)
+                    .bind_image(0, 3, level_attachment)
                     .specialize_constant(spec::SPRITE_INDIRECT, true)
                     .specialize_constant(spec::SHOW_AREAS, state.show_areas)
                     .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
+                    .push_constants_from(underlay_camera)
+                    .draw_indirect_at(draw_commands, 0, 1u32, DRAW_INDIRECT_STRIDE)
                     .push_constants_from(active_camera)
                     .draw_indirect_at(
                         draw_commands,
@@ -1096,6 +1117,7 @@ impl Renderer {
                     .bind_buffer(0, 1, light_tiles)
                     .bind_texture(0, 2, emissive_attachment, self.sampler)
                     .bind_texture(0, 3, overlay_lightmap, self.sampler)
+                    .bind_image(0, 4, level_attachment)
                     .push_constants_from(push)
                     .draw(3, 1)
                     .end_rendering();
@@ -1501,7 +1523,7 @@ impl Renderer {
                         zoom: plan.camera.zoom,
                         tile_size: lighting.tile_size.max(1) as f32,
                         map_size: [lighting.size[0], lighting.size[1]],
-                        level: view.active_z.min(lighting.size[2]),
+                        level_count: lighting.size[2],
                         base: uploaded_lighting.base,
                     },
                 );
@@ -2363,6 +2385,7 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
         owner: owner_words(sprite.owner),
         area_owner: sprite.area_owner.map(owner_words).unwrap_or([0; 2]),
         position,
+        z: sprite.z,
         packed_size: size,
         color,
         source_position_size: [source_position, source_size],
@@ -3103,7 +3126,7 @@ mod tests {
 
     #[test]
     fn area_edges_and_tile_geometry_reach_the_gpu() {
-        let mut area = sprite(1);
+        let mut area = sprite(37);
         area.area_owner = PrefabInstanceId::from_raw(0x1234_5678_9abc_def0);
         area.x = 32.0;
         area.y = 64.0;
@@ -3124,6 +3147,7 @@ mod tests {
         assert_eq!(gpu.owner, [area.owner.get() as u32, 0]);
         assert_eq!(gpu.area_owner, [0x9abc_def0, 0x1234_5678]);
         assert_eq!(gpu.position, [32.0, 64.0]);
+        assert_eq!(gpu.z, 37);
         assert_eq!(gpu.packed_size, 0x5000_5000);
         assert_eq!(gpu.color, 0);
         assert_eq!(gpu.source_position_size, [0x0008_0004, 0x0018_0010]);
@@ -3429,7 +3453,7 @@ mod tests {
     fn sprite_and_camera_layouts_match_the_shader_scalar_layout() {
         let reflection = shader::reflect(&read_spirv(GEOMETRY_VS_SPV).expect("valid SPIR-V")).expect("shader reflects");
 
-        assert_eq!(size_of::<GpuSprite>(), 44);
+        assert_eq!(size_of::<GpuSprite>(), 48);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<CameraPush>());
     }
@@ -3444,7 +3468,7 @@ mod tests {
             .collect::<Vec<_>>();
         bindings.sort_unstable();
 
-        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2), (0, 3)]);
+        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)]);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<LightingPush>());
     }
@@ -3668,7 +3692,11 @@ mod tests {
 
     #[test]
     fn sprite_fragment_passes_read_sprites_and_textures() {
-        for spirv in [SPRITE_VIS_FS_SPV, SPRITE_SHADE_FS_SPV, SPRITE_OVERLAY_LIGHT_FS_SPV] {
+        for (spirv, expected) in [
+            (SPRITE_VIS_FS_SPV, vec![(0, 1), (1, 0)]),
+            (SPRITE_SHADE_FS_SPV, vec![(0, 1), (1, 0)]),
+            (SPRITE_OVERLAY_LIGHT_FS_SPV, vec![(0, 1), (0, 3), (1, 0)]),
+        ] {
             let reflection = shader::reflect(&read_spirv(spirv).expect("valid SPIR-V")).expect("shader reflects");
             let mut bindings = reflection
                 .bindings
@@ -3677,7 +3705,7 @@ mod tests {
                 .collect::<Vec<_>>();
             bindings.sort_unstable();
 
-            assert_eq!(bindings, [(0, 1), (1, 0)]);
+            assert_eq!(bindings, expected);
         }
     }
 
