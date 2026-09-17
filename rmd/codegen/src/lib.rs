@@ -90,7 +90,7 @@ pub struct Module {
 }
 
 impl Module {
-    pub const MAGIC: [u8; 4] = *b"RMBC";
+    pub const MAGIC: [u8; 4] = *b"DMIR";
     pub const VERSION: u16 = 2;
 
     pub fn function(&self, id: FunctionId) -> Option<&CompiledFunction> { self.functions.get(id.0 as usize) }
