@@ -401,7 +401,7 @@ impl<'a> Evaluator<'a> {
             if let Some((position, (_, value))) = supplied {
                 used[position] = true;
                 if let Some(slot) = locals.get_mut(index)
-                    && *value != GenericValue::Omitted
+                    && !matches!(value, GenericValue::Omitted | GenericValue::Null)
                 {
                     *slot = value.clone();
                 }
@@ -1823,7 +1823,8 @@ impl Evaluator<'_> {
         match op {
             CompEq | CompEquiv => return Ok((left == right).into()),
             CompNotEq | CompNotEquiv => return Ok((left != right).into()),
-            LogicalAnd | LogicalOr => return Ok(right),
+            LogicalAnd => return Ok(if left.truthy() { right } else { left }),
+            LogicalOr => return Ok(if left.truthy() { left } else { right }),
             In => {
                 let entries = self.iter_values(right)?;
                 return Ok(entries.iter().any(|(value, _)| *value == left).into());

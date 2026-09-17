@@ -192,7 +192,12 @@ pub fn resolve_overlay(tree: &ObjectTree, parent: &Appearance, delta: &vm::Appea
         appearance.icon = parent.icon.clone();
     }
 
-    if appearance.dir == 0 {
+    let own_dir = delta
+        .vars
+        .iter()
+        .find(|(name, _)| name.as_str() == "dir")
+        .and_then(|(_, value)| value.as_num());
+    if own_dir.is_none_or(|dir| dir == 0.0) {
         appearance.dir = parent.dir;
     }
 

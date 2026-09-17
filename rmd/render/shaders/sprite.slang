@@ -175,7 +175,7 @@ func fs_visibility(VSOutput input) -> VisibilityOutput {
     output.emissive = (flags & SPRITE_FLAG_EMISSIVE) != 0
         ? f32x4(color.a)
         : f32x4(0.0, 0.0, 0.0, color.a);
-    output.visibility = SPRITE_WRITES_ID && !blocker ? input.sprite_id : 0;
+    output.visibility = SPRITE_WRITES_ID ? input.sprite_id : 0;
 
     return output;
 }

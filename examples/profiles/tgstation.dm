@@ -193,20 +193,22 @@
 	update_icon_state()
 	overlays = update_overlays(UPDATE_OVERLAYS)
 
-// Smart pipes are the ordinary mapping pipe helpers. Build their local node
-// list with the codebase's own connection checks, then run their native icon
-// selection without starting atmos processing or pipe networks.
-/obj/machinery/atmospherics/pipe/smart/proc/demir_bake_connections()
-	set_init_directions(initialize_directions)
+// Link this device's nodes with the codebase's own connection checks; atmos_init()
+// then runs its native update_appearance() without starting pipe networks.
+/obj/machinery/atmospherics/proc/demir_bake_connections()
+	// GAGS sheets are generated at runtime, so keep the prebuilt map preview state.
+	var/preview_state = icon_state
+	var/gags = greyscale_config
+	greyscale_config = null
 	nodes = list()
 	nodes.len = device_type
-	var/list/node_connects = get_node_connects()
-	for(var/i in 1 to device_type)
-		for(var/obj/machinery/atmospherics/target in get_step(src, node_connects[i]))
-			if(can_be_node(target))
-				nodes[i] = target
-				break
-	update_pipe_icon()
+	atmos_init()
+	if(gags)
+		icon_state = preview_state
+
+/obj/machinery/atmospherics/pipe/layer_manifold/demir_bake_connections()
+	icon_state = "manifoldlayer_center"
+	return ..()
 
 // Fluid ducts keep an associative neighbour list and use it to assemble their
 // icon-state suffixes. Network construction is unnecessary for their preview.
@@ -285,12 +287,12 @@
 	else if(istype(target, /obj/structure/cable) && !istype(target, /obj/structure/cable/multilayer))
 		var/obj/structure/cable/cable = target
 		cable.demir_bake_connections()
-	else if(istype(target, /obj/machinery/atmospherics/pipe/smart))
-		var/obj/machinery/atmospherics/pipe/smart/pipe = target
-		pipe.demir_bake_connections()
 	else if(istype(target, /obj/machinery/duct))
 		var/obj/machinery/duct/duct = target
 		duct.demir_bake_connections()
+	else if(istype(target, /obj/machinery/atmospherics))
+		var/obj/machinery/atmospherics/atmos_target = target
+		atmos_target.demir_bake_connections()
 	else if(target.smoothing_flags & USES_SMOOTHING)
 		target.smooth_icon()
 	if(ismovable(target))

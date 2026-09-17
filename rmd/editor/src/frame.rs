@@ -550,25 +550,47 @@ impl RenderContext<'_> {
     fn overlay(
         &self, sprites: &mut Vec<SpriteInstance>, owner: PrefabInstanceId, parent: &Appearance,
         delta: &vm::AppearanceDelta, coord: Coord, area_owner: Option<PrefabInstanceId>, depth: usize,
-    ) {
+    ) -> f32 {
         if depth >= 32 {
-            return;
+            return parent.layer;
         }
 
         let appearance = visual::resolve_overlay(self.tree, parent, delta);
-        for extra in &delta.underlays {
-            self.overlay(sprites, owner, &appearance, extra, coord, area_owner, depth + 1);
-        }
-
+        let mut own = Vec::new();
         if let Some(texture) = sprite_texture(self.icons, self.textures, &appearance) {
             let mut sprite = instance_for(owner, &appearance, texture, coord, self.tile_size, false);
             sprite.area_owner = area_owner;
-            sprites.push(sprite);
+            own.push(sprite);
         }
 
-        for extra in &delta.overlays {
-            self.overlay(sprites, owner, &appearance, extra, coord, area_owner, depth + 1);
+        self.layered(sprites, owner, &appearance, own, delta, coord, area_owner, depth + 1);
+        appearance.layer
+    }
+
+    /// BYOND sorts an atom's underlays and overlays by layer. `FLOAT_LAYER` ones take the atom's
+    /// layer and keep their list order around it.
+    #[allow(clippy::too_many_arguments)]
+    fn layered(
+        &self, sprites: &mut Vec<SpriteInstance>, owner: PrefabInstanceId, parent: &Appearance,
+        own: Vec<SpriteInstance>, delta: &vm::AppearanceDelta, coord: Coord, area_owner: Option<PrefabInstanceId>,
+        depth: usize,
+    ) {
+        let mut groups = Vec::with_capacity(delta.underlays.len() + delta.overlays.len() + 1);
+        for extra in &delta.underlays {
+            let mut group = Vec::new();
+            let layer = self.overlay(&mut group, owner, parent, extra, coord, area_owner, depth);
+            groups.push((layer, group));
         }
+
+        groups.push((parent.layer, own));
+        for extra in &delta.overlays {
+            let mut group = Vec::new();
+            let layer = self.overlay(&mut group, owner, parent, extra, coord, area_owner, depth);
+            groups.push((layer, group));
+        }
+
+        groups.sort_by(|left, right| left.0.total_cmp(&right.0));
+        sprites.extend(groups.into_iter().flat_map(|(_, group)| group));
     }
 
     fn prefab(
@@ -641,17 +663,8 @@ impl RenderContext<'_> {
         if let Some(delta) = delta
             && !is_area
         {
-            let mut layered = Vec::new();
-            for extra in &delta.underlays {
-                self.overlay(&mut layered, owner, &appearance, extra, coord, area_owner, 0);
-            }
-
-            layered.append(&mut sprites);
-            for extra in &delta.overlays {
-                self.overlay(&mut layered, owner, &appearance, extra, coord, area_owner, 0);
-            }
-
-            sprites = layered;
+            let own = std::mem::take(&mut sprites);
+            self.layered(&mut sprites, owner, &appearance, own, delta, coord, area_owner, 0);
         }
 
         RenderedPrefab {

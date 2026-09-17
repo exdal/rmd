@@ -945,6 +945,48 @@ fn descending_ranges_use_the_steps_sign() {
 }
 
 #[test]
+fn switch_cases_match_every_listed_value() {
+    assert_eq!(
+        run(
+            r#"
+/proc/axis(d)
+    switch(d)
+        if(1, 2)
+            return "ns"
+        if(4, 8)
+            return "ew"
+    return "none"
+/proc/test()
+    return "[axis(1)] [axis(2)] [axis(4)] [axis(8)] [axis(3)]"
+"#,
+            "test",
+        ),
+        GenericValue::from("ns ns ew ew none")
+    );
+}
+
+#[test]
+fn null_arguments_take_the_default() {
+    assert_eq!(
+        run(
+            r#"
+/proc/value(a = 5)
+    return a
+/datum/proc/forwarded(u = 7)
+    return u
+/datum/child/forwarded(u)
+    return ..()
+/proc/test()
+    var/datum/child/child = new
+    return "[value(null)] [child.forwarded()] [child.forwarded(3)]"
+"#,
+            "test",
+        ),
+        GenericValue::from("5 7 3")
+    );
+}
+
+#[test]
 fn virtual_dispatch_super_dot_and_defaults() {
     assert_eq!(
         run(

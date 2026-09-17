@@ -401,6 +401,61 @@ mod tests {
     }
 
     #[test]
+    fn overlays_follow_the_owner_dir_and_sort_by_layer() {
+        let environment = environment(
+            r#"
+/proc/demir_bake(atom/target)
+    if(!istype(target, /obj/structure/table))
+        return
+    target.dir = 4
+    var/image/above = new
+    above.icon_state = "light"
+    above.layer = -1
+    var/image/below = new
+    below.icon_state = "floor"
+    below.layer = 1
+    target.overlays += above
+    target.overlays += below
+"#,
+        );
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        let key = map.intern_tile(vec![Prefab::new(TreePath::parse("/obj/structure/table"))]);
+        map.grid[0] = vec![vec![key]];
+        let document = MapDocument::new(map, 1);
+        let bake = build(&environment, &document).expect("baking is on");
+        assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+
+        let table = document.instance_ids_at(Coord::new(1, 1, 1))[0];
+        let (prefab, _) = document.prefab_instance(table).expect("table");
+        let ty = environment.tree.id_of(&prefab.path).expect("table type");
+        let delta = &bake.appearances[&table.get()];
+        let owner = visual::resolve_delta(&environment.tree, ty, prefab, delta);
+        let above = visual::resolve_overlay(&environment.tree, &owner, &delta.overlays[0]);
+
+        assert_eq!(owner.dir, 4);
+        assert_eq!(above.dir, 4);
+
+        let mut textures = render::texture::TextureCatalog::new();
+        textures
+            .insert(
+                "icons/test.dmi",
+                &dmi::IconFile::load(examples().join("icons/test.dmi")).expect("test icon"),
+            )
+            .expect("pack test icon");
+        let visibility = frame::TypeVisibility::default();
+        let instances = frame::build_with_options(
+            &environment.tree,
+            &environment.icons,
+            &textures,
+            &document,
+            options(&visibility, &bake),
+        );
+        let depths = instances.sprites.iter().map(|sprite| sprite.depth).collect::<Vec<_>>();
+
+        assert_eq!(depths, [1.0, owner.layer, owner.layer]);
+    }
+
+    #[test]
     fn derived_sprites_follow_edits_and_history_without_changing_map_bytes() {
         let environment = environment(WALLS);
         let mut map = Map::new(Size { x: 3, y: 3, z: 1 });
