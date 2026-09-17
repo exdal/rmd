@@ -1722,13 +1722,12 @@ impl Evaluator<'_> {
                 .relocate(id, value.object())
                 .map_err(|kind| self.fault(kind)),
             GenericValue::Object(id)
-                if !matches!(key, "type" | "parent_type" | "contents")
-                    && !(matches!(key, "x" | "y" | "z")
-                        && self
-                            .runtime
-                            .heap
-                            .object(id)
-                            .is_none_or(|object| self.has_coordinates(object.ty))) =>
+                if !matches!(key, "type" | "parent_type" | "contents" | "x" | "y" | "z")
+                    && self
+                        .runtime
+                        .heap
+                        .object(id)
+                        .is_none_or(|object| self.has_coordinates(object.ty)) =>
             {
                 let shared = self
                     .runtime
