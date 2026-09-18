@@ -172,6 +172,8 @@ impl Session {
                 revision: self.revision,
                 pending_update: None,
             }),
+            guide_lines: &[],
+            connected: &[],
             interaction: MapViewInteraction::default(),
             preview: None,
         }

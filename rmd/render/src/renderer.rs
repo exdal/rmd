@@ -59,6 +59,8 @@ const SPRITE_CULL_COMPACT_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR")
 const AREA_COLOR_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/area_color.comp.spv"));
 const INTERACTION_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/interaction.vert.spv"));
 const INTERACTION_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/interaction.frag.spv"));
+const GUIDE_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/guide.vert.spv"));
+const GUIDE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/guide.frag.spv"));
 const LIGHTING_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/lighting.vert.spv"));
 const LIGHTING_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/lighting.frag.spv"));
 const PICK_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pick.comp.spv"));
@@ -147,10 +149,23 @@ struct InteractionPush {
     cursor_valid: u32,
     selected_owner: [u32; 2],
     stripe_offset: f32,
-    guide_origin: [f32; 2],
-    guide_target: [f32; 2],
-    guide_valid: u32,
     focused_area_owner: [u32; 2],
+    connected_count: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct GpuGuideLine {
+    origin: [f32; 2],
+    target: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct GuidePush {
+    viewport: [f32; 2],
+    selected_owner: [u32; 2],
+    stripe_offset: f32,
 }
 
 #[repr(C)]
@@ -178,6 +193,7 @@ struct LightingSlots {
 
 struct InteractionSlots {
     push: ValueId,
+    connected_owners: ValueId,
     pick_push: ValueId,
     area_tiles: ValueId,
     hover_draw: ValueId,
@@ -404,6 +420,13 @@ struct MapViewPass {
     preview: Option<PreviewSlots>,
     should_pick: Option<ValueId>,
     interaction: Option<InteractionSlots>,
+    guides: Option<GuideSlots>,
+}
+
+struct GuideSlots {
+    lines: ValueId,
+    push: ValueId,
+    draw: ValueId,
 }
 
 struct AreaColorPass {
@@ -534,6 +557,65 @@ struct UploadedPreview {
     cull: CullBuffers,
 }
 
+struct HostBuffer {
+    buffer: Buffer,
+    capacity: u64,
+}
+
+impl HostBuffer {
+    fn allocate(device: &mut Device, capacity: u64, name: &str) -> Result<Self, GpuError> {
+        let capacity = capacity.max(1);
+        let buffer = device.allocator.allocate_buffer(
+            &BufferInfo::new(capacity, vk::BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::CpuToGpu).with_name(name),
+        )?;
+
+        Ok(Self { buffer, capacity })
+    }
+
+    fn destroy(self, device: &mut Device) { device.allocator.deallocate_buffer(self.buffer); }
+}
+
+/// Resizes `slots` to one buffer per visible view and writes each payload, keeping a byte of
+/// storage for an empty one so the pass can always bind it.
+fn upload_per_view(
+    device: &mut Device, slots: &mut Vec<HostBuffer>, payloads: &[&[u8]], name: &str,
+) -> Result<(), GpuError> {
+    let wanted = |payload: &[u8]| (payload.len() as u64).max(1).next_power_of_two();
+    if slots.len() != payloads.len()
+        || payloads
+            .iter()
+            .enumerate()
+            .any(|(index, payload)| slots[index].capacity < wanted(payload))
+    {
+        device.wait_idle()?;
+        while slots.len() > payloads.len() {
+            if let Some(slot) = slots.pop() {
+                slot.destroy(device);
+            }
+        }
+
+        for (index, payload) in payloads.iter().enumerate() {
+            let wanted = wanted(payload);
+            match slots.get(index) {
+                Some(slot) if slot.capacity >= wanted => {},
+                Some(_) => {
+                    let fresh = HostBuffer::allocate(device, wanted, name)?;
+                    std::mem::replace(&mut slots[index], fresh).destroy(device);
+                },
+                None => slots.push(HostBuffer::allocate(device, wanted, name)?),
+            }
+        }
+    }
+
+    for (slot, payload) in slots.iter_mut().zip(payloads) {
+        if !payload.is_empty() {
+            slot.buffer.write(0, payload)?;
+        }
+    }
+
+    Ok(())
+}
+
 impl UploadedPreview {
     fn allocate(device: &mut Device, preview: SpritePreview<'_>) -> Result<Self, GpuError> {
         let payload = gpu_sprite_range(
@@ -614,6 +696,7 @@ pub struct Renderer {
     cull_pipelines: [PipelineId; 3],
     lighting_pipeline: PipelineId,
     interaction_pipeline: PipelineId,
+    guide_pipeline: PipelineId,
     pick_pipeline: PipelineId,
     area_colors: AreaColorPass,
     bindless: BindlessDescriptorSet,
@@ -627,6 +710,8 @@ pub struct Renderer {
     lights: Option<Buffer>,
     light_capacity: usize,
     cull: Vec<CullBuffers>,
+    guides: Vec<HostBuffer>,
+    connected: Vec<HostBuffer>,
     pick_readback: Option<Buffer>,
     uploaded: Vec<UploadedMapView>,
     uploaded_lighting: Vec<UploadedLighting>,
@@ -721,6 +806,19 @@ impl Renderer {
                 return Err(error.into());
             },
         };
+        let guide_pipeline = match graph.declare_pipeline(
+            GraphicsPipelineInfo::new()
+                .with_shader(&read_spirv(GUIDE_VS_SPV)?)
+                .with_shader(&read_spirv(GUIDE_FS_SPV)?),
+        ) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                drop(graph);
+                bindless.destroy(&device);
+
+                return Err(error.into());
+            },
+        };
         let lighting_pipeline = match graph.declare_pipeline(
             GraphicsPipelineInfo::new()
                 .with_shader(&read_spirv(LIGHTING_VS_SPV)?)
@@ -779,6 +877,7 @@ impl Renderer {
             cull_pipelines,
             lighting_pipeline,
             interaction_pipeline,
+            guide_pipeline,
             pick_pipeline,
             area_colors,
             bindless,
@@ -792,6 +891,8 @@ impl Renderer {
             lights: None,
             light_capacity: 0,
             cull: Vec::new(),
+            guides: Vec::new(),
+            connected: Vec::new(),
             pick_readback: None,
             uploaded: Vec::new(),
             uploaded_lighting: Vec::new(),
@@ -1159,7 +1260,7 @@ impl Renderer {
                 )
                 .end_rendering();
 
-            let (mut output_attachment, interaction, should_pick) = if with_imgui {
+            let (mut output_attachment, interaction, guides, should_pick) = if with_imgui {
                 // TODO: vir doesnt support explicit barriers, fix this shit
                 [visibility_attachment] = module
                     .begin_compute([(visibility_attachment, Access::FragmentSampled | Access::ComputeSampled)])
@@ -1181,9 +1282,14 @@ impl Renderer {
                     module.declare_buffer_var(&format!("map view {index} hover area tiles"), Access::ComputeWrite);
                 let highlight_draw = module.declare_callback_var(&format!("map view {index} highlight draw"));
                 let hover_draw = module.declare_callback_var(&format!("map view {index} hover area draw"));
+                let connected_owners =
+                    module.declare_buffer_var(&format!("map view {index} connected owners"), Access::HostWrite);
 
-                [highlighted_scene_attachment] = module
-                    .begin_rendering([(highlighted_scene_attachment, Access::ColorRW)])
+                [highlighted_scene_attachment, _] = module
+                    .begin_rendering([
+                        (highlighted_scene_attachment, Access::ColorRW),
+                        (connected_owners, Access::FragmentRead),
+                    ])
                     .with_name(format!("map view {index} highlights"))
                     .bind_graphics_pipeline(self.interaction_pipeline)
                     .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
@@ -1192,6 +1298,7 @@ impl Renderer {
                     .bind_texture(0, 0, scene_attachment, self.sampler)
                     .bind_image(0, 1, visibility_attachment)
                     .bind_buffer(0, 2, sprites)
+                    .bind_buffer(0, 4, connected_owners)
                     .specialize_constant(spec::HIGHLIGHT_TINT, view.highlight_tint)
                     .specialize_constant(spec::DELETE_MODE, view.delete_mode)
                     .push_constants_from(push)
@@ -1223,6 +1330,32 @@ impl Renderer {
                     .record_from(hover_draw)
                     .end_rendering();
 
+                let guide_lines =
+                    module.declare_buffer_var(&format!("map view {index} guide lines"), Access::HostWrite);
+                let guide_push =
+                    module.declare_bytes_var(&format!("map view {index} guide push"), size_of::<GuidePush>() as u32);
+                let guide_draw = module.declare_callback_var(&format!("map view {index} guide draw"));
+                [highlighted_scene_attachment, _] = module
+                    .begin_rendering([
+                        (highlighted_scene_attachment, Access::ColorRW),
+                        (guide_lines, Access::VertexRead | Access::FragmentRead),
+                    ])
+                    .with_name(format!("map view {index} guides"))
+                    .bind_graphics_pipeline(self.guide_pipeline)
+                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                    .set_viewport(0, Rect2D::framebuffer())
+                    .set_scissor(0, Rect2D::framebuffer())
+                    .set_rasterization(RasterizationState {
+                        cull_mode: vk::CullModeFlags::NONE,
+                        ..Default::default()
+                    })
+                    .bind_buffer(0, 0, guide_lines)
+                    .bind_image(0, 1, visibility_attachment)
+                    .bind_buffer(0, 2, sprites)
+                    .push_constants_from(guide_push)
+                    .record_from(guide_draw)
+                    .end_rendering();
+
                 let pick_push =
                     module.declare_bytes_var(&format!("map view {index} pick cursor"), size_of::<PickPush>() as u32);
                 let should_pick = module.declare_bool_var(&format!("map view {index} should pick"), false);
@@ -1252,15 +1385,21 @@ impl Renderer {
                     highlighted_scene_attachment,
                     Some(InteractionSlots {
                         push,
+                        connected_owners,
                         pick_push,
                         area_tiles,
                         hover_draw,
                         highlight_draw,
                     }),
+                    Some(GuideSlots {
+                        lines: guide_lines,
+                        push: guide_push,
+                        draw: guide_draw,
+                    }),
                     Some(should_pick),
                 )
             } else {
-                (scene_attachment, None, None)
+                (scene_attachment, None, None, None)
             };
 
             let preview = if view.preview {
@@ -1330,6 +1469,7 @@ impl Renderer {
                 preview,
                 should_pick,
                 interaction,
+                guides,
             });
         }
 
@@ -1403,6 +1543,7 @@ impl Renderer {
         self.prepare_previews(frame)?;
         let stripe_offset =
             (self.highlight_started_at.elapsed().as_secs_f32() * HIGHLIGHT_STRIPE_SPEED) % HIGHLIGHT_STRIPE_PERIOD;
+        let guide_counts = self.prepare_guides(frame)?;
 
         let recorded = self.recorded.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
         let frames = self.frames.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
@@ -1552,27 +1693,21 @@ impl Renderer {
             let local_cursor = interaction
                 .cursor
                 .filter(|cursor| cursor[0] < view.rect.width && cursor[1] < view.rect.height);
-            let guide = interaction
-                .selection_guide
-                .filter(|guide| {
-                    interaction.selected.is_some()
-                        && guide.origin.iter().chain(&guide.target).all(|value| value.is_finite())
-                })
-                .map(|guide| project_selection_guide(guide, view.camera, view.rect))
-                .filter(|(origin, target)| origin.iter().chain(target).all(|value| value.is_finite()));
-            let (guide_origin, guide_target, guide_valid) =
-                guide.map_or(([0.0; 2], [0.0; 2], 0), |(origin, target)| (origin, target, 1));
+            let (guide_count, connected_count) = guide_counts.get(index).copied().unwrap_or((0, 0));
+            let connected = self
+                .connected
+                .get(index)
+                .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
             let push = InteractionPush {
                 cursor: local_cursor.unwrap_or([0; 2]),
                 cursor_valid: u32::from(local_cursor.is_some()),
                 selected_owner: interaction.selected.map(owner_words).unwrap_or([0; 2]),
                 stripe_offset,
-                guide_origin,
-                guide_target,
-                guide_valid,
                 focused_area_owner: view.focused_area.map(owner_words).unwrap_or([0; 2]),
+                connected_count,
             };
             recorded.program.set_bytes(slots.push, &push);
+            recorded.program.set(slots.connected_owners, connected.buffer);
             recorded.program.set_bytes(
                 slots.pick_push,
                 &PickPush {
@@ -1586,6 +1721,30 @@ impl Renderer {
                 pick.is_some() && picking_map == Some(index) && local_cursor.is_some(),
             );
             recorded.program.set(slots.area_tiles, area_tiles);
+
+            if let Some(slots) = &map_view.guides {
+                let guides = self.guides.get(index).ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+                let count = guide_count;
+                recorded.program.set(slots.lines, guides.buffer);
+                recorded.program.set_bytes(
+                    slots.push,
+                    &GuidePush {
+                        viewport: [map_extent.width as f32, map_extent.height as f32],
+                        selected_owner: interaction.selected.map(owner_words).unwrap_or([0; 2]),
+                        stripe_offset,
+                    },
+                );
+                recorded.program.set(
+                    slots.draw,
+                    PassCallback::new(move |cmd| {
+                        if count > 0 {
+                            cmd.set_viewport(0, Rect2D::framebuffer())
+                                .set_scissor(0, Rect2D::framebuffer())
+                                .draw(4, count);
+                        }
+                    }),
+                );
+            }
 
             recorded.program.set(
                 slots.highlight_draw,
@@ -1933,6 +2092,50 @@ impl Renderer {
         uploaded.revision = Some(lighting.revision);
 
         Ok(true)
+    }
+
+    /// Projects each visible view's guide lines and uploads them, returning the instance count per view.
+    /// Projects each visible view's guide lines and collects the owners linked to its selection,
+    /// uploading both and returning the guide and connected counts per view.
+    fn prepare_guides(&mut self, frame: &Frame<'_>) -> Result<Vec<(u32, u32)>, GpuError> {
+        let finite = |origin: &[f32; 2], target: &[f32; 2]| origin.iter().chain(target).all(|value| value.is_finite());
+        let visible = || frame.map_views.iter().filter(|view| !view.rect.is_empty());
+        let lines = visible()
+            .map(|view| {
+                view.guide_lines
+                    .iter()
+                    .copied()
+                    .filter(|guide| finite(&guide.origin, &guide.target))
+                    .map(|guide| {
+                        let (origin, target) = project_guide_line(guide, view.camera, view.rect);
+                        GpuGuideLine { origin, target }
+                    })
+                    .filter(|guide| finite(&guide.origin, &guide.target))
+                    .take(u32::MAX as usize)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let owners = visible()
+            .map(|view| {
+                view.connected
+                    .iter()
+                    .copied()
+                    .map(owner_words)
+                    .take(u32::MAX as usize)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let line_bytes = lines.iter().map(|lines| payload_bytes(lines)).collect::<Vec<_>>();
+        let owner_bytes = owners.iter().map(|owners| payload_bytes(owners)).collect::<Vec<_>>();
+        upload_per_view(&mut self.device, &mut self.guides, &line_bytes, "selection guide lines")?;
+        upload_per_view(&mut self.device, &mut self.connected, &owner_bytes, "connected owners")?;
+
+        Ok(lines
+            .iter()
+            .zip(&owners)
+            .map(|(lines, owners)| (lines.len() as u32, owners.len() as u32))
+            .collect())
     }
 
     fn prepare_previews(&mut self, frame: &Frame<'_>) -> Result<(), GpuError> {
@@ -2397,8 +2600,8 @@ fn owner_words(owner: dmm::PrefabInstanceId) -> [u32; 2] { split_owner(owner.get
 
 fn split_owner(owner: u64) -> [u32; 2] { [owner as u32, (owner >> 32) as u32] }
 
-fn project_selection_guide(
-    guide: crate::SelectionGuide, camera: crate::Camera, rect: crate::MapViewRect,
+fn project_guide_line(
+    guide: crate::GuideLine, camera: crate::Camera, rect: crate::MapViewRect,
 ) -> ([f32; 2], [f32; 2]) {
     let logical = [
         camera.viewport_width.max(1) as f32,
@@ -2413,6 +2616,11 @@ fn project_selection_guide(
     };
 
     (project(guide.origin), project(guide.target))
+}
+
+/// Reinterprets a slice of tightly packed `repr(C)` shader records as the bytes to upload.
+fn payload_bytes<T: Copy>(values: &[T]) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), std::mem::size_of_val(values)) }
 }
 
 fn pack_half2(x: f32, y: f32) -> Option<u32> {
@@ -2508,6 +2716,12 @@ impl Drop for Renderer {
         }
         for preview in std::mem::take(&mut self.previews).into_iter().flatten() {
             preview.destroy(&mut self.device);
+        }
+        for guides in std::mem::take(&mut self.guides) {
+            guides.destroy(&mut self.device);
+        }
+        for connected in std::mem::take(&mut self.connected) {
+            connected.destroy(&mut self.device);
         }
         if let Some(buffer) = self.sprites.take() {
             self.device.allocator.deallocate_buffer(buffer);
@@ -2790,7 +3004,10 @@ mod tests {
         Frame,
         FrameGraphState,
         GEOMETRY_VS_SPV,
+        GUIDE_FS_SPV,
+        GpuGuideLine,
         GpuSprite,
+        GuidePush,
         INTERACTION_FS_SPV,
         InteractionPush,
         LIGHTING_FS_SPV,
@@ -2826,7 +3043,7 @@ mod tests {
         meshopt_quantize_half,
         pack_unorm4x8,
         patch_area_tile_indices,
-        project_selection_guide,
+        project_guide_line,
         spec,
         split_owner,
         valid_update_range,
@@ -2837,13 +3054,13 @@ mod tests {
         AREA_EDGE_NORTH,
         Camera,
         GpuError,
+        GuideLine,
         HighlightStyle,
         InteractionMode,
         LightTile,
         LightingFrame,
         MapViewFrame,
         MapViewRect,
-        SelectionGuide,
         SpriteInstance,
         SpriteLighting,
         SpriteTexture,
@@ -2889,6 +3106,8 @@ mod tests {
             revision: 1,
             pending_update: None,
             lighting: None,
+            guide_lines: &[],
+            connected: &[],
             interaction: Default::default(),
             preview: None,
         }
@@ -3566,8 +3785,8 @@ mod tests {
     }
 
     #[test]
-    fn selection_guides_project_into_map_view_coordinates() {
-        let guide = SelectionGuide {
+    fn guide_lines_project_into_map_view_coordinates() {
+        let guide = GuideLine {
             origin: [110.0, 40.0],
             target: [130.0, 60.0],
         };
@@ -3586,7 +3805,7 @@ mod tests {
             height: 600,
         };
         assert_eq!(
-            project_selection_guide(guide, camera, full),
+            project_guide_line(guide, camera, full),
             ([420.0, 320.0], [460.0, 280.0]),
         );
 
@@ -3599,7 +3818,7 @@ mod tests {
             height: 600,
         };
         assert_eq!(
-            project_selection_guide(guide, camera, right),
+            project_guide_line(guide, camera, right),
             ([420.0, 320.0], [460.0, 280.0]),
         );
 
@@ -3610,7 +3829,7 @@ mod tests {
             height: 1200,
         };
         assert_eq!(
-            project_selection_guide(guide, camera, scaled),
+            project_guide_line(guide, camera, scaled),
             ([840.0, 640.0], [920.0, 560.0]),
         );
 
@@ -3620,7 +3839,7 @@ mod tests {
             ..camera
         };
         assert_eq!(
-            project_selection_guide(guide, panned, scaled),
+            project_guide_line(guide, panned, scaled),
             ([800.0, 680.0], [880.0, 600.0]),
         );
     }
@@ -3636,9 +3855,25 @@ mod tests {
             .collect::<Vec<_>>();
         bindings.sort_unstable();
 
-        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2)]);
+        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2), (0, 4)]);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<InteractionPush>());
+    }
+
+    #[test]
+    fn guide_fragment_layout_matches_the_host() {
+        let reflection = shader::reflect(&read_spirv(GUIDE_FS_SPV).expect("valid SPIR-V")).expect("shader reflects");
+        let mut bindings = reflection
+            .bindings
+            .iter()
+            .map(|binding| (binding.set, binding.binding))
+            .collect::<Vec<_>>();
+        bindings.sort_unstable();
+
+        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2)]);
+        assert_eq!(reflection.push_constant_offset, 0);
+        assert_eq!(reflection.push_constant_size as usize, size_of::<GuidePush>());
+        assert_eq!(size_of::<GpuGuideLine>(), 16);
     }
 
     #[test]

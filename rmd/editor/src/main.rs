@@ -361,7 +361,14 @@ impl App {
         let mut map_views = Vec::with_capacity(output.map_views.len());
         let mut picking = None;
         for (index, view) in output.map_views.iter().enumerate() {
-            let Some(frame) = session.map_view_frame(view.document, view.rect, view.camera, view.interaction) else {
+            let Some(frame) = session.map_view_frame(
+                view.document,
+                view.rect,
+                view.camera,
+                view.interaction,
+                &view.guide_lines,
+                &view.connected,
+            ) else {
                 continue;
             };
             if output.picking == Some(index) {

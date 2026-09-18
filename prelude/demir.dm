@@ -302,6 +302,9 @@
 /// BAKING HOOKS
 ///
 
+#define DEMIR_CONNECTION_SOURCE 1
+#define DEMIR_CONNECTION_TARGET 2
+
 /proc/demir_bake(atom/target)
 
 /proc/demir_initialize()
@@ -309,6 +312,9 @@
 /proc/demir_prepare(atom/target)
 
 /proc/demir_light(atom/target)
+
+// Return an associative list of opaque text channel keys to DEMIR_CONNECTION_* role bitmasks.
+/proc/demir_connections(atom/target)
 
 #define USE_PERSPECTIVE_EDITOR_WALLS
 

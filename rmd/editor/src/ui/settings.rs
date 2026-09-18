@@ -223,7 +223,7 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
     ui.separator();
     ui.text("Feedback");
     ui.checkbox("Tile placement flash", &mut settings.tile_place_flash);
-    ui.checkbox("Selection guide line", &mut settings.selection_guide_line);
+    ui.checkbox("Selection guide lines", &mut settings.selection_guide_line);
 
     ui.separator();
     ui.text("Selection");

@@ -24,7 +24,17 @@ use crate::{
     world::Position,
 };
 
-const HOOKS: [&str; 4] = ["demir_initialize", "demir_prepare", "demir_light", "demir_bake"];
+const HOOKS: [&str; 5] = [
+    "demir_initialize",
+    "demir_prepare",
+    "demir_connections",
+    "demir_light",
+    "demir_bake",
+];
+
+const CONNECTION_SOURCE: u8 = 1;
+const CONNECTION_TARGET: u8 = 2;
+const CONNECTION_ROLES: u8 = CONNECTION_SOURCE | CONNECTION_TARGET;
 
 /// `#ifdef __DEMIR_BAKE__` around one or more bake hooks in the codebase.
 pub fn has_profile(tree: &ObjectTree) -> bool { HOOKS.iter().any(|name| hook(tree, name).is_some()) }
@@ -38,6 +48,7 @@ fn hook(tree: &ObjectTree, name: &str) -> Option<ProcId> {
 struct Hooks {
     initialize: Option<ProcId>,
     prepare: Option<ProcId>,
+    connections: Option<ProcId>,
     light: Option<ProcId>,
     bake: Option<ProcId>,
 }
@@ -47,6 +58,7 @@ impl Hooks {
         Self {
             initialize: hook(tree, "demir_initialize"),
             prepare: hook(tree, "demir_prepare"),
+            connections: hook(tree, "demir_connections"),
             light: hook(tree, "demir_light"),
             bake: hook(tree, "demir_bake"),
         }
@@ -65,6 +77,18 @@ pub struct Atom {
 pub struct BakeUpdate {
     pub appearances: Vec<u64>,
     pub lighting: Option<Range<usize>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConnectionEndpoint {
+    channel: String,
+    roles: u8,
+}
+
+#[derive(Debug, Default)]
+struct ConnectionChannel {
+    sources: Vec<u64>,
+    targets: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -131,6 +155,7 @@ pub struct Bake {
     cells: HashMap<Position, Vec<u64>>,
     failed: HashSet<u64>,
     faults: HashMap<u64, Fault>,
+    connection_faults: HashMap<u64, Fault>,
     areas: HashMap<(TypeId, u64), ObjectId>,
     area_members: HashMap<ObjectId, HashSet<u64>>,
     initialized: bool,
@@ -139,6 +164,8 @@ pub struct Bake {
     contributions: HashMap<u64, Vec<u64>>,
     by_target: HashMap<u64, Contributions>,
     dirty_appearances: HashSet<u64>,
+    connection_endpoints: HashMap<u64, Vec<ConnectionEndpoint>>,
+    connection_index: HashMap<String, ConnectionChannel>,
     hooks: Hooks,
 }
 
@@ -147,6 +174,7 @@ pub enum Stage {
     Instantiate,
     Initialize,
     Prepare,
+    Connections,
     Light,
     Smooth,
 }
@@ -211,6 +239,15 @@ impl Bake {
 
         for (index, id) in ids.iter().enumerate() {
             if index.is_multiple_of(4096) {
+                progress(Stage::Connections, index, total);
+            }
+            bake.connect(tree, module, *id);
+        }
+        bake.rebuild_connection_index();
+        progress(Stage::Connections, total, total);
+
+        for (index, id) in ids.iter().enumerate() {
+            if index.is_multiple_of(4096) {
                 progress(Stage::Light, index, total);
             }
             bake.light(tree, module, *id);
@@ -246,6 +283,31 @@ impl Bake {
     pub fn position(&self, id: u64) -> Option<Position> { self.atoms.get(&id).map(|atom| atom.position) }
 
     pub fn object(&self, id: u64) -> Option<ObjectId> { self.objects.get(&id).copied() }
+
+    /// Placements connected to `id` through complementary profile-defined endpoint roles.
+    pub fn connections(&self, id: u64) -> Vec<u64> {
+        let mut connected = Vec::new();
+        let Some(endpoints) = self.connection_endpoints.get(&id) else {
+            return connected;
+        };
+
+        for endpoint in endpoints {
+            let Some(channel) = self.connection_index.get(&endpoint.channel) else {
+                continue;
+            };
+            if endpoint.roles & CONNECTION_SOURCE != 0 {
+                connected.extend(channel.targets.iter().copied());
+            }
+            if endpoint.roles & CONNECTION_TARGET != 0 {
+                connected.extend(channel.sources.iter().copied());
+            }
+        }
+        connected.retain(|connected| *connected != id);
+        connected.sort_unstable();
+        connected.dedup();
+
+        connected
+    }
 
     pub fn take_output(&mut self) -> Vec<String> { self.runtime.take_output() }
 
@@ -412,6 +474,61 @@ impl Bake {
         let args = vec![GenericValue::Object(object)];
         if let Err(fault) = self.runtime.run(tree, module, proc, None, args, self.limits) {
             self.record_fault(id, fault);
+        }
+    }
+
+    fn connect(&mut self, tree: &ObjectTree, module: &Module, id: u64) {
+        self.connection_endpoints.remove(&id);
+        if let Some(previous) = self.connection_faults.remove(&id) {
+            self.diagnostics.remove(&previous);
+        }
+
+        if self.failed.contains(&id) {
+            return;
+        }
+
+        let Some(object) = self.objects.get(&id).copied() else {
+            return;
+        };
+        let Some(proc) = self.hooks.connections else {
+            return;
+        };
+
+        match self
+            .runtime
+            .connection_endpoints(tree, module, proc, object, self.limits)
+        {
+            Ok(endpoints) => {
+                if !endpoints.is_empty() {
+                    self.connection_endpoints.insert(id, endpoints);
+                }
+            },
+            Err(fault) => {
+                self.diagnostics.record(fault.clone());
+                self.connection_faults.insert(id, fault);
+            },
+        }
+    }
+
+    fn rebuild_connection_index(&mut self) {
+        self.connection_index.clear();
+        for (id, endpoints) in &self.connection_endpoints {
+            for endpoint in endpoints {
+                let channel = self.connection_index.entry(endpoint.channel.clone()).or_default();
+                if endpoint.roles & CONNECTION_SOURCE != 0 {
+                    channel.sources.push(*id);
+                }
+                if endpoint.roles & CONNECTION_TARGET != 0 {
+                    channel.targets.push(*id);
+                }
+            }
+        }
+
+        for channel in self.connection_index.values_mut() {
+            channel.sources.sort_unstable();
+            channel.sources.dedup();
+            channel.targets.sort_unstable();
+            channel.targets.dedup();
         }
     }
 
@@ -733,6 +850,12 @@ impl Bake {
             if let Some(fault) = self.faults.remove(id) {
                 self.diagnostics.remove(&fault);
             }
+
+            if let Some(fault) = self.connection_faults.remove(id) {
+                self.diagnostics.remove(&fault);
+            }
+
+            self.connection_endpoints.remove(id);
             self.failed.remove(id);
             self.remove_contribution(*id);
         }
@@ -748,6 +871,7 @@ impl Bake {
         if self.initialized {
             for id in inserted {
                 self.prepare(tree, module, id);
+                self.connect(tree, module, id);
                 self.light(tree, module, id);
                 self.fingerprint(id);
 
@@ -759,6 +883,8 @@ impl Bake {
                 }
             }
         }
+
+        self.rebuild_connection_index();
 
         let lighting = self.lighting.as_mut().and_then(LightingMap::solve_dirty);
 
@@ -851,6 +977,74 @@ fn object_color(object: &Object, tree: &ObjectTree, name: &str) -> [f32; 3] {
 }
 
 impl Runtime {
+    fn connection_endpoints(
+        &mut self, tree: &ObjectTree, module: &Module, proc: ProcId, object: ObjectId, limits: Limits,
+    ) -> Result<Vec<ConnectionEndpoint>, Fault> {
+        if self.global.is_none() {
+            self.global = Some(
+                self.heap
+                    .alloc_object(Object::new(TypeId::ROOT))
+                    .map_err(|kind| Fault {
+                        offset: None,
+                        proc: Some(proc),
+                        location: Default::default(),
+                        kind,
+                    })?,
+            );
+        }
+
+        self.heap.begin();
+        let result = (|| {
+            let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, Some(object));
+            let value = evaluator.call(proc, None, vec![(None, GenericValue::Object(object))])?;
+            let entries = match value {
+                GenericValue::Null => return Ok(Vec::new()),
+                GenericValue::List(list) => evaluator
+                    .runtime
+                    .heap
+                    .list(list)
+                    .map(|list| list.entries.clone())
+                    .ok_or_else(|| evaluator.fault(FaultKind::InvalidReference))?,
+                _ => {
+                    return Err(evaluator.fault(FaultKind::InvalidOperation(
+                        "demir_connections must return an associative list".into(),
+                    )));
+                },
+            };
+
+            let mut combined = HashMap::<String, u8>::new();
+            for (channel, roles) in entries {
+                let Some(channel) = channel.text() else {
+                    return Err(evaluator.fault(FaultKind::InvalidOperation(
+                        "demir_connections channel keys must be text".into(),
+                    )));
+                };
+                let Some(roles) = roles.and_then(|roles| roles.num()) else {
+                    return Err(evaluator.fault(FaultKind::InvalidOperation(
+                        "demir_connections roles must be numeric associative values".into(),
+                    )));
+                };
+                if !roles.is_finite() || roles.fract() != 0.0 || roles < 1.0 || roles > f32::from(CONNECTION_ROLES) {
+                    return Err(evaluator.fault(FaultKind::InvalidOperation(
+                        "demir_connections roles must use DEMIR_CONNECTION_SOURCE and DEMIR_CONNECTION_TARGET".into(),
+                    )));
+                }
+                *combined.entry(channel.to_owned()).or_default() |= roles as u8;
+            }
+
+            let mut endpoints = combined
+                .into_iter()
+                .map(|(channel, roles)| ConnectionEndpoint { channel, roles })
+                .collect::<Vec<_>>();
+            endpoints.sort_by(|left, right| left.channel.cmp(&right.channel));
+
+            Ok(endpoints)
+        })();
+        self.heap.rollback();
+
+        result
+    }
+
     fn preview(
         &mut self, tree: &ObjectTree, module: &Module, proc: ProcId, object: ObjectId, instance: u64, limits: Limits,
     ) -> Result<Preview, Fault> {

@@ -33,9 +33,9 @@ pub struct PlacementFlash {
     pub strength: f32,
 }
 
-// this is for our tile origin -> pixel_x/y override indicator
+/// A map-space guide segment rendered over a map view.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SelectionGuide {
+pub struct GuideLine {
     pub origin: [f32; 2],
     pub target: [f32; 2],
 }
@@ -59,7 +59,6 @@ pub struct MapViewInteraction {
     pub cursor: Option<[u32; 2]>,
     pub hovered_area: Option<PrefabInstanceId>,
     pub selected: Option<PrefabInstanceId>,
-    pub selection_guide: Option<SelectionGuide>,
     pub placement_flash: Option<PlacementFlash>,
     pub highlight: HighlightStyle,
     pub mode: InteractionMode,
@@ -190,6 +189,8 @@ pub struct MapViewFrame<'a> {
     pub revision: u64,
     pub pending_update: Option<FrameUpdate>,
     pub lighting: Option<LightingFrame<'a>>,
+    pub guide_lines: &'a [GuideLine],
+    pub connected: &'a [PrefabInstanceId],
     pub interaction: MapViewInteraction,
     pub preview: Option<SpritePreview<'a>>,
 }

@@ -3,7 +3,7 @@ use core::{
     types::{Identifier, Value},
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -47,15 +47,28 @@ use objtree::{ObjectTree, TypeId};
 use render::{
     Frame,
     FrameUpdate,
+    GuideLine,
     MapViewFrame,
     MapViewInteraction,
     MapViewRect,
-    SelectionGuide,
     SpriteInstance,
     SpritePreview,
     SpriteTexture,
     texture::TextureCatalog,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct GuideBadge {
+    pub position: [f32; 2],
+    pub z: u32,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct SelectionGuides {
+    pub lines: Vec<GuideLine>,
+    pub badges: Vec<GuideBadge>,
+    pub connected: Vec<PrefabInstanceId>,
+}
 
 use crate::{
     baker::{self, Baker},
@@ -1386,7 +1399,7 @@ impl Session {
         })
     }
 
-    pub(crate) fn selected_offset_guide(&self) -> Option<SelectionGuide> {
+    pub(crate) fn selected_offset_guide(&self) -> Option<GuideLine> {
         let environment = self.state.environment.as_ref()?;
         let document = self.state.active_document()?;
         let selected = document.selected_instance()?;
@@ -1414,13 +1427,80 @@ impl Session {
         let sprite = self.instances()?.sprite(selected)?;
         let tile_size = self.options.tile_size.max(1) as f32;
 
-        Some(SelectionGuide {
+        Some(GuideLine {
             origin: [
                 (location.coord.x as f32 - 0.5) * tile_size,
                 (location.coord.y as f32 - 0.5) * tile_size,
             ],
             target: [sprite.x + sprite.width * 0.5, sprite.y + sprite.height * 0.5],
         })
+    }
+
+    pub(crate) fn selected_guides(&self) -> SelectionGuides {
+        let mut guides = SelectionGuides::default();
+        if let Some(offset) = self.selected_offset_guide() {
+            guides.lines.push(offset);
+        }
+
+        let Some(document_id) = self.state.active() else {
+            return guides;
+        };
+        let Some(document) = self.state.document(document_id) else {
+            return guides;
+        };
+        let Some(selected) = document.selected_instance() else {
+            return guides;
+        };
+        let Some((_, selected_location)) = document.prefab_instance(selected) else {
+            return guides;
+        };
+
+        if selected_location.coord.z != document.z {
+            return guides;
+        }
+
+        let Some(cache) = self.caches.get(&document_id) else {
+            return guides;
+        };
+
+        let Some(bake) = cache.bake.as_ref() else {
+            return guides;
+        };
+
+        let tile_size = self.options.tile_size.max(1) as f32;
+        let center = |id: PrefabInstanceId, coord: Coord| {
+            cache.instances.sprite(id).map_or_else(
+                || [(coord.x as f32 - 0.5) * tile_size, (coord.y as f32 - 0.5) * tile_size],
+                |sprite| [sprite.x + sprite.width * 0.5, sprite.y + sprite.height * 0.5],
+            )
+        };
+
+        let selected_center = center(selected, selected_location.coord);
+        let mut badged = HashSet::new();
+
+        for connected in bake.connections(selected.get()) {
+            let Some(connected) = PrefabInstanceId::from_raw(connected) else {
+                continue;
+            };
+            let Some((_, location)) = document.prefab_instance(connected) else {
+                continue;
+            };
+            let target = center(connected, location.coord);
+            guides.lines.push(GuideLine {
+                origin: selected_center,
+                target,
+            });
+            guides.connected.push(connected);
+
+            if location.coord.z != document.z && badged.insert((location.coord.x, location.coord.y, location.coord.z)) {
+                guides.badges.push(GuideBadge {
+                    position: target,
+                    z: location.coord.z,
+                });
+            }
+        }
+
+        guides
     }
 
     pub fn icon_metadata(&self, name: &str) -> Option<&dmi::metadata::Metadata> {
@@ -1667,9 +1747,10 @@ impl Session {
         self.options.underlay_depth = depth;
     }
 
-    pub fn map_view_frame(
-        &self, id: DocumentId, rect: MapViewRect, camera: render::Camera, interaction: MapViewInteraction,
-    ) -> Option<MapViewFrame<'_>> {
+    pub fn map_view_frame<'a>(
+        &'a self, id: DocumentId, rect: MapViewRect, camera: render::Camera, interaction: MapViewInteraction,
+        guide_lines: &'a [GuideLine], connected: &'a [PrefabInstanceId],
+    ) -> Option<MapViewFrame<'a>> {
         let document = self.state.document(id)?;
         let cache = self.caches.get(&id)?;
 
@@ -1690,6 +1771,8 @@ impl Session {
                 revision: cache.lighting_revision,
                 pending_update: cache.lighting_update,
             }),
+            guide_lines,
+            connected,
             interaction,
             preview: cache
                 .preview
@@ -2296,7 +2379,13 @@ mod tests {
         path::TreePath,
         types::Value,
     };
-    use std::{path::PathBuf, sync::Arc};
+    use std::{
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     use dmi::{IconFile, metadata::Dir};
     use dmm::{Coord, Map, MapFormat, Prefab, Size};
@@ -2307,10 +2396,11 @@ mod tests {
         tool::{BlockSelectionMode, FillMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
     };
     use objtree::ObjectTree;
-    use render::SpriteInstance;
+    use render::{GuideLine, SpriteInstance};
 
     use super::{
         FillOutcome,
+        GuideBadge,
         LevelChange,
         LoadReport,
         MAX_MAP_DIMENSION,
@@ -2370,10 +2460,10 @@ mod tests {
         };
         let map_views = [
             session
-                .map_view_frame(ids[0], left, Default::default(), Default::default())
+                .map_view_frame(ids[0], left, Default::default(), Default::default(), &[], &[])
                 .expect("left map view"),
             session
-                .map_view_frame(ids[1], right, Default::default(), Default::default())
+                .map_view_frame(ids[1], right, Default::default(), Default::default(), &[], &[])
                 .expect("right map view"),
         ];
         let frame = session.frame(&map_views, Some(1));
@@ -2485,10 +2575,10 @@ mod tests {
 
         let rect = render::MapViewRect::default();
         let a = session
-            .map_view_frame(first, rect, Default::default(), Default::default())
+            .map_view_frame(first, rect, Default::default(), Default::default(), &[], &[])
             .expect("first map view");
         let b = session
-            .map_view_frame(second, rect, Default::default(), Default::default())
+            .map_view_frame(second, rect, Default::default(), Default::default(), &[], &[])
             .expect("second map view");
 
         assert_eq!(a.active_z, 1);
@@ -2519,6 +2609,8 @@ mod tests {
                 render::MapViewRect::default(),
                 render::Camera::default(),
                 Default::default(),
+                &[],
+                &[],
             )
             .expect("first frame");
         let second = session
@@ -2527,6 +2619,8 @@ mod tests {
                 render::MapViewRect::default(),
                 render::Camera::default(),
                 Default::default(),
+                &[],
+                &[],
             )
             .expect("second frame");
         assert_ne!(first.revision, second.revision);
@@ -2878,7 +2972,9 @@ mod tests {
                     first,
                     render::MapViewRect::default(),
                     render::Camera::default(),
-                    Default::default()
+                    Default::default(),
+                    &[],
+                    &[],
                 )
                 .is_none()
         );
@@ -3329,6 +3425,140 @@ mod tests {
     }
 
     #[test]
+    fn selection_guides_follow_profile_connections_in_both_directions_and_across_levels() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("dmed-connection-guides-{}-{id}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("temp connection fixture");
+        std::fs::copy(examples().join("icons/test.dmi"), root.join("test.dmi")).expect("fixture icon");
+        std::fs::write(
+            root.join("game.dm"),
+            r#"
+/area/test
+/turf/floor
+    icon = 'test.dmi'
+    icon_state = "floor"
+/obj/source
+    icon = 'test.dmi'
+    icon_state = "table"
+    pixel_x = 4
+    var/channel
+/obj/target
+    icon = 'test.dmi'
+    icon_state = "light"
+    var/channel
+"#,
+        )
+        .expect("fixture game");
+        std::fs::write(
+            root.join("profile.dm"),
+            r#"
+#ifdef __DEMIR_BAKE__
+/proc/demir_connections(atom/target)
+    var/list/connections = list()
+    if(istype(target, /obj/source))
+        var/obj/source/source = target
+        connections[source.channel] = DEMIR_CONNECTION_SOURCE
+    else if(istype(target, /obj/target))
+        var/obj/target/destination = target
+        connections[destination.channel] = DEMIR_CONNECTION_TARGET
+    return connections
+#endif
+"#,
+        )
+        .expect("fixture profile");
+        std::fs::write(root.join("test.dme"), "#include \"game.dm\"\n#include \"profile.dm\"\n")
+            .expect("fixture environment");
+
+        let mut session = Session::new();
+        session
+            .load_environment(&root.join("test.dme"))
+            .expect("connection environment");
+        let mut map = Map::new(Size { x: 3, y: 1, z: 2 });
+        let floor = || Prefab::new(TreePath::parse("/turf/floor"));
+        let area = || Prefab::new(TreePath::parse("/area/test"));
+        let mut source = Prefab::new(TreePath::parse("/obj/source"));
+        source.set_var("channel".into(), Value::Text(String::from("doors")));
+        let mut target = Prefab::new(TreePath::parse("/obj/target"));
+        target.set_var("channel".into(), Value::Text(String::from("doors")));
+        let source_tile = map.intern_tile(vec![source, floor(), area()]);
+        let target_tile = map.intern_tile(vec![target.clone(), floor(), area()]);
+        let floor_tile = map.intern_tile(vec![floor(), area()]);
+        map.grid[0][0] = vec![source_tile, floor_tile, target_tile];
+        map.grid[1][0] = vec![floor_tile, target_tile, floor_tile];
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+
+        let endpoint = |session: &Session, coord: Coord, path: &str| {
+            let document = session.state.active_document().expect("active fixture map");
+            document
+                .instance_ids_at(coord)
+                .iter()
+                .copied()
+                .find(|id| {
+                    document
+                        .prefab_instance(*id)
+                        .is_some_and(|(prefab, _)| prefab.path == TreePath::parse(path))
+                })
+                .expect("fixture endpoint")
+        };
+        let source = endpoint(&session, Coord::new(1, 1, 1), "/obj/source");
+        let same_level = endpoint(&session, Coord::new(3, 1, 1), "/obj/target");
+        session.select_instance(Some(source));
+
+        let guides = session.selected_guides();
+        assert_eq!(guides.lines.len(), 3, "one offset guide and two connections");
+        assert!(guides.lines.contains(&GuideLine {
+            origin: [16.0, 16.0],
+            target: [20.0, 16.0],
+        }));
+        assert!(guides.lines.contains(&GuideLine {
+            origin: [20.0, 16.0],
+            target: [80.0, 16.0],
+        }));
+        assert!(guides.lines.contains(&GuideLine {
+            origin: [20.0, 16.0],
+            target: [48.0, 16.0],
+        }));
+        assert_eq!(
+            guides.badges,
+            vec![GuideBadge {
+                position: [48.0, 16.0],
+                z: 2,
+            }]
+        );
+        assert_eq!(
+            guides.connected.len(),
+            2,
+            "both endpoints are highlighted, the offset guide adds none"
+        );
+        assert!(guides.connected.contains(&same_level));
+
+        session.select_instance(Some(same_level));
+        let reverse = session.selected_guides();
+        assert_eq!(
+            reverse.lines,
+            vec![GuideLine {
+                origin: [80.0, 16.0],
+                target: [20.0, 16.0],
+            }]
+        );
+        assert!(reverse.badges.is_empty());
+        assert_eq!(reverse.connected, vec![source]);
+
+        assert_eq!(
+            session.set_selected_instance_var("channel".into(), Value::Text(String::from("other"))),
+            Some(true),
+        );
+        let disconnected = session.selected_guides();
+        assert!(disconnected.lines.is_empty());
+        assert!(disconnected.connected.is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn directional_type_groups_are_discovered_from_base_group_and_direction_paths() {
         let mut tree = ObjectTree::new();
         let base = tree.register(&TreePath::parse("/obj/alarm"), Location::default());
@@ -3412,6 +3642,8 @@ mod tests {
                 render::MapViewRect::default(),
                 Default::default(),
                 Default::default(),
+                &[],
+                &[],
             )
             .expect("the open map has a map view");
         assert_eq!(view.revision, 7, "changing the view does not re-upload sprites");
@@ -3568,7 +3800,7 @@ mod tests {
         );
         assert_eq!(
             session
-                .map_view_frame(id, Default::default(), Default::default(), Default::default())
+                .map_view_frame(id, Default::default(), Default::default(), Default::default(), &[], &[])
                 .unwrap()
                 .level_count,
             2

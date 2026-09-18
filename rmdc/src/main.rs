@@ -314,7 +314,15 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
     report_bake_output(&mut bake);
 
     let mut changed = 0;
+    let mut connected = 0;
+    let mut links = 0;
     for (id, position, fallback) in baseline {
+        let incident = bake.connections(id).len();
+        if incident > 0 {
+            connected += 1;
+            links += incident;
+        }
+
         let baked = bake.appearances.get(&id).and_then(|delta| {
             delta
                 .vars
@@ -346,6 +354,7 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
         bake_seconds
     );
     eprintln!("{changed} icon states changed, {} cache hits", bake.cache_hits);
+    eprintln!("{connected} connected placements, {links} incident connections");
     if let Some(lighting) = &bake.lighting {
         let lit = lighting
             .tiles

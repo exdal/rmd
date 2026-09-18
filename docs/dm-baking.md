@@ -18,11 +18,12 @@ updates, and verifies that the complete derived appearance layer returns to its 
 
 ## Profiles
 
-The compiler prelude declares four hooks without bodies:
+The compiler prelude declares five hooks without bodies:
 
 ```dm
 /proc/demir_initialize()
 /proc/demir_prepare(atom/target)
+/proc/demir_connections(atom/target)
 /proc/demir_light(atom/target)
 /proc/demir_bake(atom/target)
 ```
@@ -51,6 +52,12 @@ A codebase without a profile bakes nothing. No bytecode is generated, no DM runs
 draws from its static appearance. rmd never calls the game's own `Initialize()` either. Persistent
 target-specific preparation, including any call to `target.Initialize(TRUE)`, belongs in
 `demir_prepare`. Appearance mutations belong in `demir_bake`.
+
+`demir_connections` lets a profile expose codebase-specific links without teaching the editor about
+the codebase. It returns an associative list whose text keys are opaque connection channels and whose
+values use `DEMIR_CONNECTION_SOURCE`, `DEMIR_CONNECTION_TARGET`, or both flags. The baker connects
+atoms with the same channel and complementary roles. The hook runs after preparation in a rolled-back
+transaction, so it can inspect prepared runtime values but cannot mutate the persistent world.
 
 The editor compiles two views of a codebase when baking is enabled. Its editor tree defines
 `__DEMIR_COMPAT__`, `FASTDMM`, and `SPACEMAN_DMM`, preserving mapping-only icons and types. Its bake
@@ -91,15 +98,16 @@ The caller assigns stable instance IDs and translates map prefabs into this form
 type and map-variable overrides share one runtime object while keeping all of their placement IDs.
 Turfs, areas, and movable contents are linked through the runtime world before any DM executes.
 
-A full bake has five ordered stages:
+A full bake has six ordered stages:
 
 1. **Instantiate** creates objects, applies constant map overrides, and links each map cell.
 2. **Initialize** calls `demir_initialize()` once after the complete runtime world is linked.
 3. **Prepare** calls `demir_prepare` once per runtime object and commits successful setup for use by
    neighboring previews.
-4. **Light** calls `demir_light` once per runtime object, harvests the neutral schema for every
+4. **Connections** calls `demir_connections` once per runtime object and indexes matching channels.
+5. **Light** calls `demir_light` once per runtime object, harvests the neutral schema for every
    placement, and solves each z level's shared lighting corners.
-5. **Smooth** calls `demir_bake` for each placement and exports appearance changes.
+6. **Smooth** calls `demir_bake` for each placement and exports appearance changes.
 
 Initialization uses the VM's normal transaction behavior and commits only when it succeeds. A fault
 is reported once and stops the remaining stages, leaving every atom on its static appearance.
@@ -133,12 +141,13 @@ identity rather than contents, which makes a placement holding one a cache miss 
 hit. Hashes are only compared within one process.
 
 `Bake::update` accepts replacement atoms and removed instance IDs. It relinks changed cells, applies
-the prepare and light hooks to new objects, and rebakes the surrounding 3 by 3 by 3 neighborhood. It
-reuses the runtime initialized by the full bake and never reruns `demir_initialize()`. The vertical
-extent is needed by codebases with pipes or other structures that connect between z levels.
-Incremental edits bypass full-load cache reuse through the epoch, avoiding results derived from stale
-runtime globals. The update reports only the edited instances and the neighbors whose composed
-appearance actually changed.
+the prepare, connection, and light hooks to new objects, and rebakes the surrounding 3 by 3 by 3
+neighborhood. Connection endpoint entries are replaced or removed with their placements, and the
+channel index is rebuilt without rerunning hooks for unchanged objects. The update reuses the runtime
+initialized by the full bake and never reruns `demir_initialize()`. The vertical extent is needed by
+codebases with pipes or other structures that connect between z levels. Incremental edits bypass
+full-load cache reuse through the epoch, avoiding results derived from stale runtime globals. The
+update reports only the edited instances and the neighbors whose composed appearance actually changed.
 
 The lightmap keeps its corner samples, per-cell blockers and fullbright/ambient state, and a bucketed
 index of sources between solves. A changed light re-solves only the corners inside its reach. A
@@ -183,6 +192,13 @@ pass runs after map sprites and before area outlines, selection feedback, and pl
 editor feedback and previews remain readable. Lighting has its own revision and GPU update range;
 ordinary appearance edits do not re-upload the lightmap.
 
+With the select tool active, **Selection guide lines** draws every baked connection incident to the
+selected placement in the same orange guide style used for pixel offsets. Either endpoint can be
+selected. Connections to another z level are projected onto the current level and marked with a
+`Z<n>` badge. Every placement at the far end of a guide is also tinted orange in the map, in both
+highlight styles, so a button shows which shutters it drives. Turning the setting off hides both
+offset and connection guides along with the tint.
+
 Palette thumbnails resolve statically. An atom whose static `icon_state` is missing from its sheet,
 which is how smoothed walls are declared, is baked alone in a one cell world at load, and the
 derived appearance is used for its thumbnail. The placement preview still resolves statically.
@@ -207,16 +223,23 @@ to stderr where available and to `latest.log` on Windows. Other output targets r
 ## Validation
 
 The VM tests cover neighborhood smoothing, incremental remove/restore, deterministic random results,
-instance-variable cache separation, list-backed neighbor overlays, rollback, bounded recursive
-appearance export, corner lighting, blockers, ambient/fullbright cells, and incremental lightmap
-restoration. The compiler-driver check exercises preprocessing, semantic analysis, bytecode
-generation, map translation, the five bake stages, summary output, and incremental restoration:
+instance-variable cache separation, list-backed neighbor overlays, rolled-back connection metadata,
+bounded recursive appearance export, corner lighting, blockers, ambient/fullbright cells, and
+incremental lightmap restoration. The compiler-driver check exercises preprocessing, semantic
+analysis, bytecode generation, map translation, the six bake stages, summary output, and incremental
+restoration:
 
 ```sh
 cargo test --workspace
 cargo run --release --bin rmdc -- bake examples/env/test.dme examples/env/test.dmm --summary --check-edit
 ```
 
+The bake summary reports how many placements carry connections and how many incident connections
+they hold, which is the quickest way to tell whether a profile's `demir_connections` is reaching the
+codebase at all. A profile only takes effect through the copy the `.dme` includes, so a profile
+edited in `examples/profiles` reports zero until it is copied into the codebase.
+
 The editor tests cover whole-map baking without changing map bytes, overlay sprites, incremental
 sprites matching a full rebuild, undo and redo through the bake, movable smoothing, standalone
-thumbnails, hiding a type without rebaking, and that only a codebase with a profile bakes.
+thumbnails, selection guides across z levels, hiding a type without rebaking, and that only a codebase
+with a profile bakes.

@@ -94,9 +94,107 @@ fn baked_state(bake: &Bake, id: u64) -> Option<&str> {
 fn only_hook_bodies_make_a_profile() {
     let (bare, _) = compile("/turf/wall\n    proc/Initialize(mapload)\n        return\n");
     let (profiled, _) = compile(WALLS);
+    let (connections, _) = compile("/proc/demir_connections(atom/target)\n    return list()\n");
 
     assert!(!has_profile(&bare));
     assert!(has_profile(&profiled));
+    assert!(has_profile(&connections));
+}
+
+#[test]
+fn profile_connections_match_complementary_roles_from_either_endpoint() {
+    let (tree, module) = compile(
+        r#"
+/obj/source
+    var/channel
+/obj/target
+    var/channel
+/obj/both
+    var/channel
+/proc/demir_connections(atom/target)
+    var/list/connections = list()
+    if(istype(target, /obj/source))
+        var/obj/source/source = target
+        connections[source.channel] = 1
+    else if(istype(target, /obj/target))
+        var/obj/target/destination = target
+        connections[destination.channel] = 2
+    else if(istype(target, /obj/both))
+        var/obj/both/both = target
+        connections[both.channel] = 3
+    target.name = "connection hook writes are rolled back"
+    return connections
+"#,
+    );
+    let atom = |instance, path: &str, channel: &str| Atom {
+        instance,
+        ty: tree.id_of(&TreePath::parse(path)).expect("connection fixture type"),
+        position: Position::new(instance as i32, 1, 1),
+        vars: vec![(Identifier::from("channel"), Value::Text(channel.into()))],
+    };
+    let source_a = atom(1, "/obj/source", "a");
+    let source_b = atom(2, "/obj/source", "b");
+    let target_a = atom(3, "/obj/target", "a");
+    let both_a = atom(4, "/obj/both", "a");
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        vec![source_a.clone(), source_b, target_a.clone(), both_a],
+        [4, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.connections(1), vec![3, 4]);
+    assert!(bake.connections(2).is_empty());
+    assert_eq!(bake.connections(3), vec![1, 4]);
+    assert_eq!(bake.connections(4), vec![1, 3]);
+    let source_object = bake.object(1).expect("source runtime object");
+    assert_eq!(
+        bake.runtime
+            .heap
+            .object(source_object)
+            .and_then(|object| object.vars.get(&Identifier::from("name"))),
+        None,
+    );
+
+    let target_b = atom(3, "/obj/target", "b");
+    bake.update(&tree, &module, vec![target_b], &[4]);
+    assert!(bake.connections(1).is_empty());
+    assert_eq!(bake.connections(2), vec![3]);
+    assert_eq!(bake.connections(3), vec![2]);
+}
+
+#[test]
+fn malformed_connection_metadata_does_not_block_appearance_baking() {
+    let (tree, module) = compile(
+        r#"
+/obj/source
+    icon_state = "static"
+/proc/demir_connections(atom/target)
+    return list("missing role")
+/proc/demir_bake(atom/target)
+    target.icon_state = "baked"
+"#,
+    );
+    let atom = Atom {
+        instance: 1,
+        ty: tree.id_of(&TreePath::parse("/obj/source")).expect("source type"),
+        position: Position::new(1, 1, 1),
+        vars: Vec::new(),
+    };
+    let bake = Bake::new(
+        &tree,
+        &module,
+        vec![atom],
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.diagnostics.count(), 1);
+    assert!(bake.connections(1).is_empty());
+    assert_eq!(baked_state(&bake, 1), Some("baked"));
 }
 
 #[test]

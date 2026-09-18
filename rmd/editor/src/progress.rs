@@ -17,6 +17,7 @@ pub enum Stage {
     Instantiate,
     Initialize,
     Prepare,
+    Connections,
     Light,
     Smooth,
 }
@@ -36,6 +37,7 @@ impl Stage {
             Self::Instantiate => "Instantiating atoms",
             Self::Initialize => "Running demir_initialize",
             Self::Prepare => "Preparing atoms",
+            Self::Connections => "Collecting connections",
             Self::Light => "Collecting lights",
             Self::Smooth => "Baking appearances",
         }
@@ -46,6 +48,7 @@ impl Stage {
             vm::bake::Stage::Instantiate => Self::Instantiate,
             vm::bake::Stage::Initialize => Self::Initialize,
             vm::bake::Stage::Prepare => Self::Prepare,
+            vm::bake::Stage::Connections => Self::Connections,
             vm::bake::Stage::Light => Self::Light,
             vm::bake::Stage::Smooth => Self::Smooth,
         }
@@ -65,8 +68,9 @@ impl Stage {
             Self::Instantiate => 9,
             Self::Initialize => 10,
             Self::Prepare => 11,
-            Self::Light => 12,
-            Self::Smooth => 13,
+            Self::Connections => 12,
+            Self::Light => 13,
+            Self::Smooth => 14,
         }
     }
 
@@ -83,8 +87,9 @@ impl Stage {
             9 => Self::Instantiate,
             10 => Self::Initialize,
             11 => Self::Prepare,
-            12 => Self::Light,
-            13 => Self::Smooth,
+            12 => Self::Connections,
+            13 => Self::Light,
+            14 => Self::Smooth,
             _ => Self::Preprocess,
         }
     }
@@ -170,6 +175,7 @@ mod tests {
             Stage::Instantiate,
             Stage::Initialize,
             Stage::Prepare,
+            Stage::Connections,
             Stage::Light,
             Stage::Smooth,
         ] {

@@ -27,7 +27,7 @@ use dear_imgui_rs::{
     WindowKey,
     WindowKeyError,
 };
-use dmm::{Coord, MapFormat, Prefab, Size};
+use dmm::{Coord, MapFormat, Prefab, PrefabInstanceId, Size};
 use editor::{
     command::EditGroupId,
     document::{DocumentId, MapDocument, Selection},
@@ -56,7 +56,16 @@ use editor::{
 };
 pub(crate) use inspector::TransformMode;
 use objtree::ObjectTree;
-use render::{Camera, InteractionMode, MapViewInteraction, MapViewRect, PickRequest, PlacementFlash, Renderer};
+use render::{
+    Camera,
+    GuideLine,
+    InteractionMode,
+    MapViewInteraction,
+    MapViewRect,
+    PickRequest,
+    PlacementFlash,
+    Renderer,
+};
 
 use self::{
     inspector::{InspectorPanel, JumpTarget},
@@ -68,7 +77,7 @@ use crate::{
     external_editor::SourceLocation,
     gizmo::{BlockGizmoKind, BlockGizmoTarget, GizmoMapView, GizmoState},
     loader::LoadView,
-    session::{BlockPreviewSource, FillOutcome, LevelChange, PlacementPreview, Session},
+    session::{BlockPreviewSource, FillOutcome, GuideBadge, LevelChange, PlacementPreview, Session},
     settings::{KeyBindings, KeybindAction, KeybindPreset, Settings},
 };
 
@@ -391,11 +400,41 @@ fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
         .build();
 }
 
+fn draw_guide_badges(
+    ui: &Ui, camera: &Controller, viewport_min: [f32; 2], viewport_max: [f32; 2], badges: &[GuideBadge],
+) {
+    if badges.is_empty() {
+        return;
+    }
+
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(viewport_min, viewport_max, || {
+        for badge in badges {
+            let local = camera.map_to_screen(badge.position);
+            if !local.iter().all(|value| value.is_finite()) {
+                continue;
+            }
+            let label = format!("Z{}", badge.z);
+            let text_size = ui.calc_text_size(&label);
+            let min = [
+                viewport_min[0] + local[0] + 6.0,
+                viewport_min[1] + local[1] - text_size[1] - 6.0,
+            ];
+            let max = [min[0] + text_size[0] + 6.0, min[1] + text_size[1] + 4.0];
+            draw.add_rect(min, max, [0.12, 0.08, 0.02, 0.92]).filled(true).build();
+            draw.add_rect(min, max, [1.0, 0.5, 0.0, 1.0]).build();
+            draw.add_text([min[0] + 3.0, min[1] + 2.0], [1.0; 4], label);
+        }
+    });
+}
+
 pub struct VisibleMapView {
     pub document: DocumentId,
     pub rect: MapViewRect,
     pub camera: Camera,
     pub interaction: MapViewInteraction,
+    pub guide_lines: Vec<GuideLine>,
+    pub connected: Vec<PrefabInstanceId>,
 }
 
 pub struct UiOutput {
@@ -456,6 +495,7 @@ struct MapViewDraw<'a> {
     index: usize,
     view: &'a mut MapViewState,
     interaction: &'a mut MapViewInteraction,
+    guide_badges: &'a [GuideBadge],
     refit_requested: bool,
     keep_open: &'a mut bool,
 }
@@ -1064,11 +1104,13 @@ impl UiState {
             let refit = refit_active && session.state.active() == Some(id);
             let mut keep_open = true;
             let active = session.state.active() == Some(id);
+            let guides = if active && settings.selection_guide_line && session.tool() == Tool::Select {
+                session.selected_guides()
+            } else {
+                Default::default()
+            };
             let mut interaction = MapViewInteraction {
                 selected: session.selected_instance_of(id),
-                selection_guide: (active && settings.selection_guide_line)
-                    .then(|| session.selected_offset_guide())
-                    .flatten(),
                 highlight: settings.selection_highlight.style(),
                 mode: interaction_mode(session.tool()),
                 ..Default::default()
@@ -1083,6 +1125,7 @@ impl UiState {
                     index: map_view_index,
                     view: &mut view,
                     interaction: &mut interaction,
+                    guide_badges: &guides.badges,
                     refit_requested: refit,
                     keep_open: &mut keep_open,
                 },
@@ -1094,6 +1137,8 @@ impl UiState {
                     rect: view.rect,
                     camera: view.camera.camera,
                     interaction,
+                    guide_lines: guides.lines,
+                    connected: guides.connected,
                 });
             }
             self.map_views.insert(id, view);
@@ -1251,6 +1296,7 @@ impl UiState {
             index: map_view_index,
             view,
             interaction,
+            guide_badges,
             refit_requested,
             keep_open,
         } = draw;
@@ -1397,6 +1443,8 @@ impl UiState {
                     *refit = false;
                 }
             }
+
+            draw_guide_badges(ui, camera, viewport_min, viewport_max, guide_badges);
 
             configure_tool_interaction(session.tool(), interaction);
 
@@ -2974,11 +3022,9 @@ fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewInteraction) 
             interaction.cursor = None;
             interaction.hovered_area = None;
             interaction.selected = None;
-            interaction.selection_guide = None;
         },
         Tool::Delete => {
             interaction.selected = None;
-            interaction.selection_guide = None;
         },
         Tool::Select => {},
     }
@@ -3871,6 +3917,7 @@ mod tests {
                     index: 0,
                     view: &mut self.view,
                     interaction: &mut MapViewInteraction::default(),
+                    guide_badges: &[],
                     refit_requested: false,
                     keep_open: &mut true,
                 },
@@ -5030,7 +5077,6 @@ mod tests {
             cursor: Some([10, 20]),
             hovered_area: Some(owner),
             selected: Some(owner),
-            selection_guide: None,
             placement_flash: Some(PlacementFlash { owner, strength: 0.5 }),
             highlight: HighlightStyle::Tint,
             mode: InteractionMode::Select {
@@ -5048,7 +5094,6 @@ mod tests {
             delete,
             MapViewInteraction {
                 selected: None,
-                selection_guide: None,
                 mode: InteractionMode::Delete { pick: None },
                 ..interaction
             }

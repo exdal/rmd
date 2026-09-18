@@ -392,6 +392,42 @@
 /proc/demir_light(atom/target)
 	target.demir_apply_light()
 
+// Connection channels are opaque to rmd. Keep the controlled type and DM value kind in the key
+// so an airlock id_tag cannot collide with a poddoor id, or a numeric ID with the same text.
+/proc/get_connection_key(kind, value)
+	if(isnull(value))
+		return null
+	if(isnum(value))
+		return "[kind]:number:[value]"
+	if(istext(value))
+		return "[kind]:text:[value]"
+	return null
+
+/proc/demir_connections(atom/target)
+	var/channel
+	var/roles
+	if(istype(target, /obj/machinery/button/door))
+		var/obj/machinery/button/door/button = target
+		var/controller_id = button.id
+		if(!controller_id)
+			// These are the initial IDs of the controller assemblies created by setup_device().
+			controller_id = button.normaldoorcontrol ? "badmin" : -1
+		channel = get_connection_key(button.normaldoorcontrol ? "airlock" : "poddoor", controller_id)
+		roles = DEMIR_CONNECTION_SOURCE
+	else if(istype(target, /obj/machinery/door/poddoor))
+		var/obj/machinery/door/poddoor/poddoor = target
+		channel = get_connection_key("poddoor", poddoor.id)
+		roles = DEMIR_CONNECTION_TARGET
+	else if(istype(target, /obj/machinery/door/airlock))
+		var/obj/machinery/door/airlock/airlock = target
+		channel = get_connection_key("airlock", airlock.id_tag)
+		roles = DEMIR_CONNECTION_TARGET
+
+	var/list/connections = list()
+	if(channel)
+		connections[channel] = roles
+	return connections
+
 // A border object only blocks the side it stands on, and the lighting corners care about
 // whether the whole tile is concealed. IS_OPAQUE_TURF wants ALL_CARDINALS.
 /atom/movable/demir_apply_light()
