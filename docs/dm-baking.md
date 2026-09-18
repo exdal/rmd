@@ -18,7 +18,7 @@ updates, and verifies that the complete derived appearance layer returns to its 
 
 ## Profiles
 
-The compiler prelude declares six hooks without bodies:
+The compiler prelude declares seven hooks without bodies:
 
 ```dm
 /proc/demir_initialize()
@@ -27,6 +27,7 @@ The compiler prelude declares six hooks without bodies:
 /proc/demir_highlights(atom/target)
 /proc/demir_light(atom/target)
 /proc/demir_bake(atom/target)
+/proc/demir_ui(atom/target)
 ```
 
 A codebase opts in by shipping a profile, a DM file that gives one or more of them a body. The
@@ -105,6 +106,96 @@ shape draw one continuous border.
 tgstation's profile uses it to show what area a `/obj/docking_port` covers, deriving a mobile port's
 extent from the shuttle map's own bounds the way `calculate_docking_port_information()` does.
 
+`demir_ui` draws the profile's own editor panel. It is the one hook that does not belong to a bake
+stage: the editor calls it once per frame with the selected atom, or null. The `imgui_*` procs are
+blocked everywhere else:
+
+| proc                                        | answers                    |
+| ------------------------------------------- | -------------------------- |
+| `imgui_begin(label)`, `imgui_end()`         | whether the window is open |
+| `imgui_tree(label)`, `imgui_tree_end()`     | whether the node is open   |
+| `imgui_collapsing_header(label)`            | whether the header is open |
+| `imgui_button(label)`                       | whether it was pressed     |
+| `imgui_checkbox(label, checked)`            | the checked state          |
+| `imgui_radio(label, active)`                | whether it was picked      |
+| `imgui_slider(label, value, min, max)`      | the value                  |
+| `imgui_drag(label, value, speed, min, max)` | the value                  |
+| `imgui_input_text(label, value)`            | the text                   |
+| `imgui_text(text)`                          | nothing                    |
+| `imgui_text_colored(color, text)`           | nothing                    |
+| `imgui_separator(label)`                    | nothing                    |
+| `imgui_same_line()`                         | nothing                    |
+| `imgui_dockspace()`                         | the editor's dockspace     |
+| `imgui_set_next_window_dock(dockspace)`     | nothing                    |
+| `imgui_set_next_window_size(width, height)` | nothing                    |
+| `demir_rebake(kinds, groups)`               | nothing                    |
+
+`demir_define_group(group, type)` is the one other proc a profile calls, from `demir_initialize`
+rather than the panel. It puts a type and everything under it in a group, which is a bit whose
+meaning is the profile's own; rmd only matches them. A type may join several groups, and a group may
+name as many types as it likes.
+
+A widget is identified by the path of labels enclosing it, so the same label under two nodes stays
+two widgets and a repeated one under the same node keeps a stable identity across frames. Pair
+`imgui_tree_end()` with an open node only; the baker closes a collapsed one, and closes whatever a
+profile that returns early left open, so the editor never replays an unbalanced stream.
+
+The editor, not the profile, remembers what the viewer set, and it answers a frame later: a widget
+starts from the profile's own value and reports the edited one on every frame after, and a button
+answers true on the frame after it is pressed.
+
+Writes roll back on every frame but the one that first carries a click or an edit and writes
+something. That is what lets a profile keep panel state in an ordinary global or static datum, which
+the other hooks then read, without an idle profile growing the heap sixty times a second. An
+interaction the profile drops keeps nothing, so a button it ignores costs no work.
+
+A frame that keeps its writes re-derives whatever it asked `demir_rebake` for, against the runtime
+the full bake already initialized; `demir_initialize()` does not run again, so the state survives. A
+frame that asks for nothing re-derives nothing, so a profile that writes state without calling it
+draws a panel whose switches never take effect.
+
+`kinds` is a combinable `DEMIR_BAKE_APPEARANCE`, `_LIGHT` and `_HIGHLIGHT`. `groups` selects the
+placements whose type `demir_define_group` put in one of them, and zero, or omitted, means all of
+them. Several calls in a frame add up, and a request held back while a slider is being dragged
+merges into the next. Naming a group is what keeps a panel responsive: on tgstation's Deltastation,
+re-deriving appearances for every one of 182,598 placements takes 2.6s, where the disposal pipes
+take 42ms and the cables 156ms.
+
+An option whose reach is not a type subtree simply names no group and pays for the whole map, which
+is what tgstation's smoothing toggle does: `smoothing_flags` is declared at a hundred-odd scattered
+types, so there is no honest set to register.
+
+Relighting first clears the neutral schema on the objects it covers, so a source the panel switched
+off falls back to the values its own type declares instead of keeping the ones it was handed before.
+
+`imgui_radio` answers like `imgui_button`, so a group is a run of them over one stored value:
+
+```dm
+if(imgui_radio("Wide", options.shape == SHAPE_WIDE))
+	options.shape = SHAPE_WIDE
+```
+
+Every other widget answers with its value, so the profile, which is holding the old one anyway,
+compares to find out what the viewer changed and what that costs:
+
+```dm
+var/cables = imgui_checkbox("Cables", options.show_cables)
+if(cables != options.show_cables)
+	options.show_cables = cables
+	demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_CABLES)
+```
+
+`examples/profiles/tgstation.dm` keeps its options in a `/datum/demir_options` on a global, and
+`demir_bake` and `demir_apply_light` read it to turn smoothing and lighting off from the panel. Its
+under-floor checkboxes are the reason the hook can reach appearances at all: tgstation covers
+cables, pipes and disposals with a floor tile through `/datum/element/undertile`, which reacts to
+`COMSIG_OBJ_HIDE` from `levelupdate()`. No components or signals run in a bake, so nothing ever
+hides them and every network floats over the tiles. The profile reads the turf's own
+`underfloor_accessibility` instead and reproduces the result, with a checkbox per network and one
+more for half alpha. Atmos pipes are gated on `hide`, since `setup_hiding()` skips the `/visible`
+subtypes that set it false, and only a network not already on `FLOOR_PLANE` is sunk onto it, so a
+cable keeps the per-layer offsets it orders itself by.
+
 ## Runtime model
 
 `vm::bake::Bake` owns a `Runtime`, the placed atoms, runtime objects, the world position index,
@@ -135,6 +226,9 @@ A full bake has seven ordered stages:
 6. **Light** calls `demir_light` once per runtime object, harvests the neutral schema for every
    placement, and solves each z level's shared lighting corners.
 7. **Smooth** calls `demir_bake` for each placement and exports appearance changes.
+
+`demir_ui` runs outside those stages, once per editor frame, and `Bake::rebake` re-runs stages 5
+through 7 when one of its frames keeps its writes.
 
 Initialization uses the VM's normal transaction behavior and commits only when it succeeds. A fault
 is reported once and stops the remaining stages, leaving every atom on its static appearance.
@@ -238,6 +332,12 @@ Palette thumbnails resolve statically. An atom whose static `icon_state` is miss
 which is how smoothed walls are declared, is baked alone in a one cell world at load, and the
 derived appearance is used for its thumbnail. The placement preview still resolves statically.
 
+A profile that defines `demir_ui` draws into the editor's own dockspace, after the map views and
+before the modal dialogs, so its windows dock and float like the editor's. The editor holds the
+widget values, the pressed buttons and the collapsed nodes between frames and forgets the ones the
+profile stopped drawing. A frame that keeps its writes queues a rebake, which is held until no
+widget is being dragged, so working a slider costs one rebake on release rather than one per frame.
+
 The settings tab lists grouped bake faults. It refreshes after every full bake.
 
 ## Sandbox and limits
@@ -246,6 +346,10 @@ Every call receives an instruction budget, call-depth limit, allocation budget, 
 size. The default instruction budget is 100,000 operations, call depth is 48, allocations are capped
 at 100,000 units, and an individual text result is capped at 1 MiB. Randomness is seeded from the
 source type and coordinates, so rebuilding or removing and restoring the same atom is repeatable.
+
+A `demir_ui` frame is bounded as well: 4096 commands, 16 nested windows and nodes, 128 characters
+of label and 1024 of text. An `imgui_*` proc called outside the hook is blocked like any other
+unsupported operation, and the editor logs one fault per distinct kind rather than one per frame.
 
 File access, native libraries, networking, sleep, spawn, timers, and interactive input remain
 blocked. DM `catch` can handle DM throws but cannot swallow sandbox or resource-limit faults. World
@@ -261,7 +365,10 @@ The VM tests cover neighborhood smoothing, incremental remove/restore, determini
 instance-variable cache separation, list-backed neighbor overlays, rolled-back connection metadata,
 bounded recursive appearance export, clipped and edge-tagged highlights restored across edits,
 corner lighting,
-blockers, ambient/fullbright cells, and incremental lightmap restoration. The compiler-driver check exercises preprocessing, semantic
+blockers, ambient/fullbright cells, incremental lightmap restoration, panel state held in a global
+across committed and rolled-back frames, a rebake group narrowing a pass to the placements carrying
+it, and balanced command streams from a profile that left a
+window or node open. The compiler-driver check exercises preprocessing, semantic
 analysis, bytecode generation, map translation, the seven bake stages, summary output, and incremental
 restoration:
 
@@ -279,5 +386,6 @@ edited in `examples/profiles` reports zero until it is copied into the codebase.
 The editor tests cover whole-map baking without changing map bytes, overlay sprites, incremental
 sprites matching a full rebuild, undo and redo through the bake, movable smoothing, standalone
 thumbnails, selection guides and profile highlights across z levels, hiding a type without rebaking,
-and that only a codebase
+replaying a command stream including an unbalanced one, forgetting a widget the profile stopped
+drawing, and that only a codebase
 with a profile bakes.

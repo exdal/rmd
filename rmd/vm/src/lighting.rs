@@ -205,11 +205,16 @@ impl LightingMap {
     }
 
     fn replace(&mut self, id: u64, atom: Option<LightingAtom>, track: bool) {
+        let atom = atom.filter(|atom| atom.affects_lighting());
+        if self.atoms.get(&id) == atom.as_ref() {
+            return;
+        }
+
         if let Some(old) = self.atoms.remove(&id) {
             self.apply(id, old, false, track);
         }
 
-        if let Some(atom) = atom.filter(|atom| atom.affects_lighting()) {
+        if let Some(atom) = atom {
             self.atoms.insert(id, atom);
             self.apply(id, atom, true, track);
         }

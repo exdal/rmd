@@ -37,6 +37,9 @@ pub struct Runtime {
     pub heap: Heap,
     pub world: World,
     pub icons: crate::IconStates,
+    pub(crate) ui: crate::ui::Panel,
+    pub(crate) groups: std::collections::HashMap<TypeId, u32>,
+    pub(crate) defining_groups: bool,
     output: Vec<String>,
     pub(crate) global: Option<ObjectId>,
     pub(crate) world_object: Option<ObjectId>,
@@ -92,7 +95,7 @@ impl Runtime {
         evaluator.write_field(target, name, value)
     }
 
-    fn ensure_global(&mut self) -> Result<()> {
+    pub(crate) fn ensure_global(&mut self) -> Result<()> {
         if self.global.is_none() {
             self.global = Some(
                 self.heap

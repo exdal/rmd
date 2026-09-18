@@ -3,7 +3,10 @@ use core::{
     path::TreePath,
     types::{Identifier, Value},
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use objtree::{ObjectTree, TypeId};
 
@@ -16,6 +19,7 @@ use crate::{
     bake::{
         Atom,
         Bake,
+        BakeUpdate,
         HIGHLIGHT_ALWAYS,
         HIGHLIGHT_EDGE_NORTH,
         HIGHLIGHT_EDGE_SOUTH,
@@ -26,6 +30,7 @@ use crate::{
     },
     eval::Evaluator,
     heap::{Object, ObjectId},
+    ui::{Command, Feedback, Rebake, Value as UiValue},
     world::Position,
 };
 
@@ -88,6 +93,16 @@ fn wall_patch(tree: &ObjectTree) -> Vec<Atom> {
     }
 
     atoms
+}
+
+fn baked_alpha(bake: &Bake, id: u64) -> Option<f32> {
+    bake.appearances
+        .get(&id)?
+        .vars
+        .iter()
+        .find(|(name, _)| name.as_str() == "alpha")?
+        .1
+        .as_num()
 }
 
 fn baked_state(bake: &Bake, id: u64) -> Option<&str> {
@@ -263,6 +278,647 @@ fn profile_highlights_are_clipped_edged_and_restored_across_edits() {
 
     bake.update(&tree, &module, vec![centered], &[]);
     assert_eq!(bake.highlights(1).len(), 2);
+}
+
+#[test]
+fn profile_ui_draws_widgets_and_reads_back_what_the_editor_remembers() {
+    let (tree, module) = compile(
+        r##"
+/obj/panel
+    var/glow = 40
+/proc/demir_ui(atom/target)
+    if(!imgui_begin("Panel"))
+        imgui_end()
+        return
+    imgui_text("[target.name]")
+    if(imgui_button("Reset"))
+        imgui_text("reset")
+    var/obj/panel/panel = target
+    target.name = "ui writes are rolled back"
+    if(imgui_checkbox("lit", 1))
+        imgui_slider("glow", panel.glow, 0, 255)
+    imgui_end()
+"##,
+    );
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        vec![Atom {
+            instance: 1,
+            ty: tree.id_of(&TreePath::parse("/obj/panel")).expect("ui fixture type"),
+            position: Position::new(1, 1, 1),
+            vars: Vec::new(),
+        }],
+        [3, 3, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    let commands = bake
+        .ui(&tree, &module, Some(1), 7, Feedback::default())
+        .expect("the hook should draw")
+        .commands;
+    let [
+        Command::Begin { key, dock, .. },
+        Command::Text { .. },
+        Command::Button { .. },
+        Command::Checkbox { value: true, .. },
+        Command::Slider { key: slider, value, .. },
+        Command::End,
+    ] = commands.as_slice()
+    else {
+        panic!("unexpected command stream: {commands:#?}");
+    };
+    assert_eq!(key, "Panel", "the window keys off its own label");
+    assert_eq!(slider, "Panel/glow", "widgets key off the windows enclosing them");
+    assert_eq!(*dock, None, "a window only docks when the profile asks");
+    assert_eq!(*value, 40.0, "the profile's own value starts the widget");
+
+    let object = bake.object(1).expect("panel runtime object");
+    assert_eq!(
+        bake.runtime
+            .heap
+            .object(object)
+            .and_then(|object| object.vars.get(&Identifier::from("name"))),
+        None,
+    );
+
+    let feedback = Feedback {
+        values: HashMap::from([
+            (String::from("Panel/glow"), UiValue::Num(200.0)),
+            (String::from("Panel/lit"), UiValue::Bool(false)),
+        ]),
+        clicks: HashSet::from([String::from("Panel/Reset")]),
+        closed: HashSet::new(),
+        interacted: true,
+    };
+    let commands = bake
+        .ui(&tree, &module, Some(1), 7, feedback)
+        .expect("second frame")
+        .commands;
+    let [
+        Command::Begin { .. },
+        Command::Text { .. },
+        Command::Button { .. },
+        Command::Text { text, .. },
+        Command::Checkbox { value: false, .. },
+        Command::End,
+    ] = commands.as_slice()
+    else {
+        panic!("unexpected command stream: {commands:#?}");
+    };
+    assert_eq!(text, "reset", "a press is answered on the frame after");
+
+    let closed = Feedback {
+        closed: HashSet::from([String::from("Panel")]),
+        ..Default::default()
+    };
+    let commands = bake
+        .ui(&tree, &module, Some(1), 7, closed)
+        .expect("collapsed frame")
+        .commands;
+    assert!(
+        matches!(commands.as_slice(), [Command::Begin { .. }, Command::End]),
+        "a collapsed window draws nothing inside",
+    );
+}
+
+#[test]
+fn profile_ui_rejects_drawing_outside_a_window() {
+    let (tree, module) = compile(
+        r#"
+/proc/demir_ui(atom/target)
+    imgui_text("orphan")
+"#,
+    );
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        Vec::new(),
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    let fault = bake
+        .ui(&tree, &module, None, 0, Feedback::default())
+        .expect_err("a widget outside imgui_begin is a fault");
+    assert!(
+        matches!(&fault.kind, FaultKind::InvalidOperation(message) if message.contains("outside of imgui_begin")),
+        "{fault:?}",
+    );
+}
+
+#[test]
+fn imgui_procs_are_blocked_outside_the_ui_hook() {
+    let (tree, module) = compile(
+        r#"
+/proc/demir_bake(atom/target)
+    imgui_text("nope")
+"#,
+    );
+    let fault = Runtime::default()
+        .run(
+            &tree,
+            &module,
+            proc(&tree, "demir_bake"),
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
+        .expect_err("imgui only runs inside demir_ui");
+    assert!(
+        matches!(&fault.kind, FaultKind::Blocked(message) if message.contains("outside demir_ui")),
+        "{fault:?}",
+    );
+}
+
+#[test]
+fn profile_ui_state_survives_in_globals_and_a_committed_frame_rebakes() {
+    let (tree, module) = compile(
+        r##"
+/datum/panel_state
+    var/lit = 1
+
+/obj/lamp
+
+var/global/datum/panel_state/panel
+
+/proc/demir_initialize()
+    panel = new /datum/panel_state
+    demir_define_group(2, /obj/lamp)
+
+/proc/demir_ui(atom/target)
+    if(!imgui_begin("Panel"))
+        imgui_end()
+        return
+    var/lit = imgui_checkbox("lit", panel.lit)
+    if(lit != panel.lit)
+        panel.lit = lit
+        demir_rebake(DEMIR_BAKE_APPEARANCE | DEMIR_BAKE_LIGHT, 2)
+    imgui_end()
+
+/proc/demir_light(atom/target)
+    if(panel.lit)
+        target.demir_light_range = 3
+        target.demir_light_power = 1
+
+/proc/demir_bake(atom/target)
+    target.icon_state = panel.lit ? "on" : "off"
+"##,
+    );
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        vec![Atom {
+            instance: 1,
+            ty: tree.id_of(&TreePath::parse("/obj/lamp")).expect("lamp type"),
+            position: Position::new(2, 2, 1),
+            vars: Vec::new(),
+        }],
+        [3, 3, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    assert_eq!(baked_state(&bake, 1), Some("on"));
+    let lit = bake.lighting.clone().expect("the light hook exports a lightmap");
+    assert!(lit.tile(Position::new(2, 2, 1)).expect("lamp tile").corners[0][0] > 0.0);
+
+    let unchecked = Feedback {
+        values: HashMap::from([(String::from("Panel/lit"), UiValue::Bool(false))]),
+        ..Default::default()
+    };
+    let quiet = bake
+        .ui(&tree, &module, None, 0, unchecked.clone())
+        .expect("a quiet frame still draws");
+    assert!(!quiet.committed, "only the frame the viewer touched keeps its writes");
+    assert!(
+        quiet.rebake.is_empty(),
+        "a rolled-back frame asked on behalf of state that no longer exists",
+    );
+    assert_eq!(baked_state(&bake, 1), Some("on"));
+
+    let committed = bake
+        .ui(
+            &tree,
+            &module,
+            None,
+            0,
+            Feedback {
+                interacted: true,
+                ..unchecked
+            },
+        )
+        .expect("the interaction frame draws");
+    assert!(committed.committed);
+    assert_eq!(
+        committed.rebake,
+        Rebake {
+            appearance: Some(2),
+            light: Some(2),
+            highlight: None,
+        },
+        "the profile names the stages and the group its option drives",
+    );
+
+    let update = bake.rebake(&tree, &module, committed.rebake);
+    assert_eq!(update.appearances, vec![1], "the lamp is re-derived from the new state");
+    assert_eq!(baked_state(&bake, 1), Some("off"));
+    assert_eq!(
+        update.lighting,
+        Some(0..9),
+        "the source the panel switched off is re-solved"
+    );
+    assert!(
+        bake.lighting
+            .as_ref()
+            .expect("lightmap")
+            .tile(Position::new(2, 2, 1))
+            .expect("lamp tile")
+            .corners
+            .iter()
+            .all(|corner| corner[0] == 0.0),
+        "clearing the neutral schema is what drops the range the lamp used to have",
+    );
+}
+
+#[test]
+fn profile_ui_radios_pick_one_mode_and_the_rebake_follows_it() {
+    let (tree, module) = compile(
+        r##"
+/datum/panel_state
+    var/mode = 0
+
+/obj/pipe
+    alpha = 255
+
+var/global/datum/panel_state/panel
+
+/proc/demir_initialize()
+    panel = new /datum/panel_state
+
+/proc/demir_ui(atom/target)
+    if(!imgui_begin("Panel"))
+        imgui_end()
+        return
+    if(imgui_radio("Hidden", panel.mode == 0))
+        panel.mode = 0
+    if(imgui_radio("Shown", panel.mode == 1))
+        panel.mode = 1
+        demir_rebake(DEMIR_BAKE_APPEARANCE)
+    imgui_end()
+
+/proc/demir_bake(atom/target)
+    target.alpha = panel.mode ? 128 : 0
+"##,
+    );
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        vec![Atom {
+            instance: 1,
+            ty: tree.id_of(&TreePath::parse("/obj/pipe")).expect("pipe type"),
+            position: Position::new(1, 1, 1),
+            vars: Vec::new(),
+        }],
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    assert_eq!(
+        baked_alpha(&bake, 1),
+        Some(0.0),
+        "the profile's own default wins at load"
+    );
+
+    let frame = bake
+        .ui(&tree, &module, None, 0, Feedback::default())
+        .expect("the hook should draw");
+    let [
+        _,
+        Command::Radio {
+            key: hidden,
+            active: true,
+            ..
+        },
+        Command::Radio {
+            key: shown,
+            active: false,
+            ..
+        },
+        _,
+    ] = frame.commands.as_slice()
+    else {
+        panic!("unexpected command stream: {:#?}", frame.commands);
+    };
+    assert_eq!(hidden, "Panel/Hidden");
+    assert_eq!(shown, "Panel/Shown");
+
+    let picked = bake
+        .ui(
+            &tree,
+            &module,
+            None,
+            0,
+            Feedback {
+                clicks: HashSet::from([String::from("Panel/Shown")]),
+                interacted: true,
+                ..Default::default()
+            },
+        )
+        .expect("the interaction frame draws");
+    assert!(picked.committed, "picking a radio is an edit like any other");
+
+    assert_eq!(
+        picked.rebake,
+        Rebake {
+            appearance: Some(0),
+            ..Default::default()
+        }
+    );
+    assert_eq!(bake.rebake(&tree, &module, picked.rebake).appearances, vec![1]);
+    assert_eq!(baked_alpha(&bake, 1), Some(128.0));
+
+    let settled = bake
+        .ui(&tree, &module, None, 0, Feedback::default())
+        .expect("the frame after draws");
+    let [
+        _,
+        Command::Radio { active: false, .. },
+        Command::Radio { active: true, .. },
+        _,
+    ] = settled.commands.as_slice()
+    else {
+        panic!("the pick should hold: {:#?}", settled.commands);
+    };
+}
+
+#[test]
+fn a_rebake_group_narrows_the_pass_to_the_placements_that_carry_it() {
+    let (tree, module) = compile(
+        r##"
+/datum/panel_state
+    var/tint = 0
+
+/obj/cable
+/obj/pipe
+
+var/global/datum/panel_state/panel
+
+/proc/demir_initialize()
+    panel = new /datum/panel_state
+    demir_define_group(1, /obj/cable)
+    demir_define_group(2, /obj/pipe)
+
+/proc/demir_ui(atom/target)
+    if(!imgui_begin("Panel"))
+        imgui_end()
+        return
+    var/tint = imgui_slider("tint", panel.tint, 0, 255)
+    if(tint != panel.tint)
+        panel.tint = tint
+        demir_rebake(DEMIR_BAKE_APPEARANCE, 1)
+    imgui_end()
+
+/proc/demir_bake(atom/target)
+    target.alpha = panel.tint
+"##,
+    );
+    let atom = |instance: u64, path: &str, x: i32| Atom {
+        instance,
+        ty: tree.id_of(&TreePath::parse(path)).expect("fixture type"),
+        position: Position::new(x, 1, 1),
+        vars: Vec::new(),
+    };
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        vec![atom(1, "/obj/cable", 1), atom(2, "/obj/pipe", 3)],
+        [3, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    let frame = bake
+        .ui(
+            &tree,
+            &module,
+            None,
+            0,
+            Feedback {
+                values: HashMap::from([(String::from("Panel/tint"), UiValue::Num(80.0))]),
+                interacted: true,
+                ..Default::default()
+            },
+        )
+        .expect("the interaction frame draws");
+    assert_eq!(
+        frame.rebake,
+        Rebake {
+            appearance: Some(1),
+            ..Default::default()
+        }
+    );
+
+    assert_eq!(
+        bake.rebake(&tree, &module, frame.rebake).appearances,
+        vec![1],
+        "only the placement carrying the group is re-derived",
+    );
+    assert_eq!(baked_alpha(&bake, 1), Some(80.0));
+    assert_eq!(
+        baked_alpha(&bake, 2),
+        Some(0.0),
+        "the pipe keeps the appearance the load gave it",
+    );
+
+    assert_eq!(
+        bake.rebake(&tree, &module, Rebake::default()),
+        BakeUpdate::default(),
+        "a frame that asks for nothing re-derives nothing",
+    );
+}
+
+#[test]
+fn a_rebake_group_covers_the_subtypes_of_what_it_named() {
+    let (tree, module) = compile(
+        r##"
+/obj/cable
+/obj/cable/layered
+/obj/pipe
+
+/proc/demir_initialize()
+    demir_define_group(1, /obj/cable)
+
+/proc/demir_ui(atom/target)
+    if(imgui_begin("Panel"))
+        if(imgui_button("Redo"))
+            demir_rebake(DEMIR_BAKE_APPEARANCE, 1)
+    imgui_end()
+
+/proc/demir_bake(atom/target)
+    target.alpha = 100
+"##,
+    );
+    let atom = |instance: u64, path: &str, x: i32| Atom {
+        instance,
+        ty: tree.id_of(&TreePath::parse(path)).expect("fixture type"),
+        position: Position::new(x, 1, 1),
+        vars: Vec::new(),
+    };
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        vec![
+            atom(1, "/obj/cable", 1),
+            atom(2, "/obj/cable/layered", 2),
+            atom(3, "/obj/pipe", 3),
+        ],
+        [3, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    // Nothing has changed, so a re-derivation reports nothing; what it walked is what matters.
+    assert_eq!(bake.attempted, 3);
+    bake.rebake(
+        &tree,
+        &module,
+        Rebake {
+            appearance: Some(1),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        bake.attempted, 5,
+        "the named type and its subtype are redone, and the unrelated one is not",
+    );
+}
+
+#[test]
+fn defining_a_rebake_group_outside_initialize_is_blocked() {
+    let (tree, module) = compile(
+        r#"
+/proc/demir_bake(atom/target)
+    demir_define_group(1, /obj)
+"#,
+    );
+    let fault = Runtime::default()
+        .run(
+            &tree,
+            &module,
+            proc(&tree, "demir_bake"),
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
+        .expect_err("groups are declared once, at initialization");
+    assert!(
+        matches!(&fault.kind, FaultKind::Blocked(message) if message.contains("outside demir_initialize")),
+        "{fault:?}",
+    );
+}
+
+#[test]
+fn a_ui_interaction_the_profile_ignores_keeps_nothing() {
+    let (tree, module) = compile(
+        r#"
+/proc/demir_ui(atom/target)
+    if(imgui_begin("Panel"))
+        imgui_button("Does nothing")
+    imgui_end()
+"#,
+    );
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        Vec::new(),
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    let frame = bake
+        .ui(
+            &tree,
+            &module,
+            None,
+            0,
+            Feedback {
+                clicks: HashSet::from([String::from("Panel/Does nothing")]),
+                interacted: true,
+                ..Default::default()
+            },
+        )
+        .expect("the hook should draw");
+
+    assert!(
+        !frame.committed,
+        "a press the profile drops leaves nothing to keep, and so nothing to re-derive",
+    );
+}
+
+#[test]
+fn profile_ui_streams_stay_balanced_when_the_profile_leaves_them_open() {
+    let (tree, module) = compile(
+        r#"
+/proc/demir_ui(atom/target)
+    imgui_begin("Panel")
+    if(imgui_tree("Nested"))
+        imgui_text("only when open")
+        imgui_tree_end()
+    imgui_text("after")
+"#,
+    );
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        Vec::new(),
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    let open = bake
+        .ui(&tree, &module, None, 0, Feedback::default())
+        .expect("the hook should draw");
+    assert!(
+        matches!(
+            open.commands.as_slice(),
+            [
+                Command::Begin { .. },
+                Command::Tree { .. },
+                Command::Text { .. },
+                Command::TreeEnd,
+                Command::Text { .. },
+                Command::End,
+            ],
+        ),
+        "a missing imgui_end() is closed for the profile: {:#?}",
+        open.commands,
+    );
+
+    let collapsed = Feedback {
+        closed: HashSet::from([String::from("Panel/Nested")]),
+        ..Default::default()
+    };
+    let closed = bake
+        .ui(&tree, &module, None, 0, collapsed)
+        .expect("the collapsed frame draws");
+    assert!(
+        matches!(
+            closed.commands.as_slice(),
+            [
+                Command::Begin { .. },
+                Command::Tree { .. },
+                Command::TreeEnd,
+                Command::Text { .. },
+                Command::End,
+            ],
+        ),
+        "a collapsed node closes itself, since the profile only pairs an open one: {:#?}",
+        closed.commands,
+    );
 }
 
 #[test]

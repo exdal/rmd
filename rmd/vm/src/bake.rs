@@ -24,13 +24,14 @@ use crate::{
     world::Position,
 };
 
-const HOOKS: [&str; 6] = [
+const HOOKS: [&str; 7] = [
     "demir_initialize",
     "demir_prepare",
     "demir_connections",
     "demir_highlights",
     "demir_light",
     "demir_bake",
+    "demir_ui",
 ];
 
 const CONNECTION_SOURCE: u8 = 1;
@@ -50,6 +51,27 @@ const HIGHLIGHT_MAX_PER_ATOM: usize = 16;
 const HIGHLIGHT_MAX_LABEL: usize = 64;
 const HIGHLIGHT_DEFAULT_COLOR: [f32; 3] = [1.0, 0.5, 0.0];
 
+const LIGHT_SCHEMA: [&str; 18] = [
+    "demir_light_range",
+    "demir_light_inner_range",
+    "demir_light_power",
+    "demir_light_color",
+    "demir_light_angle",
+    "demir_light_dir",
+    "demir_light_offset_x",
+    "demir_light_offset_y",
+    "demir_light_height",
+    "demir_light_curve",
+    "demir_light_peak",
+    "demir_light_edge_only",
+    "demir_light_quadratic",
+    "demir_light_constant",
+    "demir_blocks_light",
+    "demir_ambient_color",
+    "demir_ambient_power",
+    "demir_fullbright",
+];
+
 /// `#ifdef __DEMIR_BAKE__` around one or more bake hooks in the codebase.
 pub fn has_profile(tree: &ObjectTree) -> bool { HOOKS.iter().any(|name| hook(tree, name).is_some()) }
 
@@ -66,6 +88,7 @@ struct Hooks {
     highlights: Option<ProcId>,
     light: Option<ProcId>,
     bake: Option<ProcId>,
+    ui: Option<ProcId>,
 }
 
 impl Hooks {
@@ -77,6 +100,7 @@ impl Hooks {
             highlights: hook(tree, "demir_highlights"),
             light: hook(tree, "demir_light"),
             bake: hook(tree, "demir_bake"),
+            ui: hook(tree, "demir_ui"),
         }
     }
 }
@@ -89,7 +113,7 @@ pub struct Atom {
     pub vars: Vec<(Identifier, Value)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BakeUpdate {
     pub appearances: Vec<u64>,
     pub lighting: Option<Range<usize>>,
@@ -205,6 +229,7 @@ pub struct Bake {
     connection_index: HashMap<String, ConnectionChannel>,
     highlights: HashMap<u64, Vec<Highlight>>,
     highlight_faults: HashMap<u64, Fault>,
+    type_groups: HashMap<TypeId, u32>,
     hooks: Hooks,
 }
 
@@ -365,6 +390,20 @@ impl Bake {
         self.highlights.iter().map(|(id, list)| (*id, list.as_slice()))
     }
 
+    pub fn ui(
+        &mut self, tree: &ObjectTree, module: &Module, target: Option<u64>, dockspace: u32,
+        feedback: crate::ui::Feedback,
+    ) -> Result<crate::ui::Frame, Fault> {
+        let Some(proc) = self.hooks.ui else {
+            return Ok(crate::ui::Frame::default());
+        };
+
+        let target = target.and_then(|id| self.objects.get(&id).copied());
+
+        self.runtime
+            .ui_frame(tree, module, proc, target, dockspace, feedback, self.limits)
+    }
+
     pub fn take_output(&mut self) -> Vec<String> { self.runtime.take_output() }
 
     fn sorted_ids(&self) -> Vec<u64> {
@@ -478,9 +517,11 @@ impl Bake {
             return Ok(());
         };
 
-        self.runtime
-            .run(tree, module, proc, None, Vec::new(), self.limits)
-            .map(|_| ())
+        self.runtime.defining_groups = true;
+        let result = self.runtime.run(tree, module, proc, None, Vec::new(), self.limits);
+        self.runtime.defining_groups = false;
+
+        result.map(|_| ())
     }
 
     fn prepare(&mut self, tree: &ObjectTree, module: &Module, id: u64) {
@@ -1022,6 +1063,94 @@ impl Bake {
             lighting,
         }
     }
+
+    fn type_groups(&mut self, tree: &ObjectTree, ty: TypeId) -> u32 {
+        if let Some(groups) = self.type_groups.get(&ty) {
+            return *groups;
+        }
+
+        let groups = tree
+            .ancestors(ty)
+            .filter_map(|ancestor| self.runtime.groups.get(&ancestor.id))
+            .fold(0, |groups, declared| groups | declared);
+        self.type_groups.insert(ty, groups);
+
+        groups
+    }
+
+    pub fn rebake(&mut self, tree: &ObjectTree, module: &Module, request: crate::ui::Rebake) -> BakeUpdate {
+        if !self.initialized || request.is_empty() {
+            return BakeUpdate::default();
+        }
+
+        self.epoch = self.epoch.wrapping_add(1);
+        let all = self.sorted_ids();
+        let mut carried = Vec::with_capacity(all.len());
+        for id in &all {
+            let ty = self.atoms.get(id).map(|atom| atom.ty);
+            carried.push(ty.map_or(0, |ty| self.type_groups(tree, ty)));
+        }
+
+        let selected = |groups: Option<u32>| match groups {
+            None => Vec::new(),
+            Some(0) => all.clone(),
+            Some(mask) => all
+                .iter()
+                .zip(&carried)
+                .filter(|(_, carried)| **carried & mask != 0)
+                .map(|(id, _)| *id)
+                .collect(),
+        };
+
+        let ids = selected(request.light);
+        if self.hooks.light.is_some() && !ids.is_empty() {
+            let schema = LIGHT_SCHEMA.map(Identifier::from);
+            let objects = ids
+                .iter()
+                .filter_map(|id| self.objects.get(id).copied())
+                .collect::<HashSet<_>>();
+            for object in &objects {
+                self.lit.remove(object);
+                if let Ok(object) = self.runtime.heap.object_mut(*object) {
+                    for name in &schema {
+                        object.vars.remove(name);
+                    }
+                }
+            }
+
+            for id in &ids {
+                self.light(tree, module, *id);
+            }
+
+            if self.lighting.is_some() {
+                for id in &ids {
+                    let light = self.harvest_light(tree, *id);
+                    if let Some(lighting) = self.lighting.as_mut() {
+                        lighting.set(*id, light);
+                    }
+                }
+            }
+        }
+        let lighting = self.lighting.as_mut().and_then(LightingMap::solve_dirty);
+
+        for id in selected(request.highlight) {
+            self.highlight(tree, module, id);
+        }
+
+        let ids = selected(request.appearance);
+        for id in &ids {
+            self.fingerprint(*id);
+        }
+
+        for id in &ids {
+            self.bake_atom(tree, module, *id);
+        }
+
+        BakeUpdate {
+            appearances: self.compose(),
+            lighting,
+        }
+    }
 }
 
 fn finite_or(value: f32, default: f32) -> f32 { if value.is_finite() { value } else { default } }
@@ -1221,18 +1350,10 @@ impl Runtime {
     fn connection_endpoints(
         &mut self, tree: &ObjectTree, module: &Module, proc: ProcId, object: ObjectId, limits: Limits,
     ) -> Result<Vec<ConnectionEndpoint>, Fault> {
-        if self.global.is_none() {
-            self.global = Some(
-                self.heap
-                    .alloc_object(Object::new(TypeId::ROOT))
-                    .map_err(|kind| Fault {
-                        offset: None,
-                        proc: Some(proc),
-                        location: Default::default(),
-                        kind,
-                    })?,
-            );
-        }
+        self.ensure_global().map_err(|fault| Fault {
+            proc: Some(proc),
+            ..fault
+        })?;
 
         self.heap.begin();
         let result = (|| {
@@ -1287,22 +1408,48 @@ impl Runtime {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn ui_frame(
+        &mut self, tree: &ObjectTree, module: &Module, proc: ProcId, target: Option<ObjectId>, dockspace: u32,
+        feedback: crate::ui::Feedback, limits: Limits,
+    ) -> Result<crate::ui::Frame, Fault> {
+        self.ensure_global().map_err(|fault| Fault {
+            proc: Some(proc),
+            ..fault
+        })?;
+
+        let interacted = feedback.interacted;
+        self.ui.begin_frame(dockspace, feedback);
+        self.heap.begin();
+        let result = {
+            let argument = target.map_or(GenericValue::Null, GenericValue::Object);
+            let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, target);
+            evaluator.call(proc, None, vec![(None, argument)])
+        };
+
+        let committed = interacted && result.is_ok() && self.heap.changed();
+        match committed {
+            true => self.heap.commit(),
+            false => self.heap.rollback(),
+        }
+
+        let (commands, rebake) = self.ui.end_frame();
+
+        result.map(|_| crate::ui::Frame {
+            commands,
+            committed,
+            rebake: if committed { rebake } else { Default::default() },
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn highlights(
         &mut self, tree: &ObjectTree, module: &Module, proc: ProcId, object: ObjectId, position: Position,
         size: [i32; 3], limits: Limits,
     ) -> Result<Vec<Highlight>, Fault> {
-        if self.global.is_none() {
-            self.global = Some(
-                self.heap
-                    .alloc_object(Object::new(TypeId::ROOT))
-                    .map_err(|kind| Fault {
-                        offset: None,
-                        proc: Some(proc),
-                        location: Default::default(),
-                        kind,
-                    })?,
-            );
-        }
+        self.ensure_global().map_err(|fault| Fault {
+            proc: Some(proc),
+            ..fault
+        })?;
 
         self.heap.begin();
         let result = (|| {
@@ -1362,18 +1509,10 @@ impl Runtime {
     fn preview(
         &mut self, tree: &ObjectTree, module: &Module, proc: ProcId, object: ObjectId, instance: u64, limits: Limits,
     ) -> Result<Preview, Fault> {
-        if self.global.is_none() {
-            self.global = Some(
-                self.heap
-                    .alloc_object(Object::new(TypeId::ROOT))
-                    .map_err(|kind| Fault {
-                        offset: None,
-                        proc: Some(proc),
-                        location: Default::default(),
-                        kind,
-                    })?,
-            );
-        }
+        self.ensure_global().map_err(|fault| Fault {
+            proc: Some(proc),
+            ..fault
+        })?;
 
         self.heap.begin();
         let (overlays, underlays, icon, icon_state) = NAMES.with(|names| {

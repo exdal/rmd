@@ -1,3 +1,4 @@
+mod dm;
 mod inspector;
 mod object_tree;
 mod settings;
@@ -661,6 +662,7 @@ pub struct UiState {
     map_views: HashMap<DocumentId, MapViewState>,
     central_node: Option<Id>,
     dockspace_root: Option<Id>,
+    dm_ui: dm::DmUi,
     welcome_window: WindowKey,
     inspector: InspectorPanel,
     settings_window: SettingsWindow,
@@ -716,6 +718,7 @@ impl UiState {
             map_views: HashMap::new(),
             central_node: None,
             dockspace_root: None,
+            dm_ui: dm::DmUi::default(),
             welcome_window,
             inspector,
             settings_window,
@@ -1063,9 +1066,14 @@ impl UiState {
         } else {
             self.draw_map_views(ui, session, settings, refit)
         };
+
+        self.dm_ui.draw(ui, session, root.raw());
+
         draw_new_level_dialog(ui, session, &mut self.new_level_dialog, &mut self.new_level_type_path);
+
         self.settings_window
             .finish_keybind_capture(ui, &mut settings.keybindings);
+
         let exit = self.draw_exit_confirmation(ui, session);
         self.popup_was_open = ui.is_popup_open_with_flags("", dear_imgui_rs::PopupQueryFlags::ANY_POPUP);
 
@@ -4083,6 +4091,7 @@ mod tests {
                     keep_open: &mut true,
                 },
             );
+
             self.fill_button = None;
             if let Some(selection) = self.session.selection() {
                 let min = [self.view.rect.x as f32, self.view.rect.y as f32];
@@ -4124,6 +4133,7 @@ mod tests {
                     ],
                 ));
             }
+
             assert!(self.context.render_legacy().valid());
         }
 

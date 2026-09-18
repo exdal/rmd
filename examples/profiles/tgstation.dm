@@ -13,6 +13,13 @@
 // hook sets up only the data the icon selection it drives actually reads.
 #ifdef __DEMIR_BAKE__
 
+// What each panel option drives, so a change re-derives that and nothing else. The types in each
+// group are declared once in demir_initialize().
+#define DEMIR_GROUP_CABLES (1<<0)
+#define DEMIR_GROUP_PIPES (1<<1)
+#define DEMIR_GROUP_DISPOSALS (1<<2)
+#define DEMIR_GROUP_UNDERFLOOR (DEMIR_GROUP_CABLES | DEMIR_GROUP_PIPES | DEMIR_GROUP_DISPOSALS)
+
 // Run the codebase's smoothing setup without starting game subsystems.
 /datum/controller/subsystem/mapping/demir_preview/New()
 	SSmapping = src
@@ -291,6 +298,57 @@
 		preview.appearance = spawned.appearance
 		overlays += preview
 
+// Cables and pipes are covered by a floor tile through /datum/element/undertile, which reacts to
+// COMSIG_OBJ_HIDE from levelupdate(). No signals or elements run here, so read the turf's own
+// accessibility instead and apply the same result.
+// Null for anything the element never covers, so a shown one is told apart from an untouched one.
+/atom/movable/proc/demir_underfloor_shown()
+	return null
+
+/obj/structure/cable/demir_underfloor_shown()
+	return demir_options.show_cables
+
+/obj/machinery/power/terminal/demir_underfloor_shown()
+	return demir_options.show_cables
+
+// setup_hiding() runs only when hide is set, so the /visible subtypes never take the element.
+/obj/machinery/atmospherics/pipe/demir_underfloor_shown()
+	return hide ? demir_options.show_pipes : null
+
+/obj/machinery/duct/demir_underfloor_shown()
+	return demir_options.show_pipes
+
+/obj/structure/disposalpipe/demir_underfloor_shown()
+	return demir_options.show_disposals
+
+/obj/structure/disposalconstruct/demir_underfloor_shown()
+	return demir_options.show_disposals
+
+/atom/movable/proc/demir_apply_underfloor()
+	var/shown = demir_underfloor_shown()
+	if(isnull(shown))
+		return
+
+	var/turf/our_turf = loc
+	if(!isturf(our_turf) || our_turf.underfloor_accessibility >= UNDERFLOOR_VISIBLE)
+		return
+
+	if(!shown)
+		alpha = 0
+		return
+
+	if(demir_options.fade_underfloor)
+		// undertile.dm undefines its own ALPHA_UNDERTILE before this profile is included.
+		alpha = 128
+
+	// The element sinks whatever it leaves visible onto the floor plane, and only what is not already
+	// there. Without it a pipe covers the machines standing on its own tile; with the guard a cable
+	// keeps the per-cable-layer offsets it draws its ordering from. Assigned rather than
+	// SET_PLANE_IMPLICIT because the multi-z plane offsets that consults mean nothing to a bake.
+	if(plane != FLOOR_PLANE)
+		plane = FLOOR_PLANE
+		layer = BELOW_CATWALK_LAYER
+
 /obj/machinery/door/airlock/proc/demir_bake_appearance()
 	if(glass)
 		airlock_material = "glass"
@@ -382,9 +440,78 @@
 
 	return highlight ? list(highlight) : null
 
+// demir_ui() rolls its writes back on every frame but the one the viewer touched something on, so
+// a global datum is where panel state belongs. Every other hook reads it, and the frame that
+// changes it re-derives appearances, highlights and lighting.
+/datum/demir_options
+	var/smooth = TRUE
+	var/lighting = TRUE
+	var/show_cables = TRUE
+	var/show_pipes = TRUE
+	var/show_disposals = TRUE
+	var/fade_underfloor = FALSE
+
+var/global/datum/demir_options/demir_options
+
 /proc/demir_initialize()
 	if(!GLOB)
 		GLOB = new /datum/controller/global_vars/demir_preview
+	demir_options = new /datum/demir_options
+
+	// A group is a type and everything under it, so the /visible atmos pipes join DEMIR_GROUP_PIPES
+	// too. Re-deriving one that was never hidden costs a preview and changes nothing.
+	demir_define_group(DEMIR_GROUP_CABLES, /obj/structure/cable)
+	demir_define_group(DEMIR_GROUP_CABLES, /obj/machinery/power/terminal)
+	demir_define_group(DEMIR_GROUP_PIPES, /obj/machinery/atmospherics/pipe)
+	demir_define_group(DEMIR_GROUP_PIPES, /obj/machinery/duct)
+	demir_define_group(DEMIR_GROUP_DISPOSALS, /obj/structure/disposalpipe)
+	demir_define_group(DEMIR_GROUP_DISPOSALS, /obj/structure/disposalconstruct)
+
+/proc/demir_ui(atom/target)
+	if(!imgui_begin("Demir"))
+		imgui_end()
+		return
+
+	imgui_separator("Baking")
+	var/smooth = imgui_checkbox("Smooth walls", demir_options.smooth)
+	if(smooth != demir_options.smooth)
+		demir_options.smooth = smooth
+		// Smoothing is declared at a hundred-odd scattered types, so there is no honest group for it.
+		demir_rebake(DEMIR_BAKE_APPEARANCE)
+
+	var/lighting = imgui_checkbox("Lighting", demir_options.lighting)
+	if(lighting != demir_options.lighting)
+		demir_options.lighting = lighting
+		// Every area carries the fullbright flag, so this one is not worth narrowing.
+		demir_rebake(DEMIR_BAKE_LIGHT)
+
+	imgui_separator("Under-floor")
+	var/cables = imgui_checkbox("Cables", demir_options.show_cables)
+	if(cables != demir_options.show_cables)
+		demir_options.show_cables = cables
+		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_CABLES)
+
+	var/pipes = imgui_checkbox("Pipes", demir_options.show_pipes)
+	if(pipes != demir_options.show_pipes)
+		demir_options.show_pipes = pipes
+		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_PIPES)
+
+	var/disposals = imgui_checkbox("Disposals", demir_options.show_disposals)
+	if(disposals != demir_options.show_disposals)
+		demir_options.show_disposals = disposals
+		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_DISPOSALS)
+
+	var/fade = imgui_checkbox("Semitransparent", demir_options.fade_underfloor)
+	if(fade != demir_options.fade_underfloor)
+		demir_options.fade_underfloor = fade
+		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_UNDERFLOOR)
+
+	if(target)
+		imgui_separator("Selection")
+		imgui_text("[target.type]")
+		imgui_text("[target.name]")
+
+	imgui_end()
 
 /proc/demir_prepare(atom/target)
 	target.demir_prepare_smoothing()
@@ -418,11 +545,12 @@
 	else if(istype(target, /obj/machinery/atmospherics))
 		var/obj/machinery/atmospherics/atmos_target = target
 		atmos_target.demir_bake_connections()
-	else if(target.smoothing_flags & USES_SMOOTHING)
+	else if(demir_options.smooth && (target.smoothing_flags & USES_SMOOTHING))
 		target.smooth_icon()
 	if(ismovable(target))
 		var/atom/movable/movable_target = target
 		movable_target.demir_add_overlay_light()
+		movable_target.demir_apply_underfloor()
 	target.demir_tag_emissive()
 
 /proc/fast_emissive_blocker(atom/target)
@@ -471,7 +599,9 @@
 	demir_light_edge_only = 1
 
 /area/demir_apply_light()
-	demir_fullbright = !static_lighting
+	// Switching lighting off lights the whole map rather than blacking it out, which is what a
+	// mapper wants from the toggle.
+	demir_fullbright = !demir_options.lighting || !static_lighting
 	demir_ambient_color = base_lighting_color
 	demir_ambient_power = base_lighting_alpha / 255
 
@@ -520,5 +650,10 @@
 	if(opacity && (flags_1 & ON_BORDER_1))
 		demir_blocks_light = 0
 	return ..()
+
+#undef DEMIR_GROUP_CABLES
+#undef DEMIR_GROUP_PIPES
+#undef DEMIR_GROUP_DISPOSALS
+#undef DEMIR_GROUP_UNDERFLOOR
 
 #endif

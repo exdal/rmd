@@ -203,6 +203,47 @@ impl Evaluator<'_> {
             | Intrinsic::DmDatabase
             | Intrinsic::MakeGenerator => Err(self.fault(FaultKind::Blocked(name.into()))),
 
+            Intrinsic::DemirDefineGroup => {
+                if !self.runtime.defining_groups {
+                    return Err(self.fault(FaultKind::Blocked(format!("{name} outside demir_initialize"))));
+                }
+
+                let group = args.first().map(|(_, value)| value.clone()).unwrap_or_default().num();
+                let group = group
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                    .unwrap_or_default() as u32;
+                let ty = match args.get(1).map(|(_, value)| value.clone()) {
+                    Some(GenericValue::Path(path)) => self.tree.id_of(&path),
+                    Some(GenericValue::Object(id)) => self.runtime.heap.object(id).map(|object| object.ty),
+                    _ => None,
+                };
+                if let Some(ty) = ty {
+                    *self.runtime.groups.entry(ty).or_default() |= group;
+                }
+
+                Ok(GenericValue::Null)
+            },
+
+            Intrinsic::DemirRebake
+            | Intrinsic::ImguiDockspace
+            | Intrinsic::ImguiSetNextWindowDock
+            | Intrinsic::ImguiSetNextWindowSize
+            | Intrinsic::ImguiBegin
+            | Intrinsic::ImguiEnd
+            | Intrinsic::ImguiText
+            | Intrinsic::ImguiTextColored
+            | Intrinsic::ImguiButton
+            | Intrinsic::ImguiCheckbox
+            | Intrinsic::ImguiRadio
+            | Intrinsic::ImguiSlider
+            | Intrinsic::ImguiDrag
+            | Intrinsic::ImguiInputText
+            | Intrinsic::ImguiSeparator
+            | Intrinsic::ImguiSameLine
+            | Intrinsic::ImguiTree
+            | Intrinsic::ImguiTreeEnd
+            | Intrinsic::ImguiCollapsingHeader => self.imgui(intrinsic, name, args),
+
             // Both play out over time, and a bake shows the appearance from before either starts
             Intrinsic::Animate | Intrinsic::Flick => Ok(GenericValue::Null),
 

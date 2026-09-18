@@ -335,6 +335,120 @@
 #define USE_PERSPECTIVE_EDITOR_WALLS
 
 ///
+/// EDITOR UI
+///
+
+// Called once per editor frame with the selected atom, or null. The imgui_* procs below only run
+// inside it.
+//
+// The editor, not the profile, remembers what the viewer set: a widget takes the profile's value as
+// its starting one and then answers with the edited value every frame after. A button answers true
+// on the frame after it is pressed.
+//
+// Writes roll back on every frame but the one that first carries a click or an edit and writes
+// something. That is what lets a global or static datum hold panel state without an idle profile
+// growing the heap:
+//
+//   /datum/options
+//     var/smooth = TRUE
+//
+//   var/global/datum/options/options
+//
+//   /proc/demir_initialize()
+//     options = new /datum/options
+//
+//   /proc/demir_ui(atom/target)
+//     options.smooth = imgui_checkbox("Smooth walls", options.smooth)
+//
+// A frame that keeps its writes re-derives appearances, highlights and lighting, so the other hooks
+// see the new state. demir_initialize() does not run again, so the state survives.
+/proc/demir_ui(atom/target)
+
+// Put `type` and everything under it in the group `group`, a bit demir_rebake() can then name to
+// re-derive only those placements. Only callable from demir_initialize(). The meaning of each bit is
+// the profile's own; rmd only matches them. Call it once per type, in any order, and a type may join
+// several groups.
+/proc/demir_define_group(group, type)
+	set __demir_intrin = 719
+
+// What a demir_rebake() call re-derives. Combinable.
+#define DEMIR_BAKE_APPEARANCE 1
+#define DEMIR_BAKE_LIGHT 2
+#define DEMIR_BAKE_HIGHLIGHT 4
+
+// Ask for part of the map to be re-derived, because something demir_ui() just wrote changes what
+// another hook answers. Only callable from demir_ui(), and only a frame that keeps its writes acts
+// on it.
+//
+// `groups` selects the placements to redo by the groups demir_define_group() put their type in, so
+// an option that only drives one kind of atom costs one kind of atom. Zero, or omitted, means every
+// placement. Several calls in a frame add up.
+//
+// A frame that asks for nothing re-derives nothing, so a profile that writes state without calling
+// this draws a panel whose switches do not take effect.
+/proc/demir_rebake(kinds, groups = 0)
+	set __demir_intrin = 718
+
+// The editor's main dockspace, to pass to imgui_set_next_window_dock().
+/proc/imgui_dockspace()
+	set __demir_intrin = 700
+
+/proc/imgui_set_next_window_dock(dockspace)
+	set __demir_intrin = 701
+
+/proc/imgui_set_next_window_size(width, height)
+	set __demir_intrin = 702
+
+// Answers whether the window is open. Every other proc here must run inside one.
+/proc/imgui_begin(label)
+	set __demir_intrin = 703
+
+/proc/imgui_end()
+	set __demir_intrin = 704
+
+/proc/imgui_text(text)
+	set __demir_intrin = 705
+
+/proc/imgui_text_colored(color, text)
+	set __demir_intrin = 706
+
+/proc/imgui_button(label)
+	set __demir_intrin = 707
+
+/proc/imgui_checkbox(label, checked)
+	set __demir_intrin = 708
+
+// Answers true on the frame after it is picked, like imgui_button(). Pass whether it is the
+// selected one of its group.
+/proc/imgui_radio(label, active)
+	set __demir_intrin = 717
+
+/proc/imgui_slider(label, value, min, max)
+	set __demir_intrin = 709
+
+/proc/imgui_drag(label, value, speed = 1, min = 0, max = 0)
+	set __demir_intrin = 710
+
+/proc/imgui_input_text(label, value)
+	set __demir_intrin = 711
+
+/proc/imgui_separator(label)
+	set __demir_intrin = 712
+
+/proc/imgui_same_line()
+	set __demir_intrin = 713
+
+// Pair with imgui_tree_end() only when it answers true.
+/proc/imgui_tree(label)
+	set __demir_intrin = 714
+
+/proc/imgui_tree_end()
+	set __demir_intrin = 715
+
+/proc/imgui_collapsing_header(label)
+	set __demir_intrin = 716
+
+///
 /// CLIENT
 ///
 

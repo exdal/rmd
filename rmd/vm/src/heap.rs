@@ -124,6 +124,15 @@ impl Heap {
             .unwrap_or_default()
     }
 
+    pub fn changed(&self) -> bool {
+        self.journal.as_ref().is_some_and(|j| {
+            !j.objects.is_empty()
+                || !j.lists.is_empty()
+                || self.objects.len() > j.objects_len
+                || self.lists.len() > j.lists_len
+        })
+    }
+
     pub fn commit(&mut self) { self.journal = None; }
 
     pub fn rollback(&mut self) {

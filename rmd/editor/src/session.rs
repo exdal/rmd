@@ -201,6 +201,7 @@ pub struct Session {
     queued_bakes: Vec<DocumentId>,
     standalone_baker: editor::bake::Standalone,
     standalone: Vec<(Prefab, Option<visual::Appearance>)>,
+    ui_fault: Option<vm::FaultKind>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,6 +236,7 @@ impl Session {
             queued_bakes: Vec::new(),
             standalone_baker: editor::bake::Standalone::default(),
             standalone: Vec::new(),
+            ui_fault: None,
         }
     }
 
@@ -1565,6 +1567,79 @@ impl Session {
         shown
     }
 
+    pub(crate) fn dm_ui(&mut self, dockspace: u32, feedback: editor::bake::UiFeedback) -> editor::bake::UiFrame {
+        let Some(id) = self.state.active() else {
+            return editor::bake::UiFrame::default();
+        };
+        let Some(program) = self
+            .state
+            .environment
+            .as_ref()
+            .and_then(|environment| environment.bake_program.as_ref())
+        else {
+            return editor::bake::UiFrame::default();
+        };
+        let target = self
+            .state
+            .document(id)
+            .and_then(|document| document.selected_instance())
+            .map(PrefabInstanceId::get);
+        let Some(bake) = self.caches.get_mut(&id).and_then(|cache| cache.bake.as_mut()) else {
+            return editor::bake::UiFrame::default();
+        };
+
+        let drawn = bake.ui(&program.tree, &program.module, target, dockspace, feedback);
+        report_bake_output(bake);
+
+        match drawn {
+            Ok(frame) => {
+                self.ui_fault = None;
+
+                frame
+            },
+            Err(fault) => {
+                if self.ui_fault.as_ref() != Some(&fault.kind) {
+                    log::warn!("demir_ui: {fault}");
+                    self.ui_fault = Some(fault.kind);
+                }
+
+                editor::bake::UiFrame::default()
+            },
+        }
+    }
+
+    pub(crate) fn dm_ui_rebake(&mut self, request: editor::bake::UiRebake) {
+        let Some(id) = self.state.active() else {
+            return;
+        };
+        let Some(program) = self
+            .state
+            .environment
+            .as_ref()
+            .and_then(|environment| environment.bake_program.as_ref())
+        else {
+            return;
+        };
+        let Some(bake) = self.caches.get_mut(&id).and_then(|cache| cache.bake.as_mut()) else {
+            return;
+        };
+
+        let update = bake.rebake(&program.tree, &program.module, request);
+        report_bake_output(bake);
+
+        self.apply_bake_update(
+            id,
+            editor::bake::BakeUpdate {
+                appearances: update
+                    .appearances
+                    .into_iter()
+                    .filter_map(PrefabInstanceId::from_raw)
+                    .collect(),
+                lighting: update.lighting,
+            },
+        );
+    }
+
     pub fn icon_metadata(&self, name: &str) -> Option<&dmi::metadata::Metadata> {
         self.state.environment.as_ref()?.icon(name)
     }
@@ -2021,14 +2096,7 @@ impl Session {
         };
 
         let Self {
-            state,
-            textures,
-            caches,
-            type_visibility,
-            options,
-            next_revision,
-            baker,
-            ..
+            state, caches, baker, ..
         } = self;
         let cache = caches.entry(id).or_default();
         let bake_update = match (cache.bake.as_mut(), state.environment.as_ref(), state.document(id)) {
@@ -2047,6 +2115,21 @@ impl Session {
                 }
             },
         };
+
+        self.apply_bake_update(id, bake_update);
+    }
+
+    fn apply_bake_update(&mut self, id: DocumentId, bake_update: editor::bake::BakeUpdate) {
+        let Self {
+            state,
+            textures,
+            caches,
+            type_visibility,
+            options,
+            next_revision,
+            ..
+        } = self;
+        let cache = caches.entry(id).or_default();
         cache.always_highlights = always_highlighted(cache.bake.as_ref());
         let affected = bake_update.appearances;
         let update = match (state.environment.as_ref(), state.document(id)) {
