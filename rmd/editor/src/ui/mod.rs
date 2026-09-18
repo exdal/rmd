@@ -16,6 +16,7 @@ use dear_imgui_rs::{
     DockSplit,
     DockspaceError,
     DragFlags,
+    DrawListMut,
     Id,
     InputTextMultilineFlags,
     Key,
@@ -400,6 +401,140 @@ fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
         .build();
 }
 
+fn marching_stripe_offset(ui: &Ui) -> f32 {
+    (ui.time() as f32 * BLOCK_STRIPE_SPEED).rem_euclid(BLOCK_STRIPE_LENGTH * 2.0)
+}
+
+fn draw_marching_border(draw: &DrawListMut<'_>, bounds: OverlayRect, clip: OverlayRect, offset: f32, accent: [f32; 4]) {
+    for (start, end, on_accent) in block_border_segments(bounds, clip, offset) {
+        draw.add_line(start, end, if on_accent { accent } else { BLOCK_SELECTION_WHITE })
+            .thickness(2.0)
+            .build();
+    }
+}
+
+fn draw_marching_edge(draw: &DrawListMut<'_>, from: [f32; 2], to: [f32; 2], offset: f32, accent: [f32; 4]) {
+    let horizontal = (to[0] - from[0]).abs() >= (to[1] - from[1]).abs();
+    let (start, end) = if horizontal { (from[0], to[0]) } else { (from[1], to[1]) };
+    let span = end - start;
+    if !span.is_finite() || span.abs() <= f32::EPSILON {
+        return;
+    }
+
+    let (low, high) = (start.min(end), start.max(end));
+    let mut stripe = ((low - offset) / BLOCK_STRIPE_LENGTH).floor();
+    let mut cut = low;
+    while cut < high {
+        let next = (offset + (stripe + 1.0) * BLOCK_STRIPE_LENGTH).min(high);
+        let next = if next > cut { next } else { high };
+        if stripe.rem_euclid(2.0) != 0.0 {
+            let point = |value: f32| {
+                if horizontal { [value, from[1]] } else { [from[0], value] }
+            };
+            draw.add_line(point(cut), point(next), accent).thickness(2.0).build();
+        }
+        cut = next;
+        stripe += 1.0;
+    }
+}
+
+fn draw_highlights(
+    ui: &Ui, camera: &Controller, viewport: OverlayRect, highlights: &[&editor::bake::Highlight], tile_size: u32,
+) {
+    if highlights.is_empty() {
+        return;
+    }
+
+    let tile_size = tile_size.max(1) as f32;
+    let offset = marching_stripe_offset(ui);
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(viewport.min, viewport.max, || {
+        for highlight in highlights {
+            let accent = [highlight.color[0], highlight.color[1], highlight.color[2], 1.0];
+            let wash = [
+                highlight.color[0],
+                highlight.color[1],
+                highlight.color[2],
+                highlight.fill,
+            ];
+
+            for tile in &highlight.tiles {
+                let left = (tile.position[0] - 1) as f32 * tile_size;
+                let bottom = (tile.position[1] - 1) as f32 * tile_size;
+                let top_left = camera.map_to_screen([left, bottom + tile_size]);
+                let bottom_right = camera.map_to_screen([left + tile_size, bottom]);
+                let min = [viewport.min[0] + top_left[0], viewport.min[1] + top_left[1]];
+                let max = [viewport.min[0] + bottom_right[0], viewport.min[1] + bottom_right[1]];
+                if !min.iter().chain(&max).all(|value| value.is_finite())
+                    || max[0] < viewport.min[0]
+                    || max[1] < viewport.min[1]
+                    || min[0] > viewport.max[0]
+                    || min[1] > viewport.max[1]
+                {
+                    continue;
+                }
+
+                if highlight.fill > 0.0 {
+                    draw.add_rect(min, max, wash).filled(true).build();
+                }
+                if !highlight.outline {
+                    continue;
+                }
+
+                // Screen y grows downward, so the map's north edge is the rectangle's top.
+                for (edge, from, to) in [
+                    (editor::bake::HIGHLIGHT_EDGE_NORTH, min, [max[0], min[1]]),
+                    (editor::bake::HIGHLIGHT_EDGE_SOUTH, [min[0], max[1]], max),
+                    (editor::bake::HIGHLIGHT_EDGE_WEST, min, [min[0], max[1]]),
+                    (editor::bake::HIGHLIGHT_EDGE_EAST, [max[0], min[1]], max),
+                ] {
+                    if tile.edges & edge != 0 {
+                        draw_marching_edge(&draw, from, to, offset, accent);
+                    }
+                }
+            }
+
+            draw_highlight_label(ui, &draw, camera, viewport, highlight, tile_size, accent);
+        }
+    });
+}
+
+fn draw_highlight_label(
+    ui: &Ui, draw: &DrawListMut<'_>, camera: &Controller, viewport: OverlayRect, highlight: &editor::bake::Highlight,
+    tile_size: f32, accent: [f32; 4],
+) {
+    let Some(label) = highlight.label.as_deref() else {
+        return;
+    };
+    let Some(anchor) = highlight
+        .tiles
+        .iter()
+        .max_by_key(|tile| (tile.position[1], -tile.position[0]))
+    else {
+        return;
+    };
+
+    let local = camera.map_to_screen([
+        (anchor.position[0] - 1) as f32 * tile_size,
+        anchor.position[1] as f32 * tile_size,
+    ]);
+
+    if !local.iter().all(|value| value.is_finite()) {
+        return;
+    }
+
+    let text_size = ui.calc_text_size(label);
+    let min = [
+        (viewport.min[0] + local[0]).clamp(viewport.min[0] + 4.0, viewport.max[0] - text_size[0] - 10.0),
+        (viewport.min[1] + local[1] - text_size[1] - 8.0).max(viewport.min[1] + 4.0),
+    ];
+
+    let max = [min[0] + text_size[0] + 6.0, min[1] + text_size[1] + 4.0];
+    draw.add_rect(min, max, OVERLAY_BG).filled(true).build();
+    draw.add_rect(min, max, accent).build();
+    draw.add_text([min[0] + 3.0, min[1] + 2.0], [1.0; 4], label);
+}
+
 fn draw_guide_badges(
     ui: &Ui, camera: &Controller, viewport_min: [f32; 2], viewport_max: [f32; 2], badges: &[GuideBadge],
 ) {
@@ -484,6 +619,7 @@ struct MapViewState {
     visible: bool,
     refit: bool,
     focus: bool,
+    hovered_coord: Option<Coord>,
     block_selection_anchor: Option<Coord>,
     rectangle_gesture: Option<RectangleGesture>,
     block_placement: Option<PendingBlockPlacement>,
@@ -496,6 +632,7 @@ struct MapViewDraw<'a> {
     view: &'a mut MapViewState,
     interaction: &'a mut MapViewInteraction,
     guide_badges: &'a [GuideBadge],
+
     refit_requested: bool,
     keep_open: &'a mut bool,
 }
@@ -509,6 +646,7 @@ impl MapViewState {
             rect: MapViewRect::default(),
             visible: false,
             refit: true,
+            hovered_coord: None,
             focus: false,
             block_selection_anchor: None,
             rectangle_gesture: None,
@@ -1138,6 +1276,7 @@ impl UiState {
                     view: &mut view,
                     interaction: &mut interaction,
                     guide_badges: &guides.badges,
+
                     refit_requested: refit,
                     keep_open: &mut keep_open,
                 },
@@ -1309,6 +1448,7 @@ impl UiState {
             view,
             interaction,
             guide_badges,
+
             refit_requested,
             keep_open,
         } = draw;
@@ -1324,6 +1464,7 @@ impl UiState {
             visible: view_visible,
             refit: view_refit,
             focus: view_focus,
+            hovered_coord,
             block_selection_anchor,
             rectangle_gesture,
             block_placement,
@@ -1459,6 +1600,21 @@ impl UiState {
                 }
             }
 
+            {
+                // The hover comes from the previous frame, this runs before the cursor is resolved
+                let highlights = session.highlights(id, *hovered_coord);
+                draw_highlights(
+                    ui,
+                    camera,
+                    OverlayRect {
+                        min: viewport_min,
+                        max: viewport_max,
+                    },
+                    &highlights,
+                    session.options.tile_size,
+                );
+            }
+
             draw_guide_badges(ui, camera, viewport_min, viewport_max, guide_badges);
 
             configure_tool_interaction(session.tool(), interaction);
@@ -1478,6 +1634,7 @@ impl UiState {
 
                 camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
             });
+            *hovered_coord = pointed_coord;
 
             if hovered
                 && !ui.io().want_text_input()
@@ -2618,21 +2775,9 @@ fn draw_block_outline(
                 .thickness(4.0)
                 .build();
         }
-        let offset = (ui.time() as f32 * BLOCK_STRIPE_SPEED).rem_euclid(BLOCK_STRIPE_LENGTH * 2.0);
+        let offset = marching_stripe_offset(ui);
         for border in std::iter::once(bounds).chain(inner_bounds) {
-            for (start, end, green) in block_border_segments(border, viewport, offset) {
-                draw.add_line(
-                    start,
-                    end,
-                    if green {
-                        BLOCK_SELECTION_GREEN
-                    } else {
-                        BLOCK_SELECTION_WHITE
-                    },
-                )
-                .thickness(2.0)
-                .build();
-            }
+            draw_marching_border(&draw, border, viewport, offset, BLOCK_SELECTION_GREEN);
         }
         let mode_label = match mode {
             BlockSelectionMode::Full => String::from("Full"),
@@ -3933,6 +4078,7 @@ mod tests {
                     view: &mut self.view,
                     interaction: &mut MapViewInteraction::default(),
                     guide_badges: &[],
+
                     refit_requested: false,
                     keep_open: &mut true,
                 },

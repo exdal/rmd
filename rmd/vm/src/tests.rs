@@ -13,7 +13,17 @@ use crate::{
     IconStates,
     Limits,
     Runtime,
-    bake::{Atom, Bake, has_profile},
+    bake::{
+        Atom,
+        Bake,
+        HIGHLIGHT_ALWAYS,
+        HIGHLIGHT_EDGE_NORTH,
+        HIGHLIGHT_EDGE_SOUTH,
+        HIGHLIGHT_EDGE_WEST,
+        HIGHLIGHT_SELECTED,
+        HighlightTile,
+        has_profile,
+    },
     eval::Evaluator,
     heap::{Object, ObjectId},
     world::Position,
@@ -163,6 +173,96 @@ fn profile_connections_match_complementary_roles_from_either_endpoint() {
     assert!(bake.connections(1).is_empty());
     assert_eq!(bake.connections(2), vec![3]);
     assert_eq!(bake.connections(3), vec![2]);
+}
+
+#[test]
+fn profile_highlights_are_clipped_edged_and_restored_across_edits() {
+    let (tree, module) = compile(
+        r##"
+/obj/port
+    var/span = 0
+/proc/demir_highlights(atom/target)
+    if(!istype(target, /obj/port))
+        return
+    var/obj/port/port = target
+    target.name = "highlight hook writes are rolled back"
+    return list(
+        list("x" = -1, "y" = -1, "width" = port.span, "height" = port.span,
+             "color" = "#00ff00", "fill" = 0.5, "when" = 4, "label" = "span"),
+        list("tiles" = list(list(0, 2), list(1, 2))),
+    )
+"##,
+    );
+    let port = |instance, position, span: f32| Atom {
+        instance,
+        ty: tree
+            .id_of(&TreePath::parse("/obj/port"))
+            .expect("highlight fixture type"),
+        position,
+        vars: vec![(Identifier::from("span"), Value::Num(span))],
+    };
+    let centered = port(1, Position::new(3, 3, 1), 3.0);
+    // A rectangle reaching past the south-west corner is clipped, not rejected.
+    let cornered = port(2, Position::new(1, 1, 1), 3.0);
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        vec![centered.clone(), cornered],
+        [5, 5, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:#?}", bake.diagnostics);
+    let [rect, tiles] = bake.highlights(1) else {
+        panic!("both highlights should survive");
+    };
+    assert_eq!(rect.tiles.len(), 9);
+    assert_eq!(rect.color, [0.0, 1.0, 0.0]);
+    assert_eq!(rect.fill, 0.5);
+    assert_eq!(rect.when, HIGHLIGHT_ALWAYS);
+    assert_eq!(rect.label.as_deref(), Some("span"));
+    assert_eq!(
+        rect.tiles.first(),
+        Some(&HighlightTile {
+            position: [2, 2],
+            edges: HIGHLIGHT_EDGE_SOUTH | HIGHLIGHT_EDGE_WEST,
+        })
+    );
+    // An interior tile of a full rectangle faces nothing outward.
+    assert_eq!(
+        rect.tiles
+            .iter()
+            .find(|tile| tile.position == [3, 3])
+            .map(|tile| tile.edges),
+        Some(0)
+    );
+    assert_eq!(tiles.when, HIGHLIGHT_SELECTED, "the default is selection only");
+    assert_eq!(tiles.tiles.len(), 2);
+    assert_eq!(
+        tiles.tiles.first(),
+        Some(&HighlightTile {
+            position: [3, 5],
+            edges: HIGHLIGHT_EDGE_NORTH | HIGHLIGHT_EDGE_SOUTH | HIGHLIGHT_EDGE_WEST,
+        })
+    );
+
+    assert_eq!(bake.highlights(2).first().map(|rect| rect.tiles.len()), Some(4));
+
+    let port_object = bake.object(1).expect("port runtime object");
+    assert_eq!(
+        bake.runtime
+            .heap
+            .object(port_object)
+            .and_then(|object| object.vars.get(&Identifier::from("name"))),
+        None,
+    );
+
+    bake.update(&tree, &module, Vec::new(), &[1]);
+    assert!(bake.highlights(1).is_empty());
+
+    bake.update(&tree, &module, vec![centered], &[]);
+    assert_eq!(bake.highlights(1).len(), 2);
 }
 
 #[test]

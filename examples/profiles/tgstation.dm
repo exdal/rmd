@@ -296,6 +296,92 @@
 		airlock_material = "glass"
 	update_appearance(UPDATE_ICON)
 
+// A docking port stands on one tile but claims a rectangle around it, rotated by its dir. This is
+// return_coords() reduced to a south-west offset and an extent.
+/obj/docking_port/proc/demir_region_extent()
+	return list(width, height, dwidth, dheight)
+
+// Mobile ports are sized by calculate_docking_port_information() when their template loads, so a
+// mapped one still reads zero. The template is the map being edited, so its bounds and the port's
+// own tile stand in for the template size and port_x_offset/port_y_offset.
+/obj/docking_port/mobile/demir_region_extent()
+	if(width && height)
+		return ..()
+
+	var/template_width = world.maxx
+	var/template_height = world.maxy
+	var/port_x_offset = x
+	var/port_y_offset = y
+
+	var/rotated_width = template_width
+	var/rotated_height = template_height
+	if(dir == EAST || dir == WEST)
+		rotated_width = template_height
+		rotated_height = template_width
+
+	// The native switch reads the pre-swap template size, not the rotated one.
+	var/offset_width = port_x_offset - 1
+	var/offset_height = port_y_offset - 1
+	switch(dir)
+		if(EAST)
+			offset_width = template_height - port_y_offset
+			offset_height = port_x_offset - 1
+		if(SOUTH)
+			offset_width = template_width - port_x_offset
+			offset_height = template_height - port_y_offset
+		if(WEST)
+			offset_width = port_y_offset - 1
+			offset_height = template_width - port_x_offset
+
+	return list(rotated_width, rotated_height, offset_width, offset_height)
+
+/obj/docking_port/proc/demir_highlight()
+	var/list/extent = demir_region_extent()
+	var/port_width = extent[1]
+	var/port_height = extent[2]
+	var/port_dwidth = extent[3]
+	var/port_dheight = extent[4]
+	if(port_width < 1 || port_height < 1)
+		return null
+
+	var/cos = 1
+	var/sin = 0
+	switch(dir)
+		if(WEST)
+			cos = 0
+			sin = 1
+		if(SOUTH)
+			cos = -1
+			sin = 0
+		if(EAST)
+			cos = 0
+			sin = -1
+
+	// return_coords() yields two opposite corners, not a min and a max.
+	var/near_x = (-port_dwidth * cos) - (-port_dheight * sin)
+	var/near_y = (-port_dwidth * sin) + (-port_dheight * cos)
+	var/far_x = ((-port_dwidth + port_width - 1) * cos) - ((-port_dheight + port_height - 1) * sin)
+	var/far_y = ((-port_dwidth + port_width - 1) * sin) + ((-port_dheight + port_height - 1) * cos)
+
+	return list(
+		"x" = min(near_x, far_x),
+		"y" = min(near_y, far_y),
+		"width" = abs(far_x - near_x) + 1,
+		"height" = abs(far_y - near_y) + 1,
+		"color" = "#ff8000",
+		"when" = DEMIR_HIGHLIGHT_SELECTED | DEMIR_HIGHLIGHT_HOVERED,
+		"label" = name || "docking port",
+	)
+
+/proc/demir_highlights(atom/target)
+	if(!istype(target, /obj/docking_port))
+		return null
+
+	var/obj/docking_port/port = target
+	var/list/highlight = port.demir_highlight()
+
+	return highlight ? list(highlight) : null
+
 /proc/demir_initialize()
 	if(!GLOB)
 		GLOB = new /datum/controller/global_vars/demir_preview

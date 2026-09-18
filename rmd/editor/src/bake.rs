@@ -1,7 +1,21 @@
 use std::{collections::HashMap, ops::Range, sync::OnceLock};
 
 use dmm::{Coord, Prefab, PrefabInstanceId};
-pub use vm::{AppearanceDelta, bake::Bake};
+pub use vm::{
+    AppearanceDelta,
+    bake::{
+        Bake,
+        HIGHLIGHT_ALWAYS,
+        HIGHLIGHT_EDGE_EAST,
+        HIGHLIGHT_EDGE_NORTH,
+        HIGHLIGHT_EDGE_SOUTH,
+        HIGHLIGHT_EDGE_WEST,
+        HIGHLIGHT_HOVERED,
+        HIGHLIGHT_SELECTED,
+        Highlight,
+        HighlightTile,
+    },
+};
 
 use crate::{
     BakeProgram,

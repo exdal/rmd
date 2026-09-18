@@ -76,6 +76,24 @@ use crate::{
     loader::{LoadedCodebase, LoadedMap},
 };
 
+fn always_highlighted(bake: Option<&editor::bake::Bake>) -> Vec<PrefabInstanceId> {
+    let Some(bake) = bake else {
+        return Vec::new();
+    };
+
+    let mut always = bake
+        .highlighted()
+        .filter(|(_, list)| {
+            list.iter()
+                .any(|highlight| highlight.shown_when(editor::bake::HIGHLIGHT_ALWAYS))
+        })
+        .filter_map(|(id, _)| PrefabInstanceId::from_raw(id))
+        .collect::<Vec<_>>();
+    always.sort_unstable();
+
+    always
+}
+
 fn report_bake_output(bake: &mut editor::bake::Bake) {
     for line in bake.take_output() {
         log::info!("DM: {line}");
@@ -164,6 +182,7 @@ struct DocumentCache {
     lighting_update: Option<render::LightingUpdate>,
     preview: Option<BlockPreviewCache>,
     bake: Option<editor::bake::Bake>,
+    always_highlights: Vec<PrefabInstanceId>,
 }
 
 pub struct Session {
@@ -1503,6 +1522,49 @@ impl Session {
         guides
     }
 
+    pub(crate) fn highlights(&self, id: DocumentId, hovered: Option<Coord>) -> Vec<&editor::bake::Highlight> {
+        let Some(document) = self.state.document(id) else {
+            return Vec::new();
+        };
+        let Some(cache) = self.caches.get(&id) else {
+            return Vec::new();
+        };
+        let Some(bake) = cache.bake.as_ref() else {
+            return Vec::new();
+        };
+
+        let z = document.z as i32;
+        let mut seen = HashSet::new();
+        let mut shown = Vec::new();
+        let mut sources = cache
+            .always_highlights
+            .iter()
+            .map(|owner| (*owner, editor::bake::HIGHLIGHT_ALWAYS))
+            .collect::<Vec<_>>();
+        if let Some(selected) = document.selected_instance() {
+            sources.push((selected, editor::bake::HIGHLIGHT_SELECTED));
+        }
+
+        if let Some(hovered) = hovered {
+            sources.extend(
+                document
+                    .instance_ids_at(hovered)
+                    .iter()
+                    .map(|owner| (*owner, editor::bake::HIGHLIGHT_HOVERED)),
+            );
+        }
+
+        for (owner, when) in sources {
+            for (index, highlight) in bake.highlights(owner.get()).iter().enumerate() {
+                if highlight.z == z && highlight.shown_when(when) && seen.insert((owner, index)) {
+                    shown.push(highlight);
+                }
+            }
+        }
+
+        shown
+    }
+
     pub fn icon_metadata(&self, name: &str) -> Option<&dmi::metadata::Metadata> {
         self.state.environment.as_ref()?.icon(name)
     }
@@ -1896,7 +1958,9 @@ impl Session {
                     report_bake_output(bake);
                 }
 
-                self.caches.entry(id).or_default().bake = bake;
+                let cache = self.caches.entry(id).or_default();
+                cache.bake = bake;
+                cache.always_highlights = always_highlighted(cache.bake.as_ref());
                 self.collect_bake_diagnostics();
                 self.rebuild_instances(id);
             }
@@ -1983,6 +2047,7 @@ impl Session {
                 }
             },
         };
+        cache.always_highlights = always_highlighted(cache.bake.as_ref());
         let affected = bake_update.appearances;
         let update = match (state.environment.as_ref(), state.document(id)) {
             (Some(environment), Some(document)) => frame::update_prefabs_with_options(
@@ -3459,6 +3524,10 @@ mod tests {
             root.join("profile.dm"),
             r#"
 #ifdef __DEMIR_BAKE__
+/proc/demir_highlights(atom/target)
+    if(!istype(target, /obj/source))
+        return
+    return list(list("width" = 3, "height" = 1, "when" = DEMIR_HIGHLIGHT_SELECTED))
 /proc/demir_connections(atom/target)
     var/list/connections = list()
     if(istype(target, /obj/source))
@@ -3539,6 +3608,20 @@ mod tests {
         );
         assert!(guides.connected.contains(&same_level));
 
+        let document_id = session.state.active().expect("active fixture document");
+        let highlights = session.highlights(document_id, None);
+        let [highlight] = highlights.as_slice() else {
+            panic!("the selected source declares one highlight");
+        };
+        assert_eq!(
+            highlight.tiles.iter().map(|tile| tile.position).collect::<Vec<_>>(),
+            vec![[1, 1], [2, 1], [3, 1]]
+        );
+        assert!(
+            session.highlights(document_id, Some(Coord::new(1, 1, 1))).len() == 1,
+            "a selection-only highlight is not repeated by hovering its own tile"
+        );
+
         session.select_instance(Some(same_level));
         let reverse = session.selected_guides();
         assert_eq!(
@@ -3550,6 +3633,10 @@ mod tests {
         );
         assert!(reverse.badges.is_empty());
         assert_eq!(reverse.connected, vec![source]);
+        assert!(
+            session.highlights(document_id, None).is_empty(),
+            "only the source declares a highlight"
+        );
 
         assert_eq!(
             session.set_selected_instance_var("channel".into(), Value::Text(String::from("other"))),

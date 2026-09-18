@@ -18,12 +18,13 @@ updates, and verifies that the complete derived appearance layer returns to its 
 
 ## Profiles
 
-The compiler prelude declares five hooks without bodies:
+The compiler prelude declares six hooks without bodies:
 
 ```dm
 /proc/demir_initialize()
 /proc/demir_prepare(atom/target)
 /proc/demir_connections(atom/target)
+/proc/demir_highlights(atom/target)
 /proc/demir_light(atom/target)
 /proc/demir_bake(atom/target)
 ```
@@ -79,6 +80,31 @@ the additive or subtractive overlay lightmap instead of the scene color. Profile
 source independently of its sprite with `demir_light_offset_x` and `demir_light_offset_y`, measured
 in tile units.
 
+`demir_highlights` lets a profile shade tiles without teaching the editor what they mean. It returns
+a list of descriptors, each an associative list; unknown keys are ignored, so a profile may carry
+keys a newer rmd reads, and a trailing comma is tolerated because it is ordinary DM style.
+
+| key                                 | meaning                                                                         |
+| ----------------------------------- | ------------------------------------------------------------------------------- |
+| `"x"`, `"y"`, `"width"`, `"height"` | a rectangle, offset in tiles from the atom's own tile                           |
+| `"tiles"`                           | `list(list(x, y), ...)` offsets, for a shape that is not a rectangle            |
+| `"color"`                           | any DM color, default orange                                                    |
+| `"fill"`                            | wash opacity from 0 to 1, default `0.12`                                        |
+| `"outline"`                         | draw the marching border, default on                                            |
+| `"when"`                            | `DEMIR_HIGHLIGHT_SELECTED`, `_HOVERED`, `_ALWAYS`, combinable; default selected |
+| `"label"`                           | text drawn above the region                                                     |
+
+Offsets locate tiles relative to the atom, so an atom standing inside its own region uses negative
+ones. Tiles outside the world are dropped and a descriptor covering nothing is discarded. One
+highlight is capped at 16384 tiles, an atom at 16 highlights, and a label at 64 characters, so a
+runaway hook costs a diagnostic rather than the editor's memory. The hook runs in a rolled-back
+transaction like `demir_connections`, so it can read prepared runtime values but cannot mutate the
+world. The baker records which sides of each tile face outward, which is what lets a non-rectangular
+shape draw one continuous border.
+
+tgstation's profile uses it to show what area a `/obj/docking_port` covers, deriving a mobile port's
+extent from the shuttle map's own bounds the way `calculate_docking_port_information()` does.
+
 ## Runtime model
 
 `vm::bake::Bake` owns a `Runtime`, the placed atoms, runtime objects, the world position index,
@@ -98,16 +124,17 @@ The caller assigns stable instance IDs and translates map prefabs into this form
 type and map-variable overrides share one runtime object while keeping all of their placement IDs.
 Turfs, areas, and movable contents are linked through the runtime world before any DM executes.
 
-A full bake has six ordered stages:
+A full bake has seven ordered stages:
 
 1. **Instantiate** creates objects, applies constant map overrides, and links each map cell.
 2. **Initialize** calls `demir_initialize()` once after the complete runtime world is linked.
 3. **Prepare** calls `demir_prepare` once per runtime object and commits successful setup for use by
    neighboring previews.
 4. **Connections** calls `demir_connections` once per runtime object and indexes matching channels.
-5. **Light** calls `demir_light` once per runtime object, harvests the neutral schema for every
+5. **Highlights** calls `demir_highlights` for each placement and records the tiles it claims.
+6. **Light** calls `demir_light` once per runtime object, harvests the neutral schema for every
    placement, and solves each z level's shared lighting corners.
-6. **Smooth** calls `demir_bake` for each placement and exports appearance changes.
+7. **Smooth** calls `demir_bake` for each placement and exports appearance changes.
 
 Initialization uses the VM's normal transaction behavior and commits only when it succeeds. A fault
 is reported once and stops the remaining stages, leaving every atom on its static appearance.
@@ -199,6 +226,14 @@ selected. Connections to another z level are projected onto the current level an
 highlight styles, so a button shows which shutters it drives. Turning the setting off hides both
 offset and connection guides along with the tint.
 
+Highlights draw independently of that setting, in the color each descriptor chose: a wash over every
+tile it covers and a marching dashed border along the sides that face outward, on the block
+selection's stripe rhythm but leaving gaps rather than alternating with white, so a permanently
+shaded region stays quiet. A `DEMIR_HIGHLIGHT_ALWAYS` highlight is drawn whenever its level is open, a
+`_SELECTED` one only for the selected placement, and a `_HOVERED` one for anything under the cursor,
+which trails the cursor by a frame. Highlights on another z level are not drawn, and tiles outside
+the viewport are skipped.
+
 Palette thumbnails resolve statically. An atom whose static `icon_state` is missing from its sheet,
 which is how smoothed walls are declared, is baked alone in a one cell world at load, and the
 derived appearance is used for its thumbnail. The placement preview still resolves statically.
@@ -224,9 +259,10 @@ to stderr where available and to `latest.log` on Windows. Other output targets r
 
 The VM tests cover neighborhood smoothing, incremental remove/restore, deterministic random results,
 instance-variable cache separation, list-backed neighbor overlays, rolled-back connection metadata,
-bounded recursive appearance export, corner lighting, blockers, ambient/fullbright cells, and
-incremental lightmap restoration. The compiler-driver check exercises preprocessing, semantic
-analysis, bytecode generation, map translation, the six bake stages, summary output, and incremental
+bounded recursive appearance export, clipped and edge-tagged highlights restored across edits,
+corner lighting,
+blockers, ambient/fullbright cells, and incremental lightmap restoration. The compiler-driver check exercises preprocessing, semantic
+analysis, bytecode generation, map translation, the seven bake stages, summary output, and incremental
 restoration:
 
 ```sh
@@ -235,11 +271,13 @@ cargo run --release --bin rmdc -- bake examples/env/test.dme examples/env/test.d
 ```
 
 The bake summary reports how many placements carry connections and how many incident connections
-they hold, which is the quickest way to tell whether a profile's `demir_connections` is reaching the
+they hold, plus how many placements are highlighted and how many tiles they cover, which is the
+quickest way to tell whether a profile's `demir_connections` or `demir_highlights` is reaching the
 codebase at all. A profile only takes effect through the copy the `.dme` includes, so a profile
 edited in `examples/profiles` reports zero until it is copied into the codebase.
 
 The editor tests cover whole-map baking without changing map bytes, overlay sprites, incremental
 sprites matching a full rebuild, undo and redo through the bake, movable smoothing, standalone
-thumbnails, selection guides across z levels, hiding a type without rebaking, and that only a codebase
+thumbnails, selection guides and profile highlights across z levels, hiding a type without rebaking,
+and that only a codebase
 with a profile bakes.

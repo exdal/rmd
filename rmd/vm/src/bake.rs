@@ -24,10 +24,11 @@ use crate::{
     world::Position,
 };
 
-const HOOKS: [&str; 5] = [
+const HOOKS: [&str; 6] = [
     "demir_initialize",
     "demir_prepare",
     "demir_connections",
+    "demir_highlights",
     "demir_light",
     "demir_bake",
 ];
@@ -35,6 +36,19 @@ const HOOKS: [&str; 5] = [
 const CONNECTION_SOURCE: u8 = 1;
 const CONNECTION_TARGET: u8 = 2;
 const CONNECTION_ROLES: u8 = CONNECTION_SOURCE | CONNECTION_TARGET;
+
+pub const HIGHLIGHT_SELECTED: u8 = 1;
+pub const HIGHLIGHT_HOVERED: u8 = 2;
+pub const HIGHLIGHT_ALWAYS: u8 = 4;
+const HIGHLIGHT_WHEN: u8 = HIGHLIGHT_SELECTED | HIGHLIGHT_HOVERED | HIGHLIGHT_ALWAYS;
+pub const HIGHLIGHT_EDGE_NORTH: u8 = 1;
+pub const HIGHLIGHT_EDGE_EAST: u8 = 1 << 1;
+pub const HIGHLIGHT_EDGE_SOUTH: u8 = 1 << 2;
+pub const HIGHLIGHT_EDGE_WEST: u8 = 1 << 3;
+const HIGHLIGHT_MAX_TILES: usize = 16384;
+const HIGHLIGHT_MAX_PER_ATOM: usize = 16;
+const HIGHLIGHT_MAX_LABEL: usize = 64;
+const HIGHLIGHT_DEFAULT_COLOR: [f32; 3] = [1.0, 0.5, 0.0];
 
 /// `#ifdef __DEMIR_BAKE__` around one or more bake hooks in the codebase.
 pub fn has_profile(tree: &ObjectTree) -> bool { HOOKS.iter().any(|name| hook(tree, name).is_some()) }
@@ -49,6 +63,7 @@ struct Hooks {
     initialize: Option<ProcId>,
     prepare: Option<ProcId>,
     connections: Option<ProcId>,
+    highlights: Option<ProcId>,
     light: Option<ProcId>,
     bake: Option<ProcId>,
 }
@@ -59,6 +74,7 @@ impl Hooks {
             initialize: hook(tree, "demir_initialize"),
             prepare: hook(tree, "demir_prepare"),
             connections: hook(tree, "demir_connections"),
+            highlights: hook(tree, "demir_highlights"),
             light: hook(tree, "demir_light"),
             bake: hook(tree, "demir_bake"),
         }
@@ -77,6 +93,27 @@ pub struct Atom {
 pub struct BakeUpdate {
     pub appearances: Vec<u64>,
     pub lighting: Option<Range<usize>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HighlightTile {
+    pub position: [i32; 2],
+    pub edges: u8,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Highlight {
+    pub tiles: Vec<HighlightTile>,
+    pub z: i32,
+    pub color: [f32; 3],
+    pub fill: f32,
+    pub outline: bool,
+    pub when: u8,
+    pub label: Option<String>,
+}
+
+impl Highlight {
+    pub fn shown_when(&self, when: u8) -> bool { self.when & when != 0 }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,6 +203,8 @@ pub struct Bake {
     dirty_appearances: HashSet<u64>,
     connection_endpoints: HashMap<u64, Vec<ConnectionEndpoint>>,
     connection_index: HashMap<String, ConnectionChannel>,
+    highlights: HashMap<u64, Vec<Highlight>>,
+    highlight_faults: HashMap<u64, Fault>,
     hooks: Hooks,
 }
 
@@ -175,6 +214,7 @@ pub enum Stage {
     Initialize,
     Prepare,
     Connections,
+    Highlights,
     Light,
     Smooth,
 }
@@ -248,6 +288,16 @@ impl Bake {
 
         for (index, id) in ids.iter().enumerate() {
             if index.is_multiple_of(4096) {
+                progress(Stage::Highlights, index, total);
+            }
+
+            bake.highlight(tree, module, *id);
+        }
+
+        progress(Stage::Highlights, total, total);
+
+        for (index, id) in ids.iter().enumerate() {
+            if index.is_multiple_of(4096) {
                 progress(Stage::Light, index, total);
             }
             bake.light(tree, module, *id);
@@ -307,6 +357,12 @@ impl Bake {
         connected.dedup();
 
         connected
+    }
+
+    pub fn highlights(&self, id: u64) -> &[Highlight] { self.highlights.get(&id).map_or(&[], Vec::as_slice) }
+
+    pub fn highlighted(&self) -> impl Iterator<Item = (u64, &[Highlight])> {
+        self.highlights.iter().map(|(id, list)| (*id, list.as_slice()))
     }
 
     pub fn take_output(&mut self) -> Vec<String> { self.runtime.take_output() }
@@ -593,6 +649,43 @@ impl Bake {
         light.affects_lighting().then_some(light)
     }
 
+    fn highlight(&mut self, tree: &ObjectTree, module: &Module, id: u64) {
+        self.highlights.remove(&id);
+        if let Some(previous) = self.highlight_faults.remove(&id) {
+            self.diagnostics.remove(&previous);
+        }
+
+        if self.failed.contains(&id) {
+            return;
+        }
+
+        let Some(object) = self.objects.get(&id).copied() else {
+            return;
+        };
+        let Some(proc) = self.hooks.highlights else {
+            return;
+        };
+        let Some(position) = self.atoms.get(&id).map(|atom| atom.position) else {
+            return;
+        };
+
+        let size = self.runtime.world.size;
+        match self
+            .runtime
+            .highlights(tree, module, proc, object, position, size, self.limits)
+        {
+            Ok(highlights) => {
+                if !highlights.is_empty() {
+                    self.highlights.insert(id, highlights);
+                }
+            },
+            Err(fault) => {
+                self.diagnostics.record(fault.clone());
+                self.highlight_faults.insert(id, fault);
+            },
+        }
+    }
+
     fn record_fault(&mut self, id: u64, fault: Fault) {
         if let Some(previous) = self.faults.insert(id, fault.clone()) {
             self.diagnostics.remove(&previous);
@@ -855,7 +948,12 @@ impl Bake {
                 self.diagnostics.remove(&fault);
             }
 
+            if let Some(fault) = self.highlight_faults.remove(id) {
+                self.diagnostics.remove(&fault);
+            }
+
             self.connection_endpoints.remove(id);
+            self.highlights.remove(id);
             self.failed.remove(id);
             self.remove_contribution(*id);
         }
@@ -872,6 +970,7 @@ impl Bake {
             for id in inserted {
                 self.prepare(tree, module, id);
                 self.connect(tree, module, id);
+                self.highlight(tree, module, id);
                 self.light(tree, module, id);
                 self.fingerprint(id);
 
@@ -976,6 +1075,148 @@ fn object_color(object: &Object, tree: &ObjectTree, name: &str) -> [f32; 3] {
     parse_color(text)
 }
 
+fn field<'a>(fields: &'a [(GenericValue, Option<GenericValue>)], name: &str) -> Option<&'a GenericValue> {
+    fields
+        .iter()
+        .find(|(key, _)| key.text().is_some_and(|key| key == name))
+        .and_then(|(_, value)| value.as_ref())
+}
+
+fn field_number(fields: &[(GenericValue, Option<GenericValue>)], name: &str, default: f32) -> f32 {
+    field(fields, name).and_then(GenericValue::num).map_or(
+        default,
+        |value| {
+            if value.is_finite() { value } else { default }
+        },
+    )
+}
+
+fn highlight_from_fields(
+    evaluator: &mut crate::eval::Evaluator<'_>, fields: &[(GenericValue, Option<GenericValue>)], position: Position,
+    size: [i32; 3],
+) -> Result<Option<Highlight>, Fault> {
+    let mut offsets = Vec::new();
+    if let Some(GenericValue::List(tiles)) = field(fields, "tiles") {
+        let tiles = evaluator
+            .runtime
+            .heap
+            .list(*tiles)
+            .map(|list| list.entries.clone())
+            .ok_or_else(|| evaluator.fault(FaultKind::InvalidReference))?;
+        if tiles.len() > HIGHLIGHT_MAX_TILES {
+            return Err(evaluator.fault(FaultKind::InvalidOperation(format!(
+                "a demir_highlights entry listed more than {HIGHLIGHT_MAX_TILES} tiles"
+            ))));
+        }
+
+        for (tile, _) in tiles {
+            if matches!(tile, GenericValue::Null | GenericValue::Omitted) {
+                continue;
+            }
+
+            let GenericValue::List(pair) = tile else {
+                return Err(evaluator.fault(FaultKind::InvalidOperation(
+                    "each demir_highlights tile must be a list(x, y)".into(),
+                )));
+            };
+            let pair = evaluator
+                .runtime
+                .heap
+                .list(pair)
+                .map(|list| list.entries.clone())
+                .ok_or_else(|| evaluator.fault(FaultKind::InvalidReference))?;
+            let coords = pair
+                .iter()
+                .filter_map(|(value, _)| value.num())
+                .filter(|value| value.is_finite())
+                .collect::<Vec<_>>();
+            let [x, y] = coords[..] else {
+                return Err(evaluator.fault(FaultKind::InvalidOperation(
+                    "each demir_highlights tile must be a list(x, y)".into(),
+                )));
+            };
+
+            offsets.push([x as i32, y as i32]);
+        }
+    } else {
+        let width = field_number(fields, "width", 0.0);
+        let height = field_number(fields, "height", 0.0);
+        if width < 1.0 || height < 1.0 {
+            return Ok(None);
+        }
+
+        if (width as f64) * (height as f64) > HIGHLIGHT_MAX_TILES as f64 {
+            return Err(evaluator.fault(FaultKind::InvalidOperation(format!(
+                "a demir_highlights rectangle covered more than {HIGHLIGHT_MAX_TILES} tiles"
+            ))));
+        }
+
+        let origin_x = field_number(fields, "x", 0.0) as i32;
+        let origin_y = field_number(fields, "y", 0.0) as i32;
+        for step_y in 0..height as i32 {
+            for step_x in 0..width as i32 {
+                offsets.push([origin_x.saturating_add(step_x), origin_y.saturating_add(step_y)]);
+            }
+        }
+    }
+
+    let mut covered = HashSet::new();
+    for offset in offsets {
+        let x = position.x.saturating_add(offset[0]);
+        let y = position.y.saturating_add(offset[1]);
+
+        if x >= 1 && y >= 1 && x <= size[0] && y <= size[1] {
+            covered.insert([x, y]);
+        }
+    }
+
+    if covered.is_empty() {
+        return Ok(None);
+    }
+
+    let mut tiles = covered
+        .iter()
+        .map(|tile| {
+            let [x, y] = *tile;
+            let mut edges = 0;
+            if !covered.contains(&[x, y + 1]) {
+                edges |= HIGHLIGHT_EDGE_NORTH;
+            }
+            if !covered.contains(&[x + 1, y]) {
+                edges |= HIGHLIGHT_EDGE_EAST;
+            }
+            if !covered.contains(&[x, y - 1]) {
+                edges |= HIGHLIGHT_EDGE_SOUTH;
+            }
+            if !covered.contains(&[x - 1, y]) {
+                edges |= HIGHLIGHT_EDGE_WEST;
+            }
+
+            HighlightTile { position: *tile, edges }
+        })
+        .collect::<Vec<_>>();
+    tiles.sort_unstable_by_key(|tile| (tile.position[1], tile.position[0]));
+
+    let when = field_number(fields, "when", f32::from(HIGHLIGHT_SELECTED)) as u8 & HIGHLIGHT_WHEN;
+    let label = field(fields, "label")
+        .and_then(GenericValue::text)
+        .filter(|label| !label.is_empty())
+        .map(|label| label.chars().take(HIGHLIGHT_MAX_LABEL).collect::<String>());
+
+    Ok(Some(Highlight {
+        tiles,
+        z: position.z,
+        color: match field(fields, "color").and_then(GenericValue::text) {
+            Some(text) => parse_color(Some(text)),
+            None => HIGHLIGHT_DEFAULT_COLOR,
+        },
+        fill: field_number(fields, "fill", 0.12).clamp(0.0, 1.0),
+        outline: field_number(fields, "outline", 1.0) != 0.0,
+        when: if when == 0 { HIGHLIGHT_SELECTED } else { when },
+        label,
+    }))
+}
+
 impl Runtime {
     fn connection_endpoints(
         &mut self, tree: &ObjectTree, module: &Module, proc: ProcId, object: ObjectId, limits: Limits,
@@ -1039,6 +1280,79 @@ impl Runtime {
             endpoints.sort_by(|left, right| left.channel.cmp(&right.channel));
 
             Ok(endpoints)
+        })();
+        self.heap.rollback();
+
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn highlights(
+        &mut self, tree: &ObjectTree, module: &Module, proc: ProcId, object: ObjectId, position: Position,
+        size: [i32; 3], limits: Limits,
+    ) -> Result<Vec<Highlight>, Fault> {
+        if self.global.is_none() {
+            self.global = Some(
+                self.heap
+                    .alloc_object(Object::new(TypeId::ROOT))
+                    .map_err(|kind| Fault {
+                        offset: None,
+                        proc: Some(proc),
+                        location: Default::default(),
+                        kind,
+                    })?,
+            );
+        }
+
+        self.heap.begin();
+        let result = (|| {
+            let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, Some(object));
+            let value = evaluator.call(proc, None, vec![(None, GenericValue::Object(object))])?;
+            let entries = match value {
+                GenericValue::Null => return Ok(Vec::new()),
+                GenericValue::List(list) => evaluator
+                    .runtime
+                    .heap
+                    .list(list)
+                    .map(|list| list.entries.clone())
+                    .ok_or_else(|| evaluator.fault(FaultKind::InvalidReference))?,
+                _ => {
+                    return Err(evaluator.fault(FaultKind::InvalidOperation(
+                        "demir_highlights must return a list of highlights".into(),
+                    )));
+                },
+            };
+
+            if entries.len() > HIGHLIGHT_MAX_PER_ATOM {
+                return Err(evaluator.fault(FaultKind::InvalidOperation(format!(
+                    "demir_highlights returned more than {HIGHLIGHT_MAX_PER_ATOM} highlights"
+                ))));
+            }
+
+            let mut highlights = Vec::new();
+            for (entry, _) in entries {
+                if matches!(entry, GenericValue::Null | GenericValue::Omitted) {
+                    continue;
+                }
+
+                let GenericValue::List(entry) = entry else {
+                    return Err(evaluator.fault(FaultKind::InvalidOperation(
+                        "each demir_highlights entry must be an associative list".into(),
+                    )));
+                };
+                let fields = evaluator
+                    .runtime
+                    .heap
+                    .list(entry)
+                    .map(|list| list.entries.clone())
+                    .ok_or_else(|| evaluator.fault(FaultKind::InvalidReference))?;
+
+                if let Some(highlight) = highlight_from_fields(&mut evaluator, &fields, position, size)? {
+                    highlights.push(highlight);
+                }
+            }
+
+            Ok(highlights)
         })();
         self.heap.rollback();
 

@@ -316,6 +316,22 @@
 // Return an associative list of opaque text channel keys to DEMIR_CONNECTION_* role bitmasks.
 /proc/demir_connections(atom/target)
 
+#define DEMIR_HIGHLIGHT_SELECTED 1
+#define DEMIR_HIGHLIGHT_HOVERED 2
+#define DEMIR_HIGHLIGHT_ALWAYS 4
+
+// Return a list of tile regions the editor should shade for this atom. Each entry is an
+// associative list; unknown keys are ignored, so a profile may carry keys a newer rmd reads.
+//
+//     "x", "y", "width", "height"  a rectangle, offset in tiles from this atom's own tile
+//     "tiles"                      list(list(x, y), ...) offsets, instead of a rectangle
+//     "color"                      any DM color, default orange
+//     "fill"                       wash opacity from 0 to 1, default 0.12
+//     "outline"                    draw the marching border, default 1
+//     "when"                       DEMIR_HIGHLIGHT_* bitmask, default DEMIR_HIGHLIGHT_SELECTED
+//     "label"                      text drawn above the region
+/proc/demir_highlights(atom/target)
+
 #define USE_PERSPECTIVE_EDITOR_WALLS
 
 ///

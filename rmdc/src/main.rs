@@ -225,8 +225,8 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
 
     if !vm::bake::has_profile(&tree) {
         return Err(
-            "the codebase defines no demir_bake, demir_initialize, demir_prepare or demir_light under #ifdef \
-             __DEMIR_BAKE__"
+            "the codebase defines no demir_bake, demir_initialize, demir_prepare, demir_connections, demir_highlights \
+             or demir_light under #ifdef __DEMIR_BAKE__"
                 .into(),
         );
     }
@@ -355,6 +355,13 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
     );
     eprintln!("{changed} icon states changed, {} cache hits", bake.cache_hits);
     eprintln!("{connected} connected placements, {links} incident connections");
+    let (highlighted, highlight_tiles) = bake.highlighted().fold((0, 0), |(count, tiles), (_, list)| {
+        (
+            count + 1,
+            tiles + list.iter().map(|highlight| highlight.tiles.len()).sum::<usize>(),
+        )
+    });
+    eprintln!("{highlighted} highlighted placements, {highlight_tiles} highlighted tiles");
     if let Some(lighting) = &bake.lighting {
         let lit = lighting
             .tiles
