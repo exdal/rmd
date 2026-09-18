@@ -3,6 +3,15 @@
 
 /datum/demir/example
 	var/label = "table"
+	var/smooth = 1
+
+	ui(atom/target)
+		if(imgui_begin("Panel"))
+			var/picked = imgui_checkbox("Smooth", smooth)
+			if(picked != smooth)
+				smooth = picked
+				demir_rebake(DEMIR_BAKE_APPEARANCE)
+		imgui_end()
 
 	highlights(atom/target)
 		if(!istype(target, /obj/structure/table))
@@ -29,6 +38,6 @@
 			if(istype(get_step(target, direction), /turf/closed/wall))
 				junction |= direction
 
-		target.name = "wall [junction]"
+		target.name = smooth ? "wall [junction]" : "plain [junction]"
 
 #endif

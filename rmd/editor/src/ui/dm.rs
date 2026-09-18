@@ -1,16 +1,12 @@
 use std::collections::HashSet;
 
 use dear_imgui_rs::{Condition, Id, TreeNodeFlags, Ui};
-use editor::{
-    bake::{UiCommand, UiFeedback, UiRebake, UiValue},
-    document::DocumentId,
-};
+use editor::bake::{UiCommand, UiFeedback, UiRebake, UiValue};
 
 use crate::session::Session;
 
 #[derive(Debug, Default)]
 pub(crate) struct DmUi {
-    document: Option<DocumentId>,
     feedback: UiFeedback,
     clicks: HashSet<String>,
     pending: bool,
@@ -19,14 +15,6 @@ pub(crate) struct DmUi {
 
 impl DmUi {
     pub(crate) fn draw(&mut self, ui: &Ui, session: &mut Session, dockspace: u32) {
-        let document = session.state.active();
-        if self.document != document {
-            *self = Self {
-                document,
-                ..Self::default()
-            };
-        }
-
         let feedback = UiFeedback {
             values: self.feedback.values.clone(),
             closed: self.feedback.closed.clone(),
