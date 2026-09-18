@@ -1705,6 +1705,8 @@ impl Session {
 
     pub fn toggle_area_outlines(&mut self) { self.options.show_area_outlines = !self.options.show_area_outlines; }
 
+    pub fn toggle_lighting(&mut self) { self.options.show_lighting = !self.options.show_lighting; }
+
     fn collect_bake_diagnostics(&mut self) {
         self.diagnostics.bake = self
             .caches
@@ -1764,13 +1766,15 @@ impl Session {
             level_count: document.map.size.z.max(1),
             revision: cache.revision,
             pending_update: cache.frame_update,
-            lighting: (!cache.instances.light_tiles.is_empty()).then_some(render::LightingFrame {
-                size: cache.instances.lighting_size,
-                tiles: &cache.instances.light_tiles,
-                tile_size: self.options.tile_size,
-                revision: cache.lighting_revision,
-                pending_update: cache.lighting_update,
-            }),
+            lighting: (self.options.show_lighting && !cache.instances.light_tiles.is_empty()).then_some(
+                render::LightingFrame {
+                    size: cache.instances.lighting_size,
+                    tiles: &cache.instances.light_tiles,
+                    tile_size: self.options.tile_size,
+                    revision: cache.lighting_revision,
+                    pending_update: cache.lighting_update,
+                },
+            ),
             guide_lines,
             connected,
             interaction,
@@ -3654,6 +3658,41 @@ mod tests {
         assert_eq!(frame.underlay_depth, 1);
         assert!(frame.show_areas);
         assert!(!frame.show_area_outlines);
+    }
+
+    #[test]
+    fn toggling_lighting_off_withholds_the_light_grid() {
+        let mut session = Session::new();
+        let id = session
+            .state
+            .open_document(MapDocument::new(Map::new(Size { x: 1, y: 1, z: 1 }), 1));
+        let cache = session.caches.entry(id).or_default();
+        cache.instances.lighting_size = [1, 1, 1];
+        cache.instances.light_tiles = vec![render::LightTile { corners: [[1.0; 3]; 4] }];
+
+        let view = |session: &Session| {
+            session
+                .map_view_frame(
+                    id,
+                    render::MapViewRect::default(),
+                    Default::default(),
+                    Default::default(),
+                    &[],
+                    &[],
+                )
+                .expect("the open map has a map view")
+                .lighting
+                .is_some()
+        };
+
+        assert!(session.options.show_lighting);
+        assert!(view(&session));
+
+        session.toggle_lighting();
+        assert!(!view(&session));
+
+        session.toggle_lighting();
+        assert!(view(&session));
     }
 
     #[test]

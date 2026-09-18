@@ -164,6 +164,7 @@ pub struct FrameRenderOptions<'a> {
 pub struct FrameOptions {
     pub show_areas: bool,
     pub show_area_outlines: bool,
+    pub show_lighting: bool,
     /// `world.icon_size`
     pub tile_size: u32,
     /// How many levels below the active one to draw behind it, 0 for none.
@@ -175,6 +176,7 @@ impl Default for FrameOptions {
         Self {
             show_areas: false,
             show_area_outlines: true,
+            show_lighting: true,
             tile_size: 32,
             underlay_depth: 3,
         }

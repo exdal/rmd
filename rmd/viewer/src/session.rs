@@ -149,6 +149,8 @@ impl Session {
 
     pub fn toggle_area_outlines(&mut self) { self.options.show_area_outlines = !self.options.show_area_outlines; }
 
+    pub fn toggle_lighting(&mut self) { self.options.show_lighting = !self.options.show_lighting; }
+
     pub fn map_view(&self, camera: render::Camera) -> MapViewFrame<'_> {
         MapViewFrame {
             rect: MapViewRect {
@@ -165,7 +167,7 @@ impl Session {
             level_count: self.document.as_ref().map_or(1, |document| document.map.size.z.max(1)),
             revision: self.revision,
             pending_update: None,
-            lighting: (!self.light_tiles.is_empty()).then_some(LightingFrame {
+            lighting: (self.options.show_lighting && !self.light_tiles.is_empty()).then_some(LightingFrame {
                 size: self.lighting_size,
                 tiles: &self.light_tiles,
                 tile_size: self.options.tile_size,

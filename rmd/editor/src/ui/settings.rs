@@ -71,6 +71,7 @@ const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
         &[
             KeybindAction::ShowAreas,
             KeybindAction::ShowAreaOutlines,
+            KeybindAction::ShowLighting,
             KeybindAction::LevelUp,
             KeybindAction::LevelDown,
             KeybindAction::Refit,
@@ -219,6 +220,10 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
     ui.text("Areas");
     ui.checkbox("Show areas", &mut session.options.show_areas);
     ui.checkbox("Show area outlines", &mut session.options.show_area_outlines);
+
+    ui.separator();
+    ui.text("Lighting");
+    ui.checkbox("Show lighting", &mut session.options.show_lighting);
 
     ui.separator();
     ui.text("Feedback");

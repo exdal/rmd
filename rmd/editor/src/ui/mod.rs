@@ -693,6 +693,7 @@ impl UiState {
         let mut pick_new_map_path = false;
         let mut toggle_areas = false;
         let mut toggle_area_outlines = false;
+        let mut toggle_lighting = false;
         let mut level_delta = 0;
         let mut underlay_depth = None;
         let mut refit = false;
@@ -773,6 +774,14 @@ impl UiState {
                 ) {
                     toggle_area_outlines = true;
                 }
+                if ui.menu_item_enabled_selected_with_shortcut(
+                    "Show lighting",
+                    settings.keybindings.get(KeybindAction::ShowLighting).label(ui),
+                    session.options.show_lighting,
+                    true,
+                ) {
+                    toggle_lighting = true;
+                }
                 if ui.menu_item_with_shortcut("Z up", settings.keybindings.get(KeybindAction::LevelUp).label(ui)) {
                     level_delta += 1;
                 }
@@ -840,6 +849,9 @@ impl UiState {
         }
         if toggle_area_outlines {
             session.toggle_area_outlines();
+        }
+        if toggle_lighting {
+            session.toggle_lighting();
         }
         if level_delta != 0 {
             request_level_change(
@@ -1411,6 +1423,9 @@ impl UiState {
                 }
                 if settings.keybindings.get(KeybindAction::ShowAreaOutlines).is_pressed(ui) {
                     session.toggle_area_outlines();
+                }
+                if settings.keybindings.get(KeybindAction::ShowLighting).is_pressed(ui) {
+                    session.toggle_lighting();
                 }
                 if settings.keybindings.get(KeybindAction::LevelUp).is_pressed(ui) {
                     request_level_change(session, 1, &mut self.new_level_dialog, &self.new_level_type_path);
@@ -4933,13 +4948,14 @@ mod tests {
             KeyBinding::with_ctrl(dear_imgui_rs::Key::V)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 26);
+        assert_eq!(KeybindAction::ALL.len(), 27);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Redo));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Copy));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Paste));
+        assert!(KeybindAction::ALL.contains(&KeybindAction::ShowLighting));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Recent1));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Recent0));
     }
