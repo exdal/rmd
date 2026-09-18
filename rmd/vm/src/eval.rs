@@ -43,6 +43,7 @@ pub struct Runtime {
     output: Vec<String>,
     pub(crate) global: Option<ObjectId>,
     pub(crate) world_object: Option<ObjectId>,
+    pub(crate) profile: Option<ObjectId>,
 }
 
 impl Runtime {
@@ -50,16 +51,18 @@ impl Runtime {
 
     pub fn take_output(&mut self) -> Vec<String> { std::mem::take(&mut self.output) }
 
+    /// `seed` is the atom a hook was called about, which is what its randomness and its memo safety
+    /// are measured against. It is not `src`: a hook's `src` is the profile, which has no position.
+    #[allow(clippy::too_many_arguments)]
     pub fn run(
-        &mut self, tree: &ObjectTree, module: &Module, proc: ProcId, src: Option<ObjectId>, args: Vec<GenericValue>,
-        limits: Limits,
+        &mut self, tree: &ObjectTree, module: &Module, proc: ProcId, src: Option<ObjectId>, seed: Option<ObjectId>,
+        args: Vec<GenericValue>, limits: Limits,
     ) -> Result<GenericValue> {
         self.ensure_global()?;
         self.ensure_world(tree)?;
         self.heap.begin();
 
         let result = {
-            let seed = src.or_else(|| args.first().and_then(GenericValue::object));
             let mut evaluator = Evaluator::new(self, tree, module, limits, seed);
             evaluator.call(
                 proc,
@@ -82,7 +85,7 @@ impl Runtime {
     ) -> Result<GenericValue> {
         let world = self.ensure_world(tree)?;
 
-        self.run(tree, module, proc, Some(world), args, limits)
+        self.run(tree, module, proc, Some(world), Some(world), args, limits)
     }
 
     pub fn set_var(
@@ -117,6 +120,33 @@ impl Runtime {
         self.world_object = Some(world);
 
         Ok(world)
+    }
+
+    /// Allocate the bake profile and run its `New()`. The id is stored before `New()` runs so that
+    /// `demir_profile()` answers inside it, and no journal is opened: the profile outlives every
+    /// transaction taken against it, and `Heap::rollback` truncates by id.
+    pub(crate) fn create_profile(
+        &mut self, tree: &ObjectTree, module: &Module, ty: TypeId, limits: Limits,
+    ) -> Result<ObjectId> {
+        self.ensure_global()?;
+        self.ensure_world(tree)?;
+
+        let id = self.heap.alloc_object(Object::new(ty)).map_err(Fault::detached)?;
+        self.profile = Some(id);
+
+        self.defining_groups = true;
+        let result = {
+            let mut evaluator = Evaluator::new(self, tree, module, limits, None);
+            match evaluator.find_proc(ty, &"New".into()) {
+                Some(proc) => evaluator
+                    .call_function_for_proc(proc, Receiver::Object(id), None, Vec::new())
+                    .map(|_| ()),
+                None => Ok(()),
+            }
+        };
+        self.defining_groups = false;
+
+        result.map(|()| id)
     }
 
     pub fn constant(&mut self, value: &Value) -> std::result::Result<GenericValue, FaultKind> {

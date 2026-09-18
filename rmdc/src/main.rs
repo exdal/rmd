@@ -223,12 +223,8 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
         return Err("semantic analysis failed".into());
     }
 
-    if !vm::bake::has_profile(&tree) {
-        return Err(
-            "the codebase defines no demir_bake, demir_initialize, demir_prepare, demir_connections, demir_highlights \
-             or demir_light under #ifdef __DEMIR_BAKE__"
-                .into(),
-        );
+    if let Err(error) = vm::bake::profile_type(&tree) {
+        return Err(error.to_string().into());
     }
 
     let module = codegen::generate(&ir_module)?;
@@ -527,7 +523,7 @@ fn evaluate_file(path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>>
     let module = codegen::generate(&module)?;
     let mut runtime = vm::Runtime::default();
     let result = if let Some(main) = main {
-        runtime.run(&tree, &module, main, None, Vec::new(), vm::Limits::default())
+        runtime.run(&tree, &module, main, None, None, Vec::new(), vm::Limits::default())
     } else if let Some(world_new) = world_new {
         runtime.run_world(&tree, &module, world_new, Vec::new(), vm::Limits::default())
     } else {

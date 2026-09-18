@@ -32,7 +32,7 @@
 	atmos_dmi = image('icons/obj/atmospherics/atmos.dmi')
 	bomb_dmi = image('icons/obj/canisterbomb.dmi')
 
-/proc/demir_prepare(atom/target)
+/datum/demir/goonstation/prepare(atom/target)
 	target.get_typeinfo()
 	target.demir_prepare_state()
 	target.demir_prepare_lights()
@@ -135,7 +135,7 @@
 	for(var/image/overlay in overlays)
 		overlay.demir_tag_light()
 
-/proc/demir_bake(atom/target)
+/datum/demir/goonstation/bake(atom/target)
 	if(istype(target, /obj/table))
 		var/obj/table/table = target
 		if(table.auto && table.materialless_icon_state() == "0")
@@ -318,7 +318,7 @@
 /obj/map/light/demir_apply_light()
 	demir_apply_point_light(brightness / 5, color_r, color_g, color_b)
 
-/proc/demir_light(atom/target)
+/datum/demir/goonstation/light(atom/target)
 	target.demir_apply_light()
 
 #endif

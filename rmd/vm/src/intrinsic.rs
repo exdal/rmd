@@ -203,9 +203,11 @@ impl Evaluator<'_> {
             | Intrinsic::DmDatabase
             | Intrinsic::MakeGenerator => Err(self.fault(FaultKind::Blocked(name.into()))),
 
+            Intrinsic::DemirProfile => Ok(self.runtime.profile.map(GenericValue::Object).unwrap_or_default()),
+
             Intrinsic::DemirDefineGroup => {
                 if !self.runtime.defining_groups {
-                    return Err(self.fault(FaultKind::Blocked(format!("{name} outside demir_initialize"))));
+                    return Err(self.fault(FaultKind::Blocked(format!("{name} outside a profile's New()"))));
                 }
 
                 let group = args.first().map(|(_, value)| value.clone()).unwrap_or_default().num();

@@ -24,16 +24,6 @@ use crate::{
     world::Position,
 };
 
-const HOOKS: [&str; 7] = [
-    "demir_initialize",
-    "demir_prepare",
-    "demir_connections",
-    "demir_highlights",
-    "demir_light",
-    "demir_bake",
-    "demir_ui",
-];
-
 const CONNECTION_SOURCE: u8 = 1;
 const CONNECTION_TARGET: u8 = 2;
 const CONNECTION_ROLES: u8 = CONNECTION_SOURCE | CONNECTION_TARGET;
@@ -72,17 +62,72 @@ const LIGHT_SCHEMA: [&str; 18] = [
     "demir_fullbright",
 ];
 
-/// `#ifdef __DEMIR_BAKE__` around one or more bake hooks in the codebase.
-pub fn has_profile(tree: &ObjectTree) -> bool { HOOKS.iter().any(|name| hook(tree, name).is_some()) }
+const PROFILE_BASE: &str = "/datum/demir";
 
-fn hook(tree: &ObjectTree, name: &str) -> Option<ProcId> {
-    tree.proc_inherited(TypeId::ROOT, &name.into())
-        .and_then(|proc| proc.body)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileError {
+    Missing,
+    Ambiguous(Vec<String>),
+}
+
+impl std::fmt::Display for ProfileError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing => write!(
+                formatter,
+                "the codebase defines no subtype of {PROFILE_BASE} under #ifdef __DEMIR_BAKE__"
+            ),
+            Self::Ambiguous(paths) => write!(
+                formatter,
+                "the codebase defines {} profiles and none is more derived than the rest: {}",
+                paths.len(),
+                paths.join(", ")
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ProfileError {}
+
+/// The one subtype of `/datum/demir` nothing else inherits from. Subtyping a profile to adjust it
+/// picks the adjustment, two unrelated profiles are an ambiguity only the codebase can settle.
+pub fn profile_type(tree: &ObjectTree) -> Result<TypeId, ProfileError> {
+    let base = tree
+        .id_of(&core::path::TreePath::parse(PROFILE_BASE))
+        .ok_or(ProfileError::Missing)?;
+
+    let mut leaves = tree
+        .descendants(base)
+        .into_iter()
+        .filter(|id| *id != base)
+        .filter(|id| tree.get(*id).is_some_and(|decl| decl.children.is_empty()))
+        .collect::<Vec<_>>();
+
+    match leaves.len() {
+        0 => Err(ProfileError::Missing),
+        1 => Ok(leaves.remove(0)),
+        _ => {
+            let mut paths = leaves
+                .into_iter()
+                .filter_map(|id| tree.get(id).map(|decl| decl.path.to_string()))
+                .collect::<Vec<_>>();
+            paths.sort();
+
+            Err(ProfileError::Ambiguous(paths))
+        },
+    }
+}
+
+pub fn has_profile(tree: &ObjectTree) -> bool { profile_type(tree).is_ok() }
+
+/// The prelude declares every hook on `/datum/demir`, so the walk to `/` stops there and a
+/// codebase's own global `/proc/light` is never mistaken for one.
+fn hook(tree: &ObjectTree, profile: TypeId, name: &str) -> Option<ProcId> {
+    tree.proc_inherited(profile, &name.into()).and_then(|proc| proc.body)
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Hooks {
-    initialize: Option<ProcId>,
     prepare: Option<ProcId>,
     connections: Option<ProcId>,
     highlights: Option<ProcId>,
@@ -92,15 +137,14 @@ struct Hooks {
 }
 
 impl Hooks {
-    fn resolve(tree: &ObjectTree) -> Self {
+    fn resolve(tree: &ObjectTree, profile: TypeId) -> Self {
         Self {
-            initialize: hook(tree, "demir_initialize"),
-            prepare: hook(tree, "demir_prepare"),
-            connections: hook(tree, "demir_connections"),
-            highlights: hook(tree, "demir_highlights"),
-            light: hook(tree, "demir_light"),
-            bake: hook(tree, "demir_bake"),
-            ui: hook(tree, "demir_ui"),
+            prepare: hook(tree, profile, "prepare"),
+            connections: hook(tree, profile, "connections"),
+            highlights: hook(tree, profile, "highlights"),
+            light: hook(tree, profile, "light"),
+            bake: hook(tree, profile, "bake"),
+            ui: hook(tree, profile, "ui"),
         }
     }
 }
@@ -255,9 +299,10 @@ impl Bake {
         tree: &ObjectTree, module: &Module, atoms: Vec<Atom>, size: [i32; 3], limits: Limits, icons: IconStates,
         mut progress: impl FnMut(Stage, usize, usize),
     ) -> Self {
+        let profile = profile_type(tree);
         let mut bake = Self {
             limits,
-            hooks: Hooks::resolve(tree),
+            hooks: profile.as_ref().map(|ty| Hooks::resolve(tree, *ty)).unwrap_or_default(),
             ..Default::default()
         };
 
@@ -282,9 +327,14 @@ impl Bake {
         }
 
         progress(Stage::Initialize, 0, 1);
-        let initialized = bake.initialize(tree, module);
+        let constructed = match profile {
+            Ok(ty) => bake.runtime.create_profile(tree, module, ty, limits).map(|_| ()),
+            // A codebase with no profile bakes nothing, which is not a fault. An ambiguous one is
+            // reported by whoever gated on `profile_type` before reaching here.
+            Err(_) => Ok(()),
+        };
         progress(Stage::Initialize, 1, 1);
-        if let Err(fault) = initialized {
+        if let Err(fault) = constructed {
             bake.diagnostics.record(fault);
 
             return bake;
@@ -512,18 +562,6 @@ impl Bake {
         }
     }
 
-    fn initialize(&mut self, tree: &ObjectTree, module: &Module) -> Result<(), Fault> {
-        let Some(proc) = self.hooks.initialize else {
-            return Ok(());
-        };
-
-        self.runtime.defining_groups = true;
-        let result = self.runtime.run(tree, module, proc, None, Vec::new(), self.limits);
-        self.runtime.defining_groups = false;
-
-        result.map(|_| ())
-    }
-
     fn prepare(&mut self, tree: &ObjectTree, module: &Module, id: u64) {
         if self.failed.contains(&id) {
             return;
@@ -543,7 +581,10 @@ impl Bake {
 
         let fault = self.hooks.prepare.and_then(|proc| {
             let args = vec![GenericValue::Object(object)];
-            self.runtime.run(tree, module, proc, None, args, self.limits).err()
+            let profile = self.runtime.profile;
+            self.runtime
+                .run(tree, module, proc, profile, Some(object), args, self.limits)
+                .err()
         });
         self.prepared.insert(object, fault.clone());
         if let Some(fault) = fault {
@@ -569,7 +610,11 @@ impl Bake {
             return;
         };
         let args = vec![GenericValue::Object(object)];
-        if let Err(fault) = self.runtime.run(tree, module, proc, None, args, self.limits) {
+        let profile = self.runtime.profile;
+        if let Err(fault) = self
+            .runtime
+            .run(tree, module, proc, profile, Some(object), args, self.limits)
+        {
             self.record_fault(id, fault);
         }
     }
@@ -1234,7 +1279,7 @@ fn highlight_from_fields(
             .ok_or_else(|| evaluator.fault(FaultKind::InvalidReference))?;
         if tiles.len() > HIGHLIGHT_MAX_TILES {
             return Err(evaluator.fault(FaultKind::InvalidOperation(format!(
-                "a demir_highlights entry listed more than {HIGHLIGHT_MAX_TILES} tiles"
+                "a highlights() entry listed more than {HIGHLIGHT_MAX_TILES} tiles"
             ))));
         }
 
@@ -1245,7 +1290,7 @@ fn highlight_from_fields(
 
             let GenericValue::List(pair) = tile else {
                 return Err(evaluator.fault(FaultKind::InvalidOperation(
-                    "each demir_highlights tile must be a list(x, y)".into(),
+                    "each highlights() tile must be a list(x, y)".into(),
                 )));
             };
             let pair = evaluator
@@ -1261,7 +1306,7 @@ fn highlight_from_fields(
                 .collect::<Vec<_>>();
             let [x, y] = coords[..] else {
                 return Err(evaluator.fault(FaultKind::InvalidOperation(
-                    "each demir_highlights tile must be a list(x, y)".into(),
+                    "each highlights() tile must be a list(x, y)".into(),
                 )));
             };
 
@@ -1276,7 +1321,7 @@ fn highlight_from_fields(
 
         if (width as f64) * (height as f64) > HIGHLIGHT_MAX_TILES as f64 {
             return Err(evaluator.fault(FaultKind::InvalidOperation(format!(
-                "a demir_highlights rectangle covered more than {HIGHLIGHT_MAX_TILES} tiles"
+                "a highlights() rectangle covered more than {HIGHLIGHT_MAX_TILES} tiles"
             ))));
         }
 
@@ -1355,10 +1400,11 @@ impl Runtime {
             ..fault
         })?;
 
+        let profile = self.profile;
         self.heap.begin();
         let result = (|| {
             let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, Some(object));
-            let value = evaluator.call(proc, None, vec![(None, GenericValue::Object(object))])?;
+            let value = evaluator.call(proc, profile, vec![(None, GenericValue::Object(object))])?;
             let entries = match value {
                 GenericValue::Null => return Ok(Vec::new()),
                 GenericValue::List(list) => evaluator
@@ -1369,7 +1415,7 @@ impl Runtime {
                     .ok_or_else(|| evaluator.fault(FaultKind::InvalidReference))?,
                 _ => {
                     return Err(evaluator.fault(FaultKind::InvalidOperation(
-                        "demir_connections must return an associative list".into(),
+                        "connections() must return an associative list".into(),
                     )));
                 },
             };
@@ -1378,17 +1424,17 @@ impl Runtime {
             for (channel, roles) in entries {
                 let Some(channel) = channel.text() else {
                     return Err(evaluator.fault(FaultKind::InvalidOperation(
-                        "demir_connections channel keys must be text".into(),
+                        "connections() channel keys must be text".into(),
                     )));
                 };
                 let Some(roles) = roles.and_then(|roles| roles.num()) else {
                     return Err(evaluator.fault(FaultKind::InvalidOperation(
-                        "demir_connections roles must be numeric associative values".into(),
+                        "connections() roles must be numeric associative values".into(),
                     )));
                 };
                 if !roles.is_finite() || roles.fract() != 0.0 || roles < 1.0 || roles > f32::from(CONNECTION_ROLES) {
                     return Err(evaluator.fault(FaultKind::InvalidOperation(
-                        "demir_connections roles must use DEMIR_CONNECTION_SOURCE and DEMIR_CONNECTION_TARGET".into(),
+                        "connections() roles must use DEMIR_CONNECTION_SOURCE and DEMIR_CONNECTION_TARGET".into(),
                     )));
                 }
                 *combined.entry(channel.to_owned()).or_default() |= roles as u8;
@@ -1417,13 +1463,14 @@ impl Runtime {
             ..fault
         })?;
 
+        let profile = self.profile;
         let interacted = feedback.interacted;
         self.ui.begin_frame(dockspace, feedback);
         self.heap.begin();
         let result = {
             let argument = target.map_or(GenericValue::Null, GenericValue::Object);
             let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, target);
-            evaluator.call(proc, None, vec![(None, argument)])
+            evaluator.call(proc, profile, vec![(None, argument)])
         };
 
         let committed = interacted && result.is_ok() && self.heap.changed();
@@ -1451,10 +1498,11 @@ impl Runtime {
             ..fault
         })?;
 
+        let profile = self.profile;
         self.heap.begin();
         let result = (|| {
             let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, Some(object));
-            let value = evaluator.call(proc, None, vec![(None, GenericValue::Object(object))])?;
+            let value = evaluator.call(proc, profile, vec![(None, GenericValue::Object(object))])?;
             let entries = match value {
                 GenericValue::Null => return Ok(Vec::new()),
                 GenericValue::List(list) => evaluator
@@ -1465,14 +1513,14 @@ impl Runtime {
                     .ok_or_else(|| evaluator.fault(FaultKind::InvalidReference))?,
                 _ => {
                     return Err(evaluator.fault(FaultKind::InvalidOperation(
-                        "demir_highlights must return a list of highlights".into(),
+                        "highlights() must return a list of highlights".into(),
                     )));
                 },
             };
 
             if entries.len() > HIGHLIGHT_MAX_PER_ATOM {
                 return Err(evaluator.fault(FaultKind::InvalidOperation(format!(
-                    "demir_highlights returned more than {HIGHLIGHT_MAX_PER_ATOM} highlights"
+                    "highlights() returned more than {HIGHLIGHT_MAX_PER_ATOM} highlights"
                 ))));
             }
 
@@ -1484,7 +1532,7 @@ impl Runtime {
 
                 let GenericValue::List(entry) = entry else {
                     return Err(evaluator.fault(FaultKind::InvalidOperation(
-                        "each demir_highlights entry must be an associative list".into(),
+                        "each highlights() entry must be an associative list".into(),
                     )));
                 };
                 let fields = evaluator
@@ -1514,6 +1562,7 @@ impl Runtime {
             ..fault
         })?;
 
+        let profile = self.profile;
         self.heap.begin();
         let (overlays, underlays, icon, icon_state) = NAMES.with(|names| {
             (
@@ -1525,7 +1574,7 @@ impl Runtime {
         });
         let result = (|| {
             let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, Some(object));
-            evaluator.call(proc, None, vec![(None, GenericValue::Object(object))])?;
+            evaluator.call(proc, profile, vec![(None, GenericValue::Object(object))])?;
 
             let mut ids = evaluator.runtime.heap.changed_objects();
             ids.extend(evaluator.appearance_reads.iter().copied().filter(|id| {

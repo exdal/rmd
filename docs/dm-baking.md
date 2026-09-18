@@ -18,32 +18,41 @@ updates, and verifies that the complete derived appearance layer returns to its 
 
 ## Profiles
 
-The compiler prelude declares seven hooks without bodies:
+The compiler prelude declares one type with six hooks, none of them with a body:
 
 ```dm
-/proc/demir_initialize()
-/proc/demir_prepare(atom/target)
-/proc/demir_connections(atom/target)
-/proc/demir_highlights(atom/target)
-/proc/demir_light(atom/target)
-/proc/demir_bake(atom/target)
-/proc/demir_ui(atom/target)
+/datum/demir
+	proc/bake(atom/target)
+	proc/prepare(atom/target)
+	proc/light(atom/target)
+	proc/connections(atom/target)
+	proc/highlights(atom/target)
+	proc/ui(atom/target)
 ```
 
-A codebase opts in by shipping a profile, a DM file that gives one or more of them a body. The
-profile lives in the codebase and is included from its `.dme` like any other file, wrapped so that
-only a bake compiles it:
+A codebase opts in by shipping a profile, a DM file declaring one subtype of `/datum/demir` that
+gives one or more of them a body. The profile lives in the codebase and is included from its `.dme`
+like any other file, wrapped so that only a bake compiles it:
 
 ```dm
 #ifdef __DEMIR_BAKE__
 
-/proc/demir_bake(atom/target)
+/datum/demir/mycodebase/bake(atom/target)
 	if(istype(target, /turf/closed/wall))
 		var/turf/closed/wall/wall = target
 		wall.smooth_icon()
 
 #endif
 ```
+
+rmd builds the subtype once per bake and calls every hook on that instance, so a profile keeps what
+it needs to remember in its own vars rather than in globals, and `..()` lets a hook chain to the one
+it overrides. `/datum/New()` is where a profile sets itself up; it runs once, before every other
+hook. A proc that is not itself a hook reaches the same instance through `demir_profile()`.
+
+A codebase may carry several profiles, as long as one is more derived than the rest: rmd bakes with
+the subtype of `/datum/demir` that nothing else inherits from. Two unrelated profiles are an error
+naming both, because only the codebase can say which one it meant.
 
 BYOND never defines `__DEMIR_BAKE__`, so the file compiles to nothing there, and a load with baking
 off sees exactly the tree BYOND does. Because the profile is part of the codebase, it can use every
@@ -52,10 +61,10 @@ macro the codebase defined before it, and the codebase maintains it alongside th
 
 A codebase without a profile bakes nothing. No bytecode is generated, no DM runs, and every atom
 draws from its static appearance. rmd never calls the game's own `Initialize()` either. Persistent
-target-specific preparation, including any call to `target.Initialize(TRUE)`, belongs in
-`demir_prepare`. Appearance mutations belong in `demir_bake`.
+target-specific preparation, including any call to `target.Initialize(TRUE)`, belongs in `prepare`.
+Appearance mutations belong in `bake`.
 
-`demir_connections` lets a profile expose codebase-specific links without teaching the editor about
+`connections` lets a profile expose codebase-specific links without teaching the editor about
 the codebase. It returns an associative list whose text keys are opaque connection channels and whose
 values use `DEMIR_CONNECTION_SOURCE`, `DEMIR_CONNECTION_TARGET`, or both flags. The baker connects
 atoms with the same channel and complementary roles. The hook runs after preparation in a rolled-back
@@ -73,7 +82,7 @@ icons. Its `.dme` therefore defines `CBT` under `#ifdef __DEMIR_BAKE__` after th
 `genesis_call.dme` include and before the generated include block.
 
 The prelude also declares a codebase-neutral static lighting schema on `/atom`. Profiles may fill it
-through `demir_light`. The baker harvests those fields into a dense, z-major corner lightmap. The
+through `light`. The baker harvests those fields into a dense, z-major corner lightmap. The
 renderer bilinearly samples the four corners of each tile and applies the result to the map scene.
 Nested appearances marked `demir_emissive` contribute their alpha to the emissive mask without
 drawing their mask texture into the scene. `demir_overlay_light` similarly routes an appearance to
@@ -81,7 +90,7 @@ the additive or subtractive overlay lightmap instead of the scene color. Profile
 source independently of its sprite with `demir_light_offset_x` and `demir_light_offset_y`, measured
 in tile units.
 
-`demir_highlights` lets a profile shade tiles without teaching the editor what they mean. It returns
+`highlights` lets a profile shade tiles without teaching the editor what they mean. It returns
 a list of descriptors, each an associative list; unknown keys are ignored, so a profile may carry
 keys a newer rmd reads, and a trailing comma is tolerated because it is ordinary DM style.
 
@@ -99,14 +108,14 @@ Offsets locate tiles relative to the atom, so an atom standing inside its own re
 ones. Tiles outside the world are dropped and a descriptor covering nothing is discarded. One
 highlight is capped at 16384 tiles, an atom at 16 highlights, and a label at 64 characters, so a
 runaway hook costs a diagnostic rather than the editor's memory. The hook runs in a rolled-back
-transaction like `demir_connections`, so it can read prepared runtime values but cannot mutate the
+transaction like `connections`, so it can read prepared runtime values but cannot mutate the
 world. The baker records which sides of each tile face outward, which is what lets a non-rectangular
 shape draw one continuous border.
 
 tgstation's profile uses it to show what area a `/obj/docking_port` covers, deriving a mobile port's
 extent from the shuttle map's own bounds the way `calculate_docking_port_information()` does.
 
-`demir_ui` draws the profile's own editor panel. It is the one hook that does not belong to a bake
+`ui` draws the profile's own editor panel. It is the one hook that does not belong to a bake
 stage: the editor calls it once per frame with the selected atom, or null. The `imgui_*` procs are
 blocked everywhere else:
 
@@ -130,10 +139,18 @@ blocked everywhere else:
 | `imgui_set_next_window_size(width, height)` | nothing                    |
 | `demir_rebake(kinds, groups)`               | nothing                    |
 
-`demir_define_group(group, type)` is the one other proc a profile calls, from `demir_initialize`
-rather than the panel. It puts a type and everything under it in a group, which is a bit whose
-meaning is the profile's own; rmd only matches them. A type may join several groups, and a group may
-name as many types as it likes.
+`demir_define_group(group, type)` is called from `New()` rather than the panel. It puts a type and
+everything under it in a group, which is a bit whose meaning is the profile's own; rmd only matches
+them. A type may join several groups, and a group may name as many types as it likes.
+
+`demir_profile()` answers with the profile instance from anywhere, which is how a proc that is not
+itself a hook, and so has some atom as its own `src`, reads what the panel wrote:
+
+```dm
+/obj/structure/cable/demir_underfloor_shown()
+	var/datum/demir/tgstation/profile = demir_profile()
+	return profile.show_cables
+```
 
 A widget is identified by the path of labels enclosing it, so the same label under two nodes stays
 two widgets and a repeated one under the same node keeps a stable identity across frames. Pair
@@ -145,12 +162,12 @@ starts from the profile's own value and reports the edited one on every frame af
 answers true on the frame after it is pressed.
 
 Writes roll back on every frame but the one that first carries a click or an edit and writes
-something. That is what lets a profile keep panel state in an ordinary global or static datum, which
-the other hooks then read, without an idle profile growing the heap sixty times a second. An
-interaction the profile drops keeps nothing, so a button it ignores costs no work.
+something. That is what lets a profile keep panel state in its own vars, which the other hooks then
+read off `src`, without an idle profile growing the heap sixty times a second. An interaction the
+profile drops keeps nothing, so a button it ignores costs no work.
 
 A frame that keeps its writes re-derives whatever it asked `demir_rebake` for, against the runtime
-the full bake already initialized; `demir_initialize()` does not run again, so the state survives. A
+the full bake already initialized; `New()` does not run again, so the state survives. A
 frame that asks for nothing re-derives nothing, so a profile that writes state without calling it
 draws a panel whose switches never take effect.
 
@@ -171,22 +188,23 @@ off falls back to the values its own type declares instead of keeping the ones i
 `imgui_radio` answers like `imgui_button`, so a group is a run of them over one stored value:
 
 ```dm
-if(imgui_radio("Wide", options.shape == SHAPE_WIDE))
-	options.shape = SHAPE_WIDE
+if(imgui_radio("Wide", src.shape == SHAPE_WIDE))
+	src.shape = SHAPE_WIDE
 ```
 
 Every other widget answers with its value, so the profile, which is holding the old one anyway,
 compares to find out what the viewer changed and what that costs:
 
 ```dm
-var/cables = imgui_checkbox("Cables", options.show_cables)
-if(cables != options.show_cables)
-	options.show_cables = cables
+var/cables = imgui_checkbox("Cables", src.show_cables)
+if(cables != src.show_cables)
+	src.show_cables = cables
 	demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_CABLES)
 ```
 
-`examples/profiles/tgstation.dm` keeps its options in a `/datum/demir_options` on a global, and
-`demir_bake` and `demir_apply_light` read it to turn smoothing and lighting off from the panel. Its
+`examples/profiles/tgstation.dm` keeps its options in vars on `/datum/demir/tgstation`, which `bake`
+reads off `src` and `demir_apply_light` reaches through `demir_profile()`, to turn smoothing and
+lighting off from the panel. Its
 under-floor checkboxes are the reason the hook can reach appearances at all: tgstation covers
 cables, pipes and disposals with a floor tile through `/datum/element/undertile`, which reacts to
 `COMSIG_OBJ_HIDE` from `levelupdate()`. No components or signals run in a bake, so nothing ever
@@ -218,21 +236,28 @@ Turfs, areas, and movable contents are linked through the runtime world before a
 A full bake has seven ordered stages:
 
 1. **Instantiate** creates objects, applies constant map overrides, and links each map cell.
-2. **Initialize** calls `demir_initialize()` once after the complete runtime world is linked.
-3. **Prepare** calls `demir_prepare` once per runtime object and commits successful setup for use by
+2. **Initialize** allocates the profile and runs its `New()` once, after the complete runtime
+   world is linked.
+3. **Prepare** calls `prepare` once per runtime object and commits successful setup for use by
    neighboring previews.
-4. **Connections** calls `demir_connections` once per runtime object and indexes matching channels.
-5. **Highlights** calls `demir_highlights` for each placement and records the tiles it claims.
-6. **Light** calls `demir_light` once per runtime object, harvests the neutral schema for every
+4. **Connections** calls `connections` once per runtime object and indexes matching channels.
+5. **Highlights** calls `highlights` for each placement and records the tiles it claims.
+6. **Light** calls `light` once per runtime object, harvests the neutral schema for every
    placement, and solves each z level's shared lighting corners.
-7. **Smooth** calls `demir_bake` for each placement and exports appearance changes.
+7. **Smooth** calls `bake` for each placement and exports appearance changes.
 
-`demir_ui` runs outside those stages, once per editor frame, and `Bake::rebake` re-runs stages 5
+`ui` runs outside those stages, once per editor frame, and `Bake::rebake` re-runs stages 5
 through 7 when one of its frames keeps its writes.
 
-Initialization uses the VM's normal transaction behavior and commits only when it succeeds. A fault
-is reported once and stops the remaining stages, leaving every atom on its static appearance.
-Preparation also commits when it succeeds; a per-object fault excludes that object from later hooks.
+The profile is allocated before any transaction is open, because object IDs are arena indices and a
+rollback truncates: an ID minted inside a transaction and held outside the heap would dangle. Its
+`New()` therefore keeps its writes unconditionally. A fault there is reported once and stops the
+remaining stages, leaving every atom on its static appearance. Preparation commits when it succeeds;
+a per-object fault excludes that object from later hooks.
+
+`bake`, `highlights` and `connections` run in rolled-back transactions, so none of them can
+accumulate state on the profile; the appearance cache depends on that. `ui` is the one hook whose
+writes to `src` can survive, on the frames described above.
 Each smoothing call starts a separate heap journal. The baker runs the hook, gathers the target and
 any changed neighboring objects, recursively exports their appearance values, and then rolls the
 journal back. A failed preview exports nothing, so repeated bakes cannot accumulate runtime writes or
@@ -265,7 +290,7 @@ hit. Hashes are only compared within one process.
 the prepare, connection, and light hooks to new objects, and rebakes the surrounding 3 by 3 by 3
 neighborhood. Connection endpoint entries are replaced or removed with their placements, and the
 channel index is rebuilt without rerunning hooks for unchanged objects. The update reuses the runtime
-initialized by the full bake and never reruns `demir_initialize()`. The vertical extent is needed by
+initialized by the full bake and never reruns `New()`. The vertical extent is needed by
 codebases with pipes or other structures that connect between z levels. Incremental edits bypass
 full-load cache reuse through the epoch, avoiding results derived from stale runtime globals. The
 update reports only the edited instances and the neighbors whose composed appearance actually changed.
@@ -308,7 +333,7 @@ Overlay and underlay deltas become extra sprites owned by the placement, drawn i
 it. They inherit the owner's icon, dir, offsets, and floating layer and plane. Color and alpha
 multiply with the owner's unless the overlay sets `RESET_COLOR` or `RESET_ALPHA`.
 
-When a profile defines `demir_light`, the map canvas always applies its baked lighting. The lighting
+When a profile defines `light`, the map canvas always applies its baked lighting. The lighting
 pass runs after map sprites and before area outlines, selection feedback, and placement previews, so
 editor feedback and previews remain readable. Lighting has its own revision and GPU update range;
 ordinary appearance edits do not re-upload the lightmap.
@@ -332,7 +357,7 @@ Palette thumbnails resolve statically. An atom whose static `icon_state` is miss
 which is how smoothed walls are declared, is baked alone in a one cell world at load, and the
 derived appearance is used for its thumbnail. The placement preview still resolves statically.
 
-A profile that defines `demir_ui` draws into the editor's own dockspace, after the map views and
+A profile that defines `ui` draws into the editor's own dockspace, after the map views and
 before the modal dialogs, so its windows dock and float like the editor's. The editor holds the
 widget values, the pressed buttons and the collapsed nodes between frames and forgets the ones the
 profile stopped drawing. A frame that keeps its writes queues a rebake, which is held until no
@@ -345,9 +370,11 @@ The settings tab lists grouped bake faults. It refreshes after every full bake.
 Every call receives an instruction budget, call-depth limit, allocation budget, and maximum text
 size. The default instruction budget is 100,000 operations, call depth is 48, allocations are capped
 at 100,000 units, and an individual text result is capped at 1 MiB. Randomness is seeded from the
-source type and coordinates, so rebuilding or removing and restoring the same atom is repeatable.
+type and coordinates of the atom a hook was called about, not of its `src`, so rebuilding or removing
+and restoring the same atom is repeatable. The same atom is what memo safety is measured against, so
+a hook reading its own neighbourhood still caches.
 
-A `demir_ui` frame is bounded as well: 4096 commands, 16 nested windows and nodes, 128 characters
+A `ui` frame is bounded as well: 4096 commands, 16 nested windows and nodes, 128 characters
 of label and 1024 of text. An `imgui_*` proc called outside the hook is blocked like any other
 unsupported operation, and the editor logs one fault per distinct kind rather than one per frame.
 
@@ -379,7 +406,7 @@ cargo run --release --bin rmdc -- bake examples/env/test.dme examples/env/test.d
 
 The bake summary reports how many placements carry connections and how many incident connections
 they hold, plus how many placements are highlighted and how many tiles they cover, which is the
-quickest way to tell whether a profile's `demir_connections` or `demir_highlights` is reaching the
+quickest way to tell whether a profile's `connections` or `highlights` is reaching the
 codebase at all. A profile only takes effect through the copy the `.dme` includes, so a profile
 edited in `examples/profiles` reports zero until it is copied into the codebase.
 

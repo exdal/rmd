@@ -1,7 +1,9 @@
 pub const VERSION_SOURCE: &str = include_str!(concat!(env!("OUT_DIR"), "/version.dm"));
 pub const CORE_SOURCE: &str = include_str!("../core.dm");
 pub const STDDEF_SOURCE: &str = include_str!("../stddef.dm");
+pub const STDDEF_EXT_SOURCE: &str = include_str!("../stddef_ext.dm");
 pub const DEMIR_SOURCE: &str = include_str!("../demir.dm");
+pub const IMGUI_SOURCE: &str = include_str!("../imgui.dm");
 
 include!(concat!(env!("OUT_DIR"), "/intrinsic.rs"));
 
@@ -40,8 +42,37 @@ mod tests {
         assert!(CORE_SOURCE.contains("/datum"));
         assert!(CORE_SOURCE.contains("/list"));
         assert!(CORE_SOURCE.contains("/alist"));
-        assert!(!DEMIR_SOURCE.contains("\n/datum\n"));
-        assert!(!DEMIR_SOURCE.contains("\n/list\n"));
-        assert!(!DEMIR_SOURCE.contains("\n/alist\n"));
+        for source in [STDDEF_EXT_SOURCE, DEMIR_SOURCE] {
+            assert!(!source.contains("\n/datum\n"));
+            assert!(!source.contains("\n/list\n"));
+            assert!(!source.contains("\n/alist\n"));
+        }
+    }
+
+    /// The split is the point: stddef_ext.dm carries BYOND's surface, demir.dm carries ours.
+    #[test]
+    fn the_prelude_split_keeps_byond_and_demir_apart() {
+        assert!(STDDEF_EXT_SOURCE.contains("\n/atom\n"));
+        assert!(STDDEF_EXT_SOURCE.contains("\n/image\n"));
+        assert!(STDDEF_EXT_SOURCE.contains("\n/world\n"));
+        // `set __demir_intrin` is the intrinsic ABI marker and belongs beside every proc it
+        // implements; the demir schema and the panel do not.
+        assert!(!STDDEF_EXT_SOURCE.contains("demir_light"));
+        assert!(!STDDEF_EXT_SOURCE.contains("demir_emissive"));
+        assert!(!STDDEF_EXT_SOURCE.contains("demir_overlay"));
+        assert!(!STDDEF_EXT_SOURCE.contains("/datum/demir"));
+        assert!(!STDDEF_EXT_SOURCE.contains("imgui_"));
+
+        assert!(DEMIR_SOURCE.contains("#define __DEMIR__"));
+        assert!(DEMIR_SOURCE.contains("\n/datum/demir\n"));
+        assert!(DEMIR_SOURCE.contains("demir_light_range"));
+        // /atom is reopened for the lighting schema, never redeclared with BYOND's own vars.
+        assert!(!DEMIR_SOURCE.contains("parent_type = /datum"));
+        assert!(!DEMIR_SOURCE.contains("/client"));
+        assert!(!DEMIR_SOURCE.contains("/savefile"));
+        assert!(!DEMIR_SOURCE.contains("/proc/imgui_"));
+
+        assert!(IMGUI_SOURCE.contains("/proc/imgui_begin"));
+        assert!(!IMGUI_SOURCE.contains("/datum/demir"));
     }
 }

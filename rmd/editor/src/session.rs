@@ -3429,7 +3429,7 @@ mod tests {
         let profile = r#"
 /turf/closed/wall/smoothed
     icon_state = "smooth"
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     if(istype(target, /turf/closed/wall/smoothed))
         target.icon_state = "wall"
 "#;
@@ -3607,11 +3607,11 @@ mod tests {
             root.join("profile.dm"),
             r#"
 #ifdef __DEMIR_BAKE__
-/proc/demir_highlights(atom/target)
+/datum/demir/test/highlights(atom/target)
     if(!istype(target, /obj/source))
         return
     return list(list("width" = 3, "height" = 1, "when" = DEMIR_HIGHLIGHT_SELECTED))
-/proc/demir_connections(atom/target)
+/datum/demir/test/connections(atom/target)
     var/list/connections = list()
     if(istype(target, /obj/source))
         var/obj/source/source = target

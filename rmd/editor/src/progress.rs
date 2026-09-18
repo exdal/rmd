@@ -36,7 +36,7 @@ impl Stage {
             Self::ReadMap => "Reading map",
             Self::ParseMap => "Parsing map",
             Self::Instantiate => "Instantiating atoms",
-            Self::Initialize => "Running demir_initialize",
+            Self::Initialize => "Constructing profile",
             Self::Prepare => "Preparing atoms",
             Self::Connections => "Collecting connections",
             Self::Highlights => "Collecting highlights",

@@ -1549,7 +1549,7 @@ pub const STDDEF_ENV: &str = "DM_STDDEF";
 
 pub const DEMIR_ENV: &str = "DM_DEMIR";
 
-pub use prelude::{CORE_SOURCE, DEMIR_SOURCE, STDDEF_SOURCE, VERSION_SOURCE};
+pub use prelude::{CORE_SOURCE, DEMIR_SOURCE, IMGUI_SOURCE, STDDEF_EXT_SOURCE, STDDEF_SOURCE, VERSION_SOURCE};
 
 pub enum PreludeFile {
     Embedded(&'static str, &'static str),
@@ -1566,7 +1566,9 @@ pub fn core_files() -> [PreludeFile; 2] {
 pub fn prelude_files() -> Vec<PreludeFile> {
     vec![
         env_override(STDDEF_ENV, PreludeFile::Embedded("<stddef.dm>", STDDEF_SOURCE)),
+        PreludeFile::Embedded("<stddef_ext.dm>", STDDEF_EXT_SOURCE),
         env_override(DEMIR_ENV, PreludeFile::Embedded("<demir.dm>", DEMIR_SOURCE)),
+        PreludeFile::Embedded("<imgui.dm>", IMGUI_SOURCE),
     ]
 }
 
@@ -2002,9 +2004,9 @@ mod tests {
         assert!(rendered.contains("valid"), "{rendered}");
     }
 
-    /// All three sources are compiled in, so a shipped binary needs no prelude directory beside it.
+    /// Every source is compiled in, so a shipped binary needs no prelude directory beside it.
     #[test]
-    fn the_default_prelude_is_version_core_stddef_then_demir_and_needs_no_files() {
+    fn the_default_prelude_is_version_core_stddef_ext_demir_then_imgui_and_needs_no_files() {
         let names: Vec<_> = core_files()
             .into_iter()
             .chain(prelude_files())
@@ -2014,9 +2016,20 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(names, vec!["<version.dm>", "<core.dm>", "<stddef.dm>", "<demir.dm>"]);
+        assert_eq!(
+            names,
+            vec![
+                "<version.dm>",
+                "<core.dm>",
+                "<stddef.dm>",
+                "<stddef_ext.dm>",
+                "<demir.dm>",
+                "<imgui.dm>"
+            ]
+        );
         assert!(CORE_SOURCE.contains("/datum"));
         assert!(STDDEF_SOURCE.contains("#define NORTH 1"));
+        assert!(STDDEF_EXT_SOURCE.contains("/atom"));
         assert!(DEMIR_SOURCE.contains("#define __DEMIR__"));
     }
 
@@ -2054,7 +2067,9 @@ mod tests {
             PreludeFile::Embedded("<version.dm>", VERSION_SOURCE),
             PreludeFile::Embedded("<core.dm>", CORE_SOURCE),
             PreludeFile::Embedded("<stddef.dm>", STDDEF_SOURCE),
+            PreludeFile::Embedded("<stddef_ext.dm>", STDDEF_EXT_SOURCE),
             PreludeFile::Embedded("<demir.dm>", DEMIR_SOURCE),
+            PreludeFile::Embedded("<imgui.dm>", IMGUI_SOURCE),
         ];
 
         for file in std::mem::take(&mut preprocessor.prelude) {

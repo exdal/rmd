@@ -256,7 +256,7 @@ mod tests {
     }
 
     const WALLS: &str = r#"
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     if(!istype(target, /turf/closed/wall))
         return
     var/junction = 0
@@ -317,7 +317,7 @@ mod tests {
         std::fs::write(
             root.join("profile.dm"),
             r#"
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     if(istype(target, /obj/smoothed))
         target.icon_state = "wall"
 "#,
@@ -335,10 +335,8 @@ mod tests {
         let smoothed_id = environment.tree.id_of(&smoothed.path).expect("editor smoothed");
         let helper_id = environment.tree.id_of(&helper.path).expect("editor helper");
         let program = environment.bake_program.as_ref().expect("bake program");
-        let hook = program
-            .tree
-            .proc_inherited(objtree::TypeId::ROOT, &"demir_bake".into())
-            .expect("bake hook");
+        let profile = vm::bake::profile_type(&program.tree).expect("bake profile");
+        let hook = program.tree.proc_inherited(profile, &"bake".into()).expect("bake hook");
 
         assert_eq!(
             visual::resolve_id(&environment.tree, plain_id, &plain).icon.as_deref(),
@@ -456,7 +454,7 @@ mod tests {
     fn overlays_follow_the_owner_dir_and_sort_by_layer() {
         let environment = environment(
             r#"
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     if(!istype(target, /obj/structure/table))
         return
     target.dir = 4
@@ -598,7 +596,7 @@ mod tests {
             junction |= direction
     icon_state = "table-[junction]"
 
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     if(istype(target, /obj/structure/table))
         var/obj/structure/table/table = target
         table.smooth_icon()

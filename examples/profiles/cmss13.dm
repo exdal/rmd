@@ -13,7 +13,8 @@
 	InitGlobaldiagonals()
 	InitGlobalalldirs()
 
-/proc/demir_initialize()
+/datum/demir/cmss13/New()
+	..()
 	if(!GLOB)
 		GLOB = new /datum/controller/global_vars/demir_preview
 
@@ -55,7 +56,7 @@
 /obj/structure/machinery/door/poddoor/demir_prepare_state()
 	opacity = density
 
-/proc/demir_prepare(atom/target)
+/datum/demir/cmss13/prepare(atom/target)
 	if(istype(target, /turf/closed/wall))
 		var/turf/closed/wall/wall = target
 		wall.demir_prepare_overlays()
@@ -184,7 +185,7 @@
 	for(var/image/overlay in overlays)
 		overlay.demir_tag_emissive()
 
-/proc/demir_bake(atom/target)
+/datum/demir/cmss13/bake(atom/target)
 	target.demir_bake_icon()
 	if(target.tiles_with && !istype(target, /turf/closed/wall))
 		target.relativewall()
@@ -208,7 +209,7 @@
 	demir_ambient_color = base_lighting_color
 	demir_ambient_power = base_lighting_alpha / 255
 
-/proc/demir_light(atom/target)
+/datum/demir/cmss13/light(atom/target)
 	target.demir_apply_light()
 
 #endif

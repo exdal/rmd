@@ -14,7 +14,7 @@
 #ifdef __DEMIR_BAKE__
 
 // What each panel option drives, so a change re-derives that and nothing else. The types in each
-// group are declared once in demir_initialize().
+// group are declared once in New().
 #define DEMIR_GROUP_CABLES (1<<0)
 #define DEMIR_GROUP_PIPES (1<<1)
 #define DEMIR_GROUP_DISPOSALS (1<<2)
@@ -306,23 +306,29 @@
 	return null
 
 /obj/structure/cable/demir_underfloor_shown()
-	return demir_options.show_cables
+	var/datum/demir/tgstation/profile = demir_profile()
+	return profile.show_cables
 
 /obj/machinery/power/terminal/demir_underfloor_shown()
-	return demir_options.show_cables
+	var/datum/demir/tgstation/profile = demir_profile()
+	return profile.show_cables
 
 // setup_hiding() runs only when hide is set, so the /visible subtypes never take the element.
 /obj/machinery/atmospherics/pipe/demir_underfloor_shown()
-	return hide ? demir_options.show_pipes : null
+	var/datum/demir/tgstation/profile = demir_profile()
+	return hide ? profile.show_pipes : null
 
 /obj/machinery/duct/demir_underfloor_shown()
-	return demir_options.show_pipes
+	var/datum/demir/tgstation/profile = demir_profile()
+	return profile.show_pipes
 
 /obj/structure/disposalpipe/demir_underfloor_shown()
-	return demir_options.show_disposals
+	var/datum/demir/tgstation/profile = demir_profile()
+	return profile.show_disposals
 
 /obj/structure/disposalconstruct/demir_underfloor_shown()
-	return demir_options.show_disposals
+	var/datum/demir/tgstation/profile = demir_profile()
+	return profile.show_disposals
 
 /atom/movable/proc/demir_apply_underfloor()
 	var/shown = demir_underfloor_shown()
@@ -337,7 +343,8 @@
 		alpha = 0
 		return
 
-	if(demir_options.fade_underfloor)
+	var/datum/demir/tgstation/profile = demir_profile()
+	if(profile.fade_underfloor)
 		// undertile.dm undefines its own ALPHA_UNDERTILE before this profile is included.
 		alpha = 128
 
@@ -431,7 +438,7 @@
 		"label" = name || "docking port",
 	)
 
-/proc/demir_highlights(atom/target)
+/datum/demir/tgstation/highlights(atom/target)
 	if(!istype(target, /obj/docking_port))
 		return null
 
@@ -440,10 +447,10 @@
 
 	return highlight ? list(highlight) : null
 
-// demir_ui() rolls its writes back on every frame but the one the viewer touched something on, so
-// a global datum is where panel state belongs. Every other hook reads it, and the frame that
-// changes it re-derives appearances, highlights and lighting.
-/datum/demir_options
+// ui() rolls its writes back on every frame but the one the viewer touched something on, so the
+// profile's own vars are where panel state belongs. Every other hook reads them off src, and the
+// frame that changes one re-derives appearances, highlights and lighting.
+/datum/demir/tgstation
 	var/smooth = TRUE
 	var/lighting = TRUE
 	var/show_cables = TRUE
@@ -451,59 +458,58 @@
 	var/show_disposals = TRUE
 	var/fade_underfloor = FALSE
 
-var/global/datum/demir_options/demir_options
+	New()
+		..()
+		if(!GLOB)
+			GLOB = new /datum/controller/global_vars/demir_preview
 
-/proc/demir_initialize()
-	if(!GLOB)
-		GLOB = new /datum/controller/global_vars/demir_preview
-	demir_options = new /datum/demir_options
+		// A group is a type and everything under it, so the /visible atmos pipes join
+		// DEMIR_GROUP_PIPES too. Re-deriving one that was never hidden costs a preview and
+		// changes nothing.
+		demir_define_group(DEMIR_GROUP_CABLES, /obj/structure/cable)
+		demir_define_group(DEMIR_GROUP_CABLES, /obj/machinery/power/terminal)
+		demir_define_group(DEMIR_GROUP_PIPES, /obj/machinery/atmospherics/pipe)
+		demir_define_group(DEMIR_GROUP_PIPES, /obj/machinery/duct)
+		demir_define_group(DEMIR_GROUP_DISPOSALS, /obj/structure/disposalpipe)
+		demir_define_group(DEMIR_GROUP_DISPOSALS, /obj/structure/disposalconstruct)
 
-	// A group is a type and everything under it, so the /visible atmos pipes join DEMIR_GROUP_PIPES
-	// too. Re-deriving one that was never hidden costs a preview and changes nothing.
-	demir_define_group(DEMIR_GROUP_CABLES, /obj/structure/cable)
-	demir_define_group(DEMIR_GROUP_CABLES, /obj/machinery/power/terminal)
-	demir_define_group(DEMIR_GROUP_PIPES, /obj/machinery/atmospherics/pipe)
-	demir_define_group(DEMIR_GROUP_PIPES, /obj/machinery/duct)
-	demir_define_group(DEMIR_GROUP_DISPOSALS, /obj/structure/disposalpipe)
-	demir_define_group(DEMIR_GROUP_DISPOSALS, /obj/structure/disposalconstruct)
-
-/proc/demir_ui(atom/target)
+/datum/demir/tgstation/ui(atom/target)
 	if(!imgui_begin("Demir"))
 		imgui_end()
 		return
 
 	imgui_separator("Baking")
-	var/smooth = imgui_checkbox("Smooth walls", demir_options.smooth)
-	if(smooth != demir_options.smooth)
-		demir_options.smooth = smooth
+	var/smoothed = imgui_checkbox("Smooth walls", src.smooth)
+	if(smoothed != src.smooth)
+		src.smooth = smoothed
 		// Smoothing is declared at a hundred-odd scattered types, so there is no honest group for it.
 		demir_rebake(DEMIR_BAKE_APPEARANCE)
 
-	var/lighting = imgui_checkbox("Lighting", demir_options.lighting)
-	if(lighting != demir_options.lighting)
-		demir_options.lighting = lighting
+	var/lit = imgui_checkbox("Lighting", src.lighting)
+	if(lit != src.lighting)
+		src.lighting = lit
 		// Every area carries the fullbright flag, so this one is not worth narrowing.
 		demir_rebake(DEMIR_BAKE_LIGHT)
 
 	imgui_separator("Under-floor")
-	var/cables = imgui_checkbox("Cables", demir_options.show_cables)
-	if(cables != demir_options.show_cables)
-		demir_options.show_cables = cables
+	var/cables = imgui_checkbox("Cables", src.show_cables)
+	if(cables != src.show_cables)
+		src.show_cables = cables
 		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_CABLES)
 
-	var/pipes = imgui_checkbox("Pipes", demir_options.show_pipes)
-	if(pipes != demir_options.show_pipes)
-		demir_options.show_pipes = pipes
+	var/pipes = imgui_checkbox("Pipes", src.show_pipes)
+	if(pipes != src.show_pipes)
+		src.show_pipes = pipes
 		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_PIPES)
 
-	var/disposals = imgui_checkbox("Disposals", demir_options.show_disposals)
-	if(disposals != demir_options.show_disposals)
-		demir_options.show_disposals = disposals
+	var/disposals = imgui_checkbox("Disposals", src.show_disposals)
+	if(disposals != src.show_disposals)
+		src.show_disposals = disposals
 		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_DISPOSALS)
 
-	var/fade = imgui_checkbox("Semitransparent", demir_options.fade_underfloor)
-	if(fade != demir_options.fade_underfloor)
-		demir_options.fade_underfloor = fade
+	var/fade = imgui_checkbox("Semitransparent", src.fade_underfloor)
+	if(fade != src.fade_underfloor)
+		src.fade_underfloor = fade
 		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_UNDERFLOOR)
 
 	if(target)
@@ -513,7 +519,7 @@ var/global/datum/demir_options/demir_options
 
 	imgui_end()
 
-/proc/demir_prepare(atom/target)
+/datum/demir/tgstation/prepare(atom/target)
 	target.demir_prepare_smoothing()
 	if(istype(target, /obj/item/flashlight))
 		var/obj/item/flashlight/flashlight = target
@@ -529,7 +535,7 @@ var/global/datum/demir_options/demir_options
 			atmos_target.normalize_cardinal_directions()
 		atmos_target.set_init_directions(atmos_target.initialize_directions)
 
-/proc/demir_bake(atom/target)
+/datum/demir/tgstation/bake(atom/target)
 	if(istype(target, /obj/effect/spawner/structure/window))
 		var/obj/effect/spawner/structure/window/spawner = target
 		spawner.demir_bake_spawned_appearance()
@@ -545,7 +551,7 @@ var/global/datum/demir_options/demir_options
 	else if(istype(target, /obj/machinery/atmospherics))
 		var/obj/machinery/atmospherics/atmos_target = target
 		atmos_target.demir_bake_connections()
-	else if(demir_options.smooth && (target.smoothing_flags & USES_SMOOTHING))
+	else if(src.smooth && (target.smoothing_flags & USES_SMOOTHING))
 		target.smooth_icon()
 	if(ismovable(target))
 		var/atom/movable/movable_target = target
@@ -601,11 +607,12 @@ var/global/datum/demir_options/demir_options
 /area/demir_apply_light()
 	// Switching lighting off lights the whole map rather than blacking it out, which is what a
 	// mapper wants from the toggle.
-	demir_fullbright = !demir_options.lighting || !static_lighting
+	var/datum/demir/tgstation/profile = demir_profile()
+	demir_fullbright = !profile.lighting || !static_lighting
 	demir_ambient_color = base_lighting_color
 	demir_ambient_power = base_lighting_alpha / 255
 
-/proc/demir_light(atom/target)
+/datum/demir/tgstation/light(atom/target)
 	target.demir_apply_light()
 
 // Connection channels are opaque to rmd. Keep the controlled type and DM value kind in the key
@@ -619,7 +626,7 @@ var/global/datum/demir_options/demir_options
 		return "[kind]:text:[value]"
 	return null
 
-/proc/demir_connections(atom/target)
+/datum/demir/tgstation/connections(atom/target)
 	var/channel
 	var/roles
 	if(istype(target, /obj/machinery/button/door))

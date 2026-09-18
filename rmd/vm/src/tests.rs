@@ -26,7 +26,9 @@ use crate::{
         HIGHLIGHT_EDGE_WEST,
         HIGHLIGHT_SELECTED,
         HighlightTile,
+        ProfileError,
         has_profile,
+        profile_type,
     },
     eval::Evaluator,
     heap::{Object, ObjectId},
@@ -56,17 +58,32 @@ fn proc(tree: &ObjectTree, name: &str) -> core::types::ProcId {
         .expect("fixture proc should exist")
 }
 
+fn hook(tree: &ObjectTree, name: &str) -> core::types::ProcId {
+    let profile = profile_type(tree).expect("fixture should declare one profile");
+    tree.proc_inherited(profile, &name.into())
+        .and_then(|proc| proc.body)
+        .expect("fixture hook should exist")
+}
+
 fn run(source: &str, name: &str) -> GenericValue {
     let (tree, module) = compile(source);
     Runtime::default()
-        .run(&tree, &module, proc(&tree, name), None, Vec::new(), Limits::default())
+        .run(
+            &tree,
+            &module,
+            proc(&tree, name),
+            None,
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
         .expect("fixture should execute")
 }
 
 const WALLS: &str = r#"
 /turf/wall
     icon_state = "static"
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     if(!istype(target, /turf/wall))
         return
     var/junction = 0
@@ -116,14 +133,175 @@ fn baked_state(bake: &Bake, id: u64) -> Option<&str> {
 }
 
 #[test]
-fn only_hook_bodies_make_a_profile() {
+fn only_a_demir_subtype_makes_a_profile() {
     let (bare, _) = compile("/turf/wall\n    proc/Initialize(mapload)\n        return\n");
     let (profiled, _) = compile(WALLS);
-    let (connections, _) = compile("/proc/demir_connections(atom/target)\n    return list()\n");
+    // A subtype with no hook bodies at all is still a profile: it bakes nothing, which is what a
+    // codebase asking for the editor without appearances wants.
+    let (empty, _) = compile("/datum/demir/test\n    var/unused = 1\n");
 
+    assert_eq!(profile_type(&bare), Err(ProfileError::Missing));
     assert!(!has_profile(&bare));
     assert!(has_profile(&profiled));
-    assert!(has_profile(&connections));
+    assert!(has_profile(&empty));
+}
+
+/// Subtyping a profile to adjust it names the adjustment, so a codebase can ship a base profile and
+/// a variant without the two fighting.
+#[test]
+fn the_most_derived_profile_wins() {
+    let (tree, _) = compile(
+        r#"
+/datum/demir/base/bake(atom/target)
+    target.icon_state = "base"
+/datum/demir/base/debug/bake(atom/target)
+    target.icon_state = "debug"
+"#,
+    );
+    let chosen = profile_type(&tree).expect("the leaf profile");
+
+    assert_eq!(
+        tree.get(chosen).map(|decl| decl.path.to_string()),
+        Some(String::from("/datum/demir/base/debug"))
+    );
+}
+
+#[test]
+fn sibling_profiles_are_an_ambiguity() {
+    let (tree, _) = compile(
+        r#"
+/datum/demir/goon/bake(atom/target)
+    return
+/datum/demir/tg/bake(atom/target)
+    return
+"#,
+    );
+
+    assert_eq!(
+        profile_type(&tree),
+        Err(ProfileError::Ambiguous(vec![
+            String::from("/datum/demir/goon"),
+            String::from("/datum/demir/tg"),
+        ]))
+    );
+    assert!(!has_profile(&tree));
+}
+
+/// `..()` is half the reason the hooks are methods: a variant profile adjusts the base rather than
+/// copying it.
+#[test]
+fn a_profile_hook_chains_to_its_parent() {
+    let (tree, module) = compile(
+        r#"
+/turf/wall
+    icon_state = "static"
+/datum/demir/base
+    bake(atom/target)
+        target.icon_state = "base"
+/datum/demir/base/debug/bake(atom/target)
+    ..()
+    target.icon_state = "[target.icon_state]-debug"
+"#,
+    );
+    let bake = Bake::new(
+        &tree,
+        &module,
+        vec![Atom {
+            instance: 1,
+            ty: tree.id_of(&TreePath::parse("/turf/wall")).expect("wall type"),
+            position: Position::new(1, 1, 1),
+            vars: Vec::new(),
+        }],
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(baked_state(&bake, 1), Some("base-debug"));
+}
+
+/// A proc that is not itself a hook has no `src` of its own to read the profile from.
+#[test]
+fn demir_profile_reaches_the_instance_from_an_ordinary_proc() {
+    let (tree, module) = compile(
+        r#"
+/turf/wall
+    icon_state = "static"
+    proc/demir_style()
+        var/datum/demir/test/profile = demir_profile()
+        return profile.style
+/datum/demir/test
+    var/style
+
+    New()
+        ..()
+        style = "lit"
+
+    bake(atom/target)
+        target.icon_state = target.demir_style()
+"#,
+    );
+    let bake = Bake::new(
+        &tree,
+        &module,
+        vec![Atom {
+            instance: 1,
+            ty: tree.id_of(&TreePath::parse("/turf/wall")).expect("wall type"),
+            position: Position::new(1, 1, 1),
+            vars: Vec::new(),
+        }],
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(baked_state(&bake, 1), Some("lit"));
+}
+
+/// Memo safety is measured against the atom a hook was called about, not against `src`. A profile
+/// has no position, so seeding from it would mark every neighbourhood read uncacheable and silently
+/// cost every cache hit in a real bake.
+#[test]
+fn a_hook_reading_its_neighbours_still_caches() {
+    let (tree, module) = compile(
+        r#"
+/turf/wall
+    icon_state = "static"
+    var/smooth = 1
+/datum/demir/test/bake(atom/target)
+    var/junction = 0
+    for(var/direction in list(1, 2, 4, 8))
+        var/turf/wall/neighbour = get_step(target, direction)
+        if(istype(neighbour) && neighbour.smooth)
+            junction |= direction
+    target.icon_state = "[junction]"
+"#,
+    );
+    let ty = tree.id_of(&TreePath::parse("/turf/wall")).expect("wall type");
+    let atoms = (1..=20)
+        .map(|x| Atom {
+            instance: x as u64,
+            ty,
+            position: Position::new(x, 1, 1),
+            vars: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let bake = Bake::new(
+        &tree,
+        &module,
+        atoms,
+        [20, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.attempted, 20);
+    assert_eq!(baked_state(&bake, 10), Some("12"));
+    assert!(
+        bake.cache_hits > 10,
+        "the interior walls share a neighbourhood, so all but the ends come from the cache: {}",
+        bake.cache_hits
+    );
 }
 
 #[test]
@@ -136,7 +314,7 @@ fn profile_connections_match_complementary_roles_from_either_endpoint() {
     var/channel
 /obj/both
     var/channel
-/proc/demir_connections(atom/target)
+/datum/demir/test/connections(atom/target)
     var/list/connections = list()
     if(istype(target, /obj/source))
         var/obj/source/source = target
@@ -196,7 +374,7 @@ fn profile_highlights_are_clipped_edged_and_restored_across_edits() {
         r##"
 /obj/port
     var/span = 0
-/proc/demir_highlights(atom/target)
+/datum/demir/test/highlights(atom/target)
     if(!istype(target, /obj/port))
         return
     var/obj/port/port = target
@@ -286,7 +464,7 @@ fn profile_ui_draws_widgets_and_reads_back_what_the_editor_remembers() {
         r##"
 /obj/panel
     var/glow = 40
-/proc/demir_ui(atom/target)
+/datum/demir/test/ui(atom/target)
     if(!imgui_begin("Panel"))
         imgui_end()
         return
@@ -387,7 +565,7 @@ fn profile_ui_draws_widgets_and_reads_back_what_the_editor_remembers() {
 fn profile_ui_rejects_drawing_outside_a_window() {
     let (tree, module) = compile(
         r#"
-/proc/demir_ui(atom/target)
+/datum/demir/test/ui(atom/target)
     imgui_text("orphan")
 "#,
     );
@@ -413,7 +591,7 @@ fn profile_ui_rejects_drawing_outside_a_window() {
 fn imgui_procs_are_blocked_outside_the_ui_hook() {
     let (tree, module) = compile(
         r#"
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     imgui_text("nope")
 "#,
     );
@@ -421,50 +599,49 @@ fn imgui_procs_are_blocked_outside_the_ui_hook() {
         .run(
             &tree,
             &module,
-            proc(&tree, "demir_bake"),
+            hook(&tree, "bake"),
+            None,
             None,
             Vec::new(),
             Limits::default(),
         )
-        .expect_err("imgui only runs inside demir_ui");
+        .expect_err("imgui only runs inside ui()");
     assert!(
-        matches!(&fault.kind, FaultKind::Blocked(message) if message.contains("outside demir_ui")),
+        matches!(&fault.kind, FaultKind::Blocked(message) if message.contains("outside ui()")),
         "{fault:?}",
     );
 }
 
 #[test]
-fn profile_ui_state_survives_in_globals_and_a_committed_frame_rebakes() {
+fn profile_ui_state_survives_on_the_profile_and_a_committed_frame_rebakes() {
     let (tree, module) = compile(
         r##"
-/datum/panel_state
-    var/lit = 1
-
 /obj/lamp
 
-var/global/datum/panel_state/panel
+/datum/demir/test
+    var/lit = 1
 
-/proc/demir_initialize()
-    panel = new /datum/panel_state
-    demir_define_group(2, /obj/lamp)
+    New()
+        ..()
+        demir_define_group(2, /obj/lamp)
 
-/proc/demir_ui(atom/target)
-    if(!imgui_begin("Panel"))
+    ui(atom/target)
+        if(!imgui_begin("Panel"))
+            imgui_end()
+            return
+        var/checked = imgui_checkbox("lit", src.lit)
+        if(checked != src.lit)
+            src.lit = checked
+            demir_rebake(DEMIR_BAKE_APPEARANCE | DEMIR_BAKE_LIGHT, 2)
         imgui_end()
-        return
-    var/lit = imgui_checkbox("lit", panel.lit)
-    if(lit != panel.lit)
-        panel.lit = lit
-        demir_rebake(DEMIR_BAKE_APPEARANCE | DEMIR_BAKE_LIGHT, 2)
-    imgui_end()
 
-/proc/demir_light(atom/target)
-    if(panel.lit)
-        target.demir_light_range = 3
-        target.demir_light_power = 1
+    light(atom/target)
+        if(src.lit)
+            target.demir_light_range = 3
+            target.demir_light_power = 1
 
-/proc/demir_bake(atom/target)
-    target.icon_state = panel.lit ? "on" : "off"
+    bake(atom/target)
+        target.icon_state = src.lit ? "on" : "off"
 "##,
     );
     let mut bake = Bake::new(
@@ -554,10 +731,10 @@ fn profile_ui_radios_pick_one_mode_and_the_rebake_follows_it() {
 
 var/global/datum/panel_state/panel
 
-/proc/demir_initialize()
+/datum/demir/test/New()
     panel = new /datum/panel_state
 
-/proc/demir_ui(atom/target)
+/datum/demir/test/ui(atom/target)
     if(!imgui_begin("Panel"))
         imgui_end()
         return
@@ -568,7 +745,7 @@ var/global/datum/panel_state/panel
         demir_rebake(DEMIR_BAKE_APPEARANCE)
     imgui_end()
 
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     target.alpha = panel.mode ? 128 : 0
 "##,
     );
@@ -665,12 +842,12 @@ fn a_rebake_group_narrows_the_pass_to_the_placements_that_carry_it() {
 
 var/global/datum/panel_state/panel
 
-/proc/demir_initialize()
+/datum/demir/test/New()
     panel = new /datum/panel_state
     demir_define_group(1, /obj/cable)
     demir_define_group(2, /obj/pipe)
 
-/proc/demir_ui(atom/target)
+/datum/demir/test/ui(atom/target)
     if(!imgui_begin("Panel"))
         imgui_end()
         return
@@ -680,7 +857,7 @@ var/global/datum/panel_state/panel
         demir_rebake(DEMIR_BAKE_APPEARANCE, 1)
     imgui_end()
 
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     target.alpha = panel.tint
 "##,
     );
@@ -747,16 +924,16 @@ fn a_rebake_group_covers_the_subtypes_of_what_it_named() {
 /obj/cable/layered
 /obj/pipe
 
-/proc/demir_initialize()
+/datum/demir/test/New()
     demir_define_group(1, /obj/cable)
 
-/proc/demir_ui(atom/target)
+/datum/demir/test/ui(atom/target)
     if(imgui_begin("Panel"))
         if(imgui_button("Redo"))
             demir_rebake(DEMIR_BAKE_APPEARANCE, 1)
     imgui_end()
 
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     target.alpha = 100
 "##,
     );
@@ -799,7 +976,7 @@ fn a_rebake_group_covers_the_subtypes_of_what_it_named() {
 fn defining_a_rebake_group_outside_initialize_is_blocked() {
     let (tree, module) = compile(
         r#"
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     demir_define_group(1, /obj)
 "#,
     );
@@ -807,14 +984,15 @@ fn defining_a_rebake_group_outside_initialize_is_blocked() {
         .run(
             &tree,
             &module,
-            proc(&tree, "demir_bake"),
+            hook(&tree, "bake"),
+            None,
             None,
             Vec::new(),
             Limits::default(),
         )
         .expect_err("groups are declared once, at initialization");
     assert!(
-        matches!(&fault.kind, FaultKind::Blocked(message) if message.contains("outside demir_initialize")),
+        matches!(&fault.kind, FaultKind::Blocked(message) if message.contains("outside a profile's New()")),
         "{fault:?}",
     );
 }
@@ -823,7 +1001,7 @@ fn defining_a_rebake_group_outside_initialize_is_blocked() {
 fn a_ui_interaction_the_profile_ignores_keeps_nothing() {
     let (tree, module) = compile(
         r#"
-/proc/demir_ui(atom/target)
+/datum/demir/test/ui(atom/target)
     if(imgui_begin("Panel"))
         imgui_button("Does nothing")
     imgui_end()
@@ -862,7 +1040,7 @@ fn a_ui_interaction_the_profile_ignores_keeps_nothing() {
 fn profile_ui_streams_stay_balanced_when_the_profile_leaves_them_open() {
     let (tree, module) = compile(
         r#"
-/proc/demir_ui(atom/target)
+/datum/demir/test/ui(atom/target)
     imgui_begin("Panel")
     if(imgui_tree("Nested"))
         imgui_text("only when open")
@@ -927,9 +1105,9 @@ fn malformed_connection_metadata_does_not_block_appearance_baking() {
         r#"
 /obj/source
     icon_state = "static"
-/proc/demir_connections(atom/target)
+/datum/demir/test/connections(atom/target)
     return list("missing role")
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     target.icon_state = "baked"
 "#,
     );
@@ -987,7 +1165,7 @@ fn lighting_hooks_build_and_incrementally_restore_the_lightmap() {
         r##"
 /obj/lamp
 /obj/ambient
-/proc/demir_light(atom/target)
+/datum/demir/test/light(atom/target)
     if(istype(target, /obj/lamp))
         target.demir_light_range = 3
         target.demir_light_power = 1
@@ -1078,7 +1256,7 @@ fn lighting_hook_keeps_zero_radius_quadratic_sources() {
     let (tree, module) = compile(
         r##"
 /obj/runway_light
-/proc/demir_light(atom/target)
+/datum/demir/test/light(atom/target)
     if(istype(target, /obj/runway_light))
         target.demir_light_range = 0
         target.demir_light_power = 0.5
@@ -1120,7 +1298,7 @@ fn lighting_hook_offsets_source_origins_in_tile_units() {
     let (tree, module) = compile(
         r##"
 /obj/lamp
-/proc/demir_light(atom/target)
+/datum/demir/test/light(atom/target)
     if(istype(target, /obj/lamp))
         target.demir_light_range = 4
         target.demir_light_power = 1
@@ -1161,7 +1339,7 @@ fn appearance_offset_moves_a_wall_fixture_without_leaking_through_its_wall() {
     pixel_y = 21
 /obj/wall
     opacity = 1
-/proc/demir_light(atom/target)
+/datum/demir/test/light(atom/target)
     if(istype(target, /obj/fixture))
         target.demir_light_range = 3
         target.demir_light_power = 1.6
@@ -1263,7 +1441,7 @@ fn range_and_orange_spiral_out_with_areas_once() {
             parts += "O"
     return jointext(parts, " ")
 
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     if(!istype(target, /turf/floor) || target.x != 2 || target.y != 2)
         return
     target.name = "[describe(orange(1, target))] | [describe(range(target, 1))]"
@@ -1317,7 +1495,7 @@ fn baking_exports_icon_objects_and_ignores_timed_effects() {
         r#"
 /obj/panel
     icon = 'old.dmi'
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     flick("opening", target)
     animate(target, alpha = 0, time = 10)
     target.icon = icon(icon('panels.dmi', "on"))
@@ -1361,7 +1539,7 @@ fn baking_exports_icon_and_icon_state_as_a_pair() {
 /obj/icon_only
     icon = 'old.dmi'
     icon_state = "steady"
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     if(istype(target, /obj/state_only))
         target.icon_state = "on"
     else if(istype(target, /obj/icon_only))
@@ -1416,7 +1594,7 @@ fn baking_exports_sprite_lighting_roles() {
     let (tree, module) = compile(
         r#"
 /obj/light
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     if(!istype(target, /obj/light))
         return
     target.demir_emissive = TRUE
@@ -1501,7 +1679,7 @@ fn bake_cache_uses_instance_variables() {
 /turf/styled
     icon_state = "static"
     var/style = 0
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     if(istype(target, /turf/styled))
         target.icon_state = "[target.style]"
 "#;
@@ -1543,13 +1721,13 @@ var/global/demir_init_count = 0
 /turf/initialized
     icon_state = "static"
     var/demir_prepared = 0
-/proc/demir_initialize()
+/datum/demir/test/New()
     world.log << "hello world"
     demir_init_count += 1
-/proc/demir_prepare(atom/target)
+/datum/demir/test/prepare(atom/target)
     if(istype(target, /turf/initialized))
         target.demir_prepared += 1
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     if(istype(target, /turf/initialized))
         target.icon_state = "[demir_init_count]-[target.demir_prepared]"
 "#,
@@ -1596,9 +1774,9 @@ fn initialization_fault_stops_all_object_hooks() {
         r#"
 /turf/initialized
     icon_state = "static"
-/proc/demir_initialize()
+/datum/demir/test/New()
     world.Reboot()
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     target.icon_state = "baked"
 "#,
     );
@@ -1637,7 +1815,7 @@ fn neighbor_overlay_changes_are_exported_and_rolled_back() {
     var/list/overlays = list()
     proc/Initialize(mapload)
         overlays = list("base")
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     if(istype(target, /turf/overlay_test))
         target.Initialize(TRUE)
         var/turf/east = get_step(target, 4)
@@ -1677,7 +1855,7 @@ fn shared_overlay_graphs_respect_the_export_budget() {
 /turf/export_test
     icon_state = "static"
     overlays = list()
-/proc/demir_bake(atom/target)
+/datum/demir/test/bake(atom/target)
     if(istype(target, /turf/export_test))
         var/image/previous = new
         for(var/i = 1 to 24)
@@ -1973,7 +2151,15 @@ fn sandbox_faults_are_not_catchable() {
 "#,
     );
     let fault = Runtime::default()
-        .run(&tree, &module, proc(&tree, "test"), None, Vec::new(), Limits::default())
+        .run(
+            &tree,
+            &module,
+            proc(&tree, "test"),
+            None,
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
         .expect_err("sandbox operation should fault");
     assert_eq!(fault.kind, FaultKind::Blocked("shell".into()));
 }
@@ -1989,7 +2175,15 @@ fn world_log_output_uses_a_field_reference() {
     );
     let mut runtime = Runtime::default();
     let result = runtime
-        .run(&tree, &module, proc(&tree, "test"), None, Vec::new(), Limits::default())
+        .run(
+            &tree,
+            &module,
+            proc(&tree, "test"),
+            None,
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
         .expect("fixture should execute");
 
     assert_eq!(result, GenericValue::Null);
@@ -2097,7 +2291,15 @@ fn icon_states_answer_from_the_host_table() {
         vec![String::from("wall0"), String::from("wall1"), String::from("wall0")],
     )]);
     let result = runtime
-        .run(&tree, &module, proc(&tree, "test"), None, Vec::new(), Limits::default())
+        .run(
+            &tree,
+            &module,
+            proc(&tree, "test"),
+            None,
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
         .expect("fixture should execute");
 
     assert_eq!(result, GenericValue::from("2 wall0 wall1 2 0"));
@@ -2112,7 +2314,15 @@ fn unsupported_output_targets_are_blocked() {
 "#,
     );
     let fault = Runtime::default()
-        .run(&tree, &module, proc(&tree, "test"), None, Vec::new(), Limits::default())
+        .run(
+            &tree,
+            &module,
+            proc(&tree, "test"),
+            None,
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
         .expect_err("unsupported output target should fault");
 
     assert_eq!(fault.kind, FaultKind::Blocked("output".into()));
@@ -2132,6 +2342,7 @@ fn instruction_budget_stops_infinite_control_flow() {
             &tree,
             &module,
             proc(&tree, "test"),
+            None,
             None,
             Vec::new(),
             Limits {
@@ -2528,6 +2739,7 @@ fn call_depth_stops_recursive_functions() {
             &module,
             proc(&tree, "test"),
             None,
+            None,
             Vec::new(),
             Limits {
                 call_depth: 4,
@@ -2565,6 +2777,7 @@ fn an_instruction_fault_rolls_back_heap_changes() {
             &tree,
             &module,
             proc(&tree, "test"),
+            None,
             None,
             vec![GenericValue::Object(object)],
             Limits {
@@ -2645,6 +2858,7 @@ fn intrinsic_procs_run_in_rust_instead_of_their_body() {
             &module,
             proc(&tree, "lines"),
             None,
+            None,
             Vec::new(),
             Limits::default(),
         )
@@ -2669,6 +2883,7 @@ fn intrinsic_procs_run_in_rust_instead_of_their_body() {
                 &module,
                 proc(&tree, "banned"),
                 None,
+                None,
                 Vec::new(),
                 Limits::default()
             )
@@ -2681,6 +2896,7 @@ fn intrinsic_procs_run_in_rust_instead_of_their_body() {
             &tree,
             &module,
             proc(&tree, "reboot"),
+            None,
             None,
             Vec::new(),
             Limits::default(),
@@ -2709,6 +2925,7 @@ fn file2list_without_a_root_is_blocked() {
             &tree,
             &module,
             proc(&tree, "lines"),
+            None,
             None,
             Vec::new(),
             Limits::default(),

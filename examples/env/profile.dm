@@ -1,31 +1,34 @@
 // Baked by rmd, never compiled by BYOND
 #ifdef __DEMIR_BAKE__
 
-/proc/demir_highlights(atom/target)
-	if(!istype(target, /obj/structure/table))
-		return null
+/datum/demir/example
+	var/label = "table"
 
-	// A rectangle around the table, and the ring of tiles just outside it.
-	var/list/ring = list()
-	for(var/offset in -2 to 2)
-		ring += list(list(offset, -2), list(offset, 2))
-	for(var/offset in -1 to 1)
-		ring += list(list(-2, offset), list(2, offset))
+	highlights(atom/target)
+		if(!istype(target, /obj/structure/table))
+			return null
 
-	return list(
-		list("x" = -1, "y" = -1, "width" = 3, "height" = 3, "label" = "table"),
-		list("tiles" = ring, "color" = "#40a0ff", "fill" = 0.08, "when" = DEMIR_HIGHLIGHT_ALWAYS),
-	)
+		// A rectangle around the table, and the ring of tiles just outside it.
+		var/list/ring = list()
+		for(var/offset in -2 to 2)
+			ring += list(list(offset, -2), list(offset, 2))
+		for(var/offset in -1 to 1)
+			ring += list(list(-2, offset), list(2, offset))
 
-/proc/demir_bake(atom/target)
-	if(!istype(target, /turf/closed/wall))
-		return
+		return list(
+			list("x" = -1, "y" = -1, "width" = 3, "height" = 3, "label" = label),
+			list("tiles" = ring, "color" = "#40a0ff", "fill" = 0.08, "when" = DEMIR_HIGHLIGHT_ALWAYS),
+		)
 
-	var/junction = 0
-	for(var/direction in list(NORTH, SOUTH, EAST, WEST))
-		if(istype(get_step(target, direction), /turf/closed/wall))
-			junction |= direction
+	bake(atom/target)
+		if(!istype(target, /turf/closed/wall))
+			return
 
-	target.name = "wall [junction]"
+		var/junction = 0
+		for(var/direction in list(NORTH, SOUTH, EAST, WEST))
+			if(istype(get_step(target, direction), /turf/closed/wall))
+				junction |= direction
+
+		target.name = "wall [junction]"
 
 #endif

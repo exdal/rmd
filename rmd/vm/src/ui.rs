@@ -224,7 +224,7 @@ impl Evaluator<'_> {
         &mut self, intrinsic: Intrinsic, name: &str, args: Vec<(Option<Identifier>, GenericValue)>,
     ) -> Result<GenericValue> {
         if !self.runtime.ui.active {
-            return Err(self.fault(FaultKind::Blocked(format!("{name} outside demir_ui"))));
+            return Err(self.fault(FaultKind::Blocked(format!("{name} outside ui()"))));
         }
 
         let arg = |n: usize| args.get(n).map(|(_, value)| value.clone()).unwrap_or_default();
@@ -256,7 +256,7 @@ impl Evaluator<'_> {
                 let label = label(0);
                 if self.runtime.ui.scope.len() >= MAX_DEPTH {
                     return Err(self.fault(FaultKind::InvalidOperation(format!(
-                        "demir_ui nested more than {MAX_DEPTH} windows and nodes"
+                        "ui() nested more than {MAX_DEPTH} windows and nodes"
                     ))));
                 }
 
@@ -385,7 +385,7 @@ impl Evaluator<'_> {
                 let tree = intrinsic == Intrinsic::ImguiTree;
                 if tree && self.runtime.ui.scope.len() >= MAX_DEPTH {
                     return Err(self.fault(FaultKind::InvalidOperation(format!(
-                        "demir_ui nested more than {MAX_DEPTH} windows and nodes"
+                        "ui() nested more than {MAX_DEPTH} windows and nodes"
                     ))));
                 }
 
@@ -427,14 +427,12 @@ impl Evaluator<'_> {
     fn emit(&mut self, command: Command) -> Result<()> {
         if self.runtime.ui.commands.len() >= MAX_COMMANDS {
             return Err(self.fault(FaultKind::InvalidOperation(format!(
-                "demir_ui emitted more than {MAX_COMMANDS} commands"
+                "ui() emitted more than {MAX_COMMANDS} commands"
             ))));
         }
 
         if !matches!(command, Command::Begin { .. }) && self.runtime.ui.scope.is_empty() {
-            return Err(self.fault(FaultKind::InvalidOperation(
-                "demir_ui drew outside of imgui_begin".into(),
-            )));
+            return Err(self.fault(FaultKind::InvalidOperation("ui() drew outside of imgui_begin".into())));
         }
 
         self.charge(1)?;

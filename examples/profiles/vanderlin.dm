@@ -181,13 +181,16 @@
 
 	return locate(here.x, here.y, here.z + offset)
 
-/proc/demir_initialize()
-	if(!GLOB)
-		GLOB = new /datum/controller/global_vars/demir_preview
-	if(!GLOB.demir_sun_color)
-		GLOB.demir_sun_color = demir_daylight_color()
+/datum/demir/vanderlin
+	var/sun_color
 
-/proc/demir_prepare(atom/target)
+	New()
+		..()
+		if(!GLOB)
+			GLOB = new /datum/controller/global_vars/demir_preview
+		sun_color = demir_daylight_color()
+
+/datum/demir/vanderlin/prepare(atom/target)
 	target.demir_prepare_smoothing()
 	if(istype(target, /obj/item/flashlight))
 		var/obj/item/flashlight/flashlight = target
@@ -199,7 +202,7 @@
 		var/obj/machinery/light/fixture = target
 		fixture.demir_prepare_light_state()
 
-/proc/demir_bake(atom/target)
+/datum/demir/vanderlin/bake(atom/target)
 	if(istype(target, /obj/structure/water_pipe))
 		var/obj/structure/water_pipe/pipe = target
 		pipe.demir_bake_connections()
@@ -210,9 +213,6 @@
 		var/atom/movable/movable_target = target
 		movable_target.demir_add_overlay_light()
 
-
-/datum/controller/global_vars/demir_preview
-	var/demir_sun_color
 
 // The day cycle picks one of the daytime tints at random. Noon is what a mapper wants to see, and
 // a fixed choice keeps the view from shimmering between bakes.
@@ -267,13 +267,14 @@
 	demir_light_range = 3
 	demir_light_power = 1
 	demir_light_height = -0.5
-	demir_light_color = GLOB.demir_sun_color
+	var/datum/demir/vanderlin/profile = demir_profile()
+	demir_light_color = profile.sun_color
 	demir_light_peak = 1
 
 /area/demir_apply_light()
 	demir_fullbright = !dynamic_lighting
 
-/proc/demir_light(atom/target)
+/datum/demir/vanderlin/light(atom/target)
 	target.demir_apply_light()
 
 #endif

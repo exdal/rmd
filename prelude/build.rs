@@ -15,14 +15,21 @@ struct Declaration {
 
 fn main() {
     println!("cargo:rerun-if-changed=core.dm");
+    println!("cargo:rerun-if-changed=stddef_ext.dm");
     println!("cargo:rerun-if-changed=demir.dm");
+    println!("cargo:rerun-if-changed=imgui.dm");
     println!("cargo:rerun-if-changed=BYOND_VERSION");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     fs::write(out_dir.join("version.dm"), version_defines(Path::new("BYOND_VERSION")))
         .expect("write generated version defines");
 
-    let sources = [Path::new("core.dm"), Path::new("demir.dm")];
+    let sources = [
+        Path::new("core.dm"),
+        Path::new("stddef_ext.dm"),
+        Path::new("demir.dm"),
+        Path::new("imgui.dm"),
+    ];
     let mut declarations = Vec::new();
     for source in sources {
         declarations.extend(read_declarations(source));
