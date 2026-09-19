@@ -24,6 +24,7 @@ use dear_imgui_rs::{
     StyleVar,
     Ui,
     WindowFlags,
+    WindowHoveredFlags,
     WindowKey,
     WindowKeyError,
 };
@@ -382,6 +383,15 @@ struct PendingPaste {
 enum PasteAction {
     Paste,
     Cancel,
+}
+
+pub(super) fn focus_window_on_hover(ui: &Ui) {
+    if !ui.is_window_focused()
+        && !ui.is_any_item_active()
+        && ui.is_window_hovered_with_flags(WindowHoveredFlags::CHILD_WINDOWS)
+    {
+        ui.set_window_focus(None);
+    }
 }
 
 fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
@@ -833,7 +843,7 @@ impl UiState {
         self.show_welcome |= show_welcome;
 
         let mut open_source = self.object_tree.draw(ui, session, settings);
-        let inspector = self.inspector.draw(ui, session);
+        let inspector = self.inspector.draw(ui, session, settings);
         open_source = inspector.open_source.or(open_source);
         if let Some(target) = inspector.jump {
             self.jump_to_instance(session, target);
@@ -905,6 +915,9 @@ impl UiState {
         let maps_expanded = &mut self.welcome_maps_expanded;
         let codebase = session.environment_path();
         ui.window(&self.welcome_window).opened(show_welcome).build(|| {
+            if settings.focus_windows_on_hover {
+                focus_window_on_hover(ui);
+            }
             let dock = ui.get_window_dock_id();
             if dock.raw() != 0 {
                 *central_node = Some(dock);
@@ -1283,6 +1296,9 @@ impl UiState {
             .opened(keep_open)
             .focused(std::mem::take(view_focus));
         map_window.build(|| {
+            if settings.focus_windows_on_hover {
+                focus_window_on_hover(ui);
+            }
             if ui.is_window_focused() {
                 if session.state.active() != Some(id) {
                     self.cancel_edit_gestures(session, session.state.active());

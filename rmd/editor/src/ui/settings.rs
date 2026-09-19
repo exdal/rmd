@@ -151,6 +151,9 @@ fn draw_settings_window(
         .size_constraints(SETTINGS_WINDOW_MIN_SIZE, [f32::MAX, f32::MAX])
         .flags(flags)
         .build(|| {
+            if settings.focus_windows_on_hover {
+                super::focus_window_on_hover(ui);
+            }
             let content_height = ui.content_region_avail()[1].max(1.0);
             ui.child_window("settings-categories")
                 .size([SETTINGS_CATEGORY_WIDTH, content_height])
@@ -204,6 +207,10 @@ fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
     ui.input_text("##preferred-editor", &mut settings.preferred_editor)
         .build();
     ui.text_disabled("Placeholders: {file}, {line}, {column}");
+
+    ui.separator();
+    ui.text("Windows");
+    ui.checkbox("Focus windows on hover", &mut settings.focus_windows_on_hover);
 }
 
 fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Settings) {

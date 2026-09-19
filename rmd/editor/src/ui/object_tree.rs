@@ -193,6 +193,9 @@ impl ObjectTreePanel {
     pub(super) fn draw(&mut self, ui: &Ui, session: &mut Session, settings: &mut Settings) -> Option<SourceLocation> {
         let mut open_source = None;
         ui.window(&self.window).build(|| {
+            if settings.focus_windows_on_hover {
+                super::focus_window_on_hover(ui);
+            }
             let mut output = ObjectTreeOutput {
                 reveal: self.reveal,
                 ..ObjectTreeOutput::default()

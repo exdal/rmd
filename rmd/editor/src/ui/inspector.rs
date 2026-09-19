@@ -24,6 +24,7 @@ use objtree::{ObjectTree, TypeId};
 use crate::{
     external_editor::SourceLocation,
     session::{DirectionalTypes, Session},
+    settings::Settings,
     transform::anchor_axis,
 };
 
@@ -1114,21 +1115,24 @@ impl InspectorPanel {
 
     pub(super) const fn transform_mode(&self) -> TransformMode { self.state.transform_mode() }
 
-    pub(super) fn draw(&mut self, ui: &Ui, session: &mut Session) -> InspectorPanelOutput {
-        let output = self.draw_inspector(ui, session);
+    pub(super) fn draw(&mut self, ui: &Ui, session: &mut Session, settings: &Settings) -> InspectorPanelOutput {
+        let output = self.draw_inspector(ui, session, settings);
         if output.find_similar {
             self.open_similar_instances(session);
         }
 
         InspectorPanelOutput {
             open_source: output.open_source,
-            jump: self.draw_similar_instances(ui, session),
+            jump: self.draw_similar_instances(ui, session, settings),
         }
     }
 
-    fn draw_inspector(&mut self, ui: &Ui, session: &mut Session) -> InspectorOutput {
+    fn draw_inspector(&mut self, ui: &Ui, session: &mut Session, settings: &Settings) -> InspectorOutput {
         let mut output = InspectorOutput::default();
         ui.window(&self.window).build(|| {
+            if settings.focus_windows_on_hover {
+                super::focus_window_on_hover(ui);
+            }
             output = self.state.draw(ui, session);
         });
 
@@ -1154,7 +1158,7 @@ impl InspectorPanel {
         });
     }
 
-    fn draw_similar_instances(&mut self, ui: &Ui, session: &Session) -> Option<JumpTarget> {
+    fn draw_similar_instances(&mut self, ui: &Ui, session: &Session, settings: &Settings) -> Option<JumpTarget> {
         let document_id = self.similar.as_ref()?.document;
         let Some(document) = session.state.document(document_id) else {
             self.similar = None;
@@ -1172,6 +1176,9 @@ impl InspectorPanel {
             .size(SIMILAR_INSTANCES_WINDOW_SIZE, Condition::FirstUseEver)
             .focused(focus)
             .build(|| {
+                if settings.focus_windows_on_hover {
+                    super::focus_window_on_hover(ui);
+                }
                 ui.text_wrapped(&search.prefab_path);
                 let suffix = if rows.len() == 1 { "instance" } else { "instances" };
                 ui.text_disabled(format!("{} matching {suffix}", rows.len()));
