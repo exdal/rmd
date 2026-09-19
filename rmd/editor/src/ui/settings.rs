@@ -1,4 +1,14 @@
-use dear_imgui_rs::{Condition, Key, TableFlags, TableSizingPolicy, Ui, WindowFlags, WindowKey, WindowKeyError};
+use dear_imgui_rs::{
+    Condition,
+    DragFlags,
+    Key,
+    TableFlags,
+    TableSizingPolicy,
+    Ui,
+    WindowFlags,
+    WindowKey,
+    WindowKeyError,
+};
 
 use crate::{
     session::Session,
@@ -160,6 +170,9 @@ fn draw_settings_window(
         .size_constraints(SETTINGS_WINDOW_MIN_SIZE, [f32::MAX, f32::MAX])
         .flags(flags)
         .build(|| {
+            if settings.focus_windows_on_hover {
+                super::focus_window_on_hover(ui);
+            }
             let content_height = ui.content_region_avail()[1].max(1.0);
             ui.child_window("settings-categories")
                 .size([SETTINGS_CATEGORY_WIDTH, content_height])
@@ -214,6 +227,10 @@ fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
     ui.input_text("##preferred-editor", &mut settings.preferred_editor)
         .build();
     ui.text_disabled("Placeholders: {file}, {line}, {column}");
+
+    ui.separator();
+    ui.text("Windows");
+    ui.checkbox("Focus windows on hover", &mut settings.focus_windows_on_hover);
 }
 
 fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Settings) {
@@ -229,6 +246,24 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
     ui.text("Feedback");
     ui.checkbox("Tile placement flash", &mut settings.tile_place_flash);
     ui.checkbox("Selection guide lines", &mut settings.selection_guide_line);
+
+    ui.separator();
+    ui.text("Grid");
+    ui.checkbox("Tile grid overlay", &mut settings.show_tile_grid);
+    ui.set_next_item_width(120.0);
+    drag_min_pixels(
+        ui,
+        "Hide tile grid below (px per tile)",
+        &mut settings.tile_grid_min_pixels,
+    );
+
+    ui.checkbox("Pixel grid on selected tile", &mut settings.show_selected_pixel_grid);
+    ui.set_next_item_width(120.0);
+    drag_min_pixels(
+        ui,
+        "Hide pixel grid below (px per world px)",
+        &mut settings.selected_pixel_grid_min_pixels,
+    );
 
     ui.separator();
     ui.text("Selection");
@@ -274,6 +309,18 @@ fn draw_compiler_settings(ui: &Ui, session: &Session, settings: &mut Settings) {
             fault.kind,
             fault.location.display(file)
         ));
+    }
+}
+
+fn drag_min_pixels(ui: &Ui, label: &str, value: &mut u32) {
+    let mut pixels = *value as i32;
+    if ui
+        .drag_int_config(label)
+        .range(1, 128)
+        .flags(DragFlags::ALWAYS_CLAMP)
+        .build(ui, &mut pixels)
+    {
+        *value = pixels.max(1) as u32;
     }
 }
 
