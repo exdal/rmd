@@ -1,3 +1,4 @@
+pub mod bake;
 pub mod clipboard;
 pub mod command;
 pub mod document;
@@ -14,6 +15,7 @@ use core::types::Value;
 use std::{
     collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use dmi::{IconFile, error::IconError, metadata::Metadata};
@@ -30,9 +32,22 @@ use crate::{
 
 pub const RECENT_PREFAB_CAPACITY: usize = 10;
 
+pub struct BakeProgram {
+    pub tree: ObjectTree,
+    pub module: codegen::Module,
+    pub files: Arc<[PathBuf]>,
+    pub icon_states: vm::IconStates,
+}
+
 pub struct Environment {
     pub root: PathBuf,
+    /// The compatibility view used by the editor and static renderer.
     pub tree: ObjectTree,
+    /// Runtime declarations and bytecode compiled without mapping compatibility defines.
+    pub bake_program: Option<BakeProgram>,
+    /// Runtime-view sources, retained even when bytecode generation fails.
+    pub bake_files: Arc<[PathBuf]>,
+    pub bake_options: environment::BakeOptions,
     pub icons: HashMap<String, Metadata>,
     pub maps: Vec<PathBuf>,
     pub files: Vec<PathBuf>,
@@ -45,6 +60,9 @@ impl Environment {
         Self {
             root: root.into(),
             tree,
+            bake_program: None,
+            bake_files: Arc::default(),
+            bake_options: environment::BakeOptions::default(),
             icons: HashMap::new(),
             maps: Vec::new(),
             files: Vec::new(),
@@ -53,18 +71,21 @@ impl Environment {
     }
 
     pub fn load(entry: impl AsRef<Path>) -> Result<(Self, LoadDiagnostics), LoadError> {
-        Self::load_with_progress(entry, &Progress::new())
+        Self::load_with(entry, environment::BakeOptions::default(), &Progress::new())
     }
 
-    pub fn load_with_progress(
-        entry: impl AsRef<Path>, progress: &Progress,
+    pub fn load_with(
+        entry: impl AsRef<Path>, options: environment::BakeOptions, progress: &Progress,
     ) -> Result<(Self, LoadDiagnostics), LoadError> {
         let entry = entry.as_ref();
-        let (tree, compiled) = environment::compile(entry, progress)?;
+        let compiled = environment::compile(entry, &options, progress)?;
 
         let mut environment = Self {
             root: compiled.root,
-            tree,
+            tree: compiled.tree,
+            bake_program: compiled.bake_program,
+            bake_files: compiled.bake_files,
+            bake_options: options,
             icons: HashMap::new(),
             maps: compiled.maps,
             files: compiled.files,
@@ -82,7 +103,11 @@ impl Environment {
             LoadDiagnostics {
                 preprocess: compiled.errors,
                 sema: compiled.sema_errors,
+                bake_preprocess: compiled.bake_errors,
+                bake_sema: compiled.bake_sema_errors,
+                codegen: compiled.codegen_error,
                 icons,
+                bake: Vec::new(),
             },
         ))
     }
@@ -93,6 +118,10 @@ impl Environment {
         self.files.get(id.0 as usize).map(PathBuf::as_path)
     }
 
+    pub fn bake_file(&self, id: core::location::FileId) -> Option<&Path> {
+        self.bake_files.get(id.0 as usize).map(PathBuf::as_path)
+    }
+
     pub fn icon(&self, name: &str) -> Option<&Metadata> { self.icons.get(name) }
 
     /// `'icons/obj/items.dmi'`
@@ -100,7 +129,16 @@ impl Environment {
         self.tree
             .iter()
             .flat_map(|decl| decl.vars.values())
-            .filter_map(|var| match &var.value {
+            .map(|var| &var.value)
+            .chain(
+                self.bake_program
+                    .iter()
+                    .flat_map(|program| program.tree.iter())
+                    .flat_map(|decl| decl.vars.values())
+                    .map(|var| &var.value),
+            )
+            .chain(self.bake_program.iter().flat_map(|program| &program.module.constants))
+            .filter_map(|value| match value {
                 Value::Resource(s) if s.to_ascii_lowercase().ends_with(".dmi") => Some(s.as_str()),
                 _ => None,
             })
@@ -119,11 +157,9 @@ impl Environment {
                 break;
             }
             progress.advance(&name);
-            // TODO: BYOND resolves resource paths case-insensitively
-            let mut candidates = std::iter::once(base.join(&name)).chain(search_dirs.iter().map(|dir| dir.join(&name)));
-
-            let found = candidates
-                .find(|path| path.is_file())
+            let found = std::iter::once(base.as_path())
+                .chain(search_dirs.iter().map(PathBuf::as_path))
+                .find_map(|dir| resolve_resource_path(dir, &name))
                 .unwrap_or_else(|| base.join(&name));
 
             match IconFile::load_metadata(&found) {
@@ -134,12 +170,36 @@ impl Environment {
             }
         }
 
+        if let Some(program) = self.bake_program.as_mut() {
+            program.icon_states = vm::IconStates::new(self.icons.iter().map(|(name, metadata)| {
+                let states = metadata.states.iter().map(|state| state.name.clone()).collect();
+
+                (name.clone(), states)
+            }));
+        }
+
         failures
     }
 }
 
+fn resolve_resource_path(dir: &Path, relative: &str) -> Option<PathBuf> {
+    let mut current = dir.to_path_buf();
+    for component in relative.split('/').filter(|part| !part.is_empty()) {
+        let entry = std::fs::read_dir(&current).ok()?.filter_map(Result::ok).find(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case(component))
+        })?;
+
+        current = entry.path();
+    }
+
+    current.is_file().then_some(current)
+}
+
 pub struct EditorState {
-    pub environment: Option<Environment>,
+    pub environment: Option<Arc<Environment>>,
     documents: Vec<MapDocument>,
     active: Option<DocumentId>,
     pub tool: Tool,
@@ -335,6 +395,8 @@ mod tests {
                         declared_type: None,
                         modifiers: VarModifiers::default(),
                         value: value.clone(),
+                        initializer: None,
+                        declared: true,
                         location: Location::default(),
                     },
                 );
@@ -342,6 +404,20 @@ mod tests {
         }
 
         tree
+    }
+
+    #[test]
+    fn resource_paths_resolve_regardless_of_case() {
+        let dir = std::env::temp_dir().join(format!("rmd-resource-case-{}", std::process::id()));
+        let nested = dir.join("Icons").join("Obj");
+        std::fs::create_dir_all(&nested).expect("temp dir");
+        std::fs::write(nested.join("Items.dmi"), []).expect("write fixture");
+
+        let found = super::resolve_resource_path(&dir, "icons/obj/items.dmi");
+        assert_eq!(found, Some(nested.join("Items.dmi")));
+        assert!(super::resolve_resource_path(&dir, "icons/obj/missing.dmi").is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

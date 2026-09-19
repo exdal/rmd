@@ -3,8 +3,9 @@ use core::{
     types::{Identifier, Value},
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use dmi::{IconFile, metadata::Dir};
@@ -46,20 +47,58 @@ use objtree::{ObjectTree, TypeId};
 use render::{
     Frame,
     FrameUpdate,
+    GuideLine,
     MapViewFrame,
     MapViewInteraction,
     MapViewRect,
-    SelectionGuide,
     SpriteInstance,
     SpritePreview,
     SpriteTexture,
     texture::TextureCatalog,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct GuideBadge {
+    pub position: [f32; 2],
+    pub z: u32,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct SelectionGuides {
+    pub lines: Vec<GuideLine>,
+    pub badges: Vec<GuideBadge>,
+    pub connected: Vec<PrefabInstanceId>,
+}
+
 use crate::{
+    baker::{self, Baker},
     external_editor::SourceLocation,
     loader::{LoadedCodebase, LoadedMap},
 };
+
+fn always_highlighted(bake: Option<&editor::bake::Bake>) -> Vec<PrefabInstanceId> {
+    let Some(bake) = bake else {
+        return Vec::new();
+    };
+
+    let mut always = bake
+        .highlighted()
+        .filter(|(_, list)| {
+            list.iter()
+                .any(|highlight| highlight.shown_when(editor::bake::HIGHLIGHT_ALWAYS))
+        })
+        .filter_map(|(id, _)| PrefabInstanceId::from_raw(id))
+        .collect::<Vec<_>>();
+    always.sort_unstable();
+
+    always
+}
+
+fn report_bake_output(bake: &mut editor::bake::Bake) {
+    for line in bake.take_output() {
+        log::info!("DM: {line}");
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct SelectedTransform {
@@ -127,6 +166,7 @@ struct BlockPreviewCache {
 
 const MAX_REPORTED_DIAGNOSTICS: usize = 500;
 const MAX_MAP_DIMENSION: u32 = 255;
+const STANDALONE_CACHE_LIMIT: usize = 256;
 
 const PREVIEW_OWNER: PrefabInstanceId = match PrefabInstanceId::from_raw(1) {
     Some(id) => id,
@@ -138,13 +178,20 @@ struct DocumentCache {
     instances: FrameInstances,
     revision: u64,
     frame_update: Option<FrameUpdate>,
+    lighting_revision: u64,
+    lighting_update: Option<render::LightingUpdate>,
     preview: Option<BlockPreviewCache>,
+    bake: Option<editor::bake::Bake>,
+    always_highlights: Vec<PrefabInstanceId>,
+    /// What a replayed panel frame asked this document to re-derive, held until it is active.
+    pending_rebake: editor::bake::UiRebake,
 }
 
 pub struct Session {
     pub state: EditorState,
     pub textures: TextureCatalog,
     pub options: FrameOptions,
+    pub diagnostics: editor::environment::LoadDiagnostics,
     caches: HashMap<DocumentId, DocumentCache>,
     next_revision: u64,
     next_preview_revision: u64,
@@ -152,6 +199,13 @@ pub struct Session {
     type_thumbnails: HashMap<TypeId, Option<PrefabThumbnail>>,
     texture_revision: u64,
     maps: Vec<PathBuf>,
+    baker: Baker,
+    queued_bakes: Vec<DocumentId>,
+    standalone_baker: editor::bake::Standalone,
+    standalone: Vec<(Prefab, Option<visual::Appearance>)>,
+    ui_fault: Option<vm::FaultKind>,
+    /// The last interaction the panel committed, replayed into a bake that lands after it.
+    ui_feedback: Option<editor::bake::UiFeedback>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +228,7 @@ impl Session {
             state: EditorState::new(),
             textures: TextureCatalog::default(),
             options: FrameOptions::default(),
+            diagnostics: editor::environment::LoadDiagnostics::default(),
             caches: HashMap::new(),
             next_revision: 1,
             next_preview_revision: 1,
@@ -181,6 +236,12 @@ impl Session {
             type_thumbnails: HashMap::new(),
             texture_revision: 0,
             maps: Vec::new(),
+            baker: Baker::default(),
+            queued_bakes: Vec::new(),
+            standalone_baker: editor::bake::Standalone::default(),
+            standalone: Vec::new(),
+            ui_fault: None,
+            ui_feedback: None,
         }
     }
 
@@ -194,13 +255,16 @@ impl Session {
         } = loaded;
 
         let report = report(&environment, &diagnostics);
+        self.diagnostics = diagnostics;
         self.textures = textures;
         self.type_thumbnails = thumbnails;
+        self.standalone.clear();
+        self.standalone_baker = editor::bake::Standalone::default();
         self.texture_revision = self.texture_revision.wrapping_add(1);
         self.type_visibility = TypeVisibility::default();
         self.maps = maps;
-        self.state.environment = Some(environment);
-        self.rebuild_all_instances();
+        self.state.environment = Some(Arc::new(environment));
+        self.rebake_all();
 
         report
     }
@@ -331,7 +395,7 @@ impl Session {
             .map(|environment| environment.root.as_path())
     }
 
-    pub fn codebase_dir(&self) -> Option<&Path> { self.state.environment.as_ref().map(Environment::base_dir) }
+    pub fn codebase_dir(&self) -> Option<&Path> { self.state.environment.as_deref().map(Environment::base_dir) }
 
     pub fn maps(&self) -> &[PathBuf] { &self.maps }
 
@@ -398,7 +462,7 @@ impl Session {
                 .document(id)
                 .is_some_and(|document| document.map.size.z != levels)
         {
-            self.rebuild_instances(id);
+            self.rebake(id);
         }
 
         result
@@ -421,7 +485,7 @@ impl Session {
                 .document(id)
                 .is_some_and(|document| document.map.size.z != levels)
         {
-            self.rebuild_instances(id);
+            self.rebake(id);
         }
 
         result
@@ -544,7 +608,7 @@ impl Session {
         document.set_focus(None);
         document.selection = None;
         self.state.set_active(id);
-        self.rebuild_instances(id);
+        self.rebake(id);
 
         Ok(z)
     }
@@ -1071,9 +1135,33 @@ impl Session {
 
     pub fn recent_prefabs(&self) -> &[Prefab] { self.state.recent_prefabs() }
 
-    pub(crate) fn prefab_thumbnail(&self, prefab: &Prefab) -> Option<PrefabThumbnail> {
-        let environment = self.state.environment.as_ref()?;
+    pub(crate) fn prefab_appearance(&mut self, prefab: &Prefab) -> Option<visual::Appearance> {
+        let environment = self.state.environment.clone()?;
         let appearance = visual::resolve(&environment.tree, prefab);
+        if frame::sprite_texture(&environment.icons, &self.textures, &appearance).is_some() {
+            return Some(appearance);
+        }
+
+        if let Some((_, cached)) = self.standalone.iter().find(|(cached, _)| cached == prefab) {
+            return cached.clone().or(Some(appearance));
+        }
+
+        let derived = environment.tree.id_of(&prefab.path).and_then(|id| {
+            let delta = self.standalone_baker.appearance(&environment, prefab)?;
+
+            Some(visual::resolve_delta(&environment.tree, id, prefab, &delta))
+        });
+        if self.standalone.len() >= STANDALONE_CACHE_LIMIT {
+            self.standalone.clear();
+        }
+        self.standalone.push((prefab.clone(), derived.clone()));
+
+        derived.or(Some(appearance))
+    }
+
+    pub(crate) fn prefab_thumbnail(&mut self, prefab: &Prefab) -> Option<PrefabThumbnail> {
+        let appearance = self.prefab_appearance(prefab)?;
+        let environment = self.state.environment.as_ref()?;
 
         self.prefab_thumbnail_for(environment, &appearance)
     }
@@ -1082,14 +1170,14 @@ impl Session {
         self.type_thumbnails.get(&id).copied().flatten()
     }
 
-    pub(crate) fn placement_preview(&self) -> Option<PlacementPreview> {
+    pub(crate) fn placement_preview(&mut self) -> Option<PlacementPreview> {
         if self.tool() != Tool::Place {
             return None;
         }
 
-        let prefab = self.palette()?;
+        let prefab = self.palette()?.clone();
+        let appearance = self.prefab_appearance(&prefab)?;
         let environment = self.state.environment.as_ref()?;
-        let appearance = visual::resolve(&environment.tree, prefab);
         let thumbnail = self.prefab_thumbnail_for(environment, &appearance)?;
         let offset = [
             appearance
@@ -1337,7 +1425,7 @@ impl Session {
         })
     }
 
-    pub(crate) fn selected_offset_guide(&self) -> Option<SelectionGuide> {
+    pub(crate) fn selected_offset_guide(&self) -> Option<GuideLine> {
         let environment = self.state.environment.as_ref()?;
         let document = self.state.active_document()?;
         let selected = document.selected_instance()?;
@@ -1365,13 +1453,258 @@ impl Session {
         let sprite = self.instances()?.sprite(selected)?;
         let tile_size = self.options.tile_size.max(1) as f32;
 
-        Some(SelectionGuide {
+        Some(GuideLine {
             origin: [
                 (location.coord.x as f32 - 0.5) * tile_size,
                 (location.coord.y as f32 - 0.5) * tile_size,
             ],
             target: [sprite.x + sprite.width * 0.5, sprite.y + sprite.height * 0.5],
         })
+    }
+
+    pub(crate) fn selected_guides(&self) -> SelectionGuides {
+        let mut guides = SelectionGuides::default();
+        if let Some(offset) = self.selected_offset_guide() {
+            guides.lines.push(offset);
+        }
+
+        let Some(document_id) = self.state.active() else {
+            return guides;
+        };
+        let Some(document) = self.state.document(document_id) else {
+            return guides;
+        };
+        let Some(selected) = document.selected_instance() else {
+            return guides;
+        };
+        let Some((_, selected_location)) = document.prefab_instance(selected) else {
+            return guides;
+        };
+
+        if selected_location.coord.z != document.z {
+            return guides;
+        }
+
+        let Some(cache) = self.caches.get(&document_id) else {
+            return guides;
+        };
+
+        let Some(bake) = cache.bake.as_ref() else {
+            return guides;
+        };
+
+        let tile_size = self.options.tile_size.max(1) as f32;
+        let center = |id: PrefabInstanceId, coord: Coord| {
+            cache.instances.sprite(id).map_or_else(
+                || [(coord.x as f32 - 0.5) * tile_size, (coord.y as f32 - 0.5) * tile_size],
+                |sprite| [sprite.x + sprite.width * 0.5, sprite.y + sprite.height * 0.5],
+            )
+        };
+
+        let selected_center = center(selected, selected_location.coord);
+        let mut badged = HashSet::new();
+
+        for connected in bake.connections(selected.get()) {
+            let Some(connected) = PrefabInstanceId::from_raw(connected) else {
+                continue;
+            };
+            let Some((_, location)) = document.prefab_instance(connected) else {
+                continue;
+            };
+            let target = center(connected, location.coord);
+            guides.lines.push(GuideLine {
+                origin: selected_center,
+                target,
+            });
+            guides.connected.push(connected);
+
+            if location.coord.z != document.z && badged.insert((location.coord.x, location.coord.y, location.coord.z)) {
+                guides.badges.push(GuideBadge {
+                    position: target,
+                    z: location.coord.z,
+                });
+            }
+        }
+
+        guides
+    }
+
+    pub(crate) fn highlights(&self, id: DocumentId, hovered: Option<Coord>) -> Vec<&editor::bake::Highlight> {
+        let Some(document) = self.state.document(id) else {
+            return Vec::new();
+        };
+        let Some(cache) = self.caches.get(&id) else {
+            return Vec::new();
+        };
+        let Some(bake) = cache.bake.as_ref() else {
+            return Vec::new();
+        };
+
+        let z = document.z as i32;
+        let mut seen = HashSet::new();
+        let mut shown = Vec::new();
+        let mut sources = cache
+            .always_highlights
+            .iter()
+            .map(|owner| (*owner, editor::bake::HIGHLIGHT_ALWAYS))
+            .collect::<Vec<_>>();
+        if let Some(selected) = document.selected_instance() {
+            sources.push((selected, editor::bake::HIGHLIGHT_SELECTED));
+        }
+
+        if let Some(hovered) = hovered {
+            sources.extend(
+                document
+                    .instance_ids_at(hovered)
+                    .iter()
+                    .map(|owner| (*owner, editor::bake::HIGHLIGHT_HOVERED)),
+            );
+        }
+
+        for (owner, when) in sources {
+            for (index, highlight) in bake.highlights(owner.get()).iter().enumerate() {
+                if highlight.z == z && highlight.shown_when(when) && seen.insert((owner, index)) {
+                    shown.push(highlight);
+                }
+            }
+        }
+
+        shown
+    }
+
+    pub(crate) fn dm_ui(&mut self, dockspace: u32, feedback: editor::bake::UiFeedback) -> editor::bake::UiFrame {
+        let Some(id) = self.state.active() else {
+            return editor::bake::UiFrame::default();
+        };
+        let Some(program) = self
+            .state
+            .environment
+            .as_ref()
+            .and_then(|environment| environment.bake_program.as_ref())
+        else {
+            return editor::bake::UiFrame::default();
+        };
+        let target = self
+            .state
+            .document(id)
+            .and_then(|document| document.selected_instance())
+            .map(PrefabInstanceId::get);
+        let Some(bake) = self.caches.get_mut(&id).and_then(|cache| cache.bake.as_mut()) else {
+            return editor::bake::UiFrame::default();
+        };
+
+        let replayed = feedback.clone();
+        let drawn = bake.ui(&program.tree, &program.module, target, dockspace, feedback);
+        report_bake_output(bake);
+
+        match drawn {
+            Ok(frame) => {
+                self.ui_fault = None;
+                if frame.committed {
+                    for other in self.state.document_ids() {
+                        if other != id {
+                            self.replay_ui(other, &replayed);
+                        }
+                    }
+
+                    self.ui_feedback = Some(replayed);
+                }
+
+                frame
+            },
+            Err(fault) => {
+                if self.ui_fault.as_ref() != Some(&fault.kind) {
+                    log::warn!("demir_ui: {fault}");
+                    self.ui_fault = Some(fault.kind);
+                }
+
+                editor::bake::UiFrame::default()
+            },
+        }
+    }
+
+    fn replay_ui(&mut self, id: DocumentId, feedback: &editor::bake::UiFeedback) {
+        let Some(environment) = self.state.environment.clone() else {
+            return;
+        };
+        let Some(program) = environment.bake_program.as_ref() else {
+            return;
+        };
+        let target = self
+            .state
+            .document(id)
+            .and_then(|document| document.selected_instance())
+            .map(PrefabInstanceId::get);
+        let Some(cache) = self.caches.get_mut(&id) else {
+            return;
+        };
+
+        // a bake still on the baker thread is caught up by poll_bake instead
+        let Some(bake) = cache.bake.as_mut() else {
+            return;
+        };
+
+        let drawn = bake.ui(&program.tree, &program.module, target, 0, feedback.clone());
+        report_bake_output(bake);
+
+        if let Ok(frame) = drawn {
+            cache.pending_rebake.merge(frame.rebake);
+        }
+    }
+
+    fn flush_pending_rebake(&mut self, id: DocumentId) {
+        let request = self
+            .caches
+            .get_mut(&id)
+            .map(|cache| std::mem::take(&mut cache.pending_rebake))
+            .unwrap_or_default();
+
+        if !request.is_empty() {
+            self.run_rebake(id, request);
+        }
+    }
+
+    fn flush_pending_rebakes(&mut self) {
+        for id in self.state.document_ids() {
+            self.flush_pending_rebake(id);
+        }
+    }
+
+    pub(crate) fn dm_ui_rebake(&mut self, request: editor::bake::UiRebake) {
+        if let Some(id) = self.state.active() {
+            self.caches.entry(id).or_default().pending_rebake.merge(request);
+        }
+
+        self.flush_pending_rebakes();
+    }
+
+    fn run_rebake(&mut self, id: DocumentId, request: editor::bake::UiRebake) {
+        let Some(program) = self
+            .state
+            .environment
+            .as_ref()
+            .and_then(|environment| environment.bake_program.as_ref())
+        else {
+            return;
+        };
+        let Some(bake) = self.caches.get_mut(&id).and_then(|cache| cache.bake.as_mut()) else {
+            return;
+        };
+
+        let update = bake.rebake(&program.tree, &program.module, request);
+        report_bake_output(bake);
+
+        self.apply_bake_update(
+            id,
+            editor::bake::BakeUpdate {
+                appearances: update
+                    .appearances
+                    .into_iter()
+                    .filter_map(PrefabInstanceId::from_raw)
+                    .collect(),
+                lighting: update.lighting,
+            },
+        );
     }
 
     pub fn icon_metadata(&self, name: &str) -> Option<&dmi::metadata::Metadata> {
@@ -1576,6 +1909,19 @@ impl Session {
 
     pub fn toggle_area_outlines(&mut self) { self.options.show_area_outlines = !self.options.show_area_outlines; }
 
+    pub fn toggle_lighting(&mut self) { self.options.show_lighting = !self.options.show_lighting; }
+
+    fn collect_bake_diagnostics(&mut self) {
+        self.diagnostics.bake = self
+            .caches
+            .values()
+            .filter_map(|cache| cache.bake.as_ref())
+            .flat_map(|bake| bake.diagnostics.entries.iter())
+            .filter(|entry| entry.count > 0)
+            .cloned()
+            .collect();
+    }
+
     pub fn is_type_visible(&self, id: TypeId) -> bool {
         self.tree().is_some_and(|tree| tree.get(id).is_some()) && self.type_visibility.is_visible(id)
     }
@@ -1607,9 +1953,10 @@ impl Session {
         self.options.underlay_depth = depth;
     }
 
-    pub fn map_view_frame(
-        &self, id: DocumentId, rect: MapViewRect, camera: render::Camera, interaction: MapViewInteraction,
-    ) -> Option<MapViewFrame<'_>> {
+    pub fn map_view_frame<'a>(
+        &'a self, id: DocumentId, rect: MapViewRect, camera: render::Camera, interaction: MapViewInteraction,
+        guide_lines: &'a [GuideLine], connected: &'a [PrefabInstanceId],
+    ) -> Option<MapViewFrame<'a>> {
         let document = self.state.document(id)?;
         let cache = self.caches.get(&id)?;
 
@@ -1623,6 +1970,17 @@ impl Session {
             level_count: document.map.size.z.max(1),
             revision: cache.revision,
             pending_update: cache.frame_update,
+            lighting: (self.options.show_lighting && !cache.instances.light_tiles.is_empty()).then_some(
+                render::LightingFrame {
+                    size: cache.instances.lighting_size,
+                    tiles: &cache.instances.light_tiles,
+                    tile_size: self.options.tile_size,
+                    revision: cache.lighting_revision,
+                    pending_update: cache.lighting_update,
+                },
+            ),
+            guide_lines,
+            connected,
             interaction,
             preview: cache
                 .preview
@@ -1683,7 +2041,89 @@ impl Session {
         }
     }
 
+    fn rebake_all(&mut self) {
+        for id in self.state.document_ids() {
+            self.rebake(id);
+        }
+    }
+
+    fn rebake(&mut self, id: DocumentId) {
+        self.caches.entry(id).or_default().bake = None;
+        self.collect_bake_diagnostics();
+        self.rebuild_instances(id);
+
+        if !self.queued_bakes.contains(&id) {
+            self.queued_bakes.push(id);
+        }
+
+        self.start_next_bake();
+    }
+
+    fn start_next_bake(&mut self) {
+        while !self.baker.is_busy() {
+            let Some(id) = self.queued_bakes.first().copied() else {
+                return;
+            };
+            self.queued_bakes.remove(0);
+
+            let Some(environment) = self.state.environment.clone() else {
+                return;
+            };
+            let Some(document) = self.state.document(id) else {
+                continue;
+            };
+            if environment.bake_program.is_none() {
+                return;
+            }
+
+            self.baker.start(baker::Request {
+                document: id,
+                path: document
+                    .path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default(),
+                atoms: editor::bake::atoms(&environment, document),
+                size: editor::bake::size(document),
+                environment,
+            });
+        }
+    }
+
+    pub fn poll_bake(&mut self) {
+        if let Some((id, mut bake, outdated)) = self.baker.poll() {
+            let open = self.state.document(id).is_some();
+            if outdated && open {
+                self.rebake(id);
+            } else if open {
+                if let Some(bake) = bake.as_mut() {
+                    report_bake_output(bake);
+                }
+
+                let cache = self.caches.entry(id).or_default();
+                cache.bake = bake;
+                cache.pending_rebake = editor::bake::UiRebake::default();
+                // a bake starts from the profile's own defaults, so it has to be told what the
+                // panel already asked for before it is first shown
+                if let Some(feedback) = self.ui_feedback.clone() {
+                    self.replay_ui(id, &feedback);
+                }
+
+                let cache = self.caches.entry(id).or_default();
+                cache.always_highlights = always_highlighted(cache.bake.as_ref());
+                self.collect_bake_diagnostics();
+                self.rebuild_instances(id);
+                self.flush_pending_rebake(id);
+            }
+        }
+
+        self.start_next_bake();
+    }
+
+    pub fn bake_view(&self) -> Option<crate::loader::LoadView> { self.baker.view() }
+
     fn rebuild_instances(&mut self, id: DocumentId) {
+        let bake = self.caches.get(&id).and_then(|cache| cache.bake.as_ref());
         let instances = match (self.state.environment.as_ref(), self.state.document(id)) {
             (Some(environment), Some(document)) => frame::build_with_options(
                 &environment.tree,
@@ -1693,6 +2133,8 @@ impl Session {
                 FrameRenderOptions {
                     visibility: &self.type_visibility,
                     tile_size: self.options.tile_size,
+                    appearances: editor::bake::appearances(bake),
+                    lighting: bake.and_then(|bake| bake.lighting.as_ref()),
                 },
             ),
             _ => FrameInstances::default(),
@@ -1703,6 +2145,8 @@ impl Session {
         cache.instances = instances;
         cache.revision = revision;
         cache.frame_update = None;
+        cache.lighting_revision = revision;
+        cache.lighting_update = None;
         self.revalidate_focus();
     }
 
@@ -1715,7 +2159,7 @@ impl Session {
 
     fn activate_document(&mut self, document: MapDocument) -> DocumentId {
         let id = self.state.open_document(document);
-        self.rebuild_instances(id);
+        self.rebake(id);
 
         id
     }
@@ -1728,6 +2172,31 @@ impl Session {
         };
 
         let Self {
+            state, caches, baker, ..
+        } = self;
+        let cache = caches.entry(id).or_default();
+        let bake_update = match (cache.bake.as_mut(), state.environment.as_ref(), state.document(id)) {
+            (Some(bake), Some(environment), Some(document)) => {
+                let update = editor::bake::update(bake, environment, document, affected);
+                report_bake_output(bake);
+
+                update
+            },
+            _ => {
+                baker.invalidate(id);
+
+                editor::bake::BakeUpdate {
+                    appearances: affected.to_vec(),
+                    lighting: None,
+                }
+            },
+        };
+
+        self.apply_bake_update(id, bake_update);
+    }
+
+    fn apply_bake_update(&mut self, id: DocumentId, bake_update: editor::bake::BakeUpdate) {
+        let Self {
             state,
             textures,
             caches,
@@ -1737,6 +2206,8 @@ impl Session {
             ..
         } = self;
         let cache = caches.entry(id).or_default();
+        cache.always_highlights = always_highlighted(cache.bake.as_ref());
+        let affected = bake_update.appearances;
         let update = match (state.environment.as_ref(), state.document(id)) {
             (Some(environment), Some(document)) => frame::update_prefabs_with_options(
                 &mut cache.instances,
@@ -1744,14 +2215,33 @@ impl Session {
                 &environment.icons,
                 textures,
                 document,
-                affected,
+                &affected,
                 FrameRenderOptions {
                     visibility: type_visibility,
                     tile_size: options.tile_size,
+                    appearances: editor::bake::appearances(cache.bake.as_ref()),
+                    lighting: cache.bake.as_ref().and_then(|bake| bake.lighting.as_ref()),
                 },
             ),
             _ => PrefabUpdate::Unchanged,
         };
+
+        if let Some(range) = bake_update.lighting {
+            cache.instances.update_lighting(
+                cache.bake.as_ref().and_then(|bake| bake.lighting.as_ref()),
+                Some(range.clone()),
+            );
+            let previous_revision = cache.lighting_revision;
+            cache.lighting_revision = *next_revision;
+            *next_revision = next_revision.wrapping_add(1).max(1);
+            cache.lighting_update = Some(render::LightingUpdate {
+                previous_revision,
+                tiles: render::UpdateRange {
+                    start: range.start,
+                    end: range.end,
+                },
+            });
+        }
 
         match update {
             PrefabUpdate::Unchanged => {},
@@ -1982,19 +2472,21 @@ pub(crate) fn build_textures(environment: &Environment, progress: &Progress) -> 
 pub(crate) struct LoadReport {
     pub preprocess: usize,
     pub sema: usize,
+    pub codegen: usize,
     pub icons: usize,
     pub lines: Vec<String>,
 }
 
 impl LoadReport {
-    pub fn is_empty(&self) -> bool { self.preprocess == 0 && self.sema == 0 && self.icons == 0 }
+    pub fn is_empty(&self) -> bool { self.total() == 0 }
 
-    pub fn total(&self) -> usize { self.preprocess + self.sema + self.icons }
+    pub fn total(&self) -> usize { self.preprocess + self.sema + self.codegen + self.icons }
 
     pub fn summary(&self) -> String {
         let parts = [
             (self.preprocess, "preprocessor"),
             (self.sema, "analysis"),
+            (self.codegen, "bytecode"),
             (self.icons, "icon"),
         ]
         .into_iter()
@@ -2015,6 +2507,11 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
     let root = environment.base_dir();
     let path = |file| {
         let path = environment.file(file)?;
+
+        Some(path.strip_prefix(root).unwrap_or(path))
+    };
+    let bake_path = |file| {
+        let path = environment.bake_file(file)?;
 
         Some(path.strip_prefix(root).unwrap_or(path))
     };
@@ -2042,6 +2539,30 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
         );
     }
 
+    for error in &diagnostics.bake_preprocess {
+        collect(
+            log::Level::Error,
+            error.display(bake_path(error.location.file)).to_string(),
+            "",
+        );
+    }
+
+    for error in &diagnostics.bake_sema {
+        collect(
+            log::Level::Error,
+            error.display(bake_path(error.location.file)).to_string(),
+            "",
+        );
+    }
+
+    if let Some(error) = &diagnostics.codegen {
+        collect(
+            log::Level::Warn,
+            format!("warning: baking is off, bytecode generation failed: {error}"),
+            "warning: ",
+        );
+    }
+
     for (name, error) in &diagnostics.icons {
         collect(
             log::Level::Warn,
@@ -2051,8 +2572,9 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
     }
 
     LoadReport {
-        preprocess: diagnostics.preprocess.len(),
-        sema: diagnostics.sema.len(),
+        preprocess: diagnostics.preprocess.len() + diagnostics.bake_preprocess.len(),
+        sema: diagnostics.sema.len() + diagnostics.bake_sema.len(),
+        codegen: usize::from(diagnostics.codegen.is_some()),
         icons: diagnostics.icons.len(),
         lines,
     }
@@ -2062,7 +2584,11 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
 #[cfg(test)]
 impl Session {
     pub(crate) fn load_environment(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        self.apply_codebase(crate::loader::load_codebase(path, &Progress::new())?);
+        self.apply_codebase(crate::loader::load_codebase(
+            path,
+            &editor::environment::BakeOptions::default(),
+            &Progress::new(),
+        )?);
 
         Ok(())
     }
@@ -2081,21 +2607,29 @@ mod tests {
         path::TreePath,
         types::Value,
     };
-    use std::path::PathBuf;
+    use std::{
+        collections::HashMap,
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     use dmi::{IconFile, metadata::Dir};
     use dmm::{Coord, Map, MapFormat, Prefab, Size};
     use editor::{
         Environment,
         command::EditGroupId,
-        document::{MapDocument, PlacedPrefab, PrefabInstanceId, Selection, VarMutation},
+        document::{DocumentId, MapDocument, PlacedPrefab, PrefabInstanceId, Selection, VarMutation},
         tool::{BlockSelectionMode, FillMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
     };
     use objtree::ObjectTree;
-    use render::SpriteInstance;
+    use render::{GuideLine, SpriteInstance};
 
     use super::{
         FillOutcome,
+        GuideBadge,
         LevelChange,
         LoadReport,
         MAX_MAP_DIMENSION,
@@ -2122,7 +2656,7 @@ mod tests {
         let mut environment = Environment::new("station.dme", tree);
         environment.files.push(PathBuf::from("code/items.dm"));
         let mut session = Session::new();
-        session.state.environment = Some(environment);
+        session.state.environment = Some(Arc::new(environment));
 
         let source = session.type_source(id).expect("known type source");
 
@@ -2155,10 +2689,10 @@ mod tests {
         };
         let map_views = [
             session
-                .map_view_frame(ids[0], left, Default::default(), Default::default())
+                .map_view_frame(ids[0], left, Default::default(), Default::default(), &[], &[])
                 .expect("left map view"),
             session
-                .map_view_frame(ids[1], right, Default::default(), Default::default())
+                .map_view_frame(ids[1], right, Default::default(), Default::default(), &[], &[])
                 .expect("right map view"),
         ];
         let frame = session.frame(&map_views, Some(1));
@@ -2176,6 +2710,88 @@ mod tests {
     }
 
     #[test]
+    fn a_map_draws_before_its_bake_lands() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("map");
+
+        assert!(session.baker.is_busy());
+        assert!(
+            session
+                .instances()
+                .is_some_and(|instances| !instances.sprites.is_empty())
+        );
+        assert!(session.active_cache().bake.is_none());
+
+        settle_bake(&mut session);
+
+        assert!(session.active_cache().bake.is_some());
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    fn an_edit_while_a_bake_is_running_throws_its_result_away_and_bakes_again() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("map");
+        let id = session.state.active().expect("active map");
+        let coord = Coord::new(6, 3, 1);
+        let target = session
+            .state
+            .active_document()
+            .and_then(|document| document.instance_ids_at(coord).first())
+            .copied()
+            .expect("an instance to delete");
+
+        session.set_tool(Tool::Delete);
+        session.select_instance(Some(target));
+
+        assert!(session.delete_instance(target));
+        assert!(session.baker.invalidated(id));
+
+        settle_bake(&mut session);
+
+        // the bake that lands is the one that ran after the delete, so it knows nothing of the atom
+        assert!(
+            session
+                .active_cache()
+                .bake
+                .as_ref()
+                .is_some_and(|bake| bake.position(target.get()).is_none())
+        );
+    }
+
+    #[test]
+    fn hiding_a_type_redraws_from_the_cached_bake() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("map");
+        settle_bake(&mut session);
+        let id = session.state.active().expect("active map");
+        let table = session
+            .tree()
+            .and_then(|tree| tree.id_of(&TreePath::parse("/obj/structure/table")))
+            .expect("table type");
+
+        // A bake that ran again would start its counters over.
+        session
+            .caches
+            .get_mut(&id)
+            .and_then(|cache| cache.bake.as_mut())
+            .expect("the example map is baked")
+            .cache_hits = usize::MAX;
+
+        assert!(session.toggle_type_visibility(table));
+        assert_eq!(
+            session.active_cache().bake.as_ref().map(|bake| bake.cache_hits),
+            Some(usize::MAX)
+        );
+    }
+
+    #[test]
     fn a_map_view_frame_follows_its_own_documents_z_level() {
         let root = examples();
         let mut session = Session::new();
@@ -2188,10 +2804,10 @@ mod tests {
 
         let rect = render::MapViewRect::default();
         let a = session
-            .map_view_frame(first, rect, Default::default(), Default::default())
+            .map_view_frame(first, rect, Default::default(), Default::default(), &[], &[])
             .expect("first map view");
         let b = session
-            .map_view_frame(second, rect, Default::default(), Default::default())
+            .map_view_frame(second, rect, Default::default(), Default::default(), &[], &[])
             .expect("second map view");
 
         assert_eq!(a.active_z, 1);
@@ -2222,6 +2838,8 @@ mod tests {
                 render::MapViewRect::default(),
                 render::Camera::default(),
                 Default::default(),
+                &[],
+                &[],
             )
             .expect("first frame");
         let second = session
@@ -2230,6 +2848,8 @@ mod tests {
                 render::MapViewRect::default(),
                 render::Camera::default(),
                 Default::default(),
+                &[],
+                &[],
             )
             .expect("second frame");
         assert_ne!(first.revision, second.revision);
@@ -2259,6 +2879,109 @@ mod tests {
 
         assert_eq!(session.caches[&first].revision, untouched, "the other map is untouched");
         assert_ne!(session.caches[&second].revision, before, "the edited map re-uploads");
+    }
+
+    fn panel_session() -> Session {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+
+        session
+    }
+
+    fn wall_map(session: &mut Session) -> (DocumentId, PrefabInstanceId) {
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        let key = map.intern_tile(vec![Prefab::new(TreePath::parse("/turf/closed/wall"))]);
+        map.grid[0] = vec![vec![key]];
+        let id = session.activate_document(MapDocument::new(map, 1));
+        let wall = session
+            .state
+            .document(id)
+            .expect("the map is open")
+            .instance_ids_at(Coord::new(1, 1, 1))[0];
+
+        (id, wall)
+    }
+
+    fn baked_name(session: &Session, id: DocumentId, wall: PrefabInstanceId) -> Option<&str> {
+        session.caches[&id]
+            .bake
+            .as_ref()?
+            .appearances
+            .get(&wall.get())?
+            .vars
+            .iter()
+            .find(|(name, _)| name.as_str() == "name")
+            .and_then(|(_, value)| value.as_text())
+    }
+
+    fn toggle_smooth(session: &mut Session, smooth: bool) -> editor::bake::UiFrame {
+        session.dm_ui(
+            0,
+            editor::bake::UiFeedback {
+                values: HashMap::from([(String::from("Panel/Smooth"), editor::bake::UiValue::Bool(smooth))]),
+                interacted: true,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn a_panel_toggle_reaches_every_open_map() {
+        let mut session = panel_session();
+        let (first, first_wall) = wall_map(&mut session);
+        let (second, second_wall) = wall_map(&mut session);
+        settle_bake(&mut session);
+
+        assert_eq!(baked_name(&session, first, first_wall), Some("wall 0"));
+        assert_eq!(baked_name(&session, second, second_wall), Some("wall 0"));
+
+        let frame = toggle_smooth(&mut session, false);
+
+        assert!(frame.committed, "the interaction keeps the profile's write");
+        assert!(!frame.rebake.is_empty(), "the profile asks for its appearances back");
+
+        session.dm_ui_rebake(frame.rebake);
+
+        assert_eq!(baked_name(&session, second, second_wall), Some("plain 0"));
+        assert_eq!(
+            baked_name(&session, first, first_wall),
+            Some("plain 0"),
+            "the map nobody is looking at re-derives with the one that was toggled",
+        );
+        assert!(session.caches[&first].pending_rebake.is_empty());
+
+        session.state.set_active(first);
+        session.poll_bake();
+
+        assert_eq!(
+            baked_name(&session, first, first_wall),
+            Some("plain 0"),
+            "activating it changes nothing, it was already current",
+        );
+    }
+
+    #[test]
+    fn a_map_opened_after_a_panel_toggle_catches_up_before_it_is_shown() {
+        let mut session = panel_session();
+        let (first, first_wall) = wall_map(&mut session);
+        settle_bake(&mut session);
+
+        let frame = toggle_smooth(&mut session, false);
+        session.dm_ui_rebake(frame.rebake);
+
+        assert_eq!(baked_name(&session, first, first_wall), Some("plain 0"));
+
+        let (late, late_wall) = wall_map(&mut session);
+        session.state.set_active(first);
+        settle_bake(&mut session);
+
+        assert_eq!(
+            baked_name(&session, late, late_wall),
+            Some("plain 0"),
+            "a bake that lands later catches up without ever being active",
+        );
+        assert!(session.caches[&late].pending_rebake.is_empty());
     }
 
     #[test]
@@ -2581,7 +3304,9 @@ mod tests {
                     first,
                     render::MapViewRect::default(),
                     render::Camera::default(),
-                    Default::default()
+                    Default::default(),
+                    &[],
+                    &[],
                 )
                 .is_none()
         );
@@ -2602,6 +3327,12 @@ mod tests {
 
         report.sema = 3;
         assert_eq!(report.summary(), "12 preprocessor, 3 analysis and 1 icon diagnostics");
+
+        report.codegen = 1;
+        assert_eq!(
+            report.summary(),
+            "12 preprocessor, 3 analysis, 1 bytecode and 1 icon diagnostics"
+        );
     }
 
     #[test]
@@ -2768,6 +3499,16 @@ mod tests {
         assert!(remaining.is_empty());
     }
 
+    /// Waits for the background bake, since a worker thread has no deterministic finish time.
+    fn settle_bake(session: &mut Session) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+
+        while session.baker.is_busy() && std::time::Instant::now() < deadline {
+            session.poll_bake();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
     fn assert_render_cache_matches_rebuild(session: &Session) {
         let environment = session.state.environment.as_ref().unwrap();
         let document = session.state.active_document().unwrap();
@@ -2779,6 +3520,12 @@ mod tests {
             editor::frame::FrameRenderOptions {
                 visibility: &session.type_visibility,
                 tile_size: session.options.tile_size,
+                appearances: editor::bake::appearances(session.active_cache().bake.as_ref()),
+                lighting: session
+                    .active_cache()
+                    .bake
+                    .as_ref()
+                    .and_then(|bake| bake.lighting.as_ref()),
             },
         );
 
@@ -2852,6 +3599,75 @@ mod tests {
                 .prefab_thumbnail(&Prefab::new(TreePath::parse("/area/station")))
                 .is_none()
         );
+    }
+
+    /// A smoothed type's static `icon_state` is only a prefix, so the sheet holds nothing under it
+    /// and the palette, the recent list and the placement preview would all draw nothing.
+    #[test]
+    fn palette_thumbnails_fall_back_to_a_standalone_bake_when_no_sprite_matches() {
+        let root = examples();
+        let profile = r#"
+/turf/closed/wall/smoothed
+    icon_state = "smooth"
+/datum/demir/test/bake(atom/target)
+    if(istype(target, /turf/closed/wall/smoothed))
+        target.icon_state = "wall"
+"#;
+        let compile = |baking| {
+            let arena = core::arena::StrArena::new();
+            let prelude = preprocessor::prelude_files()
+                .into_iter()
+                .chain([preprocessor::PreludeFile::Embedded("<test-standalone.dm>", profile)]);
+            let preprocessed = preprocessor::Preprocessor::new(&arena)
+                .with_prelude(prelude)
+                .with_baking(baking)
+                .run(root.join("test.dm"))
+                .expect("preprocess");
+            assert!(preprocessed.is_ok(), "{:?}", preprocessed.errors);
+
+            let ast = ast::parse(&preprocessed.tokens).expect("parse");
+            let (tree, module, errors) = sema::analyze(&ast);
+            assert!(errors.is_empty(), "{errors:?}");
+
+            (tree, module)
+        };
+        let (editor_tree, _) = compile(false);
+        let (bake_tree, module) = compile(true);
+        let mut environment = editor::Environment::new(root.join("test.dme"), editor_tree);
+        environment.bake_program = Some(editor::BakeProgram {
+            tree: bake_tree,
+            module: codegen::generate(&module).expect("codegen"),
+            files: Default::default(),
+            icon_states: Default::default(),
+        });
+        assert!(environment.load_icons(&[], &Progress::new()).is_empty());
+
+        let mut session = Session::new();
+        session.textures = build_textures(&environment, &Progress::new());
+        session.state.environment = Some(Arc::new(environment));
+
+        let smoothed = Prefab::new(TreePath::parse("/turf/closed/wall/smoothed"));
+
+        // "smooth" is in no sheet, so only a standalone bake makes this drawable
+        assert_eq!(
+            session.prefab_appearance(&smoothed).and_then(|a| a.icon_state),
+            Some(String::from("wall"))
+        );
+        assert!(session.prefab_thumbnail(&smoothed).is_some());
+
+        session.state.choose_prefab(smoothed.clone());
+        session.set_tool(Tool::Place);
+
+        assert!(session.placement_preview().is_some());
+
+        // a type whose static state already matches never reaches the baker
+        let plain = Prefab::new(TreePath::parse("/turf/closed/wall"));
+
+        assert_eq!(
+            session.prefab_appearance(&plain).and_then(|a| a.icon_state),
+            Some(String::from("wall"))
+        );
+        assert_eq!(session.standalone.len(), 1);
     }
 
     #[test]
@@ -2941,6 +3757,162 @@ mod tests {
     }
 
     #[test]
+    fn selection_guides_follow_profile_connections_in_both_directions_and_across_levels() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("dmed-connection-guides-{}-{id}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("temp connection fixture");
+        std::fs::copy(examples().join("icons/test.dmi"), root.join("test.dmi")).expect("fixture icon");
+        std::fs::write(
+            root.join("game.dm"),
+            r#"
+/area/test
+/turf/floor
+    icon = 'test.dmi'
+    icon_state = "floor"
+/obj/source
+    icon = 'test.dmi'
+    icon_state = "table"
+    pixel_x = 4
+    var/channel
+/obj/target
+    icon = 'test.dmi'
+    icon_state = "light"
+    var/channel
+"#,
+        )
+        .expect("fixture game");
+        std::fs::write(
+            root.join("profile.dm"),
+            r#"
+#ifdef __DEMIR_BAKE__
+/datum/demir/test/highlights(atom/target)
+    if(!istype(target, /obj/source))
+        return
+    return list(list("width" = 3, "height" = 1, "when" = DEMIR_HIGHLIGHT_SELECTED))
+/datum/demir/test/connections(atom/target)
+    var/list/connections = list()
+    if(istype(target, /obj/source))
+        var/obj/source/source = target
+        connections[source.channel] = DEMIR_CONNECTION_SOURCE
+    else if(istype(target, /obj/target))
+        var/obj/target/destination = target
+        connections[destination.channel] = DEMIR_CONNECTION_TARGET
+    return connections
+#endif
+"#,
+        )
+        .expect("fixture profile");
+        std::fs::write(root.join("test.dme"), "#include \"game.dm\"\n#include \"profile.dm\"\n")
+            .expect("fixture environment");
+
+        let mut session = Session::new();
+        session
+            .load_environment(&root.join("test.dme"))
+            .expect("connection environment");
+        let mut map = Map::new(Size { x: 3, y: 1, z: 2 });
+        let floor = || Prefab::new(TreePath::parse("/turf/floor"));
+        let area = || Prefab::new(TreePath::parse("/area/test"));
+        let mut source = Prefab::new(TreePath::parse("/obj/source"));
+        source.set_var("channel".into(), Value::Text(String::from("doors")));
+        let mut target = Prefab::new(TreePath::parse("/obj/target"));
+        target.set_var("channel".into(), Value::Text(String::from("doors")));
+        let source_tile = map.intern_tile(vec![source, floor(), area()]);
+        let target_tile = map.intern_tile(vec![target.clone(), floor(), area()]);
+        let floor_tile = map.intern_tile(vec![floor(), area()]);
+        map.grid[0][0] = vec![source_tile, floor_tile, target_tile];
+        map.grid[1][0] = vec![floor_tile, target_tile, floor_tile];
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+
+        let endpoint = |session: &Session, coord: Coord, path: &str| {
+            let document = session.state.active_document().expect("active fixture map");
+            document
+                .instance_ids_at(coord)
+                .iter()
+                .copied()
+                .find(|id| {
+                    document
+                        .prefab_instance(*id)
+                        .is_some_and(|(prefab, _)| prefab.path == TreePath::parse(path))
+                })
+                .expect("fixture endpoint")
+        };
+        let source = endpoint(&session, Coord::new(1, 1, 1), "/obj/source");
+        let same_level = endpoint(&session, Coord::new(3, 1, 1), "/obj/target");
+        session.select_instance(Some(source));
+
+        let guides = session.selected_guides();
+        assert_eq!(guides.lines.len(), 3, "one offset guide and two connections");
+        assert!(guides.lines.contains(&GuideLine {
+            origin: [16.0, 16.0],
+            target: [20.0, 16.0],
+        }));
+        assert!(guides.lines.contains(&GuideLine {
+            origin: [20.0, 16.0],
+            target: [80.0, 16.0],
+        }));
+        assert!(guides.lines.contains(&GuideLine {
+            origin: [20.0, 16.0],
+            target: [48.0, 16.0],
+        }));
+        assert_eq!(
+            guides.badges,
+            vec![GuideBadge {
+                position: [48.0, 16.0],
+                z: 2,
+            }]
+        );
+        assert_eq!(
+            guides.connected.len(),
+            2,
+            "both endpoints are highlighted, the offset guide adds none"
+        );
+        assert!(guides.connected.contains(&same_level));
+
+        let document_id = session.state.active().expect("active fixture document");
+        let highlights = session.highlights(document_id, None);
+        let [highlight] = highlights.as_slice() else {
+            panic!("the selected source declares one highlight");
+        };
+        assert_eq!(
+            highlight.tiles.iter().map(|tile| tile.position).collect::<Vec<_>>(),
+            vec![[1, 1], [2, 1], [3, 1]]
+        );
+        assert!(
+            session.highlights(document_id, Some(Coord::new(1, 1, 1))).len() == 1,
+            "a selection-only highlight is not repeated by hovering its own tile"
+        );
+
+        session.select_instance(Some(same_level));
+        let reverse = session.selected_guides();
+        assert_eq!(
+            reverse.lines,
+            vec![GuideLine {
+                origin: [80.0, 16.0],
+                target: [20.0, 16.0],
+            }]
+        );
+        assert!(reverse.badges.is_empty());
+        assert_eq!(reverse.connected, vec![source]);
+        assert!(
+            session.highlights(document_id, None).is_empty(),
+            "only the source declares a highlight"
+        );
+
+        assert_eq!(
+            session.set_selected_instance_var("channel".into(), Value::Text(String::from("other"))),
+            Some(true),
+        );
+        let disconnected = session.selected_guides();
+        assert!(disconnected.lines.is_empty());
+        assert!(disconnected.connected.is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn directional_type_groups_are_discovered_from_base_group_and_direction_paths() {
         let mut tree = ObjectTree::new();
         let base = tree.register(&TreePath::parse("/obj/alarm"), Location::default());
@@ -2977,7 +3949,7 @@ mod tests {
         tree.register(&TreePath::parse("/obj/alarm/directional/north"), Location::default());
         tree.register(&TreePath::parse("/obj/alarm/directional/east"), Location::default());
         let mut session = Session::new();
-        session.state.environment = Some(Environment::new(".", tree));
+        session.state.environment = Some(Arc::new(Environment::new(".", tree)));
         let mut prefab = Prefab::new(TreePath::parse("/obj/alarm/directional/north"));
         prefab.set_var("dir".into(), Value::Num(Dir::South.to_bits() as f32));
         session.state.choose_prefab(prefab);
@@ -3024,6 +3996,8 @@ mod tests {
                 render::MapViewRect::default(),
                 Default::default(),
                 Default::default(),
+                &[],
+                &[],
             )
             .expect("the open map has a map view");
         assert_eq!(view.revision, 7, "changing the view does not re-upload sprites");
@@ -3034,6 +4008,41 @@ mod tests {
         assert_eq!(frame.underlay_depth, 1);
         assert!(frame.show_areas);
         assert!(!frame.show_area_outlines);
+    }
+
+    #[test]
+    fn toggling_lighting_off_withholds_the_light_grid() {
+        let mut session = Session::new();
+        let id = session
+            .state
+            .open_document(MapDocument::new(Map::new(Size { x: 1, y: 1, z: 1 }), 1));
+        let cache = session.caches.entry(id).or_default();
+        cache.instances.lighting_size = [1, 1, 1];
+        cache.instances.light_tiles = vec![render::LightTile { corners: [[1.0; 3]; 4] }];
+
+        let view = |session: &Session| {
+            session
+                .map_view_frame(
+                    id,
+                    render::MapViewRect::default(),
+                    Default::default(),
+                    Default::default(),
+                    &[],
+                    &[],
+                )
+                .expect("the open map has a map view")
+                .lighting
+                .is_some()
+        };
+
+        assert!(session.options.show_lighting);
+        assert!(view(&session));
+
+        session.toggle_lighting();
+        assert!(!view(&session));
+
+        session.toggle_lighting();
+        assert!(view(&session));
     }
 
     #[test]
@@ -3180,7 +4189,7 @@ mod tests {
         );
         assert_eq!(
             session
-                .map_view_frame(id, Default::default(), Default::default(), Default::default())
+                .map_view_frame(id, Default::default(), Default::default(), Default::default(), &[], &[])
                 .unwrap()
                 .level_count,
             2

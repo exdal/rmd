@@ -271,6 +271,7 @@ pub(crate) enum KeybindAction {
     Redo,
     ShowAreas,
     ShowAreaOutlines,
+    ShowLighting,
     LevelUp,
     LevelDown,
     Refit,
@@ -297,12 +298,13 @@ pub(crate) enum KeybindAction {
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::Save,
         Self::Undo,
         Self::Redo,
         Self::ShowAreas,
         Self::ShowAreaOutlines,
+        Self::ShowLighting,
         Self::LevelUp,
         Self::LevelDown,
         Self::Refit,
@@ -347,6 +349,7 @@ impl KeybindAction {
             Self::Redo => "Redo",
             Self::ShowAreas => "Show areas",
             Self::ShowAreaOutlines => "Show area outlines",
+            Self::ShowLighting => "Show lighting",
             Self::LevelUp => "Z up",
             Self::LevelDown => "Z down",
             Self::Refit => "Refit",
@@ -380,6 +383,7 @@ impl KeybindAction {
             Self::Redo => "redo",
             Self::ShowAreas => "show-areas",
             Self::ShowAreaOutlines => "show-area-outlines",
+            Self::ShowLighting => "show-lighting",
             Self::LevelUp => "level-up",
             Self::LevelDown => "level-down",
             Self::Refit => "refit",
@@ -415,6 +419,7 @@ pub(crate) struct KeyBindings {
     redo: KeyBinding,
     show_areas: KeyBinding,
     show_area_outlines: KeyBinding,
+    show_lighting: KeyBinding,
     level_up: KeyBinding,
     level_down: KeyBinding,
     refit: KeyBinding,
@@ -448,6 +453,7 @@ impl Default for KeyBindings {
             redo: KeyBinding::with_ctrl(Key::Y),
             show_areas: KeyBinding::new(Key::A),
             show_area_outlines: KeyBinding::new(Key::O),
+            show_lighting: KeyBinding::new(Key::L),
             level_up: KeyBinding::new(Key::PageUp),
             level_down: KeyBinding::new(Key::PageDown),
             refit: KeyBinding::new(Key::Home),
@@ -483,6 +489,7 @@ impl KeyBindings {
             redo: KeyBinding::with_primary_shift(Key::Z),
             show_areas: KeyBinding::with_primary(Key::Key1),
             show_area_outlines: KeyBinding::with_shift(Key::O),
+            show_lighting: KeyBinding::new(Key::L),
             level_up: KeyBinding::with_primary(Key::UpArrow),
             level_down: KeyBinding::with_primary(Key::DownArrow),
             refit: KeyBinding::new(Key::Home),
@@ -516,6 +523,7 @@ impl KeyBindings {
             KeybindAction::Redo => self.redo,
             KeybindAction::ShowAreas => self.show_areas,
             KeybindAction::ShowAreaOutlines => self.show_area_outlines,
+            KeybindAction::ShowLighting => self.show_lighting,
             KeybindAction::LevelUp => self.level_up,
             KeybindAction::LevelDown => self.level_down,
             KeybindAction::Refit => self.refit,
@@ -579,6 +587,7 @@ impl KeyBindings {
             KeybindAction::Redo => self.redo = binding,
             KeybindAction::ShowAreas => self.show_areas = binding,
             KeybindAction::ShowAreaOutlines => self.show_area_outlines = binding,
+            KeybindAction::ShowLighting => self.show_lighting = binding,
             KeybindAction::LevelUp => self.level_up = binding,
             KeybindAction::LevelDown => self.level_down = binding,
             KeybindAction::Refit => self.refit = binding,
@@ -674,6 +683,7 @@ pub(crate) struct Settings {
     pub preferred_editor: String,
     pub show_areas: bool,
     pub show_area_outlines: bool,
+    pub show_lighting: bool,
     pub focus_windows_on_hover: bool,
     pub tile_place_flash: bool,
     pub selection_guide_line: bool,
@@ -690,6 +700,8 @@ pub(crate) struct Settings {
     pub keybindings: KeyBindings,
     pub recent_codebases: Vec<PathBuf>,
     pub recent: Vec<RecentMap>,
+    pub bake_enabled: bool,
+    pub perspective_editor_wall: bool,
 }
 
 pub(crate) struct SettingsLoad {
@@ -731,6 +743,7 @@ impl Default for Settings {
             preferred_editor: String::from(DEFAULT_PREFERRED_EDITOR),
             show_areas: false,
             show_area_outlines: true,
+            show_lighting: true,
             focus_windows_on_hover: true,
             tile_place_flash: true,
             selection_guide_line: true,
@@ -747,6 +760,8 @@ impl Default for Settings {
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
+            bake_enabled: true,
+            perspective_editor_wall: false,
         }
     }
 }
@@ -763,11 +778,13 @@ impl Settings {
     pub fn apply_to(&self, options: &mut FrameOptions) {
         options.show_areas = self.show_areas;
         options.show_area_outlines = self.show_area_outlines;
+        options.show_lighting = self.show_lighting;
     }
 
     pub fn capture_from(&mut self, options: &FrameOptions) {
         self.show_areas = options.show_areas;
         self.show_area_outlines = options.show_area_outlines;
+        self.show_lighting = options.show_lighting;
     }
 
     fn normalize(&mut self) {
@@ -902,6 +919,7 @@ mod tests {
                 preferred_editor: String::from(DEFAULT_PREFERRED_EDITOR),
                 show_areas: false,
                 show_area_outlines: true,
+                show_lighting: true,
                 focus_windows_on_hover: true,
                 tile_place_flash: true,
                 selection_guide_line: true,
@@ -918,6 +936,8 @@ mod tests {
                 keybindings: KeyBindings::default(),
                 recent_codebases: Vec::new(),
                 recent: Vec::new(),
+                bake_enabled: true,
+                perspective_editor_wall: false,
             }
         );
     }
@@ -1108,6 +1128,7 @@ mod tests {
             preferred_editor: String::from("zed {file}:{line}:{column}"),
             show_areas: true,
             show_area_outlines: false,
+            show_lighting: true,
             focus_windows_on_hover: false,
             tile_place_flash: false,
             selection_guide_line: false,
@@ -1134,6 +1155,8 @@ mod tests {
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
+            bake_enabled: true,
+            perspective_editor_wall: false,
         };
         settings.keybindings.rebind(
             KeybindAction::ShowAreas,
@@ -1176,6 +1199,7 @@ mod tests {
             preferred_editor: String::from("editor {file}"),
             show_areas: true,
             show_area_outlines: false,
+            show_lighting: true,
             focus_windows_on_hover: true,
             tile_place_flash: false,
             selection_guide_line: false,
@@ -1195,6 +1219,8 @@ mod tests {
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
+            bake_enabled: true,
+            perspective_editor_wall: false,
         };
         let mut options = FrameOptions::default();
 

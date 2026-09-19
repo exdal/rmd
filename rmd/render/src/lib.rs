@@ -33,9 +33,9 @@ pub struct PlacementFlash {
     pub strength: f32,
 }
 
-// this is for our tile origin -> pixel_x/y override indicator
+/// A map-space guide segment rendered over a map view.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SelectionGuide {
+pub struct GuideLine {
     pub origin: [f32; 2],
     pub target: [f32; 2],
 }
@@ -59,7 +59,6 @@ pub struct MapViewInteraction {
     pub cursor: Option<[u32; 2]>,
     pub hovered_area: Option<PrefabInstanceId>,
     pub selected: Option<PrefabInstanceId>,
-    pub selection_guide: Option<SelectionGuide>,
     pub placement_flash: Option<PlacementFlash>,
     pub highlight: HighlightStyle,
     pub mode: InteractionMode,
@@ -110,6 +109,16 @@ pub struct SpriteTexture {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum SpriteLighting {
+    #[default]
+    Normal,
+    Emissive,
+    Blocker,
+    OverlayLight,
+    OverlayLightSubtract,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpriteInstance {
     pub owner: PrefabInstanceId,
@@ -122,6 +131,7 @@ pub struct SpriteInstance {
     pub z: u32,
     pub is_area: bool,
     pub area_edges: u32,
+    pub lighting: SpriteLighting,
     /// premultiplied RGBA
     pub color: [f32; 4],
     /// sort key, from plane and layer
@@ -178,8 +188,31 @@ pub struct MapViewFrame<'a> {
     pub level_count: u32,
     pub revision: u64,
     pub pending_update: Option<FrameUpdate>,
+    pub lighting: Option<LightingFrame<'a>>,
+    pub guide_lines: &'a [GuideLine],
+    pub connected: &'a [PrefabInstanceId],
     pub interaction: MapViewInteraction,
     pub preview: Option<SpritePreview<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LightTile {
+    pub corners: [[f32; 3]; 4],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LightingFrame<'a> {
+    pub size: [u32; 3],
+    pub tiles: &'a [LightTile],
+    pub tile_size: u32,
+    pub revision: u64,
+    pub pending_update: Option<LightingUpdate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LightingUpdate {
+    pub previous_revision: u64,
+    pub tiles: UpdateRange,
 }
 
 #[derive(Debug, Clone, Copy)]

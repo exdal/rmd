@@ -3,13 +3,14 @@ use std::{env, error::Error, ffi::CString, fs, path::PathBuf};
 use shader_slang as slang;
 use slang::Downcast;
 
-const MODULES: [(&str, &[(&str, &str)]); 6] = [
+const MODULES: [(&str, &[(&str, &str)]); 8] = [
     (
         "sprite.slang",
         &[
             ("vs_main", "sprite.vert.spv"),
             ("fs_main", "sprite.frag.spv"),
             ("fs_visibility", "sprite_visibility.frag.spv"),
+            ("fs_overlay_light", "sprite_overlay_light.frag.spv"),
         ],
     ),
     (
@@ -24,6 +25,10 @@ const MODULES: [(&str, &[(&str, &str)]); 6] = [
         "blur.slang",
         &[("vs_main", "blur.vert.spv"), ("fs_main", "blur.frag.spv")],
     ),
+    (
+        "lighting.slang",
+        &[("vs_main", "lighting.vert.spv"), ("fs_main", "lighting.frag.spv")],
+    ),
     ("area_color.slang", &[("cs_main", "area_color.comp.spv")]),
     (
         "interaction.slang",
@@ -32,6 +37,10 @@ const MODULES: [(&str, &[(&str, &str)]); 6] = [
             ("fs_main", "interaction.frag.spv"),
             ("cs_pick", "pick.comp.spv"),
         ],
+    ),
+    (
+        "guide.slang",
+        &[("vs_main", "guide.vert.spv"), ("fs_main", "guide.frag.spv")],
     ),
     (
         "imgui.slang",

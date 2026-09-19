@@ -41,6 +41,7 @@ struct RenderedPrefab {
 }
 
 struct RenderContext<'a> {
+    appearances: &'a HashMap<u64, vm::AppearanceDelta>,
     tree: &'a ObjectTree,
     icons: &'a HashMap<String, Metadata>,
     textures: &'a TextureCatalog,
@@ -54,6 +55,8 @@ struct RenderContext<'a> {
 pub struct FrameInstances {
     pub sprites: Vec<SpriteInstance>,
     pub area_tiles: Vec<SpriteInstance>,
+    pub light_tiles: Vec<render::LightTile>,
+    pub lighting_size: [u32; 3],
     area_components: HashMap<Coord, PrefabInstanceId>,
     area_component_tiles: HashMap<PrefabInstanceId, HashSet<Coord>>,
     sprite_keys: HashMap<PrefabInstanceId, SpriteKey>,
@@ -79,7 +82,30 @@ impl FrameInstances {
     pub fn area_component_tiles(&self, component: PrefabInstanceId) -> HashSet<Coord> {
         self.area_component_tiles.get(&component).cloned().unwrap_or_default()
     }
+
+    pub fn update_lighting(&mut self, lighting: Option<&vm::bake::LightingMap>, range: Option<std::ops::Range<usize>>) {
+        let Some(lighting) = lighting else {
+            self.light_tiles.clear();
+            self.lighting_size = [0; 3];
+            return;
+        };
+
+        let replace = self.lighting_size != lighting.size || self.light_tiles.len() != lighting.tiles.len();
+        self.lighting_size = lighting.size;
+
+        if replace {
+            self.light_tiles = lighting.tiles.iter().copied().map(light_tile).collect();
+            return;
+        }
+
+        let range = range.unwrap_or(0..lighting.tiles.len());
+        for index in range.start.min(lighting.tiles.len())..range.end.min(lighting.tiles.len()) {
+            self.light_tiles[index] = light_tile(lighting.tiles[index]);
+        }
+    }
 }
+
+fn light_tile(tile: vm::bake::LightTile) -> render::LightTile { render::LightTile { corners: tile.corners } }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefabUpdate {
@@ -129,12 +155,16 @@ impl TypeVisibility {
 pub struct FrameRenderOptions<'a> {
     pub visibility: &'a TypeVisibility,
     pub tile_size: u32,
+    /// What the bake made of each atom, keyed by `vm::bake` atom id, empty when baking is off
+    pub appearances: &'a HashMap<u64, vm::AppearanceDelta>,
+    pub lighting: Option<&'a vm::bake::LightingMap>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameOptions {
     pub show_areas: bool,
     pub show_area_outlines: bool,
+    pub show_lighting: bool,
     /// `world.icon_size`
     pub tile_size: u32,
     /// How many levels below the active one to draw behind it, 0 for none.
@@ -146,6 +176,7 @@ impl Default for FrameOptions {
         Self {
             show_areas: false,
             show_area_outlines: true,
+            show_lighting: true,
             tile_size: 32,
             underlay_depth: 3,
         }
@@ -187,6 +218,13 @@ pub fn instance_for(
         z: tile.z,
         is_area,
         area_edges: 0,
+        lighting: match appearance.lighting {
+            vm::AppearanceLighting::Normal => render::SpriteLighting::Normal,
+            vm::AppearanceLighting::Emissive => render::SpriteLighting::Emissive,
+            vm::AppearanceLighting::Blocker => render::SpriteLighting::Blocker,
+            vm::AppearanceLighting::OverlayLight => render::SpriteLighting::OverlayLight,
+            vm::AppearanceLighting::OverlayLightSubtract => render::SpriteLighting::OverlayLightSubtract,
+        },
         color: [tint[0] * alpha, tint[1] * alpha, tint[2] * alpha, alpha],
         depth: appearance.plane * 1000.0 + appearance.layer,
     }
@@ -204,6 +242,8 @@ pub fn build(
         FrameRenderOptions {
             visibility: &TypeVisibility::default(),
             tile_size,
+            appearances: &HashMap::new(),
+            lighting: None,
         },
     )
 }
@@ -225,6 +265,7 @@ pub fn build_with_options(
     let area_component_tiles = index_area_component_tiles(&area_components);
     let mut order = 0usize;
     let render = RenderContext {
+        appearances: options.appearances,
         tree,
         icons,
         textures,
@@ -278,6 +319,11 @@ pub fn build_with_options(
     let mut instances = FrameInstances {
         sprites: keyed_sprites.into_iter().map(|(_, sprite)| sprite).collect(),
         area_tiles,
+        light_tiles: options
+            .lighting
+            .map(|lighting| lighting.tiles.iter().copied().map(light_tile).collect())
+            .unwrap_or_default(),
+        lighting_size: options.lighting.map_or([0; 3], |lighting| lighting.size),
         area_components,
         area_component_tiles,
         sprite_keys,
@@ -314,6 +360,8 @@ pub fn update_prefabs(
         FrameRenderOptions {
             visibility: &TypeVisibility::default(),
             tile_size,
+            appearances: &HashMap::new(),
+            lighting: None,
         },
     )
 }
@@ -404,6 +452,7 @@ pub fn update_prefabs_with_options(
     }
 
     let render = RenderContext {
+        appearances: options.appearances,
         tree,
         icons,
         textures,
@@ -499,12 +548,62 @@ fn current_placement(tree: &ObjectTree, document: &MapDocument, owner: PrefabIns
 }
 
 impl RenderContext<'_> {
+    #[allow(clippy::too_many_arguments)]
+    fn overlay(
+        &self, sprites: &mut Vec<SpriteInstance>, owner: PrefabInstanceId, parent: &Appearance,
+        delta: &vm::AppearanceDelta, coord: Coord, area_owner: Option<PrefabInstanceId>, depth: usize,
+    ) -> f32 {
+        if depth >= 32 {
+            return parent.layer;
+        }
+
+        let appearance = visual::resolve_overlay(self.tree, parent, delta);
+        let mut own = Vec::new();
+        if let Some(texture) = sprite_texture(self.icons, self.textures, &appearance) {
+            let mut sprite = instance_for(owner, &appearance, texture, coord, self.tile_size, false);
+            sprite.area_owner = area_owner;
+            own.push(sprite);
+        }
+
+        self.layered(sprites, owner, &appearance, own, delta, coord, area_owner, depth + 1);
+        appearance.layer
+    }
+
+    /// BYOND sorts an atom's underlays and overlays by layer. `FLOAT_LAYER` ones take the atom's
+    /// layer and keep their list order around it.
+    #[allow(clippy::too_many_arguments)]
+    fn layered(
+        &self, sprites: &mut Vec<SpriteInstance>, owner: PrefabInstanceId, parent: &Appearance,
+        own: Vec<SpriteInstance>, delta: &vm::AppearanceDelta, coord: Coord, area_owner: Option<PrefabInstanceId>,
+        depth: usize,
+    ) {
+        let mut groups = Vec::with_capacity(delta.underlays.len() + delta.overlays.len() + 1);
+        for extra in &delta.underlays {
+            let mut group = Vec::new();
+            let layer = self.overlay(&mut group, owner, parent, extra, coord, area_owner, depth);
+            groups.push((layer, group));
+        }
+
+        groups.push((parent.layer, own));
+        for extra in &delta.overlays {
+            let mut group = Vec::new();
+            let layer = self.overlay(&mut group, owner, parent, extra, coord, area_owner, depth);
+            groups.push((layer, group));
+        }
+
+        groups.sort_by(|left, right| left.0.total_cmp(&right.0));
+        sprites.extend(groups.into_iter().flat_map(|(_, group)| group));
+    }
+
     fn prefab(
         &self, owner: PrefabInstanceId, prefab: &Prefab, id: TypeId, coord: Coord, order: usize,
         area_owner: Option<PrefabInstanceId>,
     ) -> RenderedPrefab {
         let is_area = self.area.is_some_and(|area| self.tree.is_subtype_of(id, area));
-        let appearance = visual::resolve_id(self.tree, id, prefab);
+        let delta = self.appearances.get(&owner.get());
+        let appearance = delta
+            .map(|delta| visual::resolve_delta(self.tree, id, prefab, delta))
+            .unwrap_or_else(|| visual::resolve_id(self.tree, id, prefab));
         let key = (
             coord.z,
             (appearance.plane * 1000.0) as i32,
@@ -561,6 +660,13 @@ impl RenderContext<'_> {
             let mut sprite = instance_for(owner, &appearance, texture, coord, self.tile_size, false);
             sprite.area_owner = area_owner;
             sprites.push(sprite);
+        }
+
+        if let Some(delta) = delta
+            && !is_area
+        {
+            let own = std::mem::take(&mut sprites);
+            self.layered(&mut sprites, owner, &appearance, own, delta, coord, area_owner, 0);
         }
 
         RenderedPrefab {
@@ -1318,6 +1424,8 @@ mod tests {
                         declared_type: None,
                         modifiers: VarModifiers::default(),
                         value,
+                        initializer: None,
+                        declared: true,
                         location: Location::default(),
                     },
                 );
@@ -1376,6 +1484,8 @@ mod tests {
             FrameRenderOptions {
                 visibility: &visibility,
                 tile_size: 32,
+                appearances: &HashMap::new(),
+                lighting: None,
             },
         );
         assert!(without_objects.iter().all(|sprite| sprite.owner != object_owner));
@@ -1392,6 +1502,8 @@ mod tests {
             FrameRenderOptions {
                 visibility: &visibility,
                 tile_size: 32,
+                appearances: &HashMap::new(),
+                lighting: None,
             },
         );
         assert!(without_areas.iter().any(|sprite| sprite.owner == object_owner));

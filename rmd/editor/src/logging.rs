@@ -42,7 +42,7 @@ pub(crate) fn init() {
     if log::set_logger(logger).is_err() {
         return;
     }
-    log::set_max_level(LevelFilter::Warn);
+    log::set_max_level(LevelFilter::Info);
 
     if let Some(error) = error {
         log::error!("could not initialize latest.log: {error}");
@@ -72,7 +72,7 @@ impl FileLogger {
 }
 
 impl Log for FileLogger {
-    fn enabled(&self, metadata: &Metadata<'_>) -> bool { metadata.level() <= Level::Warn }
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool { metadata.level() <= Level::Info }
 
     fn log(&self, record: &Record<'_>) {
         if self.enabled(record.metadata()) {

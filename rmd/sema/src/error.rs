@@ -9,6 +9,9 @@ pub enum SemaErrorKind {
     DuplicateProc(Identifier),
     UnknownParentType(TreePath),
     CircularInheritance(TreePath),
+    InvalidIntrinsic,
+    UnknownIntrinsic(u16),
+    DuplicateIntrinsic,
 }
 
 impl std::fmt::Display for SemaErrorKind {
@@ -20,6 +23,9 @@ impl std::fmt::Display for SemaErrorKind {
             Self::DuplicateProc(n) => write!(f, "proc '{n}' is declared twice"),
             Self::UnknownParentType(p) => write!(f, "unknown parent_type '{p}'"),
             Self::CircularInheritance(p) => write!(f, "circular inheritance at '{p}'"),
+            Self::InvalidIntrinsic => write!(f, "intrinsic marker must be an exact nonnegative u16 integer"),
+            Self::UnknownIntrinsic(id) => write!(f, "intrinsic id {id} is not declared by the prelude"),
+            Self::DuplicateIntrinsic => write!(f, "procedure has more than one intrinsic marker"),
         }
     }
 }

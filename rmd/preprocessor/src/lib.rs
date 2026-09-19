@@ -10,7 +10,7 @@ use core::{
     types::Identifier,
 };
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::{Component, Path, PathBuf},
     rc::Rc,
 };
@@ -25,6 +25,18 @@ use crate::{
 
 pub type PreprocessResult<T> = Result<T, PreprocessError>;
 pub type Spanned<'a> = (Token<'a>, Location);
+
+/// Source text shared by multiple preprocessing configurations in one compilation.
+#[derive(Clone, Default)]
+pub struct SourceCache<'a> {
+    files: HashMap<PathBuf, &'a str>,
+}
+
+impl SourceCache<'_> {
+    pub fn len(&self) -> usize { self.files.len() }
+
+    pub fn is_empty(&self) -> bool { self.files.is_empty() }
+}
 
 #[derive(Clone, Copy)]
 enum Spacing {
@@ -151,6 +163,7 @@ pub struct Preprocessed<'a> {
     pub resource_dirs: Vec<PathBuf>,
     pub defines: DefineTable<'a>,
     pub errors: Vec<PreprocessError>,
+    pub source_cache: SourceCache<'a>,
 }
 
 impl Preprocessed<'_> {
@@ -185,9 +198,11 @@ pub struct Preprocessor<'a> {
     last_file_line: Option<(FileId, usize)>,
     last_if: Location,
 
+    include_core: bool,
     prelude: Vec<PreludeFile>,
     progress: Option<ProgressHook<'a>>,
     aborted: bool,
+    source_cache: SourceCache<'a>,
 }
 
 impl<'a> Preprocessor<'a> {
@@ -212,14 +227,42 @@ impl<'a> Preprocessor<'a> {
             can_use_directive: true,
             last_file_line: None,
             last_if: Location::default(),
+            include_core: true,
             prelude: prelude_files(),
             progress: None,
             aborted: false,
+            source_cache: SourceCache::default(),
         }
+    }
+
+    pub fn with_source_cache(mut self, cache: SourceCache<'a>) -> Self {
+        self.source_cache = cache;
+
+        self
     }
 
     pub fn with_prelude(mut self, files: impl IntoIterator<Item = PreludeFile>) -> Self {
         self.prelude = files.into_iter().collect();
+
+        self
+    }
+
+    pub fn with_baking(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.prelude
+                .insert(0, PreludeFile::Embedded("<demir-bake.dm>", "#define __DEMIR_BAKE__\n"));
+        }
+
+        self
+    }
+
+    pub fn with_editor_walls(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.prelude.insert(
+                0,
+                PreludeFile::Embedded("<demir-editor-walls.dm>", "#define PERSPECTIVE_EDITOR_WALL\n"),
+            );
+        }
 
         self
     }
@@ -236,11 +279,21 @@ impl<'a> Preprocessor<'a> {
         self
     }
 
+    #[cfg(test)]
+    fn without_core(mut self) -> Self {
+        self.include_core = false;
+
+        self
+    }
+
     pub fn sources(&self) -> &SourceMap<'a> { &self.sources }
 
-    /// `stddef.dm`, then `demir.dm`, then the entry `.dme`
     pub fn run(mut self, entry: impl AsRef<Path>) -> PreprocessResult<Preprocessed<'a>> {
-        for file in std::mem::take(&mut self.prelude) {
+        let mut files = std::mem::take(&mut self.prelude);
+        if self.include_core {
+            files.splice(0..0, core_files());
+        }
+        for file in files {
             match file {
                 PreludeFile::Embedded(name, contents) => self.open_embedded(name, contents),
                 PreludeFile::Disk(path) => self.include_file(&path, Location::default()),
@@ -287,6 +340,7 @@ impl<'a> Preprocessor<'a> {
             resource_dirs: self.resource_dirs,
             defines: self.defines,
             errors: self.errors,
+            source_cache: self.source_cache,
         })
     }
 
@@ -1392,17 +1446,25 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn open(&mut self, path: &Path, location: Location) {
-        let file = match self.sources.load(self.arena, path) {
-            Ok(file) => file,
-            Err(error) => {
-                self.diagnose(
-                    Code::MissingIncludedFile,
-                    location,
-                    format!("could not read \"{}\": {error}", path.display()),
-                );
-                return;
+        let contents = match self.source_cache.files.get(path).copied() {
+            Some(contents) => contents,
+            None => match std::fs::read_to_string(path) {
+                Ok(contents) => {
+                    let contents = self.arena.alloc(contents);
+                    self.source_cache.files.insert(path.to_path_buf(), contents);
+                    contents
+                },
+                Err(error) => {
+                    self.diagnose(
+                        Code::MissingIncludedFile,
+                        location,
+                        format!("could not read \"{}\": {error}", path.display()),
+                    );
+                    return;
+                },
             },
         };
+        let file = self.sources.add_borrowed(path, contents);
 
         if let Some(progress) = self.progress.as_mut()
             && !progress(path)
@@ -1487,19 +1549,26 @@ pub const STDDEF_ENV: &str = "DM_STDDEF";
 
 pub const DEMIR_ENV: &str = "DM_DEMIR";
 
-pub const STDDEF_SOURCE: &str = include_str!("../../../dm/stddef.dm");
-
-pub const DEMIR_SOURCE: &str = include_str!("../../../dm/demir.dm");
+pub use prelude::{CORE_SOURCE, DEMIR_SOURCE, IMGUI_SOURCE, STDDEF_EXT_SOURCE, STDDEF_SOURCE, VERSION_SOURCE};
 
 pub enum PreludeFile {
     Embedded(&'static str, &'static str),
     Disk(PathBuf),
 }
 
+pub fn core_files() -> [PreludeFile; 2] {
+    [
+        PreludeFile::Embedded("<version.dm>", VERSION_SOURCE),
+        PreludeFile::Embedded("<core.dm>", CORE_SOURCE),
+    ]
+}
+
 pub fn prelude_files() -> Vec<PreludeFile> {
     vec![
         env_override(STDDEF_ENV, PreludeFile::Embedded("<stddef.dm>", STDDEF_SOURCE)),
+        PreludeFile::Embedded("<stddef_ext.dm>", STDDEF_EXT_SOURCE),
         env_override(DEMIR_ENV, PreludeFile::Embedded("<demir.dm>", DEMIR_SOURCE)),
+        PreludeFile::Embedded("<imgui.dm>", IMGUI_SOURCE),
     ]
 }
 
@@ -1569,6 +1638,7 @@ mod tests {
 
         let arena = StrArena::new();
         let result = Preprocessor::new(&arena)
+            .without_core()
             .without_prelude()
             .run(dir.join(files[0].0))
             .expect("preprocess");
@@ -1804,6 +1874,38 @@ mod tests {
     }
 
     #[test]
+    fn source_text_can_be_shared_between_configuration_passes() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("demir-source-cache-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let entry = dir.join("entry.dm");
+        fs::write(&entry, "/datum/a\n\tvar/x = 1\n").expect("first source");
+
+        let arena = StrArena::new();
+        let first = Preprocessor::new(&arena)
+            .without_core()
+            .without_prelude()
+            .run(&entry)
+            .expect("first pass");
+        let cache = first.source_cache.clone();
+        assert_eq!(cache.len(), 1);
+
+        fs::write(&entry, "/datum/a\n\tvar/x = 2\n").expect("changed source");
+        let second = Preprocessor::new(&arena)
+            .without_core()
+            .without_prelude()
+            .with_source_cache(cache)
+            .run(&entry)
+            .expect("second pass");
+        fs::remove_dir_all(&dir).expect("remove temp dir");
+
+        assert!(render(&second.tokens).contains("x = 1"));
+        assert!(!render(&second.tokens).contains("x = 2"));
+    }
+
+    #[test]
     fn an_included_file_cannot_leak_a_peeked_eof() {
         let rendered = pp(&[
             ("outer.dm", "/datum/a\n\tvar/x = 1\n#include \"tail.dm\"\n/datum/b\n"),
@@ -1846,6 +1948,35 @@ mod tests {
         assert!(rendered.contains("x = 1"), "{rendered}");
     }
 
+    #[test]
+    fn baking_disables_mapping_compatibility_defines() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("rmd-baking-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let entry = dir.join("entry.dm");
+        // tgstation's `__byond_version_compat.dm`, which only `SPACEMAN_DMM` used to skip
+        fs::write(
+            &entry,
+            "#if (DM_VERSION < 516 || DM_BUILD < 1659) && !defined(SPACEMAN_DMM)\n#error too \
+             old\n#endif\n/proc/test()\n\treturn 1\n",
+        )
+        .expect("write entry");
+
+        let arena = StrArena::new();
+        let result = Preprocessor::new(&arena)
+            .with_baking(true)
+            .run(&entry)
+            .expect("preprocess");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(result.is_ok(), "{:?}", result.errors);
+        assert!(result.defines.is_defined("__DEMIR_BAKE__"));
+        assert!(!result.defines.is_defined("FASTDMM"));
+        assert!(!result.defines.is_defined("SPACEMAN_DMM"));
+    }
+
     /// `#if 0` around code the lexer would reject must not diagnose the dead branch. Indentation
     /// errors already ride along in `IndentState`; these are the ones that do not.
     #[test]
@@ -1861,6 +1992,7 @@ mod tests {
 
         let arena = StrArena::new();
         let result = Preprocessor::new(&arena)
+            .without_core()
             .without_prelude()
             .run(&entry)
             .expect("preprocess");
@@ -1872,20 +2004,58 @@ mod tests {
         assert!(rendered.contains("valid"), "{rendered}");
     }
 
-    /// Both prelude files are compiled in, so a shipped binary needs no `dm/` beside it.
+    /// Every source is compiled in, so a shipped binary needs no prelude directory beside it.
     #[test]
-    fn the_default_prelude_is_stddef_then_demir_and_needs_no_files() {
-        let names: Vec<_> = prelude_files()
-            .iter()
+    fn the_default_prelude_is_version_core_stddef_ext_demir_then_imgui_and_needs_no_files() {
+        let names: Vec<_> = core_files()
+            .into_iter()
+            .chain(prelude_files())
             .map(|file| match file {
-                PreludeFile::Embedded(name, _) => *name,
+                PreludeFile::Embedded(name, _) => name,
                 PreludeFile::Disk(_) => "disk",
             })
             .collect();
 
-        assert_eq!(names, vec!["<stddef.dm>", "<demir.dm>"]);
+        assert_eq!(
+            names,
+            vec![
+                "<version.dm>",
+                "<core.dm>",
+                "<stddef.dm>",
+                "<stddef_ext.dm>",
+                "<demir.dm>",
+                "<imgui.dm>"
+            ]
+        );
+        assert!(CORE_SOURCE.contains("/datum"));
         assert!(STDDEF_SOURCE.contains("#define NORTH 1"));
-        assert!(DEMIR_SOURCE.contains("#define DM_VERSION"));
+        assert!(STDDEF_EXT_SOURCE.contains("/atom"));
+        assert!(DEMIR_SOURCE.contains("#define __DEMIR__"));
+    }
+
+    #[test]
+    fn disabling_the_optional_prelude_keeps_core() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("rmd-core-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let entry = dir.join("entry.dm");
+        fs::write(&entry, "/proc/test()\n\treturn 1\n").expect("write entry");
+
+        let arena = StrArena::new();
+        let result = Preprocessor::new(&arena)
+            .without_prelude()
+            .run(&entry)
+            .expect("preprocess");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(result.sources.find("<version.dm>").is_some());
+        assert!(result.sources.find("<core.dm>").is_some());
+        assert!(result.sources.find("<stddef.dm>").is_none());
+        assert!(result.sources.find("<demir.dm>").is_none());
+        assert!(result.defines.is_defined("DM_VERSION"));
+        assert!(result.defines.is_defined("DM_BUILD"));
     }
 
     /// The builtins reach the tree without a single file read.
@@ -1894,8 +2064,12 @@ mod tests {
         let arena = StrArena::new();
         let mut preprocessor = Preprocessor::new(&arena);
         preprocessor.prelude = vec![
+            PreludeFile::Embedded("<version.dm>", VERSION_SOURCE),
+            PreludeFile::Embedded("<core.dm>", CORE_SOURCE),
             PreludeFile::Embedded("<stddef.dm>", STDDEF_SOURCE),
+            PreludeFile::Embedded("<stddef_ext.dm>", STDDEF_EXT_SOURCE),
             PreludeFile::Embedded("<demir.dm>", DEMIR_SOURCE),
+            PreludeFile::Embedded("<imgui.dm>", IMGUI_SOURCE),
         ];
 
         for file in std::mem::take(&mut preprocessor.prelude) {

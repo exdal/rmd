@@ -14,6 +14,13 @@ pub enum Stage {
     FindMaps,
     ReadMap,
     ParseMap,
+    Instantiate,
+    Initialize,
+    Prepare,
+    Connections,
+    Highlights,
+    Light,
+    Smooth,
 }
 
 impl Stage {
@@ -28,6 +35,25 @@ impl Stage {
             Self::FindMaps => "Finding maps",
             Self::ReadMap => "Reading map",
             Self::ParseMap => "Parsing map",
+            Self::Instantiate => "Instantiating atoms",
+            Self::Initialize => "Constructing profile",
+            Self::Prepare => "Preparing atoms",
+            Self::Connections => "Collecting connections",
+            Self::Highlights => "Collecting highlights",
+            Self::Light => "Collecting lights",
+            Self::Smooth => "Baking appearances",
+        }
+    }
+
+    pub const fn from_bake(stage: vm::bake::Stage) -> Self {
+        match stage {
+            vm::bake::Stage::Instantiate => Self::Instantiate,
+            vm::bake::Stage::Initialize => Self::Initialize,
+            vm::bake::Stage::Prepare => Self::Prepare,
+            vm::bake::Stage::Connections => Self::Connections,
+            vm::bake::Stage::Highlights => Self::Highlights,
+            vm::bake::Stage::Light => Self::Light,
+            vm::bake::Stage::Smooth => Self::Smooth,
         }
     }
 
@@ -42,6 +68,13 @@ impl Stage {
             Self::FindMaps => 6,
             Self::ReadMap => 7,
             Self::ParseMap => 8,
+            Self::Instantiate => 9,
+            Self::Initialize => 10,
+            Self::Prepare => 11,
+            Self::Connections => 12,
+            Self::Highlights => 15,
+            Self::Light => 13,
+            Self::Smooth => 14,
         }
     }
 
@@ -55,6 +88,13 @@ impl Stage {
             6 => Self::FindMaps,
             7 => Self::ReadMap,
             8 => Self::ParseMap,
+            9 => Self::Instantiate,
+            10 => Self::Initialize,
+            11 => Self::Prepare,
+            12 => Self::Connections,
+            15 => Self::Highlights,
+            13 => Self::Light,
+            14 => Self::Smooth,
             _ => Self::Preprocess,
         }
     }
@@ -98,6 +138,8 @@ impl Progress {
         self.set_detail(detail);
     }
 
+    pub fn set_done(&self, done: usize) { self.done.store(done, Ordering::Relaxed); }
+
     pub fn set_detail(&self, detail: &str) {
         if let Ok(mut current) = self.detail.lock() {
             current.clear();
@@ -135,6 +177,12 @@ mod tests {
             Stage::FindMaps,
             Stage::ReadMap,
             Stage::ParseMap,
+            Stage::Instantiate,
+            Stage::Initialize,
+            Stage::Prepare,
+            Stage::Connections,
+            Stage::Light,
+            Stage::Smooth,
         ] {
             let progress = Progress::new();
             progress.enter(stage, 0);

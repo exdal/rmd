@@ -14,6 +14,7 @@ use vir::{
     DRAW_INDIRECT_STRIDE,
     DomainFlag,
     DrawIndirectCommand,
+    FrameAllocator,
     GraphicsPipelineInfo,
     Image,
     ImageAttachment,
@@ -52,12 +53,17 @@ use crate::{
 const GEOMETRY_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.vert.spv"));
 const SPRITE_SHADE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.frag.spv"));
 const SPRITE_VIS_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_visibility.frag.spv"));
+const SPRITE_OVERLAY_LIGHT_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_overlay_light.frag.spv"));
 const SPRITE_CULL_CLASSIFY_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_cull_classify.comp.spv"));
 const SPRITE_CULL_SCAN_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_cull_scan.comp.spv"));
 const SPRITE_CULL_COMPACT_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_cull_compact.comp.spv"));
 const AREA_COLOR_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/area_color.comp.spv"));
 const INTERACTION_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/interaction.vert.spv"));
 const INTERACTION_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/interaction.frag.spv"));
+const GUIDE_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/guide.vert.spv"));
+const GUIDE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/guide.frag.spv"));
+const LIGHTING_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/lighting.vert.spv"));
+const LIGHTING_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/lighting.frag.spv"));
 const PICK_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pick.comp.spv"));
 const UPLOAD_BATCH_BYTES: usize = 64 * 1024 * 1024;
 const HIGHLIGHT_STRIPE_PERIOD: f32 = 12.0;
@@ -71,15 +77,27 @@ struct GpuSprite {
     owner: [u32; 2],
     area_owner: [u32; 2],
     position: [f32; 2],
+    z: u32,
     packed_size: u32,
     color: u32,
     source_position_size: [u32; 2],
     texture_flags: u32,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GpuLightTile {
+    corners: [u32; 4],
+}
+
 const SPRITE_FLAG_AREA: u32 = 1;
 const SPRITE_AREA_EDGE_SHIFT: u32 = 1;
-const SPRITE_FLAGS_SHIFT: u32 = 27;
+const SPRITE_FLAG_EMISSIVE_MASK: u32 = 1 << 5;
+const SPRITE_FLAG_EMISSIVE_BLOCKER: u32 = 1 << 6;
+const SPRITE_FLAG_OVERLAY_LIGHT: u32 = 1 << 7;
+const SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT: u32 = 1 << 8;
+const SPRITE_FLAG_FULLBRIGHT: u32 = 1 << 9;
+const SPRITE_FLAGS_SHIFT: u32 = 22;
 const SPRITE_TEXTURE_MASK: u32 = (1 << SPRITE_FLAGS_SHIFT) - 1;
 const SPRITE_TEXTURE_CAPACITY: u32 = SPRITE_TEXTURE_MASK + 1;
 const TEXTURE_RESERVE: usize = 8192;
@@ -132,10 +150,23 @@ struct InteractionPush {
     cursor_valid: u32,
     selected_owner: [u32; 2],
     stripe_offset: f32,
-    guide_origin: [f32; 2],
-    guide_target: [f32; 2],
-    guide_valid: u32,
     focused_area_owner: [u32; 2],
+    connected_count: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct GpuGuideLine {
+    origin: [f32; 2],
+    target: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct GuidePush {
+    viewport: [f32; 2],
+    selected_owner: [u32; 2],
+    stripe_offset: f32,
 }
 
 #[repr(C)]
@@ -145,8 +176,25 @@ struct PickPush {
     cursor_valid: u32,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct LightingPush {
+    center: [f32; 2],
+    viewport: [f32; 2],
+    zoom: f32,
+    tile_size: f32,
+    map_size: [u32; 2],
+    level_count: u32,
+    base: u32,
+}
+
+struct LightingSlots {
+    push: ValueId,
+}
+
 struct InteractionSlots {
     push: ValueId,
+    connected_owners: ValueId,
     pick_push: ValueId,
     area_tiles: ValueId,
     hover_draw: ValueId,
@@ -324,6 +372,7 @@ struct MapViewState {
     highlight_tint: bool,
     delete_mode: bool,
     preview: bool,
+    lighting: bool,
 }
 
 impl FrameGraphState {
@@ -342,6 +391,7 @@ impl FrameGraphState {
                     highlight_tint: view.interaction.highlight.is_tint(),
                     delete_mode: view.interaction.mode.is_delete(),
                     preview: view.preview.is_some_and(|preview| !preview.sprites.is_empty()),
+                    lighting: view.lighting.is_some_and(|lighting| !lighting.tiles.is_empty()),
                 })
                 .collect(),
         }
@@ -351,6 +401,7 @@ impl FrameGraphState {
 struct Recorded {
     program: Program,
     sprites: ValueId,
+    lights: Option<ValueId>,
     map_views: Vec<MapViewPass>,
     pick_result: Option<ValueId>,
     state: FrameGraphState,
@@ -366,9 +417,17 @@ struct MapViewPass {
     underlay_camera: ValueId,
     active_camera: ValueId,
     cull: CullSlots,
+    lighting: Option<LightingSlots>,
     preview: Option<PreviewSlots>,
     should_pick: Option<ValueId>,
     interaction: Option<InteractionSlots>,
+    guides: Option<GuideSlots>,
+}
+
+struct GuideSlots {
+    lines: ValueId,
+    push: ValueId,
+    draw: ValueId,
 }
 
 struct AreaColorPass {
@@ -485,10 +544,42 @@ struct UploadedMapView {
     ranges: Vec<LevelRange>,
 }
 
+#[derive(Debug, Default)]
+struct UploadedLighting {
+    revision: Option<u64>,
+    base: u32,
+    count: usize,
+    size: [u32; 3],
+}
+
 struct UploadedPreview {
     revision: u64,
     sprites: Buffer,
     cull: CullBuffers,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PreparedGuides {
+    lines: Buffer,
+    connected_owners: Buffer,
+    line_count: u32,
+    connected_count: u32,
+}
+
+fn upload_frame_buffer(allocator: &mut FrameAllocator, payload: &[u8], name: &str) -> Result<Buffer, GpuError> {
+    let mut buffer = allocator.allocate_buffer(
+        &BufferInfo::new(
+            (payload.len() as u64).max(1),
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            MemoryLocation::CpuToGpu,
+        )
+        .with_name(name),
+    )?;
+    if !payload.is_empty() {
+        buffer.write(0, payload)?;
+    }
+
+    Ok(buffer)
 }
 
 impl UploadedPreview {
@@ -567,8 +658,11 @@ pub struct Renderer {
     swapchain: Option<SwapChain>,
     sprite_pipeline: PipelineId,
     visibility_pipeline: PipelineId,
+    overlay_light_pipeline: PipelineId,
     cull_pipelines: [PipelineId; 3],
+    lighting_pipeline: PipelineId,
     interaction_pipeline: PipelineId,
+    guide_pipeline: PipelineId,
     pick_pipeline: PipelineId,
     area_colors: AreaColorPass,
     bindless: BindlessDescriptorSet,
@@ -579,9 +673,12 @@ pub struct Renderer {
     sprite_capacity: usize,
     area_tiles: Option<Buffer>,
     area_tile_capacity: usize,
+    lights: Option<Buffer>,
+    light_capacity: usize,
     cull: Vec<CullBuffers>,
     pick_readback: Option<Buffer>,
     uploaded: Vec<UploadedMapView>,
+    uploaded_lighting: Vec<UploadedLighting>,
     previews: Vec<Option<UploadedPreview>>,
     imgui: Option<ImGuiPass>,
     highlight_started_at: Instant,
@@ -631,6 +728,20 @@ impl Renderer {
                 return Err(error.into());
             },
         };
+        let overlay_light_pipeline = match graph.declare_pipeline(
+            GraphicsPipelineInfo::new()
+                .with_shader(&geometry_vs)
+                .with_shader(&read_spirv(SPRITE_OVERLAY_LIGHT_FS_SPV)?)
+                .with_bindless_set(1, bindless.layout, bindless.set),
+        ) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                drop(graph);
+                bindless.destroy(&device);
+
+                return Err(error.into());
+            },
+        };
         let cull_pipelines = match (|| -> Result<[PipelineId; 3], GpuError> {
             Ok([
                 graph.declare_compute_pipeline(ComputePipelineInfo::new(&read_spirv(SPRITE_CULL_CLASSIFY_CS_SPV)?))?,
@@ -650,6 +761,32 @@ impl Renderer {
             GraphicsPipelineInfo::new()
                 .with_shader(&read_spirv(INTERACTION_VS_SPV)?)
                 .with_shader(&read_spirv(INTERACTION_FS_SPV)?),
+        ) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                drop(graph);
+                bindless.destroy(&device);
+
+                return Err(error.into());
+            },
+        };
+        let guide_pipeline = match graph.declare_pipeline(
+            GraphicsPipelineInfo::new()
+                .with_shader(&read_spirv(GUIDE_VS_SPV)?)
+                .with_shader(&read_spirv(GUIDE_FS_SPV)?),
+        ) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                drop(graph);
+                bindless.destroy(&device);
+
+                return Err(error.into());
+            },
+        };
+        let lighting_pipeline = match graph.declare_pipeline(
+            GraphicsPipelineInfo::new()
+                .with_shader(&read_spirv(LIGHTING_VS_SPV)?)
+                .with_shader(&read_spirv(LIGHTING_FS_SPV)?),
         ) {
             Ok(pipeline) => pipeline,
             Err(error) => {
@@ -700,8 +837,11 @@ impl Renderer {
             swapchain: None,
             sprite_pipeline,
             visibility_pipeline,
+            overlay_light_pipeline,
             cull_pipelines,
+            lighting_pipeline,
             interaction_pipeline,
+            guide_pipeline,
             pick_pipeline,
             area_colors,
             bindless,
@@ -712,9 +852,12 @@ impl Renderer {
             sprite_capacity: 0,
             area_tiles: None,
             area_tile_capacity: 0,
+            lights: None,
+            light_capacity: 0,
             cull: Vec::new(),
             pick_readback: None,
             uploaded: Vec::new(),
+            uploaded_lighting: Vec::new(),
             previews: Vec::new(),
             imgui: None,
             highlight_started_at: Instant::now(),
@@ -851,6 +994,11 @@ impl Renderer {
         let mut module = Module::default();
         let swapchain_attachment = module.acquire_next_image(swapchain);
         let sprites = module.declare_buffer_var("sprites", Access::ComputeWrite);
+        let lights = state
+            .map_views
+            .iter()
+            .any(|view| view.lighting)
+            .then(|| module.declare_buffer_var("light tiles", Access::FragmentRead));
         let pick_result = (with_imgui && !state.map_views.is_empty())
             .then(|| module.declare_buffer_var("pick result", Access::HostRead));
         let mut pick_after = pick_result;
@@ -870,6 +1018,13 @@ impl Renderer {
                 extent,
             );
             scene_attachment = module.clear(scene_attachment, vir::clear::f32::BLACK);
+            let mut emissive_attachment = module.transient_image_sized(
+                &ImageInfo::color_target(viewport, vk::Format::R8_UNORM)
+                    .with_usage(vk::ImageUsageFlags::SAMPLED)
+                    .with_name(format!("map view {index} emissive attachment")),
+                extent,
+            );
+            emissive_attachment = module.clear(emissive_attachment, vir::clear::f32::BLACK);
             let mut visibility_attachment = module.transient_image_sized(
                 &ImageInfo::color_target(viewport, vk::Format::R32_UINT)
                     .with_usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
@@ -877,6 +1032,13 @@ impl Renderer {
                 extent,
             );
             visibility_attachment = module.clear(visibility_attachment, vir::clear::u32::TRANSPARENT);
+            let mut level_attachment = module.transient_image_sized(
+                &ImageInfo::color_target(viewport, vk::Format::R32_UINT)
+                    .with_usage(vk::ImageUsageFlags::SAMPLED)
+                    .with_name(format!("map view {index} level attachment")),
+                extent,
+            );
+            level_attachment = module.clear(level_attachment, vir::clear::u32::TRANSPARENT);
 
             let visible_indices =
                 module.declare_buffer_var(&format!("map view {index} visible sprite indices"), Access::VertexRead);
@@ -909,10 +1071,19 @@ impl Renderer {
             let draw_commands = cull_values.commands;
             let visible_indices = cull_values.visible;
 
-            [scene_attachment, visibility_attachment, _, _] = module
+            [
+                scene_attachment,
+                emissive_attachment,
+                visibility_attachment,
+                level_attachment,
+                _,
+                _,
+            ] = module
                 .begin_rendering([
                     (scene_attachment, Access::ColorRW),
+                    (emissive_attachment, Access::ColorRW),
                     (visibility_attachment, Access::ColorRW),
+                    (level_attachment, Access::ColorRW),
                     (draw_commands, Access::IndirectRead),
                     (visible_indices, Access::VertexRead),
                 ])
@@ -922,7 +1093,9 @@ impl Renderer {
                 .set_viewport(0, Rect2D::framebuffer())
                 .set_scissor(0, Rect2D::framebuffer())
                 .set_color_blend(0, BlendPreset::PremultipliedAlphaBlend)
-                .set_color_blend(1, BlendPreset::Off)
+                .set_color_blend(1, BlendPreset::PremultipliedAlphaBlend)
+                .set_color_blend(2, BlendPreset::Off)
+                .set_color_blend(3, BlendPreset::Off)
                 .set_rasterization(RasterizationState {
                     cull_mode: vk::CullModeFlags::NONE,
                     ..Default::default()
@@ -944,6 +1117,79 @@ impl Renderer {
                     DRAW_INDIRECT_STRIDE,
                 )
                 .end_rendering();
+
+            let lighting = if view.lighting {
+                let light_tiles = lights.ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+                let mut overlay_lightmap = module.transient_image_sized(
+                    &ImageInfo::color_target(viewport, vk::Format::R16G16B16A16_SFLOAT)
+                        .with_usage(vk::ImageUsageFlags::SAMPLED)
+                        .with_name(format!("map view {index} overlay lightmap")),
+                    extent,
+                );
+                overlay_lightmap = module.clear(overlay_lightmap, vir::clear::f32::BLACK);
+                [overlay_lightmap, _, _, _] = module
+                    .begin_rendering([
+                        (overlay_lightmap, Access::ColorRW),
+                        (level_attachment, Access::FragmentSampled),
+                        (draw_commands, Access::IndirectRead),
+                        (visible_indices, Access::VertexRead),
+                    ])
+                    .with_name(format!("map view {index} overlay lights"))
+                    .bind_graphics_pipeline(self.overlay_light_pipeline)
+                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                    .set_viewport(0, Rect2D::framebuffer())
+                    .set_scissor(0, Rect2D::framebuffer())
+                    .broadcast_color_blend(BlendPreset::Additive)
+                    .set_rasterization(RasterizationState {
+                        cull_mode: vk::CullModeFlags::NONE,
+                        ..Default::default()
+                    })
+                    .bind_buffer(0, 1, sprites)
+                    .bind_buffer(0, 2, visible_indices)
+                    .bind_image(0, 3, level_attachment)
+                    .specialize_constant(spec::SPRITE_INDIRECT, true)
+                    .specialize_constant(spec::SHOW_AREAS, state.show_areas)
+                    .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
+                    .push_constants_from(underlay_camera)
+                    .draw_indirect_at(draw_commands, 0, 1u32, DRAW_INDIRECT_STRIDE)
+                    .push_constants_from(active_camera)
+                    .draw_indirect_at(
+                        draw_commands,
+                        u64::from(DRAW_INDIRECT_STRIDE),
+                        1u32,
+                        DRAW_INDIRECT_STRIDE,
+                    )
+                    .end_rendering();
+                let push =
+                    module.declare_bytes_var(&format!("map view {index} lighting"), size_of::<LightingPush>() as u32);
+                let mut lit_attachment = module.transient_image_sized(
+                    &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
+                        .with_usage(vk::ImageUsageFlags::SAMPLED)
+                        .with_name(format!("map view {index} lit scene attachment")),
+                    extent,
+                );
+                lit_attachment = module.clear(lit_attachment, vir::clear::f32::BLACK);
+                [lit_attachment] = module
+                    .begin_rendering([(lit_attachment, Access::ColorRW)])
+                    .with_name(format!("map view {index} static lighting"))
+                    .bind_graphics_pipeline(self.lighting_pipeline)
+                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+                    .set_viewport(0, Rect2D::framebuffer())
+                    .set_scissor(0, Rect2D::framebuffer())
+                    .bind_texture(0, 0, scene_attachment, self.sampler)
+                    .bind_buffer(0, 1, light_tiles)
+                    .bind_texture(0, 2, emissive_attachment, self.sampler)
+                    .bind_texture(0, 3, overlay_lightmap, self.sampler)
+                    .bind_image(0, 4, level_attachment)
+                    .push_constants_from(push)
+                    .draw(3, 1)
+                    .end_rendering();
+                scene_attachment = lit_attachment;
+
+                Some(LightingSlots { push })
+            } else {
+                None
+            };
 
             [scene_attachment, _, _] = module
                 .begin_rendering([
@@ -976,7 +1222,7 @@ impl Renderer {
                 )
                 .end_rendering();
 
-            let (mut output_attachment, interaction, should_pick) = if with_imgui {
+            let (mut output_attachment, interaction, guides, should_pick) = if with_imgui {
                 // TODO: vir doesnt support explicit barriers, fix this shit
                 [visibility_attachment] = module
                     .begin_compute([(visibility_attachment, Access::FragmentSampled | Access::ComputeSampled)])
@@ -998,9 +1244,14 @@ impl Renderer {
                     module.declare_buffer_var(&format!("map view {index} hover area tiles"), Access::ComputeWrite);
                 let highlight_draw = module.declare_callback_var(&format!("map view {index} highlight draw"));
                 let hover_draw = module.declare_callback_var(&format!("map view {index} hover area draw"));
+                let connected_owners =
+                    module.declare_buffer_var(&format!("map view {index} connected owners"), Access::HostWrite);
 
-                [highlighted_scene_attachment] = module
-                    .begin_rendering([(highlighted_scene_attachment, Access::ColorRW)])
+                [highlighted_scene_attachment, _] = module
+                    .begin_rendering([
+                        (highlighted_scene_attachment, Access::ColorRW),
+                        (connected_owners, Access::FragmentRead),
+                    ])
                     .with_name(format!("map view {index} highlights"))
                     .bind_graphics_pipeline(self.interaction_pipeline)
                     .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
@@ -1009,6 +1260,7 @@ impl Renderer {
                     .bind_texture(0, 0, scene_attachment, self.sampler)
                     .bind_image(0, 1, visibility_attachment)
                     .bind_buffer(0, 2, sprites)
+                    .bind_buffer(0, 4, connected_owners)
                     .specialize_constant(spec::HIGHLIGHT_TINT, view.highlight_tint)
                     .specialize_constant(spec::DELETE_MODE, view.delete_mode)
                     .push_constants_from(push)
@@ -1040,6 +1292,32 @@ impl Renderer {
                     .record_from(hover_draw)
                     .end_rendering();
 
+                let guide_lines =
+                    module.declare_buffer_var(&format!("map view {index} guide lines"), Access::HostWrite);
+                let guide_push =
+                    module.declare_bytes_var(&format!("map view {index} guide push"), size_of::<GuidePush>() as u32);
+                let guide_draw = module.declare_callback_var(&format!("map view {index} guide draw"));
+                [highlighted_scene_attachment, _] = module
+                    .begin_rendering([
+                        (highlighted_scene_attachment, Access::ColorRW),
+                        (guide_lines, Access::VertexRead | Access::FragmentRead),
+                    ])
+                    .with_name(format!("map view {index} guides"))
+                    .bind_graphics_pipeline(self.guide_pipeline)
+                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                    .set_viewport(0, Rect2D::framebuffer())
+                    .set_scissor(0, Rect2D::framebuffer())
+                    .set_rasterization(RasterizationState {
+                        cull_mode: vk::CullModeFlags::NONE,
+                        ..Default::default()
+                    })
+                    .bind_buffer(0, 0, guide_lines)
+                    .bind_image(0, 1, visibility_attachment)
+                    .bind_buffer(0, 2, sprites)
+                    .push_constants_from(guide_push)
+                    .record_from(guide_draw)
+                    .end_rendering();
+
                 let pick_push =
                     module.declare_bytes_var(&format!("map view {index} pick cursor"), size_of::<PickPush>() as u32);
                 let should_pick = module.declare_bool_var(&format!("map view {index} should pick"), false);
@@ -1069,15 +1347,21 @@ impl Renderer {
                     highlighted_scene_attachment,
                     Some(InteractionSlots {
                         push,
+                        connected_owners,
                         pick_push,
                         area_tiles,
                         hover_draw,
                         highlight_draw,
                     }),
+                    Some(GuideSlots {
+                        lines: guide_lines,
+                        push: guide_push,
+                        draw: guide_draw,
+                    }),
                     Some(should_pick),
                 )
             } else {
-                (scene_attachment, None, None)
+                (scene_attachment, None, None, None)
             };
 
             let preview = if view.preview {
@@ -1143,9 +1427,11 @@ impl Renderer {
                 underlay_camera,
                 active_camera,
                 cull,
+                lighting,
                 preview,
                 should_pick,
                 interaction,
+                guides,
             });
         }
 
@@ -1185,6 +1471,7 @@ impl Renderer {
         self.recorded = Some(Recorded {
             program,
             sprites,
+            lights,
             map_views,
             pick_result,
             state,
@@ -1213,6 +1500,7 @@ impl Renderer {
         }
 
         self.prepare_sprites(frame)?;
+        self.prepare_lighting(frame)?;
         self.prepare_cull_buffers(frame)?;
         self.prepare_previews(frame)?;
         let stripe_offset =
@@ -1220,8 +1508,14 @@ impl Renderer {
 
         let recorded = self.recorded.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
         let frames = self.frames.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+        let next = frames.get_next_frame()?;
+        let prepared_guides = Self::prepare_guides(next, frame)?;
         let sprites = self.sprites.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
         recorded.program.set(recorded.sprites, sprites);
+        if let Some(slot) = recorded.lights {
+            let lights = self.lights.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+            recorded.program.set(slot, lights);
+        }
 
         let plans: Vec<MapViewPlan> = frame
             .map_views
@@ -1262,7 +1556,8 @@ impl Renderer {
             .map_views
             .iter()
             .zip(&self.uploaded)
-            .filter(|(view, _)| !view.rect.is_empty())
+            .zip(&self.uploaded_lighting)
+            .filter(|((view, _), _)| !view.rect.is_empty())
             .collect();
         if plans.len() != recorded.map_views.len() || visible.len() != recorded.map_views.len() {
             return Err(vk::Result::ERROR_INITIALIZATION_FAILED.into());
@@ -1295,7 +1590,7 @@ impl Renderer {
         }
 
         for (index, map_view) in recorded.map_views.iter().enumerate() {
-            let ((view, uploaded), plan) = (visible[index], plans[index].clone());
+            let (((view, uploaded), uploaded_lighting), plan) = (visible[index], plans[index].clone());
             let map_extent = vk::Extent2D {
                 width: view.rect.width.max(1),
                 height: view.rect.height.max(1),
@@ -1318,6 +1613,25 @@ impl Renderer {
             recorded.program.set(map_view.cull.chunks, buffers.chunks);
             recorded.program.set(map_view.cull.commands, buffers.commands);
             bind_sprite_cull(&mut recorded.program, &map_view.cull, &plan);
+
+            if let Some(slots) = &map_view.lighting {
+                let lighting = view.lighting.ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+                if uploaded_lighting.revision != Some(lighting.revision) || uploaded_lighting.size != lighting.size {
+                    return Err(vk::Result::ERROR_INITIALIZATION_FAILED.into());
+                }
+                recorded.program.set_bytes(
+                    slots.push,
+                    &LightingPush {
+                        center: plan.camera.center,
+                        viewport: plan.camera.viewport,
+                        zoom: plan.camera.zoom,
+                        tile_size: lighting.tile_size.max(1) as f32,
+                        map_size: [lighting.size[0], lighting.size[1]],
+                        level_count: lighting.size[2],
+                        base: uploaded_lighting.base,
+                    },
+                );
+            }
 
             if let Some(slots) = &map_view.preview {
                 let preview = view.preview.ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
@@ -1342,27 +1656,19 @@ impl Renderer {
             let local_cursor = interaction
                 .cursor
                 .filter(|cursor| cursor[0] < view.rect.width && cursor[1] < view.rect.height);
-            let guide = interaction
-                .selection_guide
-                .filter(|guide| {
-                    interaction.selected.is_some()
-                        && guide.origin.iter().chain(&guide.target).all(|value| value.is_finite())
-                })
-                .map(|guide| project_selection_guide(guide, view.camera, view.rect))
-                .filter(|(origin, target)| origin.iter().chain(target).all(|value| value.is_finite()));
-            let (guide_origin, guide_target, guide_valid) =
-                guide.map_or(([0.0; 2], [0.0; 2], 0), |(origin, target)| (origin, target, 1));
+            let guides = prepared_guides
+                .get(index)
+                .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
             let push = InteractionPush {
                 cursor: local_cursor.unwrap_or([0; 2]),
                 cursor_valid: u32::from(local_cursor.is_some()),
                 selected_owner: interaction.selected.map(owner_words).unwrap_or([0; 2]),
                 stripe_offset,
-                guide_origin,
-                guide_target,
-                guide_valid,
                 focused_area_owner: view.focused_area.map(owner_words).unwrap_or([0; 2]),
+                connected_count: guides.connected_count,
             };
             recorded.program.set_bytes(slots.push, &push);
+            recorded.program.set(slots.connected_owners, guides.connected_owners);
             recorded.program.set_bytes(
                 slots.pick_push,
                 &PickPush {
@@ -1376,6 +1682,29 @@ impl Renderer {
                 pick.is_some() && picking_map == Some(index) && local_cursor.is_some(),
             );
             recorded.program.set(slots.area_tiles, area_tiles);
+
+            if let Some(slots) = &map_view.guides {
+                let count = guides.line_count;
+                recorded.program.set(slots.lines, guides.lines);
+                recorded.program.set_bytes(
+                    slots.push,
+                    &GuidePush {
+                        viewport: [map_extent.width as f32, map_extent.height as f32],
+                        selected_owner: interaction.selected.map(owner_words).unwrap_or([0; 2]),
+                        stripe_offset,
+                    },
+                );
+                recorded.program.set(
+                    slots.draw,
+                    PassCallback::new(move |cmd| {
+                        if count > 0 {
+                            cmd.set_viewport(0, Rect2D::framebuffer())
+                                .set_scissor(0, Rect2D::framebuffer())
+                                .draw(4, count);
+                        }
+                    }),
+                );
+            }
 
             recorded.program.set(
                 slots.highlight_draw,
@@ -1412,7 +1741,6 @@ impl Renderer {
             );
         }
 
-        let next = frames.get_next_frame()?;
         if let Some(pending) = pending {
             let imgui = self.imgui.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
             let feedback = imgui.poll_textures(&mut self.device, &mut self.graph, next, pending.texture_requests())?;
@@ -1592,6 +1920,176 @@ impl Renderer {
         self.uploaded = uploaded;
 
         Ok(())
+    }
+
+    fn prepare_lighting(&mut self, frame: &Frame<'_>) -> Result<(), GpuError> {
+        if self.uploaded_lighting.len() == frame.map_views.len()
+            && self
+                .uploaded_lighting
+                .iter()
+                .zip(frame.map_views)
+                .all(|(uploaded, view)| uploaded.revision == view.lighting.map(|lighting| lighting.revision))
+        {
+            return Ok(());
+        }
+
+        if frame.map_views.len() == 1 && self.uploaded_lighting.len() == 1 && self.prepare_lighting_update(frame)? {
+            return Ok(());
+        }
+
+        let total = frame
+            .map_views
+            .iter()
+            .filter_map(|view| view.lighting)
+            .try_fold(0usize, |total, lighting| total.checked_add(lighting.tiles.len()))
+            .ok_or(GpuError::SpriteUploadTooLarge)?;
+
+        u32::try_from(total).map_err(|_| GpuError::SpriteUploadTooLarge)?;
+
+        let mut payload = Vec::with_capacity(total);
+        let mut uploaded = Vec::with_capacity(frame.map_views.len());
+        for view in frame.map_views {
+            let base = u32::try_from(payload.len()).map_err(|_| GpuError::SpriteUploadTooLarge)?;
+            let Some(lighting) = view.lighting else {
+                uploaded.push(UploadedLighting {
+                    base,
+                    ..Default::default()
+                });
+                continue;
+            };
+            let expected = lighting
+                .size
+                .into_iter()
+                .try_fold(1usize, |length, value| length.checked_mul(value as usize));
+            if expected != Some(lighting.tiles.len()) {
+                return Err(vk::Result::ERROR_INITIALIZATION_FAILED.into());
+            }
+            for (index, tile) in lighting.tiles.iter().enumerate() {
+                payload.push(gpu_light_tile(index, tile)?);
+            }
+            uploaded.push(UploadedLighting {
+                revision: Some(lighting.revision),
+                base,
+                count: lighting.tiles.len(),
+                size: lighting.size,
+            });
+        }
+
+        self.device.wait_idle()?;
+        if total > 0 && (self.lights.is_none() || self.light_capacity < total) {
+            let capacity = total
+                .max(1024)
+                .checked_next_power_of_two()
+                .ok_or(GpuError::SpriteUploadTooLarge)?;
+            let size = capacity
+                .checked_mul(size_of::<GpuLightTile>())
+                .and_then(|size| u64::try_from(size).ok())
+                .ok_or(GpuError::SpriteUploadTooLarge)?;
+            let mut buffer = self.device.allocator.allocate_buffer(
+                &BufferInfo::new(size, vk::BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::CpuToGpu)
+                    .with_name("static light tiles"),
+            )?;
+
+            if let Err(error) = buffer.write(0, &payload) {
+                self.device.allocator.deallocate_buffer(buffer);
+                return Err(error.into());
+            }
+
+            if let Some(old) = self.lights.replace(buffer) {
+                self.device.allocator.deallocate_buffer(old);
+            }
+
+            self.light_capacity = capacity;
+        } else if total > 0
+            && let Some(buffer) = self.lights.as_mut()
+        {
+            buffer.write(0, &payload)?;
+        }
+        self.uploaded_lighting = uploaded;
+
+        Ok(())
+    }
+
+    fn prepare_lighting_update(&mut self, frame: &Frame<'_>) -> Result<bool, GpuError> {
+        let (Some(view), Some(uploaded)) = (frame.map_views.first(), self.uploaded_lighting.first()) else {
+            return Ok(false);
+        };
+        let (Some(lighting), Some(update), Some(buffer)) = (
+            view.lighting,
+            view.lighting.and_then(|lighting| lighting.pending_update),
+            self.lights.as_mut(),
+        ) else {
+            return Ok(false);
+        };
+
+        let range = update.tiles;
+        if uploaded.base != 0
+            || uploaded.revision != Some(update.previous_revision)
+            || uploaded.size != lighting.size
+            || uploaded.count != lighting.tiles.len()
+            || lighting.tiles.len() > self.light_capacity
+            || range.start > range.end
+            || range.end > lighting.tiles.len()
+        {
+            return Ok(false);
+        }
+
+        let payload = lighting.tiles[range.start..range.end]
+            .iter()
+            .enumerate()
+            .map(|(offset, tile)| gpu_light_tile(range.start + offset, tile))
+            .collect::<Result<Vec<_>, _>>()?;
+        if !payload.is_empty() {
+            self.graph.wait()?;
+            buffer.write(gpu_light_offset(range.start)?, &payload)?;
+        }
+
+        let Some(uploaded) = self.uploaded_lighting.first_mut() else {
+            return Ok(false);
+        };
+
+        uploaded.revision = Some(lighting.revision);
+
+        Ok(true)
+    }
+
+    fn prepare_guides(allocator: &mut FrameAllocator, frame: &Frame<'_>) -> Result<Vec<PreparedGuides>, GpuError> {
+        let finite = |origin: &[f32; 2], target: &[f32; 2]| origin.iter().chain(target).all(|value| value.is_finite());
+        frame
+            .map_views
+            .iter()
+            .filter(|view| !view.rect.is_empty())
+            .map(|view| {
+                let lines = view
+                    .guide_lines
+                    .iter()
+                    .copied()
+                    .filter(|guide| finite(&guide.origin, &guide.target))
+                    .map(|guide| {
+                        let (origin, target) = project_guide_line(guide, view.camera, view.rect);
+                        GpuGuideLine { origin, target }
+                    })
+                    .filter(|guide| finite(&guide.origin, &guide.target))
+                    .take(u32::MAX as usize)
+                    .collect::<Vec<_>>();
+                let owners = view
+                    .connected
+                    .iter()
+                    .copied()
+                    .map(owner_words)
+                    .take(u32::MAX as usize)
+                    .collect::<Vec<_>>();
+                let lines_buffer = upload_frame_buffer(allocator, payload_bytes(&lines), "selection guide lines")?;
+                let connected_owners = upload_frame_buffer(allocator, payload_bytes(&owners), "connected owners")?;
+
+                Ok(PreparedGuides {
+                    lines: lines_buffer,
+                    connected_owners,
+                    line_count: lines.len() as u32,
+                    connected_count: owners.len() as u32,
+                })
+            })
+            .collect()
     }
 
     fn prepare_previews(&mut self, frame: &Frame<'_>) -> Result<(), GpuError> {
@@ -1990,11 +2488,40 @@ fn gpu_sprite_range(sprites: &[SpriteInstance], range: crate::UpdateRange) -> Re
         .collect()
 }
 
+fn gpu_light_tile(index: usize, tile: &crate::LightTile) -> Result<GpuLightTile, GpuError> {
+    let mut corners = [0; 4];
+    for (packed, corner) in corners.iter_mut().zip(tile.corners) {
+        *packed = pack_unorm4x8([corner[0], corner[1], corner[2], 1.0]).ok_or(GpuError::SpritePackingOutOfRange {
+            sprite: index,
+            field: "light color",
+        })?;
+    }
+
+    Ok(GpuLightTile { corners })
+}
+
+fn gpu_light_offset(start: usize) -> Result<u64, GpuError> {
+    start
+        .checked_mul(size_of::<GpuLightTile>())
+        .and_then(|offset| u64::try_from(offset).ok())
+        .ok_or(GpuError::SpriteUploadTooLarge)
+}
+
 fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuError> {
-    let flags = if sprite.is_area {
+    let mut flags = if sprite.is_area {
         SPRITE_FLAG_AREA | ((sprite.area_edges & AREA_EDGES_ALL) << SPRITE_AREA_EDGE_SHIFT)
     } else {
         0
+    };
+    if sprite.is_area && sprite.area_edges == 0 {
+        flags |= SPRITE_FLAG_FULLBRIGHT;
+    }
+    flags |= match sprite.lighting {
+        crate::SpriteLighting::Normal => 0,
+        crate::SpriteLighting::Emissive => SPRITE_FLAG_EMISSIVE_MASK,
+        crate::SpriteLighting::Blocker => SPRITE_FLAG_EMISSIVE_BLOCKER,
+        crate::SpriteLighting::OverlayLight => SPRITE_FLAG_OVERLAY_LIGHT,
+        crate::SpriteLighting::OverlayLightSubtract => SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT,
     };
 
     let out_of_range = |field| GpuError::SpritePackingOutOfRange { sprite: index, field };
@@ -2015,6 +2542,7 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
         owner: owner_words(sprite.owner),
         area_owner: sprite.area_owner.map(owner_words).unwrap_or([0; 2]),
         position,
+        z: sprite.z,
         packed_size: size,
         color,
         source_position_size: [source_position, source_size],
@@ -2026,8 +2554,8 @@ fn owner_words(owner: dmm::PrefabInstanceId) -> [u32; 2] { split_owner(owner.get
 
 fn split_owner(owner: u64) -> [u32; 2] { [owner as u32, (owner >> 32) as u32] }
 
-fn project_selection_guide(
-    guide: crate::SelectionGuide, camera: crate::Camera, rect: crate::MapViewRect,
+fn project_guide_line(
+    guide: crate::GuideLine, camera: crate::Camera, rect: crate::MapViewRect,
 ) -> ([f32; 2], [f32; 2]) {
     let logical = [
         camera.viewport_width.max(1) as f32,
@@ -2042,6 +2570,11 @@ fn project_selection_guide(
     };
 
     (project(guide.origin), project(guide.target))
+}
+
+/// Reinterprets a slice of tightly packed `repr(C)` shader records as the bytes to upload.
+fn payload_bytes<T: Copy>(values: &[T]) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), std::mem::size_of_val(values)) }
 }
 
 fn pack_half2(x: f32, y: f32) -> Option<u32> {
@@ -2142,6 +2675,9 @@ impl Drop for Renderer {
             self.device.allocator.deallocate_buffer(buffer);
         }
         if let Some(buffer) = self.area_tiles.take() {
+            self.device.allocator.deallocate_buffer(buffer);
+        }
+        if let Some(buffer) = self.lights.take() {
             self.device.allocator.deallocate_buffer(buffer);
         }
         if let Some(buffer) = self.pick_readback.take() {
@@ -2416,17 +2952,28 @@ mod tests {
         Frame,
         FrameGraphState,
         GEOMETRY_VS_SPV,
+        GUIDE_FS_SPV,
+        GpuGuideLine,
         GpuSprite,
+        GuidePush,
         INTERACTION_FS_SPV,
         InteractionPush,
+        LIGHTING_FS_SPV,
         LevelRange,
+        LightingPush,
         PICK_CS_SPV,
         PickPush,
         SPRITE_CULL_CLASSIFY_CS_SPV,
         SPRITE_CULL_COMPACT_CS_SPV,
         SPRITE_CULL_SCAN_CS_SPV,
         SPRITE_FLAG_AREA,
+        SPRITE_FLAG_EMISSIVE_BLOCKER,
+        SPRITE_FLAG_EMISSIVE_MASK,
+        SPRITE_FLAG_FULLBRIGHT,
+        SPRITE_FLAG_OVERLAY_LIGHT,
+        SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT,
         SPRITE_FLAGS_SHIFT,
+        SPRITE_OVERLAY_LIGHT_FS_SPV,
         SPRITE_SHADE_FS_SPV,
         SPRITE_TEXTURE_MASK,
         SPRITE_VIS_FS_SPV,
@@ -2436,6 +2983,7 @@ mod tests {
         batch_ranges,
         copy_region,
         descriptor_capacity,
+        gpu_light_tile,
         gpu_sprite,
         level_ranges,
         meshopt_dequantize_half,
@@ -2443,7 +2991,7 @@ mod tests {
         meshopt_quantize_half,
         pack_unorm4x8,
         patch_area_tile_indices,
-        project_selection_guide,
+        project_guide_line,
         spec,
         split_owner,
         valid_update_range,
@@ -2454,12 +3002,15 @@ mod tests {
         AREA_EDGE_NORTH,
         Camera,
         GpuError,
+        GuideLine,
         HighlightStyle,
         InteractionMode,
+        LightTile,
+        LightingFrame,
         MapViewFrame,
         MapViewRect,
-        SelectionGuide,
         SpriteInstance,
+        SpriteLighting,
         SpriteTexture,
         UpdateRange,
         read_spirv,
@@ -2479,6 +3030,7 @@ mod tests {
             z,
             is_area: false,
             area_edges: 0,
+            lighting: SpriteLighting::Normal,
             color: [1.0; 4],
             depth: 0.0,
         }
@@ -2501,6 +3053,9 @@ mod tests {
             level_count: 1,
             revision: 1,
             pending_update: None,
+            lighting: None,
+            guide_lines: &[],
+            connected: &[],
             interaction: Default::default(),
             preview: None,
         }
@@ -2628,6 +3183,17 @@ mod tests {
         let mut deleting = map_view(rect);
         deleting.interaction.mode = InteractionMode::Delete { pick: None };
         assert_ne!(base, graph_state(target, true, &[deleting]));
+
+        let tiles = [LightTile { corners: [[1.0; 3]; 4] }];
+        let mut lit = map_view(rect);
+        lit.lighting = Some(LightingFrame {
+            size: [1, 1, 1],
+            tiles: &tiles,
+            tile_size: 32,
+            revision: 1,
+            pending_update: None,
+        });
+        assert_ne!(base, graph_state(target, true, &[lit]));
     }
 
     /// The cull buffers are renderer-owned and grown in place, so neither the sprite count nor the
@@ -2727,7 +3293,7 @@ mod tests {
 
     #[test]
     fn area_edges_and_tile_geometry_reach_the_gpu() {
-        let mut area = sprite(1);
+        let mut area = sprite(37);
         area.area_owner = PrefabInstanceId::from_raw(0x1234_5678_9abc_def0);
         area.x = 32.0;
         area.y = 64.0;
@@ -2748,6 +3314,7 @@ mod tests {
         assert_eq!(gpu.owner, [area.owner.get() as u32, 0]);
         assert_eq!(gpu.area_owner, [0x9abc_def0, 0x1234_5678]);
         assert_eq!(gpu.position, [32.0, 64.0]);
+        assert_eq!(gpu.z, 37);
         assert_eq!(gpu.packed_size, 0x5000_5000);
         assert_eq!(gpu.color, 0);
         assert_eq!(gpu.source_position_size, [0x0008_0004, 0x0018_0010]);
@@ -2759,13 +3326,45 @@ mod tests {
     }
 
     #[test]
-    fn normal_area_sprites_have_no_outline_flags() {
+    fn filled_area_sprites_are_fullbright_without_outline_flags() {
         let mut area = sprite(1);
         area.is_area = true;
 
         let gpu = gpu_sprite(0, &area).expect("pack");
 
-        assert_eq!(gpu.texture_flags >> SPRITE_FLAGS_SHIFT, SPRITE_FLAG_AREA);
+        assert_eq!(
+            gpu.texture_flags >> SPRITE_FLAGS_SHIFT,
+            SPRITE_FLAG_AREA | SPRITE_FLAG_FULLBRIGHT
+        );
+    }
+
+    #[test]
+    fn lighting_roles_reach_the_gpu_flags() {
+        let mut emissive = sprite(1);
+        emissive.lighting = SpriteLighting::Emissive;
+        let mut blocker = sprite(1);
+        blocker.lighting = SpriteLighting::Blocker;
+        let mut overlay = sprite(1);
+        overlay.lighting = SpriteLighting::OverlayLight;
+        let mut subtract = sprite(1);
+        subtract.lighting = SpriteLighting::OverlayLightSubtract;
+
+        let emissive = gpu_sprite(0, &emissive).expect("pack emissive");
+        let blocker = gpu_sprite(1, &blocker).expect("pack blocker");
+        let overlay = gpu_sprite(2, &overlay).expect("pack overlay light");
+        let subtract = gpu_sprite(3, &subtract).expect("pack subtractive overlay light");
+
+        assert_eq!(emissive.texture_flags >> SPRITE_FLAGS_SHIFT, SPRITE_FLAG_EMISSIVE_MASK);
+        assert_ne!(SPRITE_FLAG_EMISSIVE_MASK, SPRITE_FLAG_FULLBRIGHT);
+        assert_eq!(
+            blocker.texture_flags >> SPRITE_FLAGS_SHIFT,
+            SPRITE_FLAG_EMISSIVE_BLOCKER
+        );
+        assert_eq!(overlay.texture_flags >> SPRITE_FLAGS_SHIFT, SPRITE_FLAG_OVERLAY_LIGHT);
+        assert_eq!(
+            subtract.texture_flags >> SPRITE_FLAGS_SHIFT,
+            SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT
+        );
     }
 
     #[test]
@@ -2795,6 +3394,19 @@ mod tests {
         assert_eq!(packed, 0x80ff_8000);
         assert_eq!(meshopt_dequantize_unorm((packed >> 8) & 0xff, 8), 128.0 / 255.0);
         assert_eq!(meshopt_dequantize_unorm((packed >> 16) & 0xff, 8), 1.0);
+    }
+
+    #[test]
+    fn light_tiles_use_four_rgb_unorm8_corners() {
+        let tile = LightTile {
+            corners: [[1.0, 0.0, 0.0], [0.0, 0.5, 0.0], [0.0, 0.0, 1.0], [0.25; 3]],
+        };
+        let packed = gpu_light_tile(0, &tile).expect("pack light tile");
+
+        assert_eq!(size_of_val(&packed), 16);
+        assert_eq!(packed.corners[0], 0xff00_00ff);
+        assert_eq!(packed.corners[1], 0xff00_8000);
+        assert_eq!(packed.corners[2], 0xffff_0000);
     }
 
     #[test]
@@ -3008,9 +3620,24 @@ mod tests {
     fn sprite_and_camera_layouts_match_the_shader_scalar_layout() {
         let reflection = shader::reflect(&read_spirv(GEOMETRY_VS_SPV).expect("valid SPIR-V")).expect("shader reflects");
 
-        assert_eq!(size_of::<GpuSprite>(), 44);
+        assert_eq!(size_of::<GpuSprite>(), 48);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<CameraPush>());
+    }
+
+    #[test]
+    fn lighting_shader_layout_matches_the_renderer() {
+        let reflection = shader::reflect(&read_spirv(LIGHTING_FS_SPV).expect("valid SPIR-V")).expect("shader reflects");
+        let mut bindings = reflection
+            .bindings
+            .iter()
+            .map(|binding| (binding.set, binding.binding))
+            .collect::<Vec<_>>();
+        bindings.sort_unstable();
+
+        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)]);
+        assert_eq!(reflection.push_constant_offset, 0);
+        assert_eq!(reflection.push_constant_size as usize, size_of::<LightingPush>());
     }
 
     #[test]
@@ -3106,8 +3733,8 @@ mod tests {
     }
 
     #[test]
-    fn selection_guides_project_into_map_view_coordinates() {
-        let guide = SelectionGuide {
+    fn guide_lines_project_into_map_view_coordinates() {
+        let guide = GuideLine {
             origin: [110.0, 40.0],
             target: [130.0, 60.0],
         };
@@ -3126,7 +3753,7 @@ mod tests {
             height: 600,
         };
         assert_eq!(
-            project_selection_guide(guide, camera, full),
+            project_guide_line(guide, camera, full),
             ([420.0, 320.0], [460.0, 280.0]),
         );
 
@@ -3139,7 +3766,7 @@ mod tests {
             height: 600,
         };
         assert_eq!(
-            project_selection_guide(guide, camera, right),
+            project_guide_line(guide, camera, right),
             ([420.0, 320.0], [460.0, 280.0]),
         );
 
@@ -3150,7 +3777,7 @@ mod tests {
             height: 1200,
         };
         assert_eq!(
-            project_selection_guide(guide, camera, scaled),
+            project_guide_line(guide, camera, scaled),
             ([840.0, 640.0], [920.0, 560.0]),
         );
 
@@ -3160,7 +3787,7 @@ mod tests {
             ..camera
         };
         assert_eq!(
-            project_selection_guide(guide, panned, scaled),
+            project_guide_line(guide, panned, scaled),
             ([800.0, 680.0], [880.0, 600.0]),
         );
     }
@@ -3176,9 +3803,25 @@ mod tests {
             .collect::<Vec<_>>();
         bindings.sort_unstable();
 
-        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2)]);
+        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2), (0, 4)]);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<InteractionPush>());
+    }
+
+    #[test]
+    fn guide_fragment_layout_matches_the_host() {
+        let reflection = shader::reflect(&read_spirv(GUIDE_FS_SPV).expect("valid SPIR-V")).expect("shader reflects");
+        let mut bindings = reflection
+            .bindings
+            .iter()
+            .map(|binding| (binding.set, binding.binding))
+            .collect::<Vec<_>>();
+        bindings.sort_unstable();
+
+        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2)]);
+        assert_eq!(reflection.push_constant_offset, 0);
+        assert_eq!(reflection.push_constant_size as usize, size_of::<GuidePush>());
+        assert_eq!(size_of::<GpuGuideLine>(), 16);
     }
 
     #[test]
@@ -3232,7 +3875,11 @@ mod tests {
 
     #[test]
     fn sprite_fragment_passes_read_sprites_and_textures() {
-        for spirv in [SPRITE_VIS_FS_SPV, SPRITE_SHADE_FS_SPV] {
+        for (spirv, expected) in [
+            (SPRITE_VIS_FS_SPV, vec![(0, 1), (1, 0)]),
+            (SPRITE_SHADE_FS_SPV, vec![(0, 1), (1, 0)]),
+            (SPRITE_OVERLAY_LIGHT_FS_SPV, vec![(0, 1), (0, 3), (1, 0)]),
+        ] {
             let reflection = shader::reflect(&read_spirv(spirv).expect("valid SPIR-V")).expect("shader reflects");
             let mut bindings = reflection
                 .bindings
@@ -3241,7 +3888,7 @@ mod tests {
                 .collect::<Vec<_>>();
             bindings.sort_unstable();
 
-            assert_eq!(bindings, [(0, 1), (1, 0)]);
+            assert_eq!(bindings, expected);
         }
     }
 

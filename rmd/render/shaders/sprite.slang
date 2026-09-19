@@ -11,6 +11,9 @@ StructuredBuffer<Sprite> sprites;
 [[vk::binding(2, 0)]]
 StructuredBuffer<u32> visible_sprite_indices;
 
+[[vk::binding(3, 0)]]
+Texture2D<u32> rendered_levels;
+
 struct VSOutput {
     f32x4 position : SV_Position;
     f32x2 uv;
@@ -136,12 +139,22 @@ func fs_main(VSOutput input) -> f32x4 {
         }
     }
 
+    if (input.sprite_id != 0) {
+        let flags = sprites[input.sprite_id - 1].flags();
+        if ((flags & (SPRITE_FLAG_EMISSIVE_MASK | SPRITE_FLAG_EMISSIVE_BLOCKER |
+                      SPRITE_FLAG_OVERLAY_LIGHT | SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT)) != 0) {
+            discard;
+        }
+    }
+
     return sample_sprite(input);
 }
 
 struct VisibilityOutput {
     f32x4 color : SV_Target0;
-    u32 visibility : SV_Target1;
+    f32x4 emissive : SV_Target1;
+    u32 visibility : SV_Target2;
+    u32 level : SV_Target3;
 };
 
 [shader("fragment")]
@@ -155,9 +168,40 @@ func fs_visibility(VSOutput input) -> VisibilityOutput {
         discard;
     }
 
+    if ((flags & (SPRITE_FLAG_OVERLAY_LIGHT | SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT)) != 0) {
+        discard;
+    }
+
     VisibilityOutput output;
-    output.color = sample_sprite(input);
+    let color = sample_sprite(input);
+    let mask = (flags & SPRITE_FLAG_EMISSIVE_MASK) != 0;
+    let blocker = (flags & SPRITE_FLAG_EMISSIVE_BLOCKER) != 0;
+    output.color = mask || blocker ? f32x4(0.0) : color;
+    output.emissive = (flags & (SPRITE_FLAG_EMISSIVE_MASK | SPRITE_FLAG_FULLBRIGHT)) != 0
+        ? f32x4(color.a)
+        : f32x4(0.0, 0.0, 0.0, color.a);
     output.visibility = SPRITE_WRITES_ID ? input.sprite_id : 0;
+    output.level = sprites[input.sprite_id - 1].z;
 
     return output;
+}
+
+[shader("fragment")]
+func fs_overlay_light(VSOutput input) -> f32x4 {
+    if (input.sprite_id == 0) {
+        discard;
+    }
+
+    let flags = sprites[input.sprite_id - 1].flags();
+    let add = (flags & SPRITE_FLAG_OVERLAY_LIGHT) != 0;
+    let subtract = (flags & SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT) != 0;
+    if (!add && !subtract) {
+        discard;
+    }
+    if (sprites[input.sprite_id - 1].z != rendered_levels.Load(i32x3(i32x2(input.position.xy), 0))) {
+        discard;
+    }
+
+    let color = sample_sprite(input);
+    return f32x4(color.rgb * (subtract ? -1.0 : 1.0), color.a);
 }

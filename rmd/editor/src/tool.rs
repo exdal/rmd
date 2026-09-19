@@ -2537,6 +2537,8 @@ mod tests {
                     declared_type: None,
                     modifiers: VarModifiers::default(),
                     value: Value::Path(TreePath::parse(path)),
+                    initializer: None,
+                    declared: true,
                     location: Location::default(),
                 },
             );
@@ -2800,6 +2802,8 @@ mod tests {
                         declared_type: None,
                         modifiers: VarModifiers::default(),
                         value: Value::Num(value),
+                        initializer: None,
+                        declared: true,
                         location: Location::default(),
                     },
                 );

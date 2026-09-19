@@ -1,3 +1,4 @@
+mod dm;
 mod inspector;
 mod object_tree;
 mod settings;
@@ -29,7 +30,7 @@ use dear_imgui_rs::{
     WindowKey,
     WindowKeyError,
 };
-use dmm::{Coord, MapFormat, Prefab, Size};
+use dmm::{Coord, MapFormat, Prefab, PrefabInstanceId, Size};
 use editor::{
     command::EditGroupId,
     document::{DocumentId, MapDocument, Selection},
@@ -58,7 +59,16 @@ use editor::{
 };
 pub(crate) use inspector::TransformMode;
 use objtree::ObjectTree;
-use render::{Camera, InteractionMode, MapViewInteraction, MapViewRect, PickRequest, PlacementFlash, Renderer};
+use render::{
+    Camera,
+    GuideLine,
+    InteractionMode,
+    MapViewInteraction,
+    MapViewRect,
+    PickRequest,
+    PlacementFlash,
+    Renderer,
+};
 
 use self::{
     inspector::{InspectorPanel, JumpTarget},
@@ -70,7 +80,7 @@ use crate::{
     external_editor::SourceLocation,
     gizmo::{BlockGizmoKind, BlockGizmoTarget, GizmoMapView, GizmoState},
     loader::LoadView,
-    session::{BlockPreviewSource, FillOutcome, LevelChange, PlacementPreview, SelectedTransform, Session},
+    session::{BlockPreviewSource, FillOutcome, GuideBadge, LevelChange, PlacementPreview, SelectedTransform, Session},
     settings::{KeyBindings, KeybindAction, KeybindPreset, Settings},
 };
 
@@ -402,11 +412,175 @@ fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
         .build();
 }
 
+fn marching_stripe_offset(ui: &Ui) -> f32 {
+    (ui.time() as f32 * BLOCK_STRIPE_SPEED).rem_euclid(BLOCK_STRIPE_LENGTH * 2.0)
+}
+
+fn draw_marching_border(draw: &DrawListMut<'_>, bounds: OverlayRect, clip: OverlayRect, offset: f32, accent: [f32; 4]) {
+    for (start, end, on_accent) in block_border_segments(bounds, clip, offset) {
+        draw.add_line(start, end, if on_accent { accent } else { BLOCK_SELECTION_WHITE })
+            .thickness(2.0)
+            .build();
+    }
+}
+
+fn draw_marching_edge(draw: &DrawListMut<'_>, from: [f32; 2], to: [f32; 2], offset: f32, accent: [f32; 4]) {
+    let horizontal = (to[0] - from[0]).abs() >= (to[1] - from[1]).abs();
+    let (start, end) = if horizontal { (from[0], to[0]) } else { (from[1], to[1]) };
+    let span = end - start;
+    if !span.is_finite() || span.abs() <= f32::EPSILON {
+        return;
+    }
+
+    let (low, high) = (start.min(end), start.max(end));
+    let mut stripe = ((low - offset) / BLOCK_STRIPE_LENGTH).floor();
+    let mut cut = low;
+    while cut < high {
+        let next = (offset + (stripe + 1.0) * BLOCK_STRIPE_LENGTH).min(high);
+        let next = if next > cut { next } else { high };
+        if stripe.rem_euclid(2.0) != 0.0 {
+            let point = |value: f32| {
+                if horizontal { [value, from[1]] } else { [from[0], value] }
+            };
+            draw.add_line(point(cut), point(next), accent).thickness(2.0).build();
+        }
+        cut = next;
+        stripe += 1.0;
+    }
+}
+
+fn draw_highlights(
+    ui: &Ui, camera: &Controller, viewport: OverlayRect, highlights: &[&editor::bake::Highlight], tile_size: u32,
+) {
+    if highlights.is_empty() {
+        return;
+    }
+
+    let tile_size = tile_size.max(1) as f32;
+    let offset = marching_stripe_offset(ui);
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(viewport.min, viewport.max, || {
+        for highlight in highlights {
+            let accent = [highlight.color[0], highlight.color[1], highlight.color[2], 1.0];
+            let wash = [
+                highlight.color[0],
+                highlight.color[1],
+                highlight.color[2],
+                highlight.fill,
+            ];
+
+            for tile in &highlight.tiles {
+                let left = (tile.position[0] - 1) as f32 * tile_size;
+                let bottom = (tile.position[1] - 1) as f32 * tile_size;
+                let top_left = camera.map_to_screen([left, bottom + tile_size]);
+                let bottom_right = camera.map_to_screen([left + tile_size, bottom]);
+                let min = [viewport.min[0] + top_left[0], viewport.min[1] + top_left[1]];
+                let max = [viewport.min[0] + bottom_right[0], viewport.min[1] + bottom_right[1]];
+                if !min.iter().chain(&max).all(|value| value.is_finite())
+                    || max[0] < viewport.min[0]
+                    || max[1] < viewport.min[1]
+                    || min[0] > viewport.max[0]
+                    || min[1] > viewport.max[1]
+                {
+                    continue;
+                }
+
+                if highlight.fill > 0.0 {
+                    draw.add_rect(min, max, wash).filled(true).build();
+                }
+                if !highlight.outline {
+                    continue;
+                }
+
+                // Screen y grows downward, so the map's north edge is the rectangle's top.
+                for (edge, from, to) in [
+                    (editor::bake::HIGHLIGHT_EDGE_NORTH, min, [max[0], min[1]]),
+                    (editor::bake::HIGHLIGHT_EDGE_SOUTH, [min[0], max[1]], max),
+                    (editor::bake::HIGHLIGHT_EDGE_WEST, min, [min[0], max[1]]),
+                    (editor::bake::HIGHLIGHT_EDGE_EAST, [max[0], min[1]], max),
+                ] {
+                    if tile.edges & edge != 0 {
+                        draw_marching_edge(&draw, from, to, offset, accent);
+                    }
+                }
+            }
+
+            draw_highlight_label(ui, &draw, camera, viewport, highlight, tile_size, accent);
+        }
+    });
+}
+
+fn draw_highlight_label(
+    ui: &Ui, draw: &DrawListMut<'_>, camera: &Controller, viewport: OverlayRect, highlight: &editor::bake::Highlight,
+    tile_size: f32, accent: [f32; 4],
+) {
+    let Some(label) = highlight.label.as_deref() else {
+        return;
+    };
+    let Some(anchor) = highlight
+        .tiles
+        .iter()
+        .max_by_key(|tile| (tile.position[1], -tile.position[0]))
+    else {
+        return;
+    };
+
+    let local = camera.map_to_screen([
+        (anchor.position[0] - 1) as f32 * tile_size,
+        anchor.position[1] as f32 * tile_size,
+    ]);
+
+    if !local.iter().all(|value| value.is_finite()) {
+        return;
+    }
+
+    let text_size = ui.calc_text_size(label);
+    let min = [
+        (viewport.min[0] + local[0]).clamp(viewport.min[0] + 4.0, viewport.max[0] - text_size[0] - 10.0),
+        (viewport.min[1] + local[1] - text_size[1] - 8.0).max(viewport.min[1] + 4.0),
+    ];
+
+    let max = [min[0] + text_size[0] + 6.0, min[1] + text_size[1] + 4.0];
+    draw.add_rect(min, max, OVERLAY_BG).filled(true).build();
+    draw.add_rect(min, max, accent).build();
+    draw.add_text([min[0] + 3.0, min[1] + 2.0], [1.0; 4], label);
+}
+
+fn draw_guide_badges(
+    ui: &Ui, camera: &Controller, viewport_min: [f32; 2], viewport_max: [f32; 2], badges: &[GuideBadge],
+) {
+    if badges.is_empty() {
+        return;
+    }
+
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(viewport_min, viewport_max, || {
+        for badge in badges {
+            let local = camera.map_to_screen(badge.position);
+            if !local.iter().all(|value| value.is_finite()) {
+                continue;
+            }
+            let label = format!("Z{}", badge.z);
+            let text_size = ui.calc_text_size(&label);
+            let min = [
+                viewport_min[0] + local[0] + 6.0,
+                viewport_min[1] + local[1] - text_size[1] - 6.0,
+            ];
+            let max = [min[0] + text_size[0] + 6.0, min[1] + text_size[1] + 4.0];
+            draw.add_rect(min, max, [0.12, 0.08, 0.02, 0.92]).filled(true).build();
+            draw.add_rect(min, max, [1.0, 0.5, 0.0, 1.0]).build();
+            draw.add_text([min[0] + 3.0, min[1] + 2.0], [1.0; 4], label);
+        }
+    });
+}
+
 pub struct VisibleMapView {
     pub document: DocumentId,
     pub rect: MapViewRect,
     pub camera: Camera,
     pub interaction: MapViewInteraction,
+    pub guide_lines: Vec<GuideLine>,
+    pub connected: Vec<PrefabInstanceId>,
 }
 
 pub struct UiOutput {
@@ -456,6 +630,7 @@ struct MapViewState {
     visible: bool,
     refit: bool,
     focus: bool,
+    hovered_coord: Option<Coord>,
     block_selection_anchor: Option<Coord>,
     rectangle_gesture: Option<RectangleGesture>,
     block_placement: Option<PendingBlockPlacement>,
@@ -467,6 +642,8 @@ struct MapViewDraw<'a> {
     index: usize,
     view: &'a mut MapViewState,
     interaction: &'a mut MapViewInteraction,
+    guide_badges: &'a [GuideBadge],
+
     refit_requested: bool,
     keep_open: &'a mut bool,
 }
@@ -480,6 +657,7 @@ impl MapViewState {
             rect: MapViewRect::default(),
             visible: false,
             refit: true,
+            hovered_coord: None,
             focus: false,
             block_selection_anchor: None,
             rectangle_gesture: None,
@@ -494,6 +672,7 @@ pub struct UiState {
     map_views: HashMap<DocumentId, MapViewState>,
     central_node: Option<Id>,
     dockspace_root: Option<Id>,
+    dm_ui: dm::DmUi,
     welcome_window: WindowKey,
     inspector: InspectorPanel,
     settings_window: SettingsWindow,
@@ -549,6 +728,7 @@ impl UiState {
             map_views: HashMap::new(),
             central_node: None,
             dockspace_root: None,
+            dm_ui: dm::DmUi::default(),
             welcome_window,
             inspector,
             settings_window,
@@ -664,6 +844,7 @@ impl UiState {
         let mut pick_new_map_path = false;
         let mut toggle_areas = false;
         let mut toggle_area_outlines = false;
+        let mut toggle_lighting = false;
         let mut toggle_tile_grid = false;
         let mut toggle_pixel_grid = false;
         let mut level_delta = 0;
@@ -745,6 +926,14 @@ impl UiState {
                     true,
                 ) {
                     toggle_area_outlines = true;
+                }
+                if ui.menu_item_enabled_selected_with_shortcut(
+                    "Show lighting",
+                    settings.keybindings.get(KeybindAction::ShowLighting).label(ui),
+                    session.options.show_lighting,
+                    true,
+                ) {
+                    toggle_lighting = true;
                 }
                 if ui.menu_item_enabled_selected_with_shortcut(
                     "Show tile grid",
@@ -830,6 +1019,9 @@ impl UiState {
         if toggle_area_outlines {
             session.toggle_area_outlines();
         }
+        if toggle_lighting {
+            session.toggle_lighting();
+        }
         if toggle_tile_grid {
             settings.show_tile_grid = !settings.show_tile_grid;
         }
@@ -908,9 +1100,14 @@ impl UiState {
         } else {
             self.draw_map_views(ui, session, settings, refit)
         };
+
+        self.dm_ui.draw(ui, session, root.raw());
+
         draw_new_level_dialog(ui, session, &mut self.new_level_dialog, &mut self.new_level_type_path);
+
         self.settings_window
             .finish_keybind_capture(ui, &mut settings.keybindings);
+
         let exit = self.draw_exit_confirmation(ui, session);
         self.popup_was_open = ui.is_popup_open_with_flags("", dear_imgui_rs::PopupQueryFlags::ANY_POPUP);
 
@@ -1102,11 +1299,13 @@ impl UiState {
             let refit = refit_active && session.state.active() == Some(id);
             let mut keep_open = true;
             let active = session.state.active() == Some(id);
+            let guides = if active && settings.selection_guide_line && session.tool() == Tool::Select {
+                session.selected_guides()
+            } else {
+                Default::default()
+            };
             let mut interaction = MapViewInteraction {
                 selected: session.selected_instance_of(id),
-                selection_guide: (active && settings.selection_guide_line)
-                    .then(|| session.selected_offset_guide())
-                    .flatten(),
                 highlight: settings.selection_highlight.style(),
                 mode: interaction_mode(session.tool()),
                 ..Default::default()
@@ -1121,6 +1320,8 @@ impl UiState {
                     index: map_view_index,
                     view: &mut view,
                     interaction: &mut interaction,
+                    guide_badges: &guides.badges,
+
                     refit_requested: refit,
                     keep_open: &mut keep_open,
                 },
@@ -1132,6 +1333,8 @@ impl UiState {
                     rect: view.rect,
                     camera: view.camera.camera,
                     interaction,
+                    guide_lines: guides.lines,
+                    connected: guides.connected,
                 });
             }
             self.map_views.insert(id, view);
@@ -1289,6 +1492,8 @@ impl UiState {
             index: map_view_index,
             view,
             interaction,
+            guide_badges,
+
             refit_requested,
             keep_open,
         } = draw;
@@ -1304,6 +1509,7 @@ impl UiState {
             visible: view_visible,
             refit: view_refit,
             focus: view_focus,
+            hovered_coord,
             block_selection_anchor,
             rectangle_gesture,
             block_placement,
@@ -1408,6 +1614,9 @@ impl UiState {
                 if settings.keybindings.get(KeybindAction::ShowAreaOutlines).is_pressed(ui) {
                     session.toggle_area_outlines();
                 }
+                if settings.keybindings.get(KeybindAction::ShowLighting).is_pressed(ui) {
+                    session.toggle_lighting();
+                }
                 if settings.keybindings.get(KeybindAction::ShowTileGrid).is_pressed(ui) {
                     settings.show_tile_grid = !settings.show_tile_grid;
                 }
@@ -1474,6 +1683,23 @@ impl UiState {
                 );
             }
 
+            {
+                // The hover comes from the previous frame, this runs before the cursor is resolved
+                let highlights = session.highlights(id, *hovered_coord);
+                draw_highlights(
+                    ui,
+                    camera,
+                    OverlayRect {
+                        min: viewport_min,
+                        max: viewport_max,
+                    },
+                    &highlights,
+                    session.options.tile_size,
+                );
+            }
+
+            draw_guide_badges(ui, camera, viewport_min, viewport_max, guide_badges);
+
             configure_tool_interaction(session.tool(), interaction);
 
             let in_viewport = |point: [f32; 2]| {
@@ -1491,6 +1717,7 @@ impl UiState {
 
                 camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
             });
+            *hovered_coord = pointed_coord;
 
             if hovered
                 && !ui.io().want_text_input()
@@ -2328,11 +2555,14 @@ fn draw_load_body(
         (Some(view), _) => {
             draw_load_heading(ui, view.title, &view.path);
             draw_load_progress(ui, &view.snapshot);
-            ui.separator();
 
-            let _disabled = ui.begin_disabled_with_cond(view.cancelling);
-            if ui.button(if view.cancelling { "Cancelling..." } else { "Cancel" }) || escape {
-                popup.cancel = true;
+            if view.cancellable {
+                ui.separator();
+
+                let _disabled = ui.begin_disabled_with_cond(view.cancelling);
+                if ui.button(if view.cancelling { "Cancelling..." } else { "Cancel" }) || escape {
+                    popup.cancel = true;
+                }
             }
         },
 
@@ -2661,7 +2891,7 @@ fn draw_selected_pixel_grid(
 }
 
 fn draw_placement_preview(
-    ui: &Ui, session: &Session, camera: &Controller, coord: Coord, viewport_min: [f32; 2], viewport_max: [f32; 2],
+    ui: &Ui, session: &mut Session, camera: &Controller, coord: Coord, viewport_min: [f32; 2], viewport_max: [f32; 2],
 ) {
     let Some(preview) = session.placement_preview() else {
         return;
@@ -2765,21 +2995,9 @@ fn draw_block_outline(
                 .thickness(4.0)
                 .build();
         }
-        let offset = (ui.time() as f32 * BLOCK_STRIPE_SPEED).rem_euclid(BLOCK_STRIPE_LENGTH * 2.0);
+        let offset = marching_stripe_offset(ui);
         for border in std::iter::once(bounds).chain(inner_bounds) {
-            for (start, end, green) in block_border_segments(border, viewport, offset) {
-                draw.add_line(
-                    start,
-                    end,
-                    if green {
-                        BLOCK_SELECTION_GREEN
-                    } else {
-                        BLOCK_SELECTION_WHITE
-                    },
-                )
-                .thickness(2.0)
-                .build();
-            }
+            draw_marching_border(&draw, border, viewport, offset, BLOCK_SELECTION_GREEN);
         }
         let mode_label = match mode {
             BlockSelectionMode::Full => String::from("Full"),
@@ -3184,11 +3402,9 @@ fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewInteraction) 
             interaction.cursor = None;
             interaction.hovered_area = None;
             interaction.selected = None;
-            interaction.selection_guide = None;
         },
         Tool::Delete => {
             interaction.selected = None;
-            interaction.selection_guide = None;
         },
         Tool::Select => {},
     }
@@ -4081,10 +4297,13 @@ mod tests {
                     index: 0,
                     view: &mut self.view,
                     interaction: &mut MapViewInteraction::default(),
+                    guide_badges: &[],
+
                     refit_requested: false,
                     keep_open: &mut true,
                 },
             );
+
             self.fill_button = None;
             if let Some(selection) = self.session.selection() {
                 let min = [self.view.rect.x as f32, self.view.rect.y as f32];
@@ -4126,6 +4345,7 @@ mod tests {
                     ],
                 ));
             }
+
             assert!(self.context.render_legacy().valid());
         }
 
@@ -5124,13 +5344,14 @@ mod tests {
             KeyBinding::with_ctrl(dear_imgui_rs::Key::V)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 28);
+        assert_eq!(KeybindAction::ALL.len(), 29);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Redo));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Copy));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Paste));
+        assert!(KeybindAction::ALL.contains(&KeybindAction::ShowLighting));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Recent1));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Recent0));
     }
@@ -5268,7 +5489,6 @@ mod tests {
             cursor: Some([10, 20]),
             hovered_area: Some(owner),
             selected: Some(owner),
-            selection_guide: None,
             placement_flash: Some(PlacementFlash { owner, strength: 0.5 }),
             highlight: HighlightStyle::Tint,
             mode: InteractionMode::Select {
@@ -5286,7 +5506,6 @@ mod tests {
             delete,
             MapViewInteraction {
                 selected: None,
-                selection_guide: None,
                 mode: InteractionMode::Delete { pick: None },
                 ..interaction
             }

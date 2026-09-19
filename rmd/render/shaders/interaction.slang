@@ -14,6 +14,9 @@ StructuredBuffer<Sprite> sprites;
 [[vk::binding(3, 0)]]
 RWStructuredBuffer<u32> pick_result;
 
+[[vk::binding(4, 0)]]
+StructuredBuffer<u32x2> connected_owners;
+
 struct VSOutput {
     f32x4 position : SV_Position;
     f32x2 uv;
@@ -56,6 +59,23 @@ func is_highlighted_owner(u32x2 owner, u32x2 selected_owner, u32x2 hovered_owner
 
 static const f32 SELECTED_TINT_STRENGTH = 0.45;
 static const f32 HOVERED_TINT_STRENGTH = 0.22;
+static const f32 CONNECTED_TINT_STRENGTH = 0.45;
+
+static const f32x4 GUIDE_ACCENT = f32x4(1.0, 0.5, 0.0, 1.0);
+
+func is_connected_owner(u32x2 owner, u32 connected_count) -> bool {
+    if (!any(owner != u32x2(0))) {
+        return false;
+    }
+
+    for (u32 index = 0; index < connected_count; index++) {
+        if (all(connected_owners[index] == owner)) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 func accent_color() -> f32x4 {
     return DELETE_MODE ? f32x4(1.0, 0.0, 0.0, 1.0) : f32x4(0.0, 1.0, 0.0, 1.0);
@@ -68,19 +88,15 @@ func marching_color(f32 path_position, f32 stripe_offset) -> f32x4 {
     return wrapped < 6.0 ? f32x4(1.0) : accent_color();
 }
 
-func tint_color(f32x4 color, f32 strength) -> f32x4 {
-    let accent = accent_color();
+func tint_with(f32x4 color, f32x4 accent, f32 strength) -> f32x4 {
     // premultiplied, like the scene it blends over
     let tint = f32x4(accent.rgb * color.a, color.a);
 
     return lerp(color, tint, strength);
 }
 
-func guide_color(f32 path_position, f32 stripe_offset) -> f32x4 {
-    let stripe_position = path_position - stripe_offset;
-    let wrapped = stripe_position - floor(stripe_position / 12.0) * 12.0;
-
-    return wrapped < 6.0 ? f32x4(1.0) : f32x4(1.0, 0.5, 0.0, 1.0);
+func tint_color(f32x4 color, f32 strength) -> f32x4 {
+    return tint_with(color, accent_color(), strength);
 }
 
 [shader("fragment")]
@@ -90,31 +106,14 @@ func fs_main(
     uniform u32 cursor_valid,
     uniform u32x2 selected_owner,
     uniform f32 stripe_offset,
-    uniform f32x2 guide_origin,
-    uniform f32x2 guide_target,
-    uniform u32 guide_valid,
-    uniform u32x2 focused_area_owner
+    uniform u32x2 focused_area_owner,
+    uniform u32 connected_count
 ) -> f32x4 {
     let color = scene.Sample(input.uv);
     let pixel = i32x2(input.position.xy);
-    let fragment = input.position.xy;
     u32 width;
     u32 height;
     visibility.GetDimensions(width, height);
-
-    let guide_active = guide_valid != 0 && any(selected_owner != u32x2(0));
-    var on_guide = false;
-    var guide_path_position = 0.0;
-    if (guide_active) {
-        let segment = guide_target - guide_origin;
-        let segment_length_squared = dot(segment, segment);
-        if (segment_length_squared > 0.0001) {
-            let along = saturate(dot(fragment - guide_origin, segment) / segment_length_squared);
-            let nearest_guide = guide_origin + segment * along;
-            on_guide = distance(fragment, nearest_guide) <= 1.5;
-            guide_path_position = along * sqrt(segment_length_squared);
-        }
-    }
 
     var hovered_owner = u32x2(0);
     if (cursor_valid != 0) {
@@ -127,7 +126,7 @@ func fs_main(
         }
     }
 
-    if (!any(selected_owner != u32x2(0)) && !any(hovered_owner != u32x2(0)) && !guide_active) {
+    if (!any(selected_owner != u32x2(0)) && !any(hovered_owner != u32x2(0)) && connected_count == 0) {
         return color;
     }
 
@@ -137,17 +136,13 @@ func fs_main(
         return HIGHLIGHT_TINT ? tint_color(color, SELECTED_TINT_STRENGTH) : color;
     }
 
-    // origin needs to stay under sprite, otherwise it looks annoying
-    if (guide_active && distance(fragment, guide_origin) <= 6.0) {
-        return f32x4(1.0, 0.5, 0.0, 1.0);
+    // the selection's links read as orange in either highlight style, matching their guide lines
+    if (is_connected_owner(owner, connected_count)) {
+        return tint_with(color, GUIDE_ACCENT, CONNECTED_TINT_STRENGTH);
     }
 
     let on_hovered = any(hovered_owner != u32x2(0)) && same_owner(owner, hovered_owner);
     if (on_hovered) {
-        if (on_guide) {
-            return guide_color(guide_path_position, stripe_offset);
-        }
-
         return HIGHLIGHT_TINT ? tint_color(color, HOVERED_TINT_STRENGTH) : color;
     }
 
@@ -181,10 +176,6 @@ func fs_main(
 
             return marching_color(path_position, stripe_offset);
         }
-    }
-
-    if (on_guide) {
-        return guide_color(guide_path_position, stripe_offset);
     }
 
     return color;

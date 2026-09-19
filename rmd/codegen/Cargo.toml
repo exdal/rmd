@@ -1,0 +1,13 @@
+[package]
+name = "codegen"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+core = { path = "../core" }
+ir = { path = "../ir" }
+prelude = { path = "../../prelude" }
+
+[dev-dependencies]
+ast = { path = "../ast" }
+lexer = { path = "../lexer" }

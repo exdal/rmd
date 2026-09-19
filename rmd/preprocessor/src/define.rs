@@ -96,16 +96,6 @@ impl<'a> DefineTable<'a> {
         let mut table = Self::default();
         table.define(Define::builtin("__LINE__", Builtin::Line));
         table.define(Define::builtin("__FILE__", Builtin::File));
-        table.define(Define::object_like(
-            Identifier::from("DM_VERSION"),
-            vec![BodyPart::Token(Token::IntegerLiteral("515"))],
-            Location::default(),
-        ));
-        table.define(Define::object_like(
-            Identifier::from("DM_BUILD"),
-            vec![BodyPart::Token(Token::IntegerLiteral("1642"))],
-            Location::default(),
-        ));
 
         table
     }

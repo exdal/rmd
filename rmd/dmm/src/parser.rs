@@ -995,4 +995,17 @@ mod tests {
                 .any(|error| matches!(error.kind, MapErrorKind::MalformedPrefab(_)))
         );
     }
+
+    #[test]
+    fn var_modifiers_are_ordinary_type_names_in_a_prefab() {
+        let (map, errors) = parse(concat!(
+            "\"a\" = (/obj/item/paper/final,/obj/static,/area)\n",
+            "\n(1,1,1) = {\"\na\n\"}\n",
+        ));
+
+        assert!(errors.is_empty(), "{errors:?}");
+        let tile = map.tile_at(Coord::new(1, 1, 1)).expect("one tile");
+        assert_eq!(tile[0].path.to_string(), "/obj/item/paper/final");
+        assert_eq!(tile[1].path.to_string(), "/obj/static");
+    }
 }
