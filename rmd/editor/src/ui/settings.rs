@@ -82,6 +82,8 @@ const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
             KeybindAction::ShowAreas,
             KeybindAction::ShowAreaOutlines,
             KeybindAction::ShowLighting,
+            KeybindAction::ShowTileGrid,
+            KeybindAction::ShowPixelGrid,
             KeybindAction::LevelUp,
             KeybindAction::LevelDown,
             KeybindAction::Refit,
@@ -256,6 +258,7 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
         "Hide tile grid below (px per tile)",
         &mut settings.tile_grid_min_pixels,
     );
+    ui.checkbox("Tile grid axis", &mut settings.show_tile_grid_axis);
 
     ui.checkbox("Pixel grid on selected tile", &mut settings.show_selected_pixel_grid);
     ui.set_next_item_width(120.0);
@@ -264,6 +267,7 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
         "Hide pixel grid below (px per world px)",
         &mut settings.selected_pixel_grid_min_pixels,
     );
+    ui.checkbox("Pixel grid axis", &mut settings.show_pixel_grid_axis);
 
     ui.separator();
     ui.text("Selection");

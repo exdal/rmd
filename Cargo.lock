@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "ast"
-version = "1.2.0"
+version = "1.6.0"
 dependencies = [
  "core",
  "lexer",
@@ -295,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "core"
-version = "1.0.0"
+version = "1.6.0"
 dependencies = [
  "bitflags 2.13.1",
 ]
@@ -464,7 +464,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "editor"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "ast",
  "codegen",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "lexer"
-version = "1.1.0"
+version = "1.6.0"
 dependencies = [
  "core",
 ]
@@ -1227,7 +1227,7 @@ dependencies = [
 
 [[package]]
 name = "objtree"
-version = "1.0.0"
+version = "1.6.0"
 dependencies = [
  "core",
 ]
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "preprocessor"
-version = "1.1.0"
+version = "1.6.0"
 dependencies = [
  "core",
  "lexer",
@@ -1521,7 +1521,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "render"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "ash",
  "dear-imgui-rs",
@@ -1561,7 +1561,7 @@ dependencies = [
 
 [[package]]
 name = "rmdc"
-version = "1.0.0"
+version = "1.6.0"
 dependencies = [
  "ast",
  "codegen",
@@ -1665,7 +1665,7 @@ dependencies = [
 
 [[package]]
 name = "sema"
-version = "1.0.0"
+version = "1.6.0"
 dependencies = [
  "ast",
  "core",
@@ -2058,7 +2058,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "viewer"
-version = "1.2.0"
+version = "1.6.0"
 dependencies = [
  "core",
  "dmi",
