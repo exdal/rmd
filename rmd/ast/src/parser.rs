@@ -748,6 +748,11 @@ impl<'a, 't> Parser<'a, 't> {
         let parenthesized = self.consume(Token::ParenLeft);
         let mut spec = TypeSpec::default();
 
+        // `for(var/datum/x as() in list)`
+        if parenthesized && self.consume(Token::ParenRight) {
+            return Ok(spec);
+        }
+
         loop {
             let (token, location) = self.peek().ok_or_else(ParseError::end_of_file)?;
             let flag = match token {
