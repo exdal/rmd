@@ -14,6 +14,7 @@ use vir::{
     DRAW_INDIRECT_STRIDE,
     DomainFlag,
     DrawIndirectCommand,
+    FrameAllocator,
     GraphicsPipelineInfo,
     Image,
     ImageAttachment,
@@ -557,63 +558,28 @@ struct UploadedPreview {
     cull: CullBuffers,
 }
 
-struct HostBuffer {
-    buffer: Buffer,
-    capacity: u64,
+#[derive(Debug, Clone, Copy)]
+struct PreparedGuides {
+    lines: Buffer,
+    connected_owners: Buffer,
+    line_count: u32,
+    connected_count: u32,
 }
 
-impl HostBuffer {
-    fn allocate(device: &mut Device, capacity: u64, name: &str) -> Result<Self, GpuError> {
-        let capacity = capacity.max(1);
-        let buffer = device.allocator.allocate_buffer(
-            &BufferInfo::new(capacity, vk::BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::CpuToGpu).with_name(name),
-        )?;
-
-        Ok(Self { buffer, capacity })
+fn upload_frame_buffer(allocator: &mut FrameAllocator, payload: &[u8], name: &str) -> Result<Buffer, GpuError> {
+    let mut buffer = allocator.allocate_buffer(
+        &BufferInfo::new(
+            (payload.len() as u64).max(1),
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            MemoryLocation::CpuToGpu,
+        )
+        .with_name(name),
+    )?;
+    if !payload.is_empty() {
+        buffer.write(0, payload)?;
     }
 
-    fn destroy(self, device: &mut Device) { device.allocator.deallocate_buffer(self.buffer); }
-}
-
-/// Resizes `slots` to one buffer per visible view and writes each payload, keeping a byte of
-/// storage for an empty one so the pass can always bind it.
-fn upload_per_view(
-    device: &mut Device, slots: &mut Vec<HostBuffer>, payloads: &[&[u8]], name: &str,
-) -> Result<(), GpuError> {
-    let wanted = |payload: &[u8]| (payload.len() as u64).max(1).next_power_of_two();
-    if slots.len() != payloads.len()
-        || payloads
-            .iter()
-            .enumerate()
-            .any(|(index, payload)| slots[index].capacity < wanted(payload))
-    {
-        device.wait_idle()?;
-        while slots.len() > payloads.len() {
-            if let Some(slot) = slots.pop() {
-                slot.destroy(device);
-            }
-        }
-
-        for (index, payload) in payloads.iter().enumerate() {
-            let wanted = wanted(payload);
-            match slots.get(index) {
-                Some(slot) if slot.capacity >= wanted => {},
-                Some(_) => {
-                    let fresh = HostBuffer::allocate(device, wanted, name)?;
-                    std::mem::replace(&mut slots[index], fresh).destroy(device);
-                },
-                None => slots.push(HostBuffer::allocate(device, wanted, name)?),
-            }
-        }
-    }
-
-    for (slot, payload) in slots.iter_mut().zip(payloads) {
-        if !payload.is_empty() {
-            slot.buffer.write(0, payload)?;
-        }
-    }
-
-    Ok(())
+    Ok(buffer)
 }
 
 impl UploadedPreview {
@@ -710,8 +676,6 @@ pub struct Renderer {
     lights: Option<Buffer>,
     light_capacity: usize,
     cull: Vec<CullBuffers>,
-    guides: Vec<HostBuffer>,
-    connected: Vec<HostBuffer>,
     pick_readback: Option<Buffer>,
     uploaded: Vec<UploadedMapView>,
     uploaded_lighting: Vec<UploadedLighting>,
@@ -891,8 +855,6 @@ impl Renderer {
             lights: None,
             light_capacity: 0,
             cull: Vec::new(),
-            guides: Vec::new(),
-            connected: Vec::new(),
             pick_readback: None,
             uploaded: Vec::new(),
             uploaded_lighting: Vec::new(),
@@ -1543,10 +1505,11 @@ impl Renderer {
         self.prepare_previews(frame)?;
         let stripe_offset =
             (self.highlight_started_at.elapsed().as_secs_f32() * HIGHLIGHT_STRIPE_SPEED) % HIGHLIGHT_STRIPE_PERIOD;
-        let guide_counts = self.prepare_guides(frame)?;
 
         let recorded = self.recorded.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
         let frames = self.frames.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+        let next = frames.get_next_frame()?;
+        let prepared_guides = Self::prepare_guides(next, frame)?;
         let sprites = self.sprites.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
         recorded.program.set(recorded.sprites, sprites);
         if let Some(slot) = recorded.lights {
@@ -1693,9 +1656,7 @@ impl Renderer {
             let local_cursor = interaction
                 .cursor
                 .filter(|cursor| cursor[0] < view.rect.width && cursor[1] < view.rect.height);
-            let (guide_count, connected_count) = guide_counts.get(index).copied().unwrap_or((0, 0));
-            let connected = self
-                .connected
+            let guides = prepared_guides
                 .get(index)
                 .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
             let push = InteractionPush {
@@ -1704,10 +1665,10 @@ impl Renderer {
                 selected_owner: interaction.selected.map(owner_words).unwrap_or([0; 2]),
                 stripe_offset,
                 focused_area_owner: view.focused_area.map(owner_words).unwrap_or([0; 2]),
-                connected_count,
+                connected_count: guides.connected_count,
             };
             recorded.program.set_bytes(slots.push, &push);
-            recorded.program.set(slots.connected_owners, connected.buffer);
+            recorded.program.set(slots.connected_owners, guides.connected_owners);
             recorded.program.set_bytes(
                 slots.pick_push,
                 &PickPush {
@@ -1723,9 +1684,8 @@ impl Renderer {
             recorded.program.set(slots.area_tiles, area_tiles);
 
             if let Some(slots) = &map_view.guides {
-                let guides = self.guides.get(index).ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
-                let count = guide_count;
-                recorded.program.set(slots.lines, guides.buffer);
+                let count = guides.line_count;
+                recorded.program.set(slots.lines, guides.lines);
                 recorded.program.set_bytes(
                     slots.push,
                     &GuidePush {
@@ -1781,7 +1741,6 @@ impl Renderer {
             );
         }
 
-        let next = frames.get_next_frame()?;
         if let Some(pending) = pending {
             let imgui = self.imgui.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
             let feedback = imgui.poll_textures(&mut self.device, &mut self.graph, next, pending.texture_requests())?;
@@ -2094,15 +2053,15 @@ impl Renderer {
         Ok(true)
     }
 
-    /// Projects each visible view's guide lines and uploads them, returning the instance count per view.
-    /// Projects each visible view's guide lines and collects the owners linked to its selection,
-    /// uploading both and returning the guide and connected counts per view.
-    fn prepare_guides(&mut self, frame: &Frame<'_>) -> Result<Vec<(u32, u32)>, GpuError> {
+    fn prepare_guides(allocator: &mut FrameAllocator, frame: &Frame<'_>) -> Result<Vec<PreparedGuides>, GpuError> {
         let finite = |origin: &[f32; 2], target: &[f32; 2]| origin.iter().chain(target).all(|value| value.is_finite());
-        let visible = || frame.map_views.iter().filter(|view| !view.rect.is_empty());
-        let lines = visible()
+        frame
+            .map_views
+            .iter()
+            .filter(|view| !view.rect.is_empty())
             .map(|view| {
-                view.guide_lines
+                let lines = view
+                    .guide_lines
                     .iter()
                     .copied()
                     .filter(|guide| finite(&guide.origin, &guide.target))
@@ -2112,30 +2071,25 @@ impl Renderer {
                     })
                     .filter(|guide| finite(&guide.origin, &guide.target))
                     .take(u32::MAX as usize)
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let owners = visible()
-            .map(|view| {
-                view.connected
+                    .collect::<Vec<_>>();
+                let owners = view
+                    .connected
                     .iter()
                     .copied()
                     .map(owner_words)
                     .take(u32::MAX as usize)
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                let lines_buffer = upload_frame_buffer(allocator, payload_bytes(&lines), "selection guide lines")?;
+                let connected_owners = upload_frame_buffer(allocator, payload_bytes(&owners), "connected owners")?;
+
+                Ok(PreparedGuides {
+                    lines: lines_buffer,
+                    connected_owners,
+                    line_count: lines.len() as u32,
+                    connected_count: owners.len() as u32,
+                })
             })
-            .collect::<Vec<_>>();
-
-        let line_bytes = lines.iter().map(|lines| payload_bytes(lines)).collect::<Vec<_>>();
-        let owner_bytes = owners.iter().map(|owners| payload_bytes(owners)).collect::<Vec<_>>();
-        upload_per_view(&mut self.device, &mut self.guides, &line_bytes, "selection guide lines")?;
-        upload_per_view(&mut self.device, &mut self.connected, &owner_bytes, "connected owners")?;
-
-        Ok(lines
-            .iter()
-            .zip(&owners)
-            .map(|(lines, owners)| (lines.len() as u32, owners.len() as u32))
-            .collect())
+            .collect()
     }
 
     fn prepare_previews(&mut self, frame: &Frame<'_>) -> Result<(), GpuError> {
@@ -2716,12 +2670,6 @@ impl Drop for Renderer {
         }
         for preview in std::mem::take(&mut self.previews).into_iter().flatten() {
             preview.destroy(&mut self.device);
-        }
-        for guides in std::mem::take(&mut self.guides) {
-            guides.destroy(&mut self.device);
-        }
-        for connected in std::mem::take(&mut self.connected) {
-            connected.destroy(&mut self.device);
         }
         if let Some(buffer) = self.sprites.take() {
             self.device.allocator.deallocate_buffer(buffer);
