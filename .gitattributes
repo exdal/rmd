@@ -1,0 +1,2 @@
+*.dm text eol=lf
+prelude/BYOND_VERSION text eol=lf
