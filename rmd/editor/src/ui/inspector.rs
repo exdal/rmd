@@ -1485,6 +1485,7 @@ mod tests {
                 modifiers,
                 value,
                 initializer: None,
+                declared: true,
                 location: Location::default(),
             },
         );

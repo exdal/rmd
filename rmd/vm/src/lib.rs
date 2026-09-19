@@ -27,6 +27,7 @@ pub struct Limits {
     pub call_depth: usize,
     pub allocations: usize,
     pub text_bytes: usize,
+    pub constant_depth: usize,
 }
 
 impl Default for Limits {
@@ -36,6 +37,7 @@ impl Default for Limits {
             call_depth: 48,
             allocations: 100_000,
             text_bytes: 1_048_576,
+            constant_depth: 128,
         }
     }
 }

@@ -1425,6 +1425,7 @@ mod tests {
                         modifiers: VarModifiers::default(),
                         value,
                         initializer: None,
+                        declared: true,
                         location: Location::default(),
                     },
                 );

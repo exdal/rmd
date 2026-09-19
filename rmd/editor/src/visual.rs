@@ -262,6 +262,7 @@ mod tests {
                 modifiers: VarModifiers::default(),
                 value: Value::Num(2.0),
                 initializer: None,
+                declared: true,
                 location: Location::default(),
             },
         );

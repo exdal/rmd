@@ -195,7 +195,7 @@ pub enum IrNode {
         target: OutputTarget,
         value: IrNodeId,
     },
-    // TODO: DM unwinding has no branch form, so this stays structured. `body` and `catch` are blocks
+    // DM unwinding has no branch form, so this stays structured. `body` and `catch` are blocks
     TryCatch {
         body: IrNodeId,
         catch: IrNodeId,

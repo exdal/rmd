@@ -157,11 +157,9 @@ impl Environment {
                 break;
             }
             progress.advance(&name);
-            // TODO: BYOND resolves resource paths case-insensitively
-            let mut candidates = std::iter::once(base.join(&name)).chain(search_dirs.iter().map(|dir| dir.join(&name)));
-
-            let found = candidates
-                .find(|path| path.is_file())
+            let found = std::iter::once(base.as_path())
+                .chain(search_dirs.iter().map(PathBuf::as_path))
+                .find_map(|dir| resolve_resource_path(dir, &name))
                 .unwrap_or_else(|| base.join(&name));
 
             match IconFile::load_metadata(&found) {
@@ -182,6 +180,22 @@ impl Environment {
 
         failures
     }
+}
+
+fn resolve_resource_path(dir: &Path, relative: &str) -> Option<PathBuf> {
+    let mut current = dir.to_path_buf();
+    for component in relative.split('/').filter(|part| !part.is_empty()) {
+        let entry = std::fs::read_dir(&current).ok()?.filter_map(Result::ok).find(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case(component))
+        })?;
+
+        current = entry.path();
+    }
+
+    current.is_file().then_some(current)
 }
 
 pub struct EditorState {
@@ -382,6 +396,7 @@ mod tests {
                         modifiers: VarModifiers::default(),
                         value: value.clone(),
                         initializer: None,
+                        declared: true,
                         location: Location::default(),
                     },
                 );
@@ -389,6 +404,20 @@ mod tests {
         }
 
         tree
+    }
+
+    #[test]
+    fn resource_paths_resolve_regardless_of_case() {
+        let dir = std::env::temp_dir().join(format!("rmd-resource-case-{}", std::process::id()));
+        let nested = dir.join("Icons").join("Obj");
+        std::fs::create_dir_all(&nested).expect("temp dir");
+        std::fs::write(nested.join("Items.dmi"), []).expect("write fixture");
+
+        let found = super::resolve_resource_path(&dir, "icons/obj/items.dmi");
+        assert_eq!(found, Some(nested.join("Items.dmi")));
+        assert!(super::resolve_resource_path(&dir, "icons/obj/missing.dmi").is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -488,7 +488,7 @@ impl Bake {
         }
 
         for (name, value) in &atom.vars {
-            match self.runtime.constant(value) {
+            match self.runtime.constant(value, self.limits) {
                 Ok(value) => {
                     object.vars.insert(name.clone(), value);
                 },

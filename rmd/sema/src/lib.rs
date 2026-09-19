@@ -137,6 +137,8 @@ impl<'a> Analyzer<'a> {
                         .push(SemaError::new(SemaErrorKind::DuplicateVar(name.clone()), *location));
                 }
 
+                let already_declared = decl.vars.get(&name).is_some_and(|var| var.declared);
+
                 decl.vars.insert(
                     name.clone(),
                     VarDecl {
@@ -145,6 +147,7 @@ impl<'a> Analyzer<'a> {
                         modifiers,
                         value,
                         initializer: runtime_initializer,
+                        declared: declares || already_declared,
                         location: *location,
                     },
                 );
@@ -242,6 +245,8 @@ impl<'a> Analyzer<'a> {
                     return;
                 };
 
+                let already_declared = decl.vars.get(name).is_some_and(|var| var.declared);
+
                 decl.vars.insert(
                     name.clone(),
                     VarDecl {
@@ -250,6 +255,7 @@ impl<'a> Analyzer<'a> {
                         modifiers,
                         value: folded,
                         initializer: runtime_initializer,
+                        declared: already_declared,
                         location: *location,
                     },
                 );
@@ -304,11 +310,24 @@ impl<'a> Analyzer<'a> {
 }
 
 pub fn check_undeclared_overrides(tree: &ObjectTree) -> Vec<SemaError> {
-    let _ = tree;
+    let mut errors = Vec::new();
 
-    // TODO: needs `VarDecl` to remember whether it was a declaration or an override
+    for decl in tree.iter() {
+        let Some(parent) = decl.parent else {
+            continue;
+        };
 
-    Vec::new()
+        for var in decl.vars.values() {
+            if !var.declared && tree.var_inherited(parent, &var.name).is_none() {
+                errors.push(SemaError::new(
+                    SemaErrorKind::UndeclaredVar(var.name.clone()),
+                    var.location,
+                ));
+            }
+        }
+    }
+
+    errors
 }
 
 pub fn analyze(ast: &AST) -> (ObjectTree, ir::Module, Vec<SemaError>) {
@@ -385,6 +404,25 @@ mod tests {
                 ..
             }] if name.as_str() == "script"
         ));
+    }
+
+    #[test]
+    fn undeclared_overrides_are_reported() {
+        let source = "/client\n\tvar/script\n/client/script = \"override\"\n/obj\n\tnonexistent = 1\n";
+        let (tree, _, errors) = analyze_source(source);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let errors = check_undeclared_overrides(&tree);
+        assert!(
+            matches!(
+                errors.as_slice(),
+                [SemaError {
+                    kind: SemaErrorKind::UndeclaredVar(name),
+                    ..
+                }] if name.as_str() == "nonexistent"
+            ),
+            "{errors:?}"
+        );
     }
 
     #[test]

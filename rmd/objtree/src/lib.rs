@@ -58,6 +58,7 @@ pub struct VarDecl {
     pub modifiers: VarModifiers,
     pub value: Value,
     pub initializer: Option<ProcId>,
+    pub declared: bool,
     pub location: Location,
 }
 

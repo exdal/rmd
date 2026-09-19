@@ -149,13 +149,14 @@ impl Runtime {
         result.map(|()| id)
     }
 
-    pub fn constant(&mut self, value: &Value) -> std::result::Result<GenericValue, FaultKind> {
-        self.constant_inner(value, 0)
+    pub fn constant(&mut self, value: &Value, limits: Limits) -> std::result::Result<GenericValue, FaultKind> {
+        self.constant_inner(value, limits, 0)
     }
 
-    fn constant_inner(&mut self, value: &Value, depth: usize) -> std::result::Result<GenericValue, FaultKind> {
-        // TODO: Make this configurable
-        if depth >= 128 {
+    fn constant_inner(
+        &mut self, value: &Value, limits: Limits, depth: usize,
+    ) -> std::result::Result<GenericValue, FaultKind> {
+        if depth >= limits.constant_depth {
             return Err(FaultKind::Memory);
         }
 
@@ -171,11 +172,11 @@ impl Runtime {
                     .iter()
                     .map(|entry| {
                         Ok((
-                            self.constant_inner(&entry.key, depth + 1)?,
+                            self.constant_inner(&entry.key, limits, depth + 1)?,
                             entry
                                 .value
                                 .as_ref()
-                                .map(|value| self.constant_inner(value, depth + 1))
+                                .map(|value| self.constant_inner(value, limits, depth + 1))
                                 .transpose()?,
                         ))
                     })
@@ -236,6 +237,48 @@ pub(crate) struct Evaluator<'a> {
     pub rng: u64,
     thrown: Option<GenericValue>,
     iterators: Vec<IteratorState>,
+}
+
+struct CallFrameGuard<'e, 'a> {
+    eval: &'e mut Evaluator<'a>,
+    previous_proc: Option<ProcId>,
+    previous_receiver: Receiver,
+    previous_offset: Option<CodeOffset>,
+}
+
+impl<'e, 'a> CallFrameGuard<'e, 'a> {
+    fn enter(eval: &'e mut Evaluator<'a>, proc: ProcId, receiver: Receiver) -> Self {
+        let previous_proc = eval.current.replace(proc);
+        let previous_receiver = std::mem::replace(&mut eval.current_receiver, receiver);
+        let previous_offset = eval.current_offset.take();
+        eval.depth += 1;
+
+        Self {
+            eval,
+            previous_proc,
+            previous_receiver,
+            previous_offset,
+        }
+    }
+}
+
+impl<'a> std::ops::Deref for CallFrameGuard<'_, 'a> {
+    type Target = Evaluator<'a>;
+
+    fn deref(&self) -> &Self::Target { self.eval }
+}
+
+impl std::ops::DerefMut for CallFrameGuard<'_, '_> {
+    fn deref_mut(&mut self) -> &mut Self::Target { self.eval }
+}
+
+impl Drop for CallFrameGuard<'_, '_> {
+    fn drop(&mut self) {
+        self.eval.depth -= 1;
+        self.eval.current = self.previous_proc;
+        self.eval.current_receiver = self.previous_receiver;
+        self.eval.current_offset = self.previous_offset;
+    }
 }
 
 impl<'a> Evaluator<'a> {
@@ -462,18 +505,8 @@ impl<'a> Evaluator<'a> {
             end,
         };
 
-        // TODO: Use push pop with a tempoarary struct helper thing to not do this. this should be handled inside a RAII
-        // like struct
-        let previous_proc = self.current.replace(proc);
-        let previous_receiver = std::mem::replace(&mut self.current_receiver, src);
-        let previous_offset = self.current_offset.take();
-        self.depth += 1;
-        let result = self.execute_until(&mut frame, None).map(|_| frame.dot);
-        self.depth -= 1;
-        self.current = previous_proc;
-        self.current_receiver = previous_receiver;
-        self.current_offset = previous_offset;
-        result
+        let mut call = CallFrameGuard::enter(self, proc, src);
+        call.execute_until(&mut frame, None).map(|_| frame.dot)
     }
 
     fn function_name(&self, function: &CompiledFunction) -> String {
@@ -1013,7 +1046,9 @@ impl Evaluator<'_> {
             }
         }
 
-        self.runtime.constant(value).map_err(|kind| self.fault(kind))
+        self.runtime
+            .constant(value, self.limits)
+            .map_err(|kind| self.fault(kind))
     }
 
     pub(crate) fn object_mut(&mut self, id: ObjectId) -> Result<&mut Object> {
@@ -1740,7 +1775,7 @@ impl Evaluator<'_> {
                         if !vars.contains_key(key) && variable.value != Value::Unevaluated {
                             let value = self
                                 .runtime
-                                .constant(&variable.value)
+                                .constant(&variable.value, self.limits)
                                 .map_err(|kind| self.fault(kind))?;
                             vars.insert(key.clone(), value);
                         }
