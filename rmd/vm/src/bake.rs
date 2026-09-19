@@ -157,6 +157,12 @@ pub struct Atom {
     pub vars: Vec<(Identifier, Value)>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeGroup {
+    pub subtype: TypeId,
+    pub blockers: Vec<TypeId>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BakeUpdate {
     pub appearances: Vec<u64>,
@@ -293,6 +299,14 @@ impl Bake {
         tree: &ObjectTree, module: &Module, atoms: Vec<Atom>, size: [i32; 3], limits: Limits, icons: IconStates,
     ) -> Self {
         Self::with_progress(tree, module, atoms, size, limits, icons, |_, _, _| {})
+    }
+
+    pub fn node_groups(&self) -> &[NodeGroup] {
+        if self.initialized {
+            &self.runtime.node_groups
+        } else {
+            &[]
+        }
     }
 
     pub fn with_progress(

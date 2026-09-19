@@ -39,6 +39,7 @@ use crate::{
     Device,
     Frame,
     GpuError,
+    PickRequest,
     PickResult,
     SpriteInstance,
     SpritePreview,
@@ -941,7 +942,7 @@ impl Renderer {
 
     pub fn draw_imgui(
         &mut self, frame: &Frame<'_>, pending: PendingFrame<'_>,
-    ) -> Result<Option<(usize, PickResult)>, GpuError> {
+    ) -> Result<Option<(usize, PickRequest, PickResult)>, GpuError> {
         if pending.draw_requirements().requires_raw_callback_support() {
             return Err(GpuError::RawDrawCallback);
         }
@@ -1483,7 +1484,7 @@ impl Renderer {
 
     fn draw_inner(
         &mut self, frame: &Frame<'_>, viewport: Option<vk::Extent2D>, pending: Option<PendingFrame<'_>>,
-    ) -> Result<Option<(usize, PickResult)>, GpuError> {
+    ) -> Result<Option<(usize, PickRequest, PickResult)>, GpuError> {
         if self.stale {
             self.recreate_swapchain()?;
         }
@@ -1768,7 +1769,7 @@ impl Renderer {
                 Err(error) => return Err(error.into()),
             };
 
-        let (Some(index), true, true) = (picking, pick.is_some(), cursor.is_some()) else {
+        let (Some(index), Some(request), true) = (picking, pick, cursor.is_some()) else {
             return Ok(None);
         };
         if !executed {
@@ -1790,7 +1791,7 @@ impl Renderer {
             .and_then(|sprite| frame.map_views.get(index)?.sprite_instances.get(sprite))
             .map_or(PickResult::Miss, |sprite| PickResult::Hit(sprite.owner));
 
-        Ok(Some((index, picked)))
+        Ok(Some((index, request, picked)))
     }
 
     fn prepare_sprites(&mut self, frame: &Frame<'_>) -> Result<(), GpuError> {

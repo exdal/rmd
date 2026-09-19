@@ -135,6 +135,13 @@
 /proc/demir_profile()
 	set __demir_intrin = 720
 
+// Teach the editor that `subtype` and everything under it can be laid out with the node tool.
+// `blocker` may be one type or a list of types - each type and its descendants are tiles the router
+// must not cross. Pass null when the group has no blocker. Only callable from a profile's New().
+// Repeating a subtype adds more blockers.
+/proc/demir_node_group(subtype, blocker)
+	set __demir_intrin = 721
+
 ///
 /// REBAKING
 ///

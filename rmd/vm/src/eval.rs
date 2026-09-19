@@ -39,6 +39,7 @@ pub struct Runtime {
     pub icons: crate::IconStates,
     pub(crate) ui: crate::ui::Panel,
     pub(crate) groups: std::collections::HashMap<TypeId, u32>,
+    pub(crate) node_groups: Vec<crate::bake::NodeGroup>,
     pub(crate) defining_groups: bool,
     output: Vec<String>,
     pub(crate) global: Option<ObjectId>,

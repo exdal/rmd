@@ -20,6 +20,20 @@
 #define DEMIR_GROUP_DISPOSALS (1<<2)
 #define DEMIR_GROUP_UNDERFLOOR (DEMIR_GROUP_CABLES | DEMIR_GROUP_PIPES | DEMIR_GROUP_DISPOSALS)
 
+// Layer 3 is the unsuffixed mapping family. The other layers have separate visible and hidden
+// mapping subtypes, so registering those more-derived paths keeps them out of the layer 3 group.
+#define DEMIR_NODE_BLOCKERS list(/turf/closed, /obj/effect/spawner/structure/window)
+#define DEMIR_NODE_PIPE_FAMILY(Fulltype) \
+	demir_node_group(Fulltype, DEMIR_NODE_BLOCKERS); \
+	demir_node_group(Fulltype/visible/layer1, DEMIR_NODE_BLOCKERS); \
+	demir_node_group(Fulltype/hidden/layer1, DEMIR_NODE_BLOCKERS); \
+	demir_node_group(Fulltype/visible/layer2, DEMIR_NODE_BLOCKERS); \
+	demir_node_group(Fulltype/hidden/layer2, DEMIR_NODE_BLOCKERS); \
+	demir_node_group(Fulltype/visible/layer4, DEMIR_NODE_BLOCKERS); \
+	demir_node_group(Fulltype/hidden/layer4, DEMIR_NODE_BLOCKERS); \
+	demir_node_group(Fulltype/visible/layer5, DEMIR_NODE_BLOCKERS); \
+	demir_node_group(Fulltype/hidden/layer5, DEMIR_NODE_BLOCKERS)
+
 // Run the codebase's smoothing setup without starting game subsystems.
 /datum/controller/subsystem/mapping/demir_preview/New()
 	SSmapping = src
@@ -473,6 +487,28 @@
 		demir_define_group(DEMIR_GROUP_DISPOSALS, /obj/structure/disposalpipe)
 		demir_define_group(DEMIR_GROUP_DISPOSALS, /obj/structure/disposalconstruct)
 
+		// The node tool copies the seeded map prefab along a cardinal route and keeps
+		// every route out of closed turfs. Pipe color/network families and piping layers
+		// are separate groups so adjacent supply, scrubber and stacked pipes never merge.
+		demir_node_group(/obj/structure/cable, /turf/closed)
+		DEMIR_NODE_PIPE_FAMILY(/obj/machinery/atmospherics/pipe/smart/simple/yellow)
+		DEMIR_NODE_PIPE_FAMILY(/obj/machinery/atmospherics/pipe/smart/simple/general)
+		DEMIR_NODE_PIPE_FAMILY(/obj/machinery/atmospherics/pipe/smart/simple/cyan)
+		DEMIR_NODE_PIPE_FAMILY(/obj/machinery/atmospherics/pipe/smart/simple/green)
+		DEMIR_NODE_PIPE_FAMILY(/obj/machinery/atmospherics/pipe/smart/simple/orange)
+		DEMIR_NODE_PIPE_FAMILY(/obj/machinery/atmospherics/pipe/smart/simple/purple)
+		DEMIR_NODE_PIPE_FAMILY(/obj/machinery/atmospherics/pipe/smart/simple/dark)
+		DEMIR_NODE_PIPE_FAMILY(/obj/machinery/atmospherics/pipe/smart/simple/brown)
+		DEMIR_NODE_PIPE_FAMILY(/obj/machinery/atmospherics/pipe/smart/simple/violet)
+		DEMIR_NODE_PIPE_FAMILY(/obj/machinery/atmospherics/pipe/smart/simple/pink)
+		DEMIR_NODE_PIPE_FAMILY(/obj/machinery/atmospherics/pipe/smart/simple/scrubbers)
+		DEMIR_NODE_PIPE_FAMILY(/obj/machinery/atmospherics/pipe/smart/simple/supply)
+		demir_node_group(/obj/machinery/atmospherics/pipe/smart/manifold4w/supply, DEMIR_NODE_BLOCKERS)
+		demir_node_group(/obj/machinery/atmospherics/pipe/smart/manifold4w/scrubbers, DEMIR_NODE_BLOCKERS)
+		demir_node_group(/obj/machinery/duct, DEMIR_NODE_BLOCKERS)
+		demir_node_group(/obj/structure/disposalpipe, DEMIR_NODE_BLOCKERS)
+		demir_node_group(/obj/structure/disposalconstruct, DEMIR_NODE_BLOCKERS)
+
 /datum/demir/tgstation/ui(atom/target)
 	if(!imgui_begin("Demir"))
 		imgui_end()
@@ -658,6 +694,7 @@
 		demir_blocks_light = 0
 	return ..()
 
+#undef DEMIR_NODE_PIPE_FAMILY
 #undef DEMIR_GROUP_CABLES
 #undef DEMIR_GROUP_PIPES
 #undef DEMIR_GROUP_DISPOSALS

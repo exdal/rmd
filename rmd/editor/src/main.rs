@@ -32,9 +32,9 @@ use dear_imgui_rs::{
     render::SynchronousRendererConsumer,
 };
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
-use editor::{environment::BakeOptions, tool::Tool};
+use editor::environment::BakeOptions;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use render::{Device, PickResult, Renderer};
+use render::{Device, PickRequest, PickResult, Renderer};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -381,24 +381,41 @@ impl App {
         let pending = frame.try_render(consumer)?;
         window.pre_present_notify();
         let picked = renderer.draw_imgui(&scene, pending)?;
-        if let Some((index, pick)) = picked {
+        if let Some((index, request, pick)) = picked {
             if let Some(document) = drawn.get(index).copied() {
-                session.state.set_active(document);
+                session.set_active_document(document);
             }
-            match session.tool() {
-                Tool::Select => match pick {
+            match request {
+                PickRequest::Select => match pick {
                     PickResult::Hit(owner) => {
                         session.select_instance(Some(owner));
                         ui.reveal_selected_instance(session);
                     },
                     PickResult::Miss => session.select_instance(None),
                 },
-                Tool::Delete => {
+                PickRequest::Delete => {
                     if let PickResult::Hit(owner) = pick {
                         session.delete_instance(owner);
                     }
                 },
-                Tool::Place | Tool::BlockSelect | Tool::Fill => {},
+                PickRequest::NodeSeed(coord) => {
+                    let picked = match pick {
+                        PickResult::Hit(owner) => Some(owner),
+                        PickResult::Miss => None,
+                    };
+                    if let Some(target) = session.node_candidate_from_pick(picked, coord) {
+                        session.begin_node_edit(target);
+                    }
+                },
+                PickRequest::NodeDelete(coord) => {
+                    let picked = match pick {
+                        PickResult::Hit(owner) => Some(owner),
+                        PickResult::Miss => None,
+                    };
+                    if let Some(connection) = session.node_connection_from_pick(picked, coord) {
+                        session.delete_node_connection(&connection);
+                    }
+                },
             }
         }
 

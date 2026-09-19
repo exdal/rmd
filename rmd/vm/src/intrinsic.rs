@@ -205,6 +205,61 @@ impl Evaluator<'_> {
 
             Intrinsic::DemirProfile => Ok(self.runtime.profile.map(GenericValue::Object).unwrap_or_default()),
 
+            Intrinsic::DemirNodeGroup => {
+                if !self.runtime.defining_groups {
+                    return Err(self.fault(FaultKind::Blocked(format!("{name} outside a profile's New()"))));
+                }
+
+                let Some(subtype) = args.first().and_then(|(_, value)| match value {
+                    GenericValue::Path(path) => self.tree.id_of(path),
+                    GenericValue::Object(id) => self.runtime.heap.object(*id).map(|object| object.ty),
+                    _ => None,
+                }) else {
+                    return Ok(GenericValue::Null);
+                };
+                let blocker_arg = arg(1);
+                let blocker_values = match blocker_arg {
+                    GenericValue::Null => Vec::new(),
+                    value @ (GenericValue::List(_) | GenericValue::ArgList(_)) => {
+                        self.iter_values(value)?.into_iter().map(|(value, _)| value).collect()
+                    },
+                    value => vec![value],
+                };
+                let resolve_type = |value: &GenericValue| match value {
+                    GenericValue::Path(path) => self.tree.id_of(path),
+                    GenericValue::Object(id) => self.runtime.heap.object(*id).map(|object| object.ty),
+                    _ => None,
+                };
+                let Some(blockers) = blocker_values.iter().map(resolve_type).collect::<Option<Vec<_>>>() else {
+                    return Ok(GenericValue::Null);
+                };
+
+                if let Some(group) = self
+                    .runtime
+                    .node_groups
+                    .iter_mut()
+                    .find(|group| group.subtype == subtype)
+                {
+                    for blocker in blockers {
+                        if !group.blockers.contains(&blocker) {
+                            group.blockers.push(blocker);
+                        }
+                    }
+                } else {
+                    self.runtime.node_groups.push(crate::bake::NodeGroup {
+                        subtype,
+                        blockers: blockers.into_iter().fold(Vec::new(), |mut unique, blocker| {
+                            if !unique.contains(&blocker) {
+                                unique.push(blocker);
+                            }
+                            unique
+                        }),
+                    });
+                }
+
+                Ok(GenericValue::Null)
+            },
+
             Intrinsic::DemirDefineGroup => {
                 if !self.runtime.defining_groups {
                     return Err(self.fault(FaultKind::Blocked(format!("{name} outside a profile's New()"))));

@@ -44,7 +44,9 @@ use editor::{
         ICON_MENU_DOWN,
         ICON_PENCIL,
         ICON_SELECT_DRAG,
+        ICON_VECTOR_POLYLINE,
     },
+    node,
     progress::{Snapshot, Stage},
     tool::{
         BlockSelectionMode,
@@ -80,7 +82,16 @@ use crate::{
     external_editor::SourceLocation,
     gizmo::{BlockGizmoKind, BlockGizmoTarget, GizmoMapView, GizmoState},
     loader::LoadView,
-    session::{BlockPreviewSource, FillOutcome, GuideBadge, LevelChange, PlacementPreview, SelectedTransform, Session},
+    session::{
+        BlockPreviewSource,
+        FillOutcome,
+        GuideBadge,
+        LevelChange,
+        NodeOverlay,
+        PlacementPreview,
+        SelectedTransform,
+        Session,
+    },
     settings::{KeyBindings, KeybindAction, KeybindPreset, Settings},
 };
 
@@ -574,6 +585,151 @@ fn draw_guide_badges(
     });
 }
 
+#[derive(Default)]
+struct NodeOverlayHit {
+    handle: Option<Coord>,
+    standalone: Option<Coord>,
+    connection: Option<Vec<Coord>>,
+}
+
+struct NodeOverlayView<'a> {
+    camera: &'a Controller,
+    viewport_min: [f32; 2],
+    viewport_max: [f32; 2],
+    tile_size: u32,
+    hovered_tile: Option<Coord>,
+    interactive: bool,
+}
+
+fn point_segment_distance_squared(point: [f32; 2], from: [f32; 2], to: [f32; 2]) -> f32 {
+    let delta = [to[0] - from[0], to[1] - from[1]];
+    let length_squared = delta[0].powi(2) + delta[1].powi(2);
+    if length_squared == 0.0 {
+        return (point[0] - from[0]).powi(2) + (point[1] - from[1]).powi(2);
+    }
+
+    let offset = [point[0] - from[0], point[1] - from[1]];
+    let t = ((offset[0] * delta[0] + offset[1] * delta[1]) / length_squared).clamp(0.0, 1.0);
+    let closest = [from[0] + delta[0] * t, from[1] + delta[1] * t];
+
+    (point[0] - closest[0]).powi(2) + (point[1] - closest[1]).powi(2)
+}
+
+fn closest_node_connection(
+    mouse: [f32; 2], connections: &[Vec<Coord>], center: impl Fn(Coord) -> [f32; 2], tolerance: f32,
+) -> Option<usize> {
+    let mut nearest = None;
+    for (index, connection) in connections.iter().enumerate() {
+        for segment in connection.windows(2) {
+            let distance = point_segment_distance_squared(mouse, center(segment[0]), center(segment[1]));
+            if distance <= tolerance.powi(2)
+                && nearest.is_none_or(|(best, best_index)| distance < best || distance == best && index < best_index)
+            {
+                nearest = Some((distance, index));
+            }
+        }
+    }
+
+    nearest.map(|(_, index)| index)
+}
+
+fn draw_node_overlay(ui: &Ui, overlay: &NodeOverlay, view: NodeOverlayView<'_>) -> NodeOverlayHit {
+    const EDGE: [f32; 4] = [0.15, 0.78, 1.0, 0.9];
+    const CONNECTION_HOVER: [f32; 4] = [1.0, 0.25, 0.2, 1.0];
+    const ROUTE: [f32; 4] = [0.25, 1.0, 0.45, 1.0];
+    const INVALID_ROUTE: [f32; 4] = [1.0, 0.25, 0.2, 1.0];
+    const HANDLE: [f32; 4] = [1.0, 0.58, 0.08, 1.0];
+    const HANDLE_HOVER: [f32; 4] = [1.0, 0.88, 0.45, 1.0];
+    const HANDLE_RADIUS: f32 = 6.0;
+    const CONNECTION_TOLERANCE: f32 = 6.0;
+    let NodeOverlayView {
+        camera,
+        viewport_min,
+        viewport_max,
+        tile_size,
+        hovered_tile,
+        interactive,
+    } = view;
+
+    let center = |coord: Coord| {
+        let tile_size = tile_size.max(1) as f32;
+        let local = camera.map_to_screen([(coord.x as f32 - 0.5) * tile_size, (coord.y as f32 - 0.5) * tile_size]);
+
+        [viewport_min[0] + local[0], viewport_min[1] + local[1]]
+    };
+    let mouse = ui.io().mouse_pos();
+    let hovered = interactive
+        .then(|| {
+            overlay
+                .nodes
+                .iter()
+                .copied()
+                .filter_map(|coord| {
+                    let position = center(coord);
+                    let distance = (position[0] - mouse[0]).powi(2) + (position[1] - mouse[1]).powi(2);
+
+                    (distance <= (HANDLE_RADIUS + 3.0).powi(2)).then_some((distance, coord))
+                })
+                .min_by(|left, right| left.0.total_cmp(&right.0))
+                .map(|(_, coord)| coord)
+        })
+        .flatten();
+    let hovered_connection = (interactive && hovered.is_none())
+        .then(|| closest_node_connection(mouse, &overlay.connections, center, CONNECTION_TOLERANCE))
+        .flatten()
+        .or_else(|| {
+            (interactive && hovered.is_none())
+                .then(|| {
+                    hovered_tile
+                        .and_then(|coord| node::connection_at_tile(&overlay.connections, coord))
+                        .and_then(|connection| overlay.connections.iter().position(|current| current == connection))
+                })
+                .flatten()
+        });
+    let standalone = hovered.filter(|coord| !overlay.segments.iter().any(|(from, to)| from == coord || to == coord));
+
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(viewport_min, viewport_max, || {
+        for (from, to) in &overlay.segments {
+            draw.add_line(center(*from), center(*to), EDGE).thickness(2.0).build();
+        }
+        if let Some(connection) = hovered_connection.and_then(|index| overlay.connections.get(index)) {
+            for segment in connection.windows(2) {
+                draw.add_line(center(segment[0]), center(segment[1]), CONNECTION_HOVER)
+                    .thickness(4.0)
+                    .build();
+            }
+        }
+        let route_color = if overlay.route_valid { ROUTE } else { INVALID_ROUTE };
+        for segment in overlay.route.windows(2) {
+            draw.add_line(center(segment[0]), center(segment[1]), route_color)
+                .thickness(4.0)
+                .build();
+        }
+        for coord in &overlay.nodes {
+            let color = if standalone == Some(*coord) {
+                CONNECTION_HOVER
+            } else if hovered == Some(*coord) {
+                HANDLE_HOVER
+            } else {
+                HANDLE
+            };
+            draw.add_circle(center(*coord), HANDLE_RADIUS, [0.05, 0.05, 0.05, 0.95])
+                .filled(true)
+                .build();
+            draw.add_circle(center(*coord), HANDLE_RADIUS - 2.0, color)
+                .filled(true)
+                .build();
+        }
+    });
+
+    NodeOverlayHit {
+        handle: hovered,
+        standalone,
+        connection: hovered_connection.and_then(|index| overlay.connections.get(index).cloned()),
+    }
+}
+
 pub struct VisibleMapView {
     pub document: DocumentId,
     pub rect: MapViewRect,
@@ -787,6 +943,7 @@ impl UiState {
         self.placement_flash = None;
         self.placement_stroke = None;
         self.deletion_stroke = None;
+        session.cancel_node_drag();
 
         if let Some(id) = id
             && let Some(view) = self.map_views.get_mut(&id)
@@ -1445,7 +1602,7 @@ impl UiState {
         ui.dummy([0.0, ui.frame_height() * 0.25]);
 
         if ui.button("Save") {
-            session.state.set_active(id);
+            session.set_active_document(id);
             match session.map_path().map(Path::to_path_buf).filter(|_| writable) {
                 Some(path) => {
                     let format = session.map_format().unwrap_or_default();
@@ -1534,7 +1691,7 @@ impl UiState {
                 if session.state.active() != Some(id) {
                     self.cancel_edit_gestures(session, session.state.active());
                 }
-                session.state.set_active(id);
+                session.set_active_document(id);
             }
             let is_active = session.state.active() == Some(id);
             if !is_active && rectangle_gesture.is_some() {
@@ -1638,6 +1795,9 @@ impl UiState {
                 if settings.keybindings.get(KeybindAction::SelectTool).is_pressed(ui) {
                     session.set_tool(Tool::Select);
                 }
+                if settings.keybindings.get(KeybindAction::NodeTool).is_pressed(ui) {
+                    session.set_tool(Tool::Node);
+                }
                 if settings.keybindings.get(KeybindAction::BlockSelectTool).is_pressed(ui) {
                     session.set_tool(Tool::BlockSelect);
                 }
@@ -1700,6 +1860,26 @@ impl UiState {
 
             draw_guide_badges(ui, camera, viewport_min, viewport_max, guide_badges);
 
+            let node_interactive = hovered && focused && !session.node_dragging();
+            let node_hit = (is_active && session.tool() == Tool::Node)
+                .then(|| session.node_overlay())
+                .flatten()
+                .map(|overlay| {
+                    draw_node_overlay(
+                        ui,
+                        &overlay,
+                        NodeOverlayView {
+                            camera,
+                            viewport_min,
+                            viewport_max,
+                            tile_size: session.options.tile_size,
+                            hovered_tile: *hovered_coord,
+                            interactive: node_interactive,
+                        },
+                    )
+                })
+                .unwrap_or_default();
+
             configure_tool_interaction(session.tool(), interaction);
 
             let in_viewport = |point: [f32; 2]| {
@@ -1742,6 +1922,7 @@ impl UiState {
                         *block_selection_anchor = None;
                         *block_placement = None;
                         *paste = None;
+                        session.cancel_node_drag();
 
                         if undo {
                             session.undo();
@@ -1803,6 +1984,7 @@ impl UiState {
                         session.select_block(None);
                     }
                     self.gizmo.cancel();
+                    session.cancel_node_drag();
                 }
                 let preview_coord = (tool == Tool::Place)
                     .then(|| self.gizmo.placement_coord().or(pointed_coord))
@@ -1903,6 +2085,11 @@ impl UiState {
                             .draw_placement_direction(ui, session, settings, camera, pointed_coord, gizmo_map_view)
                             .captures_mouse
                     },
+                    Tool::Node => {
+                        self.gizmo.cancel();
+
+                        false
+                    },
                     Tool::BlockSelect => {
                         if let (Some(pending), Some(target), Some(size)) =
                             (*paste, paste_target, session.map().map(|map| map.size))
@@ -2002,6 +2189,44 @@ impl UiState {
                 };
                 let left_clicked = ui.is_mouse_clicked(MouseButton::Left);
                 let left_down = ui.is_mouse_down(MouseButton::Left);
+                let left_double_clicked = ui.is_mouse_double_clicked(MouseButton::Left);
+                let right_clicked = ui.is_mouse_clicked(MouseButton::Right);
+
+                if session.tool() == Tool::Node {
+                    if !focused {
+                        session.cancel_node_drag();
+                    }
+                    if left_double_clicked
+                        && let Some(coord) = pointed_coord
+                        && let Some(cursor) = cursor
+                    {
+                        interaction.cursor = Some(cursor_in_map_view(cursor, scale));
+                        request_pick(interaction, PickRequest::NodeSeed(coord));
+                    } else if left_clicked && let Some(coord) = node_hit.handle {
+                        session.start_node_drag(coord);
+                    }
+
+                    if right_clicked {
+                        if let Some(coord) = node_hit.standalone {
+                            session.delete_standalone_node(coord);
+                        } else if let Some(connection) = node_hit.connection.as_deref() {
+                            session.delete_node_connection(connection);
+                        } else if let (Some(coord), Some(cursor)) = (pointed_coord, cursor) {
+                            interaction.cursor = Some(cursor_in_map_view(cursor, scale));
+                            request_pick(interaction, PickRequest::NodeDelete(coord));
+                        }
+                    }
+
+                    if session.node_dragging() {
+                        if left_down {
+                            if let Some(coord) = pointed_coord {
+                                session.update_node_drag(coord);
+                            }
+                        } else {
+                            session.finish_node_drag(hovered && pointed_coord.is_some());
+                        }
+                    }
+                }
                 if left_clicked {
                     self.placement_stroke = None;
                     self.deletion_stroke = None;
@@ -2019,6 +2244,7 @@ impl UiState {
                 if !escape
                     && !gizmo_captures_mouse
                     && !block_controls_capture_mouse
+                    && session.tool() != Tool::Node
                     && let Some(cursor) = cursor
                 {
                     let pixel = [cursor[0].floor() as u32, cursor[1].floor() as u32];
@@ -2053,10 +2279,13 @@ impl UiState {
                             },
                             Tool::Select => {
                                 self.placement_stroke = None;
-                                if left_clicked {
-                                    request_pick(interaction, PickRequest::Cursor);
+                                if left_double_clicked {
+                                    request_pick(interaction, PickRequest::NodeSeed(coord));
+                                } else if left_clicked {
+                                    request_pick(interaction, PickRequest::Select);
                                 }
                             },
+                            Tool::Node => {},
                             Tool::BlockSelect => {
                                 self.placement_stroke = None;
                                 if block_placement.is_none() && paste.is_none() {
@@ -2099,7 +2328,7 @@ impl UiState {
                                             .is_some_and(|stroke| stroke.move_to(pixel))
                                 };
                                 if requests_pick {
-                                    request_pick(interaction, PickRequest::Cursor);
+                                    request_pick(interaction, PickRequest::Delete);
                                 }
                             },
                             Tool::Fill => {
@@ -2351,7 +2580,7 @@ impl UiState {
         };
 
         self.cancel_edit_gestures(session, session.state.active());
-        session.state.set_active(target.document);
+        session.set_active_document(target.document);
         session.set_level(location.coord.z);
         if let Some(document) = session.state.active_document_mut() {
             document.set_focus(None);
@@ -3396,9 +3625,10 @@ fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewInteraction) 
         (Tool::Delete, InteractionMode::Delete { pick }) => InteractionMode::Delete { pick },
         (Tool::Select, _) => InteractionMode::Select { pick: None },
         (Tool::Delete, _) => InteractionMode::Delete { pick: None },
+        (Tool::Node, _) => InteractionMode::Select { pick: None },
     };
     match tool {
-        Tool::Place | Tool::BlockSelect | Tool::Fill => {
+        Tool::Place | Tool::Node | Tool::BlockSelect | Tool::Fill => {
             interaction.cursor = None;
             interaction.hovered_area = None;
             interaction.selected = None;
@@ -3415,6 +3645,7 @@ fn interaction_mode(tool: Tool) -> InteractionMode {
         Tool::Place | Tool::BlockSelect | Tool::Fill => InteractionMode::Place,
         Tool::Select => InteractionMode::Select { pick: None },
         Tool::Delete => InteractionMode::Delete { pick: None },
+        Tool::Node => InteractionMode::Select { pick: None },
     }
 }
 
@@ -3472,6 +3703,10 @@ fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect, state: 
     draw_tool_button(ui, session, Tool::Place, ICON_PENCIL);
     ui.same_line();
     draw_tool_button(ui, session, Tool::Select, ICON_EYEDROPPER);
+    if session.node_tool_available() {
+        ui.same_line();
+        draw_tool_button(ui, session, Tool::Node, ICON_VECTOR_POLYLINE);
+    }
     ui.same_line();
     draw_block_select_tool_button(ui, session, block_selection_options, keybindings, selection_busy);
     ui.same_line();
@@ -5225,6 +5460,30 @@ mod tests {
     }
 
     #[test]
+    fn node_connection_hit_test_uses_screen_distance_and_includes_adjacent_nodes() {
+        let connections = vec![
+            vec![Coord::new(1, 1, 1), Coord::new(2, 1, 1)],
+            vec![Coord::new(1, 2, 1), Coord::new(2, 2, 1), Coord::new(3, 2, 1)],
+            vec![Coord::new(4, 1, 1), Coord::new(4, 2, 1), Coord::new(4, 3, 1)],
+        ];
+        let center = |coord: Coord| [coord.x as f32 * 10.0, coord.y as f32 * 10.0];
+
+        assert_eq!(
+            closest_node_connection([20.0, 24.0], &connections, center, 6.0),
+            Some(1)
+        );
+        assert_eq!(
+            closest_node_connection([36.0, 20.0], &connections, center, 6.0),
+            Some(2)
+        );
+        assert_eq!(
+            closest_node_connection([15.0, 10.0], &connections, center, 6.0),
+            Some(0)
+        );
+        assert_eq!(closest_node_connection([20.0, 27.0], &connections, center, 6.0), None);
+    }
+
+    #[test]
     fn placement_strokes_process_each_tile_once_until_a_new_stroke_begins() {
         let prefab = Prefab::new(TreePath::parse("/obj/table"));
         let first = Coord::new(2, 3, 1);
@@ -5343,14 +5602,19 @@ mod tests {
             bindings.get(KeybindAction::Paste),
             KeyBinding::with_ctrl(dear_imgui_rs::Key::V)
         );
+        assert_eq!(
+            bindings.get(KeybindAction::NodeTool),
+            KeyBinding::new(dear_imgui_rs::Key::N)
+        );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 29);
+        assert_eq!(KeybindAction::ALL.len(), 30);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Redo));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Copy));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Paste));
+        assert!(KeybindAction::ALL.contains(&KeybindAction::NodeTool));
         assert!(KeybindAction::ALL.contains(&KeybindAction::ShowLighting));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Recent1));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Recent0));
@@ -5492,7 +5756,7 @@ mod tests {
             placement_flash: Some(PlacementFlash { owner, strength: 0.5 }),
             highlight: HighlightStyle::Tint,
             mode: InteractionMode::Select {
-                pick: Some(PickRequest::Cursor),
+                pick: Some(PickRequest::Select),
             },
         };
         let mut selected = interaction;
@@ -5518,6 +5782,33 @@ mod tests {
                 placement_flash: interaction.placement_flash,
                 highlight: interaction.highlight,
                 ..Default::default()
+            }
+        );
+
+        let mut node = interaction;
+        configure_tool_interaction(Tool::Node, &mut node);
+        assert_eq!(
+            node,
+            MapViewInteraction {
+                placement_flash: interaction.placement_flash,
+                highlight: interaction.highlight,
+                mode: InteractionMode::Select { pick: None },
+                ..Default::default()
+            }
+        );
+        let coord = Coord::new(3, 4, 1);
+        request_pick(&mut node, PickRequest::NodeSeed(coord));
+        assert_eq!(
+            node.mode,
+            InteractionMode::Select {
+                pick: Some(PickRequest::NodeSeed(coord)),
+            }
+        );
+        request_pick(&mut node, PickRequest::NodeDelete(coord));
+        assert_eq!(
+            node.mode,
+            InteractionMode::Select {
+                pick: Some(PickRequest::NodeDelete(coord)),
             }
         );
 

@@ -143,6 +143,17 @@ blocked everywhere else:
 everything under it in a group, which is a bit whose meaning is the profile's own; rmd only matches
 them. A type may join several groups, and a group may name as many types as it likes.
 
+`demir_node_group(subtype, blocker)` is also called from `New()`. It enables the editor's Node tool
+for `subtype` and every type below it. `blocker` may be one type or a list of types; every blocker
+and its descendants are tiles the cardinal router cannot cross. Repeat the declaration to add more
+blockers, or pass null for none. Invalid list entries reject that declaration without partially
+adding its valid entries. When registrations overlap, the most-derived matching subtype controls
+the object:
+
+```dm
+demir_node_group(/obj/machinery/pipe, list(/turf/closed, /obj/structure/window))
+```
+
 `demir_profile()` answers with the profile instance from anywhere, which is how a proc that is not
 itself a hook, and so has some atom as its own `src`, reads what the panel wrote:
 
@@ -317,6 +328,24 @@ next codebase load.
 `Environment::bake_program` holds the separate runtime tree, bytecode, and source-file table. It is
 `None` with baking off, for a codebase without a profile, and when bytecode generation fails. A
 failure is reported with the load diagnostics and leaves the map drawn from static appearances.
+
+When a profile registers at least one node group, the editor adds a **Node** toolbar button and an
+`N` shortcut. Double-click a registered object to open its cardinally connected component on the
+active Z level. Handles appear on isolated objects, endpoints, elbows, and junctions; double-clicking
+any object creates a handle there, and a newly dragged endpoint remains a handle. Double-click
+picking uses the rendered visibility buffer, so eligible objects from different pipe layers on one
+tile are selected from their visible pixels. If no sprite is hit, or a floor or area wins the visible
+pick, the editor searches that tile for an eligible node object. Drag a handle to lay the shortest route around
+registered blockers. Coordinate loops are removed before placement. The
+editor copies the seeded object's exact type and map variables, reuses registered objects already on
+the route, updates the map while dragging, and records the gesture as one undo step. Escape or
+releasing an unreachable route restores every touched tile to its exact pre-drag contents. Hover a
+connection line or one of its visible routed objects and right-click
+to remove its registered group objects as one undoable edit. Each endpoint remains when it has
+another connection and is removed when deleting the selected connection would leave it standalone;
+this also makes a connection between two adjacent terminal nodes removable. Right-clicking an
+already standalone handle removes all registered group objects on its tile. Unrelated objects remain,
+and deletion is rejected as a whole when an affected tile is outside the current focus.
 
 `editor::bake` translates placed prefabs into `vm::bake::Atom`s, keyed by `PrefabInstanceId`. Each
 open map owns its bake. A new environment, a newly opened map, or a change in the number of z levels

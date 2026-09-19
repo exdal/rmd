@@ -6,7 +6,7 @@ pub mod renderer;
 mod spec;
 pub mod texture;
 
-use dmm::PrefabInstanceId;
+use dmm::{Coord, PrefabInstanceId};
 
 pub use crate::{device::Device, error::GpuError, renderer::Renderer};
 
@@ -90,7 +90,10 @@ impl InteractionMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickRequest {
-    Cursor,
+    Select,
+    Delete,
+    NodeSeed(Coord),
+    NodeDelete(Coord),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

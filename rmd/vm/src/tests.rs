@@ -998,6 +998,90 @@ fn defining_a_rebake_group_outside_initialize_is_blocked() {
 }
 
 #[test]
+fn node_groups_accept_blocker_lists_merge_and_allow_an_unblocked_group() {
+    let (tree, module) = compile(
+        r#"
+/obj/cable
+/obj/pipe
+/obj/grille
+/obj/window
+/obj/bad
+/turf/closed
+
+/datum/demir/test
+    New()
+        ..()
+        demir_node_group(/obj/cable, list(/turf/closed, /obj/grille, /obj/window, /turf/closed))
+        demir_node_group(/obj/cable, /obj/grille)
+        demir_node_group(/obj/cable, /turf/closed)
+        demir_node_group(/obj/pipe, null)
+        demir_node_group(/obj/bad, /obj/grille)
+        demir_node_group(/obj/bad, list(/turf/closed, "not a type"))
+"#,
+    );
+    let bake = Bake::new(
+        &tree,
+        &module,
+        Vec::new(),
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    let cable = tree.id_of(&TreePath::parse("/obj/cable")).unwrap();
+    let pipe = tree.id_of(&TreePath::parse("/obj/pipe")).unwrap();
+    let closed = tree.id_of(&TreePath::parse("/turf/closed")).unwrap();
+    let grille = tree.id_of(&TreePath::parse("/obj/grille")).unwrap();
+    let window = tree.id_of(&TreePath::parse("/obj/window")).unwrap();
+    let bad = tree.id_of(&TreePath::parse("/obj/bad")).unwrap();
+
+    assert_eq!(bake.node_groups().len(), 3);
+    let cable_group = bake.node_groups().iter().find(|group| group.subtype == cable).unwrap();
+    assert_eq!(cable_group.blockers, vec![closed, grille, window]);
+    assert!(
+        bake.node_groups()
+            .iter()
+            .find(|group| group.subtype == pipe)
+            .unwrap()
+            .blockers
+            .is_empty()
+    );
+    assert_eq!(
+        bake.node_groups()
+            .iter()
+            .find(|group| group.subtype == bad)
+            .unwrap()
+            .blockers,
+        vec![grille],
+        "an invalid blocker list does not partially update an existing group"
+    );
+}
+
+#[test]
+fn defining_a_node_group_outside_initialize_is_blocked() {
+    let (tree, module) = compile(
+        r#"
+/datum/demir/test/bake(atom/target)
+    demir_node_group(/obj, /turf)
+"#,
+    );
+    let fault = Runtime::default()
+        .run(
+            &tree,
+            &module,
+            hook(&tree, "bake"),
+            None,
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
+        .expect_err("node groups are declared once, at initialization");
+    assert!(
+        matches!(&fault.kind, FaultKind::Blocked(message) if message.contains("outside a profile's New()")),
+        "{fault:?}",
+    );
+}
+
+#[test]
 fn a_ui_interaction_the_profile_ignores_keeps_nothing() {
     let (tree, module) = compile(
         r#"

@@ -15,6 +15,7 @@ mod tests {
     fn generated_intrinsics_preserve_the_declared_abi() {
         assert_eq!(Intrinsic::try_from(100).unwrap(), Intrinsic::WorldNew);
         assert_eq!(Intrinsic::try_from(401).unwrap(), Intrinsic::Call);
+        assert_eq!(Intrinsic::try_from(721).unwrap(), Intrinsic::DemirNodeGroup);
         assert_eq!(Intrinsic::try_from(1100).unwrap(), Intrinsic::ListAdd);
         assert!(Intrinsic::try_from(u16::MAX).is_err());
     }
