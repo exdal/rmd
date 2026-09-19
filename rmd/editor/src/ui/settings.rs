@@ -73,6 +73,8 @@ const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
         &[
             KeybindAction::ShowAreas,
             KeybindAction::ShowAreaOutlines,
+            KeybindAction::ShowTileGrid,
+            KeybindAction::ShowPixelGrid,
             KeybindAction::LevelUp,
             KeybindAction::LevelDown,
             KeybindAction::Refit,

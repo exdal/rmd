@@ -292,10 +292,12 @@ pub(crate) enum KeybindAction {
     Recent8,
     Recent9,
     Recent0,
+    ShowTileGrid,
+    ShowPixelGrid,
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 28] = [
         Self::Save,
         Self::Undo,
         Self::Redo,
@@ -322,6 +324,8 @@ impl KeybindAction {
         Self::Recent8,
         Self::Recent9,
         Self::Recent0,
+        Self::ShowTileGrid,
+        Self::ShowPixelGrid,
     ];
     pub const RECENT: [Self; 10] = [
         Self::Recent1,
@@ -364,6 +368,8 @@ impl KeybindAction {
             Self::Recent8 => "Recent 8",
             Self::Recent9 => "Recent 9",
             Self::Recent0 => "Recent 0",
+            Self::ShowTileGrid => "Show tile grid",
+            Self::ShowPixelGrid => "Show pixel grid",
         }
     }
 
@@ -395,6 +401,8 @@ impl KeybindAction {
             Self::Recent8 => "recent-8",
             Self::Recent9 => "recent-9",
             Self::Recent0 => "recent-0",
+            Self::ShowTileGrid => "show-tile-grid",
+            Self::ShowPixelGrid => "show-pixel-grid",
         }
     }
 }
@@ -428,6 +436,8 @@ pub(crate) struct KeyBindings {
     recent_8: KeyBinding,
     recent_9: KeyBinding,
     recent_0: KeyBinding,
+    show_tile_grid: KeyBinding,
+    show_pixel_grid: KeyBinding,
 }
 
 impl Default for KeyBindings {
@@ -459,6 +469,8 @@ impl Default for KeyBindings {
             recent_8: KeyBinding::new(Key::Key8),
             recent_9: KeyBinding::new(Key::Key9),
             recent_0: KeyBinding::new(Key::Key0),
+            show_tile_grid: KeyBinding::new(Key::G),
+            show_pixel_grid: KeyBinding::with_shift(Key::G),
         }
     }
 }
@@ -492,6 +504,8 @@ impl KeyBindings {
             recent_8: KeyBinding::new(Key::I),
             recent_9: KeyBinding::new(Key::O),
             recent_0: KeyBinding::new(Key::P),
+            show_tile_grid: KeyBinding::new(Key::G),
+            show_pixel_grid: KeyBinding::with_shift(Key::G),
         }
     }
 
@@ -523,6 +537,8 @@ impl KeyBindings {
             KeybindAction::Recent8 => self.recent_8,
             KeybindAction::Recent9 => self.recent_9,
             KeybindAction::Recent0 => self.recent_0,
+            KeybindAction::ShowTileGrid => self.show_tile_grid,
+            KeybindAction::ShowPixelGrid => self.show_pixel_grid,
         }
     }
 
@@ -584,6 +600,8 @@ impl KeyBindings {
             KeybindAction::Recent8 => self.recent_8 = binding,
             KeybindAction::Recent9 => self.recent_9 = binding,
             KeybindAction::Recent0 => self.recent_0 = binding,
+            KeybindAction::ShowTileGrid => self.show_tile_grid = binding,
+            KeybindAction::ShowPixelGrid => self.show_pixel_grid = binding,
         }
     }
 }
@@ -912,6 +930,7 @@ mod tests {
             (KeybindAction::DeleteTool, Key::X),
             (KeybindAction::FillTool, Key::Q),
             (KeybindAction::Rotate, Key::R),
+            (KeybindAction::ShowTileGrid, Key::G),
         ];
 
         for (action, key) in expected {
@@ -924,6 +943,10 @@ mod tests {
         assert_eq!(bindings.get(KeybindAction::Undo), KeyBinding::with_ctrl(Key::Z));
         assert_eq!(bindings.get(KeybindAction::Redo), KeyBinding::with_ctrl(Key::Y));
         assert_eq!(bindings.get(KeybindAction::Save), KeyBinding::with_ctrl(Key::S));
+        assert_eq!(
+            bindings.get(KeybindAction::ShowPixelGrid),
+            KeyBinding::with_shift(Key::G)
+        );
 
         let recent = [
             Key::Key1,
@@ -963,6 +986,8 @@ mod tests {
             (KeybindAction::Rotate, KeyBinding::with_shift(Key::R)),
             (KeybindAction::Copy, KeyBinding::with_primary(Key::C)),
             (KeybindAction::Paste, KeyBinding::with_primary(Key::V)),
+            (KeybindAction::ShowTileGrid, KeyBinding::new(Key::G)),
+            (KeybindAction::ShowPixelGrid, KeyBinding::with_shift(Key::G)),
         ];
 
         for (action, binding) in expected {

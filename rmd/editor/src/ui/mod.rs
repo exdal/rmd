@@ -664,6 +664,8 @@ impl UiState {
         let mut pick_new_map_path = false;
         let mut toggle_areas = false;
         let mut toggle_area_outlines = false;
+        let mut toggle_tile_grid = false;
+        let mut toggle_pixel_grid = false;
         let mut level_delta = 0;
         let mut underlay_depth = None;
         let mut refit = false;
@@ -744,6 +746,22 @@ impl UiState {
                 ) {
                     toggle_area_outlines = true;
                 }
+                if ui.menu_item_enabled_selected_with_shortcut(
+                    "Show tile grid",
+                    settings.keybindings.get(KeybindAction::ShowTileGrid).label(ui),
+                    settings.show_tile_grid,
+                    true,
+                ) {
+                    toggle_tile_grid = true;
+                }
+                if ui.menu_item_enabled_selected_with_shortcut(
+                    "Show pixel grid",
+                    settings.keybindings.get(KeybindAction::ShowPixelGrid).label(ui),
+                    settings.show_selected_pixel_grid,
+                    true,
+                ) {
+                    toggle_pixel_grid = true;
+                }
                 if ui.menu_item_with_shortcut("Z up", settings.keybindings.get(KeybindAction::LevelUp).label(ui)) {
                     level_delta += 1;
                 }
@@ -811,6 +829,12 @@ impl UiState {
         }
         if toggle_area_outlines {
             session.toggle_area_outlines();
+        }
+        if toggle_tile_grid {
+            settings.show_tile_grid = !settings.show_tile_grid;
+        }
+        if toggle_pixel_grid {
+            settings.show_selected_pixel_grid = !settings.show_selected_pixel_grid;
         }
         if level_delta != 0 {
             request_level_change(
@@ -1042,7 +1066,7 @@ impl UiState {
     }
 
     fn draw_map_views(
-        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, refit_active: bool,
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, refit_active: bool,
     ) -> (Vec<VisibleMapView>, Option<usize>) {
         let mut closing = None;
         let mut visible = Vec::new();
@@ -1259,7 +1283,7 @@ impl UiState {
         }
     }
 
-    fn draw_map_view(&mut self, ui: &Ui, session: &mut Session, settings: &Settings, draw: MapViewDraw<'_>) {
+    fn draw_map_view(&mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, draw: MapViewDraw<'_>) {
         let MapViewDraw {
             id,
             index: map_view_index,
@@ -1383,6 +1407,12 @@ impl UiState {
                 }
                 if settings.keybindings.get(KeybindAction::ShowAreaOutlines).is_pressed(ui) {
                     session.toggle_area_outlines();
+                }
+                if settings.keybindings.get(KeybindAction::ShowTileGrid).is_pressed(ui) {
+                    settings.show_tile_grid = !settings.show_tile_grid;
+                }
+                if settings.keybindings.get(KeybindAction::ShowPixelGrid).is_pressed(ui) {
+                    settings.show_selected_pixel_grid = !settings.show_selected_pixel_grid;
                 }
                 if settings.keybindings.get(KeybindAction::LevelUp).is_pressed(ui) {
                     request_level_change(session, 1, &mut self.new_level_dialog, &self.new_level_type_path);
@@ -4007,7 +4037,7 @@ mod tests {
             self.state.draw_map_view(
                 ui,
                 &mut self.session,
-                &self.settings,
+                &mut self.settings,
                 MapViewDraw {
                     id: self.id,
                     index: 0,
@@ -4202,6 +4232,34 @@ mod tests {
                 .unwrap()
                 .contains(&red)
         );
+    }
+
+    #[test]
+    fn grid_overlay_shortcuts_toggle_settings_while_hovered() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut app = RectangleUiHarness::new();
+        app.pointer(app.tile(5, 8), false);
+
+        assert!(app.settings.show_tile_grid);
+        assert!(app.settings.show_selected_pixel_grid);
+
+        app.key(Key::G, true);
+        assert!(!app.settings.show_tile_grid);
+        assert!(
+            app.settings.show_selected_pixel_grid,
+            "plain G should not affect the pixel grid"
+        );
+        app.key(Key::G, false);
+
+        app.key(Key::ModShift, true);
+        app.key(Key::G, true);
+        assert!(!app.settings.show_selected_pixel_grid);
+        assert!(
+            !app.settings.show_tile_grid,
+            "shift+g should not toggle the tile grid again"
+        );
+        app.key(Key::G, false);
+        app.key(Key::ModShift, false);
     }
 
     #[test]
@@ -5028,7 +5086,7 @@ mod tests {
             KeyBinding::with_ctrl(dear_imgui_rs::Key::V)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 26);
+        assert_eq!(KeybindAction::ALL.len(), 28);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));
