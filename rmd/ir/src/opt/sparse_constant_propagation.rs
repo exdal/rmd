@@ -857,7 +857,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_short_circuiting_when_the_rhs_would_fault() {
+    fn removes_a_faulting_rhs_when_short_circuiting_skips_it() {
         let module = lower("/proc/t()\n\treturn 0 && (1 / 0)\n");
 
         assert_eq!(returned(&module), Some(&Value::Num(0.0)));
@@ -865,9 +865,22 @@ mod tests {
             module
                 .nodes
                 .iter()
-                .any(|node| matches!(node, IrNode::Binary { op: BinaryOp::Div, .. }))
+                .all(|node| !matches!(node, IrNode::Binary { op: BinaryOp::Div, .. }))
         );
         crate::verify(&module).expect("short-circuit module should verify");
+    }
+
+    #[test]
+    fn preserves_a_faulting_rhs_when_its_path_executes() {
+        let module = lower("/proc/t()\n\treturn 1 && (1 / 0)\n");
+
+        assert!(
+            module
+                .nodes
+                .iter()
+                .any(|node| matches!(node, IrNode::Binary { op: BinaryOp::Div, .. }))
+        );
+        crate::verify(&module).expect("executable faulting expression should verify");
     }
 
     #[test]

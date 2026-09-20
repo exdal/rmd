@@ -154,6 +154,11 @@ impl<'a> IrModuleBuilder<'a> {
         //  return 20
         crate::opt::sparse_constant_propagation(&mut self.module);
 
+        // constant branches can leave blocks with no executable path from a
+        // procedure entry, remove those blocks and simplify the phis they fed
+        crate::opt::eliminate_unreachable_blocks(&mut self.module);
+        crate::opt::simplify_phis(&mut self.module);
+
         #[cfg(debug_assertions)]
         if let Err(error) = crate::verify(&self.module) {
             panic!("lowering produced invalid IR: {error}");
