@@ -4,51 +4,49 @@
 #define __DEMIR_COMPAT__
 #endif
 #ifdef __DEMIR_COMPAT__
-// mapping tools set this, and codebases gate map editor icon states on it
-#define FASTDMM  // we do a little bit of lying
+// Supported codebases use these names to select mapping-only code.
+#define FASTDMM
 #define SPACEMAN_DMM
 #define SpacemanDMM_unlint(X) X
 #define SpacemanDMM_debug(X...) X
 #endif
 
-///
-/// LIGHTING AND APPEARANCE SCHEMA
-///
+// Lighting and appearance fields
 
 /atom
 	var/demir_light_range = 0
-	/// Radius of full brightness inside `demir_light_range`.
+	/// Set the radius of full brightness within `demir_light_range`.
 	var/demir_light_inner_range = 0
 	var/demir_light_power = 0
 	var/demir_light_color = null
 	var/demir_light_angle = 360
 	var/demir_light_dir = 0
-	/// Additional light-source origin offset in tile units.
+	/// Offset the light source on the x axis in tile units.
 	var/demir_light_offset_x = 0
 	var/demir_light_offset_y = 0
 	var/demir_light_height = 1
-	/// Falloff exponent.
+	/// Set the light falloff exponent.
 	var/demir_light_curve = 1
-	/// Combine with other peak sources by taking the strongest instead of summing.
+	/// Use the strongest peak source at each sample.
 	var/demir_light_peak = 0
-	/// Only contribute when this cell touches one that is not fullbright.
+	/// Emit light only along the edge of a fullbright region.
 	var/demir_light_edge_only = 0
-	/// Use `demir_light_quadratic / distance ** 2` when nonzero.
+	/// Use `demir_light_quadratic / distance ** 2` when this value is nonzero.
 	var/demir_light_quadratic = 0
-	/// Constant added to the quadratic term.
+	/// Add this constant to the quadratic term.
 	var/demir_light_constant = 0
-	/// A value of -1 follows `opacity`.
+	/// Use `opacity` when this value is -1.
 	var/demir_blocks_light = -1
 	var/demir_ambient_color = null
-	/// Ambient power in the range 0..1.
+	/// Set ambient power from 0 to 1.
 	var/demir_ambient_power = 0
-	/// Suppress corner lighting for this cell.
+	/// Disable corner lighting for this cell.
 	var/demir_fullbright = 0
-	/// Use this appearance as an emissive mask without drawing it into the scene color.
+	/// Use this appearance as an emissive mask and omit it from the scene color.
 	var/demir_emissive = 0
-	/// Clear emissive pixels behind this appearance without drawing it.
+	/// Clear emissive pixels behind this appearance and omit the appearance from the scene.
 	var/demir_emissive_blocker = 0
-	/// Add (positive) or subtract (negative) this appearance from the cheap overlay lightmap.
+	/// Add this appearance for positive values. Subtract it for negative values.
 	var/demir_overlay_light = 0
 
 /image
@@ -56,9 +54,7 @@
 	var/demir_emissive_blocker = 0
 	var/demir_overlay_light = 0
 
-///
-/// BAKING HOOKS
-///
+// Appearance profile
 
 #define DEMIR_CONNECTION_SOURCE 1
 #define DEMIR_CONNECTION_TARGET 2
@@ -69,10 +65,11 @@
 
 #define USE_PERSPECTIVE_EDITOR_WALLS
 
-// A codebase teaches the editor how to bake its maps with one subtype of this. The editor builds that subtype once
-// per bake and calls the hooks below on the instance, so what a profile wants to remember is a var
-// on it rather than a global. A codebase may carry several profiles as long as one is more derived
-// than the rest, the editor bakes with the subtype nothing else inherits from.
+// Define a subtype to teach the editor how to bake a codebase. The bake runtime creates one profile
+// instance and calls these hooks on it. Store persistent profile state in its variables.
+//
+// Profiles can inherit from other profiles. The bake runtime selects the subtype with no derived
+// profile. Two unrelated profile leaves cause an ambiguity error.
 //
 //   /datum/demir/tgstation
 //     var/smooth = TRUE
@@ -84,9 +81,8 @@
 //     bake(atom/target)
 //       target.icon_state = smooth ? "wall" : "plain"
 //
-// New() sets the profile up. It runs once, before every other hook, and is the only place
-// demir_define_group() is callable. A proc that is not itself a hook reaches the same instance
-// through demir_profile().
+// New() runs once before all hooks. Use it for setup and demir_define_group() calls. An ordinary
+// procedure can get the same profile instance through demir_profile().
 /datum/demir
 	proc/bake(atom/target)
 
@@ -94,31 +90,30 @@
 
 	proc/light(atom/target)
 
-	// Return an associative list of opaque text channel keys to DEMIR_CONNECTION_* role bitmasks.
+	// Map each connection channel to a DEMIR_CONNECTION_* role mask.
 	proc/connections(atom/target)
 
-	// Return a list of tile regions the editor should shade for this atom. Each entry is an
-	// associative list, unknown keys are ignored.
+	// Return the tile regions that the editor must shade for this atom. Each entry is an associative
+	// list. The editor ignores unknown keys.
 	//
-	//     "x", "y", "width", "height"  a rectangle, offset in tiles from this atom's own tile
-	//     "tiles"                      list(list(x, y), ...) offsets, instead of a rectangle
-	//     "color"                      any hex color, default orange
-	//     "fill"                       wash opacity from 0 to 1, default 0.12
-	//     "outline"                    draw the marching border, default 1
-	//     "when"                       DEMIR_HIGHLIGHT_* bitmask, default DEMIR_HIGHLIGHT_SELECTED
-	//     "label"                      text drawn above the region
+	//     "x", "y", "width", "height"  rectangle with offsets from the atom
+	//     "tiles"                      list(list(x, y), ...) offsets for a custom shape
+	//     "color"                      hex color, default orange
+	//     "fill"                       fill opacity from 0 to 1, default 0.12
+	//     "outline"                    border visibility, default 1
+	//     "when"                       DEMIR_HIGHLIGHT_* mask, default selected
+	//     "label"                      text above the region
 	proc/highlights(atom/target)
 
-	// Called once per editor frame with the selected atom, or null. The imgui_* procs below only
-	// run inside it.
+	// Draw one editor frame for the selected atom. The target is null when the editor has no selection.
+	// imgui_* procedures can run only from this hook.
 	//
-	// The editor, not the profile, remembers what the viewer set: a widget takes the profile's
-	// value as its starting one and then answers with the edited value every frame after. A button
-	// answers true on the frame after it is pressed.
+	// The editor retains widget values. A widget first returns the value supplied by the profile.
+	// After an edit, it returns the edited value on each frame. A button returns true on the frame
+	// after the user presses it.
 	//
-	// Writes roll back on every frame but the one that first carries a click or an edit and writes
-	// something. That is what lets the profile's own vars hold panel state without an idle profile
-	// growing the heap:
+	// The runtime keeps profile writes only when an interaction changes the heap. Idle frames restore
+	// their writes. Store panel state in profile variables:
 	//
 	//   /datum/demir/example
 	//     var/smooth = TRUE
@@ -126,47 +121,40 @@
 	//     ui(atom/target)
 	//       smooth = imgui_checkbox("Smooth walls", smooth)
 	//
-	// A frame that keeps its writes re-derives appearances, highlights and lighting, so the other
-	// hooks see the new state. New() does not run again, so the state survives.
+	// Call demir_rebake() after a state change. The requested hooks then read the new state. New()
+	// does not run again.
 	proc/ui(atom/target)
 
-// The profile editor built for this bake, so a proc that is not itself a hook can read what the panel
-// wrote. Null outside a bake.
+// Return the active profile. An ordinary procedure can use it to read profile state. Return null
+// outside a bake.
 /proc/demir_profile()
 	set __demir_intrin = 720
 
-// Teach the editor that `subtype` and everything under it can be laid out with the node tool.
-// `blocker` may be one type or a list of types - each type and its descendants are tiles the router
-// must not cross. Pass null when the group has no blocker. Only callable from a profile's New().
-// Repeating a subtype adds more blockers.
+// Enable the Node tool for `subtype` and its descendants. `blocker` accepts one type or a list of
+// types. The router cannot cross those types or their descendants. Pass null when no blocker is
+// required. Call this procedure only from the profile's New(). Repeat a subtype to add blockers.
 /proc/demir_node_group(subtype, blocker)
 	set __demir_intrin = 721
 
-///
-/// REBAKING
-///
+// Rebaking
 
-// Put `type` and everything under it in the group `group`, a bit demir_rebake() can then name to
-// re-derive only those placements. Only callable from a profile's New(). The meaning of each bit is
-// the profile's own, the editor only matches them. Call it once per type, in any order, and a type may join
-// several groups.
+// Add `type` and its descendants to the bit group `group`. demir_rebake() can select that group.
+// The profile defines the meaning of each bit. The editor only matches the bits. A type can belong
+// to multiple groups. Call this procedure only from the profile's New().
 /proc/demir_define_group(group, type)
 	set __demir_intrin = 719
 
-// What a demir_rebake() call re-derives. Combinable.
+// Combine these flags to select the derived data for demir_rebake().
 #define DEMIR_BAKE_APPEARANCE 1
 #define DEMIR_BAKE_LIGHT 2
 #define DEMIR_BAKE_HIGHLIGHT 4
 
-// Ask for part of the map to be re-derived, because something ui() just wrote changes what
-// another hook answers. Only callable from ui(), and only a frame that keeps its writes acts
-// on it.
+// Request new derived data after ui() changes profile state. Call this procedure only from ui().
+// The runtime acts on the request only when it keeps the frame's writes.
 //
-// `groups` selects the placements to redo by the groups demir_define_group() put their type in, so
-// an option that only drives one kind of atom costs one kind of atom. Zero, or omitted, means every
-// placement. Several calls in a frame add up.
+// `groups` selects placements by their demir_define_group() bits. Zero selects every placement.
+// Multiple calls in one frame combine their flags and groups.
 //
-// A frame that asks for nothing re-derives nothing, so a profile that writes state without calling
-// this draws a panel whose switches do not take effect.
+// Profile state does not affect the map until ui() requests the required derived data.
 /proc/demir_rebake(kinds, groups = 0)
 	set __demir_intrin = 718

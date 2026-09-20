@@ -1,4 +1,4 @@
-// The editor's main dockspace, to pass to imgui_set_next_window_dock().
+// Return the editor dockspace for imgui_set_next_window_dock().
 /proc/imgui_dockspace()
 	set __demir_intrin = 700
 

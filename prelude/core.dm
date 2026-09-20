@@ -1,6 +1,4 @@
-///
-/// DATUM
-///
+// Root datum
 
 /datum
 	var/type
@@ -23,9 +21,7 @@
 	proc/Write(savefile/F)
 		set __demir_intrin = 1004
 
-///
-/// LISTS
-///
+// Lists
 
 /list
 	var/len

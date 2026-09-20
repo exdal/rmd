@@ -1,6 +1,4 @@
-///
-/// ATOM AND ITS DERIVATIVES
-///
+// Atom types
 
 /atom
 	parent_type = /datum
@@ -178,9 +176,7 @@
 	proc/Logout()
 		set __demir_intrin = 1041
 
-///
-/// APPEARANCE HOLDERS
-///
+// Appearance holders
 
 /image
 	parent_type = /datum
@@ -246,9 +242,7 @@
 	parent_type = /image
 	var/animate_movement = 1
 	var/screen_loc
-///
-/// CLIENT
-///
+// Client
 
 /client
 	var/list/verbs = null
@@ -388,9 +382,7 @@
 	proc/RenderIcon(object)
 		set __demir_intrin = 1076
 
-///
-/// SAVEFILES
-///
+// Savefiles
 
 /savefile
 	var/cd
@@ -416,9 +408,7 @@
 	proc/Unlock()
 		set __demir_intrin = 1085
 
-///
-/// GEOMETRY
-///
+// Geometry
 
 /vector
 	var/len
@@ -456,9 +446,7 @@
 	proc/New(x, y, z)
 		set __demir_intrin = 1096
 
-///
-/// WORLD
-///
+// World
 
 /world
 	var/const/type
@@ -570,9 +558,7 @@
 	proc/file2list(File, Separator)
 		set __demir_intrin = 122
 
-///
-/// GLOBAL PROCS
-///
+// Global procedures
 
 /proc/call(Target, ProcName)
 	set __demir_intrin = 401
@@ -1186,9 +1172,7 @@
 /proc/winshow(player,window,show=1)
 	set __demir_intrin = 398
 
-///
-/// NATIVE HOOKS
-///
+// Native hooks
 
 /proc/_dm_new_icon(icon,icon_state,dir,frame,moving)
 	set __demir_intrin = 600

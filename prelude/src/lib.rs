@@ -50,14 +50,14 @@ mod tests {
         }
     }
 
-    /// The split is the point: stddef_ext.dm carries BYOND's surface, demir.dm carries ours.
+    /// Keep BYOND declarations separate from the appearance-baking declarations.
     #[test]
     fn the_prelude_split_keeps_byond_and_demir_apart() {
         assert!(STDDEF_EXT_SOURCE.contains("\n/atom\n"));
         assert!(STDDEF_EXT_SOURCE.contains("\n/image\n"));
         assert!(STDDEF_EXT_SOURCE.contains("\n/world\n"));
-        // `set __demir_intrin` is the intrinsic ABI marker and belongs beside every proc it
-        // implements; the demir schema and the panel do not.
+        // Each implemented procedure owns its `set __demir_intrin` ABI marker.
+        // The appearance schema and profile panel do not use intrinsic markers.
         assert!(!STDDEF_EXT_SOURCE.contains("demir_light"));
         assert!(!STDDEF_EXT_SOURCE.contains("demir_emissive"));
         assert!(!STDDEF_EXT_SOURCE.contains("demir_overlay"));
@@ -67,7 +67,7 @@ mod tests {
         assert!(DEMIR_SOURCE.contains("#define __DEMIR__"));
         assert!(DEMIR_SOURCE.contains("\n/datum/demir\n"));
         assert!(DEMIR_SOURCE.contains("demir_light_range"));
-        // /atom is reopened for the lighting schema, never redeclared with BYOND's own vars.
+        // demir.dm reopens /atom for lighting fields. stddef_ext.dm owns the base declaration.
         assert!(!DEMIR_SOURCE.contains("parent_type = /datum"));
         assert!(!DEMIR_SOURCE.contains("/client"));
         assert!(!DEMIR_SOURCE.contains("/savefile"));
