@@ -159,6 +159,9 @@ impl<'a> IrModuleBuilder<'a> {
         crate::opt::eliminate_unreachable_blocks(&mut self.module);
         crate::opt::simplify_phis(&mut self.module);
 
+        // remove unused computations whose evaluation has no observable effect
+        crate::opt::eliminate_dead_code(&mut self.module);
+
         #[cfg(debug_assertions)]
         if let Err(error) = crate::verify(&self.module) {
             panic!("lowering produced invalid IR: {error}");
