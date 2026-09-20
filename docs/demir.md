@@ -178,9 +178,8 @@ remembered per environment. Choosing the declared default clears the override so
 the codebase default take effect.
 
 **Forced bundled profile** can inject one of the embedded integrations after the codebase and use
-it even when the codebase declares another default. Required bake-view defines, such as tgstation's
-`CBT`, are injected before the environment. Forced choices are remembered per environment. Setting
-the option back to **None - use codebase profile** restores the remembered codebase profile.
+it even when the codebase declares another default. Forced choices are remembered per environment.
+Setting the option back to **None - use codebase profile** restores the remembered codebase profile.
 
 Each open map owns one bake. A new environment, a new map, or a changed z-level count starts a full
 bake. Edits, undo, and redo use incremental updates. Hiding a type rebuilds sprites from cached bake

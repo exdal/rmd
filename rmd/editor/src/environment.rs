@@ -122,8 +122,7 @@ impl BundledProfile {
                 "<bundled-profile-goonstation-defines.dm>",
                 "#define USE_PERSPECTIVE_EDITOR_WALLS\n",
             )),
-            Self::Tgstation => Some(("<bundled-profile-tgstation-defines.dm>", "#define CBT\n")),
-            Self::Cmss13 | Self::Vanderlin => None,
+            Self::Cmss13 | Self::Tgstation | Self::Vanderlin => None,
         }
     }
 }
@@ -539,10 +538,6 @@ mod tests {
         assert_eq!(
             BundledProfile::Goonstation.defines().map(|(_, source)| source),
             Some("#define USE_PERSPECTIVE_EDITOR_WALLS\n")
-        );
-        assert_eq!(
-            BundledProfile::Tgstation.defines().map(|(_, source)| source),
-            Some("#define CBT\n")
         );
     }
 }
