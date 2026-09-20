@@ -162,6 +162,9 @@ impl<'a> IrModuleBuilder<'a> {
         // remove unused computations whose evaluation has no observable effect
         crate::opt::eliminate_dead_code(&mut self.module);
 
+        // combine straight-line blocks and remove their intermediate jumps
+        crate::opt::merge_linear_blocks(&mut self.module);
+
         #[cfg(debug_assertions)]
         if let Err(error) = crate::verify(&self.module) {
             panic!("lowering produced invalid IR: {error}");
@@ -2311,18 +2314,20 @@ mod tests {
     #[test]
     fn builder_resets_control_flow_state_between_procedures() {
         let module = lower("/proc/a()\n\tagain:\n\t\treturn 1\n/proc/b()\n\tagain:\n\t\treturn 2\n");
+        let first_entry = module.procs[0].body;
         let second_entry = module.procs[1].body;
-        let second_label = module
+        let second_return = module
             .block(second_entry)
             .and_then(|instructions| {
                 instructions.iter().find_map(|id| match module.node(*id) {
-                    Some(IrNode::Branch(target)) => Some(*target),
+                    Some(IrNode::Return(Some(value))) => Some(*value),
                     _ => None,
                 })
             })
-            .expect("second procedure should branch to its label");
+            .and_then(|value| module.node(value));
 
-        assert!(second_label.0 > second_entry.0, "{:?}", nodes(&module));
+        assert_ne!(first_entry, second_entry);
+        assert!(matches!(second_return, Some(IrNode::Constant(Value::Num(2.0)))));
     }
 
     #[test]
