@@ -32,6 +32,9 @@
 	atmos_dmi = image('icons/obj/atmospherics/atmos.dmi')
 	bomb_dmi = image('icons/obj/canisterbomb.dmi')
 
+/datum/demir/goonstation
+	default = TRUE
+
 /datum/demir/goonstation/prepare(atom/target)
 	target.get_typeinfo()
 	target.demir_prepare_state()

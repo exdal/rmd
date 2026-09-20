@@ -36,8 +36,16 @@ pub const RECENT_PREFAB_CAPACITY: usize = 10;
 pub struct BakeProgram {
     pub tree: ObjectTree,
     pub module: codegen::Module,
+    pub profile: objtree::TypeId,
     pub files: Arc<[PathBuf]>,
     pub icon_states: vm::IconStates,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Profiles {
+    pub available: Vec<String>,
+    pub default: String,
+    pub active: String,
 }
 
 pub struct Environment {
@@ -46,6 +54,8 @@ pub struct Environment {
     pub tree: ObjectTree,
     /// Runtime declarations and bytecode compiled without mapping compatibility defines.
     pub bake_program: Option<BakeProgram>,
+    /// Profiles discovered in the runtime view, even when bytecode generation failed.
+    pub profiles: Option<Profiles>,
     /// Runtime-view sources, retained even when bytecode generation fails.
     pub bake_files: Arc<[PathBuf]>,
     pub bake_options: environment::BakeOptions,
@@ -62,6 +72,7 @@ impl Environment {
             root: root.into(),
             tree,
             bake_program: None,
+            profiles: None,
             bake_files: Arc::default(),
             bake_options: environment::BakeOptions::default(),
             icons: HashMap::new(),
@@ -85,6 +96,7 @@ impl Environment {
             root: compiled.root,
             tree: compiled.tree,
             bake_program: compiled.bake_program,
+            profiles: compiled.profiles,
             bake_files: compiled.bake_files,
             bake_options: options,
             icons: HashMap::new(),
@@ -107,6 +119,7 @@ impl Environment {
                 bake_preprocess: compiled.bake_errors,
                 bake_sema: compiled.bake_sema_errors,
                 codegen: compiled.codegen_error,
+                profile: compiled.profile_error,
                 icons,
                 bake: Vec::new(),
             },

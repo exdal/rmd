@@ -68,10 +68,11 @@
 // Define a subtype to teach the editor how to bake a codebase. The bake runtime creates one profile
 // instance and calls these hooks on it. Store persistent profile state in its variables.
 //
-// Profiles can inherit from other profiles. The bake runtime selects the subtype with no derived
-// profile. Two unrelated profile leaves cause an ambiguity error.
+// Profiles can inherit from other profiles. Every subtype is selectable. Exactly one subtype must
+// directly set default to a true value; descendants do not inherit that selection marker.
 //
 //   /datum/demir/tgstation
+//     default = TRUE
 //     var/smooth = TRUE
 //
 //     New()
@@ -84,6 +85,10 @@
 // New() runs once before all hooks. Use it for setup and demir_define_group() calls. An ordinary
 // procedure can get the same profile instance through demir_profile().
 /datum/demir
+	/// Select this profile when the user has not chosen another one. Exactly one profile subtype
+	/// must directly set this to a true value when a codebase defines profiles.
+	var/default = FALSE
+
 	proc/bake(atom/target)
 
 	proc/prepare(atom/target)

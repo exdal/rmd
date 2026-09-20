@@ -465,6 +465,7 @@
 // profile's own vars are where panel state belongs. Every other hook reads them off src, and the
 // frame that changes one re-derives appearances, highlights and lighting.
 /datum/demir/tgstation
+	default = TRUE
 	var/smooth = TRUE
 	var/lighting = TRUE
 	var/show_cables = TRUE

@@ -13,10 +13,13 @@
 	InitGlobaldiagonals()
 	InitGlobalalldirs()
 
-/datum/demir/cmss13/New()
-	..()
-	if(!GLOB)
-		GLOB = new /datum/controller/global_vars/demir_preview
+/datum/demir/cmss13
+	default = TRUE
+
+	New()
+		..()
+		if(!GLOB)
+			GLOB = new /datum/controller/global_vars/demir_preview
 
 // Walls fill a shared damage overlay cache on first draw. Filling it here keeps it out of every
 // rolled-back preview.

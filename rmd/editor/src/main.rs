@@ -83,16 +83,17 @@ fn main() -> ExitCode {
     settings.apply_to(&mut session.options);
 
     let (startup_job, pending_map) = match arguments.environment {
-        Some(entry) => (
-            Some(Job::Codebase {
-                path: entry,
-                bake: bake_options(&settings),
-            }),
-            Some(PendingMap {
-                path: arguments.map,
-                z: arguments.z,
-            }),
-        ),
+        Some(entry) => {
+            let bake = bake_options(&settings, Some(&entry));
+
+            (
+                Some(Job::Codebase { path: entry, bake }),
+                Some(PendingMap {
+                    path: arguments.map,
+                    z: arguments.z,
+                }),
+            )
+        },
         None => (arguments.map.map(|path| Job::Map { path, z: arguments.z }), None),
     };
 
@@ -216,6 +217,7 @@ struct Redraw {
     pick_new_map_path: bool,
     cancel_load: bool,
     copy_to_clipboard: Option<String>,
+    reload_profile: Option<String>,
 }
 
 enum Opened {
@@ -327,6 +329,7 @@ impl App {
                 pick_new_map_path: false,
                 cancel_load: false,
                 copy_to_clipboard: None,
+                reload_profile: None,
             });
         };
 
@@ -426,6 +429,7 @@ impl App {
             pick_new_map_path: output.pick_new_map_path,
             cancel_load: output.cancel_load,
             copy_to_clipboard: output.copy_to_clipboard,
+            reload_profile: output.reload_profile,
         })
     }
 
@@ -444,12 +448,23 @@ impl App {
         self.ui.set_load_notice(None);
         self.pending_map = None;
         self.loader.start(match resolved {
-            Opened::Codebase(path) => Job::Codebase {
-                path,
-                bake: bake_options(&self.settings),
+            Opened::Codebase(path) => {
+                let bake = bake_options(&self.settings, Some(&path));
+
+                Job::Codebase { path, bake }
             },
             Opened::Map(path) => Job::Map { path, z: 1 },
         });
+    }
+
+    fn reload_profile(&mut self, profile: String) {
+        let Some(path) = self.session.environment_path().map(PathBuf::from) else {
+            return;
+        };
+        let mut bake = bake_options(&self.settings, Some(&path));
+        bake.profile = Some(core::path::TreePath::parse(&profile));
+        self.ui.set_load_notice(None);
+        self.loader.start(Job::Codebase { path, bake });
     }
 
     fn open_source(&mut self, source: SourceLocation) {
@@ -468,6 +483,10 @@ impl App {
     fn apply_outcome(&mut self, outcome: Outcome) {
         match outcome {
             Outcome::Codebase { path, loaded } => {
+                if let Some(profiles) = loaded.environment.profiles.as_ref() {
+                    let selected = (profiles.active != profiles.default).then_some(profiles.active.as_str());
+                    self.settings.set_profile_for(&path, selected);
+                }
                 let report = self.session.apply_codebase(*loaded);
                 self.settings.record_codebase(&path);
                 self.ui.set_open_error(None);
@@ -630,6 +649,7 @@ impl ApplicationHandler for App {
                             pick_new_map_path: false,
                             cancel_load: false,
                             copy_to_clipboard: None,
+                            reload_profile: None,
                         }
                     },
                 };
@@ -645,6 +665,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(request) = redraw.open {
                     self.apply_open(request);
+                }
+                if let Some(profile) = redraw.reload_profile {
+                    self.reload_profile(profile);
                 }
 
                 if let Some(source) = redraw.open_source {
@@ -679,10 +702,13 @@ impl Drop for App {
     }
 }
 
-fn bake_options(settings: &Settings) -> BakeOptions {
+fn bake_options(settings: &Settings, environment: Option<&std::path::Path>) -> BakeOptions {
     BakeOptions {
         enabled: editor::environment::baking_enabled(settings.bake_enabled),
         editor_walls: settings.perspective_editor_wall,
+        profile: environment
+            .and_then(|path| settings.profile_for(path))
+            .map(core::path::TreePath::parse),
         ..Default::default()
     }
 }

@@ -1,4 +1,7 @@
-use core::types::{Identifier, ProcId, Value};
+use core::{
+    path::TreePath,
+    types::{Identifier, ProcId, Value},
+};
 use std::{
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
@@ -67,7 +70,8 @@ const PROFILE_BASE: &str = "/datum/demir";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProfileError {
     Missing,
-    Ambiguous(Vec<String>),
+    MissingDefault(Vec<String>),
+    MultipleDefaults(Vec<String>),
 }
 
 impl std::fmt::Display for ProfileError {
@@ -77,9 +81,15 @@ impl std::fmt::Display for ProfileError {
                 formatter,
                 "the codebase defines no subtype of {PROFILE_BASE} under #ifdef __DEMIR_BAKE__"
             ),
-            Self::Ambiguous(paths) => write!(
+            Self::MissingDefault(paths) => write!(
                 formatter,
-                "the codebase defines {} profiles and none is more derived than the rest: {}",
+                "the codebase defines {} profiles but none directly sets default to a true value: {}",
+                paths.len(),
+                paths.join(", ")
+            ),
+            Self::MultipleDefaults(paths) => write!(
+                formatter,
+                "the codebase defines {} default profiles: {}",
                 paths.len(),
                 paths.join(", ")
             ),
@@ -89,33 +99,75 @@ impl std::fmt::Display for ProfileError {
 
 impl std::error::Error for ProfileError {}
 
-/// The one subtype of `/datum/demir` nothing else inherits from. Subtyping a profile to adjust it
-/// picks the adjustment, two unrelated profiles are an ambiguity only the codebase can settle.
-pub fn profile_type(tree: &ObjectTree) -> Result<TypeId, ProfileError> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileCatalog {
+    pub profiles: Vec<TypeId>,
+    pub default: TypeId,
+}
+
+impl ProfileCatalog {
+    pub fn select(&self, tree: &ObjectTree, requested: Option<&TreePath>) -> TypeId {
+        requested
+            .and_then(|path| tree.id_of(path))
+            .filter(|id| self.profiles.contains(id))
+            .unwrap_or(self.default)
+    }
+}
+
+/// Every selectable subtype of `/datum/demir` and the one subtype that directly marks itself as
+/// the default. The marker is intentionally not inherited, so a debug subtype does not become a
+/// second default merely because its parent is the default profile.
+pub fn profile_catalog(tree: &ObjectTree) -> Result<ProfileCatalog, ProfileError> {
     let base = tree
-        .id_of(&core::path::TreePath::parse(PROFILE_BASE))
+        .id_of(&TreePath::parse(PROFILE_BASE))
         .ok_or(ProfileError::Missing)?;
 
-    let mut leaves = tree
+    let mut profiles = tree
         .descendants(base)
         .into_iter()
         .filter(|id| *id != base)
-        .filter(|id| tree.get(*id).is_some_and(|decl| decl.children.is_empty()))
+        .collect::<Vec<_>>();
+    profiles.sort_by(|left, right| {
+        let left = tree.get(*left).map(|decl| decl.path.to_string()).unwrap_or_default();
+        let right = tree.get(*right).map(|decl| decl.path.to_string()).unwrap_or_default();
+
+        left.cmp(&right)
+    });
+    if profiles.is_empty() {
+        return Err(ProfileError::Missing);
+    }
+
+    let marker = Identifier::from("default");
+    let defaults = profiles
+        .iter()
+        .copied()
+        .filter(|id| {
+            tree.var(*id, &marker)
+                .is_some_and(|variable| variable.initializer.is_none() && variable.value.is_truthy())
+        })
         .collect::<Vec<_>>();
 
-    match leaves.len() {
-        0 => Err(ProfileError::Missing),
-        1 => Ok(leaves.remove(0)),
-        _ => {
-            let mut paths = leaves
-                .into_iter()
-                .filter_map(|id| tree.get(id).map(|decl| decl.path.to_string()))
-                .collect::<Vec<_>>();
-            paths.sort();
+    let paths = |types: &[TypeId]| {
+        types
+            .iter()
+            .filter_map(|id| tree.get(*id).map(|decl| decl.path.to_string()))
+            .collect::<Vec<_>>()
+    };
+    let default = match defaults.as_slice() {
+        [] => return Err(ProfileError::MissingDefault(paths(&profiles))),
+        [default] => *default,
+        _ => return Err(ProfileError::MultipleDefaults(paths(&defaults))),
+    };
 
-            Err(ProfileError::Ambiguous(paths))
-        },
-    }
+    Ok(ProfileCatalog { profiles, default })
+}
+
+pub fn profile_type(tree: &ObjectTree) -> Result<TypeId, ProfileError> { Ok(profile_catalog(tree)?.default) }
+
+pub fn selected_profile_type(tree: &ObjectTree, requested: Option<&TreePath>) -> Result<TypeId, ProfileError> {
+    let catalog = profile_catalog(tree)?;
+
+    Ok(catalog.select(tree, requested))
 }
 
 pub fn has_profile(tree: &ObjectTree) -> bool { profile_type(tree).is_ok() }
@@ -298,7 +350,16 @@ impl Bake {
     pub fn new(
         tree: &ObjectTree, module: &Module, atoms: Vec<Atom>, size: [i32; 3], limits: Limits, icons: IconStates,
     ) -> Self {
-        Self::with_progress(tree, module, atoms, size, limits, icons, |_, _, _| {})
+        let profile = profile_type(tree).expect("Bake::new requires a valid default profile");
+
+        Self::new_with_profile(tree, module, profile, atoms, size, limits, icons)
+    }
+
+    pub fn new_with_profile(
+        tree: &ObjectTree, module: &Module, profile: TypeId, atoms: Vec<Atom>, size: [i32; 3], limits: Limits,
+        icons: IconStates,
+    ) -> Self {
+        Self::with_profile_and_progress(tree, module, profile, atoms, size, limits, icons, |_, _, _| {})
     }
 
     pub fn node_groups(&self) -> &[NodeGroup] {
@@ -311,12 +372,20 @@ impl Bake {
 
     pub fn with_progress(
         tree: &ObjectTree, module: &Module, atoms: Vec<Atom>, size: [i32; 3], limits: Limits, icons: IconStates,
-        mut progress: impl FnMut(Stage, usize, usize),
+        progress: impl FnMut(Stage, usize, usize),
     ) -> Self {
-        let profile = profile_type(tree);
+        let profile = profile_type(tree).expect("Bake::with_progress requires a valid default profile");
+
+        Self::with_profile_and_progress(tree, module, profile, atoms, size, limits, icons, progress)
+    }
+
+    pub fn with_profile_and_progress(
+        tree: &ObjectTree, module: &Module, profile: TypeId, atoms: Vec<Atom>, size: [i32; 3], limits: Limits,
+        icons: IconStates, mut progress: impl FnMut(Stage, usize, usize),
+    ) -> Self {
         let mut bake = Self {
             limits,
-            hooks: profile.as_ref().map(|ty| Hooks::resolve(tree, *ty)).unwrap_or_default(),
+            hooks: Hooks::resolve(tree, profile),
             ..Default::default()
         };
 
@@ -341,12 +410,7 @@ impl Bake {
         }
 
         progress(Stage::Initialize, 0, 1);
-        let constructed = match profile {
-            Ok(ty) => bake.runtime.create_profile(tree, module, ty, limits).map(|_| ()),
-            // A codebase with no profile bakes nothing, which is not a fault. An ambiguous one is
-            // reported by whoever gated on `profile_type` before reaching here.
-            Err(_) => Ok(()),
-        };
+        let constructed = bake.runtime.create_profile(tree, module, profile, limits).map(|_| ());
         progress(Stage::Initialize, 1, 1);
         if let Err(fault) = constructed {
             bake.diagnostics.record(fault);

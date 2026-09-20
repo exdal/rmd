@@ -182,6 +182,7 @@
 	return locate(here.x, here.y, here.z + offset)
 
 /datum/demir/vanderlin
+	default = TRUE
 	var/sun_color
 
 	New()

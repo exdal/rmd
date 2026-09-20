@@ -28,7 +28,9 @@ use crate::{
         HighlightTile,
         ProfileError,
         has_profile,
+        profile_catalog,
         profile_type,
+        selected_profile_type,
     },
     eval::Evaluator,
     heap::{Object, ObjectId},
@@ -40,6 +42,11 @@ fn compile(source: &str) -> (ObjectTree, codegen::Module) {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("rmd-vm-fixture-{}-{id}.dm", std::process::id()));
+    let source = if source.contains("/datum/demir/test") {
+        format!("{source}\n/datum/demir/test\n    default = TRUE\n")
+    } else {
+        source.to_owned()
+    };
     std::fs::write(&path, source).expect("write fixture");
     let arena = StrArena::new();
     let preprocessed = preprocessor::preprocess(&arena, &path).expect("fixture should preprocess");
@@ -146,28 +153,39 @@ fn only_a_demir_subtype_makes_a_profile() {
     assert!(has_profile(&empty));
 }
 
-/// Subtyping a profile to adjust it names the adjustment, so a codebase can ship a base profile and
-/// a variant without the two fighting.
 #[test]
-fn the_most_derived_profile_wins() {
+fn an_explicit_default_is_not_inherited_by_its_variants() {
     let (tree, _) = compile(
         r#"
-/datum/demir/base/bake(atom/target)
-    target.icon_state = "base"
+/datum/demir/base
+    default = TRUE
+    bake(atom/target)
+        target.icon_state = "base"
 /datum/demir/base/debug/bake(atom/target)
     target.icon_state = "debug"
 "#,
     );
-    let chosen = profile_type(&tree).expect("the leaf profile");
+    let catalog = profile_catalog(&tree).expect("valid profile catalog");
+    let chosen = profile_type(&tree).expect("default profile");
+    let debug = selected_profile_type(&tree, Some(&TreePath::parse("/datum/demir/base/debug")))
+        .expect("selected debug profile");
+    let stale = selected_profile_type(&tree, Some(&TreePath::parse("/datum/demir/base/missing")))
+        .expect("a stale selection falls back to the default");
 
     assert_eq!(
         tree.get(chosen).map(|decl| decl.path.to_string()),
+        Some(String::from("/datum/demir/base"))
+    );
+    assert_eq!(
+        tree.get(debug).map(|decl| decl.path.to_string()),
         Some(String::from("/datum/demir/base/debug"))
     );
+    assert_eq!(catalog.profiles.len(), 2);
+    assert_eq!(stale, chosen);
 }
 
 #[test]
-fn sibling_profiles_are_an_ambiguity() {
+fn profiles_require_one_explicit_default() {
     let (tree, _) = compile(
         r#"
 /datum/demir/goon/bake(atom/target)
@@ -179,12 +197,32 @@ fn sibling_profiles_are_an_ambiguity() {
 
     assert_eq!(
         profile_type(&tree),
-        Err(ProfileError::Ambiguous(vec![
+        Err(ProfileError::MissingDefault(vec![
             String::from("/datum/demir/goon"),
             String::from("/datum/demir/tg"),
         ]))
     );
     assert!(!has_profile(&tree));
+}
+
+#[test]
+fn multiple_explicit_defaults_are_rejected() {
+    let (tree, _) = compile(
+        r#"
+/datum/demir/goon
+    default = TRUE
+/datum/demir/tg
+    default = TRUE
+"#,
+    );
+
+    assert_eq!(
+        profile_type(&tree),
+        Err(ProfileError::MultipleDefaults(vec![
+            String::from("/datum/demir/goon"),
+            String::from("/datum/demir/tg"),
+        ]))
+    );
 }
 
 /// `..()` is half the reason the hooks are methods: a variant profile adjusts the base rather than
@@ -196,6 +234,7 @@ fn a_profile_hook_chains_to_its_parent() {
 /turf/wall
     icon_state = "static"
 /datum/demir/base
+    default = TRUE
     bake(atom/target)
         target.icon_state = "base"
 /datum/demir/base/debug/bake(atom/target)
@@ -203,9 +242,12 @@ fn a_profile_hook_chains_to_its_parent() {
     target.icon_state = "[target.icon_state]-debug"
 "#,
     );
-    let bake = Bake::new(
+    let profile =
+        selected_profile_type(&tree, Some(&TreePath::parse("/datum/demir/base/debug"))).expect("debug profile");
+    let bake = Bake::new_with_profile(
         &tree,
         &module,
+        profile,
         vec![Atom {
             instance: 1,
             ty: tree.id_of(&TreePath::parse("/turf/wall")).expect("wall type"),

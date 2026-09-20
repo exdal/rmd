@@ -3023,6 +3023,7 @@ pub(crate) fn build_textures(environment: &Environment, progress: &Progress) -> 
 pub(crate) struct LoadReport {
     pub preprocess: usize,
     pub sema: usize,
+    pub profile: usize,
     pub codegen: usize,
     pub icons: usize,
     pub lines: Vec<String>,
@@ -3031,12 +3032,13 @@ pub(crate) struct LoadReport {
 impl LoadReport {
     pub fn is_empty(&self) -> bool { self.total() == 0 }
 
-    pub fn total(&self) -> usize { self.preprocess + self.sema + self.codegen + self.icons }
+    pub fn total(&self) -> usize { self.preprocess + self.sema + self.profile + self.codegen + self.icons }
 
     pub fn summary(&self) -> String {
         let parts = [
             (self.preprocess, "preprocessor"),
             (self.sema, "analysis"),
+            (self.profile, "profile"),
             (self.codegen, "bytecode"),
             (self.icons, "icon"),
         ]
@@ -3106,6 +3108,14 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
         );
     }
 
+    if let Some(error) = &diagnostics.profile {
+        collect(
+            log::Level::Warn,
+            format!("warning: baking is off, profile selection failed: {error}"),
+            "warning: ",
+        );
+    }
+
     if let Some(error) = &diagnostics.codegen {
         collect(
             log::Level::Warn,
@@ -3125,6 +3135,7 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
     LoadReport {
         preprocess: diagnostics.preprocess.len() + diagnostics.bake_preprocess.len(),
         sema: diagnostics.sema.len() + diagnostics.bake_sema.len(),
+        profile: usize::from(diagnostics.profile.is_some()),
         codegen: usize::from(diagnostics.codegen.is_some()),
         icons: diagnostics.icons.len(),
         lines,
@@ -3210,6 +3221,9 @@ mod tests {
 /obj/pipe/scrubbers
 /obj/not_node
 
+/datum/demir/example
+    default = TRUE
+
 /datum/demir/example/New()
     demir_node_group(/obj/cable, /turf/closed)
     demir_node_group(/obj/pipe/supply, /turf/closed)
@@ -3236,10 +3250,12 @@ mod tests {
         };
         let (editor_tree, _) = compile(false);
         let (bake_tree, module) = compile(true);
+        let profile = vm::bake::profile_type(&bake_tree).expect("default profile");
         let mut environment = Environment::new(root.join("test.dme"), editor_tree);
         environment.bake_program = Some(BakeProgram {
             tree: bake_tree,
             module: codegen::generate(&module).expect("codegen"),
+            profile,
             files: Default::default(),
             icon_states: Default::default(),
         });
@@ -3993,10 +4009,16 @@ mod tests {
         report.sema = 3;
         assert_eq!(report.summary(), "12 preprocessor, 3 analysis and 1 icon diagnostics");
 
+        report.profile = 1;
+        assert_eq!(
+            report.summary(),
+            "12 preprocessor, 3 analysis, 1 profile and 1 icon diagnostics"
+        );
+
         report.codegen = 1;
         assert_eq!(
             report.summary(),
-            "12 preprocessor, 3 analysis, 1 bytecode and 1 icon diagnostics"
+            "12 preprocessor, 3 analysis, 1 profile, 1 bytecode and 1 icon diagnostics"
         );
     }
 
@@ -4274,6 +4296,8 @@ mod tests {
         let profile = r#"
 /turf/closed/wall/smoothed
     icon_state = "smooth"
+/datum/demir/test
+    default = TRUE
 /datum/demir/test/bake(atom/target)
     if(istype(target, /turf/closed/wall/smoothed))
         target.icon_state = "wall"
@@ -4298,10 +4322,12 @@ mod tests {
         };
         let (editor_tree, _) = compile(false);
         let (bake_tree, module) = compile(true);
+        let selected_profile = vm::bake::profile_type(&bake_tree).expect("default profile");
         let mut environment = editor::Environment::new(root.join("test.dme"), editor_tree);
         environment.bake_program = Some(editor::BakeProgram {
             tree: bake_tree,
             module: codegen::generate(&module).expect("codegen"),
+            profile: selected_profile,
             files: Default::default(),
             icon_states: Default::default(),
         });
@@ -4452,6 +4478,8 @@ mod tests {
             root.join("profile.dm"),
             r#"
 #ifdef __DEMIR_BAKE__
+/datum/demir/test
+    default = TRUE
 /datum/demir/test/highlights(atom/target)
     if(!istype(target, /obj/source))
         return
@@ -5354,6 +5382,12 @@ mod tests {
 
         assert!(session.toggle_type_visibility(table));
         assert!(session.instances().unwrap().sprite(selected).is_none());
+        session.select_instance(Some(selected));
+        assert_eq!(
+            session.set_selected_instance_var("name".into(), Value::Text(String::from("Unsaved table"))),
+            Some(true)
+        );
+        assert!(session.state.active_document().unwrap().is_dirty());
         session.load_environment(&root.join("test.dme")).unwrap();
         let reloaded_table = session
             .tree()
@@ -5363,6 +5397,8 @@ mod tests {
 
         assert!(session.is_type_visible(reloaded_table));
         assert!(session.instances().unwrap().sprite(selected).is_some());
+        assert!(session.state.active_document().unwrap().is_dirty());
+        assert_eq!(session.selected_instance(), Some(selected));
         assert_render_cache_matches_rebuild(&session);
     }
 

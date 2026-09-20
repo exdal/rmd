@@ -27,6 +27,7 @@ use crate::{
 const SETTINGS_WINDOW_SIZE: [f32; 2] = [760.0, 560.0];
 const SETTINGS_WINDOW_MIN_SIZE: [f32; 2] = [620.0, 420.0];
 const SETTINGS_CATEGORY_WIDTH: f32 = 160.0;
+const PROFILE_RELOAD_POPUP: &str = "Reload codebase profile?";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum SettingsCategory {
@@ -43,6 +44,13 @@ struct SettingsWindowState<'a> {
     category: &'a mut SettingsCategory,
     capturing: &'a mut Option<KeybindAction>,
     measured: &'a mut [f32; 2],
+    pending_profile: &'a mut Option<String>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct SettingsWindowOutput {
+    pub object_tree_changed: bool,
+    pub reload_profile: Option<String>,
 }
 
 impl SettingsCategory {
@@ -110,6 +118,7 @@ pub(super) struct SettingsWindow {
     category: SettingsCategory,
     capturing: Option<KeybindAction>,
     measured: [f32; 2],
+    pending_profile: Option<String>,
 }
 
 impl SettingsWindow {
@@ -120,6 +129,7 @@ impl SettingsWindow {
             category: SettingsCategory::default(),
             capturing: None,
             measured: SETTINGS_WINDOW_SIZE,
+            pending_profile: None,
         })
     }
 
@@ -127,7 +137,9 @@ impl SettingsWindow {
 
     pub(super) const fn is_capturing_keybind(&self) -> bool { self.capturing.is_some() }
 
-    pub(super) fn draw(&mut self, ui: &Ui, session: &mut Session, settings: &mut Settings) -> bool {
+    pub(super) fn draw(
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, loading: bool,
+    ) -> SettingsWindowOutput {
         draw_settings_window(
             ui,
             &self.window,
@@ -136,9 +148,11 @@ impl SettingsWindow {
                 category: &mut self.category,
                 capturing: &mut self.capturing,
                 measured: &mut self.measured,
+                pending_profile: &mut self.pending_profile,
             },
             session,
             settings,
+            loading,
         )
     }
 
@@ -149,17 +163,19 @@ impl SettingsWindow {
 
 fn draw_settings_window(
     ui: &Ui, window: &WindowKey, state: SettingsWindowState<'_>, session: &mut Session, settings: &mut Settings,
-) -> bool {
+    loading: bool,
+) -> SettingsWindowOutput {
     let SettingsWindowState {
         open,
         category,
         capturing,
         measured,
+        pending_profile,
     } = state;
     if !*open {
         *capturing = None;
 
-        return false;
+        return SettingsWindowOutput::default();
     }
 
     let center = ui.main_viewport().work_center();
@@ -205,7 +221,9 @@ fn draw_settings_window(
                     match category {
                         SettingsCategory::General => draw_general_settings(ui, settings),
                         SettingsCategory::Viewport => draw_viewport_settings(ui, session, settings),
-                        SettingsCategory::Compiler => draw_compiler_settings(ui, session, settings),
+                        SettingsCategory::Compiler => {
+                            draw_compiler_settings(ui, session, settings, loading, pending_profile)
+                        },
                         SettingsCategory::ObjectTree => {
                             object_tree_changed |= draw_object_tree_settings(ui, settings);
                         },
@@ -220,7 +238,10 @@ fn draw_settings_window(
         *capturing = None;
     }
 
-    object_tree_changed
+    SettingsWindowOutput {
+        object_tree_changed,
+        reload_profile: draw_profile_reload_dialog(ui, pending_profile),
+    }
 }
 
 fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
@@ -283,7 +304,13 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
     }
 }
 
-fn draw_compiler_settings(ui: &Ui, session: &Session, settings: &mut Settings) {
+fn draw_compiler_settings(
+    ui: &Ui, session: &Session, settings: &mut Settings, loading: bool, pending_profile: &mut Option<String>,
+) {
+    ui.text("Codebase");
+    draw_profile_setting(ui, session, settings, loading, pending_profile);
+
+    ui.separator();
     ui.text("On next load");
     ui.checkbox("Run DM appearance baking", &mut settings.bake_enabled);
     ui.checkbox("Perspective editor walls", &mut settings.perspective_editor_wall);
@@ -315,6 +342,90 @@ fn draw_compiler_settings(ui: &Ui, session: &Session, settings: &mut Settings) {
             fault.location.display(file)
         ));
     }
+}
+
+fn draw_profile_setting(
+    ui: &Ui, session: &Session, settings: &Settings, loading: bool, pending_profile: &mut Option<String>,
+) {
+    let Some(environment) = session.state.environment.as_deref() else {
+        ui.text_disabled("No codebase loaded");
+
+        return;
+    };
+    if !settings.bake_enabled || !environment.bake_options.enabled {
+        ui.text_disabled("DM appearance baking is disabled");
+
+        return;
+    }
+    let Some(profiles) = environment.profiles.as_ref() else {
+        if session.diagnostics.profile.is_some() {
+            ui.text_disabled("Profile declarations are invalid");
+        } else {
+            ui.text_disabled("This codebase defines no profiles");
+        }
+
+        return;
+    };
+
+    ui.text("Profile");
+    let _disabled = ui.begin_disabled_with_cond(loading);
+    ui.set_next_item_width(-1.0);
+    if let Some(combo) = ui.begin_combo("##codebase-profile", &profiles.active) {
+        for profile in &profiles.available {
+            let label = if *profile == profiles.default {
+                format!("{profile} (default)")
+            } else {
+                profile.clone()
+            };
+            if ui
+                .selectable_config(&label)
+                .selected(*profile == profiles.active)
+                .build()
+                && *profile != profiles.active
+            {
+                *pending_profile = Some(profile.clone());
+            }
+        }
+        combo.end();
+    }
+    if loading {
+        ui.text_disabled("Available after the current load finishes");
+    }
+}
+
+fn draw_profile_reload_dialog(ui: &Ui, pending_profile: &mut Option<String>) -> Option<String> {
+    let profile = pending_profile.as_deref()?;
+    if !ui.is_popup_open(PROFILE_RELOAD_POPUP) {
+        ui.open_popup(PROFILE_RELOAD_POPUP);
+    }
+    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
+        | WindowFlags::NO_RESIZE
+        | WindowFlags::NO_MOVE
+        | WindowFlags::NO_COLLAPSE
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::NO_DOCKING;
+    let Some(_modal) = ui.begin_modal_popup_config(PROFILE_RELOAD_POPUP).flags(flags).begin() else {
+        return None;
+    };
+
+    ui.text_wrapped(format!("Reload the codebase with {profile}?"));
+    ui.text("Open maps and unsaved changes will be preserved.");
+    ui.separator();
+    if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+        *pending_profile = None;
+        ui.close_current_popup();
+
+        return None;
+    }
+    ui.same_line();
+    if ui.button("Reload") {
+        let profile = pending_profile.take();
+        ui.close_current_popup();
+
+        return profile;
+    }
+
+    None
 }
 
 fn drag_min_pixels(ui: &Ui, label: &str, value: &mut u32) {
@@ -486,6 +597,7 @@ mod tests {
             let mut open = true;
             let mut capturing = None;
             let mut measured = SETTINGS_WINDOW_SIZE;
+            let mut pending_profile = None;
             let mut session = Session::new();
             let mut settings = Settings::default();
 
@@ -497,12 +609,64 @@ mod tests {
                     category: &mut category,
                     capturing: &mut capturing,
                     measured: &mut measured,
+                    pending_profile: &mut pending_profile,
                 },
                 &mut session,
                 &mut settings,
+                false,
             );
 
             assert!(context.render_legacy().valid());
         }
+    }
+
+    #[test]
+    fn compiler_settings_render_the_loaded_profile_catalog() {
+        let _context = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = dear_imgui_rs::Context::create();
+        context
+            .font_atlas()
+            .try_claim_legacy_renderer()
+            .expect("legacy renderer font atlas should be available")
+            .build();
+        context.io_mut().set_display_size([1280.0, 720.0]);
+        context.io_mut().set_delta_time(1.0 / 60.0);
+        let ui = context.frame();
+        let window = WindowKey::new("settings-profile-test", "Settings").expect("valid settings window key");
+        let mut open = true;
+        let mut category = SettingsCategory::Compiler;
+        let mut capturing = None;
+        let mut measured = SETTINGS_WINDOW_SIZE;
+        let mut pending_profile = None;
+        let mut session = Session::new();
+        let mut environment = editor::Environment::new("station.dme", objtree::ObjectTree::new());
+        environment.profiles = Some(editor::Profiles {
+            available: vec![
+                String::from("/datum/demir/tgstation"),
+                String::from("/datum/demir/tgstation/debug"),
+            ],
+            default: String::from("/datum/demir/tgstation"),
+            active: String::from("/datum/demir/tgstation/debug"),
+        });
+        session.state.environment = Some(std::sync::Arc::new(environment));
+        let mut settings = Settings::default();
+
+        let output = draw_settings_window(
+            ui,
+            &window,
+            SettingsWindowState {
+                open: &mut open,
+                category: &mut category,
+                capturing: &mut capturing,
+                measured: &mut measured,
+                pending_profile: &mut pending_profile,
+            },
+            &mut session,
+            &mut settings,
+            false,
+        );
+
+        assert_eq!(output, SettingsWindowOutput::default());
+        assert!(context.render_legacy().valid());
     }
 }

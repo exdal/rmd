@@ -46,9 +46,15 @@ object trees. Code must resolve placed types by path when it moves data between 
 Some build tools pass defines outside the `.dme` file. A codebase must declare required runtime
 defines inside its bake branch. The declarations must appear before the generated include block.
 
-The compiler finds the most-derived subtype of `/datum/demir`. That subtype becomes the profile. A
-codebase can layer profile subtypes through inheritance. Two unrelated profile leaves cause an
-ambiguity error.
+The compiler finds every subtype of `/datum/demir`. Every subtype is selectable, including a base
+profile and variants derived from it. Exactly one subtype must directly set `default = TRUE`. The
+default marker is not inherited for selection purposes, so a debug subtype does not become a
+second default merely because its parent is the default profile.
+
+The declared default is used by the viewer, compiler driver, and the editor's first load. The
+editor can request another profile by its complete type path. A missing remembered path falls back
+to the declared default. Zero or multiple explicit defaults are profile diagnostics and disable
+bake bytecode generation until the codebase fixes the declaration.
 
 The bake view produces no bytecode when the codebase has no profile. Preprocessor, analysis, and
 code generation faults appear with the load diagnostics. The editor continues to use the
@@ -105,9 +111,12 @@ compile the profile:
 ```dm
 #ifdef __DEMIR_BAKE__
 
-/datum/demir/example/bake(atom/target)
-	if(istype(target, /turf/closed/wall))
-		target.icon_state = "wall"
+/datum/demir/example
+	default = TRUE
+
+	bake(atom/target)
+		if(istype(target, /turf/closed/wall))
+			target.icon_state = "wall"
 
 #endif
 ```
@@ -159,6 +168,12 @@ UI procedure. The example profiles provide complete integrations:
 
 The editor and viewer enable appearance baking by default. Set `DM_BAKE=0` to disable it for one
 run. The editor's **Run DM appearance baking** setting applies on the next codebase load.
+
+The editor's **Compiler > Codebase** setting lists every profile in the loaded codebase and marks
+the declared default. Choosing another profile asks for confirmation, then reloads the codebase
+and rebakes its open maps without closing them or discarding unsaved map edits. The choice is
+remembered per environment. Choosing the declared default clears the override so later changes to
+the codebase default take effect.
 
 Each open map owns one bake. A new environment, a new map, or a changed z-level count starts a full
 bake. Edits, undo, and redo use incremental updates. Hiding a type rebuilds sprites from cached bake

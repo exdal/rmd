@@ -223,9 +223,7 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
         return Err("semantic analysis failed".into());
     }
 
-    if let Err(error) = vm::bake::profile_type(&tree) {
-        return Err(error.to_string().into());
-    }
+    let profile = vm::bake::profile_type(&tree).map_err(|error| error.to_string())?;
 
     let module = codegen::generate(&ir_module)?;
     drop(ast);
@@ -298,9 +296,10 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
         .flatten();
 
     let bake_started = std::time::Instant::now();
-    let mut bake = vm::bake::Bake::new(
+    let mut bake = vm::bake::Bake::new_with_profile(
         &tree,
         &module,
+        profile,
         atoms,
         [map.size.x as i32, map.size.y as i32, map.size.z as i32],
         vm::Limits::default(),

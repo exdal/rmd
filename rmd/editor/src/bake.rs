@@ -64,9 +64,10 @@ impl Standalone {
         self.baked += 1;
 
         let world = self.world.get_or_insert_with(|| {
-            Bake::new(
+            Bake::new_with_profile(
                 &program.tree,
                 &program.module,
+                program.profile,
                 Vec::new(),
                 [1, 1, 1],
                 environment.bake_options.limits,
@@ -116,9 +117,10 @@ pub fn build_atoms(
     let program = environment.bake_program.as_ref()?;
     let mut current = None;
 
-    Some(Bake::with_progress(
+    Some(Bake::with_profile_and_progress(
         &program.tree,
         &program.module,
+        program.profile,
         atoms,
         size,
         environment.bake_options.limits,
@@ -208,9 +210,13 @@ mod tests {
         let root = examples();
         let compile = |baking| {
             let arena = StrArena::new();
-            let prelude = preprocessor::prelude_files()
-                .into_iter()
-                .chain([preprocessor::PreludeFile::Embedded("<test-profile.dm>", profile)]);
+            let prelude = preprocessor::prelude_files().into_iter().chain([
+                preprocessor::PreludeFile::Embedded("<test-profile.dm>", profile),
+                preprocessor::PreludeFile::Embedded(
+                    "<test-profile-default.dm>",
+                    "/datum/demir/test\n    default = TRUE\n",
+                ),
+            ]);
             let preprocessed = preprocessor::Preprocessor::new(&arena)
                 .with_prelude(prelude)
                 .with_baking(baking)
@@ -226,10 +232,12 @@ mod tests {
         };
         let (editor_tree, _) = compile(false);
         let (bake_tree, module) = compile(true);
+        let profile = vm::bake::profile_type(&bake_tree).expect("default profile");
         let mut environment = Environment::new(root.join("test.dme"), editor_tree);
         environment.bake_program = Some(BakeProgram {
             tree: bake_tree,
             module: codegen::generate(&module).expect("codegen"),
+            profile,
             files: Default::default(),
             icon_states: Default::default(),
         });
@@ -317,6 +325,8 @@ mod tests {
         std::fs::write(
             root.join("profile.dm"),
             r#"
+/datum/demir/test
+    default = TRUE
 /datum/demir/test/bake(atom/target)
     if(istype(target, /obj/smoothed))
         target.icon_state = "wall"

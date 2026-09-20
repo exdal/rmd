@@ -686,6 +686,12 @@ pub(crate) struct RecentMap {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ProfileSelection {
+    pub environment: PathBuf,
+    pub profile: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
     pub maximized: bool,
@@ -709,6 +715,7 @@ pub(crate) struct Settings {
     pub keybindings: KeyBindings,
     pub recent_codebases: Vec<PathBuf>,
     pub recent: Vec<RecentMap>,
+    pub profile_selections: Vec<ProfileSelection>,
     pub bake_enabled: bool,
     pub perspective_editor_wall: bool,
 }
@@ -769,6 +776,7 @@ impl Default for Settings {
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
+            profile_selections: Vec::new(),
             bake_enabled: true,
             perspective_editor_wall: false,
         }
@@ -861,6 +869,27 @@ impl Settings {
             .filter(move |recent| recent.environment.as_deref() == Some(environment.as_path()))
     }
 
+    pub fn profile_for(&self, environment: &Path) -> Option<&str> {
+        let environment = absolute(environment);
+
+        self.profile_selections
+            .iter()
+            .find(|selection| selection.environment == environment)
+            .map(|selection| selection.profile.as_str())
+    }
+
+    pub fn set_profile_for(&mut self, environment: &Path, profile: Option<&str>) {
+        let environment = absolute(environment);
+        self.profile_selections
+            .retain(|selection| selection.environment != environment);
+        if let Some(profile) = profile {
+            self.profile_selections.push(ProfileSelection {
+                environment,
+                profile: profile.to_owned(),
+            });
+        }
+    }
+
     fn try_load() -> Result<Option<Self>, Box<dyn Error>> {
         let path = settings_path()?;
         Self::from_file_read(fs::read_to_string(path))
@@ -945,6 +974,7 @@ mod tests {
                 keybindings: KeyBindings::default(),
                 recent_codebases: Vec::new(),
                 recent: Vec::new(),
+                profile_selections: Vec::new(),
                 bake_enabled: true,
                 perspective_editor_wall: false,
             }
@@ -1165,6 +1195,10 @@ mod tests {
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
+            profile_selections: vec![ProfileSelection {
+                environment: PathBuf::from("/project/station.dme"),
+                profile: String::from("/datum/demir/tgstation/debug"),
+            }],
             bake_enabled: true,
             perspective_editor_wall: false,
         };
@@ -1197,6 +1231,8 @@ mod tests {
         assert!(encoded.contains("obj = true"));
         assert!(encoded.contains("custom_enabled = true"));
         assert!(encoded.contains("custom_type_path = \"/atom/movable/lighting\""));
+        assert!(encoded.contains("[[profile_selections]]"));
+        assert!(encoded.contains("profile = \"/datum/demir/tgstation/debug\""));
         assert!(encoded.contains("key = \"G\""));
         assert!(encoded.contains("ctrl = true"));
         assert_eq!(toml::from_str::<Settings>(&encoded).unwrap(), settings);
@@ -1229,6 +1265,7 @@ mod tests {
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
+            profile_selections: Vec::new(),
             bake_enabled: true,
             perspective_editor_wall: false,
         };
@@ -1386,6 +1423,26 @@ mod tests {
             settings.recent_codebases,
             vec![absolute(Path::new("a.dme")), absolute(Path::new("b.dme"))]
         );
+    }
+
+    #[test]
+    fn profile_overrides_are_scoped_replaced_and_cleared_per_codebase() {
+        let mut settings = Settings::default();
+        let station = Path::new("station.dme");
+        let other = Path::new("other.dme");
+
+        settings.set_profile_for(station, Some("/datum/demir/tgstation/debug"));
+        settings.set_profile_for(other, Some("/datum/demir/goonstation"));
+        assert_eq!(settings.profile_for(station), Some("/datum/demir/tgstation/debug"));
+        assert_eq!(settings.profile_for(other), Some("/datum/demir/goonstation"));
+
+        settings.set_profile_for(station, Some("/datum/demir/tgstation/lighting"));
+        assert_eq!(settings.profile_for(station), Some("/datum/demir/tgstation/lighting"));
+        assert_eq!(settings.profile_selections.len(), 2);
+
+        settings.set_profile_for(station, None);
+        assert_eq!(settings.profile_for(station), None);
+        assert_eq!(settings.profile_for(other), Some("/datum/demir/goonstation"));
     }
 
     #[test]

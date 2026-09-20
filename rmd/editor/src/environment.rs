@@ -1,4 +1,4 @@
-use core::{arena::StrArena, location::FileId, source::SourceMap};
+use core::{arena::StrArena, location::FileId, path::TreePath, source::SourceMap};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -13,6 +13,7 @@ use crate::{
     BakeProgram,
     LoadError,
     ObjectTree,
+    Profiles,
     progress::{Progress, Stage},
 };
 
@@ -23,6 +24,7 @@ pub struct LoadDiagnostics {
     pub bake_preprocess: Vec<PreprocessError>,
     pub bake_sema: Vec<SemaError>,
     pub codegen: Option<CodegenError>,
+    pub profile: Option<vm::bake::ProfileError>,
     pub icons: Vec<(String, IconError)>,
     pub bake: Vec<vm::Diagnostic>,
 }
@@ -34,6 +36,7 @@ impl LoadDiagnostics {
             && self.bake_preprocess.is_empty()
             && self.bake_sema.is_empty()
             && self.codegen.is_none()
+            && self.profile.is_none()
             && self.icons.is_empty()
             && self.bake.is_empty()
     }
@@ -44,6 +47,7 @@ impl LoadDiagnostics {
             + self.bake_preprocess.len()
             + self.bake_sema.len()
             + usize::from(self.codegen.is_some())
+            + usize::from(self.profile.is_some())
             + self.icons.len()
             + self.bake.len()
     }
@@ -67,6 +71,7 @@ pub(crate) fn source_root<'a>(sources: &'a SourceMap<'_>, entry: Option<FileId>,
 pub struct BakeOptions {
     pub enabled: bool,
     pub editor_walls: bool,
+    pub profile: Option<TreePath>,
     pub limits: vm::Limits,
 }
 
@@ -75,6 +80,7 @@ impl Default for BakeOptions {
         Self {
             enabled: true,
             editor_walls: false,
+            profile: None,
             limits: vm::Limits::default(),
         }
     }
@@ -118,24 +124,60 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
         }
     }
 
-    let (bake_program, bake_files, bake_errors, bake_sema_errors, codegen_error) = match bake {
+    let (bake_program, profiles, profile_error, bake_files, bake_errors, bake_sema_errors, codegen_error) = match bake {
         Some(view) => {
             let files: Arc<[PathBuf]> = Arc::from(view.files);
-            let program = view.module.map(|module| BakeProgram {
-                tree: view.tree,
-                module,
-                files: files.clone(),
-                icon_states: vm::IconStates::default(),
-            });
+            let catalog = vm::bake::profile_catalog(&view.tree);
+            let (selection, profile_error) = match catalog {
+                Ok(catalog) => {
+                    let active = catalog.select(&view.tree, options.profile.as_ref());
+                    let path = |id| {
+                        view.tree
+                            .get(id)
+                            .map(|declaration| declaration.path.to_string())
+                            .unwrap_or_default()
+                    };
+                    let profiles = Profiles {
+                        available: catalog.profiles.iter().copied().map(path).collect::<Vec<_>>(),
+                        default: path(catalog.default),
+                        active: path(active),
+                    };
 
-            (program, files, view.errors, view.sema_errors, view.codegen_error)
+                    (Some((active, profiles)), None)
+                },
+                Err(vm::bake::ProfileError::Missing) => (None, None),
+                Err(error) => (None, Some(error)),
+            };
+            let profiles = selection.as_ref().map(|(_, profiles)| profiles.clone());
+            let program = match (view.module, selection) {
+                (Some(module), Some((profile, _))) => Some(BakeProgram {
+                    tree: view.tree,
+                    module,
+                    profile,
+                    files: files.clone(),
+                    icon_states: vm::IconStates::default(),
+                }),
+                _ => None,
+            };
+
+            (
+                program,
+                profiles,
+                profile_error,
+                files,
+                view.errors,
+                view.sema_errors,
+                view.codegen_error,
+            )
         },
-        None => (None, Arc::default(), Vec::new(), Vec::new(), None),
+        None => (None, None, None, Arc::default(), Vec::new(), Vec::new(), None),
     };
 
     Ok(Compiled {
         tree: editor.tree,
         bake_program,
+        profiles,
+        profile_error,
         bake_files,
         root: editor.root,
         files: editor.files,
@@ -234,6 +276,8 @@ fn compile_view<'a>(
 pub(crate) struct Compiled {
     pub tree: ObjectTree,
     pub bake_program: Option<BakeProgram>,
+    pub profiles: Option<Profiles>,
+    pub profile_error: Option<vm::bake::ProfileError>,
     pub bake_files: Arc<[PathBuf]>,
     pub root: PathBuf,
     pub files: Vec<PathBuf>,
@@ -257,4 +301,111 @@ struct CompiledView<'a> {
     sema_errors: Vec<SemaError>,
     codegen_error: Option<CodegenError>,
     source_cache: preprocessor::SourceCache<'a>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+    use crate::Environment;
+
+    fn fixture(source: &str) -> PathBuf {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("rmd-profile-selection-{}-{id}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create fixture directory");
+        let entry = root.join("test.dm");
+        std::fs::write(&entry, source).expect("write fixture");
+
+        entry
+    }
+
+    #[test]
+    fn compilation_exposes_profiles_and_honors_valid_or_stale_requests() {
+        let entry = fixture(
+            r#"
+#ifdef __DEMIR_BAKE__
+/datum/demir/main
+    default = TRUE
+    bake(atom/target)
+        target.name = "main"
+/datum/demir/main/debug/bake(atom/target)
+    target.name = "debug"
+#endif
+"#,
+        );
+
+        let load = |requested: Option<&str>| {
+            Environment::load_with(
+                &entry,
+                BakeOptions {
+                    profile: requested.map(TreePath::parse),
+                    ..BakeOptions::default()
+                },
+                &Progress::new(),
+            )
+            .expect("load fixture")
+        };
+        let (default, diagnostics) = load(None);
+        assert!(diagnostics.profile.is_none());
+        assert_eq!(
+            default.profiles,
+            Some(Profiles {
+                available: vec![
+                    String::from("/datum/demir/main"),
+                    String::from("/datum/demir/main/debug"),
+                ],
+                default: String::from("/datum/demir/main"),
+                active: String::from("/datum/demir/main"),
+            })
+        );
+
+        let (debug, diagnostics) = load(Some("/datum/demir/main/debug"));
+        assert!(diagnostics.profile.is_none());
+        assert_eq!(
+            debug.profiles.as_ref().map(|profiles| profiles.active.as_str()),
+            Some("/datum/demir/main/debug")
+        );
+        assert_eq!(
+            debug
+                .bake_program
+                .as_ref()
+                .and_then(|program| program.tree.get(program.profile))
+                .map(|declaration| declaration.path.to_string()),
+            Some(String::from("/datum/demir/main/debug"))
+        );
+
+        let (stale, diagnostics) = load(Some("/datum/demir/main/missing"));
+        assert!(diagnostics.profile.is_none());
+        assert_eq!(
+            stale.profiles.as_ref().map(|profiles| profiles.active.as_str()),
+            Some("/datum/demir/main")
+        );
+
+        std::fs::remove_dir_all(entry.parent().expect("fixture parent")).expect("remove fixture");
+    }
+
+    #[test]
+    fn invalid_default_declarations_are_diagnostics_and_disable_baking() {
+        let entry = fixture(
+            r#"
+#ifdef __DEMIR_BAKE__
+/datum/demir/one
+/datum/demir/two
+#endif
+"#,
+        );
+        let (environment, diagnostics) = Environment::load_with(&entry, BakeOptions::default(), &Progress::new())
+            .expect("the compatibility view still loads");
+
+        assert!(matches!(
+            diagnostics.profile,
+            Some(vm::bake::ProfileError::MissingDefault(_))
+        ));
+        assert!(environment.profiles.is_none());
+        assert!(environment.bake_program.is_none());
+
+        std::fs::remove_dir_all(entry.parent().expect("fixture parent")).expect("remove fixture");
+    }
 }

@@ -2,6 +2,7 @@
 #ifdef __DEMIR_BAKE__
 
 /datum/demir/example
+	default = TRUE
 	var/label = "table"
 	var/smooth = 1
 

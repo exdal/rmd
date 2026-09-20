@@ -748,6 +748,7 @@ pub struct UiOutput {
     pub pick_new_map_path: bool,
     pub cancel_load: bool,
     pub copy_to_clipboard: Option<String>,
+    pub reload_profile: Option<String>,
     pub(crate) keybind_preset: Option<KeybindPreset>,
 }
 
@@ -990,6 +991,7 @@ impl UiState {
                 pick_new_map_path: false,
                 cancel_load: false,
                 copy_to_clipboard: None,
+                reload_profile: None,
                 keybind_preset,
             });
         }
@@ -1210,8 +1212,8 @@ impl UiState {
         }
         draw_save_dialog(ui, session, &mut self.save_dialog);
 
-        let object_tree_settings_changed = self.settings_window.draw(ui, session, settings);
-        if object_tree_settings_changed {
+        let settings_output = self.settings_window.draw(ui, session, settings, load.is_some());
+        if settings_output.object_tree_changed {
             self.object_tree.invalidate_filter();
         }
         self.show_welcome |= show_welcome;
@@ -1277,6 +1279,7 @@ impl UiState {
             pick_new_map_path,
             cancel_load: load_popup.cancel,
             copy_to_clipboard: load_popup.copy,
+            reload_profile: settings_output.reload_profile,
             keybind_preset: None,
         })
     }
