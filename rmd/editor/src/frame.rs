@@ -19,7 +19,7 @@ use crate::{
     visual::{self, Appearance},
 };
 
-type SpriteKey = (u32, i32, i32, usize);
+type SpriteKey = (u32, i32, i32, usize, usize);
 
 #[derive(Debug, Clone, Copy)]
 struct CachedPlacement {
@@ -34,10 +34,17 @@ struct CurrentPlacement {
 }
 
 struct RenderedPrefab {
-    key: SpriteKey,
     is_area: bool,
-    sprites: Vec<SpriteInstance>,
+    sprites: Vec<(SpriteKey, SpriteInstance)>,
+    primary: Option<SpriteInstance>,
     area_tile: Option<SpriteInstance>,
+}
+
+struct SpriteGroup {
+    plane: f32,
+    layer: f32,
+    keep_apart: bool,
+    sprites: Vec<SpriteInstance>,
 }
 
 struct RenderContext<'a> {
@@ -59,8 +66,8 @@ pub struct FrameInstances {
     pub lighting_size: [u32; 3],
     area_components: HashMap<Coord, PrefabInstanceId>,
     area_component_tiles: HashMap<PrefabInstanceId, HashSet<Coord>>,
-    sprite_keys: HashMap<PrefabInstanceId, SpriteKey>,
-    sprite_ranges: HashMap<PrefabInstanceId, UpdateRange>,
+    sprite_sort_keys: Vec<SpriteKey>,
+    primary_sprites: HashMap<PrefabInstanceId, SpriteInstance>,
     area_tile_indices: HashMap<PrefabInstanceId, usize>,
     placement_orders: HashMap<PrefabInstanceId, usize>,
     next_placement_order: usize,
@@ -69,11 +76,7 @@ pub struct FrameInstances {
 }
 
 impl FrameInstances {
-    pub fn sprite(&self, owner: PrefabInstanceId) -> Option<&SpriteInstance> {
-        self.sprite_ranges
-            .get(&owner)
-            .and_then(|range| self.sprites.get(range.start))
-    }
+    pub fn sprite(&self, owner: PrefabInstanceId) -> Option<&SpriteInstance> { self.primary_sprites.get(&owner) }
 
     pub fn area_component_at(&self, coord: Coord) -> Option<PrefabInstanceId> {
         self.area_components.get(&coord).copied()
@@ -254,7 +257,7 @@ pub fn build_with_options(
 ) -> FrameInstances {
     let mut keyed_sprites = Vec::new();
     let mut area_tiles = Vec::new();
-    let mut sprite_keys = HashMap::new();
+    let mut primary_sprites = HashMap::new();
     let mut area_tile_indices = HashMap::new();
     let mut placement_orders = HashMap::new();
     let mut placements = HashMap::new();
@@ -294,7 +297,6 @@ pub fn build_with_options(
                     let coord = Coord::new(x, y, z);
                     let rendered = render.prefab(owner, prefab, id, coord, order, area_components.get(&coord).copied());
                     placement_orders.insert(owner, order);
-                    sprite_keys.insert(owner, rendered.key);
                     placements.insert(
                         owner,
                         CachedPlacement {
@@ -305,7 +307,10 @@ pub fn build_with_options(
                     if rendered.is_area {
                         area_owners_by_coord.entry(coord).or_default().push(owner);
                     }
-                    keyed_sprites.extend(rendered.sprites.into_iter().map(|sprite| (rendered.key, sprite)));
+                    if let Some(primary) = rendered.primary {
+                        primary_sprites.insert(owner, primary);
+                    }
+                    keyed_sprites.extend(rendered.sprites);
                     if let Some(area_tile) = rendered.area_tile {
                         area_tile_indices.insert(owner, area_tiles.len());
                         area_tiles.push(area_tile);
@@ -316,8 +321,9 @@ pub fn build_with_options(
     }
 
     keyed_sprites.sort_by_key(|(key, _)| *key);
-    let mut instances = FrameInstances {
-        sprites: keyed_sprites.into_iter().map(|(_, sprite)| sprite).collect(),
+    let (sprite_sort_keys, sprites) = keyed_sprites.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
+    FrameInstances {
+        sprites,
         area_tiles,
         light_tiles: options
             .lighting
@@ -326,17 +332,14 @@ pub fn build_with_options(
         lighting_size: options.lighting.map_or([0; 3], |lighting| lighting.size),
         area_components,
         area_component_tiles,
-        sprite_keys,
-        sprite_ranges: HashMap::new(),
+        sprite_sort_keys,
+        primary_sprites,
         area_tile_indices,
         placement_orders,
         next_placement_order: order.saturating_add(1),
         placements,
         area_owners_by_coord,
-    };
-    refresh_sprite_ranges(&mut instances, 0);
-
-    instances
+    }
 }
 
 pub fn update_prefab(
@@ -483,31 +486,7 @@ pub fn update_prefabs_with_options(
             (affected_owner, rendered)
         })
         .collect::<Vec<_>>();
-    let structural_sprite_updates = rendered
-        .iter()
-        .filter(|(owner, rendered)| owner_sprite_update_is_structural(instances, *owner, rendered.as_ref()))
-        .count();
-
-    // Each structural replacement shifts later ranges. Batch multiple replacements so the global
-    // sprite array and its ranges are traversed once, regardless of how many Z levels are loaded.
-    let mut sprite_update = if structural_sprite_updates > 1 {
-        replace_owner_sprites_batch(instances, &rendered)
-    } else {
-        let mut update = None;
-        for (owner, rendered) in &rendered {
-            let next_key = rendered.as_ref().map(|rendered| rendered.key);
-            let next_sprites = rendered
-                .as_ref()
-                .map(|rendered| rendered.sprites.as_slice())
-                .unwrap_or_default();
-            merge_update_range(
-                &mut update,
-                replace_owner_sprites(instances, *owner, next_key, next_sprites),
-            );
-        }
-
-        update
-    };
+    let mut sprite_update = replace_owner_sprites_batch(instances, &rendered);
     let mut area_tile_update = None;
 
     for (affected_owner, rendered) in rendered {
@@ -524,7 +503,6 @@ pub fn update_prefabs_with_options(
     for (owner, _, current) in changes {
         if current.is_none() {
             instances.placement_orders.remove(&owner);
-            instances.sprite_keys.remove(&owner);
         }
     }
 
@@ -549,12 +527,12 @@ fn current_placement(tree: &ObjectTree, document: &MapDocument, owner: PrefabIns
 
 impl RenderContext<'_> {
     #[allow(clippy::too_many_arguments)]
-    fn overlay(
-        &self, sprites: &mut Vec<SpriteInstance>, owner: PrefabInstanceId, parent: &Appearance,
-        delta: &vm::AppearanceDelta, coord: Coord, area_owner: Option<PrefabInstanceId>, depth: usize,
-    ) -> f32 {
+    fn overlay_groups(
+        &self, owner: PrefabInstanceId, parent: &Appearance, delta: &vm::AppearanceDelta, coord: Coord,
+        area_owner: Option<PrefabInstanceId>, depth: usize,
+    ) -> Vec<SpriteGroup> {
         if depth >= 32 {
-            return parent.layer;
+            return Vec::new();
         }
 
         let appearance = visual::resolve_overlay(self.tree, parent, delta);
@@ -565,34 +543,72 @@ impl RenderContext<'_> {
             own.push(sprite);
         }
 
-        self.layered(sprites, owner, &appearance, own, delta, coord, area_owner, depth + 1);
-        appearance.layer
+        self.grouped(owner, &appearance, own, delta, coord, area_owner, depth + 1)
     }
 
-    /// BYOND sorts an atom's underlays and overlays by layer. `FLOAT_LAYER` ones take the atom's
-    /// layer and keep their list order around it.
     #[allow(clippy::too_many_arguments)]
-    fn layered(
-        &self, sprites: &mut Vec<SpriteInstance>, owner: PrefabInstanceId, parent: &Appearance,
-        own: Vec<SpriteInstance>, delta: &vm::AppearanceDelta, coord: Coord, area_owner: Option<PrefabInstanceId>,
-        depth: usize,
-    ) {
+    fn grouped(
+        &self, owner: PrefabInstanceId, parent: &Appearance, own: Vec<SpriteInstance>, delta: &vm::AppearanceDelta,
+        coord: Coord, area_owner: Option<PrefabInstanceId>, depth: usize,
+    ) -> Vec<SpriteGroup> {
         let mut groups = Vec::with_capacity(delta.underlays.len() + delta.overlays.len() + 1);
         for extra in &delta.underlays {
-            let mut group = Vec::new();
-            let layer = self.overlay(&mut group, owner, parent, extra, coord, area_owner, depth);
-            groups.push((layer, group));
+            groups.extend(self.overlay_groups(owner, parent, extra, coord, area_owner, depth));
         }
 
-        groups.push((parent.layer, own));
+        if !own.is_empty() {
+            groups.push(SpriteGroup {
+                plane: parent.plane,
+                layer: parent.layer,
+                keep_apart: false,
+                sprites: own,
+            });
+        }
         for extra in &delta.overlays {
-            let mut group = Vec::new();
-            let layer = self.overlay(&mut group, owner, parent, extra, coord, area_owner, depth);
-            groups.push((layer, group));
+            groups.extend(self.overlay_groups(owner, parent, extra, coord, area_owner, depth));
         }
 
-        groups.sort_by(|left, right| left.0.total_cmp(&right.0));
-        sprites.extend(groups.into_iter().flat_map(|(_, group)| group));
+        groups.sort_by(|left, right| {
+            left.plane
+                .total_cmp(&right.plane)
+                .then_with(|| left.layer.total_cmp(&right.layer))
+        });
+
+        // TODO: type intrinsocs
+        const KEEP_TOGETHER: u32 = 32;
+        const KEEP_APART: u32 = 64;
+        if parent.appearance_flags & KEEP_TOGETHER != 0 && !groups.is_empty() {
+            let mut together = Vec::new();
+            let mut apart = Vec::new();
+            for group in groups {
+                if group.keep_apart {
+                    apart.push(group);
+                } else {
+                    together.extend(group.sprites);
+                }
+            }
+            if !together.is_empty() {
+                apart.push(SpriteGroup {
+                    plane: parent.plane,
+                    layer: parent.layer,
+                    keep_apart: false,
+                    sprites: together,
+                });
+            }
+            groups = apart;
+        }
+        if parent.appearance_flags & KEEP_APART != 0 {
+            for group in &mut groups {
+                group.keep_apart = true;
+            }
+        }
+        groups.sort_by(|left, right| {
+            left.plane
+                .total_cmp(&right.plane)
+                .then_with(|| left.layer.total_cmp(&right.layer))
+        });
+
+        groups
     }
 
     fn prefab(
@@ -604,21 +620,15 @@ impl RenderContext<'_> {
         let appearance = delta
             .map(|delta| visual::resolve_delta(self.tree, id, prefab, delta))
             .unwrap_or_else(|| visual::resolve_id(self.tree, id, prefab));
-        let key = (
-            coord.z,
-            (appearance.plane * 1000.0) as i32,
-            (appearance.layer * 1000.0) as i32,
-            order,
-        );
         let texture = sprite_texture(self.icons, self.textures, &appearance);
-        let mut sprites = Vec::with_capacity(if is_area { 2 } else { 1 });
+        let mut own = Vec::with_capacity(if is_area { 2 } else { 1 });
         let mut area_tile = None;
 
         if !self.visibility.is_visible(id) {
             return RenderedPrefab {
-                key,
                 is_area,
-                sprites,
+                sprites: Vec::new(),
+                primary: None,
                 area_tile,
             };
         }
@@ -627,7 +637,7 @@ impl RenderContext<'_> {
             if let Some(texture) = texture {
                 let mut sprite = instance_for(owner, &appearance, texture, coord, self.tile_size, true);
                 sprite.area_owner = area_owner;
-                sprites.push(sprite);
+                own.push(sprite);
             }
 
             let mut tile = area_outline(
@@ -654,25 +664,48 @@ impl RenderContext<'_> {
                     area_owner,
                 );
                 outline.area_edges = edges;
-                sprites.push(outline);
+                own.push(outline);
             }
         } else if let Some(texture) = texture {
             let mut sprite = instance_for(owner, &appearance, texture, coord, self.tile_size, false);
             sprite.area_owner = area_owner;
-            sprites.push(sprite);
+            own.push(sprite);
+        }
+        let primary = own.first().copied();
+
+        let groups = if let Some(delta) = delta.filter(|_| !is_area) {
+            self.grouped(owner, &appearance, own, delta, coord, area_owner, 0)
+        } else if own.is_empty() {
+            Vec::new()
+        } else {
+            vec![SpriteGroup {
+                plane: appearance.plane,
+                layer: appearance.layer,
+                keep_apart: false,
+                sprites: own,
+            }]
+        };
+        let mut local_order = 0usize;
+        let mut sprites = Vec::new();
+        for group in groups {
+            for sprite in group.sprites {
+                let key = (
+                    coord.z,
+                    (group.plane * 1000.0) as i32,
+                    (group.layer * 1000.0) as i32,
+                    order,
+                    local_order,
+                );
+                local_order = local_order.saturating_add(1);
+                sprites.push((key, sprite));
+            }
         }
 
-        if let Some(delta) = delta
-            && !is_area
-        {
-            let own = std::mem::take(&mut sprites);
-            self.layered(&mut sprites, owner, &appearance, own, delta, coord, area_owner, 0);
-        }
-
+        let primary = primary.or_else(|| sprites.first().map(|(_, sprite)| *sprite));
         RenderedPrefab {
-            key,
             is_area,
             sprites,
+            primary,
             area_tile,
         }
     }
@@ -737,87 +770,59 @@ fn remove_area_owner(instances: &mut FrameInstances, coord: Coord, owner: Prefab
     }
 }
 
-fn owner_sprite_update_is_structural(
-    instances: &FrameInstances, owner: PrefabInstanceId, rendered: Option<&RenderedPrefab>,
-) -> bool {
-    let previous = instances.sprite_ranges.get(&owner).copied();
-    let previous_key = instances.sprite_keys.get(&owner).copied();
-    let next_key = rendered.map(|rendered| rendered.key);
-    let next_len = rendered.map_or(0, |rendered| rendered.sprites.len());
-
-    match previous {
-        Some(previous) => previous_key != next_key || previous.end - previous.start != next_len,
-        None => next_len != 0,
-    }
-}
-
 fn replace_owner_sprites_batch(
     instances: &mut FrameInstances, rendered: &[(PrefabInstanceId, Option<RenderedPrefab>)],
 ) -> Option<UpdateRange> {
     let affected = rendered.iter().map(|(owner, _)| *owner).collect::<HashSet<_>>();
-    let previous = std::mem::take(&mut instances.sprites);
-
     for (owner, rendered) in rendered {
-        match rendered {
-            Some(rendered) => {
-                instances.sprite_keys.insert(*owner, rendered.key);
-            },
-            None => {
-                instances.sprite_keys.remove(owner);
-            },
+        if let Some(primary) = rendered.as_ref().and_then(|rendered| rendered.primary) {
+            instances.primary_sprites.insert(*owner, primary);
+        } else {
+            instances.primary_sprites.remove(owner);
         }
     }
-
-    let mut replacement_runs = rendered
+    let previous = std::mem::take(&mut instances.sprites);
+    let previous_keys = std::mem::take(&mut instances.sprite_sort_keys);
+    let replacement_len = rendered
         .iter()
-        .filter_map(|(_, rendered)| {
-            let rendered = rendered.as_ref()?;
-
-            (!rendered.sprites.is_empty()).then_some((rendered.key, rendered.sprites.as_slice()))
-        })
-        .collect::<Vec<_>>();
-    replacement_runs.sort_unstable_by_key(|(key, _)| *key);
-
-    let replacement_len = replacement_runs.iter().map(|(_, sprites)| sprites.len()).sum::<usize>();
-    let mut retained = previous
+        .filter_map(|(_, rendered)| rendered.as_ref())
+        .map(|rendered| rendered.sprites.len())
+        .sum::<usize>();
+    let mut retained = previous_keys
         .iter()
         .copied()
-        .filter(|sprite| !affected.contains(&sprite.owner))
-        .map(|sprite| {
-            let key = instances
-                .sprite_keys
-                .get(&sprite.owner)
-                .copied()
-                .expect("every cached sprite has a render key");
-
-            (key, sprite)
-        })
+        .zip(previous.iter().copied())
+        .filter(|(_, sprite)| !affected.contains(&sprite.owner))
         .peekable();
-    let mut replacements = replacement_runs.into_iter().peekable();
-    let mut next = Vec::with_capacity(previous.len().saturating_add(replacement_len));
-
+    let mut replacements = Vec::with_capacity(replacement_len);
+    for (_, rendered) in rendered {
+        if let Some(rendered) = rendered {
+            replacements.extend(rendered.sprites.iter().copied());
+        }
+    }
+    replacements.sort_by_key(|(key, _)| *key);
+    let mut replacements = replacements.into_iter().peekable();
+    let mut keyed = Vec::with_capacity(previous.len().saturating_add(replacement_len));
     loop {
         match (retained.peek(), replacements.peek()) {
             (Some((retained_key, _)), Some((replacement_key, _))) if retained_key <= replacement_key => {
-                let (_, sprite) = retained.next().expect("peeked retained sprite");
-                next.push(sprite);
+                keyed.push(retained.next().expect("peeked retained sprite"));
             },
             (Some(_), Some(_)) | (None, Some(_)) => {
-                let (_, sprites) = replacements.next().expect("peeked replacement run");
-                next.extend_from_slice(sprites);
+                keyed.push(replacements.next().expect("peeked replacement sprite"));
             },
             (Some(_), None) => {
-                next.extend(retained.map(|(_, sprite)| sprite));
+                keyed.extend(retained);
                 break;
             },
             (None, None) => break,
         }
     }
 
+    let (next_keys, next) = keyed.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
     let update = changed_sprite_range(&previous, &next);
     instances.sprites = next;
-    instances.sprite_ranges.clear();
-    refresh_sprite_ranges(instances, 0);
+    instances.sprite_sort_keys = next_keys;
 
     update
 }
@@ -840,92 +845,6 @@ fn changed_sprite_range(previous: &[SpriteInstance], next: &[SpriteInstance]) ->
     };
 
     Some(UpdateRange { start, end })
-}
-
-fn replace_owner_sprites(
-    instances: &mut FrameInstances, owner: PrefabInstanceId, next_key: Option<SpriteKey>, next: &[SpriteInstance],
-) -> Option<UpdateRange> {
-    let previous = instances.sprite_ranges.get(&owner).copied();
-    let previous_key = instances.sprite_keys.get(&owner).copied();
-    if let (Some(previous), Some(next_key)) = (previous, next_key)
-        && previous_key == Some(next_key)
-        && previous.end - previous.start == next.len()
-    {
-        let current = &mut instances.sprites[previous.start..previous.end];
-        if current == next {
-            return None;
-        }
-        current.clone_from_slice(next);
-
-        return Some(previous);
-    }
-
-    let old_len = previous.map_or(0, |range| range.end - range.start);
-    let old_start = previous.map(|range| range.start);
-    if let Some(previous) = previous {
-        instances.sprites.drain(previous.start..previous.end);
-        instances.sprite_ranges.remove(&owner);
-    }
-
-    match next_key {
-        Some(next_key) => {
-            instances.sprite_keys.insert(owner, next_key);
-        },
-        None => {
-            instances.sprite_keys.remove(&owner);
-        },
-    }
-    if previous.is_none() && next.is_empty() {
-        return None;
-    }
-
-    let next_start = next_key.map(|next_key| {
-        instances.sprites.partition_point(|sprite| {
-            instances
-                .sprite_keys
-                .get(&sprite.owner)
-                .is_some_and(|key| *key <= next_key)
-        })
-    });
-    if let Some(next_start) = next_start
-        && !next.is_empty()
-    {
-        instances.sprites.splice(next_start..next_start, next.iter().copied());
-    }
-
-    let start = match (old_start, next_start) {
-        (Some(old), Some(next)) => old.min(next),
-        (Some(old), None) => old,
-        (None, Some(next)) => next,
-        (None, None) => return None,
-    };
-    refresh_sprite_ranges(instances, start);
-
-    let next_len = next.len();
-    let end = if old_len != next_len {
-        instances.sprites.len()
-    } else {
-        old_start
-            .unwrap_or(start)
-            .saturating_add(old_len)
-            .max(next_start.unwrap_or(start).saturating_add(next_len))
-    };
-
-    Some(UpdateRange { start, end })
-}
-
-fn refresh_sprite_ranges(instances: &mut FrameInstances, start: usize) {
-    let mut index = start;
-    while index < instances.sprites.len() {
-        let owner = instances.sprites[index].owner;
-        let end = index
-            + instances.sprites[index..]
-                .iter()
-                .take_while(|sprite| sprite.owner == owner)
-                .count();
-        instances.sprite_ranges.insert(owner, UpdateRange { start: index, end });
-        index = end;
-    }
 }
 
 fn replace_area_tile(
@@ -1588,16 +1507,13 @@ mod tests {
         assert_eq!(actual_tiles, expected_tiles);
         assert_eq!(actual.area_components, expected.area_components);
         assert_eq!(actual.area_component_tiles, expected.area_component_tiles);
-        assert_eq!(actual.sprite_ranges, expected.sprite_ranges);
+        assert_eq!(actual.sprite_sort_keys.len(), actual.sprites.len());
+        assert!(actual.sprite_sort_keys.windows(2).all(|keys| keys[0] <= keys[1]));
+        assert_eq!(actual.primary_sprites, expected.primary_sprites);
 
-        for (owner, range) in &actual.sprite_ranges {
-            assert!(range.start < range.end);
-            assert!(
-                actual.sprites[range.start..range.end]
-                    .iter()
-                    .all(|sprite| sprite.owner == *owner)
-            );
-            assert_eq!(actual.sprite(*owner), actual.sprites.get(range.start));
+        for (owner, sprite) in &actual.primary_sprites {
+            assert_eq!(sprite.owner, *owner);
+            assert_eq!(actual.sprite(*owner), Some(sprite));
         }
         for (owner, index) in &actual.area_tile_indices {
             assert_eq!(actual.area_tiles.get(*index).map(|tile| tile.owner), Some(*owner));
@@ -1630,6 +1546,148 @@ mod tests {
             textures(&["floor", "table"]).lookup(ICON, 1).unwrap()
         );
         assert_eq!([sprites[0].owner, sprites[1].owner], [owners[1], owners[0]]);
+    }
+
+    #[test]
+    fn an_overlay_plane_sorts_across_unrelated_placements() {
+        let tree = tree(&[("/turf/wall", "floor", 2.058), ("/obj/legacy", "table", 3.0)]);
+        let mut document = document(one_tile_map(&["/turf/wall", "/obj/legacy"]));
+        let owners = document.instance_ids_at(Coord::new(1, 1, 1)).to_vec();
+        for owner in &owners {
+            document
+                .set_instance_var(*owner, "plane".into(), Value::Num(-10.0))
+                .unwrap();
+        }
+        let frill = vm::AppearanceDelta {
+            vars: vec![
+                ("icon_state".into(), Value::Text("light".into())),
+                ("plane".into(), Value::Num(-7.0)),
+                ("layer".into(), Value::Num(2.67)),
+            ],
+            ..Default::default()
+        };
+        let appearances = HashMap::from([(
+            owners[0].get(),
+            vm::AppearanceDelta {
+                overlays: vec![frill],
+                ..Default::default()
+            },
+        )]);
+        let visibility = TypeVisibility::default();
+
+        let sprites = build_with_options(
+            &tree,
+            &icons(&["floor", "table", "light"]),
+            &textures(&["floor", "table", "light"]),
+            &document,
+            FrameRenderOptions {
+                visibility: &visibility,
+                tile_size: 32,
+                appearances: &appearances,
+                lighting: None,
+            },
+        );
+
+        assert_eq!(
+            sprites.iter().map(|sprite| sprite.owner).collect::<Vec<_>>(),
+            [owners[0], owners[1], owners[0]]
+        );
+        assert!(sprites[2].depth > sprites[1].depth);
+        assert_eq!(
+            sprites.sprite(owners[0]).unwrap().texture,
+            textures(&["floor"]).lookup(ICON, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn keep_together_keeps_explicit_plane_overlays_with_their_owner() {
+        let tree = tree(&[("/turf/wall", "floor", 2.058), ("/obj/legacy", "table", 3.0)]);
+        let mut document = document(one_tile_map(&["/turf/wall", "/obj/legacy"]));
+        let owners = document.instance_ids_at(Coord::new(1, 1, 1)).to_vec();
+        for owner in &owners {
+            document
+                .set_instance_var(*owner, "plane".into(), Value::Num(-10.0))
+                .unwrap();
+        }
+        let appearances = HashMap::from([(
+            owners[0].get(),
+            vm::AppearanceDelta {
+                vars: vec![("appearance_flags".into(), Value::Num(32.0))],
+                overlays: vec![vm::AppearanceDelta {
+                    vars: vec![
+                        ("icon_state".into(), Value::Text("light".into())),
+                        ("plane".into(), Value::Num(-7.0)),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )]);
+        let visibility = TypeVisibility::default();
+
+        let sprites = build_with_options(
+            &tree,
+            &icons(&["floor", "table", "light"]),
+            &textures(&["floor", "table", "light"]),
+            &document,
+            FrameRenderOptions {
+                visibility: &visibility,
+                tile_size: 32,
+                appearances: &appearances,
+                lighting: None,
+            },
+        );
+
+        assert_eq!(
+            sprites.iter().map(|sprite| sprite.owner).collect::<Vec<_>>(),
+            [owners[0], owners[0], owners[1]]
+        );
+    }
+
+    #[test]
+    fn keep_apart_restores_global_plane_order_inside_keep_together() {
+        let tree = tree(&[("/turf/wall", "floor", 2.058), ("/obj/legacy", "table", 3.0)]);
+        let mut document = document(one_tile_map(&["/turf/wall", "/obj/legacy"]));
+        let owners = document.instance_ids_at(Coord::new(1, 1, 1)).to_vec();
+        for owner in &owners {
+            document
+                .set_instance_var(*owner, "plane".into(), Value::Num(-10.0))
+                .unwrap();
+        }
+        let appearances = HashMap::from([(
+            owners[0].get(),
+            vm::AppearanceDelta {
+                vars: vec![("appearance_flags".into(), Value::Num(32.0))],
+                overlays: vec![vm::AppearanceDelta {
+                    vars: vec![
+                        ("icon_state".into(), Value::Text("light".into())),
+                        ("plane".into(), Value::Num(-7.0)),
+                        ("appearance_flags".into(), Value::Num(64.0)),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )]);
+        let visibility = TypeVisibility::default();
+
+        let sprites = build_with_options(
+            &tree,
+            &icons(&["floor", "table", "light"]),
+            &textures(&["floor", "table", "light"]),
+            &document,
+            FrameRenderOptions {
+                visibility: &visibility,
+                tile_size: 32,
+                appearances: &appearances,
+                lighting: None,
+            },
+        );
+
+        assert_eq!(
+            sprites.iter().map(|sprite| sprite.owner).collect::<Vec<_>>(),
+            [owners[0], owners[1], owners[0]]
+        );
     }
 
     #[test]

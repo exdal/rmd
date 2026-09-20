@@ -379,6 +379,7 @@ impl Bake {
         Self::with_profile_and_progress(tree, module, profile, atoms, size, limits, icons, progress)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn with_profile_and_progress(
         tree: &ObjectTree, module: &Module, profile: TypeId, atoms: Vec<Atom>, size: [i32; 3], limits: Limits,
         icons: IconStates, mut progress: impl FnMut(Stage, usize, usize),

@@ -404,9 +404,7 @@ fn draw_profile_reload_dialog(ui: &Ui, pending_profile: &mut Option<String>) -> 
         | WindowFlags::NO_COLLAPSE
         | WindowFlags::NO_SAVED_SETTINGS
         | WindowFlags::NO_DOCKING;
-    let Some(_modal) = ui.begin_modal_popup_config(PROFILE_RELOAD_POPUP).flags(flags).begin() else {
-        return None;
-    };
+    let _modal = ui.begin_modal_popup_config(PROFILE_RELOAD_POPUP).flags(flags).begin()?;
 
     ui.text_wrapped(format!("Reload the codebase with {profile}?"));
     ui.text("Open maps and unsaved changes will be preserved.");

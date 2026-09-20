@@ -163,6 +163,8 @@ UI procedure. The example profiles provide complete integrations:
 
 - [`examples/env/profile.dm`](../examples/env/profile.dm) is a small test profile.
 - [`examples/profiles/tgstation.dm`](../examples/profiles/tgstation.dm) is a codebase integration.
+- [`examples/profiles/wallening.dm`](../examples/profiles/wallening.dm) integrates the BYOND 515
+  Wallening fork and its split-visibility tall walls.
 
 ## Editor and viewer
 

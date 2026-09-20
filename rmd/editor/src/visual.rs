@@ -20,6 +20,7 @@ pub struct Appearance {
     pub color: Option<String>,
     pub alpha: u8,
     pub invisibility: i32,
+    pub appearance_flags: u32,
     pub lighting: vm::AppearanceLighting,
 }
 
@@ -55,6 +56,7 @@ impl Default for Appearance {
             color: None,
             alpha: 255,
             invisibility: 0,
+            appearance_flags: 0,
             lighting: vm::AppearanceLighting::Normal,
         }
     }
@@ -146,6 +148,11 @@ pub fn resolve_id(tree: &ObjectTree, id: TypeId, prefab: &Prefab) -> Appearance 
 
     if let Some(invisibility) = get("invisibility").and_then(|v| v.as_num()) {
         appearance.invisibility = invisibility as i32;
+    }
+
+    // TODO: type intrinsics
+    if let Some(appearance_flags) = get("appearance_flags").and_then(|v| v.as_num()) {
+        appearance.appearance_flags = appearance_flags as u32;
     }
 
     appearance.color = get("color").and_then(|v| v.as_text().map(str::to_string));
