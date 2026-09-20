@@ -142,7 +142,18 @@ impl<'a> IrModuleBuilder<'a> {
         // remove instructions after any branch nodes, and repair phi predecessor
         // lists after the removed control-flow edges disappear.
         crate::opt::canonicalize_terminators(&mut self.module);
+
         crate::opt::simplify_phis(&mut self.module);
+
+        // better constant propagation
+        // this:
+        //  %1 = 2 + 3
+        //  %2 = %1 * 4
+        //  return %2
+        // becomes:
+        //  return 20
+        crate::opt::sparse_constant_propagation(&mut self.module);
+
         #[cfg(debug_assertions)]
         if let Err(error) = crate::verify(&self.module) {
             panic!("lowering produced invalid IR: {error}");

@@ -170,7 +170,7 @@ fn dump_ir(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
     let ast = ast::parse(&preprocessed.tokens)?;
     let (_, module, _) = sema::analyze(&ast);
-    print!("{}", ir::disasm::dump_with(&module, false));
+    print!("{}", ir::disasm::dump_with(&module, std::env::var("DM_COLOR").is_ok()));
 
     Ok(())
 }

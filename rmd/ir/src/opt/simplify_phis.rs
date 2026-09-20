@@ -71,25 +71,7 @@ pub fn simplify_phis(module: &mut Module) {
         return;
     }
 
-    for node in &mut module.nodes {
-        replace_operands(node, &replacements);
-    }
-
-    for proc in &mut module.procs {
-        for param in &mut proc.params {
-            replace_optional(&mut param.default, &replacements);
-            replace_optional(&mut param.in_list, &replacements);
-            for dimension in &mut param.spec.dimensions {
-                replace_optional(dimension, &replacements);
-            }
-        }
-
-        for var in &mut proc.vars {
-            for dimension in &mut var.dimensions {
-                replace_optional(dimension, &replacements);
-            }
-        }
-    }
+    replace_all_uses(module, &replacements);
 
     for node in &mut module.nodes {
         if let IrNode::Label(instructions) = node {
@@ -135,6 +117,32 @@ fn replace_optional(id: &mut Option<IrNodeId>, replacements: &HashMap<IrNodeId, 
     }
 }
 
+pub(super) fn replace_all_uses(module: &mut Module, replacements: &HashMap<IrNodeId, IrNodeId>) {
+    for node in &mut module.nodes {
+        replace_operands(node, replacements);
+    }
+
+    replace_metadata_uses(module, replacements);
+}
+
+pub(super) fn replace_metadata_uses(module: &mut Module, replacements: &HashMap<IrNodeId, IrNodeId>) {
+    for proc in &mut module.procs {
+        for param in &mut proc.params {
+            replace_optional(&mut param.default, replacements);
+            replace_optional(&mut param.in_list, replacements);
+            for dimension in &mut param.spec.dimensions {
+                replace_optional(dimension, replacements);
+            }
+        }
+
+        for var in &mut proc.vars {
+            for dimension in &mut var.dimensions {
+                replace_optional(dimension, replacements);
+            }
+        }
+    }
+}
+
 fn replace_arguments(args: &mut [Argument], replacements: &HashMap<IrNodeId, IrNodeId>) {
     for arg in args {
         replace_optional(&mut arg.key, replacements);
@@ -142,7 +150,7 @@ fn replace_arguments(args: &mut [Argument], replacements: &HashMap<IrNodeId, IrN
     }
 }
 
-fn replace_operands(node: &mut IrNode, replacements: &HashMap<IrNodeId, IrNodeId>) {
+pub(super) fn replace_operands(node: &mut IrNode, replacements: &HashMap<IrNodeId, IrNodeId>) {
     match node {
         IrNode::Phi { operands } => {
             for operand in operands {

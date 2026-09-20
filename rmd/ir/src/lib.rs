@@ -226,58 +226,110 @@ impl IrNode {
     pub fn is_merge(&self) -> bool { matches!(self, Self::SelectionMerge { .. } | Self::LoopMerge { .. }) }
 
     pub fn operands(&self) -> Vec<IrNodeId> {
-        let args = |args: &[Argument]| {
-            args.iter()
-                .flat_map(|arg| [arg.key, arg.value])
-                .flatten()
-                .collect::<Vec<_>>()
+        let mut operands = Vec::new();
+        self.for_each_operand(|operand| operands.push(operand));
+        operands
+    }
+
+    pub fn for_each_operand(&self, mut visit: impl FnMut(IrNodeId)) {
+        let args = |args: &[Argument], visit: &mut dyn FnMut(IrNodeId)| {
+            for arg in args {
+                if let Some(key) = arg.key {
+                    visit(key);
+                }
+                if let Some(value) = arg.value {
+                    visit(value);
+                }
+            }
         };
 
         match self {
-            Self::Phi { operands, .. } => operands.iter().map(|operand| operand.value).collect(),
-            Self::Unary { operand, .. } => vec![*operand],
-            Self::Binary { lhs, rhs, .. } | Self::CompoundBinary { lhs, rhs, .. } => vec![*lhs, *rhs],
-            Self::Load { pointer } => vec![*pointer],
-            Self::AccessField { object, .. } => vec![*object],
-            Self::Initial { object, .. } => object.iter().copied().collect(),
-            Self::Index { object, index, .. } => vec![*object, *index],
-            Self::Call { callee, args: a } => [vec![*callee], args(a)].concat(),
-            Self::FunctionCall { function, args: a } => [vec![*function], args(a)].concat(),
-            Self::Super { args: a, .. } | Self::List(a) => args(a),
-            Self::New { ty, args: a } => [ty.iter().copied().collect(), args(a)].concat(),
-            Self::ModifiedType { overrides, .. } => overrides.iter().map(|(_, id)| *id).collect(),
-            Self::Pick(choices) => choices.iter().flat_map(|(w, v)| [*w, Some(*v)]).flatten().collect(),
-            Self::Interpolate { values, .. } => values.clone(),
+            Self::Phi { operands, .. } => operands.iter().for_each(|operand| visit(operand.value)),
+            Self::Unary { operand, .. } => visit(*operand),
+            Self::Binary { lhs, rhs, .. } | Self::CompoundBinary { lhs, rhs, .. } => {
+                visit(*lhs);
+                visit(*rhs);
+            },
+            Self::Load { pointer } => visit(*pointer),
+            Self::AccessField { object, .. } => visit(*object),
+            Self::Initial { object, .. } => object.iter().copied().for_each(&mut visit),
+            Self::Index { object, index, .. } => {
+                visit(*object);
+                visit(*index);
+            },
+            Self::Call { callee, args: a } => {
+                visit(*callee);
+                args(a, &mut visit);
+            },
+            Self::FunctionCall { function, args: a } => {
+                visit(*function);
+                args(a, &mut visit);
+            },
+            Self::Super { args: a, .. } | Self::List(a) => args(a, &mut visit),
+            Self::New { ty, args: a } => {
+                ty.iter().copied().for_each(&mut visit);
+                args(a, &mut visit);
+            },
+            Self::ModifiedType { overrides, .. } => overrides.iter().for_each(|(_, id)| visit(*id)),
+            Self::Pick(choices) => choices.iter().for_each(|(weight, value)| {
+                weight.iter().copied().for_each(&mut visit);
+                visit(*value);
+            }),
+            Self::Interpolate { values, .. } => values.iter().copied().for_each(&mut visit),
             Self::InRange {
                 value,
                 start,
                 end,
                 step,
-            } => [vec![*value, *start, *end], step.iter().copied().collect()].concat(),
-            Self::Range { start, end, step } => [vec![*start, *end], step.iter().copied().collect()].concat(),
-            Self::RangeTest { current, end, step } => vec![*current, *end, *step],
-            Self::IterInit { list, .. } => vec![*list],
-            Self::IterNext(id) | Self::IterValue(id) | Self::IterKey(id) => vec![*id],
-            Self::SetField { object, value, .. } => vec![*object, *value],
+            } => {
+                visit(*value);
+                visit(*start);
+                visit(*end);
+                step.iter().copied().for_each(&mut visit);
+            },
+            Self::Range { start, end, step } => {
+                visit(*start);
+                visit(*end);
+                step.iter().copied().for_each(&mut visit);
+            },
+            Self::RangeTest { current, end, step } => {
+                visit(*current);
+                visit(*end);
+                visit(*step);
+            },
+            Self::IterInit { list, .. } => visit(*list),
+            Self::IterNext(id) | Self::IterValue(id) | Self::IterKey(id) => visit(*id),
+            Self::SetField { object, value, .. } => {
+                visit(*object);
+                visit(*value);
+            },
             Self::SetIndex {
                 object, index, value, ..
-            } => vec![*object, *index, *value],
-            Self::Store { pointer, value } | Self::Initialize { pointer, value } => vec![*pointer, *value],
-            Self::StoreBuiltin { value, .. } => vec![*value],
-            Self::ConditionalBranch { condition, .. } => vec![*condition],
-            Self::Return(value) => value.iter().copied().collect(),
-            Self::Output { target, value } => {
-                let mut operands = match target {
-                    OutputTarget::Value(target) => vec![*target],
-                    OutputTarget::Field { object, .. } => vec![*object],
-                    OutputTarget::Index { object, index, .. } => vec![*object, *index],
-                };
-                operands.push(*value);
-
-                operands
+            } => {
+                visit(*object);
+                visit(*index);
+                visit(*value);
             },
-            Self::Del(id) | Self::Throw(id) => vec![*id],
-            _ => Vec::new(),
+            Self::Store { pointer, value } | Self::Initialize { pointer, value } => {
+                visit(*pointer);
+                visit(*value);
+            },
+            Self::StoreBuiltin { value, .. } => visit(*value),
+            Self::ConditionalBranch { condition, .. } => visit(*condition),
+            Self::Return(value) => value.iter().copied().for_each(&mut visit),
+            Self::Output { target, value } => {
+                match target {
+                    OutputTarget::Value(target) => visit(*target),
+                    OutputTarget::Field { object, .. } => visit(*object),
+                    OutputTarget::Index { object, index, .. } => {
+                        visit(*object);
+                        visit(*index);
+                    },
+                }
+                visit(*value);
+            },
+            Self::Del(id) | Self::Throw(id) => visit(*id),
+            _ => {},
         }
     }
 }
