@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(
             dump(&lower("/proc/t(a)\n\twhile(a)\n\t\ta = 0\n")),
             concat!(
-                "; ir module: 13 nodes, 1 constants, 0 external functions, 1 functions, 4 blocks\n",
+                "; ir module: 13 nodes, 1 constants, 0 external functions, 1 functions, 3 blocks\n",
                 "\n",
                 "; constants\n",
                 "%10 = constant 0\n",
@@ -562,12 +562,9 @@ mod tests {
                 " %6 =     branch %3\n",
                 "\n",
                 " %3 =   label\n",
-                " %7 =     phi [%1 from block %2] [%10 from block %4]\n",
+                " %7 =     phi [%1 from block %2] [%10 from block %3]\n",
                 " %8 =     loop_merge merge=%5 continue=%3\n",
-                " %9 =     conditional_branch %7 %4 %5\n",
-                "\n",
-                " %4 =   label\n",
-                "%11 =     branch %3\n",
+                " %9 =     conditional_branch %7 %3 %5\n",
                 "\n",
                 " %5 =   label\n",
                 "%12 =     return\n",

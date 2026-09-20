@@ -165,6 +165,9 @@ impl<'a> IrModuleBuilder<'a> {
         // combine straight-line blocks and remove their intermediate jumps
         crate::opt::merge_linear_blocks(&mut self.module);
 
+        // redirect edges around blocks that only forward to another block
+        crate::opt::eliminate_forwarding_blocks(&mut self.module);
+
         #[cfg(debug_assertions)]
         if let Err(error) = crate::verify(&self.module) {
             panic!("lowering produced invalid IR: {error}");
@@ -2420,9 +2423,16 @@ mod tests {
 
         let outer_exit = merges[0];
         assert!(
-            blocks(&module).iter().any(|(_, instructions)| instructions
+            blocks(&module)
                 .iter()
-                .any(|i| matches!(module.node(*i), Some(IrNode::Branch(t)) if *t == outer_exit))),
+                .any(|(_, instructions)| instructions.iter().any(|i| matches!(
+                    module.node(*i),
+                    Some(IrNode::Branch(target)) if *target == outer_exit
+                ) || matches!(
+                    module.node(*i),
+                    Some(IrNode::ConditionalBranch { true_block, false_block, .. })
+                        if *true_block == outer_exit || *false_block == outer_exit
+                ))),
             "nothing branches to the outer exit"
         );
     }
