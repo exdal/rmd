@@ -159,12 +159,12 @@ Call `demir_node_group` from `New()` to enable the Node tool for a type subtree.
 can name blocker types that the cardinal router cannot cross.
 
 The prelude is the complete DM interface. It defines every hook, helper, flag, lighting field, and
-UI procedure. The example profiles provide complete integrations:
+UI procedure. The editor embeds the example integrations so they can be forced without changing a
+codebase. The files remain usable as templates for codebase-owned profiles:
 
 - [`examples/env/profile.dm`](../examples/env/profile.dm) is a small test profile.
-- [`examples/profiles/tgstation.dm`](../examples/profiles/tgstation.dm) is a codebase integration.
-- [`examples/profiles/wallening.dm`](../examples/profiles/wallening.dm) integrates the BYOND 515
-  Wallening fork and its split-visibility tall walls.
+- [`examples/profiles`](../examples/profiles) contains integrations for CMSS13, Goonstation,
+  tgstation, and Vanderlin.
 
 ## Editor and viewer
 
@@ -176,6 +176,11 @@ the declared default. Choosing another profile asks for confirmation, then reloa
 and rebakes its open maps without closing them or discarding unsaved map edits. The choice is
 remembered per environment. Choosing the declared default clears the override so later changes to
 the codebase default take effect.
+
+**Forced bundled profile** can inject one of the embedded integrations after the codebase and use
+it even when the codebase declares another default. Required bake-view defines, such as tgstation's
+`CBT`, are injected before the environment. Forced choices are remembered per environment. Setting
+the option back to **None - use codebase profile** restores the remembered codebase profile.
 
 Each open map owns one bake. A new environment, a new map, or a changed z-level count starts a full
 bake. Edits, undo, and redo use incremental updates. Hiding a type rebuilds sprites from cached bake

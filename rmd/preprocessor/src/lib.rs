@@ -200,6 +200,7 @@ pub struct Preprocessor<'a> {
 
     include_core: bool,
     prelude: Vec<PreludeFile>,
+    postlude: Vec<PreludeFile>,
     progress: Option<ProgressHook<'a>>,
     aborted: bool,
     source_cache: SourceCache<'a>,
@@ -229,6 +230,7 @@ impl<'a> Preprocessor<'a> {
             last_if: Location::default(),
             include_core: true,
             prelude: prelude_files(),
+            postlude: Vec::new(),
             progress: None,
             aborted: false,
             source_cache: SourceCache::default(),
@@ -247,21 +249,16 @@ impl<'a> Preprocessor<'a> {
         self
     }
 
-    pub fn with_baking(mut self, enabled: bool) -> Self {
-        if enabled {
-            self.prelude
-                .insert(0, PreludeFile::Embedded("<demir-bake.dm>", "#define __DEMIR_BAKE__\n"));
-        }
+    pub fn with_postlude(mut self, files: impl IntoIterator<Item = PreludeFile>) -> Self {
+        self.postlude = files.into_iter().collect();
 
         self
     }
 
-    pub fn with_editor_walls(mut self, enabled: bool) -> Self {
+    pub fn with_baking(mut self, enabled: bool) -> Self {
         if enabled {
-            self.prelude.insert(
-                0,
-                PreludeFile::Embedded("<demir-editor-walls.dm>", "#define PERSPECTIVE_EDITOR_WALL\n"),
-            );
+            self.prelude
+                .insert(0, PreludeFile::Embedded("<demir-bake.dm>", "#define __DEMIR_BAKE__\n"));
         }
 
         self
@@ -319,7 +316,17 @@ impl<'a> Preprocessor<'a> {
         }
 
         self.drain();
-        self.flush_layout();
+        self.end_stream();
+
+        for file in std::mem::take(&mut self.postlude) {
+            match file {
+                PreludeFile::Embedded(name, contents) => self.open_embedded(name, contents),
+                PreludeFile::Disk(path) => self.include_file(&path, Location::default()),
+            }
+
+            self.drain();
+            self.end_stream();
+        }
 
         if !self.conditionals.is_empty() {
             let count = self.conditionals.len();
@@ -1946,6 +1953,38 @@ mod tests {
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         assert!(rendered.contains("x = 1"), "{rendered}");
+    }
+
+    #[test]
+    fn the_postlude_runs_after_the_entry_and_shares_its_defines() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("rmd-postlude-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        fs::write(
+            dir.join("entry.dm"),
+            "#define FROM_ENTRY 7\n/datum/entry\n\tvar/value = FROM_PRELUDE\n",
+        )
+        .expect("write entry");
+
+        let arena = StrArena::new();
+        let result = Preprocessor::new(&arena)
+            .without_prelude()
+            .with_prelude([PreludeFile::Embedded("<before-entry.dm>", "#define FROM_PRELUDE 3\n")])
+            .with_postlude([PreludeFile::Embedded(
+                "<after-entry.dm>",
+                "/datum/injected\n\tvar/value = FROM_ENTRY\n",
+            )])
+            .run(dir.join("entry.dm"))
+            .expect("preprocess");
+
+        let rendered = render(&result.tokens);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert!(rendered.contains("/ datum / entry\n> var / value = 3"), "{rendered}");
+        assert!(rendered.contains("/ datum / injected\n> var / value = 7"), "{rendered}");
     }
 
     #[test]

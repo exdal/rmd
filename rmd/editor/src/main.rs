@@ -48,7 +48,7 @@ use crate::{
     loader::{Job, Loader, Outcome},
     session::Session,
     settings::{Settings, imgui_ini_path},
-    ui::{LoadNotice, OpenRequest, UiState},
+    ui::{LoadNotice, OpenRequest, ProfileReload, UiState},
 };
 
 const FONT_DATA: &[u8] = include_bytes!("../assets/FiraMono-Regular.ttf");
@@ -217,7 +217,7 @@ struct Redraw {
     pick_new_map_path: bool,
     cancel_load: bool,
     copy_to_clipboard: Option<String>,
-    reload_profile: Option<String>,
+    reload_profile: Option<ProfileReload>,
 }
 
 enum Opened {
@@ -457,12 +457,18 @@ impl App {
         });
     }
 
-    fn reload_profile(&mut self, profile: String) {
+    fn reload_profile(&mut self, request: ProfileReload) {
         let Some(path) = self.session.environment_path().map(PathBuf::from) else {
             return;
         };
         let mut bake = bake_options(&self.settings, Some(&path));
-        bake.profile = Some(core::path::TreePath::parse(&profile));
+        match request {
+            ProfileReload::Select(profile) => {
+                bake.forced_profile = None;
+                bake.profile = Some(core::path::TreePath::parse(&profile));
+            },
+            ProfileReload::Force(profile) => bake.forced_profile = profile,
+        }
         self.ui.set_load_notice(None);
         self.loader.start(Job::Codebase { path, bake });
     }
@@ -483,7 +489,11 @@ impl App {
     fn apply_outcome(&mut self, outcome: Outcome) {
         match outcome {
             Outcome::Codebase { path, loaded } => {
-                if let Some(profiles) = loaded.environment.profiles.as_ref() {
+                let forced_profile = loaded.environment.bake_options.forced_profile;
+                self.settings.set_forced_profile_for(&path, forced_profile);
+                if forced_profile.is_none()
+                    && let Some(profiles) = loaded.environment.profiles.as_ref()
+                {
                     let selected = (profiles.active != profiles.default).then_some(profiles.active.as_str());
                     self.settings.set_profile_for(&path, selected);
                 }
@@ -705,10 +715,10 @@ impl Drop for App {
 fn bake_options(settings: &Settings, environment: Option<&std::path::Path>) -> BakeOptions {
     BakeOptions {
         enabled: editor::environment::baking_enabled(settings.bake_enabled),
-        editor_walls: settings.perspective_editor_wall,
         profile: environment
             .and_then(|path| settings.profile_for(path))
             .map(core::path::TreePath::parse),
+        forced_profile: environment.and_then(|path| settings.forced_profile_for(path)),
         ..Default::default()
     }
 }
@@ -797,5 +807,25 @@ mod tests {
         assert!(parse(&["map.dmm", "two"]).is_err());
         assert!(parse(&["environment.dme", "not-a-map", "2"]).is_err());
         assert!(parse(&["environment.dme", "map.dmm", "2", "extra"]).is_err());
+    }
+
+    #[test]
+    fn bake_options_restore_native_and_forced_profile_choices_per_codebase() {
+        let mut settings = Settings::default();
+        let environment = std::path::Path::new("station.dme");
+        settings.set_profile_for(environment, Some("/datum/demir/station/debug"));
+        settings.set_forced_profile_for(environment, Some(editor::environment::BundledProfile::Tgstation));
+
+        let options = bake_options(&settings, Some(environment));
+
+        assert_eq!(
+            options.profile,
+            Some(core::path::TreePath::parse("/datum/demir/station/debug"))
+        );
+        assert_eq!(
+            options.forced_profile,
+            Some(editor::environment::BundledProfile::Tgstation)
+        );
+        assert_eq!(bake_options(&settings, None).forced_profile, None);
     }
 }

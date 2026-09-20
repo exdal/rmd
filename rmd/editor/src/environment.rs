@@ -8,6 +8,7 @@ use codegen::CodegenError;
 use dmi::error::IconError;
 use preprocessor::error::PreprocessError;
 use sema::error::SemaError;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     BakeProgram,
@@ -67,11 +68,71 @@ pub(crate) fn source_root<'a>(sources: &'a SourceMap<'_>, entry: Option<FileId>,
         .unwrap_or_else(|| Path::new(""))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BundledProfile {
+    Cmss13,
+    Goonstation,
+    Tgstation,
+    Vanderlin,
+}
+
+impl BundledProfile {
+    pub const ALL: [Self; 4] = [Self::Cmss13, Self::Goonstation, Self::Tgstation, Self::Vanderlin];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Cmss13 => "CMSS13",
+            Self::Goonstation => "Goonstation",
+            Self::Tgstation => "tgstation",
+            Self::Vanderlin => "Vanderlin",
+        }
+    }
+
+    pub const fn type_path(self) -> &'static str {
+        match self {
+            Self::Cmss13 => "/datum/demir/cmss13",
+            Self::Goonstation => "/datum/demir/goonstation",
+            Self::Tgstation => "/datum/demir/tgstation",
+            Self::Vanderlin => "/datum/demir/vanderlin",
+        }
+    }
+
+    const fn source_name(self) -> &'static str {
+        match self {
+            Self::Cmss13 => "<bundled-profile-cmss13.dm>",
+            Self::Goonstation => "<bundled-profile-goonstation.dm>",
+            Self::Tgstation => "<bundled-profile-tgstation.dm>",
+            Self::Vanderlin => "<bundled-profile-vanderlin.dm>",
+        }
+    }
+
+    const fn source(self) -> &'static str {
+        match self {
+            Self::Cmss13 => include_str!("../../../examples/profiles/cmss13.dm"),
+            Self::Goonstation => include_str!("../../../examples/profiles/goonstation.dm"),
+            Self::Tgstation => include_str!("../../../examples/profiles/tgstation.dm"),
+            Self::Vanderlin => include_str!("../../../examples/profiles/vanderlin.dm"),
+        }
+    }
+
+    const fn defines(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::Goonstation => Some((
+                "<bundled-profile-goonstation-defines.dm>",
+                "#define USE_PERSPECTIVE_EDITOR_WALLS\n",
+            )),
+            Self::Tgstation => Some(("<bundled-profile-tgstation-defines.dm>", "#define CBT\n")),
+            Self::Cmss13 | Self::Vanderlin => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BakeOptions {
     pub enabled: bool,
-    pub editor_walls: bool,
     pub profile: Option<TreePath>,
+    pub forced_profile: Option<BundledProfile>,
     pub limits: vm::Limits,
 }
 
@@ -79,8 +140,8 @@ impl Default for BakeOptions {
     fn default() -> Self {
         Self {
             enabled: true,
-            editor_walls: false,
             profile: None,
+            forced_profile: None,
             limits: vm::Limits::default(),
         }
     }
@@ -95,8 +156,8 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
         &arena,
         entry,
         false,
-        options.editor_walls,
         false,
+        options.forced_profile,
         preprocessor::SourceCache::default(),
         progress,
     )?;
@@ -106,8 +167,8 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
             &arena,
             entry,
             true,
-            false,
             true,
+            options.forced_profile,
             editor.source_cache.clone(),
             progress,
         )?)
@@ -127,26 +188,40 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
     let (bake_program, profiles, profile_error, bake_files, bake_errors, bake_sema_errors, codegen_error) = match bake {
         Some(view) => {
             let files: Arc<[PathBuf]> = Arc::from(view.files);
-            let catalog = vm::bake::profile_catalog(&view.tree);
-            let (selection, profile_error) = match catalog {
-                Ok(catalog) => {
-                    let active = catalog.select(&view.tree, options.profile.as_ref());
-                    let path = |id| {
-                        view.tree
-                            .get(id)
-                            .map(|declaration| declaration.path.to_string())
-                            .unwrap_or_default()
-                    };
-                    let profiles = Profiles {
-                        available: catalog.profiles.iter().copied().map(path).collect::<Vec<_>>(),
-                        default: path(catalog.default),
-                        active: path(active),
-                    };
+            let path = |id| {
+                view.tree
+                    .get(id)
+                    .map(|declaration| declaration.path.to_string())
+                    .unwrap_or_default()
+            };
+            let (selection, profile_error) = match options.forced_profile {
+                Some(forced) => match view.tree.id_of(&TreePath::parse(forced.type_path())) {
+                    Some(active) => {
+                        let active_path = path(active);
+                        let profiles = Profiles {
+                            available: vec![active_path.clone()],
+                            default: active_path.clone(),
+                            active: active_path,
+                        };
 
-                    (Some((active, profiles)), None)
+                        (Some((active, profiles)), None)
+                    },
+                    None => (None, Some(vm::bake::ProfileError::Missing)),
                 },
-                Err(vm::bake::ProfileError::Missing) => (None, None),
-                Err(error) => (None, Some(error)),
+                None => match vm::bake::profile_catalog(&view.tree) {
+                    Ok(catalog) => {
+                        let active = catalog.select(&view.tree, options.profile.as_ref());
+                        let profiles = Profiles {
+                            available: catalog.profiles.iter().copied().map(path).collect::<Vec<_>>(),
+                            default: path(catalog.default),
+                            active: path(active),
+                        };
+
+                        (Some((active, profiles)), None)
+                    },
+                    Err(vm::bake::ProfileError::Missing) => (None, None),
+                    Err(error) => (None, Some(error)),
+                },
             };
             let profiles = selection.as_ref().map(|(_, profiles)| profiles.clone());
             let program = match (view.module, selection) {
@@ -192,14 +267,21 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
 }
 
 fn compile_view<'a>(
-    arena: &'a StrArena, entry: &Path, baking: bool, editor_walls: bool, generate: bool,
+    arena: &'a StrArena, entry: &Path, baking: bool, generate: bool, forced_profile: Option<BundledProfile>,
     source_cache: preprocessor::SourceCache<'a>, progress: &'a Progress,
 ) -> Result<CompiledView<'a>, LoadError> {
     progress.enter(Stage::Preprocess, 0);
+    let mut prelude = preprocessor::prelude_files();
+    if let Some((name, source)) = forced_profile.and_then(BundledProfile::defines) {
+        prelude.push(preprocessor::PreludeFile::Embedded(name, source));
+    }
+    let postlude =
+        forced_profile.map(|profile| preprocessor::PreludeFile::Embedded(profile.source_name(), profile.source()));
     let preprocessed = preprocessor::Preprocessor::new(arena)
         .with_source_cache(source_cache)
+        .with_prelude(prelude)
+        .with_postlude(postlude)
         .with_baking(baking)
-        .with_editor_walls(editor_walls)
         .with_progress(|path| {
             progress.advance(&path.display().to_string());
 
@@ -229,7 +311,7 @@ fn compile_view<'a>(
         return Err(LoadError::Cancelled);
     }
 
-    let should_generate = generate && vm::bake::has_profile(&tree);
+    let should_generate = generate && (forced_profile.is_some() || vm::bake::has_profile(&tree));
     let (module, codegen_error) = match should_generate.then(|| codegen::generate(&module)) {
         Some(Ok(module)) => (Some(module), None),
         Some(Err(error)) => (None, Some(error)),
@@ -407,5 +489,60 @@ mod tests {
         assert!(environment.bake_program.is_none());
 
         std::fs::remove_dir_all(entry.parent().expect("fixture parent")).expect("remove fixture");
+    }
+
+    #[test]
+    fn forcing_a_bundled_profile_overrides_the_codebase_default() {
+        let entry = fixture(
+            r#"
+#ifdef __DEMIR_BAKE__
+/datum/demir/native
+    default = TRUE
+#endif
+"#,
+        );
+        let options = BakeOptions {
+            forced_profile: Some(BundledProfile::Cmss13),
+            ..BakeOptions::default()
+        };
+        let (environment, diagnostics) = Environment::load_with(&entry, options, &Progress::new())
+            .expect("the bundled profile should be injected after the codebase");
+
+        assert!(diagnostics.profile.is_none());
+        assert_eq!(
+            environment.profiles,
+            Some(Profiles {
+                available: vec![String::from("/datum/demir/cmss13")],
+                default: String::from("/datum/demir/cmss13"),
+                active: String::from("/datum/demir/cmss13"),
+            })
+        );
+        assert_eq!(environment.bake_options.forced_profile, Some(BundledProfile::Cmss13));
+
+        std::fs::remove_dir_all(entry.parent().expect("fixture parent")).expect("remove fixture");
+    }
+
+    #[test]
+    fn bundled_profile_metadata_covers_every_embedded_example() {
+        assert_eq!(
+            BundledProfile::ALL.map(BundledProfile::type_path),
+            [
+                "/datum/demir/cmss13",
+                "/datum/demir/goonstation",
+                "/datum/demir/tgstation",
+                "/datum/demir/vanderlin",
+            ]
+        );
+        for profile in BundledProfile::ALL {
+            assert!(profile.source().contains(profile.type_path()));
+        }
+        assert_eq!(
+            BundledProfile::Goonstation.defines().map(|(_, source)| source),
+            Some("#define USE_PERSPECTIVE_EDITOR_WALLS\n")
+        );
+        assert_eq!(
+            BundledProfile::Tgstation.defines().map(|(_, source)| source),
+            Some("#define CBT\n")
+        );
     }
 }

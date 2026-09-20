@@ -7,7 +7,7 @@ use std::{
 };
 
 use dear_imgui_rs::{Key, Ui};
-use editor::frame::FrameOptions;
+use editor::{environment::BundledProfile, frame::FrameOptions};
 use render::HighlightStyle;
 use serde::{Deserialize, Serialize};
 
@@ -692,6 +692,12 @@ pub(crate) struct ProfileSelection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ForcedProfileSelection {
+    pub environment: PathBuf,
+    pub profile: BundledProfile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
     pub maximized: bool,
@@ -716,8 +722,8 @@ pub(crate) struct Settings {
     pub recent_codebases: Vec<PathBuf>,
     pub recent: Vec<RecentMap>,
     pub profile_selections: Vec<ProfileSelection>,
+    pub forced_profile_selections: Vec<ForcedProfileSelection>,
     pub bake_enabled: bool,
-    pub perspective_editor_wall: bool,
 }
 
 pub(crate) struct SettingsLoad {
@@ -777,8 +783,8 @@ impl Default for Settings {
             recent_codebases: Vec::new(),
             recent: Vec::new(),
             profile_selections: Vec::new(),
+            forced_profile_selections: Vec::new(),
             bake_enabled: true,
-            perspective_editor_wall: false,
         }
     }
 }
@@ -890,6 +896,25 @@ impl Settings {
         }
     }
 
+    pub fn forced_profile_for(&self, environment: &Path) -> Option<BundledProfile> {
+        let environment = absolute(environment);
+
+        self.forced_profile_selections
+            .iter()
+            .find(|selection| selection.environment == environment)
+            .map(|selection| selection.profile)
+    }
+
+    pub fn set_forced_profile_for(&mut self, environment: &Path, profile: Option<BundledProfile>) {
+        let environment = absolute(environment);
+        self.forced_profile_selections
+            .retain(|selection| selection.environment != environment);
+        if let Some(profile) = profile {
+            self.forced_profile_selections
+                .push(ForcedProfileSelection { environment, profile });
+        }
+    }
+
     fn try_load() -> Result<Option<Self>, Box<dyn Error>> {
         let path = settings_path()?;
         Self::from_file_read(fs::read_to_string(path))
@@ -975,8 +1000,8 @@ mod tests {
                 recent_codebases: Vec::new(),
                 recent: Vec::new(),
                 profile_selections: Vec::new(),
+                forced_profile_selections: Vec::new(),
                 bake_enabled: true,
-                perspective_editor_wall: false,
             }
         );
     }
@@ -1199,8 +1224,11 @@ mod tests {
                 environment: PathBuf::from("/project/station.dme"),
                 profile: String::from("/datum/demir/tgstation/debug"),
             }],
+            forced_profile_selections: vec![ForcedProfileSelection {
+                environment: PathBuf::from("/project/colonialmarines.dme"),
+                profile: BundledProfile::Cmss13,
+            }],
             bake_enabled: true,
-            perspective_editor_wall: false,
         };
         settings.keybindings.rebind(
             KeybindAction::ShowAreas,
@@ -1233,6 +1261,8 @@ mod tests {
         assert!(encoded.contains("custom_type_path = \"/atom/movable/lighting\""));
         assert!(encoded.contains("[[profile_selections]]"));
         assert!(encoded.contains("profile = \"/datum/demir/tgstation/debug\""));
+        assert!(encoded.contains("[[forced_profile_selections]]"));
+        assert!(encoded.contains("profile = \"cmss13\""));
         assert!(encoded.contains("key = \"G\""));
         assert!(encoded.contains("ctrl = true"));
         assert_eq!(toml::from_str::<Settings>(&encoded).unwrap(), settings);
@@ -1266,8 +1296,8 @@ mod tests {
             recent_codebases: Vec::new(),
             recent: Vec::new(),
             profile_selections: Vec::new(),
+            forced_profile_selections: Vec::new(),
             bake_enabled: true,
-            perspective_editor_wall: false,
         };
         let mut options = FrameOptions::default();
 
@@ -1443,6 +1473,26 @@ mod tests {
         settings.set_profile_for(station, None);
         assert_eq!(settings.profile_for(station), None);
         assert_eq!(settings.profile_for(other), Some("/datum/demir/goonstation"));
+    }
+
+    #[test]
+    fn forced_profiles_are_scoped_replaced_and_cleared_per_codebase() {
+        let mut settings = Settings::default();
+        let station = Path::new("station.dme");
+        let other = Path::new("other.dme");
+
+        settings.set_forced_profile_for(station, Some(BundledProfile::Tgstation));
+        settings.set_forced_profile_for(other, Some(BundledProfile::Goonstation));
+        assert_eq!(settings.forced_profile_for(station), Some(BundledProfile::Tgstation));
+        assert_eq!(settings.forced_profile_for(other), Some(BundledProfile::Goonstation));
+
+        settings.set_forced_profile_for(station, Some(BundledProfile::Vanderlin));
+        assert_eq!(settings.forced_profile_for(station), Some(BundledProfile::Vanderlin));
+        assert_eq!(settings.forced_profile_selections.len(), 2);
+
+        settings.set_forced_profile_for(station, None);
+        assert_eq!(settings.forced_profile_for(station), None);
+        assert_eq!(settings.forced_profile_for(other), Some(BundledProfile::Goonstation));
     }
 
     #[test]

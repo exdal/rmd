@@ -34,6 +34,7 @@ use dmm::{Coord, MapFormat, Prefab, PrefabInstanceId, Size};
 use editor::{
     command::EditGroupId,
     document::{DocumentId, MapDocument, Selection},
+    environment::BundledProfile,
     icons::materialdesignicons::{
         ICON_CLOSE_THICK,
         ICON_DOTS_HORIZONTAL,
@@ -748,8 +749,14 @@ pub struct UiOutput {
     pub pick_new_map_path: bool,
     pub cancel_load: bool,
     pub copy_to_clipboard: Option<String>,
-    pub reload_profile: Option<String>,
+    pub reload_profile: Option<ProfileReload>,
     pub(crate) keybind_preset: Option<KeybindPreset>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ProfileReload {
+    Select(String),
+    Force(Option<BundledProfile>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

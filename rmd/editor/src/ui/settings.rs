@@ -9,6 +9,7 @@ use dear_imgui_rs::{
     WindowKey,
     WindowKeyError,
 };
+use editor::environment::BundledProfile;
 
 use crate::{
     session::Session,
@@ -22,6 +23,7 @@ use crate::{
         SelectionHighlight,
         Settings,
     },
+    ui::ProfileReload,
 };
 
 const SETTINGS_WINDOW_SIZE: [f32; 2] = [760.0, 560.0];
@@ -44,13 +46,13 @@ struct SettingsWindowState<'a> {
     category: &'a mut SettingsCategory,
     capturing: &'a mut Option<KeybindAction>,
     measured: &'a mut [f32; 2],
-    pending_profile: &'a mut Option<String>,
+    pending_profile: &'a mut Option<ProfileReload>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct SettingsWindowOutput {
     pub object_tree_changed: bool,
-    pub reload_profile: Option<String>,
+    pub reload_profile: Option<ProfileReload>,
 }
 
 impl SettingsCategory {
@@ -118,7 +120,7 @@ pub(super) struct SettingsWindow {
     category: SettingsCategory,
     capturing: Option<KeybindAction>,
     measured: [f32; 2],
-    pending_profile: Option<String>,
+    pending_profile: Option<ProfileReload>,
 }
 
 impl SettingsWindow {
@@ -305,7 +307,7 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
 }
 
 fn draw_compiler_settings(
-    ui: &Ui, session: &Session, settings: &mut Settings, loading: bool, pending_profile: &mut Option<String>,
+    ui: &Ui, session: &Session, settings: &mut Settings, loading: bool, pending_profile: &mut Option<ProfileReload>,
 ) {
     ui.text("Codebase");
     draw_profile_setting(ui, session, settings, loading, pending_profile);
@@ -313,7 +315,6 @@ fn draw_compiler_settings(
     ui.separator();
     ui.text("On next load");
     ui.checkbox("Run DM appearance baking", &mut settings.bake_enabled);
-    ui.checkbox("Perspective editor walls", &mut settings.perspective_editor_wall);
 
     ui.separator();
     ui.text("Diagnostics");
@@ -345,7 +346,7 @@ fn draw_compiler_settings(
 }
 
 fn draw_profile_setting(
-    ui: &Ui, session: &Session, settings: &Settings, loading: bool, pending_profile: &mut Option<String>,
+    ui: &Ui, session: &Session, settings: &Settings, loading: bool, pending_profile: &mut Option<ProfileReload>,
 ) {
     let Some(environment) = session.state.environment.as_deref() else {
         ui.text_disabled("No codebase loaded");
@@ -354,6 +355,47 @@ fn draw_profile_setting(
     };
     if !settings.bake_enabled || !environment.bake_options.enabled {
         ui.text_disabled("DM appearance baking is disabled");
+
+        return;
+    }
+
+    let forced = environment.bake_options.forced_profile;
+    ui.text("Forced bundled profile");
+    {
+        let _disabled = ui.begin_disabled_with_cond(loading);
+        let preview = forced
+            .map(BundledProfile::label)
+            .unwrap_or("None - use codebase profile");
+        ui.set_next_item_width(-1.0);
+        if let Some(combo) = ui.begin_combo("##forced-bundled-profile", preview) {
+            if ui
+                .selectable_config("None - use codebase profile")
+                .selected(forced.is_none())
+                .build()
+                && forced.is_some()
+            {
+                *pending_profile = Some(ProfileReload::Force(None));
+            }
+            for profile in BundledProfile::ALL {
+                if ui
+                    .selectable_config(profile.label())
+                    .selected(forced == Some(profile))
+                    .build()
+                    && forced != Some(profile)
+                {
+                    *pending_profile = Some(ProfileReload::Force(Some(profile)));
+                }
+            }
+            combo.end();
+        }
+    }
+    if loading {
+        ui.text_disabled("Available after the current load finishes");
+    }
+
+    ui.text("Profile");
+    if forced.is_some() {
+        ui.text_disabled("Codebase profile selection is disabled while a bundled profile is forced");
 
         return;
     }
@@ -367,7 +409,6 @@ fn draw_profile_setting(
         return;
     };
 
-    ui.text("Profile");
     let _disabled = ui.begin_disabled_with_cond(loading);
     ui.set_next_item_width(-1.0);
     if let Some(combo) = ui.begin_combo("##codebase-profile", &profiles.active) {
@@ -383,7 +424,7 @@ fn draw_profile_setting(
                 .build()
                 && *profile != profiles.active
             {
-                *pending_profile = Some(profile.clone());
+                *pending_profile = Some(ProfileReload::Select(profile.clone()));
             }
         }
         combo.end();
@@ -393,8 +434,14 @@ fn draw_profile_setting(
     }
 }
 
-fn draw_profile_reload_dialog(ui: &Ui, pending_profile: &mut Option<String>) -> Option<String> {
-    let profile = pending_profile.as_deref()?;
+fn draw_profile_reload_dialog(ui: &Ui, pending_profile: &mut Option<ProfileReload>) -> Option<ProfileReload> {
+    let message = match pending_profile.as_ref()? {
+        ProfileReload::Select(profile) => format!("Reload the codebase with {profile}?"),
+        ProfileReload::Force(Some(profile)) => {
+            format!("Reload the codebase with the bundled {} profile?", profile.label())
+        },
+        ProfileReload::Force(None) => String::from("Stop forcing a bundled profile and reload the codebase?"),
+    };
     if !ui.is_popup_open(PROFILE_RELOAD_POPUP) {
         ui.open_popup(PROFILE_RELOAD_POPUP);
     }
@@ -406,7 +453,7 @@ fn draw_profile_reload_dialog(ui: &Ui, pending_profile: &mut Option<String>) -> 
         | WindowFlags::NO_DOCKING;
     let _modal = ui.begin_modal_popup_config(PROFILE_RELOAD_POPUP).flags(flags).begin()?;
 
-    ui.text_wrapped(format!("Reload the codebase with {profile}?"));
+    ui.text_wrapped(message);
     ui.text("Open maps and unsaved changes will be preserved.");
     ui.separator();
     if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
@@ -417,10 +464,10 @@ fn draw_profile_reload_dialog(ui: &Ui, pending_profile: &mut Option<String>) -> 
     }
     ui.same_line();
     if ui.button("Reload") {
-        let profile = pending_profile.take();
+        let request = pending_profile.take();
         ui.close_current_popup();
 
-        return profile;
+        return request;
     }
 
     None
@@ -619,52 +666,56 @@ mod tests {
     }
 
     #[test]
-    fn compiler_settings_render_the_loaded_profile_catalog() {
+    fn compiler_settings_render_native_and_forced_profile_states() {
         let _context = IMGUI_CONTEXT.lock().unwrap();
-        let mut context = dear_imgui_rs::Context::create();
-        context
-            .font_atlas()
-            .try_claim_legacy_renderer()
-            .expect("legacy renderer font atlas should be available")
-            .build();
-        context.io_mut().set_display_size([1280.0, 720.0]);
-        context.io_mut().set_delta_time(1.0 / 60.0);
-        let ui = context.frame();
-        let window = WindowKey::new("settings-profile-test", "Settings").expect("valid settings window key");
-        let mut open = true;
-        let mut category = SettingsCategory::Compiler;
-        let mut capturing = None;
-        let mut measured = SETTINGS_WINDOW_SIZE;
-        let mut pending_profile = None;
-        let mut session = Session::new();
-        let mut environment = editor::Environment::new("station.dme", objtree::ObjectTree::new());
-        environment.profiles = Some(editor::Profiles {
-            available: vec![
-                String::from("/datum/demir/tgstation"),
-                String::from("/datum/demir/tgstation/debug"),
-            ],
-            default: String::from("/datum/demir/tgstation"),
-            active: String::from("/datum/demir/tgstation/debug"),
-        });
-        session.state.environment = Some(std::sync::Arc::new(environment));
-        let mut settings = Settings::default();
+        for forced_profile in [None, Some(BundledProfile::Tgstation)] {
+            let mut context = dear_imgui_rs::Context::create();
+            context
+                .font_atlas()
+                .try_claim_legacy_renderer()
+                .expect("legacy renderer font atlas should be available")
+                .build();
+            context.io_mut().set_display_size([1280.0, 720.0]);
+            context.io_mut().set_delta_time(1.0 / 60.0);
+            let ui = context.frame();
+            let window = WindowKey::new(format!("settings-profile-test-{forced_profile:?}"), "Settings")
+                .expect("valid settings window key");
+            let mut open = true;
+            let mut category = SettingsCategory::Compiler;
+            let mut capturing = None;
+            let mut measured = SETTINGS_WINDOW_SIZE;
+            let mut pending_profile = None;
+            let mut session = Session::new();
+            let mut environment = editor::Environment::new("station.dme", objtree::ObjectTree::new());
+            environment.bake_options.forced_profile = forced_profile;
+            environment.profiles = Some(editor::Profiles {
+                available: vec![
+                    String::from("/datum/demir/tgstation"),
+                    String::from("/datum/demir/tgstation/debug"),
+                ],
+                default: String::from("/datum/demir/tgstation"),
+                active: String::from("/datum/demir/tgstation/debug"),
+            });
+            session.state.environment = Some(std::sync::Arc::new(environment));
+            let mut settings = Settings::default();
 
-        let output = draw_settings_window(
-            ui,
-            &window,
-            SettingsWindowState {
-                open: &mut open,
-                category: &mut category,
-                capturing: &mut capturing,
-                measured: &mut measured,
-                pending_profile: &mut pending_profile,
-            },
-            &mut session,
-            &mut settings,
-            false,
-        );
+            let output = draw_settings_window(
+                ui,
+                &window,
+                SettingsWindowState {
+                    open: &mut open,
+                    category: &mut category,
+                    capturing: &mut capturing,
+                    measured: &mut measured,
+                    pending_profile: &mut pending_profile,
+                },
+                &mut session,
+                &mut settings,
+                false,
+            );
 
-        assert_eq!(output, SettingsWindowOutput::default());
-        assert!(context.render_legacy().valid());
+            assert_eq!(output, SettingsWindowOutput::default());
+            assert!(context.render_legacy().valid());
+        }
     }
 }

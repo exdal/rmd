@@ -1,5 +1,6 @@
-// A template, not something rmd loads on its own. Copy this file into a cmss13 checkout and
-// `#include` it from `colonialmarines.dme`; the guard keeps BYOND compiling it to nothing.
+// rmd embeds this integration for the Forced bundled profile setting. To make the profile part of
+// a cmss13 checkout instead, copy it there and `#include` it from `colonialmarines.dme`, the guard
+// keeps BYOND compiling it to nothing.
 //
 // Walls pick corner states from their neighbours in LateInitialize(), and windows, frames and a
 // few floors pick a junction state through relativewall(). Lights follow TGMC's three systems:

@@ -1,11 +1,16 @@
-// A template, not something rmd loads on its own. Copy this file into a Goonstation checkout and
-// `#include` it from `goonstation.dme`; the guard keeps BYOND compiling it to nothing.
+// rmd embeds this integration for the Forced bundled profile setting. To make the profile part of
+// a Goonstation checkout instead, copy it there and `#include` it from `goonstation.dme`, the guard
+// keeps BYOND compiling it to nothing.
 //
 // Goonstation derives its icons in `UpdateIcon()` and keeps its per-type data in a typeinfo datum,
 // so the profile resolves that datum per atom and lets the codebase pick its own icon state.
 // Mapped atoms never run New(), so the state UpdateIcon() reads and the lights New() attaches are
 // set up here instead.
 #ifdef __DEMIR_BAKE__
+
+#ifndef USE_PERSPECTIVE_EDITOR_WALLS
+#define USE_PERSPECTIVE_EDITOR_WALLS
+#endif
 
 /atom/proc/demir_prepare_state()
 	return

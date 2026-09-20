@@ -63,8 +63,6 @@
 #define DEMIR_HIGHLIGHT_HOVERED 2
 #define DEMIR_HIGHLIGHT_ALWAYS 4
 
-#define USE_PERSPECTIVE_EDITOR_WALLS
-
 // Define a subtype to teach the editor how to bake a codebase. The bake runtime creates one profile
 // instance and calls these hooks on it. Store persistent profile state in its variables.
 //

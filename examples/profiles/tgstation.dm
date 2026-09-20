@@ -1,8 +1,8 @@
-// A template, not something rmd loads on its own. Copy this file into a tgstation checkout and
-// `#include` it from `tgstation.dme`; the guard keeps BYOND compiling it to nothing. tgstation's
-// build tool also supplies CBT, which selects runtime values from MAP_SWITCH. Since rmd reads the
-// DME directly, add this immediately after the required `genesis_call.dme` include and before the
-// generated include block:
+// rmd embeds this integration for the Forced bundled profile setting and supplies the CBT define
+// it needs. To make the profile part of a tgstation checkout instead, copy it there and `#include`
+// it from `tgstation.dme`, the guard keeps BYOND compiling it to nothing. tgstation's build tool
+// also supplies CBT, which selects runtime values from MAP_SWITCH. For a manual include, add this
+// immediately after the required `genesis_call.dme` include and before the generated include block:
 //
 // #ifdef __DEMIR_BAKE__
 // #define CBT
