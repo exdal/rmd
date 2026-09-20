@@ -410,7 +410,7 @@ enum PasteAction {
 pub(super) fn focus_window_on_hover(ui: &Ui) {
     if !ui.is_window_focused()
         && !ui.is_any_item_active()
-        && ui.is_window_hovered_with_flags(WindowHoveredFlags::CHILD_WINDOWS)
+        && ui.is_window_hovered_with_flags(WindowHoveredFlags::CHILD_WINDOWS | WindowHoveredFlags::NO_POPUP_HIERARCHY)
     {
         ui.set_window_focus(None);
     }
@@ -4608,6 +4608,66 @@ mod tests {
             self.context.io_mut().add_key_event(key, down);
             self.step();
         }
+    }
+
+    fn draw_hover_focus_test_window(ui: &Ui, open_popup: bool) -> (bool, bool) {
+        let mut focused = false;
+        let mut popup_open = false;
+        ui.window("hover-focus-target")
+            .position([20.0, 20.0], Condition::Always)
+            .size([300.0, 240.0], Condition::Always)
+            .build(|| {
+                focus_window_on_hover(ui);
+                focused = ui.is_window_focused();
+                ui.child_window("hover-focus-child")
+                    .size([200.0, 100.0])
+                    .build(ui, || ui.text("Child content"));
+
+                if open_popup {
+                    ui.open_popup("hover-focus-popup");
+                }
+                if let Some(_popup) = ui.begin_popup("hover-focus-popup") {
+                    popup_open = true;
+                    ui.text("Popup content");
+                    ui.dummy([120.0, 80.0]);
+                }
+            });
+
+        (focused, popup_open)
+    }
+
+    fn draw_hover_focus_holder(ui: &Ui) {
+        ui.window("hover-focus-holder")
+            .position([400.0, 20.0], Condition::Always)
+            .size([200.0, 200.0], Condition::Always)
+            .build(|| ui.text("Initially focused"));
+    }
+
+    #[test]
+    fn hover_focus_keeps_child_windows_and_ignores_popups() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = rectangle_context();
+        context.io_mut().add_mouse_pos_event([100.0, 100.0]);
+
+        let ui = context.frame();
+        draw_hover_focus_test_window(ui, false);
+        draw_hover_focus_holder(ui);
+        ui.set_window_focus(Some("hover-focus-holder"));
+        assert!(context.render_legacy().valid());
+
+        let ui = context.frame();
+        let (focused, popup_open) = draw_hover_focus_test_window(ui, true);
+        draw_hover_focus_holder(ui);
+        assert!(focused, "hovering an embedded child should focus its parent window");
+        assert!(popup_open);
+        assert!(context.render_legacy().valid());
+
+        context.io_mut().add_mouse_pos_event([110.0, 110.0]);
+        let ui = context.frame();
+        let (_, popup_open) = draw_hover_focus_test_window(ui, false);
+        draw_hover_focus_holder(ui);
+        assert!(popup_open, "hovering a popup should not refocus its parent window");
+        assert!(context.render_legacy().valid());
     }
 
     #[test]
