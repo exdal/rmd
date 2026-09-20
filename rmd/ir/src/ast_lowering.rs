@@ -139,7 +139,14 @@ impl<'a> IrModuleBuilder<'a> {
 
     pub fn finish(mut self) -> Module {
         self.link_global_function_calls();
+        // remove instructions after any branch nodes, and repair phi predecessor
+        // lists after the removed control-flow edges disappear.
+        crate::opt::canonicalize_terminators(&mut self.module);
         crate::opt::simplify_phis(&mut self.module);
+        #[cfg(debug_assertions)]
+        if let Err(error) = crate::verify(&self.module) {
+            panic!("lowering produced invalid IR: {error}");
+        }
 
         self.module
     }
@@ -2034,6 +2041,59 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn every_lowered_shape_passes_verification() {
+        for source in SHAPES {
+            let module = lower(source);
+
+            crate::verify(&module).unwrap_or_else(|error| panic!("invalid IR for `{source}`: {error}"));
+        }
+    }
+
+    #[test]
+    fn a_throw_removes_its_following_edge_and_phi_operand() {
+        let module = lower("/proc/t(a)\n\tvar/x = 0\n\tif(a)\n\t\tthrow 1\n\t\tx = 2\n\telse\n\t\tx = 3\n\treturn x\n");
+        let throwing_block = blocks(&module)
+            .into_iter()
+            .find(|(_, instructions)| {
+                instructions
+                    .iter()
+                    .any(|instruction| matches!(module.node(*instruction), Some(IrNode::Throw(_))))
+            })
+            .expect("fixture should contain a throwing block");
+
+        assert!(matches!(
+            throwing_block
+                .1
+                .last()
+                .and_then(|instruction| module.node(*instruction)),
+            Some(IrNode::Throw(_))
+        ));
+        assert!(!module.nodes.iter().any(|node| matches!(node, IrNode::Phi { .. })));
+        assert!(module.nodes.iter().any(|node| {
+            matches!(
+                node,
+                IrNode::Return(Some(value))
+                    if matches!(module.node(*value), Some(IrNode::Constant(Value::Num(3.0))))
+            )
+        }));
+        crate::verify(&module).expect("canonicalized module should verify");
+    }
+
+    #[test]
+    fn metadata_does_not_reference_defaults_after_a_noreturn_default() {
+        let module = lower("/proc/t(a = input(), b = a + 2)\n\treturn b\n");
+
+        assert!(matches!(
+            module.procs[0].params[0]
+                .default
+                .and_then(|default| module.node(default)),
+            Some(IrNode::Blocked("input"))
+        ));
+        assert_eq!(module.procs[0].params[1].default, None);
+        crate::verify(&module).expect("removed defaults should not leave stale metadata");
     }
 
     #[test]

@@ -770,13 +770,13 @@ impl Generator {
                 let reason = self.intern_string((*reason).to_owned())?;
                 self.emit_op(Op::Blocked);
                 self.emit_u32(reason.0);
-                self.store_result(state, id)?;
+                return Ok(());
             },
             IrNode::Trap { reason } => {
                 let reason = self.intern_string(reason.clone())?;
                 self.emit_op(Op::Trap);
                 self.emit_u32(reason.0);
-                self.store_result(state, id)?;
+                return Ok(());
             },
         }
 
@@ -1040,8 +1040,6 @@ fn produces_value(node: &IrNode) -> bool {
             | IrNode::IterKey(_)
             | IrNode::RangeTest { .. }
             | IrNode::CatchValue
-            | IrNode::Blocked(_)
-            | IrNode::Trap { .. }
     )
 }
 
