@@ -2,6 +2,7 @@ pub mod disasm;
 pub mod error;
 pub mod opcode;
 mod reachability;
+mod stackify;
 
 use core::{
     location::Location,
@@ -165,9 +166,29 @@ pub fn generate_reachable(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Label {
+    Block(IrNodeId),
+    Synthetic(usize),
+}
+
+#[derive(Debug)]
+struct AddressPatch {
+    operand: usize,
+    target: Label,
+}
+
 #[derive(Debug)]
 struct JumpPatch {
-    operand: usize,
+    instruction: usize,
+    address: usize,
+    op: Op,
+}
+
+#[derive(Debug)]
+struct EdgeStub {
+    label: Label,
+    predecessor: IrNodeId,
     target: IrNodeId,
 }
 
@@ -176,6 +197,7 @@ struct FunctionState {
     locals: HashMap<IrNodeId, LocalId>,
     parameter_defaults: HashMap<IrNodeId, LocalId>,
     next_local: u32,
+    stackify: stackify::Stackify,
 }
 
 impl FunctionState {
@@ -205,8 +227,10 @@ struct Generator {
     path_ids: HashMap<TreePath, PathId>,
     functions: Vec<CompiledFunction>,
     function_ids: HashMap<IrNodeId, FunctionId>,
-    labels: HashMap<IrNodeId, CodeOffset>,
+    labels: HashMap<Label, usize>,
+    addresses: Vec<AddressPatch>,
     jumps: Vec<JumpPatch>,
+    next_label: usize,
     code: Vec<u8>,
     /// `a.b()` looks `b` up as a proc first, and plain `a.b` as a var first
     callees: HashSet<IrNodeId>,
@@ -224,7 +248,9 @@ impl Generator {
             functions: Vec::new(),
             function_ids: HashMap::new(),
             labels: HashMap::new(),
+            addresses: Vec::new(),
             jumps: Vec::new(),
+            next_label: 0,
             code: Vec::new(),
             callees: HashSet::new(),
         }
@@ -252,8 +278,6 @@ impl Generator {
             }
             self.generate_function(module, proc)?;
         }
-
-        self.resolve_jumps()?;
 
         Ok(Module {
             magic: Module::MAGIC,
@@ -361,11 +385,14 @@ impl Generator {
 
     fn generate_function(&mut self, module: &ir::Module, proc: &Procedure) -> Result<(), CodegenError> {
         let blocks = reachable_blocks(module, proc.body)?;
+        let layout = block_layout(module, proc.body, &blocks)?;
+        let stackify = stackify::Stackify::analyze(module, proc, &blocks)?;
         let mut state = FunctionState {
             blocks,
             locals: HashMap::new(),
             parameter_defaults: HashMap::new(),
             next_local: 0,
+            stackify,
         };
 
         for parameter in &proc.parameters {
@@ -395,7 +422,7 @@ impl Generator {
 
         for block in state.blocks.clone() {
             for instruction in module.block(block).ok_or(CodegenError::ExpectedBlock(block))? {
-                if module.node(*instruction).is_some_and(produces_value) {
+                if module.node(*instruction).is_some_and(produces_value) && state.stackify.needs_local(*instruction) {
                     state.reserve(*instruction);
                 }
             }
@@ -407,15 +434,21 @@ impl Generator {
             self.emit_op(Op::DefaultParameter);
             self.emit_u32(destination.0);
         }
-        for block in state.blocks.clone() {
-            self.generate_block(module, block, &state)?;
+
+        let mut edge_stubs = Vec::new();
+
+        for (index, block) in layout.iter().copied().enumerate() {
+            let next = layout.get(index + 1).copied();
+            self.generate_block(module, block, next, &state, &mut edge_stubs)?;
         }
 
-        let length = self
-            .code_offset()?
-            .0
-            .checked_sub(address.0)
-            .ok_or(CodegenError::CodeTooLarge)?;
+        for stub in edge_stubs {
+            self.mark_label(stub.label);
+            self.emit_phi_copies(module, &state, stub.predecessor, stub.target)?;
+            self.emit_jump(Op::Jump, Label::Block(stub.target));
+        }
+
+        let length = self.finish_function(address.0 as usize)?;
         let id = *self
             .function_ids
             .get(&proc.function)
@@ -432,12 +465,20 @@ impl Generator {
     }
 
     fn generate_block(
-        &mut self, module: &ir::Module, block: IrNodeId, state: &FunctionState,
+        &mut self, module: &ir::Module, block: IrNodeId, next: Option<IrNodeId>, state: &FunctionState,
+        edge_stubs: &mut Vec<EdgeStub>,
     ) -> Result<(), CodegenError> {
-        self.labels.insert(block, self.code_offset()?);
-        let instructions = module.block(block).ok_or(CodegenError::ExpectedBlock(block))?;
+        self.mark_label(Label::Block(block));
+        let instructions = state
+            .stackify
+            .schedule(block)
+            .ok_or(CodegenError::ExpectedBlock(block))?;
 
         for instruction in instructions {
+            if state.stackify.is_stacked(*instruction) {
+                continue;
+            }
+
             match module
                 .node(*instruction)
                 .ok_or(CodegenError::MissingNode(*instruction))?
@@ -449,7 +490,7 @@ impl Generator {
                 | IrNode::Noop => {},
                 IrNode::Branch(target) => {
                     self.emit_phi_copies(module, state, block, *target)?;
-                    self.emit_jump(Op::Jump, *target);
+                    self.emit_jump(Op::Jump, Label::Block(*target));
                 },
                 IrNode::ConditionalBranch {
                     condition,
@@ -457,16 +498,27 @@ impl Generator {
                     false_block,
                 } => {
                     self.emit_value(module, state, *condition)?;
-                    self.emit_op(Op::JumpIfFalse);
-                    let false_operand = self.reserve_address();
+                    let false_target = if has_phi_copies(module, *false_block)? {
+                        // Phi copies belong to the incoming edge so keep the false
+                        // copies behind the conditional while the true copies can
+                        // lead directly into the preferred fallthrough block
+                        let label = self.fresh_label();
+                        edge_stubs.push(EdgeStub {
+                            label,
+                            predecessor: block,
+                            target: *false_block,
+                        });
+
+                        label
+                    } else {
+                        Label::Block(*false_block)
+                    };
+                    self.emit_jump(Op::JumpIfFalse, false_target);
 
                     self.emit_phi_copies(module, state, block, *true_block)?;
-                    self.emit_jump(Op::Jump, *true_block);
-
-                    let false_offset = self.code_offset()?;
-                    self.write_address(false_operand, false_offset)?;
-                    self.emit_phi_copies(module, state, block, *false_block)?;
-                    self.emit_jump(Op::Jump, *false_block);
+                    if next != Some(*true_block) {
+                        self.emit_jump(Op::Jump, Label::Block(*true_block));
+                    }
                 },
                 node => self.generate_instruction(module, state, *instruction, node)?,
             }
@@ -806,9 +858,9 @@ impl Generator {
             },
             IrNode::TryCatch { body, catch, merge } => {
                 self.emit_op(Op::TryCatch);
-                self.emit_block_address(*body);
-                self.emit_block_address(*catch);
-                self.emit_block_address(*merge);
+                self.emit_address(Label::Block(*body));
+                self.emit_address(Label::Block(*catch));
+                self.emit_address(Label::Block(*merge));
             },
             IrNode::Blocked(reason) => {
                 let reason = self.intern_string((*reason).to_owned())?;
@@ -865,6 +917,11 @@ impl Generator {
     }
 
     fn emit_value(&mut self, module: &ir::Module, state: &FunctionState, value: IrNodeId) -> Result<(), CodegenError> {
+        if state.stackify.is_stacked(value) {
+            let node = module.node(value).ok_or(CodegenError::MissingNode(value))?;
+            return self.generate_instruction(module, state, value, node);
+        }
+
         match module.node(value).ok_or(CodegenError::MissingNode(value))? {
             IrNode::Constant(_) => {
                 let constant = self
@@ -886,6 +943,15 @@ impl Generator {
     }
 
     fn store_result(&mut self, state: &FunctionState, value: IrNodeId) -> Result<(), CodegenError> {
+        if state.stackify.is_stacked(value) {
+            return Ok(());
+        }
+
+        if state.stackify.uses(value) == 0 {
+            self.emit_op(Op::Drop);
+            return Ok(());
+        }
+
         let local = state.local(value)?;
         self.emit_op(Op::StoreLocal);
         self.emit_u32(local.0);
@@ -984,36 +1050,186 @@ impl Generator {
         operand
     }
 
-    fn emit_jump(&mut self, op: Op, target: IrNodeId) {
+    fn emit_jump(&mut self, op: Op, target: Label) {
+        let instruction = self.code.len();
         self.emit_op(op);
-        self.emit_block_address(target);
+        let address = self.addresses.len();
+        self.emit_address(target);
+        self.jumps.push(JumpPatch {
+            instruction,
+            address,
+            op,
+        });
     }
 
-    fn emit_block_address(&mut self, target: IrNodeId) {
+    fn emit_address(&mut self, target: Label) {
         let operand = self.reserve_address();
-        self.jumps.push(JumpPatch { operand, target });
+        self.addresses.push(AddressPatch { operand, target });
     }
 
-    fn write_address(&mut self, operand: usize, target: CodeOffset) -> Result<(), CodegenError> {
+    fn fresh_label(&mut self) -> Label {
+        let label = Label::Synthetic(self.next_label);
+        self.next_label += 1;
+        label
+    }
+
+    fn mark_label(&mut self, label: Label) { self.labels.insert(label, self.code.len()); }
+
+    fn write_address(&mut self, operand: usize, target: usize) -> Result<(), CodegenError> {
         let end = operand.checked_add(4).ok_or(CodegenError::CodeTooLarge)?;
         let bytes = self.code.get_mut(operand..end).ok_or(CodegenError::CodeTooLarge)?;
-        bytes.copy_from_slice(&target.0.to_le_bytes());
+        let target = u32::try_from(target).map_err(|_| CodegenError::CodeTooLarge)?;
+        bytes.copy_from_slice(&target.to_le_bytes());
 
         Ok(())
     }
 
-    fn resolve_jumps(&mut self) -> Result<(), CodegenError> {
-        for jump in std::mem::take(&mut self.jumps) {
-            let target = self
-                .labels
-                .get(&jump.target)
-                .copied()
-                .ok_or(CodegenError::ExpectedBlock(jump.target))?;
-            self.write_address(jump.operand, target)?;
+    fn finish_function(&mut self, start: usize) -> Result<u32, CodegenError> {
+        let end = self.code.len();
+        debug_assert!(self.labels.values().all(|offset| (start..=end).contains(offset)));
+
+        // Targets stay symbolic until the function has its final layout. This
+        // lets compaction move every absolute address, including TryCatch
+        // operands, without decoding the variable-width bytecode stream.
+        self.redirect_jump_chains();
+
+        let mut removed = vec![false; self.jumps.len()];
+        loop {
+            let mut changed = false;
+            for (index, jump) in self.jumps.iter().enumerate() {
+                if removed[index] || jump.op != Op::Jump {
+                    continue;
+                }
+                let target = self.addresses[jump.address].target;
+                let target = label_offset(&self.labels, target)?;
+                if compact_offset(jump.instruction + 5, &self.jumps, &removed)
+                    == compact_offset(target, &self.jumps, &removed)
+                {
+                    removed[index] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
         }
 
-        Ok(())
+        let old = self.code[start..end].to_vec();
+        self.code.truncate(start);
+        let mut cursor = start;
+        for (index, jump) in self.jumps.iter().enumerate() {
+            if !removed[index] {
+                continue;
+            }
+            self.code
+                .extend_from_slice(&old[cursor - start..jump.instruction - start]);
+            cursor = jump.instruction + 5;
+        }
+        self.code.extend_from_slice(&old[cursor - start..]);
+
+        let labels = std::mem::take(&mut self.labels)
+            .into_iter()
+            .map(|(label, offset)| (label, compact_offset(offset, &self.jumps, &removed)))
+            .collect::<HashMap<_, _>>();
+        let removed_addresses = self
+            .jumps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, jump)| removed[index].then_some(jump.address))
+            .collect::<HashSet<_>>();
+        let addresses = std::mem::take(&mut self.addresses);
+        for (index, address) in addresses.into_iter().enumerate() {
+            if removed_addresses.contains(&index) {
+                continue;
+            }
+            let operand = compact_offset(address.operand, &self.jumps, &removed);
+            let target = label_offset(&labels, address.target)?;
+            self.write_address(operand, target)?;
+        }
+        self.jumps.clear();
+
+        u32::try_from(self.code.len() - start).map_err(|_| CodegenError::CodeTooLarge)
     }
+
+    fn redirect_jump_chains(&mut self) {
+        let jumps_at = self
+            .jumps
+            .iter()
+            .filter(|jump| jump.op == Op::Jump)
+            .map(|jump| (jump.instruction, jump.address))
+            .collect::<HashMap<_, _>>();
+
+        for jump in &self.jumps {
+            let original = self.addresses[jump.address].target;
+            let mut target = original;
+            let mut seen = HashSet::new();
+            let resolved = loop {
+                if !seen.insert(target) {
+                    break original;
+                }
+                let Some(offset) = self.labels.get(&target) else {
+                    break target;
+                };
+                let Some(address) = jumps_at.get(offset) else {
+                    break target;
+                };
+                target = self.addresses[*address].target;
+            };
+            self.addresses[jump.address].target = resolved;
+        }
+    }
+}
+
+fn compact_offset(offset: usize, jumps: &[JumpPatch], removed: &[bool]) -> usize {
+    let removed_bytes = jumps
+        .iter()
+        .zip(removed)
+        .filter(|(jump, removed)| **removed && jump.instruction < offset)
+        .count()
+        * 5;
+    offset - removed_bytes
+}
+
+fn label_offset(labels: &HashMap<Label, usize>, label: Label) -> Result<usize, CodegenError> {
+    match labels.get(&label).copied() {
+        Some(offset) => Ok(offset),
+        None => match label {
+            Label::Block(block) => Err(CodegenError::ExpectedBlock(block)),
+            Label::Synthetic(_) => unreachable!("generated synthetic target should have a label"),
+        },
+    }
+}
+
+fn has_phi_copies(module: &ir::Module, target: IrNodeId) -> Result<bool, CodegenError> {
+    Ok(module
+        .block(target)
+        .ok_or(CodegenError::ExpectedBlock(target))?
+        .iter()
+        .any(|instruction| matches!(module.node(*instruction), Some(IrNode::Phi { .. }))))
+}
+
+fn block_layout(module: &ir::Module, entry: IrNodeId, reachable: &[IrNodeId]) -> Result<Vec<IrNodeId>, CodegenError> {
+    let reachable_set = reachable.iter().copied().collect::<HashSet<_>>();
+    let mut placed = HashSet::new();
+    let mut layout = Vec::with_capacity(reachable.len());
+
+    for seed in std::iter::once(entry).chain(reachable.iter().copied()) {
+        let mut block = seed;
+        while reachable_set.contains(&block) && placed.insert(block) {
+            layout.push(block);
+            let instructions = module.block(block).ok_or(CodegenError::ExpectedBlock(block))?;
+            let Some(terminator) = instructions.last().and_then(|instruction| module.node(*instruction)) else {
+                break;
+            };
+            block = match terminator {
+                IrNode::Branch(target) => *target,
+                IrNode::ConditionalBranch { true_block, .. } => *true_block,
+                _ => break,
+            };
+        }
+    }
+
+    Ok(layout)
 }
 
 fn referenced_nodes(module: &ir::Module, procedures: &HashSet<ProcId>) -> Result<HashSet<IrNodeId>, CodegenError> {
@@ -1243,8 +1459,16 @@ mod tests {
             .expect("fixture procedure should exist")
     }
 
+    fn bytecode_instructions(output: &str) -> Vec<&str> {
+        output
+            .lines()
+            .filter(|line| line.trim_start().starts_with("0x"))
+            .map(str::trim)
+            .collect::<Vec<_>>()
+    }
+
     #[test]
-    fn arithmetic_ssa_values_become_stack_operations_and_locals() {
+    fn arithmetic_ssa_values_are_stackified_without_a_temporary_local() {
         let module = generate(&lower("/proc/add(a, b)\n\treturn a + b\n")).expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
@@ -1252,11 +1476,12 @@ mod tests {
         assert_eq!(module.version, Module::VERSION);
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.functions[0].parameter_count, 2);
-        assert_eq!(module.functions[0].local_count, 3);
+        assert_eq!(module.functions[0].local_count, 2);
         assert!(output.contains("load_local local0"), "{output}");
         assert!(output.contains("load_local local1"), "{output}");
         assert!(output.contains("binary add"), "{output}");
         assert!(output.contains("return_value"), "{output}");
+        assert!(!output.contains("store_local"), "{output}");
     }
 
     #[test]
@@ -1269,6 +1494,178 @@ mod tests {
 
         assert_eq!(module.functions.len(), 2);
         assert!(output.contains("function_call fn1"), "{output}");
+    }
+
+    #[test]
+    fn unused_call_results_are_dropped_without_a_local() {
+        let module = generate(&lower(
+            "/proc/effect()\n\treturn 1\n/proc/test()\n\teffect()\n\treturn 2\n",
+        ))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+
+        assert_eq!(module.functions[1].local_count, 0);
+        assert!(output.contains("function_call fn0 args=[]\n"), "{output}");
+        assert!(output.contains(" drop\n"), "{output}");
+    }
+
+    #[test]
+    fn stackification_preserves_dynamic_evaluation_order() {
+        let module = generate(&lower("/proc/test(object, a, b)\n\treturn object.run(a + b)\n")).expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+
+        let object = output.find("load_local local0").expect("object load");
+        let field = output.find("access_field .run method").expect("method lookup");
+        let lhs = output.find("load_local local1").expect("left argument");
+        let rhs = output.find("load_local local2").expect("right argument");
+        let add = output.find("binary add").expect("argument expression");
+        let call = output.find("call args=[value]").expect("dynamic call");
+
+        assert!(
+            object < field && field < lhs && lhs < rhs && rhs < add && add < call,
+            "{output}"
+        );
+        assert!(!output.contains("store_local"), "{output}");
+    }
+
+    #[test]
+    fn conditional_true_successor_falls_through() {
+        let module = generate(&lower(
+            "/proc/test(condition)\n\tif(condition)\n\t\treturn 1\n\treturn 2\n",
+        ))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+
+        assert_eq!(
+            instructions
+                .iter()
+                .filter(|instruction| instruction.contains(" jump "))
+                .count(),
+            0,
+            "{output}"
+        );
+        assert_eq!(
+            instructions
+                .iter()
+                .filter(|instruction| instruction.contains(" jump_if_false "))
+                .count(),
+            1,
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn false_edge_phi_copies_stay_on_the_false_path() {
+        let ir = lower("/proc/test(condition)\n\tvar/value = 2\n\tif(condition)\n\t\tvalue = 1\n\treturn value\n");
+        let false_block = ir
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                IrNode::ConditionalBranch { false_block, .. } => Some(*false_block),
+                _ => None,
+            })
+            .expect("conditional branch");
+        assert!(
+            ir.block(false_block)
+                .expect("false block")
+                .iter()
+                .any(|instruction| matches!(ir.node(*instruction), Some(IrNode::Phi { .. })))
+        );
+
+        let module = generate(&ir).expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let branch = instructions
+            .iter()
+            .position(|instruction| instruction.contains(" jump_if_false "))
+            .expect("conditional jump");
+        let target = instructions[branch]
+            .split_whitespace()
+            .last()
+            .expect("conditional target");
+        let stub = instructions
+            .iter()
+            .position(|instruction| instruction.starts_with(target))
+            .expect("false-edge stub");
+        let return_value = instructions
+            .iter()
+            .position(|instruction| instruction.ends_with("return_value"))
+            .expect("return");
+
+        assert!(stub > return_value, "{output}");
+        assert!(
+            instructions[stub..]
+                .iter()
+                .any(|instruction| instruction.contains(" jump ")),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn bytecode_cleanup_threads_chains_and_removes_fallthrough_jumps() {
+        let mut generator = Generator::new();
+        let entry = Label::Block(IrNodeId(0));
+        let forwarding = Label::Block(IrNodeId(1));
+        let destination = Label::Block(IrNodeId(2));
+
+        generator.mark_label(entry);
+        generator.emit_jump(Op::Jump, forwarding);
+        generator.mark_label(forwarding);
+        generator.emit_jump(Op::Jump, destination);
+        generator.mark_label(destination);
+        generator.emit_op(Op::Return);
+
+        let length = generator.finish_function(0).expect("finish function");
+
+        assert_eq!(length, 1);
+        assert_eq!(generator.code, [Op::Return as u8]);
+    }
+
+    #[test]
+    fn bytecode_cleanup_preserves_jump_cycles() {
+        let mut generator = Generator::new();
+        let first = Label::Block(IrNodeId(0));
+        let second = Label::Block(IrNodeId(1));
+
+        generator.mark_label(first);
+        generator.emit_jump(Op::Jump, second);
+        generator.mark_label(second);
+        generator.emit_jump(Op::Jump, first);
+
+        let length = generator.finish_function(0).expect("finish function");
+
+        assert_eq!(length, 5);
+        assert_eq!(generator.code[0], Op::Jump as u8);
+        assert_eq!(u32::from_le_bytes(generator.code[1..5].try_into().unwrap()), 0);
+    }
+
+    #[test]
+    fn compacted_functions_keep_contiguous_ranges() {
+        let module = generate(&lower(
+            r#"
+/proc/first(condition)
+    if(condition)
+        return 1
+    return 2
+/proc/second(condition)
+    if(condition)
+        return 3
+    return 4
+"#,
+        ))
+        .expect("generate");
+
+        assert_eq!(module.functions.len(), 2);
+        assert_eq!(
+            module.functions[0].address.0 + module.functions[0].length,
+            module.functions[1].address.0
+        );
+        assert_eq!(
+            module.functions[1].address.0 + module.functions[1].length,
+            module.code.len() as u32
+        );
+        disasm::dump(&module).expect("compacted functions should disassemble");
     }
 
     #[test]
@@ -1361,20 +1758,19 @@ mod tests {
         };
         let module = generate(&module).expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
-        let instructions = output
-            .lines()
-            .filter(|line| line.trim_start().starts_with("0x"))
+        let instructions = bytecode_instructions(&output)
+            .into_iter()
             .map(|line| line.split_whitespace().skip(1).collect::<Vec<_>>().join(" "))
             .collect::<Vec<_>>();
 
         assert_eq!(
-            &instructions[5..10],
+            &instructions[4..9],
             [
                 "load_local local3",
                 "load_local local2",
                 "store_local local3",
                 "store_local local2",
-                "jump 0x00000019",
+                "jump 0x00000014",
             ]
         );
     }
@@ -1766,6 +2162,7 @@ mod tests {
         assert_eq!(Op::DefaultParameter as u8, 0x29);
         assert_eq!(Op::CompoundBinary as u8, 0x2a);
         assert_eq!(Op::Initial as u8, 0x2b);
+        assert_eq!(Op::Drop as u8, 0x2c);
         assert_eq!(Unary::Dereference as u8, 0x08);
         assert_eq!(Binary::In as u8, 0x17);
         assert_eq!(Builtin::SuperProc as u8, 0x08);

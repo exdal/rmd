@@ -893,6 +893,9 @@ impl<'a> Evaluator<'a> {
                     frame.ip = resume;
                 },
                 Op::CatchValue => frame.stack.push(self.thrown.take().unwrap_or_default()),
+                Op::Drop => {
+                    self.pop(frame)?;
+                },
                 Op::Blocked => {
                     let reason = self.string(frame)?.to_owned();
                     return Err(self.fault(FaultKind::Blocked(reason)));

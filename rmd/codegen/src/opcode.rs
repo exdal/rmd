@@ -71,6 +71,7 @@ byte_enum! {
         DefaultParameter = 0x29,
         CompoundBinary = 0x2a,
         Initial = 0x2b,
+        Drop = 0x2c,
     }
 }
 

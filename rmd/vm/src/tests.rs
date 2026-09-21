@@ -2091,6 +2091,25 @@ fn executes_phi_lowered_fibonacci_loop() {
 }
 
 #[test]
+fn conditional_fallthrough_preserves_both_phi_edges() {
+    assert_eq!(
+        run(
+            r#"
+/proc/choose(condition)
+    var/value = 2
+    if(condition)
+        value = 1
+    return value
+/proc/test()
+    return choose(1) * 10 + choose(0)
+"#,
+            "test",
+        ),
+        12.into()
+    );
+}
+
+#[test]
 fn associative_iteration_preserves_keys_and_values() {
     assert_eq!(
         run(

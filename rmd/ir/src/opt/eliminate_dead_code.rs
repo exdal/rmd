@@ -1,10 +1,12 @@
 use core::types::IrNodeId;
 
-use ast::{BinaryOp, Builtin, UnaryOp};
+use ast::UnaryOp;
 
-use crate::{IrNode, Module};
+use super::value_facts::ValueFacts;
+use crate::{IrNode, SideEffect, Module};
 
 pub fn eliminate_dead_code(module: &mut Module) {
+    let facts = ValueFacts::analyze(module);
     let mut live = vec![false; module.nodes.len()];
     let mut pending = Vec::new();
 
@@ -16,7 +18,7 @@ pub fn eliminate_dead_code(module: &mut Module) {
             let Some(node) = module.node(*instruction) else {
                 continue;
             };
-            if !is_removable_when_unused(node) {
+            if !is_removable_when_unused(node, &facts) {
                 mark(*instruction, &mut live, &mut pending);
             }
         }
@@ -77,70 +79,14 @@ fn mark_optional(instruction: Option<IrNodeId>, live: &mut [bool], pending: &mut
     }
 }
 
-fn is_removable_when_unused(node: &IrNode) -> bool {
+fn is_removable_when_unused(node: &IrNode, facts: &ValueFacts) -> bool {
     match node {
         IrNode::Phi { .. } | IrNode::Noop => true,
-        IrNode::Builtin(
-            Builtin::Src | Builtin::Usr | Builtin::World | Builtin::Global | Builtin::Callee | Builtin::ThisProc,
-        ) => true,
-        IrNode::Unary { op: UnaryOp::Not, .. } => true,
-        IrNode::Binary {
-            op:
-                BinaryOp::CompEq
-                | BinaryOp::CompNotEq
-                | BinaryOp::CompEquiv
-                | BinaryOp::CompNotEquiv
-                | BinaryOp::LogicalAnd
-                | BinaryOp::LogicalOr,
-            ..
-        }
-        | IrNode::ModifiedType { .. } => true,
-
-        IrNode::Function(_)
-        | IrNode::ExternalFunction(_)
-        | IrNode::Constant(_)
-        | IrNode::FunctionParameter(_)
-        | IrNode::Variable(_)
-        | IrNode::Label(_)
-        | IrNode::SelectionMerge { .. }
-        | IrNode::LoopMerge { .. }
-        | IrNode::Branch(_)
-        | IrNode::ConditionalBranch { .. }
-        | IrNode::Return(_)
-        | IrNode::TryCatch { .. }
-        | IrNode::Blocked(_)
-        | IrNode::Trap { .. }
-        | IrNode::Load { .. }
-        | IrNode::Builtin(Builtin::Args | Builtin::Caller | Builtin::SuperProc)
-        | IrNode::Interpolate { .. }
-        | IrNode::Unary { .. }
-        | IrNode::Binary { .. }
-        | IrNode::CompoundBinary { .. }
-        | IrNode::AccessField { .. }
-        | IrNode::Initial { .. }
-        | IrNode::Index { .. }
-        | IrNode::Call { .. }
-        | IrNode::FunctionCall { .. }
-        | IrNode::Super { .. }
-        | IrNode::New { .. }
-        | IrNode::List(_)
-        | IrNode::Pick(_)
-        | IrNode::InRange { .. }
-        | IrNode::Range { .. }
-        | IrNode::IterInit { .. }
-        | IrNode::IterNext(_)
-        | IrNode::IterValue(_)
-        | IrNode::IterKey(_)
-        | IrNode::RangeTest { .. }
-        | IrNode::SetField { .. }
-        | IrNode::SetIndex { .. }
-        | IrNode::Store { .. }
-        | IrNode::Initialize { .. }
-        | IrNode::StoreBuiltin { .. }
-        | IrNode::CatchValue
-        | IrNode::Del(_)
-        | IrNode::Throw(_)
-        | IrNode::Output { .. } => false,
+        IrNode::Unary {
+            op: UnaryOp::Neg | UnaryOp::BitNot,
+            operand,
+        } if facts.is_number(*operand) => true,
+        node => node.effect() == SideEffect::Pure,
     }
 }
 

@@ -210,7 +210,93 @@ pub enum IrNode {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SideEffect {
+    /// Evaluation has no observable behavior and cannot fault.
+    Pure,
+    /// Evaluation has no known mutation, but can fault for some operands.
+    MayFault,
+    /// Evaluation reads or changes runtime state, allocates an identity, or
+    /// invokes code whose behavior is not represented by IR operands.
+    Observable,
+    /// Evaluation changes control flow.
+    ControlFlow,
+    /// The node describes IR structure rather than a movable instruction.
+    Structural,
+}
+
 impl IrNode {
+    pub fn effect(&self) -> SideEffect {
+        match self {
+            Self::Builtin(
+                Builtin::Src | Builtin::Usr | Builtin::World | Builtin::Global | Builtin::Callee | Builtin::ThisProc,
+            )
+            | Self::Unary { op: UnaryOp::Not, .. }
+            | Self::Binary {
+                op:
+                    BinaryOp::CompEq
+                    | BinaryOp::CompNotEq
+                    | BinaryOp::CompEquiv
+                    | BinaryOp::CompNotEquiv
+                    | BinaryOp::LogicalAnd
+                    | BinaryOp::LogicalOr,
+                ..
+            }
+            | Self::ModifiedType { .. } => SideEffect::Pure,
+
+            Self::Interpolate { .. }
+            | Self::Unary { .. }
+            | Self::Binary { .. }
+            | Self::CompoundBinary { .. }
+            | Self::InRange { .. }
+            | Self::Range { .. }
+            | Self::RangeTest { .. } => SideEffect::MayFault,
+
+            Self::Load { .. }
+            | Self::Builtin(_)
+            | Self::AccessField { .. }
+            | Self::Initial { .. }
+            | Self::Index { .. }
+            | Self::Call { .. }
+            | Self::FunctionCall { .. }
+            | Self::Super { .. }
+            | Self::New { .. }
+            | Self::List(_)
+            | Self::Pick(_)
+            | Self::IterInit { .. }
+            | Self::IterNext(_)
+            | Self::IterValue(_)
+            | Self::IterKey(_)
+            | Self::SetField { .. }
+            | Self::SetIndex { .. }
+            | Self::Store { .. }
+            | Self::Initialize { .. }
+            | Self::StoreBuiltin { .. }
+            | Self::CatchValue
+            | Self::Del(_)
+            | Self::Output { .. } => SideEffect::Observable,
+
+            Self::Branch(_)
+            | Self::ConditionalBranch { .. }
+            | Self::Return(_)
+            | Self::Throw(_)
+            | Self::Blocked(_)
+            | Self::Trap { .. } => SideEffect::ControlFlow,
+
+            Self::Function(_)
+            | Self::ExternalFunction(_)
+            | Self::Constant(_)
+            | Self::FunctionParameter(_)
+            | Self::Phi { .. }
+            | Self::Variable(_)
+            | Self::Label(_)
+            | Self::SelectionMerge { .. }
+            | Self::LoopMerge { .. }
+            | Self::TryCatch { .. }
+            | Self::Noop => SideEffect::Structural,
+        }
+    }
+
     pub fn is_terminator(&self) -> bool {
         matches!(
             self,

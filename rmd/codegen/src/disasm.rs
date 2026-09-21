@@ -129,7 +129,8 @@ impl Cursor<'_> {
             | Op::ReturnValue
             | Op::Del
             | Op::Throw
-            | Op::CatchValue => {},
+            | Op::CatchValue
+            | Op::Drop => {},
             Op::PushConstant => {
                 let id = ConstantId(self.u32()?);
                 let value = self
