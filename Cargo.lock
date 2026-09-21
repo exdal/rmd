@@ -271,7 +271,9 @@ dependencies = [
  "core",
  "ir",
  "lexer",
+ "objtree",
  "prelude",
+ "sema",
 ]
 
 [[package]]
@@ -473,6 +475,7 @@ dependencies = [
  "dear-imgui-winit",
  "dmi",
  "dmm",
+ "ir",
  "log",
  "objtree",
  "preprocessor",

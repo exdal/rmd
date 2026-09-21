@@ -1,6 +1,7 @@
 pub mod disasm;
 pub mod error;
 pub mod opcode;
+mod reachability;
 
 use core::{
     location::Location,
@@ -141,7 +142,28 @@ pub struct CompiledFunction {
     pub location: Location,
 }
 
-pub fn generate(module: &ir::Module) -> Result<Module, CodegenError> { Generator::new().generate(module) }
+#[derive(Debug, Clone)]
+pub enum ProcedureReachability {
+    All,
+    Selected(HashSet<ProcId>),
+}
+
+pub fn generate(module: &ir::Module) -> Result<Module, CodegenError> { Generator::new().generate(module, None) }
+
+pub fn reachable_procedures(
+    module: &ir::Module, tree: &objtree::ObjectTree, roots: &[ProcId],
+) -> Result<ProcedureReachability, CodegenError> {
+    reachability::reachable_procedures(module, tree, roots)
+}
+
+pub fn generate_reachable(
+    module: &ir::Module, tree: &objtree::ObjectTree, roots: &[ProcId],
+) -> Result<Module, CodegenError> {
+    match reachable_procedures(module, tree, roots)? {
+        ProcedureReachability::All => Generator::new().generate(module, None),
+        ProcedureReachability::Selected(procedures) => Generator::new().generate(module, Some(&procedures)),
+    }
+}
 
 #[derive(Debug)]
 struct JumpPatch {
@@ -208,7 +230,7 @@ impl Generator {
         }
     }
 
-    fn generate(mut self, module: &ir::Module) -> Result<Module, CodegenError> {
+    fn generate(mut self, module: &ir::Module, procedures: Option<&HashSet<ProcId>>) -> Result<Module, CodegenError> {
         self.callees = module
             .nodes
             .iter()
@@ -217,10 +239,17 @@ impl Generator {
                 _ => None,
             })
             .collect();
-        self.register_constants(module)?;
-        self.register_functions(module)?;
+        let referenced = procedures
+            .map(|procedures| referenced_nodes(module, procedures))
+            .transpose()?;
+        self.register_constants(module, referenced.as_ref())?;
+        self.register_functions(module, procedures, referenced.as_ref())?;
 
-        for proc in &module.procs {
+        for (index, proc) in module.procs.iter().enumerate() {
+            let id = ProcId(index as u32);
+            if procedures.is_some_and(|procedures| !procedures.contains(&id)) {
+                continue;
+            }
             self.generate_function(module, proc)?;
         }
 
@@ -243,8 +272,13 @@ impl Generator {
         })
     }
 
-    fn register_constants(&mut self, module: &ir::Module) -> Result<(), CodegenError> {
+    fn register_constants(
+        &mut self, module: &ir::Module, referenced: Option<&HashSet<IrNodeId>>,
+    ) -> Result<(), CodegenError> {
         for node in &module.constants {
+            if referenced.is_some_and(|referenced| !referenced.contains(node)) {
+                continue;
+            }
             let Some(IrNode::Constant(value)) = module.node(*node) else {
                 return Err(CodegenError::MissingNode(*node));
             };
@@ -257,9 +291,16 @@ impl Generator {
         Ok(())
     }
 
-    fn register_functions(&mut self, module: &ir::Module) -> Result<(), CodegenError> {
+    fn register_functions(
+        &mut self, module: &ir::Module, procedures: Option<&HashSet<ProcId>>, referenced: Option<&HashSet<IrNodeId>>,
+    ) -> Result<(), CodegenError> {
         for (index, proc) in module.procs.iter().enumerate() {
-            let id = FunctionId(u32::try_from(index).map_err(|_| CodegenError::PoolTooLarge("function"))?);
+            let proc_id = ProcId(index as u32);
+            if procedures.is_some_and(|procedures| !procedures.contains(&proc_id)) {
+                continue;
+            }
+            let id =
+                FunctionId(u32::try_from(self.functions.len()).map_err(|_| CodegenError::PoolTooLarge("function"))?);
             let name = self.intern_string(format!("{}::{}", proc.owner, proc.name))?;
             let proc_name = self.intern_identifier(&proc.name)?;
             let parameter_names = proc
@@ -270,7 +311,7 @@ impl Generator {
             self.function_ids.insert(proc.function, id);
             self.functions.push(CompiledFunction {
                 id,
-                proc: Some(ProcId(index as u32)),
+                proc: Some(proc_id),
                 name,
                 proc_name,
                 owner: proc.owner.clone(),
@@ -287,6 +328,9 @@ impl Generator {
         }
 
         for node in &module.external_functions {
+            if referenced.is_some_and(|referenced| !referenced.contains(node)) {
+                continue;
+            }
             let Some(IrNode::ExternalFunction(name)) = module.node(*node) else {
                 return Err(CodegenError::MissingNode(*node));
             };
@@ -972,7 +1016,35 @@ impl Generator {
     }
 }
 
-fn reachable_blocks(module: &ir::Module, entry: IrNodeId) -> Result<Vec<IrNodeId>, CodegenError> {
+fn referenced_nodes(module: &ir::Module, procedures: &HashSet<ProcId>) -> Result<HashSet<IrNodeId>, CodegenError> {
+    let mut referenced = HashSet::new();
+
+    for proc_id in procedures {
+        let Some(proc) = module.proc(*proc_id) else {
+            continue;
+        };
+
+        for parameter in &proc.params {
+            referenced.extend(parameter.default);
+        }
+
+        for block in reachable_blocks(module, proc.body)? {
+            for instruction in module.block(block).ok_or(CodegenError::ExpectedBlock(block))? {
+                let node = module
+                    .node(*instruction)
+                    .ok_or(CodegenError::MissingNode(*instruction))?;
+                referenced.insert(*instruction);
+                node.for_each_operand(|operand| {
+                    referenced.insert(operand);
+                });
+            }
+        }
+    }
+
+    Ok(referenced)
+}
+
+pub(crate) fn reachable_blocks(module: &ir::Module, entry: IrNodeId) -> Result<Vec<IrNodeId>, CodegenError> {
     let mut blocks = Vec::new();
     let mut seen = HashSet::new();
     let mut pending = VecDeque::from([entry]);
@@ -1154,6 +1226,23 @@ mod tests {
         builder.finish()
     }
 
+    fn analyze(source: &str) -> (objtree::ObjectTree, ir::Module) {
+        let (tokens, errors) = lexer::tokenize(source);
+        assert!(errors.is_empty(), "{errors:?}");
+        let ast = ast::parse(&tokens).expect("fixture should parse");
+        let (tree, module, errors) = sema::analyze(&ast);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        (tree, module)
+    }
+
+    fn proc_id(tree: &objtree::ObjectTree, owner: &str, name: &str) -> ProcId {
+        tree.id_of(&TreePath::parse(owner))
+            .and_then(|owner| tree.proc_inherited(owner, &name.into()))
+            .and_then(|procedure| procedure.body)
+            .expect("fixture procedure should exist")
+    }
+
     #[test]
     fn arithmetic_ssa_values_become_stack_operations_and_locals() {
         let module = generate(&lower("/proc/add(a, b)\n\treturn a + b\n")).expect("generate");
@@ -1287,6 +1376,386 @@ mod tests {
                 "store_local local2",
                 "jump 0x00000019",
             ]
+        );
+    }
+
+    #[test]
+    fn reachable_codegen_keeps_named_dispatch_candidates_and_stable_proc_ids() {
+        let (tree, ir_module) = analyze(
+            r#"
+/datum/base
+    proc/live()
+        return 1
+    proc/dead()
+        return 2
+/datum/base/child/live()
+    return 3
+/proc/entry(datum/base/value)
+    return value.live()
+/proc/unused()
+    return 4
+"#,
+        );
+        let entry = proc_id(&tree, "/", "entry");
+        let base_live = proc_id(&tree, "/datum/base", "live");
+        let child_live = proc_id(&tree, "/datum/base/child", "live");
+        let dead = proc_id(&tree, "/datum/base", "dead");
+        let unused = proc_id(&tree, "/", "unused");
+
+        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+
+        for retained in [entry, base_live, child_live] {
+            assert_eq!(
+                module.function_for_proc(retained).and_then(|function| function.proc),
+                Some(retained)
+            );
+        }
+        assert!(module.function_for_proc(dead).is_none());
+        assert!(module.function_for_proc(unused).is_none());
+        assert_eq!(module.functions.len(), 3);
+        assert!(!module.constants.contains(&Value::Num(2.0)));
+        assert!(!module.constants.contains(&Value::Num(4.0)));
+    }
+
+    #[test]
+    fn reachable_codegen_does_not_treat_field_reads_as_method_calls() {
+        let (tree, ir_module) = analyze(
+            r#"
+/datum/base/proc/status()
+    return 1
+/proc/entry(datum/base/value)
+    return value.status
+"#,
+        );
+        let entry = proc_id(&tree, "/", "entry");
+        let status = proc_id(&tree, "/datum/base", "status");
+
+        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+
+        assert!(module.function_for_proc(entry).is_some());
+        assert!(module.function_for_proc(status).is_none());
+    }
+
+    #[test]
+    fn reachable_codegen_limits_typed_receiver_dispatch_to_its_type_family() {
+        let (tree, ir_module) = analyze(
+            r#"
+/datum/wanted/proc/Initialize()
+    return 1
+/datum/wanted/child/Initialize()
+    return 2
+/datum/unrelated/proc/Initialize()
+    return 3
+/proc/entry(values)
+    for(var/datum/wanted/value in values)
+        value.Initialize()
+"#,
+        );
+        let entry = proc_id(&tree, "/", "entry");
+        let wanted = proc_id(&tree, "/datum/wanted", "Initialize");
+        let child = proc_id(&tree, "/datum/wanted/child", "Initialize");
+        let unrelated = proc_id(&tree, "/datum/unrelated", "Initialize");
+
+        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+
+        for retained in [entry, wanted, child] {
+            assert!(
+                module.function_for_proc(retained).is_some(),
+                "missing retained procedure {retained}"
+            );
+        }
+        assert!(module.function_for_proc(unrelated).is_none());
+    }
+
+    #[test]
+    fn reachable_codegen_follows_super_and_roots_lazy_initializers() {
+        let (tree, ir_module) = analyze(
+            r#"
+/datum/base/proc/step()
+    return 1
+/datum/base/child/step()
+    return ..()
+/datum/base/child/step()
+    return ..()
+/datum/holder
+    var/value = initialize()
+/proc/initialize()
+    return 3
+/proc/entry()
+    var/datum/base/child/value = new
+    var/datum/holder/holder = new
+    return value.step() + holder.value
+/proc/unused()
+    return 4
+"#,
+        );
+        let entry = proc_id(&tree, "/", "entry");
+        let latest = proc_id(&tree, "/datum/base/child", "step");
+        let previous = ir_module
+            .proc(latest)
+            .and_then(|procedure| procedure.previous)
+            .expect("same-type previous");
+        let inherited = proc_id(&tree, "/datum/base", "step");
+        let initializer = tree
+            .id_of(&TreePath::parse("/datum/holder"))
+            .and_then(|holder| tree.var_inherited(holder, &"value".into()))
+            .and_then(|variable| variable.initializer)
+            .expect("runtime initializer");
+        let initialize = proc_id(&tree, "/", "initialize");
+        let unused = proc_id(&tree, "/", "unused");
+
+        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+
+        for retained in [entry, latest, previous, inherited, initializer, initialize] {
+            assert!(
+                module.function_for_proc(retained).is_some(),
+                "missing retained procedure {retained}"
+            );
+        }
+        assert!(module.function_for_proc(unused).is_none());
+    }
+
+    #[test]
+    fn reachable_codegen_omits_unread_lazy_initializers() {
+        let (tree, ir_module) = analyze(
+            r#"
+/datum/holder
+    var/value = initialize()
+/proc/initialize()
+    return 1
+/proc/entry()
+    return 2
+"#,
+        );
+        let entry = proc_id(&tree, "/", "entry");
+        let initialize = proc_id(&tree, "/", "initialize");
+        let initializer = tree
+            .id_of(&TreePath::parse("/datum/holder"))
+            .and_then(|holder| tree.var_inherited(holder, &"value".into()))
+            .and_then(|variable| variable.initializer)
+            .expect("runtime initializer");
+
+        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+
+        assert!(module.function_for_proc(entry).is_some());
+        assert!(module.function_for_proc(initializer).is_none());
+        assert!(module.function_for_proc(initialize).is_none());
+    }
+
+    #[test]
+    fn reachable_codegen_bounds_opaque_calls_to_reachable_proc_paths() {
+        let (tree, ir_module) = analyze(
+            r#"
+/proc/call(Target, ProcName)
+    set __demir_intrin = 401
+/proc/live()
+    return 1
+/proc/dead()
+    return 2
+/proc/invoke(callback)
+    return call(callback)()
+/proc/entry(callback = /proc/live)
+    return invoke(callback)
+"#,
+        );
+        let entry = proc_id(&tree, "/", "entry");
+        let invoke = proc_id(&tree, "/", "invoke");
+        let call = proc_id(&tree, "/", "call");
+        let live = proc_id(&tree, "/", "live");
+        let dead = proc_id(&tree, "/", "dead");
+
+        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+
+        for retained in [entry, invoke, call, live] {
+            assert!(
+                module.function_for_proc(retained).is_some(),
+                "missing retained procedure {retained}"
+            );
+        }
+        assert!(module.function_for_proc(dead).is_none());
+    }
+
+    #[test]
+    fn reachable_codegen_resolves_static_call_names() {
+        let (tree, ir_module) = analyze(
+            r#"
+/proc/call(Target, ProcName)
+    set __demir_intrin = 401
+/datum/base/proc/live()
+    return 1
+/datum/base/proc/dead()
+    return 2
+/proc/entry()
+    var/datum/base/value = new /datum/base
+    return call(value, "live")()
+"#,
+        );
+        let entry = proc_id(&tree, "/", "entry");
+        let call = proc_id(&tree, "/", "call");
+        let live = proc_id(&tree, "/datum/base", "live");
+        let dead = proc_id(&tree, "/datum/base", "dead");
+
+        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+
+        for retained in [entry, call, live] {
+            assert!(
+                module.function_for_proc(retained).is_some(),
+                "missing retained procedure {retained}"
+            );
+        }
+        assert!(module.function_for_proc(dead).is_none());
+    }
+
+    #[test]
+    fn reachable_codegen_keeps_only_exact_constructor_targets() {
+        let (tree, ir_module) = analyze(
+            r#"
+/datum/live/New()
+    return live_helper()
+/datum/dead/New()
+    return dead_helper()
+/proc/live_helper()
+    return 1
+/proc/dead_helper()
+    return 2
+/proc/entry()
+    return new /datum/live
+"#,
+        );
+        let entry = proc_id(&tree, "/", "entry");
+        let live_new = proc_id(&tree, "/datum/live", "New");
+        let dead_new = proc_id(&tree, "/datum/dead", "New");
+        let live_helper = proc_id(&tree, "/", "live_helper");
+        let dead_helper = proc_id(&tree, "/", "dead_helper");
+
+        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+
+        for retained in [entry, live_new, live_helper] {
+            assert!(
+                module.function_for_proc(retained).is_some(),
+                "missing retained procedure {retained}"
+            );
+        }
+        assert!(module.function_for_proc(dead_new).is_none());
+        assert!(module.function_for_proc(dead_helper).is_none());
+    }
+
+    #[test]
+    fn reachable_codegen_keeps_every_constructor_for_a_computed_type() {
+        let (tree, ir_module) = analyze(
+            r#"
+/datum/live/New()
+    return 1
+/datum/dead/New()
+    return 2
+/proc/entry(kind)
+    return new kind
+/proc/unrelated()
+    return 3
+"#,
+        );
+        let entry = proc_id(&tree, "/", "entry");
+        let live_new = proc_id(&tree, "/datum/live", "New");
+        let dead_new = proc_id(&tree, "/datum/dead", "New");
+        let unrelated = proc_id(&tree, "/", "unrelated");
+
+        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+
+        for retained in [entry, live_new, dead_new] {
+            assert!(
+                module.function_for_proc(retained).is_some(),
+                "missing retained procedure {retained}"
+            );
+        }
+        assert!(module.function_for_proc(unrelated).is_none());
+    }
+
+    #[test]
+    fn reachable_codegen_falls_back_when_call_target_might_be_a_proc_path() {
+        let (tree, ir_module) = analyze(
+            r#"
+/proc/call(Target, ProcName)
+    set __demir_intrin = 401
+/datum/base/proc/live()
+    return 1
+/datum/base/proc/dead()
+    return 2
+/proc/entry(target)
+    return call(target, "live")()
+/proc/unrelated()
+    return 3
+"#,
+        );
+        let entry = proc_id(&tree, "/", "entry");
+
+        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+
+        assert_eq!(
+            module
+                .functions
+                .iter()
+                .filter(|function| function.proc.is_some())
+                .count(),
+            ir_module.procs.len()
+        );
+    }
+
+    #[test]
+    fn reachable_codegen_resolves_dynamic_values_from_typesof_iteration() {
+        let (tree, ir_module) = analyze(
+            r#"
+/proc/call(Target, ProcName)
+    set __demir_intrin = 401
+/proc/typesof(Type1, Type2)
+    set __demir_intrin = 377
+/datum/controller/global_vars/proc/Initialize()
+    var/list/global_procs = typesof(/datum/controller/global_vars/proc)
+    for(var/proc_path in global_procs)
+        call(src, proc_path)()
+/proc/unrelated()
+    return 1
+"#,
+        );
+        let initialize = proc_id(&tree, "/datum/controller/global_vars", "Initialize");
+        let call = proc_id(&tree, "/", "call");
+        let typesof = proc_id(&tree, "/", "typesof");
+        let unrelated = proc_id(&tree, "/", "unrelated");
+
+        let module = generate_reachable(&ir_module, &tree, &[initialize]).expect("generate selected procedures");
+
+        for retained in [initialize, call, typesof] {
+            assert!(
+                module.function_for_proc(retained).is_some(),
+                "missing retained procedure {retained}"
+            );
+        }
+        assert!(module.function_for_proc(unrelated).is_none());
+    }
+
+    #[test]
+    fn reachable_codegen_falls_back_to_every_proc_for_an_opaque_callable() {
+        let (tree, ir_module) = analyze(
+            r#"
+/proc/entry(callback)
+    return (callback)()
+/proc/otherwise()
+    return 1
+"#,
+        );
+        let entry = proc_id(&tree, "/", "entry");
+        let otherwise = proc_id(&tree, "/", "otherwise");
+
+        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+
+        assert!(module.function_for_proc(entry).is_some());
+        assert!(module.function_for_proc(otherwise).is_some());
+        assert_eq!(
+            module
+                .functions
+                .iter()
+                .filter(|function| function.proc.is_some())
+                .count(),
+            ir_module.procs.len()
         );
     }
 

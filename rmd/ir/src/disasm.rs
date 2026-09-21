@@ -1,32 +1,48 @@
-use core::types::{IrNodeId, Value};
+use core::types::{IrNodeId, ProcId, Value};
 use std::{collections::HashSet, fmt::Write};
 
 use crate::{AccessKind, Argument, IrNode, Module, OutputTarget};
 
 pub fn dump(module: &Module) -> String { dump_with(module, false) }
 
-pub fn dump_with(module: &Module, syntax_highlighting: bool) -> String {
-    let blocks = module
-        .nodes
+pub fn dump_with(module: &Module, syntax_highlighting: bool) -> String { dump_impl(module, None, syntax_highlighting) }
+
+pub fn dump_selected_with(module: &Module, procedures: &HashSet<ProcId>, syntax_highlighting: bool) -> String {
+    dump_impl(module, Some(procedures), syntax_highlighting)
+}
+
+fn dump_impl(module: &Module, procedures: Option<&HashSet<ProcId>>, syntax_highlighting: bool) -> String {
+    let referenced = procedures.map(|procedures| selected_nodes(module, procedures));
+    let included = |id: IrNodeId| referenced.as_ref().is_none_or(|nodes| nodes.contains(&id));
+    let function_count = module
+        .procs
         .iter()
-        .filter(|node| matches!(node, IrNode::Label(_)))
+        .enumerate()
+        .filter(|(index, _)| procedures.is_none_or(|procedures| procedures.contains(&ProcId(*index as u32))))
         .count();
+    let constant_count = module.constants.iter().filter(|id| included(**id)).count();
+    let external_count = module.external_functions.iter().filter(|id| included(**id)).count();
+    let blocks = module
+        .procs
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| procedures.is_none_or(|procedures| procedures.contains(&ProcId(*index as u32))))
+        .map(|(_, procedure)| reachable(module, procedure.body).len())
+        .sum::<usize>();
+    let node_count = referenced.as_ref().map_or(module.nodes.len(), HashSet::len);
     let width = IrNodeId(module.nodes.len().saturating_sub(1) as u32).to_string().len();
 
     let mut out = String::new();
     let _ = writeln!(
         out,
         "; ir module: {} nodes, {} constants, {} external functions, {} functions, {blocks} blocks",
-        module.nodes.len(),
-        module.constants.len(),
-        module.external_functions.len(),
-        module.procs.len()
+        node_count, constant_count, external_count, function_count
     );
 
-    if !module.constants.is_empty() {
+    if constant_count != 0 {
         blank_line(&mut out);
         let _ = writeln!(out, "; constants");
-        for id in &module.constants {
+        for id in module.constants.iter().filter(|id| included(**id)) {
             let Some(IrNode::Constant(value)) = module.node(*id) else {
                 continue;
             };
@@ -35,10 +51,10 @@ pub fn dump_with(module: &Module, syntax_highlighting: bool) -> String {
         }
     }
 
-    if !module.external_functions.is_empty() {
+    if external_count != 0 {
         blank_line(&mut out);
         let _ = writeln!(out, "; external functions");
-        for id in &module.external_functions {
+        for id in module.external_functions.iter().filter(|id| included(**id)) {
             let Some(IrNode::ExternalFunction(name)) = module.node(*id) else {
                 continue;
             };
@@ -47,7 +63,10 @@ pub fn dump_with(module: &Module, syntax_highlighting: bool) -> String {
         }
     }
 
-    for proc in &module.procs {
+    for (index, proc) in module.procs.iter().enumerate() {
+        if procedures.is_some_and(|procedures| !procedures.contains(&ProcId(index as u32))) {
+            continue;
+        }
         blank_line(&mut out);
         let mut declaration = format!("function {}::{} vars={}", proc.owner, proc.name, proc.vars.len());
 
@@ -90,6 +109,59 @@ pub fn dump_with(module: &Module, syntax_highlighting: bool) -> String {
     match syntax_highlighting {
         true => highlight(&out),
         false => out,
+    }
+}
+
+fn selected_nodes(module: &Module, procedures: &HashSet<ProcId>) -> HashSet<IrNodeId> {
+    let mut selected = HashSet::new();
+    let mut pending = Vec::new();
+
+    for proc_id in procedures {
+        let Some(procedure) = module.proc(*proc_id) else {
+            continue;
+        };
+        mark(procedure.function, &mut selected, &mut pending);
+        for parameter in &procedure.parameters {
+            mark(*parameter, &mut selected, &mut pending);
+        }
+        for parameter in &procedure.params {
+            for node in parameter
+                .default
+                .into_iter()
+                .chain(parameter.in_list)
+                .chain(parameter.spec.dimensions.iter().flatten().copied())
+            {
+                mark(node, &mut selected, &mut pending);
+            }
+        }
+        for variable in &procedure.vars {
+            for dimension in variable.dimensions.iter().flatten() {
+                mark(*dimension, &mut selected, &mut pending);
+            }
+        }
+        for block in reachable(module, procedure.body) {
+            mark(block, &mut selected, &mut pending);
+            let Some(IrNode::Label(instructions)) = module.node(block) else {
+                continue;
+            };
+            for instruction in instructions {
+                mark(*instruction, &mut selected, &mut pending);
+            }
+        }
+    }
+
+    while let Some(id) = pending.pop() {
+        if let Some(node) = module.node(id) {
+            node.for_each_operand(|operand| mark(operand, &mut selected, &mut pending));
+        }
+    }
+
+    selected
+}
+
+fn mark(id: IrNodeId, selected: &mut HashSet<IrNodeId>, pending: &mut Vec<IrNodeId>) {
+    if selected.insert(id) {
+        pending.push(id);
     }
 }
 
@@ -602,6 +674,18 @@ mod tests {
 
         assert!(coloured.contains("\x1b["));
         assert_eq!(strip(&coloured), plain);
+    }
+
+    #[test]
+    fn selected_disassembly_omits_unreachable_procedures_and_constants() {
+        let module = lower("/proc/live()\n\treturn 1\n/proc/dead()\n\treturn 2\n");
+        let output = dump_selected_with(&module, &HashSet::from([ProcId(0)]), false);
+
+        assert!(output.contains("1 functions"), "{output}");
+        assert!(output.contains("::live"), "{output}");
+        assert!(output.contains("constant 1"), "{output}");
+        assert!(!output.contains("::dead"), "{output}");
+        assert!(!output.contains("constant 2"), "{output}");
     }
 
     fn strip(text: &str) -> String {

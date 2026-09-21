@@ -4,9 +4,9 @@
 //! rmdc tokens <file.dm>     dump the token stream, layout tokens included
 //! rmdc pp     <file.dme>    preprocess and print the flattened source back out
 //! rmdc tree   <file.dme>    preprocess, parse and print the object tree
-//! rmdc ir     <file.dme>    preprocess, parse and print the IR module
-//! rmdc bytecode <file.dme>  compile and print stack bytecode
-//! rmdc eval   <file.dm>     compile and execute /proc/main or /world/New
+//! rmdc ir     <file.dme> [--entry <proc-path> | --all]  print reachable IR
+//! rmdc bytecode <file.dme> [--entry <proc-path> | --all]  print reachable bytecode
+//! rmdc eval   <file.dm> [--entry <proc-path>]  compile and execute an entry point
 //! rmdc bake   <file.dme> <file.dmm>  bake map appearances through DM
 //! rmdc map    <file.dmm>    parse a map and summarise it
 //! rmdc roundtrip <file.dmm> parse a map, write it back out and diff the bytes
@@ -16,7 +16,9 @@
 use core::{
     arena::StrArena,
     location::{FileId, Location},
+    path::TreePath,
     source::SourceMap,
+    types::ProcId,
 };
 use std::{
     collections::BTreeSet,
@@ -29,7 +31,10 @@ use dmi::{IconFile, metadata::IconState};
 use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
 
 fn usage() -> ExitCode {
-    eprintln!("usage: rmdc <tokens|pp|tree|ir|bytecode|eval|bake|map|roundtrip|icon> <file>");
+    eprintln!(
+        "usage: rmdc <tokens|pp|tree|ir|bytecode|eval|bake|map|roundtrip|icon> <file>\nrmdc ir|bytecode <file> \
+         [--entry <proc-path> | --all]\nrmdc eval <file> [--entry <proc-path>]"
+    );
 
     ExitCode::FAILURE
 }
@@ -44,9 +49,18 @@ fn main() -> ExitCode {
         "tokens" => dump_tokens(&path),
         "pp" => dump_preprocessed(&path),
         "tree" => dump_tree(&path),
-        "ir" => dump_ir(&path),
-        "bytecode" => dump_bytecode(&path),
-        "eval" => eval(&path),
+        "ir" => match parse_entry_selection(args.collect::<Vec<_>>(), true) {
+            Some(selection) => dump_ir(&path, selection),
+            None => return usage(),
+        },
+        "bytecode" => match parse_entry_selection(args.collect::<Vec<_>>(), true) {
+            Some(selection) => dump_bytecode(&path, selection),
+            None => return usage(),
+        },
+        "eval" => match parse_entry_selection(args.collect::<Vec<_>>(), false) {
+            Some(selection) => eval(&path, selection),
+            None => return usage(),
+        },
         "bake" => match args.next() {
             Some(map) => {
                 let flags = args.collect::<Vec<_>>();
@@ -74,6 +88,28 @@ fn main() -> ExitCode {
             eprintln!("error: {e}");
             ExitCode::FAILURE
         },
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum EntrySelection {
+    Auto,
+    Explicit(String),
+    All,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ResolvedEntry {
+    proc: ProcId,
+    world: bool,
+}
+
+fn parse_entry_selection(args: Vec<String>, allow_all: bool) -> Option<EntrySelection> {
+    match args.as_slice() {
+        [] => Some(EntrySelection::Auto),
+        [flag] if allow_all && flag == "--all" => Some(EntrySelection::All),
+        [flag, path] if flag == "--entry" => Some(EntrySelection::Explicit(path.clone())),
+        _ => None,
     }
 }
 
@@ -161,7 +197,7 @@ fn dump_tree(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn dump_ir(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn dump_ir(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn std::error::Error>> {
     let arena = StrArena::new();
     let preprocessed = preprocessor::preprocess(&arena, path)?;
     if !preprocessed.is_ok() {
@@ -169,13 +205,26 @@ fn dump_ir(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let ast = ast::parse(&preprocessed.tokens)?;
-    let (_, module, _) = sema::analyze(&ast);
-    print!("{}", ir::disasm::dump_with(&module, std::env::var("DM_COLOR").is_ok()));
+    let (tree, module, _) = sema::analyze(&ast);
+    let color = std::env::var("DM_COLOR").is_ok();
+    let output = match selection {
+        EntrySelection::All => ir::disasm::dump_with(&module, color),
+        selection => {
+            let entry = resolve_entry(&tree, &selection)?;
+            match codegen::reachable_procedures(&module, &tree, &[entry.proc])? {
+                codegen::ProcedureReachability::All => ir::disasm::dump_with(&module, color),
+                codegen::ProcedureReachability::Selected(procedures) => {
+                    ir::disasm::dump_selected_with(&module, &procedures, color)
+                },
+            }
+        },
+    };
+    print!("{output}");
 
     Ok(())
 }
 
-fn dump_bytecode(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn dump_bytecode(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn std::error::Error>> {
     let arena = StrArena::new();
     let preprocessed = preprocessor::preprocess(&arena, path)?;
     if !preprocessed.is_ok() {
@@ -183,11 +232,57 @@ fn dump_bytecode(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let ast = ast::parse(&preprocessed.tokens)?;
-    let (_, module, _) = sema::analyze(&ast);
-    let module = codegen::generate(&module)?;
+    let (tree, module, _) = sema::analyze(&ast);
+    let module = match selection {
+        EntrySelection::All => codegen::generate(&module)?,
+        selection => {
+            let entry = resolve_entry(&tree, &selection)?;
+            codegen::generate_reachable(&module, &tree, &[entry.proc])?
+        },
+    };
     print!("{}", codegen::disasm::dump(&module)?);
 
     Ok(())
+}
+
+fn resolve_entry(tree: &ObjectTree, selection: &EntrySelection) -> Result<ResolvedEntry, Box<dyn std::error::Error>> {
+    match selection {
+        EntrySelection::Auto => {
+            if let Some(proc) = tree
+                .proc_inherited(TypeId::ROOT, &"main".into())
+                .and_then(|procedure| procedure.body)
+            {
+                return Ok(ResolvedEntry { proc, world: false });
+            }
+
+            let world = tree.id_of(&TreePath::parse("/world"));
+            if let Some(proc) = world
+                .and_then(|world| tree.proc_inherited(world, &"New".into()))
+                .and_then(|procedure| procedure.body)
+            {
+                return Ok(ResolvedEntry { proc, world: true });
+            }
+
+            Err(std::io::Error::other("missing /proc/main and /world/New").into())
+        },
+        EntrySelection::Explicit(text) => {
+            let path = TreePath::parse(text);
+            let Some(name) = path.name() else {
+                return Err(std::io::Error::other(format!("entry path {text:?} has no procedure name")).into());
+            };
+            let owner_path = TreePath::new(path.declaration_owner().to_vec(), true);
+            let Some(owner) = tree.id_of(&owner_path) else {
+                return Err(std::io::Error::other(format!("entry owner {owner_path} does not exist")).into());
+            };
+            let Some(proc) = tree.proc_inherited(owner, name).and_then(|procedure| procedure.body) else {
+                return Err(std::io::Error::other(format!("entry procedure {text} does not exist")).into());
+            };
+            let world = tree.id_of(&TreePath::parse("/world")) == Some(owner) && name.as_str() == "New";
+
+            Ok(ResolvedEntry { proc, world })
+        },
+        EntrySelection::All => Err(std::io::Error::other("--all does not select an entry procedure").into()),
+    }
 }
 
 fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -225,7 +320,9 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
 
     let profile = vm::bake::profile_type(&tree).map_err(|error| error.to_string())?;
 
-    let module = codegen::generate(&ir_module)?;
+    let definition = vm::profile::ProfileDefinition::resolve(&tree, profile);
+    let roots = definition.entry_points();
+    let module = codegen::generate_reachable(&ir_module, &tree, &roots)?;
     drop(ast);
     eprintln!("compiled in {:.2}s", compile_started.elapsed().as_secs_f32());
     let roots = entry
@@ -471,15 +568,20 @@ fn report_bake_output(bake: &mut vm::bake::Bake) {
     }
 }
 
-fn eval(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    for line in evaluate_file(path)? {
+fn eval(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn std::error::Error>> {
+    for line in evaluate_file_with(path, selection)? {
         println!("{line}");
     }
 
     Ok(())
 }
 
+#[cfg(test)]
 fn evaluate_file(path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    evaluate_file_with(path, EntrySelection::Auto)
+}
+
+fn evaluate_file_with(path: &Path, selection: EntrySelection) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let arena = StrArena::new();
     let preprocessed = preprocessor::preprocess(&arena, path)?;
     let source_root = source_root(&preprocessed.sources, preprocessed.entry, path);
@@ -512,21 +614,21 @@ fn evaluate_file(path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>>
         return Err("semantic analysis failed".into());
     }
 
-    let main = tree
-        .proc_inherited(TypeId::ROOT, &"main".into())
-        .and_then(|proc| proc.body);
-    let world_new = tree
-        .id_of(&core::path::TreePath::parse("/world"))
-        .and_then(|world| tree.proc_inherited(world, &"New".into()))
-        .and_then(|proc| proc.body);
-    let module = codegen::generate(&module)?;
+    let entry = resolve_entry(&tree, &selection)?;
+    let module = codegen::generate_reachable(&module, &tree, &[entry.proc])?;
     let mut runtime = vm::Runtime::default();
-    let result = if let Some(main) = main {
-        runtime.run(&tree, &module, main, None, None, Vec::new(), vm::Limits::default())
-    } else if let Some(world_new) = world_new {
-        runtime.run_world(&tree, &module, world_new, Vec::new(), vm::Limits::default())
+    let result = if entry.world {
+        runtime.run_world(&tree, &module, entry.proc, Vec::new(), vm::Limits::default())
     } else {
-        return Err(std::io::Error::other("missing /proc/main and /world/New").into());
+        runtime.run(
+            &tree,
+            &module,
+            entry.proc,
+            None,
+            None,
+            Vec::new(),
+            vm::Limits::default(),
+        )
     };
     result.map_err(|fault| {
         std::io::Error::other(format!(
@@ -803,7 +905,34 @@ mod tests {
         metadata::{IconState, Metadata},
     };
 
-    use super::{evaluate_file, format_location, format_parse_error, render_icon, render_tree, source_root};
+    use super::{
+        EntrySelection,
+        evaluate_file,
+        evaluate_file_with,
+        format_location,
+        format_parse_error,
+        parse_entry_selection,
+        render_icon,
+        render_tree,
+        source_root,
+    };
+
+    #[test]
+    fn entry_options_select_auto_explicit_and_full_modes() {
+        assert_eq!(parse_entry_selection(Vec::new(), true), Some(EntrySelection::Auto));
+        assert_eq!(
+            parse_entry_selection(vec![String::from("--all")], true),
+            Some(EntrySelection::All)
+        );
+        assert_eq!(
+            parse_entry_selection(
+                vec![String::from("--entry"), String::from("/datum/example/proc/run")],
+                true,
+            ),
+            Some(EntrySelection::Explicit(String::from("/datum/example/proc/run")))
+        );
+        assert_eq!(parse_entry_selection(vec![String::from("--all")], false), None);
+    }
 
     #[test]
     fn eval_executes_main_and_prints_world_log() {
@@ -811,6 +940,17 @@ mod tests {
 
         assert_eq!(
             evaluate_file(&path).expect("evaluate hello world"),
+            vec![String::from("55")]
+        );
+    }
+
+    #[test]
+    fn eval_executes_an_explicit_entry() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/hello_world.dm");
+
+        assert_eq!(
+            evaluate_file_with(&path, EntrySelection::Explicit(String::from("/proc/main")))
+                .expect("evaluate explicit main"),
             vec![String::from("55")]
         );
     }

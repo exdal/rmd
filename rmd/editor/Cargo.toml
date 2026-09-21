@@ -16,6 +16,7 @@ preprocessor = { path = "../preprocessor" }
 ast = { path = "../ast" }
 sema = { path = "../sema" }
 objtree = { path = "../objtree" }
+ir = { path = "../ir" }
 codegen = { path = "../codegen" }
 vm = { path = "../vm" }
 dmm = { path = "../dmm" }

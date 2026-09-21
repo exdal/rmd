@@ -28,6 +28,16 @@ Normal output includes each placement, its instance ID, and its resolved `icon_s
 `--summary` flag hides those rows. The `--check-edit` flag removes and restores the first wall. It
 then checks that the derived view returns to its original state.
 
+The IR and bytecode commands default to the procedures reachable from `/proc/main`, or
+`/world/New` when `main` is absent. Use `--entry <proc-path>` to choose another root and `--all` to
+inspect the complete module:
+
+```sh
+cargo run --release --bin rmdc -- ir examples/hello_world.dm
+cargo run --release --bin rmdc -- ir examples/hello_world.dm --entry /proc/fib_iter
+cargo run --release --bin rmdc -- ir examples/hello_world.dm --all
+```
+
 ## Compiler
 
 The editor compiles two views of a codebase when users enable appearance baking.
@@ -37,8 +47,9 @@ static rendering use this view. It preserves mapping-only types, icons, and othe
 code.
 
 The bake view defines `__DEMIR_BAKE__`. It omits the mapping compatibility defines and includes the
-profile code. The compiler keeps procedure bodies in its intermediate representation. Code
-generation converts them to stack bytecode for the virtual machine.
+profile code. The compiler keeps procedure bodies in its intermediate representation. After profile
+selection, code generation converts only the selected profile's reachable procedures to stack
+bytecode for the virtual machine while preserving their procedure IDs.
 
 Both views share cached source text. They keep separate tokens, type IDs, source locations, and
 object trees. Code must resolve placed types by path when it moves data between the views.

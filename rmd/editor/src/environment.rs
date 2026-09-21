@@ -223,15 +223,25 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
                 },
             };
             let profiles = selection.as_ref().map(|(_, profiles)| profiles.clone());
-            let program = match (view.module, selection) {
-                (Some(module), Some((profile, _))) => Some(BakeProgram {
-                    tree: view.tree,
-                    module,
-                    profile,
-                    files: files.clone(),
-                    icon_states: vm::IconStates::default(),
-                }),
-                _ => None,
+            let (program, codegen_error) = match (view.module, selection) {
+                (Some(module), Some((profile, _))) => {
+                    let definition = vm::profile::ProfileDefinition::resolve(&view.tree, profile);
+                    let roots = definition.entry_points();
+                    match codegen::generate_reachable(&module, &view.tree, &roots) {
+                        Ok(module) => (
+                            Some(BakeProgram {
+                                tree: view.tree,
+                                module,
+                                profile,
+                                files: files.clone(),
+                                icon_states: vm::IconStates::default(),
+                            }),
+                            None,
+                        ),
+                        Err(error) => (None, Some(error)),
+                    }
+                },
+                _ => (None, None),
             };
 
             (
@@ -241,7 +251,7 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
                 files,
                 view.errors,
                 view.sema_errors,
-                view.codegen_error,
+                codegen_error,
             )
         },
         None => (None, None, None, Arc::default(), Vec::new(), Vec::new(), None),
@@ -310,12 +320,7 @@ fn compile_view<'a>(
         return Err(LoadError::Cancelled);
     }
 
-    let should_generate = generate && (forced_profile.is_some() || vm::bake::has_profile(&tree));
-    let (module, codegen_error) = match should_generate.then(|| codegen::generate(&module)) {
-        Some(Ok(module)) => (Some(module), None),
-        Some(Err(error)) => (None, Some(error)),
-        None => (None, None),
-    };
+    let module = generate.then_some(module);
 
     let root = preprocessed
         .entry
@@ -349,7 +354,6 @@ fn compile_view<'a>(
         resource_dirs: preprocessed.resource_dirs,
         errors: preprocessed.errors,
         sema_errors,
-        codegen_error,
         source_cache: preprocessed.source_cache,
     })
 }
@@ -373,14 +377,13 @@ pub(crate) struct Compiled {
 
 struct CompiledView<'a> {
     tree: ObjectTree,
-    module: Option<codegen::Module>,
+    module: Option<ir::Module>,
     root: PathBuf,
     files: Vec<PathBuf>,
     maps: Vec<PathBuf>,
     resource_dirs: Vec<PathBuf>,
     errors: Vec<PreprocessError>,
     sema_errors: Vec<SemaError>,
-    codegen_error: Option<CodegenError>,
     source_cache: preprocessor::SourceCache<'a>,
 }
 
@@ -441,6 +444,23 @@ mod tests {
                 active: String::from("/datum/demir/main"),
             })
         );
+        let default_program = default.bake_program.as_ref().expect("default profile bytecode");
+        let main = default_program
+            .tree
+            .id_of(&TreePath::parse("/datum/demir/main"))
+            .expect("main profile");
+        let main_bake = vm::profile::ProfileDefinition::resolve(&default_program.tree, main)
+            .procedure(vm::profile::ProfileHook::Bake)
+            .expect("main bake body");
+        let debug = default_program
+            .tree
+            .id_of(&TreePath::parse("/datum/demir/main/debug"))
+            .expect("debug profile");
+        let debug_bake = vm::profile::ProfileDefinition::resolve(&default_program.tree, debug)
+            .procedure(vm::profile::ProfileHook::Bake)
+            .expect("debug bake body");
+        assert!(default_program.module.function_for_proc(main_bake).is_some());
+        assert!(default_program.module.function_for_proc(debug_bake).is_none());
 
         let (debug, diagnostics) = load(Some("/datum/demir/main/debug"));
         assert!(diagnostics.profile.is_none());
@@ -456,6 +476,23 @@ mod tests {
                 .map(|declaration| declaration.path.to_string()),
             Some(String::from("/datum/demir/main/debug"))
         );
+        let debug_program = debug.bake_program.as_ref().expect("debug profile bytecode");
+        let main = debug_program
+            .tree
+            .id_of(&TreePath::parse("/datum/demir/main"))
+            .expect("main profile");
+        let main_bake = vm::profile::ProfileDefinition::resolve(&debug_program.tree, main)
+            .procedure(vm::profile::ProfileHook::Bake)
+            .expect("main bake body");
+        let debug = debug_program
+            .tree
+            .id_of(&TreePath::parse("/datum/demir/main/debug"))
+            .expect("debug profile");
+        let debug_bake = vm::profile::ProfileDefinition::resolve(&debug_program.tree, debug)
+            .procedure(vm::profile::ProfileHook::Bake)
+            .expect("debug bake body");
+        assert!(debug_program.module.function_for_proc(main_bake).is_none());
+        assert!(debug_program.module.function_for_proc(debug_bake).is_some());
 
         let (stale, diagnostics) = load(Some("/datum/demir/main/missing"));
         assert!(diagnostics.profile.is_none());

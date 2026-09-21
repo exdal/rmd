@@ -34,11 +34,12 @@ use crate::{
     },
     eval::Evaluator,
     heap::{Object, ObjectId},
+    profile::{ProfileDefinition, ProfileHook},
     ui::{Command, Feedback, Rebake, Value as UiValue},
     world::Position,
 };
 
-fn compile(source: &str) -> (ObjectTree, codegen::Module) {
+fn analyze_fixture(source: &str) -> (ObjectTree, ir::Module) {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("rmd-vm-fixture-{}-{id}.dm", std::process::id()));
@@ -55,6 +56,12 @@ fn compile(source: &str) -> (ObjectTree, codegen::Module) {
     let ast = ast::parse(&preprocessed.tokens).expect("fixture should parse");
     let (tree, module, errors) = sema::analyze(&ast);
     assert!(errors.is_empty(), "{errors:?}");
+
+    (tree, module)
+}
+
+fn compile(source: &str) -> (ObjectTree, codegen::Module) {
+    let (tree, module) = analyze_fixture(source);
     let module = codegen::generate(&module).expect("fixture should compile");
     (tree, module)
 }
@@ -65,10 +72,10 @@ fn proc(tree: &ObjectTree, name: &str) -> core::types::ProcId {
         .expect("fixture proc should exist")
 }
 
-fn hook(tree: &ObjectTree, name: &str) -> core::types::ProcId {
+fn hook(tree: &ObjectTree, hook: ProfileHook) -> core::types::ProcId {
     let profile = profile_type(tree).expect("fixture should declare one profile");
-    tree.proc_inherited(profile, &name.into())
-        .and_then(|proc| proc.body)
+    ProfileDefinition::resolve(tree, profile)
+        .procedure(hook)
         .expect("fixture hook should exist")
 }
 
@@ -151,6 +158,19 @@ fn only_a_demir_subtype_makes_a_profile() {
     assert!(!has_profile(&bare));
     assert!(has_profile(&profiled));
     assert!(has_profile(&empty));
+}
+
+#[test]
+fn profile_definition_resolves_the_complete_hook_abi() {
+    let (tree, _) = analyze_fixture("/datum/demir/test\n");
+    let profile = profile_type(&tree).expect("default profile");
+    let definition = ProfileDefinition::resolve(&tree, profile);
+    let resolved = ProfileHook::ALL
+        .into_iter()
+        .filter(|hook| definition.declaration(&tree, *hook).is_some())
+        .collect::<Vec<_>>();
+
+    assert_eq!(resolved, ProfileHook::ALL);
 }
 
 #[test]
@@ -641,7 +661,7 @@ fn imgui_procs_are_blocked_outside_the_ui_hook() {
         .run(
             &tree,
             &module,
-            hook(&tree, "bake"),
+            hook(&tree, ProfileHook::Bake),
             None,
             None,
             Vec::new(),
@@ -1026,7 +1046,7 @@ fn defining_a_rebake_group_outside_initialize_is_blocked() {
         .run(
             &tree,
             &module,
-            hook(&tree, "bake"),
+            hook(&tree, ProfileHook::Bake),
             None,
             None,
             Vec::new(),
@@ -1110,7 +1130,7 @@ fn defining_a_node_group_outside_initialize_is_blocked() {
         .run(
             &tree,
             &module,
-            hook(&tree, "bake"),
+            hook(&tree, ProfileHook::Bake),
             None,
             None,
             Vec::new(),
@@ -2605,6 +2625,42 @@ fn static_state_is_shared_and_dynamic_dm_calls_work() {
         ),
         14.into()
     );
+}
+
+#[test]
+fn reachable_codegen_executes_like_full_codegen() {
+    let source = r#"
+/datum/base
+    var/value = initialize_value()
+    proc/read()
+        world.log << "read [value]"
+        return value
+/datum/base/child/read()
+    return ..() + 1
+/proc/initialize_value()
+    return 6
+/proc/entry()
+    var/datum/base/child/value = new
+    return value.read()
+/proc/unreachable()
+    return 99
+"#;
+    let (tree, ir_module) = analyze_fixture(source);
+    let entry = proc(&tree, "entry");
+    let full = codegen::generate(&ir_module).expect("full codegen");
+    let selected = codegen::generate_reachable(&ir_module, &tree, &[entry]).expect("reachable codegen");
+
+    let execute = |module: &codegen::Module| {
+        let mut runtime = Runtime::default();
+        let value = runtime
+            .run(&tree, module, entry, None, None, Vec::new(), Limits::default())
+            .expect("fixture should execute");
+        (value, runtime.take_output())
+    };
+
+    assert_eq!(execute(&selected), execute(&full));
+    let unreachable = proc(&tree, "unreachable");
+    assert!(selected.function_for_proc(unreachable).is_none());
 }
 
 #[test]

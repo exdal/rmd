@@ -1,7 +1,4 @@
-use core::{
-    path::TreePath,
-    types::{Identifier, ProcId, Value},
-};
+use core::types::{Identifier, ProcId, Value};
 use std::{
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
@@ -11,7 +8,6 @@ use std::{
 use codegen::Module;
 use objtree::{ObjectTree, TypeId};
 
-pub use crate::lighting::{LightTile, LightingMap};
 use crate::{
     AppearanceDelta,
     AppearanceLighting,
@@ -25,6 +21,19 @@ use crate::{
     heap::{Object, ObjectId},
     lighting::{LightSource, LightingAtom, direction_angle, parse_color},
     world::Position,
+};
+pub use crate::{
+    lighting::{LightTile, LightingMap},
+    profile::{
+        ProfileCatalog,
+        ProfileDefinition,
+        ProfileError,
+        ProfileHook,
+        catalog as profile_catalog,
+        default_type as profile_type,
+        exists as has_profile,
+        selected_type as selected_profile_type,
+    },
 };
 
 const CONNECTION_SOURCE: u8 = 1;
@@ -64,142 +73,6 @@ const LIGHT_SCHEMA: [&str; 18] = [
     "demir_ambient_power",
     "demir_fullbright",
 ];
-
-const PROFILE_BASE: &str = "/datum/demir";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProfileError {
-    Missing,
-    MissingDefault(Vec<String>),
-    MultipleDefaults(Vec<String>),
-}
-
-impl std::fmt::Display for ProfileError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Missing => write!(
-                formatter,
-                "the codebase defines no subtype of {PROFILE_BASE} under #ifdef __DEMIR_BAKE__"
-            ),
-            Self::MissingDefault(paths) => write!(
-                formatter,
-                "the codebase defines {} profiles but none directly sets default to a true value: {}",
-                paths.len(),
-                paths.join(", ")
-            ),
-            Self::MultipleDefaults(paths) => write!(
-                formatter,
-                "the codebase defines {} default profiles: {}",
-                paths.len(),
-                paths.join(", ")
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ProfileError {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProfileCatalog {
-    pub profiles: Vec<TypeId>,
-    pub default: TypeId,
-}
-
-impl ProfileCatalog {
-    pub fn select(&self, tree: &ObjectTree, requested: Option<&TreePath>) -> TypeId {
-        requested
-            .and_then(|path| tree.id_of(path))
-            .filter(|id| self.profiles.contains(id))
-            .unwrap_or(self.default)
-    }
-}
-
-/// Every selectable subtype of `/datum/demir` and the one subtype that directly marks itself as
-/// the default. The marker is intentionally not inherited, so a debug subtype does not become a
-/// second default merely because its parent is the default profile.
-pub fn profile_catalog(tree: &ObjectTree) -> Result<ProfileCatalog, ProfileError> {
-    let base = tree
-        .id_of(&TreePath::parse(PROFILE_BASE))
-        .ok_or(ProfileError::Missing)?;
-
-    let mut profiles = tree
-        .descendants(base)
-        .into_iter()
-        .filter(|id| *id != base)
-        .collect::<Vec<_>>();
-    profiles.sort_by(|left, right| {
-        let left = tree.get(*left).map(|decl| decl.path.to_string()).unwrap_or_default();
-        let right = tree.get(*right).map(|decl| decl.path.to_string()).unwrap_or_default();
-
-        left.cmp(&right)
-    });
-    if profiles.is_empty() {
-        return Err(ProfileError::Missing);
-    }
-
-    let marker = Identifier::from("default");
-    let defaults = profiles
-        .iter()
-        .copied()
-        .filter(|id| {
-            tree.var(*id, &marker)
-                .is_some_and(|variable| variable.initializer.is_none() && variable.value.is_truthy())
-        })
-        .collect::<Vec<_>>();
-
-    let paths = |types: &[TypeId]| {
-        types
-            .iter()
-            .filter_map(|id| tree.get(*id).map(|decl| decl.path.to_string()))
-            .collect::<Vec<_>>()
-    };
-    let default = match defaults.as_slice() {
-        [] => return Err(ProfileError::MissingDefault(paths(&profiles))),
-        [default] => *default,
-        _ => return Err(ProfileError::MultipleDefaults(paths(&defaults))),
-    };
-
-    Ok(ProfileCatalog { profiles, default })
-}
-
-pub fn profile_type(tree: &ObjectTree) -> Result<TypeId, ProfileError> { Ok(profile_catalog(tree)?.default) }
-
-pub fn selected_profile_type(tree: &ObjectTree, requested: Option<&TreePath>) -> Result<TypeId, ProfileError> {
-    let catalog = profile_catalog(tree)?;
-
-    Ok(catalog.select(tree, requested))
-}
-
-pub fn has_profile(tree: &ObjectTree) -> bool { profile_type(tree).is_ok() }
-
-/// The prelude declares every hook on `/datum/demir`, so the walk to `/` stops there and a
-/// codebase's own global `/proc/light` is never mistaken for one.
-fn hook(tree: &ObjectTree, profile: TypeId, name: &str) -> Option<ProcId> {
-    tree.proc_inherited(profile, &name.into()).and_then(|proc| proc.body)
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct Hooks {
-    prepare: Option<ProcId>,
-    connections: Option<ProcId>,
-    highlights: Option<ProcId>,
-    light: Option<ProcId>,
-    bake: Option<ProcId>,
-    ui: Option<ProcId>,
-}
-
-impl Hooks {
-    fn resolve(tree: &ObjectTree, profile: TypeId) -> Self {
-        Self {
-            prepare: hook(tree, profile, "prepare"),
-            connections: hook(tree, profile, "connections"),
-            highlights: hook(tree, profile, "highlights"),
-            light: hook(tree, profile, "light"),
-            bake: hook(tree, profile, "bake"),
-            ui: hook(tree, profile, "ui"),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Atom {
@@ -332,7 +205,7 @@ pub struct Bake {
     highlights: HashMap<u64, Vec<Highlight>>,
     highlight_faults: HashMap<u64, Fault>,
     type_groups: HashMap<TypeId, u32>,
-    hooks: Hooks,
+    profile: ProfileDefinition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,9 +257,10 @@ impl Bake {
         tree: &ObjectTree, module: &Module, profile: TypeId, atoms: Vec<Atom>, size: [i32; 3], limits: Limits,
         icons: IconStates, mut progress: impl FnMut(Stage, usize, usize),
     ) -> Self {
+        let definition = ProfileDefinition::resolve(tree, profile);
         let mut bake = Self {
             limits,
-            hooks: Hooks::resolve(tree, profile),
+            profile: definition,
             ..Default::default()
         };
 
@@ -411,7 +285,10 @@ impl Bake {
         }
 
         progress(Stage::Initialize, 0, 1);
-        let constructed = bake.runtime.create_profile(tree, module, profile, limits).map(|_| ());
+        let constructed = bake
+            .runtime
+            .create_profile(tree, module, profile, bake.profile.procedure(ProfileHook::New), limits)
+            .map(|_| ());
         progress(Stage::Initialize, 1, 1);
         if let Err(fault) = constructed {
             bake.diagnostics.record(fault);
@@ -459,7 +336,7 @@ impl Bake {
 
         progress(Stage::Light, total, total);
 
-        if bake.hooks.light.is_some() {
+        if bake.profile.procedure(ProfileHook::Light).is_some() {
             let atoms = ids
                 .iter()
                 .filter_map(|id| Some((*id, bake.harvest_light(tree, *id)?)))
@@ -523,7 +400,7 @@ impl Bake {
         &mut self, tree: &ObjectTree, module: &Module, target: Option<u64>, dockspace: u32,
         feedback: crate::ui::Feedback,
     ) -> Result<crate::ui::Frame, Fault> {
-        let Some(proc) = self.hooks.ui else {
+        let Some(proc) = self.profile.procedure(ProfileHook::Ui) else {
             return Ok(crate::ui::Frame::default());
         };
 
@@ -658,7 +535,7 @@ impl Bake {
             return;
         }
 
-        let fault = self.hooks.prepare.and_then(|proc| {
+        let fault = self.profile.procedure(ProfileHook::Prepare).and_then(|proc| {
             let args = vec![GenericValue::Object(object)];
             let profile = self.runtime.profile;
             self.runtime
@@ -685,7 +562,7 @@ impl Bake {
             return;
         }
 
-        let Some(proc) = self.hooks.light else {
+        let Some(proc) = self.profile.procedure(ProfileHook::Light) else {
             return;
         };
         let args = vec![GenericValue::Object(object)];
@@ -711,7 +588,7 @@ impl Bake {
         let Some(object) = self.objects.get(&id).copied() else {
             return;
         };
-        let Some(proc) = self.hooks.connections else {
+        let Some(proc) = self.profile.procedure(ProfileHook::Connections) else {
             return;
         };
 
@@ -827,7 +704,7 @@ impl Bake {
         let Some(object) = self.objects.get(&id).copied() else {
             return;
         };
-        let Some(proc) = self.hooks.highlights else {
+        let Some(proc) = self.profile.procedure(ProfileHook::Highlights) else {
             return;
         };
         let Some(position) = self.atoms.get(&id).map(|atom| atom.position) else {
@@ -949,7 +826,7 @@ impl Bake {
         let Some(object) = self.objects.get(&id).copied() else {
             return;
         };
-        let Some(proc) = self.hooks.bake else {
+        let Some(proc) = self.profile.procedure(ProfileHook::Bake) else {
             return;
         };
 
@@ -1227,7 +1104,7 @@ impl Bake {
         };
 
         let ids = selected(request.light);
-        if self.hooks.light.is_some() && !ids.is_empty() {
+        if self.profile.procedure(ProfileHook::Light).is_some() && !ids.is_empty() {
             let schema = LIGHT_SCHEMA.map(Identifier::from);
             let objects = ids
                 .iter()

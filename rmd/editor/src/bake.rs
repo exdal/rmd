@@ -346,7 +346,10 @@ mod tests {
         let helper_id = environment.tree.id_of(&helper.path).expect("editor helper");
         let program = environment.bake_program.as_ref().expect("bake program");
         let profile = vm::bake::profile_type(&program.tree).expect("bake profile");
-        let hook = program.tree.proc_inherited(profile, &"bake".into()).expect("bake hook");
+        let definition = vm::profile::ProfileDefinition::resolve(&program.tree, profile);
+        let hook = definition
+            .declaration(&program.tree, vm::profile::ProfileHook::Bake)
+            .expect("bake hook");
 
         assert_eq!(
             visual::resolve_id(&environment.tree, plain_id, &plain).icon.as_deref(),

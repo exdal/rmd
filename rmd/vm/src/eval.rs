@@ -127,7 +127,7 @@ impl Runtime {
     /// `demir_profile()` answers inside it, and no journal is opened: the profile outlives every
     /// transaction taken against it, and `Heap::rollback` truncates by id.
     pub(crate) fn create_profile(
-        &mut self, tree: &ObjectTree, module: &Module, ty: TypeId, limits: Limits,
+        &mut self, tree: &ObjectTree, module: &Module, ty: TypeId, constructor: Option<ProcId>, limits: Limits,
     ) -> Result<ObjectId> {
         self.ensure_global()?;
         self.ensure_world(tree)?;
@@ -138,7 +138,7 @@ impl Runtime {
         self.defining_groups = true;
         let result = {
             let mut evaluator = Evaluator::new(self, tree, module, limits, None);
-            match evaluator.find_proc(ty, &"New".into()) {
+            match constructor {
                 Some(proc) => evaluator
                     .call_function_for_proc(proc, Receiver::Object(id), None, Vec::new())
                     .map(|_| ()),
