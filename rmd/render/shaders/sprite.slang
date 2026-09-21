@@ -150,15 +150,14 @@ func fs_main(VSOutput input) -> f32x4 {
     return sample_sprite(input);
 }
 
-struct VisibilityOutput {
+struct SceneOutput {
     f32x4 color : SV_Target0;
     f32x4 emissive : SV_Target1;
-    u32 visibility : SV_Target2;
-    u32 level : SV_Target3;
+    u32 level : SV_Target2;
 };
 
 [shader("fragment")]
-func fs_visibility(VSOutput input) -> VisibilityOutput {
+func fs_scene(VSOutput input) -> SceneOutput {
     if (input.sprite_id == 0) {
         discard;
     }
@@ -172,7 +171,7 @@ func fs_visibility(VSOutput input) -> VisibilityOutput {
         discard;
     }
 
-    VisibilityOutput output;
+    SceneOutput output;
     let color = sample_sprite(input);
     let mask = (flags & SPRITE_FLAG_EMISSIVE_MASK) != 0;
     let blocker = (flags & SPRITE_FLAG_EMISSIVE_BLOCKER) != 0;
@@ -180,10 +179,29 @@ func fs_visibility(VSOutput input) -> VisibilityOutput {
     output.emissive = (flags & (SPRITE_FLAG_EMISSIVE_MASK | SPRITE_FLAG_FULLBRIGHT)) != 0
         ? f32x4(color.a)
         : f32x4(0.0, 0.0, 0.0, color.a);
-    output.visibility = SPRITE_WRITES_ID ? input.sprite_id : 0;
     output.level = sprites[input.sprite_id - 1].z;
 
     return output;
+}
+
+[shader("fragment")]
+func fs_visibility(VSOutput input) -> u32 {
+    if (input.sprite_id == 0) {
+        discard;
+    }
+
+    let flags = sprites[input.sprite_id - 1].flags();
+    if ((flags & (SPRITE_AREA_EDGE_MASK | SPRITE_FLAG_EMISSIVE_MASK | SPRITE_FLAG_EMISSIVE_BLOCKER |
+                  SPRITE_FLAG_OVERLAY_LIGHT | SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT)) != 0) {
+        discard;
+    }
+
+    let color = sample_sprite(input);
+    if (color.a <= 0.0) {
+        discard;
+    }
+
+    return input.sprite_id;
 }
 
 [shader("fragment")]

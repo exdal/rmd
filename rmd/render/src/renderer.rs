@@ -53,6 +53,7 @@ use crate::{
 
 const GEOMETRY_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.vert.spv"));
 const SPRITE_SHADE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.frag.spv"));
+const SPRITE_SCENE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_scene.frag.spv"));
 const SPRITE_VIS_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_visibility.frag.spv"));
 const SPRITE_OVERLAY_LIGHT_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_overlay_light.frag.spv"));
 const SPRITE_CULL_CLASSIFY_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_cull_classify.comp.spv"));
@@ -658,6 +659,7 @@ pub struct Renderer {
     frames: Option<SuperFrameAllocator>,
     swapchain: Option<SwapChain>,
     sprite_pipeline: PipelineId,
+    scene_pipeline: PipelineId,
     visibility_pipeline: PipelineId,
     overlay_light_pipeline: PipelineId,
     cull_pipelines: [PipelineId; 3],
@@ -705,6 +707,20 @@ impl Renderer {
             GraphicsPipelineInfo::new()
                 .with_shader(&geometry_vs)
                 .with_shader(&read_spirv(SPRITE_SHADE_FS_SPV)?)
+                .with_bindless_set(1, bindless.layout, bindless.set),
+        ) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                drop(graph);
+                bindless.destroy(&device);
+
+                return Err(error.into());
+            },
+        };
+        let scene_pipeline = match graph.declare_pipeline(
+            GraphicsPipelineInfo::new()
+                .with_shader(&geometry_vs)
+                .with_shader(&read_spirv(SPRITE_SCENE_FS_SPV)?)
                 .with_bindless_set(1, bindless.layout, bindless.set),
         ) {
             Ok(pipeline) => pipeline,
@@ -837,6 +853,7 @@ impl Renderer {
             frames: None,
             swapchain: None,
             sprite_pipeline,
+            scene_pipeline,
             visibility_pipeline,
             overlay_light_pipeline,
             cull_pipelines,
@@ -1072,31 +1089,22 @@ impl Renderer {
             let draw_commands = cull_values.commands;
             let visible_indices = cull_values.visible;
 
-            [
-                scene_attachment,
-                emissive_attachment,
-                visibility_attachment,
-                level_attachment,
-                _,
-                _,
-            ] = module
+            [scene_attachment, emissive_attachment, level_attachment, _, _] = module
                 .begin_rendering([
                     (scene_attachment, Access::ColorRW),
                     (emissive_attachment, Access::ColorRW),
-                    (visibility_attachment, Access::ColorRW),
                     (level_attachment, Access::ColorRW),
                     (draw_commands, Access::IndirectRead),
                     (visible_indices, Access::VertexRead),
                 ])
                 .with_name(format!("map view {index} sprites"))
-                .bind_graphics_pipeline(self.visibility_pipeline)
+                .bind_graphics_pipeline(self.scene_pipeline)
                 .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
                 .set_viewport(0, Rect2D::framebuffer())
                 .set_scissor(0, Rect2D::framebuffer())
                 .set_color_blend(0, BlendPreset::PremultipliedAlphaBlend)
                 .set_color_blend(1, BlendPreset::PremultipliedAlphaBlend)
                 .set_color_blend(2, BlendPreset::Off)
-                .set_color_blend(3, BlendPreset::Off)
                 .set_rasterization(RasterizationState {
                     cull_mode: vk::CullModeFlags::NONE,
                     ..Default::default()
@@ -1106,10 +1114,38 @@ impl Renderer {
                 .specialize_constant(spec::SPRITE_INDIRECT, true)
                 .specialize_constant(spec::SHOW_AREAS, state.show_areas)
                 .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
-                .specialize_constant(spec::SPRITE_WRITES_ID, false)
                 .push_constants_from(underlay_camera)
                 .draw_indirect_at(draw_commands, 0, 1u32, DRAW_INDIRECT_STRIDE)
-                .specialize_constant(spec::SPRITE_WRITES_ID, true)
+                .push_constants_from(active_camera)
+                .draw_indirect_at(
+                    draw_commands,
+                    u64::from(DRAW_INDIRECT_STRIDE),
+                    1u32,
+                    DRAW_INDIRECT_STRIDE,
+                )
+                .end_rendering();
+
+            [visibility_attachment, _, _] = module
+                .begin_rendering([
+                    (visibility_attachment, Access::ColorRW),
+                    (draw_commands, Access::IndirectRead),
+                    (visible_indices, Access::VertexRead),
+                ])
+                .with_name(format!("map view {index} visibility"))
+                .bind_graphics_pipeline(self.visibility_pipeline)
+                .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                .set_viewport(0, Rect2D::framebuffer())
+                .set_scissor(0, Rect2D::framebuffer())
+                .broadcast_color_blend(BlendPreset::Off)
+                .set_rasterization(RasterizationState {
+                    cull_mode: vk::CullModeFlags::NONE,
+                    ..Default::default()
+                })
+                .bind_buffer(0, 1, sprites)
+                .bind_buffer(0, 2, visible_indices)
+                .specialize_constant(spec::SPRITE_INDIRECT, true)
+                .specialize_constant(spec::SHOW_AREAS, state.show_areas)
+                .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
                 .push_constants_from(active_camera)
                 .draw_indirect_at(
                     draw_commands,
@@ -2975,6 +3011,7 @@ mod tests {
         SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT,
         SPRITE_FLAGS_SHIFT,
         SPRITE_OVERLAY_LIGHT_FS_SPV,
+        SPRITE_SCENE_FS_SPV,
         SPRITE_SHADE_FS_SPV,
         SPRITE_TEXTURE_MASK,
         SPRITE_VIS_FS_SPV,
@@ -3877,6 +3914,7 @@ mod tests {
     #[test]
     fn sprite_fragment_passes_read_sprites_and_textures() {
         for (spirv, expected) in [
+            (SPRITE_SCENE_FS_SPV, vec![(0, 1), (1, 0)]),
             (SPRITE_VIS_FS_SPV, vec![(0, 1), (1, 0)]),
             (SPRITE_SHADE_FS_SPV, vec![(0, 1), (1, 0)]),
             (SPRITE_OVERLAY_LIGHT_FS_SPV, vec![(0, 1), (0, 3), (1, 0)]),
@@ -3900,7 +3938,6 @@ mod tests {
             (GEOMETRY_VS_SPV, spec::SHOW_AREA_OUTLINES),
             (GEOMETRY_VS_SPV, spec::SPRITE_INDIRECT),
             (SPRITE_SHADE_FS_SPV, spec::SPRITE_EDGE_ONLY),
-            (SPRITE_VIS_FS_SPV, spec::SPRITE_WRITES_ID),
             (SPRITE_CULL_CLASSIFY_CS_SPV, spec::SHOW_AREAS),
             (SPRITE_CULL_CLASSIFY_CS_SPV, spec::SHOW_AREA_OUTLINES),
             (SPRITE_CULL_COMPACT_CS_SPV, spec::SHOW_AREAS),

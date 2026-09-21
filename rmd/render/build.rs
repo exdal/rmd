@@ -9,6 +9,7 @@ const MODULES: [(&str, &[(&str, &str)]); 8] = [
         &[
             ("vs_main", "sprite.vert.spv"),
             ("fs_main", "sprite.frag.spv"),
+            ("fs_scene", "sprite_scene.frag.spv"),
             ("fs_visibility", "sprite_visibility.frag.spv"),
             ("fs_overlay_light", "sprite_overlay_light.frag.spv"),
         ],
