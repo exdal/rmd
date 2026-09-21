@@ -440,10 +440,20 @@ mod tests {
         };
         let (disabled, _) = Environment::load_with(root.join("test.dme"), disabled, &crate::progress::Progress::new())
             .expect("codebase with baking off");
+        let phi_only = crate::environment::BakeOptions {
+            optimizations_enabled: false,
+            ..Default::default()
+        };
+        let (phi_only, _) = Environment::load_with(root.join("test.dme"), phi_only, &crate::progress::Progress::new())
+            .expect("codebase with optional optimizations off");
 
         assert!(profiled.bake_program.is_some());
         assert!(bare.bake_program.is_none());
         assert!(disabled.bake_program.is_none());
+        assert!(phi_only.bake_program.is_some());
+        assert_eq!(profiled.optimization_timings.samples(), 2);
+        assert_eq!(disabled.optimization_timings.samples(), 1);
+        assert_eq!(phi_only.optimization_timings.samples(), 2);
 
         let source = std::fs::read_to_string(root.join("test.dmm")).expect("example map");
         let (map, errors) = dmm::parser::parse(&source);

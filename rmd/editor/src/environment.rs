@@ -130,6 +130,7 @@ impl BundledProfile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BakeOptions {
     pub enabled: bool,
+    pub optimizations_enabled: bool,
     pub profile: Option<TreePath>,
     pub forced_profile: Option<BundledProfile>,
     pub limits: vm::Limits,
@@ -139,6 +140,7 @@ impl Default for BakeOptions {
     fn default() -> Self {
         Self {
             enabled: true,
+            optimizations_enabled: true,
             profile: None,
             forced_profile: None,
             limits: vm::Limits::default(),
@@ -156,7 +158,7 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
         entry,
         false,
         false,
-        options.forced_profile,
+        options,
         preprocessor::SourceCache::default(),
         progress,
     )?;
@@ -167,7 +169,7 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
             entry,
             true,
             true,
-            options.forced_profile,
+            options,
             editor.source_cache.clone(),
             progress,
         )?)
@@ -175,8 +177,10 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
         None
     };
 
+    let mut optimization_timings = editor.optimization_timings;
     let mut resource_dirs = editor.resource_dirs;
     if let Some(view) = &bake {
+        optimization_timings.merge(view.optimization_timings);
         for path in &view.resource_dirs {
             if !resource_dirs.contains(path) {
                 resource_dirs.push(path.clone());
@@ -272,20 +276,22 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
         bake_errors,
         bake_sema_errors,
         codegen_error,
+        optimization_timings,
     })
 }
 
 fn compile_view<'a>(
-    arena: &'a StrArena, entry: &Path, baking: bool, generate: bool, forced_profile: Option<BundledProfile>,
+    arena: &'a StrArena, entry: &Path, baking: bool, generate: bool, options: &BakeOptions,
     source_cache: preprocessor::SourceCache<'a>, progress: &'a Progress,
 ) -> Result<CompiledView<'a>, LoadError> {
     progress.enter(Stage::Preprocess, 0);
     let mut prelude = preprocessor::prelude_files();
-    if let Some((name, source)) = forced_profile.and_then(BundledProfile::defines) {
+    if let Some((name, source)) = options.forced_profile.and_then(BundledProfile::defines) {
         prelude.push(preprocessor::PreludeFile::Embedded(name, source));
     }
-    let postlude =
-        forced_profile.map(|profile| preprocessor::PreludeFile::Embedded(profile.source_name(), profile.source()));
+    let postlude = options
+        .forced_profile
+        .map(|profile| preprocessor::PreludeFile::Embedded(profile.source_name(), profile.source()));
     let preprocessed = preprocessor::Preprocessor::new(arena)
         .with_source_cache(source_cache)
         .with_prelude(prelude)
@@ -315,7 +321,8 @@ fn compile_view<'a>(
     }
 
     progress.enter(Stage::Analyze, 0);
-    let (tree, module, sema_errors) = sema::analyze(&ast);
+    let (tree, module, sema_errors, optimization_timings) =
+        sema::analyze_with_optimizations(&ast, options.optimizations_enabled);
     if progress.is_cancelled() {
         return Err(LoadError::Cancelled);
     }
@@ -354,6 +361,7 @@ fn compile_view<'a>(
         resource_dirs: preprocessed.resource_dirs,
         errors: preprocessed.errors,
         sema_errors,
+        optimization_timings,
         source_cache: preprocessed.source_cache,
     })
 }
@@ -373,6 +381,7 @@ pub(crate) struct Compiled {
     pub bake_errors: Vec<PreprocessError>,
     pub bake_sema_errors: Vec<SemaError>,
     pub codegen_error: Option<CodegenError>,
+    pub optimization_timings: ir::opt::OptimizationTimings,
 }
 
 struct CompiledView<'a> {
@@ -384,6 +393,7 @@ struct CompiledView<'a> {
     resource_dirs: Vec<PathBuf>,
     errors: Vec<PreprocessError>,
     sema_errors: Vec<SemaError>,
+    optimization_timings: ir::opt::OptimizationTimings,
     source_cache: preprocessor::SourceCache<'a>,
 }
 
@@ -433,6 +443,7 @@ mod tests {
         };
         let (default, diagnostics) = load(None);
         assert!(diagnostics.profile.is_none());
+        assert_eq!(default.optimization_timings.samples(), 2);
         assert_eq!(
             default.profiles,
             Some(Profiles {

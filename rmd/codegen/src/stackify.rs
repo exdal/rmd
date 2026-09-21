@@ -1,7 +1,7 @@
 use core::types::IrNodeId;
 use std::collections::{HashMap, HashSet};
 
-use ir::{IrNode, SideEffect, Procedure};
+use ir::{IrNode, Procedure, SideEffect};
 
 use crate::{CodegenError, produces_value};
 
@@ -9,6 +9,7 @@ pub(super) struct Stackify {
     schedules: HashMap<IrNodeId, Vec<IrNodeId>>,
     stacked: HashSet<IrNodeId>,
     uses: HashMap<IrNodeId, u32>,
+    users: HashMap<IrNodeId, IrNodeId>,
 }
 
 impl Stackify {
@@ -38,6 +39,7 @@ impl Stackify {
         let mut schedules = HashMap::new();
         for block in blocks {
             let instructions = module.block(*block).ok_or(CodegenError::ExpectedBlock(*block))?;
+
             schedules.insert(*block, reorder_pure_runs(module, instructions, &uses, &users));
         }
 
@@ -48,6 +50,7 @@ impl Stackify {
                 if stacked.contains(&instruction) {
                     continue;
                 }
+
                 let mut cursor = index;
                 match_operands(module, schedule, instruction, &mut cursor, &uses, &mut stacked);
             }
@@ -57,6 +60,7 @@ impl Stackify {
             schedules,
             stacked,
             uses,
+            users,
         })
     }
 
@@ -69,6 +73,75 @@ impl Stackify {
     pub(super) fn uses(&self, value: IrNodeId) -> u32 { self.uses.get(&value).copied().unwrap_or_default() }
 
     pub(super) fn needs_local(&self, value: IrNodeId) -> bool { self.uses(value) != 0 && !self.is_stacked(value) }
+
+    pub(super) fn sole_user(&self, value: IrNodeId) -> Option<IrNodeId> {
+        if self.uses(value) != 1 {
+            return None;
+        }
+        self.users.get(&value).copied()
+    }
+
+    pub(super) fn can_coalesce_phi_source(
+        &self, module: &ir::Module, predecessor: IrNodeId, target: IrNodeId, phi: IrNodeId, source: IrNodeId,
+    ) -> bool {
+        if self.sole_user(source) != Some(phi) || !self.needs_local(source) {
+            return false;
+        }
+
+        match module.node(source) {
+            // parameter slots already contain the incoming value and the sole use
+            // check guarantees that overwriting one on other edges is harmless
+            Some(IrNode::FunctionParameter(_)) => return true,
+            Some(IrNode::Constant(_) | IrNode::Phi { .. }) | None => return false,
+            Some(node) if !produces_value(node) => return false,
+            Some(_) => {},
+        }
+
+        let Some(schedule) = self.schedule(predecessor) else {
+            return false;
+        };
+        let Some(source_position) = schedule.iter().position(|instruction| *instruction == source) else {
+            return false;
+        };
+        let Some(terminator) = schedule.last() else {
+            return false;
+        };
+        if !matches!(module.node(*terminator), Some(IrNode::Branch(actual)) if *actual == target) {
+            return false;
+        }
+
+        // storing the source directly into the phi local overwrites the phi's
+        // current value before the edge, only permit code after the source when
+        // it cannot observe that value or transfer control before the edge
+        for instruction in &schedule[source_position + 1..schedule.len() - 1] {
+            let Some(node) = module.node(*instruction) else {
+                return false;
+            };
+            if node.operands().contains(&phi) || (emits_code(node) && node.effect() != SideEffect::Pure) {
+                return false;
+            }
+        }
+
+        // parallel copies may still need the old phi value as another phi's
+        // source, such an edge must keep separate locals until all loads finish
+        let Some(target_instructions) = module.block(target) else {
+            return false;
+        };
+        for instruction in target_instructions {
+            let Some(IrNode::Phi { operands }) = module.node(*instruction) else {
+                continue;
+            };
+
+            if operands
+                .iter()
+                .any(|operand| operand.block == predecessor && operand.value == phi)
+            {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 fn reorder_pure_runs(

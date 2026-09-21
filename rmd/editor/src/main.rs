@@ -715,6 +715,7 @@ impl Drop for App {
 fn bake_options(settings: &Settings, environment: Option<&std::path::Path>) -> BakeOptions {
     BakeOptions {
         enabled: editor::environment::baking_enabled(settings.bake_enabled),
+        optimizations_enabled: settings.optimizations_enabled,
         profile: environment
             .and_then(|path| settings.profile_for(path))
             .map(core::path::TreePath::parse),
@@ -826,6 +827,9 @@ mod tests {
             options.forced_profile,
             Some(editor::environment::BundledProfile::Tgstation)
         );
+        assert!(options.optimizations_enabled);
+        settings.optimizations_enabled = false;
+        assert!(!bake_options(&settings, Some(environment)).optimizations_enabled);
         assert_eq!(bake_options(&settings, None).forced_profile, None);
     }
 }

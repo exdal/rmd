@@ -137,49 +137,20 @@ impl<'a> IrModuleBuilder<'a> {
         id
     }
 
-    pub fn finish(mut self) -> Module {
+    pub fn finish(self) -> Module { self.finish_with_optimizations(true).0 }
+
+    pub fn finish_with_optimizations(mut self, enabled: bool) -> (Module, opt::OptimizationTimings) {
         self.link_global_function_calls();
-        // remove instructions after any branch nodes, and repair phi predecessor
-        // lists after the removed control-flow edges disappear.
+        // raw lowering can leave instructions after a terminating operation
         crate::opt::canonicalize_terminators(&mut self.module);
-
-        crate::opt::simplify_phis(&mut self.module);
-
-        // better constant propagation
-        // this:
-        //  %1 = 2 + 3
-        //  %2 = %1 * 4
-        //  return %2
-        // becomes:
-        //  return 20
-        crate::opt::sparse_constant_propagation(&mut self.module);
-
-        // constant branches can leave blocks with no executable path from a
-        // procedure entry, remove those blocks and simplify the phis they fed
-        crate::opt::eliminate_unreachable_blocks(&mut self.module);
-        crate::opt::simplify_phis(&mut self.module);
-
-        // simplify local instruction patterns exposed by constant and phi propagation
-        crate::opt::peephole(&mut self.module);
-
-        // remove stores superseded before their values can be observed
-        crate::opt::eliminate_dead_stores(&mut self.module);
-
-        // remove unused computations whose evaluation has no observable effect
-        crate::opt::eliminate_dead_code(&mut self.module);
-
-        // combine straight-line blocks and remove their intermediate jumps
-        crate::opt::merge_linear_blocks(&mut self.module);
-
-        // redirect edges around blocks that only forward to another block
-        crate::opt::eliminate_forwarding_blocks(&mut self.module);
+        let timings = crate::opt::run_optimizations(&mut self.module, enabled);
 
         #[cfg(debug_assertions)]
         if let Err(error) = crate::verify(&self.module) {
             panic!("lowering produced invalid IR: {error}");
         }
 
-        self.module
+        (self.module, timings)
     }
 
     pub fn unresolved_new(&self) -> &[UnresolvedNew] { &self.unresolved_new }
@@ -1901,7 +1872,9 @@ mod tests {
          += i\n\tswitch(n)\n\t\tif(1 to 5)\n\t\t\tn = a ? 1 : 2\n\t\telse\n\t\t\tn = 0\n\treturn n\n",
     ];
 
-    fn lower(source: &str) -> Module {
+    fn lower(source: &str) -> Module { lower_with_optimizations(source, true).0 }
+
+    fn lower_with_optimizations(source: &str, enabled: bool) -> (Module, opt::OptimizationTimings) {
         let (tokens, _) = lexer::tokenize(source);
         let ast = ast::parse(&tokens).expect("fixture should parse");
         let mut builder = IrModuleBuilder::new(&ast);
@@ -1921,7 +1894,29 @@ mod tests {
             );
         }
 
-        builder.finish()
+        builder.finish_with_optimizations(enabled)
+    }
+
+    #[test]
+    fn disabling_optimizations_keeps_only_phi_simplification() {
+        let (module, timings) = lower_with_optimizations(
+            "/proc/t(condition)\n\tvar/value = 1\n\tif(condition)\n\t\tvalue = 1\n\treturn value + 0\n",
+            false,
+        );
+
+        assert!(!module.nodes.iter().any(|node| matches!(node, IrNode::Phi { .. })));
+        assert!(
+            module
+                .nodes
+                .iter()
+                .any(|node| matches!(node, IrNode::Binary { op: BinaryOp::Add, .. }))
+        );
+        assert_eq!(timings.samples(), 1);
+        assert_eq!(
+            timings.average(opt::OptimizationPass::Peephole),
+            std::time::Duration::ZERO
+        );
+        verify(&module).expect("phi-only lowering should produce valid IR");
     }
 
     fn blocks(module: &Module) -> Vec<(IrNodeId, Vec<IrNodeId>)> {
@@ -2080,6 +2075,15 @@ mod tests {
             let module = lower(source);
 
             crate::verify(&module).unwrap_or_else(|error| panic!("invalid IR for `{source}`: {error}"));
+        }
+    }
+
+    #[test]
+    fn every_phi_only_lowered_shape_passes_verification() {
+        for source in SHAPES {
+            let (module, _) = lower_with_optimizations(source, false);
+
+            crate::verify(&module).unwrap_or_else(|error| panic!("invalid phi-only IR for `{source}`: {error}"));
         }
     }
 

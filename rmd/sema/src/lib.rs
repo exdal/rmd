@@ -43,11 +43,20 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    pub fn finish(mut self) -> (ObjectTree, ir::Module, Vec<SemaError>) {
+    pub fn finish(self) -> (ObjectTree, ir::Module, Vec<SemaError>) {
+        let (tree, module, errors, _) = self.finish_with_optimizations(true);
+
+        (tree, module, errors)
+    }
+
+    pub fn finish_with_optimizations(
+        mut self, enabled: bool,
+    ) -> (ObjectTree, ir::Module, Vec<SemaError>, ir::opt::OptimizationTimings) {
         self.tree.resolve_parent_types();
         self.resolve_new_types();
+        let (module, timings) = self.module.finish_with_optimizations(enabled);
 
-        (self.tree, self.module.finish(), self.errors)
+        (self.tree, module, self.errors, timings)
     }
 
     fn resolve_new_types(&mut self) {
@@ -335,6 +344,15 @@ pub fn analyze(ast: &AST) -> (ObjectTree, ir::Module, Vec<SemaError>) {
     analyzer.add();
 
     analyzer.finish()
+}
+
+pub fn analyze_with_optimizations(
+    ast: &AST, enabled: bool,
+) -> (ObjectTree, ir::Module, Vec<SemaError>, ir::opt::OptimizationTimings) {
+    let mut analyzer = Analyzer::new(ast);
+    analyzer.add();
+
+    analyzer.finish_with_optimizations(enabled)
 }
 
 pub fn lookup_var<'a>(tree: &'a ObjectTree, path: &TreePath, name: &Identifier) -> Option<&'a Value> {

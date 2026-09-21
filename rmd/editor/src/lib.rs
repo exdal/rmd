@@ -59,6 +59,7 @@ pub struct Environment {
     /// Runtime-view sources, retained even when bytecode generation fails.
     pub bake_files: Arc<[PathBuf]>,
     pub bake_options: environment::BakeOptions,
+    pub optimization_timings: ir::opt::OptimizationTimings,
     pub icons: HashMap<String, Metadata>,
     pub maps: Vec<PathBuf>,
     pub files: Vec<PathBuf>,
@@ -75,6 +76,7 @@ impl Environment {
             profiles: None,
             bake_files: Arc::default(),
             bake_options: environment::BakeOptions::default(),
+            optimization_timings: ir::opt::OptimizationTimings::default(),
             icons: HashMap::new(),
             maps: Vec::new(),
             files: Vec::new(),
@@ -99,6 +101,7 @@ impl Environment {
             profiles: compiled.profiles,
             bake_files: compiled.bake_files,
             bake_options: options,
+            optimization_timings: compiled.optimization_timings,
             icons: HashMap::new(),
             maps: compiled.maps,
             files: compiled.files,

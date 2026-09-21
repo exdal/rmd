@@ -216,6 +216,15 @@ impl FunctionState {
     fn local(&self, node: IrNodeId) -> Result<LocalId, CodegenError> {
         self.locals.get(&node).copied().ok_or(CodegenError::MissingLocal(node))
     }
+
+    fn assigned_local(&self, node: IrNodeId) -> Option<LocalId> { self.locals.get(&node).copied() }
+
+    fn assign_local(&mut self, node: IrNodeId, local: LocalId) {
+        let previous = self.locals.insert(node, local);
+        if let Some(previous) = previous {
+            debug_assert_eq!(previous, local);
+        }
+    }
 }
 
 struct Generator {
@@ -412,13 +421,7 @@ impl Generator {
             }
         }
 
-        for block in state.blocks.clone() {
-            for instruction in module.block(block).ok_or(CodegenError::ExpectedBlock(block))? {
-                if matches!(module.node(*instruction), Some(IrNode::Phi { .. })) {
-                    state.reserve(*instruction);
-                }
-            }
-        }
+        assign_phi_locals(module, &mut state)?;
 
         for block in state.blocks.clone() {
             for instruction in module.block(block).ok_or(CodegenError::ExpectedBlock(block))? {
@@ -498,7 +501,7 @@ impl Generator {
                     false_block,
                 } => {
                     self.emit_value(module, state, *condition)?;
-                    let false_target = if has_phi_copies(module, *false_block)? {
+                    let false_target = if has_phi_copies(module, state, block, *false_block)? {
                         // Phi copies belong to the incoming edge so keep the false
                         // copies behind the conditional while the true copies can
                         // lead directly into the preferred fallthrough block
@@ -888,21 +891,7 @@ impl Generator {
     fn emit_phi_copies(
         &mut self, module: &ir::Module, state: &FunctionState, predecessor: IrNodeId, target: IrNodeId,
     ) -> Result<(), CodegenError> {
-        let mut copies = Vec::new();
-        for instruction in module.block(target).ok_or(CodegenError::ExpectedBlock(target))? {
-            let Some(IrNode::Phi { operands }) = module.node(*instruction) else {
-                continue;
-            };
-            let source = operands
-                .iter()
-                .find(|operand| operand.block == predecessor)
-                .map(|operand| operand.value)
-                .ok_or(CodegenError::MissingPhiOperand {
-                    phi: *instruction,
-                    predecessor,
-                })?;
-            copies.push((source, state.local(*instruction)?));
-        }
+        let copies = phi_copies(module, state, predecessor, target)?;
 
         for (source, _) in &copies {
             self.emit_value(module, state, *source)?;
@@ -1200,12 +1189,94 @@ fn label_offset(labels: &HashMap<Label, usize>, label: Label) -> Result<usize, C
     }
 }
 
-fn has_phi_copies(module: &ir::Module, target: IrNodeId) -> Result<bool, CodegenError> {
-    Ok(module
-        .block(target)
-        .ok_or(CodegenError::ExpectedBlock(target))?
+fn assign_phi_locals(module: &ir::Module, state: &mut FunctionState) -> Result<(), CodegenError> {
+    let phis = state
+        .blocks
         .iter()
-        .any(|instruction| matches!(module.node(*instruction), Some(IrNode::Phi { .. }))))
+        .copied()
+        .map(|block| {
+            module
+                .block(block)
+                .ok_or(CodegenError::ExpectedBlock(block))
+                .map(|instructions| {
+                    instructions
+                        .iter()
+                        .copied()
+                        .filter(|instruction| matches!(module.node(*instruction), Some(IrNode::Phi { .. })))
+                        .map(|phi| (block, phi))
+                        .collect::<Vec<_>>()
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+    for (target, phi) in phis {
+        let Some(IrNode::Phi { operands }) = module.node(phi) else {
+            continue;
+        };
+
+        let candidates = operands
+            .iter()
+            .filter(|operand| {
+                state
+                    .stackify
+                    .can_coalesce_phi_source(module, operand.block, target, phi, operand.value)
+            })
+            .map(|operand| operand.value)
+            .collect::<Vec<_>>();
+
+        // parameters have fixed ABI slots, prefer the first eligible fixed slot,
+        // otherwise allocate the phi before assigning its edge-dead producers
+        let existing = candidates.iter().find_map(|source| state.assigned_local(*source));
+        let local = match existing {
+            Some(local) => {
+                state.assign_local(phi, local);
+                local
+            },
+            None => state.reserve(phi),
+        };
+
+        for source in candidates {
+            if state.assigned_local(source).is_none() {
+                state.assign_local(source, local);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn phi_copies(
+    module: &ir::Module, state: &FunctionState, predecessor: IrNodeId, target: IrNodeId,
+) -> Result<Vec<(IrNodeId, LocalId)>, CodegenError> {
+    let mut copies = Vec::new();
+    for instruction in module.block(target).ok_or(CodegenError::ExpectedBlock(target))? {
+        let Some(IrNode::Phi { operands }) = module.node(*instruction) else {
+            continue;
+        };
+        let source = operands
+            .iter()
+            .find(|operand| operand.block == predecessor)
+            .map(|operand| operand.value)
+            .ok_or(CodegenError::MissingPhiOperand {
+                phi: *instruction,
+                predecessor,
+            })?;
+        let destination = state.local(*instruction)?;
+        if state.assigned_local(source) != Some(destination) {
+            copies.push((source, destination));
+        }
+    }
+
+    Ok(copies)
+}
+
+fn has_phi_copies(
+    module: &ir::Module, state: &FunctionState, predecessor: IrNodeId, target: IrNodeId,
+) -> Result<bool, CodegenError> {
+    Ok(!phi_copies(module, state, predecessor, target)?.is_empty())
 }
 
 fn block_layout(module: &ir::Module, entry: IrNodeId, reachable: &[IrNodeId]) -> Result<Vec<IrNodeId>, CodegenError> {
@@ -1529,6 +1600,109 @@ mod tests {
     }
 
     #[test]
+    fn coalesces_edge_dead_loop_updates_into_the_phi_local() {
+        let module = generate(&lower(
+            "/proc/count(n)\n\tvar/i = 0\n\twhile(i < n)\n\t\ti++\n\treturn i\n",
+        ))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+
+        assert_eq!(module.functions[0].local_count, 2, "{output}");
+        assert!(!output.contains("local2"), "{output}");
+        assert_eq!(output.matches("store_local local1").count(), 2, "{output}");
+    }
+
+    #[test]
+    fn coalesces_distinct_edge_dead_sources_into_one_phi_local() {
+        let module = generate(&lower(
+            r#"
+/proc/select_and_increment(condition, a, b)
+    var/value
+    if(condition)
+        value = a + 1
+    else
+        value = b + 1
+    return value
+"#,
+        ))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+
+        assert_eq!(module.functions[0].local_count, 4, "{output}");
+        assert!(!output.contains("local4"), "{output}");
+        assert_eq!(output.matches("store_local local3").count(), 2, "{output}");
+    }
+
+    #[test]
+    fn keeps_a_phi_copy_when_the_old_value_is_used_after_the_source() {
+        let module = generate(&lower(
+            r#"
+/proc/test(n)
+    var/i = 0
+    while(i < n)
+        var/next = i + 1
+        world.log << i
+        i = next
+    return i
+"#,
+        ))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+
+        assert_eq!(module.functions[0].local_count, 3, "{output}");
+        assert!(output.contains("store_local local2"), "{output}");
+        assert!(output.contains("load_local local2"), "{output}");
+    }
+
+    #[test]
+    fn keeps_a_phi_copy_when_the_source_has_another_user() {
+        let module = generate(&lower(
+            r#"
+/proc/test(n)
+    var/i = 0
+    while(i < n)
+        var/next = i + 1
+        world.log << next
+        i = next
+    return i
+"#,
+        ))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+
+        assert_eq!(module.functions[0].local_count, 3, "{output}");
+        assert!(output.contains("store_local local2"), "{output}");
+        assert!(output.contains("load_local local2"), "{output}");
+    }
+
+    #[test]
+    fn a_coalesced_false_edge_needs_no_copy_stub() {
+        let module = generate(&lower(
+            r#"
+/proc/test(condition, input)
+    var/value = input
+    if(condition)
+        value = 2
+    return value
+"#,
+        ))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+
+        assert_eq!(module.functions[0].local_count, 2, "{output}");
+        assert_eq!(
+            instructions
+                .iter()
+                .filter(|instruction| instruction.contains(" jump "))
+                .count(),
+            0,
+            "{output}"
+        );
+        assert_eq!(output.matches("store_local local1").count(), 1, "{output}");
+    }
+
+    #[test]
     fn conditional_true_successor_falls_through() {
         let module = generate(&lower(
             "/proc/test(condition)\n\tif(condition)\n\t\treturn 1\n\treturn 2\n",
@@ -1764,13 +1938,13 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(
-            &instructions[4..9],
+            &instructions[..5],
             [
-                "load_local local3",
-                "load_local local2",
-                "store_local local3",
-                "store_local local2",
-                "jump 0x00000014",
+                "load_local local1",
+                "load_local local0",
+                "store_local local1",
+                "store_local local0",
+                "jump 0x00000000",
             ]
         );
     }

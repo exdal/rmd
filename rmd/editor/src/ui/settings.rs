@@ -313,6 +313,9 @@ fn draw_compiler_settings(
     draw_profile_setting(ui, session, settings, loading, pending_profile);
 
     ui.separator();
+    draw_optimization_settings(ui, session, settings);
+
+    ui.separator();
     ui.text("On next load");
     ui.checkbox("Run DM appearance baking", &mut settings.bake_enabled);
 
@@ -344,6 +347,58 @@ fn draw_compiler_settings(
         ));
     }
 }
+
+fn draw_optimization_settings(ui: &Ui, session: &Session, settings: &mut Settings) {
+    ui.text("Optimization");
+    ui.checkbox("Enable compiler optimizations", &mut settings.optimizations_enabled);
+
+    let Some(environment) = session.state.environment.as_deref() else {
+        ui.text_disabled("Pass timings are available after loading a codebase.");
+
+        return;
+    };
+    let timings = environment.optimization_timings;
+    let samples = timings.samples();
+    if samples == 0 {
+        ui.text_disabled("No pass timing data for this codebase.");
+
+        return;
+    }
+
+    let run_label = if samples == 1 { "run" } else { "runs" };
+    ui.text_disabled(format!(
+        "Last load: average pass time across {samples} compiler {run_label}"
+    ));
+    ui.table("compiler-optimization-timings")
+        .flags(TableFlags::BORDERS_INNER_V | TableFlags::ROW_BG)
+        .sizing_policy(TableSizingPolicy::StretchProp)
+        .column("Pass")
+        .weight(1.0)
+        .done()
+        .column("Average")
+        .width(100.0)
+        .done()
+        .build(|ui| {
+            for pass in ir::opt::OptimizationPass::ALL {
+                if !environment.bake_options.optimizations_enabled && pass != ir::opt::OptimizationPass::SimplifyPhis {
+                    continue;
+                }
+                ui.table_next_row();
+                ui.table_next_column();
+                ui.text(pass.label());
+                ui.table_next_column();
+                ui.text(format_pass_time(timings.average(pass)));
+            }
+
+            ui.table_next_row();
+            ui.table_next_column();
+            ui.text("Total");
+            ui.table_next_column();
+            ui.text(format_pass_time(timings.average_total()));
+        });
+}
+
+fn format_pass_time(duration: std::time::Duration) -> String { format!("{:.3} ms", duration.as_secs_f64() * 1_000.0) }
 
 fn draw_profile_setting(
     ui: &Ui, session: &Session, settings: &Settings, loading: bool, pending_profile: &mut Option<ProfileReload>,

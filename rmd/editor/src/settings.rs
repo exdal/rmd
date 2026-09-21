@@ -723,6 +723,7 @@ pub(crate) struct Settings {
     pub recent: Vec<RecentMap>,
     pub profile_selections: Vec<ProfileSelection>,
     pub forced_profile_selections: Vec<ForcedProfileSelection>,
+    pub optimizations_enabled: bool,
     pub bake_enabled: bool,
 }
 
@@ -784,6 +785,7 @@ impl Default for Settings {
             recent: Vec::new(),
             profile_selections: Vec::new(),
             forced_profile_selections: Vec::new(),
+            optimizations_enabled: true,
             bake_enabled: true,
         }
     }
@@ -1001,6 +1003,7 @@ mod tests {
                 recent: Vec::new(),
                 profile_selections: Vec::new(),
                 forced_profile_selections: Vec::new(),
+                optimizations_enabled: true,
                 bake_enabled: true,
             }
         );
@@ -1174,6 +1177,7 @@ mod tests {
         assert!(settings.object_tree_line_indicators);
         assert_eq!(settings.object_tree_search, ObjectTreeSearchOptions::default());
         assert_eq!(settings.object_tree_filter, ObjectTreeFilterOptions::default());
+        assert!(settings.optimizations_enabled);
     }
 
     #[test]
@@ -1228,6 +1232,7 @@ mod tests {
                 environment: PathBuf::from("/project/colonialmarines.dme"),
                 profile: BundledProfile::Cmss13,
             }],
+            optimizations_enabled: false,
             bake_enabled: true,
         };
         settings.keybindings.rebind(
@@ -1249,6 +1254,7 @@ mod tests {
         assert!(encoded.contains("[keybindings.recent_1]"));
         assert!(encoded.contains("maximized = true"));
         assert!(encoded.contains("preferred_editor = \"zed {file}:{line}:{column}\""));
+        assert!(encoded.contains("optimizations_enabled = false"));
         assert!(encoded.contains("selection_highlight = \"tint\""));
         assert!(encoded.contains("object_tree_line_indicators = false"));
         assert!(encoded.contains("[object_tree_search]"));
@@ -1297,6 +1303,7 @@ mod tests {
             recent: Vec::new(),
             profile_selections: Vec::new(),
             forced_profile_selections: Vec::new(),
+            optimizations_enabled: true,
             bake_enabled: true,
         };
         let mut options = FrameOptions::default();
