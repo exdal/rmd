@@ -1,0 +1,2 @@
+/proc/invalid()
+	break

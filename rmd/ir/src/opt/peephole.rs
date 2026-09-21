@@ -211,6 +211,12 @@ fn resolve(replacements: &HashMap<IrNodeId, IrNodeId>, mut value: IrNodeId) -> I
 
 #[cfg(test)]
 mod tests {
+    macro_rules! fixture {
+        ($path:literal) => {
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/", $path))
+        };
+    }
+
     use core::{
         location::Location,
         path::TreePath,
@@ -266,7 +272,9 @@ mod tests {
 
     #[test]
     fn removes_numeric_identities_after_numeric_producers() {
-        let module = lower("/proc/t(x)\n\tvar/y = -x\n\ty *= 1\n\treturn list(y / 1, 1 * y, y - 0)\n");
+        let module = lower(fixture!(
+            "programs/removes_numeric_identities_after_numeric_producers.dm"
+        ));
 
         assert_eq!(
             count(&module, |node| matches!(
@@ -289,8 +297,9 @@ mod tests {
 
     #[test]
     fn preserves_identities_for_dynamic_values_and_exact_float_cases() {
-        let module =
-            lower("/proc/t(x)\n\treturn list(x * 1, (-x) + 0, (-x) ** 1, !((-x) < 1), \"x\" * 1, list(1) * 1)\n");
+        let module = lower(fixture!(
+            "programs/preserves_identities_for_dynamic_values_and_exact_float_cases.dm"
+        ));
 
         assert_eq!(
             count(&module, |node| matches!(node, IrNode::Binary { op: BinaryOp::Mul, .. })),
@@ -313,7 +322,7 @@ mod tests {
 
     #[test]
     fn collapses_exact_unary_chains() {
-        let module = lower("/proc/t(x)\n\treturn list(-(-(-x)), ~(~(~x)), ~(~x))\n");
+        let module = lower(fixture!("programs/collapses_exact_unary_chains.dm"));
 
         assert_eq!(
             count(&module, |node| matches!(node, IrNode::Unary { op: UnaryOp::Neg, .. })),
@@ -333,7 +342,9 @@ mod tests {
 
     #[test]
     fn simplifies_boolean_operations_and_inverts_equality() {
-        let module = lower("/proc/t(x, y)\n\treturn list(!(!(x == y)), (!x) == 1, !(x ~= y))\n");
+        let module = lower(fixture!(
+            "programs/simplifies_boolean_operations_and_inverts_equality.dm"
+        ));
 
         assert_eq!(
             count(&module, |node| matches!(
@@ -426,7 +437,7 @@ mod tests {
 
     #[test]
     fn updates_parameter_default_metadata() {
-        let module = lower("/proc/t(a = -external_value * 1)\n\treturn a\n");
+        let module = lower(fixture!("programs/updates_parameter_default_metadata.dm"));
         let default = module.procs[0].params[0].default.expect("default value");
 
         assert!(matches!(

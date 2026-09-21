@@ -24,6 +24,10 @@ pkgs.mkShell {
     pkgs.zenity
   ];
 
+  buildInputs = [
+    pkgs.python315
+  ];
+
   SLANG_INCLUDE_DIR = "${pkgs.shader-slang.dev}/include";
   SLANG_LIB_DIR = "${pkgs.shader-slang}/lib";
   LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";

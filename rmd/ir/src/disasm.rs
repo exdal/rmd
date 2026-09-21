@@ -568,6 +568,12 @@ fn token(out: &mut String, color: &str, text: &str, base: &str) {
 
 #[cfg(test)]
 mod tests {
+    macro_rules! fixture {
+        ($path:literal) => {
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/", $path))
+        };
+    }
+
     use core::{location::Location, path::TreePath};
 
     use super::*;
@@ -600,7 +606,9 @@ mod tests {
     #[test]
     fn disassembly_is_stable_and_names_variables() {
         assert_eq!(
-            dump(&lower("/proc/test(a = 2)\n\treturn a\n")),
+            dump(&lower(fixture!(
+                "programs/disassembly_is_stable_and_names_variables.dm"
+            ))),
             concat!(
                 "; ir module: 5 nodes, 1 constants, 0 external functions, 1 functions, 1 blocks\n",
                 "\n",
@@ -620,7 +628,9 @@ mod tests {
     #[test]
     fn a_loop_disassembles_as_blocks_and_branches() {
         assert_eq!(
-            dump(&lower("/proc/t(a)\n\twhile(a)\n\t\ta = 0\n")),
+            dump(&lower(fixture!(
+                "programs/a_loop_disassembles_as_blocks_and_branches.dm"
+            ))),
             concat!(
                 "; ir module: 13 nodes, 1 constants, 0 external functions, 1 functions, 3 blocks\n",
                 "\n",
@@ -646,7 +656,9 @@ mod tests {
 
     #[test]
     fn opcodes_and_enum_operands_are_lower_snake_case() {
-        let output = dump(&lower("/proc/t(a)\n\tsrc.value = -a + 1\n\treturn src.value\n"));
+        let output = dump(&lower(fixture!(
+            "programs/opcodes_and_enum_operands_are_lower_snake_case.dm"
+        )));
 
         assert!(output.contains("builtin src"), "{output}");
         assert!(output.contains("unary neg"), "{output}");
@@ -668,7 +680,7 @@ mod tests {
     /// Highlighting only wraps the plain dump, so the text is identical once the escapes are gone.
     #[test]
     fn highlighting_changes_nothing_but_colour() {
-        let module = lower("/proc/t(a)\n\twhile(a)\n\t\ta = 0\n");
+        let module = lower(fixture!("programs/highlighting_changes_nothing_but_colour.dm"));
         let plain = dump(&module);
         let coloured = dump_with(&module, true);
 
@@ -678,7 +690,9 @@ mod tests {
 
     #[test]
     fn selected_disassembly_omits_unreachable_procedures_and_constants() {
-        let module = lower("/proc/live()\n\treturn 1\n/proc/dead()\n\treturn 2\n");
+        let module = lower(fixture!(
+            "programs/selected_disassembly_omits_unreachable_procedures_and_constants.dm"
+        ));
         let output = dump_selected_with(&module, &HashSet::from([ProcId(0)]), false);
 
         assert!(output.contains("1 functions"), "{output}");

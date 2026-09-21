@@ -1845,31 +1845,30 @@ fn is_waitfor(stmt: &Statement) -> bool {
 
 #[cfg(test)]
 mod tests {
+    macro_rules! fixture {
+        ($path:literal) => {
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/", $path))
+        };
+    }
+
     use super::*;
 
     const SHAPES: [&str; 15] = [
-        "/proc/t(a)\n\treturn a\n",
-        "/proc/t(a)\n\tif(a)\n\t\treturn 1\n\telse if(a)\n\t\treturn 2\n\telse\n\t\treturn 3\n",
-        "/proc/t(a)\n\tvar/x = 0\n\tif(a)\n\t\tx = 1\n\treturn x\n",
-        "/proc/t(a)\n\twhile(a)\n\t\ta = a - 1\n\treturn a\n",
-        "/proc/t(a)\n\tdo\n\t\ta = a - 1\n\twhile(a)\n",
-        "/proc/t(L)\n\tfor(var/x in L)\n\t\tcontinue\n",
-        "/proc/t()\n\tfor(var/i = 1 to 10 step 2)\n\t\tbreak\n",
-        "/proc/t()\n\tvar/n = 0\n\tfor(var/i = 0, i < 10, i++)\n\t\tn += i\n\treturn n\n",
-        "/proc/t(a)\n\tswitch(a)\n\t\tif(1)\n\t\t\treturn 1\n\t\tif(2 to 4)\n\t\t\treturn 2\n\t\telse\n\t\t\treturn \
-         3\n",
-        "/proc/t(a)\n\touter:\n\t\twhile(a)\n\t\t\twhile(a)\n\t\t\t\tbreak outer\n",
-        "/proc/t()\n\ttry\n\t\tthrow 1\n\tcatch(var/e)\n\t\treturn e\n",
-        "/proc/t(a, b)\n\treturn a && b || a\n",
-        "/proc/t(a)\n\tvar/x = 0\n\tagain:\n\t\tx += 1\n\t\tif(a)\n\t\t\ta = 0\n\t\t\tgoto again\n\t\treturn x\n",
-        "/proc/t(mean, stddev)\n\tvar/cached\n\tvar/r1\n\tvar/r2\n\tvar/working\n\tif(cached != null)\n\t\tr1 = \
-         cached\n\t\tcached = null\n\telse\n\t\tdo\n\t\t\tr1 = rand(-10000, 10000) / 10000\n\t\t\tr2 = rand(-10000, \
-         10000) / 10000\n\t\t\tworking = r1 * r1 + r2 * r2\n\t\twhile(working >= 1 || working == 0)\n\t\tworking = \
-         sqrt(-2 * log(working) / working)\n\t\tr1 *= working\n\t\tcached = r2 * working\n\treturn mean + stddev * \
-         r1\n",
-        "/proc/t(list/L, a, b)\n\tvar/n = 0\n\touter:\n\t\tfor(var/mob/M in L)\n\t\t\tfor(var/i = 1 to \
-         10)\n\t\t\t\tif(a && b)\n\t\t\t\t\tcontinue outer\n\t\t\t\telse if(a || i > 3)\n\t\t\t\t\tbreak\n\t\t\t\tn \
-         += i\n\tswitch(n)\n\t\tif(1 to 5)\n\t\t\tn = a ? 1 : 2\n\t\telse\n\t\t\tn = 0\n\treturn n\n",
+        fixture!("programs/shape-simple-return.dm"),
+        fixture!("programs/shape-conditional-chain.dm"),
+        fixture!("programs/shape-conditional-phi.dm"),
+        fixture!("programs/shape-while-loop.dm"),
+        fixture!("programs/shape-do-while-loop.dm"),
+        fixture!("programs/shape-list-iteration.dm"),
+        fixture!("programs/shape-range-loop.dm"),
+        fixture!("programs/shape-standard-loop.dm"),
+        fixture!("programs/switch-shape.dm"),
+        fixture!("programs/shape-labelled-break.dm"),
+        fixture!("programs/shape-try-catch.dm"),
+        fixture!("programs/shape-logical-expression.dm"),
+        fixture!("programs/shape-goto-loop.dm"),
+        fixture!("programs/gaussian-shape.dm"),
+        fixture!("programs/combined-control-flow-shape.dm"),
     ];
 
     fn lower(source: &str) -> Module { lower_with_optimizations(source, true).0 }
@@ -1900,7 +1899,7 @@ mod tests {
     #[test]
     fn disabling_optimizations_keeps_only_phi_simplification() {
         let (module, timings) = lower_with_optimizations(
-            "/proc/t(condition)\n\tvar/value = 1\n\tif(condition)\n\t\tvalue = 1\n\treturn value + 0\n",
+            fixture!("programs/disabling_optimizations_keeps_only_phi_simplification.dm"),
             false,
         );
 
@@ -2089,7 +2088,9 @@ mod tests {
 
     #[test]
     fn a_throw_removes_its_following_edge_and_phi_operand() {
-        let module = lower("/proc/t(a)\n\tvar/x = 0\n\tif(a)\n\t\tthrow 1\n\t\tx = 2\n\telse\n\t\tx = 3\n\treturn x\n");
+        let module = lower(fixture!(
+            "programs/a_throw_removes_its_following_edge_and_phi_operand.dm"
+        ));
         let throwing_block = blocks(&module)
             .into_iter()
             .find(|(_, instructions)| {
@@ -2119,7 +2120,9 @@ mod tests {
 
     #[test]
     fn metadata_does_not_reference_defaults_after_a_noreturn_default() {
-        let module = lower("/proc/t(a = input(), b = a + 2)\n\treturn b\n");
+        let module = lower(fixture!(
+            "programs/metadata_does_not_reference_defaults_after_a_noreturn_default.dm"
+        ));
 
         assert!(matches!(
             module.procs[0].params[0]
@@ -2133,7 +2136,9 @@ mod tests {
 
     #[test]
     fn constants_are_module_scoped_and_interned_across_procedures() {
-        let module = lower("/proc/a()\n\treturn 1\n/proc/b()\n\tvar/x = 1\n\treturn x\n");
+        let module = lower(fixture!(
+            "programs/constants_are_module_scoped_and_interned_across_procedures.dm"
+        ));
 
         assert_eq!(module.constants.len(), 1, "{:?}", nodes(&module));
         let constant = module.constants[0];
@@ -2158,7 +2163,9 @@ mod tests {
 
     #[test]
     fn direct_global_calls_target_function_nodes_including_forward_calls() {
-        let module = lower("/proc/invoke()\n\treturn target(1)\n/proc/target(value)\n\treturn value\n");
+        let module = lower(fixture!(
+            "programs/direct_global_calls_target_function_nodes_including_forward_calls.dm"
+        ));
         let callee = module.procs[1].function;
         let calls = module
             .nodes
@@ -2181,7 +2188,9 @@ mod tests {
 
     #[test]
     fn nonlocal_variables_use_explicit_read_and_write_nodes() {
-        let module = lower("/proc/test()\n\texternal_value = external_value + 1\n");
+        let module = lower(fixture!(
+            "programs/nonlocal_variables_use_explicit_read_and_write_nodes.dm"
+        ));
         let variables = module
             .nodes
             .iter()
@@ -2210,8 +2219,9 @@ mod tests {
 
     #[test]
     fn external_functions_are_module_scoped_and_interned() {
-        let module =
-            lower("/proc/a(value)\n\treturn third_party(value)\n/proc/b(value)\n\treturn third_party(value)\n");
+        let module = lower(fixture!(
+            "programs/external_functions_are_module_scoped_and_interned.dm"
+        ));
 
         assert_eq!(module.external_functions.len(), 1);
         let external = module.external_functions[0];
@@ -2240,7 +2250,9 @@ mod tests {
     /// The induction variable becomes a φ, and `end` and `step` stay plain values in the preheader.
     #[test]
     fn a_counted_loop_merges_its_induction_variable_with_a_phi() {
-        let module = lower("/proc/t()\n\tfor(var/i = 1 to 10 step 2)\n\t\ti = i + 1\n");
+        let module = lower(fixture!(
+            "programs/a_counted_loop_merges_its_induction_variable_with_a_phi.dm"
+        ));
         let phis = module
             .nodes
             .iter()
@@ -2253,7 +2265,9 @@ mod tests {
 
     #[test]
     fn a_standard_loop_carries_its_incremented_induction_variable() {
-        let module = lower("/proc/t(n)\n\tfor(var/i = 0, i < n, i++)\n\t\tcontinue\n\treturn i\n");
+        let module = lower(fixture!(
+            "programs/a_standard_loop_carries_its_incremented_induction_variable.dm"
+        ));
         let phis = module
             .nodes
             .iter()
@@ -2282,7 +2296,7 @@ mod tests {
     /// `a && b` evaluates `b` only when it must, so it is two blocks and a φ.
     #[test]
     fn short_circuit_becomes_branches_and_a_phi() {
-        let module = lower("/proc/t(a, b)\n\treturn a && b\n");
+        let module = lower(fixture!("programs/short_circuit_becomes_branches_and_a_phi.dm"));
 
         assert!(has(&module, "Phi"), "{:?}", nodes(&module));
         assert_eq!(
@@ -2298,7 +2312,7 @@ mod tests {
     /// A write to a local is SSA bookkeeping; a write to a field is a real memory instruction.
     #[test]
     fn field_and_index_writes_stay_instructions() {
-        let module = lower("/proc/t(o, L)\n\to.name = 1\n\tL[1] = 2\n");
+        let module = lower(fixture!("programs/field_and_index_writes_stay_instructions.dm"));
 
         assert!(has(&module, "SetField"), "{:?}", nodes(&module));
         assert!(has(&module, "SetIndex"), "{:?}", nodes(&module));
@@ -2306,7 +2320,7 @@ mod tests {
 
     #[test]
     fn statements_after_a_return_are_dropped() {
-        let module = lower("/proc/t()\n\treturn 1\n\treturn 2\n");
+        let module = lower(fixture!("programs/statements_after_a_return_are_dropped.dm"));
         let returns = module
             .nodes
             .iter()
@@ -2318,7 +2332,9 @@ mod tests {
 
     #[test]
     fn control_flow_after_a_return_does_not_restore_reachability() {
-        let module = lower("/proc/t(a)\n\treturn 1\n\tif(a)\n\t\treturn 2\n");
+        let module = lower(fixture!(
+            "programs/control_flow_after_a_return_does_not_restore_reachability.dm"
+        ));
 
         assert_eq!(blocks(&module).len(), 1, "{:?}", nodes(&module));
         assert!(!has(&module, "ConditionalBranch"), "{:?}", nodes(&module));
@@ -2326,7 +2342,9 @@ mod tests {
 
     #[test]
     fn builder_resets_control_flow_state_between_procedures() {
-        let module = lower("/proc/a()\n\tagain:\n\t\treturn 1\n/proc/b()\n\tagain:\n\t\treturn 2\n");
+        let module = lower(fixture!(
+            "programs/builder_resets_control_flow_state_between_procedures.dm"
+        ));
         let first_entry = module.procs[0].body;
         let second_entry = module.procs[1].body;
         let second_return = module
@@ -2376,7 +2394,9 @@ mod tests {
 
     #[test]
     fn an_endless_loop_does_not_fall_through_without_a_break() {
-        let module = lower("/proc/t()\n\tfor()\n\t\tcontinue\n\treturn 1\n");
+        let module = lower(fixture!(
+            "programs/an_endless_loop_does_not_fall_through_without_a_break.dm"
+        ));
 
         assert!(!module.nodes.iter().any(|node| {
             matches!(node, IrNode::Return(Some(value)) if matches!(module.node(*value), Some(IrNode::Constant(Value::Num(1.0)))))
@@ -2385,9 +2405,7 @@ mod tests {
 
     #[test]
     fn a_backward_goto_contributes_to_the_labels_phi() {
-        let module = lower(
-            "/proc/t(a)\n\tvar/x = 0\n\tagain:\n\t\tx += 1\n\t\tif(a)\n\t\t\ta = 0\n\t\t\tgoto again\n\t\treturn x\n",
-        );
+        let module = lower(fixture!("programs/a_backward_goto_contributes_to_the_labels_phi.dm"));
 
         assert!(
             module
@@ -2401,7 +2419,9 @@ mod tests {
 
     #[test]
     fn a_range_bound_reads_the_value_from_before_loop_initialization() {
-        let module = lower("/proc/t(i)\n\tfor(i = 1 to i)\n\t\tbreak\n");
+        let module = lower(fixture!(
+            "programs/a_range_bound_reads_the_value_from_before_loop_initialization.dm"
+        ));
         let parameter = module
             .nodes
             .iter()
@@ -2418,7 +2438,7 @@ mod tests {
     /// `break outer` leaves the outer loop, so it branches where the inner loop never does.
     #[test]
     fn a_labelled_break_targets_the_outer_loop_exit() {
-        let module = lower("/proc/t(a)\n\touter:\n\t\twhile(a)\n\t\t\twhile(a)\n\t\t\t\tbreak outer\n");
+        let module = lower(fixture!("programs/a_labelled_break_targets_the_outer_loop_exit.dm"));
         let merges = module
             .nodes
             .iter()

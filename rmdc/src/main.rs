@@ -1037,15 +1037,7 @@ mod tests {
     #[test]
     fn tree_dump_lists_members_in_dm_syntax_and_stable_order() {
         let arena = StrArena::new();
-        let source = concat!(
-            "/obj/item\n",
-            "\tvar/global/static/const/final/tmp/damage = 2\n",
-            "\tvar/mob/living/owner = null\n",
-            "\tname = \"item\"\n",
-            "\tproc/use(target)\n",
-            "/mob\n",
-            "\tverb/look(user)\n",
-        );
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tree_render.dm"));
         let mut sources = SourceMap::new();
         let entry = sources.add(&arena, "/project/game/entry.dm", source.to_string());
         let (tokens, errors) = lexer::tokenize(source);

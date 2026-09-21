@@ -39,6 +39,12 @@ use crate::{
     world::Position,
 };
 
+macro_rules! fixture {
+    ($path:literal) => {
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/", $path))
+    };
+}
+
 fn analyze_fixture(source: &str) -> (ObjectTree, ir::Module) {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -94,18 +100,7 @@ fn run(source: &str, name: &str) -> GenericValue {
         .expect("fixture should execute")
 }
 
-const WALLS: &str = r#"
-/turf/wall
-    icon_state = "static"
-/datum/demir/test/bake(atom/target)
-    if(!istype(target, /turf/wall))
-        return
-    var/junction = 0
-    for(var/direction in list(1, 2, 4, 8))
-        if(istype(get_step(target, direction), /turf/wall))
-            junction |= direction
-    target.icon_state = "wall-[junction]"
-"#;
+const WALLS: &str = fixture!("programs/profile-wall-bake.dm");
 
 fn wall_patch(tree: &ObjectTree) -> Vec<Atom> {
     let ty = tree
@@ -148,11 +143,11 @@ fn baked_state(bake: &Bake, id: u64) -> Option<&str> {
 
 #[test]
 fn only_a_demir_subtype_makes_a_profile() {
-    let (bare, _) = compile("/turf/wall\n    proc/Initialize(mapload)\n        return\n");
+    let (bare, _) = compile(fixture!("programs/only_a_demir_subtype_makes_a_profile-bare.dm"));
     let (profiled, _) = compile(WALLS);
     // A subtype with no hook bodies at all is still a profile: it bakes nothing, which is what a
     // codebase asking for the editor without appearances wants.
-    let (empty, _) = compile("/datum/demir/test\n    var/unused = 1\n");
+    let (empty, _) = compile(fixture!("programs/only_a_demir_subtype_makes_a_profile-empty.dm"));
 
     assert_eq!(profile_type(&bare), Err(ProfileError::Missing));
     assert!(!has_profile(&bare));
@@ -162,7 +157,9 @@ fn only_a_demir_subtype_makes_a_profile() {
 
 #[test]
 fn profile_definition_resolves_the_complete_hook_abi() {
-    let (tree, _) = analyze_fixture("/datum/demir/test\n");
+    let (tree, _) = analyze_fixture(fixture!(
+        "programs/profile_definition_resolves_the_complete_hook_abi.dm"
+    ));
     let profile = profile_type(&tree).expect("default profile");
     let definition = ProfileDefinition::resolve(&tree, profile);
     let resolved = ProfileHook::ALL
@@ -175,16 +172,9 @@ fn profile_definition_resolves_the_complete_hook_abi() {
 
 #[test]
 fn an_explicit_default_is_not_inherited_by_its_variants() {
-    let (tree, _) = compile(
-        r#"
-/datum/demir/base
-    default = TRUE
-    bake(atom/target)
-        target.icon_state = "base"
-/datum/demir/base/debug/bake(atom/target)
-    target.icon_state = "debug"
-"#,
-    );
+    let (tree, _) = compile(fixture!(
+        "programs/an_explicit_default_is_not_inherited_by_its_variants.dm"
+    ));
     let catalog = profile_catalog(&tree).expect("valid profile catalog");
     let chosen = profile_type(&tree).expect("default profile");
     let debug = selected_profile_type(&tree, Some(&TreePath::parse("/datum/demir/base/debug")))
@@ -206,14 +196,7 @@ fn an_explicit_default_is_not_inherited_by_its_variants() {
 
 #[test]
 fn profiles_require_one_explicit_default() {
-    let (tree, _) = compile(
-        r#"
-/datum/demir/goon/bake(atom/target)
-    return
-/datum/demir/tg/bake(atom/target)
-    return
-"#,
-    );
+    let (tree, _) = compile(fixture!("programs/profiles_require_one_explicit_default.dm"));
 
     assert_eq!(
         profile_type(&tree),
@@ -227,14 +210,7 @@ fn profiles_require_one_explicit_default() {
 
 #[test]
 fn multiple_explicit_defaults_are_rejected() {
-    let (tree, _) = compile(
-        r#"
-/datum/demir/goon
-    default = TRUE
-/datum/demir/tg
-    default = TRUE
-"#,
-    );
+    let (tree, _) = compile(fixture!("programs/multiple_explicit_defaults_are_rejected.dm"));
 
     assert_eq!(
         profile_type(&tree),
@@ -249,19 +225,7 @@ fn multiple_explicit_defaults_are_rejected() {
 /// copying it.
 #[test]
 fn a_profile_hook_chains_to_its_parent() {
-    let (tree, module) = compile(
-        r#"
-/turf/wall
-    icon_state = "static"
-/datum/demir/base
-    default = TRUE
-    bake(atom/target)
-        target.icon_state = "base"
-/datum/demir/base/debug/bake(atom/target)
-    ..()
-    target.icon_state = "[target.icon_state]-debug"
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/a_profile_hook_chains_to_its_parent.dm"));
     let profile =
         selected_profile_type(&tree, Some(&TreePath::parse("/datum/demir/base/debug"))).expect("debug profile");
     let bake = Bake::new_with_profile(
@@ -285,24 +249,9 @@ fn a_profile_hook_chains_to_its_parent() {
 /// A proc that is not itself a hook has no `src` of its own to read the profile from.
 #[test]
 fn demir_profile_reaches_the_instance_from_an_ordinary_proc() {
-    let (tree, module) = compile(
-        r#"
-/turf/wall
-    icon_state = "static"
-    proc/demir_style()
-        var/datum/demir/test/profile = demir_profile()
-        return profile.style
-/datum/demir/test
-    var/style
-
-    New()
-        ..()
-        style = "lit"
-
-    bake(atom/target)
-        target.icon_state = target.demir_style()
-"#,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/demir_profile_reaches_the_instance_from_an_ordinary_proc.dm"
+    ));
     let bake = Bake::new(
         &tree,
         &module,
@@ -325,20 +274,7 @@ fn demir_profile_reaches_the_instance_from_an_ordinary_proc() {
 /// cost every cache hit in a real bake.
 #[test]
 fn a_hook_reading_its_neighbours_still_caches() {
-    let (tree, module) = compile(
-        r#"
-/turf/wall
-    icon_state = "static"
-    var/smooth = 1
-/datum/demir/test/bake(atom/target)
-    var/junction = 0
-    for(var/direction in list(1, 2, 4, 8))
-        var/turf/wall/neighbour = get_step(target, direction)
-        if(istype(neighbour) && neighbour.smooth)
-            junction |= direction
-    target.icon_state = "[junction]"
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/a_hook_reading_its_neighbours_still_caches.dm"));
     let ty = tree.id_of(&TreePath::parse("/turf/wall")).expect("wall type");
     let atoms = (1..=20)
         .map(|x| Atom {
@@ -368,29 +304,9 @@ fn a_hook_reading_its_neighbours_still_caches() {
 
 #[test]
 fn profile_connections_match_complementary_roles_from_either_endpoint() {
-    let (tree, module) = compile(
-        r#"
-/obj/source
-    var/channel
-/obj/target
-    var/channel
-/obj/both
-    var/channel
-/datum/demir/test/connections(atom/target)
-    var/list/connections = list()
-    if(istype(target, /obj/source))
-        var/obj/source/source = target
-        connections[source.channel] = 1
-    else if(istype(target, /obj/target))
-        var/obj/target/destination = target
-        connections[destination.channel] = 2
-    else if(istype(target, /obj/both))
-        var/obj/both/both = target
-        connections[both.channel] = 3
-    target.name = "connection hook writes are rolled back"
-    return connections
-"#,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/profile_connections_match_complementary_roles_from_either_endpoint.dm"
+    ));
     let atom = |instance, path: &str, channel: &str| Atom {
         instance,
         ty: tree.id_of(&TreePath::parse(path)).expect("connection fixture type"),
@@ -432,22 +348,9 @@ fn profile_connections_match_complementary_roles_from_either_endpoint() {
 
 #[test]
 fn profile_highlights_are_clipped_edged_and_restored_across_edits() {
-    let (tree, module) = compile(
-        r##"
-/obj/port
-    var/span = 0
-/datum/demir/test/highlights(atom/target)
-    if(!istype(target, /obj/port))
-        return
-    var/obj/port/port = target
-    target.name = "highlight hook writes are rolled back"
-    return list(
-        list("x" = -1, "y" = -1, "width" = port.span, "height" = port.span,
-             "color" = "#00ff00", "fill" = 0.5, "when" = 4, "label" = "span"),
-        list("tiles" = list(list(0, 2), list(1, 2))),
-    )
-"##,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/profile_highlights_are_clipped_edged_and_restored_across_edits.dm"
+    ));
     let port = |instance, position, span: f32| Atom {
         instance,
         ty: tree
@@ -522,24 +425,9 @@ fn profile_highlights_are_clipped_edged_and_restored_across_edits() {
 
 #[test]
 fn profile_ui_draws_widgets_and_reads_back_what_the_editor_remembers() {
-    let (tree, module) = compile(
-        r##"
-/obj/panel
-    var/glow = 40
-/datum/demir/test/ui(atom/target)
-    if(!imgui_begin("Panel"))
-        imgui_end()
-        return
-    imgui_text("[target.name]")
-    if(imgui_button("Reset"))
-        imgui_text("reset")
-    var/obj/panel/panel = target
-    target.name = "ui writes are rolled back"
-    if(imgui_checkbox("lit", 1))
-        imgui_slider("glow", panel.glow, 0, 255)
-    imgui_end()
-"##,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/profile_ui_draws_widgets_and_reads_back_what_the_editor_remembers.dm"
+    ));
     let mut bake = Bake::new(
         &tree,
         &module,
@@ -625,12 +513,7 @@ fn profile_ui_draws_widgets_and_reads_back_what_the_editor_remembers() {
 
 #[test]
 fn profile_ui_rejects_drawing_outside_a_window() {
-    let (tree, module) = compile(
-        r#"
-/datum/demir/test/ui(atom/target)
-    imgui_text("orphan")
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/profile_ui_rejects_drawing_outside_a_window.dm"));
     let mut bake = Bake::new(
         &tree,
         &module,
@@ -651,12 +534,7 @@ fn profile_ui_rejects_drawing_outside_a_window() {
 
 #[test]
 fn imgui_procs_are_blocked_outside_the_ui_hook() {
-    let (tree, module) = compile(
-        r#"
-/datum/demir/test/bake(atom/target)
-    imgui_text("nope")
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/imgui_procs_are_blocked_outside_the_ui_hook.dm"));
     let fault = Runtime::default()
         .run(
             &tree,
@@ -676,36 +554,9 @@ fn imgui_procs_are_blocked_outside_the_ui_hook() {
 
 #[test]
 fn profile_ui_state_survives_on_the_profile_and_a_committed_frame_rebakes() {
-    let (tree, module) = compile(
-        r##"
-/obj/lamp
-
-/datum/demir/test
-    var/lit = 1
-
-    New()
-        ..()
-        demir_define_group(2, /obj/lamp)
-
-    ui(atom/target)
-        if(!imgui_begin("Panel"))
-            imgui_end()
-            return
-        var/checked = imgui_checkbox("lit", src.lit)
-        if(checked != src.lit)
-            src.lit = checked
-            demir_rebake(DEMIR_BAKE_APPEARANCE | DEMIR_BAKE_LIGHT, 2)
-        imgui_end()
-
-    light(atom/target)
-        if(src.lit)
-            target.demir_light_range = 3
-            target.demir_light_power = 1
-
-    bake(atom/target)
-        target.icon_state = src.lit ? "on" : "off"
-"##,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/profile_ui_state_survives_on_the_profile_and_a_committed_frame_rebakes.dm"
+    ));
     let mut bake = Bake::new(
         &tree,
         &module,
@@ -783,34 +634,9 @@ fn profile_ui_state_survives_on_the_profile_and_a_committed_frame_rebakes() {
 
 #[test]
 fn profile_ui_radios_pick_one_mode_and_the_rebake_follows_it() {
-    let (tree, module) = compile(
-        r##"
-/datum/panel_state
-    var/mode = 0
-
-/obj/pipe
-    alpha = 255
-
-var/global/datum/panel_state/panel
-
-/datum/demir/test/New()
-    panel = new /datum/panel_state
-
-/datum/demir/test/ui(atom/target)
-    if(!imgui_begin("Panel"))
-        imgui_end()
-        return
-    if(imgui_radio("Hidden", panel.mode == 0))
-        panel.mode = 0
-    if(imgui_radio("Shown", panel.mode == 1))
-        panel.mode = 1
-        demir_rebake(DEMIR_BAKE_APPEARANCE)
-    imgui_end()
-
-/datum/demir/test/bake(atom/target)
-    target.alpha = panel.mode ? 128 : 0
-"##,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/profile_ui_radios_pick_one_mode_and_the_rebake_follows_it.dm"
+    ));
     let mut bake = Bake::new(
         &tree,
         &module,
@@ -894,35 +720,9 @@ var/global/datum/panel_state/panel
 
 #[test]
 fn a_rebake_group_narrows_the_pass_to_the_placements_that_carry_it() {
-    let (tree, module) = compile(
-        r##"
-/datum/panel_state
-    var/tint = 0
-
-/obj/cable
-/obj/pipe
-
-var/global/datum/panel_state/panel
-
-/datum/demir/test/New()
-    panel = new /datum/panel_state
-    demir_define_group(1, /obj/cable)
-    demir_define_group(2, /obj/pipe)
-
-/datum/demir/test/ui(atom/target)
-    if(!imgui_begin("Panel"))
-        imgui_end()
-        return
-    var/tint = imgui_slider("tint", panel.tint, 0, 255)
-    if(tint != panel.tint)
-        panel.tint = tint
-        demir_rebake(DEMIR_BAKE_APPEARANCE, 1)
-    imgui_end()
-
-/datum/demir/test/bake(atom/target)
-    target.alpha = panel.tint
-"##,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/a_rebake_group_narrows_the_pass_to_the_placements_that_carry_it.dm"
+    ));
     let atom = |instance: u64, path: &str, x: i32| Atom {
         instance,
         ty: tree.id_of(&TreePath::parse(path)).expect("fixture type"),
@@ -980,25 +780,9 @@ var/global/datum/panel_state/panel
 
 #[test]
 fn a_rebake_group_covers_the_subtypes_of_what_it_named() {
-    let (tree, module) = compile(
-        r##"
-/obj/cable
-/obj/cable/layered
-/obj/pipe
-
-/datum/demir/test/New()
-    demir_define_group(1, /obj/cable)
-
-/datum/demir/test/ui(atom/target)
-    if(imgui_begin("Panel"))
-        if(imgui_button("Redo"))
-            demir_rebake(DEMIR_BAKE_APPEARANCE, 1)
-    imgui_end()
-
-/datum/demir/test/bake(atom/target)
-    target.alpha = 100
-"##,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/a_rebake_group_covers_the_subtypes_of_what_it_named.dm"
+    ));
     let atom = |instance: u64, path: &str, x: i32| Atom {
         instance,
         ty: tree.id_of(&TreePath::parse(path)).expect("fixture type"),
@@ -1036,12 +820,9 @@ fn a_rebake_group_covers_the_subtypes_of_what_it_named() {
 
 #[test]
 fn defining_a_rebake_group_outside_initialize_is_blocked() {
-    let (tree, module) = compile(
-        r#"
-/datum/demir/test/bake(atom/target)
-    demir_define_group(1, /obj)
-"#,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/defining_a_rebake_group_outside_initialize_is_blocked.dm"
+    ));
     let fault = Runtime::default()
         .run(
             &tree,
@@ -1061,26 +842,9 @@ fn defining_a_rebake_group_outside_initialize_is_blocked() {
 
 #[test]
 fn node_groups_accept_blocker_lists_merge_and_allow_an_unblocked_group() {
-    let (tree, module) = compile(
-        r#"
-/obj/cable
-/obj/pipe
-/obj/grille
-/obj/window
-/obj/bad
-/turf/closed
-
-/datum/demir/test
-    New()
-        ..()
-        demir_node_group(/obj/cable, list(/turf/closed, /obj/grille, /obj/window, /turf/closed))
-        demir_node_group(/obj/cable, /obj/grille)
-        demir_node_group(/obj/cable, /turf/closed)
-        demir_node_group(/obj/pipe, null)
-        demir_node_group(/obj/bad, /obj/grille)
-        demir_node_group(/obj/bad, list(/turf/closed, "not a type"))
-"#,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/node_groups_accept_blocker_lists_merge_and_allow_an_unblocked_group.dm"
+    ));
     let bake = Bake::new(
         &tree,
         &module,
@@ -1120,12 +884,9 @@ fn node_groups_accept_blocker_lists_merge_and_allow_an_unblocked_group() {
 
 #[test]
 fn defining_a_node_group_outside_initialize_is_blocked() {
-    let (tree, module) = compile(
-        r#"
-/datum/demir/test/bake(atom/target)
-    demir_node_group(/obj, /turf)
-"#,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/defining_a_node_group_outside_initialize_is_blocked.dm"
+    ));
     let fault = Runtime::default()
         .run(
             &tree,
@@ -1145,14 +906,9 @@ fn defining_a_node_group_outside_initialize_is_blocked() {
 
 #[test]
 fn a_ui_interaction_the_profile_ignores_keeps_nothing() {
-    let (tree, module) = compile(
-        r#"
-/datum/demir/test/ui(atom/target)
-    if(imgui_begin("Panel"))
-        imgui_button("Does nothing")
-    imgui_end()
-"#,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/a_ui_interaction_the_profile_ignores_keeps_nothing.dm"
+    ));
     let mut bake = Bake::new(
         &tree,
         &module,
@@ -1184,16 +940,9 @@ fn a_ui_interaction_the_profile_ignores_keeps_nothing() {
 
 #[test]
 fn profile_ui_streams_stay_balanced_when_the_profile_leaves_them_open() {
-    let (tree, module) = compile(
-        r#"
-/datum/demir/test/ui(atom/target)
-    imgui_begin("Panel")
-    if(imgui_tree("Nested"))
-        imgui_text("only when open")
-        imgui_tree_end()
-    imgui_text("after")
-"#,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/profile_ui_streams_stay_balanced_when_the_profile_leaves_them_open.dm"
+    ));
     let mut bake = Bake::new(
         &tree,
         &module,
@@ -1247,16 +996,9 @@ fn profile_ui_streams_stay_balanced_when_the_profile_leaves_them_open() {
 
 #[test]
 fn malformed_connection_metadata_does_not_block_appearance_baking() {
-    let (tree, module) = compile(
-        r#"
-/obj/source
-    icon_state = "static"
-/datum/demir/test/connections(atom/target)
-    return list("missing role")
-/datum/demir/test/bake(atom/target)
-    target.icon_state = "baked"
-"#,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/malformed_connection_metadata_does_not_block_appearance_baking.dm"
+    ));
     let atom = Atom {
         instance: 1,
         ty: tree.id_of(&TreePath::parse("/obj/source")).expect("source type"),
@@ -1307,21 +1049,9 @@ fn baking_updates_a_neighborhood_and_restores_removed_atoms() {
 
 #[test]
 fn lighting_hooks_build_and_incrementally_restore_the_lightmap() {
-    let (tree, module) = compile(
-        r##"
-/obj/lamp
-/obj/ambient
-/datum/demir/test/light(atom/target)
-    if(istype(target, /obj/lamp))
-        target.demir_light_range = 3
-        target.demir_light_power = 1
-        target.demir_light_color = "#ff4000"
-        target.demir_light_height = 0
-    if(istype(target, /obj/ambient))
-        target.demir_ambient_color = "#0020ff"
-        target.demir_ambient_power = 0.25
-"##,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/lighting_hooks_build_and_incrementally_restore_the_lightmap.dm"
+    ));
     let lamp = tree.id_of(&TreePath::parse("/obj/lamp")).expect("lamp type");
     let ambient = tree.id_of(&TreePath::parse("/obj/ambient")).expect("ambient type");
     let atoms = vec![
@@ -1399,19 +1129,9 @@ fn lighting_hooks_build_and_incrementally_restore_the_lightmap() {
 
 #[test]
 fn lighting_hook_keeps_zero_radius_quadratic_sources() {
-    let (tree, module) = compile(
-        r##"
-/obj/runway_light
-/datum/demir/test/light(atom/target)
-    if(istype(target, /obj/runway_light))
-        target.demir_light_range = 0
-        target.demir_light_power = 0.5
-        target.demir_light_color = "#ffffff"
-        target.demir_light_height = 5.76
-        target.demir_light_quadratic = 1.1
-        target.demir_light_constant = -0.11
-"##,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/lighting_hook_keeps_zero_radius_quadratic_sources.dm"
+    ));
     let runway_light = tree
         .id_of(&TreePath::parse("/obj/runway_light"))
         .expect("runway light type");
@@ -1441,18 +1161,9 @@ fn lighting_hook_keeps_zero_radius_quadratic_sources() {
 
 #[test]
 fn lighting_hook_offsets_source_origins_in_tile_units() {
-    let (tree, module) = compile(
-        r##"
-/obj/lamp
-/datum/demir/test/light(atom/target)
-    if(istype(target, /obj/lamp))
-        target.demir_light_range = 4
-        target.demir_light_power = 1
-        target.demir_light_color = "#ffffff"
-        target.demir_light_height = 0
-        target.demir_light_offset_x = 0.5
-"##,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/lighting_hook_offsets_source_origins_in_tile_units.dm"
+    ));
     let lamp = tree.id_of(&TreePath::parse("/obj/lamp")).expect("lamp type");
     let bake = Bake::new(
         &tree,
@@ -1479,22 +1190,9 @@ fn lighting_hook_offsets_source_origins_in_tile_units() {
 
 #[test]
 fn appearance_offset_moves_a_wall_fixture_without_leaking_through_its_wall() {
-    let (tree, module) = compile(
-        r##"
-/obj/fixture
-    pixel_y = 21
-/obj/wall
-    opacity = 1
-/datum/demir/test/light(atom/target)
-    if(istype(target, /obj/fixture))
-        target.demir_light_range = 3
-        target.demir_light_power = 1.6
-        target.demir_light_color = "#ffffff"
-        target.demir_light_height = 5.76
-        target.demir_light_quadratic = 3.52
-        target.demir_light_constant = -0.11
-"##,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/appearance_offset_moves_a_wall_fixture_without_leaking_through_its_wall.dm"
+    ));
     let fixture = tree.id_of(&TreePath::parse("/obj/fixture")).expect("fixture type");
     let wall = tree.id_of(&TreePath::parse("/obj/wall")).expect("wall type");
     let mut atoms = vec![Atom {
@@ -1571,28 +1269,7 @@ fn appearance_offset_moves_a_wall_fixture_without_leaking_through_its_wall() {
 
 #[test]
 fn range_and_orange_spiral_out_with_areas_once() {
-    let (tree, module) = compile(
-        r#"
-/area/zone
-/turf/floor
-/obj/thing
-/proc/describe(list/found)
-    var/list/parts = list()
-    for(var/atom/entry in found)
-        if(isturf(entry))
-            parts += "[entry.x],[entry.y]"
-        else if(isarea(entry))
-            parts += "A"
-        else
-            parts += "O"
-    return jointext(parts, " ")
-
-/datum/demir/test/bake(atom/target)
-    if(!istype(target, /turf/floor) || target.x != 2 || target.y != 2)
-        return
-    target.name = "[describe(orange(1, target))] | [describe(range(target, 1))]"
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/range_and_orange_spiral_out_with_areas_once.dm"));
     let ty = |path: &str| tree.id_of(&TreePath::parse(path)).expect("fixture type");
     let mut atoms = Vec::new();
     for y in 1..=3 {
@@ -1637,17 +1314,9 @@ fn range_and_orange_spiral_out_with_areas_once() {
 
 #[test]
 fn baking_exports_icon_objects_and_ignores_timed_effects() {
-    let (tree, module) = compile(
-        r#"
-/obj/panel
-    icon = 'old.dmi'
-/datum/demir/test/bake(atom/target)
-    flick("opening", target)
-    animate(target, alpha = 0, time = 10)
-    target.icon = icon(icon('panels.dmi', "on"))
-    target.icon_state = "on"
-"#,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/baking_exports_icon_objects_and_ignores_timed_effects.dm"
+    ));
     let panel = tree.id_of(&TreePath::parse("/obj/panel")).expect("panel type");
     let bake = Bake::new(
         &tree,
@@ -1677,21 +1346,7 @@ fn baking_exports_icon_objects_and_ignores_timed_effects() {
 
 #[test]
 fn baking_exports_icon_and_icon_state_as_a_pair() {
-    let (tree, module) = compile(
-        r#"
-/obj/state_only
-    icon = 'state.dmi'
-    icon_state = "off"
-/obj/icon_only
-    icon = 'old.dmi'
-    icon_state = "steady"
-/datum/demir/test/bake(atom/target)
-    if(istype(target, /obj/state_only))
-        target.icon_state = "on"
-    else if(istype(target, /obj/icon_only))
-        target.icon = 'new.dmi'
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/baking_exports_icon_and_icon_state_as_a_pair.dm"));
     let state_only = tree
         .id_of(&TreePath::parse("/obj/state_only"))
         .expect("state-only type");
@@ -1737,31 +1392,7 @@ fn baking_exports_icon_and_icon_state_as_a_pair() {
 
 #[test]
 fn baking_exports_sprite_lighting_roles() {
-    let (tree, module) = compile(
-        r#"
-/obj/light
-/datum/demir/test/bake(atom/target)
-    if(!istype(target, /obj/light))
-        return
-    target.demir_emissive = TRUE
-    var/image/glow = new
-    glow.icon_state = "glow"
-    glow.demir_emissive = TRUE
-    var/image/blocker = new
-    blocker.icon_state = "blocker"
-    blocker.demir_emissive_blocker = TRUE
-    glow.overlays += blocker
-    var/image/overlay_light = new
-    overlay_light.icon_state = "overlay-light"
-    overlay_light.demir_overlay_light = 1
-    glow.overlays += overlay_light
-    var/image/darkness = new
-    darkness.icon_state = "darkness"
-    darkness.demir_overlay_light = -1
-    glow.overlays += darkness
-    target.overlays += glow
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/baking_exports_sprite_lighting_roles.dm"));
     let light = tree.id_of(&TreePath::parse("/obj/light")).expect("light type");
     let bake = Bake::new(
         &tree,
@@ -1821,14 +1452,7 @@ fn baking_rolls_back_overlays_and_randomness_is_repeatable() {
 
 #[test]
 fn bake_cache_uses_instance_variables() {
-    let source = r#"
-/turf/styled
-    icon_state = "static"
-    var/style = 0
-/datum/demir/test/bake(atom/target)
-    if(istype(target, /turf/styled))
-        target.icon_state = "[target.style]"
-"#;
+    let source = fixture!("programs/bake_cache_uses_instance_variables.dm");
     let (tree, module) = compile(source);
     let ty = tree
         .id_of(&TreePath::parse("/turf/styled"))
@@ -1861,23 +1485,9 @@ fn bake_cache_uses_instance_variables() {
 
 #[test]
 fn initialization_runs_once_for_a_bake_and_not_for_updates() {
-    let (tree, module) = compile(
-        r#"
-var/global/demir_init_count = 0
-/turf/initialized
-    icon_state = "static"
-    var/demir_prepared = 0
-/datum/demir/test/New()
-    world.log << "hello world"
-    demir_init_count += 1
-/datum/demir/test/prepare(atom/target)
-    if(istype(target, /turf/initialized))
-        target.demir_prepared += 1
-/datum/demir/test/bake(atom/target)
-    if(istype(target, /turf/initialized))
-        target.icon_state = "[demir_init_count]-[target.demir_prepared]"
-"#,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/initialization_runs_once_for_a_bake_and_not_for_updates.dm"
+    ));
     let ty = tree
         .id_of(&TreePath::parse("/turf/initialized"))
         .expect("initialized turf should exist");
@@ -1916,16 +1526,7 @@ var/global/demir_init_count = 0
 
 #[test]
 fn initialization_fault_stops_all_object_hooks() {
-    let (tree, module) = compile(
-        r#"
-/turf/initialized
-    icon_state = "static"
-/datum/demir/test/New()
-    world.Reboot()
-/datum/demir/test/bake(atom/target)
-    target.icon_state = "baked"
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/initialization_fault_stops_all_object_hooks.dm"));
     let atom = Atom {
         instance: 1,
         ty: tree
@@ -1955,20 +1556,9 @@ fn initialization_fault_stops_all_object_hooks() {
 
 #[test]
 fn neighbor_overlay_changes_are_exported_and_rolled_back() {
-    let (tree, module) = compile(
-        r#"
-/turf/overlay_test
-    var/list/overlays = list()
-    proc/Initialize(mapload)
-        overlays = list("base")
-/datum/demir/test/bake(atom/target)
-    if(istype(target, /turf/overlay_test))
-        target.Initialize(TRUE)
-        var/turf/east = get_step(target, 4)
-        if(east)
-            east.overlays.Add("edge")
-"#,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/neighbor_overlay_changes_are_exported_and_rolled_back.dm"
+    ));
     let ty = tree
         .id_of(&TreePath::parse("/turf/overlay_test"))
         .expect("overlay turf should exist");
@@ -1996,21 +1586,7 @@ fn neighbor_overlay_changes_are_exported_and_rolled_back() {
 
 #[test]
 fn shared_overlay_graphs_respect_the_export_budget() {
-    let (tree, module) = compile(
-        r#"
-/turf/export_test
-    icon_state = "static"
-    overlays = list()
-/datum/demir/test/bake(atom/target)
-    if(istype(target, /turf/export_test))
-        var/image/previous = new
-        for(var/i = 1 to 24)
-            var/image/next = new
-            next.overlays = list(previous, previous)
-            previous = next
-        target.overlays += previous
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/shared_overlay_graphs_respect_the_export_budget.dm"));
     let atom = Atom {
         instance: 1,
         ty: tree
@@ -2040,12 +1616,7 @@ fn shared_overlay_graphs_respect_the_export_budget() {
 fn executes_arithmetic_direct_calls_and_defaults() {
     assert_eq!(
         run(
-            r#"
-/proc/add(a, b = 4)
-    return a + b
-/proc/test()
-    return add(3)
-"#,
+            fixture!("programs/executes_arithmetic_direct_calls_and_defaults.dm"),
             "test",
         ),
         7.into()
@@ -2056,12 +1627,7 @@ fn executes_arithmetic_direct_calls_and_defaults() {
 fn nonconstant_defaults_can_read_earlier_parameters() {
     assert_eq!(
         run(
-            r#"
-/proc/value(a = 2, b = a + 3)
-    return b
-/proc/test()
-    return value(4) * 10 + value()
-"#,
+            fixture!("programs/nonconstant_defaults_can_read_earlier_parameters.dm"),
             "test",
         ),
         75.into()
@@ -2071,21 +1637,7 @@ fn nonconstant_defaults_can_read_earlier_parameters() {
 #[test]
 fn executes_phi_lowered_fibonacci_loop() {
     assert_eq!(
-        run(
-            r#"
-/proc/fib(n)
-    var/a = 0
-    var/b = 1
-    for(var/i = 0; i < n; i++)
-        var/tmp = b
-        b = a + b
-        a = tmp
-    return a
-/proc/test()
-    return fib(10)
-"#,
-            "test",
-        ),
+        run(fixture!("programs/executes_phi_lowered_fibonacci_loop.dm"), "test",),
         55.into()
     );
 }
@@ -2094,15 +1646,7 @@ fn executes_phi_lowered_fibonacci_loop() {
 fn conditional_fallthrough_preserves_both_phi_edges() {
     assert_eq!(
         run(
-            r#"
-/proc/choose(condition)
-    var/value = 2
-    if(condition)
-        value = 1
-    return value
-/proc/test()
-    return choose(1) * 10 + choose(0)
-"#,
+            fixture!("programs/conditional_fallthrough_preserves_both_phi_edges.dm"),
             "test",
         ),
         12.into()
@@ -2113,14 +1657,7 @@ fn conditional_fallthrough_preserves_both_phi_edges() {
 fn associative_iteration_preserves_keys_and_values() {
     assert_eq!(
         run(
-            r#"
-/proc/test()
-    var/list/values = list("a" = 2, "b" = 5)
-    var/total = 0
-    for(var/key, var/value in values)
-        total += values[key] + value
-    return total
-"#,
+            fixture!("programs/associative_iteration_preserves_keys_and_values.dm"),
             "test",
         ),
         14.into()
@@ -2130,19 +1667,7 @@ fn associative_iteration_preserves_keys_and_values() {
 #[test]
 fn labelled_break_leaves_a_plain_block() {
     assert_eq!(
-        run(
-            r#"
-/proc/test()
-    var/value = 0
-    done: {
-        value = 1
-        break done
-        value = 2
-    }
-    return value
-"#,
-            "test",
-        ),
+        run(fixture!("programs/labelled_break_leaves_a_plain_block.dm"), "test",),
         1.into()
     );
 }
@@ -2151,18 +1676,7 @@ fn labelled_break_leaves_a_plain_block() {
 fn labelled_break_inside_do_while_leaves_the_block() {
     assert_eq!(
         run(
-            r#"
-/proc/test()
-    var/value = 0
-    do {
-        done: {
-            value = 1
-            break done
-            value = 2
-        }
-    } while(FALSE)
-    return value
-"#,
+            fixture!("programs/labelled_break_inside_do_while_leaves_the_block.dm"),
             "test",
         ),
         1.into()
@@ -2173,23 +1687,7 @@ fn labelled_break_inside_do_while_leaves_the_block() {
 fn repeated_local_labels_create_distinct_blocks() {
     assert_eq!(
         run(
-            r#"
-/proc/test()
-    var/value = 0
-    do {
-        done: {
-            value += 1
-            break done
-        }
-    } while(FALSE)
-    do {
-        done: {
-            value += 1
-            break done
-        }
-    } while(FALSE)
-    return value
-"#,
+            fixture!("programs/repeated_local_labels_create_distinct_blocks.dm"),
             "test",
         ),
         2.into()
@@ -2200,22 +1698,7 @@ fn repeated_local_labels_create_distinct_blocks() {
 fn repeated_local_labels_preserve_values_from_their_predecessors() {
     assert_eq!(
         run(
-            r#"
-/proc/test()
-    var/value = 7
-    do {
-        done: {
-            break done
-        }
-    } while(FALSE)
-    var/after_first = value
-    do {
-        done: {
-            break done
-        }
-    } while(FALSE)
-    return after_first
-"#,
+            fixture!("programs/repeated_local_labels_preserve_values_from_their_predecessors.dm"),
             "test",
         ),
         7.into()
@@ -2225,16 +1708,7 @@ fn repeated_local_labels_preserve_values_from_their_predecessors() {
 #[test]
 fn descending_ranges_use_the_steps_sign() {
     assert_eq!(
-        run(
-            r#"
-/proc/test()
-    var/total = 0
-    for(var/i = 5 to 1 step -2)
-        total += i
-    return total
-"#,
-            "test",
-        ),
+        run(fixture!("programs/descending_ranges_use_the_steps_sign.dm"), "test",),
         9.into()
     );
 }
@@ -2242,20 +1716,7 @@ fn descending_ranges_use_the_steps_sign() {
 #[test]
 fn switch_cases_match_every_listed_value() {
     assert_eq!(
-        run(
-            r#"
-/proc/axis(d)
-    switch(d)
-        if(1, 2)
-            return "ns"
-        if(4, 8)
-            return "ew"
-    return "none"
-/proc/test()
-    return "[axis(1)] [axis(2)] [axis(4)] [axis(8)] [axis(3)]"
-"#,
-            "test",
-        ),
+        run(fixture!("programs/switch_cases_match_every_listed_value.dm"), "test",),
         GenericValue::from("ns ns ew ew none")
     );
 }
@@ -2263,20 +1724,7 @@ fn switch_cases_match_every_listed_value() {
 #[test]
 fn null_arguments_take_the_default() {
     assert_eq!(
-        run(
-            r#"
-/proc/value(a = 5)
-    return a
-/datum/proc/forwarded(u = 7)
-    return u
-/datum/child/forwarded(u)
-    return ..()
-/proc/test()
-    var/datum/child/child = new
-    return "[value(null)] [child.forwarded()] [child.forwarded(3)]"
-"#,
-            "test",
-        ),
+        run(fixture!("programs/null_arguments_take_the_default.dm"), "test",),
         GenericValue::from("5 7 3")
     );
 }
@@ -2284,37 +1732,14 @@ fn null_arguments_take_the_default() {
 #[test]
 fn virtual_dispatch_super_dot_and_defaults() {
     assert_eq!(
-        run(
-            r#"
-/datum/base
-    proc/value(a = 3)
-        return a * 2
-/datum/base/child
-    value(a = 4)
-        . = ..()
-        . += 1
-/proc/test()
-    var/datum/base/child/object = new
-    return object.value()
-"#,
-            "test",
-        ),
+        run(fixture!("programs/virtual_dispatch_super_dot_and_defaults.dm"), "test",),
         9.into()
     );
 }
 
 #[test]
 fn sandbox_faults_are_not_catchable() {
-    let (tree, module) = compile(
-        r#"
-/proc/test()
-    try
-        shell("echo no")
-    catch
-        return 1
-    return 0
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/sandbox_faults_are_not_catchable.dm"));
     let fault = Runtime::default()
         .run(
             &tree,
@@ -2331,13 +1756,7 @@ fn sandbox_faults_are_not_catchable() {
 
 #[test]
 fn world_log_output_uses_a_field_reference() {
-    let (tree, module) = compile(
-        r#"
-/proc/test()
-    world.log << "hello"
-    return world.log
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/world_log_output_uses_a_field_reference.dm"));
     let mut runtime = Runtime::default();
     let result = runtime
         .run(
@@ -2357,99 +1776,35 @@ fn world_log_output_uses_a_field_reference() {
 
 #[test]
 fn locate_in_searches_the_container() {
-    let result = run(
-        r#"
-/datum/a
-/datum/b
-
-/proc/test()
-    var/datum/b/wanted = new
-    var/list/things = list(new /datum/a, wanted)
-    var/datum/b/found = locate(/datum/b) in things
-    var/missing = locate(/datum/b) in list(new /datum/a)
-    return "[found == wanted] [isnull(missing)] [istype(things ? locate(/datum/a) in things : null, /datum/a)]"
-"#,
-        "test",
-    );
+    let result = run(fixture!("programs/locate_in_searches_the_container.dm"), "test");
 
     assert_eq!(result, GenericValue::from("1 1 1"));
 }
 
 #[test]
 fn a_var_and_a_proc_can_share_a_name() {
-    let result = run(
-        r#"
-/datum/rock
-    var/list/edges = null
-
-/datum/rock/proc/edges()
-    src.edges = list()
-    src.edges += "north"
-    edges += "south"
-    return length(src.edges)
-
-/proc/test()
-    var/datum/rock/rock = new
-    return "[rock.edges()] [length(rock.edges)] [rock.edges[2]]"
-"#,
-        "test",
-    );
+    let result = run(fixture!("programs/a_var_and_a_proc_can_share_a_name.dm"), "test");
 
     assert_eq!(result, GenericValue::from("2 2 south"));
 }
 
 #[test]
 fn datums_keep_their_own_coordinate_vars() {
-    let result = run(
-        r#"
-/datum/light
-    var/x = 1
-    var/y
-
-/proc/test()
-    var/datum/light/light = new
-    light.x = 4.5
-    light.y = 2
-    return "[light.x] [light.y]"
-"#,
-        "test",
-    );
+    let result = run(fixture!("programs/datums_keep_their_own_coordinate_vars.dm"), "test");
 
     assert_eq!(result, GenericValue::from("4.5 2"));
 }
 
 #[test]
 fn sized_type_vars_start_as_lists() {
-    let result = run(
-        r#"
-/obj/thing
-    var/global/shared[8]
-    var/sized[3]
-    var/list/empty[]
-
-/proc/test()
-    var/obj/thing/first = new
-    var/obj/thing/second = new
-    first.sized[1] = 1
-    first.shared[1] = 2
-    return "[length(first.sized)] [length(first.shared)] [length(first.empty)] [second.sized[1]] [second.shared[1]]"
-"#,
-        "test",
-    );
+    let result = run(fixture!("programs/sized_type_vars_start_as_lists.dm"), "test");
 
     assert_eq!(result, GenericValue::from("3 8 0  2"));
 }
 
 #[test]
 fn icon_states_answer_from_the_host_table() {
-    let (tree, module) = compile(
-        r#"
-/proc/test()
-    var/icon/wrapped = icon('Icons\Walls.dmi')
-    var/list/found = icon_states('icons/walls.dmi')
-    return "[length(found)] [found[1]] [found[2]] [length(wrapped.IconStates())] [length(icon_states('missing.dmi'))]"
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/icon_states_answer_from_the_host_table.dm"));
     let mut runtime = Runtime::default();
     runtime.icons = IconStates::new([(
         String::from("icons/walls.dmi"),
@@ -2472,12 +1827,7 @@ fn icon_states_answer_from_the_host_table() {
 
 #[test]
 fn unsupported_output_targets_are_blocked() {
-    let (tree, module) = compile(
-        r#"
-/proc/test()
-    null << 1
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/unsupported_output_targets_are_blocked.dm"));
     let fault = Runtime::default()
         .run(
             &tree,
@@ -2495,13 +1845,7 @@ fn unsupported_output_targets_are_blocked() {
 
 #[test]
 fn instruction_budget_stops_infinite_control_flow() {
-    let (tree, module) = compile(
-        r#"
-/proc/test()
-    while(1)
-        . = 1
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/instruction_budget_stops_infinite_control_flow.dm"));
     let fault = Runtime::default()
         .run(
             &tree,
@@ -2522,18 +1866,7 @@ fn instruction_budget_stops_infinite_control_flow() {
 #[test]
 fn dm_throw_is_caught_with_its_value() {
     assert_eq!(
-        run(
-            r#"
-/proc/raiser()
-    throw 42
-/proc/test()
-    try
-        raiser()
-    catch(var/value)
-        return value + pick(list(7))
-"#,
-            "test",
-        ),
+        run(fixture!("programs/dm_throw_is_caught_with_its_value.dm"), "test",),
         49.into()
     );
 }
@@ -2542,16 +1875,7 @@ fn dm_throw_is_caught_with_its_value() {
 fn values_live_across_try_and_catch_merge_correctly() {
     assert_eq!(
         run(
-            r#"
-/proc/test()
-    var/value = 1
-    try
-        value = 2
-        throw 9
-    catch(var/error)
-        value += error
-    return value
-"#,
+            fixture!("programs/values_live_across_try_and_catch_merge_correctly.dm"),
             "test",
         ),
         11.into()
@@ -2561,22 +1885,7 @@ fn values_live_across_try_and_catch_merge_correctly() {
 #[test]
 fn try_inside_a_loop_preserves_frame_locals() {
     assert_eq!(
-        run(
-            r#"
-/proc/test()
-    var/list/values = list(1, 2, 3)
-    var/total = 0
-    for(var/value in values)
-        var/current = value
-        try
-            total += current
-        catch
-            total = -100
-        current = 100
-    return total
-"#,
-            "test",
-        ),
+        run(fixture!("programs/try_inside_a_loop_preserves_frame_locals.dm"), "test",),
         6.into()
     );
 }
@@ -2585,16 +1894,7 @@ fn try_inside_a_loop_preserves_frame_locals() {
 fn parameter_defaults_are_applied_before_try_frame_storage() {
     assert_eq!(
         run(
-            r#"
-/proc/value(number = 4)
-    try
-        number += 1
-    catch
-        number = -100
-    return number
-/proc/test()
-    return value()
-"#,
+            fixture!("programs/parameter_defaults_are_applied_before_try_frame_storage.dm"),
             "test",
         ),
         5.into()
@@ -2605,17 +1905,7 @@ fn parameter_defaults_are_applied_before_try_frame_storage() {
 fn same_type_super_observes_reassigned_arguments() {
     assert_eq!(
         run(
-            r#"
-/datum/test/proc/value(a = 1)
-    return a
-/datum/test/value(a = 2)
-    args[1] += 3
-    a += 4
-    return ..()
-/proc/test()
-    var/datum/test/object = new
-    return object.value()
-"#,
+            fixture!("programs/same_type_super_observes_reassigned_arguments.dm"),
             "test",
         ),
         9.into()
@@ -2626,20 +1916,7 @@ fn same_type_super_observes_reassigned_arguments() {
 fn static_state_is_shared_and_dynamic_dm_calls_work() {
     assert_eq!(
         run(
-            r#"
-/datum/test
-    var/static/list/items = list()
-    proc/value(a = 9, b = 2)
-        var/static/count = 0
-        count++
-        items += count
-        return a + b + length(items)
-/proc/test()
-    var/datum/test/a = new
-    var/datum/test/b = new
-    a.value()
-    return call(b, "value")(, 3)
-"#,
+            fixture!("programs/static_state_is_shared_and_dynamic_dm_calls_work.dm"),
             "test",
         ),
         14.into()
@@ -2648,22 +1925,7 @@ fn static_state_is_shared_and_dynamic_dm_calls_work() {
 
 #[test]
 fn reachable_codegen_executes_like_full_codegen() {
-    let source = r#"
-/datum/base
-    var/value = initialize_value()
-    proc/read()
-        world.log << "read [value]"
-        return value
-/datum/base/child/read()
-    return ..() + 1
-/proc/initialize_value()
-    return 6
-/proc/entry()
-    var/datum/base/child/value = new
-    return value.read()
-/proc/unreachable()
-    return 99
-"#;
+    let source = fixture!("programs/reachable_codegen_executes_like_full_codegen.dm");
     let (tree, ir_module) = analyze_fixture(source);
     let entry = proc(&tree, "entry");
     let full = codegen::generate(&ir_module).expect("full codegen");
@@ -2686,14 +1948,7 @@ fn reachable_codegen_executes_like_full_codegen() {
 fn named_and_arglist_arguments_keep_their_layout() {
     assert_eq!(
         run(
-            r#"
-/proc/value(a, b, c)
-    return a * 100 + b * 10 + c
-/proc/forward(list/arguments)
-    return value(arglist(arguments))
-/proc/test()
-    return forward(list("c" = 3, "a" = 1, "b" = 2))
-"#,
+            fixture!("programs/named_and_arglist_arguments_keep_their_layout.dm"),
             "test",
         ),
         123.into()
@@ -2704,12 +1959,7 @@ fn named_and_arglist_arguments_keep_their_layout() {
 fn positional_arguments_fill_parameters_left_open_by_named_arguments() {
     assert_eq!(
         run(
-            r#"
-/proc/value(a, b, c)
-    return a * 100 + b * 10 + c
-/proc/test()
-    return value(c = 3, 1, 2)
-"#,
+            fixture!("programs/positional_arguments_fill_parameters_left_open_by_named_arguments.dm"),
             "test",
         ),
         123.into()
@@ -2720,12 +1970,7 @@ fn positional_arguments_fill_parameters_left_open_by_named_arguments() {
 fn args_is_a_dm_list_with_the_supplied_length() {
     assert_eq!(
         run(
-            r#"
-/proc/value(a, b)
-    return args.len + islist(args)
-/proc/test()
-    return value(1, 2)
-"#,
+            fixture!("programs/args_is_a_dm_list_with_the_supplied_length.dm"),
             "test",
         ),
         3.into()
@@ -2736,15 +1981,7 @@ fn args_is_a_dm_list_with_the_supplied_length() {
 fn a_sized_local_list_declaration_allocates_its_entries() {
     assert_eq!(
         run(
-            r#"
-/proc/test()
-    var/device_type = 3
-    var/list/node_connects[device_type]
-    node_connects[1] = 1
-    node_connects[2] = 2
-    node_connects[3] = 4
-    return node_connects.len * 10 + node_connects[3]
-"#,
+            fixture!("programs/a_sized_local_list_declaration_allocates_its_entries.dm"),
             "test",
         ),
         34.into()
@@ -2755,15 +1992,7 @@ fn a_sized_local_list_declaration_allocates_its_entries() {
 fn list_iteration_uses_a_stable_entry_snapshot() {
     assert_eq!(
         run(
-            r#"
-/proc/test()
-    var/list/values = list(1, 2, 3)
-    var/total = 0
-    for(var/value in values)
-        total += value
-        values.Add(value + 10)
-    return total * 10 + length(values)
-"#,
+            fixture!("programs/list_iteration_uses_a_stable_entry_snapshot.dm"),
             "test",
         ),
         66.into()
@@ -2774,14 +2003,7 @@ fn list_iteration_uses_a_stable_entry_snapshot() {
 fn compound_list_operators_mutate_aliases_but_plain_operators_copy() {
     assert_eq!(
         run(
-            r#"
-/proc/test()
-    var/list/original = list(1, 2)
-    var/list/alias = original
-    alias += 3
-    var/list/copy = original + 4
-    return length(original) * 100 + length(alias) * 10 + length(copy)
-"#,
+            fixture!("programs/compound_list_operators_mutate_aliases_but_plain_operators_copy.dm"),
             "test",
         ),
         334.into()
@@ -2793,33 +2015,12 @@ fn compound_list_operators_mutate_aliases_but_plain_operators_copy() {
 #[test]
 fn null_is_the_identity_for_addition() {
     assert_eq!(
-        run(
-            r#"
-/proc/test()
-    var/text
-    text += "a"
-    text += "b"
-    return text
-"#,
-            "test",
-        ),
+        run(fixture!("programs/null_is_the_identity_for_addition.dm"), "test",),
         "ab".into()
     );
 
     assert_eq!(
-        run(
-            r#"
-/datum/thing
-    var/tag_name = "x"
-/proc/test()
-    var/list/entries = list()
-    var/datum/thing/thing = new
-    entries["4"] += thing
-    var/datum/thing/stored = entries["4"]
-    return stored.tag_name
-"#,
-            "test",
-        ),
+        run(fixture!("programs/null_is_the_identity_for_addition-2.dm"), "test",),
         "x".into()
     );
 }
@@ -2828,17 +2029,7 @@ fn null_is_the_identity_for_addition() {
 fn typed_iteration_filters_the_iterated_value() {
     assert_eq!(
         run(
-            r#"
-/datum/base
-/datum/base/wanted
-/datum/other
-/proc/test()
-    var/list/values = list(new /datum/base/wanted, new /datum/other, new /datum/base/wanted)
-    var/count = 0
-    for(var/datum/base/value in values)
-        count++
-    return count
-"#,
+            fixture!("programs/typed_iteration_filters_the_iterated_value.dm"),
             "test",
         ),
         2.into()
@@ -2849,14 +2040,7 @@ fn typed_iteration_filters_the_iterated_value() {
 fn one_argument_istype_uses_the_declared_type() {
     assert_eq!(
         run(
-            r#"
-/datum/base
-/datum/base/child
-/datum/other
-/proc/test()
-    var/datum/base/value = new /datum/other
-    return istype(value)
-"#,
+            fixture!("programs/one_argument_istype_uses_the_declared_type.dm"),
             "test",
         ),
         0.into()
@@ -2867,14 +2051,7 @@ fn one_argument_istype_uses_the_declared_type() {
 fn initial_reads_the_declaration_instead_of_the_current_field() {
     assert_eq!(
         run(
-            r#"
-/datum/test
-    var/value = 4
-/proc/test()
-    var/datum/test/object = new
-    object.value = 9
-    return initial(object.value) + issaved(object.value)
-"#,
+            fixture!("programs/initial_reads_the_declaration_instead_of_the_current_field.dm"),
             "test",
         ),
         5.into()
@@ -2885,12 +2062,7 @@ fn initial_reads_the_declaration_instead_of_the_current_field() {
 fn initial_of_a_local_falls_back_to_its_current_value() {
     assert_eq!(
         run(
-            r#"
-/proc/test()
-    var/value = 4
-    value = 9
-    return initial(value)
-"#,
+            fixture!("programs/initial_of_a_local_falls_back_to_its_current_value.dm"),
             "test",
         ),
         9.into()
@@ -2900,17 +2072,7 @@ fn initial_of_a_local_falls_back_to_its_current_value() {
 #[test]
 fn safe_calls_on_null_return_null() {
     assert_eq!(
-        run(
-            r#"
-/datum/test
-    proc/value()
-        return 1
-/proc/test()
-    var/datum/test/object
-    return object?.value()
-"#,
-            "test",
-        ),
+        run(fixture!("programs/safe_calls_on_null_return_null.dm"), "test",),
         GenericValue::Null
     );
 }
@@ -2918,22 +2080,14 @@ fn safe_calls_on_null_return_null() {
 #[test]
 fn safe_index_writes_on_null_are_discarded() {
     assert_eq!(
-        run(
-            r#"
-/proc/test()
-    var/list/value
-    value?[1] = 2
-    return 3
-"#,
-            "test",
-        ),
+        run(fixture!("programs/safe_index_writes_on_null_are_discarded.dm"), "test",),
         3.into()
     );
 }
 
 #[test]
 fn call_depth_stops_recursive_functions() {
-    let (tree, module) = compile("/proc/test()\n    return test()\n");
+    let (tree, module) = compile(fixture!("programs/call_depth_stops_recursive_functions.dm"));
     let fault = Runtime::default()
         .run(
             &tree,
@@ -2953,19 +2107,7 @@ fn call_depth_stops_recursive_functions() {
 
 #[test]
 fn an_instruction_fault_rolls_back_heap_changes() {
-    let (tree, module) = compile(
-        r#"
-/datum
-    var/value = 1
-    var/list/items = list("old")
-/proc/test(datum/target)
-    target.value = 2
-    target.items.Add("new")
-    new /datum
-    while(1)
-        target.value++
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/an_instruction_fault_rolls_back_heap_changes.dm"));
     let mut runtime = Runtime::default();
     let object = runtime
         .heap
@@ -3003,14 +2145,9 @@ fn an_instruction_fault_rolls_back_heap_changes() {
 
 #[test]
 fn evaluation_reports_randomness_and_nonlocal_world_reads() {
-    let (tree, module) = compile(
-        r#"
-/datum
-/proc/test()
-    rand()
-    locate(/datum)
-"#,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/evaluation_reports_randomness_and_nonlocal_world_reads.dm"
+    ));
     let mut runtime = Runtime::default();
     runtime.global = Some(
         runtime
@@ -3028,23 +2165,9 @@ fn evaluation_reports_randomness_and_nonlocal_world_reads() {
 
 #[test]
 fn intrinsic_procs_run_in_rust_instead_of_their_body() {
-    let (tree, module) = compile(
-        r#"
-/world
-    proc/file2list(File, Separator)
-        set __demir_intrin = 122
-    proc/IsBanned(key, address, computer_id, type)
-        set __demir_intrin = 112
-    proc/Reboot(reason)
-        set __demir_intrin = 104
-/proc/lines()
-    return world.file2list("tips.txt")
-/proc/banned()
-    return world.IsBanned("key")
-/proc/reboot()
-    return world.Reboot()
-"#,
-    );
+    let (tree, module) = compile(fixture!(
+        "programs/intrinsic_procs_run_in_rust_instead_of_their_body.dm"
+    ));
 
     let root = std::env::temp_dir().join(format!("dmed-intrinsic-{}", std::process::id()));
     std::fs::create_dir_all(&root).expect("temp dir");
@@ -3111,15 +2234,7 @@ fn intrinsic_procs_run_in_rust_instead_of_their_body() {
 /// Without a root there is no filesystem to reach, rather than an ambient one.
 #[test]
 fn file2list_without_a_root_is_blocked() {
-    let (tree, module) = compile(
-        r#"
-/world
-    proc/file2list(File, Separator)
-        set __demir_intrin = 122
-/proc/lines()
-    return world.file2list("tips.txt")
-"#,
-    );
+    let (tree, module) = compile(fixture!("programs/file2list_without_a_root_is_blocked.dm"));
 
     let fault = Runtime::default()
         .run(
@@ -3140,15 +2255,7 @@ fn file2list_without_a_root_is_blocked() {
 fn world_vars_are_readable_and_writable_through_world_procs() {
     assert_eq!(
         run(
-            r#"
-/world
-    var/booted = 0
-    proc/boot()
-        booted = 7
-/proc/test()
-    world.boot()
-    return world.booted
-"#,
+            fixture!("programs/world_vars_are_readable_and_writable_through_world_procs.dm"),
             "test",
         ),
         7.into()
@@ -3161,11 +2268,7 @@ fn world_vars_are_readable_and_writable_through_world_procs() {
 fn image_constructor_fills_the_object_new_allocated() {
     assert_eq!(
         run(
-            r#"
-/proc/test()
-    var/image/I = new('thing.dmi', null, "state")
-    return I.icon_state
-"#,
+            fixture!("programs/image_constructor_fills_the_object_new_allocated.dm"),
             "test",
         ),
         "state".into()
@@ -3179,11 +2282,7 @@ fn image_constructor_fills_the_object_new_allocated() {
 fn matrix_in_place_form_leaves_the_matrix_alone() {
     assert_eq!(
         run(
-            r#"
-/proc/test()
-    var/matrix/M = new(2)
-    return M.a
-"#,
+            fixture!("programs/matrix_in_place_form_leaves_the_matrix_alone.dm"),
             "test",
         ),
         1.into()
@@ -3195,16 +2294,7 @@ fn matrix_in_place_form_leaves_the_matrix_alone() {
 fn new_alist_is_a_list_seeded_from_its_pairs() {
     assert_eq!(
         run(
-            r#"
-/alist
-    var/len
-    proc/New(items)
-/proc/islist(L)
-    set __demir_intrin = 279
-/proc/test()
-    var/alist/A = new(list("a", "b"))
-    return islist(A) + A.len
-"#,
+            fixture!("programs/new_alist_is_a_list_seeded_from_its_pairs.dm"),
             "test",
         ),
         3.into()
@@ -3216,14 +2306,7 @@ fn new_alist_is_a_list_seeded_from_its_pairs() {
 #[test]
 fn sound_constructor_keeps_its_file() {
     assert_eq!(
-        run(
-            r#"
-/proc/test()
-    var/sound/S = new('beep.ogg')
-    return S.file
-"#,
-            "test",
-        ),
+        run(fixture!("programs/sound_constructor_keeps_its_file.dm"), "test",),
         GenericValue::Resource("beep.ogg".into())
     );
 }
@@ -3232,17 +2315,7 @@ fn sound_constructor_keeps_its_file() {
 #[test]
 fn nameof_resolves_a_proc_path_to_its_name() {
     assert_eq!(
-        run(
-            r#"
-/proc/nameof(X)
-    set __demir_intrin = 400
-/proc/work()
-    return 1
-/proc/test()
-    return nameof(/proc/work)
-"#,
-            "test",
-        ),
+        run(fixture!("programs/nameof_resolves_a_proc_path_to_its_name.dm"), "test",),
         "work".into()
     );
 }
@@ -3253,16 +2326,7 @@ fn nameof_resolves_a_proc_path_to_its_name() {
 fn a_global_proc_called_from_a_method_reaches_the_global() {
     assert_eq!(
         run(
-            r#"
-/proc/helper(n)
-    return n * 2
-/datum/thing
-    proc/work()
-        return helper(21)
-/proc/test()
-    var/datum/thing/T = new
-    return T.work()
-"#,
+            fixture!("programs/a_global_proc_called_from_a_method_reaches_the_global.dm"),
             "test",
         ),
         42.into()
@@ -3275,21 +2339,7 @@ fn a_global_proc_called_from_a_method_reaches_the_global() {
 fn a_method_of_the_same_name_still_shadows_the_global() {
     assert_eq!(
         run(
-            r#"
-/proc/helper(n)
-    return 1
-/datum/thing
-    proc/helper(n)
-        return 2
-    proc/work()
-        return helper(0)
-/datum/thing/special
-    helper(n)
-        return 3
-/proc/test()
-    var/datum/thing/T = new /datum/thing/special
-    return T.work()
-"#,
+            fixture!("programs/a_method_of_the_same_name_still_shadows_the_global.dm"),
             "test",
         ),
         3.into()
@@ -3302,11 +2352,7 @@ fn a_method_of_the_same_name_still_shadows_the_global() {
 fn appearance_arguments_follow_the_declared_signature() {
     assert_eq!(
         run(
-            r#"
-/proc/test()
-    var/image/I = image('a.dmi', null, "s", 3, 1, 4, 5, 6, 7)
-    return I.pixel_w * 10 + I.pixel_z
-"#,
+            fixture!("programs/appearance_arguments_follow_the_declared_signature.dm"),
             "test",
         ),
         67.into()
@@ -3319,16 +2365,7 @@ fn appearance_arguments_follow_the_declared_signature() {
 #[test]
 fn mutable_appearance_takes_an_appearance() {
     assert_eq!(
-        run(
-            r#"
-/proc/test()
-    var/image/source = new
-    source.icon_state = "src"
-    var/mutable_appearance/MA = mutable_appearance(source)
-    return MA.icon_state
-"#,
-            "test",
-        ),
+        run(fixture!("programs/mutable_appearance_takes_an_appearance.dm"), "test",),
         "src".into()
     );
 }
@@ -3339,12 +2376,7 @@ fn mutable_appearance_takes_an_appearance() {
 fn list_remove_all_reports_how_many_it_dropped() {
     assert_eq!(
         run(
-            r#"
-/proc/test()
-    var/list/L = list(1, null, 2, null, null, 3)
-    var/dropped = L.RemoveAll(null)
-    return dropped * 100 + L.len * 10 + L[1]
-"#,
+            fixture!("programs/list_remove_all_reports_how_many_it_dropped.dm"),
             "test",
         ),
         331.into()
@@ -3355,15 +2387,7 @@ fn list_remove_all_reports_how_many_it_dropped() {
 #[test]
 fn list_splice_replaces_a_range() {
     assert_eq!(
-        run(
-            r#"
-/proc/test()
-    var/list/L = list("a", "b", "c")
-    L.Splice(2, 3, "x", "y")
-    return L.Join("")
-"#,
-            "test",
-        ),
+        run(fixture!("programs/list_splice_replaces_a_range.dm"), "test",),
         "axyc".into()
     );
 }
@@ -3374,13 +2398,7 @@ fn list_splice_replaces_a_range() {
 fn list_methods_are_overridable_dm_procs_with_list_src() {
     assert_eq!(
         run(
-            r#"
-/list/Add(Item1)
-    return src.len * 10 + Item1
-/proc/test()
-    var/list/L = list(1, 2)
-    return L.Add(7) * 10 + L.len
-"#,
+            fixture!("programs/list_methods_are_overridable_dm_procs_with_list_src.dm"),
             "test",
         ),
         272.into()
@@ -3393,14 +2411,7 @@ fn list_methods_are_overridable_dm_procs_with_list_src() {
 fn list_method_overrides_can_call_the_intrinsic_super_proc() {
     assert_eq!(
         run(
-            r#"
-/list/Add(Item1)
-    ..()
-    return src.len
-/proc/test()
-    var/list/L = list(1, 2)
-    return L.Add(7) * 10 + L.len
-"#,
+            fixture!("programs/list_method_overrides_can_call_the_intrinsic_super_proc.dm"),
             "test",
         ),
         33.into()
@@ -3412,12 +2423,7 @@ fn list_method_overrides_can_call_the_intrinsic_super_proc() {
 fn alists_inherit_list_intrinsics_through_proc_dispatch() {
     assert_eq!(
         run(
-            r#"
-/proc/test()
-    var/alist/A = alist("first")
-    A.Add("value")
-    return istype(A, /alist) * 10 + A.len
-"#,
+            fixture!("programs/alists_inherit_list_intrinsics_through_proc_dispatch.dm"),
             "test",
         ),
         12.into()

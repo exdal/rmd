@@ -1478,6 +1478,12 @@ fn access_code(access: ir::AccessKind) -> Access {
 
 #[cfg(test)]
 mod tests {
+    macro_rules! fixture {
+        ($path:literal) => {
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/", $path))
+        };
+    }
+
     use core::{location::Location, path::TreePath, types::ProcId};
 
     use super::*;
@@ -1540,7 +1546,10 @@ mod tests {
 
     #[test]
     fn arithmetic_ssa_values_are_stackified_without_a_temporary_local() {
-        let module = generate(&lower("/proc/add(a, b)\n\treturn a + b\n")).expect("generate");
+        let module = generate(&lower(fixture!(
+            "programs/arithmetic_ssa_values_are_stackified_without_a_temporary_local.dm"
+        )))
+        .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
         assert_eq!(module.magic, Module::MAGIC);
@@ -1557,10 +1566,7 @@ mod tests {
 
     #[test]
     fn named_calls_use_function_table_ids() {
-        let module = generate(&lower(
-            "/proc/invoke(value)\n\treturn target(value)\n/proc/target(value)\n\treturn value\n",
-        ))
-        .expect("generate");
+        let module = generate(&lower(fixture!("programs/named_calls_use_function_table_ids.dm"))).expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
         assert_eq!(module.functions.len(), 2);
@@ -1569,9 +1575,9 @@ mod tests {
 
     #[test]
     fn unused_call_results_are_dropped_without_a_local() {
-        let module = generate(&lower(
-            "/proc/effect()\n\treturn 1\n/proc/test()\n\teffect()\n\treturn 2\n",
-        ))
+        let module = generate(&lower(fixture!(
+            "programs/unused_call_results_are_dropped_without_a_local.dm"
+        )))
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
@@ -1582,7 +1588,10 @@ mod tests {
 
     #[test]
     fn stackification_preserves_dynamic_evaluation_order() {
-        let module = generate(&lower("/proc/test(object, a, b)\n\treturn object.run(a + b)\n")).expect("generate");
+        let module = generate(&lower(fixture!(
+            "programs/stackification_preserves_dynamic_evaluation_order.dm"
+        )))
+        .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
         let object = output.find("load_local local0").expect("object load");
@@ -1601,9 +1610,9 @@ mod tests {
 
     #[test]
     fn coalesces_edge_dead_loop_updates_into_the_phi_local() {
-        let module = generate(&lower(
-            "/proc/count(n)\n\tvar/i = 0\n\twhile(i < n)\n\t\ti++\n\treturn i\n",
-        ))
+        let module = generate(&lower(fixture!(
+            "programs/coalesces_edge_dead_loop_updates_into_the_phi_local.dm"
+        )))
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
@@ -1614,17 +1623,9 @@ mod tests {
 
     #[test]
     fn coalesces_distinct_edge_dead_sources_into_one_phi_local() {
-        let module = generate(&lower(
-            r#"
-/proc/select_and_increment(condition, a, b)
-    var/value
-    if(condition)
-        value = a + 1
-    else
-        value = b + 1
-    return value
-"#,
-        ))
+        let module = generate(&lower(fixture!(
+            "programs/coalesces_distinct_edge_dead_sources_into_one_phi_local.dm"
+        )))
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
@@ -1635,17 +1636,9 @@ mod tests {
 
     #[test]
     fn keeps_a_phi_copy_when_the_old_value_is_used_after_the_source() {
-        let module = generate(&lower(
-            r#"
-/proc/test(n)
-    var/i = 0
-    while(i < n)
-        var/next = i + 1
-        world.log << i
-        i = next
-    return i
-"#,
-        ))
+        let module = generate(&lower(fixture!(
+            "programs/keeps_a_phi_copy_when_the_old_value_is_used_after_the_source.dm"
+        )))
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
@@ -1656,17 +1649,9 @@ mod tests {
 
     #[test]
     fn keeps_a_phi_copy_when_the_source_has_another_user() {
-        let module = generate(&lower(
-            r#"
-/proc/test(n)
-    var/i = 0
-    while(i < n)
-        var/next = i + 1
-        world.log << next
-        i = next
-    return i
-"#,
-        ))
+        let module = generate(&lower(fixture!(
+            "programs/keeps_a_phi_copy_when_the_source_has_another_user.dm"
+        )))
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
@@ -1677,15 +1662,9 @@ mod tests {
 
     #[test]
     fn a_coalesced_false_edge_needs_no_copy_stub() {
-        let module = generate(&lower(
-            r#"
-/proc/test(condition, input)
-    var/value = input
-    if(condition)
-        value = 2
-    return value
-"#,
-        ))
+        let module = generate(&lower(fixture!(
+            "programs/a_coalesced_false_edge_needs_no_copy_stub.dm"
+        )))
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
         let instructions = bytecode_instructions(&output);
@@ -1704,10 +1683,8 @@ mod tests {
 
     #[test]
     fn conditional_true_successor_falls_through() {
-        let module = generate(&lower(
-            "/proc/test(condition)\n\tif(condition)\n\t\treturn 1\n\treturn 2\n",
-        ))
-        .expect("generate");
+        let module =
+            generate(&lower(fixture!("programs/conditional_true_successor_falls_through.dm"))).expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
         let instructions = bytecode_instructions(&output);
 
@@ -1731,7 +1708,7 @@ mod tests {
 
     #[test]
     fn false_edge_phi_copies_stay_on_the_false_path() {
-        let ir = lower("/proc/test(condition)\n\tvar/value = 2\n\tif(condition)\n\t\tvalue = 1\n\treturn value\n");
+        let ir = lower(fixture!("programs/false_edge_phi_copies_stay_on_the_false_path.dm"));
         let false_block = ir
             .nodes
             .iter()
@@ -1816,18 +1793,9 @@ mod tests {
 
     #[test]
     fn compacted_functions_keep_contiguous_ranges() {
-        let module = generate(&lower(
-            r#"
-/proc/first(condition)
-    if(condition)
-        return 1
-    return 2
-/proc/second(condition)
-    if(condition)
-        return 3
-    return 4
-"#,
-        ))
+        let module = generate(&lower(fixture!(
+            "programs/compacted_functions_keep_contiguous_ranges.dm"
+        )))
         .expect("generate");
 
         assert_eq!(module.functions.len(), 2);
@@ -1844,7 +1812,10 @@ mod tests {
 
     #[test]
     fn unsupported_source_constructs_become_traps() {
-        let module = generate(&lower("/proc/invalid()\n\tbreak\n")).expect("generate");
+        let module = generate(&lower(fixture!(
+            "programs/unsupported_source_constructs_become_traps.dm"
+        )))
+        .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
         assert!(output.contains("trap break outside loop"), "{output}");
@@ -1852,7 +1823,8 @@ mod tests {
 
     #[test]
     fn output_preserves_field_reference_shape() {
-        let module = generate(&lower("/proc/test()\n\tworld.log << \"hello\"\n")).expect("generate");
+        let module =
+            generate(&lower(fixture!("programs/output_preserves_field_reference_shape.dm"))).expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
         assert!(output.contains("output field .log"), "{output}");
@@ -1861,18 +1833,9 @@ mod tests {
 
     #[test]
     fn try_inside_a_loop_does_not_leave_orphaned_ssa_loads() {
-        let module = lower(
-            r#"
-/proc/test(values)
-    var/total = 0
-    for(var/value in values)
-        try
-            total += value
-        catch
-            total = -1
-    return total
-"#,
-        );
+        let module = lower(fixture!(
+            "programs/try_inside_a_loop_does_not_leave_orphaned_ssa_loads.dm"
+        ));
 
         generate(&module).expect("generate");
     }
@@ -1951,21 +1914,9 @@ mod tests {
 
     #[test]
     fn reachable_codegen_keeps_named_dispatch_candidates_and_stable_proc_ids() {
-        let (tree, ir_module) = analyze(
-            r#"
-/datum/base
-    proc/live()
-        return 1
-    proc/dead()
-        return 2
-/datum/base/child/live()
-    return 3
-/proc/entry(datum/base/value)
-    return value.live()
-/proc/unused()
-    return 4
-"#,
-        );
+        let (tree, ir_module) = analyze(fixture!(
+            "programs/reachable_codegen_keeps_named_dispatch_candidates_and_stable_proc_ids.dm"
+        ));
         let entry = proc_id(&tree, "/", "entry");
         let base_live = proc_id(&tree, "/datum/base", "live");
         let child_live = proc_id(&tree, "/datum/base/child", "live");
@@ -1989,14 +1940,9 @@ mod tests {
 
     #[test]
     fn reachable_codegen_does_not_treat_field_reads_as_method_calls() {
-        let (tree, ir_module) = analyze(
-            r#"
-/datum/base/proc/status()
-    return 1
-/proc/entry(datum/base/value)
-    return value.status
-"#,
-        );
+        let (tree, ir_module) = analyze(fixture!(
+            "programs/reachable_codegen_does_not_treat_field_reads_as_method_calls.dm"
+        ));
         let entry = proc_id(&tree, "/", "entry");
         let status = proc_id(&tree, "/datum/base", "status");
 
@@ -2008,19 +1954,9 @@ mod tests {
 
     #[test]
     fn reachable_codegen_limits_typed_receiver_dispatch_to_its_type_family() {
-        let (tree, ir_module) = analyze(
-            r#"
-/datum/wanted/proc/Initialize()
-    return 1
-/datum/wanted/child/Initialize()
-    return 2
-/datum/unrelated/proc/Initialize()
-    return 3
-/proc/entry(values)
-    for(var/datum/wanted/value in values)
-        value.Initialize()
-"#,
-        );
+        let (tree, ir_module) = analyze(fixture!(
+            "programs/reachable_codegen_limits_typed_receiver_dispatch_to_its_type_family.dm"
+        ));
         let entry = proc_id(&tree, "/", "entry");
         let wanted = proc_id(&tree, "/datum/wanted", "Initialize");
         let child = proc_id(&tree, "/datum/wanted/child", "Initialize");
@@ -2039,26 +1975,9 @@ mod tests {
 
     #[test]
     fn reachable_codegen_follows_super_and_roots_lazy_initializers() {
-        let (tree, ir_module) = analyze(
-            r#"
-/datum/base/proc/step()
-    return 1
-/datum/base/child/step()
-    return ..()
-/datum/base/child/step()
-    return ..()
-/datum/holder
-    var/value = initialize()
-/proc/initialize()
-    return 3
-/proc/entry()
-    var/datum/base/child/value = new
-    var/datum/holder/holder = new
-    return value.step() + holder.value
-/proc/unused()
-    return 4
-"#,
-        );
+        let (tree, ir_module) = analyze(fixture!(
+            "programs/reachable_codegen_follows_super_and_roots_lazy_initializers.dm"
+        ));
         let entry = proc_id(&tree, "/", "entry");
         let latest = proc_id(&tree, "/datum/base/child", "step");
         let previous = ir_module
@@ -2087,16 +2006,7 @@ mod tests {
 
     #[test]
     fn reachable_codegen_omits_unread_lazy_initializers() {
-        let (tree, ir_module) = analyze(
-            r#"
-/datum/holder
-    var/value = initialize()
-/proc/initialize()
-    return 1
-/proc/entry()
-    return 2
-"#,
-        );
+        let (tree, ir_module) = analyze(fixture!("programs/reachable_codegen_omits_unread_lazy_initializers.dm"));
         let entry = proc_id(&tree, "/", "entry");
         let initialize = proc_id(&tree, "/", "initialize");
         let initializer = tree
@@ -2114,20 +2024,9 @@ mod tests {
 
     #[test]
     fn reachable_codegen_bounds_opaque_calls_to_reachable_proc_paths() {
-        let (tree, ir_module) = analyze(
-            r#"
-/proc/call(Target, ProcName)
-    set __demir_intrin = 401
-/proc/live()
-    return 1
-/proc/dead()
-    return 2
-/proc/invoke(callback)
-    return call(callback)()
-/proc/entry(callback = /proc/live)
-    return invoke(callback)
-"#,
-        );
+        let (tree, ir_module) = analyze(fixture!(
+            "programs/reachable_codegen_bounds_opaque_calls_to_reachable_proc_paths.dm"
+        ));
         let entry = proc_id(&tree, "/", "entry");
         let invoke = proc_id(&tree, "/", "invoke");
         let call = proc_id(&tree, "/", "call");
@@ -2147,19 +2046,7 @@ mod tests {
 
     #[test]
     fn reachable_codegen_resolves_static_call_names() {
-        let (tree, ir_module) = analyze(
-            r#"
-/proc/call(Target, ProcName)
-    set __demir_intrin = 401
-/datum/base/proc/live()
-    return 1
-/datum/base/proc/dead()
-    return 2
-/proc/entry()
-    var/datum/base/value = new /datum/base
-    return call(value, "live")()
-"#,
-        );
+        let (tree, ir_module) = analyze(fixture!("programs/reachable_codegen_resolves_static_call_names.dm"));
         let entry = proc_id(&tree, "/", "entry");
         let call = proc_id(&tree, "/", "call");
         let live = proc_id(&tree, "/datum/base", "live");
@@ -2178,20 +2065,9 @@ mod tests {
 
     #[test]
     fn reachable_codegen_keeps_only_exact_constructor_targets() {
-        let (tree, ir_module) = analyze(
-            r#"
-/datum/live/New()
-    return live_helper()
-/datum/dead/New()
-    return dead_helper()
-/proc/live_helper()
-    return 1
-/proc/dead_helper()
-    return 2
-/proc/entry()
-    return new /datum/live
-"#,
-        );
+        let (tree, ir_module) = analyze(fixture!(
+            "programs/reachable_codegen_keeps_only_exact_constructor_targets.dm"
+        ));
         let entry = proc_id(&tree, "/", "entry");
         let live_new = proc_id(&tree, "/datum/live", "New");
         let dead_new = proc_id(&tree, "/datum/dead", "New");
@@ -2212,18 +2088,9 @@ mod tests {
 
     #[test]
     fn reachable_codegen_keeps_every_constructor_for_a_computed_type() {
-        let (tree, ir_module) = analyze(
-            r#"
-/datum/live/New()
-    return 1
-/datum/dead/New()
-    return 2
-/proc/entry(kind)
-    return new kind
-/proc/unrelated()
-    return 3
-"#,
-        );
+        let (tree, ir_module) = analyze(fixture!(
+            "programs/reachable_codegen_keeps_every_constructor_for_a_computed_type.dm"
+        ));
         let entry = proc_id(&tree, "/", "entry");
         let live_new = proc_id(&tree, "/datum/live", "New");
         let dead_new = proc_id(&tree, "/datum/dead", "New");
@@ -2242,20 +2109,9 @@ mod tests {
 
     #[test]
     fn reachable_codegen_falls_back_when_call_target_might_be_a_proc_path() {
-        let (tree, ir_module) = analyze(
-            r#"
-/proc/call(Target, ProcName)
-    set __demir_intrin = 401
-/datum/base/proc/live()
-    return 1
-/datum/base/proc/dead()
-    return 2
-/proc/entry(target)
-    return call(target, "live")()
-/proc/unrelated()
-    return 3
-"#,
-        );
+        let (tree, ir_module) = analyze(fixture!(
+            "programs/reachable_codegen_falls_back_when_call_target_might_be_a_proc_path.dm"
+        ));
         let entry = proc_id(&tree, "/", "entry");
 
         let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
@@ -2272,20 +2128,9 @@ mod tests {
 
     #[test]
     fn reachable_codegen_resolves_dynamic_values_from_typesof_iteration() {
-        let (tree, ir_module) = analyze(
-            r#"
-/proc/call(Target, ProcName)
-    set __demir_intrin = 401
-/proc/typesof(Type1, Type2)
-    set __demir_intrin = 377
-/datum/controller/global_vars/proc/Initialize()
-    var/list/global_procs = typesof(/datum/controller/global_vars/proc)
-    for(var/proc_path in global_procs)
-        call(src, proc_path)()
-/proc/unrelated()
-    return 1
-"#,
-        );
+        let (tree, ir_module) = analyze(fixture!(
+            "programs/reachable_codegen_resolves_dynamic_values_from_typesof_iteration.dm"
+        ));
         let initialize = proc_id(&tree, "/datum/controller/global_vars", "Initialize");
         let call = proc_id(&tree, "/", "call");
         let typesof = proc_id(&tree, "/", "typesof");
@@ -2304,14 +2149,9 @@ mod tests {
 
     #[test]
     fn reachable_codegen_falls_back_to_every_proc_for_an_opaque_callable() {
-        let (tree, ir_module) = analyze(
-            r#"
-/proc/entry(callback)
-    return (callback)()
-/proc/otherwise()
-    return 1
-"#,
-        );
+        let (tree, ir_module) = analyze(fixture!(
+            "programs/reachable_codegen_falls_back_to_every_proc_for_an_opaque_callable.dm"
+        ));
         let entry = proc_id(&tree, "/", "entry");
         let otherwise = proc_id(&tree, "/", "otherwise");
 

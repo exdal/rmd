@@ -363,6 +363,12 @@ pub fn lookup_var<'a>(tree: &'a ObjectTree, path: &TreePath, name: &Identifier) 
 
 #[cfg(test)]
 mod tests {
+    macro_rules! fixture {
+        ($path:literal) => {
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/", $path))
+        };
+    }
+
     use super::*;
 
     fn analyze_source(source: &str) -> (ObjectTree, ir::Module, Vec<SemaError>) {
@@ -375,7 +381,7 @@ mod tests {
 
     #[test]
     fn retains_override_chains_and_runtime_initializers() {
-        let source = "/obj\n\tvar/result = source()\n\tproc/source()\n\t\treturn 1\n\tproc/source()\n\t\treturn 2\n";
+        let source = fixture!("programs/retains_override_chains_and_runtime_initializers.dm");
         let (tree, module, sema_errors) = analyze_source(source);
         assert!(sema_errors.is_empty());
         let object = tree.id_of(&TreePath::parse("/obj")).expect("/obj type");
@@ -401,7 +407,7 @@ mod tests {
 
     #[test]
     fn absolute_var_assignment_overrides_an_existing_declaration() {
-        let source = "/client\n\tvar/script\n/client/script = \"override\"\n";
+        let source = fixture!("programs/absolute-var-assignment-overrides-an-existing-declaration.dm");
         let (tree, _, errors) = analyze_source(source);
         assert!(errors.is_empty(), "{errors:?}");
         let client = tree.id_of(&TreePath::parse("/client")).expect("/client type");
@@ -412,7 +418,7 @@ mod tests {
 
     #[test]
     fn repeated_var_declarations_remain_an_error() {
-        let source = "/client\n\tvar/script\n/client\n\tvar/script\n";
+        let source = fixture!("programs/repeated-var-declarations-remain-an-error.dm");
         let (_, _, errors) = analyze_source(source);
 
         assert!(matches!(
@@ -426,7 +432,7 @@ mod tests {
 
     #[test]
     fn undeclared_overrides_are_reported() {
-        let source = "/client\n\tvar/script\n/client/script = \"override\"\n/obj\n\tnonexistent = 1\n";
+        let source = fixture!("programs/undeclared_overrides_are_reported.dm");
         let (tree, _, errors) = analyze_source(source);
         assert!(errors.is_empty(), "{errors:?}");
 
@@ -445,7 +451,7 @@ mod tests {
 
     #[test]
     fn intrinsic_markers_become_typed_ir_metadata() {
-        let (tree, module, errors) = analyze_source("/proc/test()\n\tset __demir_intrin = 1100\n");
+        let (tree, module, errors) = analyze_source(fixture!("programs/intrinsic_markers_become_typed_ir_metadata.dm"));
         assert!(errors.is_empty(), "{errors:?}");
         let proc = tree
             .proc_inherited(TypeId::ROOT, &"test".into())
@@ -458,7 +464,9 @@ mod tests {
 
     #[test]
     fn intrinsic_markers_reject_malformed_unknown_and_duplicate_ids() {
-        let (_, _, malformed) = analyze_source("/proc/test()\n\tset __demir_intrin = 1100.5\n");
+        let (_, _, malformed) = analyze_source(fixture!(
+            "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_ids.dm"
+        ));
         assert!(matches!(
             malformed.as_slice(),
             [SemaError {
@@ -467,7 +475,9 @@ mod tests {
             }]
         ));
 
-        let (_, _, wrong_mode) = analyze_source("/proc/test()\n\tset __demir_intrin in 1100\n");
+        let (_, _, wrong_mode) = analyze_source(fixture!(
+            "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_ids-2.dm"
+        ));
         assert!(matches!(
             wrong_mode.as_slice(),
             [SemaError {
@@ -476,7 +486,9 @@ mod tests {
             }]
         ));
 
-        let (_, _, unknown) = analyze_source("/proc/test()\n\tset __demir_intrin = 65535\n");
+        let (_, _, unknown) = analyze_source(fixture!(
+            "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_ids-3.dm"
+        ));
         assert!(matches!(
             unknown.as_slice(),
             [SemaError {
@@ -485,8 +497,9 @@ mod tests {
             }]
         ));
 
-        let (_, _, duplicate) =
-            analyze_source("/proc/test()\n\tset __demir_intrin = 1100\n\tset __demir_intrin = 1101\n");
+        let (_, _, duplicate) = analyze_source(fixture!(
+            "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_ids-4.dm"
+        ));
         assert!(matches!(
             duplicate.as_slice(),
             [SemaError {
@@ -534,7 +547,7 @@ mod tests {
         // An object var, declared after the proc that assigns it.
         assert_eq!(
             new_type_of(
-                "/datum/tracy\n/datum/holder\n\tproc/go()\n\t\tchild = new\n/datum/holder\n\tvar/datum/tracy/child\n",
+                fixture!("programs/untyped_new_resolves_against_the_finished_tree.dm"),
                 "/datum/holder",
                 "go",
             ),
@@ -555,7 +568,7 @@ mod tests {
         // A file-scope global.
         assert_eq!(
             new_type_of(
-                "/datum/tracy\nvar/global/datum/tracy/Tracy\n/datum/holder/proc/go()\n\t\tTracy = new\n",
+                fixture!("programs/untyped_new_resolves_against_the_finished_tree-2.dm"),
                 "/datum/holder",
                 "go",
             ),
@@ -565,7 +578,7 @@ mod tests {
         // `src.x`, whose type lives on the owner the same way a bare name's does.
         assert_eq!(
             new_type_of(
-                "/datum/tracy\n/datum/holder\n\tvar/datum/tracy/child\n\tproc/go()\n\t\tsrc.child = new\n",
+                fixture!("programs/untyped_new_resolves_against_the_finished_tree-3.dm"),
                 "/datum/holder",
                 "go",
             ),
@@ -579,7 +592,7 @@ mod tests {
     fn untyped_new_leaves_unresolvable_targets_alone() {
         assert_eq!(
             new_type_of(
-                "/datum/tracy\n/datum/holder/proc/go()\n\t\tvar/datum/tracy/local = new\n",
+                fixture!("programs/untyped_new_leaves_unresolvable_targets_alone.dm"),
                 "/datum/holder",
                 "go",
             ),
@@ -587,7 +600,11 @@ mod tests {
         );
 
         assert_eq!(
-            new_type_of("/datum/holder/proc/go()\n\t\tunknown = new\n", "/datum/holder", "go"),
+            new_type_of(
+                fixture!("programs/untyped_new_leaves_unresolvable_targets_alone-2.dm"),
+                "/datum/holder",
+                "go"
+            ),
             None
         );
     }

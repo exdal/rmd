@@ -1618,6 +1618,12 @@ pub fn render(tokens: &[Spanned<'_>]) -> String {
 
 #[cfg(test)]
 mod tests {
+    macro_rules! fixture {
+        ($path:literal) => {
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/", $path))
+        };
+    }
+
     use std::{
         fs,
         sync::atomic::{AtomicUsize, Ordering},
@@ -1669,19 +1675,18 @@ mod tests {
     fn an_indented_directive_is_not_part_of_the_code_indentation() {
         // The `#endif` lines up with the `#if`, not with anything the code opened.
         assert_eq!(
-            indent_errors("\t#if 0\n\t\t#warn skipped\n\t#endif\n"),
+            indent_errors(fixture!("programs/indented-directive-off.dm")),
             Vec::<String>::new()
         );
         assert_eq!(
-            indent_errors("\t#if 1\n\t\t#warn taken\n\t#endif\n"),
+            indent_errors(fixture!("programs/indented-directive-on.dm")),
             Vec::<String>::new()
         );
     }
 
     #[test]
     fn a_conditional_compiled_out_mid_block_leaves_the_indentation_alone() {
-        let source =
-            "/proc/a()\n\tif(1)\n#if 0\n\t\tskipped()\n\t\t\tdeeper()\n#endif\n\t\tone()\n\t\t\ttwo()\n\tthree()\n";
+        let source = fixture!("programs/conditional-mid-block.dm");
 
         assert_eq!(indent_errors(source), Vec::<String>::new());
     }
@@ -1689,82 +1694,38 @@ mod tests {
     #[test]
     fn a_real_indentation_mistake_is_still_reported_around_directives() {
         // The dedent lands between two open blocks, which no directive explains away.
+        assert_eq!(indent_errors(fixture!("programs/real-indentation-error.dm")).len(), 1);
         assert_eq!(
-            indent_errors("/proc/a()\n\tif(1)\n\t\t\tdeep()\n\t\tmiddle()\n").len(),
-            1
-        );
-        assert_eq!(
-            indent_errors("/proc/a()\n\tif(1)\n#if 0\n\t\tskipped()\n#endif\n\t\t\tdeep()\n\t\tmiddle()\n").len(),
+            indent_errors(fixture!("programs/real-indentation-error-with-directive.dm")).len(),
             1
         );
     }
 
     #[test]
     fn macro_generated_defines_preserve_function_like_spacing() {
-        let rendered = pp(&[(
-            "generated.dm",
-            concat!(
-                "#define DEFINE #define\n",
-                "#define MAKE_FUNCTION(_NAME) DEFINE _NAME(x) x\n",
-                "#define MAKE_OBJECT(_NAME) DEFINE _NAME (x) x\n",
-                "MAKE_FUNCTION(FUNCTION)\n",
-                "FUNCTION\n",
-                "FUNCTION(value)\n",
-                "MAKE_OBJECT(OBJECT)\n",
-                "OBJECT\n",
-            ),
-        )]);
+        let rendered = pp(&[("generated.dm", fixture!("programs/macro-generated-defines.dm"))]);
 
         assert_eq!(rendered, "FUNCTION\nvalue\n( x ) x");
     }
 
     #[test]
     fn concat_pastes_fixed_text_onto_a_parameter() {
-        let rendered = pp(&[(
-            "fixed_concat.dm",
-            "#define UPDATE(X) src.X ## _standing\nUPDATE(body)\n",
-        )]);
+        let rendered = pp(&[("fixed_concat.dm", fixture!("programs/fixed-concat.dm"))]);
 
         assert_eq!(rendered, "src . body_standing");
     }
 
     #[test]
     fn a_bare_generated_function_macro_survives_in_a_nested_path_macro() {
-        let rendered = pp(&[(
-            "nested.dm",
-            concat!(
-                "#define DEFINE #define\n",
-                "#define MAKE(_NAME) /datum/base/##_NAME {} DEFINE _NAME(x) x\n",
-                "#define OTHER(_NAME) /datum/other/##_NAME\n",
-                "#define WRAP(_PATH, _NAME) _PATH(_NAME) {}\n",
-                "MAKE(OFFSETS)\n",
-                "WRAP(OTHER, OFFSETS)\n",
-            ),
-        )]);
+        let rendered = pp(&[("nested.dm", fixture!("programs/nested-path-macro.dm"))]);
 
         assert_eq!(rendered, "/ datum / base / OFFSETS { } / datum / other / OFFSETS { }");
     }
 
     #[test]
     fn a_pasted_identity_macro_captures_a_following_argument_list() {
-        let direct = pp(&[(
-            "identity.dm",
-            concat!(
-                "#define IDENTITY(x) x\n",
-                "#define PATH(_NAME) datum/namespace/##_NAME/##IDENTITY\n",
-                "PATH(CHEM)(var/const/REQUEST = 1)\n",
-            ),
-        )]);
-        let nested = pp(&[(
-            "nested_identity.dm",
-            concat!(
-                "#define IDENTITY(x) x\n",
-                "#define ADD_1(a) datum/namespace/##a/##IDENTITY\n",
-                "#define ADD_2(a, b) datum/namespace/inner/##IDENTITY\n",
-                "#define CREATE(a, b) ADD_1(a)(var/##ADD_2(a, b)(##b = 1))\n",
-                "CREATE(CHEM, REQUEST)\n",
-            ),
-        )]);
+        let direct = pp(&[("identity.dm", fixture!("programs/identity-macro.dm"))]);
+        let nested = pp(&[("nested_identity.dm", fixture!("programs/nested-identity-macro.dm"))]);
 
         assert_eq!(direct, "datum / namespace / CHEM / var / const / REQUEST = 1");
         assert_eq!(
@@ -1775,37 +1736,14 @@ mod tests {
 
     #[test]
     fn recursive_macros_stop_at_the_token_that_already_expanded_them() {
-        let rendered = pp(&[(
-            "recursive.dm",
-            concat!(
-                "#define SELF SELF\n",
-                "#define LEFT RIGHT\n",
-                "#define RIGHT LEFT\n",
-                "SELF\n",
-                "LEFT\n",
-            ),
-        )]);
+        let rendered = pp(&[("recursive.dm", fixture!("programs/recursive-macros.dm"))]);
 
         assert_eq!(rendered, "SELF\nLEFT");
     }
 
     #[test]
     fn a_condition_inside_parentheses_ends_at_its_physical_line() {
-        let rendered = pp(&[(
-            "conditional_list.dm",
-            concat!(
-                "#define CURRENT 1\n",
-                "#define EXPECTED 1\n",
-                "var/list/items = list(\n",
-                "first,\n",
-                "#if CURRENT == EXPECTED\n",
-                "conditional,\n",
-                "#endif\n",
-                "last,\n",
-                ")\n",
-                "var/after = 1\n",
-            ),
-        )]);
+        let rendered = pp(&[("conditional_list.dm", fixture!("programs/conditional-list.dm"))]);
 
         assert_eq!(
             rendered,
@@ -1815,32 +1753,15 @@ mod tests {
 
     #[test]
     fn an_inactive_branch_does_not_close_the_surrounding_expression() {
-        let rendered = pp(&[(
-            "conditional_close.dm",
-            concat!(
-                "var/items = list(first,\\\n",
-                "#ifdef WINTER\n",
-                "coat)\n",
-                "#else\n",
-                ")\n",
-                "#endif\n",
-                "var/after = 1\n",
-            ),
-        )]);
+        let rendered = pp(&[("conditional_close.dm", fixture!("programs/conditional-close.dm"))]);
 
         assert_eq!(rendered, "var / items = list ( first , )\nvar / after = 1");
     }
 
     #[test]
     fn indented_dead_branch_keeps_layout() {
-        let flat = pp(&[(
-            "flat.dm",
-            "/datum/a\n#ifdef NOPE\n#include \"x.dm\"\n#endif\n/datum/b\n\tvar/y = 2\n",
-        )]);
-        let indented = pp(&[(
-            "indented.dm",
-            "/datum/a\n#ifdef NOPE\n\t#include \"x.dm\"\n#endif\n/datum/b\n\tvar/y = 2\n",
-        )]);
+        let flat = pp(&[("flat.dm", fixture!("programs/dead-branch-flat.dm"))]);
+        let indented = pp(&[("indented.dm", fixture!("programs/dead-branch-indented.dm"))]);
 
         assert_eq!(flat, indented);
         assert_eq!(flat, "/ datum / a\n/ datum / b\n> var / y = 2\n<");
@@ -1849,11 +1770,8 @@ mod tests {
     #[test]
     fn an_include_is_indented_against_its_includer() {
         let spliced = pp(&[
-            (
-                "outer.dm",
-                "#define YES\n/datum/a\n\tvar/x = 1\n#ifdef YES\n\t#include \"inner.dm\"\n#endif\n/datum/b\n",
-            ),
-            ("inner.dm", "/datum/inc\n\tvar/z = 3\n"),
+            ("outer.dm", fixture!("programs/include-indented-outer.dm")),
+            ("inner.dm", fixture!("programs/include-indented-inner.dm")),
         ]);
 
         assert_eq!(
@@ -1865,16 +1783,13 @@ mod tests {
     #[test]
     fn an_include_hands_its_open_blocks_back() {
         let trailing = pp(&[
-            ("outer.dm", "/datum/a\n\tvar/x = 1\n#include \"tail.dm\"\n/datum/b\n"),
-            ("tail.dm", "\tvar/deep = 4\n"),
+            ("outer.dm", fixture!("programs/include-open-block-outer.dm")),
+            ("tail.dm", fixture!("programs/include-open-block-tail.dm")),
         ]);
         assert_eq!(trailing, "/ datum / a\n> var / x = 1\nvar / deep = 4\n< / datum / b");
 
         let empty = pp(&[
-            (
-                "block.dm",
-                "/datum/a\n\tvar/x = 1\n\t#include \"nothing.dm\"\n\tvar/y = 2\n",
-            ),
+            ("block.dm", fixture!("programs/include-empty-outer.dm")),
             ("nothing.dm", ""),
         ]);
         assert_eq!(empty, "/ datum / a\n> var / x = 1\nvar / y = 2\n<");
@@ -1888,7 +1803,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("demir-source-cache-{}-{id}", std::process::id()));
         fs::create_dir_all(&dir).expect("temp dir");
         let entry = dir.join("entry.dm");
-        fs::write(&entry, "/datum/a\n\tvar/x = 1\n").expect("first source");
+        fs::write(&entry, fixture!("programs/source-cache-first.dm")).expect("first source");
 
         let arena = StrArena::new();
         let first = Preprocessor::new(&arena)
@@ -1899,7 +1814,7 @@ mod tests {
         let cache = first.source_cache.clone();
         assert_eq!(cache.len(), 1);
 
-        fs::write(&entry, "/datum/a\n\tvar/x = 2\n").expect("changed source");
+        fs::write(&entry, fixture!("programs/source-cache-second.dm")).expect("changed source");
         let second = Preprocessor::new(&arena)
             .without_core()
             .without_prelude()
@@ -1915,8 +1830,8 @@ mod tests {
     #[test]
     fn an_included_file_cannot_leak_a_peeked_eof() {
         let rendered = pp(&[
-            ("outer.dm", "/datum/a\n\tvar/x = 1\n#include \"tail.dm\"\n/datum/b\n"),
-            ("tail.dm", "\tvar/deep = LAST"),
+            ("outer.dm", fixture!("programs/include-eof-outer.dm")),
+            ("tail.dm", fixture!("programs/include-eof-tail.dm")),
         ]);
 
         assert_eq!(rendered, "/ datum / a\n> var / x = 1\nvar / deep = LAST\n< / datum / b");
@@ -1931,13 +1846,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rmd-prelude-{}-{id}", std::process::id()));
         fs::create_dir_all(&dir).expect("temp dir");
 
-        fs::write(dir.join("first.dm"), "#define FROM_FIRST 1\n").expect("write first");
-        fs::write(
-            dir.join("second.dm"),
-            "#if defined(FROM_FIRST)\n#define ORDER 1\n#else\n#define ORDER 0\n#endif\n",
-        )
-        .expect("write second");
-        fs::write(dir.join("entry.dme"), "/datum/a\n\tvar/x = ORDER\n").expect("write entry");
+        fs::write(dir.join("first.dm"), fixture!("programs/prelude-first.dm")).expect("write first");
+        fs::write(dir.join("second.dm"), fixture!("programs/prelude-second.dm")).expect("write second");
+        fs::write(dir.join("entry.dme"), fixture!("programs/prelude-entry.dme")).expect("write entry");
 
         let arena = StrArena::new();
         let result = Preprocessor::new(&arena)
@@ -1962,19 +1873,18 @@ mod tests {
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("rmd-postlude-{}-{id}", std::process::id()));
         fs::create_dir_all(&dir).expect("temp dir");
-        fs::write(
-            dir.join("entry.dm"),
-            "#define FROM_ENTRY 7\n/datum/entry\n\tvar/value = FROM_PRELUDE\n",
-        )
-        .expect("write entry");
+        fs::write(dir.join("entry.dm"), fixture!("programs/postlude-entry.dm")).expect("write entry");
 
         let arena = StrArena::new();
         let result = Preprocessor::new(&arena)
             .without_prelude()
-            .with_prelude([PreludeFile::Embedded("<before-entry.dm>", "#define FROM_PRELUDE 3\n")])
+            .with_prelude([PreludeFile::Embedded(
+                "<before-entry.dm>",
+                fixture!("programs/postlude-prelude.dm"),
+            )])
             .with_postlude([PreludeFile::Embedded(
                 "<after-entry.dm>",
-                "/datum/injected\n\tvar/value = FROM_ENTRY\n",
+                fixture!("programs/postlude-postlude.dm"),
             )])
             .run(dir.join("entry.dm"))
             .expect("preprocess");
@@ -1996,12 +1906,7 @@ mod tests {
         fs::create_dir_all(&dir).expect("temp dir");
         let entry = dir.join("entry.dm");
         // tgstation's `__byond_version_compat.dm`, which only `SPACEMAN_DMM` used to skip
-        fs::write(
-            &entry,
-            "#if (DM_VERSION < 516 || DM_BUILD < 1659) && !defined(SPACEMAN_DMM)\n#error too \
-             old\n#endif\n/proc/test()\n\treturn 1\n",
-        )
-        .expect("write entry");
+        fs::write(&entry, fixture!("programs/baking-compatibility.dm")).expect("write entry");
 
         let arena = StrArena::new();
         let result = Preprocessor::new(&arena)
@@ -2023,11 +1928,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("demir-inactive-{}", std::process::id()));
         fs::create_dir_all(&dir).expect("temp dir");
         let entry = dir.join("entry.dm");
-        fs::write(
-            &entry,
-            "#if 0\n/proc/ignored()\n\tvar/x = `\n\tvar/y = \"unterminated\n#endif\n/proc/valid()\n\treturn 1\n",
-        )
-        .expect("write entry");
+        fs::write(&entry, fixture!("programs/inactive-branch-lex-errors.dm")).expect("write entry");
 
         let arena = StrArena::new();
         let result = Preprocessor::new(&arena)
@@ -2080,7 +1981,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rmd-core-{}-{id}", std::process::id()));
         fs::create_dir_all(&dir).expect("temp dir");
         let entry = dir.join("entry.dm");
-        fs::write(&entry, "/proc/test()\n\treturn 1\n").expect("write entry");
+        fs::write(&entry, fixture!("programs/without-prelude.dm")).expect("write entry");
 
         let arena = StrArena::new();
         let result = Preprocessor::new(&arena)

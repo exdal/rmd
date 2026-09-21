@@ -2083,6 +2083,12 @@ pub fn parse(tokens: &[(Token<'_>, Location)]) -> ParseResult<AST> { Parser::new
 
 #[cfg(test)]
 mod tests {
+    macro_rules! fixture {
+        ($path:literal) => {
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/", $path))
+        };
+    }
+
     use super::*;
 
     fn tokens(source: &str) -> Vec<(Token<'_>, Location)> {
@@ -2121,9 +2127,7 @@ mod tests {
 
     #[test]
     fn modifiers_outside_a_declaration_are_type_names() {
-        let ast = parse_source(
-            "/obj/paper/final\n\tname = \"last\"\n\tvar\n\t\tfinal\n\t\t\tsealed = 1\n/obj/static/var/tmp/cache\n",
-        );
+        let ast = parse_source(fixture!("programs/modifiers_outside_a_declaration_are_type_names.dm"));
         let Declaration::Type { path, body, .. } = &ast.declarations[0] else {
             panic!("expected a type declaration")
         };
@@ -2149,7 +2153,7 @@ mod tests {
 
     #[test]
     fn keywords_stay_usable_as_path_segments_and_names() {
-        let ast = parse_source("/datum/task/throw\n\tvar/matrix/final = null\n\tvar/datum/thing/verb = null\n");
+        let ast = parse_source(fixture!("programs/keywords_stay_usable_as_path_segments_and_names.dm"));
         let Declaration::Type { path, body, .. } = &ast.declarations[0] else {
             panic!("expected a type declaration")
         };
@@ -2165,15 +2169,17 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["final", "verb"]);
 
-        let ast = parse_source("/proc/f()\n\tvar/matrix/final = null\n\tfinal.Turn(1)\n\tstep(src, 1)\n\tvar x = 1\n");
+        let ast = parse_source(fixture!(
+            "programs/keywords_stay_usable_as_path_segments_and_names-2.dm"
+        ));
         assert_eq!(proc_body(&ast).len(), 4);
     }
 
     #[test]
     fn operator_stays_usable_as_a_variable_and_path_name() {
-        let ast = parse_source(
-            "/datum/example\n\tvar/operator\n\tvar/mob/operator = null\n\tvar/operator[]\n/datum/operator/child\n",
-        );
+        let ast = parse_source(fixture!(
+            "programs/operator_stays_usable_as_a_variable_and_path_name.dm"
+        ));
         let Declaration::Type { body, .. } = &ast.declarations[0] else {
             panic!("expected a type declaration")
         };
@@ -2205,7 +2211,7 @@ mod tests {
 
     #[test]
     fn soft_keywords_are_read_by_position() {
-        let ast = parse_source("/datum/pick/list\n\tvar/step = 1\n\tvar/global/src = 2\n");
+        let ast = parse_source(fixture!("programs/soft_keywords_are_read_by_position.dm"));
         let Declaration::Type { path, body, .. } = &ast.declarations[0] else {
             panic!("expected a type declaration")
         };
@@ -2322,7 +2328,7 @@ mod tests {
 
     #[test]
     fn parses_declaration_forms_byond_allows() {
-        let ast = parse_source("/datum/admin_verb/debug/visibility_flag = 4\n");
+        let ast = parse_source(fixture!("programs/parses_declaration_forms_byond_allows.dm"));
         let Declaration::Var { path, initializer, .. } = &ast.declarations[0] else {
             panic!("expected a var declaration")
         };
@@ -2330,7 +2336,7 @@ mod tests {
         assert_eq!(path.declaration_owner().len(), 3);
         assert!(initializer.is_some());
 
-        let ast = parse_source("/datum/thing/New(..., serialized)\n\treturn\n");
+        let ast = parse_source(fixture!("programs/parses_declaration_forms_byond_allows-2.dm"));
         let Declaration::Proc { params, variadic, .. } = &ast.declarations[0] else {
             panic!("expected a proc")
         };
@@ -2338,14 +2344,14 @@ mod tests {
         assert!(variadic);
         assert_eq!(params.len(), 1);
 
-        let ast = parse_source("/datum/timer/proc/operator\"\"()\n\treturn \"now\"\n");
+        let ast = parse_source(fixture!("programs/parses_declaration_forms_byond_allows-3.dm"));
         let Declaration::Proc { path, .. } = &ast.declarations[0] else {
             panic!("expected a proc")
         };
 
         assert_eq!(path.name().map(ToString::to_string).unwrap_or_default(), "operator\"\"");
 
-        let ast = parse_source("/mob/proc/temperature_expose(null, temp, volume)\n\treturn\n");
+        let ast = parse_source(fixture!("programs/parses_declaration_forms_byond_allows-4.dm"));
         let Declaration::Proc { params, .. } = &ast.declarations[0] else {
             panic!("expected a proc")
         };
@@ -2356,10 +2362,14 @@ mod tests {
 
     #[test]
     fn statement_bodies_may_be_empty_and_loops_may_filter_bare_names() {
-        let ast = parse_source("/proc/f()\n\ttry\n\t\tg()\n\tcatch\n\treturn 1\n");
+        let ast = parse_source(fixture!(
+            "programs/statement_bodies_may_be_empty_and_loops_may_filter_bare_names.dm"
+        ));
         assert_eq!(proc_body(&ast).len(), 2);
 
-        let ast = parse_source("/proc/f()\n\tfor(point as anything in grid)\n\t\tpoint.go()\n");
+        let ast = parse_source(fixture!(
+            "programs/statement_bodies_may_be_empty_and_loops_may_filter_bare_names-2.dm"
+        ));
         let [Statement::For(loop_)] = proc_body(&ast) else {
             panic!("expected a for loop")
         };
@@ -2374,8 +2384,7 @@ mod tests {
 
     #[test]
     fn parses_braced_declaration_blocks() {
-        let ast =
-            parse_source("/datum/bitfield/check_flags { flags = list(\"A\" = 1); variable = \"check_flags\"; }\n");
+        let ast = parse_source(fixture!("programs/parses_braced_declaration_blocks.dm"));
         let Declaration::Type { path, body, .. } = &ast.declarations[0] else {
             panic!("expected a type declaration")
         };
@@ -2384,7 +2393,7 @@ mod tests {
         assert_eq!(body.len(), 2);
         assert!(body.iter().all(|d| matches!(d, Declaration::Override { .. })));
 
-        let ast = parse_source("/obj/thing\n{\n\tname = \"thing\"\n\tvar/count = 3\n}\n");
+        let ast = parse_source(fixture!("programs/parses_braced_declaration_blocks-2.dm"));
         let Declaration::Type { body, .. } = &ast.declarations[0] else {
             panic!("expected a type declaration")
         };
@@ -2564,33 +2573,7 @@ mod tests {
 
     #[test]
     fn parses_statement_families_and_typed_bindings() {
-        let ast = parse_source(
-            r#"
-/proc/test(mob/user, amount = 1 as num in 1 to 10, ...)
-    var/list/items[5], other = list()
-    set waitfor = 0
-    if(!user)
-        return
-    else if(amount > 2)
-        world << "hi"
-    else
-        user >> amount
-    while(amount)
-        amount--
-    do
-        amount++
-    while(amount < 2)
-    spawn(1)
-        del user
-    try
-        throw user
-    catch(/datum/error/e)
-        goto done
-    obj:field()
-    done:
-        break
-"#,
-        );
+        let ast = parse_source(fixture!("programs/parses_statement_families_and_typed_bindings.dm"));
 
         let Declaration::Proc {
             params,
@@ -2624,18 +2607,7 @@ mod tests {
 
     #[test]
     fn parses_all_for_header_forms() {
-        let ast = parse_source(
-            r#"
-/proc/test()
-    for(;;) break
-    for(var/i; i < 10; i++) continue
-    for(var/two, two < 2) continue
-    for(i = 1 to 10 step 2) continue
-    for(var/j in 1 to 5) continue
-    for(var/key, value in list()) continue
-    for(existing in world) continue
-"#,
-        );
+        let ast = parse_source(fixture!("programs/parses_all_for_header_forms.dm"));
         let body = proc_body(&ast);
         assert_eq!(body.len(), 7);
         assert!(matches!(&body[0], Statement::For(loop_) if matches!(**loop_, ForLoop::Standard { init: None, .. })));
@@ -2655,17 +2627,7 @@ mod tests {
 
     #[test]
     fn parses_switch_and_braced_bodies() {
-        let ast = parse_source(
-            r#"
-/proc/indented(value)
-    switch(value)
-        if(1, 2 to 4)
-            return 1
-        else
-            return 0
-/proc/braced() { if(1) { return 1; }; else { return 2; }; }
-"#,
-        );
+        let ast = parse_source(fixture!("programs/parses_switch_and_braced_bodies.dm"));
         let Declaration::Proc { body: Some(body), .. } = &ast.declarations[0] else {
             panic!("expected proc")
         };
@@ -2733,7 +2695,7 @@ mod tests {
 
     #[test]
     fn indented_var_blocks_chain_inside_proc_bodies() {
-        let ast = parse_source("/proc/test()\n\tvar\n\t\ta = 1\n\t\tmob/M = null\n\treturn a\n");
+        let ast = parse_source(fixture!("programs/indented_var_blocks_chain_inside_proc_bodies.dm"));
         let body = proc_body(&ast);
         assert!(matches!(&body[0], Statement::Var { spec, initializer: Some(_), .. }
             if spec.name.as_str() == "a" && spec.var_type.is_none()));
@@ -2748,7 +2710,9 @@ mod tests {
         assert_eq!(no_eof.pop().unwrap().0, Token::Eof);
         assert!(parse(&no_eof).is_ok());
 
-        let bad = tokens("/proc/test()\n    return 1 unexpected");
+        let bad = tokens(fixture!(
+            "programs/accepts_slice_exhaustion_and_rejects_missing_statement_delimiters.dm"
+        ));
         assert!(parse(&bad).is_err());
     }
 
@@ -2810,13 +2774,18 @@ mod tests {
 
     #[test]
     fn rejects_non_overloadable_operator_names() {
-        assert!(parse(&tokens("/datum/proc/operator&&(a)\n\treturn a\n")).is_err());
-        assert!(parse(&tokens("/datum/proc/operator!(a)\n\treturn a\n")).is_err());
+        assert!(parse(&tokens(fixture!("programs/rejects_non_overloadable_operator_names.dm"))).is_err());
+        assert!(
+            parse(&tokens(fixture!(
+                "programs/rejects_non_overloadable_operator_names-2.dm"
+            )))
+            .is_err()
+        );
     }
 
     #[test]
     fn proc_bodies_may_sit_on_the_header_line() {
-        let ast = parse_source("/datum\n\tproc\n\t\toperator:=(a) src.x = a\n\t\tMultiply(m) m = 1; return m\n");
+        let ast = parse_source(fixture!("programs/proc_bodies_may_sit_on_the_header_line.dm"));
         let Declaration::Type { body, .. } = &ast.declarations[0] else {
             panic!("expected a type declaration")
         };

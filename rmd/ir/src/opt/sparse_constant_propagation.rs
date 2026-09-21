@@ -791,6 +791,12 @@ fn intern_constant(module: &mut Module, constant_ids: &mut HashMap<ScalarKey, Ir
 
 #[cfg(test)]
 mod tests {
+    macro_rules! fixture {
+        ($path:literal) => {
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/", $path))
+        };
+    }
+
     use core::{location::Location, path::TreePath, types::Value};
 
     use super::{fold_binary, fold_unary};
@@ -830,7 +836,7 @@ mod tests {
 
     #[test]
     fn folds_scalar_expression_chains() {
-        let module = lower("/proc/t()\n\treturn -(1 + 2) * 4\n");
+        let module = lower(fixture!("programs/folds_scalar_expression_chains.dm"));
 
         assert_eq!(returned(&module), Some(&Value::Num(-12.0)));
         assert!(
@@ -844,7 +850,7 @@ mod tests {
 
     #[test]
     fn follows_only_the_executable_phi_edge() {
-        let module = lower("/proc/t()\n\tvar/x\n\tif(1)\n\t\tx = 2 + 3\n\telse\n\t\tx = 9\n\treturn x\n");
+        let module = lower(fixture!("programs/follows_only_the_executable_phi_edge.dm"));
 
         assert_eq!(returned(&module), Some(&Value::Num(5.0)));
         assert!(
@@ -858,7 +864,9 @@ mod tests {
 
     #[test]
     fn removes_a_faulting_rhs_when_short_circuiting_skips_it() {
-        let module = lower("/proc/t()\n\treturn 0 && (1 / 0)\n");
+        let module = lower(fixture!(
+            "programs/removes_a_faulting_rhs_when_short_circuiting_skips_it.dm"
+        ));
 
         assert_eq!(returned(&module), Some(&Value::Num(0.0)));
         assert!(
@@ -872,7 +880,7 @@ mod tests {
 
     #[test]
     fn preserves_a_faulting_rhs_when_its_path_executes() {
-        let module = lower("/proc/t()\n\treturn 1 && (1 / 0)\n");
+        let module = lower(fixture!("programs/preserves_a_faulting_rhs_when_its_path_executes.dm"));
 
         assert!(
             module
