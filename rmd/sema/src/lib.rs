@@ -43,8 +43,8 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    pub fn finish(self) -> (ObjectTree, ir::Module, Vec<SemaError>) {
-        let (tree, module, errors, _) = self.finish_with_optimizations(true);
+    pub fn finish(self, optimize: bool) -> (ObjectTree, ir::Module, Vec<SemaError>) {
+        let (tree, module, errors, _) = self.finish_with_optimizations(optimize);
 
         (tree, module, errors)
     }
@@ -339,11 +339,11 @@ pub fn check_undeclared_overrides(tree: &ObjectTree) -> Vec<SemaError> {
     errors
 }
 
-pub fn analyze(ast: &AST) -> (ObjectTree, ir::Module, Vec<SemaError>) {
+pub fn analyze(ast: &AST, optimize: bool) -> (ObjectTree, ir::Module, Vec<SemaError>) {
     let mut analyzer = Analyzer::new(ast);
     analyzer.add();
 
-    analyzer.finish()
+    analyzer.finish(optimize)
 }
 
 pub fn analyze_with_optimizations(
@@ -376,7 +376,7 @@ mod tests {
         assert!(lexer_errors.is_empty(), "{lexer_errors:?}");
         let ast = ast::parse(&tokens).expect("fixture should parse");
 
-        analyze(&ast)
+        analyze(&ast, true)
     }
 
     #[test]
@@ -513,7 +513,7 @@ mod tests {
         let (tokens, errors) = lexer::tokenize(source);
         assert!(errors.is_empty(), "{errors:?}");
         let ast = ast::parse(&tokens).expect("fixture should parse");
-        let (tree, module, _) = analyze(&ast);
+        let (tree, module, _) = analyze(&ast, true);
 
         let body = tree
             .id_of(&TreePath::parse(owner))

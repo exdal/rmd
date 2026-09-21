@@ -73,6 +73,19 @@
 	if(uses_integrity)
 		atom_integrity = max_integrity
 
+// tgstation documents a null canSmoothWith on a smoothing atom as "smooth with the same type".
+// Its bitmask helper only compares explicit groups, though, and snow mineral walls rely on the
+// null form. Give those mineral walls a private type-keyed group for the preview bake.
+/turf/closed/wall/mineral/demir_prepare_smoothing()
+	. = ..()
+	if(canSmoothWith || !(smoothing_flags & USES_SMOOTHING))
+		return
+	var/list/self_smoothing_group = list()
+	self_smoothing_group[type] = TRUE
+	canSmoothWith = self_smoothing_group
+	smoothing_groups = smoothing_groups ? smoothing_groups.Copy() : list()
+	smoothing_groups[type] = TRUE
+
 // Overlay lights are pre-baked masks composited on the lighting plane. Recreate the component's
 // visual without starting components, signals, or dynamic-luminosity bookkeeping.
 /proc/demir_tg_overlay_icon(pixel_bounds)
@@ -545,8 +558,11 @@
 
 	if(target)
 		imgui_separator("Selection")
-		imgui_text("[target.type]")
-		imgui_text("[target.name]")
+		if(istype(target, /obj/structure/closet))
+			var/obj/structure/closet/closet = target
+			imgui_text("Closet contents: [length(closet.contents)]")
+			for(var/atom/content in closet.contents)
+				imgui_text("[content.name]")
 
 	imgui_end()
 
@@ -565,6 +581,9 @@
 		if(atmos_target.pipe_flags & PIPING_CARDINAL_AUTONORMALIZE)
 			atmos_target.normalize_cardinal_directions()
 		atmos_target.set_init_directions(atmos_target.initialize_directions)
+	if(istype(target, /obj/structure/closet))
+		var/obj/structure/closet/closet = target
+		closet.PopulateContents()
 
 /datum/demir/tgstation/bake(atom/target)
 	if(istype(target, /obj/effect/spawner/structure/window))

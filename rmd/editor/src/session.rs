@@ -3243,7 +3243,7 @@ mod tests {
             assert!(preprocessed.is_ok(), "{:?}", preprocessed.errors);
 
             let ast = ast::parse(&preprocessed.tokens).expect("parse");
-            let (tree, module, errors) = sema::analyze(&ast);
+            let (tree, module, errors) = sema::analyze(&ast, baking);
             assert!(errors.is_empty(), "{errors:?}");
 
             (tree, module)
@@ -4315,7 +4315,7 @@ mod tests {
             assert!(preprocessed.is_ok(), "{:?}", preprocessed.errors);
 
             let ast = ast::parse(&preprocessed.tokens).expect("parse");
-            let (tree, module, errors) = sema::analyze(&ast);
+            let (tree, module, errors) = sema::analyze(&ast, baking);
             assert!(errors.is_empty(), "{errors:?}");
 
             (tree, module)

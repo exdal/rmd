@@ -975,6 +975,7 @@ impl Bake {
                     self.areas.retain(|_, value| *value != object);
                     self.prepared.remove(&object);
                     self.lit.remove(&object);
+                    let _ = self.runtime.heap.delete_unplaced_contents(object);
                     let _ = self.runtime.heap.relocate(object, None);
                     if let Ok(object) = self.runtime.heap.object_mut(object) {
                         object.deleted = true;

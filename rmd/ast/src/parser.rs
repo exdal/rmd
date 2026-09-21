@@ -1960,14 +1960,12 @@ impl<'a, 't> Parser<'a, 't> {
                 args.push(Argument { key: None, value: None });
 
                 if self.consume(Token::ParenRight) {
-                    args.push(Argument { key: None, value: None });
                     break;
                 }
                 continue;
             }
 
             if self.consume(Token::ParenRight) {
-                args.push(Argument { key: None, value: None });
                 break;
             }
 
@@ -2486,6 +2484,15 @@ mod tests {
         assert!(args[2].key.is_some());
         let grouped = args[3].value.expect("grouped assignment argument");
         assert!(matches!(expressions[grouped.index()], Expression::Grouped(_)));
+
+        let (expressions, root) = parse_expr("list(1, 2,)");
+        assert!(matches!(&expressions[root.index()], Expression::List(args) if args.len() == 2));
+
+        let (expressions, root) = parse_expr("list(1,,)");
+        assert!(matches!(
+            &expressions[root.index()],
+            Expression::List(args) if args.len() == 2 && args[1].value.is_none()
+        ));
 
         let (expressions, root) = parse_expr("pick(10; \"rare\", \"common\")");
         assert!(matches!(

@@ -28,7 +28,8 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
         .iter()
         .enumerate()
         .filter_map(|(index, node)| matches!(node, IrNode::Label(_)).then_some(IrNodeId(index as u32)))
-        .collect::<HashSet<_>>();
+        .collect::<Vec<_>>();
+    let block_set = blocks.iter().copied().collect::<HashSet<_>>();
     let mut instruction_blocks = HashMap::<IrNodeId, IrNodeId>::new();
     let mut predecessors = HashMap::<IrNodeId, Vec<IrNodeId>>::new();
 
@@ -39,7 +40,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                 proc.function
             )));
         }
-        require_block(&blocks, proc.body, &format!("procedure {index} body"))?;
+        require_block(&block_set, proc.body, &format!("procedure {index} body"))?;
         if let Some(previous) = proc.previous
             && module.proc(previous).is_none()
         {
@@ -155,9 +156,9 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
             }
 
             for operand in node.operands() {
-                verify_reference(module, operand, &format!("instruction {instruction}"))?;
+                verify_reference(module, operand, &format!("instruction {instruction} in block {block}"))?;
             }
-            verify_targets(node, &blocks, instruction)?;
+            verify_targets(node, &block_set, instruction, *block)?;
         }
 
         let terminator = instructions.last().and_then(|instruction| module.node(*instruction));
@@ -219,7 +220,9 @@ fn require_block(blocks: &HashSet<IrNodeId>, block: IrNodeId, context: &str) -> 
     }
 }
 
-fn verify_targets(node: &IrNode, blocks: &HashSet<IrNodeId>, instruction: IrNodeId) -> Result<(), VerifyError> {
+fn verify_targets(
+    node: &IrNode, blocks: &HashSet<IrNodeId>, instruction: IrNodeId, block: IrNodeId,
+) -> Result<(), VerifyError> {
     let targets = match node {
         IrNode::SelectionMerge { merge_block } => vec![*merge_block],
         IrNode::LoopMerge {
@@ -237,7 +240,7 @@ fn verify_targets(node: &IrNode, blocks: &HashSet<IrNodeId>, instruction: IrNode
         _ => Vec::new(),
     };
     for target in targets {
-        require_block(blocks, target, &format!("instruction {instruction}"))?;
+        require_block(blocks, target, &format!("instruction {instruction} in block {block}"))?;
     }
 
     Ok(())
@@ -284,5 +287,24 @@ mod tests {
         let error = verify(&module).expect_err("phi should name its predecessor");
 
         assert!(error.to_string().contains("expected [%0]"));
+    }
+
+    #[test]
+    fn reference_errors_name_the_containing_block() {
+        let module = Module {
+            nodes: vec![
+                IrNode::Label(vec![IrNodeId(1)]),
+                IrNode::Return(Some(IrNodeId(2))),
+                IrNode::Noop,
+            ],
+            ..Module::default()
+        };
+
+        let error = verify(&module).expect_err("return should not reference a removed node");
+
+        assert_eq!(
+            error.to_string(),
+            "instruction %1 in block %0 references removed node %2"
+        );
     }
 }

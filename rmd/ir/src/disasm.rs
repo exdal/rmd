@@ -14,25 +14,30 @@ pub fn dump_selected_with(module: &Module, procedures: &HashSet<ProcId>, syntax_
 fn dump_impl(module: &Module, procedures: Option<&HashSet<ProcId>>, syntax_highlighting: bool) -> String {
     let referenced = procedures.map(|procedures| selected_nodes(module, procedures));
     let included = |id: IrNodeId| referenced.as_ref().is_none_or(|nodes| nodes.contains(&id));
-    let function_count = module
+    let displayed_blocks = module
         .procs
         .iter()
         .enumerate()
-        .filter(|(index, _)| procedures.is_none_or(|procedures| procedures.contains(&ProcId(*index as u32))))
-        .count();
+        .map(|(index, _)| {
+            procedures
+                .is_none_or(|procedures| procedures.contains(&ProcId(index as u32)))
+                .then(|| procedure_blocks(module, index))
+        })
+        .collect::<Vec<_>>();
+    let function_count = displayed_blocks.iter().flatten().count();
     let constant_count = module.constants.iter().filter(|id| included(**id)).count();
     let external_count = module.external_functions.iter().filter(|id| included(**id)).count();
-    let blocks = module
-        .procs
+    let blocks = displayed_blocks
         .iter()
-        .enumerate()
-        .filter(|(index, _)| procedures.is_none_or(|procedures| procedures.contains(&ProcId(*index as u32))))
-        .map(|(_, procedure)| reachable(module, procedure.body).len())
+        .flatten()
+        .map(|(reachable, unreachable)| reachable.len() + unreachable.len())
         .sum::<usize>();
     let node_count = referenced.as_ref().map_or(module.nodes.len(), HashSet::len);
     let width = IrNodeId(module.nodes.len().saturating_sub(1) as u32).to_string().len();
 
     let mut out = String::new();
+    let mut printed = vec![false; module.nodes.len()];
+    let mut printed_missing = HashSet::new();
     let _ = writeln!(
         out,
         "; ir module: {} nodes, {} constants, {} external functions, {} functions, {blocks} blocks",
@@ -48,6 +53,7 @@ fn dump_impl(module: &Module, procedures: Option<&HashSet<ProcId>>, syntax_highl
             };
 
             line(&mut out, width, *id, 0, &format!("constant {}", constant(value)));
+            mark_printed(&mut printed, *id);
         }
     }
 
@@ -60,13 +66,14 @@ fn dump_impl(module: &Module, procedures: Option<&HashSet<ProcId>>, syntax_highl
             };
 
             line(&mut out, width, *id, 0, &format!("external_function {name}"));
+            mark_printed(&mut printed, *id);
         }
     }
 
     for (index, proc) in module.procs.iter().enumerate() {
-        if procedures.is_some_and(|procedures| !procedures.contains(&ProcId(index as u32))) {
+        let Some((reachable, unreachable)) = displayed_blocks[index].as_ref() else {
             continue;
-        }
+        };
         blank_line(&mut out);
         let mut declaration = format!("function {}::{} vars={}", proc.owner, proc.name, proc.vars.len());
 
@@ -79,6 +86,7 @@ fn dump_impl(module: &Module, procedures: Option<&HashSet<ProcId>>, syntax_highl
         }
 
         line(&mut out, width, proc.function, 0, &declaration);
+        mark_printed(&mut printed, proc.function);
 
         for parameter in &proc.parameters {
             let Some(node @ IrNode::FunctionParameter(_)) = module.node(*parameter) else {
@@ -86,25 +94,23 @@ fn dump_impl(module: &Module, procedures: Option<&HashSet<ProcId>>, syntax_highl
             };
 
             line(&mut out, width, *parameter, 1, &format_node(node));
+            mark_printed(&mut printed, *parameter);
         }
 
-        for block in reachable(module, proc.body) {
-            let Some(IrNode::Label(instructions)) = module.node(block) else {
-                continue;
-            };
+        for block in reachable.iter().copied() {
+            dump_block(module, block, width, &mut out, &mut printed, &mut printed_missing);
+        }
 
+        if !unreachable.is_empty() {
             blank_line(&mut out);
-            line(&mut out, width, block, 1, "label");
-
-            for instruction in instructions {
-                let Some(node) = module.node(*instruction) else {
-                    continue;
-                };
-
-                line(&mut out, width, *instruction, 2, &format_node(node));
-            }
+            let _ = writeln!(out, "; unreachable blocks in {}::{}", proc.owner, proc.name);
+        }
+        for block in unreachable.iter().copied() {
+            dump_block(module, block, width, &mut out, &mut printed, &mut printed_missing);
         }
     }
+
+    dump_referenced_nodes(module, procedures, width, &printed, &printed_missing, &mut out);
 
     match syntax_highlighting {
         true => highlight(&out),
@@ -139,7 +145,8 @@ fn selected_nodes(module: &Module, procedures: &HashSet<ProcId>) -> HashSet<IrNo
                 mark(*dimension, &mut selected, &mut pending);
             }
         }
-        for block in reachable(module, procedure.body) {
+        let (reachable, unreachable) = procedure_blocks(module, proc_id.0 as usize);
+        for block in reachable.into_iter().chain(unreachable) {
             mark(block, &mut selected, &mut pending);
             let Some(IrNode::Label(instructions)) = module.node(block) else {
                 continue;
@@ -159,9 +166,152 @@ fn selected_nodes(module: &Module, procedures: &HashSet<ProcId>) -> HashSet<IrNo
     selected
 }
 
+fn procedure_blocks(module: &Module, index: usize) -> (Vec<IrNodeId>, Vec<IrNodeId>) {
+    let Some(procedure) = module.procs.get(index) else {
+        return (Vec::new(), Vec::new());
+    };
+    let start = procedure.function.0 as usize + 1;
+    let end = module
+        .procs
+        .get(index + 1)
+        .map_or(module.nodes.len(), |next| next.function.0 as usize)
+        .min(module.nodes.len());
+    let owned = module
+        .nodes
+        .get(start..end)
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .filter_map(|(offset, node)| matches!(node, IrNode::Label(_)).then_some(IrNodeId((start + offset) as u32)))
+        .collect::<Vec<_>>();
+    let owned_set = owned.iter().copied().collect::<HashSet<_>>();
+    let reachable = reachable(module, procedure.body)
+        .into_iter()
+        .filter(|block| owned_set.contains(block))
+        .collect::<Vec<_>>();
+    let reachable_set = reachable.iter().copied().collect::<HashSet<_>>();
+    let unreachable = owned
+        .into_iter()
+        .filter(|block| !reachable_set.contains(block))
+        .collect::<Vec<_>>();
+
+    (reachable, unreachable)
+}
+
+fn dump_block(
+    module: &Module, block: IrNodeId, width: usize, out: &mut String, printed: &mut [bool],
+    printed_missing: &mut HashSet<IrNodeId>,
+) {
+    let Some(IrNode::Label(instructions)) = module.node(block) else {
+        return;
+    };
+
+    blank_line(out);
+    line(out, width, block, 1, "label");
+    mark_printed(printed, block);
+
+    for instruction in instructions {
+        match module.node(*instruction) {
+            Some(node) => {
+                line(out, width, *instruction, 2, &format_node(node));
+                mark_printed(printed, *instruction);
+            },
+            None => {
+                line(out, width, *instruction, 2, "<missing>");
+                printed_missing.insert(*instruction);
+            },
+        }
+    }
+}
+
+fn mark_printed(printed: &mut [bool], id: IrNodeId) {
+    if let Some(slot) = printed.get_mut(id.0 as usize) {
+        *slot = true;
+    }
+}
+
 fn mark(id: IrNodeId, selected: &mut HashSet<IrNodeId>, pending: &mut Vec<IrNodeId>) {
     if selected.insert(id) {
         pending.push(id);
+    }
+}
+
+fn dump_referenced_nodes(
+    module: &Module, procedures: Option<&HashSet<ProcId>>, width: usize, printed: &[bool],
+    printed_missing: &HashSet<IrNodeId>, out: &mut String,
+) {
+    let mut referenced = vec![false; module.nodes.len()];
+    let mut missing = HashSet::new();
+    let mut pending = Vec::new();
+
+    for (index, was_printed) in printed.iter().copied().enumerate() {
+        if !was_printed {
+            continue;
+        }
+        if let Some(node) = module.nodes.get(index) {
+            node.for_each_operand(|operand| pending.push(operand));
+        }
+    }
+
+    for (index, procedure) in module.procs.iter().enumerate() {
+        if procedures.is_some_and(|procedures| !procedures.contains(&ProcId(index as u32))) {
+            continue;
+        }
+        for parameter in &procedure.params {
+            pending.extend(parameter.default);
+            pending.extend(parameter.in_list);
+            pending.extend(parameter.spec.dimensions.iter().flatten().copied());
+        }
+        for variable in &procedure.vars {
+            pending.extend(variable.dimensions.iter().flatten().copied());
+        }
+    }
+
+    while let Some(id) = pending.pop() {
+        let index = id.0 as usize;
+        let Some(seen) = referenced.get_mut(index) else {
+            missing.insert(id);
+            continue;
+        };
+        if *seen {
+            continue;
+        }
+        *seen = true;
+        if let Some(node) = module.node(id) {
+            node.for_each_operand(|operand| pending.push(operand));
+        }
+    }
+
+    let detached = referenced
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(index, referenced)| *referenced && !printed[*index])
+        .filter_map(|(index, _)| {
+            let id = IrNodeId(index as u32);
+            (!matches!(module.node(id), Some(IrNode::Function(_)))).then_some(id)
+        })
+        .collect::<Vec<_>>();
+    let mut missing = missing
+        .into_iter()
+        .filter(|id| !printed_missing.contains(id))
+        .collect::<Vec<_>>();
+    missing.sort_by_key(|id| id.0);
+
+    if detached.is_empty() && missing.is_empty() {
+        return;
+    }
+
+    blank_line(out);
+    let _ = writeln!(out, "; referenced nodes outside displayed blocks");
+    for id in detached {
+        let Some(node) = module.node(id) else {
+            continue;
+        };
+        line(out, width, id, 0, &format_node(node));
+    }
+    for id in missing {
+        line(out, width, id, 0, "<missing>");
     }
 }
 
@@ -574,10 +724,14 @@ mod tests {
         };
     }
 
-    use core::{location::Location, path::TreePath};
+    use core::{
+        location::Location,
+        path::TreePath,
+        types::{IrNodeId, ProcId},
+    };
 
     use super::*;
-    use crate::IrModuleBuilder;
+    use crate::{IrModuleBuilder, Procedure};
 
     fn lower(source: &str) -> Module {
         let (tokens, _) = lexer::tokenize(source);
@@ -700,6 +854,44 @@ mod tests {
         assert!(output.contains("constant 1"), "{output}");
         assert!(!output.contains("::dead"), "{output}");
         assert!(!output.contains("constant 2"), "{output}");
+    }
+
+    #[test]
+    fn disassembly_includes_unreachable_blocks_and_their_invalid_references() {
+        let mut module = Module {
+            nodes: vec![
+                IrNode::Function(ProcId(0)),
+                IrNode::Label(vec![IrNodeId(2)]),
+                IrNode::Return(None),
+                IrNode::Label(vec![IrNodeId(4)]),
+                IrNode::Return(Some(IrNodeId(5))),
+                IrNode::Noop,
+            ],
+            procs: vec![Procedure {
+                function: IrNodeId(0),
+                parameters: Vec::new(),
+                previous: None,
+                owner: TreePath::default(),
+                name: "test".into(),
+                params: Vec::new(),
+                variadic: false,
+                vars: Vec::new(),
+                body: IrNodeId(1),
+                intrinsic: None,
+                location: Location::default(),
+            }],
+            ..Module::default()
+        };
+
+        let output = dump(&module);
+        assert!(output.contains("2 blocks"), "{output}");
+        assert!(output.contains("; unreachable blocks in /::test"), "{output}");
+        assert!(output.contains("%4 =     return %5"), "{output}");
+        assert!(output.contains("%5 = noop"), "{output}");
+
+        module.nodes[4] = IrNode::Return(Some(IrNodeId(99)));
+        let output = dump(&module);
+        assert!(output.contains("%99 = <missing>"), "{output}");
     }
 
     fn strip(text: &str) -> String {

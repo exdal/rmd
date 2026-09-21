@@ -143,6 +143,10 @@ impl<'a> IrModuleBuilder<'a> {
         self.link_global_function_calls();
         // raw lowering can leave instructions after a terminating operation
         crate::opt::canonicalize_terminators(&mut self.module);
+        // blocks made unreachable by terminator canonicalization can still refer to instructions
+        // that were removed above
+        // this is required IR cleanup, not an optional optimization
+        crate::opt::eliminate_unreachable_blocks(&mut self.module);
         let timings = crate::opt::run_optimizations(&mut self.module, enabled);
 
         #[cfg(debug_assertions)]
@@ -1916,6 +1920,23 @@ mod tests {
             std::time::Duration::ZERO
         );
         verify(&module).expect("phi-only lowering should produce valid IR");
+    }
+
+    #[test]
+    fn unoptimized_lowering_removes_cfg_after_a_blocking_setting() {
+        let (module, _) = lower_with_optimizations(
+            fixture!("programs/unoptimized_cleanup_after_blocking_setting.dm"),
+            false,
+        );
+
+        assert_eq!(blocks(&module).len(), 1, "{:?}", nodes(&module));
+        let body = module.block(module.procs[0].body).expect("procedure body");
+        assert!(matches!(
+            body.last().and_then(|id| module.node(*id)),
+            Some(IrNode::Blocked("set waitfor"))
+        ));
+        assert!(module.procs[0].vars[1].dimensions.iter().all(Option::is_none));
+        verify(&module).expect("unoptimized lowering should produce valid IR");
     }
 
     fn blocks(module: &Module) -> Vec<(IrNodeId, Vec<IrNodeId>)> {

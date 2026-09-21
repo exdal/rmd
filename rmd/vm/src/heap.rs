@@ -185,4 +185,27 @@ impl Heap {
 
         Ok(())
     }
+
+    /// Deletes descendants created by runtime code, while leaving map placements to be relinked.
+    pub(crate) fn delete_unplaced_contents(&mut self, parent: ObjectId) -> Result<(), FaultKind> {
+        let mut pending = self
+            .object(parent)
+            .map(|object| object.contents.clone())
+            .unwrap_or_default();
+
+        while let Some(id) = pending.pop() {
+            let Some(object) = self.object(id) else {
+                continue;
+            };
+            if object.instance.is_some() {
+                continue;
+            }
+
+            pending.extend(object.contents.iter().copied());
+            self.relocate(id, None)?;
+            self.object_mut(id)?.deleted = true;
+        }
+
+        Ok(())
+    }
 }

@@ -712,7 +712,7 @@ impl<'a> Evaluator<'a> {
                     }));
                 },
                 Op::MakeList => {
-                    let args = self.arguments(frame)?;
+                    let args = self.argument_values(frame)?;
                     let value = self.make_list(args)?;
                     frame.stack.push(value);
                 },
@@ -1213,6 +1213,18 @@ impl Evaluator<'_> {
     }
 
     fn arguments(&mut self, frame: &mut Frame) -> Result<Vec<(Option<Identifier>, GenericValue)>> {
+        Ok(self
+            .argument_values(frame)?
+            .into_iter()
+            .map(|(key, value)| match key {
+                Some(GenericValue::Text(name)) => (Some(name.as_ref().into()), value),
+                Some(key) => (None, key),
+                None => (None, value),
+            })
+            .collect::<Vec<_>>())
+    }
+
+    fn argument_values(&mut self, frame: &mut Frame) -> Result<Vec<(Option<GenericValue>, GenericValue)>> {
         let count = self.u32(frame)? as usize;
         let shapes = (0..count).map(|_| self.u8(frame)).collect::<Result<Vec<_>>>()?;
         if let Some(shape) = shapes
@@ -1234,12 +1246,7 @@ impl Evaluator<'_> {
         let mut args = Vec::with_capacity(count);
         for shape in shapes {
             let key = if shape & ARGUMENT_KEY != 0 {
-                Some(Identifier::from(
-                    operands
-                        .next()
-                        .ok_or_else(|| self.fault(FaultKind::InvalidReference))?
-                        .display(),
-                ))
+                Some(operands.next().ok_or_else(|| self.fault(FaultKind::InvalidReference))?)
             } else {
                 None
             };
@@ -1262,7 +1269,7 @@ impl Evaluator<'_> {
                     entries
                         .into_iter()
                         .map(|(entry, association)| match (entry, association) {
-                            (GenericValue::Text(name), Some(value)) => (Some(name.as_ref().into()), value),
+                            (name, Some(value)) => (Some(name), value),
                             (value, _) => (None, value),
                         }),
                 );
@@ -2223,11 +2230,10 @@ impl Evaluator<'_> {
             .ok_or_else(|| self.fault(FaultKind::InvalidOperation("iterator has no current key".into())))
     }
 
-    fn make_list(&mut self, args: Vec<(Option<Identifier>, GenericValue)>) -> Result<GenericValue> {
+    fn make_list(&mut self, args: Vec<(Option<GenericValue>, GenericValue)>) -> Result<GenericValue> {
         let mut entries = Vec::new();
         for (key, value) in args {
             if let Some(key) = key {
-                let key = GenericValue::from(key.as_str());
                 if let Some((_, association)) = entries.iter_mut().find(|(entry, _)| *entry == key) {
                     *association = Some(value);
                 } else {

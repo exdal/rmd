@@ -184,7 +184,7 @@ fn dump_tree(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("{} top level declarations", ast.declarations.len());
 
     println!("=== TREE ===");
-    let (tree, _module, errors) = sema::analyze(&ast);
+    let (tree, _module, errors) = sema::analyze(&ast, false);
     print!("{}", render_tree(&tree, &preprocessed.sources, source_root));
 
     for error in &errors {
@@ -205,7 +205,7 @@ fn dump_ir(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn std::er
     }
 
     let ast = ast::parse(&preprocessed.tokens)?;
-    let (tree, module, _) = sema::analyze(&ast);
+    let (tree, module, _) = sema::analyze(&ast, false);
     let color = std::env::var("DM_COLOR").is_ok();
     let output = match selection {
         EntrySelection::All => ir::disasm::dump_with(&module, color),
@@ -232,7 +232,7 @@ fn dump_bytecode(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn s
     }
 
     let ast = ast::parse(&preprocessed.tokens)?;
-    let (tree, module, _) = sema::analyze(&ast);
+    let (tree, module, _) = sema::analyze(&ast, true);
     let module = match selection {
         EntrySelection::All => codegen::generate(&module)?,
         selection => {
@@ -307,7 +307,7 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
             entry,
         ))
     })?;
-    let (tree, ir_module, errors) = sema::analyze(&ast);
+    let (tree, ir_module, errors) = sema::analyze(&ast, true);
     for error in &errors {
         eprintln!(
             "{}",
@@ -603,7 +603,7 @@ fn evaluate_file_with(path: &Path, selection: EntrySelection) -> Result<Vec<Stri
             path,
         ))
     })?;
-    let (tree, module, errors) = sema::analyze(&ast);
+    let (tree, module, errors) = sema::analyze(&ast, true);
     for error in &errors {
         eprintln!(
             "{}",
@@ -1043,7 +1043,7 @@ mod tests {
         let (tokens, errors) = lexer::tokenize(source);
         assert!(errors.is_empty());
         let ast = ast::parse(&tokens).expect("fixture should parse");
-        let (tree, _module, errors) = sema::analyze(&ast);
+        let (tree, _module, errors) = sema::analyze(&ast, false);
         assert!(errors.is_empty());
 
         let source_root = source_root(&sources, Some(entry), Path::new("/project/game/entry.dm"));

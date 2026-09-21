@@ -60,7 +60,7 @@ fn analyze_fixture(source: &str) -> (ObjectTree, ir::Module) {
     let _ = std::fs::remove_file(path);
     assert!(preprocessed.errors.is_empty(), "{:?}", preprocessed.errors);
     let ast = ast::parse(&preprocessed.tokens).expect("fixture should parse");
-    let (tree, module, errors) = sema::analyze(&ast);
+    let (tree, module, errors) = sema::analyze(&ast, true);
     assert!(errors.is_empty(), "{errors:?}");
 
     (tree, module)
@@ -509,6 +509,85 @@ fn profile_ui_draws_widgets_and_reads_back_what_the_editor_remembers() {
         matches!(commands.as_slice(), [Command::Begin { .. }, Command::End]),
         "a collapsed window draws nothing inside",
     );
+}
+
+#[test]
+fn prepared_contents_are_visible_and_cleaned_up_with_their_placement() {
+    let (tree, module) = compile(fixture!(
+        "programs/prepared_contents_are_visible_and_cleaned_up_with_their_placement.dm"
+    ));
+    let atom = |instance: u64, path: &str, x: i32| Atom {
+        instance,
+        ty: tree.id_of(&TreePath::parse(path)).expect("fixture type"),
+        position: Position::new(x, 1, 1),
+        vars: Vec::new(),
+    };
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        vec![atom(1, "/obj/container", 1), atom(2, "/obj/container", 2)],
+        [2, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    let draw = |bake: &mut Bake| {
+        bake.ui(&tree, &module, Some(1), 7, Feedback::default())
+            .expect("the hook should draw")
+            .commands
+    };
+    let expected = [
+        Command::Begin {
+            key: "Contents".into(),
+            label: "Contents".into(),
+            dock: None,
+            size: None,
+        },
+        Command::Text {
+            text: "1".into(),
+            color: None,
+        },
+        Command::Text {
+            text: "prepared item".into(),
+            color: None,
+        },
+        Command::End,
+    ];
+    assert_eq!(draw(&mut bake), expected);
+
+    bake.rebake(
+        &tree,
+        &module,
+        Rebake {
+            appearance: Some(0),
+            ..Default::default()
+        },
+    );
+    assert_eq!(draw(&mut bake), expected, "rebaking must not repopulate the container");
+
+    let generated = [1, 2]
+        .into_iter()
+        .flat_map(|instance| {
+            let container = bake.object(instance).expect("container runtime object");
+            let item = bake.runtime.heap.object(container).expect("container").contents[0];
+            let nested = bake.runtime.heap.object(item).expect("generated item").contents[0];
+            [item, nested]
+        })
+        .collect::<Vec<_>>();
+
+    bake.update(&tree, &module, vec![atom(1, "/obj/empty", 1)], &[2]);
+
+    assert!(generated.into_iter().all(|id| bake.runtime.heap.object(id).is_none()));
+    let replacement = bake.object(1).expect("replacement runtime object");
+    assert!(
+        bake.runtime
+            .heap
+            .object(replacement)
+            .expect("replacement")
+            .contents
+            .is_empty()
+    );
+    assert!(bake.object(2).is_none());
 }
 
 #[test]
@@ -1971,6 +2050,28 @@ fn args_is_a_dm_list_with_the_supplied_length() {
     assert_eq!(
         run(
             fixture!("programs/args_is_a_dm_list_with_the_supplied_length.dm"),
+            "test",
+        ),
+        3.into()
+    );
+}
+
+#[test]
+fn trailing_list_comma_does_not_add_an_entry() {
+    assert_eq!(
+        run(
+            fixture!("programs/trailing_list_comma_does_not_add_an_entry.dm"),
+            "test",
+        ),
+        4.into()
+    );
+}
+
+#[test]
+fn type_paths_remain_types_as_associative_list_keys() {
+    assert_eq!(
+        run(
+            fixture!("programs/type_paths_remain_types_as_associative_list_keys.dm"),
             "test",
         ),
         3.into()

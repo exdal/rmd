@@ -1523,7 +1523,7 @@ mod tests {
         let (tokens, errors) = lexer::tokenize(source);
         assert!(errors.is_empty(), "{errors:?}");
         let ast = ast::parse(&tokens).expect("fixture should parse");
-        let (tree, module, errors) = sema::analyze(&ast);
+        let (tree, module, errors) = sema::analyze(&ast, true);
         assert!(errors.is_empty(), "{errors:?}");
 
         (tree, module)

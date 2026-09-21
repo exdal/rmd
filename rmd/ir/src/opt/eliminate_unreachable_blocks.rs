@@ -1,10 +1,12 @@
 use core::types::IrNodeId;
+use std::collections::HashSet;
 
 use crate::{IrNode, Module};
 
 pub fn eliminate_unreachable_blocks(module: &mut Module) {
     let reachable = reachable_blocks(module);
     let mut obsolete_merges = vec![false; module.nodes.len()];
+    let mut removed = Vec::new();
 
     for (index, node) in module.nodes.iter().enumerate() {
         if !reachable[index] {
@@ -77,7 +79,32 @@ pub fn eliminate_unreachable_blocks(module: &mut Module) {
 
         for instruction in instructions {
             module.nodes[instruction.0 as usize] = IrNode::Noop;
+            removed.push(instruction);
         }
+    }
+
+    let removed = removed.into_iter().collect::<HashSet<_>>();
+    for proc in &mut module.procs {
+        for parameter in &mut proc.params {
+            clear_removed(&mut parameter.default, &removed);
+            clear_removed(&mut parameter.in_list, &removed);
+
+            for dimension in &mut parameter.spec.dimensions {
+                clear_removed(dimension, &removed);
+            }
+        }
+
+        for variable in &mut proc.vars {
+            for dimension in &mut variable.dimensions {
+                clear_removed(dimension, &removed);
+            }
+        }
+    }
+}
+
+fn clear_removed(node: &mut Option<IrNodeId>, removed: &HashSet<IrNodeId>) {
+    if node.is_some_and(|node| removed.contains(&node)) {
+        *node = None;
     }
 }
 
