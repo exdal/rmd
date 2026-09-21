@@ -3,7 +3,7 @@ use core::types::IrNodeId;
 use ast::UnaryOp;
 
 use super::value_facts::ValueFacts;
-use crate::{IrNode, SideEffect, Module};
+use crate::{IrNode, Module, SideEffect};
 
 pub fn eliminate_dead_code(module: &mut Module) {
     let facts = ValueFacts::analyze(module);
