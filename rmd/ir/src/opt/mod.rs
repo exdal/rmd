@@ -1,15 +1,20 @@
 mod canonicalize_terminators;
 mod eliminate_dead_code;
+mod eliminate_dead_stores;
 mod eliminate_forwarding_blocks;
 mod eliminate_unreachable_blocks;
 mod merge_linear_blocks;
+mod peephole;
 mod simplify_phis;
 mod sparse_constant_propagation;
+mod value_facts;
 
 pub use canonicalize_terminators::canonicalize_terminators;
 pub use eliminate_dead_code::eliminate_dead_code;
+pub use eliminate_dead_stores::eliminate_dead_stores;
 pub use eliminate_forwarding_blocks::eliminate_forwarding_blocks;
 pub use eliminate_unreachable_blocks::eliminate_unreachable_blocks;
 pub use merge_linear_blocks::merge_linear_blocks;
+pub use peephole::peephole;
 pub use simplify_phis::simplify_phis;
 pub use sparse_constant_propagation::sparse_constant_propagation;

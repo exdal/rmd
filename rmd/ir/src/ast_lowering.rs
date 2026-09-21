@@ -159,6 +159,12 @@ impl<'a> IrModuleBuilder<'a> {
         crate::opt::eliminate_unreachable_blocks(&mut self.module);
         crate::opt::simplify_phis(&mut self.module);
 
+        // simplify local instruction patterns exposed by constant and phi propagation
+        crate::opt::peephole(&mut self.module);
+
+        // remove stores superseded before their values can be observed
+        crate::opt::eliminate_dead_stores(&mut self.module);
+
         // remove unused computations whose evaluation has no observable effect
         crate::opt::eliminate_dead_code(&mut self.module);
 
