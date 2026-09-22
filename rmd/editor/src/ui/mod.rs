@@ -1,3 +1,4 @@
+mod context_menu;
 mod dm;
 mod inspector;
 mod object_tree;
@@ -76,6 +77,13 @@ use render::{
 };
 
 use self::{
+    context_menu::{
+        Action as MenuAction,
+        NodeContext,
+        POPUP as MAP_MENU_POPUP,
+        Target as MenuTarget,
+        draw_popup as draw_map_menu,
+    },
     inspector::{InspectorPanel, JumpTarget},
     object_tree::ObjectTreePanel,
     settings::SettingsWindow,
@@ -147,7 +155,6 @@ const BUILD_VERSION_URL: Option<&str> = option_env!("RMD_VERSION_URL");
 const BUILD_COMMIT_URL: Option<&str> = option_env!("RMD_COMMIT_URL");
 const CLOSE_MAP_POPUP: &str = "Unsaved changes##close-map";
 const EXIT_POPUP: &str = "Unsaved changes##exit";
-const BLOCK_SELECTION_POPUP: &str = "Block selection##block-selection";
 const BLOCK_SELECTION_GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 const BLOCK_SELECTION_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const BLOCK_SELECTION_SHADOW: [f32; 4] = [0.0, 0.0, 0.0, 0.85];
@@ -805,6 +812,7 @@ struct MapViewState {
     rectangle_gesture: Option<RectangleGesture>,
     block_placement: Option<PendingBlockPlacement>,
     paste: Option<PendingPaste>,
+    context: Option<MenuTarget>,
 }
 
 struct MapViewDraw<'a> {
@@ -833,6 +841,7 @@ impl MapViewState {
             rectangle_gesture: None,
             block_placement: None,
             paste: None,
+            context: None,
         })
     }
 }
@@ -1726,6 +1735,7 @@ impl UiState {
             rectangle_gesture,
             block_placement,
             paste,
+            context,
         } = view;
         *view_visible = false;
         *view_refit |= refit_requested;
@@ -2246,6 +2256,38 @@ impl UiState {
                 let left_down = ui.is_mouse_down(MouseButton::Left);
                 let left_double_clicked = ui.is_mouse_double_clicked(MouseButton::Left);
                 let right_clicked = ui.is_mouse_clicked(MouseButton::Right);
+                if right_clicked && let Some(coord) = pointed_coord {
+                    let atoms = session
+                        .state
+                        .active_document()
+                        .map(|document| document.instance_ids_at(coord).to_vec())
+                        .unwrap_or_default();
+                    let node = if session.tool() == Tool::Node {
+                        if let Some(standalone) = node_hit.standalone {
+                            Some(NodeContext::Standalone(standalone))
+                        } else if let Some(connection) = node_hit.connection.clone() {
+                            Some(NodeContext::Connection(connection))
+                        } else {
+                            cursor.map(|cursor| NodeContext::Pick(coord, cursor_in_map_view(cursor, scale)))
+                        }
+                    } else {
+                        None
+                    };
+                    let block_selected = session.tool() == Tool::BlockSelect
+                        && session
+                            .selection()
+                            .is_some_and(|selection| session.selection_mode().includes(selection, coord));
+                    *context = Some(MenuTarget {
+                        document: id,
+                        coord,
+                        atoms,
+                        node,
+                        block_selected,
+                        replace_for: None,
+                        replace_query: String::new(),
+                    });
+                    ui.open_popup(MAP_MENU_POPUP);
+                }
 
                 if session.tool() == Tool::Node {
                     if !focused {
@@ -2259,17 +2301,6 @@ impl UiState {
                         request_pick(interaction, PickRequest::NodeSeed(coord));
                     } else if left_clicked && let Some(coord) = node_hit.handle {
                         session.start_node_drag(coord);
-                    }
-
-                    if right_clicked {
-                        if let Some(coord) = node_hit.standalone {
-                            session.delete_standalone_node(coord);
-                        } else if let Some(connection) = node_hit.connection.as_deref() {
-                            session.delete_node_connection(connection);
-                        } else if let (Some(coord), Some(cursor)) = (pointed_coord, cursor) {
-                            interaction.cursor = Some(cursor_in_map_view(cursor, scale));
-                            request_pick(interaction, PickRequest::NodeDelete(coord));
-                        }
                     }
 
                     if session.node_dragging() {
@@ -2343,29 +2374,22 @@ impl UiState {
                             Tool::Node => {},
                             Tool::BlockSelect => {
                                 self.placement_stroke = None;
-                                if block_placement.is_none() && paste.is_none() {
-                                    if left_clicked && session.can_edit_at(coord) {
-                                        *block_placement = None;
-                                        let selection = Selection::from_drag(coord, coord);
-                                        *rectangle_gesture = Some(RectangleGesture {
-                                            start: session.selection_mask(),
-                                            z: session.z(),
-                                        });
-                                        if session.try_select_block(SelectionMask {
-                                            bounds: selection,
-                                            mode: self.block_selection_options.drawing_mode(ui.io().key_shift()),
-                                        }) {
-                                            *block_selection_anchor = Some(coord);
-                                        }
-                                    }
-
-                                    if ui.is_mouse_clicked(MouseButton::Right)
-                                        && block_selection_anchor.is_none()
-                                        && session.selection().is_some_and(|selection| {
-                                            session.selection_mode().includes(selection, coord)
-                                        })
-                                    {
-                                        ui.open_popup(BLOCK_SELECTION_POPUP);
+                                if block_placement.is_none()
+                                    && paste.is_none()
+                                    && left_clicked
+                                    && session.can_edit_at(coord)
+                                {
+                                    *block_placement = None;
+                                    let selection = Selection::from_drag(coord, coord);
+                                    *rectangle_gesture = Some(RectangleGesture {
+                                        start: session.selection_mask(),
+                                        z: session.z(),
+                                    });
+                                    if session.try_select_block(SelectionMask {
+                                        bounds: selection,
+                                        mode: self.block_selection_options.drawing_mode(ui.io().key_shift()),
+                                    }) {
+                                        *block_selection_anchor = Some(coord);
                                     }
                                 }
                             },
@@ -2487,7 +2511,82 @@ impl UiState {
                     );
                 }
 
-                draw_block_selection_menu(ui, session, session.selection_mode());
+                if let Some(target) = context.as_mut()
+                    && let Some(action) = draw_map_menu(ui, session, settings, target)
+                {
+                    if matches!(
+                        action,
+                        MenuAction::Undo
+                            | MenuAction::Redo
+                            | MenuAction::Paste(_)
+                            | MenuAction::Cut(_)
+                            | MenuAction::Delete(_)
+                    ) {
+                        restore_rectangle_gesture(session, id, rectangle_gesture);
+                        self.gizmo.cancel();
+                        self.placement_flash = None;
+                        self.placement_stroke = None;
+                        self.deletion_stroke = None;
+                        *block_selection_anchor = None;
+                        *block_placement = None;
+                        *paste = None;
+                        session.cancel_node_drag();
+                    }
+                    match action {
+                        MenuAction::Undo => {
+                            session.undo();
+                        },
+                        MenuAction::Redo => {
+                            session.redo();
+                        },
+                        MenuAction::Copy(coord) => {
+                            session.copy_tile(coord);
+                        },
+                        MenuAction::Paste(coord) => {
+                            session.paste_clipboard(coord, SelectionRotation::Original);
+                        },
+                        MenuAction::Cut(coord) => {
+                            session.cut_tile(coord);
+                        },
+                        MenuAction::Delete(coord) => {
+                            session.delete_tile(coord);
+                        },
+                        MenuAction::Select(instance) => {
+                            session.select_instance(Some(instance));
+                            self.reveal_selected_instance(session);
+                        },
+                        MenuAction::DeleteAtom(instance) => {
+                            session.delete_context_instance(instance);
+                        },
+                        MenuAction::Reorder(instance, to_top) => {
+                            session.reorder_instance(instance, to_top);
+                        },
+                        MenuAction::Reset(instance) => {
+                            session.reset_instance_to_default(instance);
+                        },
+                        MenuAction::Replace(instance, path) => {
+                            session.replace_context_instance(instance, path);
+                        },
+                        MenuAction::Search(instance, kind) => {
+                            self.inspector.open_similar_instances_for(session, id, instance, kind);
+                        },
+                        MenuAction::Node(node) => match node {
+                            NodeContext::Standalone(coord) => {
+                                session.delete_standalone_node(coord);
+                            },
+                            NodeContext::Connection(connection) => {
+                                session.delete_node_connection(&connection);
+                            },
+                            NodeContext::Pick(coord, pixel) => {
+                                interaction.cursor = Some(pixel);
+                                request_pick(interaction, PickRequest::NodeDelete(coord));
+                            },
+                        },
+                        MenuAction::Mirror(transform) => {
+                            session.transform_selected_block_with_mode(transform, session.selection_mode());
+                        },
+                    }
+                }
                 let paste_action = paste
                     .zip(paste_controls(self.gizmo.block_rotation_open(), paste_target))
                     .and_then(|(pending, target)| {
@@ -3490,24 +3589,6 @@ fn block_border_point(bounds: OverlayRect, distance: f32) -> [f32; 2] {
     }
 }
 
-fn draw_block_selection_menu(ui: &Ui, session: &mut Session, mode: BlockSelectionMode) {
-    let mut requested = None;
-    if let Some(_popup) = ui.begin_popup(BLOCK_SELECTION_POPUP) {
-        for (label, transform) in [
-            ("Mirror horizontally", SelectionTransform::MirrorHorizontal),
-            ("Mirror vertically", SelectionTransform::MirrorVertical),
-        ] {
-            let enabled = session.can_transform_selected_block_with_mode(transform, mode);
-            if ui.menu_item_enabled_selected_no_shortcut(label, false, enabled) {
-                requested = Some(transform);
-            }
-        }
-    }
-    if let Some(transform) = requested {
-        session.transform_selected_block_with_mode(transform, mode);
-    }
-}
-
 fn block_controls_placement(
     tool: Tool, selecting: bool, rotation_open: bool, selection: Option<Selection>,
     pending: Option<PendingBlockPlacement>,
@@ -4360,27 +4441,15 @@ fn draw_fill_tool_button(
 
         let mut searched_path = None;
         if let Some(_menu) = ui.begin_menu("Search type paths") {
-            ui.set_next_item_width(320.0);
-            ui.input_text("##custom-fill-boundary-search", custom_fill_search)
-                .build();
-
-            if custom_fill_search.trim().is_empty() {
-                ui.text_disabled("Type a path to search");
-            } else if let Some(tree) = session.tree() {
-                let matches = matching_type_paths(tree, custom_fill_search);
-                if matches.is_empty() {
-                    ui.text_disabled("No matching types");
-                } else {
-                    for path in matches {
-                        let enabled = !custom_fill_boundaries.contains(&path);
-                        if ui.menu_item_enabled_selected_no_shortcut(path.to_string(), false, enabled) {
-                            searched_path = Some(path);
-                        }
-                    }
-                }
-            } else {
-                ui.text_disabled("No environment loaded");
-            }
+            searched_path = draw_type_path_search(
+                ui,
+                session.tree(),
+                custom_fill_search,
+                "##custom-fill-boundary-search",
+                MAX_CUSTOM_FILL_SEARCH_RESULTS,
+                |_, _| true,
+                |path| !custom_fill_boundaries.contains(path),
+            );
         }
 
         if let Some(path) = searched_path {
@@ -4414,6 +4483,28 @@ fn draw_fill_tool_button(
     tools_end
 }
 
+fn draw_type_path_search(
+    ui: &Ui, tree: Option<&ObjectTree>, query: &mut String, input_id: &str, limit: usize,
+    allowed: impl Fn(&ObjectTree, &TreePath) -> bool, enabled: impl Fn(&TreePath) -> bool,
+) -> Option<TreePath> {
+    ui.set_next_item_width(320.0);
+    ui.input_text(input_id, query).hint("Search type paths").build();
+    if query.trim().is_empty() {
+        ui.text_disabled("Type a path to search");
+        return None;
+    }
+    let Some(tree) = tree else {
+        ui.text_disabled("No environment loaded");
+        return None;
+    };
+    let matches = matching_type_paths_up_to_filtered(tree, query, limit, |path| allowed(tree, path));
+    if matches.is_empty() {
+        ui.text_disabled("No matching types");
+    }
+    matches
+        .into_iter()
+        .find(|path| ui.menu_item_enabled_selected_no_shortcut(path.to_string(), false, enabled(path)))
+}
 fn matching_type_paths(tree: &ObjectTree, query: &str) -> Vec<TreePath> {
     matching_type_paths_up_to(tree, query, MAX_CUSTOM_FILL_SEARCH_RESULTS)
 }
@@ -4421,6 +4512,12 @@ fn matching_type_paths(tree: &ObjectTree, query: &str) -> Vec<TreePath> {
 // im not sure why every single fucking icons appear not centered fuck you
 
 fn matching_type_paths_up_to(tree: &ObjectTree, query: &str, limit: usize) -> Vec<TreePath> {
+    matching_type_paths_up_to_filtered(tree, query, limit, |_| true)
+}
+
+fn matching_type_paths_up_to_filtered(
+    tree: &ObjectTree, query: &str, limit: usize, allowed: impl Fn(&TreePath) -> bool,
+) -> Vec<TreePath> {
     let query = query.trim().to_ascii_lowercase();
     if query.is_empty() {
         return Vec::new();
@@ -4428,6 +4525,7 @@ fn matching_type_paths_up_to(tree: &ObjectTree, query: &str, limit: usize) -> Ve
 
     let mut matches = tree
         .iter()
+        .filter(|decl| allowed(&decl.path))
         .filter(|decl| decl.path.to_string().to_ascii_lowercase().contains(&query))
         .map(|decl| decl.path.clone())
         .take(limit)
@@ -4742,6 +4840,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn right_click_captures_the_clicked_tile_in_every_tool() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        for tool in [
+            Tool::Select,
+            Tool::Place,
+            Tool::Node,
+            Tool::BlockSelect,
+            Tool::Delete,
+            Tool::Fill,
+        ] {
+            let mut app = RectangleUiHarness::new();
+            app.session.set_tool(tool);
+            let point = app.tile(5, 8);
+            app.context.io_mut().add_mouse_pos_event(point);
+            app.context.io_mut().add_mouse_button_event(MouseButton::Right, false);
+            app.step();
+            app.context.io_mut().add_mouse_button_event(MouseButton::Right, true);
+            app.step();
+            let target = app.view.context.as_ref().expect("right click opens the map menu");
+            assert_eq!(target.coord, Coord::new(5, 8, 1), "{tool:?}");
+            assert_eq!(target.document, app.id);
+            app.context.io_mut().add_mouse_button_event(MouseButton::Right, false);
+            let next_tile = app.tile(6, 8);
+            app.context.io_mut().add_mouse_pos_event(next_tile);
+            app.step();
+            assert_eq!(app.view.context.as_ref().unwrap().coord, Coord::new(5, 8, 1));
+        }
+    }
     fn draw_hover_focus_test_window(ui: &Ui, open_popup: bool) -> (bool, bool) {
         let mut focused = false;
         let mut popup_open = false;

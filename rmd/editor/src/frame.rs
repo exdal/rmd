@@ -76,6 +76,23 @@ pub struct FrameInstances {
 }
 
 impl FrameInstances {
+    pub fn reorder_placements(&mut self, ids: &[PrefabInstanceId]) {
+        let mut orders = ids
+            .iter()
+            .filter_map(|id| self.placement_orders.get(id).copied())
+            .collect::<Vec<_>>();
+
+        if orders.len() != ids.len() {
+            return;
+        }
+
+        orders.sort_unstable();
+
+        for (id, order) in ids.iter().zip(orders) {
+            self.placement_orders.insert(*id, order);
+        }
+    }
+
     pub fn sprite(&self, owner: PrefabInstanceId) -> Option<&SpriteInstance> { self.primary_sprites.get(&owner) }
 
     pub fn area_component_at(&self, coord: Coord) -> Option<PrefabInstanceId> {
@@ -696,19 +713,19 @@ impl RenderContext<'_> {
                 sprites: own,
             }]
         };
-        if groups.is_empty() && !is_area {
-            if let Some(fallback) = sprite_texture_or_missing(self.icons, self.textures, &appearance)
+        if groups.is_empty()
+            && !is_area
+            && let Some(fallback) = sprite_texture_or_missing(self.icons, self.textures, &appearance)
                 .filter(|texture| self.textures.is_missing_icon(*texture))
-            {
-                let mut sprite = self.instance(owner, &appearance, fallback, coord, false);
-                sprite.area_owner = area_owner;
-                groups.push(SpriteGroup {
-                    plane: appearance.plane,
-                    layer: appearance.layer,
-                    keep_apart: false,
-                    sprites: vec![sprite],
-                });
-            }
+        {
+            let mut sprite = self.instance(owner, &appearance, fallback, coord, false);
+            sprite.area_owner = area_owner;
+            groups.push(SpriteGroup {
+                plane: appearance.plane,
+                layer: appearance.layer,
+                keep_apart: false,
+                sprites: vec![sprite],
+            });
         }
         let mut local_order = 0usize;
         let mut sprites = Vec::new();

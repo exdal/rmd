@@ -469,6 +469,7 @@ impl Session {
     pub fn redo_label(&self) -> Option<&str> { self.state.active_document()?.redo_label() }
 
     pub fn undo(&mut self) -> bool {
+        let reordered = self.undo_label().is_some_and(is_reorder_label);
         let Some(affected) = self
             .state
             .active_document_mut()
@@ -477,12 +478,17 @@ impl Session {
             return false;
         };
 
-        self.update_instances(&affected);
+        if reordered {
+            self.refresh_reordered_from_affected(&affected);
+        } else {
+            self.update_instances(&affected);
+        }
 
         true
     }
 
     pub fn redo(&mut self) -> bool {
+        let reordered = self.redo_label().is_some_and(is_reorder_label);
         let Some(affected) = self
             .state
             .active_document_mut()
@@ -491,7 +497,11 @@ impl Session {
             return false;
         };
 
-        self.update_instances(&affected);
+        if reordered {
+            self.refresh_reordered_from_affected(&affected);
+        } else {
+            self.update_instances(&affected);
+        }
 
         true
     }
@@ -1481,6 +1491,101 @@ impl Session {
         true
     }
 
+    pub fn copy_tile(&mut self, coord: Coord) -> bool {
+        let Some(document) = self.state.active_document() else {
+            return false;
+        };
+
+        let Some(block) = clipboard::copy_block(document, Selection::from_drag(coord, coord), BlockSelectionMode::Full)
+        else {
+            return false;
+        };
+
+        self.state.set_clipboard(block);
+
+        true
+    }
+
+    pub fn can_clear_tile(&self, coord: Coord) -> bool {
+        let Some((environment, document)) = self.state.active_pair() else {
+            return false;
+        };
+
+        if !document.allows_edit_at(coord) {
+            return false;
+        }
+
+        let Some((turf, area)) = default_tile_paths(&environment.tree) else {
+            return false;
+        };
+
+        document
+            .map
+            .tile_at(coord)
+            .is_some_and(|tile| tile.as_slice() != [Prefab::new(turf), Prefab::new(area)])
+    }
+
+    fn build_clear_tile(&mut self, coord: Coord, label: &str) -> Option<ToolEdit> {
+        let (environment, document) = self.state.active_pair_mut()?;
+
+        if !document.allows_edit_at(coord) {
+            return None;
+        }
+
+        let (turf, area) = default_tile_paths(&environment.tree)?;
+        let before = document.placed_tile(coord)?;
+        if before
+            .iter()
+            .map(|placed| placed.prefab())
+            .eq([&Prefab::new(turf.clone()), &Prefab::new(area.clone())])
+        {
+            return None;
+        }
+
+        let mut affected = before.iter().map(|placed| placed.id()).collect::<Vec<_>>();
+        let after = vec![
+            document.instantiate(Prefab::new(turf)),
+            document.instantiate(Prefab::new(area)),
+        ];
+
+        affected.extend(after.iter().map(|placed| placed.id()));
+
+        let mut edit = Edit::new(label);
+
+        edit.change(document, coord, after);
+
+        Some(ToolEdit {
+            edit,
+            selected: None,
+            affected,
+        })
+    }
+
+    pub fn delete_tile(&mut self, coord: Coord) -> bool {
+        self.build_clear_tile(coord, "delete tile")
+            .is_some_and(|action| self.commit(action, None))
+    }
+
+    pub fn cut_tile(&mut self, coord: Coord) -> bool {
+        let Some(action) = self.build_clear_tile(coord, "cut tile") else {
+            return false;
+        };
+
+        let Some(block) = self.state.active_document().and_then(|document| {
+            clipboard::copy_block(document, Selection::from_drag(coord, coord), BlockSelectionMode::Full)
+        }) else {
+            return false;
+        };
+
+        if !self.commit(action, None) {
+            return false;
+        }
+
+        self.state.set_clipboard(block);
+
+        true
+    }
+
     pub fn clipboard(&self) -> Option<&TileBlock> { self.state.clipboard() }
 
     pub fn clipboard_footprint(&self, min: Coord, rotation: SelectionRotation) -> Option<Selection> {
@@ -1880,6 +1985,135 @@ impl Session {
 
         self.build_delete(target)
             .is_some_and(|action| self.commit(action, None))
+    }
+
+    pub fn delete_context_instance(&mut self, target: PrefabInstanceId) -> bool {
+        self.build_delete(target)
+            .is_some_and(|action| self.commit(action, None))
+    }
+
+    pub fn can_edit_instance(&self, target: PrefabInstanceId) -> bool {
+        self.state.active_document().is_some_and(|document| {
+            document
+                .instance_location(target)
+                .is_some_and(|location| document.allows_edit_at(location.coord))
+        })
+    }
+
+    pub fn reorder_instance(&mut self, target: PrefabInstanceId, to_top: bool) -> bool {
+        let Some((environment, document)) = self.state.active_pair_mut() else {
+            return false;
+        };
+        let Some(location) = document.instance_location(target) else {
+            return false;
+        };
+        if !document.allows_edit_at(location.coord) {
+            return false;
+        }
+        let Some(mut tile) = document.placed_tile(location.coord) else {
+            return false;
+        };
+        let is_object = |prefab: &Prefab| context_placement_group(&environment.tree, &prefab.path) == Some(0);
+        if !tile
+            .get(location.prefab_index)
+            .is_some_and(|placed| is_object(placed.prefab()))
+        {
+            return false;
+        }
+        let positions = tile
+            .iter()
+            .enumerate()
+            .filter_map(|(index, placed)| is_object(placed.prefab()).then_some(index))
+            .collect::<Vec<_>>();
+        let destination = if to_top {
+            *positions.last().unwrap()
+        } else {
+            positions[0]
+        };
+        if destination == location.prefab_index {
+            return false;
+        }
+        let placed = tile.remove(location.prefab_index);
+        tile.insert(destination, placed);
+        let mut edit = Edit::new(if to_top {
+            "move atom to top"
+        } else {
+            "move atom to bottom"
+        });
+        edit.change(document, location.coord, tile);
+        let applied = self
+            .state
+            .active_document_mut()
+            .is_some_and(|document| document.apply_grouped(edit, None));
+        if applied {
+            self.refresh_reordered_tile(location.coord);
+        }
+
+        applied
+    }
+
+    pub fn reset_instance_to_default(&mut self, target: PrefabInstanceId) -> bool {
+        if !self.can_edit_instance(target) {
+            return false;
+        }
+
+        let Some(document) = self.state.active_document_mut() else {
+            return false;
+        };
+
+        let Some((prefab, _)) = document.prefab_instance(target) else {
+            return false;
+        };
+
+        let mutations = prefab
+            .vars
+            .iter()
+            .map(|(name, _)| VarMutation::Remove(name.clone()))
+            .collect::<Vec<_>>();
+        let changed = document
+            .edit_instance_vars(target, "reset atom to default", &mutations, None)
+            .unwrap_or(false);
+
+        if changed {
+            self.update_instance(target);
+        }
+
+        changed
+    }
+
+    pub fn replace_context_instance(&mut self, target: PrefabInstanceId, path: TreePath) -> bool {
+        if !self.can_edit_instance(target) {
+            return false;
+        }
+        let Some(environment) = self.state.environment.as_ref() else {
+            return false;
+        };
+        let Some(document) = self.state.active_document() else {
+            return false;
+        };
+        let Some((prefab, _)) = document.prefab_instance(target) else {
+            return false;
+        };
+        let kind = context_placement_group(&environment.tree, &prefab.path);
+        if kind.is_none() || kind != context_placement_group(&environment.tree, &path) {
+            return false;
+        }
+        let mutations = prefab
+            .vars
+            .iter()
+            .map(|(name, _)| VarMutation::Remove(name.clone()))
+            .collect::<Vec<_>>();
+        let changed = self
+            .state
+            .active_document_mut()
+            .and_then(|document| document.replace_instance_path(target, "replace atom", path, &mutations, None))
+            .unwrap_or(false);
+
+        if changed {
+            self.update_instance(target);
+        }
+
+        changed
     }
 
     fn build_delete(&mut self, target: PrefabInstanceId) -> Option<ToolEdit> {
@@ -2719,6 +2953,54 @@ impl Session {
         id
     }
 
+    fn refresh_reordered_from_affected(&mut self, affected: &[PrefabInstanceId]) {
+        let coord = self.state.active_document().and_then(|document| {
+            affected
+                .iter()
+                .find_map(|id| document.instance_location(*id).map(|location| location.coord))
+        });
+        if let Some(coord) = coord {
+            self.refresh_reordered_tile(coord);
+        }
+    }
+
+    fn refresh_reordered_tile(&mut self, coord: Coord) {
+        let Some(id) = self.state.active() else {
+            return;
+        };
+
+        let ordered = {
+            let Some(document) = self.state.document(id) else {
+                return;
+            };
+            let Some(tree) = self.tree() else {
+                return;
+            };
+            document
+                .instance_ids_at(coord)
+                .iter()
+                .copied()
+                .filter(|owner| {
+                    document
+                        .prefab_instance(*owner)
+                        .is_some_and(|(prefab, _)| context_placement_group(tree, &prefab.path) == Some(0))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        if let Some(cache) = self.caches.get_mut(&id) {
+            cache.instances.reorder_placements(&ordered);
+        }
+
+        self.apply_bake_update(
+            id,
+            editor::bake::BakeUpdate {
+                appearances: ordered,
+                lighting: None,
+            },
+        );
+    }
+
     fn update_instance(&mut self, selected: PrefabInstanceId) { self.update_instances(&[selected]); }
 
     fn update_instances(&mut self, affected: &[PrefabInstanceId]) {
@@ -2831,6 +3113,21 @@ fn direction_state(environment: &Environment, id: TypeId, appearance: &visual::A
     }
 }
 
+fn is_reorder_label(label: &str) -> bool { matches!(label, "move atom to top" | "move atom to bottom") }
+
+pub(crate) fn context_placement_group(tree: &ObjectTree, path: &TreePath) -> Option<u8> {
+    let id = tree.id_of(path)?;
+    let roots = tree.roots();
+    if roots.turf.is_some_and(|root| tree.is_subtype_of(id, root)) {
+        Some(1)
+    } else if roots.area.is_some_and(|root| tree.is_subtype_of(id, root)) {
+        Some(2)
+    } else if roots.atom.is_some_and(|root| tree.is_subtype_of(id, root)) {
+        Some(0)
+    } else {
+        None
+    }
+}
 fn direction_from_name(name: &str) -> Option<Dir> {
     match name {
         "south" => Some(Dir::South),
@@ -6525,6 +6822,193 @@ mod tests {
         assert_eq!(session.recent_prefabs().len(), 2);
     }
 
+    #[test]
+    fn context_tile_cut_paste_and_delete_are_undoable() {
+        let mut session = flat_session(4, 4);
+        let source = Coord::new(2, 2, 1);
+        let destination = Coord::new(3, 2, 1);
+        let table = TreePath::parse("/obj/structure/table");
+        let type_id = session.tree().unwrap().id_of(&table).unwrap();
+        assert!(session.choose_type(type_id));
+        assert!(session.place_at(source, None).is_some());
+        let before = session.map().unwrap().tile_at(source).unwrap().clone();
+
+        assert!(session.copy_tile(source));
+        assert_eq!(session.clipboard().unwrap().tile(0, 0), Some(&before));
+        assert!(session.cut_tile(source));
+        assert_render_cache_matches_rebuild(&session);
+        let defaults = editor::tool::default_tile_paths(session.tree().unwrap()).unwrap();
+        let cleared = session.map().unwrap().tile_at(source).unwrap();
+        assert_eq!(
+            cleared.iter().map(|prefab| &prefab.path).collect::<Vec<_>>(),
+            vec![&defaults.0, &defaults.1]
+        );
+        assert!(session.undo());
+        assert_eq!(session.map().unwrap().tile_at(source), Some(&before));
+        assert!(session.redo());
+
+        assert!(session.paste_clipboard(destination, SelectionRotation::Original));
+        assert_eq!(session.map().unwrap().tile_at(destination), Some(&before));
+        assert!(session.delete_tile(destination));
+        assert_render_cache_matches_rebuild(&session);
+        assert!(!session.can_clear_tile(destination));
+        assert!(session.undo());
+        assert_eq!(session.map().unwrap().tile_at(destination), Some(&before));
+    }
+
+    #[test]
+    fn context_atom_actions_preserve_ids_and_undo() {
+        let mut session = flat_session(4, 4);
+        let coord = Coord::new(2, 2, 1);
+        let table = TreePath::parse("/obj/structure/table");
+        let light = TreePath::parse("/obj/machinery/light");
+        let table_type = session.tree().unwrap().id_of(&table).unwrap();
+        let light_type = session.tree().unwrap().id_of(&light).unwrap();
+        assert!(session.choose_type(table_type));
+        let first = session.place_at(coord, None).unwrap();
+        assert!(session.choose_type(light_type));
+        let second = session.place_at(coord, None).unwrap();
+        assert_eq!(
+            session.state.active_document().unwrap().instance_ids_at(coord)[0..2],
+            [first, second]
+        );
+
+        assert!(session.reorder_instance(first, true));
+        assert_eq!(
+            session.state.active_document().unwrap().instance_ids_at(coord)[0..2],
+            [second, first]
+        );
+        assert!(session.undo());
+        assert_eq!(
+            session.state.active_document().unwrap().instance_ids_at(coord)[0..2],
+            [first, second]
+        );
+
+        session.select_instance(Some(first));
+        assert_eq!(
+            session.set_selected_instance_var("name".into(), Value::Text("custom table".into())),
+            Some(true)
+        );
+        assert!(session.reset_instance_to_default(first));
+        assert!(
+            session
+                .state
+                .active_document()
+                .unwrap()
+                .prefab_instance(first)
+                .unwrap()
+                .0
+                .vars
+                .is_empty()
+        );
+        assert!(session.undo());
+        assert_eq!(
+            session
+                .state
+                .active_document()
+                .unwrap()
+                .prefab_instance(first)
+                .unwrap()
+                .0
+                .var(&"name".into()),
+            Some(&Value::Text("custom table".into()))
+        );
+        assert!(session.replace_context_instance(first, light.clone()));
+        let (prefab, _) = session.state.active_document().unwrap().prefab_instance(first).unwrap();
+        assert_eq!(prefab.path, light);
+        assert!(prefab.vars.is_empty());
+        assert!(!session.replace_context_instance(first, TreePath::parse("/turf/open/floor")));
+        assert!(session.undo());
+        assert_eq!(
+            session
+                .state
+                .active_document()
+                .unwrap()
+                .prefab_instance(first)
+                .unwrap()
+                .0
+                .path,
+            table
+        );
+        assert!(session.delete_context_instance(first));
+        assert!(
+            session
+                .state
+                .active_document()
+                .unwrap()
+                .instance_location(first)
+                .is_none()
+        );
+        assert!(session.undo());
+        assert!(
+            session
+                .state
+                .active_document()
+                .unwrap()
+                .instance_location(first)
+                .is_some()
+        );
+    }
+    #[test]
+    fn context_reorder_changes_equal_layer_draw_order_through_undo_and_redo() {
+        let mut session = flat_session(2, 2);
+        let coord = Coord::new(1, 1, 1);
+        let table = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/structure/table"))
+            .unwrap();
+        assert!(session.choose_type(table));
+        let first = session.place_at(coord, None).unwrap();
+        let second = session.place_at(coord, None).unwrap();
+        let drawn = |session: &Session| {
+            session
+                .instances()
+                .unwrap()
+                .sprites
+                .iter()
+                .filter(|sprite| sprite.owner == first || sprite.owner == second)
+                .map(|sprite| sprite.owner)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(drawn(&session), vec![first, second]);
+        let revision = session.revision();
+        assert!(session.reorder_instance(first, true));
+        assert_eq!(session.revision(), revision.wrapping_add(1));
+        assert_eq!(drawn(&session), vec![second, first]);
+        let revision = session.revision();
+        assert!(session.undo());
+        assert_eq!(session.revision(), revision.wrapping_add(1));
+        assert_eq!(drawn(&session), vec![first, second]);
+        let revision = session.revision();
+        assert!(session.redo());
+        assert_eq!(session.revision(), revision.wrapping_add(1));
+        assert_eq!(drawn(&session), vec![second, first]);
+    }
+    #[test]
+    fn context_edits_obey_area_focus_without_blocking_copy() {
+        let mut session = focus_session();
+        let inside = Coord::new(1, 1, 1);
+        let outside = Coord::new(4, 1, 1);
+        let table = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/structure/table"))
+            .unwrap();
+        assert!(session.choose_type(table));
+        let target = session.place_at(outside, None).unwrap();
+        let before = session.map().unwrap().tile_at(outside).unwrap().clone();
+        session.toggle_focus_at(Some(inside));
+        assert!(session.copy_tile(outside));
+        assert!(!session.can_clear_tile(outside));
+        assert!(!session.cut_tile(outside));
+        assert!(!session.delete_tile(outside));
+        assert!(!session.delete_context_instance(target));
+        assert!(!session.reset_instance_to_default(target));
+        assert!(!session.replace_context_instance(target, TreePath::parse("/obj/machinery/light")));
+        assert!(!session.can_paste_clipboard(outside, SelectionRotation::Original));
+        assert_eq!(session.map().unwrap().tile_at(outside), Some(&before));
+    }
     #[test]
     fn exporting_the_open_map_as_tgm_round_trips_through_the_parser() {
         let root = examples();
