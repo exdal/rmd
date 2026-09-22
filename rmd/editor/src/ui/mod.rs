@@ -36,6 +36,8 @@ use editor::{
     document::{DocumentId, MapDocument, Selection},
     environment::BundledProfile,
     icons::materialdesignicons::{
+        ICON_ALERT,
+        ICON_ALERT_CIRCLE,
         ICON_CLOSE_THICK,
         ICON_DOTS_HORIZONTAL,
         ICON_ERASER,
@@ -85,9 +87,12 @@ use crate::{
     loader::LoadView,
     session::{
         BlockPreviewSource,
+        DiagnosticSeverity,
         FillOutcome,
         GuideBadge,
         LevelChange,
+        LoadReport,
+        MAX_REPORTED_DIAGNOSTICS,
         NodeOverlay,
         PlacementPreview,
         SelectedTransform,
@@ -131,6 +136,7 @@ const LOAD_ERROR_MAX_LINES: usize = 10;
 const LOAD_PATH_MAX_CHARS: usize = 60;
 const SAVE_MAP_PATH_WIDTH: f32 = 460.0;
 const SAVE_ERROR_COLOR: [f32; 4] = [1.0, 0.4, 0.4, 1.0];
+const DIAGNOSTIC_WARNING_COLOR: [f32; 4] = [1.0, 0.8, 0.25, 1.0];
 const WELCOME_TITLE_SIZE: f32 = 40.0;
 const WELCOME_CONTENT_WIDTH: f32 = 640.0;
 const WELCOME_MIN_INDENT: f32 = 24.0;
@@ -864,6 +870,7 @@ pub struct UiState {
     open_error: Option<String>,
     load_window: WindowKey,
     load_notice: Option<LoadNotice>,
+    diagnostics: DiagnosticsState,
     load_window_size: [f32; 2],
     keybind_preset_prompt: bool,
 }
@@ -920,6 +927,7 @@ impl UiState {
             open_error: None,
             load_window,
             load_notice: None,
+            diagnostics: DiagnosticsState::default(),
             load_window_size: [0.0, 0.0],
             keybind_preset_prompt,
         })
@@ -934,6 +942,12 @@ impl UiState {
     pub fn request_mouse_popup(&mut self) { self.dm_ui.request_mouse_popup(); }
 
     pub fn set_load_notice(&mut self, notice: Option<LoadNotice>) { self.load_notice = notice; }
+
+    pub fn set_codebase_report(&mut self, report: LoadReport) { self.diagnostics.set_codebase(report); }
+
+    pub fn set_map_report(&mut self, path: PathBuf, report: LoadReport) { self.diagnostics.set_map(path, report); }
+
+    pub fn set_failed_codebase_report(&mut self, report: LoadReport) { self.diagnostics.set_failed_codebase(report); }
 
     pub fn request_exit(&mut self) { self.exit_requested = true; }
 
@@ -1258,9 +1272,14 @@ impl UiState {
             &mut self.load_window_size,
             load,
             self.load_notice.as_mut(),
+            &self.diagnostics,
         );
         if load_popup.dismiss {
-            self.load_notice = None;
+            if self.load_notice.is_some() {
+                self.load_notice = None;
+            } else {
+                self.diagnostics.open = None;
+            }
         }
 
         let (map_views, picking) = if session.state.is_empty() {
@@ -1304,6 +1323,7 @@ impl UiState {
         let central_node = &mut self.central_node;
         let map_filter = &mut self.welcome_map_filter;
         let maps_expanded = &mut self.welcome_maps_expanded;
+        let diagnostics = &mut self.diagnostics;
         let codebase = session.environment_path();
         ui.window(&self.welcome_window).opened(show_welcome).build(|| {
             if settings.focus_windows_on_hover {
@@ -1329,6 +1349,29 @@ impl UiState {
             }
 
             ui.dummy([0.0, WELCOME_MIN_INDENT]);
+
+            let warnings = diagnostics.count(DiagnosticSeverity::Warning);
+            if warnings > 0 {
+                let _color = ui.push_style_color(StyleColor::TextLink, DIAGNOSTIC_WARNING_COLOR);
+                let label = if warnings == 1 { "warning" } else { "warnings" };
+                if ui.text_link(format!("{ICON_ALERT} {warnings} {label}##load-warnings")) {
+                    diagnostics.open = Some(DiagnosticSeverity::Warning);
+                }
+            }
+            let errors = diagnostics.count(DiagnosticSeverity::Error);
+            if errors > 0 {
+                if warnings > 0 {
+                    ui.same_line();
+                }
+                let _color = ui.push_style_color(StyleColor::TextLink, SAVE_ERROR_COLOR);
+                let label = if errors == 1 { "error" } else { "errors" };
+                if ui.text_link(format!("{ICON_ALERT_CIRCLE} {errors} {label}##load-errors")) {
+                    diagnostics.open = Some(DiagnosticSeverity::Error);
+                }
+            }
+            if warnings + errors > 0 {
+                ui.dummy([0.0, WELCOME_MIN_INDENT]);
+            }
 
             let _disabled = ui.begin_disabled_with_cond(loading);
             match codebase {
@@ -2730,11 +2773,6 @@ pub enum LoadNotice {
         path: String,
         message: String,
     },
-    Diagnostics {
-        path: String,
-        summary: String,
-        text: String,
-    },
 }
 
 impl LoadNotice {
@@ -2745,13 +2783,80 @@ impl LoadNotice {
             message: message.into(),
         }
     }
+}
 
-    pub fn diagnostics(path: &Path, summary: String, lines: Vec<String>) -> Self {
-        Self::Diagnostics {
-            path: path.display().to_string(),
-            summary,
-            text: lines.join("\n"),
+#[derive(Debug, Default)]
+struct DiagnosticsState {
+    codebase: Option<LoadReport>,
+    maps: HashMap<PathBuf, LoadReport>,
+    failed_codebase: Option<LoadReport>,
+    open: Option<DiagnosticSeverity>,
+}
+
+impl DiagnosticsState {
+    fn set_codebase(&mut self, report: LoadReport) {
+        self.maps.clear();
+        self.failed_codebase = None;
+        self.open = (report.errors > 0).then_some(DiagnosticSeverity::Error);
+        self.codebase = (!report.is_empty()).then_some(report);
+    }
+
+    fn set_map(&mut self, path: PathBuf, report: LoadReport) {
+        if report.errors > 0 {
+            self.open = Some(DiagnosticSeverity::Error);
         }
+        if report.is_empty() {
+            self.maps.remove(&path);
+        } else {
+            self.maps.insert(path, report);
+        }
+        self.close_empty_view();
+    }
+
+    fn set_failed_codebase(&mut self, report: LoadReport) {
+        self.open = Some(DiagnosticSeverity::Error);
+        self.failed_codebase = Some(report);
+    }
+
+    fn close_empty_view(&mut self) {
+        if self.open.is_some_and(|severity| self.count(severity) == 0) {
+            self.open = None;
+        }
+    }
+
+    fn count(&self, severity: DiagnosticSeverity) -> usize {
+        self.codebase.as_ref().map_or(0, |report| report.count(severity))
+            + self.failed_codebase.as_ref().map_or(0, |report| report.count(severity))
+            + self.maps.values().map(|report| report.count(severity)).sum::<usize>()
+    }
+
+    fn text(&self, severity: DiagnosticSeverity) -> (String, usize) {
+        let mut reports = Vec::new();
+        if let Some(report) = &self.codebase {
+            reports.push(report);
+        }
+        if let Some(report) = &self.failed_codebase {
+            reports.push(report);
+        }
+        let mut maps = self.maps.iter().collect::<Vec<_>>();
+        maps.sort_by(|left, right| left.0.cmp(right.0));
+        reports.extend(maps.into_iter().map(|(_, report)| report));
+
+        let mut text = String::new();
+        let mut shown = 0;
+        for report in reports {
+            for line in report.lines(severity) {
+                if shown == MAX_REPORTED_DIAGNOSTICS {
+                    return (text, shown);
+                }
+                if shown > 0 {
+                    text.push('\n');
+                }
+                text.push_str(line);
+                shown += 1;
+            }
+        }
+        (text, shown)
     }
 }
 
@@ -2764,9 +2869,10 @@ struct LoadPopup {
 
 fn draw_load_popup(
     ui: &Ui, window: &WindowKey, measured: &mut [f32; 2], load: Option<&LoadView>, notice: Option<&mut LoadNotice>,
+    diagnostics: &DiagnosticsState,
 ) -> LoadPopup {
     let mut popup = LoadPopup::default();
-    if load.is_none() && notice.is_none() {
+    if load.is_none() && notice.is_none() && diagnostics.open.is_none() {
         return popup;
     }
 
@@ -2783,13 +2889,14 @@ fn draw_load_popup(
     ui.window(window)
         .flags(flags)
         .position(position, Condition::Always)
-        .build(|| draw_load_body(ui, measured, load, notice, &mut popup));
+        .build(|| draw_load_body(ui, measured, load, notice, diagnostics, &mut popup));
 
     popup
 }
 
 fn draw_load_body(
-    ui: &Ui, measured: &mut [f32; 2], load: Option<&LoadView>, notice: Option<&mut LoadNotice>, popup: &mut LoadPopup,
+    ui: &Ui, measured: &mut [f32; 2], load: Option<&LoadView>, notice: Option<&mut LoadNotice>,
+    diagnostics: &DiagnosticsState, popup: &mut LoadPopup,
 ) {
     let escape = ui.is_key_pressed(Key::Escape);
     match (load, notice) {
@@ -2822,23 +2929,36 @@ fn draw_load_body(
             }
         },
 
-        (None, Some(LoadNotice::Diagnostics { path, summary, text })) => {
-            draw_load_heading(ui, "Loaded with diagnostics", path);
-            ui.text(summary);
-            let lines = wrapped_lines(ui, text).clamp(LOAD_TEXT_MIN_LINES, LOAD_DIAGNOSTICS_LINES);
-            draw_selectable_text(ui, "##load-diagnostics", text, lines, None);
-            ui.separator();
+        (None, None) => {
+            if let Some(severity) = diagnostics.open {
+                let (title, label, color) = match severity {
+                    DiagnosticSeverity::Warning => ("Load warnings", "warning", DIAGNOSTIC_WARNING_COLOR),
+                    DiagnosticSeverity::Error => ("Load errors", "error", SAVE_ERROR_COLOR),
+                };
+                ui.text(title);
+                ui.separator();
+                let count = diagnostics.count(severity);
+                let plural = if count == 1 { "" } else { "s" };
+                ui.text(format!("{count} {label}{plural}"));
+                let (mut text, shown) = diagnostics.text(severity);
+                if shown < count {
+                    ui.text_disabled(format!("Showing first {shown} of {count}"));
+                }
 
-            if ui.button("Close") || escape {
-                popup.dismiss = true;
-            }
-            ui.same_line();
-            if ui.button("Copy") {
-                popup.copy = Some(text.clone());
+                let lines = wrapped_lines(ui, &text).clamp(LOAD_TEXT_MIN_LINES, LOAD_DIAGNOSTICS_LINES);
+                draw_selectable_text(ui, "##load-diagnostics", &mut text, lines, Some(color));
+                ui.separator();
+
+                if ui.button("Close") || escape {
+                    popup.dismiss = true;
+                }
+
+                ui.same_line();
+                if ui.button("Copy") {
+                    popup.copy = Some(text);
+                }
             }
         },
-
-        (None, None) => {},
     }
 
     *measured = ui.window_size();
@@ -5218,21 +5338,67 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_are_joined_into_one_selectable_buffer() {
-        let notice = LoadNotice::diagnostics(
-            Path::new("game/tg.dme"),
-            String::from("2 preprocessor diagnostics"),
-            vec![String::from("first"), String::from("second")],
+    fn diagnostics_accumulate_by_map_and_replace_reopened_map_results() {
+        let mut state = DiagnosticsState::default();
+        state.set_codebase(LoadReport {
+            warnings: 1,
+            warning_lines: vec![String::from("codebase warning")],
+            ..LoadReport::default()
+        });
+        assert_eq!(state.count(DiagnosticSeverity::Warning), 1);
+        assert_eq!(state.open, None);
+
+        state.set_map(
+            PathBuf::from("b.dmm"),
+            LoadReport {
+                errors: 2,
+                error_lines: vec![String::from("b.dmm: first"), String::from("b.dmm: second")],
+                ..LoadReport::default()
+            },
+        );
+        state.set_map(
+            PathBuf::from("a.dmm"),
+            LoadReport {
+                errors: 1,
+                error_lines: vec![String::from("a.dmm: error")],
+                ..LoadReport::default()
+            },
+        );
+        assert_eq!(state.count(DiagnosticSeverity::Error), 3);
+        assert_eq!(state.open, Some(DiagnosticSeverity::Error));
+        assert_eq!(
+            state.text(DiagnosticSeverity::Error).0,
+            "a.dmm: error\nb.dmm: first\nb.dmm: second"
         );
 
-        assert_eq!(
-            notice,
-            LoadNotice::Diagnostics {
-                path: String::from("game/tg.dme"),
-                summary: String::from("2 preprocessor diagnostics"),
-                text: String::from("first\nsecond"),
-            }
+        state.open = None;
+        assert_eq!(state.count(DiagnosticSeverity::Error), 3);
+        state.set_map(PathBuf::from("b.dmm"), LoadReport::default());
+        assert_eq!(state.count(DiagnosticSeverity::Error), 1);
+        assert_eq!(state.open, None);
+    }
+
+    #[test]
+    fn failed_loads_remain_visible_until_a_successful_codebase_replaces_them() {
+        let mut state = DiagnosticsState::default();
+        state.set_failed_codebase(LoadReport::failure(
+            "game.dme",
+            Path::new("game.dme"),
+            "cannot read file",
+        ));
+        assert_eq!(state.count(DiagnosticSeverity::Error), 1);
+        assert_eq!(state.open, Some(DiagnosticSeverity::Error));
+        state.open = None;
+        assert!(
+            state
+                .text(DiagnosticSeverity::Error)
+                .0
+                .contains("game.dme: cannot read file")
         );
+
+        state.set_codebase(LoadReport::default());
+        assert_eq!(state.count(DiagnosticSeverity::Error), 0);
+        assert!(state.failed_codebase.is_none());
     }
 
     #[test]
@@ -5250,6 +5416,7 @@ mod tests {
         assert!(state.pending_fill_warning.is_none());
         assert!(state.new_map_dialog.is_none());
         assert!(state.load_notice.is_none());
+        assert_eq!(state.diagnostics.count(DiagnosticSeverity::Error), 0);
         assert!(state.save_dialog.is_none());
         assert!(!state.exit_requested);
         assert!(state.show_welcome);

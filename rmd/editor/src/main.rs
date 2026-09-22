@@ -20,7 +20,12 @@ mod settings;
 mod transform;
 mod ui;
 
-use std::{fs, path::PathBuf, process::ExitCode, sync::Arc};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::ExitCode,
+    sync::Arc,
+};
 
 use dear_imgui_rs::{
     BackendFlags,
@@ -46,7 +51,7 @@ use winit::{
 use crate::{
     external_editor::SourceLocation,
     loader::{Job, Loader, Outcome},
-    session::Session,
+    session::{LoadReport, Session},
     settings::{Settings, imgui_ini_path},
     ui::{LoadNotice, OpenRequest, ProfileReload, UiState},
 };
@@ -487,6 +492,15 @@ impl App {
         }
     }
 
+    fn diagnostic_path(&self, path: &Path) -> String {
+        self.session
+            .codebase_dir()
+            .and_then(|base| path.strip_prefix(base).ok())
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    }
+
     fn apply_outcome(&mut self, outcome: Outcome) {
         match outcome {
             Outcome::Codebase { path, loaded } => {
@@ -501,18 +515,20 @@ impl App {
                 let report = self.session.apply_codebase(*loaded);
                 self.settings.record_codebase(&path);
                 self.ui.set_open_error(None);
-                self.ui.set_load_notice(
-                    (!report.is_empty()).then(|| LoadNotice::diagnostics(&path, report.summary(), report.lines)),
-                );
+                self.ui.set_load_notice(None);
+                self.ui.set_codebase_report(report);
                 self.start_pending_map();
             },
 
             Outcome::Map(loaded) => {
                 let path = loaded.path.clone();
+                let report = LoadReport::map(&self.diagnostic_path(&path), &loaded.errors);
                 self.session.apply_map(*loaded);
                 self.ui.request_refit(self.session.state.active());
                 self.ui.set_open_error(None);
                 self.ui.set_load_notice(None);
+                self.ui
+                    .set_map_report(fs::canonicalize(&path).unwrap_or_else(|_| path.clone()), report);
                 self.settings.record_recent(self.session.environment_path(), &path);
             },
 
@@ -520,8 +536,17 @@ impl App {
                 log::error!("{error}");
                 self.pending_map = None;
                 self.ui.set_open_error(Some(error.clone()));
-                self.ui
-                    .set_load_notice(Some(LoadNotice::failed(job.title(), job.path(), error)));
+                self.ui.set_load_notice(None);
+                match job {
+                    Job::Codebase { path, .. } => {
+                        let report = LoadReport::failure(&path.display().to_string(), &path, &error);
+                        self.ui.set_failed_codebase_report(report);
+                    },
+                    Job::Map { path, .. } => {
+                        let report = LoadReport::failure(&self.diagnostic_path(&path), &path, &error);
+                        self.ui.set_map_report(fs::canonicalize(&path).unwrap_or(path), report);
+                    },
+                }
             },
 
             Outcome::Cancelled => {

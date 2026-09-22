@@ -195,7 +195,7 @@ struct BlockPreviewCache {
     visible: bool,
 }
 
-const MAX_REPORTED_DIAGNOSTICS: usize = 500;
+pub(crate) const MAX_REPORTED_DIAGNOSTICS: usize = 500;
 const MAX_MAP_DIMENSION: u32 = 255;
 const STANDALONE_CACHE_LIMIT: usize = 256;
 
@@ -3020,40 +3020,70 @@ pub(crate) fn build_textures(environment: &Environment, progress: &Progress) -> 
     textures
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiagnosticSeverity {
+    Warning,
+    Error,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct LoadReport {
-    pub preprocess: usize,
-    pub sema: usize,
-    pub profile: usize,
-    pub codegen: usize,
-    pub icons: usize,
-    pub lines: Vec<String>,
+    pub warnings: usize,
+    pub errors: usize,
+    pub warning_lines: Vec<String>,
+    pub error_lines: Vec<String>,
 }
 
 impl LoadReport {
-    pub fn is_empty(&self) -> bool { self.total() == 0 }
+    pub fn is_empty(&self) -> bool { self.warnings + self.errors == 0 }
 
-    pub fn total(&self) -> usize { self.preprocess + self.sema + self.profile + self.codegen + self.icons }
-
-    pub fn summary(&self) -> String {
-        let parts = [
-            (self.preprocess, "preprocessor"),
-            (self.sema, "analysis"),
-            (self.profile, "profile"),
-            (self.codegen, "bytecode"),
-            (self.icons, "icon"),
-        ]
-        .into_iter()
-        .filter(|(count, _)| *count > 0)
-        .map(|(count, label)| format!("{count} {label}"))
-        .collect::<Vec<_>>();
-        let plural = if self.total() == 1 { "" } else { "s" };
-
-        match parts.split_last() {
-            None => String::from("No diagnostics"),
-            Some((last, [])) => format!("{last} diagnostic{plural}"),
-            Some((last, rest)) => format!("{} and {last} diagnostic{plural}", rest.join(", ")),
+    pub fn count(&self, severity: DiagnosticSeverity) -> usize {
+        match severity {
+            DiagnosticSeverity::Warning => self.warnings,
+            DiagnosticSeverity::Error => self.errors,
         }
+    }
+
+    pub fn lines(&self, severity: DiagnosticSeverity) -> &[String] {
+        match severity {
+            DiagnosticSeverity::Warning => &self.warning_lines,
+            DiagnosticSeverity::Error => &self.error_lines,
+        }
+    }
+
+    fn record(&mut self, severity: DiagnosticSeverity, line: String) {
+        let (count, lines) = match severity {
+            DiagnosticSeverity::Warning => (&mut self.warnings, &mut self.warning_lines),
+            DiagnosticSeverity::Error => (&mut self.errors, &mut self.error_lines),
+        };
+        *count += 1;
+        if lines.len() < MAX_REPORTED_DIAGNOSTICS {
+            lines.push(line);
+        }
+    }
+
+    pub fn map(path: &str, errors: &[dmm::error::MapError]) -> Self {
+        let mut report = Self::default();
+        for error in errors {
+            report.record(DiagnosticSeverity::Error, format!("{path}: {error}"));
+        }
+        report
+    }
+
+    pub fn failure(display_path: &str, original_path: &Path, error: &str) -> Self {
+        let mut report = Self::default();
+        let prefix = format!("{}: ", original_path.display());
+        let detail = error.strip_prefix(&prefix).unwrap_or(error);
+        report.record(DiagnosticSeverity::Error, format!("{display_path}: {detail}"));
+        report
+    }
+}
+
+fn preprocess_severity(level: preprocessor::diagnostic::Level) -> DiagnosticSeverity {
+    if level == preprocessor::diagnostic::Level::Error {
+        DiagnosticSeverity::Error
+    } else {
+        DiagnosticSeverity::Warning
     }
 }
 
@@ -3069,17 +3099,19 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
 
         Some(path.strip_prefix(root).unwrap_or(path))
     };
-    let mut lines = Vec::new();
-    let mut collect = |level, line: String, prefix: &str| {
+    let mut report = LoadReport::default();
+    let mut collect = |severity, line: String, prefix: &str| {
+        let level = match severity {
+            DiagnosticSeverity::Warning => log::Level::Warn,
+            DiagnosticSeverity::Error => log::Level::Error,
+        };
         log::log!(level, "{}", line.strip_prefix(prefix).unwrap_or(&line));
-        if lines.len() < MAX_REPORTED_DIAGNOSTICS {
-            lines.push(line);
-        }
+        report.record(severity, line);
     };
 
     for error in &diagnostics.preprocess {
         collect(
-            log::Level::Error,
+            preprocess_severity(error.level),
             error.display(path(error.location.file)).to_string(),
             "",
         );
@@ -3087,7 +3119,7 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
 
     for error in &diagnostics.sema {
         collect(
-            log::Level::Error,
+            DiagnosticSeverity::Error,
             error.display(path(error.location.file)).to_string(),
             "",
         );
@@ -3095,7 +3127,7 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
 
     for error in &diagnostics.bake_preprocess {
         collect(
-            log::Level::Error,
+            preprocess_severity(error.level),
             error.display(bake_path(error.location.file)).to_string(),
             "",
         );
@@ -3103,7 +3135,7 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
 
     for error in &diagnostics.bake_sema {
         collect(
-            log::Level::Error,
+            DiagnosticSeverity::Error,
             error.display(bake_path(error.location.file)).to_string(),
             "",
         );
@@ -3111,7 +3143,7 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
 
     if let Some(error) = &diagnostics.profile {
         collect(
-            log::Level::Warn,
+            DiagnosticSeverity::Warning,
             format!("warning: baking is off, profile selection failed: {error}"),
             "warning: ",
         );
@@ -3119,7 +3151,7 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
 
     if let Some(error) = &diagnostics.codegen {
         collect(
-            log::Level::Warn,
+            DiagnosticSeverity::Warning,
             format!("warning: baking is off, bytecode generation failed: {error}"),
             "warning: ",
         );
@@ -3127,20 +3159,13 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
 
     for (name, error) in &diagnostics.icons {
         collect(
-            log::Level::Warn,
+            DiagnosticSeverity::Warning,
             format!("warning: could not read '{name}': {error}"),
             "warning: ",
         );
     }
 
-    LoadReport {
-        preprocess: diagnostics.preprocess.len() + diagnostics.bake_preprocess.len(),
-        sema: diagnostics.sema.len() + diagnostics.bake_sema.len(),
-        profile: usize::from(diagnostics.profile.is_some()),
-        codegen: usize::from(diagnostics.codegen.is_some()),
-        icons: diagnostics.icons.len(),
-        lines,
-    }
+    report
 }
 
 /// The editor always loads in the background, but tests want one blocking call.
@@ -3173,7 +3198,7 @@ mod tests {
     };
     use std::{
         collections::{HashMap, HashSet},
-        path::PathBuf,
+        path::{Path, PathBuf},
         sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
@@ -3194,17 +3219,20 @@ mod tests {
     use render::{GuideLine, SpriteInstance};
 
     use super::{
+        DiagnosticSeverity,
         FillOutcome,
         GuideBadge,
         LevelChange,
         LoadReport,
         MAX_MAP_DIMENSION,
+        MAX_REPORTED_DIAGNOSTICS,
         Progress,
         Session,
         build_textures,
         directional_type_target,
         directional_types_for,
         discover_maps,
+        preprocess_severity,
         validate_level,
     };
 
@@ -3995,34 +4023,43 @@ mod tests {
     }
 
     #[test]
-    fn a_report_summarises_only_the_kinds_of_diagnostic_it_saw() {
+    fn load_report_classifies_preprocessor_levels_and_caps_only_displayed_lines() {
+        use preprocessor::diagnostic::Level;
+
+        assert_eq!(preprocess_severity(Level::Notice), DiagnosticSeverity::Warning);
+        assert_eq!(preprocess_severity(Level::Warning), DiagnosticSeverity::Warning);
+        assert_eq!(preprocess_severity(Level::Error), DiagnosticSeverity::Error);
+
         let mut report = LoadReport::default();
         assert!(report.is_empty());
-        assert_eq!(report.summary(), "No diagnostics");
-
-        report.icons = 1;
+        for index in 0..=MAX_REPORTED_DIAGNOSTICS {
+            report.record(DiagnosticSeverity::Warning, format!("warning {index}"));
+        }
+        report.record(DiagnosticSeverity::Error, String::from("error"));
+        assert_eq!(report.warnings, MAX_REPORTED_DIAGNOSTICS + 1);
+        assert_eq!(report.warning_lines.len(), MAX_REPORTED_DIAGNOSTICS);
+        assert_eq!(report.errors, 1);
         assert!(!report.is_empty());
-        assert_eq!(report.summary(), "1 icon diagnostic");
-
-        report.preprocess = 12;
-        assert_eq!(report.summary(), "12 preprocessor and 1 icon diagnostics");
-
-        report.sema = 3;
-        assert_eq!(report.summary(), "12 preprocessor, 3 analysis and 1 icon diagnostics");
-
-        report.profile = 1;
-        assert_eq!(
-            report.summary(),
-            "12 preprocessor, 3 analysis, 1 profile and 1 icon diagnostics"
-        );
-
-        report.codegen = 1;
-        assert_eq!(
-            report.summary(),
-            "12 preprocessor, 3 analysis, 1 profile, 1 bytecode and 1 icon diagnostics"
-        );
+        assert_eq!(report.error_lines, ["error"]);
     }
 
+    #[test]
+    fn map_and_failed_load_reports_keep_one_readable_path_prefix() {
+        let error = dmm::error::MapError::new(
+            dmm::error::MapErrorKind::RaggedGrid,
+            core::location::Position::new(2, 3),
+        );
+        let report = LoadReport::map("maps/level.dmm", &[error]);
+        assert_eq!(report.errors, 1);
+        assert!(report.error_lines[0].starts_with("maps/level.dmm: Map error"));
+
+        let failed = LoadReport::failure(
+            "maps/level.dmm",
+            Path::new("C:/game/maps/level.dmm"),
+            "C:/game/maps/level.dmm: cannot read",
+        );
+        assert_eq!(failed.error_lines, ["maps/level.dmm: cannot read"]);
+    }
     #[test]
     fn map_discovery_finds_maps_the_environment_never_includes() {
         let maps = discover_maps(&examples());
