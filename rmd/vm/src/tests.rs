@@ -479,6 +479,7 @@ fn profile_ui_draws_widgets_and_reads_back_what_the_editor_remembers() {
         clicks: HashSet::from([String::from("Panel/Reset")]),
         closed: HashSet::new(),
         interacted: true,
+        ..Default::default()
     };
     let commands = bake
         .ui(&tree, &module, Some(1), 7, feedback)
@@ -1071,6 +1072,70 @@ fn profile_ui_streams_stay_balanced_when_the_profile_leaves_them_open() {
         "a collapsed node closes itself, since the profile only pairs an open one: {:#?}",
         closed.commands,
     );
+}
+
+#[test]
+fn profile_mouse_popup_opens_only_for_a_selection() {
+    let (tree, module) = compile(fixture!("programs/profile_mouse_popup_opens_only_for_a_selection.dm"));
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        Vec::new(),
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    let requested = bake
+        .ui(
+            &tree,
+            &module,
+            None,
+            0,
+            Feedback {
+                mouse_popup_requested: true,
+                ..Default::default()
+            },
+        )
+        .expect("the selection frame should draw");
+    assert!(matches!(
+        requested.commands.as_slice(),
+        [
+            Command::OpenPopup(crate::ui::PopupId::Mouse),
+            Command::BeginPopup(crate::ui::PopupId::Mouse),
+            Command::Text { .. },
+            Command::EndPopup,
+        ]
+    ));
+
+    let retained = bake
+        .ui(
+            &tree,
+            &module,
+            None,
+            0,
+            Feedback {
+                open_popups: HashSet::from([crate::ui::PopupId::Mouse]),
+                ..Default::default()
+            },
+        )
+        .expect("an open popup should keep drawing");
+    assert!(matches!(
+        retained.commands.as_slice(),
+        [
+            Command::BeginPopup(crate::ui::PopupId::Mouse),
+            Command::Text { .. },
+            Command::EndPopup,
+        ]
+    ));
+
+    let dismissed = bake
+        .ui(&tree, &module, None, 0, Feedback::default())
+        .expect("a dismissed popup should leave a balanced stream");
+    assert!(matches!(
+        dismissed.commands.as_slice(),
+        [Command::BeginPopup(crate::ui::PopupId::Mouse), Command::EndPopup]
+    ));
 }
 
 #[test]

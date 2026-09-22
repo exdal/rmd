@@ -11,6 +11,12 @@ const MAX_LABEL: usize = 128;
 const MAX_TEXT: usize = 1024;
 
 const DOCKSPACE_HANDLE: f32 = 1.0;
+const MOUSE_POPUP_HANDLE: f32 = 1.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PopupId {
+    Mouse,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
@@ -70,6 +76,9 @@ pub enum Command {
         key: String,
         label: String,
     },
+    OpenPopup(PopupId),
+    BeginPopup(PopupId),
+    EndPopup,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +97,10 @@ pub struct Feedback {
     pub clicks: HashSet<String>,
     /// Windows and nodes the viewer has collapsed. Anything absent counts as open.
     pub closed: HashSet<String>,
+    /// Popups that remained open in the editor's preceding frame.
+    pub open_popups: HashSet<PopupId>,
+    /// A successful selection pick asked the mouse popup to open on this frame.
+    pub mouse_popup_requested: bool,
     pub interacted: bool,
 }
 
@@ -146,6 +159,7 @@ pub struct Frame {
 enum Scope {
     Window,
     Tree,
+    Popup,
 }
 
 #[derive(Debug, Default)]
@@ -183,6 +197,7 @@ impl Panel {
             self.commands.push(match scope {
                 Scope::Window => Command::End,
                 Scope::Tree => Command::TreeEnd,
+                Scope::Popup => Command::EndPopup,
             });
         }
         self.seen.clear();
@@ -215,6 +230,8 @@ impl Panel {
     fn clicked(&self, key: &str) -> bool { self.feedback.clicks.contains(key) }
 
     fn value(&self, key: &str) -> Option<&Value> { self.feedback.values.get(key) }
+
+    fn popup(&self, handle: f32) -> Option<PopupId> { (handle == MOUSE_POPUP_HANDLE).then_some(PopupId::Mouse) }
 }
 
 fn clamped(text: &str, limit: usize) -> String { text.chars().take(limit).collect() }
@@ -420,6 +437,43 @@ impl Evaluator<'_> {
 
                 Ok(GenericValue::Null)
             },
+            Intrinsic::ImguiMousePopup => Ok(GenericValue::Num(MOUSE_POPUP_HANDLE)),
+            Intrinsic::ImguiOpenPopup => {
+                let Some(popup) = self.runtime.ui.popup(number(0)) else {
+                    return Ok(GenericValue::Null);
+                };
+                if self.runtime.ui.feedback.mouse_popup_requested {
+                    self.emit(Command::OpenPopup(popup))?;
+                    self.runtime.ui.feedback.open_popups.insert(popup);
+                }
+
+                Ok(GenericValue::Null)
+            },
+            Intrinsic::ImguiBeginPopup => {
+                let Some(popup) = self.runtime.ui.popup(number(0)) else {
+                    return Ok(false.into());
+                };
+                if self.runtime.ui.scope.len() >= MAX_DEPTH {
+                    return Err(self.fault(FaultKind::InvalidOperation(format!(
+                        "ui() nested more than {MAX_DEPTH} windows and nodes"
+                    ))));
+                }
+
+                self.emit(Command::BeginPopup(popup))?;
+                let open = self.runtime.ui.feedback.open_popups.contains(&popup);
+                match open {
+                    true => self.runtime.ui.scope.push((Scope::Popup, String::from("MousePopup"))),
+                    false => self.emit(Command::EndPopup)?,
+                }
+
+                Ok(open.into())
+            },
+            Intrinsic::ImguiEndPopup => {
+                self.emit(Command::EndPopup)?;
+                self.close(Scope::Popup, name)?;
+
+                Ok(GenericValue::Null)
+            },
             _ => Err(self.fault(FaultKind::Blocked(name.into()))),
         }
     }
@@ -431,7 +485,11 @@ impl Evaluator<'_> {
             ))));
         }
 
-        if !matches!(command, Command::Begin { .. }) && self.runtime.ui.scope.is_empty() {
+        if !matches!(
+            command,
+            Command::Begin { .. } | Command::OpenPopup(_) | Command::BeginPopup(_) | Command::EndPopup
+        ) && self.runtime.ui.scope.is_empty()
+        {
             return Err(self.fault(FaultKind::InvalidOperation("ui() drew outside of imgui_begin".into())));
         }
 

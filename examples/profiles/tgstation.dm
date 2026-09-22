@@ -556,14 +556,6 @@
 		src.fade_underfloor = fade
 		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_UNDERFLOOR)
 
-	if(target)
-		imgui_separator("Selection")
-		if(istype(target, /obj/structure/closet))
-			var/obj/structure/closet/closet = target
-			imgui_text("Closet contents: [length(closet.contents)]")
-			for(var/atom/content in closet.contents)
-				imgui_text("[content.name]")
-
 	imgui_end()
 
 /datum/demir/tgstation/prepare(atom/target)

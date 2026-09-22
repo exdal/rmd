@@ -2143,7 +2143,8 @@ impl Session {
             return editor::bake::UiFrame::default();
         };
 
-        let replayed = feedback.clone();
+        let mut replayed = feedback.clone();
+        replayed.mouse_popup_requested = false;
         let drawn = bake.ui(&program.tree, &program.module, target, dockspace, feedback);
         report_bake_output(bake);
 

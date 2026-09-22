@@ -52,3 +52,15 @@
 
 /proc/imgui_collapsing_header(label)
 	set __demir_intrin = 716
+
+/proc/imgui_mouse_popup()
+	set __demir_intrin = 722
+
+/proc/imgui_open_popup(popup)
+	set __demir_intrin = 723
+
+/proc/imgui_begin_popup(popup)
+	set __demir_intrin = 724
+
+/proc/imgui_end_popup()
+	set __demir_intrin = 725

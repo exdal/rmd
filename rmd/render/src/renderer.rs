@@ -1260,12 +1260,6 @@ impl Renderer {
                 .end_rendering();
 
             let (mut output_attachment, interaction, guides, should_pick) = if with_imgui {
-                // TODO: vir doesnt support explicit barriers, fix this shit
-                [visibility_attachment] = module
-                    .begin_compute([(visibility_attachment, Access::FragmentSampled | Access::ComputeSampled)])
-                    .with_name(format!("map view {index} shared visibility access"))
-                    .end_compute();
-
                 let push = module.declare_bytes_var(
                     &format!("map view {index} interaction"),
                     size_of::<InteractionPush>() as u32,

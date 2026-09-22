@@ -299,7 +299,11 @@ impl Evaluator<'_> {
             | Intrinsic::ImguiSameLine
             | Intrinsic::ImguiTree
             | Intrinsic::ImguiTreeEnd
-            | Intrinsic::ImguiCollapsingHeader => self.imgui(intrinsic, name, args),
+            | Intrinsic::ImguiCollapsingHeader
+            | Intrinsic::ImguiMousePopup
+            | Intrinsic::ImguiOpenPopup
+            | Intrinsic::ImguiBeginPopup
+            | Intrinsic::ImguiEndPopup => self.imgui(intrinsic, name, args),
 
             // Both play out over time, and a bake shows the appearance from before either starts
             Intrinsic::Animate | Intrinsic::Flick => Ok(GenericValue::Null),

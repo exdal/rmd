@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use dear_imgui_rs::{Condition, Id, TreeNodeFlags, Ui};
-use editor::bake::{UiCommand, UiFeedback, UiRebake, UiValue};
+use editor::bake::{UiCommand, UiFeedback, UiPopupId, UiRebake, UiValue};
 
 use crate::session::Session;
 
@@ -10,15 +10,20 @@ pub(crate) struct DmUi {
     feedback: UiFeedback,
     clicks: HashSet<String>,
     pending: bool,
+    mouse_popup_requested: bool,
     rebake: UiRebake,
 }
 
 impl DmUi {
+    pub(crate) fn request_mouse_popup(&mut self) { self.mouse_popup_requested = true; }
+
     pub(crate) fn draw(&mut self, ui: &Ui, session: &mut Session, dockspace: u32) {
         let feedback = UiFeedback {
             values: self.feedback.values.clone(),
             closed: self.feedback.closed.clone(),
+            open_popups: self.feedback.open_popups.clone(),
             clicks: std::mem::take(&mut self.clicks),
+            mouse_popup_requested: std::mem::take(&mut self.mouse_popup_requested),
             interacted: std::mem::take(&mut self.pending),
         };
 
@@ -37,7 +42,23 @@ impl DmUi {
         while let Some(command) = commands.get(index) {
             index += 1;
             match command {
-                UiCommand::End | UiCommand::TreeEnd => return index,
+                UiCommand::End | UiCommand::TreeEnd | UiCommand::EndPopup => return index,
+                UiCommand::OpenPopup(popup) => {
+                    ui.open_popup(popup_name(*popup));
+                },
+                UiCommand::BeginPopup(popup) => {
+                    let token = ui.begin_popup(popup_name(*popup));
+                    self.set_popup_open(*popup, token.is_some());
+                    index = match token {
+                        Some(token) => {
+                            let after = self.draw_commands(ui, commands, index);
+                            drop(token);
+
+                            after
+                        },
+                        None => skip(commands, index, &UiCommand::EndPopup),
+                    };
+                },
                 UiCommand::Begin { key, label, dock, size } => {
                     if let Some(dock) = dock {
                         ui.set_next_window_dock_id_with_cond(Id::from(*dock), Condition::FirstUseEver);
@@ -157,23 +178,42 @@ impl DmUi {
         };
     }
 
+    fn set_popup_open(&mut self, popup: UiPopupId, open: bool) {
+        match open {
+            true => self.feedback.open_popups.insert(popup),
+            false => self.feedback.open_popups.remove(&popup),
+        };
+    }
+
     fn prune(&mut self, commands: &[UiCommand]) {
         let mut drawn = HashSet::new();
+        let mut popups = HashSet::new();
         for command in commands {
             if let Some(key) = key_of(command) {
                 drawn.insert(key);
+            }
+            if let UiCommand::BeginPopup(popup) = command {
+                popups.insert(*popup);
             }
         }
 
         self.feedback.values.retain(|key, _| drawn.contains(key.as_str()));
         self.feedback.closed.retain(|key| drawn.contains(key.as_str()));
+        self.feedback.open_popups.retain(|popup| popups.contains(popup));
         self.clicks.retain(|key| drawn.contains(key.as_str()));
+    }
+}
+
+fn popup_name(popup: UiPopupId) -> &'static str {
+    match popup {
+        UiPopupId::Mouse => "demir-mouse-popup",
     }
 }
 
 fn skip(commands: &[UiCommand], from: usize, terminator: &UiCommand) -> usize {
     let opener = match terminator {
         UiCommand::TreeEnd => |command: &UiCommand| matches!(command, UiCommand::Tree { .. }),
+        UiCommand::EndPopup => |command: &UiCommand| matches!(command, UiCommand::BeginPopup(_)),
         _ => |command: &UiCommand| matches!(command, UiCommand::Begin { .. }),
     };
 
@@ -205,6 +245,9 @@ fn key_of(command: &UiCommand) -> Option<&str> {
         | UiCommand::CollapsingHeader { key, .. } => Some(key),
         UiCommand::End
         | UiCommand::TreeEnd
+        | UiCommand::OpenPopup(_)
+        | UiCommand::BeginPopup(_)
+        | UiCommand::EndPopup
         | UiCommand::Text { .. }
         | UiCommand::Separator { .. }
         | UiCommand::SameLine => None,
@@ -223,6 +266,8 @@ impl DmUi {
     pub(crate) fn closed(&self) -> &HashSet<String> { &self.feedback.closed }
 
     pub(crate) fn clicks(&self) -> &HashSet<String> { &self.clicks }
+
+    pub(crate) fn open_popups(&self) -> &HashSet<UiPopupId> { &self.feedback.open_popups }
 }
 
 #[cfg(test)]
@@ -349,5 +394,30 @@ mod tests {
         assert!(panel.values().is_empty());
         assert_eq!(panel.closed(), &HashSet::new());
         assert!(panel.clicks().is_empty());
+    }
+
+    #[test]
+    fn a_mouse_popup_opens_only_when_the_stream_requests_it() {
+        let popup = UiPopupId::Mouse;
+        let open = replay(&[
+            UiCommand::OpenPopup(popup),
+            UiCommand::BeginPopup(popup),
+            UiCommand::Text {
+                text: String::from("inside"),
+                color: None,
+            },
+            UiCommand::EndPopup,
+        ]);
+        assert_eq!(open.open_popups(), &HashSet::from([popup]));
+
+        let closed = replay(&[
+            UiCommand::BeginPopup(popup),
+            UiCommand::Text {
+                text: String::from("not drawn"),
+                color: None,
+            },
+            UiCommand::EndPopup,
+        ]);
+        assert!(closed.open_popups().is_empty());
     }
 }

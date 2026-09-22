@@ -393,6 +393,7 @@ impl App {
                     PickResult::Hit(owner) => {
                         session.select_instance(Some(owner));
                         ui.reveal_selected_instance(session);
+                        ui.request_mouse_popup();
                     },
                     PickResult::Miss => session.select_instance(None),
                 },

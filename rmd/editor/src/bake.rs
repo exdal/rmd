@@ -15,7 +15,14 @@ pub use vm::{
         Highlight,
         HighlightTile,
     },
-    ui::{Command as UiCommand, Feedback as UiFeedback, Frame as UiFrame, Rebake as UiRebake, Value as UiValue},
+    ui::{
+        Command as UiCommand,
+        Feedback as UiFeedback,
+        Frame as UiFrame,
+        PopupId as UiPopupId,
+        Rebake as UiRebake,
+        Value as UiValue,
+    },
 };
 
 use crate::{

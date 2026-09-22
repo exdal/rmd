@@ -931,6 +931,8 @@ impl UiState {
         self.object_tree.reveal_selected_instance(session);
     }
 
+    pub fn request_mouse_popup(&mut self) { self.dm_ui.request_mouse_popup(); }
+
     pub fn set_load_notice(&mut self, notice: Option<LoadNotice>) { self.load_notice = notice; }
 
     pub fn request_exit(&mut self) { self.exit_requested = true; }

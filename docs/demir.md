@@ -162,6 +162,22 @@ sources, blockers, ambient light, fullbright cells, and appearance-based light r
 `ui` can call the `imgui_*` procedures declared in the prelude. The editor retains widget values
 between frames. A frame keeps profile writes only when a user interaction changes the heap.
 
+The editor also provides one popup handle for content associated with a map selection. A successful
+selection click opens it at the mouse once; dismissing it does not make it reopen on later frames.
+Selections made outside the map viewport do not trigger it. Only handles returned by the editor are
+accepted:
+
+```dm
+var/popup = imgui_mouse_popup()
+imgui_open_popup(popup)
+if(imgui_begin_popup(popup))
+	imgui_text("Selected details")
+	imgui_end_popup()
+```
+
+Place this sequence outside any optional profile window when the popup must still draw while that
+window is collapsed.
+
 Call `demir_define_group` from `New()` to assign type subtrees to profile-owned bit groups. A UI
 change can pass those bits to `demir_rebake`. This limits new work to the affected kinds and type
 groups. A UI change has no map effect until it requests a rebake.
