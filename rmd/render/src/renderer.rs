@@ -1466,11 +1466,11 @@ impl Renderer {
             });
         }
 
-        let pick_host = pick_after.map(|pick| module.release(pick, Access::HostRead, DomainFlag::Host));
+        let pick_host = pick_after.map(|pick| module.export(pick, Access::HostRead, DomainFlag::Host));
         let mut sampled_map_view_roots = Vec::new();
         let (presented_attachment, ui) = if with_imgui {
             for map_view in &map_views {
-                let sampled = module.release(
+                let sampled = module.export(
                     map_view.output_attachment,
                     Access::FragmentSampled,
                     DomainFlag::Graphics,
@@ -2897,7 +2897,7 @@ fn upload_batch(
                 destination_attachment,
                 copy_region(offset, source.width, source.height),
             );
-            roots.push(module.release(
+            roots.push(module.export(
                 copied_attachment,
                 Access::FragmentSampled | Access::ComputeSampled,
                 DomainFlag::Graphics,

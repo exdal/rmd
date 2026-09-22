@@ -639,7 +639,7 @@ impl ImGuiPass {
 
         let roots = values
             .iter()
-            .map(|(_, value)| module.release(*value, TEXTURE_RESTING, DomainFlag::Graphics))
+            .map(|(_, value)| module.export(*value, TEXTURE_RESTING, DomainFlag::Graphics))
             .collect::<Vec<_>>();
         let program = module.compile_all(&*graph, &roots)?;
         graph.execute_blocking(ctx, &program, &mut AllocatorKind::Frame(allocator))?;
