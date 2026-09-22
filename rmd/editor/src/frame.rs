@@ -526,6 +526,17 @@ fn current_placement(tree: &ObjectTree, document: &MapDocument, owner: PrefabIns
 }
 
 impl RenderContext<'_> {
+    fn instance(
+        &self, owner: PrefabInstanceId, appearance: &Appearance, texture: SpriteTexture, coord: Coord, is_area: bool,
+    ) -> SpriteInstance {
+        let mut sprite = instance_for(owner, appearance, texture, coord, self.tile_size, is_area);
+        if self.textures.is_missing_icon(texture) {
+            sprite.color = [sprite.color[3]; 4];
+        }
+
+        sprite
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn overlay_groups(
         &self, owner: PrefabInstanceId, parent: &Appearance, delta: &vm::AppearanceDelta, coord: Coord,
@@ -538,7 +549,7 @@ impl RenderContext<'_> {
         let appearance = visual::resolve_overlay(self.tree, parent, delta);
         let mut own = Vec::new();
         if let Some(texture) = sprite_texture(self.icons, self.textures, &appearance) {
-            let mut sprite = instance_for(owner, &appearance, texture, coord, self.tile_size, false);
+            let mut sprite = self.instance(owner, &appearance, texture, coord, false);
             sprite.area_owner = area_owner;
             own.push(sprite);
         }
@@ -635,7 +646,7 @@ impl RenderContext<'_> {
 
         if is_area {
             if let Some(texture) = texture {
-                let mut sprite = instance_for(owner, &appearance, texture, coord, self.tile_size, true);
+                let mut sprite = self.instance(owner, &appearance, texture, coord, true);
                 sprite.area_owner = area_owner;
                 own.push(sprite);
             }
@@ -667,13 +678,13 @@ impl RenderContext<'_> {
                 own.push(outline);
             }
         } else if let Some(texture) = texture {
-            let mut sprite = instance_for(owner, &appearance, texture, coord, self.tile_size, false);
+            let mut sprite = self.instance(owner, &appearance, texture, coord, false);
             sprite.area_owner = area_owner;
             own.push(sprite);
         }
         let primary = own.first().copied();
 
-        let groups = if let Some(delta) = delta.filter(|_| !is_area) {
+        let mut groups = if let Some(delta) = delta.filter(|_| !is_area) {
             self.grouped(owner, &appearance, own, delta, coord, area_owner, 0)
         } else if own.is_empty() {
             Vec::new()
@@ -685,6 +696,20 @@ impl RenderContext<'_> {
                 sprites: own,
             }]
         };
+        if groups.is_empty() && !is_area {
+            if let Some(fallback) = sprite_texture_or_missing(self.icons, self.textures, &appearance)
+                .filter(|texture| self.textures.is_missing_icon(*texture))
+            {
+                let mut sprite = self.instance(owner, &appearance, fallback, coord, false);
+                sprite.area_owner = area_owner;
+                groups.push(SpriteGroup {
+                    plane: appearance.plane,
+                    layer: appearance.layer,
+                    keep_apart: false,
+                    sprites: vec![sprite],
+                });
+            }
+        }
         let mut local_order = 0usize;
         let mut sprites = Vec::new();
         for group in groups {
@@ -1124,6 +1149,18 @@ pub fn sprite_texture(
     let cell = metadata.find(state)?.sprite_index(dir, 0);
 
     textures.lookup(icon, cell)
+}
+
+pub fn sprite_texture_or_missing(
+    icons: &HashMap<String, Metadata>, textures: &TextureCatalog, appearance: &Appearance,
+) -> Option<SpriteTexture> {
+    sprite_texture(icons, textures, appearance).or_else(|| {
+        appearance.icon.as_deref().filter(|icon| !icon.is_empty())?;
+        if appearance.alpha == 0 || appearance.invisibility > 0 {
+            return None;
+        }
+        textures.missing_icon()
+    })
 }
 
 #[cfg(test)]
@@ -1691,6 +1728,141 @@ mod tests {
     }
 
     #[test]
+    fn visible_prefabs_with_failed_icon_lookups_use_the_missing_texture() {
+        let mut tree = tree(&[
+            ("/obj/valid", "valid", 2.0),
+            ("/obj/machinery/computer", "missing", 2.0),
+            ("/obj/no_file", "valid", 2.0),
+            ("/obj/iconless", "missing", 2.0),
+            ("/obj/transparent", "missing", 2.0),
+        ]);
+        tree.register(&TreePath::parse("/obj/machinery/computer/monitor"), Location::default());
+        let mut document = document(one_tile_map(&[
+            "/obj/valid",
+            "/obj/machinery/computer/monitor",
+            "/obj/no_file",
+            "/obj/iconless",
+            "/obj/transparent",
+        ]));
+        let owners = document.instance_ids_at(Coord::new(1, 1, 1)).to_vec();
+        document
+            .set_instance_var(owners[1], "color".into(), Value::Text(String::from("#00ff00")))
+            .unwrap();
+        document
+            .set_instance_var(owners[2], "icon".into(), Value::Resource(String::from("missing.dmi")))
+            .unwrap();
+        document
+            .set_instance_var(owners[3], "icon".into(), Value::Null)
+            .unwrap();
+        document
+            .set_instance_var(owners[4], "alpha".into(), Value::Num(0.0))
+            .unwrap();
+
+        let icons = icons(&["valid"]);
+        let mut textures = textures(&["valid"]);
+        let missing = textures.insert_missing_icon().unwrap();
+        let sprites = build(&tree, &icons, &textures, &document, 32);
+
+        assert_eq!(
+            sprites.sprite(owners[0]).unwrap().texture,
+            textures.lookup(ICON, 0).unwrap()
+        );
+        assert_eq!(sprites.sprite(owners[1]).unwrap().texture, missing);
+        assert_eq!(sprites.sprite(owners[1]).unwrap().color, [1.0; 4]);
+        assert_eq!(sprites.sprite(owners[2]).unwrap().texture, missing);
+        assert!(sprites.sprite(owners[3]).is_none());
+        assert!(sprites.sprite(owners[4]).is_none());
+
+        let mut visibility = TypeVisibility::default();
+        let monitor = tree.id_of(&TreePath::parse("/obj/machinery/computer/monitor")).unwrap();
+        visibility.set_subtree(&tree, monitor, false);
+        let hidden = build_with_options(
+            &tree,
+            &icons,
+            &textures,
+            &document,
+            FrameRenderOptions {
+                visibility: &visibility,
+                tile_size: 32,
+                appearances: &HashMap::new(),
+                lighting: None,
+            },
+        );
+        assert!(hidden.sprite(owners[1]).is_none());
+    }
+
+    #[test]
+    fn failed_overlays_do_not_cover_a_valid_airlock_or_overlay_only_object() {
+        let tree = tree(&[
+            ("/obj/machinery/door/airlock/grunge", "closed", 2.0),
+            ("/obj/overlay_only", "missing", 2.0),
+            ("/obj/truly_missing", "missing", 2.0),
+        ]);
+        let document = document(one_tile_map(&[
+            "/obj/machinery/door/airlock/grunge",
+            "/obj/overlay_only",
+            "/obj/truly_missing",
+        ]));
+        let owners = document.instance_ids_at(Coord::new(1, 1, 1)).to_vec();
+        let overlay = |state: &str| vm::AppearanceDelta {
+            vars: vec![("icon_state".into(), Value::Text(state.into()))],
+            ..Default::default()
+        };
+        let appearances = HashMap::from([
+            (
+                owners[0].get(),
+                vm::AppearanceDelta {
+                    overlays: vec![overlay("missing")],
+                    ..Default::default()
+                },
+            ),
+            (
+                owners[1].get(),
+                vm::AppearanceDelta {
+                    overlays: vec![overlay("closed")],
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let icons = icons(&["closed"]);
+        let mut textures = textures(&["closed"]);
+        let missing = textures.insert_missing_icon().unwrap();
+        let rendered = build_with_options(
+            &tree,
+            &icons,
+            &textures,
+            &document,
+            FrameRenderOptions {
+                visibility: &TypeVisibility::default(),
+                tile_size: 32,
+                appearances: &appearances,
+                lighting: None,
+            },
+        );
+        let real = textures.lookup(ICON, 0).unwrap();
+
+        assert_eq!(rendered.sprite(owners[0]).unwrap().texture, real);
+        assert_eq!(rendered.sprite(owners[1]).unwrap().texture, real);
+        assert_eq!(rendered.sprite(owners[2]).unwrap().texture, missing);
+        assert_eq!(
+            rendered
+                .sprites
+                .iter()
+                .filter(|sprite| sprite.owner == owners[0])
+                .count(),
+            1
+        );
+        assert_eq!(
+            rendered
+                .sprites
+                .iter()
+                .filter(|sprite| sprite.owner == owners[1])
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn sprite_textures_use_the_resolved_direction_and_first_frame() {
         let metadata = Metadata {
             version: String::from("4.0"),
@@ -2207,7 +2379,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unresolvable_icon_state_emits_nothing() {
+    fn an_unresolvable_icon_state_without_a_registered_fallback_emits_nothing() {
         let tree = tree(&[("/obj/ghost", "not_in_the_sheet", 2.0)]);
         let document = document(one_tile_map(&["/obj/ghost"]));
 

@@ -7,6 +7,28 @@ use dmi::{IconFile, IconInfo};
 
 use crate::SpriteTexture;
 
+const MISSING_ICON_SIZE: u32 = 32;
+const MISSING_ICON_PIXELS: [u8; (MISSING_ICON_SIZE * MISSING_ICON_SIZE * 4) as usize] = missing_icon_pixels();
+
+const fn missing_icon_pixels() -> [u8; (MISSING_ICON_SIZE * MISSING_ICON_SIZE * 4) as usize] {
+    let mut pixels = [0; (MISSING_ICON_SIZE * MISSING_ICON_SIZE * 4) as usize];
+    let mut y = 0;
+    while y < MISSING_ICON_SIZE {
+        let mut x = 0;
+        while x < MISSING_ICON_SIZE {
+            let index = ((y * MISSING_ICON_SIZE + x) * 4) as usize;
+            if ((x / 8) + (y / 8)) % 2 == 0 {
+                pixels[index] = 255;
+                pixels[index + 2] = 255;
+            }
+            pixels[index + 3] = 255;
+            x += 1;
+        }
+        y += 1;
+    }
+    pixels
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextureError {
     ZeroCellSize { icon: String },
@@ -33,6 +55,7 @@ pub struct TextureData {
     path: PathBuf,
     width: u32,
     height: u32,
+    builtin_pixels: Option<&'static [u8]>,
 }
 
 impl TextureData {
@@ -41,6 +64,8 @@ impl TextureData {
     pub fn width(&self) -> u32 { self.width }
 
     pub fn height(&self) -> u32 { self.height }
+
+    pub fn builtin_pixels(&self) -> Option<&'static [u8]> { self.builtin_pixels }
 
     pub fn decoded_bytes(&self) -> usize {
         (self.width as usize)
@@ -54,6 +79,7 @@ pub struct TextureCatalog {
     textures: Vec<TextureData>,
     sheets: HashMap<String, Vec<SpriteTexture>>,
     cell_count: usize,
+    missing_icon: Option<SpriteTexture>,
 }
 
 impl TextureCatalog {
@@ -66,6 +92,34 @@ impl TextureCatalog {
     pub fn textures(&self) -> &[TextureData] { &self.textures }
 
     pub fn texture(&self, index: u32) -> Option<&TextureData> { self.textures.get(usize::try_from(index).ok()?) }
+
+    pub fn missing_icon(&self) -> Option<SpriteTexture> { self.missing_icon }
+
+    pub fn is_missing_icon(&self, texture: SpriteTexture) -> bool { self.missing_icon == Some(texture) }
+
+    pub fn insert_missing_icon(&mut self) -> Result<SpriteTexture, TextureError> {
+        if let Some(texture) = self.missing_icon {
+            return Ok(texture);
+        }
+
+        let index = u32::try_from(self.textures.len()).map_err(|_| TextureError::TooManyTextures)?;
+        let texture = SpriteTexture {
+            index,
+            source_position: [0, 0],
+            width: MISSING_ICON_SIZE,
+            height: MISSING_ICON_SIZE,
+        };
+        self.textures.push(TextureData {
+            path: PathBuf::from("<missing icon>"),
+            width: MISSING_ICON_SIZE,
+            height: MISSING_ICON_SIZE,
+            builtin_pixels: Some(&MISSING_ICON_PIXELS),
+        });
+        self.cell_count = self.cell_count.saturating_add(1);
+        self.missing_icon = Some(texture);
+
+        Ok(texture)
+    }
 
     pub fn cell_count(&self) -> usize { self.cell_count }
 
@@ -177,6 +231,7 @@ impl TextureCatalog {
                 path: info.path.clone(),
                 width: info.sheet_width,
                 height: info.sheet_height,
+                builtin_pixels: None,
             });
             self.cell_count = self.cell_count.saturating_add(mapped);
         }
@@ -224,6 +279,24 @@ mod tests {
             sheet_height: height,
             pixels,
         }
+    }
+
+    #[test]
+    fn missing_icon_is_an_embedded_opaque_checkerboard() {
+        let mut catalog = TextureCatalog::new();
+        let missing = catalog.insert_missing_icon().expect("insert missing icon");
+        let texture = catalog.texture(missing.index).expect("missing texture");
+        let pixels = texture.builtin_pixels().expect("embedded pixels");
+        let pixel = |x: usize, y: usize| &pixels[(y * 32 + x) * 4..(y * 32 + x + 1) * 4];
+
+        assert_eq!((texture.width(), texture.height()), (32, 32));
+        assert_eq!(pixels.len(), 32 * 32 * 4);
+        assert_eq!(pixel(0, 0), [255, 0, 255, 255]);
+        assert_eq!(pixel(8, 0), [0, 0, 0, 255]);
+        assert_eq!(pixel(8, 8), [255, 0, 255, 255]);
+        assert_eq!(pixel(31, 31), [255, 0, 255, 255]);
+        assert_eq!(catalog.insert_missing_icon().unwrap(), missing);
+        assert_eq!(catalog.len(), 1);
     }
 
     #[test]

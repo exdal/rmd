@@ -19,7 +19,14 @@ use editor::{
 use objtree::TypeId;
 use render::texture::TextureCatalog;
 
-use crate::session::{PrefabThumbnail, build_textures, discover_maps, prefab_thumbnail_for, validate_level};
+use crate::session::{
+    PrefabThumbnail,
+    build_textures,
+    discover_maps,
+    prefab_thumbnail_for,
+    prefab_thumbnail_or_missing,
+    validate_level,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Job {
@@ -243,7 +250,7 @@ fn build_thumbnails(
                 );
                 derived += usize::from(standalone.is_some());
 
-                standalone
+                standalone.or_else(|| prefab_thumbnail_or_missing(textures, environment, &appearance))
             },
         };
         thumbnails.insert(declaration.id, thumbnail);

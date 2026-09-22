@@ -1665,8 +1665,8 @@ impl Session {
         }
 
         let appearance = visual::resolve_id(&environment.tree, id, &prefab);
-        let texture = frame::sprite_texture(&environment.icons, &self.textures, &appearance)?;
-        let sprite = frame::instance_for(
+        let texture = frame::sprite_texture_or_missing(&environment.icons, &self.textures, &appearance)?;
+        let mut sprite = frame::instance_for(
             owner,
             &appearance,
             texture,
@@ -1674,6 +1674,9 @@ impl Session {
             self.options.tile_size,
             is_area,
         );
+        if self.textures.is_missing_icon(texture) {
+            sprite.color = [sprite.color[3]; 4];
+        }
 
         Some(SpriteInstance {
             color: sprite.color.map(|channel| channel * 0.55),
@@ -1746,7 +1749,7 @@ impl Session {
     fn prefab_thumbnail_for(
         &self, environment: &Environment, appearance: &visual::Appearance,
     ) -> Option<PrefabThumbnail> {
-        prefab_thumbnail_for(&self.textures, environment, appearance)
+        prefab_thumbnail_or_missing(&self.textures, environment, appearance)
     }
 
     pub fn choose_type(&mut self, selected: TypeId) -> bool {
@@ -2960,6 +2963,19 @@ pub(crate) fn prefab_thumbnail_for(
     textures: &TextureCatalog, environment: &Environment, appearance: &visual::Appearance,
 ) -> Option<PrefabThumbnail> {
     let texture = frame::sprite_texture(&environment.icons, textures, appearance)?;
+    thumbnail_for_texture(textures, appearance, texture)
+}
+
+pub(crate) fn prefab_thumbnail_or_missing(
+    textures: &TextureCatalog, environment: &Environment, appearance: &visual::Appearance,
+) -> Option<PrefabThumbnail> {
+    let texture = frame::sprite_texture_or_missing(&environment.icons, textures, appearance)?;
+    thumbnail_for_texture(textures, appearance, texture)
+}
+
+fn thumbnail_for_texture(
+    textures: &TextureCatalog, appearance: &visual::Appearance, texture: SpriteTexture,
+) -> Option<PrefabThumbnail> {
     let sheet = textures.texture(texture.index)?;
     let sheet_width = sheet.width() as f32;
     let sheet_height = sheet.height() as f32;
@@ -2971,6 +2987,9 @@ pub(crate) fn prefab_thumbnail_for(
         .and_then(render::color::parse)
         .unwrap_or([1.0; 4]);
     tint[3] *= f32::from(appearance.alpha) / 255.0;
+    if textures.is_missing_icon(texture) {
+        tint[0..3].fill(1.0);
+    }
 
     Some(PrefabThumbnail {
         texture,
@@ -2985,6 +3004,9 @@ pub(crate) fn prefab_thumbnail_for(
 
 pub(crate) fn build_textures(environment: &Environment, progress: &Progress) -> TextureCatalog {
     let mut textures = TextureCatalog::default();
+    textures
+        .insert_missing_icon()
+        .expect("one built-in texture fits in the catalog");
     let base = environment.base_dir();
     let names = environment.icon_paths();
 
@@ -4295,8 +4317,9 @@ mod tests {
 
         let textures = build_textures(&environment, &Progress::new());
 
-        assert_eq!(textures.len(), 1);
-        assert_eq!(textures.cell_count(), file.cell_count());
+        assert_eq!(textures.len(), 2);
+        assert_eq!(textures.cell_count(), file.cell_count() + 1);
+        assert!(textures.missing_icon().is_some());
         assert!((0..file.cell_count()).all(|cell| textures.lookup("icons/test.dmi", cell).is_some()));
     }
 
@@ -4319,6 +4342,12 @@ mod tests {
         assert_ne!(inherited.uv1, overridden.uv1);
         assert_eq!(overridden.tint[0..3], [1.0, 0.0, 0.0]);
         assert!((overridden.tint[3] - (128.0 / 255.0) * (128.0 / 255.0)).abs() < f32::EPSILON);
+
+        prefab.set_var("icon".into(), Value::Resource(String::from("icons/missing.dmi")));
+        let missing = session.prefab_thumbnail(&prefab).expect("missing icon thumbnail");
+        assert_eq!(missing.texture, session.textures.missing_icon().unwrap());
+        assert_eq!(missing.tint[0..3], [1.0; 3]);
+        assert_eq!(missing.tint[3], overridden.tint[3]);
         assert!(
             session
                 .prefab_thumbnail(&Prefab::new(TreePath::parse("/area/station")))

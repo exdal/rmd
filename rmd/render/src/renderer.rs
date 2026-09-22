@@ -2423,6 +2423,10 @@ impl Renderer {
             let files = match batch
                 .iter()
                 .map(|texture| {
+                    if texture.builtin_pixels().is_some() {
+                        return Ok(None);
+                    }
+
                     let path = texture.path();
                     let file = IconFile::load(path).map_err(|error| GpuError::TextureLoad {
                         path: path.display().to_string(),
@@ -2438,7 +2442,7 @@ impl Renderer {
                         });
                     }
 
-                    Ok(file)
+                    Ok(Some(file))
                 })
                 .collect::<Result<Vec<_>, GpuError>>()
             {
@@ -2448,12 +2452,15 @@ impl Renderer {
                     return Err(error);
                 },
             };
-            let sources = files
+            let sources = batch
                 .iter()
-                .map(|file| TextureSource {
-                    width: file.sheet_width,
-                    height: file.sheet_height,
-                    pixels: &file.pixels,
+                .zip(&files)
+                .map(|(texture, file)| TextureSource {
+                    width: texture.width(),
+                    height: texture.height(),
+                    pixels: texture
+                        .builtin_pixels()
+                        .unwrap_or_else(|| &file.as_ref().expect("file texture").pixels),
                 })
                 .collect::<Vec<_>>();
             match self.upload_images(&sources) {
