@@ -259,7 +259,10 @@ impl GizmoState {
     ) -> GizmoResponse {
         self.block_drag = None;
         self.block_direction = None;
-        let Some(mut target) = session.selected_transform() else {
+        let Some(mut target) = session
+            .selected_transform()
+            .filter(|target| target.sprite.z == session.z())
+        else {
             self.drag = None;
             self.direction = None;
 

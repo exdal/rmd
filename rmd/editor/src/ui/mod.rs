@@ -5269,6 +5269,90 @@ mod tests {
         response
     }
 
+    fn object_gizmo_frame(
+        context: &mut dear_imgui_rs::Context, gizmo: &mut GizmoState, session: &mut Session, camera: &Controller,
+        settings: &Settings,
+    ) -> (crate::gizmo::GizmoResponse, usize) {
+        let ui = context.frame();
+        let view = GizmoMapView {
+            min: [0.0; 2],
+            max: [800.0, 600.0],
+            hovered: true,
+        };
+        let response = ui
+            .window("object-gizmo-z-level-test")
+            .position([0.0; 2], Condition::Always)
+            .size([800.0, 600.0], Condition::Always)
+            .build(|| gizmo.draw(ui, session, settings, camera, TransformMode::Pixel, view))
+            .unwrap();
+        let draw_data = context.render_legacy();
+        assert!(draw_data.valid());
+
+        (response, draw_data.total_vtx_count())
+    }
+
+    #[test]
+    fn object_gizmo_only_appears_on_the_selected_instances_z_level() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = rectangle_context();
+        let mut session = Session::new();
+        let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
+        session.load_environment(&examples.join("test.dme")).unwrap();
+        let coord = Coord::new(6, 3, 1);
+        let mut map = dmm::Map::new(Size { x: 8, y: 6, z: 2 });
+        let base = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/turf/open/floor")),
+            Prefab::new(TreePath::parse("/area/station")),
+        ]);
+        let selected_tile = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/obj/structure/table")),
+            Prefab::new(TreePath::parse("/turf/open/floor")),
+            Prefab::new(TreePath::parse("/area/station")),
+        ]);
+        for level in &mut map.grid {
+            for row in level {
+                row.fill(base);
+            }
+        }
+        map.grid[0][2][5] = selected_tile;
+        session.apply_map(crate::loader::LoadedMap {
+            path: PathBuf::from("object-gizmo-z-level-test.dmm"),
+            map,
+            z: 1,
+            errors: vec![],
+        });
+        let selected = session.state.active_document().unwrap().instance_ids_at(coord)[0];
+        session.select_instance(Some(selected));
+
+        let mut camera = Controller::new();
+        camera.resize(800, 600);
+        camera.center_on_tile(coord, session.options.tile_size);
+        let sprite = session.selected_transform().unwrap().sprite;
+        let origin = camera.map_to_screen([sprite.x + sprite.width * 0.5, sprite.y + sprite.height * 0.5]);
+        let mut gizmo = GizmoState::default();
+        let settings = Settings::default();
+        context.io_mut().add_mouse_pos_event(origin);
+        context.io_mut().add_mouse_button_event(MouseButton::Left, true);
+
+        let (visible, visible_vertices) =
+            object_gizmo_frame(&mut context, &mut gizmo, &mut session, &camera, &settings);
+        assert!(visible.captures_mouse);
+        assert!(gizmo.is_interacting());
+
+        assert_eq!(session.change_level(1), LevelChange::Changed);
+        assert_eq!(session.selected_instance(), Some(selected));
+        let (hidden, hidden_vertices) = object_gizmo_frame(&mut context, &mut gizmo, &mut session, &camera, &settings);
+        assert!(!hidden.captures_mouse);
+        assert!(!gizmo.is_interacting());
+        assert!(visible_vertices > hidden_vertices);
+
+        assert_eq!(session.change_level(-1), LevelChange::Changed);
+        let (visible_again, restored_vertices) =
+            object_gizmo_frame(&mut context, &mut gizmo, &mut session, &camera, &settings);
+        assert!(visible_again.captures_mouse);
+        assert!(restored_vertices > hidden_vertices);
+    }
+
     #[test]
     fn resize_and_move_gestures_keep_their_mouse_down_action_when_shift_changes() {
         let _guard = IMGUI_CONTEXT.lock().unwrap();
