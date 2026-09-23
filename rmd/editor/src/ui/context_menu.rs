@@ -2,7 +2,7 @@ use core::{path::TreePath, types::Identifier};
 
 use dear_imgui_rs::Ui;
 use dmm::{Coord, Prefab, PrefabInstanceId};
-use editor::document::DocumentId;
+use editor::{conflict::Side, document::DocumentId};
 use objtree::ObjectTree;
 
 use super::{SelectionTransform, Session, Tool, draw_type_path_search, inspector::SimilarMatchKind};
@@ -29,6 +29,7 @@ pub(super) struct Target {
 }
 
 pub(super) enum Action {
+    Conflict(Vec<Coord>, Side),
     Undo,
     Redo,
     Copy(Coord),
@@ -54,7 +55,51 @@ pub(super) fn draw_popup(
     }
     let coord = target.coord;
     ui.text_disabled(format!("X: {}, Y: {}, Z: {}", coord.x, coord.y, coord.z));
+    ui.separator();
+    // every section starts with its own separator so none of them double up
     let mut action = None;
+    if let Some(conflicts) = session
+        .git_state(target.document)
+        .and_then(|git| git.conflicts.as_ref())
+        && conflicts.conflict_at(coord).is_some()
+    {
+        ui.separator();
+        for side in [Side::Ours, Side::Theirs] {
+            if ui.menu_item(format!("Take {} for this tile", conflicts.side_label(side))) {
+                action = Some(Action::Conflict(vec![coord], side));
+            }
+        }
+
+        if let Some(region) = session
+            .conflict_regions(target.document, Some(coord.z))
+            .iter()
+            .find(|region| region.tiles.contains(&coord))
+        {
+            for side in [Side::Ours, Side::Theirs] {
+                if ui.menu_item(format!("Take {} for region", conflicts.side_label(side))) {
+                    action = Some(Action::Conflict(region.tiles.clone(), side));
+                }
+            }
+        }
+
+        if target.block_selected
+            && let Some(selection) = session.selection()
+        {
+            let coords = session
+                .selection_mode()
+                .tiles(selection)
+                .filter(|coord| conflicts.conflict_at(*coord).is_some())
+                .collect::<Vec<_>>();
+            if !coords.is_empty() {
+                for side in [Side::Ours, Side::Theirs] {
+                    if ui.menu_item(format!("Take {} for selection", conflicts.side_label(side))) {
+                        action = Some(Action::Conflict(coords.clone(), side));
+                    }
+                }
+            }
+        }
+    }
+
     if let Some(node) = target.node.as_ref() {
         ui.separator();
         let label = match node {

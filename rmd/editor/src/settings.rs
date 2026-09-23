@@ -726,6 +726,7 @@ pub(crate) struct Settings {
     pub forced_profile_selections: Vec<ForcedProfileSelection>,
     pub optimizations_enabled: bool,
     pub bake_enabled: bool,
+    pub git_enabled: bool,
 }
 
 pub(crate) struct SettingsLoad {
@@ -789,6 +790,7 @@ impl Default for Settings {
             forced_profile_selections: Vec::new(),
             optimizations_enabled: true,
             bake_enabled: true,
+            git_enabled: true,
         }
     }
 }
@@ -1011,6 +1013,7 @@ mod tests {
                 forced_profile_selections: Vec::new(),
                 optimizations_enabled: true,
                 bake_enabled: true,
+                git_enabled: true,
             }
         );
     }
@@ -1250,6 +1253,7 @@ mod tests {
             }],
             optimizations_enabled: false,
             bake_enabled: true,
+            git_enabled: true,
         };
         settings.keybindings.rebind(
             KeybindAction::ShowAreas,
@@ -1323,6 +1327,7 @@ mod tests {
             forced_profile_selections: Vec::new(),
             optimizations_enabled: true,
             bake_enabled: true,
+            git_enabled: true,
         };
         let mut options = FrameOptions::default();
 

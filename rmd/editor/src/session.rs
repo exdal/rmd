@@ -3,6 +3,7 @@ use core::{
     types::{Identifier, Value},
 };
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
@@ -15,9 +16,11 @@ use editor::{
     Environment,
     clipboard::{self, TileBlock},
     command::{Edit, EditGroupId},
+    conflict::{ConflictState, Region, Resolved, Side},
     document::{DocumentId, MapDocument, PlacedTile, PrefabInstanceId, PrefabLocation, Selection, VarMutation},
     focus::AreaFocus,
     frame::{self, FrameInstances, FrameOptions, FrameRenderOptions, PrefabUpdate, TypeVisibility},
+    git::{CommitRef, Operation, RepoPath},
     node,
     progress::{Progress, Stage},
     tool::{
@@ -104,6 +107,7 @@ struct NodeEditState {
 use crate::{
     baker::{self, Baker},
     external_editor::SourceLocation,
+    git_worker::{GitWorker, Outcome as GitOutcome},
     loader::{LoadedCodebase, LoadedMap},
 };
 
@@ -174,6 +178,7 @@ pub(crate) struct PlacementPreview {
 pub(crate) enum BlockPreviewSource {
     Selection(SelectionMask),
     Clipboard,
+    Conflict { region: u64, side: Side },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,6 +221,104 @@ struct DocumentCache {
     always_highlights: Vec<PrefabInstanceId>,
     /// What a replayed panel frame asked this document to re-derive, held until it is active.
     pending_rebake: editor::bake::UiRebake,
+    git: Option<GitDocState>,
+    map_revision: u64,
+}
+
+type SharedHighlights = Arc<[editor::bake::Highlight]>;
+
+/// Conflict regions and overlays derived for one point in the history
+struct ConflictView {
+    key: (u64, u64, usize),
+    resolved: Resolved,
+    unresolved: usize,
+    regions: HashMap<Option<u32>, Arc<[Region]>>,
+    highlights: HashMap<u32, SharedHighlights>,
+}
+
+impl ConflictView {
+    fn regions(&mut self, conflicts: &ConflictState, z: Option<u32>) -> Arc<[Region]> {
+        self.regions
+            .entry(z)
+            .or_insert_with(|| conflicts.regions_in(z, &self.resolved).into())
+            .clone()
+    }
+
+    fn highlights(&mut self, conflicts: &ConflictState, z: u32) -> SharedHighlights {
+        self.highlights
+            .entry(z)
+            .or_insert_with(|| conflicts.highlights_in(z, &self.resolved).into())
+            .clone()
+    }
+}
+
+/// Highlights for one frame, borrowed from the bake or shared from the git caches
+pub(crate) struct HighlightSet<'a> {
+    borrowed: Vec<&'a editor::bake::Highlight>,
+    shared: Vec<SharedHighlights>,
+}
+
+impl HighlightSet<'_> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &editor::bake::Highlight> + '_ {
+        self.borrowed
+            .iter()
+            .copied()
+            .chain(self.shared.iter().flat_map(|highlights| highlights.iter()))
+    }
+}
+
+pub(crate) struct GitDocState {
+    pub repo: RepoPath,
+    pub conflicts: Option<ConflictState>,
+    pub unmerged_on_disk: bool,
+    pub pending_load: bool,
+    pub error: Option<String>,
+    pub branch: Option<String>,
+    pub head: Option<CommitRef>,
+    pub operation: Option<Operation>,
+    pub staging: bool,
+    conflict_view: RefCell<Option<ConflictView>>,
+}
+
+impl GitDocState {
+    fn new(repo: RepoPath, conflicts: Option<ConflictState>) -> Self {
+        let unmerged_on_disk = conflicts.is_some();
+
+        Self {
+            repo,
+            conflicts,
+            unmerged_on_disk,
+            pending_load: false,
+            error: None,
+            branch: None,
+            head: None,
+            operation: None,
+            staging: false,
+            conflict_view: RefCell::new(None),
+        }
+    }
+
+    /// Runs `read` against the view for the current history, rebuilding it after any change
+    fn with_conflict_view<R>(
+        &self, map_revision: u64, history: &editor::command::History,
+        read: impl FnOnce(&mut ConflictView, &ConflictState) -> R,
+    ) -> Option<R> {
+        let conflicts = self.conflicts.as_ref()?;
+        let key = (map_revision, conflicts.revision(), history.undo_depth());
+        let mut view = self.conflict_view.borrow_mut();
+        if view.as_ref().is_none_or(|view| view.key != key) {
+            let resolved = conflicts.resolved(history);
+            *view = Some(ConflictView {
+                key,
+                unresolved: conflicts.unresolved_in(&resolved).count(),
+                resolved,
+                regions: HashMap::new(),
+                highlights: HashMap::new(),
+            });
+        }
+
+        view.as_mut().map(|view| read(view, conflicts))
+    }
 }
 
 pub struct Session {
@@ -231,6 +334,8 @@ pub struct Session {
     texture_revision: u64,
     maps: Vec<PathBuf>,
     baker: Baker,
+    git_worker: GitWorker,
+    git_enabled: bool,
     queued_bakes: Vec<DocumentId>,
     standalone_baker: editor::bake::Standalone,
     standalone: Vec<(Prefab, Option<visual::Appearance>)>,
@@ -269,6 +374,8 @@ impl Session {
             texture_revision: 0,
             maps: Vec::new(),
             baker: Baker::default(),
+            git_worker: GitWorker::default(),
+            git_enabled: true,
             queued_bakes: Vec::new(),
             standalone_baker: editor::bake::Standalone::default(),
             standalone: Vec::new(),
@@ -308,7 +415,14 @@ impl Session {
     }
 
     pub fn apply_map(&mut self, loaded: LoadedMap) {
-        let LoadedMap { path, map, z, errors } = loaded;
+        let LoadedMap {
+            path,
+            map,
+            z,
+            errors,
+            repo,
+            conflict,
+        } = loaded;
 
         for error in &errors {
             log::error!("{}: {error}", path.display());
@@ -320,7 +434,264 @@ impl Session {
             return;
         }
 
-        self.activate_document(MapDocument::open(path, map, z));
+        let pending_write = conflict.is_some();
+        let document = if pending_write {
+            MapDocument::open_modified(path, map, z)
+        } else {
+            MapDocument::open(path, map, z)
+        };
+        let id = self.activate_document(document);
+        self.caches.entry(id).or_default().git =
+            repo.map(|repo| GitDocState::new(repo, conflict.map(ConflictState::new)));
+
+        self.refresh_git_document(id);
+    }
+
+    pub fn reload_map(&mut self, id: DocumentId, loaded: LoadedMap) -> bool {
+        let LoadedMap {
+            path,
+            map,
+            errors,
+            repo,
+            conflict,
+            ..
+        } = loaded;
+        if self
+            .state
+            .document(id)
+            .is_none_or(|document| document.path.as_deref() != Some(path.as_path()))
+        {
+            return false;
+        }
+
+        for error in &errors {
+            log::error!("{}: {error}", path.display());
+        }
+
+        let pending_write = conflict.is_some();
+        self.state.document_mut(id).unwrap().replace_map(map, pending_write);
+        self.caches.entry(id).or_default().git =
+            repo.map(|repo| GitDocState::new(repo, conflict.map(ConflictState::new)));
+        self.caches.entry(id).or_default().map_revision = self
+            .caches
+            .get(&id)
+            .map_or(0, |cache| cache.map_revision.wrapping_add(1));
+        self.set_active_document(id);
+        self.rebake(id);
+        self.refresh_git_document(id);
+
+        true
+    }
+
+    fn refresh_git_document(&mut self, id: DocumentId) {
+        if !self.git_enabled {
+            return;
+        }
+
+        if let Some(path) = self.git_state(id).map(|git| git.repo.clone()) {
+            self.git_worker.status(id, path);
+        }
+    }
+
+    pub(crate) fn refresh_git(&mut self) {
+        for id in self.state.document_ids() {
+            self.refresh_git_document(id);
+        }
+    }
+
+    pub(crate) fn sync_git_enabled(&mut self, enabled: bool) {
+        if self.git_enabled == enabled {
+            return;
+        }
+
+        self.git_enabled = enabled;
+
+        for id in self.state.document_ids() {
+            if !enabled {
+                self.git_worker.close(id);
+                if let Some(git) = self.caches.get_mut(&id).and_then(|cache| cache.git.as_mut()) {
+                    git.staging = false;
+                }
+            } else {
+                let repo = self
+                    .caches
+                    .get(&id)
+                    .and_then(|cache| cache.git.as_ref())
+                    .is_none()
+                    .then(|| {
+                        self.state
+                            .document(id)
+                            .and_then(|document| document.path.as_deref())
+                            .and_then(editor::git::discover)
+                    })
+                    .flatten();
+
+                if let Some(repo) = repo {
+                    self.caches.entry(id).or_default().git = Some(GitDocState::new(repo, None));
+                }
+
+                self.refresh_git_document(id);
+            }
+        }
+    }
+
+    pub(crate) fn mark_resolved(&mut self, id: DocumentId) -> bool {
+        if !self.git_enabled {
+            return false;
+        }
+
+        let Some(document) = self.state.document(id) else {
+            return false;
+        };
+
+        let Some(git) = self.caches.get_mut(&id).and_then(|cache| cache.git.as_mut()) else {
+            return false;
+        };
+
+        if !git.unmerged_on_disk
+            || git.conflicts.is_none()
+            || git.staging
+            || document.is_dirty()
+            || git
+                .conflicts
+                .as_ref()
+                .is_some_and(|state| state.unresolved_count(&document.history) != 0)
+        {
+            return false;
+        }
+
+        git.staging = true;
+        self.git_worker.mark_resolved(id, git.repo.clone());
+
+        true
+    }
+
+    pub(crate) fn poll_git(&mut self) {
+        let mut refresh_after = Vec::new();
+
+        for finished in self.git_worker.poll() {
+            let Some(document) = self.state.document(finished.document) else {
+                continue;
+            };
+            let document_dirty = document.is_dirty();
+            let Some(cache) = self.caches.get_mut(&finished.document) else {
+                continue;
+            };
+            let Some(git) = cache.git.as_mut() else { continue };
+
+            match finished.outcome {
+                GitOutcome::Status(result) => match result {
+                    Ok(status) => {
+                        git.branch = Some(status.branch);
+                        git.head = status.head;
+                        git.operation = status.operation;
+                        git.unmerged_on_disk = status.unmerged;
+
+                        if !status.unmerged && !document_dirty {
+                            git.conflicts = None;
+                        }
+
+                        git.pending_load = status.unmerged && git.conflicts.is_none();
+                        git.error = None;
+                    },
+                    Err(error) => git.error = Some(error.to_string()),
+                },
+                GitOutcome::MarkResolved(result) => {
+                    git.staging = false;
+                    match result {
+                        Ok(()) => {
+                            git.unmerged_on_disk = false;
+                            git.conflicts = None;
+                            git.pending_load = false;
+                            refresh_after.push(finished.document);
+                        },
+                        Err(error) => git.error = Some(error.to_string()),
+                    }
+                },
+            }
+        }
+
+        for id in refresh_after {
+            self.refresh_git_document(id);
+        }
+    }
+
+    pub(crate) fn git_state(&self, id: DocumentId) -> Option<&GitDocState> {
+        if !self.git_enabled {
+            return None;
+        }
+
+        self.caches.get(&id)?.git.as_ref()
+    }
+
+    fn with_conflict_view<R>(
+        &self, id: DocumentId, read: impl FnOnce(&mut ConflictView, &ConflictState) -> R,
+    ) -> Option<R> {
+        let document = self.state.document(id)?;
+        let cache = self.caches.get(&id)?;
+        let git = cache.git.as_ref().filter(|_| self.git_enabled)?;
+
+        git.with_conflict_view(cache.map_revision, &document.history, read)
+    }
+
+    /// unresolved regions, cached until the history or the resolutions change
+    pub(crate) fn conflict_regions(&self, id: DocumentId, z: Option<u32>) -> Arc<[Region]> {
+        self.with_conflict_view(id, |view, conflicts| view.regions(conflicts, z))
+            .unwrap_or_else(|| Arc::new([]))
+    }
+
+    pub(crate) fn unresolved_conflicts(&self, id: DocumentId) -> usize {
+        self.with_conflict_view(id, |view, _| view.unresolved).unwrap_or(0)
+    }
+
+    pub(crate) fn resolve_conflict(&mut self, id: DocumentId, coords: &[Coord], side: Side) -> bool {
+        if !self.git_enabled {
+            return false;
+        }
+
+        if self.state.active() != Some(id) {
+            return false;
+        }
+
+        let edit = {
+            let Some(conflicts) = self
+                .caches
+                .get(&id)
+                .and_then(|cache| cache.git.as_ref())
+                .and_then(|git| git.conflicts.as_ref())
+            else {
+                return false;
+            };
+            let Some(document) = self.state.document_mut(id) else {
+                return false;
+            };
+
+            conflicts.resolve_edit(document, coords, side)
+        };
+        let Some(edit) = edit else { return false };
+        let affected = edit.affected_instances();
+        let mark = EditGroupId::new();
+        if !self.commit(
+            ToolEdit {
+                edit,
+                selected: None,
+                affected,
+            },
+            Some(mark),
+        ) {
+            return false;
+        }
+
+        if let Some(conflicts) = self
+            .caches
+            .get_mut(&id)
+            .and_then(|cache| cache.git.as_mut())
+            .and_then(|git| git.conflicts.as_mut())
+        {
+            conflicts.record(coords, side, mark);
+        }
+
+        true
     }
 
     pub(crate) fn set_active_document(&mut self, id: DocumentId) -> bool {
@@ -342,7 +713,9 @@ impl Session {
         let closed = self.state.close_document(id).is_some();
         if closed {
             self.caches.remove(&id);
+            self.git_worker.close(id);
         }
+
         if self.state.tool == Tool::Node && !self.node_tool_available() {
             self.cancel_node_edit();
             self.state.tool = Tool::Select;
@@ -484,6 +857,12 @@ impl Session {
             self.update_instances(&affected);
         }
 
+        if let Some(id) = self.state.active()
+            && let Some(cache) = self.caches.get_mut(&id)
+        {
+            cache.map_revision = cache.map_revision.wrapping_add(1);
+        }
+
         true
     }
 
@@ -501,6 +880,12 @@ impl Session {
             self.refresh_reordered_from_affected(&affected);
         } else {
             self.update_instances(&affected);
+        }
+
+        if let Some(id) = self.state.active()
+            && let Some(cache) = self.caches.get_mut(&id)
+        {
+            cache.map_revision = cache.map_revision.wrapping_add(1);
         }
 
         true
@@ -1828,6 +2213,7 @@ impl Session {
                 BlockPreviewSource::Clipboard => self
                     .clipboard_footprint(origin, rotation)
                     .map_or_else(Vec::new, |target| self.clipboard_preview_sprites(target, rotation)),
+                BlockPreviewSource::Conflict { region, side } => self.conflict_preview_sprites(id, region, side),
             };
             let revision = self.next_preview_revision;
             self.next_preview_revision = revision.wrapping_add(1).max(1);
@@ -1896,6 +2282,46 @@ impl Session {
         previews.sort_by(|left, right| left.depth.total_cmp(&right.depth));
 
         previews
+    }
+
+    fn conflict_preview_sprites(&self, id: DocumentId, region_id: u64, side: Side) -> Vec<SpriteInstance> {
+        let Some(environment) = self.state.environment.as_ref() else {
+            return Vec::new();
+        };
+        let Some(document) = self.state.document(id) else {
+            return Vec::new();
+        };
+        let Some(conflicts) = self.git_state(id).and_then(|git| git.conflicts.as_ref()) else {
+            return Vec::new();
+        };
+        let Some(region) = conflicts
+            .regions(Some(document.z), &document.history)
+            .into_iter()
+            .find(|region| region.id() == region_id)
+        else {
+            return Vec::new();
+        };
+
+        let mut sprites = Vec::new();
+        for coord in &region.tiles {
+            let Some(Some(tile)) = conflicts.side_tile(*coord, side) else {
+                continue;
+            };
+            let target = Coord::new(coord.x - region.min.x + 1, coord.y - region.min.y + 1, 1);
+            for prefab in tile {
+                sprites.extend(self.preview_sprite(
+                    environment,
+                    PREVIEW_OWNER,
+                    prefab,
+                    target,
+                    SelectionRotation::Original,
+                ));
+            }
+        }
+
+        sprites.sort_by(|left, right| left.depth.total_cmp(&right.depth));
+
+        sprites
     }
 
     fn preview_sprite(
@@ -2290,6 +2716,11 @@ impl Session {
             .is_some_and(|document| document.apply_grouped(action.edit, group));
         if applied {
             self.update_instances(&affected);
+            if let Some(id) = self.state.active()
+                && let Some(cache) = self.caches.get_mut(&id)
+            {
+                cache.map_revision = cache.map_revision.wrapping_add(1);
+            }
         }
 
         applied
@@ -2466,20 +2897,19 @@ impl Session {
         guides
     }
 
-    pub(crate) fn highlights(&self, id: DocumentId, hovered: Option<Coord>) -> Vec<&editor::bake::Highlight> {
+    pub(crate) fn highlights(&self, id: DocumentId, hovered: Option<Coord>) -> HighlightSet<'_> {
+        let mut set = HighlightSet {
+            borrowed: Vec::new(),
+            shared: Vec::new(),
+        };
         let Some(document) = self.state.document(id) else {
-            return Vec::new();
+            return set;
         };
         let Some(cache) = self.caches.get(&id) else {
-            return Vec::new();
+            return set;
         };
-        let Some(bake) = cache.bake.as_ref() else {
-            return Vec::new();
-        };
-
         let z = document.z as i32;
         let mut seen = HashSet::new();
-        let mut shown = Vec::new();
         let mut sources = cache
             .always_highlights
             .iter()
@@ -2498,15 +2928,21 @@ impl Session {
             );
         }
 
-        for (owner, when) in sources {
-            for (index, highlight) in bake.highlights(owner.get()).iter().enumerate() {
-                if highlight.z == z && highlight.shown_when(when) && seen.insert((owner, index)) {
-                    shown.push(highlight);
+        if let Some(bake) = cache.bake.as_ref() {
+            for (owner, when) in sources {
+                for (index, highlight) in bake.highlights(owner.get()).iter().enumerate() {
+                    if highlight.z == z && highlight.shown_when(when) && seen.insert((owner, index)) {
+                        set.borrowed.push(highlight);
+                    }
                 }
             }
         }
 
-        shown
+        if let Some(conflicts) = self.with_conflict_view(id, |view, conflicts| view.highlights(conflicts, document.z)) {
+            set.shared.push(conflicts);
+        }
+
+        set
     }
 
     pub(crate) fn dm_ui(&mut self, dockspace: u32, feedback: editor::bake::UiFeedback) -> editor::bake::UiFrame {
@@ -3705,6 +4141,86 @@ pub(crate) mod tests {
         preprocess_severity,
         validate_level,
     };
+
+    #[test]
+    fn cached_conflict_regions_follow_resolutions_through_undo_and_redo() {
+        let floor = vec![Prefab::new(TreePath::parse("/turf/floor"))];
+        let wall = vec![Prefab::new(TreePath::parse("/turf/wall"))];
+        let mut map = Map::new(Size { x: 3, y: 1, z: 1 });
+        let key = map.intern_tile(floor.clone());
+        map.grid[0][0].fill(key);
+        let mut session = Session::new();
+        session.apply_map(crate::loader::LoadedMap {
+            path: PathBuf::from("conflicts.dmm"),
+            map,
+            z: 1,
+            errors: Vec::new(),
+            repo: Some(editor::git::RepoPath {
+                root: PathBuf::from("missing-repository"),
+                git_dir: PathBuf::from("missing-repository/.git"),
+                rel: String::from("conflicts.dmm"),
+            }),
+            conflict: Some(editor::conflict::ConflictData {
+                operation: None,
+                conflicts: [1, 3]
+                    .map(|x| dmm::merge::TileConflict {
+                        coord: Coord::new(x, 1, 1),
+                        base: Some(floor.clone()),
+                        ours: Some(floor.clone()),
+                        theirs: Some(wall.clone()),
+                    })
+                    .into(),
+            }),
+        });
+        let id = session.state.active().unwrap();
+        assert_eq!(session.conflict_regions(id, Some(1)).len(), 2);
+        assert_eq!(session.unresolved_conflicts(id), 2);
+
+        assert!(session.resolve_conflict(id, &[Coord::new(1, 1, 1)], editor::conflict::Side::Theirs));
+        assert_eq!(session.conflict_regions(id, Some(1)).len(), 1);
+        assert_eq!(session.unresolved_conflicts(id), 1);
+
+        assert!(session.undo());
+        assert_eq!(session.conflict_regions(id, Some(1)).len(), 2);
+        assert_eq!(session.unresolved_conflicts(id), 2);
+
+        assert!(session.redo());
+        assert_eq!(session.unresolved_conflicts(id), 1);
+        let highlights = session.highlights(id, None).iter().cloned().collect::<Vec<_>>();
+        assert!(
+            highlights
+                .iter()
+                .any(|highlight| !highlight.outline && highlight.tiles.len() == 1),
+            "the taken tile keeps a resolved wash"
+        );
+    }
+
+    #[test]
+    fn disabling_git_releases_a_document_waiting_on_staging() {
+        let mut session = Session::new();
+        session.apply_map(crate::loader::LoadedMap {
+            path: PathBuf::from("staging.dmm"),
+            map: Map::new(Size { x: 1, y: 1, z: 1 }),
+            z: 1,
+            errors: Vec::new(),
+            repo: Some(editor::git::RepoPath {
+                root: PathBuf::from("missing-repository"),
+                git_dir: PathBuf::from("missing-repository/.git"),
+                rel: String::from("staging.dmm"),
+            }),
+            conflict: None,
+        });
+        let id = session.state.active().unwrap();
+        session.caches.get_mut(&id).unwrap().git.as_mut().unwrap().staging = true;
+
+        session.sync_git_enabled(false);
+        session.sync_git_enabled(true);
+
+        assert!(
+            !session.git_state(id).unwrap().staging,
+            "the dropped job can never report back"
+        );
+    }
 
     fn examples() -> PathBuf {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
@@ -5246,7 +5762,11 @@ pub(crate) mod tests {
         assert!(guides.connected.contains(&same_level));
 
         let document_id = session.state.active().expect("active fixture document");
-        let highlights = session.highlights(document_id, None);
+        let highlights = session
+            .highlights(document_id, None)
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
         let [highlight] = highlights.as_slice() else {
             panic!("the selected source declares one highlight");
         };
@@ -5255,7 +5775,11 @@ pub(crate) mod tests {
             vec![[1, 1], [2, 1], [3, 1]]
         );
         assert!(
-            session.highlights(document_id, Some(Coord::new(1, 1, 1))).len() == 1,
+            session
+                .highlights(document_id, Some(Coord::new(1, 1, 1)))
+                .iter()
+                .count()
+                == 1,
             "a selection-only highlight is not repeated by hovering its own tile"
         );
 
@@ -5271,7 +5795,7 @@ pub(crate) mod tests {
         assert!(reverse.badges.is_empty());
         assert_eq!(reverse.connected, vec![source]);
         assert!(
-            session.highlights(document_id, None).is_empty(),
+            session.highlights(document_id, None).iter().next().is_none(),
             "only the source declares a highlight"
         );
 

@@ -1,5 +1,6 @@
 mod context_menu;
 mod dm;
+mod git;
 mod inspector;
 mod object_tree;
 mod settings;
@@ -34,6 +35,7 @@ use dear_imgui_rs::{
 use dmm::{Coord, MapFormat, Prefab, PrefabInstanceId, Size};
 use editor::{
     command::EditGroupId,
+    conflict::{Region, Side, describe_tile},
     document::{DocumentId, MapDocument, Selection},
     environment::BundledProfile,
     icons::materialdesignicons::{
@@ -135,6 +137,7 @@ const NEW_MAP_DEFAULT_HEIGHT: i32 = 255;
 const NEW_MAP_DEFAULT_LEVELS: i32 = 1;
 const NEW_MAP_MAX_DIMENSION: i32 = 255;
 const SAVE_MAP_POPUP: &str = "Save map##save-map";
+const RELOAD_CONFLICTS_POPUP: &str = "Load merge conflicts##reload-conflicts";
 const KEYBIND_PRESET_POPUP: &str = "Choose keybindings##keybind-preset";
 const LOAD_POPUP_WIDTH: f32 = 420.0;
 const LOAD_TEXT_WIDTH: f32 = 620.0;
@@ -535,6 +538,94 @@ fn draw_highlights(
     });
 }
 
+fn conflict_controls_layout(
+    ui: &Ui, camera: &Controller, region: &Region, tile_size: u32, viewport_min: [f32; 2], bounds: OverlayRect,
+    theirs: &str,
+) -> Option<([f32; 2], OverlayRect)> {
+    let tile_size = tile_size.max(1) as f32;
+    let corner = camera.map_to_screen([(region.min.x - 1) as f32 * tile_size, region.max.y as f32 * tile_size]);
+    let far = camera.map_to_screen([region.max.x as f32 * tile_size, (region.min.y - 1) as f32 * tile_size]);
+    let corner = [viewport_min[0] + corner[0], viewport_min[1] + corner[1]];
+    let far = [viewport_min[0] + far[0], viewport_min[1] + far[1]];
+    if far[0] < bounds.min[0] || far[1] < bounds.min[1] || corner[0] > bounds.max[0] || corner[1] > bounds.max[1] {
+        return None;
+    }
+    let style = ui.clone_style();
+    let width = ui.calc_text_size("HEAD")[0]
+        + ui.calc_text_size(theirs)[0]
+        + style.frame_padding()[0] * 4.0
+        + style.item_spacing()[0];
+    let height = ui.frame_height();
+    let x = corner[0].clamp(bounds.min[0], (bounds.max[0] - width).max(bounds.min[0]));
+    let y = (corner[1] - height - 4.0).clamp(bounds.min[1], (bounds.max[1] - height).max(bounds.min[1]));
+    Some((
+        [x, y],
+        OverlayRect {
+            min: [x - 3.0, y - 3.0],
+            max: [x + width + 3.0, y + height + 3.0],
+        },
+    ))
+}
+
+fn draw_conflict_controls(
+    ui: &Ui, session: &mut Session, id: DocumentId, camera: &Controller, regions: &[Region], viewport_min: [f32; 2],
+    bounds: OverlayRect,
+) {
+    let tile_size = session.options.tile_size;
+    let theirs = session
+        .git_state(id)
+        .and_then(|git| git.conflicts.as_ref())
+        .map_or(String::from("theirs"), |state| {
+            state.side_label(Side::Theirs).to_owned()
+        });
+    let detail = session
+        .git_state(id)
+        .and_then(|git| git.conflicts.as_ref())
+        .map_or(String::from("Take the incoming side"), |state| {
+            state.side_detail(Side::Theirs)
+        });
+
+    let mut choice = None;
+    for region in regions {
+        let Some((position, rect)) =
+            conflict_controls_layout(ui, camera, region, tile_size, viewport_min, bounds, &theirs)
+        else {
+            continue;
+        };
+
+        draw_overlay_underlay(ui, rect);
+
+        ui.set_cursor_screen_pos(position);
+        let key = format!("conflict-{}", region.id());
+        let _id = ui.push_id(&key);
+
+        if ui.small_button("HEAD") {
+            choice = Some((region.tiles.clone(), Side::Ours));
+        }
+        ui.same_line();
+        if ui.small_button(&theirs) {
+            choice = Some((region.tiles.clone(), Side::Theirs));
+        }
+
+        if ui.is_item_hovered() {
+            ui.set_item_tooltip(&detail);
+            session.prepare_block_preview(
+                id,
+                BlockPreviewSource::Conflict {
+                    region: region.id(),
+                    side: Side::Theirs,
+                },
+                region.min,
+                SelectionRotation::Original,
+            );
+        }
+    }
+
+    if let Some((coords, side)) = choice {
+        session.resolve_conflict(id, &coords, side);
+    }
+}
+
 fn draw_highlight_label(
     ui: &Ui, draw: &DrawListMut<'_>, camera: &Controller, viewport: OverlayRect, highlight: &editor::bake::Highlight,
     tile_size: f32, accent: [f32; 4],
@@ -795,6 +886,7 @@ pub struct UiOutput {
     pub cancel_load: bool,
     pub copy_to_clipboard: Option<String>,
     pub reload_profile: Option<ProfileReload>,
+    pub load_conflicts: Option<DocumentId>,
     pub(crate) keybind_preset: Option<KeybindPreset>,
 }
 
@@ -886,6 +978,7 @@ pub struct UiState {
     dm_ui: dm::DmUi,
     welcome_window: WindowKey,
     inspector: InspectorPanel,
+    git_panel: git::GitPanel,
     settings_window: SettingsWindow,
     layout: DockLayout,
     gizmo: GizmoState,
@@ -904,6 +997,7 @@ pub struct UiState {
     new_level_type_path: String,
     save_dialog: Option<SaveDialog>,
     pending_close: Option<DocumentId>,
+    pending_conflict_reload: Option<DocumentId>,
     exit_requested: bool,
     show_welcome: bool,
     welcome_map_filter: String,
@@ -921,6 +1015,7 @@ impl UiState {
         let object_tree = ObjectTreePanel::new()?;
         let welcome_window = WindowKey::new("welcome", "Welcome")?;
         let inspector = InspectorPanel::new()?;
+        let git_panel = git::GitPanel::new()?;
         let settings_window = SettingsWindow::new()?;
         let load_window = WindowKey::new("load", "Loading")?;
         let layout = DockLayout::split(
@@ -943,6 +1038,7 @@ impl UiState {
             dm_ui: dm::DmUi::default(),
             welcome_window,
             inspector,
+            git_panel,
             settings_window,
             layout,
             gizmo: GizmoState::default(),
@@ -961,6 +1057,7 @@ impl UiState {
             new_level_type_path: String::new(),
             save_dialog: None,
             pending_close: None,
+            pending_conflict_reload: None,
             exit_requested: false,
             show_welcome: true,
             welcome_map_filter: String::new(),
@@ -1056,6 +1153,7 @@ impl UiState {
                 cancel_load: false,
                 copy_to_clipboard: None,
                 reload_profile: None,
+                load_conflicts: None,
                 keybind_preset,
             });
         }
@@ -1201,6 +1299,15 @@ impl UiState {
                     refit = true;
                 }
             });
+            ui.menu("Git", || {
+                if ui.menu_item("Git Panel") {
+                    self.git_panel.open = true;
+                }
+
+                if ui.menu_item_enabled_selected_no_shortcut("Refresh", false, settings.git_enabled) {
+                    session.refresh_git();
+                }
+            });
         });
 
         if session.map().is_some()
@@ -1277,6 +1384,7 @@ impl UiState {
         draw_save_dialog(ui, session, &mut self.save_dialog);
 
         let settings_output = self.settings_window.draw(ui, session, settings, load.is_some());
+        session.sync_git_enabled(settings.git_enabled);
         if settings_output.object_tree_changed {
             self.object_tree.invalidate_filter();
         }
@@ -1287,6 +1395,50 @@ impl UiState {
         open_source = inspector.open_source.or(open_source);
         if let Some(target) = inspector.jump {
             self.jump_to_instance(session, target);
+        }
+        let git_output = self.git_panel.draw(ui, session, settings);
+        if let Some((id, coord)) = git_output.center {
+            session.set_active_document(id);
+            session.set_level(coord.z);
+            if let Some(view) = self.map_views.get_mut(&id) {
+                view.camera.center_on_tile(coord, session.options.tile_size);
+                view.refit = false;
+                view.focus = true;
+            }
+        }
+        if let Some(id) = git_output.load_conflicts {
+            self.pending_conflict_reload = Some(id);
+        }
+        if let Some(id) = self.pending_conflict_reload
+            && session.state.document(id).is_some_and(MapDocument::is_dirty)
+            && !ui.is_popup_open(RELOAD_CONFLICTS_POPUP)
+        {
+            ui.open_popup(RELOAD_CONFLICTS_POPUP);
+        }
+        let mut load_conflicts = None;
+        if let Some(id) = self.pending_conflict_reload {
+            if session.state.document(id).is_some_and(MapDocument::is_dirty) {
+                if let Some(_modal) = ui
+                    .begin_modal_popup_config(RELOAD_CONFLICTS_POPUP)
+                    .flags(WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_SAVED_SETTINGS)
+                    .begin()
+                {
+                    ui.text("Discard unsaved changes and load conflicts from Git?");
+                    if ui.button("Discard and load") {
+                        load_conflicts = Some(id);
+                        self.pending_conflict_reload = None;
+                        ui.close_current_popup();
+                    }
+                    ui.same_line();
+                    if ui.button("Cancel") {
+                        self.pending_conflict_reload = None;
+                        ui.close_current_popup();
+                    }
+                }
+            } else {
+                load_conflicts = Some(id);
+                self.pending_conflict_reload = None;
+            }
         }
         let mut welcome = WelcomeOutput::default();
         self.draw_welcome(ui, session, settings, loading, &mut welcome);
@@ -1349,6 +1501,7 @@ impl UiState {
             cancel_load: load_popup.cancel,
             copy_to_clipboard: load_popup.copy,
             reload_profile: settings_output.reload_profile,
+            load_conflicts,
             keybind_preset: None,
         })
     }
@@ -1943,6 +2096,7 @@ impl UiState {
             {
                 // The hover comes from the previous frame, this runs before the cursor is resolved
                 let highlights = session.highlights(id, *hovered_coord);
+                let highlights = highlights.iter().collect::<Vec<_>>();
                 draw_highlights(
                     ui,
                     camera,
@@ -1973,6 +2127,22 @@ impl UiState {
                 camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
             });
             *hovered_coord = pointed_coord;
+            if let Some(coord) = pointed_coord
+                && let Some(conflict) = session
+                    .git_state(id)
+                    .and_then(|git| git.conflicts.as_ref())
+                    .and_then(|state| state.conflict_at(coord))
+            {
+                ui.tooltip_text(format!(
+                    "Conflict at {}, {}, {}\nBase: {}\nHEAD: {}\nIncoming: {}",
+                    coord.x,
+                    coord.y,
+                    coord.z,
+                    describe_tile(conflict.base.as_ref()),
+                    describe_tile(conflict.ours.as_ref()),
+                    describe_tile(conflict.theirs.as_ref())
+                ));
+            }
 
             let node_interactive = hovered && !session.node_dragging();
             let node_hit = (is_active && session.tool() == Tool::Node)
@@ -2132,6 +2302,30 @@ impl UiState {
                     min: [viewport_min[0], top_overlay.max[1]],
                     max: [viewport_max[0], bottom_overlay.min[1]],
                 };
+                let conflict_regions = session.conflict_regions(id, Some(session.z()));
+                let theirs_label = session
+                    .git_state(id)
+                    .and_then(|git| git.conflicts.as_ref())
+                    .map_or(String::from("theirs"), |conflicts| {
+                        conflicts.side_label(Side::Theirs).to_owned()
+                    });
+                let conflict_controls_capture_mouse = conflict_regions.iter().any(|region| {
+                    conflict_controls_layout(
+                        ui,
+                        camera,
+                        region,
+                        session.options.tile_size,
+                        viewport_min,
+                        block_controls_area,
+                        &theirs_label,
+                    )
+                    .is_some_and(|(_, bounds)| bounds.contains(mouse))
+                });
+                let banner_capture_mouse = session.git_state(id).is_some_and(|git| git.pending_load)
+                    && mouse[0] >= viewport_min[0] + 8.0
+                    && mouse[0] <= viewport_min[0] + 320.0
+                    && mouse[1] >= top_overlay.max[1] + 4.0
+                    && mouse[1] <= top_overlay.max[1] + ui.frame_height() + 16.0;
 
                 let controls_hit_test = match *paste {
                     Some(_) => paste_controls(self.gizmo.block_rotation_open(), paste_target)
@@ -2160,7 +2354,12 @@ impl UiState {
                 });
 
                 let gizmo_map_view = GizmoMapView {
-                    hovered: hovered && !block_controls_capture_mouse && !escape && !ui.io().want_text_input(),
+                    hovered: hovered
+                        && !block_controls_capture_mouse
+                        && !conflict_controls_capture_mouse
+                        && !banner_capture_mouse
+                        && !escape
+                        && !ui.io().want_text_input(),
                     ..gizmo_map_view
                 };
 
@@ -2374,6 +2573,8 @@ impl UiState {
                 if !escape
                     && !gizmo_captures_mouse
                     && !block_controls_capture_mouse
+                    && !conflict_controls_capture_mouse
+                    && !banner_capture_mouse
                     && session.tool() != Tool::Node
                     && let Some(cursor) = cursor
                 {
@@ -2577,6 +2778,9 @@ impl UiState {
                         session.cancel_node_drag();
                     }
                     match action {
+                        MenuAction::Conflict(coords, side) => {
+                            session.resolve_conflict(id, &coords, side);
+                        },
                         MenuAction::Undo => {
                             session.undo();
                         },
@@ -2647,6 +2851,15 @@ impl UiState {
                         )
                         .map(|action| (action, pending))
                     });
+                draw_conflict_controls(
+                    ui,
+                    session,
+                    id,
+                    camera,
+                    &conflict_regions,
+                    viewport_min,
+                    block_controls_area,
+                );
 
                 let controls_placement = paste
                     .is_none()
@@ -2687,6 +2900,14 @@ impl UiState {
                         new_level_type_path: &self.new_level_type_path,
                     },
                 );
+                if is_active && session.git_state(id).is_some_and(|git| git.pending_load) {
+                    ui.set_cursor_screen_pos([viewport_min[0] + 12.0, top_overlay.max[1] + 8.0]);
+                    ui.text("Merge conflicts on disk");
+                    ui.same_line();
+                    if ui.small_button("Load conflicts") {
+                        self.pending_conflict_reload = Some(id);
+                    }
+                }
                 if let Some((action, pending)) = paste_action {
                     if action == PasteAction::Paste {
                         session.paste_clipboard(pending.min, pending.rotation);
@@ -4754,6 +4975,7 @@ mod tests {
         id: DocumentId,
         fill_button: Option<[f32; 2]>,
         mode_buttons: Option<([f32; 2], [f32; 2])>,
+        conflict_button: Option<[f32; 2]>,
         focus_other_window: bool,
     }
 
@@ -4776,6 +4998,8 @@ mod tests {
                 map,
                 z: 1,
                 errors: vec![],
+                repo: None,
+                conflict: None,
             });
 
             Self::with_session(session)
@@ -4798,6 +5022,7 @@ mod tests {
                 id,
                 fill_button: None,
                 mode_buttons: None,
+                conflict_button: None,
                 focus_other_window: false,
             };
             for _ in 0..3 {
@@ -4835,6 +5060,35 @@ mod tests {
             );
 
             self.fill_button = None;
+            self.conflict_button = None;
+            if let Some(region) = self.session.conflict_regions(self.id, Some(self.session.z())).first() {
+                let min = [self.view.rect.x as f32, self.view.rect.y as f32];
+                let max = [
+                    min[0] + self.view.rect.width as f32,
+                    min[1] + self.view.rect.height as f32,
+                ];
+                let controls = OverlayRect {
+                    min: [min[0], min[1] + ui.frame_height() + 2.0 * OVERLAY_PADDING],
+                    max: [max[0], max[1] - recent_button_size(ui) - 2.0 * OVERLAY_PADDING],
+                };
+                if let Some((position, _)) = conflict_controls_layout(
+                    ui,
+                    &self.view.camera,
+                    region,
+                    self.session.options.tile_size,
+                    min,
+                    controls,
+                    "theirs",
+                ) {
+                    let style = ui.clone_style();
+                    let head_width = ui.calc_text_size("HEAD")[0] + style.frame_padding()[0] * 2.0;
+                    let their_width = ui.calc_text_size("theirs")[0] + style.frame_padding()[0] * 2.0;
+                    self.conflict_button = Some([
+                        position[0] + head_width + style.item_spacing()[0] + their_width * 0.5,
+                        position[1] + ui.frame_height() * 0.5,
+                    ]);
+                }
+            }
             if let Some(selection) = self.session.selection() {
                 let min = [self.view.rect.x as f32, self.view.rect.y as f32];
                 let max = [
@@ -4903,6 +5157,65 @@ mod tests {
             self.context.io_mut().add_key_event(key, down);
             self.step();
         }
+    }
+
+    #[test]
+    fn conflict_button_takes_the_incoming_tile_without_reaching_the_place_tool() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut session = Session::new();
+        session
+            .load_environment(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme"))
+            .unwrap();
+        let mut map = dmm::Map::new(Size { x: 20, y: 20, z: 1 });
+        let floor = Prefab::new(TreePath::parse("/turf/open/floor"));
+        let key = map.intern_tile(vec![floor.clone()]);
+        for row in &mut map.grid[0] {
+            row.fill(key);
+        }
+        let coord = Coord::new(5, 8, 1);
+        let incoming = Prefab::new(TreePath::parse("/turf/closed/wall"));
+        session.apply_map(crate::loader::LoadedMap {
+            path: PathBuf::from("conflict-ui-test.dmm"),
+            map,
+            z: 1,
+            errors: vec![],
+            repo: Some(editor::git::RepoPath {
+                root: PathBuf::from("."),
+                git_dir: PathBuf::from(".git"),
+                rel: String::from("conflict-ui-test.dmm"),
+            }),
+            conflict: Some(editor::conflict::ConflictData {
+                operation: None,
+                conflicts: vec![dmm::merge::TileConflict {
+                    coord,
+                    base: Some(vec![floor.clone()]),
+                    ours: Some(vec![floor]),
+                    theirs: Some(vec![incoming.clone()]),
+                }],
+            }),
+        });
+        session.set_tool(Tool::Place);
+        session
+            .state
+            .choose_prefab(Prefab::new(TreePath::parse("/turf/closed/wall")));
+        let mut app = RectangleUiHarness::with_session(session);
+        let button = app.conflict_button.expect("incoming control is on screen");
+        app.click(button);
+        assert_eq!(
+            app.session.state.active_document().unwrap().map.tile_at(coord).unwrap()[0].path,
+            incoming.path
+        );
+        assert_eq!(
+            app.session
+                .git_state(app.id)
+                .unwrap()
+                .conflicts
+                .as_ref()
+                .unwrap()
+                .resolution(coord, &app.session.state.active_document().unwrap().history),
+            Some(Side::Theirs)
+        );
+        assert_eq!(app.session.undo_label(), Some("Take theirs"));
     }
 
     #[test]
@@ -5275,6 +5588,8 @@ mod tests {
             map: destination,
             z: 1,
             errors: vec![],
+            repo: None,
+            conflict: None,
         });
         app.id = app.session.state.active().unwrap();
         let mut destination_view = MapViewState::new(app.id).unwrap();
@@ -5432,6 +5747,8 @@ mod tests {
             map,
             z: 1,
             errors: vec![],
+            repo: None,
+            conflict: None,
         });
         let selected = session.state.active_document().unwrap().instance_ids_at(coord)[0];
         session.select_instance(Some(selected));

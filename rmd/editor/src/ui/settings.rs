@@ -37,6 +37,7 @@ enum SettingsCategory {
     General,
     Viewport,
     Compiler,
+    Git,
     ObjectTree,
     Keybindings,
 }
@@ -56,10 +57,11 @@ pub(super) struct SettingsWindowOutput {
 }
 
 impl SettingsCategory {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::General,
         Self::Viewport,
         Self::Compiler,
+        Self::Git,
         Self::ObjectTree,
         Self::Keybindings,
     ];
@@ -69,6 +71,7 @@ impl SettingsCategory {
             Self::General => "General",
             Self::Viewport => "Viewport",
             Self::Compiler => "Compiler",
+            Self::Git => "Git",
             Self::ObjectTree => "Object Tree",
             Self::Keybindings => "Keybindings",
         }
@@ -226,6 +229,7 @@ fn draw_settings_window(
                         SettingsCategory::Compiler => {
                             draw_compiler_settings(ui, session, settings, loading, pending_profile)
                         },
+                        SettingsCategory::Git => draw_git_settings(ui, settings),
                         SettingsCategory::ObjectTree => {
                             object_tree_changed |= draw_object_tree_settings(ui, settings);
                         },
@@ -244,6 +248,10 @@ fn draw_settings_window(
         object_tree_changed,
         reload_profile: draw_profile_reload_dialog(ui, pending_profile),
     }
+}
+
+fn draw_git_settings(ui: &Ui, settings: &mut Settings) {
+    ui.checkbox("Enable Git map integration", &mut settings.git_enabled);
 }
 
 fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
@@ -670,7 +678,7 @@ mod tests {
         assert_eq!(SettingsCategory::default(), SettingsCategory::General);
         assert_eq!(
             SettingsCategory::ALL.map(SettingsCategory::label),
-            ["General", "Viewport", "Compiler", "Object Tree", "Keybindings"]
+            ["General", "Viewport", "Compiler", "Git", "Object Tree", "Keybindings"]
         );
     }
 
