@@ -963,6 +963,66 @@ fn node_groups_accept_blocker_lists_merge_and_allow_an_unblocked_group() {
 }
 
 #[test]
+fn node_groups_keep_valid_orientable_subtypes_and_reject_conflicts_atomically() {
+    let (tree, module) = compile(fixture!("programs/node_groups_accept_orientable_subtypes.dm"));
+    let bake = Bake::new(
+        &tree,
+        &module,
+        Vec::new(),
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    let group = &bake.node_groups()[0];
+    assert_eq!(bake.node_groups().len(), 1);
+    assert_eq!(group.subtype, tree.id_of(&TreePath::parse("/obj/pipe")).unwrap());
+    assert_eq!(
+        group.orientable_subtype,
+        tree.id_of(&TreePath::parse("/obj/pipe/segment"))
+    );
+    assert_eq!(
+        group.blockers,
+        vec![
+            tree.id_of(&TreePath::parse("/turf/closed")).unwrap(),
+            tree.id_of(&TreePath::parse("/obj/grille")).unwrap(),
+        ],
+    );
+    assert_eq!(group.orientations.len(), 1);
+    assert_eq!(
+        group.orientations[0].subtype,
+        tree.id_of(&TreePath::parse("/obj/pipe/segment")).unwrap()
+    );
+    assert_eq!(group.orientations[0].direction, 1);
+    assert_eq!(group.orientations[0].openings, 12);
+}
+
+#[test]
+fn node_orientations_follow_profile_type_rules() {
+    let (tree, module) = compile(fixture!("programs/node_orientations_follow_profile_type_rules.dm"));
+    let bake = Bake::new(
+        &tree,
+        &module,
+        Vec::new(),
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    assert_eq!(bake.diagnostics.count(), 0);
+    let group = &bake.node_groups()[0];
+    let openings = |path: &str| {
+        let subtype = tree.id_of(&TreePath::parse(path)).unwrap();
+        group
+            .orientations
+            .iter()
+            .find(|rule| rule.subtype == subtype && rule.direction == 1)
+            .map(|rule| rule.openings)
+    };
+    assert_eq!(openings("/obj/link"), Some(1));
+    assert_eq!(openings("/obj/link/segment"), Some(3));
+    assert_eq!(openings("/obj/link/junction"), Some(9));
+}
+
+#[test]
 fn defining_a_node_group_outside_initialize_is_blocked() {
     let (tree, module) = compile(fixture!(
         "programs/defining_a_node_group_outside_initialize_is_blocked.dm"

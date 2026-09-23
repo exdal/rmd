@@ -469,6 +469,7 @@ name = "editor"
 version = "1.6.0"
 dependencies = [
  "ast",
+ "bitflags 2.13.1",
  "codegen",
  "core",
  "dear-imgui-rs",

@@ -468,9 +468,24 @@
 
 	return highlight ? list(highlight) : null
 
-// ui() rolls its writes back on every frame but the one the viewer touched something on, so the
-// profile's own vars are where panel state belongs. Every other hook reads them off src, and the
-// frame that changes one re-derives appearances, highlights and lighting.
+/datum/demir/tgstation/proc/register_disposal_node_orientations()
+	for(var/type_path in typesof(/obj/structure/disposalpipe))
+		var/obj/structure/disposalpipe/pipe_type = type_path
+		var/extra = initial(pipe_type.initialize_dirs)
+		for(var/direction in GLOB.cardinals)
+			var/openings = 0
+			if(extra != DISP_DIR_NONE)
+				openings = direction
+				if(extra & DISP_DIR_LEFT)
+					openings |= turn(direction, 90)
+				if(extra & DISP_DIR_RIGHT)
+					openings |= turn(direction, -90)
+				if(extra & DISP_DIR_FLIP)
+					openings |= REVERSE_DIR(direction)
+			demir_node_orientation(type_path, direction, openings)
+		for(var/direction in GLOB.diagonals)
+			demir_node_orientation(type_path, direction, extra == DISP_DIR_NONE ? 0 : direction)
+
 /datum/demir/tgstation
 	default = TRUE
 	var/smooth = TRUE
@@ -514,9 +529,13 @@
 		demir_node_group(/obj/machinery/atmospherics/pipe/smart/manifold4w/supply, DEMIR_NODE_BLOCKERS)
 		demir_node_group(/obj/machinery/atmospherics/pipe/smart/manifold4w/scrubbers, DEMIR_NODE_BLOCKERS)
 		demir_node_group(/obj/machinery/duct, DEMIR_NODE_BLOCKERS)
-		demir_node_group(/obj/structure/disposalpipe, DEMIR_NODE_BLOCKERS)
+		demir_node_group(/obj/structure/disposalpipe, DEMIR_NODE_BLOCKERS, /obj/structure/disposalpipe/segment)
 		demir_node_group(/obj/structure/disposalconstruct, DEMIR_NODE_BLOCKERS)
+		register_disposal_node_orientations()
 
+// ui() rolls its writes back on every frame but the one the viewer touched something on, so the
+// profile's own vars are where panel state belongs. Every other hook reads them off src, and the
+// frame that changes one re-derives appearances, highlights and lighting.
 /datum/demir/tgstation/ui(atom/target)
 	if(!imgui_begin("Demir"))
 		imgui_end()

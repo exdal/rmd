@@ -182,8 +182,16 @@ Call `demir_define_group` from `New()` to assign type subtrees to profile-owned 
 change can pass those bits to `demir_rebake`. This limits new work to the affected kinds and type
 groups. A UI change has no map effect until it requests a rebake.
 
-Call `demir_node_group` from `New()` to enable the Node tool for a type subtree. Each registration
-can name blocker types that the cardinal router cannot cross.
+Call `demir_node_group(subtype, blocker, orientable_subtype = null)` from `New()` to enable the Node
+tool for a type subtree. Each registration can name blocker types that the cardinal router cannot
+cross. An optional descendant `orientable_subtype` lets routes change those placements' `dir`.
+Register the connection openings for each icon direction with
+`demir_node_orientation(subtype, direction, openings)`. The `openings` mask uses the standard
+cardinal direction bits. The editor follows reciprocal openings and selects a registered
+two-opening orientation for each routed segment. Register preferred straight orientations first.
+The profile owns the conversion from its codebase's variables and icon directions to openings.
+Repeated group registrations may add blockers or set the orientable subtype once, conflicting
+subtype values are ignored.
 
 The prelude is the complete DM interface. It defines every hook, helper, flag, lighting field, and
 UI procedure. The editor embeds the example integrations so they can be forced without changing a

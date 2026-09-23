@@ -887,8 +887,13 @@ impl Session {
         };
         let path = self.state.active_pair().and_then(|(environment, document)| {
             let tree = &environment.bake_program.as_ref()?.tree;
+            let path = node::route_with_context(document, tree, &state.group, start, target, &transient)?;
+            if state.group.shapes(tree, &state.brush) {
+                let original = &state.drag.as_ref()?.original;
+                node::oriented_route_directions(document, tree, &state.group, &state.brush, &path, original)?;
+            }
 
-            node::route_with_context(document, tree, &state.group, start, target, &transient)
+            Some(path)
         });
         let valid = path.is_some();
         let changed = self.apply_node_route(&mut state, path.as_deref());
@@ -1097,6 +1102,17 @@ impl Session {
         let Some(drag) = state.drag.as_ref() else {
             return false;
         };
+
+        if self
+            .state
+            .environment
+            .as_ref()
+            .and_then(|environment| environment.bake_program.as_ref())
+            .is_some_and(|program| state.group.shapes(&program.tree, &state.brush))
+        {
+            return self.apply_oriented_node_route(state, path);
+        }
+
         let edit_group = drag.group;
         let previous_owned = drag.owned.clone();
         let previous_original = drag.original.clone();
@@ -1185,6 +1201,140 @@ impl Session {
             drag.original = next_original;
         }
 
+        changed
+    }
+
+    fn apply_oriented_node_route(&mut self, state: &mut NodeEditState, path: Option<&[Coord]>) -> bool {
+        let Some(drag) = state.drag.as_ref() else {
+            return false;
+        };
+        let previous_owned = drag.owned.clone();
+        let previous_original = drag.original.clone();
+        let desired_path = path.unwrap_or_default();
+        let edit_group = drag.group;
+        let mut next_owned = previous_owned.clone();
+        let mut next_original = HashMap::new();
+
+        let action = {
+            let Some((environment, document)) = self.state.active_pair_mut() else {
+                return false;
+            };
+            let Some(program) = environment.bake_program.as_ref() else {
+                return false;
+            };
+            let tree = &program.tree;
+            let Some(directions) = node::oriented_route_directions(
+                document,
+                tree,
+                &state.group,
+                &state.brush,
+                desired_path,
+                &previous_original,
+            ) else {
+                return false;
+            };
+
+            let mut after_tiles = previous_original.clone();
+            let desired = desired_path.iter().copied().collect::<HashSet<_>>();
+            next_owned.retain(|coord, _| desired.contains(coord));
+
+            for coord in desired_path.iter().copied() {
+                let baseline = match previous_original.get(&coord) {
+                    Some(tile) => tile.clone(),
+                    None => match document.placed_tile(coord) {
+                        Some(tile) => tile,
+                        None => return false,
+                    },
+                };
+
+                let occupied = baseline.iter().any(|placed| state.group.matches(tree, placed.prefab()));
+                if occupied {
+                    after_tiles.entry(coord).or_insert(baseline);
+                } else if let Some(id) = previous_owned.get(&coord).copied() {
+                    let Some(current) = document.placed_tile(coord) else {
+                        return false;
+                    };
+                    after_tiles.insert(coord, current);
+                    next_owned.insert(coord, id);
+                } else {
+                    let Some(placement) = Tool::Place.build_edit(&mut ToolContext {
+                        document,
+                        tree: &environment.tree,
+                        prefab: Some(&state.brush),
+                        target: None,
+                        coord,
+                        anchor: None,
+                        fill_mode: FillMode::default(),
+                        custom_fill_boundaries: &[],
+                    }) else {
+                        return false;
+                    };
+                    let Some(id) = placement.selected else {
+                        return false;
+                    };
+                    let Some(tile) = placement
+                        .edit
+                        .changes
+                        .into_iter()
+                        .find(|change| change.coord == coord)
+                        .map(|change| change.after)
+                    else {
+                        return false;
+                    };
+                    after_tiles.insert(coord, tile);
+                    next_owned.insert(coord, id);
+                }
+            }
+
+            for (coord, direction) in directions {
+                let Some(tile) = after_tiles.get_mut(&coord) else {
+                    return false;
+                };
+                let Some(placed) = tile
+                    .iter_mut()
+                    .rev()
+                    .find(|placed| state.group.shapes(tree, placed.prefab()))
+                else {
+                    return false;
+                };
+                let prefab = placed.prefab_mut();
+                let inherited = visual::resolve(tree, &Prefab::new(prefab.path.clone())).dir;
+                if inherited == direction {
+                    prefab.remove_var(&Identifier::from("dir"));
+                } else {
+                    prefab.set_var(Identifier::from("dir"), Value::Num(direction as f32));
+                }
+            }
+
+            let mut edit = Edit::new(format!("route {}", state.brush.path));
+            let mut affected = Vec::new();
+            for (coord, after) in after_tiles {
+                let Some(current) = document.placed_tile(coord) else {
+                    return false;
+                };
+                let baseline = previous_original.get(&coord).unwrap_or(&current);
+                if &after != baseline {
+                    next_original.insert(coord, baseline.clone());
+                }
+                if after != current {
+                    affected.extend(current.iter().map(|placed| placed.id()));
+                    affected.extend(after.iter().map(|placed| placed.id()));
+                    edit.change(document, coord, after);
+                }
+            }
+
+            (!edit.is_empty()).then_some(ToolEdit {
+                edit,
+                selected: None,
+                affected,
+            })
+        };
+
+        let changed = action.is_some_and(|action| self.commit(action, Some(edit_group)));
+        if let Some(drag) = state.drag.as_mut() {
+            drag.owned = next_owned;
+            drag.original = next_original;
+        }
         changed
     }
 
@@ -3514,7 +3664,7 @@ pub(crate) mod tests {
         arena::StrArena,
         location::{FileId, Location, Position},
         path::TreePath,
-        types::Value,
+        types::{Identifier, Value},
     };
     use std::{
         collections::{HashMap, HashSet},
@@ -3668,12 +3818,43 @@ pub(crate) mod tests {
     demir_node_group(/obj/pipe/supply, /turf/closed)
     demir_node_group(/obj/pipe/scrubbers, /turf/closed)
 "#;
+        node_environment_with_profile(PROFILE)
+    }
+
+    fn oriented_node_environment() -> Environment {
+        const PROFILE: &str = r#"
+/obj/link
+    dir = 0
+/obj/link/segment
+/obj/link/junction
+/obj/link/endpoint
+
+/datum/demir/example
+    default = TRUE
+
+/datum/demir/example/New()
+    demir_node_group(/obj/link, null, /obj/link/segment)
+    demir_node_orientation(/obj/link/segment, NORTH, NORTH | SOUTH)
+    demir_node_orientation(/obj/link/segment, SOUTH, NORTH | SOUTH)
+    demir_node_orientation(/obj/link/segment, EAST, EAST | WEST)
+    demir_node_orientation(/obj/link/segment, WEST, EAST | WEST)
+    demir_node_orientation(/obj/link/segment, NORTHEAST, NORTHEAST)
+    demir_node_orientation(/obj/link/segment, SOUTHEAST, SOUTHEAST)
+    demir_node_orientation(/obj/link/segment, NORTHWEST, NORTHWEST)
+    demir_node_orientation(/obj/link/segment, SOUTHWEST, SOUTHWEST)
+    demir_node_orientation(/obj/link/junction, NORTH, NORTH | EAST | SOUTH)
+    demir_node_orientation(/obj/link/endpoint, SOUTH, SOUTH)
+"#;
+        node_environment_with_profile(PROFILE)
+    }
+
+    fn node_environment_with_profile(profile: &'static str) -> Environment {
         let root = examples();
         let compile = |baking| {
             let arena = StrArena::new();
             let prelude = preprocessor::prelude_files()
                 .into_iter()
-                .chain([preprocessor::PreludeFile::Embedded("<test-node-profile.dm>", PROFILE)]);
+                .chain([preprocessor::PreludeFile::Embedded("<test-node-profile.dm>", profile)]);
             let preprocessed = preprocessor::Preprocessor::new(&arena)
                 .with_prelude(prelude)
                 .with_baking(baking)
@@ -3731,7 +3912,16 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId) {
-        let environment = node_environment();
+        node_session_with_environment(map, seed, node_environment(), "/obj/cable")
+    }
+
+    fn oriented_node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId) {
+        node_session_with_environment(map, seed, oriented_node_environment(), "/obj/link/segment")
+    }
+
+    fn node_session_with_environment(
+        map: Map, seed: Coord, environment: Environment, target_path: &str,
+    ) -> (Session, PrefabInstanceId) {
         let document = MapDocument::new(map, 1);
         let target = document
             .instance_ids_at(seed)
@@ -3740,9 +3930,9 @@ pub(crate) mod tests {
             .find(|instance| {
                 document
                     .prefab_instance(*instance)
-                    .is_some_and(|(prefab, _)| prefab.path.to_string().starts_with("/obj/cable"))
+                    .is_some_and(|(prefab, _)| prefab.path.to_string().starts_with(target_path))
             })
-            .expect("seed cable");
+            .expect("seed node");
         let bake = editor::bake::build(&environment, &document).expect("node profile bakes");
         let mut session = Session::new();
         session.state.environment = Some(Arc::new(environment));
@@ -3757,6 +3947,42 @@ pub(crate) mod tests {
         session.rebuild_instances(document_id);
 
         (session, target)
+    }
+
+    fn oriented_node_map(width: u32, height: u32, placements: &[(Coord, &str, u32)]) -> Map {
+        let mut map = Map::new(Size {
+            x: width,
+            y: height,
+            z: 1,
+        });
+        for y in 1..=height {
+            for x in 1..=width {
+                let coord = Coord::new(x, y, 1);
+                let mut tile = vec![
+                    Prefab::new(TreePath::parse("/turf/open/floor")),
+                    Prefab::new(TreePath::parse("/area/station")),
+                ];
+                for (_, path, dir) in placements.iter().filter(|(placed, ..)| *placed == coord) {
+                    let mut prefab = Prefab::new(TreePath::parse(path));
+                    prefab.set_var("dir".into(), Value::Num(*dir as f32));
+                    tile.push(prefab);
+                }
+                let key = map.intern_tile(tile);
+                map.grid[0][(height - y) as usize][(x - 1) as usize] = key;
+            }
+        }
+        map
+    }
+
+    fn oriented_dir(session: &Session, coord: Coord) -> Option<u32> {
+        session.map()?.tile_at(coord)?.iter().find_map(|prefab| {
+            prefab.path.to_string().starts_with("/obj/link/segment").then(|| {
+                prefab
+                    .var(&Identifier::from("dir"))
+                    .and_then(Value::as_num)
+                    .unwrap_or(0.0) as u32
+            })
+        })
     }
 
     pub(crate) fn node_tile_has_group(session: &Session, coord: Coord) -> bool {
@@ -6309,6 +6535,105 @@ pub(crate) mod tests {
             None,
             "the cancelled preview leaves no history entry"
         );
+    }
+
+    #[test]
+    fn oriented_route_preview_reroute_cancel_and_undo_preserve_directions() {
+        let start = Coord::new(1, 2, 1);
+        let straight = Coord::new(2, 2, 1);
+        let bend = Coord::new(3, 2, 1);
+        let end = Coord::new(3, 3, 1);
+        let map = oriented_node_map(5, 4, &[(start, "/obj/link/segment", 1)]);
+        let (mut session, seed) = oriented_node_session(map, start);
+        assert!(session.begin_node_edit(seed));
+        assert!(session.start_node_drag(start));
+        assert!(session.update_node_drag(end));
+        assert_eq!(oriented_dir(&session, start), Some(4));
+        assert_eq!(oriented_dir(&session, straight), Some(4));
+        assert_eq!(oriented_dir(&session, bend), Some(9));
+        assert_eq!(oriented_dir(&session, end), Some(1));
+
+        assert!(session.update_node_drag(Coord::new(4, 2, 1)));
+        assert_eq!(oriented_dir(&session, end), None);
+        assert_eq!(oriented_dir(&session, bend), Some(4));
+        session.cancel_node_drag();
+        assert_eq!(oriented_dir(&session, start), Some(1));
+        assert_eq!(oriented_dir(&session, straight), None);
+        assert!(!session.undo());
+
+        assert!(session.start_node_drag(start));
+        assert!(session.update_node_drag(end));
+        assert!(session.finish_node_drag(true));
+        assert!(session.undo());
+        assert_eq!(oriented_dir(&session, start), Some(1));
+        assert_eq!(oriented_dir(&session, bend), None);
+        assert!(session.redo());
+        assert_eq!(oriented_dir(&session, start), Some(4));
+        assert_eq!(oriented_dir(&session, bend), Some(9));
+    }
+
+    #[test]
+    fn oriented_route_reorients_safe_endpoint_and_rejects_three_way_segment() {
+        let start = Coord::new(1, 2, 1);
+        let middle = Coord::new(2, 2, 1);
+        let endpoint = Coord::new(3, 2, 1);
+        let north = Coord::new(3, 3, 1);
+        let placements = [
+            (start, "/obj/link/segment", 4),
+            (endpoint, "/obj/link/segment", 1),
+            (north, "/obj/link/segment", 1),
+        ];
+        let (mut session, seed) = oriented_node_session(oriented_node_map(4, 4, &placements), start);
+        let original_id = session
+            .state
+            .active_document()
+            .unwrap()
+            .instance_ids_at(endpoint)
+            .iter()
+            .copied()
+            .find(|id| {
+                session
+                    .state
+                    .active_document()
+                    .unwrap()
+                    .prefab_instance(*id)
+                    .is_some_and(|(prefab, _)| prefab.path == TreePath::parse("/obj/link/segment"))
+            })
+            .unwrap();
+        assert!(session.begin_node_edit(seed));
+        assert!(session.start_node_drag(start));
+        assert!(session.update_node_drag(endpoint));
+        assert_eq!(oriented_dir(&session, endpoint), Some(9));
+        session.update_node_drag(Coord::new(4, 2, 1));
+        assert!(!session.node_overlay().unwrap().route_valid);
+        assert_eq!(oriented_dir(&session, endpoint), Some(1));
+        assert_eq!(oriented_dir(&session, middle), None);
+        assert!(session.update_node_drag(endpoint));
+        assert!(session.finish_node_drag(true));
+        assert!(
+            session
+                .state
+                .active_document()
+                .unwrap()
+                .prefab_instance(original_id)
+                .is_some()
+        );
+        assert!(session.undo());
+        assert_eq!(oriented_dir(&session, endpoint), Some(1));
+        assert_eq!(oriented_dir(&session, middle), None);
+
+        let south = Coord::new(3, 1, 1);
+        let mut branched = placements.to_vec();
+        branched.push((south, "/obj/link/segment", 1));
+        let (mut session, seed) = oriented_node_session(oriented_node_map(4, 4, &branched), start);
+        assert!(session.begin_node_edit(seed));
+        assert!(session.start_node_drag(start));
+        assert!(!session.update_node_drag(endpoint));
+        assert!(!session.node_overlay().unwrap().route_valid);
+        assert_eq!(oriented_dir(&session, middle), None);
+        assert_eq!(oriented_dir(&session, endpoint), Some(1));
+        assert!(!session.finish_node_drag(true));
+        assert!(!session.undo());
     }
 
     #[test]

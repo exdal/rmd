@@ -1,13 +1,34 @@
+use core::types::Identifier;
 use std::{
     cmp::Ordering,
     collections::{BinaryHeap, HashMap, HashSet, VecDeque},
 };
 
+use bitflags::bitflags;
 use dmm::{Coord, Prefab, PrefabInstanceId};
 use objtree::{ObjectTree, TypeId};
 use vm::bake::NodeGroup;
 
-use crate::document::MapDocument;
+use crate::{
+    document::{MapDocument, PlacedTile},
+    visual,
+};
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct NodePorts: u32 {
+        const NORTH = 1;
+        const SOUTH = 2;
+        const EAST = 4;
+        const WEST = 8;
+        const VERTICAL = Self::NORTH.bits() | Self::SOUTH.bits();
+        const HORIZONTAL = Self::EAST.bits() | Self::WEST.bits();
+        const NORTHEAST = Self::NORTH.bits() | Self::EAST.bits();
+        const SOUTHEAST = Self::SOUTH.bits() | Self::EAST.bits();
+        const NORTHWEST = Self::NORTH.bits() | Self::WEST.bits();
+        const SOUTHWEST = Self::SOUTH.bits() | Self::WEST.bits();
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Component {
@@ -27,7 +48,13 @@ pub struct ResolvedGroup {
 impl ResolvedGroup {
     pub fn subtype(&self) -> TypeId { self.definition.subtype }
 
-    fn matches(&self, tree: &ObjectTree, prefab: &Prefab) -> bool {
+    pub fn shapes(&self, tree: &ObjectTree, prefab: &Prefab) -> bool {
+        self.definition
+            .orientable_subtype
+            .is_some_and(|root| tree.id_of(&prefab.path).is_some_and(|ty| tree.is_subtype_of(ty, root)))
+    }
+
+    pub fn matches(&self, tree: &ObjectTree, prefab: &Prefab) -> bool {
         tree.id_of(&prefab.path).is_some_and(|ty| self.members.contains(&ty))
     }
 }
@@ -78,31 +105,37 @@ pub fn eligible_instance_at(
 pub fn component(document: &MapDocument, tree: &ObjectTree, group: &ResolvedGroup, seed: Coord) -> Option<Component> {
     let tiles = component_tiles(document, tree, group, seed)?;
 
-    let mut nodes = tiles
-        .iter()
-        .copied()
-        .filter(|coord| {
-            let directions = neighbor_directions(*coord, &tiles);
-
-            match directions.as_slice() {
-                [left, right] => left.opposite() != *right,
-                _ => true,
-            }
-        })
-        .collect::<Vec<_>>();
-    nodes.sort_unstable_by_key(|coord| (coord.y, coord.x));
-
     let mut segments = Vec::new();
     for coord in &tiles {
         for direction in [Direction::East, Direction::North] {
             if let Some(neighbor) = step(*coord, direction, document.map.size.x, document.map.size.y)
                 && tiles.contains(&neighbor)
+                && connected(document, tree, group, *coord, neighbor)
             {
                 segments.push((*coord, neighbor));
             }
         }
     }
     segments.sort_unstable_by_key(|(from, to)| (from.y, from.x, to.y, to.x));
+    let mut adjacent = HashMap::<Coord, Vec<Direction>>::new();
+    for (from, to) in &segments {
+        adjacent.entry(*from).or_default().push(direction_between(*from, *to)?);
+        adjacent.entry(*to).or_default().push(direction_between(*to, *from)?);
+    }
+
+    let mut nodes = tiles
+        .iter()
+        .copied()
+        .filter(|coord| {
+            let directions = adjacent.get(coord).map(Vec::as_slice).unwrap_or_default();
+
+            match directions {
+                [left, right] => left.opposite() != *right,
+                _ => true,
+            }
+        })
+        .collect::<Vec<_>>();
+    nodes.sort_unstable_by_key(|coord| (coord.y, coord.x));
 
     Some(Component { tiles, nodes, segments })
 }
@@ -339,14 +372,180 @@ fn component_tiles(
         if !tiles.insert(coord) {
             continue;
         }
+
         for neighbor in neighbors(coord, document.map.size.x, document.map.size.y) {
-            if !tiles.contains(&neighbor) && occupied(document, tree, group, neighbor) {
+            if !tiles.contains(&neighbor)
+                && occupied(document, tree, group, neighbor)
+                && connected(document, tree, group, coord, neighbor)
+            {
                 queue.push_back(neighbor);
             }
         }
     }
 
     Some(tiles)
+}
+
+fn group_prefab_at<'a>(
+    document: &'a MapDocument, tree: &ObjectTree, group: &ResolvedGroup, coord: Coord,
+    original: Option<&'a HashMap<Coord, PlacedTile>>,
+) -> Option<&'a Prefab> {
+    if let Some(tile) = original.and_then(|original| original.get(&coord)) {
+        return tile
+            .iter()
+            .rev()
+            .find_map(|placed| group.matches(tree, placed.prefab()).then_some(placed.prefab()));
+    }
+
+    let id = eligible_instance_at(document, tree, group, coord)?;
+
+    document.prefab_instance(id).map(|(prefab, _)| prefab)
+}
+
+fn connected(document: &MapDocument, tree: &ObjectTree, group: &ResolvedGroup, from: Coord, to: Coord) -> bool {
+    if group.definition.orientable_subtype.is_none() {
+        return true;
+    }
+
+    let Some(direction) = direction_between(from, to) else {
+        return false;
+    };
+    let Some(from_prefab) = group_prefab_at(document, tree, group, from, None) else {
+        return false;
+    };
+    let Some(to_prefab) = group_prefab_at(document, tree, group, to, None) else {
+        return false;
+    };
+
+    ports(tree, group, from_prefab).contains(direction.port())
+        && ports(tree, group, to_prefab).contains(direction.opposite().port())
+}
+
+fn resolved_number(tree: &ObjectTree, prefab: &Prefab, name: &str) -> Option<u32> {
+    let id = tree.id_of(&prefab.path)?;
+    visual::resolve_value(tree, id, prefab, &Identifier::from(name))?
+        .value
+        .as_num()
+        .filter(|number| number.is_finite() && *number >= 0.0)
+        .map(|number| number as u32)
+}
+
+fn effective_direction(tree: &ObjectTree, prefab: &Prefab) -> u32 {
+    resolved_number(tree, prefab, "dir").unwrap_or_else(|| visual::resolve(tree, prefab).dir)
+}
+
+fn ports(tree: &ObjectTree, group: &ResolvedGroup, prefab: &Prefab) -> NodePorts {
+    let Some(ty) = tree.id_of(&prefab.path) else {
+        return NodePorts::empty();
+    };
+    let direction = effective_direction(tree, prefab);
+
+    group
+        .definition
+        .orientations
+        .iter()
+        .filter(|rule| rule.direction == direction && tree.is_subtype_of(ty, rule.subtype))
+        .max_by_key(|rule| tree.ancestors(rule.subtype).count())
+        .and_then(|rule| NodePorts::from_bits(rule.openings))
+        .unwrap_or_default()
+}
+
+fn icon_direction(tree: &ObjectTree, group: &ResolvedGroup, prefab: &Prefab, required: NodePorts) -> Option<u32> {
+    let ty = tree.id_of(&prefab.path)?;
+    let subtype = group
+        .definition
+        .orientations
+        .iter()
+        .filter(|rule| tree.is_subtype_of(ty, rule.subtype))
+        .max_by_key(|rule| tree.ancestors(rule.subtype).count())?
+        .subtype;
+
+    group.definition.orientations.iter().find_map(|rule| {
+        let openings = NodePorts::from_bits(rule.openings)?;
+        (rule.subtype == subtype && openings.bits().count_ones() == 2 && openings.contains(required))
+            .then_some(rule.direction)
+    })
+}
+
+fn direction_between(from: Coord, to: Coord) -> Option<Direction> {
+    if from.z != to.z {
+        return None;
+    }
+
+    match (to.x as i64 - from.x as i64, to.y as i64 - from.y as i64) {
+        (0, 1) => Some(Direction::North),
+        (0, -1) => Some(Direction::South),
+        (1, 0) => Some(Direction::East),
+        (-1, 0) => Some(Direction::West),
+        _ => None,
+    }
+}
+
+/// Orient the configured two-port segment along the candidate path. Previously
+/// connected neighbors keep their openings. A third required opening is unsafe.
+pub fn oriented_route_directions(
+    document: &MapDocument, tree: &ObjectTree, group: &ResolvedGroup, brush: &Prefab, path: &[Coord],
+    original: &HashMap<Coord, PlacedTile>,
+) -> Option<HashMap<Coord, u32>> {
+    if !group.shapes(tree, brush) {
+        return Some(HashMap::new());
+    }
+
+    let mut required = HashMap::<Coord, NodePorts>::new();
+    for pair in path.windows(2) {
+        let direction = direction_between(pair[0], pair[1])?;
+        for (coord, port) in [(pair[0], direction.port()), (pair[1], direction.opposite().port())] {
+            if let Some(prefab) = group_prefab_at(document, tree, group, coord, Some(original))
+                && !group.shapes(tree, prefab)
+                && !ports(tree, group, prefab).contains(port)
+            {
+                return None;
+            }
+            *required.entry(coord).or_default() |= port;
+        }
+    }
+
+    let mut directions = HashMap::new();
+    for coord in path.iter().copied() {
+        let existing = group_prefab_at(document, tree, group, coord, Some(original));
+        if existing.is_some_and(|prefab| !group.shapes(tree, prefab)) {
+            continue;
+        }
+
+        let mut mask = required.get(&coord).copied().unwrap_or_default();
+        if let Some(prefab) = existing {
+            let old_ports = ports(tree, group, prefab);
+            for direction in [Direction::North, Direction::South, Direction::East, Direction::West] {
+                let Some(neighbor) = step(coord, direction, document.map.size.x, document.map.size.y) else {
+                    continue;
+                };
+                if let Some(other) = group_prefab_at(document, tree, group, neighbor, Some(original))
+                    && old_ports.contains(direction.port())
+                    && ports(tree, group, other).contains(direction.opposite().port())
+                {
+                    mask |= direction.port();
+                }
+            }
+        }
+
+        if mask.bits().count_ones() > 2 {
+            return None;
+        }
+
+        let dir = match icon_direction(tree, group, existing.unwrap_or(brush), mask) {
+            Some(dir) => dir,
+            None if mask.is_empty() => continue,
+            None => return None,
+        };
+
+        if existing.is_some_and(|prefab| effective_direction(tree, prefab) != dir) && !document.allows_edit_at(coord) {
+            return None;
+        }
+
+        directions.insert(coord, dir);
+    }
+
+    Some(directions)
 }
 
 fn occupied_ignoring(
@@ -415,6 +614,16 @@ impl Direction {
         }
     }
 
+    const fn port(self) -> NodePorts {
+        match self {
+            Self::None => NodePorts::empty(),
+            Self::North => NodePorts::NORTH,
+            Self::South => NodePorts::SOUTH,
+            Self::East => NodePorts::EAST,
+            Self::West => NodePorts::WEST,
+        }
+    }
+
     fn is_turn(self, next: Self) -> bool { !matches!(self, Self::None) && self != next }
 }
 
@@ -456,18 +665,6 @@ fn erase_loops(path: Vec<Coord>) -> Vec<Coord> {
     result
 }
 
-fn neighbor_directions(coord: Coord, tiles: &HashSet<Coord>) -> Vec<Direction> {
-    [Direction::North, Direction::South, Direction::East, Direction::West]
-        .into_iter()
-        .filter(|direction| {
-            let (dx, dy) = delta(*direction);
-            let x = coord.x as i64 + dx;
-            let y = coord.y as i64 + dy;
-            x > 0 && y > 0 && tiles.contains(&Coord::new(x as u32, y as u32, coord.z))
-        })
-        .collect()
-}
-
 fn neighbors(coord: Coord, width: u32, height: u32) -> impl Iterator<Item = Coord> {
     [Direction::North, Direction::South, Direction::East, Direction::West]
         .into_iter()
@@ -497,9 +694,10 @@ fn manhattan(left: Coord, right: Coord) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use core::{location::Location, path::TreePath};
+    use core::{location::Location, path::TreePath, types::Value};
 
     use dmm::{Map, Size};
+    use vm::bake::NodeOrientation;
 
     use super::*;
 
@@ -512,6 +710,11 @@ mod tests {
             "/obj/cable",
             "/obj/cable/heavy",
             "/obj/pipe",
+            "/obj/link",
+            "/obj/link/segment",
+            "/obj/link/junction",
+            "/obj/link/endpoint",
+            "/obj/link/broken",
             "/turf",
             "/turf/open",
             "/turf/closed",
@@ -569,10 +772,202 @@ mod tests {
         NodeGroup {
             subtype: tree.id_of(&TreePath::parse("/obj/cable")).unwrap(),
             blockers: vec![tree.id_of(&TreePath::parse("/turf/closed")).unwrap()],
+            orientable_subtype: None,
+            orientations: Vec::new(),
         }
     }
 
     fn group(tree: &ObjectTree) -> ResolvedGroup { resolve_group(tree, &[group_definition(tree)], 0).unwrap() }
+
+    fn configured_group(tree: &ObjectTree) -> ResolvedGroup {
+        let root = tree.id_of(&TreePath::parse("/obj/link")).unwrap();
+        let segment = tree.id_of(&TreePath::parse("/obj/link/segment")).unwrap();
+        let junction = tree.id_of(&TreePath::parse("/obj/link/junction")).unwrap();
+        let endpoint = tree.id_of(&TreePath::parse("/obj/link/endpoint")).unwrap();
+        let orientations = [
+            (root, NodePorts::NORTH, NodePorts::all()),
+            (segment, NodePorts::NORTH, NodePorts::VERTICAL),
+            (segment, NodePorts::SOUTH, NodePorts::VERTICAL),
+            (segment, NodePorts::EAST, NodePorts::HORIZONTAL),
+            (segment, NodePorts::WEST, NodePorts::HORIZONTAL),
+            (segment, NodePorts::NORTHEAST, NodePorts::NORTHEAST),
+            (segment, NodePorts::SOUTHEAST, NodePorts::SOUTHEAST),
+            (segment, NodePorts::NORTHWEST, NodePorts::NORTHWEST),
+            (segment, NodePorts::SOUTHWEST, NodePorts::SOUTHWEST),
+            (
+                junction,
+                NodePorts::NORTH,
+                NodePorts::NORTH | NodePorts::EAST | NodePorts::SOUTH,
+            ),
+            (endpoint, NodePorts::SOUTH, NodePorts::SOUTH),
+        ]
+        .into_iter()
+        .map(|(subtype, direction, openings)| NodeOrientation {
+            subtype,
+            direction: direction.bits(),
+            openings: openings.bits(),
+        })
+        .collect::<Vec<_>>();
+        resolve_group(
+            tree,
+            &[NodeGroup {
+                subtype: root,
+                blockers: Vec::new(),
+                orientable_subtype: Some(segment),
+                orientations,
+            }],
+            0,
+        )
+        .unwrap()
+    }
+
+    fn configured_document(placements: &[(Coord, &str, NodePorts)]) -> MapDocument {
+        let paths = placements
+            .iter()
+            .map(|(coord, path, ..)| (*coord, *path))
+            .collect::<Vec<_>>();
+        let mut document = document(5, 5, &paths);
+        for (coord, path, dir) in placements {
+            let id = document
+                .instance_ids_at(*coord)
+                .iter()
+                .copied()
+                .find(|id| {
+                    document
+                        .prefab_instance(*id)
+                        .is_some_and(|(prefab, _)| prefab.path.to_string() == *path)
+                })
+                .unwrap();
+            document.set_instance_var(id, "dir".into(), Value::Num(dir.bits() as f32));
+        }
+        document
+    }
+
+    #[test]
+    fn configured_components_follow_facing_ports_including_junctions_and_endpoints() {
+        let tree = tree();
+        let group = configured_group(&tree);
+        let junction = Coord::new(2, 2, 1);
+        let east = Coord::new(3, 2, 1);
+        let west = Coord::new(1, 2, 1);
+        let north = Coord::new(2, 3, 1);
+        let document = configured_document(&[
+            (junction, "/obj/link/junction", NodePorts::NORTH),
+            (east, "/obj/link/segment", NodePorts::EAST),
+            (west, "/obj/link/segment", NodePorts::EAST),
+            (north, "/obj/link/endpoint", NodePorts::SOUTH),
+        ]);
+        let network = component(&document, &tree, &group, junction).unwrap();
+        assert_eq!(network.tiles, HashSet::from([junction, east, north]));
+        assert_eq!(network.segments.len(), 2);
+        assert_eq!(
+            component(&document, &tree, &group, west).unwrap().tiles,
+            HashSet::from([west])
+        );
+        let brush = document
+            .prefab_instance(eligible_instance_at(&document, &tree, &group, west).unwrap())
+            .unwrap()
+            .0;
+        assert!(
+            oriented_route_directions(&document, &tree, &group, brush, &[west, junction], &HashMap::new()).is_none()
+        );
+        assert!(
+            oriented_route_directions(&document, &tree, &group, brush, &[east, junction], &HashMap::new()).is_some()
+        );
+    }
+
+    #[test]
+    fn configured_route_orients_straights_bends_and_rejects_a_third_port() {
+        let tree = tree();
+        let group = configured_group(&tree);
+        let start = Coord::new(1, 1, 1);
+        let middle = Coord::new(2, 1, 1);
+        let end = Coord::new(2, 2, 1);
+        let document = configured_document(&[(start, "/obj/link/segment", NodePorts::NORTH)]);
+        let brush = document
+            .prefab_instance(eligible_instance_at(&document, &tree, &group, start).unwrap())
+            .unwrap()
+            .0;
+        let dirs =
+            oriented_route_directions(&document, &tree, &group, brush, &[start, middle, end], &HashMap::new()).unwrap();
+        assert_eq!(dirs[&start], NodePorts::EAST.bits());
+        assert_eq!(dirs[&middle], NodePorts::NORTHWEST.bits());
+        assert_eq!(dirs[&end], NodePorts::NORTH.bits());
+
+        let center = Coord::new(3, 3, 1);
+        let north = Coord::new(3, 4, 1);
+        let south = Coord::new(3, 2, 1);
+        let west = Coord::new(2, 3, 1);
+        let document = configured_document(&[
+            (center, "/obj/link/segment", NodePorts::NORTH),
+            (north, "/obj/link/segment", NodePorts::NORTH),
+            (south, "/obj/link/segment", NodePorts::NORTH),
+            (west, "/obj/link/segment", NodePorts::EAST),
+        ]);
+        let brush = document
+            .prefab_instance(eligible_instance_at(&document, &tree, &group, west).unwrap())
+            .unwrap()
+            .0;
+        assert!(oriented_route_directions(&document, &tree, &group, brush, &[west, center], &HashMap::new()).is_none());
+    }
+
+    #[test]
+    fn configured_bends_use_each_matching_diagonal_icon_direction() {
+        let tree = tree();
+        let group = configured_group(&tree);
+        let center = Coord::new(3, 3, 1);
+        let document = document(5, 5, &[]);
+        let brush = Prefab::new(TreePath::parse("/obj/link/segment"));
+        for (first, last, expected) in [
+            (Coord::new(3, 4, 1), Coord::new(4, 3, 1), NodePorts::NORTHEAST),
+            (Coord::new(3, 2, 1), Coord::new(4, 3, 1), NodePorts::SOUTHEAST),
+            (Coord::new(3, 4, 1), Coord::new(2, 3, 1), NodePorts::NORTHWEST),
+            (Coord::new(3, 2, 1), Coord::new(2, 3, 1), NodePorts::SOUTHWEST),
+        ] {
+            let directions = oriented_route_directions(
+                &document,
+                &tree,
+                &group,
+                &brush,
+                &[first, center, last],
+                &HashMap::new(),
+            )
+            .unwrap();
+            assert_eq!(directions[&center], expected.bits());
+        }
+    }
+
+    #[test]
+    fn configured_orientations_can_map_icon_directions_independently_of_openings() {
+        let tree = tree();
+        let mut group = configured_group(&tree);
+        let segment = tree.id_of(&TreePath::parse("/obj/link/segment")).unwrap();
+        for rule in group
+            .definition
+            .orientations
+            .iter_mut()
+            .filter(|rule| rule.subtype == segment)
+        {
+            if rule.direction == NodePorts::NORTHEAST.bits() {
+                rule.direction = NodePorts::NORTHWEST.bits();
+            } else if rule.direction == NodePorts::NORTHWEST.bits() {
+                rule.direction = NodePorts::NORTHEAST.bits();
+            }
+        }
+        let document = document(5, 5, &[]);
+        let brush = Prefab::new(TreePath::parse("/obj/link/segment"));
+        let center = Coord::new(3, 3, 1);
+        let directions = oriented_route_directions(
+            &document,
+            &tree,
+            &group,
+            &brush,
+            &[Coord::new(3, 4, 1), center, Coord::new(2, 3, 1)],
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(directions[&center], NodePorts::NORTHEAST.bits());
+    }
 
     #[test]
     fn most_specific_registered_group_wins() {
@@ -581,6 +976,8 @@ mod tests {
             NodeGroup {
                 subtype: tree.id_of(&TreePath::parse("/obj")).unwrap(),
                 blockers: Vec::new(),
+                orientable_subtype: None,
+                orientations: Vec::new(),
             },
             group_definition(&tree),
         ];
@@ -596,6 +993,8 @@ mod tests {
             NodeGroup {
                 subtype: tree.id_of(&TreePath::parse("/obj")).unwrap(),
                 blockers: Vec::new(),
+                orientable_subtype: None,
+                orientations: Vec::new(),
             },
             group_definition(&tree),
         ];

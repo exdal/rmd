@@ -5,6 +5,7 @@ use crate::{
     FaultKind,
     GenericValue,
     Intrinsic,
+    bake::NodeGroup,
     builtins::index_arg,
     eval::Evaluator,
     heap::ObjectId,
@@ -210,6 +211,7 @@ impl Evaluator<'_> {
                     return Err(self.fault(FaultKind::Blocked(format!("{name} outside a profile's New()"))));
                 }
 
+                // which object
                 let Some(subtype) = args.first().and_then(|(_, value)| match value {
                     GenericValue::Path(path) => self.tree.id_of(path),
                     GenericValue::Object(id) => self.runtime.heap.object(*id).map(|object| object.ty),
@@ -217,6 +219,8 @@ impl Evaluator<'_> {
                 }) else {
                     return Ok(GenericValue::Null);
                 };
+
+                // which blocker
                 let blocker_arg = arg(1);
                 let blocker_values = match blocker_arg {
                     GenericValue::Null => Vec::new(),
@@ -234,29 +238,109 @@ impl Evaluator<'_> {
                     return Ok(GenericValue::Null);
                 };
 
+                // which orentation (optional)
+                let orientable_subtype = match arg(2) {
+                    GenericValue::Null => None,
+                    value => {
+                        let Some(ty) = resolve_type(&value).filter(|ty| self.tree.is_subtype_of(*ty, subtype)) else {
+                            return Ok(GenericValue::Null);
+                        };
+                        Some(ty)
+                    },
+                };
+
                 if let Some(group) = self
                     .runtime
                     .node_groups
                     .iter_mut()
                     .find(|group| group.subtype == subtype)
                 {
+                    if orientable_subtype.is_some()
+                        && group.orientable_subtype.is_some()
+                        && group.orientable_subtype != orientable_subtype
+                    {
+                        return Ok(GenericValue::Null);
+                    }
+
+                    group.orientable_subtype = group.orientable_subtype.or(orientable_subtype);
                     for blocker in blockers {
                         if !group.blockers.contains(&blocker) {
                             group.blockers.push(blocker);
                         }
                     }
                 } else {
-                    self.runtime.node_groups.push(crate::bake::NodeGroup {
+                    // new group
+                    self.runtime.node_groups.push(NodeGroup {
                         subtype,
+                        orientable_subtype,
+                        orientations: Vec::new(),
                         blockers: blockers.into_iter().fold(Vec::new(), |mut unique, blocker| {
                             if !unique.contains(&blocker) {
                                 unique.push(blocker);
                             }
+
                             unique
                         }),
                     });
                 }
 
+                Ok(GenericValue::Null)
+            },
+
+            Intrinsic::DemirNodeOrientation => {
+                if !self.runtime.defining_groups {
+                    return Err(self.fault(FaultKind::Blocked(format!("{name} outside a profile's New()"))));
+                }
+
+                let Some(subtype) = args.first().and_then(|(_, value)| match value {
+                    GenericValue::Path(path) => self.tree.id_of(path),
+                    GenericValue::Object(id) => self.runtime.heap.object(*id).map(|object| object.ty),
+                    _ => None,
+                }) else {
+                    return Ok(GenericValue::Null);
+                };
+
+                let number = |value: GenericValue| match value {
+                    GenericValue::Num(number)
+                        if number.is_finite() && number >= 0.0 && number.fract() == 0.0 && number < u32::MAX as f32 =>
+                    {
+                        Some(number as u32)
+                    },
+                    _ => None,
+                };
+
+                let (Some(direction), Some(openings)) = (number(arg(1)), number(arg(2))) else {
+                    return Ok(GenericValue::Null);
+                };
+
+                if openings & !0xf != 0 {
+                    return Ok(GenericValue::Null);
+                }
+
+                let Some(index) = self
+                    .runtime
+                    .node_groups
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, group)| self.tree.is_subtype_of(subtype, group.subtype))
+                    .max_by_key(|(_, group)| self.tree.ancestors(group.subtype).count())
+                    .map(|(index, _)| index)
+                else {
+                    return Ok(GenericValue::Null);
+                };
+                let rules = &mut self.runtime.node_groups[index].orientations;
+                if let Some(rule) = rules
+                    .iter_mut()
+                    .find(|rule| rule.subtype == subtype && rule.direction == direction)
+                {
+                    rule.openings = openings;
+                } else {
+                    rules.push(crate::bake::NodeOrientation {
+                        subtype,
+                        direction,
+                        openings,
+                    });
+                }
                 Ok(GenericValue::Null)
             },
 

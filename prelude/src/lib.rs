@@ -16,6 +16,7 @@ mod tests {
         assert_eq!(Intrinsic::try_from(100).unwrap(), Intrinsic::WorldNew);
         assert_eq!(Intrinsic::try_from(401).unwrap(), Intrinsic::Call);
         assert_eq!(Intrinsic::try_from(721).unwrap(), Intrinsic::DemirNodeGroup);
+        assert_eq!(Intrinsic::try_from(726).unwrap(), Intrinsic::DemirNodeOrientation);
         assert_eq!(Intrinsic::try_from(722).unwrap(), Intrinsic::ImguiMousePopup);
         assert_eq!(Intrinsic::try_from(725).unwrap(), Intrinsic::ImguiEndPopup);
         assert_eq!(Intrinsic::try_from(1100).unwrap(), Intrinsic::ListAdd);

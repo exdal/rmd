@@ -86,6 +86,15 @@ pub struct Atom {
 pub struct NodeGroup {
     pub subtype: TypeId,
     pub blockers: Vec<TypeId>,
+    pub orientable_subtype: Option<TypeId>,
+    pub orientations: Vec<NodeOrientation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeOrientation {
+    pub subtype: TypeId,
+    pub direction: u32,
+    pub openings: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
