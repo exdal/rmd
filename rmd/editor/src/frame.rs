@@ -185,6 +185,8 @@ pub struct FrameOptions {
     pub show_areas: bool,
     pub show_area_outlines: bool,
     pub show_lighting: bool,
+    /// Minimum displayed light luminance, from 0 to 100 percent.
+    pub minimum_light_brightness_percent: u32,
     /// `world.icon_size`
     pub tile_size: u32,
     /// How many levels below the active one to draw behind it, 0 for none.
@@ -197,6 +199,7 @@ impl Default for FrameOptions {
             show_areas: false,
             show_area_outlines: true,
             show_lighting: true,
+            minimum_light_brightness_percent: 0,
             tile_size: 32,
             underlay_depth: 3,
         }

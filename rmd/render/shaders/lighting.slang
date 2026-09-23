@@ -46,7 +46,8 @@ func fs_main(
     uniform f32 tile_size,
     uniform u32x2 map_size,
     uniform u32 level_count,
-    uniform u32 base
+    uniform u32 base,
+    uniform f32 minimum_brightness
 ) -> f32x4 {
     let color = scene.Sample(input.uv);
     let level = rendered_levels.Load(i32x3(i32x2(input.position.xy), 0));
@@ -76,7 +77,12 @@ func fs_main(
     let light = lerp(south, north, local.y);
     let overlay_light = overlay_lightmap.Sample(input.uv).rgb;
     let combined_light = saturate(light + overlay_light);
+    let luminance = dot(combined_light, f32x3(0.2126, 0.7152, 0.0722));
+    var displayed_light = combined_light;
+    if (luminance < minimum_brightness) {
+        displayed_light = lerp(combined_light, f32x3(1.0), (minimum_brightness - luminance) / (1.0 - luminance));
+    }
     let emission = emissive_mask.Sample(input.uv).r;
 
-    return f32x4(color.rgb * lerp(combined_light, f32x3(1.0), emission), color.a);
+    return f32x4(color.rgb * lerp(displayed_light, f32x3(1.0), emission), color.a);
 }

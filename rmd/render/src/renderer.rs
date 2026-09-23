@@ -188,6 +188,7 @@ struct LightingPush {
     map_size: [u32; 2],
     level_count: u32,
     base: u32,
+    minimum_brightness: f32,
 }
 
 struct LightingSlots {
@@ -1660,6 +1661,7 @@ impl Renderer {
                         map_size: [lighting.size[0], lighting.size[1]],
                         level_count: lighting.size[2],
                         base: uploaded_lighting.base,
+                        minimum_brightness: lighting.minimum_brightness.clamp(0.0, 1.0),
                     },
                 );
             }
@@ -3229,6 +3231,7 @@ mod tests {
             size: [1, 1, 1],
             tiles: &tiles,
             tile_size: 32,
+            minimum_brightness: 0.0,
             revision: 1,
             pending_update: None,
         });

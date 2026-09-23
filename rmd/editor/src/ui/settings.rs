@@ -267,6 +267,14 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
     ui.separator();
     ui.text("Lighting");
     ui.checkbox("Show lighting", &mut session.options.show_lighting);
+    ui.set_next_item_width(200.0);
+    ui.slider(
+        "Minimum brightness (%)",
+        0,
+        100,
+        &mut session.options.minimum_light_brightness_percent,
+    );
+    ui.set_item_tooltip("0% keeps original lighting, 100% removes darkness.");
 
     ui.separator();
     ui.text("Feedback");

@@ -208,6 +208,8 @@ pub struct LightingFrame<'a> {
     pub size: [u32; 3],
     pub tiles: &'a [LightTile],
     pub tile_size: u32,
+    /// Minimum displayed light luminance, normalized to 0..=1.
+    pub minimum_brightness: f32,
     pub revision: u64,
     pub pending_update: Option<LightingUpdate>,
 }

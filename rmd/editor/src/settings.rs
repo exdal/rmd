@@ -705,6 +705,7 @@ pub(crate) struct Settings {
     pub show_areas: bool,
     pub show_area_outlines: bool,
     pub show_lighting: bool,
+    pub minimum_light_brightness_percent: u32,
     pub focus_windows_on_hover: bool,
     pub tile_place_flash: bool,
     pub selection_guide_line: bool,
@@ -767,6 +768,7 @@ impl Default for Settings {
             show_areas: false,
             show_area_outlines: true,
             show_lighting: true,
+            minimum_light_brightness_percent: 0,
             focus_windows_on_hover: true,
             tile_place_flash: true,
             selection_guide_line: true,
@@ -804,15 +806,18 @@ impl Settings {
         options.show_areas = self.show_areas;
         options.show_area_outlines = self.show_area_outlines;
         options.show_lighting = self.show_lighting;
+        options.minimum_light_brightness_percent = self.minimum_light_brightness_percent.min(100);
     }
 
     pub fn capture_from(&mut self, options: &FrameOptions) {
         self.show_areas = options.show_areas;
         self.show_area_outlines = options.show_area_outlines;
         self.show_lighting = options.show_lighting;
+        self.minimum_light_brightness_percent = options.minimum_light_brightness_percent.min(100);
     }
 
     fn normalize(&mut self) {
+        self.minimum_light_brightness_percent = self.minimum_light_brightness_percent.min(100);
         if !self.object_tree_search.type_paths && !self.object_tree_search.names {
             self.object_tree_search = ObjectTreeSearchOptions::default();
         }
@@ -985,6 +990,7 @@ mod tests {
                 show_areas: false,
                 show_area_outlines: true,
                 show_lighting: true,
+                minimum_light_brightness_percent: 0,
                 focus_windows_on_hover: true,
                 tile_place_flash: true,
                 selection_guide_line: true,
@@ -1178,6 +1184,7 @@ mod tests {
         assert_eq!(settings.object_tree_search, ObjectTreeSearchOptions::default());
         assert_eq!(settings.object_tree_filter, ObjectTreeFilterOptions::default());
         assert!(settings.optimizations_enabled);
+        assert_eq!(settings.minimum_light_brightness_percent, 0);
     }
 
     #[test]
@@ -1191,6 +1198,14 @@ mod tests {
     }
 
     #[test]
+    fn minimum_light_brightness_is_clamped_when_settings_load() {
+        let stored = toml::from_str("minimum_light_brightness_percent = 250\n").unwrap();
+        let loaded = SettingsLoad::from_file_result(Ok(Some(stored)));
+
+        assert_eq!(loaded.settings.minimum_light_brightness_percent, 100);
+    }
+
+    #[test]
     fn settings_round_trip_through_toml() {
         let mut settings = Settings {
             maximized: true,
@@ -1198,6 +1213,7 @@ mod tests {
             show_areas: true,
             show_area_outlines: false,
             show_lighting: true,
+            minimum_light_brightness_percent: 35,
             focus_windows_on_hover: false,
             tile_place_flash: false,
             selection_guide_line: false,
@@ -1265,6 +1281,7 @@ mod tests {
         assert!(encoded.contains("obj = true"));
         assert!(encoded.contains("custom_enabled = true"));
         assert!(encoded.contains("custom_type_path = \"/atom/movable/lighting\""));
+        assert!(encoded.contains("minimum_light_brightness_percent = 35"));
         assert!(encoded.contains("[[profile_selections]]"));
         assert!(encoded.contains("profile = \"/datum/demir/tgstation/debug\""));
         assert!(encoded.contains("[[forced_profile_selections]]"));
@@ -1282,6 +1299,7 @@ mod tests {
             show_areas: true,
             show_area_outlines: false,
             show_lighting: true,
+            minimum_light_brightness_percent: 35,
             focus_windows_on_hover: true,
             tile_place_flash: false,
             selection_guide_line: false,
@@ -1311,9 +1329,11 @@ mod tests {
         settings.apply_to(&mut options);
         assert!(options.show_areas);
         assert!(!options.show_area_outlines);
+        assert_eq!(options.minimum_light_brightness_percent, 35);
 
         options.show_areas = false;
         options.show_area_outlines = true;
+        options.minimum_light_brightness_percent = 60;
         settings.capture_from(&options);
         assert_eq!(
             settings,
@@ -1324,6 +1344,7 @@ mod tests {
                 selection_guide_line: false,
                 selection_highlight: SelectionHighlight::Tint,
                 object_tree_line_indicators: false,
+                minimum_light_brightness_percent: 60,
                 object_tree_search: ObjectTreeSearchOptions {
                     type_paths: false,
                     names: true,

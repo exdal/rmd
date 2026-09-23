@@ -2763,6 +2763,7 @@ impl Session {
                     size: cache.instances.lighting_size,
                     tiles: &cache.instances.light_tiles,
                     tile_size: self.options.tile_size,
+                    minimum_brightness: self.options.minimum_light_brightness_percent.min(100) as f32 / 100.0,
                     revision: cache.lighting_revision,
                     pending_update: cache.lighting_update,
                 },
@@ -5179,17 +5180,20 @@ pub(crate) mod tests {
                 )
                 .expect("the open map has a map view")
                 .lighting
-                .is_some()
+                .map(|lighting| lighting.minimum_brightness)
         };
 
         assert!(session.options.show_lighting);
-        assert!(view(&session));
+        assert_eq!(view(&session), Some(0.0));
+
+        session.options.minimum_light_brightness_percent = 35;
+        assert_eq!(view(&session), Some(0.35));
 
         session.toggle_lighting();
-        assert!(!view(&session));
+        assert_eq!(view(&session), None);
 
         session.toggle_lighting();
-        assert!(view(&session));
+        assert_eq!(view(&session), Some(0.35));
     }
 
     #[test]
