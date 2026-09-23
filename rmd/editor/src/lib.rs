@@ -1,6 +1,7 @@
 pub mod bake;
 pub mod clipboard;
 pub mod command;
+pub mod conflict;
 pub mod document;
 pub mod environment;
 pub mod error;
