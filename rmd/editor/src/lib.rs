@@ -6,6 +6,7 @@ pub mod environment;
 pub mod error;
 pub mod focus;
 pub mod frame;
+pub mod git;
 pub mod icons;
 pub mod node;
 pub mod process;
