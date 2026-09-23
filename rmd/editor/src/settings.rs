@@ -7,7 +7,7 @@ use std::{
 };
 
 use dear_imgui_rs::{Key, Ui};
-use editor::frame::FrameOptions;
+use editor::{environment::BundledProfile, frame::FrameOptions};
 use render::HighlightStyle;
 use serde::{Deserialize, Serialize};
 
@@ -271,11 +271,13 @@ pub(crate) enum KeybindAction {
     Redo,
     ShowAreas,
     ShowAreaOutlines,
+    ShowLighting,
     LevelUp,
     LevelDown,
     Refit,
     PlaceTool,
     SelectTool,
+    NodeTool,
     BlockSelectTool,
     DeleteTool,
     FillTool,
@@ -297,17 +299,19 @@ pub(crate) enum KeybindAction {
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 30] = [
         Self::Save,
         Self::Undo,
         Self::Redo,
         Self::ShowAreas,
         Self::ShowAreaOutlines,
+        Self::ShowLighting,
         Self::LevelUp,
         Self::LevelDown,
         Self::Refit,
         Self::PlaceTool,
         Self::SelectTool,
+        Self::NodeTool,
         Self::BlockSelectTool,
         Self::DeleteTool,
         Self::FillTool,
@@ -347,11 +351,13 @@ impl KeybindAction {
             Self::Redo => "Redo",
             Self::ShowAreas => "Show areas",
             Self::ShowAreaOutlines => "Show area outlines",
+            Self::ShowLighting => "Show lighting",
             Self::LevelUp => "Z up",
             Self::LevelDown => "Z down",
             Self::Refit => "Refit",
             Self::PlaceTool => "Place tool",
             Self::SelectTool => "Select tool",
+            Self::NodeTool => "Node tool",
             Self::BlockSelectTool => "Block select tool",
             Self::DeleteTool => "Delete tool",
             Self::FillTool => "Fill tool",
@@ -380,11 +386,13 @@ impl KeybindAction {
             Self::Redo => "redo",
             Self::ShowAreas => "show-areas",
             Self::ShowAreaOutlines => "show-area-outlines",
+            Self::ShowLighting => "show-lighting",
             Self::LevelUp => "level-up",
             Self::LevelDown => "level-down",
             Self::Refit => "refit",
             Self::PlaceTool => "place-tool",
             Self::SelectTool => "select-tool",
+            Self::NodeTool => "node-tool",
             Self::BlockSelectTool => "block-select-tool",
             Self::DeleteTool => "delete-tool",
             Self::FillTool => "fill-tool",
@@ -415,11 +423,13 @@ pub(crate) struct KeyBindings {
     redo: KeyBinding,
     show_areas: KeyBinding,
     show_area_outlines: KeyBinding,
+    show_lighting: KeyBinding,
     level_up: KeyBinding,
     level_down: KeyBinding,
     refit: KeyBinding,
     place_tool: KeyBinding,
     select_tool: KeyBinding,
+    node_tool: KeyBinding,
     block_select_tool: KeyBinding,
     delete_tool: KeyBinding,
     fill_tool: KeyBinding,
@@ -448,11 +458,13 @@ impl Default for KeyBindings {
             redo: KeyBinding::with_ctrl(Key::Y),
             show_areas: KeyBinding::new(Key::A),
             show_area_outlines: KeyBinding::new(Key::O),
+            show_lighting: KeyBinding::new(Key::L),
             level_up: KeyBinding::new(Key::PageUp),
             level_down: KeyBinding::new(Key::PageDown),
             refit: KeyBinding::new(Key::Home),
             place_tool: KeyBinding::new(Key::W),
             select_tool: KeyBinding::new(Key::S),
+            node_tool: KeyBinding::new(Key::N),
             block_select_tool: KeyBinding::with_shift(Key::S),
             delete_tool: KeyBinding::new(Key::X),
             fill_tool: KeyBinding::new(Key::Q),
@@ -483,11 +495,13 @@ impl KeyBindings {
             redo: KeyBinding::with_primary_shift(Key::Z),
             show_areas: KeyBinding::with_primary(Key::Key1),
             show_area_outlines: KeyBinding::with_shift(Key::O),
+            show_lighting: KeyBinding::new(Key::L),
             level_up: KeyBinding::with_primary(Key::UpArrow),
             level_down: KeyBinding::with_primary(Key::DownArrow),
             refit: KeyBinding::new(Key::Home),
             place_tool: KeyBinding::new(Key::Key1),
             select_tool: KeyBinding::new(Key::S),
+            node_tool: KeyBinding::new(Key::N),
             block_select_tool: KeyBinding::new(Key::Key3),
             delete_tool: KeyBinding::new(Key::D),
             fill_tool: KeyBinding::new(Key::Key2),
@@ -516,11 +530,13 @@ impl KeyBindings {
             KeybindAction::Redo => self.redo,
             KeybindAction::ShowAreas => self.show_areas,
             KeybindAction::ShowAreaOutlines => self.show_area_outlines,
+            KeybindAction::ShowLighting => self.show_lighting,
             KeybindAction::LevelUp => self.level_up,
             KeybindAction::LevelDown => self.level_down,
             KeybindAction::Refit => self.refit,
             KeybindAction::PlaceTool => self.place_tool,
             KeybindAction::SelectTool => self.select_tool,
+            KeybindAction::NodeTool => self.node_tool,
             KeybindAction::BlockSelectTool => self.block_select_tool,
             KeybindAction::DeleteTool => self.delete_tool,
             KeybindAction::FillTool => self.fill_tool,
@@ -579,11 +595,13 @@ impl KeyBindings {
             KeybindAction::Redo => self.redo = binding,
             KeybindAction::ShowAreas => self.show_areas = binding,
             KeybindAction::ShowAreaOutlines => self.show_area_outlines = binding,
+            KeybindAction::ShowLighting => self.show_lighting = binding,
             KeybindAction::LevelUp => self.level_up = binding,
             KeybindAction::LevelDown => self.level_down = binding,
             KeybindAction::Refit => self.refit = binding,
             KeybindAction::PlaceTool => self.place_tool = binding,
             KeybindAction::SelectTool => self.select_tool = binding,
+            KeybindAction::NodeTool => self.node_tool = binding,
             KeybindAction::BlockSelectTool => self.block_select_tool = binding,
             KeybindAction::DeleteTool => self.delete_tool = binding,
             KeybindAction::FillTool => self.fill_tool = binding,
@@ -668,12 +686,26 @@ pub(crate) struct RecentMap {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ProfileSelection {
+    pub environment: PathBuf,
+    pub profile: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ForcedProfileSelection {
+    pub environment: PathBuf,
+    pub profile: BundledProfile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
     pub maximized: bool,
     pub preferred_editor: String,
     pub show_areas: bool,
     pub show_area_outlines: bool,
+    pub show_lighting: bool,
+    pub minimum_light_brightness_percent: u32,
     pub focus_windows_on_hover: bool,
     pub tile_place_flash: bool,
     pub selection_guide_line: bool,
@@ -690,6 +722,10 @@ pub(crate) struct Settings {
     pub keybindings: KeyBindings,
     pub recent_codebases: Vec<PathBuf>,
     pub recent: Vec<RecentMap>,
+    pub profile_selections: Vec<ProfileSelection>,
+    pub forced_profile_selections: Vec<ForcedProfileSelection>,
+    pub optimizations_enabled: bool,
+    pub bake_enabled: bool,
 }
 
 pub(crate) struct SettingsLoad {
@@ -731,6 +767,8 @@ impl Default for Settings {
             preferred_editor: String::from(DEFAULT_PREFERRED_EDITOR),
             show_areas: false,
             show_area_outlines: true,
+            show_lighting: true,
+            minimum_light_brightness_percent: 0,
             focus_windows_on_hover: true,
             tile_place_flash: true,
             selection_guide_line: true,
@@ -747,6 +785,10 @@ impl Default for Settings {
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
+            profile_selections: Vec::new(),
+            forced_profile_selections: Vec::new(),
+            optimizations_enabled: true,
+            bake_enabled: true,
         }
     }
 }
@@ -763,14 +805,19 @@ impl Settings {
     pub fn apply_to(&self, options: &mut FrameOptions) {
         options.show_areas = self.show_areas;
         options.show_area_outlines = self.show_area_outlines;
+        options.show_lighting = self.show_lighting;
+        options.minimum_light_brightness_percent = self.minimum_light_brightness_percent.min(100);
     }
 
     pub fn capture_from(&mut self, options: &FrameOptions) {
         self.show_areas = options.show_areas;
         self.show_area_outlines = options.show_area_outlines;
+        self.show_lighting = options.show_lighting;
+        self.minimum_light_brightness_percent = options.minimum_light_brightness_percent.min(100);
     }
 
     fn normalize(&mut self) {
+        self.minimum_light_brightness_percent = self.minimum_light_brightness_percent.min(100);
         if !self.object_tree_search.type_paths && !self.object_tree_search.names {
             self.object_tree_search = ObjectTreeSearchOptions::default();
         }
@@ -833,6 +880,46 @@ impl Settings {
         self.recent
             .iter()
             .filter(move |recent| recent.environment.as_deref() == Some(environment.as_path()))
+    }
+
+    pub fn profile_for(&self, environment: &Path) -> Option<&str> {
+        let environment = absolute(environment);
+
+        self.profile_selections
+            .iter()
+            .find(|selection| selection.environment == environment)
+            .map(|selection| selection.profile.as_str())
+    }
+
+    pub fn set_profile_for(&mut self, environment: &Path, profile: Option<&str>) {
+        let environment = absolute(environment);
+        self.profile_selections
+            .retain(|selection| selection.environment != environment);
+        if let Some(profile) = profile {
+            self.profile_selections.push(ProfileSelection {
+                environment,
+                profile: profile.to_owned(),
+            });
+        }
+    }
+
+    pub fn forced_profile_for(&self, environment: &Path) -> Option<BundledProfile> {
+        let environment = absolute(environment);
+
+        self.forced_profile_selections
+            .iter()
+            .find(|selection| selection.environment == environment)
+            .map(|selection| selection.profile)
+    }
+
+    pub fn set_forced_profile_for(&mut self, environment: &Path, profile: Option<BundledProfile>) {
+        let environment = absolute(environment);
+        self.forced_profile_selections
+            .retain(|selection| selection.environment != environment);
+        if let Some(profile) = profile {
+            self.forced_profile_selections
+                .push(ForcedProfileSelection { environment, profile });
+        }
     }
 
     fn try_load() -> Result<Option<Self>, Box<dyn Error>> {
@@ -902,6 +989,8 @@ mod tests {
                 preferred_editor: String::from(DEFAULT_PREFERRED_EDITOR),
                 show_areas: false,
                 show_area_outlines: true,
+                show_lighting: true,
+                minimum_light_brightness_percent: 0,
                 focus_windows_on_hover: true,
                 tile_place_flash: true,
                 selection_guide_line: true,
@@ -918,6 +1007,10 @@ mod tests {
                 keybindings: KeyBindings::default(),
                 recent_codebases: Vec::new(),
                 recent: Vec::new(),
+                profile_selections: Vec::new(),
+                forced_profile_selections: Vec::new(),
+                optimizations_enabled: true,
+                bake_enabled: true,
             }
         );
     }
@@ -986,6 +1079,7 @@ mod tests {
             (KeybindAction::Refit, KeyBinding::new(Key::Home)),
             (KeybindAction::PlaceTool, KeyBinding::new(Key::Key1)),
             (KeybindAction::SelectTool, KeyBinding::new(Key::S)),
+            (KeybindAction::NodeTool, KeyBinding::new(Key::N)),
             (KeybindAction::BlockSelectTool, KeyBinding::new(Key::Key3)),
             (KeybindAction::DeleteTool, KeyBinding::new(Key::D)),
             (KeybindAction::FillTool, KeyBinding::new(Key::Key2)),
@@ -1089,6 +1183,8 @@ mod tests {
         assert!(settings.object_tree_line_indicators);
         assert_eq!(settings.object_tree_search, ObjectTreeSearchOptions::default());
         assert_eq!(settings.object_tree_filter, ObjectTreeFilterOptions::default());
+        assert!(settings.optimizations_enabled);
+        assert_eq!(settings.minimum_light_brightness_percent, 0);
     }
 
     #[test]
@@ -1102,12 +1198,22 @@ mod tests {
     }
 
     #[test]
+    fn minimum_light_brightness_is_clamped_when_settings_load() {
+        let stored = toml::from_str("minimum_light_brightness_percent = 250\n").unwrap();
+        let loaded = SettingsLoad::from_file_result(Ok(Some(stored)));
+
+        assert_eq!(loaded.settings.minimum_light_brightness_percent, 100);
+    }
+
+    #[test]
     fn settings_round_trip_through_toml() {
         let mut settings = Settings {
             maximized: true,
             preferred_editor: String::from("zed {file}:{line}:{column}"),
             show_areas: true,
             show_area_outlines: false,
+            show_lighting: true,
+            minimum_light_brightness_percent: 35,
             focus_windows_on_hover: false,
             tile_place_flash: false,
             selection_guide_line: false,
@@ -1134,6 +1240,16 @@ mod tests {
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
+            profile_selections: vec![ProfileSelection {
+                environment: PathBuf::from("/project/station.dme"),
+                profile: String::from("/datum/demir/tgstation/debug"),
+            }],
+            forced_profile_selections: vec![ForcedProfileSelection {
+                environment: PathBuf::from("/project/colonialmarines.dme"),
+                profile: BundledProfile::Cmss13,
+            }],
+            optimizations_enabled: false,
+            bake_enabled: true,
         };
         settings.keybindings.rebind(
             KeybindAction::ShowAreas,
@@ -1154,6 +1270,7 @@ mod tests {
         assert!(encoded.contains("[keybindings.recent_1]"));
         assert!(encoded.contains("maximized = true"));
         assert!(encoded.contains("preferred_editor = \"zed {file}:{line}:{column}\""));
+        assert!(encoded.contains("optimizations_enabled = false"));
         assert!(encoded.contains("selection_highlight = \"tint\""));
         assert!(encoded.contains("object_tree_line_indicators = false"));
         assert!(encoded.contains("[object_tree_search]"));
@@ -1164,6 +1281,11 @@ mod tests {
         assert!(encoded.contains("obj = true"));
         assert!(encoded.contains("custom_enabled = true"));
         assert!(encoded.contains("custom_type_path = \"/atom/movable/lighting\""));
+        assert!(encoded.contains("minimum_light_brightness_percent = 35"));
+        assert!(encoded.contains("[[profile_selections]]"));
+        assert!(encoded.contains("profile = \"/datum/demir/tgstation/debug\""));
+        assert!(encoded.contains("[[forced_profile_selections]]"));
+        assert!(encoded.contains("profile = \"cmss13\""));
         assert!(encoded.contains("key = \"G\""));
         assert!(encoded.contains("ctrl = true"));
         assert_eq!(toml::from_str::<Settings>(&encoded).unwrap(), settings);
@@ -1176,6 +1298,8 @@ mod tests {
             preferred_editor: String::from("editor {file}"),
             show_areas: true,
             show_area_outlines: false,
+            show_lighting: true,
+            minimum_light_brightness_percent: 35,
             focus_windows_on_hover: true,
             tile_place_flash: false,
             selection_guide_line: false,
@@ -1195,15 +1319,21 @@ mod tests {
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
             recent: Vec::new(),
+            profile_selections: Vec::new(),
+            forced_profile_selections: Vec::new(),
+            optimizations_enabled: true,
+            bake_enabled: true,
         };
         let mut options = FrameOptions::default();
 
         settings.apply_to(&mut options);
         assert!(options.show_areas);
         assert!(!options.show_area_outlines);
+        assert_eq!(options.minimum_light_brightness_percent, 35);
 
         options.show_areas = false;
         options.show_area_outlines = true;
+        options.minimum_light_brightness_percent = 60;
         settings.capture_from(&options);
         assert_eq!(
             settings,
@@ -1214,6 +1344,7 @@ mod tests {
                 selection_guide_line: false,
                 selection_highlight: SelectionHighlight::Tint,
                 object_tree_line_indicators: false,
+                minimum_light_brightness_percent: 60,
                 object_tree_search: ObjectTreeSearchOptions {
                     type_paths: false,
                     names: true,
@@ -1350,6 +1481,46 @@ mod tests {
             settings.recent_codebases,
             vec![absolute(Path::new("a.dme")), absolute(Path::new("b.dme"))]
         );
+    }
+
+    #[test]
+    fn profile_overrides_are_scoped_replaced_and_cleared_per_codebase() {
+        let mut settings = Settings::default();
+        let station = Path::new("station.dme");
+        let other = Path::new("other.dme");
+
+        settings.set_profile_for(station, Some("/datum/demir/tgstation/debug"));
+        settings.set_profile_for(other, Some("/datum/demir/goonstation"));
+        assert_eq!(settings.profile_for(station), Some("/datum/demir/tgstation/debug"));
+        assert_eq!(settings.profile_for(other), Some("/datum/demir/goonstation"));
+
+        settings.set_profile_for(station, Some("/datum/demir/tgstation/lighting"));
+        assert_eq!(settings.profile_for(station), Some("/datum/demir/tgstation/lighting"));
+        assert_eq!(settings.profile_selections.len(), 2);
+
+        settings.set_profile_for(station, None);
+        assert_eq!(settings.profile_for(station), None);
+        assert_eq!(settings.profile_for(other), Some("/datum/demir/goonstation"));
+    }
+
+    #[test]
+    fn forced_profiles_are_scoped_replaced_and_cleared_per_codebase() {
+        let mut settings = Settings::default();
+        let station = Path::new("station.dme");
+        let other = Path::new("other.dme");
+
+        settings.set_forced_profile_for(station, Some(BundledProfile::Tgstation));
+        settings.set_forced_profile_for(other, Some(BundledProfile::Goonstation));
+        assert_eq!(settings.forced_profile_for(station), Some(BundledProfile::Tgstation));
+        assert_eq!(settings.forced_profile_for(other), Some(BundledProfile::Goonstation));
+
+        settings.set_forced_profile_for(station, Some(BundledProfile::Vanderlin));
+        assert_eq!(settings.forced_profile_for(station), Some(BundledProfile::Vanderlin));
+        assert_eq!(settings.forced_profile_selections.len(), 2);
+
+        settings.set_forced_profile_for(station, None);
+        assert_eq!(settings.forced_profile_for(station), None);
+        assert_eq!(settings.forced_profile_for(other), Some(BundledProfile::Goonstation));
     }
 
     #[test]

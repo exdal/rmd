@@ -10,7 +10,7 @@ use core::{
     types::Identifier,
 };
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::{Component, Path, PathBuf},
     rc::Rc,
 };
@@ -25,6 +25,18 @@ use crate::{
 
 pub type PreprocessResult<T> = Result<T, PreprocessError>;
 pub type Spanned<'a> = (Token<'a>, Location);
+
+/// Source text shared by multiple preprocessing configurations in one compilation.
+#[derive(Clone, Default)]
+pub struct SourceCache<'a> {
+    files: HashMap<PathBuf, &'a str>,
+}
+
+impl SourceCache<'_> {
+    pub fn len(&self) -> usize { self.files.len() }
+
+    pub fn is_empty(&self) -> bool { self.files.is_empty() }
+}
 
 #[derive(Clone, Copy)]
 enum Spacing {
@@ -151,6 +163,7 @@ pub struct Preprocessed<'a> {
     pub resource_dirs: Vec<PathBuf>,
     pub defines: DefineTable<'a>,
     pub errors: Vec<PreprocessError>,
+    pub source_cache: SourceCache<'a>,
 }
 
 impl Preprocessed<'_> {
@@ -185,9 +198,12 @@ pub struct Preprocessor<'a> {
     last_file_line: Option<(FileId, usize)>,
     last_if: Location,
 
+    include_core: bool,
     prelude: Vec<PreludeFile>,
+    postlude: Vec<PreludeFile>,
     progress: Option<ProgressHook<'a>>,
     aborted: bool,
+    source_cache: SourceCache<'a>,
 }
 
 impl<'a> Preprocessor<'a> {
@@ -212,14 +228,38 @@ impl<'a> Preprocessor<'a> {
             can_use_directive: true,
             last_file_line: None,
             last_if: Location::default(),
+            include_core: true,
             prelude: prelude_files(),
+            postlude: Vec::new(),
             progress: None,
             aborted: false,
+            source_cache: SourceCache::default(),
         }
+    }
+
+    pub fn with_source_cache(mut self, cache: SourceCache<'a>) -> Self {
+        self.source_cache = cache;
+
+        self
     }
 
     pub fn with_prelude(mut self, files: impl IntoIterator<Item = PreludeFile>) -> Self {
         self.prelude = files.into_iter().collect();
+
+        self
+    }
+
+    pub fn with_postlude(mut self, files: impl IntoIterator<Item = PreludeFile>) -> Self {
+        self.postlude = files.into_iter().collect();
+
+        self
+    }
+
+    pub fn with_baking(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.prelude
+                .insert(0, PreludeFile::Embedded("<demir-bake.dm>", "#define __DEMIR_BAKE__\n"));
+        }
 
         self
     }
@@ -236,11 +276,21 @@ impl<'a> Preprocessor<'a> {
         self
     }
 
+    #[cfg(test)]
+    fn without_core(mut self) -> Self {
+        self.include_core = false;
+
+        self
+    }
+
     pub fn sources(&self) -> &SourceMap<'a> { &self.sources }
 
-    /// `stddef.dm`, then `demir.dm`, then the entry `.dme`
     pub fn run(mut self, entry: impl AsRef<Path>) -> PreprocessResult<Preprocessed<'a>> {
-        for file in std::mem::take(&mut self.prelude) {
+        let mut files = std::mem::take(&mut self.prelude);
+        if self.include_core {
+            files.splice(0..0, core_files());
+        }
+        for file in files {
             match file {
                 PreludeFile::Embedded(name, contents) => self.open_embedded(name, contents),
                 PreludeFile::Disk(path) => self.include_file(&path, Location::default()),
@@ -266,7 +316,17 @@ impl<'a> Preprocessor<'a> {
         }
 
         self.drain();
-        self.flush_layout();
+        self.end_stream();
+
+        for file in std::mem::take(&mut self.postlude) {
+            match file {
+                PreludeFile::Embedded(name, contents) => self.open_embedded(name, contents),
+                PreludeFile::Disk(path) => self.include_file(&path, Location::default()),
+            }
+
+            self.drain();
+            self.end_stream();
+        }
 
         if !self.conditionals.is_empty() {
             let count = self.conditionals.len();
@@ -287,6 +347,7 @@ impl<'a> Preprocessor<'a> {
             resource_dirs: self.resource_dirs,
             defines: self.defines,
             errors: self.errors,
+            source_cache: self.source_cache,
         })
     }
 
@@ -1392,17 +1453,25 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn open(&mut self, path: &Path, location: Location) {
-        let file = match self.sources.load(self.arena, path) {
-            Ok(file) => file,
-            Err(error) => {
-                self.diagnose(
-                    Code::MissingIncludedFile,
-                    location,
-                    format!("could not read \"{}\": {error}", path.display()),
-                );
-                return;
+        let contents = match self.source_cache.files.get(path).copied() {
+            Some(contents) => contents,
+            None => match std::fs::read_to_string(path) {
+                Ok(contents) => {
+                    let contents = self.arena.alloc(contents);
+                    self.source_cache.files.insert(path.to_path_buf(), contents);
+                    contents
+                },
+                Err(error) => {
+                    self.diagnose(
+                        Code::MissingIncludedFile,
+                        location,
+                        format!("could not read \"{}\": {error}", path.display()),
+                    );
+                    return;
+                },
             },
         };
+        let file = self.sources.add_borrowed(path, contents);
 
         if let Some(progress) = self.progress.as_mut()
             && !progress(path)
@@ -1487,19 +1556,26 @@ pub const STDDEF_ENV: &str = "DM_STDDEF";
 
 pub const DEMIR_ENV: &str = "DM_DEMIR";
 
-pub const STDDEF_SOURCE: &str = include_str!("../../../dm/stddef.dm");
-
-pub const DEMIR_SOURCE: &str = include_str!("../../../dm/demir.dm");
+pub use prelude::{CORE_SOURCE, DEMIR_SOURCE, IMGUI_SOURCE, STDDEF_EXT_SOURCE, STDDEF_SOURCE, VERSION_SOURCE};
 
 pub enum PreludeFile {
     Embedded(&'static str, &'static str),
     Disk(PathBuf),
 }
 
+pub fn core_files() -> [PreludeFile; 2] {
+    [
+        PreludeFile::Embedded("<version.dm>", VERSION_SOURCE),
+        PreludeFile::Embedded("<core.dm>", CORE_SOURCE),
+    ]
+}
+
 pub fn prelude_files() -> Vec<PreludeFile> {
     vec![
         env_override(STDDEF_ENV, PreludeFile::Embedded("<stddef.dm>", STDDEF_SOURCE)),
+        PreludeFile::Embedded("<stddef_ext.dm>", STDDEF_EXT_SOURCE),
         env_override(DEMIR_ENV, PreludeFile::Embedded("<demir.dm>", DEMIR_SOURCE)),
+        PreludeFile::Embedded("<imgui.dm>", IMGUI_SOURCE),
     ]
 }
 
@@ -1542,6 +1618,12 @@ pub fn render(tokens: &[Spanned<'_>]) -> String {
 
 #[cfg(test)]
 mod tests {
+    macro_rules! fixture {
+        ($path:literal) => {
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/", $path))
+        };
+    }
+
     use std::{
         fs,
         sync::atomic::{AtomicUsize, Ordering},
@@ -1569,6 +1651,7 @@ mod tests {
 
         let arena = StrArena::new();
         let result = Preprocessor::new(&arena)
+            .without_core()
             .without_prelude()
             .run(dir.join(files[0].0))
             .expect("preprocess");
@@ -1592,19 +1675,18 @@ mod tests {
     fn an_indented_directive_is_not_part_of_the_code_indentation() {
         // The `#endif` lines up with the `#if`, not with anything the code opened.
         assert_eq!(
-            indent_errors("\t#if 0\n\t\t#warn skipped\n\t#endif\n"),
+            indent_errors(fixture!("programs/indented-directive-off.dm")),
             Vec::<String>::new()
         );
         assert_eq!(
-            indent_errors("\t#if 1\n\t\t#warn taken\n\t#endif\n"),
+            indent_errors(fixture!("programs/indented-directive-on.dm")),
             Vec::<String>::new()
         );
     }
 
     #[test]
     fn a_conditional_compiled_out_mid_block_leaves_the_indentation_alone() {
-        let source =
-            "/proc/a()\n\tif(1)\n#if 0\n\t\tskipped()\n\t\t\tdeeper()\n#endif\n\t\tone()\n\t\t\ttwo()\n\tthree()\n";
+        let source = fixture!("programs/conditional-mid-block.dm");
 
         assert_eq!(indent_errors(source), Vec::<String>::new());
     }
@@ -1612,82 +1694,38 @@ mod tests {
     #[test]
     fn a_real_indentation_mistake_is_still_reported_around_directives() {
         // The dedent lands between two open blocks, which no directive explains away.
+        assert_eq!(indent_errors(fixture!("programs/real-indentation-error.dm")).len(), 1);
         assert_eq!(
-            indent_errors("/proc/a()\n\tif(1)\n\t\t\tdeep()\n\t\tmiddle()\n").len(),
-            1
-        );
-        assert_eq!(
-            indent_errors("/proc/a()\n\tif(1)\n#if 0\n\t\tskipped()\n#endif\n\t\t\tdeep()\n\t\tmiddle()\n").len(),
+            indent_errors(fixture!("programs/real-indentation-error-with-directive.dm")).len(),
             1
         );
     }
 
     #[test]
     fn macro_generated_defines_preserve_function_like_spacing() {
-        let rendered = pp(&[(
-            "generated.dm",
-            concat!(
-                "#define DEFINE #define\n",
-                "#define MAKE_FUNCTION(_NAME) DEFINE _NAME(x) x\n",
-                "#define MAKE_OBJECT(_NAME) DEFINE _NAME (x) x\n",
-                "MAKE_FUNCTION(FUNCTION)\n",
-                "FUNCTION\n",
-                "FUNCTION(value)\n",
-                "MAKE_OBJECT(OBJECT)\n",
-                "OBJECT\n",
-            ),
-        )]);
+        let rendered = pp(&[("generated.dm", fixture!("programs/macro-generated-defines.dm"))]);
 
         assert_eq!(rendered, "FUNCTION\nvalue\n( x ) x");
     }
 
     #[test]
     fn concat_pastes_fixed_text_onto_a_parameter() {
-        let rendered = pp(&[(
-            "fixed_concat.dm",
-            "#define UPDATE(X) src.X ## _standing\nUPDATE(body)\n",
-        )]);
+        let rendered = pp(&[("fixed_concat.dm", fixture!("programs/fixed-concat.dm"))]);
 
         assert_eq!(rendered, "src . body_standing");
     }
 
     #[test]
     fn a_bare_generated_function_macro_survives_in_a_nested_path_macro() {
-        let rendered = pp(&[(
-            "nested.dm",
-            concat!(
-                "#define DEFINE #define\n",
-                "#define MAKE(_NAME) /datum/base/##_NAME {} DEFINE _NAME(x) x\n",
-                "#define OTHER(_NAME) /datum/other/##_NAME\n",
-                "#define WRAP(_PATH, _NAME) _PATH(_NAME) {}\n",
-                "MAKE(OFFSETS)\n",
-                "WRAP(OTHER, OFFSETS)\n",
-            ),
-        )]);
+        let rendered = pp(&[("nested.dm", fixture!("programs/nested-path-macro.dm"))]);
 
         assert_eq!(rendered, "/ datum / base / OFFSETS { } / datum / other / OFFSETS { }");
     }
 
     #[test]
     fn a_pasted_identity_macro_captures_a_following_argument_list() {
-        let direct = pp(&[(
-            "identity.dm",
-            concat!(
-                "#define IDENTITY(x) x\n",
-                "#define PATH(_NAME) datum/namespace/##_NAME/##IDENTITY\n",
-                "PATH(CHEM)(var/const/REQUEST = 1)\n",
-            ),
-        )]);
-        let nested = pp(&[(
-            "nested_identity.dm",
-            concat!(
-                "#define IDENTITY(x) x\n",
-                "#define ADD_1(a) datum/namespace/##a/##IDENTITY\n",
-                "#define ADD_2(a, b) datum/namespace/inner/##IDENTITY\n",
-                "#define CREATE(a, b) ADD_1(a)(var/##ADD_2(a, b)(##b = 1))\n",
-                "CREATE(CHEM, REQUEST)\n",
-            ),
-        )]);
+        let direct = pp(&[("identity.dm", fixture!("programs/identity-macro.dm"))]);
+        let nested = pp(&[("nested_identity.dm", fixture!("programs/nested-identity-macro.dm"))]);
 
         assert_eq!(direct, "datum / namespace / CHEM / var / const / REQUEST = 1");
         assert_eq!(
@@ -1698,37 +1736,14 @@ mod tests {
 
     #[test]
     fn recursive_macros_stop_at_the_token_that_already_expanded_them() {
-        let rendered = pp(&[(
-            "recursive.dm",
-            concat!(
-                "#define SELF SELF\n",
-                "#define LEFT RIGHT\n",
-                "#define RIGHT LEFT\n",
-                "SELF\n",
-                "LEFT\n",
-            ),
-        )]);
+        let rendered = pp(&[("recursive.dm", fixture!("programs/recursive-macros.dm"))]);
 
         assert_eq!(rendered, "SELF\nLEFT");
     }
 
     #[test]
     fn a_condition_inside_parentheses_ends_at_its_physical_line() {
-        let rendered = pp(&[(
-            "conditional_list.dm",
-            concat!(
-                "#define CURRENT 1\n",
-                "#define EXPECTED 1\n",
-                "var/list/items = list(\n",
-                "first,\n",
-                "#if CURRENT == EXPECTED\n",
-                "conditional,\n",
-                "#endif\n",
-                "last,\n",
-                ")\n",
-                "var/after = 1\n",
-            ),
-        )]);
+        let rendered = pp(&[("conditional_list.dm", fixture!("programs/conditional-list.dm"))]);
 
         assert_eq!(
             rendered,
@@ -1738,32 +1753,15 @@ mod tests {
 
     #[test]
     fn an_inactive_branch_does_not_close_the_surrounding_expression() {
-        let rendered = pp(&[(
-            "conditional_close.dm",
-            concat!(
-                "var/items = list(first,\\\n",
-                "#ifdef WINTER\n",
-                "coat)\n",
-                "#else\n",
-                ")\n",
-                "#endif\n",
-                "var/after = 1\n",
-            ),
-        )]);
+        let rendered = pp(&[("conditional_close.dm", fixture!("programs/conditional-close.dm"))]);
 
         assert_eq!(rendered, "var / items = list ( first , )\nvar / after = 1");
     }
 
     #[test]
     fn indented_dead_branch_keeps_layout() {
-        let flat = pp(&[(
-            "flat.dm",
-            "/datum/a\n#ifdef NOPE\n#include \"x.dm\"\n#endif\n/datum/b\n\tvar/y = 2\n",
-        )]);
-        let indented = pp(&[(
-            "indented.dm",
-            "/datum/a\n#ifdef NOPE\n\t#include \"x.dm\"\n#endif\n/datum/b\n\tvar/y = 2\n",
-        )]);
+        let flat = pp(&[("flat.dm", fixture!("programs/dead-branch-flat.dm"))]);
+        let indented = pp(&[("indented.dm", fixture!("programs/dead-branch-indented.dm"))]);
 
         assert_eq!(flat, indented);
         assert_eq!(flat, "/ datum / a\n/ datum / b\n> var / y = 2\n<");
@@ -1772,11 +1770,8 @@ mod tests {
     #[test]
     fn an_include_is_indented_against_its_includer() {
         let spliced = pp(&[
-            (
-                "outer.dm",
-                "#define YES\n/datum/a\n\tvar/x = 1\n#ifdef YES\n\t#include \"inner.dm\"\n#endif\n/datum/b\n",
-            ),
-            ("inner.dm", "/datum/inc\n\tvar/z = 3\n"),
+            ("outer.dm", fixture!("programs/include-indented-outer.dm")),
+            ("inner.dm", fixture!("programs/include-indented-inner.dm")),
         ]);
 
         assert_eq!(
@@ -1788,26 +1783,55 @@ mod tests {
     #[test]
     fn an_include_hands_its_open_blocks_back() {
         let trailing = pp(&[
-            ("outer.dm", "/datum/a\n\tvar/x = 1\n#include \"tail.dm\"\n/datum/b\n"),
-            ("tail.dm", "\tvar/deep = 4\n"),
+            ("outer.dm", fixture!("programs/include-open-block-outer.dm")),
+            ("tail.dm", fixture!("programs/include-open-block-tail.dm")),
         ]);
         assert_eq!(trailing, "/ datum / a\n> var / x = 1\nvar / deep = 4\n< / datum / b");
 
         let empty = pp(&[
-            (
-                "block.dm",
-                "/datum/a\n\tvar/x = 1\n\t#include \"nothing.dm\"\n\tvar/y = 2\n",
-            ),
+            ("block.dm", fixture!("programs/include-empty-outer.dm")),
             ("nothing.dm", ""),
         ]);
         assert_eq!(empty, "/ datum / a\n> var / x = 1\nvar / y = 2\n<");
     }
 
     #[test]
+    fn source_text_can_be_shared_between_configuration_passes() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("demir-source-cache-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let entry = dir.join("entry.dm");
+        fs::write(&entry, fixture!("programs/source-cache-first.dm")).expect("first source");
+
+        let arena = StrArena::new();
+        let first = Preprocessor::new(&arena)
+            .without_core()
+            .without_prelude()
+            .run(&entry)
+            .expect("first pass");
+        let cache = first.source_cache.clone();
+        assert_eq!(cache.len(), 1);
+
+        fs::write(&entry, fixture!("programs/source-cache-second.dm")).expect("changed source");
+        let second = Preprocessor::new(&arena)
+            .without_core()
+            .without_prelude()
+            .with_source_cache(cache)
+            .run(&entry)
+            .expect("second pass");
+        fs::remove_dir_all(&dir).expect("remove temp dir");
+
+        assert!(render(&second.tokens).contains("x = 1"));
+        assert!(!render(&second.tokens).contains("x = 2"));
+    }
+
+    #[test]
     fn an_included_file_cannot_leak_a_peeked_eof() {
         let rendered = pp(&[
-            ("outer.dm", "/datum/a\n\tvar/x = 1\n#include \"tail.dm\"\n/datum/b\n"),
-            ("tail.dm", "\tvar/deep = LAST"),
+            ("outer.dm", fixture!("programs/include-eof-outer.dm")),
+            ("tail.dm", fixture!("programs/include-eof-tail.dm")),
         ]);
 
         assert_eq!(rendered, "/ datum / a\n> var / x = 1\nvar / deep = LAST\n< / datum / b");
@@ -1822,13 +1846,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rmd-prelude-{}-{id}", std::process::id()));
         fs::create_dir_all(&dir).expect("temp dir");
 
-        fs::write(dir.join("first.dm"), "#define FROM_FIRST 1\n").expect("write first");
-        fs::write(
-            dir.join("second.dm"),
-            "#if defined(FROM_FIRST)\n#define ORDER 1\n#else\n#define ORDER 0\n#endif\n",
-        )
-        .expect("write second");
-        fs::write(dir.join("entry.dme"), "/datum/a\n\tvar/x = ORDER\n").expect("write entry");
+        fs::write(dir.join("first.dm"), fixture!("programs/prelude-first.dm")).expect("write first");
+        fs::write(dir.join("second.dm"), fixture!("programs/prelude-second.dm")).expect("write second");
+        fs::write(dir.join("entry.dme"), fixture!("programs/prelude-entry.dme")).expect("write entry");
 
         let arena = StrArena::new();
         let result = Preprocessor::new(&arena)
@@ -1846,6 +1866,61 @@ mod tests {
         assert!(rendered.contains("x = 1"), "{rendered}");
     }
 
+    #[test]
+    fn the_postlude_runs_after_the_entry_and_shares_its_defines() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("rmd-postlude-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        fs::write(dir.join("entry.dm"), fixture!("programs/postlude-entry.dm")).expect("write entry");
+
+        let arena = StrArena::new();
+        let result = Preprocessor::new(&arena)
+            .without_prelude()
+            .with_prelude([PreludeFile::Embedded(
+                "<before-entry.dm>",
+                fixture!("programs/postlude-prelude.dm"),
+            )])
+            .with_postlude([PreludeFile::Embedded(
+                "<after-entry.dm>",
+                fixture!("programs/postlude-postlude.dm"),
+            )])
+            .run(dir.join("entry.dm"))
+            .expect("preprocess");
+
+        let rendered = render(&result.tokens);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert!(rendered.contains("/ datum / entry\n> var / value = 3"), "{rendered}");
+        assert!(rendered.contains("/ datum / injected\n> var / value = 7"), "{rendered}");
+    }
+
+    #[test]
+    fn baking_disables_mapping_compatibility_defines() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("rmd-baking-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let entry = dir.join("entry.dm");
+        // tgstation's `__byond_version_compat.dm`, which only `SPACEMAN_DMM` used to skip
+        fs::write(&entry, fixture!("programs/baking-compatibility.dm")).expect("write entry");
+
+        let arena = StrArena::new();
+        let result = Preprocessor::new(&arena)
+            .with_baking(true)
+            .run(&entry)
+            .expect("preprocess");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(result.is_ok(), "{:?}", result.errors);
+        assert!(result.defines.is_defined("__DEMIR_BAKE__"));
+        assert!(!result.defines.is_defined("FASTDMM"));
+        assert!(!result.defines.is_defined("SPACEMAN_DMM"));
+    }
+
     /// `#if 0` around code the lexer would reject must not diagnose the dead branch. Indentation
     /// errors already ride along in `IndentState`; these are the ones that do not.
     #[test]
@@ -1853,14 +1928,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("demir-inactive-{}", std::process::id()));
         fs::create_dir_all(&dir).expect("temp dir");
         let entry = dir.join("entry.dm");
-        fs::write(
-            &entry,
-            "#if 0\n/proc/ignored()\n\tvar/x = `\n\tvar/y = \"unterminated\n#endif\n/proc/valid()\n\treturn 1\n",
-        )
-        .expect("write entry");
+        fs::write(&entry, fixture!("programs/inactive-branch-lex-errors.dm")).expect("write entry");
 
         let arena = StrArena::new();
         let result = Preprocessor::new(&arena)
+            .without_core()
             .without_prelude()
             .run(&entry)
             .expect("preprocess");
@@ -1872,20 +1944,58 @@ mod tests {
         assert!(rendered.contains("valid"), "{rendered}");
     }
 
-    /// Both prelude files are compiled in, so a shipped binary needs no `dm/` beside it.
+    /// Every source is compiled in, so a shipped binary needs no prelude directory beside it.
     #[test]
-    fn the_default_prelude_is_stddef_then_demir_and_needs_no_files() {
-        let names: Vec<_> = prelude_files()
-            .iter()
+    fn the_default_prelude_is_version_core_stddef_ext_demir_then_imgui_and_needs_no_files() {
+        let names: Vec<_> = core_files()
+            .into_iter()
+            .chain(prelude_files())
             .map(|file| match file {
-                PreludeFile::Embedded(name, _) => *name,
+                PreludeFile::Embedded(name, _) => name,
                 PreludeFile::Disk(_) => "disk",
             })
             .collect();
 
-        assert_eq!(names, vec!["<stddef.dm>", "<demir.dm>"]);
+        assert_eq!(
+            names,
+            vec![
+                "<version.dm>",
+                "<core.dm>",
+                "<stddef.dm>",
+                "<stddef_ext.dm>",
+                "<demir.dm>",
+                "<imgui.dm>"
+            ]
+        );
+        assert!(CORE_SOURCE.contains("/datum"));
         assert!(STDDEF_SOURCE.contains("#define NORTH 1"));
-        assert!(DEMIR_SOURCE.contains("#define DM_VERSION"));
+        assert!(STDDEF_EXT_SOURCE.contains("/atom"));
+        assert!(DEMIR_SOURCE.contains("#define __DEMIR__"));
+    }
+
+    #[test]
+    fn disabling_the_optional_prelude_keeps_core() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("rmd-core-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let entry = dir.join("entry.dm");
+        fs::write(&entry, fixture!("programs/without-prelude.dm")).expect("write entry");
+
+        let arena = StrArena::new();
+        let result = Preprocessor::new(&arena)
+            .without_prelude()
+            .run(&entry)
+            .expect("preprocess");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(result.sources.find("<version.dm>").is_some());
+        assert!(result.sources.find("<core.dm>").is_some());
+        assert!(result.sources.find("<stddef.dm>").is_none());
+        assert!(result.sources.find("<demir.dm>").is_none());
+        assert!(result.defines.is_defined("DM_VERSION"));
+        assert!(result.defines.is_defined("DM_BUILD"));
     }
 
     /// The builtins reach the tree without a single file read.
@@ -1894,8 +2004,12 @@ mod tests {
         let arena = StrArena::new();
         let mut preprocessor = Preprocessor::new(&arena);
         preprocessor.prelude = vec![
+            PreludeFile::Embedded("<version.dm>", VERSION_SOURCE),
+            PreludeFile::Embedded("<core.dm>", CORE_SOURCE),
             PreludeFile::Embedded("<stddef.dm>", STDDEF_SOURCE),
+            PreludeFile::Embedded("<stddef_ext.dm>", STDDEF_EXT_SOURCE),
             PreludeFile::Embedded("<demir.dm>", DEMIR_SOURCE),
+            PreludeFile::Embedded("<imgui.dm>", IMGUI_SOURCE),
         ];
 
         for file in std::mem::take(&mut preprocessor.prelude) {

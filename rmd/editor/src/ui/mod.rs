@@ -1,3 +1,5 @@
+mod context_menu;
+mod dm;
 mod inspector;
 mod object_tree;
 mod settings;
@@ -29,11 +31,14 @@ use dear_imgui_rs::{
     WindowKey,
     WindowKeyError,
 };
-use dmm::{Coord, MapFormat, Prefab, Size};
+use dmm::{Coord, MapFormat, Prefab, PrefabInstanceId, Size};
 use editor::{
     command::EditGroupId,
     document::{DocumentId, MapDocument, Selection},
+    environment::BundledProfile,
     icons::materialdesignicons::{
+        ICON_ALERT,
+        ICON_ALERT_CIRCLE,
         ICON_CLOSE_THICK,
         ICON_DOTS_HORIZONTAL,
         ICON_ERASER,
@@ -43,7 +48,9 @@ use editor::{
         ICON_MENU_DOWN,
         ICON_PENCIL,
         ICON_SELECT_DRAG,
+        ICON_VECTOR_POLYLINE,
     },
+    node,
     progress::{Snapshot, Stage},
     tool::{
         BlockSelectionMode,
@@ -58,9 +65,25 @@ use editor::{
 };
 pub(crate) use inspector::TransformMode;
 use objtree::ObjectTree;
-use render::{Camera, InteractionMode, MapViewInteraction, MapViewRect, PickRequest, PlacementFlash, Renderer};
+use render::{
+    Camera,
+    GuideLine,
+    InteractionMode,
+    MapViewInteraction,
+    MapViewRect,
+    PickRequest,
+    PlacementFlash,
+    Renderer,
+};
 
 use self::{
+    context_menu::{
+        Action as MenuAction,
+        NodeContext,
+        POPUP as MAP_MENU_POPUP,
+        Target as MenuTarget,
+        draw_popup as draw_map_menu,
+    },
     inspector::{InspectorPanel, JumpTarget},
     object_tree::ObjectTreePanel,
     settings::SettingsWindow,
@@ -70,7 +93,19 @@ use crate::{
     external_editor::SourceLocation,
     gizmo::{BlockGizmoKind, BlockGizmoTarget, GizmoMapView, GizmoState},
     loader::LoadView,
-    session::{BlockPreviewSource, FillOutcome, LevelChange, PlacementPreview, SelectedTransform, Session},
+    session::{
+        BlockPreviewSource,
+        DiagnosticSeverity,
+        FillOutcome,
+        GuideBadge,
+        LevelChange,
+        LoadReport,
+        MAX_REPORTED_DIAGNOSTICS,
+        NodeOverlay,
+        PlacementPreview,
+        SelectedTransform,
+        Session,
+    },
     settings::{KeyBindings, KeybindAction, KeybindPreset, Settings},
 };
 
@@ -109,6 +144,7 @@ const LOAD_ERROR_MAX_LINES: usize = 10;
 const LOAD_PATH_MAX_CHARS: usize = 60;
 const SAVE_MAP_PATH_WIDTH: f32 = 460.0;
 const SAVE_ERROR_COLOR: [f32; 4] = [1.0, 0.4, 0.4, 1.0];
+const DIAGNOSTIC_WARNING_COLOR: [f32; 4] = [1.0, 0.8, 0.25, 1.0];
 const WELCOME_TITLE_SIZE: f32 = 40.0;
 const WELCOME_CONTENT_WIDTH: f32 = 640.0;
 const WELCOME_MIN_INDENT: f32 = 24.0;
@@ -119,7 +155,6 @@ const BUILD_VERSION_URL: Option<&str> = option_env!("RMD_VERSION_URL");
 const BUILD_COMMIT_URL: Option<&str> = option_env!("RMD_COMMIT_URL");
 const CLOSE_MAP_POPUP: &str = "Unsaved changes##close-map";
 const EXIT_POPUP: &str = "Unsaved changes##exit";
-const BLOCK_SELECTION_POPUP: &str = "Block selection##block-selection";
 const BLOCK_SELECTION_GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 const BLOCK_SELECTION_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const BLOCK_SELECTION_SHADOW: [f32; 4] = [0.0, 0.0, 0.0, 0.85];
@@ -402,11 +437,352 @@ fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
         .build();
 }
 
+fn marching_stripe_offset(ui: &Ui) -> f32 {
+    (ui.time() as f32 * BLOCK_STRIPE_SPEED).rem_euclid(BLOCK_STRIPE_LENGTH * 2.0)
+}
+
+fn draw_marching_border(draw: &DrawListMut<'_>, bounds: OverlayRect, clip: OverlayRect, offset: f32, accent: [f32; 4]) {
+    for (start, end, on_accent) in block_border_segments(bounds, clip, offset) {
+        draw.add_line(start, end, if on_accent { accent } else { BLOCK_SELECTION_WHITE })
+            .thickness(2.0)
+            .build();
+    }
+}
+
+fn draw_marching_edge(draw: &DrawListMut<'_>, from: [f32; 2], to: [f32; 2], offset: f32, accent: [f32; 4]) {
+    let horizontal = (to[0] - from[0]).abs() >= (to[1] - from[1]).abs();
+    let (start, end) = if horizontal { (from[0], to[0]) } else { (from[1], to[1]) };
+    let span = end - start;
+    if !span.is_finite() || span.abs() <= f32::EPSILON {
+        return;
+    }
+
+    let (low, high) = (start.min(end), start.max(end));
+    let mut stripe = ((low - offset) / BLOCK_STRIPE_LENGTH).floor();
+    let mut cut = low;
+    while cut < high {
+        let next = (offset + (stripe + 1.0) * BLOCK_STRIPE_LENGTH).min(high);
+        let next = if next > cut { next } else { high };
+        if stripe.rem_euclid(2.0) != 0.0 {
+            let point = |value: f32| {
+                if horizontal { [value, from[1]] } else { [from[0], value] }
+            };
+            draw.add_line(point(cut), point(next), accent).thickness(2.0).build();
+        }
+        cut = next;
+        stripe += 1.0;
+    }
+}
+
+fn draw_highlights(
+    ui: &Ui, camera: &Controller, viewport: OverlayRect, highlights: &[&editor::bake::Highlight], tile_size: u32,
+) {
+    if highlights.is_empty() {
+        return;
+    }
+
+    let tile_size = tile_size.max(1) as f32;
+    let offset = marching_stripe_offset(ui);
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(viewport.min, viewport.max, || {
+        for highlight in highlights {
+            let accent = [highlight.color[0], highlight.color[1], highlight.color[2], 1.0];
+            let wash = [
+                highlight.color[0],
+                highlight.color[1],
+                highlight.color[2],
+                highlight.fill,
+            ];
+
+            for tile in &highlight.tiles {
+                let left = (tile.position[0] - 1) as f32 * tile_size;
+                let bottom = (tile.position[1] - 1) as f32 * tile_size;
+                let top_left = camera.map_to_screen([left, bottom + tile_size]);
+                let bottom_right = camera.map_to_screen([left + tile_size, bottom]);
+                let min = [viewport.min[0] + top_left[0], viewport.min[1] + top_left[1]];
+                let max = [viewport.min[0] + bottom_right[0], viewport.min[1] + bottom_right[1]];
+                if !min.iter().chain(&max).all(|value| value.is_finite())
+                    || max[0] < viewport.min[0]
+                    || max[1] < viewport.min[1]
+                    || min[0] > viewport.max[0]
+                    || min[1] > viewport.max[1]
+                {
+                    continue;
+                }
+
+                if highlight.fill > 0.0 {
+                    draw.add_rect(min, max, wash).filled(true).build();
+                }
+                if !highlight.outline {
+                    continue;
+                }
+
+                // Screen y grows downward, so the map's north edge is the rectangle's top.
+                for (edge, from, to) in [
+                    (editor::bake::HIGHLIGHT_EDGE_NORTH, min, [max[0], min[1]]),
+                    (editor::bake::HIGHLIGHT_EDGE_SOUTH, [min[0], max[1]], max),
+                    (editor::bake::HIGHLIGHT_EDGE_WEST, min, [min[0], max[1]]),
+                    (editor::bake::HIGHLIGHT_EDGE_EAST, [max[0], min[1]], max),
+                ] {
+                    if tile.edges & edge != 0 {
+                        draw_marching_edge(&draw, from, to, offset, accent);
+                    }
+                }
+            }
+
+            draw_highlight_label(ui, &draw, camera, viewport, highlight, tile_size, accent);
+        }
+    });
+}
+
+fn draw_highlight_label(
+    ui: &Ui, draw: &DrawListMut<'_>, camera: &Controller, viewport: OverlayRect, highlight: &editor::bake::Highlight,
+    tile_size: f32, accent: [f32; 4],
+) {
+    let Some(label) = highlight.label.as_deref() else {
+        return;
+    };
+    let Some(anchor) = highlight
+        .tiles
+        .iter()
+        .max_by_key(|tile| (tile.position[1], -tile.position[0]))
+    else {
+        return;
+    };
+
+    let local = camera.map_to_screen([
+        (anchor.position[0] - 1) as f32 * tile_size,
+        anchor.position[1] as f32 * tile_size,
+    ]);
+
+    if !local.iter().all(|value| value.is_finite()) {
+        return;
+    }
+
+    let text_size = ui.calc_text_size(label);
+    let min = [
+        (viewport.min[0] + local[0]).clamp(viewport.min[0] + 4.0, viewport.max[0] - text_size[0] - 10.0),
+        (viewport.min[1] + local[1] - text_size[1] - 8.0).max(viewport.min[1] + 4.0),
+    ];
+
+    let max = [min[0] + text_size[0] + 6.0, min[1] + text_size[1] + 4.0];
+    draw.add_rect(min, max, OVERLAY_BG).filled(true).build();
+    draw.add_rect(min, max, accent).build();
+    draw.add_text([min[0] + 3.0, min[1] + 2.0], [1.0; 4], label);
+}
+
+fn draw_guide_badges(
+    ui: &Ui, camera: &Controller, viewport_min: [f32; 2], viewport_max: [f32; 2], badges: &[GuideBadge],
+) {
+    if badges.is_empty() {
+        return;
+    }
+
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(viewport_min, viewport_max, || {
+        for badge in badges {
+            let local = camera.map_to_screen(badge.position);
+            if !local.iter().all(|value| value.is_finite()) {
+                continue;
+            }
+            let label = format!("Z{}", badge.z);
+            let text_size = ui.calc_text_size(&label);
+            let min = [
+                viewport_min[0] + local[0] + 6.0,
+                viewport_min[1] + local[1] - text_size[1] - 6.0,
+            ];
+            let max = [min[0] + text_size[0] + 6.0, min[1] + text_size[1] + 4.0];
+            draw.add_rect(min, max, [0.12, 0.08, 0.02, 0.92]).filled(true).build();
+            draw.add_rect(min, max, [1.0, 0.5, 0.0, 1.0]).build();
+            draw.add_text([min[0] + 3.0, min[1] + 2.0], [1.0; 4], label);
+        }
+    });
+}
+
+const NODE_HANDLE_RADIUS: f32 = 6.0;
+const NODE_CONNECTION_TOLERANCE: f32 = 6.0;
+
+#[derive(Default)]
+struct NodeOverlayHit {
+    handle: Option<Coord>,
+    standalone: Option<Coord>,
+    connection: Option<Vec<Coord>>,
+}
+
+enum NodeRightClick<'a> {
+    DeleteStandalone(Coord),
+    DeleteConnection(&'a [Coord]),
+    Menu,
+}
+
+fn node_right_click(tool: Tool, shift: bool, hit: &NodeOverlayHit) -> NodeRightClick<'_> {
+    if tool == Tool::Node && !shift {
+        if let Some(coord) = hit.standalone {
+            return NodeRightClick::DeleteStandalone(coord);
+        }
+
+        if let Some(connection) = hit.connection.as_deref() {
+            return NodeRightClick::DeleteConnection(connection);
+        }
+    }
+
+    NodeRightClick::Menu
+}
+
+struct NodeOverlayView<'a> {
+    camera: &'a Controller,
+    viewport_min: [f32; 2],
+    viewport_max: [f32; 2],
+    tile_size: u32,
+    hovered_tile: Option<Coord>,
+    interactive: bool,
+}
+
+fn point_segment_distance_squared(point: [f32; 2], from: [f32; 2], to: [f32; 2]) -> f32 {
+    let delta = [to[0] - from[0], to[1] - from[1]];
+    let length_squared = delta[0].powi(2) + delta[1].powi(2);
+    if length_squared == 0.0 {
+        return (point[0] - from[0]).powi(2) + (point[1] - from[1]).powi(2);
+    }
+
+    let offset = [point[0] - from[0], point[1] - from[1]];
+    let t = ((offset[0] * delta[0] + offset[1] * delta[1]) / length_squared).clamp(0.0, 1.0);
+    let closest = [from[0] + delta[0] * t, from[1] + delta[1] * t];
+
+    (point[0] - closest[0]).powi(2) + (point[1] - closest[1]).powi(2)
+}
+
+fn closest_node_connection(
+    mouse: [f32; 2], connections: &[Vec<Coord>], center: impl Fn(Coord) -> [f32; 2], tolerance: f32,
+) -> Option<usize> {
+    let mut nearest = None;
+    for (index, connection) in connections.iter().enumerate() {
+        for segment in connection.windows(2) {
+            let distance = point_segment_distance_squared(mouse, center(segment[0]), center(segment[1]));
+            if distance <= tolerance.powi(2)
+                && nearest.is_none_or(|(best, best_index)| distance < best || distance == best && index < best_index)
+            {
+                nearest = Some((distance, index));
+            }
+        }
+    }
+
+    nearest.map(|(_, index)| index)
+}
+
+fn hit_node_overlay(
+    overlay: &NodeOverlay, mouse: [f32; 2], hovered_tile: Option<Coord>, center: impl Fn(Coord) -> [f32; 2],
+    interactive: bool,
+) -> NodeOverlayHit {
+    if !interactive {
+        return NodeOverlayHit::default();
+    }
+
+    let hovered = overlay
+        .nodes
+        .iter()
+        .copied()
+        .filter_map(|coord| {
+            let position = center(coord);
+            let distance = (position[0] - mouse[0]).powi(2) + (position[1] - mouse[1]).powi(2);
+
+            (distance <= (NODE_HANDLE_RADIUS + 3.0).powi(2)).then_some((distance, coord))
+        })
+        .min_by(|left, right| left.0.total_cmp(&right.0))
+        .map(|(_, coord)| coord);
+    let hovered_connection = if let Some(handle) = hovered {
+        let mut attached = overlay
+            .connections
+            .iter()
+            .enumerate()
+            .filter(|(_, connection)| connection.first() == Some(&handle) || connection.last() == Some(&handle));
+        let first = attached.next().map(|(index, _)| index);
+        if attached.next().is_none() { first } else { None }
+    } else {
+        closest_node_connection(mouse, &overlay.connections, &center, NODE_CONNECTION_TOLERANCE).or_else(|| {
+            hovered_tile
+                .and_then(|coord| node::connection_at_tile(&overlay.connections, coord))
+                .and_then(|connection| overlay.connections.iter().position(|current| current == connection))
+        })
+    };
+    let standalone = hovered.filter(|coord| !overlay.segments.iter().any(|(from, to)| from == coord || to == coord));
+
+    NodeOverlayHit {
+        handle: hovered,
+        standalone,
+        connection: hovered_connection.and_then(|index| overlay.connections.get(index).cloned()),
+    }
+}
+
+fn draw_node_overlay(ui: &Ui, overlay: &NodeOverlay, view: NodeOverlayView<'_>) -> NodeOverlayHit {
+    const EDGE: [f32; 4] = [0.15, 0.78, 1.0, 0.9];
+    const CONNECTION_HOVER: [f32; 4] = [1.0, 0.25, 0.2, 1.0];
+    const ROUTE: [f32; 4] = [0.25, 1.0, 0.45, 1.0];
+    const INVALID_ROUTE: [f32; 4] = [1.0, 0.25, 0.2, 1.0];
+    const HANDLE: [f32; 4] = [1.0, 0.58, 0.08, 1.0];
+    const HANDLE_HOVER: [f32; 4] = [1.0, 0.88, 0.45, 1.0];
+    let NodeOverlayView {
+        camera,
+        viewport_min,
+        viewport_max,
+        tile_size,
+        hovered_tile,
+        interactive,
+    } = view;
+
+    let center = |coord: Coord| {
+        let tile_size = tile_size.max(1) as f32;
+        let local = camera.map_to_screen([(coord.x as f32 - 0.5) * tile_size, (coord.y as f32 - 0.5) * tile_size]);
+
+        [viewport_min[0] + local[0], viewport_min[1] + local[1]]
+    };
+    let hit = hit_node_overlay(overlay, ui.io().mouse_pos(), hovered_tile, center, interactive);
+
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(viewport_min, viewport_max, || {
+        for (from, to) in &overlay.segments {
+            draw.add_line(center(*from), center(*to), EDGE).thickness(2.0).build();
+        }
+        if let Some(connection) = hit.connection.as_ref() {
+            for segment in connection.windows(2) {
+                draw.add_line(center(segment[0]), center(segment[1]), CONNECTION_HOVER)
+                    .thickness(4.0)
+                    .build();
+            }
+        }
+        let route_color = if overlay.route_valid { ROUTE } else { INVALID_ROUTE };
+        for segment in overlay.route.windows(2) {
+            draw.add_line(center(segment[0]), center(segment[1]), route_color)
+                .thickness(4.0)
+                .build();
+        }
+        for coord in &overlay.nodes {
+            let color = if hit.standalone == Some(*coord) {
+                CONNECTION_HOVER
+            } else if hit.handle == Some(*coord) {
+                HANDLE_HOVER
+            } else {
+                HANDLE
+            };
+            draw.add_circle(center(*coord), NODE_HANDLE_RADIUS, [0.05, 0.05, 0.05, 0.95])
+                .filled(true)
+                .build();
+            draw.add_circle(center(*coord), NODE_HANDLE_RADIUS - 2.0, color)
+                .filled(true)
+                .build();
+        }
+    });
+
+    hit
+}
+
 pub struct VisibleMapView {
     pub document: DocumentId,
     pub rect: MapViewRect,
     pub camera: Camera,
     pub interaction: MapViewInteraction,
+    pub guide_lines: Vec<GuideLine>,
+    pub connected: Vec<PrefabInstanceId>,
 }
 
 pub struct UiOutput {
@@ -418,7 +794,14 @@ pub struct UiOutput {
     pub pick_new_map_path: bool,
     pub cancel_load: bool,
     pub copy_to_clipboard: Option<String>,
+    pub reload_profile: Option<ProfileReload>,
     pub(crate) keybind_preset: Option<KeybindPreset>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ProfileReload {
+    Select(String),
+    Force(Option<BundledProfile>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -456,10 +839,12 @@ struct MapViewState {
     visible: bool,
     refit: bool,
     focus: bool,
+    hovered_coord: Option<Coord>,
     block_selection_anchor: Option<Coord>,
     rectangle_gesture: Option<RectangleGesture>,
     block_placement: Option<PendingBlockPlacement>,
     paste: Option<PendingPaste>,
+    context: Option<MenuTarget>,
 }
 
 struct MapViewDraw<'a> {
@@ -467,6 +852,8 @@ struct MapViewDraw<'a> {
     index: usize,
     view: &'a mut MapViewState,
     interaction: &'a mut MapViewInteraction,
+    guide_badges: &'a [GuideBadge],
+
     refit_requested: bool,
     keep_open: &'a mut bool,
 }
@@ -480,11 +867,13 @@ impl MapViewState {
             rect: MapViewRect::default(),
             visible: false,
             refit: true,
+            hovered_coord: None,
             focus: false,
             block_selection_anchor: None,
             rectangle_gesture: None,
             block_placement: None,
             paste: None,
+            context: None,
         })
     }
 }
@@ -494,6 +883,7 @@ pub struct UiState {
     map_views: HashMap<DocumentId, MapViewState>,
     central_node: Option<Id>,
     dockspace_root: Option<Id>,
+    dm_ui: dm::DmUi,
     welcome_window: WindowKey,
     inspector: InspectorPanel,
     settings_window: SettingsWindow,
@@ -521,6 +911,7 @@ pub struct UiState {
     open_error: Option<String>,
     load_window: WindowKey,
     load_notice: Option<LoadNotice>,
+    diagnostics: DiagnosticsState,
     load_window_size: [f32; 2],
     keybind_preset_prompt: bool,
 }
@@ -549,6 +940,7 @@ impl UiState {
             map_views: HashMap::new(),
             central_node: None,
             dockspace_root: None,
+            dm_ui: dm::DmUi::default(),
             welcome_window,
             inspector,
             settings_window,
@@ -576,6 +968,7 @@ impl UiState {
             open_error: None,
             load_window,
             load_notice: None,
+            diagnostics: DiagnosticsState::default(),
             load_window_size: [0.0, 0.0],
             keybind_preset_prompt,
         })
@@ -587,7 +980,15 @@ impl UiState {
         self.object_tree.reveal_selected_instance(session);
     }
 
+    pub fn request_mouse_popup(&mut self) { self.dm_ui.request_mouse_popup(); }
+
     pub fn set_load_notice(&mut self, notice: Option<LoadNotice>) { self.load_notice = notice; }
+
+    pub fn set_codebase_report(&mut self, report: LoadReport) { self.diagnostics.set_codebase(report); }
+
+    pub fn set_map_report(&mut self, path: PathBuf, report: LoadReport) { self.diagnostics.set_map(path, report); }
+
+    pub fn set_failed_codebase_report(&mut self, report: LoadReport) { self.diagnostics.set_failed_codebase(report); }
 
     pub fn request_exit(&mut self) { self.exit_requested = true; }
 
@@ -607,6 +1008,7 @@ impl UiState {
         self.placement_flash = None;
         self.placement_stroke = None;
         self.deletion_stroke = None;
+        session.cancel_node_drag();
 
         if let Some(id) = id
             && let Some(view) = self.map_views.get_mut(&id)
@@ -653,6 +1055,7 @@ impl UiState {
                 pick_new_map_path: false,
                 cancel_load: false,
                 copy_to_clipboard: None,
+                reload_profile: None,
                 keybind_preset,
             });
         }
@@ -664,6 +1067,7 @@ impl UiState {
         let mut pick_new_map_path = false;
         let mut toggle_areas = false;
         let mut toggle_area_outlines = false;
+        let mut toggle_lighting = false;
         let mut toggle_tile_grid = false;
         let mut toggle_pixel_grid = false;
         let mut level_delta = 0;
@@ -745,6 +1149,14 @@ impl UiState {
                     true,
                 ) {
                     toggle_area_outlines = true;
+                }
+                if ui.menu_item_enabled_selected_with_shortcut(
+                    "Show lighting",
+                    settings.keybindings.get(KeybindAction::ShowLighting).label(ui),
+                    session.options.show_lighting,
+                    true,
+                ) {
+                    toggle_lighting = true;
                 }
                 if ui.menu_item_enabled_selected_with_shortcut(
                     "Show tile grid",
@@ -830,6 +1242,9 @@ impl UiState {
         if toggle_area_outlines {
             session.toggle_area_outlines();
         }
+        if toggle_lighting {
+            session.toggle_lighting();
+        }
         if toggle_tile_grid {
             settings.show_tile_grid = !settings.show_tile_grid;
         }
@@ -861,8 +1276,8 @@ impl UiState {
         }
         draw_save_dialog(ui, session, &mut self.save_dialog);
 
-        let object_tree_settings_changed = self.settings_window.draw(ui, session, settings);
-        if object_tree_settings_changed {
+        let settings_output = self.settings_window.draw(ui, session, settings, load.is_some());
+        if settings_output.object_tree_changed {
             self.object_tree.invalidate_filter();
         }
         self.show_welcome |= show_welcome;
@@ -898,9 +1313,14 @@ impl UiState {
             &mut self.load_window_size,
             load,
             self.load_notice.as_mut(),
+            &self.diagnostics,
         );
         if load_popup.dismiss {
-            self.load_notice = None;
+            if self.load_notice.is_some() {
+                self.load_notice = None;
+            } else {
+                self.diagnostics.open = None;
+            }
         }
 
         let (map_views, picking) = if session.state.is_empty() {
@@ -908,9 +1328,14 @@ impl UiState {
         } else {
             self.draw_map_views(ui, session, settings, refit)
         };
+
+        self.dm_ui.draw(ui, session, root.raw());
+
         draw_new_level_dialog(ui, session, &mut self.new_level_dialog, &mut self.new_level_type_path);
+
         self.settings_window
             .finish_keybind_capture(ui, &mut settings.keybindings);
+
         let exit = self.draw_exit_confirmation(ui, session);
         self.popup_was_open = ui.is_popup_open_with_flags("", dear_imgui_rs::PopupQueryFlags::ANY_POPUP);
 
@@ -923,6 +1348,7 @@ impl UiState {
             pick_new_map_path,
             cancel_load: load_popup.cancel,
             copy_to_clipboard: load_popup.copy,
+            reload_profile: settings_output.reload_profile,
             keybind_preset: None,
         })
     }
@@ -938,6 +1364,7 @@ impl UiState {
         let central_node = &mut self.central_node;
         let map_filter = &mut self.welcome_map_filter;
         let maps_expanded = &mut self.welcome_maps_expanded;
+        let diagnostics = &mut self.diagnostics;
         let codebase = session.environment_path();
         ui.window(&self.welcome_window).opened(show_welcome).build(|| {
             if settings.focus_windows_on_hover {
@@ -963,6 +1390,29 @@ impl UiState {
             }
 
             ui.dummy([0.0, WELCOME_MIN_INDENT]);
+
+            let warnings = diagnostics.count(DiagnosticSeverity::Warning);
+            if warnings > 0 {
+                let _color = ui.push_style_color(StyleColor::TextLink, DIAGNOSTIC_WARNING_COLOR);
+                let label = if warnings == 1 { "warning" } else { "warnings" };
+                if ui.text_link(format!("{ICON_ALERT} {warnings} {label}##load-warnings")) {
+                    diagnostics.open = Some(DiagnosticSeverity::Warning);
+                }
+            }
+            let errors = diagnostics.count(DiagnosticSeverity::Error);
+            if errors > 0 {
+                if warnings > 0 {
+                    ui.same_line();
+                }
+                let _color = ui.push_style_color(StyleColor::TextLink, SAVE_ERROR_COLOR);
+                let label = if errors == 1 { "error" } else { "errors" };
+                if ui.text_link(format!("{ICON_ALERT_CIRCLE} {errors} {label}##load-errors")) {
+                    diagnostics.open = Some(DiagnosticSeverity::Error);
+                }
+            }
+            if warnings + errors > 0 {
+                ui.dummy([0.0, WELCOME_MIN_INDENT]);
+            }
 
             let _disabled = ui.begin_disabled_with_cond(loading);
             match codebase {
@@ -1102,11 +1552,13 @@ impl UiState {
             let refit = refit_active && session.state.active() == Some(id);
             let mut keep_open = true;
             let active = session.state.active() == Some(id);
+            let guides = if active && settings.selection_guide_line && session.tool() == Tool::Select {
+                session.selected_guides()
+            } else {
+                Default::default()
+            };
             let mut interaction = MapViewInteraction {
                 selected: session.selected_instance_of(id),
-                selection_guide: (active && settings.selection_guide_line)
-                    .then(|| session.selected_offset_guide())
-                    .flatten(),
                 highlight: settings.selection_highlight.style(),
                 mode: interaction_mode(session.tool()),
                 ..Default::default()
@@ -1121,6 +1573,8 @@ impl UiState {
                     index: map_view_index,
                     view: &mut view,
                     interaction: &mut interaction,
+                    guide_badges: &guides.badges,
+
                     refit_requested: refit,
                     keep_open: &mut keep_open,
                 },
@@ -1132,6 +1586,8 @@ impl UiState {
                     rect: view.rect,
                     camera: view.camera.camera,
                     interaction,
+                    guide_lines: guides.lines,
+                    connected: guides.connected,
                 });
             }
             self.map_views.insert(id, view);
@@ -1242,7 +1698,7 @@ impl UiState {
         ui.dummy([0.0, ui.frame_height() * 0.25]);
 
         if ui.button("Save") {
-            session.state.set_active(id);
+            session.set_active_document(id);
             match session.map_path().map(Path::to_path_buf).filter(|_| writable) {
                 Some(path) => {
                     let format = session.map_format().unwrap_or_default();
@@ -1289,6 +1745,8 @@ impl UiState {
             index: map_view_index,
             view,
             interaction,
+            guide_badges,
+
             refit_requested,
             keep_open,
         } = draw;
@@ -1304,10 +1762,12 @@ impl UiState {
             visible: view_visible,
             refit: view_refit,
             focus: view_focus,
+            hovered_coord,
             block_selection_anchor,
             rectangle_gesture,
             block_placement,
             paste,
+            context,
         } = view;
         *view_visible = false;
         *view_refit |= refit_requested;
@@ -1328,7 +1788,7 @@ impl UiState {
                 if session.state.active() != Some(id) {
                     self.cancel_edit_gestures(session, session.state.active());
                 }
-                session.state.set_active(id);
+                session.set_active_document(id);
             }
             let is_active = session.state.active() == Some(id);
             if !is_active && rectangle_gesture.is_some() {
@@ -1408,6 +1868,9 @@ impl UiState {
                 if settings.keybindings.get(KeybindAction::ShowAreaOutlines).is_pressed(ui) {
                     session.toggle_area_outlines();
                 }
+                if settings.keybindings.get(KeybindAction::ShowLighting).is_pressed(ui) {
+                    session.toggle_lighting();
+                }
                 if settings.keybindings.get(KeybindAction::ShowTileGrid).is_pressed(ui) {
                     settings.show_tile_grid = !settings.show_tile_grid;
                 }
@@ -1428,6 +1891,9 @@ impl UiState {
                 }
                 if settings.keybindings.get(KeybindAction::SelectTool).is_pressed(ui) {
                     session.set_tool(Tool::Select);
+                }
+                if settings.keybindings.get(KeybindAction::NodeTool).is_pressed(ui) {
+                    session.set_tool(Tool::Node);
                 }
                 if settings.keybindings.get(KeybindAction::BlockSelectTool).is_pressed(ui) {
                     session.set_tool(Tool::BlockSelect);
@@ -1474,7 +1940,22 @@ impl UiState {
                 );
             }
 
-            configure_tool_interaction(session.tool(), interaction);
+            {
+                // The hover comes from the previous frame, this runs before the cursor is resolved
+                let highlights = session.highlights(id, *hovered_coord);
+                draw_highlights(
+                    ui,
+                    camera,
+                    OverlayRect {
+                        min: viewport_min,
+                        max: viewport_max,
+                    },
+                    &highlights,
+                    session.options.tile_size,
+                );
+            }
+
+            draw_guide_badges(ui, camera, viewport_min, viewport_max, guide_badges);
 
             let in_viewport = |point: [f32; 2]| {
                 let local = [point[0] - viewport_min[0], point[1] - viewport_min[1]];
@@ -1491,6 +1972,29 @@ impl UiState {
 
                 camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
             });
+            *hovered_coord = pointed_coord;
+
+            let node_interactive = hovered && !session.node_dragging();
+            let node_hit = (is_active && session.tool() == Tool::Node)
+                .then(|| session.node_overlay())
+                .flatten()
+                .map(|overlay| {
+                    draw_node_overlay(
+                        ui,
+                        &overlay,
+                        NodeOverlayView {
+                            camera,
+                            viewport_min,
+                            viewport_max,
+                            tile_size: session.options.tile_size,
+                            hovered_tile: pointed_coord,
+                            interactive: node_interactive,
+                        },
+                    )
+                })
+                .unwrap_or_default();
+
+            configure_tool_interaction(session.tool(), interaction);
 
             if hovered
                 && !ui.io().want_text_input()
@@ -1515,6 +2019,7 @@ impl UiState {
                         *block_selection_anchor = None;
                         *block_placement = None;
                         *paste = None;
+                        session.cancel_node_drag();
 
                         if undo {
                             session.undo();
@@ -1576,6 +2081,7 @@ impl UiState {
                         session.select_block(None);
                     }
                     self.gizmo.cancel();
+                    session.cancel_node_drag();
                 }
                 let preview_coord = (tool == Tool::Place)
                     .then(|| self.gizmo.placement_coord().or(pointed_coord))
@@ -1676,6 +2182,11 @@ impl UiState {
                             .draw_placement_direction(ui, session, settings, camera, pointed_coord, gizmo_map_view)
                             .captures_mouse
                     },
+                    Tool::Node => {
+                        self.gizmo.cancel();
+
+                        false
+                    },
                     Tool::BlockSelect => {
                         if let (Some(pending), Some(target), Some(size)) =
                             (*paste, paste_target, session.map().map(|map| map.size))
@@ -1775,6 +2286,77 @@ impl UiState {
                 };
                 let left_clicked = ui.is_mouse_clicked(MouseButton::Left);
                 let left_down = ui.is_mouse_down(MouseButton::Left);
+                let left_double_clicked = ui.is_mouse_double_clicked(MouseButton::Left);
+                let right_clicked = ui.is_mouse_clicked(MouseButton::Right);
+                if right_clicked && let Some(coord) = pointed_coord {
+                    match node_right_click(session.tool(), ui.io().key_shift(), &node_hit) {
+                        NodeRightClick::DeleteStandalone(node) => {
+                            session.delete_standalone_node(node);
+                        },
+                        NodeRightClick::DeleteConnection(connection) => {
+                            session.delete_node_connection(connection);
+                        },
+                        NodeRightClick::Menu => {
+                            let atoms = session
+                                .state
+                                .active_document()
+                                .map(|document| document.instance_ids_at(coord).to_vec())
+                                .unwrap_or_default();
+                            let node = if session.tool() == Tool::Node {
+                                if let Some(standalone) = node_hit.standalone {
+                                    Some(NodeContext::Standalone(standalone))
+                                } else if let Some(connection) = node_hit.connection.clone() {
+                                    Some(NodeContext::Connection(connection))
+                                } else if node_hit.handle.is_some() {
+                                    None
+                                } else {
+                                    cursor.map(|cursor| NodeContext::Pick(coord, cursor_in_map_view(cursor, scale)))
+                                }
+                            } else {
+                                None
+                            };
+                            let block_selected = session.tool() == Tool::BlockSelect
+                                && session
+                                    .selection()
+                                    .is_some_and(|selection| session.selection_mode().includes(selection, coord));
+                            *context = Some(MenuTarget {
+                                document: id,
+                                coord,
+                                atoms,
+                                node,
+                                block_selected,
+                                replace_for: None,
+                                replace_query: String::new(),
+                            });
+                            ui.open_popup(MAP_MENU_POPUP);
+                        },
+                    }
+                }
+
+                if session.tool() == Tool::Node {
+                    if !focused {
+                        session.cancel_node_drag();
+                    }
+                    if left_double_clicked
+                        && let Some(coord) = pointed_coord
+                        && let Some(cursor) = cursor
+                    {
+                        interaction.cursor = Some(cursor_in_map_view(cursor, scale));
+                        request_pick(interaction, PickRequest::NodeSeed(coord));
+                    } else if left_clicked && let Some(coord) = node_hit.handle {
+                        session.start_node_drag(coord);
+                    }
+
+                    if session.node_dragging() {
+                        if left_down {
+                            if let Some(coord) = pointed_coord {
+                                session.update_node_drag(coord);
+                            }
+                        } else {
+                            session.finish_node_drag(hovered && pointed_coord.is_some());
+                        }
+                    }
+                }
                 if left_clicked {
                     self.placement_stroke = None;
                     self.deletion_stroke = None;
@@ -1792,6 +2374,7 @@ impl UiState {
                 if !escape
                     && !gizmo_captures_mouse
                     && !block_controls_capture_mouse
+                    && session.tool() != Tool::Node
                     && let Some(cursor) = cursor
                 {
                     let pixel = [cursor[0].floor() as u32, cursor[1].floor() as u32];
@@ -1826,35 +2409,31 @@ impl UiState {
                             },
                             Tool::Select => {
                                 self.placement_stroke = None;
-                                if left_clicked {
-                                    request_pick(interaction, PickRequest::Cursor);
+                                if left_double_clicked {
+                                    request_pick(interaction, PickRequest::NodeSeed(coord));
+                                } else if left_clicked {
+                                    request_pick(interaction, PickRequest::Select);
                                 }
                             },
+                            Tool::Node => {},
                             Tool::BlockSelect => {
                                 self.placement_stroke = None;
-                                if block_placement.is_none() && paste.is_none() {
-                                    if left_clicked && session.can_edit_at(coord) {
-                                        *block_placement = None;
-                                        let selection = Selection::from_drag(coord, coord);
-                                        *rectangle_gesture = Some(RectangleGesture {
-                                            start: session.selection_mask(),
-                                            z: session.z(),
-                                        });
-                                        if session.try_select_block(SelectionMask {
-                                            bounds: selection,
-                                            mode: self.block_selection_options.drawing_mode(ui.io().key_shift()),
-                                        }) {
-                                            *block_selection_anchor = Some(coord);
-                                        }
-                                    }
-
-                                    if ui.is_mouse_clicked(MouseButton::Right)
-                                        && block_selection_anchor.is_none()
-                                        && session.selection().is_some_and(|selection| {
-                                            session.selection_mode().includes(selection, coord)
-                                        })
-                                    {
-                                        ui.open_popup(BLOCK_SELECTION_POPUP);
+                                if block_placement.is_none()
+                                    && paste.is_none()
+                                    && left_clicked
+                                    && session.can_edit_at(coord)
+                                {
+                                    *block_placement = None;
+                                    let selection = Selection::from_drag(coord, coord);
+                                    *rectangle_gesture = Some(RectangleGesture {
+                                        start: session.selection_mask(),
+                                        z: session.z(),
+                                    });
+                                    if session.try_select_block(SelectionMask {
+                                        bounds: selection,
+                                        mode: self.block_selection_options.drawing_mode(ui.io().key_shift()),
+                                    }) {
+                                        *block_selection_anchor = Some(coord);
                                     }
                                 }
                             },
@@ -1872,7 +2451,7 @@ impl UiState {
                                             .is_some_and(|stroke| stroke.move_to(pixel))
                                 };
                                 if requests_pick {
-                                    request_pick(interaction, PickRequest::Cursor);
+                                    request_pick(interaction, PickRequest::Delete);
                                 }
                             },
                             Tool::Fill => {
@@ -1976,7 +2555,82 @@ impl UiState {
                     );
                 }
 
-                draw_block_selection_menu(ui, session, session.selection_mode());
+                if let Some(target) = context.as_mut()
+                    && let Some(action) = draw_map_menu(ui, session, settings, target)
+                {
+                    if matches!(
+                        action,
+                        MenuAction::Undo
+                            | MenuAction::Redo
+                            | MenuAction::Paste(_)
+                            | MenuAction::Cut(_)
+                            | MenuAction::Delete(_)
+                    ) {
+                        restore_rectangle_gesture(session, id, rectangle_gesture);
+                        self.gizmo.cancel();
+                        self.placement_flash = None;
+                        self.placement_stroke = None;
+                        self.deletion_stroke = None;
+                        *block_selection_anchor = None;
+                        *block_placement = None;
+                        *paste = None;
+                        session.cancel_node_drag();
+                    }
+                    match action {
+                        MenuAction::Undo => {
+                            session.undo();
+                        },
+                        MenuAction::Redo => {
+                            session.redo();
+                        },
+                        MenuAction::Copy(coord) => {
+                            session.copy_tile(coord);
+                        },
+                        MenuAction::Paste(coord) => {
+                            session.paste_clipboard(coord, SelectionRotation::Original);
+                        },
+                        MenuAction::Cut(coord) => {
+                            session.cut_tile(coord);
+                        },
+                        MenuAction::Delete(coord) => {
+                            session.delete_tile(coord);
+                        },
+                        MenuAction::Select(instance) => {
+                            session.select_instance(Some(instance));
+                            self.reveal_selected_instance(session);
+                        },
+                        MenuAction::DeleteAtom(instance) => {
+                            session.delete_context_instance(instance);
+                        },
+                        MenuAction::Reorder(instance, to_top) => {
+                            session.reorder_instance(instance, to_top);
+                        },
+                        MenuAction::Reset(instance) => {
+                            session.reset_instance_to_default(instance);
+                        },
+                        MenuAction::Replace(instance, path) => {
+                            session.replace_context_instance(instance, path);
+                        },
+                        MenuAction::Search(instance, kind) => {
+                            self.inspector.open_similar_instances_for(session, id, instance, kind);
+                        },
+                        MenuAction::Node(node) => match node {
+                            NodeContext::Standalone(coord) => {
+                                session.delete_standalone_node(coord);
+                            },
+                            NodeContext::Connection(connection) => {
+                                session.delete_node_connection(&connection);
+                            },
+                            NodeContext::Pick(coord, pixel) => {
+                                interaction.cursor = Some(pixel);
+                                request_pick(interaction, PickRequest::NodeDelete(coord));
+                            },
+                        },
+                        MenuAction::Mirror(transform) => {
+                            session.transform_selected_block_with_mode(transform, session.selection_mode());
+                        },
+                    }
+                }
                 let paste_action = paste
                     .zip(paste_controls(self.gizmo.block_rotation_open(), paste_target))
                     .and_then(|(pending, target)| {
@@ -2124,7 +2778,7 @@ impl UiState {
         };
 
         self.cancel_edit_gestures(session, session.state.active());
-        session.state.set_active(target.document);
+        session.set_active_document(target.document);
         session.set_level(location.coord.z);
         if let Some(document) = session.state.active_document_mut() {
             document.set_focus(None);
@@ -2262,11 +2916,6 @@ pub enum LoadNotice {
         path: String,
         message: String,
     },
-    Diagnostics {
-        path: String,
-        summary: String,
-        text: String,
-    },
 }
 
 impl LoadNotice {
@@ -2277,13 +2926,80 @@ impl LoadNotice {
             message: message.into(),
         }
     }
+}
 
-    pub fn diagnostics(path: &Path, summary: String, lines: Vec<String>) -> Self {
-        Self::Diagnostics {
-            path: path.display().to_string(),
-            summary,
-            text: lines.join("\n"),
+#[derive(Debug, Default)]
+struct DiagnosticsState {
+    codebase: Option<LoadReport>,
+    maps: HashMap<PathBuf, LoadReport>,
+    failed_codebase: Option<LoadReport>,
+    open: Option<DiagnosticSeverity>,
+}
+
+impl DiagnosticsState {
+    fn set_codebase(&mut self, report: LoadReport) {
+        self.maps.clear();
+        self.failed_codebase = None;
+        self.open = (report.errors > 0).then_some(DiagnosticSeverity::Error);
+        self.codebase = (!report.is_empty()).then_some(report);
+    }
+
+    fn set_map(&mut self, path: PathBuf, report: LoadReport) {
+        if report.errors > 0 {
+            self.open = Some(DiagnosticSeverity::Error);
         }
+        if report.is_empty() {
+            self.maps.remove(&path);
+        } else {
+            self.maps.insert(path, report);
+        }
+        self.close_empty_view();
+    }
+
+    fn set_failed_codebase(&mut self, report: LoadReport) {
+        self.open = Some(DiagnosticSeverity::Error);
+        self.failed_codebase = Some(report);
+    }
+
+    fn close_empty_view(&mut self) {
+        if self.open.is_some_and(|severity| self.count(severity) == 0) {
+            self.open = None;
+        }
+    }
+
+    fn count(&self, severity: DiagnosticSeverity) -> usize {
+        self.codebase.as_ref().map_or(0, |report| report.count(severity))
+            + self.failed_codebase.as_ref().map_or(0, |report| report.count(severity))
+            + self.maps.values().map(|report| report.count(severity)).sum::<usize>()
+    }
+
+    fn text(&self, severity: DiagnosticSeverity) -> (String, usize) {
+        let mut reports = Vec::new();
+        if let Some(report) = &self.codebase {
+            reports.push(report);
+        }
+        if let Some(report) = &self.failed_codebase {
+            reports.push(report);
+        }
+        let mut maps = self.maps.iter().collect::<Vec<_>>();
+        maps.sort_by(|left, right| left.0.cmp(right.0));
+        reports.extend(maps.into_iter().map(|(_, report)| report));
+
+        let mut text = String::new();
+        let mut shown = 0;
+        for report in reports {
+            for line in report.lines(severity) {
+                if shown == MAX_REPORTED_DIAGNOSTICS {
+                    return (text, shown);
+                }
+                if shown > 0 {
+                    text.push('\n');
+                }
+                text.push_str(line);
+                shown += 1;
+            }
+        }
+        (text, shown)
     }
 }
 
@@ -2296,9 +3012,10 @@ struct LoadPopup {
 
 fn draw_load_popup(
     ui: &Ui, window: &WindowKey, measured: &mut [f32; 2], load: Option<&LoadView>, notice: Option<&mut LoadNotice>,
+    diagnostics: &DiagnosticsState,
 ) -> LoadPopup {
     let mut popup = LoadPopup::default();
-    if load.is_none() && notice.is_none() {
+    if load.is_none() && notice.is_none() && diagnostics.open.is_none() {
         return popup;
     }
 
@@ -2315,24 +3032,28 @@ fn draw_load_popup(
     ui.window(window)
         .flags(flags)
         .position(position, Condition::Always)
-        .build(|| draw_load_body(ui, measured, load, notice, &mut popup));
+        .build(|| draw_load_body(ui, measured, load, notice, diagnostics, &mut popup));
 
     popup
 }
 
 fn draw_load_body(
-    ui: &Ui, measured: &mut [f32; 2], load: Option<&LoadView>, notice: Option<&mut LoadNotice>, popup: &mut LoadPopup,
+    ui: &Ui, measured: &mut [f32; 2], load: Option<&LoadView>, notice: Option<&mut LoadNotice>,
+    diagnostics: &DiagnosticsState, popup: &mut LoadPopup,
 ) {
     let escape = ui.is_key_pressed(Key::Escape);
     match (load, notice) {
         (Some(view), _) => {
             draw_load_heading(ui, view.title, &view.path);
             draw_load_progress(ui, &view.snapshot);
-            ui.separator();
 
-            let _disabled = ui.begin_disabled_with_cond(view.cancelling);
-            if ui.button(if view.cancelling { "Cancelling..." } else { "Cancel" }) || escape {
-                popup.cancel = true;
+            if view.cancellable {
+                ui.separator();
+
+                let _disabled = ui.begin_disabled_with_cond(view.cancelling);
+                if ui.button(if view.cancelling { "Cancelling..." } else { "Cancel" }) || escape {
+                    popup.cancel = true;
+                }
             }
         },
 
@@ -2351,23 +3072,36 @@ fn draw_load_body(
             }
         },
 
-        (None, Some(LoadNotice::Diagnostics { path, summary, text })) => {
-            draw_load_heading(ui, "Loaded with diagnostics", path);
-            ui.text(summary);
-            let lines = wrapped_lines(ui, text).clamp(LOAD_TEXT_MIN_LINES, LOAD_DIAGNOSTICS_LINES);
-            draw_selectable_text(ui, "##load-diagnostics", text, lines, None);
-            ui.separator();
+        (None, None) => {
+            if let Some(severity) = diagnostics.open {
+                let (title, label, color) = match severity {
+                    DiagnosticSeverity::Warning => ("Load warnings", "warning", DIAGNOSTIC_WARNING_COLOR),
+                    DiagnosticSeverity::Error => ("Load errors", "error", SAVE_ERROR_COLOR),
+                };
+                ui.text(title);
+                ui.separator();
+                let count = diagnostics.count(severity);
+                let plural = if count == 1 { "" } else { "s" };
+                ui.text(format!("{count} {label}{plural}"));
+                let (mut text, shown) = diagnostics.text(severity);
+                if shown < count {
+                    ui.text_disabled(format!("Showing first {shown} of {count}"));
+                }
 
-            if ui.button("Close") || escape {
-                popup.dismiss = true;
-            }
-            ui.same_line();
-            if ui.button("Copy") {
-                popup.copy = Some(text.clone());
+                let lines = wrapped_lines(ui, &text).clamp(LOAD_TEXT_MIN_LINES, LOAD_DIAGNOSTICS_LINES);
+                draw_selectable_text(ui, "##load-diagnostics", &mut text, lines, Some(color));
+                ui.separator();
+
+                if ui.button("Close") || escape {
+                    popup.dismiss = true;
+                }
+
+                ui.same_line();
+                if ui.button("Copy") {
+                    popup.copy = Some(text);
+                }
             }
         },
-
-        (None, None) => {},
     }
 
     *measured = ui.window_size();
@@ -2661,7 +3395,7 @@ fn draw_selected_pixel_grid(
 }
 
 fn draw_placement_preview(
-    ui: &Ui, session: &Session, camera: &Controller, coord: Coord, viewport_min: [f32; 2], viewport_max: [f32; 2],
+    ui: &Ui, session: &mut Session, camera: &Controller, coord: Coord, viewport_min: [f32; 2], viewport_max: [f32; 2],
 ) {
     let Some(preview) = session.placement_preview() else {
         return;
@@ -2765,21 +3499,9 @@ fn draw_block_outline(
                 .thickness(4.0)
                 .build();
         }
-        let offset = (ui.time() as f32 * BLOCK_STRIPE_SPEED).rem_euclid(BLOCK_STRIPE_LENGTH * 2.0);
+        let offset = marching_stripe_offset(ui);
         for border in std::iter::once(bounds).chain(inner_bounds) {
-            for (start, end, green) in block_border_segments(border, viewport, offset) {
-                draw.add_line(
-                    start,
-                    end,
-                    if green {
-                        BLOCK_SELECTION_GREEN
-                    } else {
-                        BLOCK_SELECTION_WHITE
-                    },
-                )
-                .thickness(2.0)
-                .build();
-            }
+            draw_marching_border(&draw, border, viewport, offset, BLOCK_SELECTION_GREEN);
         }
         let mode_label = match mode {
             BlockSelectionMode::Full => String::from("Full"),
@@ -2908,24 +3630,6 @@ fn block_border_point(bounds: OverlayRect, distance: f32) -> [f32; 2] {
         [bounds.max[0] - (distance - width - height), bounds.max[1]]
     } else {
         [bounds.min[0], bounds.max[1] - (distance - width * 2.0 - height)]
-    }
-}
-
-fn draw_block_selection_menu(ui: &Ui, session: &mut Session, mode: BlockSelectionMode) {
-    let mut requested = None;
-    if let Some(_popup) = ui.begin_popup(BLOCK_SELECTION_POPUP) {
-        for (label, transform) in [
-            ("Mirror horizontally", SelectionTransform::MirrorHorizontal),
-            ("Mirror vertically", SelectionTransform::MirrorVertical),
-        ] {
-            let enabled = session.can_transform_selected_block_with_mode(transform, mode);
-            if ui.menu_item_enabled_selected_no_shortcut(label, false, enabled) {
-                requested = Some(transform);
-            }
-        }
-    }
-    if let Some(transform) = requested {
-        session.transform_selected_block_with_mode(transform, mode);
     }
 }
 
@@ -3178,17 +3882,16 @@ fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewInteraction) 
         (Tool::Delete, InteractionMode::Delete { pick }) => InteractionMode::Delete { pick },
         (Tool::Select, _) => InteractionMode::Select { pick: None },
         (Tool::Delete, _) => InteractionMode::Delete { pick: None },
+        (Tool::Node, _) => InteractionMode::Select { pick: None },
     };
     match tool {
-        Tool::Place | Tool::BlockSelect | Tool::Fill => {
+        Tool::Place | Tool::Node | Tool::BlockSelect | Tool::Fill => {
             interaction.cursor = None;
             interaction.hovered_area = None;
             interaction.selected = None;
-            interaction.selection_guide = None;
         },
         Tool::Delete => {
             interaction.selected = None;
-            interaction.selection_guide = None;
         },
         Tool::Select => {},
     }
@@ -3199,6 +3902,7 @@ fn interaction_mode(tool: Tool) -> InteractionMode {
         Tool::Place | Tool::BlockSelect | Tool::Fill => InteractionMode::Place,
         Tool::Select => InteractionMode::Select { pick: None },
         Tool::Delete => InteractionMode::Delete { pick: None },
+        Tool::Node => InteractionMode::Select { pick: None },
     }
 }
 
@@ -3256,6 +3960,10 @@ fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect, state: 
     draw_tool_button(ui, session, Tool::Place, ICON_PENCIL);
     ui.same_line();
     draw_tool_button(ui, session, Tool::Select, ICON_EYEDROPPER);
+    if session.node_tool_available() {
+        ui.same_line();
+        draw_tool_button(ui, session, Tool::Node, ICON_VECTOR_POLYLINE);
+    }
     ui.same_line();
     draw_block_select_tool_button(ui, session, block_selection_options, keybindings, selection_busy);
     ui.same_line();
@@ -3777,27 +4485,15 @@ fn draw_fill_tool_button(
 
         let mut searched_path = None;
         if let Some(_menu) = ui.begin_menu("Search type paths") {
-            ui.set_next_item_width(320.0);
-            ui.input_text("##custom-fill-boundary-search", custom_fill_search)
-                .build();
-
-            if custom_fill_search.trim().is_empty() {
-                ui.text_disabled("Type a path to search");
-            } else if let Some(tree) = session.tree() {
-                let matches = matching_type_paths(tree, custom_fill_search);
-                if matches.is_empty() {
-                    ui.text_disabled("No matching types");
-                } else {
-                    for path in matches {
-                        let enabled = !custom_fill_boundaries.contains(&path);
-                        if ui.menu_item_enabled_selected_no_shortcut(path.to_string(), false, enabled) {
-                            searched_path = Some(path);
-                        }
-                    }
-                }
-            } else {
-                ui.text_disabled("No environment loaded");
-            }
+            searched_path = draw_type_path_search(
+                ui,
+                session.tree(),
+                custom_fill_search,
+                "##custom-fill-boundary-search",
+                MAX_CUSTOM_FILL_SEARCH_RESULTS,
+                |_, _| true,
+                |path| !custom_fill_boundaries.contains(path),
+            );
         }
 
         if let Some(path) = searched_path {
@@ -3831,6 +4527,28 @@ fn draw_fill_tool_button(
     tools_end
 }
 
+fn draw_type_path_search(
+    ui: &Ui, tree: Option<&ObjectTree>, query: &mut String, input_id: &str, limit: usize,
+    allowed: impl Fn(&ObjectTree, &TreePath) -> bool, enabled: impl Fn(&TreePath) -> bool,
+) -> Option<TreePath> {
+    ui.set_next_item_width(320.0);
+    ui.input_text(input_id, query).hint("Search type paths").build();
+    if query.trim().is_empty() {
+        ui.text_disabled("Type a path to search");
+        return None;
+    }
+    let Some(tree) = tree else {
+        ui.text_disabled("No environment loaded");
+        return None;
+    };
+    let matches = matching_type_paths_up_to_filtered(tree, query, limit, |path| allowed(tree, path));
+    if matches.is_empty() {
+        ui.text_disabled("No matching types");
+    }
+    matches
+        .into_iter()
+        .find(|path| ui.menu_item_enabled_selected_no_shortcut(path.to_string(), false, enabled(path)))
+}
 fn matching_type_paths(tree: &ObjectTree, query: &str) -> Vec<TreePath> {
     matching_type_paths_up_to(tree, query, MAX_CUSTOM_FILL_SEARCH_RESULTS)
 }
@@ -3838,6 +4556,12 @@ fn matching_type_paths(tree: &ObjectTree, query: &str) -> Vec<TreePath> {
 // im not sure why every single fucking icons appear not centered fuck you
 
 fn matching_type_paths_up_to(tree: &ObjectTree, query: &str, limit: usize) -> Vec<TreePath> {
+    matching_type_paths_up_to_filtered(tree, query, limit, |_| true)
+}
+
+fn matching_type_paths_up_to_filtered(
+    tree: &ObjectTree, query: &str, limit: usize, allowed: impl Fn(&TreePath) -> bool,
+) -> Vec<TreePath> {
     let query = query.trim().to_ascii_lowercase();
     if query.is_empty() {
         return Vec::new();
@@ -3845,6 +4569,7 @@ fn matching_type_paths_up_to(tree: &ObjectTree, query: &str, limit: usize) -> Ve
 
     let mut matches = tree
         .iter()
+        .filter(|decl| allowed(&decl.path))
         .filter(|decl| decl.path.to_string().to_ascii_lowercase().contains(&query))
         .map(|decl| decl.path.clone())
         .take(limit)
@@ -3864,6 +4589,10 @@ fn draw_tool_button(ui: &Ui, session: &mut Session, tool: Tool, icon: char) {
     let clicked = ui.button(icon.to_string());
     ui.set_item_tooltip(match tool {
         Tool::BlockSelect => "Block Select",
+        Tool::Node => {
+            "Node tool\nDouble-click a node to select its network; drag a handle to connect.\nRight-click a connection \
+             or isolated node to delete it; Shift+right-click for the map menu."
+        },
         _ => tool.label(),
     });
     if clicked {
@@ -4001,7 +4730,10 @@ mod tests {
     use render::{HighlightStyle, SpriteTexture};
 
     use super::*;
-    use crate::settings::KeyBinding;
+    use crate::{
+        session::tests::{node_map, node_session, node_tile_has_group},
+        settings::KeyBinding,
+    };
 
     fn rectangle_context() -> dear_imgui_rs::Context {
         let mut context = dear_imgui_rs::Context::create();
@@ -4022,11 +4754,11 @@ mod tests {
         id: DocumentId,
         fill_button: Option<[f32; 2]>,
         mode_buttons: Option<([f32; 2], [f32; 2])>,
+        focus_other_window: bool,
     }
 
     impl RectangleUiHarness {
         fn new() -> Self {
-            let context = rectangle_context();
             let mut session = Session::new();
             session
                 .load_environment(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme"))
@@ -4045,6 +4777,12 @@ mod tests {
                 z: 1,
                 errors: vec![],
             });
+
+            Self::with_session(session)
+        }
+
+        fn with_session(session: Session) -> Self {
+            let context = rectangle_context();
             let id = session.state.active().unwrap();
             let mut view = MapViewState::new(id).unwrap();
             view.refit = false;
@@ -4060,6 +4798,7 @@ mod tests {
                 id,
                 fill_button: None,
                 mode_buttons: None,
+                focus_other_window: false,
             };
             for _ in 0..3 {
                 harness.step();
@@ -4069,6 +4808,13 @@ mod tests {
 
         fn step(&mut self) {
             let ui = self.context.frame();
+            if self.focus_other_window {
+                ui.window("other-window")
+                    .position([680.0, 0.0], Condition::Always)
+                    .size([100.0, 100.0], Condition::Always)
+                    .focused(true)
+                    .build(|| ui.text("Other window"));
+            }
             let name = format!("###viewport-{}", self.id.get());
             ui.set_window_pos_by_name(&name, [0.0; 2]);
             ui.set_window_size_by_name(&name, [800.0, 600.0]);
@@ -4081,10 +4827,13 @@ mod tests {
                     index: 0,
                     view: &mut self.view,
                     interaction: &mut MapViewInteraction::default(),
+                    guide_badges: &[],
+
                     refit_requested: false,
                     keep_open: &mut true,
                 },
             );
+
             self.fill_button = None;
             if let Some(selection) = self.session.selection() {
                 let min = [self.view.rect.x as f32, self.view.rect.y as f32];
@@ -4126,6 +4875,7 @@ mod tests {
                     ],
                 ));
             }
+
             assert!(self.context.render_legacy().valid());
         }
 
@@ -4153,6 +4903,82 @@ mod tests {
             self.context.io_mut().add_key_event(key, down);
             self.step();
         }
+    }
+
+    #[test]
+    fn right_click_captures_the_clicked_tile_in_every_tool() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        for tool in [
+            Tool::Select,
+            Tool::Place,
+            Tool::Node,
+            Tool::BlockSelect,
+            Tool::Delete,
+            Tool::Fill,
+        ] {
+            let mut app = RectangleUiHarness::new();
+            app.session.set_tool(tool);
+            let point = app.tile(5, 8);
+            app.context.io_mut().add_mouse_pos_event(point);
+            app.context.io_mut().add_mouse_button_event(MouseButton::Right, false);
+            app.step();
+            app.context.io_mut().add_mouse_button_event(MouseButton::Right, true);
+            app.step();
+            let target = app.view.context.as_ref().expect("right click opens the map menu");
+            assert_eq!(target.coord, Coord::new(5, 8, 1), "{tool:?}");
+            assert_eq!(target.document, app.id);
+            app.context.io_mut().add_mouse_button_event(MouseButton::Right, false);
+            let next_tile = app.tile(6, 8);
+            app.context.io_mut().add_mouse_pos_event(next_tile);
+            app.step();
+            assert_eq!(app.view.context.as_ref().unwrap().coord, Coord::new(5, 8, 1));
+        }
+    }
+
+    #[test]
+    fn node_right_click_deletes_on_the_first_unfocused_click_and_shift_opens_the_menu() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let start = Coord::new(5, 8, 1);
+        let middle = Coord::new(6, 8, 1);
+        let end = Coord::new(7, 8, 1);
+        let map = node_map(
+            20,
+            20,
+            &[
+                (start, vec!["/obj/cable"]),
+                (middle, vec!["/obj/cable"]),
+                (end, vec!["/obj/cable"]),
+            ],
+        );
+        let (mut session, seed) = node_session(map, start);
+        assert!(session.begin_node_edit(seed));
+        let mut app = RectangleUiHarness::with_session(session);
+        app.settings.focus_windows_on_hover = false;
+        app.focus_other_window = true;
+        app.view.focus = false;
+        let point = app.tile(6, 8);
+        app.context.io_mut().add_mouse_pos_event(point);
+        app.context.io_mut().add_mouse_button_event(MouseButton::Right, false);
+        app.step();
+
+        app.context.io_mut().add_mouse_button_event(MouseButton::Right, true);
+        app.step();
+        assert!(!node_tile_has_group(&app.session, middle));
+        assert!(app.view.context.is_none());
+        assert_eq!(app.session.undo_label(), Some("delete node connection"));
+
+        app.context.io_mut().add_mouse_button_event(MouseButton::Right, false);
+        app.step();
+        assert!(app.session.undo());
+        assert!(app.session.begin_node_edit(seed));
+        app.key(Key::ModShift, true);
+        app.context.io_mut().add_mouse_button_event(MouseButton::Right, true);
+        app.step();
+        assert!(node_tile_has_group(&app.session, middle));
+        assert!(matches!(
+            app.view.context.as_ref().and_then(|target| target.node.as_ref()),
+            Some(NodeContext::Connection(connection)) if connection.contains(&middle)
+        ));
     }
 
     fn draw_hover_focus_test_window(ui: &Ui, open_popup: bool) -> (bool, bool) {
@@ -4555,6 +5381,90 @@ mod tests {
         response
     }
 
+    fn object_gizmo_frame(
+        context: &mut dear_imgui_rs::Context, gizmo: &mut GizmoState, session: &mut Session, camera: &Controller,
+        settings: &Settings,
+    ) -> (crate::gizmo::GizmoResponse, usize) {
+        let ui = context.frame();
+        let view = GizmoMapView {
+            min: [0.0; 2],
+            max: [800.0, 600.0],
+            hovered: true,
+        };
+        let response = ui
+            .window("object-gizmo-z-level-test")
+            .position([0.0; 2], Condition::Always)
+            .size([800.0, 600.0], Condition::Always)
+            .build(|| gizmo.draw(ui, session, settings, camera, TransformMode::Pixel, view))
+            .unwrap();
+        let draw_data = context.render_legacy();
+        assert!(draw_data.valid());
+
+        (response, draw_data.total_vtx_count())
+    }
+
+    #[test]
+    fn object_gizmo_only_appears_on_the_selected_instances_z_level() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = rectangle_context();
+        let mut session = Session::new();
+        let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
+        session.load_environment(&examples.join("test.dme")).unwrap();
+        let coord = Coord::new(6, 3, 1);
+        let mut map = dmm::Map::new(Size { x: 8, y: 6, z: 2 });
+        let base = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/turf/open/floor")),
+            Prefab::new(TreePath::parse("/area/station")),
+        ]);
+        let selected_tile = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/obj/structure/table")),
+            Prefab::new(TreePath::parse("/turf/open/floor")),
+            Prefab::new(TreePath::parse("/area/station")),
+        ]);
+        for level in &mut map.grid {
+            for row in level {
+                row.fill(base);
+            }
+        }
+        map.grid[0][2][5] = selected_tile;
+        session.apply_map(crate::loader::LoadedMap {
+            path: PathBuf::from("object-gizmo-z-level-test.dmm"),
+            map,
+            z: 1,
+            errors: vec![],
+        });
+        let selected = session.state.active_document().unwrap().instance_ids_at(coord)[0];
+        session.select_instance(Some(selected));
+
+        let mut camera = Controller::new();
+        camera.resize(800, 600);
+        camera.center_on_tile(coord, session.options.tile_size);
+        let sprite = session.selected_transform().unwrap().sprite;
+        let origin = camera.map_to_screen([sprite.x + sprite.width * 0.5, sprite.y + sprite.height * 0.5]);
+        let mut gizmo = GizmoState::default();
+        let settings = Settings::default();
+        context.io_mut().add_mouse_pos_event(origin);
+        context.io_mut().add_mouse_button_event(MouseButton::Left, true);
+
+        let (visible, visible_vertices) =
+            object_gizmo_frame(&mut context, &mut gizmo, &mut session, &camera, &settings);
+        assert!(visible.captures_mouse);
+        assert!(gizmo.is_interacting());
+
+        assert_eq!(session.change_level(1), LevelChange::Changed);
+        assert_eq!(session.selected_instance(), Some(selected));
+        let (hidden, hidden_vertices) = object_gizmo_frame(&mut context, &mut gizmo, &mut session, &camera, &settings);
+        assert!(!hidden.captures_mouse);
+        assert!(!gizmo.is_interacting());
+        assert!(visible_vertices > hidden_vertices);
+
+        assert_eq!(session.change_level(-1), LevelChange::Changed);
+        let (visible_again, restored_vertices) =
+            object_gizmo_frame(&mut context, &mut gizmo, &mut session, &camera, &settings);
+        assert!(visible_again.captures_mouse);
+        assert!(restored_vertices > hidden_vertices);
+    }
+
     #[test]
     fn resize_and_move_gestures_keep_their_mouse_down_action_when_shift_changes() {
         let _guard = IMGUI_CONTEXT.lock().unwrap();
@@ -4751,21 +5661,67 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_are_joined_into_one_selectable_buffer() {
-        let notice = LoadNotice::diagnostics(
-            Path::new("game/tg.dme"),
-            String::from("2 preprocessor diagnostics"),
-            vec![String::from("first"), String::from("second")],
+    fn diagnostics_accumulate_by_map_and_replace_reopened_map_results() {
+        let mut state = DiagnosticsState::default();
+        state.set_codebase(LoadReport {
+            warnings: 1,
+            warning_lines: vec![String::from("codebase warning")],
+            ..LoadReport::default()
+        });
+        assert_eq!(state.count(DiagnosticSeverity::Warning), 1);
+        assert_eq!(state.open, None);
+
+        state.set_map(
+            PathBuf::from("b.dmm"),
+            LoadReport {
+                errors: 2,
+                error_lines: vec![String::from("b.dmm: first"), String::from("b.dmm: second")],
+                ..LoadReport::default()
+            },
+        );
+        state.set_map(
+            PathBuf::from("a.dmm"),
+            LoadReport {
+                errors: 1,
+                error_lines: vec![String::from("a.dmm: error")],
+                ..LoadReport::default()
+            },
+        );
+        assert_eq!(state.count(DiagnosticSeverity::Error), 3);
+        assert_eq!(state.open, Some(DiagnosticSeverity::Error));
+        assert_eq!(
+            state.text(DiagnosticSeverity::Error).0,
+            "a.dmm: error\nb.dmm: first\nb.dmm: second"
         );
 
-        assert_eq!(
-            notice,
-            LoadNotice::Diagnostics {
-                path: String::from("game/tg.dme"),
-                summary: String::from("2 preprocessor diagnostics"),
-                text: String::from("first\nsecond"),
-            }
+        state.open = None;
+        assert_eq!(state.count(DiagnosticSeverity::Error), 3);
+        state.set_map(PathBuf::from("b.dmm"), LoadReport::default());
+        assert_eq!(state.count(DiagnosticSeverity::Error), 1);
+        assert_eq!(state.open, None);
+    }
+
+    #[test]
+    fn failed_loads_remain_visible_until_a_successful_codebase_replaces_them() {
+        let mut state = DiagnosticsState::default();
+        state.set_failed_codebase(LoadReport::failure(
+            "game.dme",
+            Path::new("game.dme"),
+            "cannot read file",
+        ));
+        assert_eq!(state.count(DiagnosticSeverity::Error), 1);
+        assert_eq!(state.open, Some(DiagnosticSeverity::Error));
+        state.open = None;
+        assert!(
+            state
+                .text(DiagnosticSeverity::Error)
+                .0
+                .contains("game.dme: cannot read file")
         );
+
+        state.set_codebase(LoadReport::default());
+        assert_eq!(state.count(DiagnosticSeverity::Error), 0);
+        assert!(state.failed_codebase.is_none());
     }
 
     #[test]
@@ -4783,6 +5739,7 @@ mod tests {
         assert!(state.pending_fill_warning.is_none());
         assert!(state.new_map_dialog.is_none());
         assert!(state.load_notice.is_none());
+        assert_eq!(state.diagnostics.count(DiagnosticSeverity::Error), 0);
         assert!(state.save_dialog.is_none());
         assert!(!state.exit_requested);
         assert!(state.show_welcome);
@@ -5065,6 +6022,99 @@ mod tests {
     }
 
     #[test]
+    fn node_connection_hit_test_uses_screen_distance_and_includes_adjacent_nodes() {
+        let connections = vec![
+            vec![Coord::new(1, 1, 1), Coord::new(2, 1, 1)],
+            vec![Coord::new(1, 2, 1), Coord::new(2, 2, 1), Coord::new(3, 2, 1)],
+            vec![Coord::new(4, 1, 1), Coord::new(4, 2, 1), Coord::new(4, 3, 1)],
+        ];
+        let center = |coord: Coord| [coord.x as f32 * 10.0, coord.y as f32 * 10.0];
+
+        assert_eq!(
+            closest_node_connection([20.0, 24.0], &connections, center, 6.0),
+            Some(1)
+        );
+        assert_eq!(
+            closest_node_connection([36.0, 20.0], &connections, center, 6.0),
+            Some(2)
+        );
+        assert_eq!(
+            closest_node_connection([15.0, 10.0], &connections, center, 6.0),
+            Some(0)
+        );
+        assert_eq!(closest_node_connection([20.0, 27.0], &connections, center, 6.0), None);
+    }
+
+    #[test]
+    fn node_overlay_hit_distinguishes_segments_endpoints_junctions_and_standalone_nodes() {
+        let left = Coord::new(1, 1, 1);
+        let junction = Coord::new(2, 1, 1);
+        let right = Coord::new(3, 1, 1);
+        let upper = Coord::new(2, 2, 1);
+        let standalone = Coord::new(5, 5, 1);
+        let connection = vec![left, junction];
+        let overlay = NodeOverlay {
+            nodes: vec![left, junction, right, upper, standalone],
+            segments: vec![(left, junction), (junction, right), (junction, upper)],
+            connections: vec![connection.clone(), vec![junction, right], vec![junction, upper]],
+            route: Vec::new(),
+            route_valid: true,
+        };
+        let center = |coord: Coord| [coord.x as f32 * 32.0, coord.y as f32 * 32.0];
+
+        let segment = hit_node_overlay(&overlay, [48.0, 32.0], Some(left), center, true);
+        assert_eq!(segment.handle, None);
+        assert_eq!(segment.connection, Some(connection.clone()));
+
+        let endpoint = hit_node_overlay(&overlay, center(left), Some(left), center, true);
+        assert_eq!(endpoint.handle, Some(left));
+        assert_eq!(endpoint.connection, Some(connection));
+
+        let branch = hit_node_overlay(&overlay, center(junction), Some(junction), center, true);
+        assert_eq!(branch.handle, Some(junction));
+        assert!(branch.connection.is_none());
+
+        let isolated = hit_node_overlay(&overlay, center(standalone), Some(standalone), center, true);
+        assert_eq!(isolated.standalone, Some(standalone));
+        assert!(isolated.connection.is_none());
+    }
+
+    #[test]
+    fn node_right_click_deletes_known_geometry_unless_shift_opens_the_menu() {
+        let node = Coord::new(2, 3, 1);
+        let connection = vec![node, Coord::new(3, 3, 1)];
+        let connected = NodeOverlayHit {
+            connection: Some(connection.clone()),
+            ..Default::default()
+        };
+        let standalone = NodeOverlayHit {
+            standalone: Some(node),
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            node_right_click(Tool::Node, false, &connected),
+            NodeRightClick::DeleteConnection(target) if target == connection
+        ));
+        assert!(matches!(
+            node_right_click(Tool::Node, false, &standalone),
+            NodeRightClick::DeleteStandalone(target) if target == node
+        ));
+        assert!(matches!(
+            node_right_click(Tool::Node, true, &connected),
+            NodeRightClick::Menu
+        ));
+        assert!(matches!(
+            node_right_click(Tool::Node, false, &NodeOverlayHit::default()),
+            NodeRightClick::Menu
+        ));
+        assert!(matches!(
+            node_right_click(Tool::Select, false, &connected),
+            NodeRightClick::Menu
+        ));
+    }
+
+    #[test]
     fn placement_strokes_process_each_tile_once_until_a_new_stroke_begins() {
         let prefab = Prefab::new(TreePath::parse("/obj/table"));
         let first = Coord::new(2, 3, 1);
@@ -5183,14 +6233,20 @@ mod tests {
             bindings.get(KeybindAction::Paste),
             KeyBinding::with_ctrl(dear_imgui_rs::Key::V)
         );
+        assert_eq!(
+            bindings.get(KeybindAction::NodeTool),
+            KeyBinding::new(dear_imgui_rs::Key::N)
+        );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 28);
+        assert_eq!(KeybindAction::ALL.len(), 30);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Redo));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Copy));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Paste));
+        assert!(KeybindAction::ALL.contains(&KeybindAction::NodeTool));
+        assert!(KeybindAction::ALL.contains(&KeybindAction::ShowLighting));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Recent1));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Recent0));
     }
@@ -5328,11 +6384,10 @@ mod tests {
             cursor: Some([10, 20]),
             hovered_area: Some(owner),
             selected: Some(owner),
-            selection_guide: None,
             placement_flash: Some(PlacementFlash { owner, strength: 0.5 }),
             highlight: HighlightStyle::Tint,
             mode: InteractionMode::Select {
-                pick: Some(PickRequest::Cursor),
+                pick: Some(PickRequest::Select),
             },
         };
         let mut selected = interaction;
@@ -5346,7 +6401,6 @@ mod tests {
             delete,
             MapViewInteraction {
                 selected: None,
-                selection_guide: None,
                 mode: InteractionMode::Delete { pick: None },
                 ..interaction
             }
@@ -5359,6 +6413,33 @@ mod tests {
                 placement_flash: interaction.placement_flash,
                 highlight: interaction.highlight,
                 ..Default::default()
+            }
+        );
+
+        let mut node = interaction;
+        configure_tool_interaction(Tool::Node, &mut node);
+        assert_eq!(
+            node,
+            MapViewInteraction {
+                placement_flash: interaction.placement_flash,
+                highlight: interaction.highlight,
+                mode: InteractionMode::Select { pick: None },
+                ..Default::default()
+            }
+        );
+        let coord = Coord::new(3, 4, 1);
+        request_pick(&mut node, PickRequest::NodeSeed(coord));
+        assert_eq!(
+            node.mode,
+            InteractionMode::Select {
+                pick: Some(PickRequest::NodeSeed(coord)),
+            }
+        );
+        request_pick(&mut node, PickRequest::NodeDelete(coord));
+        assert_eq!(
+            node.mode,
+            InteractionMode::Select {
+                pick: Some(PickRequest::NodeDelete(coord)),
             }
         );
 

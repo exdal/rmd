@@ -1,7 +1,8 @@
 use core::{
+    interner::SymbolMap,
     location::Location,
     path::TreePath,
-    types::{Identifier, Value, VarModifiers},
+    types::{Identifier, IrNodeId, ProcId, ProcKind, ProcParam, TypeSpec, Value, VarModifiers},
 };
 use std::collections::{HashMap, HashSet};
 
@@ -22,6 +23,11 @@ pub struct Roots {
     pub mob: Option<TypeId>,
     pub turf: Option<TypeId>,
     pub area: Option<TypeId>,
+    pub world: Option<TypeId>,
+    pub list: Option<TypeId>,
+    pub alist: Option<TypeId>,
+    pub image: Option<TypeId>,
+    pub mutable_appearance: Option<TypeId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -39,8 +45,8 @@ pub struct TypeDecl {
     /// `parent_type = /some/path`
     pub parent_type: Option<TreePath>,
     pub children: Vec<TypeId>,
-    pub vars: HashMap<Identifier, VarDecl>,
-    pub procs: HashMap<Identifier, ProcDecl>,
+    pub vars: SymbolMap<VarDecl>,
+    pub procs: SymbolMap<ProcDecl>,
     pub location: Location,
 }
 
@@ -51,14 +57,19 @@ pub struct VarDecl {
     pub declared_type: Option<TreePath>,
     pub modifiers: VarModifiers,
     pub value: Value,
+    pub initializer: Option<ProcId>,
+    pub declared: bool,
     pub location: Location,
 }
 
 #[derive(Debug, Clone)]
 pub struct ProcDecl {
     pub name: Identifier,
-    pub params: Vec<Identifier>,
-    pub is_verb: bool,
+    pub params: Vec<ProcParam<IrNodeId>>,
+    pub body: Option<ProcId>,
+    pub kind: ProcKind,
+    pub variadic: bool,
+    pub return_type: Option<TypeSpec>,
     pub location: Location,
 }
 
@@ -74,8 +85,8 @@ impl ObjectTree {
             parent: None,
             parent_type: None,
             children: Vec::new(),
-            vars: HashMap::new(),
-            procs: HashMap::new(),
+            vars: SymbolMap::default(),
+            procs: SymbolMap::default(),
             location: Location::default(),
         };
 
@@ -125,8 +136,8 @@ impl ObjectTree {
                         parent: Some(parent),
                         parent_type: None,
                         children: Vec::new(),
-                        vars: HashMap::new(),
-                        procs: HashMap::new(),
+                        vars: SymbolMap::default(),
+                        procs: SymbolMap::default(),
                         location,
                     });
 
@@ -152,6 +163,11 @@ impl ObjectTree {
             [mob] if mob.as_str() == "mob" => &mut self.roots.mob,
             [turf] if turf.as_str() == "turf" => &mut self.roots.turf,
             [area] if area.as_str() == "area" => &mut self.roots.area,
+            [world] if world.as_str() == "world" => &mut self.roots.world,
+            [list] if list.as_str() == "list" => &mut self.roots.list,
+            [alist] if alist.as_str() == "alist" => &mut self.roots.alist,
+            [image] if image.as_str() == "image" => &mut self.roots.image,
+            [appearance] if appearance.as_str() == "mutable_appearance" => &mut self.roots.mutable_appearance,
             [atom, movable] if atom.as_str() == "atom" && movable.as_str() == "movable" => &mut self.roots.movable,
             _ => return,
         };
@@ -161,11 +177,11 @@ impl ObjectTree {
 
     /// `parent_type = /some/path`
     pub fn resolve_parent_types(&mut self) {
-        let overrides: Vec<(TypeId, TreePath)> = self
+        let overrides = self
             .types
             .iter()
             .filter_map(|decl| decl.parent_type.clone().map(|path| (decl.id, path)))
-            .collect();
+            .collect::<Vec<(TypeId, TreePath)>>();
 
         for (id, path) in overrides {
             let Some(new_parent) = self.by_path.get(&path.segments).copied() else {
@@ -208,8 +224,12 @@ impl ObjectTree {
 
     pub fn var(&self, id: TypeId, name: &Identifier) -> Option<&VarDecl> { self.get(id)?.vars.get(name) }
 
+    pub fn var_declaration(&self, id: TypeId, name: &Identifier) -> Option<(&TypeDecl, &VarDecl)> {
+        self.ancestors(id).find_map(|decl| Some((decl, decl.vars.get(name)?)))
+    }
+
     pub fn var_inherited(&self, id: TypeId, name: &Identifier) -> Option<&VarDecl> {
-        self.ancestors(id).find_map(|decl| decl.vars.get(name))
+        self.var_declaration(id, name).map(|(_, variable)| variable)
     }
 
     pub fn proc_inherited(&self, id: TypeId, name: &Identifier) -> Option<&ProcDecl> {

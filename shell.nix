@@ -2,10 +2,9 @@
   pkgs ? import <nixpkgs> { overlays = [ (import <rust-overlay>) ]; }
 }:
 let
-  toolchain = pkgs.rust-bin.nightly.latest.default.override {
-    targets = [ "x86_64-unknown-linux-gnu" ];
-    extensions = [ "rust-src" "rust-analyzer" "clippy" ];
-  };
+  toolchain = (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override (previous: {
+    extensions = previous.extensions ++ [ "rust-src" "rust-analyzer" ];
+  });
 in
 pkgs.mkShell {
   nativeBuildInputs = [
@@ -22,6 +21,10 @@ pkgs.mkShell {
     pkgs.shader-slang
     pkgs.llvmPackages.libclang
     pkgs.zenity
+  ];
+
+  buildInputs = [
+    pkgs.python315
   ];
 
   SLANG_INCLUDE_DIR = "${pkgs.shader-slang.dev}/include";

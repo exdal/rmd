@@ -990,6 +990,12 @@ pub fn tokenize(buffer_view: &str) -> (Vec<(Token<'_>, Location)>, Vec<LexError>
 
 #[cfg(test)]
 mod tests {
+    macro_rules! fixture {
+        ($path:literal) => {
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/", $path))
+        };
+    }
+
     use crate::{
         Lexer,
         error::LexErrorKind,
@@ -1085,7 +1091,7 @@ mod tests {
 
     #[test]
     fn tracks_indentation() {
-        let source = "/obj/foo\n\tname = \"foo\"\n\t\ticon = 'a.dmi'\n/obj/bar\n";
+        let source = fixture!("programs/tracks_indentation.dm");
         let out = tokens(source);
 
         assert!(out.contains(&Token::Indent));
@@ -1200,7 +1206,9 @@ mod tests {
 
     #[test]
     fn line_leading_block_comments_leave_indentation_alone() {
-        let out = tokens("/obj/foo\n\tname = \"a\"\n/*\n\tstray\n*/\n\tdesc = \"b\"\n");
+        let out = tokens(fixture!(
+            "programs/line_leading_block_comments_leave_indentation_alone.dm"
+        ));
 
         assert_eq!(out.iter().filter(|t| **t == Token::Indent).count(), 1);
         assert_eq!(out.iter().filter(|t| **t == Token::Dedent).count(), 1);

@@ -1,0 +1,5 @@
+#define SELF SELF
+#define LEFT RIGHT
+#define RIGHT LEFT
+SELF
+LEFT

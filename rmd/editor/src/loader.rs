@@ -11,7 +11,7 @@ use std::{
 use dmm::{Map, Prefab};
 use editor::{
     Environment,
-    environment::LoadDiagnostics,
+    environment::{BakeOptions, LoadDiagnostics},
     error::LoadError,
     progress::{Progress, Snapshot, Stage},
     visual,
@@ -19,25 +19,32 @@ use editor::{
 use objtree::TypeId;
 use render::texture::TextureCatalog;
 
-use crate::session::{PrefabThumbnail, build_textures, discover_maps, prefab_thumbnail_for, validate_level};
+use crate::session::{
+    PrefabThumbnail,
+    build_textures,
+    discover_maps,
+    prefab_thumbnail_for,
+    prefab_thumbnail_or_missing,
+    validate_level,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Job {
-    Codebase(PathBuf),
+    Codebase { path: PathBuf, bake: BakeOptions },
     Map { path: PathBuf, z: u32 },
 }
 
 impl Job {
     pub fn path(&self) -> &Path {
         match self {
-            Self::Codebase(path) | Self::Map { path, .. } => path,
+            Self::Codebase { path, .. } | Self::Map { path, .. } => path,
         }
     }
 
     /// Heading for the progress popup.
     pub const fn title(&self) -> &'static str {
         match self {
-            Self::Codebase(_) => "Opening codebase",
+            Self::Codebase { .. } => "Opening codebase",
             Self::Map { .. } => "Opening map",
         }
     }
@@ -81,6 +88,7 @@ pub struct LoadView {
     pub path: String,
     pub snapshot: Snapshot,
     pub cancelling: bool,
+    pub cancellable: bool,
 }
 
 impl Loader {
@@ -138,13 +146,14 @@ impl Loader {
             path: active.job.path().display().to_string(),
             snapshot: active.progress.snapshot(),
             cancelling: active.progress.is_cancelled(),
+            cancellable: true,
         })
     }
 }
 
 fn run(job: &Job, progress: &Progress) -> Outcome {
     let result = match job {
-        Job::Codebase(path) => load_codebase(path, progress).map(|loaded| Outcome::Codebase {
+        Job::Codebase { path, bake } => load_codebase(path, bake, progress).map(|loaded| Outcome::Codebase {
             path: path.clone(),
             loaded: Box::new(loaded),
         }),
@@ -162,8 +171,8 @@ fn run(job: &Job, progress: &Progress) -> Outcome {
     }
 }
 
-pub fn load_codebase(path: &Path, progress: &Progress) -> Result<LoadedCodebase, String> {
-    let (environment, diagnostics) = match Environment::load_with_progress(path, progress) {
+pub fn load_codebase(path: &Path, bake: &BakeOptions, progress: &Progress) -> Result<LoadedCodebase, String> {
+    let (environment, diagnostics) = match Environment::load_with(path, bake.clone(), progress) {
         Ok(loaded) => loaded,
         Err(LoadError::Cancelled) => return Err(String::from("cancelled")),
         Err(error) => return Err(error.to_string()),
@@ -216,6 +225,8 @@ fn build_thumbnails(
     environment: &Environment, textures: &TextureCatalog, progress: &Progress,
 ) -> HashMap<TypeId, Option<PrefabThumbnail>> {
     let mut thumbnails = HashMap::new();
+    let mut standalone = editor::bake::Standalone::default();
+    let mut derived = 0usize;
 
     progress.enter(Stage::Thumbnails, environment.tree.len());
     for declaration in environment.tree.iter() {
@@ -226,17 +237,53 @@ fn build_thumbnails(
 
         let prefab = Prefab::new(declaration.path.clone());
         let appearance = visual::resolve_id(&environment.tree, declaration.id, &prefab);
-        thumbnails.insert(declaration.id, prefab_thumbnail_for(textures, environment, &appearance));
+        let thumbnail = match prefab_thumbnail_for(textures, environment, &appearance) {
+            Some(thumbnail) => Some(thumbnail),
+            None => {
+                let standalone = standalone_thumbnail(
+                    &mut standalone,
+                    environment,
+                    textures,
+                    declaration.id,
+                    &prefab,
+                    &appearance,
+                );
+                derived += usize::from(standalone.is_some());
+
+                standalone.or_else(|| prefab_thumbnail_or_missing(textures, environment, &appearance))
+            },
+        };
+        thumbnails.insert(declaration.id, thumbnail);
     }
 
+    log::info!("{derived} thumbnails derived by baking");
+
     thumbnails
+}
+
+fn standalone_thumbnail(
+    standalone: &mut editor::bake::Standalone, environment: &Environment, textures: &TextureCatalog, id: TypeId,
+    prefab: &Prefab, appearance: &visual::Appearance,
+) -> Option<PrefabThumbnail> {
+    let tree = &environment.tree;
+    if appearance.icon.is_none() || !tree.roots().atom.is_some_and(|atom| tree.is_subtype_of(id, atom)) {
+        return None;
+    }
+
+    let delta = standalone.appearance(environment, prefab)?;
+    let appearance = visual::resolve_delta(tree, id, prefab, &delta);
+
+    prefab_thumbnail_for(textures, environment, &appearance)
 }
 
 #[cfg(test)]
 mod tests {
     use std::{path::PathBuf, time::Instant};
 
-    use editor::progress::{Progress, Stage};
+    use editor::{
+        environment::BakeOptions,
+        progress::{Progress, Stage},
+    };
 
     use super::{Job, Loader, Outcome, load_codebase, load_map};
 
@@ -264,7 +311,8 @@ mod tests {
     fn a_codebase_load_reports_every_stage_and_ends_on_map_discovery() {
         let root = examples();
         let progress = Progress::new();
-        let loaded = load_codebase(&root.join("test.dme"), &progress).expect("load the example codebase");
+        let loaded = load_codebase(&root.join("test.dme"), &BakeOptions::default(), &progress)
+            .expect("load the example codebase");
 
         assert_eq!(progress.snapshot().stage, Stage::FindMaps);
         assert!(!loaded.textures.is_empty());
@@ -279,7 +327,7 @@ mod tests {
         let progress = Progress::new();
         progress.cancel();
 
-        assert!(load_codebase(&root.join("test.dme"), &progress).is_err());
+        assert!(load_codebase(&root.join("test.dme"), &BakeOptions::default(), &progress).is_err());
     }
 
     #[test]
@@ -308,7 +356,10 @@ mod tests {
         assert!(loader.is_busy());
 
         // A second request while one is in flight is dropped rather than queued.
-        loader.start(Job::Codebase(examples().join("test.dme")));
+        loader.start(Job::Codebase {
+            path: examples().join("test.dme"),
+            bake: BakeOptions::default(),
+        });
 
         match settle(&mut loader) {
             Outcome::Map(loaded) => assert_eq!(loaded.path, map),

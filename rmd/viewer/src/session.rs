@@ -7,7 +7,16 @@ use editor::{
     document::MapDocument,
     frame::{self, FrameOptions},
 };
-use render::{Frame, MapViewFrame, MapViewInteraction, MapViewRect, SpriteInstance, texture::TextureCatalog};
+use render::{
+    Frame,
+    LightTile,
+    LightingFrame,
+    MapViewFrame,
+    MapViewInteraction,
+    MapViewRect,
+    SpriteInstance,
+    texture::TextureCatalog,
+};
 
 pub struct Session {
     pub environment: Option<Environment>,
@@ -15,6 +24,8 @@ pub struct Session {
     pub textures: TextureCatalog,
     pub options: FrameOptions,
     sprite_instances: Vec<SpriteInstance>,
+    light_tiles: Vec<LightTile>,
+    lighting_size: [u32; 3],
     revision: u64,
 }
 
@@ -26,12 +37,21 @@ impl Session {
             textures: TextureCatalog::default(),
             options: FrameOptions::default(),
             sprite_instances: Vec::new(),
+            light_tiles: Vec::new(),
+            lighting_size: [0; 3],
             revision: 0,
         }
     }
 
     pub fn load_environment(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        let (environment, diagnostics) = Environment::load(path)?;
+        let (environment, diagnostics) = Environment::load_with(
+            path,
+            editor::environment::BakeOptions {
+                enabled: editor::environment::baking_enabled(true),
+                ..Default::default()
+            },
+            &editor::progress::Progress::new(),
+        )?;
 
         report(&environment, &diagnostics);
 
@@ -52,16 +72,44 @@ impl Session {
         validate_level(z, map.size.z)?;
         let document = MapDocument::open(path, map, z);
 
-        self.sprite_instances = self.environment.as_ref().map_or_else(Vec::new, |environment| {
-            frame::build(
+        let mut bake = self
+            .environment
+            .as_ref()
+            .and_then(|environment| editor::bake::build(environment, &document));
+        if let Some(bake) = &mut bake {
+            for line in bake.take_output() {
+                eprintln!("DM: {line}");
+            }
+            eprintln!(
+                "baked {} atoms, {} initialization or bake faults",
+                bake.succeeded,
+                bake.diagnostics.count()
+            );
+        }
+        let instances = self.environment.as_ref().map(|environment| {
+            frame::build_with_options(
                 &environment.tree,
                 &environment.icons,
                 &self.textures,
                 &document,
-                self.options.tile_size,
+                frame::FrameRenderOptions {
+                    visibility: &frame::TypeVisibility::default(),
+                    tile_size: self.options.tile_size,
+                    appearances: editor::bake::appearances(bake.as_ref()),
+                    lighting: bake.as_ref().and_then(|bake| bake.lighting.as_ref()),
+                },
             )
-            .sprites
         });
+        if let Some(instances) = instances {
+            self.sprite_instances = instances.sprites;
+            self.light_tiles = instances.light_tiles;
+            self.lighting_size = instances.lighting_size;
+        } else {
+            self.sprite_instances.clear();
+            self.light_tiles.clear();
+            self.lighting_size = [0; 3];
+        }
+
         self.document = Some(document);
         self.revision = self.revision.wrapping_add(1);
 
@@ -101,6 +149,8 @@ impl Session {
 
     pub fn toggle_area_outlines(&mut self) { self.options.show_area_outlines = !self.options.show_area_outlines; }
 
+    pub fn toggle_lighting(&mut self) { self.options.show_lighting = !self.options.show_lighting; }
+
     pub fn map_view(&self, camera: render::Camera) -> MapViewFrame<'_> {
         MapViewFrame {
             rect: MapViewRect {
@@ -117,6 +167,16 @@ impl Session {
             level_count: self.document.as_ref().map_or(1, |document| document.map.size.z.max(1)),
             revision: self.revision,
             pending_update: None,
+            lighting: (self.options.show_lighting && !self.light_tiles.is_empty()).then_some(LightingFrame {
+                size: self.lighting_size,
+                tiles: &self.light_tiles,
+                tile_size: self.options.tile_size,
+                minimum_brightness: self.options.minimum_light_brightness_percent.min(100) as f32 / 100.0,
+                revision: self.revision,
+                pending_update: None,
+            }),
+            guide_lines: &[],
+            connected: &[],
             interaction: MapViewInteraction::default(),
             preview: None,
         }
@@ -200,6 +260,11 @@ fn report(environment: &Environment, diagnostics: &editor::environment::LoadDiag
 
         Some(path.strip_prefix(root).unwrap_or(path))
     };
+    let bake_path = |file| {
+        let path = environment.bake_file(file)?;
+
+        Some(path.strip_prefix(root).unwrap_or(path))
+    };
 
     for error in &diagnostics.preprocess {
         eprintln!("{}", error.display(path(error.location.file)));
@@ -207,6 +272,18 @@ fn report(environment: &Environment, diagnostics: &editor::environment::LoadDiag
 
     for error in &diagnostics.sema {
         eprintln!("{}", error.display(path(error.location.file)));
+    }
+
+    for error in &diagnostics.bake_preprocess {
+        eprintln!("{}", error.display(bake_path(error.location.file)));
+    }
+
+    for error in &diagnostics.bake_sema {
+        eprintln!("{}", error.display(bake_path(error.location.file)));
+    }
+
+    if let Some(error) = &diagnostics.codegen {
+        eprintln!("warning: baking is off, bytecode generation failed: {error}");
     }
 
     for (name, error) in &diagnostics.icons {

@@ -9,6 +9,7 @@
 //!
 //! With no arguments the editor opens on its welcome page, which can open a codebase or a map.
 
+mod baker;
 mod camera;
 mod external_editor;
 mod gizmo;
@@ -19,7 +20,12 @@ mod settings;
 mod transform;
 mod ui;
 
-use std::{fs, path::PathBuf, process::ExitCode, sync::Arc};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::ExitCode,
+    sync::Arc,
+};
 
 use dear_imgui_rs::{
     BackendFlags,
@@ -31,9 +37,9 @@ use dear_imgui_rs::{
     render::SynchronousRendererConsumer,
 };
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
-use editor::tool::Tool;
+use editor::environment::BakeOptions;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use render::{Device, PickResult, Renderer};
+use render::{Device, PickRequest, PickResult, Renderer};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -45,9 +51,9 @@ use winit::{
 use crate::{
     external_editor::SourceLocation,
     loader::{Job, Loader, Outcome},
-    session::Session,
+    session::{LoadReport, Session},
     settings::{Settings, imgui_ini_path},
-    ui::{LoadNotice, OpenRequest, UiState},
+    ui::{LoadNotice, OpenRequest, ProfileReload, UiState},
 };
 
 const FONT_DATA: &[u8] = include_bytes!("../assets/FiraMono-Regular.ttf");
@@ -82,13 +88,17 @@ fn main() -> ExitCode {
     settings.apply_to(&mut session.options);
 
     let (startup_job, pending_map) = match arguments.environment {
-        Some(entry) => (
-            Some(Job::Codebase(entry)),
-            Some(PendingMap {
-                path: arguments.map,
-                z: arguments.z,
-            }),
-        ),
+        Some(entry) => {
+            let bake = bake_options(&settings, Some(&entry));
+
+            (
+                Some(Job::Codebase { path: entry, bake }),
+                Some(PendingMap {
+                    path: arguments.map,
+                    z: arguments.z,
+                }),
+            )
+        },
         None => (arguments.map.map(|path| Job::Map { path, z: arguments.z }), None),
     };
 
@@ -212,6 +222,7 @@ struct Redraw {
     pick_new_map_path: bool,
     cancel_load: bool,
     copy_to_clipboard: Option<String>,
+    reload_profile: Option<ProfileReload>,
 }
 
 enum Opened {
@@ -323,6 +334,7 @@ impl App {
                 pick_new_map_path: false,
                 cancel_load: false,
                 copy_to_clipboard: None,
+                reload_profile: None,
             });
         };
 
@@ -342,7 +354,7 @@ impl App {
 
         platform.prepare_frame(imgui, window)?;
         let frame = imgui.try_begin_frame()?;
-        let load = loader.view();
+        let load = loader.view().or_else(|| session.bake_view());
         let output = ui.draw(frame.ui(), session, settings, load.as_ref())?;
         if let Some(preset) = output.keybind_preset {
             settings.keybindings = preset.bindings();
@@ -357,7 +369,14 @@ impl App {
         let mut map_views = Vec::with_capacity(output.map_views.len());
         let mut picking = None;
         for (index, view) in output.map_views.iter().enumerate() {
-            let Some(frame) = session.map_view_frame(view.document, view.rect, view.camera, view.interaction) else {
+            let Some(frame) = session.map_view_frame(
+                view.document,
+                view.rect,
+                view.camera,
+                view.interaction,
+                &view.guide_lines,
+                &view.connected,
+            ) else {
                 continue;
             };
             if output.picking == Some(index) {
@@ -370,24 +389,42 @@ impl App {
         let pending = frame.try_render(consumer)?;
         window.pre_present_notify();
         let picked = renderer.draw_imgui(&scene, pending)?;
-        if let Some((index, pick)) = picked {
+        if let Some((index, request, pick)) = picked {
             if let Some(document) = drawn.get(index).copied() {
-                session.state.set_active(document);
+                session.set_active_document(document);
             }
-            match session.tool() {
-                Tool::Select => match pick {
+            match request {
+                PickRequest::Select => match pick {
                     PickResult::Hit(owner) => {
                         session.select_instance(Some(owner));
                         ui.reveal_selected_instance(session);
+                        ui.request_mouse_popup();
                     },
                     PickResult::Miss => session.select_instance(None),
                 },
-                Tool::Delete => {
+                PickRequest::Delete => {
                     if let PickResult::Hit(owner) = pick {
                         session.delete_instance(owner);
                     }
                 },
-                Tool::Place | Tool::BlockSelect | Tool::Fill => {},
+                PickRequest::NodeSeed(coord) => {
+                    let picked = match pick {
+                        PickResult::Hit(owner) => Some(owner),
+                        PickResult::Miss => None,
+                    };
+                    if let Some(target) = session.node_candidate_from_pick(picked, coord) {
+                        session.begin_node_edit(target);
+                    }
+                },
+                PickRequest::NodeDelete(coord) => {
+                    let picked = match pick {
+                        PickResult::Hit(owner) => Some(owner),
+                        PickResult::Miss => None,
+                    };
+                    if let Some(connection) = session.node_connection_from_pick(picked, coord) {
+                        session.delete_node_connection(&connection);
+                    }
+                },
             }
         }
 
@@ -398,6 +435,7 @@ impl App {
             pick_new_map_path: output.pick_new_map_path,
             cancel_load: output.cancel_load,
             copy_to_clipboard: output.copy_to_clipboard,
+            reload_profile: output.reload_profile,
         })
     }
 
@@ -416,9 +454,29 @@ impl App {
         self.ui.set_load_notice(None);
         self.pending_map = None;
         self.loader.start(match resolved {
-            Opened::Codebase(path) => Job::Codebase(path),
+            Opened::Codebase(path) => {
+                let bake = bake_options(&self.settings, Some(&path));
+
+                Job::Codebase { path, bake }
+            },
             Opened::Map(path) => Job::Map { path, z: 1 },
         });
+    }
+
+    fn reload_profile(&mut self, request: ProfileReload) {
+        let Some(path) = self.session.environment_path().map(PathBuf::from) else {
+            return;
+        };
+        let mut bake = bake_options(&self.settings, Some(&path));
+        match request {
+            ProfileReload::Select(profile) => {
+                bake.forced_profile = None;
+                bake.profile = Some(core::path::TreePath::parse(&profile));
+            },
+            ProfileReload::Force(profile) => bake.forced_profile = profile,
+        }
+        self.ui.set_load_notice(None);
+        self.loader.start(Job::Codebase { path, bake });
     }
 
     fn open_source(&mut self, source: SourceLocation) {
@@ -434,24 +492,43 @@ impl App {
         }
     }
 
+    fn diagnostic_path(&self, path: &Path) -> String {
+        self.session
+            .codebase_dir()
+            .and_then(|base| path.strip_prefix(base).ok())
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    }
+
     fn apply_outcome(&mut self, outcome: Outcome) {
         match outcome {
             Outcome::Codebase { path, loaded } => {
+                let forced_profile = loaded.environment.bake_options.forced_profile;
+                self.settings.set_forced_profile_for(&path, forced_profile);
+                if forced_profile.is_none()
+                    && let Some(profiles) = loaded.environment.profiles.as_ref()
+                {
+                    let selected = (profiles.active != profiles.default).then_some(profiles.active.as_str());
+                    self.settings.set_profile_for(&path, selected);
+                }
                 let report = self.session.apply_codebase(*loaded);
                 self.settings.record_codebase(&path);
                 self.ui.set_open_error(None);
-                self.ui.set_load_notice(
-                    (!report.is_empty()).then(|| LoadNotice::diagnostics(&path, report.summary(), report.lines)),
-                );
+                self.ui.set_load_notice(None);
+                self.ui.set_codebase_report(report);
                 self.start_pending_map();
             },
 
             Outcome::Map(loaded) => {
                 let path = loaded.path.clone();
+                let report = LoadReport::map(&self.diagnostic_path(&path), &loaded.errors);
                 self.session.apply_map(*loaded);
                 self.ui.request_refit(self.session.state.active());
                 self.ui.set_open_error(None);
                 self.ui.set_load_notice(None);
+                self.ui
+                    .set_map_report(fs::canonicalize(&path).unwrap_or_else(|_| path.clone()), report);
                 self.settings.record_recent(self.session.environment_path(), &path);
             },
 
@@ -459,8 +536,17 @@ impl App {
                 log::error!("{error}");
                 self.pending_map = None;
                 self.ui.set_open_error(Some(error.clone()));
-                self.ui
-                    .set_load_notice(Some(LoadNotice::failed(job.title(), job.path(), error)));
+                self.ui.set_load_notice(None);
+                match job {
+                    Job::Codebase { path, .. } => {
+                        let report = LoadReport::failure(&path.display().to_string(), &path, &error);
+                        self.ui.set_failed_codebase_report(report);
+                    },
+                    Job::Map { path, .. } => {
+                        let report = LoadReport::failure(&self.diagnostic_path(&path), &path, &error);
+                        self.ui.set_map_report(fs::canonicalize(&path).unwrap_or(path), report);
+                    },
+                }
             },
 
             Outcome::Cancelled => {
@@ -599,6 +685,7 @@ impl ApplicationHandler for App {
                             pick_new_map_path: false,
                             cancel_load: false,
                             copy_to_clipboard: None,
+                            reload_profile: None,
                         }
                     },
                 };
@@ -615,6 +702,9 @@ impl ApplicationHandler for App {
                 if let Some(request) = redraw.open {
                     self.apply_open(request);
                 }
+                if let Some(profile) = redraw.reload_profile {
+                    self.reload_profile(profile);
+                }
 
                 if let Some(source) = redraw.open_source {
                     self.open_source(source);
@@ -623,6 +713,7 @@ impl ApplicationHandler for App {
                 if let Some(outcome) = self.loader.poll() {
                     self.apply_outcome(outcome);
                 }
+                self.session.poll_bake();
 
                 if redraw.exit {
                     if let Err(e) = self.shutdown() {
@@ -644,6 +735,18 @@ impl Drop for App {
         if let Err(e) = self.shutdown() {
             log::error!("error while shutting down: {e}");
         }
+    }
+}
+
+fn bake_options(settings: &Settings, environment: Option<&std::path::Path>) -> BakeOptions {
+    BakeOptions {
+        enabled: editor::environment::baking_enabled(settings.bake_enabled),
+        optimizations_enabled: settings.optimizations_enabled,
+        profile: environment
+            .and_then(|path| settings.profile_for(path))
+            .map(core::path::TreePath::parse),
+        forced_profile: environment.and_then(|path| settings.forced_profile_for(path)),
+        ..Default::default()
     }
 }
 
@@ -731,5 +834,28 @@ mod tests {
         assert!(parse(&["map.dmm", "two"]).is_err());
         assert!(parse(&["environment.dme", "not-a-map", "2"]).is_err());
         assert!(parse(&["environment.dme", "map.dmm", "2", "extra"]).is_err());
+    }
+
+    #[test]
+    fn bake_options_restore_native_and_forced_profile_choices_per_codebase() {
+        let mut settings = Settings::default();
+        let environment = std::path::Path::new("station.dme");
+        settings.set_profile_for(environment, Some("/datum/demir/station/debug"));
+        settings.set_forced_profile_for(environment, Some(editor::environment::BundledProfile::Tgstation));
+
+        let options = bake_options(&settings, Some(environment));
+
+        assert_eq!(
+            options.profile,
+            Some(core::path::TreePath::parse("/datum/demir/station/debug"))
+        );
+        assert_eq!(
+            options.forced_profile,
+            Some(editor::environment::BundledProfile::Tgstation)
+        );
+        assert!(options.optimizations_enabled);
+        settings.optimizations_enabled = false;
+        assert!(!bake_options(&settings, Some(environment)).optimizations_enabled);
+        assert_eq!(bake_options(&settings, None).forced_profile, None);
     }
 }

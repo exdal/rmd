@@ -1,0 +1,12 @@
+[package]
+name = "ir"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+core = { path = "../core" }
+ast = { path = "../ast" }
+prelude = { path = "../../prelude" }
+
+[dev-dependencies]
+lexer = { path = "../lexer" }

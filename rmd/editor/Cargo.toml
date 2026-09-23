@@ -11,11 +11,15 @@ name = "rmde"
 path = "src/main.rs"
 
 [dependencies]
+bitflags = "2"
 core = { path = "../core" }
 preprocessor = { path = "../preprocessor" }
 ast = { path = "../ast" }
 sema = { path = "../sema" }
 objtree = { path = "../objtree" }
+ir = { path = "../ir" }
+codegen = { path = "../codegen" }
+vm = { path = "../vm" }
 dmm = { path = "../dmm" }
 dmi = { path = "../dmi" }
 render = { path = "../render" }

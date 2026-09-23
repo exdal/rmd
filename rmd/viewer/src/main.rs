@@ -245,6 +245,7 @@ impl ApplicationHandler for App {
                     Key::Named(NamedKey::PageDown) => self.session.change_level(-1),
                     Key::Character("a" | "A") => self.session.toggle_areas(),
                     Key::Character("o" | "O") => self.session.toggle_area_outlines(),
+                    Key::Character("l" | "L") => self.session.toggle_lighting(),
                     Key::Named(NamedKey::Home) => {
                         let (width, height) = self.session.extent_px();
                         self.camera.frame_map(width, height);

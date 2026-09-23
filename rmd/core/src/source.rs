@@ -56,8 +56,12 @@ impl<'a> SourceMap<'a> {
     pub fn new() -> Self { Self { files: Vec::new() } }
 
     pub fn add(&mut self, arena: &'a StrArena, path: impl Into<PathBuf>, contents: String) -> FileId {
+        self.add_borrowed(path, arena.alloc(contents))
+    }
+
+    pub fn add_borrowed(&mut self, path: impl Into<PathBuf>, contents: &'a str) -> FileId {
         let id = FileId(self.files.len() as u32);
-        self.files.push(SourceFile::new(path.into(), arena.alloc(contents)));
+        self.files.push(SourceFile::new(path.into(), contents));
 
         id
     }

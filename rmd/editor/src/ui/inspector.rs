@@ -1075,10 +1075,17 @@ fn draw_variable_section(
 
 const SIMILAR_INSTANCES_WINDOW_SIZE: [f32; 2] = [420.0, 320.0];
 
+#[derive(Clone, Copy)]
+pub(super) enum SimilarMatchKind {
+    Type,
+    Prefab,
+}
+
 struct SimilarInstancesState {
     document: DocumentId,
     prefab_path: String,
     instances: Vec<PrefabInstanceId>,
+    kind: SimilarMatchKind,
     focus: bool,
 }
 
@@ -1146,14 +1153,23 @@ impl InspectorPanel {
         let Some(selected) = document.selected_instance() else {
             return;
         };
-        let Some((prefab, _)) = document.prefab_instance(selected) else {
+        self.open_similar_instances_for(session, document.id(), selected, SimilarMatchKind::Prefab);
+    }
+
+    pub(super) fn open_similar_instances_for(
+        &mut self, session: &Session, document_id: DocumentId, instance: PrefabInstanceId, kind: SimilarMatchKind,
+    ) {
+        let Some(document) = session.state.document(document_id) else {
             return;
         };
-
+        let Some((prefab, _)) = document.prefab_instance(instance) else {
+            return;
+        };
         self.similar = Some(SimilarInstancesState {
-            document: document.id(),
+            document: document_id,
             prefab_path: prefab.path.to_string(),
-            instances: find_similar_instances(document, prefab),
+            instances: find_similar_instances(document, prefab, kind),
+            kind,
             focus: true,
         });
     }
@@ -1181,7 +1197,11 @@ impl InspectorPanel {
                 }
                 ui.text_wrapped(&search.prefab_path);
                 let suffix = if rows.len() == 1 { "instance" } else { "instances" };
-                ui.text_disabled(format!("{} matching {suffix}", rows.len()));
+                let match_label = match search.kind {
+                    SimilarMatchKind::Type => "type",
+                    SimilarMatchKind::Prefab => "prefab",
+                };
+                ui.text_disabled(format!("{} matching {match_label} {suffix}", rows.len()));
                 ui.separator();
 
                 if rows.is_empty() {
@@ -1231,10 +1251,16 @@ impl InspectorPanel {
     }
 }
 
-fn find_similar_instances(document: &MapDocument, target: &Prefab) -> Vec<PrefabInstanceId> {
+fn find_similar_instances(document: &MapDocument, target: &Prefab, kind: SimilarMatchKind) -> Vec<PrefabInstanceId> {
     let mut matches = document
         .prefab_instances()
-        .filter_map(|(instance, prefab, location)| (prefab == target).then_some((instance, location)))
+        .filter_map(|(instance, prefab, location)| {
+            let matches = match kind {
+                SimilarMatchKind::Type => prefab.path == target.path,
+                SimilarMatchKind::Prefab => prefab == target,
+            };
+            matches.then_some((instance, location))
+        })
         .collect::<Vec<_>>();
     matches.sort_unstable_by_key(|(instance, location)| {
         (
@@ -1304,7 +1330,7 @@ mod tests {
         let document = MapDocument::new(map, 1);
 
         assert_eq!(
-            find_similar_instances(&document, &target),
+            find_similar_instances(&document, &target, SimilarMatchKind::Prefab),
             [
                 document.instance_ids_at(Coord::new(1, 1, 1))[0],
                 document.instance_ids_at(Coord::new(2, 1, 1))[1],
@@ -1314,10 +1340,46 @@ mod tests {
     }
 
     #[test]
+    fn similar_instances_type_search_includes_prefab_overrides() {
+        let (map, target) = similar_instances_map();
+        let document = MapDocument::new(map, 1);
+
+        assert_eq!(
+            find_similar_instances(&document, &target, SimilarMatchKind::Type),
+            [
+                document.instance_ids_at(Coord::new(1, 1, 1))[0],
+                document.instance_ids_at(Coord::new(1, 1, 1))[1],
+                document.instance_ids_at(Coord::new(2, 1, 1))[1],
+                document.instance_ids_at(Coord::new(1, 1, 2))[0],
+                document.instance_ids_at(Coord::new(2, 1, 2))[0],
+            ]
+        );
+    }
+    #[test]
+    fn context_search_uses_the_clicked_instance_instead_of_inspector_selection() {
+        let (map, _) = similar_instances_map();
+        let document = MapDocument::new(map, 1);
+        let selected = document.instance_ids_at(Coord::new(1, 1, 1))[0];
+        let clicked = document.instance_ids_at(Coord::new(1, 1, 1))[1];
+        let other_match = document.instance_ids_at(Coord::new(2, 1, 2))[0];
+        let mut session = Session::new();
+        let document_id = session.state.open_document(document);
+        session.select_instance(Some(selected));
+        let mut inspector = InspectorPanel::new().expect("valid window keys");
+
+        inspector.open_similar_instances_for(&session, document_id, clicked, SimilarMatchKind::Prefab);
+
+        let search = inspector.similar.as_ref().expect("similar instances window opened");
+        assert_eq!(search.document, document_id);
+        assert_eq!(search.instances, [clicked, other_match]);
+        assert_eq!(session.selected_instance(), Some(selected));
+    }
+
+    #[test]
     fn similar_instance_snapshots_follow_moves_and_drop_deleted_placements() {
         let (map, target) = similar_instances_map();
         let mut document = MapDocument::new(map, 1);
-        let matches = find_similar_instances(&document, &target);
+        let matches = find_similar_instances(&document, &target, SimilarMatchKind::Prefab);
         let moved = matches[0];
         let deleted = matches[2];
 
@@ -1484,6 +1546,8 @@ mod tests {
                 declared_type: None,
                 modifiers,
                 value,
+                initializer: None,
+                declared: true,
                 location: Location::default(),
             },
         );

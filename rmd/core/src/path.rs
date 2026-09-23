@@ -90,11 +90,11 @@ impl TreePath {
 
                     keyword_offset.get_or_insert(segments.len());
                 },
-                "global" => flags |= PathFlags::IS_GLOBAL,
-                "static" => flags |= PathFlags::IS_STATIC,
-                "const" => flags |= PathFlags::IS_CONST,
-                "final" => flags |= PathFlags::IS_FINAL,
-                "tmp" => flags |= PathFlags::IS_TMP,
+                "global" if keyword_offset.is_some() => flags |= PathFlags::IS_GLOBAL,
+                "static" if keyword_offset.is_some() => flags |= PathFlags::IS_STATIC,
+                "const" if keyword_offset.is_some() => flags |= PathFlags::IS_CONST,
+                "final" if keyword_offset.is_some() => flags |= PathFlags::IS_FINAL,
+                "tmp" if keyword_offset.is_some() => flags |= PathFlags::IS_TMP,
                 _ => segments.push(Identifier::from(part.to_string())),
             }
         }

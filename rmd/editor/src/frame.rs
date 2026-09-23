@@ -19,7 +19,7 @@ use crate::{
     visual::{self, Appearance},
 };
 
-type SpriteKey = (u32, i32, i32, usize);
+type SpriteKey = (u32, i32, i32, usize, usize);
 
 #[derive(Debug, Clone, Copy)]
 struct CachedPlacement {
@@ -34,13 +34,21 @@ struct CurrentPlacement {
 }
 
 struct RenderedPrefab {
-    key: SpriteKey,
     is_area: bool,
-    sprites: Vec<SpriteInstance>,
+    sprites: Vec<(SpriteKey, SpriteInstance)>,
+    primary: Option<SpriteInstance>,
     area_tile: Option<SpriteInstance>,
 }
 
+struct SpriteGroup {
+    plane: f32,
+    layer: f32,
+    keep_apart: bool,
+    sprites: Vec<SpriteInstance>,
+}
+
 struct RenderContext<'a> {
+    appearances: &'a HashMap<u64, vm::AppearanceDelta>,
     tree: &'a ObjectTree,
     icons: &'a HashMap<String, Metadata>,
     textures: &'a TextureCatalog,
@@ -54,10 +62,12 @@ struct RenderContext<'a> {
 pub struct FrameInstances {
     pub sprites: Vec<SpriteInstance>,
     pub area_tiles: Vec<SpriteInstance>,
+    pub light_tiles: Vec<render::LightTile>,
+    pub lighting_size: [u32; 3],
     area_components: HashMap<Coord, PrefabInstanceId>,
     area_component_tiles: HashMap<PrefabInstanceId, HashSet<Coord>>,
-    sprite_keys: HashMap<PrefabInstanceId, SpriteKey>,
-    sprite_ranges: HashMap<PrefabInstanceId, UpdateRange>,
+    sprite_sort_keys: Vec<SpriteKey>,
+    primary_sprites: HashMap<PrefabInstanceId, SpriteInstance>,
     area_tile_indices: HashMap<PrefabInstanceId, usize>,
     placement_orders: HashMap<PrefabInstanceId, usize>,
     next_placement_order: usize,
@@ -66,11 +76,24 @@ pub struct FrameInstances {
 }
 
 impl FrameInstances {
-    pub fn sprite(&self, owner: PrefabInstanceId) -> Option<&SpriteInstance> {
-        self.sprite_ranges
-            .get(&owner)
-            .and_then(|range| self.sprites.get(range.start))
+    pub fn reorder_placements(&mut self, ids: &[PrefabInstanceId]) {
+        let mut orders = ids
+            .iter()
+            .filter_map(|id| self.placement_orders.get(id).copied())
+            .collect::<Vec<_>>();
+
+        if orders.len() != ids.len() {
+            return;
+        }
+
+        orders.sort_unstable();
+
+        for (id, order) in ids.iter().zip(orders) {
+            self.placement_orders.insert(*id, order);
+        }
     }
+
+    pub fn sprite(&self, owner: PrefabInstanceId) -> Option<&SpriteInstance> { self.primary_sprites.get(&owner) }
 
     pub fn area_component_at(&self, coord: Coord) -> Option<PrefabInstanceId> {
         self.area_components.get(&coord).copied()
@@ -79,7 +102,30 @@ impl FrameInstances {
     pub fn area_component_tiles(&self, component: PrefabInstanceId) -> HashSet<Coord> {
         self.area_component_tiles.get(&component).cloned().unwrap_or_default()
     }
+
+    pub fn update_lighting(&mut self, lighting: Option<&vm::bake::LightingMap>, range: Option<std::ops::Range<usize>>) {
+        let Some(lighting) = lighting else {
+            self.light_tiles.clear();
+            self.lighting_size = [0; 3];
+            return;
+        };
+
+        let replace = self.lighting_size != lighting.size || self.light_tiles.len() != lighting.tiles.len();
+        self.lighting_size = lighting.size;
+
+        if replace {
+            self.light_tiles = lighting.tiles.iter().copied().map(light_tile).collect();
+            return;
+        }
+
+        let range = range.unwrap_or(0..lighting.tiles.len());
+        for index in range.start.min(lighting.tiles.len())..range.end.min(lighting.tiles.len()) {
+            self.light_tiles[index] = light_tile(lighting.tiles[index]);
+        }
+    }
 }
+
+fn light_tile(tile: vm::bake::LightTile) -> render::LightTile { render::LightTile { corners: tile.corners } }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefabUpdate {
@@ -129,12 +175,18 @@ impl TypeVisibility {
 pub struct FrameRenderOptions<'a> {
     pub visibility: &'a TypeVisibility,
     pub tile_size: u32,
+    /// What the bake made of each atom, keyed by `vm::bake` atom id, empty when baking is off
+    pub appearances: &'a HashMap<u64, vm::AppearanceDelta>,
+    pub lighting: Option<&'a vm::bake::LightingMap>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameOptions {
     pub show_areas: bool,
     pub show_area_outlines: bool,
+    pub show_lighting: bool,
+    /// Minimum displayed light luminance, from 0 to 100 percent.
+    pub minimum_light_brightness_percent: u32,
     /// `world.icon_size`
     pub tile_size: u32,
     /// How many levels below the active one to draw behind it, 0 for none.
@@ -146,6 +198,8 @@ impl Default for FrameOptions {
         Self {
             show_areas: false,
             show_area_outlines: true,
+            show_lighting: true,
+            minimum_light_brightness_percent: 0,
             tile_size: 32,
             underlay_depth: 3,
         }
@@ -187,6 +241,13 @@ pub fn instance_for(
         z: tile.z,
         is_area,
         area_edges: 0,
+        lighting: match appearance.lighting {
+            vm::AppearanceLighting::Normal => render::SpriteLighting::Normal,
+            vm::AppearanceLighting::Emissive => render::SpriteLighting::Emissive,
+            vm::AppearanceLighting::Blocker => render::SpriteLighting::Blocker,
+            vm::AppearanceLighting::OverlayLight => render::SpriteLighting::OverlayLight,
+            vm::AppearanceLighting::OverlayLightSubtract => render::SpriteLighting::OverlayLightSubtract,
+        },
         color: [tint[0] * alpha, tint[1] * alpha, tint[2] * alpha, alpha],
         depth: appearance.plane * 1000.0 + appearance.layer,
     }
@@ -204,6 +265,8 @@ pub fn build(
         FrameRenderOptions {
             visibility: &TypeVisibility::default(),
             tile_size,
+            appearances: &HashMap::new(),
+            lighting: None,
         },
     )
 }
@@ -214,7 +277,7 @@ pub fn build_with_options(
 ) -> FrameInstances {
     let mut keyed_sprites = Vec::new();
     let mut area_tiles = Vec::new();
-    let mut sprite_keys = HashMap::new();
+    let mut primary_sprites = HashMap::new();
     let mut area_tile_indices = HashMap::new();
     let mut placement_orders = HashMap::new();
     let mut placements = HashMap::new();
@@ -225,6 +288,7 @@ pub fn build_with_options(
     let area_component_tiles = index_area_component_tiles(&area_components);
     let mut order = 0usize;
     let render = RenderContext {
+        appearances: options.appearances,
         tree,
         icons,
         textures,
@@ -253,7 +317,6 @@ pub fn build_with_options(
                     let coord = Coord::new(x, y, z);
                     let rendered = render.prefab(owner, prefab, id, coord, order, area_components.get(&coord).copied());
                     placement_orders.insert(owner, order);
-                    sprite_keys.insert(owner, rendered.key);
                     placements.insert(
                         owner,
                         CachedPlacement {
@@ -264,7 +327,10 @@ pub fn build_with_options(
                     if rendered.is_area {
                         area_owners_by_coord.entry(coord).or_default().push(owner);
                     }
-                    keyed_sprites.extend(rendered.sprites.into_iter().map(|sprite| (rendered.key, sprite)));
+                    if let Some(primary) = rendered.primary {
+                        primary_sprites.insert(owner, primary);
+                    }
+                    keyed_sprites.extend(rendered.sprites);
                     if let Some(area_tile) = rendered.area_tile {
                         area_tile_indices.insert(owner, area_tiles.len());
                         area_tiles.push(area_tile);
@@ -275,22 +341,25 @@ pub fn build_with_options(
     }
 
     keyed_sprites.sort_by_key(|(key, _)| *key);
-    let mut instances = FrameInstances {
-        sprites: keyed_sprites.into_iter().map(|(_, sprite)| sprite).collect(),
+    let (sprite_sort_keys, sprites) = keyed_sprites.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
+    FrameInstances {
+        sprites,
         area_tiles,
+        light_tiles: options
+            .lighting
+            .map(|lighting| lighting.tiles.iter().copied().map(light_tile).collect())
+            .unwrap_or_default(),
+        lighting_size: options.lighting.map_or([0; 3], |lighting| lighting.size),
         area_components,
         area_component_tiles,
-        sprite_keys,
-        sprite_ranges: HashMap::new(),
+        sprite_sort_keys,
+        primary_sprites,
         area_tile_indices,
         placement_orders,
         next_placement_order: order.saturating_add(1),
         placements,
         area_owners_by_coord,
-    };
-    refresh_sprite_ranges(&mut instances, 0);
-
-    instances
+    }
 }
 
 pub fn update_prefab(
@@ -314,6 +383,8 @@ pub fn update_prefabs(
         FrameRenderOptions {
             visibility: &TypeVisibility::default(),
             tile_size,
+            appearances: &HashMap::new(),
+            lighting: None,
         },
     )
 }
@@ -404,6 +475,7 @@ pub fn update_prefabs_with_options(
     }
 
     let render = RenderContext {
+        appearances: options.appearances,
         tree,
         icons,
         textures,
@@ -434,31 +506,7 @@ pub fn update_prefabs_with_options(
             (affected_owner, rendered)
         })
         .collect::<Vec<_>>();
-    let structural_sprite_updates = rendered
-        .iter()
-        .filter(|(owner, rendered)| owner_sprite_update_is_structural(instances, *owner, rendered.as_ref()))
-        .count();
-
-    // Each structural replacement shifts later ranges. Batch multiple replacements so the global
-    // sprite array and its ranges are traversed once, regardless of how many Z levels are loaded.
-    let mut sprite_update = if structural_sprite_updates > 1 {
-        replace_owner_sprites_batch(instances, &rendered)
-    } else {
-        let mut update = None;
-        for (owner, rendered) in &rendered {
-            let next_key = rendered.as_ref().map(|rendered| rendered.key);
-            let next_sprites = rendered
-                .as_ref()
-                .map(|rendered| rendered.sprites.as_slice())
-                .unwrap_or_default();
-            merge_update_range(
-                &mut update,
-                replace_owner_sprites(instances, *owner, next_key, next_sprites),
-            );
-        }
-
-        update
-    };
+    let mut sprite_update = replace_owner_sprites_batch(instances, &rendered);
     let mut area_tile_update = None;
 
     for (affected_owner, rendered) in rendered {
@@ -475,7 +523,6 @@ pub fn update_prefabs_with_options(
     for (owner, _, current) in changes {
         if current.is_none() {
             instances.placement_orders.remove(&owner);
-            instances.sprite_keys.remove(&owner);
         }
     }
 
@@ -499,36 +546,129 @@ fn current_placement(tree: &ObjectTree, document: &MapDocument, owner: PrefabIns
 }
 
 impl RenderContext<'_> {
+    fn instance(
+        &self, owner: PrefabInstanceId, appearance: &Appearance, texture: SpriteTexture, coord: Coord, is_area: bool,
+    ) -> SpriteInstance {
+        let mut sprite = instance_for(owner, appearance, texture, coord, self.tile_size, is_area);
+        if self.textures.is_missing_icon(texture) {
+            sprite.color = [sprite.color[3]; 4];
+        }
+
+        sprite
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn overlay_groups(
+        &self, owner: PrefabInstanceId, parent: &Appearance, delta: &vm::AppearanceDelta, coord: Coord,
+        area_owner: Option<PrefabInstanceId>, depth: usize,
+    ) -> Vec<SpriteGroup> {
+        if depth >= 32 {
+            return Vec::new();
+        }
+
+        let appearance = visual::resolve_overlay(self.tree, parent, delta);
+        let mut own = Vec::new();
+        if let Some(texture) = sprite_texture(self.icons, self.textures, &appearance) {
+            let mut sprite = self.instance(owner, &appearance, texture, coord, false);
+            sprite.area_owner = area_owner;
+            own.push(sprite);
+        }
+
+        self.grouped(owner, &appearance, own, delta, coord, area_owner, depth + 1)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn grouped(
+        &self, owner: PrefabInstanceId, parent: &Appearance, own: Vec<SpriteInstance>, delta: &vm::AppearanceDelta,
+        coord: Coord, area_owner: Option<PrefabInstanceId>, depth: usize,
+    ) -> Vec<SpriteGroup> {
+        let mut groups = Vec::with_capacity(delta.underlays.len() + delta.overlays.len() + 1);
+        for extra in &delta.underlays {
+            groups.extend(self.overlay_groups(owner, parent, extra, coord, area_owner, depth));
+        }
+
+        if !own.is_empty() {
+            groups.push(SpriteGroup {
+                plane: parent.plane,
+                layer: parent.layer,
+                keep_apart: false,
+                sprites: own,
+            });
+        }
+        for extra in &delta.overlays {
+            groups.extend(self.overlay_groups(owner, parent, extra, coord, area_owner, depth));
+        }
+
+        groups.sort_by(|left, right| {
+            left.plane
+                .total_cmp(&right.plane)
+                .then_with(|| left.layer.total_cmp(&right.layer))
+        });
+
+        // TODO: type intrinsocs
+        const KEEP_TOGETHER: u32 = 32;
+        const KEEP_APART: u32 = 64;
+        if parent.appearance_flags & KEEP_TOGETHER != 0 && !groups.is_empty() {
+            let mut together = Vec::new();
+            let mut apart = Vec::new();
+            for group in groups {
+                if group.keep_apart {
+                    apart.push(group);
+                } else {
+                    together.extend(group.sprites);
+                }
+            }
+            if !together.is_empty() {
+                apart.push(SpriteGroup {
+                    plane: parent.plane,
+                    layer: parent.layer,
+                    keep_apart: false,
+                    sprites: together,
+                });
+            }
+            groups = apart;
+        }
+        if parent.appearance_flags & KEEP_APART != 0 {
+            for group in &mut groups {
+                group.keep_apart = true;
+            }
+        }
+        groups.sort_by(|left, right| {
+            left.plane
+                .total_cmp(&right.plane)
+                .then_with(|| left.layer.total_cmp(&right.layer))
+        });
+
+        groups
+    }
+
     fn prefab(
         &self, owner: PrefabInstanceId, prefab: &Prefab, id: TypeId, coord: Coord, order: usize,
         area_owner: Option<PrefabInstanceId>,
     ) -> RenderedPrefab {
         let is_area = self.area.is_some_and(|area| self.tree.is_subtype_of(id, area));
-        let appearance = visual::resolve_id(self.tree, id, prefab);
-        let key = (
-            coord.z,
-            (appearance.plane * 1000.0) as i32,
-            (appearance.layer * 1000.0) as i32,
-            order,
-        );
+        let delta = self.appearances.get(&owner.get());
+        let appearance = delta
+            .map(|delta| visual::resolve_delta(self.tree, id, prefab, delta))
+            .unwrap_or_else(|| visual::resolve_id(self.tree, id, prefab));
         let texture = sprite_texture(self.icons, self.textures, &appearance);
-        let mut sprites = Vec::with_capacity(if is_area { 2 } else { 1 });
+        let mut own = Vec::with_capacity(if is_area { 2 } else { 1 });
         let mut area_tile = None;
 
         if !self.visibility.is_visible(id) {
             return RenderedPrefab {
-                key,
                 is_area,
-                sprites,
+                sprites: Vec::new(),
+                primary: None,
                 area_tile,
             };
         }
 
         if is_area {
             if let Some(texture) = texture {
-                let mut sprite = instance_for(owner, &appearance, texture, coord, self.tile_size, true);
+                let mut sprite = self.instance(owner, &appearance, texture, coord, true);
                 sprite.area_owner = area_owner;
-                sprites.push(sprite);
+                own.push(sprite);
             }
 
             let mut tile = area_outline(
@@ -555,18 +695,62 @@ impl RenderContext<'_> {
                     area_owner,
                 );
                 outline.area_edges = edges;
-                sprites.push(outline);
+                own.push(outline);
             }
         } else if let Some(texture) = texture {
-            let mut sprite = instance_for(owner, &appearance, texture, coord, self.tile_size, false);
+            let mut sprite = self.instance(owner, &appearance, texture, coord, false);
             sprite.area_owner = area_owner;
-            sprites.push(sprite);
+            own.push(sprite);
+        }
+        let primary = own.first().copied();
+
+        let mut groups = if let Some(delta) = delta.filter(|_| !is_area) {
+            self.grouped(owner, &appearance, own, delta, coord, area_owner, 0)
+        } else if own.is_empty() {
+            Vec::new()
+        } else {
+            vec![SpriteGroup {
+                plane: appearance.plane,
+                layer: appearance.layer,
+                keep_apart: false,
+                sprites: own,
+            }]
+        };
+        if groups.is_empty()
+            && !is_area
+            && let Some(fallback) = sprite_texture_or_missing(self.icons, self.textures, &appearance)
+                .filter(|texture| self.textures.is_missing_icon(*texture))
+        {
+            let mut sprite = self.instance(owner, &appearance, fallback, coord, false);
+            sprite.area_owner = area_owner;
+            groups.push(SpriteGroup {
+                plane: appearance.plane,
+                layer: appearance.layer,
+                keep_apart: false,
+                sprites: vec![sprite],
+            });
+        }
+        let mut local_order = 0usize;
+        let mut sprites = Vec::new();
+        for group in groups {
+            for sprite in group.sprites {
+                let key = (
+                    coord.z,
+                    (group.plane * 1000.0) as i32,
+                    (group.layer * 1000.0) as i32,
+                    order,
+                    local_order,
+                );
+                local_order = local_order.saturating_add(1);
+                sprites.push((key, sprite));
+            }
         }
 
+        let primary = primary.or_else(|| sprites.first().map(|(_, sprite)| *sprite));
         RenderedPrefab {
-            key,
             is_area,
             sprites,
+            primary,
             area_tile,
         }
     }
@@ -631,87 +815,59 @@ fn remove_area_owner(instances: &mut FrameInstances, coord: Coord, owner: Prefab
     }
 }
 
-fn owner_sprite_update_is_structural(
-    instances: &FrameInstances, owner: PrefabInstanceId, rendered: Option<&RenderedPrefab>,
-) -> bool {
-    let previous = instances.sprite_ranges.get(&owner).copied();
-    let previous_key = instances.sprite_keys.get(&owner).copied();
-    let next_key = rendered.map(|rendered| rendered.key);
-    let next_len = rendered.map_or(0, |rendered| rendered.sprites.len());
-
-    match previous {
-        Some(previous) => previous_key != next_key || previous.end - previous.start != next_len,
-        None => next_len != 0,
-    }
-}
-
 fn replace_owner_sprites_batch(
     instances: &mut FrameInstances, rendered: &[(PrefabInstanceId, Option<RenderedPrefab>)],
 ) -> Option<UpdateRange> {
     let affected = rendered.iter().map(|(owner, _)| *owner).collect::<HashSet<_>>();
-    let previous = std::mem::take(&mut instances.sprites);
-
     for (owner, rendered) in rendered {
-        match rendered {
-            Some(rendered) => {
-                instances.sprite_keys.insert(*owner, rendered.key);
-            },
-            None => {
-                instances.sprite_keys.remove(owner);
-            },
+        if let Some(primary) = rendered.as_ref().and_then(|rendered| rendered.primary) {
+            instances.primary_sprites.insert(*owner, primary);
+        } else {
+            instances.primary_sprites.remove(owner);
         }
     }
-
-    let mut replacement_runs = rendered
+    let previous = std::mem::take(&mut instances.sprites);
+    let previous_keys = std::mem::take(&mut instances.sprite_sort_keys);
+    let replacement_len = rendered
         .iter()
-        .filter_map(|(_, rendered)| {
-            let rendered = rendered.as_ref()?;
-
-            (!rendered.sprites.is_empty()).then_some((rendered.key, rendered.sprites.as_slice()))
-        })
-        .collect::<Vec<_>>();
-    replacement_runs.sort_unstable_by_key(|(key, _)| *key);
-
-    let replacement_len = replacement_runs.iter().map(|(_, sprites)| sprites.len()).sum::<usize>();
-    let mut retained = previous
+        .filter_map(|(_, rendered)| rendered.as_ref())
+        .map(|rendered| rendered.sprites.len())
+        .sum::<usize>();
+    let mut retained = previous_keys
         .iter()
         .copied()
-        .filter(|sprite| !affected.contains(&sprite.owner))
-        .map(|sprite| {
-            let key = instances
-                .sprite_keys
-                .get(&sprite.owner)
-                .copied()
-                .expect("every cached sprite has a render key");
-
-            (key, sprite)
-        })
+        .zip(previous.iter().copied())
+        .filter(|(_, sprite)| !affected.contains(&sprite.owner))
         .peekable();
-    let mut replacements = replacement_runs.into_iter().peekable();
-    let mut next = Vec::with_capacity(previous.len().saturating_add(replacement_len));
-
+    let mut replacements = Vec::with_capacity(replacement_len);
+    for (_, rendered) in rendered {
+        if let Some(rendered) = rendered {
+            replacements.extend(rendered.sprites.iter().copied());
+        }
+    }
+    replacements.sort_by_key(|(key, _)| *key);
+    let mut replacements = replacements.into_iter().peekable();
+    let mut keyed = Vec::with_capacity(previous.len().saturating_add(replacement_len));
     loop {
         match (retained.peek(), replacements.peek()) {
             (Some((retained_key, _)), Some((replacement_key, _))) if retained_key <= replacement_key => {
-                let (_, sprite) = retained.next().expect("peeked retained sprite");
-                next.push(sprite);
+                keyed.push(retained.next().expect("peeked retained sprite"));
             },
             (Some(_), Some(_)) | (None, Some(_)) => {
-                let (_, sprites) = replacements.next().expect("peeked replacement run");
-                next.extend_from_slice(sprites);
+                keyed.push(replacements.next().expect("peeked replacement sprite"));
             },
             (Some(_), None) => {
-                next.extend(retained.map(|(_, sprite)| sprite));
+                keyed.extend(retained);
                 break;
             },
             (None, None) => break,
         }
     }
 
+    let (next_keys, next) = keyed.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
     let update = changed_sprite_range(&previous, &next);
     instances.sprites = next;
-    instances.sprite_ranges.clear();
-    refresh_sprite_ranges(instances, 0);
+    instances.sprite_sort_keys = next_keys;
 
     update
 }
@@ -734,92 +890,6 @@ fn changed_sprite_range(previous: &[SpriteInstance], next: &[SpriteInstance]) ->
     };
 
     Some(UpdateRange { start, end })
-}
-
-fn replace_owner_sprites(
-    instances: &mut FrameInstances, owner: PrefabInstanceId, next_key: Option<SpriteKey>, next: &[SpriteInstance],
-) -> Option<UpdateRange> {
-    let previous = instances.sprite_ranges.get(&owner).copied();
-    let previous_key = instances.sprite_keys.get(&owner).copied();
-    if let (Some(previous), Some(next_key)) = (previous, next_key)
-        && previous_key == Some(next_key)
-        && previous.end - previous.start == next.len()
-    {
-        let current = &mut instances.sprites[previous.start..previous.end];
-        if current == next {
-            return None;
-        }
-        current.clone_from_slice(next);
-
-        return Some(previous);
-    }
-
-    let old_len = previous.map_or(0, |range| range.end - range.start);
-    let old_start = previous.map(|range| range.start);
-    if let Some(previous) = previous {
-        instances.sprites.drain(previous.start..previous.end);
-        instances.sprite_ranges.remove(&owner);
-    }
-
-    match next_key {
-        Some(next_key) => {
-            instances.sprite_keys.insert(owner, next_key);
-        },
-        None => {
-            instances.sprite_keys.remove(&owner);
-        },
-    }
-    if previous.is_none() && next.is_empty() {
-        return None;
-    }
-
-    let next_start = next_key.map(|next_key| {
-        instances.sprites.partition_point(|sprite| {
-            instances
-                .sprite_keys
-                .get(&sprite.owner)
-                .is_some_and(|key| *key <= next_key)
-        })
-    });
-    if let Some(next_start) = next_start
-        && !next.is_empty()
-    {
-        instances.sprites.splice(next_start..next_start, next.iter().copied());
-    }
-
-    let start = match (old_start, next_start) {
-        (Some(old), Some(next)) => old.min(next),
-        (Some(old), None) => old,
-        (None, Some(next)) => next,
-        (None, None) => return None,
-    };
-    refresh_sprite_ranges(instances, start);
-
-    let next_len = next.len();
-    let end = if old_len != next_len {
-        instances.sprites.len()
-    } else {
-        old_start
-            .unwrap_or(start)
-            .saturating_add(old_len)
-            .max(next_start.unwrap_or(start).saturating_add(next_len))
-    };
-
-    Some(UpdateRange { start, end })
-}
-
-fn refresh_sprite_ranges(instances: &mut FrameInstances, start: usize) {
-    let mut index = start;
-    while index < instances.sprites.len() {
-        let owner = instances.sprites[index].owner;
-        let end = index
-            + instances.sprites[index..]
-                .iter()
-                .take_while(|sprite| sprite.owner == owner)
-                .count();
-        instances.sprite_ranges.insert(owner, UpdateRange { start: index, end });
-        index = end;
-    }
 }
 
 fn replace_area_tile(
@@ -1101,6 +1171,18 @@ pub fn sprite_texture(
     textures.lookup(icon, cell)
 }
 
+pub fn sprite_texture_or_missing(
+    icons: &HashMap<String, Metadata>, textures: &TextureCatalog, appearance: &Appearance,
+) -> Option<SpriteTexture> {
+    sprite_texture(icons, textures, appearance).or_else(|| {
+        appearance.icon.as_deref().filter(|icon| !icon.is_empty())?;
+        if appearance.alpha == 0 || appearance.invisibility > 0 {
+            return None;
+        }
+        textures.missing_icon()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use core::{
@@ -1318,6 +1400,8 @@ mod tests {
                         declared_type: None,
                         modifiers: VarModifiers::default(),
                         value,
+                        initializer: None,
+                        declared: true,
                         location: Location::default(),
                     },
                 );
@@ -1376,6 +1460,8 @@ mod tests {
             FrameRenderOptions {
                 visibility: &visibility,
                 tile_size: 32,
+                appearances: &HashMap::new(),
+                lighting: None,
             },
         );
         assert!(without_objects.iter().all(|sprite| sprite.owner != object_owner));
@@ -1392,6 +1478,8 @@ mod tests {
             FrameRenderOptions {
                 visibility: &visibility,
                 tile_size: 32,
+                appearances: &HashMap::new(),
+                lighting: None,
             },
         );
         assert!(without_areas.iter().any(|sprite| sprite.owner == object_owner));
@@ -1476,16 +1564,13 @@ mod tests {
         assert_eq!(actual_tiles, expected_tiles);
         assert_eq!(actual.area_components, expected.area_components);
         assert_eq!(actual.area_component_tiles, expected.area_component_tiles);
-        assert_eq!(actual.sprite_ranges, expected.sprite_ranges);
+        assert_eq!(actual.sprite_sort_keys.len(), actual.sprites.len());
+        assert!(actual.sprite_sort_keys.windows(2).all(|keys| keys[0] <= keys[1]));
+        assert_eq!(actual.primary_sprites, expected.primary_sprites);
 
-        for (owner, range) in &actual.sprite_ranges {
-            assert!(range.start < range.end);
-            assert!(
-                actual.sprites[range.start..range.end]
-                    .iter()
-                    .all(|sprite| sprite.owner == *owner)
-            );
-            assert_eq!(actual.sprite(*owner), actual.sprites.get(range.start));
+        for (owner, sprite) in &actual.primary_sprites {
+            assert_eq!(sprite.owner, *owner);
+            assert_eq!(actual.sprite(*owner), Some(sprite));
         }
         for (owner, index) in &actual.area_tile_indices {
             assert_eq!(actual.area_tiles.get(*index).map(|tile| tile.owner), Some(*owner));
@@ -1518,6 +1603,283 @@ mod tests {
             textures(&["floor", "table"]).lookup(ICON, 1).unwrap()
         );
         assert_eq!([sprites[0].owner, sprites[1].owner], [owners[1], owners[0]]);
+    }
+
+    #[test]
+    fn an_overlay_plane_sorts_across_unrelated_placements() {
+        let tree = tree(&[("/turf/wall", "floor", 2.058), ("/obj/legacy", "table", 3.0)]);
+        let mut document = document(one_tile_map(&["/turf/wall", "/obj/legacy"]));
+        let owners = document.instance_ids_at(Coord::new(1, 1, 1)).to_vec();
+        for owner in &owners {
+            document
+                .set_instance_var(*owner, "plane".into(), Value::Num(-10.0))
+                .unwrap();
+        }
+        let frill = vm::AppearanceDelta {
+            vars: vec![
+                ("icon_state".into(), Value::Text("light".into())),
+                ("plane".into(), Value::Num(-7.0)),
+                ("layer".into(), Value::Num(2.67)),
+            ],
+            ..Default::default()
+        };
+        let appearances = HashMap::from([(
+            owners[0].get(),
+            vm::AppearanceDelta {
+                overlays: vec![frill],
+                ..Default::default()
+            },
+        )]);
+        let visibility = TypeVisibility::default();
+
+        let sprites = build_with_options(
+            &tree,
+            &icons(&["floor", "table", "light"]),
+            &textures(&["floor", "table", "light"]),
+            &document,
+            FrameRenderOptions {
+                visibility: &visibility,
+                tile_size: 32,
+                appearances: &appearances,
+                lighting: None,
+            },
+        );
+
+        assert_eq!(
+            sprites.iter().map(|sprite| sprite.owner).collect::<Vec<_>>(),
+            [owners[0], owners[1], owners[0]]
+        );
+        assert!(sprites[2].depth > sprites[1].depth);
+        assert_eq!(
+            sprites.sprite(owners[0]).unwrap().texture,
+            textures(&["floor"]).lookup(ICON, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn keep_together_keeps_explicit_plane_overlays_with_their_owner() {
+        let tree = tree(&[("/turf/wall", "floor", 2.058), ("/obj/legacy", "table", 3.0)]);
+        let mut document = document(one_tile_map(&["/turf/wall", "/obj/legacy"]));
+        let owners = document.instance_ids_at(Coord::new(1, 1, 1)).to_vec();
+        for owner in &owners {
+            document
+                .set_instance_var(*owner, "plane".into(), Value::Num(-10.0))
+                .unwrap();
+        }
+        let appearances = HashMap::from([(
+            owners[0].get(),
+            vm::AppearanceDelta {
+                vars: vec![("appearance_flags".into(), Value::Num(32.0))],
+                overlays: vec![vm::AppearanceDelta {
+                    vars: vec![
+                        ("icon_state".into(), Value::Text("light".into())),
+                        ("plane".into(), Value::Num(-7.0)),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )]);
+        let visibility = TypeVisibility::default();
+
+        let sprites = build_with_options(
+            &tree,
+            &icons(&["floor", "table", "light"]),
+            &textures(&["floor", "table", "light"]),
+            &document,
+            FrameRenderOptions {
+                visibility: &visibility,
+                tile_size: 32,
+                appearances: &appearances,
+                lighting: None,
+            },
+        );
+
+        assert_eq!(
+            sprites.iter().map(|sprite| sprite.owner).collect::<Vec<_>>(),
+            [owners[0], owners[0], owners[1]]
+        );
+    }
+
+    #[test]
+    fn keep_apart_restores_global_plane_order_inside_keep_together() {
+        let tree = tree(&[("/turf/wall", "floor", 2.058), ("/obj/legacy", "table", 3.0)]);
+        let mut document = document(one_tile_map(&["/turf/wall", "/obj/legacy"]));
+        let owners = document.instance_ids_at(Coord::new(1, 1, 1)).to_vec();
+        for owner in &owners {
+            document
+                .set_instance_var(*owner, "plane".into(), Value::Num(-10.0))
+                .unwrap();
+        }
+        let appearances = HashMap::from([(
+            owners[0].get(),
+            vm::AppearanceDelta {
+                vars: vec![("appearance_flags".into(), Value::Num(32.0))],
+                overlays: vec![vm::AppearanceDelta {
+                    vars: vec![
+                        ("icon_state".into(), Value::Text("light".into())),
+                        ("plane".into(), Value::Num(-7.0)),
+                        ("appearance_flags".into(), Value::Num(64.0)),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )]);
+        let visibility = TypeVisibility::default();
+
+        let sprites = build_with_options(
+            &tree,
+            &icons(&["floor", "table", "light"]),
+            &textures(&["floor", "table", "light"]),
+            &document,
+            FrameRenderOptions {
+                visibility: &visibility,
+                tile_size: 32,
+                appearances: &appearances,
+                lighting: None,
+            },
+        );
+
+        assert_eq!(
+            sprites.iter().map(|sprite| sprite.owner).collect::<Vec<_>>(),
+            [owners[0], owners[1], owners[0]]
+        );
+    }
+
+    #[test]
+    fn visible_prefabs_with_failed_icon_lookups_use_the_missing_texture() {
+        let mut tree = tree(&[
+            ("/obj/valid", "valid", 2.0),
+            ("/obj/machinery/computer", "missing", 2.0),
+            ("/obj/no_file", "valid", 2.0),
+            ("/obj/iconless", "missing", 2.0),
+            ("/obj/transparent", "missing", 2.0),
+        ]);
+        tree.register(&TreePath::parse("/obj/machinery/computer/monitor"), Location::default());
+        let mut document = document(one_tile_map(&[
+            "/obj/valid",
+            "/obj/machinery/computer/monitor",
+            "/obj/no_file",
+            "/obj/iconless",
+            "/obj/transparent",
+        ]));
+        let owners = document.instance_ids_at(Coord::new(1, 1, 1)).to_vec();
+        document
+            .set_instance_var(owners[1], "color".into(), Value::Text(String::from("#00ff00")))
+            .unwrap();
+        document
+            .set_instance_var(owners[2], "icon".into(), Value::Resource(String::from("missing.dmi")))
+            .unwrap();
+        document
+            .set_instance_var(owners[3], "icon".into(), Value::Null)
+            .unwrap();
+        document
+            .set_instance_var(owners[4], "alpha".into(), Value::Num(0.0))
+            .unwrap();
+
+        let icons = icons(&["valid"]);
+        let mut textures = textures(&["valid"]);
+        let missing = textures.insert_missing_icon().unwrap();
+        let sprites = build(&tree, &icons, &textures, &document, 32);
+
+        assert_eq!(
+            sprites.sprite(owners[0]).unwrap().texture,
+            textures.lookup(ICON, 0).unwrap()
+        );
+        assert_eq!(sprites.sprite(owners[1]).unwrap().texture, missing);
+        assert_eq!(sprites.sprite(owners[1]).unwrap().color, [1.0; 4]);
+        assert_eq!(sprites.sprite(owners[2]).unwrap().texture, missing);
+        assert!(sprites.sprite(owners[3]).is_none());
+        assert!(sprites.sprite(owners[4]).is_none());
+
+        let mut visibility = TypeVisibility::default();
+        let monitor = tree.id_of(&TreePath::parse("/obj/machinery/computer/monitor")).unwrap();
+        visibility.set_subtree(&tree, monitor, false);
+        let hidden = build_with_options(
+            &tree,
+            &icons,
+            &textures,
+            &document,
+            FrameRenderOptions {
+                visibility: &visibility,
+                tile_size: 32,
+                appearances: &HashMap::new(),
+                lighting: None,
+            },
+        );
+        assert!(hidden.sprite(owners[1]).is_none());
+    }
+
+    #[test]
+    fn failed_overlays_do_not_cover_a_valid_airlock_or_overlay_only_object() {
+        let tree = tree(&[
+            ("/obj/machinery/door/airlock/grunge", "closed", 2.0),
+            ("/obj/overlay_only", "missing", 2.0),
+            ("/obj/truly_missing", "missing", 2.0),
+        ]);
+        let document = document(one_tile_map(&[
+            "/obj/machinery/door/airlock/grunge",
+            "/obj/overlay_only",
+            "/obj/truly_missing",
+        ]));
+        let owners = document.instance_ids_at(Coord::new(1, 1, 1)).to_vec();
+        let overlay = |state: &str| vm::AppearanceDelta {
+            vars: vec![("icon_state".into(), Value::Text(state.into()))],
+            ..Default::default()
+        };
+        let appearances = HashMap::from([
+            (
+                owners[0].get(),
+                vm::AppearanceDelta {
+                    overlays: vec![overlay("missing")],
+                    ..Default::default()
+                },
+            ),
+            (
+                owners[1].get(),
+                vm::AppearanceDelta {
+                    overlays: vec![overlay("closed")],
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let icons = icons(&["closed"]);
+        let mut textures = textures(&["closed"]);
+        let missing = textures.insert_missing_icon().unwrap();
+        let rendered = build_with_options(
+            &tree,
+            &icons,
+            &textures,
+            &document,
+            FrameRenderOptions {
+                visibility: &TypeVisibility::default(),
+                tile_size: 32,
+                appearances: &appearances,
+                lighting: None,
+            },
+        );
+        let real = textures.lookup(ICON, 0).unwrap();
+
+        assert_eq!(rendered.sprite(owners[0]).unwrap().texture, real);
+        assert_eq!(rendered.sprite(owners[1]).unwrap().texture, real);
+        assert_eq!(rendered.sprite(owners[2]).unwrap().texture, missing);
+        assert_eq!(
+            rendered
+                .sprites
+                .iter()
+                .filter(|sprite| sprite.owner == owners[0])
+                .count(),
+            1
+        );
+        assert_eq!(
+            rendered
+                .sprites
+                .iter()
+                .filter(|sprite| sprite.owner == owners[1])
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -2037,7 +2399,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unresolvable_icon_state_emits_nothing() {
+    fn an_unresolvable_icon_state_without_a_registered_fallback_emits_nothing() {
         let tree = tree(&[("/obj/ghost", "not_in_the_sheet", 2.0)]);
         let document = document(one_tile_map(&["/obj/ghost"]));
 

@@ -1,0 +1,19 @@
+[package]
+name = "vm"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+codegen = { path = "../codegen" }
+core = { path = "../core" }
+objtree = { path = "../objtree" }
+prelude = { path = "../../prelude" }
+serde = "1.0"
+simd-json = "0.18"
+
+[dev-dependencies]
+ast = { path = "../ast" }
+ir = { path = "../ir" }
+lexer = { path = "../lexer" }
+preprocessor = { path = "../preprocessor" }
+sema = { path = "../sema" }

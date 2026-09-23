@@ -20,6 +20,8 @@ pub struct Appearance {
     pub color: Option<String>,
     pub alpha: u8,
     pub invisibility: i32,
+    pub appearance_flags: u32,
+    pub lighting: vm::AppearanceLighting,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +56,8 @@ impl Default for Appearance {
             color: None,
             alpha: 255,
             invisibility: 0,
+            appearance_flags: 0,
+            lighting: vm::AppearanceLighting::Normal,
         }
     }
 }
@@ -146,6 +150,11 @@ pub fn resolve_id(tree: &ObjectTree, id: TypeId, prefab: &Prefab) -> Appearance 
         appearance.invisibility = invisibility as i32;
     }
 
+    // TODO: type intrinsics
+    if let Some(appearance_flags) = get("appearance_flags").and_then(|v| v.as_num()) {
+        appearance.appearance_flags = appearance_flags as u32;
+    }
+
     appearance.color = get("color").and_then(|v| v.as_text().map(str::to_string));
 
     appearance
@@ -158,6 +167,85 @@ pub fn sort_key(appearance: &Appearance, index: usize) -> (i32, i32, usize) {
         (appearance.layer * 1000.0) as i32,
         index,
     )
+}
+
+/// `FLOAT_PLANE`
+const FLOAT_PLANE: f32 = -32767.0;
+
+/// `RESET_COLOR`
+const RESET_COLOR: u32 = 2;
+
+/// `RESET_ALPHA`
+const RESET_ALPHA: u32 = 4;
+
+pub fn resolve_delta(tree: &ObjectTree, id: TypeId, prefab: &Prefab, delta: &vm::AppearanceDelta) -> Appearance {
+    let mut derived = prefab.clone();
+    for (name, value) in &delta.vars {
+        derived.set_var(name.clone(), value.clone());
+    }
+
+    let mut appearance = resolve_id(tree, id, &derived);
+    appearance.lighting = delta.lighting;
+    appearance
+}
+
+/// `overlays += "edge"`
+pub fn resolve_overlay(tree: &ObjectTree, parent: &Appearance, delta: &vm::AppearanceDelta) -> Appearance {
+    let prefab = Prefab::new(core::path::TreePath::parse("/image"));
+    let id = tree.id_of(&prefab.path).unwrap_or(TypeId::ROOT);
+    let mut appearance = resolve_delta(tree, id, &prefab, delta);
+
+    if appearance.icon.is_none() {
+        appearance.icon = parent.icon.clone();
+    }
+
+    let own_dir = delta
+        .vars
+        .iter()
+        .find(|(name, _)| name.as_str() == "dir")
+        .and_then(|(_, value)| value.as_num());
+    if own_dir.is_none_or(|dir| dir == 0.0) {
+        appearance.dir = parent.dir;
+    }
+
+    // `layer = FLOAT_LAYER - 1`
+    if appearance.layer < 0.0 {
+        appearance.layer = parent.layer;
+    }
+
+    if appearance.plane == FLOAT_PLANE {
+        appearance.plane = parent.plane;
+    }
+
+    appearance.pixel_x = appearance.pixel_x.saturating_add(parent.pixel_x);
+    appearance.pixel_y = appearance.pixel_y.saturating_add(parent.pixel_y);
+    appearance.pixel_w = appearance.pixel_w.saturating_add(parent.pixel_w);
+    appearance.pixel_z = appearance.pixel_z.saturating_add(parent.pixel_z);
+    appearance.step_x = appearance.step_x.saturating_add(parent.step_x);
+    appearance.step_y = appearance.step_y.saturating_add(parent.step_y);
+
+    let flags = delta
+        .vars
+        .iter()
+        .find(|(name, _)| name.as_str() == "appearance_flags")
+        .and_then(|(_, value)| value.as_num())
+        .unwrap_or(0.0) as u32;
+
+    if flags & RESET_COLOR == 0 {
+        let tint = |color: Option<&str>| color.and_then(render::color::parse).unwrap_or([1.0; 4]);
+        let channels = tint(parent.color.as_deref())
+            .into_iter()
+            .zip(tint(appearance.color.as_deref()))
+            .map(|(parent, own)| format!("{:02x}", (parent * own * 255.0).round() as u8))
+            .collect::<String>();
+        appearance.color = Some(format!("#{channels}"));
+    }
+
+    if flags & RESET_ALPHA == 0 {
+        appearance.alpha = (u16::from(appearance.alpha) * u16::from(parent.alpha) / 255) as u8;
+    }
+
+    appearance
 }
 
 #[cfg(test)]
@@ -180,6 +268,8 @@ mod tests {
                 declared_type: None,
                 modifiers: VarModifiers::default(),
                 value: Value::Num(2.0),
+                initializer: None,
+                declared: true,
                 location: Location::default(),
             },
         );

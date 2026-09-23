@@ -21,6 +21,7 @@ pub enum Tool {
     Place,
     #[default]
     Select,
+    Node,
     BlockSelect,
     Delete,
     Fill,
@@ -166,6 +167,7 @@ impl Tool {
         match self {
             Tool::Place => "Place",
             Tool::Select => "Select",
+            Tool::Node => "Node",
             Tool::BlockSelect => "Block Select",
             Tool::Delete => "Delete",
             Tool::Fill => "Fill",
@@ -176,7 +178,7 @@ impl Tool {
         match self {
             Self::Place => place(context),
             Self::Delete => delete(context),
-            Self::Select | Self::BlockSelect => None,
+            Self::Select | Self::Node | Self::BlockSelect => None,
             Self::Fill => fill(context, Some(MAX_FILL_TILES), None).ok().flatten(),
         }
     }
@@ -2537,6 +2539,8 @@ mod tests {
                     declared_type: None,
                     modifiers: VarModifiers::default(),
                     value: Value::Path(TreePath::parse(path)),
+                    initializer: None,
+                    declared: true,
                     location: Location::default(),
                 },
             );
@@ -2800,6 +2804,8 @@ mod tests {
                         declared_type: None,
                         modifiers: VarModifiers::default(),
                         value: Value::Num(value),
+                        initializer: None,
+                        declared: true,
                         location: Location::default(),
                     },
                 );
