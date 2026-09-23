@@ -54,6 +54,13 @@ impl GitPanel {
             let unmerged = git.unmerged_on_disk;
             let staging = git.staging;
             let error = git.error.clone();
+            let show_blame = git.show_blame;
+            let blame_ready = git.blame.is_some();
+            let blame_boundary = git
+                .blame
+                .as_ref()
+                .filter(|blame| blame.result.parse_boundary.is_some())
+                .map(|blame| blame.result.boundary_label());
             let has_loaded_conflicts = git.conflicts.is_some();
             let total = git.conflicts.as_ref().map_or(0, |conflicts| conflicts.len());
             let remaining = session.unresolved_conflicts(id);
@@ -115,6 +122,24 @@ impl GitPanel {
                     ui.button(if staging { "Staging..." } else { "Mark resolved" })
                 }) {
                     session.mark_resolved(id);
+                }
+            }
+            ui.separator();
+            if ui.menu_item_enabled_selected_no_shortcut("Show Blame", show_blame, true) {
+                session.toggle_blame(id, settings.blame_depth as usize);
+            }
+            if show_blame {
+                if let Some(label) = blame_boundary {
+                    ui.text_disabled(label);
+                }
+                if let Some(done) = session.blame_progress(id) {
+                    ui.text(format!("Walking history: {done} revisions"));
+                }
+                if session.blame_stale(id) {
+                    ui.text_disabled("Blame result is stale");
+                }
+                if blame_ready && ui.button("Refresh blame") {
+                    session.run_blame(id, settings.blame_depth as usize);
                 }
             }
             if let Some(error) = error {

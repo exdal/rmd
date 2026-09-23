@@ -2,7 +2,7 @@ use core::{path::TreePath, types::Identifier};
 
 use dear_imgui_rs::Ui;
 use dmm::{Coord, Prefab, PrefabInstanceId};
-use editor::{conflict::Side, document::DocumentId};
+use editor::{blame::BlameCell, conflict::Side, document::DocumentId};
 use objtree::ObjectTree;
 
 use super::{SelectionTransform, Session, Tool, draw_type_path_search, inspector::SimilarMatchKind};
@@ -30,6 +30,9 @@ pub(super) struct Target {
 
 pub(super) enum Action {
     Conflict(Vec<Coord>, Side),
+    BlameCopy(String),
+    BlamePin(u32),
+    BlameRun,
     Undo,
     Redo,
     Copy(Coord),
@@ -96,6 +99,32 @@ pub(super) fn draw_popup(
                         action = Some(Action::Conflict(coords.clone(), side));
                     }
                 }
+            }
+        }
+    }
+
+    if let Some(git) = session.git_state(target.document) {
+        ui.separator();
+        if let Some(_menu) = ui.begin_menu("Blame") {
+            if let Some((cell, changed)) = session.blame_at(target.document, coord) {
+                match cell {
+                    BlameCell::Commit(index, commit) if !changed => {
+                        ui.text_disabled(format!("{} {}", commit.short, commit.summary));
+                        if ui.menu_item("Copy hash") {
+                            action = Some(Action::BlameCopy(commit.hash.clone()));
+                        }
+                        if ui.menu_item("Pin commit tiles") {
+                            action = Some(Action::BlamePin(index));
+                        }
+                    },
+                    BlameCell::Boundary if !changed => ui.text_disabled(git.blame.as_ref().map_or_else(
+                        || String::from("Older than blame depth"),
+                        |blame| blame.result.boundary_label(),
+                    )),
+                    _ => ui.text_disabled(editor::blame::pending_note(cell, changed).unwrap_or_default()),
+                }
+            } else if git.blame.is_none() && ui.menu_item("Run blame") {
+                action = Some(Action::BlameRun);
             }
         }
     }

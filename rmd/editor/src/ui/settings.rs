@@ -252,6 +252,9 @@ fn draw_settings_window(
 
 fn draw_git_settings(ui: &Ui, settings: &mut Settings) {
     ui.checkbox("Enable Git map integration", &mut settings.git_enabled);
+    ui.set_next_item_width(180.0);
+    ui.slider("Blame history depth", 1, 10_000, &mut settings.blame_depth);
+    ui.text_disabled("Tile history follows the first parent of HEAD and does not follow renames.");
 }
 
 fn draw_general_settings(ui: &Ui, settings: &mut Settings) {

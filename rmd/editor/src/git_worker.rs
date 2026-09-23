@@ -1,10 +1,16 @@
 use std::{
     collections::HashMap,
-    sync::mpsc::{Receiver, Sender, channel},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::{Receiver, Sender, channel},
+    },
     thread,
 };
 
+use dmm::Map;
 use editor::{
+    blame::{self, BlameResult, GitVersions},
     document::DocumentId,
     git::{CommitRef, GitError, Operation, RepoPath},
 };
@@ -14,10 +20,16 @@ pub struct Status {
     pub head: Option<CommitRef>,
     pub operation: Option<Operation>,
     pub unmerged: bool,
+    pub web_commit_base: Option<String>,
 }
 
 pub enum Outcome {
-    Status(Result<Box<Status>, GitError>),
+    Status(Result<Status, GitError>),
+    Blame {
+        revision: u64,
+        snapshot: Map,
+        result: Result<BlameResult, GitError>,
+    },
     MarkResolved(Result<(), GitError>),
 }
 
@@ -32,6 +44,8 @@ pub struct GitWorker {
     sender: Sender<Finished>,
     receiver: Receiver<Finished>,
     generations: HashMap<(DocumentId, u8), u64>,
+    cancels: HashMap<DocumentId, Arc<AtomicBool>>,
+    progress: HashMap<DocumentId, Arc<AtomicUsize>>,
 }
 
 impl Default for GitWorker {
@@ -41,6 +55,8 @@ impl Default for GitWorker {
             sender,
             receiver,
             generations: HashMap::new(),
+            cancels: HashMap::new(),
+            progress: HashMap::new(),
         }
     }
 }
@@ -61,18 +77,54 @@ impl GitWorker {
                 let head = repo.head_ref();
                 let operation = repo.operation();
                 let unmerged = repo.unmerged()?.is_some();
-                Ok(Box::new(Status {
+                let web_commit_base = repo.web_commit_base();
+                Ok(Status {
                     branch,
                     head,
                     operation,
                     unmerged,
-                }))
+                    web_commit_base,
+                })
             })();
             let _ = sender.send(Finished {
                 document,
                 kind: 0,
                 generation,
                 outcome: Outcome::Status(result),
+            });
+        });
+    }
+
+    pub fn blame(&mut self, document: DocumentId, path: RepoPath, snapshot: Map, revision: u64, depth: usize) {
+        if let Some(previous) = self.cancels.insert(document, Arc::new(AtomicBool::new(false))) {
+            previous.store(true, Ordering::Relaxed);
+        }
+
+        let cancelled = Arc::clone(&self.cancels[&document]);
+        let progress = Arc::new(AtomicUsize::new(0));
+        self.progress.insert(document, Arc::clone(&progress));
+        let (generation, sender) = self.next(document, 1);
+
+        thread::spawn(move || {
+            let result = GitVersions::open_with_cancel(path, depth, &|| cancelled.load(Ordering::Relaxed)).and_then(
+                |mut versions| {
+                    blame::blame(
+                        &snapshot,
+                        &mut versions,
+                        &|| cancelled.load(Ordering::Relaxed),
+                        &mut |done, _| progress.store(done, Ordering::Relaxed),
+                    )
+                },
+            );
+            let _ = sender.send(Finished {
+                document,
+                kind: 1,
+                generation,
+                outcome: Outcome::Blame {
+                    revision,
+                    snapshot,
+                    result,
+                },
             });
         });
     }
@@ -90,10 +142,18 @@ impl GitWorker {
         });
     }
 
+    pub fn blame_progress(&self, document: DocumentId) -> Option<usize> {
+        self.progress.get(&document).map(|value| value.load(Ordering::Relaxed))
+    }
+
     pub fn poll(&mut self) -> Vec<Finished> {
         let mut finished = Vec::new();
         while let Ok(result) = self.receiver.try_recv() {
             if self.generations.get(&(result.document, result.kind)) == Some(&result.generation) {
+                if result.kind == 1 {
+                    self.progress.remove(&result.document);
+                    self.cancels.remove(&result.document);
+                }
                 finished.push(result);
             }
         }
@@ -101,6 +161,10 @@ impl GitWorker {
     }
 
     pub fn close(&mut self, document: DocumentId) {
+        if let Some(cancelled) = self.cancels.remove(&document) {
+            cancelled.store(true, Ordering::Relaxed);
+        }
+        self.progress.remove(&document);
         // Keep the counters so an old result cannot match a new job if this document is reopened.
         for ((id, _), generation) in &mut self.generations {
             if *id == document {

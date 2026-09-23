@@ -932,6 +932,7 @@ struct MapViewState {
     refit: bool,
     focus: bool,
     hovered_coord: Option<Coord>,
+    blame_popup: Option<BlamePopup>,
     block_selection_anchor: Option<Coord>,
     rectangle_gesture: Option<RectangleGesture>,
     block_placement: Option<PendingBlockPlacement>,
@@ -950,6 +951,12 @@ struct MapViewDraw<'a> {
     keep_open: &'a mut bool,
 }
 
+struct BlamePopup {
+    coord: Coord,
+    position: [f32; 2],
+    bounds: Option<OverlayRect>,
+}
+
 impl MapViewState {
     fn new(id: DocumentId) -> Result<Self, WindowKeyError> {
         Ok(Self {
@@ -960,6 +967,7 @@ impl MapViewState {
             visible: false,
             refit: true,
             hovered_coord: None,
+            blame_popup: None,
             focus: false,
             block_selection_anchor: None,
             rectangle_gesture: None,
@@ -1008,6 +1016,7 @@ pub struct UiState {
     diagnostics: DiagnosticsState,
     load_window_size: [f32; 2],
     keybind_preset_prompt: bool,
+    copy_to_clipboard: Option<String>,
 }
 
 impl UiState {
@@ -1068,6 +1077,7 @@ impl UiState {
             diagnostics: DiagnosticsState::default(),
             load_window_size: [0.0, 0.0],
             keybind_preset_prompt,
+            copy_to_clipboard: None,
         })
     }
 
@@ -1304,6 +1314,13 @@ impl UiState {
                     self.git_panel.open = true;
                 }
 
+                if let Some(id) = session.state.active() {
+                    let shown = session.git_state(id).is_some_and(|git| git.show_blame);
+                    if ui.menu_item_enabled_selected_no_shortcut("Show Blame", shown, settings.git_enabled) {
+                        session.toggle_blame(id, settings.blame_depth as usize);
+                    }
+                }
+
                 if ui.menu_item_enabled_selected_no_shortcut("Refresh", false, settings.git_enabled) {
                     session.refresh_git();
                 }
@@ -1392,6 +1409,7 @@ impl UiState {
 
         let mut open_source = self.object_tree.draw(ui, session, settings);
         let inspector = self.inspector.draw(ui, session, settings);
+        self.copy_to_clipboard = inspector.copy_hash;
         open_source = inspector.open_source.or(open_source);
         if let Some(target) = inspector.jump {
             self.jump_to_instance(session, target);
@@ -1499,7 +1517,7 @@ impl UiState {
             open_source,
             pick_new_map_path,
             cancel_load: load_popup.cancel,
-            copy_to_clipboard: load_popup.copy,
+            copy_to_clipboard: load_popup.copy.or_else(|| self.copy_to_clipboard.take()),
             reload_profile: settings_output.reload_profile,
             load_conflicts,
             keybind_preset: None,
@@ -1916,6 +1934,7 @@ impl UiState {
             refit: view_refit,
             focus: view_focus,
             hovered_coord,
+            blame_popup,
             block_selection_anchor,
             rectangle_gesture,
             block_placement,
@@ -2120,28 +2139,123 @@ impl UiState {
                     .then_some(local)
                     .filter(|local| local[0] < viewport.0 as f32 && local[1] < viewport.1 as f32)
             };
-            let cursor = hovered.then(|| ui.io().mouse_pos()).and_then(in_viewport);
+            let mouse_over_blame_popup = blame_popup
+                .as_ref()
+                .and_then(|popup| popup.bounds)
+                .is_some_and(|bounds| bounds.contains(mouse));
+            let cursor = (hovered && !mouse_over_blame_popup)
+                .then(|| ui.io().mouse_pos())
+                .and_then(in_viewport);
             let pointed_coord = cursor.and_then(|cursor| {
                 let size = session.map()?.size;
 
                 camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
             });
             *hovered_coord = pointed_coord;
-            if let Some(coord) = pointed_coord
-                && let Some(conflict) = session
+            let hovered_conflict = pointed_coord.and_then(|coord| {
+                session
                     .git_state(id)
                     .and_then(|git| git.conflicts.as_ref())
                     .and_then(|state| state.conflict_at(coord))
-            {
-                ui.tooltip_text(format!(
-                    "Conflict at {}, {}, {}\nBase: {}\nHEAD: {}\nIncoming: {}",
-                    coord.x,
-                    coord.y,
-                    coord.z,
-                    describe_tile(conflict.base.as_ref()),
-                    describe_tile(conflict.ours.as_ref()),
-                    describe_tile(conflict.theirs.as_ref())
-                ));
+            });
+            let show_blame = session.git_state(id).is_some_and(|git| git.show_blame);
+            let hovered_blame = pointed_coord
+                .filter(|_| show_blame && hovered_conflict.is_none())
+                .and_then(|coord| session.blame_at(id, coord).map(|cell| (coord, cell)));
+            let hovered_commit = match hovered_blame {
+                Some((coord, (editor::blame::BlameCell::Commit(..), false))) => Some(coord),
+                _ => None,
+            };
+            let mut tooltip_position = None;
+            if blame_popup.is_none() {
+                if let (Some(coord), Some(conflict)) = (pointed_coord, hovered_conflict) {
+                    ui.tooltip_text(format!(
+                        "Conflict at {}, {}, {}\nBase: {}\nHEAD: {}\nIncoming: {}",
+                        coord.x,
+                        coord.y,
+                        coord.z,
+                        describe_tile(conflict.base.as_ref()),
+                        describe_tile(conflict.ours.as_ref()),
+                        describe_tile(conflict.theirs.as_ref())
+                    ));
+                } else if let Some((_, (cell, changed))) = hovered_blame {
+                    match cell {
+                        editor::blame::BlameCell::Commit(_, commit) if !changed => {
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(0, |time| time.as_secs() as i64);
+                            let detail = format!(
+                                "{} · {} · {}\n{}\n",
+                                commit.short,
+                                commit.author,
+                                editor::blame::relative_time(now, commit.time),
+                                commit.summary
+                            );
+                            ui.tooltip(|| {
+                                ui.text(detail);
+                                tooltip_position = Some(ui.window_pos());
+                            });
+                        },
+                        editor::blame::BlameCell::Boundary if !changed => {
+                            if let Some(label) = session
+                                .git_state(id)
+                                .and_then(|git| git.blame.as_ref())
+                                .map(|blame| blame.result.boundary_label())
+                            {
+                                ui.tooltip_text(label);
+                            }
+                        },
+                        _ => {
+                            if let Some(note) = editor::blame::pending_note(cell, changed) {
+                                ui.tooltip_text(note);
+                            }
+                        },
+                    }
+                }
+            }
+
+            if !show_blame {
+                *blame_popup = None;
+            }
+
+            let blame_clicked = ui.is_mouse_clicked(MouseButton::Left) && hovered_commit.is_some();
+            if let Some(coord) = hovered_commit.filter(|_| blame_clicked) {
+                let position = blame_popup
+                    .as_ref()
+                    .filter(|popup| popup.coord == coord)
+                    .map(|popup| popup.position)
+                    .or(tooltip_position)
+                    .unwrap_or_else(|| blame_tooltip_position(ui, mouse));
+                *blame_popup = Some(BlamePopup {
+                    coord,
+                    position,
+                    bounds: None,
+                });
+            } else if ui.is_mouse_clicked(MouseButton::Left) && !mouse_over_blame_popup {
+                *blame_popup = None;
+            }
+
+            let blame_popup_captures_mouse = blame_clicked || mouse_over_blame_popup;
+            if let Some(popup) = blame_popup.as_mut() {
+                let commit = match session.blame_at(id, popup.coord) {
+                    Some((editor::blame::BlameCell::Commit(_, commit), false)) => Some(commit),
+                    _ => None,
+                };
+
+                if let Some(commit) = commit {
+                    let url = session
+                        .git_state(id)
+                        .and_then(|git| git.web_commit_base.as_ref())
+                        .map(|base| format!("{base}/{}", commit.hash));
+                    if let Some((bounds, close)) = draw_blame_popup(ui, id, popup, commit, url.as_deref()) {
+                        popup.bounds = Some(bounds);
+                        if close {
+                            *blame_popup = None;
+                        }
+                    }
+                } else {
+                    *blame_popup = None;
+                }
             }
 
             let node_interactive = hovered && !session.node_dragging();
@@ -2358,6 +2472,7 @@ impl UiState {
                         && !block_controls_capture_mouse
                         && !conflict_controls_capture_mouse
                         && !banner_capture_mouse
+                        && !blame_popup_captures_mouse
                         && !escape
                         && !ui.io().want_text_input(),
                     ..gizmo_map_view
@@ -2487,7 +2602,10 @@ impl UiState {
                 let left_down = ui.is_mouse_down(MouseButton::Left);
                 let left_double_clicked = ui.is_mouse_double_clicked(MouseButton::Left);
                 let right_clicked = ui.is_mouse_clicked(MouseButton::Right);
-                if right_clicked && let Some(coord) = pointed_coord {
+                if right_clicked
+                    && !blame_popup_captures_mouse
+                    && let Some(coord) = pointed_coord
+                {
                     match node_right_click(session.tool(), ui.io().key_shift(), &node_hit) {
                         NodeRightClick::DeleteStandalone(node) => {
                             session.delete_standalone_node(node);
@@ -2536,13 +2654,17 @@ impl UiState {
                     if !focused {
                         session.cancel_node_drag();
                     }
-                    if left_double_clicked
+                    if !blame_popup_captures_mouse
+                        && left_double_clicked
                         && let Some(coord) = pointed_coord
                         && let Some(cursor) = cursor
                     {
                         interaction.cursor = Some(cursor_in_map_view(cursor, scale));
                         request_pick(interaction, PickRequest::NodeSeed(coord));
-                    } else if left_clicked && let Some(coord) = node_hit.handle {
+                    } else if !blame_popup_captures_mouse
+                        && left_clicked
+                        && let Some(coord) = node_hit.handle
+                    {
                         session.start_node_drag(coord);
                     }
 
@@ -2575,6 +2697,7 @@ impl UiState {
                     && !block_controls_capture_mouse
                     && !conflict_controls_capture_mouse
                     && !banner_capture_mouse
+                    && !blame_popup_captures_mouse
                     && session.tool() != Tool::Node
                     && let Some(cursor) = cursor
                 {
@@ -2780,6 +2903,15 @@ impl UiState {
                     match action {
                         MenuAction::Conflict(coords, side) => {
                             session.resolve_conflict(id, &coords, side);
+                        },
+                        MenuAction::BlameCopy(hash) => {
+                            self.copy_to_clipboard = Some(hash);
+                        },
+                        MenuAction::BlamePin(commit) => {
+                            session.pin_blame(id, commit);
+                        },
+                        MenuAction::BlameRun => {
+                            session.run_blame(id, settings.blame_depth as usize);
                         },
                         MenuAction::Undo => {
                             session.undo();
@@ -3476,6 +3608,70 @@ impl OverlayRect {
     fn contains(self, point: [f32; 2]) -> bool {
         point[0] >= self.min[0] && point[0] < self.max[0] && point[1] >= self.min[1] && point[1] < self.max[1]
     }
+}
+
+fn blame_tooltip_position(ui: &Ui, mouse: [f32; 2]) -> [f32; 2] {
+    let display = ui.io().display_size();
+    let width = 390.0;
+    let height = ui.text_line_height_with_spacing() * 6.0;
+    [
+        if mouse[0] + width + 12.0 > display[0] {
+            (mouse[0] - width - 12.0).max(0.0)
+        } else {
+            mouse[0] + 12.0
+        },
+        if mouse[1] + height + 12.0 > display[1] {
+            (mouse[1] - height - 12.0).max(0.0)
+        } else {
+            mouse[1] + 12.0
+        },
+    ]
+}
+
+fn draw_blame_popup(
+    ui: &Ui, document: DocumentId, popup: &BlamePopup, commit: &editor::git::CommitInfo, url: Option<&str>,
+) -> Option<(OverlayRect, bool)> {
+    let flags = WindowFlags::NO_DECORATION
+        | WindowFlags::NO_MOVE
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::NO_DOCKING
+        | WindowFlags::NO_FOCUS_ON_APPEARING
+        | WindowFlags::ALWAYS_AUTO_RESIZE;
+    let _background = ui.push_style_color(StyleColor::WindowBg, ui.clone_style().color(StyleColor::PopupBg));
+    ui.window(format!("Blame##popup-{}", document.get()))
+        .flags(flags)
+        .position(popup.position, Condition::Always)
+        .size_constraints([0.0, 0.0], [390.0, f32::MAX])
+        .build(|| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |time| time.as_secs() as i64);
+            ui.text(format!(
+                "{} · {} · {}",
+                commit.short,
+                commit.author,
+                editor::blame::relative_time(now, commit.time)
+            ));
+            ui.text_wrapped(&commit.summary);
+            if let Some(url) = url {
+                ui.text_link_open_url(&commit.hash, url);
+                ui.set_item_tooltip(url);
+            } else {
+                ui.text_disabled(&commit.hash);
+                ui.set_item_tooltip("No web remote is configured for this repository");
+            }
+            ui.same_line();
+            let close = ui.small_button("Close");
+            let min = ui.window_pos();
+            let size = ui.window_size();
+            (
+                OverlayRect {
+                    min,
+                    max: [min[0] + size[0], min[1] + size[1]],
+                },
+                close,
+            )
+        })
 }
 
 const TILE_GRID_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.12];
@@ -4952,7 +5148,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        session::tests::{node_map, node_session, node_tile_has_group},
+        session::tests::{install_blame, node_map, node_session, node_tile_has_group},
         settings::KeyBinding,
     };
 
@@ -5157,6 +5353,78 @@ mod tests {
             self.context.io_mut().add_key_event(key, down);
             self.step();
         }
+    }
+
+    #[test]
+    fn clicking_a_blamed_tile_opens_a_popup_without_placing_a_tile() {
+        struct OneVersion {
+            commits: Vec<editor::git::CommitInfo>,
+            map: dmm::Map,
+        }
+        impl editor::blame::VersionSource for OneVersion {
+            fn commits(&self) -> &[editor::git::CommitInfo] { &self.commits }
+
+            fn truncated(&self) -> bool { false }
+
+            fn map_at(&mut self, _: usize) -> Result<editor::blame::MapVersion, editor::git::GitError> {
+                Ok(editor::blame::MapVersion::Present(self.map.clone()))
+            }
+        }
+
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut session = Session::new();
+        session
+            .load_environment(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme"))
+            .unwrap();
+        let mut map = dmm::Map::new(Size { x: 20, y: 20, z: 1 });
+        let floor = Prefab::new(TreePath::parse("/turf/open/floor"));
+        let key = map.intern_tile(vec![floor.clone()]);
+        for row in &mut map.grid[0] {
+            row.fill(key);
+        }
+        let mut source = OneVersion {
+            commits: vec![editor::git::CommitInfo {
+                hash: String::from("a").repeat(40),
+                short: String::from("aaaaaaa"),
+                author: String::from("Map author"),
+                time: 1,
+                summary: String::from("Paint the floor"),
+            }],
+            map: map.clone(),
+        };
+        let blame = editor::blame::blame(&map, &mut source, &|| false, &mut |_, _| {}).unwrap();
+        session.apply_map(crate::loader::LoadedMap {
+            path: PathBuf::from("blame-ui-test.dmm"),
+            map,
+            z: 1,
+            errors: vec![],
+            repo: Some(editor::git::RepoPath {
+                root: PathBuf::from("."),
+                git_dir: PathBuf::from(".git"),
+                rel: String::from("blame-ui-test.dmm"),
+            }),
+            conflict: None,
+        });
+        let id = session.state.active().unwrap();
+        install_blame(&mut session, id, blame);
+        session.set_tool(Tool::Place);
+        session
+            .state
+            .choose_prefab(Prefab::new(TreePath::parse("/turf/closed/wall")));
+
+        let mut app = RectangleUiHarness::with_session(session);
+        let tile = app.tile(5, 8);
+        app.pointer(tile, false);
+        assert!(app.view.blame_popup.is_none(), "hovering only shows the normal tooltip");
+        app.click(tile);
+
+        let popup = app.view.blame_popup.as_ref().expect("clickable popup");
+        assert_eq!(popup.coord, Coord::new(5, 8, 1));
+        assert_eq!(app.session.undo_label(), None);
+        assert_eq!(
+            app.session.map().unwrap().tile_at(Coord::new(5, 8, 1)).unwrap()[0].path,
+            floor.path
+        );
     }
 
     #[test]

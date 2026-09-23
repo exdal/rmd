@@ -15,6 +15,7 @@ use dear_imgui_rs::{
 use dmi::metadata::Dir;
 use dmm::{Coord, Prefab, writer::format_value};
 use editor::{
+    blame::{self, BlameCell},
     command::EditGroupId,
     document::{DocumentId, MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
     visual,
@@ -121,6 +122,7 @@ struct InspectorSnapshot {
 pub(crate) struct InspectorOutput {
     pub open_source: Option<SourceLocation>,
     pub find_similar: bool,
+    pub copy_hash: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -154,6 +156,62 @@ impl InspectorState {
             "Tile {}, {}, {}",
             snapshot.location.coord.x, snapshot.location.coord.y, snapshot.location.coord.z
         ));
+        let mut copy_hash = None;
+        if let Some(id) = session.state.active()
+            && session.git_state(id).is_some_and(|git| git.show_blame)
+        {
+            ui.separator();
+            ui.text("Blame");
+            enum Detail {
+                Commit(u32, editor::git::CommitInfo),
+                Boundary,
+                Note(&'static str),
+            }
+            let detail = session
+                .blame_at(id, snapshot.location.coord)
+                .map(|(cell, changed)| match cell {
+                    BlameCell::Commit(index, commit) if !changed => Detail::Commit(index, commit.clone()),
+                    BlameCell::Boundary if !changed => Detail::Boundary,
+                    _ => Detail::Note(blame::pending_note(cell, changed).unwrap_or_default()),
+                });
+            match detail {
+                Some(Detail::Commit(index, commit)) => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |time| time.as_secs() as i64);
+                    ui.text(format!(
+                        "{} · {} · {}",
+                        commit.short,
+                        commit.author,
+                        blame::relative_time(now, commit.time)
+                    ));
+                    ui.text_wrapped(&commit.summary);
+                    if ui.small_button("Pin commit tiles") {
+                        session.pin_blame(id, index);
+                    }
+                    ui.same_line();
+                    if ui.small_button("Copy hash") {
+                        copy_hash = Some(commit.hash);
+                    }
+                },
+                Some(Detail::Boundary) => {
+                    if let Some(label) = session
+                        .git_state(id)
+                        .and_then(|git| git.blame.as_ref())
+                        .map(|blame| blame.result.boundary_label())
+                    {
+                        ui.text_disabled(label);
+                    }
+                },
+                Some(Detail::Note(note)) => ui.text_disabled(note),
+                None => ui.text_disabled("Run blame from the Git menu"),
+            }
+
+            if session.blame_stale(id) {
+                ui.text_disabled("Stale result");
+            }
+        }
+
         let find_similar = ui.text_link("Find similar...");
         ui.separator();
 
@@ -182,6 +240,7 @@ impl InspectorState {
         InspectorOutput {
             open_source,
             find_similar,
+            copy_hash,
         }
     }
 
@@ -1106,6 +1165,7 @@ pub(super) struct InspectorPanel {
 pub(super) struct InspectorPanelOutput {
     pub(super) open_source: Option<SourceLocation>,
     pub(super) jump: Option<JumpTarget>,
+    pub(super) copy_hash: Option<String>,
 }
 
 impl InspectorPanel {
@@ -1131,6 +1191,7 @@ impl InspectorPanel {
         InspectorPanelOutput {
             open_source: output.open_source,
             jump: self.draw_similar_instances(ui, session, settings),
+            copy_hash: output.copy_hash,
         }
     }
 

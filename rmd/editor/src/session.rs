@@ -4,7 +4,7 @@ use core::{
 };
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -14,6 +14,7 @@ use dmm::{Coord, Map, MapFormat, Prefab, Size};
 use editor::{
     EditorState,
     Environment,
+    blame::{self, BlameCell, BlameResult},
     clipboard::{self, TileBlock},
     command::{Edit, EditGroupId},
     conflict::{ConflictState, Region, Resolved, Side},
@@ -227,6 +228,70 @@ struct DocumentCache {
 
 type SharedHighlights = Arc<[editor::bake::Highlight]>;
 
+pub(crate) struct BlameState {
+    pub result: BlameResult,
+    pub snapshot: Map,
+    pub revision: u64,
+    pub pinned: Option<u32>,
+    /// Built once per level, the result never changes
+    heatmap: RefCell<HashMap<u32, SharedHighlights>>,
+    /// Outline of one commit's tiles, keyed by level and commit index
+    outlines: RefCell<HashMap<(u32, u32), SharedHighlights>>,
+}
+
+impl BlameState {
+    fn new(result: BlameResult, snapshot: Map, revision: u64) -> Self {
+        Self {
+            result,
+            snapshot,
+            revision,
+            pinned: None,
+            heatmap: RefCell::new(HashMap::new()),
+            outlines: RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn heatmap(&self, z: u32) -> SharedHighlights {
+        self.heatmap
+            .borrow_mut()
+            .entry(z)
+            .or_insert_with(|| blame_heatmap(&self.result, z).into())
+            .clone()
+    }
+
+    fn outline(&self, z: u32, commit: u32) -> SharedHighlights {
+        self.outlines
+            .borrow_mut()
+            .entry((z, commit))
+            .or_insert_with(|| {
+                let covered = self
+                    .result
+                    .level(z)
+                    .filter(|(_, cell)| *cell == commit)
+                    .map(|(coord, _)| [coord.x as i32, coord.y as i32])
+                    .collect::<HashSet<_>>();
+                if covered.is_empty() {
+                    return Arc::new([]);
+                }
+
+                Arc::new([editor::bake::Highlight {
+                    tiles: editor::bake::highlight_tiles(&covered),
+                    z: z as i32,
+                    color: [1.0, 1.0, 1.0],
+                    fill: 0.0,
+                    outline: true,
+                    when: editor::bake::HIGHLIGHT_ALWAYS,
+                    label: self
+                        .result
+                        .commits
+                        .get(commit as usize)
+                        .map(|commit| commit.short.clone()),
+                }])
+            })
+            .clone()
+    }
+}
+
 /// Conflict regions and overlays derived for one point in the history
 struct ConflictView {
     key: (u64, u64, usize),
@@ -276,6 +341,9 @@ pub(crate) struct GitDocState {
     pub branch: Option<String>,
     pub head: Option<CommitRef>,
     pub operation: Option<Operation>,
+    pub web_commit_base: Option<String>,
+    pub blame: Option<BlameState>,
+    pub show_blame: bool,
     pub staging: bool,
     conflict_view: RefCell<Option<ConflictView>>,
 }
@@ -293,6 +361,9 @@ impl GitDocState {
             branch: None,
             head: None,
             operation: None,
+            web_commit_base: None,
+            blame: None,
+            show_blame: false,
             staging: false,
             conflict_view: RefCell::new(None),
         }
@@ -535,6 +606,34 @@ impl Session {
         }
     }
 
+    pub(crate) fn toggle_blame(&mut self, id: DocumentId, depth: usize) {
+        let Some(git) = self.caches.get_mut(&id).and_then(|cache| cache.git.as_mut()) else {
+            return;
+        };
+
+        git.show_blame = !git.show_blame;
+
+        if git.show_blame && git.blame.is_none() {
+            self.run_blame(id, depth);
+        }
+    }
+
+    pub(crate) fn run_blame(&mut self, id: DocumentId, depth: usize) {
+        if let Some(git) = self.caches.get_mut(&id).and_then(|cache| cache.git.as_mut()) {
+            git.show_blame = true;
+        }
+
+        let Some(document) = self.state.document(id) else {
+            return;
+        };
+
+        let Some(cache) = self.caches.get(&id) else { return };
+        let Some(git) = cache.git.as_ref() else { return };
+
+        self.git_worker
+            .blame(id, git.repo.clone(), document.map.clone(), cache.map_revision, depth);
+    }
+
     pub(crate) fn mark_resolved(&mut self, id: DocumentId) -> bool {
         if !self.git_enabled {
             return false;
@@ -585,6 +684,7 @@ impl Session {
                         git.branch = Some(status.branch);
                         git.head = status.head;
                         git.operation = status.operation;
+                        git.web_commit_base = status.web_commit_base;
                         git.unmerged_on_disk = status.unmerged;
 
                         if !status.unmerged && !document_dirty {
@@ -595,6 +695,15 @@ impl Session {
                         git.error = None;
                     },
                     Err(error) => git.error = Some(error.to_string()),
+                },
+                GitOutcome::Blame {
+                    revision,
+                    snapshot,
+                    result,
+                } => match result {
+                    Ok(result) => git.blame = Some(BlameState::new(result, snapshot, revision)),
+                    Err(error) if error.0 != "cancelled" => git.error = Some(error.to_string()),
+                    Err(_) => {},
                 },
                 GitOutcome::MarkResolved(result) => {
                     git.staging = false;
@@ -613,6 +722,50 @@ impl Session {
 
         for id in refresh_after {
             self.refresh_git_document(id);
+        }
+    }
+
+    pub(crate) fn blame_progress(&self, id: DocumentId) -> Option<usize> { self.git_worker.blame_progress(id) }
+
+    pub(crate) fn blame_at(&self, id: DocumentId, coord: Coord) -> Option<(BlameCell<'_>, bool)> {
+        let cache = self.caches.get(&id)?;
+        let blame = cache.git.as_ref()?.blame.as_ref()?;
+        let current = self.state.document(id)?.map.tile_at(coord);
+        let old = blame.snapshot.tile_at(coord);
+        let changed = match (current, old) {
+            (Some(current), Some(old)) => !dmm::merge::tiles_equal(current, old),
+            (None, None) => false,
+            _ => true,
+        };
+
+        Some((blame.result.at(coord)?, changed))
+    }
+
+    pub(crate) fn blame_stale(&self, id: DocumentId) -> bool {
+        self.caches
+            .get(&id)
+            .and_then(|cache| {
+                cache
+                    .git
+                    .as_ref()
+                    .and_then(|git| git.blame.as_ref())
+                    .map(|blame| blame.revision != cache.map_revision)
+            })
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn pin_blame(&mut self, id: DocumentId, commit: u32) {
+        if let Some(git) = self.caches.get_mut(&id).and_then(|cache| cache.git.as_mut()) {
+            git.show_blame = true;
+        }
+
+        if let Some(blame) = self
+            .caches
+            .get_mut(&id)
+            .and_then(|cache| cache.git.as_mut())
+            .and_then(|git| git.blame.as_mut())
+        {
+            blame.pinned = (blame.pinned != Some(commit)).then_some(commit);
         }
     }
 
@@ -2942,6 +3095,23 @@ impl Session {
             set.shared.push(conflicts);
         }
 
+        if let Some(git) = cache.git.as_ref().filter(|git| self.git_enabled && git.show_blame)
+            && let Some(blame) = git.blame.as_ref()
+        {
+            set.shared.push(blame.heatmap(document.z));
+            let hovered_commit = hovered.and_then(|coord| match blame.result.at(coord) {
+                Some(BlameCell::Commit(index, _)) => Some(index),
+                _ => None,
+            });
+            for index in [blame.pinned, hovered_commit]
+                .into_iter()
+                .flatten()
+                .collect::<HashSet<_>>()
+            {
+                set.shared.push(blame.outline(document.z, index));
+            }
+        }
+
         set
     }
 
@@ -3685,6 +3855,89 @@ impl Session {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum BlameHeat {
+    Commit(u32),
+    Worktree,
+    Boundary,
+}
+
+const BLAME_BASE_FILL: f32 = 0.55;
+const BLAME_OVERLAY_OPACITY_REDUCTION: f32 = 0.15;
+const BLAME_HOT_OPACITY_REDUCTION: f32 = 0.30;
+
+fn blame_heatmap(result: &BlameResult, z: u32) -> Vec<editor::bake::Highlight> {
+    let mut buckets: BTreeMap<BlameHeat, HashSet<[i32; 2]>> = BTreeMap::new();
+    for (coord, cell) in result.level(z) {
+        let source = match cell {
+            blame::UNCOMMITTED => BlameHeat::Worktree,
+            blame::BOUNDARY => BlameHeat::Boundary,
+            index if (index as usize) < result.history_limit => BlameHeat::Commit(index),
+            _ => BlameHeat::Boundary,
+        };
+        buckets
+            .entry(source)
+            .or_default()
+            .insert([coord.x as i32, coord.y as i32]);
+    }
+    buckets
+        .into_iter()
+        .map(|(source, covered)| editor::bake::Highlight {
+            tiles: editor::bake::highlight_tiles(&covered),
+            z: z as i32,
+            color: blame_heatmap_color(source, result.history_limit),
+            fill: blame_heatmap_fill(source, result.history_limit),
+            outline: false,
+            when: editor::bake::HIGHLIGHT_ALWAYS,
+            label: None,
+        })
+        .collect()
+}
+
+fn blame_heatmap_color(source: BlameHeat, history_limit: usize) -> [f32; 3] {
+    let index = match source {
+        BlameHeat::Commit(index) => index as usize,
+        BlameHeat::Worktree => return [0.14, 0.9, 0.32],
+        BlameHeat::Boundary => return [0.4, 0.2, 0.8],
+    };
+    let color = inferno(blame_revision_heat(index, history_limit));
+    let peak = color.into_iter().fold(0.0f32, f32::max);
+    let gain = (0.85 / peak.max(f32::EPSILON)).max(1.0);
+    color.map(|channel| (channel * gain).clamp(0.0, 1.0))
+}
+
+fn blame_heatmap_fill(source: BlameHeat, history_limit: usize) -> f32 {
+    let base = BLAME_BASE_FILL * (1.0 - BLAME_OVERLAY_OPACITY_REDUCTION);
+    match source {
+        BlameHeat::Commit(index) => {
+            base * (1.0 - BLAME_HOT_OPACITY_REDUCTION * blame_revision_heat(index as usize, history_limit))
+        },
+        BlameHeat::Worktree | BlameHeat::Boundary => base,
+    }
+}
+
+fn blame_revision_heat(index: usize, history_limit: usize) -> f32 {
+    let remaining = history_limit.saturating_sub(index);
+    ((remaining + 1) as f32).log2() / ((history_limit.max(1) + 1) as f32).log2()
+}
+
+fn inferno(t: f32) -> [f32; 3] {
+    const C0: [f32; 3] = [0.000_218_940_37, 0.001_651_004_7, -0.019_480_899];
+    const C1: [f32; 3] = [0.106_513_42, 0.563_956_44, 3.932_712_3];
+    const C2: [f32; 3] = [11.602_493, -3.972_854, -15.942_394];
+    const C3: [f32; 3] = [-41.703_995, 17.436_398, 44.354_145];
+    const C4: [f32; 3] = [77.162_93, -33.402_36, -81.807_31];
+    const C5: [f32; 3] = [-71.319_43, 32.626_064, 73.209_52];
+    const C6: [f32; 3] = [25.131_126, -12.242_669, -23.070_326];
+
+    let t = t.clamp(0.0, 1.0);
+    std::array::from_fn(|channel| {
+        C0[channel]
+            + t * (C1[channel]
+                + t * (C2[channel] + t * (C3[channel] + t * (C4[channel] + t * (C5[channel] + t * C6[channel])))))
+    })
+}
+
 fn direction_state(environment: &Environment, id: TypeId, appearance: &visual::Appearance) -> DirectionState {
     let dmi_directions = appearance
         .icon
@@ -4220,6 +4473,37 @@ pub(crate) mod tests {
             !session.git_state(id).unwrap().staging,
             "the dropped job can never report back"
         );
+    }
+
+    #[test]
+    fn blame_palette_uses_revision_positions_and_keeps_worktree_green() {
+        use super::BlameHeat;
+
+        let history_limit = 500;
+        let boundary = super::blame_heatmap_color(BlameHeat::Boundary, history_limit);
+        let cold = super::blame_heatmap_color(BlameHeat::Commit(499), history_limit);
+        let middle = super::blame_heatmap_color(BlameHeat::Commit(250), history_limit);
+        let hot = super::blame_heatmap_color(BlameHeat::Commit(0), history_limit);
+        let worktree = super::blame_heatmap_color(BlameHeat::Worktree, history_limit);
+        let short_history = super::blame_heatmap_color(BlameHeat::Commit(1), 2);
+        let long_history = super::blame_heatmap_color(BlameHeat::Commit(1), history_limit);
+
+        assert!(boundary[2] >= 0.8 && boundary[2] > boundary[0]);
+        assert!(cold[2] >= 0.8 && cold[2] > cold[0]);
+        assert_ne!(middle, cold);
+        assert_ne!(middle, hot);
+        assert_ne!(short_history, long_history);
+        assert!(hot[0] >= 0.9 && hot[1] >= 0.6);
+        assert!(worktree[1] >= 0.8 && worktree[1] > worktree[0] * 3.0 && worktree[1] > worktree[2] * 2.0);
+    }
+
+    pub(crate) fn install_blame(session: &mut Session, id: DocumentId, result: editor::blame::BlameResult) {
+        let snapshot = session.state.document(id).unwrap().map.clone();
+        let cache = session.caches.get_mut(&id).unwrap();
+        let git = cache.git.as_mut().unwrap();
+        git.blame = Some(super::BlameState::new(result, snapshot, cache.map_revision));
+        git.show_blame = true;
+        git.web_commit_base = Some(String::from("https://github.com/example/maps/commit"));
     }
 
     fn examples() -> PathBuf {

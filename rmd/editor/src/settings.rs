@@ -727,6 +727,7 @@ pub(crate) struct Settings {
     pub optimizations_enabled: bool,
     pub bake_enabled: bool,
     pub git_enabled: bool,
+    pub blame_depth: u32,
 }
 
 pub(crate) struct SettingsLoad {
@@ -791,6 +792,7 @@ impl Default for Settings {
             optimizations_enabled: true,
             bake_enabled: true,
             git_enabled: true,
+            blame_depth: 500,
         }
     }
 }
@@ -820,6 +822,7 @@ impl Settings {
 
     fn normalize(&mut self) {
         self.minimum_light_brightness_percent = self.minimum_light_brightness_percent.min(100);
+        self.blame_depth = self.blame_depth.clamp(1, 10_000);
         if !self.object_tree_search.type_paths && !self.object_tree_search.names {
             self.object_tree_search = ObjectTreeSearchOptions::default();
         }
@@ -1014,6 +1017,7 @@ mod tests {
                 optimizations_enabled: true,
                 bake_enabled: true,
                 git_enabled: true,
+                blame_depth: 500,
             }
         );
     }
@@ -1254,6 +1258,7 @@ mod tests {
             optimizations_enabled: false,
             bake_enabled: true,
             git_enabled: true,
+            blame_depth: 500,
         };
         settings.keybindings.rebind(
             KeybindAction::ShowAreas,
@@ -1328,6 +1333,7 @@ mod tests {
             optimizations_enabled: true,
             bake_enabled: true,
             git_enabled: true,
+            blame_depth: 500,
         };
         let mut options = FrameOptions::default();
 
