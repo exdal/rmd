@@ -3561,6 +3561,96 @@ mod tests {
         path.canonicalize().unwrap_or(path)
     }
 
+    #[test]
+    #[ignore = "requires the local target/MonkeStation2.0 checkout"]
+    fn bundled_monkestation_profile_bakes_debug_maps() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
+        let entry = root.join("tgstation.dme");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(editor::environment::BundledProfile::Monkestation),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&entry, &options, &Progress::new()).expect("Monkestation codebase");
+        assert!(
+            !loaded.diagnostics.bake_preprocess.iter().any(|error| error.is_fatal()),
+            "{:?}",
+            loaded.diagnostics.bake_preprocess
+        );
+        assert!(
+            loaded.diagnostics.bake_sema.is_empty(),
+            "{:?}",
+            loaded.diagnostics.bake_sema
+        );
+        assert!(loaded.diagnostics.codegen.is_none(), "{:?}", loaded.diagnostics.codegen);
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        assert_eq!(
+            loaded
+                .environment
+                .profiles
+                .as_ref()
+                .map(|profiles| profiles.active.as_str()),
+            Some("/datum/demir/monkestation")
+        );
+        assert!(loaded.environment.bake_program.is_some());
+
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+        let mut flashlight = Prefab::new(TreePath::parse("/obj/item/flashlight"));
+        flashlight.set_var("start_on".into(), Value::Num(1.0));
+        let mut light_map = Map::new(Size { x: 1, y: 1, z: 1 });
+        let tile = light_map.intern_tile(vec![
+            flashlight,
+            Prefab::new(TreePath::parse("/turf/open/floor/iron")),
+            Prefab::new(TreePath::parse("/area/station/engineering/main")),
+        ]);
+        light_map.grid[0][0][0] = tile;
+        session.activate_document(MapDocument::new(light_map, 1));
+        settle_bake(&mut session);
+        let light_bake = session.active_cache().bake.as_ref().expect("lit flashlight bake");
+        assert_eq!(
+            light_bake.diagnostics.count(),
+            0,
+            "{:?}",
+            light_bake.diagnostics.entries
+        );
+        assert!(
+            light_bake
+                .appearances
+                .values()
+                .flat_map(|appearance| &appearance.underlays)
+                .any(|underlay| underlay.lighting == vm::AppearanceLighting::OverlayLight),
+            "Monkestation lighting preview did not emit a light mask"
+        );
+
+        for name in ["runtimestation.dmm", "multiz.dmm"] {
+            session
+                .open_map(&root.join("_maps/map_files/debug").join(name), 1)
+                .expect("Monkestation debug map");
+            settle_bake(&mut session);
+            let bake = session.active_cache().bake.as_ref().expect("completed map bake");
+            assert!(bake.succeeded > 0, "{name} baked no atoms");
+            let faults = bake
+                .diagnostics
+                .entries
+                .iter()
+                .map(|entry| {
+                    let file = session
+                        .state
+                        .environment
+                        .as_ref()
+                        .and_then(|environment| environment.bake_file(entry.fault.location.file));
+                    format!(
+                        "{} atoms: {:?} at {}",
+                        entry.count,
+                        entry.fault.kind,
+                        entry.fault.location.display(file)
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(bake.diagnostics.count(), 0, "{name}: {faults:#?}");
+        }
+    }
+
     fn node_environment() -> Environment {
         const PROFILE: &str = r#"
 /obj/cable

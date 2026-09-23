@@ -73,17 +73,25 @@ pub(crate) fn source_root<'a>(sources: &'a SourceMap<'_>, entry: Option<FileId>,
 pub enum BundledProfile {
     Cmss13,
     Goonstation,
+    Monkestation,
     Tgstation,
     Vanderlin,
 }
 
 impl BundledProfile {
-    pub const ALL: [Self; 4] = [Self::Cmss13, Self::Goonstation, Self::Tgstation, Self::Vanderlin];
+    pub const ALL: [Self; 5] = [
+        Self::Cmss13,
+        Self::Goonstation,
+        Self::Monkestation,
+        Self::Tgstation,
+        Self::Vanderlin,
+    ];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Cmss13 => "CMSS13",
             Self::Goonstation => "Goonstation",
+            Self::Monkestation => "Monkestation",
             Self::Tgstation => "tgstation",
             Self::Vanderlin => "Vanderlin",
         }
@@ -93,6 +101,7 @@ impl BundledProfile {
         match self {
             Self::Cmss13 => "/datum/demir/cmss13",
             Self::Goonstation => "/datum/demir/goonstation",
+            Self::Monkestation => "/datum/demir/monkestation",
             Self::Tgstation => "/datum/demir/tgstation",
             Self::Vanderlin => "/datum/demir/vanderlin",
         }
@@ -102,6 +111,7 @@ impl BundledProfile {
         match self {
             Self::Cmss13 => "<bundled-profile-cmss13.dm>",
             Self::Goonstation => "<bundled-profile-goonstation.dm>",
+            Self::Monkestation => "<bundled-profile-monkestation.dm>",
             Self::Tgstation => "<bundled-profile-tgstation.dm>",
             Self::Vanderlin => "<bundled-profile-vanderlin.dm>",
         }
@@ -111,6 +121,7 @@ impl BundledProfile {
         match self {
             Self::Cmss13 => include_str!("../../../examples/profiles/cmss13.dm"),
             Self::Goonstation => include_str!("../../../examples/profiles/goonstation.dm"),
+            Self::Monkestation => include_str!("../../../examples/profiles/monkestation.dm"),
             Self::Tgstation => include_str!("../../../examples/profiles/tgstation.dm"),
             Self::Vanderlin => include_str!("../../../examples/profiles/vanderlin.dm"),
         }
@@ -122,7 +133,7 @@ impl BundledProfile {
                 "<bundled-profile-goonstation-defines.dm>",
                 "#define USE_PERSPECTIVE_EDITOR_WALLS\n",
             )),
-            Self::Cmss13 | Self::Tgstation | Self::Vanderlin => None,
+            Self::Cmss13 | Self::Monkestation | Self::Tgstation | Self::Vanderlin => None,
         }
     }
 }
@@ -576,6 +587,7 @@ mod tests {
             [
                 "/datum/demir/cmss13",
                 "/datum/demir/goonstation",
+                "/datum/demir/monkestation",
                 "/datum/demir/tgstation",
                 "/datum/demir/vanderlin",
             ]
