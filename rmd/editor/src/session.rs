@@ -14,10 +14,10 @@ use dmm::{Coord, Map, MapFormat, Prefab, Size};
 use editor::{
     EditorState,
     Environment,
-    blame::{self, BlameCell, BlameResult},
+    blame::{self, BlameCell, BlameCounts, BlameResult},
     clipboard::{self, TileBlock},
     command::{Edit, EditGroupId},
-    conflict::{ConflictState, Region, Resolved, Side},
+    conflict::{ConflictRow, ConflictState, Region, Resolved, Side},
     document::{DocumentId, MapDocument, PlacedTile, PrefabInstanceId, PrefabLocation, Selection, VarMutation},
     focus::AreaFocus,
     frame::{self, FrameInstances, FrameOptions, FrameRenderOptions, PrefabUpdate, TypeVisibility},
@@ -227,12 +227,15 @@ struct DocumentCache {
 }
 
 type SharedHighlights = Arc<[editor::bake::Highlight]>;
+/// Each conflict row's resolution, indexed like `ConflictState::rows`
+pub(crate) type ConflictStatus = Arc<[Option<Side>]>;
 
 pub(crate) struct BlameState {
     pub result: BlameResult,
     pub snapshot: Map,
     pub revision: u64,
     pub pinned: Option<u32>,
+    pub counts: BlameCounts,
     /// Built once per level, the result never changes
     heatmap: RefCell<HashMap<u32, SharedHighlights>>,
     /// Outline of one commit's tiles, keyed by level and commit index
@@ -242,6 +245,7 @@ pub(crate) struct BlameState {
 impl BlameState {
     fn new(result: BlameResult, snapshot: Map, revision: u64) -> Self {
         Self {
+            counts: result.counts(),
             result,
             snapshot,
             revision,
@@ -297,6 +301,7 @@ struct ConflictView {
     key: (u64, u64, usize),
     resolved: Resolved,
     unresolved: usize,
+    status: ConflictStatus,
     regions: HashMap<Option<u32>, Arc<[Region]>>,
     highlights: HashMap<u32, SharedHighlights>,
 }
@@ -382,6 +387,7 @@ impl GitDocState {
             *view = Some(ConflictView {
                 key,
                 unresolved: conflicts.unresolved_in(&resolved).count(),
+                status: conflicts.rows().iter().map(|row| resolved.side(row.coord)).collect(),
                 resolved,
                 regions: HashMap::new(),
                 highlights: HashMap::new(),
@@ -407,6 +413,8 @@ pub struct Session {
     baker: Baker,
     git_worker: GitWorker,
     git_enabled: bool,
+    /// A map whose merge conflicts were just loaded, for the UI to surface
+    loaded_conflicts: Option<DocumentId>,
     queued_bakes: Vec<DocumentId>,
     standalone_baker: editor::bake::Standalone,
     standalone: Vec<(Prefab, Option<visual::Appearance>)>,
@@ -447,6 +455,7 @@ impl Session {
             baker: Baker::default(),
             git_worker: GitWorker::default(),
             git_enabled: true,
+            loaded_conflicts: None,
             queued_bakes: Vec::new(),
             standalone_baker: editor::bake::Standalone::default(),
             standalone: Vec::new(),
@@ -512,6 +521,9 @@ impl Session {
             MapDocument::open(path, map, z)
         };
         let id = self.activate_document(document);
+        if pending_write {
+            self.loaded_conflicts = Some(id);
+        }
         self.caches.entry(id).or_default().git =
             repo.map(|repo| GitDocState::new(repo, conflict.map(ConflictState::new)));
 
@@ -540,6 +552,9 @@ impl Session {
         }
 
         let pending_write = conflict.is_some();
+        if pending_write {
+            self.loaded_conflicts = Some(id);
+        }
         self.state.document_mut(id).unwrap().replace_map(map, pending_write);
         self.caches.entry(id).or_default().git =
             repo.map(|repo| GitDocState::new(repo, conflict.map(ConflictState::new)));
@@ -634,30 +649,41 @@ impl Session {
             .blame(id, git.repo.clone(), document.map.clone(), cache.map_revision, depth);
     }
 
+    /// Why the map cannot be marked resolved yet, `None` when it can
+    pub(crate) fn mark_resolved_blocker(&self, id: DocumentId) -> Option<String> {
+        let Some(git) = self.git_state(id) else {
+            return Some(String::from("Not in a Git worktree"));
+        };
+        let Some(document) = self.state.document(id) else {
+            return Some(String::from("No map selected"));
+        };
+
+        if git.staging {
+            return Some(String::from("Staging..."));
+        }
+        if !git.unmerged_on_disk {
+            return Some(String::from("Git does not list this map as unmerged"));
+        }
+        let Some(conflicts) = git.conflicts.as_ref() else {
+            return Some(String::from("No conflicts loaded"));
+        };
+
+        match self.unresolved_conflicts(id) {
+            0 if document.is_dirty() => Some(String::from("Save the map first")),
+            0 => None,
+            1 => Some(String::from("1 tile is still unresolved")),
+            count => Some(format!("{count} of {} tiles are still unresolved", conflicts.len())),
+        }
+    }
+
     pub(crate) fn mark_resolved(&mut self, id: DocumentId) -> bool {
-        if !self.git_enabled {
+        if self.mark_resolved_blocker(id).is_some() {
             return false;
         }
-
-        let Some(document) = self.state.document(id) else {
-            return false;
-        };
 
         let Some(git) = self.caches.get_mut(&id).and_then(|cache| cache.git.as_mut()) else {
             return false;
         };
-
-        if !git.unmerged_on_disk
-            || git.conflicts.is_none()
-            || git.staging
-            || document.is_dirty()
-            || git
-                .conflicts
-                .as_ref()
-                .is_some_and(|state| state.unresolved_count(&document.history) != 0)
-        {
-            return false;
-        }
 
         git.staging = true;
         self.git_worker.mark_resolved(id, git.repo.clone());
@@ -796,6 +822,25 @@ impl Session {
     pub(crate) fn unresolved_conflicts(&self, id: DocumentId) -> usize {
         self.with_conflict_view(id, |view, _| view.unresolved).unwrap_or(0)
     }
+
+    /// Every conflict row with its current resolution, in the same order
+    pub(crate) fn conflict_table(&self, id: DocumentId) -> Option<(&[ConflictRow], ConflictStatus)> {
+        let conflicts = self.git_state(id)?.conflicts.as_ref()?;
+        let status = self.with_conflict_view(id, |view, _| view.status.clone())?;
+
+        Some((conflicts.rows(), status))
+    }
+
+    /// The map whose merge conflicts were loaded since the last call
+    pub(crate) fn take_loaded_conflicts(&mut self) -> Option<DocumentId> { self.loaded_conflicts.take() }
+
+    pub(crate) fn clear_git_error(&mut self, id: DocumentId) {
+        if let Some(git) = self.caches.get_mut(&id).and_then(|cache| cache.git.as_mut()) {
+            git.error = None;
+        }
+    }
+
+    pub(crate) fn blame_state(&self, id: DocumentId) -> Option<&BlameState> { self.git_state(id)?.blame.as_ref() }
 
     pub(crate) fn resolve_conflict(&mut self, id: DocumentId, coords: &[Coord], side: Side) -> bool {
         if !self.git_enabled {
@@ -3869,12 +3914,7 @@ const BLAME_HOT_OPACITY_REDUCTION: f32 = 0.30;
 fn blame_heatmap(result: &BlameResult, z: u32) -> Vec<editor::bake::Highlight> {
     let mut buckets: BTreeMap<BlameHeat, HashSet<[i32; 2]>> = BTreeMap::new();
     for (coord, cell) in result.level(z) {
-        let source = match cell {
-            blame::UNCOMMITTED => BlameHeat::Worktree,
-            blame::BOUNDARY => BlameHeat::Boundary,
-            index if (index as usize) < result.history_limit => BlameHeat::Commit(index),
-            _ => BlameHeat::Boundary,
-        };
+        let source = blame_heat(result, cell);
         buckets
             .entry(source)
             .or_default()
@@ -3904,6 +3944,19 @@ fn blame_heatmap_color(source: BlameHeat, history_limit: usize) -> [f32; 3] {
     let peak = color.into_iter().fold(0.0f32, f32::max);
     let gain = (0.85 / peak.max(f32::EPSILON)).max(1.0);
     color.map(|channel| (channel * gain).clamp(0.0, 1.0))
+}
+
+fn blame_heat(result: &BlameResult, cell: u32) -> BlameHeat {
+    match cell {
+        blame::UNCOMMITTED => BlameHeat::Worktree,
+        blame::BOUNDARY => BlameHeat::Boundary,
+        index if (index as usize) < result.history_limit => BlameHeat::Commit(index),
+        _ => BlameHeat::Boundary,
+    }
+}
+
+pub(crate) fn blame_color(result: &BlameResult, cell: u32) -> [f32; 3] {
+    blame_heatmap_color(blame_heat(result, cell), result.history_limit)
 }
 
 fn blame_heatmap_fill(source: BlameHeat, history_limit: usize) -> f32 {
@@ -4396,7 +4449,42 @@ pub(crate) mod tests {
     };
 
     #[test]
-    fn cached_conflict_regions_follow_resolutions_through_undo_and_redo() {
+    fn the_conflict_table_and_mark_resolved_blocker_follow_resolutions() {
+        let mut session = conflicted_session();
+        let id = session.state.active().unwrap();
+        assert_eq!(session.take_loaded_conflicts(), Some(id));
+        assert_eq!(session.take_loaded_conflicts(), None);
+
+        let (rows, status) = session.conflict_table(id).unwrap();
+        assert_eq!(
+            rows.iter().map(|row| (row.coord.x, row.region)).collect::<Vec<_>>(),
+            [(1, 1), (3, 2)]
+        );
+        assert_eq!(status.as_ref(), [None, None]);
+        assert_eq!(
+            session.mark_resolved_blocker(id).as_deref(),
+            Some("2 of 2 tiles are still unresolved")
+        );
+
+        let all = [Coord::new(1, 1, 1), Coord::new(3, 1, 1)];
+        assert!(session.resolve_conflict(id, &all, editor::conflict::Side::Theirs));
+        let (_, status) = session.conflict_table(id).unwrap();
+        assert_eq!(status.as_ref(), [Some(editor::conflict::Side::Theirs); 2]);
+        assert_eq!(session.mark_resolved_blocker(id).as_deref(), Some("Save the map first"));
+        assert!(!session.mark_resolved(id));
+
+        session.caches.get_mut(&id).unwrap().git.as_mut().unwrap().staging = true;
+        assert_eq!(session.mark_resolved_blocker(id).as_deref(), Some("Staging..."));
+
+        session.sync_git_enabled(false);
+        assert!(session.conflict_table(id).is_none());
+        assert_eq!(
+            session.mark_resolved_blocker(id).as_deref(),
+            Some("Not in a Git worktree")
+        );
+    }
+
+    fn conflicted_session() -> Session {
         let floor = vec![Prefab::new(TreePath::parse("/turf/floor"))];
         let wall = vec![Prefab::new(TreePath::parse("/turf/wall"))];
         let mut map = Map::new(Size { x: 3, y: 1, z: 1 });
@@ -4425,6 +4513,13 @@ pub(crate) mod tests {
                     .into(),
             }),
         });
+
+        session
+    }
+
+    #[test]
+    fn cached_conflict_regions_follow_resolutions_through_undo_and_redo() {
+        let mut session = conflicted_session();
         let id = session.state.active().unwrap();
         assert_eq!(session.conflict_regions(id, Some(1)).len(), 2);
         assert_eq!(session.unresolved_conflicts(id), 2);

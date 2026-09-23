@@ -45,6 +45,14 @@ pub struct BlameResult {
     cells: Vec<u32>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BlameCounts {
+    // indexed like `BlameResult::commits`
+    pub commits: Vec<usize>,
+    pub uncommitted: usize,
+    pub boundary: usize,
+}
+
 fn cell_index(size: Size, coord: Coord) -> Option<usize> {
     if coord.x == 0 || coord.y == 0 || coord.z == 0 || coord.x > size.x || coord.y > size.y || coord.z > size.z {
         return None;
@@ -75,6 +83,34 @@ impl BlameResult {
                 Some((coord, *self.cells.get(cell_index(size, coord)?)?))
             })
         })
+    }
+
+    pub fn counts(&self) -> BlameCounts {
+        let mut counts = BlameCounts {
+            commits: vec![0; self.commits.len()],
+            ..BlameCounts::default()
+        };
+
+        for cell in &self.cells {
+            match *cell {
+                UNCOMMITTED => counts.uncommitted += 1,
+                BOUNDARY => counts.boundary += 1,
+                index => {
+                    if let Some(count) = counts.commits.get_mut(index as usize) {
+                        *count += 1;
+                    }
+                },
+            }
+        }
+
+        counts
+    }
+
+    /// A tile owned by `cell`, on level `prefer_z` when it has one there
+    pub fn first_tile(&self, cell: u32, prefer_z: u32) -> Option<Coord> {
+        let find = |z| self.level(z).find(|(_, owner)| *owner == cell).map(|(coord, _)| coord);
+
+        find(prefer_z).or_else(|| (1..=self.size.z).filter(|z| *z != prefer_z).find_map(find))
     }
 
     pub fn oldest_commit(&self) -> Option<&CommitInfo> { self.commits.last() }
@@ -349,7 +385,17 @@ pub fn relative_time(now: i64, time: i64) -> String {
 mod tests {
     use dmm::{Coord, parser::parse};
 
-    use super::{BlameCell, MapVersion, VersionSource, blame, history_window, pending_note, relative_time};
+    use super::{
+        BlameCell,
+        BlameCounts,
+        MapVersion,
+        UNCOMMITTED,
+        VersionSource,
+        blame,
+        history_window,
+        pending_note,
+        relative_time,
+    };
     use crate::git::{CommitInfo, FileVersion, GitError};
 
     fn file_versions(count: usize) -> Vec<FileVersion> {
@@ -473,6 +519,18 @@ mod tests {
         assert_eq!(commit_of(&result, 1, 1).as_deref(), Some("c1"));
         assert_eq!(commit_of(&result, 2, 1).as_deref(), Some("uncommitted"));
         assert_eq!(commit_of(&result, 3, 1).as_deref(), Some("c0"));
+
+        assert_eq!(
+            result.counts(),
+            BlameCounts {
+                commits: vec![1, 1, 0],
+                uncommitted: 1,
+                boundary: 0,
+            }
+        );
+        assert_eq!(result.first_tile(1, 1), Some(Coord::new(1, 1, 1)));
+        assert_eq!(result.first_tile(UNCOMMITTED, 2), Some(Coord::new(2, 1, 1)));
+        assert_eq!(result.first_tile(2, 1), None);
     }
 
     #[test]

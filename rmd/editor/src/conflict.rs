@@ -15,9 +15,9 @@ use crate::{
 
 pub const OURS_LABEL: &str = "HEAD";
 
-const UNRESOLVED_COLOR: [f32; 3] = [1.0, 0.25, 0.2];
-const OURS_COLOR: [f32; 3] = [0.3, 0.6, 1.0];
-const THEIRS_COLOR: [f32; 3] = [1.0, 0.6, 0.15];
+pub const UNRESOLVED_COLOR: [f32; 3] = [1.0, 0.25, 0.2];
+pub const OURS_COLOR: [f32; 3] = [0.3, 0.6, 1.0];
+pub const THEIRS_COLOR: [f32; 3] = [1.0, 0.6, 0.15];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Side {
@@ -55,11 +55,24 @@ impl Region {
 #[derive(Debug, Clone, Default)]
 pub struct Resolved(HashMap<Coord, Side>);
 
+impl Resolved {
+    pub fn side(&self, coord: Coord) -> Option<Side> { self.0.get(&coord).copied() }
+}
+
+/// One conflicting tile as the conflict table lists it
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictRow {
+    pub coord: Coord,
+    /// 1 based, numbered over every conflict so it holds while tiles get resolved
+    pub region: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct ConflictState {
     pub operation: Option<Operation>,
     tiles: HashMap<Coord, TileConflict>,
     order: Vec<Coord>,
+    rows: Vec<ConflictRow>,
     resolutions: HashMap<Coord, Vec<(Side, EditGroupId)>>,
     revision: u64,
 }
@@ -88,14 +101,31 @@ impl ConflictState {
             .map(|conflict| (conflict.coord, conflict))
             .collect();
 
-        Self {
+        let mut state = Self {
             operation: data.operation,
             tiles,
             order,
+            rows: Vec::new(),
             resolutions: HashMap::new(),
             revision: 0,
-        }
+        };
+        state.rows = state
+            .regions_in(None, &Resolved::default())
+            .into_iter()
+            .enumerate()
+            .flat_map(|(index, region)| {
+                region.tiles.into_iter().map(move |coord| ConflictRow {
+                    coord,
+                    region: index + 1,
+                })
+            })
+            .collect();
+
+        state
     }
+
+    /// Every conflict grouped by region, in reading order
+    pub fn rows(&self) -> &[ConflictRow] { &self.rows }
 
     /// Changes whenever a resolution is recorded
     pub fn revision(&self) -> u64 { self.revision }
@@ -430,6 +460,24 @@ mod tests {
             highlights
                 .iter()
                 .any(|highlight| highlight.outline && highlight.tiles.len() == 1)
+        );
+    }
+
+    #[test]
+    fn rows_keep_their_region_numbers_while_tiles_get_resolved() {
+        let (mut document, mut state) = setup(&[(1, 1), (2, 2), (5, 5)]);
+        let before = state.rows().to_vec();
+
+        resolve(&mut document, &mut state, &[Coord::new(5, 5, 1)], Side::Ours);
+
+        assert_eq!(state.rows(), before.as_slice());
+        assert_eq!(
+            before.iter().map(|row| (row.coord, row.region)).collect::<Vec<_>>(),
+            [
+                (Coord::new(5, 5, 1), 1),
+                (Coord::new(2, 2, 1), 2),
+                (Coord::new(1, 1, 1), 2),
+            ]
         );
     }
 }

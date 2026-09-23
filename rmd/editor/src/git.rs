@@ -4,6 +4,7 @@ use gix::{
     ObjectId,
     bstr::{BStr, ByteSlice},
     index::entry::{Flags, Mode, Stage, Stat},
+    prelude::ObjectIdExt,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +47,11 @@ impl OperationKind {
         }
     }
 }
+
+/// Git's minimum abbreviation, used when a hash cannot be looked up to shorten it properly
+const MIN_ABBREV: usize = 7;
+
+fn short_hash(hash: &str) -> String { hash.chars().take(MIN_ABBREV).collect() }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitRef {
@@ -176,6 +182,12 @@ impl Repo {
         commit_url_base(remote.url(gix::remote::Direction::Fetch)?)
     }
 
+    fn abbreviate(&self, id: ObjectId) -> String {
+        id.attach(&self.repo)
+            .shorten()
+            .map_or_else(|_| short_hash(&id.to_string()), |prefix| prefix.to_string())
+    }
+
     fn commit_info(&self, id: ObjectId) -> GitResult<CommitInfo> {
         let commit = self.repo.find_commit(id).map_err(fail)?;
         let author = commit.author().map_err(fail)?;
@@ -186,7 +198,7 @@ impl Repo {
 
         Ok(CommitInfo {
             hash: id.to_string(),
-            short: commit.id().shorten_or_id().to_string(),
+            short: self.abbreviate(id),
             author: author.name.to_str_lossy().into_owned(),
             time: commit.time().map_or(0, |time| time.seconds),
             summary,
@@ -198,7 +210,7 @@ impl Repo {
             return Ok(name.shorten().to_str_lossy().into_owned());
         }
 
-        Ok(self.repo.head_id().map_err(fail)?.shorten_or_id().to_string())
+        Ok(self.abbreviate(self.repo.head_id().map_err(fail)?.detach()))
     }
 
     pub fn head_ref(&self) -> Option<CommitRef> {
@@ -233,7 +245,7 @@ impl Repo {
     pub fn operation(&self) -> Option<Operation> {
         let (kind, hash) = detect_operation(self.repo.git_dir())?;
         let theirs = self.commit_ref(&hash).unwrap_or_else(|_| CommitRef {
-            short: hash.chars().take(7).collect(),
+            short: short_hash(&hash),
             hash,
             subject: String::new(),
             name: None,
@@ -547,6 +559,18 @@ pub(crate) mod tests {
             .map(|version| version.commit.summary.as_str())
             .collect::<Vec<_>>();
         assert_eq!(summaries, ["change map", "add map"]);
+        for version in &history {
+            let expected = git(&dir, &["rev-parse", "--short", &version.commit.hash]).unwrap();
+            assert_eq!(version.commit.short, expected.trim(), "abbreviated like rev-parse");
+        }
+
+        git(&dir, &["config", "core.abbrev", "12"]);
+        let abbreviated = path.open().unwrap().file_history(1, &|| false).unwrap();
+        assert_eq!(
+            abbreviated[0].commit.short,
+            abbreviated[0].commit.hash[..12],
+            "core.abbrev is honoured"
+        );
         assert_eq!(repo.blob(history[1].blob.unwrap()).unwrap(), b"one\n");
         assert_eq!(repo.file_history(1, &|| false).unwrap().len(), 1);
 

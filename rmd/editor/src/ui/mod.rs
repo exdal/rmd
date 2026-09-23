@@ -114,7 +114,7 @@ use crate::{
 /// How far down the "Blur below" menu goes. The option itself takes any depth.
 const MAX_UNDERLAY_DEPTH: u32 = 3;
 
-const DOCKSPACE_ID: &str = "rmd-main-dockspace-v3";
+const DOCKSPACE_ID: &str = "rmd-main-dockspace-v4";
 const OVERLAY_PADDING: f32 = 4.0;
 const OVERLAY_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 const RECENT_ICON_SIZE: f32 = 48.0;
@@ -987,6 +987,8 @@ pub struct UiState {
     welcome_window: WindowKey,
     inspector: InspectorPanel,
     git_panel: git::GitPanel,
+    /// Keeps the object tree in front of the Git tab until it has docked at startup
+    select_object_tree: bool,
     settings_window: SettingsWindow,
     layout: DockLayout,
     gizmo: GizmoState,
@@ -1030,7 +1032,7 @@ impl UiState {
         let layout = DockLayout::split(
             DockSplit::Left,
             0.25,
-            DockLayout::tabs([object_tree.window()]),
+            DockLayout::tabs([object_tree.window(), git_panel.window()]),
             DockLayout::split(
                 DockSplit::Right,
                 0.20 / 0.75,
@@ -1048,6 +1050,7 @@ impl UiState {
             welcome_window,
             inspector,
             git_panel,
+            select_object_tree: true,
             settings_window,
             layout,
             gizmo: GizmoState::default(),
@@ -1311,7 +1314,7 @@ impl UiState {
             });
             ui.menu("Git", || {
                 if ui.menu_item("Git Panel") {
-                    self.git_panel.open = true;
+                    self.git_panel.focus();
                 }
 
                 if let Some(id) = session.state.active() {
@@ -1407,7 +1410,18 @@ impl UiState {
         }
         self.show_welcome |= show_welcome;
 
-        let mut open_source = self.object_tree.draw(ui, session, settings);
+        if session.take_loaded_conflicts().is_some() {
+            self.git_panel.request(git::GitTab::Conflicts);
+        }
+        // The Git tab shares the object tree's dock node, a request to show it wins
+        if self.git_panel.has_focus_request() {
+            self.select_object_tree = false;
+        }
+        let (mut open_source, object_tree_docked) =
+            self.object_tree.draw(ui, session, settings, self.select_object_tree);
+        if object_tree_docked {
+            self.select_object_tree = false;
+        }
         let inspector = self.inspector.draw(ui, session, settings);
         self.copy_to_clipboard = inspector.copy_hash;
         open_source = inspector.open_source.or(open_source);
@@ -1415,6 +1429,9 @@ impl UiState {
             self.jump_to_instance(session, target);
         }
         let git_output = self.git_panel.draw(ui, session, settings);
+        if git_output.copy.is_some() {
+            self.copy_to_clipboard = git_output.copy;
+        }
         if let Some((id, coord)) = git_output.center {
             session.set_active_document(id);
             session.set_level(coord.z);
@@ -2169,15 +2186,15 @@ impl UiState {
             let mut tooltip_position = None;
             if blame_popup.is_none() {
                 if let (Some(coord), Some(conflict)) = (pointed_coord, hovered_conflict) {
-                    ui.tooltip_text(format!(
-                        "Conflict at {}, {}, {}\nBase: {}\nHEAD: {}\nIncoming: {}",
-                        coord.x,
-                        coord.y,
-                        coord.z,
-                        describe_tile(conflict.base.as_ref()),
-                        describe_tile(conflict.ours.as_ref()),
-                        describe_tile(conflict.theirs.as_ref())
-                    ));
+                    ui.tooltip(|| {
+                        ui.text(format!("Conflict at {}, {}, {}", coord.x, coord.y, coord.z));
+                        ui.separator();
+                        ui.text(format!("Base:\n{}", describe_tile(conflict.base.as_ref())));
+                        ui.separator();
+                        ui.text(format!("HEAD:\n{}", describe_tile(conflict.ours.as_ref())));
+                        ui.separator();
+                        ui.text(format!("Incoming:\n{}", describe_tile(conflict.theirs.as_ref())));
+                    });
                 } else if let Some((_, (cell, changed))) = hovered_blame {
                     match cell {
                         editor::blame::BlameCell::Commit(_, commit) if !changed => {
@@ -3646,21 +3663,20 @@ fn draw_blame_popup(
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |time| time.as_secs() as i64);
+            if let Some(url) = url {
+                ui.text_link_open_url(&commit.short, url);
+                ui.set_item_tooltip(url);
+            } else {
+                ui.text(&commit.short);
+                ui.set_item_tooltip("No web remote is configured for this repository");
+            }
+            ui.same_line();
             ui.text(format!(
-                "{} · {} · {}",
-                commit.short,
+                "· {} · {}",
                 commit.author,
                 editor::blame::relative_time(now, commit.time)
             ));
             ui.text_wrapped(&commit.summary);
-            if let Some(url) = url {
-                ui.text_link_open_url(&commit.hash, url);
-                ui.set_item_tooltip(url);
-            } else {
-                ui.text_disabled(&commit.hash);
-                ui.set_item_tooltip("No web remote is configured for this repository");
-            }
-            ui.same_line();
             let close = ui.small_button("Close");
             let min = ui.window_pos();
             let size = ui.window_size();
@@ -6418,6 +6434,47 @@ mod tests {
         // Map views are minted per open map and dock themselves in at runtime,
         // so the declared layout cannot name them.
         assert_eq!(second.as_ref(), &DockLayout::tabs([&state.welcome_window]));
+    }
+
+    #[test]
+    fn the_git_panel_shares_the_object_tree_dock_node() {
+        let state = UiState::new(false).expect("valid window keys");
+        let DockLayout::Split { first, .. } = &state.layout else {
+            panic!("the root is split between the object tree and everything else");
+        };
+
+        assert_eq!(
+            first.as_ref(),
+            &DockLayout::tabs([state.object_tree.window(), state.git_panel.window()])
+        );
+    }
+
+    #[test]
+    fn the_object_tree_tab_starts_in_front_of_the_git_tab() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = rectangle_context();
+        let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
+        context.io_mut().set_config_flags(flags);
+        let mut state = UiState::new(false).unwrap();
+        let mut session = Session::new();
+        let mut settings = Settings::default();
+        let mut frame = |state: &mut UiState| {
+            let ui = context.frame();
+            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            assert!(context.render_legacy().valid());
+        };
+
+        for _ in 0..4 {
+            frame(&mut state);
+        }
+        assert!(!state.select_object_tree, "the object tree docked and took the front");
+        assert!(!state.git_panel.visible(), "the Git tab waits behind the object tree");
+
+        state.git_panel.request(git::GitTab::Conflicts);
+        for _ in 0..2 {
+            frame(&mut state);
+        }
+        assert!(state.git_panel.visible(), "a request brings the Git tab forward");
     }
 
     #[test]
