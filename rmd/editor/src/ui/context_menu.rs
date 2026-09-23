@@ -54,8 +54,25 @@ pub(super) fn draw_popup(
     }
     let coord = target.coord;
     ui.text_disabled(format!("X: {}, Y: {}, Z: {}", coord.x, coord.y, coord.z));
-    ui.separator();
     let mut action = None;
+    if let Some(node) = target.node.as_ref() {
+        ui.separator();
+        let label = match node {
+            NodeContext::Standalone(_) => "Delete standalone node",
+            NodeContext::Connection(_) => "Delete connection",
+            NodeContext::Pick(..) => "Delete node or connection",
+        };
+
+        if ui.menu_item_enabled_selected_no_shortcut(
+            label,
+            false,
+            session.tool() == Tool::Node && !session.node_dragging(),
+        ) {
+            action = Some(Action::Node(node.clone()));
+        }
+    }
+
+    ui.separator();
     let undo = session.undo_label();
     let undo_label = undo.map_or_else(|| "Undo".to_owned(), |label| format!("Undo {label}"));
     if ui.menu_item_enabled_selected_with_shortcut(
@@ -237,12 +254,6 @@ pub(super) fn draw_popup(
             if ui.menu_item("Search by Prefab ID") {
                 action = Some(Action::Search(instance, SimilarMatchKind::Prefab));
             }
-        }
-    }
-    if let Some(node) = target.node.as_ref() {
-        ui.separator();
-        if ui.menu_item_enabled_selected_no_shortcut("Delete node or connection", false, session.tool() == Tool::Node) {
-            action = Some(Action::Node(node.clone()));
         }
     }
     if target.block_selected {

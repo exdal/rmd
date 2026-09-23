@@ -599,11 +599,34 @@ fn draw_guide_badges(
     });
 }
 
+const NODE_HANDLE_RADIUS: f32 = 6.0;
+const NODE_CONNECTION_TOLERANCE: f32 = 6.0;
+
 #[derive(Default)]
 struct NodeOverlayHit {
     handle: Option<Coord>,
     standalone: Option<Coord>,
     connection: Option<Vec<Coord>>,
+}
+
+enum NodeRightClick<'a> {
+    DeleteStandalone(Coord),
+    DeleteConnection(&'a [Coord]),
+    Menu,
+}
+
+fn node_right_click(tool: Tool, shift: bool, hit: &NodeOverlayHit) -> NodeRightClick<'_> {
+    if tool == Tool::Node && !shift {
+        if let Some(coord) = hit.standalone {
+            return NodeRightClick::DeleteStandalone(coord);
+        }
+
+        if let Some(connection) = hit.connection.as_deref() {
+            return NodeRightClick::DeleteConnection(connection);
+        }
+    }
+
+    NodeRightClick::Menu
 }
 
 struct NodeOverlayView<'a> {
@@ -647,6 +670,50 @@ fn closest_node_connection(
     nearest.map(|(_, index)| index)
 }
 
+fn hit_node_overlay(
+    overlay: &NodeOverlay, mouse: [f32; 2], hovered_tile: Option<Coord>, center: impl Fn(Coord) -> [f32; 2],
+    interactive: bool,
+) -> NodeOverlayHit {
+    if !interactive {
+        return NodeOverlayHit::default();
+    }
+
+    let hovered = overlay
+        .nodes
+        .iter()
+        .copied()
+        .filter_map(|coord| {
+            let position = center(coord);
+            let distance = (position[0] - mouse[0]).powi(2) + (position[1] - mouse[1]).powi(2);
+
+            (distance <= (NODE_HANDLE_RADIUS + 3.0).powi(2)).then_some((distance, coord))
+        })
+        .min_by(|left, right| left.0.total_cmp(&right.0))
+        .map(|(_, coord)| coord);
+    let hovered_connection = if let Some(handle) = hovered {
+        let mut attached = overlay
+            .connections
+            .iter()
+            .enumerate()
+            .filter(|(_, connection)| connection.first() == Some(&handle) || connection.last() == Some(&handle));
+        let first = attached.next().map(|(index, _)| index);
+        if attached.next().is_none() { first } else { None }
+    } else {
+        closest_node_connection(mouse, &overlay.connections, &center, NODE_CONNECTION_TOLERANCE).or_else(|| {
+            hovered_tile
+                .and_then(|coord| node::connection_at_tile(&overlay.connections, coord))
+                .and_then(|connection| overlay.connections.iter().position(|current| current == connection))
+        })
+    };
+    let standalone = hovered.filter(|coord| !overlay.segments.iter().any(|(from, to)| from == coord || to == coord));
+
+    NodeOverlayHit {
+        handle: hovered,
+        standalone,
+        connection: hovered_connection.and_then(|index| overlay.connections.get(index).cloned()),
+    }
+}
+
 fn draw_node_overlay(ui: &Ui, overlay: &NodeOverlay, view: NodeOverlayView<'_>) -> NodeOverlayHit {
     const EDGE: [f32; 4] = [0.15, 0.78, 1.0, 0.9];
     const CONNECTION_HOVER: [f32; 4] = [1.0, 0.25, 0.2, 1.0];
@@ -654,8 +721,6 @@ fn draw_node_overlay(ui: &Ui, overlay: &NodeOverlay, view: NodeOverlayView<'_>) 
     const INVALID_ROUTE: [f32; 4] = [1.0, 0.25, 0.2, 1.0];
     const HANDLE: [f32; 4] = [1.0, 0.58, 0.08, 1.0];
     const HANDLE_HOVER: [f32; 4] = [1.0, 0.88, 0.45, 1.0];
-    const HANDLE_RADIUS: f32 = 6.0;
-    const CONNECTION_TOLERANCE: f32 = 6.0;
     let NodeOverlayView {
         camera,
         viewport_min,
@@ -671,43 +736,14 @@ fn draw_node_overlay(ui: &Ui, overlay: &NodeOverlay, view: NodeOverlayView<'_>) 
 
         [viewport_min[0] + local[0], viewport_min[1] + local[1]]
     };
-    let mouse = ui.io().mouse_pos();
-    let hovered = interactive
-        .then(|| {
-            overlay
-                .nodes
-                .iter()
-                .copied()
-                .filter_map(|coord| {
-                    let position = center(coord);
-                    let distance = (position[0] - mouse[0]).powi(2) + (position[1] - mouse[1]).powi(2);
-
-                    (distance <= (HANDLE_RADIUS + 3.0).powi(2)).then_some((distance, coord))
-                })
-                .min_by(|left, right| left.0.total_cmp(&right.0))
-                .map(|(_, coord)| coord)
-        })
-        .flatten();
-    let hovered_connection = (interactive && hovered.is_none())
-        .then(|| closest_node_connection(mouse, &overlay.connections, center, CONNECTION_TOLERANCE))
-        .flatten()
-        .or_else(|| {
-            (interactive && hovered.is_none())
-                .then(|| {
-                    hovered_tile
-                        .and_then(|coord| node::connection_at_tile(&overlay.connections, coord))
-                        .and_then(|connection| overlay.connections.iter().position(|current| current == connection))
-                })
-                .flatten()
-        });
-    let standalone = hovered.filter(|coord| !overlay.segments.iter().any(|(from, to)| from == coord || to == coord));
+    let hit = hit_node_overlay(overlay, ui.io().mouse_pos(), hovered_tile, &center, interactive);
 
     let draw = ui.get_window_draw_list();
     draw.with_clip_rect(viewport_min, viewport_max, || {
         for (from, to) in &overlay.segments {
             draw.add_line(center(*from), center(*to), EDGE).thickness(2.0).build();
         }
-        if let Some(connection) = hovered_connection.and_then(|index| overlay.connections.get(index)) {
+        if let Some(connection) = hit.connection.as_ref() {
             for segment in connection.windows(2) {
                 draw.add_line(center(segment[0]), center(segment[1]), CONNECTION_HOVER)
                     .thickness(4.0)
@@ -721,27 +757,23 @@ fn draw_node_overlay(ui: &Ui, overlay: &NodeOverlay, view: NodeOverlayView<'_>) 
                 .build();
         }
         for coord in &overlay.nodes {
-            let color = if standalone == Some(*coord) {
+            let color = if hit.standalone == Some(*coord) {
                 CONNECTION_HOVER
-            } else if hovered == Some(*coord) {
+            } else if hit.handle == Some(*coord) {
                 HANDLE_HOVER
             } else {
                 HANDLE
             };
-            draw.add_circle(center(*coord), HANDLE_RADIUS, [0.05, 0.05, 0.05, 0.95])
+            draw.add_circle(center(*coord), NODE_HANDLE_RADIUS, [0.05, 0.05, 0.05, 0.95])
                 .filled(true)
                 .build();
-            draw.add_circle(center(*coord), HANDLE_RADIUS - 2.0, color)
+            draw.add_circle(center(*coord), NODE_HANDLE_RADIUS - 2.0, color)
                 .filled(true)
                 .build();
         }
     });
 
-    NodeOverlayHit {
-        handle: hovered,
-        standalone,
-        connection: hovered_connection.and_then(|index| overlay.connections.get(index).cloned()),
-    }
+    hit
 }
 
 pub struct VisibleMapView {
@@ -1925,28 +1957,6 @@ impl UiState {
 
             draw_guide_badges(ui, camera, viewport_min, viewport_max, guide_badges);
 
-            let node_interactive = hovered && focused && !session.node_dragging();
-            let node_hit = (is_active && session.tool() == Tool::Node)
-                .then(|| session.node_overlay())
-                .flatten()
-                .map(|overlay| {
-                    draw_node_overlay(
-                        ui,
-                        &overlay,
-                        NodeOverlayView {
-                            camera,
-                            viewport_min,
-                            viewport_max,
-                            tile_size: session.options.tile_size,
-                            hovered_tile: *hovered_coord,
-                            interactive: node_interactive,
-                        },
-                    )
-                })
-                .unwrap_or_default();
-
-            configure_tool_interaction(session.tool(), interaction);
-
             let in_viewport = |point: [f32; 2]| {
                 let local = [point[0] - viewport_min[0], point[1] - viewport_min[1]];
 
@@ -1963,6 +1973,28 @@ impl UiState {
                 camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
             });
             *hovered_coord = pointed_coord;
+
+            let node_interactive = hovered && !session.node_dragging();
+            let node_hit = (is_active && session.tool() == Tool::Node)
+                .then(|| session.node_overlay())
+                .flatten()
+                .map(|overlay| {
+                    draw_node_overlay(
+                        ui,
+                        &overlay,
+                        NodeOverlayView {
+                            camera,
+                            viewport_min,
+                            viewport_max,
+                            tile_size: session.options.tile_size,
+                            hovered_tile: pointed_coord,
+                            interactive: node_interactive,
+                        },
+                    )
+                })
+                .unwrap_or_default();
+
+            configure_tool_interaction(session.tool(), interaction);
 
             if hovered
                 && !ui.io().want_text_input()
@@ -2257,36 +2289,48 @@ impl UiState {
                 let left_double_clicked = ui.is_mouse_double_clicked(MouseButton::Left);
                 let right_clicked = ui.is_mouse_clicked(MouseButton::Right);
                 if right_clicked && let Some(coord) = pointed_coord {
-                    let atoms = session
-                        .state
-                        .active_document()
-                        .map(|document| document.instance_ids_at(coord).to_vec())
-                        .unwrap_or_default();
-                    let node = if session.tool() == Tool::Node {
-                        if let Some(standalone) = node_hit.standalone {
-                            Some(NodeContext::Standalone(standalone))
-                        } else if let Some(connection) = node_hit.connection.clone() {
-                            Some(NodeContext::Connection(connection))
-                        } else {
-                            cursor.map(|cursor| NodeContext::Pick(coord, cursor_in_map_view(cursor, scale)))
-                        }
-                    } else {
-                        None
-                    };
-                    let block_selected = session.tool() == Tool::BlockSelect
-                        && session
-                            .selection()
-                            .is_some_and(|selection| session.selection_mode().includes(selection, coord));
-                    *context = Some(MenuTarget {
-                        document: id,
-                        coord,
-                        atoms,
-                        node,
-                        block_selected,
-                        replace_for: None,
-                        replace_query: String::new(),
-                    });
-                    ui.open_popup(MAP_MENU_POPUP);
+                    match node_right_click(session.tool(), ui.io().key_shift(), &node_hit) {
+                        NodeRightClick::DeleteStandalone(node) => {
+                            session.delete_standalone_node(node);
+                        },
+                        NodeRightClick::DeleteConnection(connection) => {
+                            session.delete_node_connection(connection);
+                        },
+                        NodeRightClick::Menu => {
+                            let atoms = session
+                                .state
+                                .active_document()
+                                .map(|document| document.instance_ids_at(coord).to_vec())
+                                .unwrap_or_default();
+                            let node = if session.tool() == Tool::Node {
+                                if let Some(standalone) = node_hit.standalone {
+                                    Some(NodeContext::Standalone(standalone))
+                                } else if let Some(connection) = node_hit.connection.clone() {
+                                    Some(NodeContext::Connection(connection))
+                                } else if node_hit.handle.is_some() {
+                                    None
+                                } else {
+                                    cursor.map(|cursor| NodeContext::Pick(coord, cursor_in_map_view(cursor, scale)))
+                                }
+                            } else {
+                                None
+                            };
+                            let block_selected = session.tool() == Tool::BlockSelect
+                                && session
+                                    .selection()
+                                    .is_some_and(|selection| session.selection_mode().includes(selection, coord));
+                            *context = Some(MenuTarget {
+                                document: id,
+                                coord,
+                                atoms,
+                                node,
+                                block_selected,
+                                replace_for: None,
+                                replace_query: String::new(),
+                            });
+                            ui.open_popup(MAP_MENU_POPUP);
+                        },
+                    }
                 }
 
                 if session.tool() == Tool::Node {
@@ -4545,6 +4589,10 @@ fn draw_tool_button(ui: &Ui, session: &mut Session, tool: Tool, icon: char) {
     let clicked = ui.button(icon.to_string());
     ui.set_item_tooltip(match tool {
         Tool::BlockSelect => "Block Select",
+        Tool::Node => {
+            "Node tool\nDouble-click a node to select its network; drag a handle to connect.\nRight-click a connection \
+             or isolated node to delete it; Shift+right-click for the map menu."
+        },
         _ => tool.label(),
     });
     if clicked {
@@ -4682,7 +4730,10 @@ mod tests {
     use render::{HighlightStyle, SpriteTexture};
 
     use super::*;
-    use crate::settings::KeyBinding;
+    use crate::{
+        session::tests::{node_map, node_session, node_tile_has_group},
+        settings::KeyBinding,
+    };
 
     fn rectangle_context() -> dear_imgui_rs::Context {
         let mut context = dear_imgui_rs::Context::create();
@@ -4703,11 +4754,11 @@ mod tests {
         id: DocumentId,
         fill_button: Option<[f32; 2]>,
         mode_buttons: Option<([f32; 2], [f32; 2])>,
+        focus_other_window: bool,
     }
 
     impl RectangleUiHarness {
         fn new() -> Self {
-            let context = rectangle_context();
             let mut session = Session::new();
             session
                 .load_environment(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme"))
@@ -4726,6 +4777,12 @@ mod tests {
                 z: 1,
                 errors: vec![],
             });
+
+            Self::with_session(session)
+        }
+
+        fn with_session(session: Session) -> Self {
+            let context = rectangle_context();
             let id = session.state.active().unwrap();
             let mut view = MapViewState::new(id).unwrap();
             view.refit = false;
@@ -4741,6 +4798,7 @@ mod tests {
                 id,
                 fill_button: None,
                 mode_buttons: None,
+                focus_other_window: false,
             };
             for _ in 0..3 {
                 harness.step();
@@ -4750,6 +4808,13 @@ mod tests {
 
         fn step(&mut self) {
             let ui = self.context.frame();
+            if self.focus_other_window {
+                ui.window("other-window")
+                    .position([680.0, 0.0], Condition::Always)
+                    .size([100.0, 100.0], Condition::Always)
+                    .focused(true)
+                    .build(|| ui.text("Other window"));
+            }
             let name = format!("###viewport-{}", self.id.get());
             ui.set_window_pos_by_name(&name, [0.0; 2]);
             ui.set_window_size_by_name(&name, [800.0, 600.0]);
@@ -4869,6 +4934,53 @@ mod tests {
             assert_eq!(app.view.context.as_ref().unwrap().coord, Coord::new(5, 8, 1));
         }
     }
+
+    #[test]
+    fn node_right_click_deletes_on_the_first_unfocused_click_and_shift_opens_the_menu() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let start = Coord::new(5, 8, 1);
+        let middle = Coord::new(6, 8, 1);
+        let end = Coord::new(7, 8, 1);
+        let map = node_map(
+            20,
+            20,
+            &[
+                (start, vec!["/obj/cable"]),
+                (middle, vec!["/obj/cable"]),
+                (end, vec!["/obj/cable"]),
+            ],
+        );
+        let (mut session, seed) = node_session(map, start);
+        assert!(session.begin_node_edit(seed));
+        let mut app = RectangleUiHarness::with_session(session);
+        app.settings.focus_windows_on_hover = false;
+        app.focus_other_window = true;
+        app.view.focus = false;
+        let point = app.tile(6, 8);
+        app.context.io_mut().add_mouse_pos_event(point);
+        app.context.io_mut().add_mouse_button_event(MouseButton::Right, false);
+        app.step();
+
+        app.context.io_mut().add_mouse_button_event(MouseButton::Right, true);
+        app.step();
+        assert!(!node_tile_has_group(&app.session, middle));
+        assert!(app.view.context.is_none());
+        assert_eq!(app.session.undo_label(), Some("delete node connection"));
+
+        app.context.io_mut().add_mouse_button_event(MouseButton::Right, false);
+        app.step();
+        assert!(app.session.undo());
+        assert!(app.session.begin_node_edit(seed));
+        app.key(Key::ModShift, true);
+        app.context.io_mut().add_mouse_button_event(MouseButton::Right, true);
+        app.step();
+        assert!(node_tile_has_group(&app.session, middle));
+        assert!(matches!(
+            app.view.context.as_ref().and_then(|target| target.node.as_ref()),
+            Some(NodeContext::Connection(connection)) if connection.contains(&middle)
+        ));
+    }
+
     fn draw_hover_focus_test_window(ui: &Ui, open_popup: bool) -> (bool, bool) {
         let mut focused = false;
         let mut popup_open = false;
@@ -5931,6 +6043,75 @@ mod tests {
             Some(0)
         );
         assert_eq!(closest_node_connection([20.0, 27.0], &connections, center, 6.0), None);
+    }
+
+    #[test]
+    fn node_overlay_hit_distinguishes_segments_endpoints_junctions_and_standalone_nodes() {
+        let left = Coord::new(1, 1, 1);
+        let junction = Coord::new(2, 1, 1);
+        let right = Coord::new(3, 1, 1);
+        let upper = Coord::new(2, 2, 1);
+        let standalone = Coord::new(5, 5, 1);
+        let connection = vec![left, junction];
+        let overlay = NodeOverlay {
+            nodes: vec![left, junction, right, upper, standalone],
+            segments: vec![(left, junction), (junction, right), (junction, upper)],
+            connections: vec![connection.clone(), vec![junction, right], vec![junction, upper]],
+            route: Vec::new(),
+            route_valid: true,
+        };
+        let center = |coord: Coord| [coord.x as f32 * 32.0, coord.y as f32 * 32.0];
+
+        let segment = hit_node_overlay(&overlay, [48.0, 32.0], Some(left), center, true);
+        assert_eq!(segment.handle, None);
+        assert_eq!(segment.connection, Some(connection.clone()));
+
+        let endpoint = hit_node_overlay(&overlay, center(left), Some(left), center, true);
+        assert_eq!(endpoint.handle, Some(left));
+        assert_eq!(endpoint.connection, Some(connection));
+
+        let branch = hit_node_overlay(&overlay, center(junction), Some(junction), center, true);
+        assert_eq!(branch.handle, Some(junction));
+        assert!(branch.connection.is_none());
+
+        let isolated = hit_node_overlay(&overlay, center(standalone), Some(standalone), center, true);
+        assert_eq!(isolated.standalone, Some(standalone));
+        assert!(isolated.connection.is_none());
+    }
+
+    #[test]
+    fn node_right_click_deletes_known_geometry_unless_shift_opens_the_menu() {
+        let node = Coord::new(2, 3, 1);
+        let connection = vec![node, Coord::new(3, 3, 1)];
+        let connected = NodeOverlayHit {
+            connection: Some(connection.clone()),
+            ..Default::default()
+        };
+        let standalone = NodeOverlayHit {
+            standalone: Some(node),
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            node_right_click(Tool::Node, false, &connected),
+            NodeRightClick::DeleteConnection(target) if target == connection
+        ));
+        assert!(matches!(
+            node_right_click(Tool::Node, false, &standalone),
+            NodeRightClick::DeleteStandalone(target) if target == node
+        ));
+        assert!(matches!(
+            node_right_click(Tool::Node, true, &connected),
+            NodeRightClick::Menu
+        ));
+        assert!(matches!(
+            node_right_click(Tool::Node, false, &NodeOverlayHit::default()),
+            NodeRightClick::Menu
+        ));
+        assert!(matches!(
+            node_right_click(Tool::Select, false, &connected),
+            NodeRightClick::Menu
+        ));
     }
 
     #[test]

@@ -3508,7 +3508,7 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use core::{
         arena::StrArena,
         location::{FileId, Location, Position},
@@ -3701,7 +3701,7 @@ mod tests {
         environment
     }
 
-    fn node_map(width: u32, height: u32, placements: &[(Coord, Vec<&str>)]) -> Map {
+    pub(crate) fn node_map(width: u32, height: u32, placements: &[(Coord, Vec<&str>)]) -> Map {
         let mut map = Map::new(Size {
             x: width,
             y: height,
@@ -3729,7 +3729,7 @@ mod tests {
         map
     }
 
-    fn node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId) {
+    pub(crate) fn node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId) {
         let environment = node_environment();
         let document = MapDocument::new(map, 1);
         let target = document
@@ -3758,7 +3758,7 @@ mod tests {
         (session, target)
     }
 
-    fn node_tile_has_group(session: &Session, coord: Coord) -> bool {
+    pub(crate) fn node_tile_has_group(session: &Session, coord: Coord) -> bool {
         session.map().is_some_and(|map| {
             map.tile_at(coord).is_some_and(|tile| {
                 tile.iter()
