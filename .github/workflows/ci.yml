@@ -89,6 +89,11 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/setup-slang.ps1 -Platform windows-x86_64
 
+      - name: Show Rust toolchain versions
+        run: |
+          rustc --version
+          cargo clippy --version
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 

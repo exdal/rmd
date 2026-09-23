@@ -736,7 +736,7 @@ fn draw_node_overlay(ui: &Ui, overlay: &NodeOverlay, view: NodeOverlayView<'_>) 
 
         [viewport_min[0] + local[0], viewport_min[1] + local[1]]
     };
-    let hit = hit_node_overlay(overlay, ui.io().mouse_pos(), hovered_tile, &center, interactive);
+    let hit = hit_node_overlay(overlay, ui.io().mouse_pos(), hovered_tile, center, interactive);
 
     let draw = ui.get_window_draw_list();
     draw.with_clip_rect(viewport_min, viewport_max, || {

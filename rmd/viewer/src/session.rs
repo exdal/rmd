@@ -171,6 +171,7 @@ impl Session {
                 size: self.lighting_size,
                 tiles: &self.light_tiles,
                 tile_size: self.options.tile_size,
+                minimum_brightness: self.options.minimum_light_brightness_percent.min(100) as f32 / 100.0,
                 revision: self.revision,
                 pending_update: None,
             }),
