@@ -41,6 +41,8 @@ pub struct MapDocument {
     pub selection: Option<Selection>,
     pub selection_mode: BlockSelectionMode,
     needs_initial_save: bool,
+    /// Contents differ from the file on disk without any history, like a merge result
+    pending_write: bool,
     selected_instance: Option<PrefabInstanceId>,
     instances: PrefabInstances,
     key_usage: HashMap<Key, usize>,
@@ -250,6 +252,7 @@ impl MapDocument {
             selection: None,
             selection_mode: BlockSelectionMode::Full,
             needs_initial_save: false,
+            pending_write: false,
             selected_instance: None,
             instances,
             key_usage,
@@ -277,6 +280,28 @@ impl MapDocument {
         }
     }
 
+    pub fn open_modified(path: impl Into<PathBuf>, map: Map, z: u32) -> Self {
+        Self {
+            path: Some(path.into()),
+            pending_write: true,
+            ..Self::new(map, z)
+        }
+    }
+
+    pub fn replace_map(&mut self, map: Map, pending_write: bool) {
+        // note: this operation drops the history
+
+        let z = self.z.clamp(1, map.size.z.max(1));
+        let replaced = Self {
+            id: self.id,
+            path: self.path.take(),
+            pending_write,
+            ..Self::new(map, z)
+        };
+
+        *self = replaced;
+    }
+
     pub fn create(path: impl Into<PathBuf>, map: Map, z: u32) -> Self {
         Self {
             path: Some(path.into()),
@@ -297,7 +322,10 @@ impl MapDocument {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.needs_initial_save || self.history.is_dirty() || self.map.size.z != self.saved_level_count
+        self.needs_initial_save
+            || self.pending_write
+            || self.history.is_dirty()
+            || self.map.size.z != self.saved_level_count
     }
 
     pub fn needs_initial_save(&self) -> bool { self.needs_initial_save }
@@ -565,6 +593,7 @@ impl MapDocument {
         self.map.format = format;
         self.path = Some(path);
         self.needs_initial_save = false;
+        self.pending_write = false;
         self.saved_level_count = self.map.size.z;
         self.retained_level_count = self.map.size.z;
         self.history.mark_saved();

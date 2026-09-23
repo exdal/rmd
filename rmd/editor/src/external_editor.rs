@@ -1,9 +1,6 @@
-use std::{io, path::PathBuf, process::Command};
 #[cfg(target_os = "windows")]
-use std::{os::windows::process::CommandExt, path::Path};
-
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+use std::path::Path;
+use std::{io, path::PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SourceLocation {
@@ -34,12 +31,7 @@ pub(crate) fn open(template: &str, source: &SourceLocation) -> Result<(), String
 }
 
 fn spawn(program: &str, arguments: &[String]) -> io::Result<()> {
-    let mut command = Command::new(program);
-    command.args(arguments);
-    #[cfg(target_os = "windows")]
-    command.creation_flags(CREATE_NO_WINDOW);
-
-    command.spawn().map(|_| ())
+    editor::process::command(program).args(arguments).spawn().map(|_| ())
 }
 
 fn editor_command(template: &str, source: &SourceLocation) -> Result<EditorCommand, String> {

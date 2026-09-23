@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -18,6 +18,7 @@ pub struct TileChange {
 pub struct Edit {
     pub label: String,
     pub changes: Vec<TileChange>,
+    record_empty: bool,
 }
 
 impl Edit {
@@ -25,7 +26,14 @@ impl Edit {
         Self {
             label: label.into(),
             changes: Vec::new(),
+            record_empty: false,
         }
+    }
+
+    pub fn recorded_when_empty(mut self) -> Self {
+        self.record_empty = true;
+
+        self
     }
 
     pub fn change(&mut self, document: &MapDocument, coord: Coord, after: PlacedTile) {
@@ -35,7 +43,7 @@ impl Edit {
 
     pub fn is_empty(&self) -> bool { self.changes.is_empty() }
 
-    pub(crate) fn affected_instances(&self) -> Vec<dmm::PrefabInstanceId> {
+    pub fn affected_instances(&self) -> Vec<dmm::PrefabInstanceId> {
         let mut affected = self
             .changes
             .iter()
@@ -96,7 +104,7 @@ impl History {
         &mut self, map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>, edit: Edit,
         group: Option<EditGroupId>,
     ) {
-        if edit.is_empty() {
+        if edit.is_empty() && !edit.record_empty {
             return;
         }
 
@@ -148,6 +156,16 @@ impl History {
     pub fn mark_saved(&mut self) { self.saved_at = Some(self.undo_stack.len()); }
 
     pub fn is_dirty(&self) -> bool { self.saved_at != Some(self.undo_stack.len()) }
+
+    pub fn is_applied(&self, group: EditGroupId) -> bool {
+        self.undo_stack.iter().any(|entry| entry.group == Some(group))
+    }
+
+    pub fn applied_groups(&self) -> HashSet<EditGroupId> {
+        self.undo_stack.iter().filter_map(|entry| entry.group).collect()
+    }
+
+    pub fn undo_depth(&self) -> usize { self.undo_stack.len() }
 
     pub fn can_undo(&self) -> bool { !self.undo_stack.is_empty() }
 
@@ -387,5 +405,23 @@ mod tests {
         assert!(document.is_dirty());
         assert!(document.undo());
         assert!(!document.undo());
+    }
+
+    #[test]
+    fn an_empty_recorded_edit_is_undoable_and_tracked_by_group() {
+        let mut document = document();
+        let group = EditGroupId::new();
+
+        document.apply_grouped(Edit::new("keep tile"), Some(EditGroupId::new()));
+        assert!(!document.history.can_undo());
+
+        document.apply_grouped(Edit::new("keep tile").recorded_when_empty(), Some(group));
+        assert!(document.history.is_applied(group));
+        assert_eq!(document.undo_label(), Some("keep tile"));
+
+        assert!(document.undo());
+        assert!(!document.history.is_applied(group));
+        assert!(document.redo());
+        assert!(document.history.is_applied(group));
     }
 }

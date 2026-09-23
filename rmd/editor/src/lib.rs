@@ -8,6 +8,7 @@ pub mod focus;
 pub mod frame;
 pub mod icons;
 pub mod node;
+pub mod process;
 pub mod progress;
 pub mod tool;
 pub mod visual;
