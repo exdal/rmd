@@ -1,39 +1,41 @@
-use dmm::{Coord, Prefab};
+use dmm::Coord;
 use editor::{
     clipboard::{self, TileBlock},
-    command::Edit,
     document::Selection,
-    tool::{BlockSelectionMode, SelectionMask, SelectionRotation, ToolEdit, default_tile_paths},
+    frame::HiddenTypes,
+    tool::{BlockSelectionMode, SelectionMask, SelectionRotation, ToolEdit},
 };
 
 use super::Session;
 
 impl Session {
+    fn hidden_types(&self) -> HiddenTypes {
+        self.tree()
+            .map(|tree| self.type_visibility.hidden_types(tree))
+            .unwrap_or_default()
+    }
+
     pub fn copy_selection(&mut self, mode: BlockSelectionMode) -> bool {
         let Some(selection) = self.selection() else {
             return false;
         };
-        let Some(document) = self.state.active_document() else {
-            return false;
-        };
-        let Some(block) = clipboard::copy_block(document, selection, mode) else {
-            return false;
-        };
-        self.state.set_clipboard(block);
 
-        true
+        self.copy_block(selection, mode)
     }
 
     pub fn copy_tile(&mut self, coord: Coord) -> bool {
-        let Some(document) = self.state.active_document() else {
-            return false;
-        };
+        self.copy_block(Selection::from_drag(coord, coord), BlockSelectionMode::Full)
+    }
 
-        let Some(block) = clipboard::copy_block(document, Selection::from_drag(coord, coord), BlockSelectionMode::Full)
+    fn copy_block(&mut self, selection: Selection, mode: BlockSelectionMode) -> bool {
+        let hidden = self.hidden_types();
+        let Some(block) = self
+            .state
+            .active_document()
+            .and_then(|document| clipboard::copy_block(document, selection, mode, hidden))
         else {
             return false;
         };
-
         self.state.set_clipboard(block);
 
         true
@@ -44,69 +46,30 @@ impl Session {
             return false;
         };
 
-        if !document.allows_edit_at(coord) {
-            return false;
-        }
-
-        let Some((turf, area)) = default_tile_paths(&environment.tree) else {
-            return false;
-        };
-
-        document
-            .map
-            .tile_at(coord)
-            .is_some_and(|tile| tile.as_slice() != [Prefab::new(turf), Prefab::new(area)])
+        document.allows_edit_at(coord)
+            && document
+                .map
+                .tile_at(coord)
+                .is_some_and(|tile| clipboard::can_clear(&environment.tree, tile, &self.hidden_types()))
     }
 
-    fn build_clear_tile(&mut self, coord: Coord, label: &str) -> Option<ToolEdit> {
+    fn build_clear(&mut self, selection: Selection, mode: BlockSelectionMode, label: &str) -> Option<ToolEdit> {
+        let hidden = self.hidden_types();
         let (environment, document) = self.state.active_pair_mut()?;
 
-        if !document.allows_edit_at(coord) {
-            return None;
-        }
-
-        let (turf, area) = default_tile_paths(&environment.tree)?;
-        let before = document.placed_tile(coord)?;
-        if before
-            .iter()
-            .map(|placed| placed.prefab())
-            .eq([&Prefab::new(turf.clone()), &Prefab::new(area.clone())])
-        {
-            return None;
-        }
-
-        let mut affected = before.iter().map(|placed| placed.id()).collect::<Vec<_>>();
-        let after = vec![
-            document.instantiate(Prefab::new(turf)),
-            document.instantiate(Prefab::new(area)),
-        ];
-
-        affected.extend(after.iter().map(|placed| placed.id()));
-
-        let mut edit = Edit::new(label);
-
-        edit.change(document, coord, after);
-
-        Some(ToolEdit {
-            edit,
-            selected: None,
-            affected,
-        })
+        clipboard::clear_block(document, &environment.tree, selection, mode, &hidden, label)
     }
 
-    pub fn delete_tile(&mut self, coord: Coord) -> bool {
-        self.build_clear_tile(coord, "delete tile")
-            .is_some_and(|action| self.commit(action, None))
-    }
-
-    pub fn cut_tile(&mut self, coord: Coord) -> bool {
-        let Some(action) = self.build_clear_tile(coord, "cut tile") else {
+    fn cut_block(&mut self, selection: Selection, mode: BlockSelectionMode, label: &str) -> bool {
+        let Some(action) = self.build_clear(selection, mode, label) else {
             return false;
         };
-
-        let Some(block) = self.state.active_document().and_then(|document| {
-            clipboard::copy_block(document, Selection::from_drag(coord, coord), BlockSelectionMode::Full)
-        }) else {
+        let hidden = self.hidden_types();
+        let Some(block) = self
+            .state
+            .active_document()
+            .and_then(|document| clipboard::copy_block(document, selection, mode, hidden))
+        else {
             return false;
         };
 
@@ -117,6 +80,36 @@ impl Session {
         self.state.set_clipboard(block);
 
         true
+    }
+
+    pub fn delete_tile(&mut self, coord: Coord) -> bool {
+        self.build_clear(
+            Selection::from_drag(coord, coord),
+            BlockSelectionMode::Full,
+            "delete tile",
+        )
+        .is_some_and(|action| self.commit(action, None))
+    }
+
+    pub fn cut_tile(&mut self, coord: Coord) -> bool {
+        self.cut_block(Selection::from_drag(coord, coord), BlockSelectionMode::Full, "cut tile")
+    }
+
+    pub fn delete_selection(&mut self) -> bool {
+        let Some(selection) = self.selection() else {
+            return false;
+        };
+
+        self.build_clear(selection, self.selection_mode(), "delete block")
+            .is_some_and(|action| self.commit(action, None))
+    }
+
+    pub fn cut_selection(&mut self) -> bool {
+        let Some(selection) = self.selection() else {
+            return false;
+        };
+
+        self.cut_block(selection, self.selection_mode(), "cut block")
     }
 
     pub fn clipboard(&self) -> Option<&TileBlock> { self.state.clipboard() }
@@ -381,6 +374,123 @@ mod tests {
                 assert_eq!(session.state.active(), Some(second));
             }
         }
+    }
+
+    fn paths_at(session: &Session, coord: Coord) -> Vec<String> {
+        session
+            .map()
+            .unwrap()
+            .tile_at(coord)
+            .unwrap()
+            .iter()
+            .map(|prefab| prefab.path.to_string())
+            .collect()
+    }
+
+    fn place(session: &mut Session, prefab: Prefab, coord: Coord) {
+        session.state.choose_prefab(prefab);
+        session.set_tool(Tool::Place);
+        assert!(session.place_at(coord, None).is_some());
+    }
+
+    #[test]
+    fn a_block_cut_and_paste_leaves_hidden_areas_where_they_were() {
+        let mut session = flat_session(4, 4);
+        let source = Coord::new(1, 1, 1);
+        let destination = Coord::new(3, 3, 1);
+        let mut engineering = Prefab::new(TreePath::parse("/area/station"));
+        engineering.set_var("name".into(), Value::Text("Engineering".into()));
+        place(
+            &mut session,
+            Prefab::new(TreePath::parse("/obj/structure/table")),
+            source,
+        );
+        place(&mut session, engineering.clone(), destination);
+        let source_area = session.state.active_document().unwrap().placed_tile(source).unwrap()[2].clone();
+        let destination_area = session
+            .state
+            .active_document()
+            .unwrap()
+            .placed_tile(destination)
+            .unwrap()[1]
+            .clone();
+        let area = session.tree().unwrap().id_of(&TreePath::parse("/area")).unwrap();
+        assert!(session.toggle_type_visibility(area));
+
+        session.set_tool(Tool::BlockSelect);
+        assert!(session.select_block(Some(Selection::from_drag(source, source))));
+        assert!(session.cut_selection());
+        let cut = session.state.active_document().unwrap().placed_tile(source).unwrap();
+        let defaults = editor::tool::default_tile_paths(session.tree().unwrap()).unwrap();
+        assert_eq!(cut.len(), 2);
+        assert_eq!(cut[0].prefab().path, defaults.0);
+        assert_eq!(cut[1], source_area, "the hidden area is untouched");
+        assert_render_cache_matches_rebuild(&session);
+
+        assert!(session.paste_clipboard(destination, SelectionRotation::Original));
+        let pasted = session
+            .state
+            .active_document()
+            .unwrap()
+            .placed_tile(destination)
+            .unwrap();
+        assert_eq!(
+            paths_at(&session, destination),
+            ["/obj/structure/table", "/turf/open/floor", "/area/station"]
+        );
+        assert_eq!(pasted[2], destination_area, "the destination keeps its own area");
+        assert_eq!(pasted[2].prefab(), &engineering);
+        assert_render_cache_matches_rebuild(&session);
+
+        assert!(session.undo());
+        assert!(session.undo());
+        assert_eq!(
+            paths_at(&session, source),
+            ["/obj/structure/table", "/turf/open/floor", "/area/station"]
+        );
+    }
+
+    #[test]
+    fn a_filtered_paste_never_leaves_a_tile_without_a_turf() {
+        let mut session = flat_session(4, 1);
+        let source = Coord::new(1, 1, 1);
+        let destination = Coord::new(3, 1, 1);
+        place(
+            &mut session,
+            Prefab::new(TreePath::parse("/turf/closed/wall")),
+            destination,
+        );
+        let floor = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/turf/open/floor"))
+            .unwrap();
+        assert!(session.toggle_type_visibility(floor));
+
+        assert!(session.copy_tile(source));
+        assert_eq!(
+            session.clipboard().unwrap().tile(0, 0).unwrap().len(),
+            1,
+            "only the area is copied"
+        );
+        assert!(session.paste_clipboard(destination, SelectionRotation::Original));
+
+        assert_eq!(paths_at(&session, destination), ["/turf/closed/wall", "/area/station"]);
+    }
+
+    #[test]
+    fn deleting_a_block_with_nothing_visible_to_remove_does_nothing() {
+        let mut session = flat_session(4, 4);
+        let turf = session.tree().unwrap().id_of(&TreePath::parse("/turf")).unwrap();
+        let area = session.tree().unwrap().id_of(&TreePath::parse("/area")).unwrap();
+        assert!(session.toggle_type_visibility(turf));
+        assert!(session.toggle_type_visibility(area));
+        session.set_tool(Tool::BlockSelect);
+        assert!(session.select_block(Some(Selection::from_drag(Coord::new(1, 1, 1), Coord::new(4, 4, 1)))));
+
+        assert!(!session.can_clear_tile(Coord::new(1, 1, 1)));
+        assert!(!session.delete_selection());
+        assert!(!session.state.active_document().unwrap().is_dirty());
     }
 
     #[test]

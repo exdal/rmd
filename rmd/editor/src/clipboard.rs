@@ -1,12 +1,24 @@
 use std::collections::{HashMap, HashSet};
 
-use dmm::{Coord, Tile};
+use dmm::{Coord, Prefab, Tile};
 use objtree::ObjectTree;
 
 use crate::{
     command::Edit,
     document::{MapDocument, PlacedPrefab, PlacedTile, Selection},
-    tool::{BlockSelectionMode, SelectionRotation, ToolEdit, coord_in_bounds, rotate_point, rotate_prefab},
+    frame::HiddenTypes,
+    tool::{
+        BlockSelectionMode,
+        PlacementKind,
+        SelectionRotation,
+        ToolEdit,
+        coord_in_bounds,
+        default_tile_paths,
+        insertion_index,
+        placement_kind,
+        rotate_point,
+        rotate_prefab,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -16,6 +28,8 @@ pub struct TileBlock {
     selection_mode: BlockSelectionMode,
     /// row major, `tiles[y * width + x]`, `y` ascending = dmm north
     tiles: Vec<Tile>,
+    /// A paste leaves these on the destination
+    hidden: HiddenTypes,
 }
 
 impl TileBlock {
@@ -30,10 +44,17 @@ impl TileBlock {
     }
 
     pub fn filled(&self) -> impl Iterator<Item = (u32, u32, &Tile)> {
-        self.tiles.iter().enumerate().filter_map(|(index, tile)| {
-            let index = index as u32;
+        let bounds = Selection {
+            min: Coord::new(1, 1, 1),
+            max: Coord::new(self.width, self.height, 1),
+        };
 
-            (!tile.is_empty()).then(|| (index % self.width, index / self.width, tile))
+        self.tiles.iter().enumerate().filter_map(move |(index, tile)| {
+            let (x, y) = (index as u32 % self.width, index as u32 / self.width);
+
+            self.selection_mode
+                .includes(bounds, Coord::new(x + 1, y + 1, 1))
+                .then_some((x, y, tile))
         })
     }
 
@@ -66,21 +87,24 @@ impl TileBlock {
     }
 }
 
-pub fn copy_block(document: &MapDocument, selection: Selection, mode: BlockSelectionMode) -> Option<TileBlock> {
+pub fn copy_block(
+    document: &MapDocument, selection: Selection, mode: BlockSelectionMode, hidden: HiddenTypes,
+) -> Option<TileBlock> {
     if !selection.is_well_formed() {
         return None;
     }
 
     let (width, height) = (selection.width(), selection.height());
     let included = mode.tiles(selection).collect::<HashSet<_>>();
-    let mut tiles = Vec::with_capacity((width as usize).checked_mul(height as usize)?);
+    let mut tiles: Vec<Tile> = Vec::with_capacity((width as usize).checked_mul(height as usize)?);
     for y in 0..height {
         for x in 0..width {
             let coord = Coord::new(selection.min.x + x, selection.min.y + y, selection.min.z);
             let tile = included
                 .contains(&coord)
-                .then(|| document.map.tile_at(coord).cloned())
+                .then(|| document.map.tile_at(coord))
                 .flatten()
+                .map(|tile| tile.iter().filter(|prefab| !hidden.hides(prefab)).cloned().collect())
                 .unwrap_or_default();
 
             tiles.push(tile);
@@ -92,6 +116,7 @@ pub fn copy_block(document: &MapDocument, selection: Selection, mode: BlockSelec
         height,
         selection_mode: mode,
         tiles,
+        hidden,
     })
 }
 
@@ -142,8 +167,8 @@ pub fn paste_block(
     let mut edit = Edit::new("paste block");
     let mut affected = Vec::new();
     for coord in coords {
-        let after = staged.remove(&coord)?;
         let before = document.placed_tile(coord)?;
+        let after = merge_pasted(tree, &before, staged.remove(&coord)?, &block.hidden);
         if before == after {
             continue;
         }
@@ -165,6 +190,115 @@ pub fn paste_block(
         },
         target,
     ))
+}
+
+fn merge_pasted(tree: &ObjectTree, before: &PlacedTile, pasted: PlacedTile, hidden: &HiddenTypes) -> PlacedTile {
+    if hidden.is_empty() {
+        return pasted;
+    }
+
+    let (mut after, replaced): (PlacedTile, PlacedTile) =
+        before.iter().cloned().partition(|placed| hidden.hides(placed.prefab()));
+    for placed in pasted {
+        let kind = kind_of(tree, placed.prefab());
+        // hidden turfs and areas are left alone, and a tile only has room for one
+        if kind != PlacementKind::Atom && has_kind(tree, &after, kind) {
+            continue;
+        }
+
+        after.insert(insertion_index(tree, &after, kind), placed);
+    }
+
+    for kind in [PlacementKind::Turf, PlacementKind::Area] {
+        if !has_kind(tree, &after, kind)
+            && let Some(placed) = replaced.iter().find(|placed| kind_of(tree, placed.prefab()) == kind)
+        {
+            after.insert(insertion_index(tree, &after, kind), placed.clone());
+        }
+    }
+
+    after
+}
+
+/// Removes what is not hidden, leaving the default turf and area behind
+pub fn clear_block(
+    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, mode: BlockSelectionMode,
+    hidden: &HiddenTypes, label: &str,
+) -> Option<ToolEdit> {
+    if !selection.is_well_formed()
+        || !coord_in_bounds(selection.min, document.map.size)
+        || !coord_in_bounds(selection.max, document.map.size)
+        || mode.tiles(selection).any(|coord| !document.allows_edit_at(coord))
+    {
+        return None;
+    }
+
+    let defaults = default_prefabs(tree)?;
+    let mut edit = Edit::new(label);
+    let mut affected = Vec::new();
+    for coord in mode.tiles(selection) {
+        if !document
+            .map
+            .tile_at(coord)
+            .is_some_and(|tile| clears_anything(tile, hidden, &defaults))
+        {
+            continue;
+        }
+
+        let before = document.placed_tile(coord)?;
+        let mut after = before
+            .iter()
+            .filter(|placed| hidden.hides(placed.prefab()) || defaults.contains(placed.prefab()))
+            .cloned()
+            .collect::<PlacedTile>();
+
+        for (kind, prefab) in [(PlacementKind::Turf, &defaults[0]), (PlacementKind::Area, &defaults[1])] {
+            if !has_kind(tree, &after, kind) {
+                let placed = document.instantiate(prefab.clone());
+                after.insert(insertion_index(tree, &after, kind), placed);
+            }
+        }
+
+        affected.extend(before.iter().map(PlacedPrefab::id));
+        affected.extend(after.iter().map(PlacedPrefab::id));
+        edit.change(document, coord, after);
+    }
+
+    if edit.is_empty() {
+        return None;
+    }
+
+    affected.sort_unstable_by_key(|id| id.get());
+    affected.dedup();
+
+    Some(ToolEdit {
+        edit,
+        selected: None,
+        affected,
+    })
+}
+
+pub fn can_clear(tree: &ObjectTree, tile: &Tile, hidden: &HiddenTypes) -> bool {
+    default_prefabs(tree).is_some_and(|defaults| clears_anything(tile, hidden, &defaults))
+}
+
+fn clears_anything(tile: &[Prefab], hidden: &HiddenTypes, defaults: &[Prefab; 2]) -> bool {
+    tile.iter()
+        .any(|prefab| !hidden.hides(prefab) && !defaults.contains(prefab))
+}
+
+fn default_prefabs(tree: &ObjectTree) -> Option<[Prefab; 2]> {
+    let (turf, area) = default_tile_paths(tree)?;
+
+    Some([Prefab::new(turf), Prefab::new(area)])
+}
+
+fn kind_of(tree: &ObjectTree, prefab: &Prefab) -> PlacementKind {
+    placement_kind(tree, prefab).unwrap_or(PlacementKind::Atom)
+}
+
+fn has_kind(tree: &ObjectTree, tile: &[PlacedPrefab], kind: PlacementKind) -> bool {
+    tile.iter().any(|placed| kind_of(tree, placed.prefab()) == kind)
 }
 
 #[cfg(test)]
@@ -204,7 +338,13 @@ mod tests {
     #[test]
     fn a_copied_block_keeps_its_tiles_in_row_major_order() {
         let document = MapDocument::new(map(Size { x: 4, y: 4, z: 1 }), 1);
-        let block = copy_block(&document, selection((2, 2), (3, 4)), BlockSelectionMode::Full).expect("block");
+        let block = copy_block(
+            &document,
+            selection((2, 2), (3, 4)),
+            BlockSelectionMode::Full,
+            HiddenTypes::default(),
+        )
+        .expect("block");
 
         assert_eq!((block.width(), block.height()), (2, 3));
         assert_eq!(block.tile(0, 0).expect("tile")[0].path.to_string(), "/turf/t2_2");
@@ -219,6 +359,7 @@ mod tests {
             &document,
             selection((1, 1), (3, 3)),
             BlockSelectionMode::Hollow { line_width: 1 },
+            HiddenTypes::default(),
         )
         .expect("block");
 
@@ -228,9 +369,57 @@ mod tests {
     }
 
     #[test]
+    fn a_copy_leaves_hidden_types_behind() {
+        let document = MapDocument::new(map(Size { x: 2, y: 1, z: 1 }), 1);
+        let hidden = [TreePath::parse("/area")].into_iter().collect();
+        let block = copy_block(&document, selection((1, 1), (2, 1)), BlockSelectionMode::Full, hidden).expect("block");
+
+        assert_eq!(
+            block.tile(0, 0),
+            Some(&vec![Prefab::new(TreePath::parse("/turf/t1_1"))])
+        );
+        assert_eq!(block.filled().count(), 2);
+    }
+
+    #[test]
+    fn a_paste_keeps_what_was_hidden_at_copy_time() {
+        let source = MapDocument::new(map(Size { x: 1, y: 1, z: 1 }), 1);
+        let mut destination = MapDocument::new(map(Size { x: 2, y: 1, z: 1 }), 1);
+        let tree = ObjectTree::default();
+        let hidden = [TreePath::parse("/area")].into_iter().collect();
+        let block = copy_block(&source, selection((1, 1), (1, 1)), BlockSelectionMode::Full, hidden).expect("block");
+        let area = destination.placed_tile(Coord::new(2, 1, 1)).expect("tile")[1].clone();
+
+        let (edit, _) = paste_block(
+            &mut destination,
+            &tree,
+            &block,
+            Coord::new(2, 1, 1),
+            SelectionRotation::Original,
+        )
+        .expect("paste");
+        assert!(destination.apply(edit.edit));
+
+        let pasted = destination.placed_tile(Coord::new(2, 1, 1)).expect("tile");
+        assert_eq!(pasted.len(), 2);
+        assert!(pasted.contains(&area), "the hidden area keeps its placement");
+        assert!(
+            pasted
+                .iter()
+                .any(|placed| placed.prefab().path.to_string() == "/turf/t1_1")
+        );
+    }
+
+    #[test]
     fn a_quarter_turn_swaps_the_footprint() {
         let document = MapDocument::new(map(Size { x: 4, y: 4, z: 1 }), 1);
-        let block = copy_block(&document, selection((1, 1), (2, 4)), BlockSelectionMode::Full).expect("block");
+        let block = copy_block(
+            &document,
+            selection((1, 1), (2, 4)),
+            BlockSelectionMode::Full,
+            HiddenTypes::default(),
+        )
+        .expect("block");
         let min = Coord::new(1, 1, 1);
 
         assert_eq!(
@@ -248,7 +437,13 @@ mod tests {
         let source = MapDocument::new(map(Size { x: 4, y: 4, z: 1 }), 1);
         let mut destination = MapDocument::new(map(Size { x: 4, y: 4, z: 1 }), 1);
         let tree = ObjectTree::default();
-        let block = copy_block(&source, selection((1, 1), (2, 2)), BlockSelectionMode::Full).expect("block");
+        let block = copy_block(
+            &source,
+            selection((1, 1), (2, 2)),
+            BlockSelectionMode::Full,
+            HiddenTypes::default(),
+        )
+        .expect("block");
 
         let before = destination
             .placed_tile(Coord::new(3, 3, 1))
@@ -288,7 +483,13 @@ mod tests {
         let source = MapDocument::new(map(Size { x: 4, y: 4, z: 1 }), 1);
         let mut destination = MapDocument::new(map(Size { x: 4, y: 4, z: 1 }), 1);
         let tree = ObjectTree::default();
-        let block = copy_block(&source, selection((1, 1), (3, 3)), BlockSelectionMode::Full).expect("block");
+        let block = copy_block(
+            &source,
+            selection((1, 1), (3, 3)),
+            BlockSelectionMode::Full,
+            HiddenTypes::default(),
+        )
+        .expect("block");
 
         assert!(
             paste_block(
@@ -311,6 +512,7 @@ mod tests {
             height: 1,
             selection_mode: BlockSelectionMode::Full,
             tiles: vec![vec![Prefab::new(TreePath::parse("/turf/from/another/codebase"))]],
+            hidden: HiddenTypes::default(),
         };
 
         let (edit, _) = paste_block(

@@ -789,7 +789,7 @@ mod tests {
             KeyBinding::new(dear_imgui_rs::Key::N)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 31);
+        assert_eq!(KeybindAction::ALL.len(), 33);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));

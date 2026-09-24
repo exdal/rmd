@@ -156,7 +156,7 @@ pub enum FillError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PlacementKind {
+pub(crate) enum PlacementKind {
     Atom,
     Turf,
     Area,
@@ -1022,7 +1022,7 @@ fn replace_kind(
     (document.placed_tile(coord).as_ref() != Some(&after)).then_some((after, affected))
 }
 
-fn insertion_index(tree: &ObjectTree, tile: &[crate::document::PlacedPrefab], kind: PlacementKind) -> usize {
+pub(crate) fn insertion_index(tree: &ObjectTree, tile: &[crate::document::PlacedPrefab], kind: PlacementKind) -> usize {
     let rank = placement_rank(kind);
 
     tile.iter()
@@ -1042,7 +1042,7 @@ fn placement_rank(kind: PlacementKind) -> u8 {
     }
 }
 
-fn placement_kind(tree: &ObjectTree, prefab: &Prefab) -> Option<PlacementKind> {
+pub(crate) fn placement_kind(tree: &ObjectTree, prefab: &Prefab) -> Option<PlacementKind> {
     let id = tree.id_of(&prefab.path)?;
     let roots = tree.roots();
     let atom = roots.atom?;

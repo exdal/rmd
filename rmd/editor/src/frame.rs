@@ -1,3 +1,4 @@
+use core::{path::TreePath, types::Identifier};
 use std::collections::{HashMap, HashSet};
 
 use dmi::metadata::{Dir, Metadata};
@@ -168,6 +169,32 @@ impl TypeVisibility {
         }
 
         changed
+    }
+
+    pub fn hidden_types(&self, tree: &ObjectTree) -> HiddenTypes {
+        HiddenTypes(
+            self.hidden
+                .iter()
+                .filter_map(|id| tree.get(*id))
+                .map(|decl| decl.path.segments.clone())
+                .collect(),
+        )
+    }
+}
+
+// this needs to have path as key, it needs to outlive map reloads
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HiddenTypes(HashSet<Vec<Identifier>>);
+
+impl HiddenTypes {
+    pub fn is_empty(&self) -> bool { self.0.is_empty() }
+
+    pub fn hides(&self, prefab: &Prefab) -> bool { self.0.contains(&prefab.path.segments) }
+}
+
+impl FromIterator<TreePath> for HiddenTypes {
+    fn from_iter<I: IntoIterator<Item = TreePath>>(paths: I) -> Self {
+        Self(paths.into_iter().map(|path| path.segments).collect())
     }
 }
 
@@ -1436,6 +1463,20 @@ mod tests {
         assert!(!visibility.is_visible(parent));
         assert!(visibility.is_visible(child));
         assert!(visibility.is_visible(sibling));
+    }
+
+    #[test]
+    fn hidden_types_match_prefabs_by_path() {
+        let tree = tree(&[("/obj/parent", "floor", 1.0), ("/obj/parent/child", "floor", 1.0)]);
+        let parent = tree.id_of(&TreePath::parse("/obj/parent")).unwrap();
+        let mut visibility = TypeVisibility::default();
+        assert!(visibility.hidden_types(&tree).is_empty());
+
+        visibility.set_subtree(&tree, parent, false);
+        let hidden = visibility.hidden_types(&tree);
+
+        assert!(hidden.hides(&Prefab::new(TreePath::parse("/obj/parent/child"))));
+        assert!(!hidden.hides(&Prefab::new(TreePath::parse("/obj/other"))));
     }
 
     #[test]

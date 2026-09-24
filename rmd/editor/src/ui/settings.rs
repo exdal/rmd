@@ -87,6 +87,8 @@ const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
             KeybindAction::Undo,
             KeybindAction::Redo,
             KeybindAction::Copy,
+            KeybindAction::Cut,
+            KeybindAction::Delete,
             KeybindAction::Paste,
         ],
     ),

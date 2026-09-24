@@ -788,6 +788,21 @@ impl UiState {
                     if settings.keybindings.get(KeybindAction::Copy).is_pressed(ui) {
                         session.copy_selection(session.selection_mode());
                     }
+                    let cut = settings.keybindings.get(KeybindAction::Cut).is_pressed(ui);
+                    let delete = settings.keybindings.get(KeybindAction::Delete).is_pressed(ui);
+                    if (cut || delete) && paste.is_none() && session.selection().is_some() {
+                        restore_rectangle_gesture(session, id, rectangle_gesture);
+                        self.gizmo.cancel();
+                        *block_selection_anchor = None;
+                        *block_placement = None;
+
+                        if cut {
+                            session.cut_selection();
+                        } else {
+                            session.delete_selection();
+                        }
+                    }
+
                     if settings.keybindings.get(KeybindAction::Paste).is_pressed(ui)
                         && let Some(block) = session.clipboard()
                     {
