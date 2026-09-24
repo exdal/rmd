@@ -11,8 +11,9 @@ use std::{
 use dmm::Map;
 use editor::{
     blame::{self, BlameResult, GitVersions},
+    diff::DiffSource,
     document::DocumentId,
-    git::{CommitRef, GitError, Operation, RepoPath, WebLinks},
+    git::{CommitInfo, CommitRef, GitError, Operation, Repo, RepoPath, WebLinks},
 };
 
 pub struct Status {
@@ -23,6 +24,15 @@ pub struct Status {
     pub web: Option<WebLinks>,
 }
 
+/// A commit and the map it holds, `map` is `None` when the file doesn't exist there
+pub struct Revision {
+    pub commit: CommitInfo,
+    pub map: Option<Map>,
+}
+
+/// From and To, `None` for the working map
+pub type RevisionPair = (Option<Revision>, Option<Revision>);
+
 pub enum Outcome {
     Status(Result<Status, GitError>),
     Blame {
@@ -31,6 +41,28 @@ pub enum Outcome {
         result: Result<BlameResult, GitError>,
     },
     MarkResolved(Result<(), GitError>),
+    History(Result<Vec<CommitInfo>, GitError>),
+    Diff {
+        from: DiffSource,
+        to: DiffSource,
+        result: Result<Box<RevisionPair>, GitError>,
+    },
+}
+
+fn load_revision(repo: &Repo, source: &DiffSource, side: &str) -> Result<Option<Revision>, GitError> {
+    let DiffSource::Revision(spec) = source else {
+        return Ok(None);
+    };
+    let load = || {
+        let commit = repo.resolve(spec)?;
+        let map = repo.map_at(&commit.hash)?;
+
+        Ok(Revision { commit, map })
+    };
+
+    load()
+        .map(Some)
+        .map_err(|error: GitError| GitError(format!("{side} `{spec}`: {error}")))
 }
 
 pub struct Finished {
@@ -138,6 +170,42 @@ impl GitWorker {
                 kind: 2,
                 generation,
                 outcome: Outcome::MarkResolved(result),
+            });
+        });
+    }
+
+    /// The commits that changed the map, newest first
+    pub fn history(&mut self, document: DocumentId, path: RepoPath, limit: usize) {
+        let (generation, sender) = self.next(document, 3);
+        thread::spawn(move || {
+            let result = path.open().and_then(|repo| {
+                let versions = repo.file_history(limit, &|| false)?;
+
+                Ok(versions.into_iter().map(|version| version.commit).collect())
+            });
+            let _ = sender.send(Finished {
+                document,
+                kind: 3,
+                generation,
+                outcome: Outcome::History(result),
+            });
+        });
+    }
+
+    pub fn diff(&mut self, document: DocumentId, path: RepoPath, from: DiffSource, to: DiffSource) {
+        let (generation, sender) = self.next(document, 4);
+        thread::spawn(move || {
+            let result = path.open().and_then(|repo| {
+                Ok(Box::new((
+                    load_revision(&repo, &from, "From")?,
+                    load_revision(&repo, &to, "To")?,
+                )))
+            });
+            let _ = sender.send(Finished {
+                document,
+                kind: 4,
+                generation,
+                outcome: Outcome::Diff { from, to, result },
             });
         });
     }

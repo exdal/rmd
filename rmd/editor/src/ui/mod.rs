@@ -81,6 +81,7 @@ use render::{
 };
 
 use self::{
+    common::opaque,
     context_menu::{
         Action as MenuAction,
         NodeContext,
@@ -1325,6 +1326,11 @@ impl UiState {
                     if ui.menu_item_enabled_selected_no_shortcut("Show Blame", shown, settings.git_enabled) {
                         session.toggle_blame(id, settings.blame_depth as usize);
                     }
+
+                    let shown = session.git_state(id).is_some_and(|git| git.show_diff);
+                    if ui.menu_item_enabled_selected_no_shortcut("Show Diff", shown, settings.git_enabled) {
+                        session.toggle_diff(id);
+                    }
                 }
 
                 if ui.menu_item_enabled_selected_no_shortcut("Refresh", false, settings.git_enabled) {
@@ -2178,9 +2184,12 @@ impl UiState {
                     .and_then(|git| git.conflicts.as_ref())
                     .and_then(|state| state.conflict_at(coord))
             });
+            let hovered_diff = pointed_coord
+                .filter(|_| hovered_conflict.is_none() && session.git_state(id).is_some_and(|git| git.show_diff))
+                .and_then(|coord| session.diff_at(id, coord).map(|change| (coord, change)));
             let show_blame = session.git_state(id).is_some_and(|git| git.show_blame);
             let hovered_blame = pointed_coord
-                .filter(|_| show_blame && hovered_conflict.is_none())
+                .filter(|_| show_blame && hovered_conflict.is_none() && hovered_diff.is_none())
                 .and_then(|coord| session.blame_at(id, coord).map(|cell| (coord, cell)));
             let hovered_commit = match hovered_blame {
                 Some((coord, (editor::blame::BlameCell::Commit(..), false))) => Some(coord),
@@ -2197,6 +2206,19 @@ impl UiState {
                         ui.text(format!("HEAD:\n{}", describe_tile(conflict.ours.as_ref())));
                         ui.separator();
                         ui.text(format!("Incoming:\n{}", describe_tile(conflict.theirs.as_ref())));
+                    });
+                } else if let Some((coord, (kind, before, after))) = hovered_diff
+                    && let Some(state) = session.git_state(id).and_then(|git| git.diff.as_ref())
+                {
+                    ui.tooltip(|| {
+                        ui.text_colored(
+                            opaque(kind.color()),
+                            format!("{} at {}, {}, {}", kind.label(), coord.x, coord.y, coord.z),
+                        );
+                        ui.separator();
+                        ui.text(format!("{}:\n{}", state.from.label(), describe_tile(before)));
+                        ui.separator();
+                        ui.text(format!("{}:\n{}", state.to.label(), describe_tile(after)));
                     });
                 } else if let Some((_, (cell, changed))) = hovered_blame {
                     match cell {
@@ -2929,6 +2951,9 @@ impl UiState {
                         },
                         MenuAction::BlameRun => {
                             session.run_blame(id, settings.blame_depth as usize);
+                        },
+                        MenuAction::Restore(coords) => {
+                            session.restore_diff(id, &coords);
                         },
                         MenuAction::Undo => {
                             session.undo();
@@ -5166,7 +5191,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        session::tests::{install_blame, node_map, node_session, node_tile_has_group},
+        session::tests::{install_blame, install_diff, node_map, node_session, node_tile_has_group},
         settings::KeyBinding,
     };
 
@@ -6478,6 +6503,53 @@ mod tests {
             frame(&mut state);
         }
         assert!(state.git_panel.visible(), "a request brings the Git tab forward");
+    }
+
+    #[test]
+    fn the_diff_tab_draws_the_versions_and_the_changes() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = rectangle_context();
+        let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
+        context.io_mut().set_config_flags(flags);
+        let mut state = UiState::new(false).unwrap();
+        let mut session = Session::new();
+        let mut settings = Settings::default();
+        let mut map = dmm::Map::new(Size { x: 4, y: 4, z: 1 });
+        let floor = map.intern_tile(vec![Prefab::new(TreePath::parse("/turf/floor"))]);
+        for row in &mut map.grid[0] {
+            row.fill(floor);
+        }
+        session.apply_map(crate::loader::LoadedMap {
+            path: PathBuf::from("diff-ui-test.dmm"),
+            map,
+            z: 1,
+            errors: vec![],
+            repo: Some(editor::git::RepoPath {
+                root: PathBuf::from("missing-repository"),
+                git_dir: PathBuf::from("missing-repository/.git"),
+                rel: String::from("diff-ui-test.dmm"),
+            }),
+            conflict: None,
+        });
+        let id = session.state.active().unwrap();
+        install_diff(&mut session, id);
+        let mut frame = |state: &mut UiState, session: &mut Session| {
+            let ui = context.frame();
+            state.draw(ui, session, &mut settings, None).unwrap();
+            assert!(context.render_legacy().valid());
+        };
+
+        // the dock layout settles before the Git tab can be brought forward
+        for _ in 0..4 {
+            frame(&mut state, &mut session);
+        }
+        state.git_panel.request(git::GitTab::Diff);
+        for _ in 0..3 {
+            frame(&mut state, &mut session);
+        }
+
+        assert!(state.git_panel.visible());
+        assert_eq!(session.diff(id).map(|diff| diff.len()), Some(1));
     }
 
     #[test]

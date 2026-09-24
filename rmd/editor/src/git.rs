@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use dmm::Map;
 use gix::{
     ObjectId,
     bstr::{BStr, ByteSlice},
@@ -178,6 +179,14 @@ impl WebLinks {
 pub struct FileVersion {
     pub commit: CommitInfo,
     pub blob: Option<ObjectId>,
+}
+
+/// A map read from a blob, `None` when it doesn't parse cleanly
+pub fn parse_map(blob: Vec<u8>) -> Option<Map> {
+    let source = String::from_utf8(blob).ok()?;
+    let (map, errors) = dmm::parser::parse(&source);
+
+    errors.is_empty().then_some(map)
 }
 
 fn relative(root: &Path, file: &Path) -> Option<String> {
@@ -370,6 +379,33 @@ impl Repo {
     }
 
     pub fn blob(&self, id: ObjectId) -> GitResult<Vec<u8>> { Ok(self.repo.find_blob(id).map_err(fail)?.take_data()) }
+
+    /// The commit a revision such as `HEAD~3`, a branch, a tag or a hash points at
+    pub fn resolve(&self, spec: &str) -> GitResult<CommitInfo> {
+        let id = self
+            .repo
+            .rev_parse_single(spec.trim())
+            .map_err(fail)?
+            .object()
+            .map_err(fail)?
+            .peel_to_commit()
+            .map_err(fail)?
+            .id;
+
+        self.commit_info(id)
+    }
+
+    /// The map as `commit` left it, `None` when the file doesn't exist there
+    pub fn map_at(&self, commit: &str) -> GitResult<Option<Map>> {
+        let id = ObjectId::from_hex(commit.as_bytes()).map_err(fail)?;
+        let Some(blob) = self.blob_at(id)? else {
+            return Ok(None);
+        };
+
+        parse_map(self.blob(blob)?)
+            .map(Some)
+            .ok_or_else(|| GitError(format!("the map at {} could not be parsed", short_hash(commit))))
+    }
 
     fn blob_at(&self, commit: ObjectId) -> GitResult<Option<ObjectId>> {
         let tree = self.repo.find_commit(commit).map_err(fail)?.tree_id().map_err(fail)?;
@@ -674,6 +710,43 @@ pub(crate) mod tests {
         assert_eq!(detect_operation(&dir), Some((OperationKind::Merge, "2222".into())));
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolves_revisions_and_reads_the_map_they_hold() {
+        if !git_available() {
+            return;
+        }
+
+        let map = |turf: &str| format!("\"a\" = (/turf/{turf})\n\n(1,1,1) = {{\"\na\n\"}}\n");
+        let dir = temp_repo("revisions");
+        commit(&dir, "other.txt", "x\n", "before the map");
+        commit(&dir, "a.dmm", &map("floor"), "add map");
+        git(&dir, &["tag", "v1"]);
+        commit(&dir, "a.dmm", &map("wall"), "wall it off");
+        commit(&dir, "a.dmm", "not a map {", "break it");
+
+        let repo = discover(&dir.join("a.dmm")).unwrap().open().unwrap();
+        assert_eq!(repo.resolve("HEAD").unwrap().summary, "break it");
+        assert_eq!(repo.resolve("main~1").unwrap().summary, "wall it off");
+        assert_eq!(repo.resolve(" v1 ").unwrap().summary, "add map");
+        assert!(repo.resolve("no-such-branch").is_err());
+
+        let turf = |spec: &str| {
+            let commit = repo.resolve(spec).unwrap();
+            repo.map_at(&commit.hash).map(|map| {
+                map.and_then(|map| {
+                    map.tile_at(dmm::Coord::new(1, 1, 1))
+                        .map(|tile| tile[0].path.to_string())
+                })
+            })
+        };
+        assert_eq!(turf("HEAD~1"), Ok(Some(String::from("/turf/wall"))));
+        assert_eq!(turf("v1"), Ok(Some(String::from("/turf/floor"))));
+        assert_eq!(turf("HEAD~3"), Ok(None), "the map didn't exist yet");
+        assert!(turf("HEAD").is_err(), "an unparseable map is an error");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

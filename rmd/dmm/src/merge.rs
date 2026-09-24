@@ -6,7 +6,7 @@ pub fn tiles_equal(left: &Tile, right: &Tile) -> bool {
     left.len() == right.len() && left.iter().zip(right).all(|(left, right)| prefabs_equal(left, right))
 }
 
-fn prefabs_equal(left: &Prefab, right: &Prefab) -> bool {
+pub fn prefabs_equal(left: &Prefab, right: &Prefab) -> bool {
     left.path == right.path
         && left.vars.len() == right.vars.len()
         && left

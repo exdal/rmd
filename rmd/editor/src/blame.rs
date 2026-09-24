@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use dmm::{Coord, Map, Size, Tile, key::Key, merge::tiles_equal, writer::format_value};
 
-use crate::git::{CommitInfo, FileVersion, GitError, Repo, RepoPath};
+use crate::git::{CommitInfo, FileVersion, GitError, Repo, RepoPath, parse_map};
 
 pub const UNCOMMITTED: u32 = u32::MAX;
 /// The change is older than the walked, parseable history
@@ -350,17 +350,7 @@ impl VersionSource for GitVersions {
         let Some(blob) = version.blob else {
             return Ok(MapVersion::Missing);
         };
-        let blob = self.repo.blob(blob)?;
-        let Ok(source) = String::from_utf8(blob) else {
-            return Ok(MapVersion::Unparseable);
-        };
-        let (map, errors) = dmm::parser::parse(&source);
-
-        if !errors.is_empty() {
-            return Ok(MapVersion::Unparseable);
-        }
-
-        Ok(MapVersion::Present(map))
+        Ok(parse_map(self.repo.blob(blob)?).map_or(MapVersion::Unparseable, MapVersion::Present))
     }
 }
 

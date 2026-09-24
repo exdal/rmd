@@ -92,6 +92,76 @@ pub fn describe_tile(tile: Option<&Tile>) -> String {
     }
 }
 
+/// Replaces the tile at `coord` unless it already matches `target`
+pub fn set_tile(edit: &mut Edit, document: &mut MapDocument, coord: Coord, target: Tile) {
+    if document
+        .map
+        .tile_at(coord)
+        .is_some_and(|current| tiles_equal(current, &target))
+    {
+        return;
+    }
+
+    let after = target.into_iter().map(|prefab| document.instantiate(prefab)).collect();
+    edit.change(document, coord, after);
+}
+
+/// Groups touching tiles, diagonals included, sorted by level then from the north west
+pub fn connected_regions(coords: impl IntoIterator<Item = Coord>) -> Vec<Region> {
+    let order = coords.into_iter().collect::<Vec<_>>();
+    let open = order.iter().copied().collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    let mut regions = Vec::new();
+
+    for start in order {
+        if !seen.insert(start) {
+            continue;
+        }
+
+        let mut tiles = Vec::new();
+        let mut queue = VecDeque::from([start]);
+        while let Some(coord) = queue.pop_front() {
+            tiles.push(coord);
+            for dy in -1i64..=1 {
+                for dx in -1i64..=1 {
+                    let (Ok(x), Ok(y)) = (
+                        u32::try_from(i64::from(coord.x) + dx),
+                        u32::try_from(i64::from(coord.y) + dy),
+                    ) else {
+                        continue;
+                    };
+                    let next = Coord::new(x, y, coord.z);
+                    if open.contains(&next) && seen.insert(next) {
+                        queue.push_back(next);
+                    }
+                }
+            }
+        }
+
+        tiles.sort_unstable_by_key(|coord| (std::cmp::Reverse(coord.y), coord.x));
+        let min = Coord::new(
+            tiles.iter().map(|coord| coord.x).min().unwrap_or(start.x),
+            tiles.iter().map(|coord| coord.y).min().unwrap_or(start.y),
+            start.z,
+        );
+        let max = Coord::new(
+            tiles.iter().map(|coord| coord.x).max().unwrap_or(start.x),
+            tiles.iter().map(|coord| coord.y).max().unwrap_or(start.y),
+            start.z,
+        );
+
+        regions.push(Region {
+            anchor: Coord::new(min.x, max.y, start.z),
+            tiles,
+            min,
+            max,
+        });
+    }
+
+    regions.sort_unstable_by_key(|region| (region.anchor.z, std::cmp::Reverse(region.anchor.y), region.anchor.x));
+    regions
+}
+
 impl ConflictState {
     pub fn new(data: ConflictData) -> Self {
         let order = data.conflicts.iter().map(|conflict| conflict.coord).collect();
@@ -213,60 +283,10 @@ impl ConflictState {
     }
 
     pub fn regions_in(&self, z: Option<u32>, resolved: &Resolved) -> Vec<Region> {
-        let open = self
-            .unresolved_in(resolved)
-            .filter(|coord| z.is_none_or(|z| coord.z == z))
-            .collect::<HashSet<_>>();
-        let mut seen = HashSet::new();
-        let mut regions = Vec::new();
-
-        for start in self.order.iter().copied().filter(|coord| open.contains(coord)) {
-            if !seen.insert(start) {
-                continue;
-            }
-
-            let mut tiles = Vec::new();
-            let mut queue = VecDeque::from([start]);
-            while let Some(coord) = queue.pop_front() {
-                tiles.push(coord);
-                for dy in -1i64..=1 {
-                    for dx in -1i64..=1 {
-                        let (Ok(x), Ok(y)) = (
-                            u32::try_from(i64::from(coord.x) + dx),
-                            u32::try_from(i64::from(coord.y) + dy),
-                        ) else {
-                            continue;
-                        };
-                        let next = Coord::new(x, y, coord.z);
-                        if open.contains(&next) && seen.insert(next) {
-                            queue.push_back(next);
-                        }
-                    }
-                }
-            }
-
-            tiles.sort_unstable_by_key(|coord| (std::cmp::Reverse(coord.y), coord.x));
-            let min = Coord::new(
-                tiles.iter().map(|coord| coord.x).min().unwrap_or(start.x),
-                tiles.iter().map(|coord| coord.y).min().unwrap_or(start.y),
-                start.z,
-            );
-            let max = Coord::new(
-                tiles.iter().map(|coord| coord.x).max().unwrap_or(start.x),
-                tiles.iter().map(|coord| coord.y).max().unwrap_or(start.y),
-                start.z,
-            );
-
-            regions.push(Region {
-                anchor: Coord::new(min.x, max.y, start.z),
-                tiles,
-                min,
-                max,
-            });
-        }
-
-        regions.sort_unstable_by_key(|region| (region.anchor.z, std::cmp::Reverse(region.anchor.y), region.anchor.x));
-        regions
+        connected_regions(
+            self.unresolved_in(resolved)
+                .filter(|coord| z.is_none_or(|z| coord.z == z)),
+        )
     }
 
     /// Replaces the conflicting tiles among `coords` with one side. The edit is recorded even when
@@ -281,17 +301,7 @@ impl ConflictState {
             };
             any = true;
 
-            let target = target.cloned().unwrap_or_default();
-            if document
-                .map
-                .tile_at(*coord)
-                .is_some_and(|current| tiles_equal(current, &target))
-            {
-                continue;
-            }
-
-            let after = target.into_iter().map(|prefab| document.instantiate(prefab)).collect();
-            edit.change(document, *coord, after);
+            set_tile(&mut edit, document, *coord, target.cloned().unwrap_or_default());
         }
 
         any.then_some(edit)

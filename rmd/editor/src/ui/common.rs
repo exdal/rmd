@@ -64,3 +64,5 @@ pub(super) fn table_min_width(ui: &Ui, fixed: &[f32], stretch: usize) -> f32 {
     let columns = fixed.len() + stretch;
     fixed.iter().sum::<f32>() + MIN_STRETCH_WIDTH * stretch as f32 + padding * columns as f32
 }
+
+pub(super) const fn opaque(color: [f32; 3]) -> [f32; 4] { [color[0], color[1], color[2], 1.0] }

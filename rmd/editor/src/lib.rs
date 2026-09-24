@@ -3,6 +3,7 @@ pub mod blame;
 pub mod clipboard;
 pub mod command;
 pub mod conflict;
+pub mod diff;
 pub mod document;
 pub mod environment;
 pub mod error;

@@ -33,6 +33,7 @@ pub(super) enum Action {
     BlameCopy(String),
     BlamePin(u32),
     BlameRun,
+    Restore(Vec<Coord>),
     Undo,
     Redo,
     Copy(Coord),
@@ -98,6 +99,32 @@ pub(super) fn draw_popup(
                         action = Some(Action::Conflict(coords.clone(), side));
                     }
                 }
+            }
+        }
+    }
+
+    if let Some(state) = session
+        .git_state(target.document)
+        .and_then(|git| git.diff.as_ref())
+        .filter(|state| state.restorable())
+        && let Some(diff) = session.diff(target.document)
+    {
+        let mut coords = vec![coord];
+        if target.block_selected
+            && let Some(selection) = session.selection()
+        {
+            coords = session.selection_mode().tiles(selection).collect();
+        }
+        coords.retain(|coord| diff.at(*coord).is_some());
+
+        if !coords.is_empty() {
+            ui.separator();
+            let count = match coords.len() {
+                1 => String::new(),
+                count => format!(" ({count} tiles)"),
+            };
+            if ui.menu_item(format!("Restore from {}{count}", state.from.label())) {
+                action = Some(Action::Restore(coords));
             }
         }
     }
