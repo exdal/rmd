@@ -158,6 +158,8 @@ impl InspectorState {
             "Tile {}, {}, {}",
             snapshot.location.coord.x, snapshot.location.coord.y, snapshot.location.coord.z
         ));
+        let find_similar = ui.text_link("Find similar...");
+
         let mut copy_hash = None;
         if let Some(id) = session.state.active()
             && session.git_state(id).is_some_and(|git| git.show_blame)
@@ -215,7 +217,6 @@ impl InspectorState {
             }
         }
 
-        let find_similar = ui.text_link("Find similar...");
         ui.separator();
 
         if snapshot.is_atom {
