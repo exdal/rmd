@@ -15,6 +15,7 @@ pub(super) struct MenuActions {
     pub(super) open: Option<OpenRequest>,
     pub(super) show_welcome: bool,
     pub(super) open_save_dialog: bool,
+    pub(super) screenshot: bool,
     pub(super) toggle_areas: bool,
     pub(super) toggle_area_outlines: bool,
     pub(super) toggle_lighting: bool,
@@ -53,6 +54,14 @@ impl UiState {
                     session.map().is_some(),
                 ) {
                     actions.open_save_dialog = true;
+                }
+                if ui.menu_item_enabled_selected_with_shortcut(
+                    "Screenshot...",
+                    settings.keybindings.get(KeybindAction::Screenshot).label(ui),
+                    false,
+                    session.map().is_some(),
+                ) {
+                    actions.screenshot = true;
                 }
                 ui.separator();
                 if ui.menu_item("Welcome") {

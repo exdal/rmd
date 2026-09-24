@@ -45,6 +45,8 @@ pub enum GpuError {
     TextureUpdateMismatch,
     UnknownTexture(u64),
     ImGui(String),
+    CaptureUnavailable,
+    CaptureTooLarge,
 }
 
 impl std::fmt::Display for GpuError {
@@ -108,6 +110,8 @@ impl std::fmt::Display for GpuError {
             Self::TextureUpdateMismatch => write!(f, "an interface texture patch does not fit the image it names"),
             Self::UnknownTexture(id) => write!(f, "the interface painted with texture {id}, which was never uploaded"),
             Self::ImGui(e) => write!(f, "imgui error: {e}"),
+            Self::CaptureUnavailable => write!(f, "the map to capture has not been drawn yet"),
+            Self::CaptureTooLarge => write!(f, "the map is too large to capture"),
         }
     }
 }

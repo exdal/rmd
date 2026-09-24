@@ -708,6 +708,7 @@ dependencies = [
  "ir",
  "log",
  "objtree",
+ "png",
  "preprocessor",
  "raw-window-handle",
  "render",

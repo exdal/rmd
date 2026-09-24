@@ -148,6 +148,7 @@ pub struct UiOutput {
     pub open: Option<OpenRequest>,
     pub open_source: Option<SourceLocation>,
     pub pick_new_map_path: bool,
+    pub screenshot: bool,
     pub cancel_load: bool,
     pub copy_to_clipboard: Option<String>,
     pub reload_profile: Option<ProfileReload>,
@@ -364,6 +365,7 @@ impl UiState {
                 open: None,
                 open_source: None,
                 pick_new_map_path: false,
+                screenshot: false,
                 cancel_load: false,
                 copy_to_clipboard: None,
                 reload_profile: None,
@@ -378,6 +380,7 @@ impl UiState {
             mut open,
             show_welcome,
             mut open_save_dialog,
+            mut screenshot,
             toggle_areas,
             toggle_area_outlines,
             toggle_lighting,
@@ -413,6 +416,12 @@ impl UiState {
                 open_save_dialog = true;
             }
         }
+
+        screenshot |= session.map().is_some()
+            && self.save_dialog.is_none()
+            && !self.settings_window.is_capturing_keybind()
+            && !ui.io().want_text_input()
+            && settings.keybindings.get(KeybindAction::Screenshot).is_pressed(ui);
 
         if undo || redo {
             self.cancel_edit_gestures(session, session.state.active());
@@ -593,6 +602,7 @@ impl UiState {
             open,
             open_source,
             pick_new_map_path,
+            screenshot,
             cancel_load: load_popup.cancel,
             copy_to_clipboard: load_popup.copy.or_else(|| self.copy_to_clipboard.take()),
             reload_profile: settings_output.reload_profile,
@@ -779,7 +789,7 @@ mod tests {
             KeyBinding::new(dear_imgui_rs::Key::N)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 30);
+        assert_eq!(KeybindAction::ALL.len(), 31);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));

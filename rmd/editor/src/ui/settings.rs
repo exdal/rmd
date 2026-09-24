@@ -80,7 +80,7 @@ impl SettingsCategory {
 }
 
 const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
-    ("Application", &[KeybindAction::Save]),
+    ("Application", &[KeybindAction::Save, KeybindAction::Screenshot]),
     (
         "Editing",
         &[

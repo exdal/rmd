@@ -36,6 +36,7 @@ use vir::{
 
 use crate::{
     AREA_EDGES_ALL,
+    CapturedImage,
     Device,
     Frame,
     GpuError,
@@ -67,11 +68,14 @@ const GUIDE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/guide.frag
 const LIGHTING_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/lighting.vert.spv"));
 const LIGHTING_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/lighting.frag.spv"));
 const PICK_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pick.comp.spv"));
+const CAPTURE_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/capture.comp.spv"));
 const UPLOAD_BATCH_BYTES: usize = 64 * 1024 * 1024;
 const HIGHLIGHT_STRIPE_PERIOD: f32 = 12.0;
 const HIGHLIGHT_STRIPE_SPEED: f32 = 12.0;
 const CULL_WORKGROUP_SIZE: u32 = 64;
 const SPRITE_DRAW_COMMANDS: u64 = 2;
+const CAPTURE_TILE_SIZE: u32 = 2048;
+const CAPTURE_WORKGROUP_SIZE: u32 = 8;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -219,8 +223,8 @@ struct CullValues {
 }
 
 fn record_sprite_cull(
-    module: &mut Module, pipelines: [PipelineId; 3], sprites: ValueId, values: CullValues, state: &FrameGraphState,
-    name: &str,
+    module: &mut Module, pipelines: [PipelineId; 3], sprites: ValueId, values: CullValues, show_areas: bool,
+    show_area_outlines: bool, name: &str,
 ) -> (CullValues, CullSlots) {
     let CullValues {
         visible,
@@ -244,8 +248,8 @@ fn record_sprite_cull(
         .bind_buffer(0, 1, sprites)
         .bind_buffer(0, 4, chunks)
         .push_constants_from(push)
-        .specialize_constant(spec::SHOW_AREAS, state.show_areas)
-        .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
+        .specialize_constant(spec::SHOW_AREAS, show_areas)
+        .specialize_constant(spec::SHOW_AREA_OUTLINES, show_area_outlines)
         .dispatch_invocations(sprite_count, 1u32, 1u32)
         .end_compute();
 
@@ -271,8 +275,8 @@ fn record_sprite_cull(
         .bind_buffer(0, 2, visible)
         .bind_buffer(0, 4, chunks)
         .push_constants_from(push)
-        .specialize_constant(spec::SHOW_AREAS, state.show_areas)
-        .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
+        .specialize_constant(spec::SHOW_AREAS, show_areas)
+        .specialize_constant(spec::SHOW_AREA_OUTLINES, show_area_outlines)
         .dispatch_invocations(sprite_count, 1u32, 1u32)
         .end_compute();
 
@@ -425,6 +429,18 @@ struct MapViewPass {
     should_pick: Option<ValueId>,
     interaction: Option<InteractionSlots>,
     guides: Option<GuideSlots>,
+}
+
+struct MapScene {
+    extent: ValueId,
+    scene: ValueId,
+    camera: ValueId,
+    underlay_camera: ValueId,
+    active_camera: ValueId,
+    draw_commands: ValueId,
+    visible_indices: ValueId,
+    cull: CullSlots,
+    lighting: Option<LightingSlots>,
 }
 
 struct GuideSlots {
@@ -668,6 +684,7 @@ pub struct Renderer {
     interaction_pipeline: PipelineId,
     guide_pipeline: PipelineId,
     pick_pipeline: PipelineId,
+    capture_pipeline: PipelineId,
     area_colors: AreaColorPass,
     bindless: BindlessDescriptorSet,
     textures: Vec<TextureImage>,
@@ -823,6 +840,16 @@ impl Renderer {
                 return Err(error.into());
             },
         };
+        let capture_pipeline =
+            match graph.declare_compute_pipeline(ComputePipelineInfo::new(&read_spirv(CAPTURE_CS_SPV)?)) {
+                Ok(pipeline) => pipeline,
+                Err(error) => {
+                    drop(graph);
+                    bindless.destroy(&device);
+
+                    return Err(error.into());
+                },
+            };
         let area_color_pipeline = match graph.declare_compute_pipeline(
             ComputePipelineInfo::new(&read_spirv(AREA_COLOR_CS_SPV)?).with_bindless_set(
                 1,
@@ -862,6 +889,7 @@ impl Renderer {
             interaction_pipeline,
             guide_pipeline,
             pick_pipeline,
+            capture_pipeline,
             area_colors,
             bindless,
             textures: Vec::new(),
@@ -988,6 +1016,171 @@ impl Renderer {
         Ok(())
     }
 
+    pub fn capture(&mut self, frame: &Frame<'_>, view: usize, size: [u32; 2]) -> Result<CapturedImage, GpuError> {
+        let [width, height] = size;
+        let rgba_len = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .filter(|len| *len > 0)
+            .ok_or(GpuError::CaptureTooLarge)?;
+        let map_view = frame
+            .map_views
+            .get(view)
+            .filter(|map_view| !map_view.rect.is_empty())
+            .ok_or(GpuError::CaptureUnavailable)?;
+        let uploaded = self
+            .uploaded
+            .get(view)
+            .filter(|uploaded| uploaded.revision == map_view.revision)
+            .ok_or(GpuError::CaptureUnavailable)?;
+        let sprite_base = uploaded.base;
+        let visible = visible_range(&uploaded.ranges, map_view.active_z, frame.underlay_depth);
+        let cull_index = frame.map_views[..view]
+            .iter()
+            .filter(|map_view| !map_view.rect.is_empty())
+            .count();
+        let cull = self.cull.get(cull_index).ok_or(GpuError::CaptureUnavailable)?;
+        let (cull_visible, cull_chunks, cull_commands) = (cull.visible, cull.chunks, cull.commands);
+        let sprites = *self.sprites.as_ref().ok_or(GpuError::CaptureUnavailable)?;
+        let lighting = match map_view.lighting.filter(|lighting| !lighting.tiles.is_empty()) {
+            Some(lighting) => {
+                let uploaded = self
+                    .uploaded_lighting
+                    .get(view)
+                    .filter(|uploaded| uploaded.revision == Some(lighting.revision) && uploaded.size == lighting.size)
+                    .ok_or(GpuError::CaptureUnavailable)?;
+                let lights = *self.lights.as_ref().ok_or(GpuError::CaptureUnavailable)?;
+
+                Some((lighting, uploaded.base, lights))
+            },
+            None => None,
+        };
+
+        let tile = CAPTURE_TILE_SIZE
+            .min(self.device.max_image_dimension_2d)
+            .min(width.max(height));
+        let tile_extent = vk::Extent2D {
+            width: tile,
+            height: tile,
+        };
+
+        let mut module = Module::default();
+        let sprites_slot = module.declare_buffer_var("capture sprites", Access::ComputeWrite);
+        let lights_slot = lighting.map(|_| module.declare_buffer_var("capture light tiles", Access::FragmentRead));
+        let scene = self.record_map_scene(
+            &mut module,
+            sprites_slot,
+            lights_slot,
+            tile_extent,
+            frame.show_areas,
+            frame.show_area_outlines,
+            "capture",
+        );
+        let pixels_slot = module.declare_buffer_var("capture pixels", Access::HostRead);
+        let groups = tile.div_ceil(CAPTURE_WORKGROUP_SIZE);
+        let [_, pixels] = module
+            .begin_compute([
+                (scene.scene, Access::ComputeSampled),
+                (pixels_slot, Access::ComputeWrite),
+            ])
+            .with_name("capture readback")
+            .bind_compute_pipeline(self.capture_pipeline)
+            .bind_image(0, 0, scene.scene)
+            .bind_buffer(0, 1, pixels_slot)
+            .push_constants(&[tile, tile])
+            .dispatch(groups, groups, 1u32)
+            .end_compute();
+        let pixels = module.export(pixels, Access::HostRead, DomainFlag::Host);
+        let mut program = module.compile(&self.graph, pixels)?;
+
+        program.set(scene.extent, extent3d(tile_extent));
+        program.set(sprites_slot, sprites);
+        program.set(scene.cull.visible, cull_visible);
+        program.set(scene.cull.chunks, cull_chunks);
+        program.set(scene.cull.commands, cull_commands);
+        if let (Some(slot), Some((_, _, lights))) = (lights_slot, lighting) {
+            program.set(slot, lights);
+        }
+
+        self.graph.wait()?;
+
+        let mut readback = self.device.allocator.allocate_buffer(
+            &BufferInfo::new(
+                u64::from(tile) * u64::from(tile) * 4,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                MemoryLocation::GpuToCpu,
+            )
+            .with_name("capture readback"),
+        )?;
+        program.set(pixels_slot, readback);
+
+        let mut frames = self.device.context.create_super_frame_allocator(1);
+        let mut rgba = vec![0; rgba_len];
+        let result = (|| -> Result<(), GpuError> {
+            for region in capture_tiles(size, tile) {
+                let camera = CameraPush {
+                    center: region.center,
+                    viewport: [tile as f32; 2],
+                    zoom: 1.0,
+                    base: sprite_base,
+                    focused_area_owner: [0; 2],
+                    placement_flash_owner: [0; 2],
+                    placement_flash_strength: 0.0,
+                };
+                let plan = MapViewPlan {
+                    camera,
+                    sprite_base,
+                    visible,
+                };
+                program.set_bytes(scene.camera, &camera);
+                program.set_bytes(scene.underlay_camera, &CameraPush { base: 0, ..camera });
+                program.set_bytes(
+                    scene.active_camera,
+                    &CameraPush {
+                        base: visible.underlay_count,
+                        ..camera
+                    },
+                );
+                bind_sprite_cull(&mut program, &scene.cull, &plan);
+                if let (Some(slots), Some((lighting, base, _))) = (&scene.lighting, lighting) {
+                    program.set_bytes(
+                        slots.push,
+                        &LightingPush {
+                            center: camera.center,
+                            viewport: camera.viewport,
+                            zoom: camera.zoom,
+                            tile_size: lighting.tile_size.max(1) as f32,
+                            map_size: [lighting.size[0], lighting.size[1]],
+                            level_count: lighting.size[2],
+                            base,
+                            minimum_brightness: lighting.minimum_brightness.clamp(0.0, 1.0),
+                        },
+                    );
+                }
+
+                let next = frames.get_next_frame()?;
+                self.graph
+                    .execute_blocking(&self.device.context, &program, &mut AllocatorKind::Frame(next))?;
+
+                let pixels = readback.mapped_slice_mut().ok_or(vk::Result::ERROR_MEMORY_MAP_FAILED)?;
+                let row_len = region.width as usize * 4;
+                for row in 0..region.height as usize {
+                    let source = row * tile as usize * 4;
+                    let target = ((region.y as usize + row) * width as usize + region.x as usize) * 4;
+                    rgba[target..target + row_len].copy_from_slice(&pixels[source..source + row_len]);
+                }
+            }
+
+            Ok(())
+        })();
+
+        drop(frames);
+        self.device.allocator.deallocate_buffer(readback);
+        result?;
+
+        Ok(CapturedImage { width, height, rgba })
+    }
+
     fn recreate_swapchain(&mut self) -> Result<(), GpuError> {
         self.device.wait_idle()?;
         self.recorded = None;
@@ -1005,6 +1198,210 @@ impl Renderer {
         self.stale = false;
 
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_map_scene(
+        &self, module: &mut Module, sprites: ValueId, lights: Option<ValueId>, viewport: vk::Extent2D,
+        show_areas: bool, show_area_outlines: bool, name: &str,
+    ) -> MapScene {
+        let extent = module.declare_extent_3d_var(&format!("{name} extent"), extent3d(viewport));
+        let mut scene_attachment = module.transient_image_sized(
+            &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
+                .with_usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
+                .with_name(format!("{name} scene attachment")),
+            extent,
+        );
+        scene_attachment = module.clear(scene_attachment, vir::clear::f32::BLACK);
+        let mut emissive_attachment = module.transient_image_sized(
+            &ImageInfo::color_target(viewport, vk::Format::R8_UNORM)
+                .with_usage(vk::ImageUsageFlags::SAMPLED)
+                .with_name(format!("{name} emissive attachment")),
+            extent,
+        );
+        emissive_attachment = module.clear(emissive_attachment, vir::clear::f32::BLACK);
+        let mut level_attachment = module.transient_image_sized(
+            &ImageInfo::color_target(viewport, vk::Format::R32_UINT)
+                .with_usage(vk::ImageUsageFlags::SAMPLED)
+                .with_name(format!("{name} level attachment")),
+            extent,
+        );
+        level_attachment = module.clear(level_attachment, vir::clear::u32::TRANSPARENT);
+
+        let visible_indices = module.declare_buffer_var(&format!("{name} visible sprite indices"), Access::VertexRead);
+        let chunks = module.declare_buffer_var(&format!("{name} cull chunks"), Access::ComputeRead);
+        let draw_commands = module.declare_buffer_var(&format!("{name} sprite draw commands"), Access::IndirectRead);
+
+        let camera = module.declare_bytes_var(&format!("{name} camera"), size_of::<CameraPush>() as u32);
+        let underlay_camera =
+            module.declare_bytes_var(&format!("{name} underlay camera"), size_of::<CameraPush>() as u32);
+        let active_camera = module.declare_bytes_var(&format!("{name} active camera"), size_of::<CameraPush>() as u32);
+
+        let (cull_values, cull) = record_sprite_cull(
+            module,
+            self.cull_pipelines,
+            sprites,
+            CullValues {
+                visible: visible_indices,
+                chunks,
+                commands: draw_commands,
+            },
+            show_areas,
+            show_area_outlines,
+            &format!("{name} cull"),
+        );
+        let draw_commands = cull_values.commands;
+        let visible_indices = cull_values.visible;
+
+        [scene_attachment, emissive_attachment, level_attachment, _, _] = module
+            .begin_rendering([
+                (scene_attachment, Access::ColorRW),
+                (emissive_attachment, Access::ColorRW),
+                (level_attachment, Access::ColorRW),
+                (draw_commands, Access::IndirectRead),
+                (visible_indices, Access::VertexRead),
+            ])
+            .with_name(format!("{name} sprites"))
+            .bind_graphics_pipeline(self.scene_pipeline)
+            .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+            .set_viewport(0, Rect2D::framebuffer())
+            .set_scissor(0, Rect2D::framebuffer())
+            .set_color_blend(0, BlendPreset::PremultipliedAlphaBlend)
+            .set_color_blend(1, BlendPreset::PremultipliedAlphaBlend)
+            .set_color_blend(2, BlendPreset::Off)
+            .set_rasterization(RasterizationState {
+                cull_mode: vk::CullModeFlags::NONE,
+                ..Default::default()
+            })
+            .bind_buffer(0, 1, sprites)
+            .bind_buffer(0, 2, visible_indices)
+            .specialize_constant(spec::SPRITE_INDIRECT, true)
+            .specialize_constant(spec::SHOW_AREAS, show_areas)
+            .specialize_constant(spec::SHOW_AREA_OUTLINES, show_area_outlines)
+            .push_constants_from(underlay_camera)
+            .draw_indirect_at(draw_commands, 0, 1u32, DRAW_INDIRECT_STRIDE)
+            .push_constants_from(active_camera)
+            .draw_indirect_at(
+                draw_commands,
+                u64::from(DRAW_INDIRECT_STRIDE),
+                1u32,
+                DRAW_INDIRECT_STRIDE,
+            )
+            .end_rendering();
+
+        let lighting = if let Some(light_tiles) = lights {
+            let mut overlay_lightmap = module.transient_image_sized(
+                &ImageInfo::color_target(viewport, vk::Format::R16G16B16A16_SFLOAT)
+                    .with_usage(vk::ImageUsageFlags::SAMPLED)
+                    .with_name(format!("{name} overlay lightmap")),
+                extent,
+            );
+            overlay_lightmap = module.clear(overlay_lightmap, vir::clear::f32::BLACK);
+            [overlay_lightmap, _, _, _] = module
+                .begin_rendering([
+                    (overlay_lightmap, Access::ColorRW),
+                    (level_attachment, Access::FragmentSampled),
+                    (draw_commands, Access::IndirectRead),
+                    (visible_indices, Access::VertexRead),
+                ])
+                .with_name(format!("{name} overlay lights"))
+                .bind_graphics_pipeline(self.overlay_light_pipeline)
+                .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                .set_viewport(0, Rect2D::framebuffer())
+                .set_scissor(0, Rect2D::framebuffer())
+                .broadcast_color_blend(BlendPreset::Additive)
+                .set_rasterization(RasterizationState {
+                    cull_mode: vk::CullModeFlags::NONE,
+                    ..Default::default()
+                })
+                .bind_buffer(0, 1, sprites)
+                .bind_buffer(0, 2, visible_indices)
+                .bind_image(0, 3, level_attachment)
+                .specialize_constant(spec::SPRITE_INDIRECT, true)
+                .specialize_constant(spec::SHOW_AREAS, show_areas)
+                .specialize_constant(spec::SHOW_AREA_OUTLINES, show_area_outlines)
+                .push_constants_from(underlay_camera)
+                .draw_indirect_at(draw_commands, 0, 1u32, DRAW_INDIRECT_STRIDE)
+                .push_constants_from(active_camera)
+                .draw_indirect_at(
+                    draw_commands,
+                    u64::from(DRAW_INDIRECT_STRIDE),
+                    1u32,
+                    DRAW_INDIRECT_STRIDE,
+                )
+                .end_rendering();
+            let push = module.declare_bytes_var(&format!("{name} lighting"), size_of::<LightingPush>() as u32);
+            let mut lit_attachment = module.transient_image_sized(
+                &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
+                    .with_usage(vk::ImageUsageFlags::SAMPLED)
+                    .with_name(format!("{name} lit scene attachment")),
+                extent,
+            );
+            lit_attachment = module.clear(lit_attachment, vir::clear::f32::BLACK);
+            [lit_attachment] = module
+                .begin_rendering([(lit_attachment, Access::ColorRW)])
+                .with_name(format!("{name} static lighting"))
+                .bind_graphics_pipeline(self.lighting_pipeline)
+                .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+                .set_viewport(0, Rect2D::framebuffer())
+                .set_scissor(0, Rect2D::framebuffer())
+                .bind_texture(0, 0, scene_attachment, self.sampler)
+                .bind_buffer(0, 1, light_tiles)
+                .bind_texture(0, 2, emissive_attachment, self.sampler)
+                .bind_texture(0, 3, overlay_lightmap, self.sampler)
+                .bind_image(0, 4, level_attachment)
+                .push_constants_from(push)
+                .draw(3, 1)
+                .end_rendering();
+            scene_attachment = lit_attachment;
+
+            Some(LightingSlots { push })
+        } else {
+            None
+        };
+
+        [scene_attachment, _, _] = module
+            .begin_rendering([
+                (scene_attachment, Access::ColorRW),
+                (draw_commands, Access::IndirectRead),
+                (visible_indices, Access::VertexRead),
+            ])
+            .with_name(format!("{name} area outlines"))
+            .bind_graphics_pipeline(self.sprite_pipeline)
+            .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+            .set_viewport(0, Rect2D::framebuffer())
+            .set_scissor(0, Rect2D::framebuffer())
+            .broadcast_color_blend(BlendPreset::PremultipliedAlphaBlend)
+            .set_rasterization(RasterizationState {
+                cull_mode: vk::CullModeFlags::NONE,
+                ..Default::default()
+            })
+            .bind_buffer(0, 1, sprites)
+            .bind_buffer(0, 2, visible_indices)
+            .specialize_constant(spec::SPRITE_INDIRECT, true)
+            .specialize_constant(spec::SHOW_AREAS, show_areas)
+            .specialize_constant(spec::SHOW_AREA_OUTLINES, show_area_outlines)
+            .specialize_constant(spec::SPRITE_EDGE_ONLY, true)
+            .push_constants_from(active_camera)
+            .draw_indirect_at(
+                draw_commands,
+                u64::from(DRAW_INDIRECT_STRIDE),
+                1u32,
+                DRAW_INDIRECT_STRIDE,
+            )
+            .end_rendering();
+
+        MapScene {
+            extent,
+            scene: scene_attachment,
+            camera,
+            underlay_camera,
+            active_camera,
+            draw_commands,
+            visible_indices,
+            cull,
+            lighting,
+        }
     }
 
     fn record(&mut self, state: FrameGraphState) -> Result<(), GpuError> {
@@ -1029,21 +1426,25 @@ impl Renderer {
                 width: rect.width.max(1),
                 height: rect.height.max(1),
             };
-            let extent = module.declare_extent_3d_var(&format!("map view {index} extent"), extent3d(viewport));
-            let mut scene_attachment = module.transient_image_sized(
-                &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
-                    .with_usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
-                    .with_name(format!("map view {index} scene attachment")),
+            let MapScene {
                 extent,
+                scene: scene_attachment,
+                camera,
+                underlay_camera,
+                active_camera,
+                draw_commands,
+                visible_indices,
+                cull,
+                lighting,
+            } = self.record_map_scene(
+                &mut module,
+                sprites,
+                lights.filter(|_| view.lighting),
+                viewport,
+                state.show_areas,
+                state.show_area_outlines,
+                &format!("map view {index}"),
             );
-            scene_attachment = module.clear(scene_attachment, vir::clear::f32::BLACK);
-            let mut emissive_attachment = module.transient_image_sized(
-                &ImageInfo::color_target(viewport, vk::Format::R8_UNORM)
-                    .with_usage(vk::ImageUsageFlags::SAMPLED)
-                    .with_name(format!("map view {index} emissive attachment")),
-                extent,
-            );
-            emissive_attachment = module.clear(emissive_attachment, vir::clear::f32::BLACK);
             let mut visibility_attachment = module.transient_image_sized(
                 &ImageInfo::color_target(viewport, vk::Format::R32_UINT)
                     .with_usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
@@ -1051,80 +1452,6 @@ impl Renderer {
                 extent,
             );
             visibility_attachment = module.clear(visibility_attachment, vir::clear::u32::TRANSPARENT);
-            let mut level_attachment = module.transient_image_sized(
-                &ImageInfo::color_target(viewport, vk::Format::R32_UINT)
-                    .with_usage(vk::ImageUsageFlags::SAMPLED)
-                    .with_name(format!("map view {index} level attachment")),
-                extent,
-            );
-            level_attachment = module.clear(level_attachment, vir::clear::u32::TRANSPARENT);
-
-            let visible_indices =
-                module.declare_buffer_var(&format!("map view {index} visible sprite indices"), Access::VertexRead);
-            let chunks = module.declare_buffer_var(&format!("map view {index} cull chunks"), Access::ComputeRead);
-            let draw_commands =
-                module.declare_buffer_var(&format!("map view {index} sprite draw commands"), Access::IndirectRead);
-
-            let camera = module.declare_bytes_var(&format!("map view {index} camera"), size_of::<CameraPush>() as u32);
-            let underlay_camera = module.declare_bytes_var(
-                &format!("map view {index} underlay camera"),
-                size_of::<CameraPush>() as u32,
-            );
-            let active_camera = module.declare_bytes_var(
-                &format!("map view {index} active camera"),
-                size_of::<CameraPush>() as u32,
-            );
-
-            let (cull_values, cull) = record_sprite_cull(
-                &mut module,
-                self.cull_pipelines,
-                sprites,
-                CullValues {
-                    visible: visible_indices,
-                    chunks,
-                    commands: draw_commands,
-                },
-                &state,
-                &format!("map view {index} cull"),
-            );
-            let draw_commands = cull_values.commands;
-            let visible_indices = cull_values.visible;
-
-            [scene_attachment, emissive_attachment, level_attachment, _, _] = module
-                .begin_rendering([
-                    (scene_attachment, Access::ColorRW),
-                    (emissive_attachment, Access::ColorRW),
-                    (level_attachment, Access::ColorRW),
-                    (draw_commands, Access::IndirectRead),
-                    (visible_indices, Access::VertexRead),
-                ])
-                .with_name(format!("map view {index} sprites"))
-                .bind_graphics_pipeline(self.scene_pipeline)
-                .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-                .set_viewport(0, Rect2D::framebuffer())
-                .set_scissor(0, Rect2D::framebuffer())
-                .set_color_blend(0, BlendPreset::PremultipliedAlphaBlend)
-                .set_color_blend(1, BlendPreset::PremultipliedAlphaBlend)
-                .set_color_blend(2, BlendPreset::Off)
-                .set_rasterization(RasterizationState {
-                    cull_mode: vk::CullModeFlags::NONE,
-                    ..Default::default()
-                })
-                .bind_buffer(0, 1, sprites)
-                .bind_buffer(0, 2, visible_indices)
-                .specialize_constant(spec::SPRITE_INDIRECT, true)
-                .specialize_constant(spec::SHOW_AREAS, state.show_areas)
-                .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
-                .push_constants_from(underlay_camera)
-                .draw_indirect_at(draw_commands, 0, 1u32, DRAW_INDIRECT_STRIDE)
-                .push_constants_from(active_camera)
-                .draw_indirect_at(
-                    draw_commands,
-                    u64::from(DRAW_INDIRECT_STRIDE),
-                    1u32,
-                    DRAW_INDIRECT_STRIDE,
-                )
-                .end_rendering();
 
             [visibility_attachment, _, _] = module
                 .begin_rendering([
@@ -1147,110 +1474,6 @@ impl Renderer {
                 .specialize_constant(spec::SPRITE_INDIRECT, true)
                 .specialize_constant(spec::SHOW_AREAS, state.show_areas)
                 .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
-                .push_constants_from(active_camera)
-                .draw_indirect_at(
-                    draw_commands,
-                    u64::from(DRAW_INDIRECT_STRIDE),
-                    1u32,
-                    DRAW_INDIRECT_STRIDE,
-                )
-                .end_rendering();
-
-            let lighting = if view.lighting {
-                let light_tiles = lights.ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
-                let mut overlay_lightmap = module.transient_image_sized(
-                    &ImageInfo::color_target(viewport, vk::Format::R16G16B16A16_SFLOAT)
-                        .with_usage(vk::ImageUsageFlags::SAMPLED)
-                        .with_name(format!("map view {index} overlay lightmap")),
-                    extent,
-                );
-                overlay_lightmap = module.clear(overlay_lightmap, vir::clear::f32::BLACK);
-                [overlay_lightmap, _, _, _] = module
-                    .begin_rendering([
-                        (overlay_lightmap, Access::ColorRW),
-                        (level_attachment, Access::FragmentSampled),
-                        (draw_commands, Access::IndirectRead),
-                        (visible_indices, Access::VertexRead),
-                    ])
-                    .with_name(format!("map view {index} overlay lights"))
-                    .bind_graphics_pipeline(self.overlay_light_pipeline)
-                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-                    .set_viewport(0, Rect2D::framebuffer())
-                    .set_scissor(0, Rect2D::framebuffer())
-                    .broadcast_color_blend(BlendPreset::Additive)
-                    .set_rasterization(RasterizationState {
-                        cull_mode: vk::CullModeFlags::NONE,
-                        ..Default::default()
-                    })
-                    .bind_buffer(0, 1, sprites)
-                    .bind_buffer(0, 2, visible_indices)
-                    .bind_image(0, 3, level_attachment)
-                    .specialize_constant(spec::SPRITE_INDIRECT, true)
-                    .specialize_constant(spec::SHOW_AREAS, state.show_areas)
-                    .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
-                    .push_constants_from(underlay_camera)
-                    .draw_indirect_at(draw_commands, 0, 1u32, DRAW_INDIRECT_STRIDE)
-                    .push_constants_from(active_camera)
-                    .draw_indirect_at(
-                        draw_commands,
-                        u64::from(DRAW_INDIRECT_STRIDE),
-                        1u32,
-                        DRAW_INDIRECT_STRIDE,
-                    )
-                    .end_rendering();
-                let push =
-                    module.declare_bytes_var(&format!("map view {index} lighting"), size_of::<LightingPush>() as u32);
-                let mut lit_attachment = module.transient_image_sized(
-                    &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
-                        .with_usage(vk::ImageUsageFlags::SAMPLED)
-                        .with_name(format!("map view {index} lit scene attachment")),
-                    extent,
-                );
-                lit_attachment = module.clear(lit_attachment, vir::clear::f32::BLACK);
-                [lit_attachment] = module
-                    .begin_rendering([(lit_attachment, Access::ColorRW)])
-                    .with_name(format!("map view {index} static lighting"))
-                    .bind_graphics_pipeline(self.lighting_pipeline)
-                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-                    .set_viewport(0, Rect2D::framebuffer())
-                    .set_scissor(0, Rect2D::framebuffer())
-                    .bind_texture(0, 0, scene_attachment, self.sampler)
-                    .bind_buffer(0, 1, light_tiles)
-                    .bind_texture(0, 2, emissive_attachment, self.sampler)
-                    .bind_texture(0, 3, overlay_lightmap, self.sampler)
-                    .bind_image(0, 4, level_attachment)
-                    .push_constants_from(push)
-                    .draw(3, 1)
-                    .end_rendering();
-                scene_attachment = lit_attachment;
-
-                Some(LightingSlots { push })
-            } else {
-                None
-            };
-
-            [scene_attachment, _, _] = module
-                .begin_rendering([
-                    (scene_attachment, Access::ColorRW),
-                    (draw_commands, Access::IndirectRead),
-                    (visible_indices, Access::VertexRead),
-                ])
-                .with_name(format!("map view {index} area outlines"))
-                .bind_graphics_pipeline(self.sprite_pipeline)
-                .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-                .set_viewport(0, Rect2D::framebuffer())
-                .set_scissor(0, Rect2D::framebuffer())
-                .broadcast_color_blend(BlendPreset::PremultipliedAlphaBlend)
-                .set_rasterization(RasterizationState {
-                    cull_mode: vk::CullModeFlags::NONE,
-                    ..Default::default()
-                })
-                .bind_buffer(0, 1, sprites)
-                .bind_buffer(0, 2, visible_indices)
-                .specialize_constant(spec::SPRITE_INDIRECT, true)
-                .specialize_constant(spec::SHOW_AREAS, state.show_areas)
-                .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
-                .specialize_constant(spec::SPRITE_EDGE_ONLY, true)
                 .push_constants_from(active_camera)
                 .draw_indirect_at(
                     draw_commands,
@@ -1412,7 +1635,8 @@ impl Renderer {
                         chunks,
                         commands,
                     },
-                    &state,
+                    state.show_areas,
+                    state.show_area_outlines,
                     &name,
                 );
                 [output_attachment, _, _] = module
@@ -2746,6 +2970,36 @@ fn level_ranges(sprite_instances: &[SpriteInstance]) -> Vec<LevelRange> {
     ranges
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CaptureTile {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    center: [f32; 2],
+}
+
+fn capture_tiles(size: [u32; 2], tile: u32) -> Vec<CaptureTile> {
+    let [width, height] = size;
+    let half = tile as f32 / 2.0;
+    let mut tiles = Vec::new();
+
+    for y in (0..height).step_by(tile.max(1) as usize) {
+        for x in (0..width).step_by(tile.max(1) as usize) {
+            tiles.push(CaptureTile {
+                x,
+                y,
+                width: tile.min(width - x),
+                height: tile.min(height - y),
+                // we go up
+                center: [x as f32 + half, (height - y) as f32 - half],
+            });
+        }
+    }
+
+    tiles
+}
+
 fn visible_range(ranges: &[LevelRange], active_z: u32, underlay_depth: u32) -> VisibleRange {
     let minimum_z = active_z.saturating_sub(underlay_depth).max(1);
     let mut underlays = (0, 0);
@@ -2986,8 +3240,11 @@ mod tests {
     use super::{
         AREA_COLOR_CS_SPV,
         AreaColorPush,
+        CAPTURE_CS_SPV,
+        CAPTURE_WORKGROUP_SIZE,
         CULL_WORKGROUP_SIZE,
         CameraPush,
+        CaptureTile,
         CullPush,
         Frame,
         FrameGraphState,
@@ -3022,6 +3279,7 @@ mod tests {
         VisibleRange,
         area_color_group_count,
         batch_ranges,
+        capture_tiles,
         copy_region,
         descriptor_capacity,
         gpu_light_tile,
@@ -3563,6 +3821,47 @@ mod tests {
     }
 
     #[test]
+    fn capture_tiles_cover_the_map_from_the_top_row_down() {
+        let tiles = capture_tiles([8160, 8160], 2048);
+
+        assert_eq!(tiles.len(), 16);
+        assert_eq!(
+            tiles[0],
+            CaptureTile {
+                x: 0,
+                y: 0,
+                width: 2048,
+                height: 2048,
+                center: [1024.0, 7136.0],
+            }
+        );
+        assert_eq!(
+            tiles[15],
+            CaptureTile {
+                x: 6144,
+                y: 6144,
+                width: 2016,
+                height: 2016,
+                center: [7168.0, 992.0],
+            }
+        );
+    }
+
+    #[test]
+    fn capture_tiles_crop_a_map_smaller_than_one_tile() {
+        assert_eq!(
+            capture_tiles([100, 70], 100),
+            [CaptureTile {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 70,
+                center: [50.0, 20.0],
+            }]
+        );
+    }
+
+    #[test]
     fn visible_ranges_select_only_the_active_level_and_configured_underlays() {
         let ranges = [
             LevelRange {
@@ -3882,6 +4181,29 @@ mod tests {
         assert_eq!(bindings.len(), 2);
         assert_eq!((bindings[0].0, bindings[0].1), (0, 1));
         assert_eq!((bindings[1].0, bindings[1].1), (0, 3));
+        assert!(bindings[0].2.contains(vir::Access::ComputeSampled));
+        assert!(bindings[1].2.contains(vir::Access::ComputeWrite));
+    }
+
+    #[test]
+    fn capture_compute_layout_matches_the_host() {
+        let reflection = shader::reflect(&read_spirv(CAPTURE_CS_SPV).expect("valid SPIR-V")).expect("shader reflects");
+        let mut bindings = reflection
+            .bindings
+            .iter()
+            .map(|binding| (binding.set, binding.binding, binding.access))
+            .collect::<Vec<_>>();
+        bindings.sort_unstable_by_key(|binding| (binding.0, binding.1));
+
+        assert_eq!(
+            reflection.local_size,
+            [CAPTURE_WORKGROUP_SIZE, CAPTURE_WORKGROUP_SIZE, 1]
+        );
+        assert_eq!(reflection.push_constant_offset, 0);
+        assert_eq!(reflection.push_constant_size as usize, size_of::<[u32; 2]>());
+        assert_eq!(bindings.len(), 2);
+        assert_eq!((bindings[0].0, bindings[0].1), (0, 0));
+        assert_eq!((bindings[1].0, bindings[1].1), (0, 1));
         assert!(bindings[0].2.contains(vir::Access::ComputeSampled));
         assert!(bindings[1].2.contains(vir::Access::ComputeWrite));
     }

@@ -238,6 +238,13 @@ pub struct Frame<'a> {
     pub picking: Option<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameUpdate {
     pub previous_revision: u64,

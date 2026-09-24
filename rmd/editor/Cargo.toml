@@ -30,6 +30,7 @@ dear-imgui-winit = "=0.17.0"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 rfd = "0.17.2"
+png = "0.18"
 log = "0.4"
 shlex = "1.3"
 semver = "1"

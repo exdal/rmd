@@ -296,10 +296,11 @@ pub(crate) enum KeybindAction {
     Recent0,
     ShowTileGrid,
     ShowPixelGrid,
+    Screenshot,
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 31] = [
         Self::Save,
         Self::Undo,
         Self::Redo,
@@ -330,6 +331,7 @@ impl KeybindAction {
         Self::Recent0,
         Self::ShowTileGrid,
         Self::ShowPixelGrid,
+        Self::Screenshot,
     ];
     pub const RECENT: [Self; 10] = [
         Self::Recent1,
@@ -376,6 +378,7 @@ impl KeybindAction {
             Self::Recent0 => "Recent 0",
             Self::ShowTileGrid => "Show tile grid",
             Self::ShowPixelGrid => "Show pixel grid",
+            Self::Screenshot => "Screenshot",
         }
     }
 
@@ -411,6 +414,7 @@ impl KeybindAction {
             Self::Recent0 => "recent-0",
             Self::ShowTileGrid => "show-tile-grid",
             Self::ShowPixelGrid => "show-pixel-grid",
+            Self::Screenshot => "screenshot",
         }
     }
 }
@@ -448,6 +452,7 @@ pub(crate) struct KeyBindings {
     recent_0: KeyBinding,
     show_tile_grid: KeyBinding,
     show_pixel_grid: KeyBinding,
+    screenshot: KeyBinding,
 }
 
 impl Default for KeyBindings {
@@ -483,6 +488,7 @@ impl Default for KeyBindings {
             recent_0: KeyBinding::new(Key::Key0),
             show_tile_grid: KeyBinding::new(Key::G),
             show_pixel_grid: KeyBinding::with_shift(Key::G),
+            screenshot: KeyBinding::new(Key::F12),
         }
     }
 }
@@ -520,6 +526,7 @@ impl KeyBindings {
             recent_0: KeyBinding::new(Key::P),
             show_tile_grid: KeyBinding::new(Key::G),
             show_pixel_grid: KeyBinding::with_shift(Key::G),
+            screenshot: KeyBinding::new(Key::F12),
         }
     }
 
@@ -555,6 +562,7 @@ impl KeyBindings {
             KeybindAction::Recent0 => self.recent_0,
             KeybindAction::ShowTileGrid => self.show_tile_grid,
             KeybindAction::ShowPixelGrid => self.show_pixel_grid,
+            KeybindAction::Screenshot => self.screenshot,
         }
     }
 
@@ -620,6 +628,7 @@ impl KeyBindings {
             KeybindAction::Recent0 => self.recent_0 = binding,
             KeybindAction::ShowTileGrid => self.show_tile_grid = binding,
             KeybindAction::ShowPixelGrid => self.show_pixel_grid = binding,
+            KeybindAction::Screenshot => self.screenshot = binding,
         }
     }
 }
