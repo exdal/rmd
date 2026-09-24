@@ -14,6 +14,7 @@ pub mod icons;
 pub mod node;
 pub mod process;
 pub mod progress;
+pub mod search;
 pub mod tool;
 pub mod visual;
 

@@ -5,7 +5,7 @@ use dmm::{Coord, Prefab, PrefabInstanceId};
 use editor::{blame::BlameCell, conflict::Side, document::DocumentId};
 use objtree::ObjectTree;
 
-use super::{SelectionTransform, Session, Tool, common::fit_icon, draw_type_path_search, inspector::SimilarMatchKind};
+use super::{SelectionTransform, Session, Tool, common::fit_icon, draw_type_path_search, find::SimilarMatchKind};
 use crate::session::context_placement_group;
 
 pub(super) const POPUP: &str = "Map context##map-context";

@@ -90,6 +90,9 @@ const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
             KeybindAction::Cut,
             KeybindAction::Delete,
             KeybindAction::Paste,
+            KeybindAction::Find,
+            KeybindAction::FindNext,
+            KeybindAction::FindPrevious,
         ],
     ),
     (

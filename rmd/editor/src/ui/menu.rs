@@ -26,6 +26,7 @@ pub(super) struct MenuActions {
     pub(super) refit: bool,
     pub(super) undo: bool,
     pub(super) redo: bool,
+    pub(super) search: bool,
 }
 
 impl UiState {
@@ -96,6 +97,16 @@ impl UiState {
                     next.is_some(),
                 ) {
                     actions.redo = true;
+                }
+
+                ui.separator();
+                if ui.menu_item_enabled_selected_with_shortcut(
+                    "Search...",
+                    settings.keybindings.get(KeybindAction::Find).label(ui),
+                    false,
+                    session.map().is_some(),
+                ) {
+                    actions.search = true;
                 }
             });
             ui.menu("View", || {

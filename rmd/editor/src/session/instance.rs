@@ -4,6 +4,7 @@ use dmm::{Coord, Prefab};
 use editor::{
     command::EditGroupId,
     document::{DocumentId, MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
+    tool::Tool,
     visual,
 };
 use render::SpriteInstance;
@@ -38,6 +39,15 @@ impl Session {
         let document = self.state.active_document()?;
 
         document.instance_location(document.selected_instance()?)
+    }
+
+    pub(crate) fn gizmo_transform(&self) -> Option<SelectedTransform> {
+        if self.tool() != Tool::Select {
+            return None;
+        }
+
+        self.selected_transform()
+            .filter(|transform| transform.sprite.z == self.z())
     }
 
     pub(crate) fn selected_transform(&self) -> Option<SelectedTransform> {
@@ -131,11 +141,36 @@ mod tests {
     use core::{path::TreePath, types::Value};
 
     use dmm::Coord;
+    use editor::tool::Tool;
 
     use crate::session::{
         Session,
         fixtures::{assert_render_cache_matches_rebuild, examples},
     };
+
+    #[test]
+    fn the_gizmo_only_shows_for_the_select_tool() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        session.open_map(&root.join("test.dmm"), 1).unwrap();
+        let selected = session
+            .state
+            .active_document()
+            .and_then(|document| document.instance_ids_at(Coord::new(6, 3, 1)).first())
+            .copied()
+            .unwrap();
+        session.select_instance(Some(selected));
+        assert_eq!(session.gizmo_transform(), session.selected_transform());
+
+        for tool in [Tool::Place, Tool::Delete, Tool::Fill] {
+            session.set_tool(tool);
+            assert_eq!(session.gizmo_transform(), None, "{tool:?}");
+        }
+
+        session.set_tool(Tool::Select);
+        assert!(session.gizmo_transform().is_some());
+    }
 
     #[test]
     fn reanchoring_the_selected_instance_keeps_its_rendered_position() {

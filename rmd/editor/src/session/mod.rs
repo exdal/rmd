@@ -34,6 +34,7 @@ mod node;
 mod palette;
 mod panel;
 mod preview;
+mod search;
 
 use self::{
     bake::report_bake_output,

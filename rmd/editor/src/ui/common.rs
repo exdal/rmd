@@ -45,7 +45,7 @@ pub(super) fn centered_note(ui: &Ui, text: &str) {
         ui.text_disabled(text);
     } else {
         ui.set_cursor_pos([x, y + ui.text_line_height()]);
-        ui.text_wrapped(text);
+        text_wrapped_colored(ui, ui.style_color(StyleColor::TextDisabled), text);
     }
 }
 

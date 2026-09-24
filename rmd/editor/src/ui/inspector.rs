@@ -1,23 +1,13 @@
 use core::types::{Identifier, Value};
 use std::collections::{HashMap, HashSet};
 
-use dear_imgui_rs::{
-    Condition,
-    DragFlags,
-    ListClipper,
-    StyleColor,
-    TableFlags,
-    TableSizingPolicy,
-    Ui,
-    WindowKey,
-    WindowKeyError,
-};
+use dear_imgui_rs::{DragFlags, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError};
 use dmi::metadata::Dir;
 use dmm::{Coord, Prefab, writer::format_value};
 use editor::{
     blame::{self, BlameCell},
     command::EditGroupId,
-    document::{DocumentId, MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
+    document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation},
     icons::materialdesignicons::ICON_CIRCLE_SMALL,
     visual,
 };
@@ -1136,40 +1126,17 @@ fn draw_variable_section(
     section.pop();
 }
 
-const SIMILAR_INSTANCES_WINDOW_SIZE: [f32; 2] = [420.0, 320.0];
-
-#[derive(Clone, Copy)]
-pub(super) enum SimilarMatchKind {
-    Type,
-    Prefab,
-}
-
-struct SimilarInstancesState {
-    document: DocumentId,
-    prefab_path: String,
-    instances: Vec<PrefabInstanceId>,
-    kind: SimilarMatchKind,
-    focus: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct JumpTarget {
-    pub(super) document: DocumentId,
-    pub(super) instance: PrefabInstanceId,
-}
-
 pub(super) struct InspectorPanel {
     window: WindowKey,
     state: InspectorState,
-    similar_window: WindowKey,
-    similar: Option<SimilarInstancesState>,
 }
 
 #[derive(Default)]
 pub(super) struct InspectorPanelOutput {
     pub(super) open_source: Option<SourceLocation>,
-    pub(super) jump: Option<JumpTarget>,
+    pub(super) find_similar: Option<(DocumentId, PrefabInstanceId)>,
     pub(super) copy_hash: Option<String>,
+    pub(super) docked: bool,
 }
 
 impl InspectorPanel {
@@ -1177,8 +1144,6 @@ impl InspectorPanel {
         Ok(Self {
             window: WindowKey::new("inspector", "Inspector")?,
             state: InspectorState::default(),
-            similar_window: WindowKey::new("similar-instances", "Similar prefab instances")?,
-            similar: None,
         })
     }
 
@@ -1186,171 +1151,31 @@ impl InspectorPanel {
 
     pub(super) const fn transform_mode(&self) -> TransformMode { self.state.transform_mode() }
 
-    pub(super) fn draw(&mut self, ui: &Ui, session: &mut Session, settings: &Settings) -> InspectorPanelOutput {
-        let output = self.draw_inspector(ui, session, settings);
-        if output.find_similar {
-            self.open_similar_instances(session);
-        }
-
-        InspectorPanelOutput {
-            open_source: output.open_source,
-            jump: self.draw_similar_instances(ui, session, settings),
-            copy_hash: output.copy_hash,
-        }
-    }
-
-    fn draw_inspector(&mut self, ui: &Ui, session: &mut Session, settings: &Settings) -> InspectorOutput {
+    pub(super) fn draw(
+        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, focus: bool,
+    ) -> InspectorPanelOutput {
         let mut output = InspectorOutput::default();
-        ui.window(&self.window).build(|| {
+        let mut docked = false;
+        ui.window(&self.window).focused(focus).build(|| {
+            docked = ui.is_window_docked();
             if settings.focus_windows_on_hover {
                 focus_window_on_hover(ui);
             }
             output = self.state.draw(ui, session);
         });
+        let find_similar = output
+            .find_similar
+            .then(|| session.state.active_document())
+            .flatten()
+            .and_then(|document| Some((document.id(), document.selected_instance()?)));
 
-        output
-    }
-
-    fn open_similar_instances(&mut self, session: &Session) {
-        let Some(document) = session.state.active_document() else {
-            return;
-        };
-        let Some(selected) = document.selected_instance() else {
-            return;
-        };
-        self.open_similar_instances_for(session, document.id(), selected, SimilarMatchKind::Prefab);
-    }
-
-    pub(super) fn open_similar_instances_for(
-        &mut self, session: &Session, document_id: DocumentId, instance: PrefabInstanceId, kind: SimilarMatchKind,
-    ) {
-        let Some(document) = session.state.document(document_id) else {
-            return;
-        };
-        let Some((prefab, _)) = document.prefab_instance(instance) else {
-            return;
-        };
-        self.similar = Some(SimilarInstancesState {
-            document: document_id,
-            prefab_path: prefab.path.to_string(),
-            instances: find_similar_instances(document, prefab, kind),
-            kind,
-            focus: true,
-        });
-    }
-
-    fn draw_similar_instances(&mut self, ui: &Ui, session: &Session, settings: &Settings) -> Option<JumpTarget> {
-        let document_id = self.similar.as_ref()?.document;
-        let Some(document) = session.state.document(document_id) else {
-            self.similar = None;
-
-            return None;
-        };
-        let search = self.similar.as_mut()?;
-        let rows = resolve_similar_instances(document, &search.instances);
-        let mut open = true;
-        let mut jump = None;
-        let focus = std::mem::take(&mut search.focus);
-
-        ui.window(&self.similar_window)
-            .opened(&mut open)
-            .size(SIMILAR_INSTANCES_WINDOW_SIZE, Condition::FirstUseEver)
-            .focused(focus)
-            .build(|| {
-                if settings.focus_windows_on_hover {
-                    focus_window_on_hover(ui);
-                }
-                ui.text_wrapped(&search.prefab_path);
-                let suffix = if rows.len() == 1 { "instance" } else { "instances" };
-                let match_label = match search.kind {
-                    SimilarMatchKind::Type => "type",
-                    SimilarMatchKind::Prefab => "prefab",
-                };
-                ui.text_disabled(format!("{} matching {match_label} {suffix}", rows.len()));
-                ui.separator();
-
-                if rows.is_empty() {
-                    ui.text_disabled("No matching instances remain");
-
-                    return;
-                }
-
-                ui.table("similar-instances-table")
-                    .flags(TableFlags::BORDERS_INNER_V | TableFlags::RESIZABLE | TableFlags::ROW_BG)
-                    .sizing_policy(TableSizingPolicy::StretchProp)
-                    .column("Tile")
-                    .weight(0.7)
-                    .done()
-                    .column("Action")
-                    .weight(0.3)
-                    .done()
-                    .build(|ui| {
-                        for index in ListClipper::new(rows.len()).begin(ui).iter() {
-                            let (instance, location) = rows[index];
-                            let row_id = instance.get().to_string();
-                            let _id = ui.push_id(&row_id);
-
-                            ui.table_next_row();
-                            ui.table_next_column();
-                            ui.align_text_to_frame_padding();
-                            ui.text(format!(
-                                "{}, {}, {}",
-                                location.coord.x, location.coord.y, location.coord.z
-                            ));
-                            ui.table_next_column();
-                            if ui.small_button("Jump to") {
-                                jump = Some(JumpTarget {
-                                    document: document_id,
-                                    instance,
-                                });
-                            }
-                        }
-                    });
-            });
-
-        if !open {
-            self.similar = None;
+        InspectorPanelOutput {
+            open_source: output.open_source,
+            find_similar,
+            copy_hash: output.copy_hash,
+            docked,
         }
-
-        jump
     }
-}
-
-fn find_similar_instances(document: &MapDocument, target: &Prefab, kind: SimilarMatchKind) -> Vec<PrefabInstanceId> {
-    let mut matches = document
-        .prefab_instances()
-        .filter_map(|(instance, prefab, location)| {
-            let matches = match kind {
-                SimilarMatchKind::Type => prefab.path == target.path,
-                SimilarMatchKind::Prefab => prefab == target,
-            };
-            matches.then_some((instance, location))
-        })
-        .collect::<Vec<_>>();
-    matches.sort_unstable_by_key(|(instance, location)| {
-        (
-            location.coord.z,
-            location.coord.y,
-            location.coord.x,
-            location.prefab_index,
-            instance.get(),
-        )
-    });
-
-    matches.into_iter().map(|(instance, _)| instance).collect()
-}
-
-fn resolve_similar_instances(
-    document: &MapDocument, instances: &[PrefabInstanceId],
-) -> Vec<(PrefabInstanceId, PrefabLocation)> {
-    instances
-        .iter()
-        .filter_map(|instance| {
-            document
-                .instance_location(*instance)
-                .map(|location| (*instance, location))
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -1361,144 +1186,10 @@ mod tests {
         types::{Identifier, Value, VarModifiers},
     };
 
-    use dmm::{Map, Prefab, Size};
-    use editor::{command::Edit, document::MapDocument};
+    use dmm::Prefab;
     use objtree::{ObjectTree, VarDecl};
 
-    use super::{
-        super::{MapViewState, UiState},
-        *,
-    };
-    fn similar_instances_map() -> (Map, Prefab) {
-        let mut target = Prefab::new(TreePath::parse("/obj/table"));
-        target.set_var("name".into(), Value::Text(String::from("Conference")));
-        let mut different_override = target.clone();
-        different_override.set_var("name".into(), Value::Text(String::from("Coffee")));
-        let different_path = Prefab::new(TreePath::parse("/obj/chair"));
-
-        let mut map = Map::new(Size { x: 2, y: 1, z: 2 });
-        let first = map.intern_tile(vec![target.clone(), different_override.clone()]);
-        let second = map.intern_tile(vec![different_path, target.clone()]);
-        let third = map.intern_tile(vec![target.clone()]);
-        let fourth = map.intern_tile(vec![different_override]);
-        map.grid[0][0][0] = first;
-        map.grid[0][0][1] = second;
-        map.grid[1][0][0] = third;
-        map.grid[1][0][1] = fourth;
-
-        (map, target)
-    }
-
-    #[test]
-    fn similar_instances_match_the_exact_prefab_across_levels_in_tile_order() {
-        let (map, target) = similar_instances_map();
-        let document = MapDocument::new(map, 1);
-
-        assert_eq!(
-            find_similar_instances(&document, &target, SimilarMatchKind::Prefab),
-            [
-                document.instance_ids_at(Coord::new(1, 1, 1))[0],
-                document.instance_ids_at(Coord::new(2, 1, 1))[1],
-                document.instance_ids_at(Coord::new(1, 1, 2))[0],
-            ]
-        );
-    }
-
-    #[test]
-    fn similar_instances_type_search_includes_prefab_overrides() {
-        let (map, target) = similar_instances_map();
-        let document = MapDocument::new(map, 1);
-
-        assert_eq!(
-            find_similar_instances(&document, &target, SimilarMatchKind::Type),
-            [
-                document.instance_ids_at(Coord::new(1, 1, 1))[0],
-                document.instance_ids_at(Coord::new(1, 1, 1))[1],
-                document.instance_ids_at(Coord::new(2, 1, 1))[1],
-                document.instance_ids_at(Coord::new(1, 1, 2))[0],
-                document.instance_ids_at(Coord::new(2, 1, 2))[0],
-            ]
-        );
-    }
-    #[test]
-    fn context_search_uses_the_clicked_instance_instead_of_inspector_selection() {
-        let (map, _) = similar_instances_map();
-        let document = MapDocument::new(map, 1);
-        let selected = document.instance_ids_at(Coord::new(1, 1, 1))[0];
-        let clicked = document.instance_ids_at(Coord::new(1, 1, 1))[1];
-        let other_match = document.instance_ids_at(Coord::new(2, 1, 2))[0];
-        let mut session = Session::new();
-        let document_id = session.state.open_document(document);
-        session.select_instance(Some(selected));
-        let mut inspector = InspectorPanel::new().expect("valid window keys");
-
-        inspector.open_similar_instances_for(&session, document_id, clicked, SimilarMatchKind::Prefab);
-
-        let search = inspector.similar.as_ref().expect("similar instances window opened");
-        assert_eq!(search.document, document_id);
-        assert_eq!(search.instances, [clicked, other_match]);
-        assert_eq!(session.selected_instance(), Some(selected));
-    }
-
-    #[test]
-    fn similar_instance_snapshots_follow_moves_and_drop_deleted_placements() {
-        let (map, target) = similar_instances_map();
-        let mut document = MapDocument::new(map, 1);
-        let matches = find_similar_instances(&document, &target, SimilarMatchKind::Prefab);
-        let moved = matches[0];
-        let deleted = matches[2];
-
-        assert_eq!(
-            document.move_instance(moved, Coord::new(2, 1, 1), "move table", &[], None),
-            Some(true)
-        );
-        let deleted_location = document.instance_location(deleted).unwrap();
-        let mut after = document.placed_tile(deleted_location.coord).unwrap();
-        after.remove(deleted_location.prefab_index);
-        let mut edit = Edit::new("delete table");
-        edit.change(&document, deleted_location.coord, after);
-        assert!(document.apply(edit));
-
-        let rows = resolve_similar_instances(&document, &matches);
-        assert_eq!(rows.len(), matches.len() - 1);
-        assert_eq!(
-            rows.iter()
-                .find(|(instance, _)| *instance == moved)
-                .map(|(_, location)| location.coord),
-            Some(Coord::new(2, 1, 1))
-        );
-        assert!(rows.iter().all(|(instance, _)| *instance != deleted));
-    }
-
-    #[test]
-    fn jumping_to_an_instance_selects_its_level_and_centers_the_map_view() {
-        let (map, _) = similar_instances_map();
-        let document = MapDocument::new(map, 1);
-        let instance = document.instance_ids_at(Coord::new(1, 1, 2))[0];
-        let mut session = Session::new();
-        let document_id = session.state.open_document(document);
-        let mut state = UiState::new(false).expect("valid window keys");
-        let mut view = MapViewState::new(document_id).expect("valid map view key");
-        view.camera.camera.zoom = 2.5;
-        state.map_views.insert(document_id, view);
-
-        state.jump_to_instance(
-            &mut session,
-            JumpTarget {
-                document: document_id,
-                instance,
-            },
-        );
-
-        assert_eq!(session.state.active(), Some(document_id));
-        assert_eq!(session.z(), 2);
-        assert_eq!(session.selected_instance(), Some(instance));
-        let view = state.map_views.get(&document_id).unwrap();
-        assert_eq!((view.camera.camera.x, view.camera.camera.y), (16.0, 16.0));
-        assert_eq!(view.camera.camera.zoom, 2.5);
-        assert!(view.focus);
-        assert!(!view.refit);
-    }
+    use super::*;
 
     #[test]
     fn direction_choices_prefer_directional_subtypes_over_dmi_slots() {

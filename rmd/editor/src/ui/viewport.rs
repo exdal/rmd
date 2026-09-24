@@ -59,7 +59,7 @@ use super::{
     draw_selected_pixel_grid,
     draw_tile_grid,
     draw_top_overlay,
-    inspector::JumpTarget,
+    find::JumpTarget,
     node_right_click,
     paste_controls,
     recent_button_size,
@@ -430,7 +430,7 @@ impl UiState {
             .opened(keep_open)
             .focused(std::mem::take(view_focus));
         map_window.build(|| {
-            if settings.focus_windows_on_hover {
+            if settings.focus_windows_on_hover && !self.panel_focus_requested {
                 focus_window_on_hover(ui);
             }
             if ui.is_window_focused() {
@@ -574,8 +574,7 @@ impl UiState {
             }
             if is_active
                 && settings.show_selected_pixel_grid
-                && let Some(transform) = session.selected_transform()
-                && transform.sprite.z == session.z()
+                && let Some(transform) = session.gizmo_transform()
             {
                 draw_selected_pixel_grid(
                     ui,
@@ -1440,7 +1439,7 @@ impl UiState {
                             session.replace_context_instance(instance, path);
                         },
                         MenuAction::Search(instance, kind) => {
-                            self.inspector.open_similar_instances_for(session, id, instance, kind);
+                            self.find.open_for(session, id, instance, kind);
                         },
                         MenuAction::Node(node) => match node {
                             NodeContext::Standalone(coord) => {

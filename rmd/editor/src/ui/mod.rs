@@ -39,6 +39,7 @@ use crate::{
 mod blame;
 mod block;
 mod dialog;
+mod find;
 #[cfg(test)]
 mod fixtures;
 mod grid;
@@ -178,9 +179,14 @@ pub struct UiState {
     dm_ui: dm::DmUi,
     welcome_window: WindowKey,
     inspector: InspectorPanel,
+    find: find::FindPanel,
     git_panel: git::GitPanel,
     /// Keeps the object tree in front of the Git tab until it has docked at startup
     select_object_tree: bool,
+    /// Keeps the inspector in front of the Search tab until it has docked at startup
+    select_inspector: bool,
+    /// A docked tab only comes forward if it still holds the focus when its tab bar updates next frame
+    panel_focus_requested: bool,
     settings_window: SettingsWindow,
     layout: DockLayout,
     gizmo: GizmoState,
@@ -222,6 +228,7 @@ impl UiState {
         let object_tree = ObjectTreePanel::new()?;
         let welcome_window = WindowKey::new("welcome", "Welcome")?;
         let inspector = InspectorPanel::new()?;
+        let find = find::FindPanel::new()?;
         let git_panel = git::GitPanel::new()?;
         let settings_window = SettingsWindow::new()?;
         let load_window = WindowKey::new("load", "Loading")?;
@@ -232,7 +239,7 @@ impl UiState {
             DockLayout::split(
                 DockSplit::Right,
                 0.20 / 0.75,
-                DockLayout::tabs([inspector.window()]),
+                DockLayout::tabs([inspector.window(), find.window()]),
                 DockLayout::tabs([&welcome_window]),
             ),
         );
@@ -245,8 +252,11 @@ impl UiState {
             dm_ui: dm::DmUi::default(),
             welcome_window,
             inspector,
+            find,
             git_panel,
             select_object_tree: true,
+            select_inspector: true,
+            panel_focus_requested: false,
             settings_window,
             layout,
             gizmo: GizmoState::default(),
@@ -391,6 +401,7 @@ impl UiState {
             refit,
             undo,
             redo,
+            mut search,
         } = self.draw_menu_bar(ui, session, settings, loading);
 
         if session.map().is_some()
@@ -422,6 +433,41 @@ impl UiState {
             && !self.settings_window.is_capturing_keybind()
             && !ui.io().want_text_input()
             && settings.keybindings.get(KeybindAction::Screenshot).is_pressed(ui);
+
+        let search_keys = session.map().is_some()
+            && self.save_dialog.is_none()
+            && !self.settings_window.is_capturing_keybind()
+            && !ui.io().want_text_input();
+        search |= search_keys && settings.keybindings.get(KeybindAction::Find).is_pressed(ui);
+        if search {
+            match session
+                .state
+                .active_document()
+                .and_then(|document| Some((document.id(), document.selected_instance()?)))
+            {
+                Some((document, instance)) => {
+                    self.find
+                        .open_for(session, document, instance, find::SimilarMatchKind::Prefab);
+                },
+                None => self.find.request(),
+            }
+        }
+
+        if search_keys {
+            let next = settings
+                .keybindings
+                .get(KeybindAction::FindNext)
+                .is_pressed_repeating(ui);
+            let previous = settings
+                .keybindings
+                .get(KeybindAction::FindPrevious)
+                .is_pressed_repeating(ui);
+            if (next || previous)
+                && let Some(target) = self.find.step(session, next)
+            {
+                self.jump_to_instance(session, target);
+            }
+        }
 
         if undo || redo {
             self.cancel_edit_gestures(session, session.state.active());
@@ -482,6 +528,7 @@ impl UiState {
         if session.take_loaded_conflicts().is_some() {
             self.git_panel.request(git::GitTab::Conflicts);
         }
+        self.panel_focus_requested = self.find.has_focus_request() || self.git_panel.has_focus_request();
         // The Git tab shares the object tree's dock node, a request to show it wins
         if self.git_panel.has_focus_request() {
             self.select_object_tree = false;
@@ -491,10 +538,20 @@ impl UiState {
         if object_tree_docked {
             self.select_object_tree = false;
         }
-        let inspector = self.inspector.draw(ui, session, settings);
+        if self.find.has_focus_request() {
+            self.select_inspector = false;
+        }
+        let inspector = self.inspector.draw(ui, session, settings, self.select_inspector);
+        if inspector.docked {
+            self.select_inspector = false;
+        }
         self.copy_to_clipboard = inspector.copy_hash;
         open_source = inspector.open_source.or(open_source);
-        if let Some(target) = inspector.jump {
+        if let Some((document, instance)) = inspector.find_similar {
+            self.find
+                .open_for(session, document, instance, find::SimilarMatchKind::Prefab);
+        }
+        if let Some(target) = self.find.draw(ui, session, settings) {
             self.jump_to_instance(session, target);
         }
         let git_output = self.git_panel.draw(ui, session, settings);
@@ -686,6 +743,87 @@ mod tests {
     }
 
     #[test]
+    fn the_search_panel_shares_the_inspector_dock_node() {
+        let state = UiState::new(false).expect("valid window keys");
+        let DockLayout::Split { second, .. } = &state.layout else {
+            panic!("the root is split between the object tree and everything else");
+        };
+        let DockLayout::Split { first, .. } = second.as_ref() else {
+            panic!("the remainder is split between the inspector and the central node");
+        };
+
+        assert_eq!(
+            first.as_ref(),
+            &DockLayout::tabs([state.inspector.window(), state.find.window()])
+        );
+    }
+
+    #[test]
+    fn the_inspector_tab_starts_in_front_of_the_search_tab() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = rectangle_context();
+        let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
+        context.io_mut().set_config_flags(flags);
+        let mut state = UiState::new(false).unwrap();
+        let mut session = Session::new();
+        let mut settings = Settings::default();
+        let mut frame = |state: &mut UiState| {
+            let ui = context.frame();
+            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            assert!(context.render_legacy().valid());
+        };
+
+        for _ in 0..4 {
+            frame(&mut state);
+        }
+        assert!(!state.select_inspector, "the inspector docked and took the front");
+        assert!(!state.find.visible(), "the Search tab waits behind the inspector");
+
+        state.find.request();
+        for _ in 0..2 {
+            frame(&mut state);
+        }
+        assert!(state.find.visible(), "a request brings the Search tab forward");
+    }
+
+    #[test]
+    fn a_search_request_brings_its_tab_forward_while_the_mouse_is_over_the_map() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = rectangle_context();
+        let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
+        context.io_mut().set_config_flags(flags);
+        let mut state = UiState::new(false).unwrap();
+        let mut session = Session::new();
+        session.apply_map(crate::loader::LoadedMap {
+            path: PathBuf::from("search-focus-test.dmm"),
+            map: dmm::Map::new(dmm::Size { x: 10, y: 10, z: 1 }),
+            z: 1,
+            errors: vec![],
+            repo: None,
+            conflict: None,
+        });
+        let mut settings = Settings::default();
+        assert!(settings.focus_windows_on_hover);
+        let mut frame = |state: &mut UiState| {
+            context.io_mut().add_mouse_pos_event([400.0, 300.0]);
+            let ui = context.frame();
+            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            assert!(context.render_legacy().valid());
+        };
+
+        for _ in 0..4 {
+            frame(&mut state);
+        }
+        assert!(!state.find.visible());
+
+        state.find.request();
+        for _ in 0..3 {
+            frame(&mut state);
+        }
+        assert!(state.find.visible(), "the map view must not take the focus back first");
+    }
+
+    #[test]
     fn the_object_tree_tab_starts_in_front_of_the_git_tab() {
         let _guard = IMGUI_CONTEXT.lock().unwrap();
         let mut context = rectangle_context();
@@ -789,7 +927,7 @@ mod tests {
             KeyBinding::new(dear_imgui_rs::Key::N)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 33);
+        assert_eq!(KeybindAction::ALL.len(), 36);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));
