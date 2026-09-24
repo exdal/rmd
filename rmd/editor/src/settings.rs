@@ -728,6 +728,7 @@ pub(crate) struct Settings {
     pub bake_enabled: bool,
     pub git_enabled: bool,
     pub blame_depth: u32,
+    pub check_for_updates: bool,
 }
 
 pub(crate) struct SettingsLoad {
@@ -793,6 +794,7 @@ impl Default for Settings {
             bake_enabled: true,
             git_enabled: true,
             blame_depth: 500,
+            check_for_updates: true,
         }
     }
 }
@@ -1018,6 +1020,7 @@ mod tests {
                 bake_enabled: true,
                 git_enabled: true,
                 blame_depth: 500,
+                check_for_updates: true,
             }
         );
     }
@@ -1191,6 +1194,7 @@ mod tests {
         assert_eq!(settings.object_tree_search, ObjectTreeSearchOptions::default());
         assert_eq!(settings.object_tree_filter, ObjectTreeFilterOptions::default());
         assert!(settings.optimizations_enabled);
+        assert!(settings.check_for_updates);
         assert_eq!(settings.minimum_light_brightness_percent, 0);
     }
 
@@ -1259,6 +1263,7 @@ mod tests {
             bake_enabled: true,
             git_enabled: true,
             blame_depth: 500,
+            check_for_updates: false,
         };
         settings.keybindings.rebind(
             KeybindAction::ShowAreas,
@@ -1280,6 +1285,7 @@ mod tests {
         assert!(encoded.contains("maximized = true"));
         assert!(encoded.contains("preferred_editor = \"zed {file}:{line}:{column}\""));
         assert!(encoded.contains("optimizations_enabled = false"));
+        assert!(encoded.contains("check_for_updates = false"));
         assert!(encoded.contains("selection_highlight = \"tint\""));
         assert!(encoded.contains("object_tree_line_indicators = false"));
         assert!(encoded.contains("[object_tree_search]"));
@@ -1334,6 +1340,7 @@ mod tests {
             bake_enabled: true,
             git_enabled: true,
             blame_depth: 500,
+            check_for_updates: true,
         };
         let mut options = FrameOptions::default();
 

@@ -24,6 +24,7 @@ fn main() {
     let version = env::var("CARGO_PKG_VERSION").expect("Cargo sets CARGO_PKG_VERSION");
     println!("cargo:rustc-env=RMD_VERSION_URL={repository_url}/releases/tag/v{version}");
     println!("cargo:rustc-env=RMD_COMMIT_URL={repository_url}/commit/{hash}");
+    println!("cargo:rustc-env=RMD_REPOSITORY_URL={repository_url}");
 }
 
 fn git_output(manifest_dir: &Path, arguments: &[&str]) -> Option<String> {

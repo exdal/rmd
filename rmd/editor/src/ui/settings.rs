@@ -269,6 +269,10 @@ fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
     ui.separator();
     ui.text("Windows");
     ui.checkbox("Focus windows on hover", &mut settings.focus_windows_on_hover);
+
+    ui.separator();
+    ui.text("Updates");
+    ui.checkbox("Check for new releases on startup", &mut settings.check_for_updates);
 }
 
 fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Settings) {

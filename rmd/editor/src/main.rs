@@ -20,6 +20,7 @@ mod session;
 mod settings;
 mod transform;
 mod ui;
+mod update;
 
 use std::{
     fs,

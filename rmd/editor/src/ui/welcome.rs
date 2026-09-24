@@ -7,6 +7,7 @@ use super::{DIAGNOSTIC_WARNING_COLOR, OpenRequest, SAVE_ERROR_COLOR, UiState, co
 use crate::{
     session::{DiagnosticSeverity, Session},
     settings::Settings,
+    update::Release,
 };
 
 const WELCOME_TITLE_SIZE: f32 = 40.0;
@@ -24,6 +25,8 @@ const BUILD_GIT_SHORT_HASH: Option<&str> = option_env!("RMD_GIT_SHORT_HASH");
 const BUILD_VERSION_URL: Option<&str> = option_env!("RMD_VERSION_URL");
 
 const BUILD_COMMIT_URL: Option<&str> = option_env!("RMD_COMMIT_URL");
+
+const UPDATE_AVAILABLE_COLOR: [f32; 4] = [0.3, 0.68, 0.36, 1.0];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ForgetRequest {
@@ -44,7 +47,15 @@ struct RecentEntry {
     forget: bool,
 }
 
-fn draw_welcome_subtitle(ui: &Ui) {
+fn draw_welcome_subtitle(ui: &Ui, release: Option<&Release>) {
+    if let Some(release) = release {
+        let _color = ui.push_style_color(StyleColor::TextLink, UPDATE_AVAILABLE_COLOR);
+        ui.text_link_open_url(format!("{} available", release.version), &release.url);
+        ui.same_line();
+        ui.text_disabled("\u{2022}");
+        ui.same_line();
+    }
+
     match BUILD_VERSION_URL {
         Some(url) => {
             ui.text_link_open_url(BUILD_VERSION, url);
@@ -124,6 +135,11 @@ impl UiState {
         let maps_expanded = &mut self.welcome_maps_expanded;
         let diagnostics = &mut self.diagnostics;
         let codebase = session.environment_path();
+        let release = if settings.check_for_updates {
+            self.update_check.poll()
+        } else {
+            None
+        };
         ui.window(&self.welcome_window).opened(show_welcome).build(|| {
             if settings.focus_windows_on_hover {
                 focus_window_on_hover(ui);
@@ -146,7 +162,7 @@ impl UiState {
 
             match codebase {
                 Some(codebase) => ui.text_disabled(codebase.display().to_string()),
-                None => draw_welcome_subtitle(ui),
+                None => draw_welcome_subtitle(ui, release),
             }
 
             ui.dummy([0.0, WELCOME_MIN_INDENT]);

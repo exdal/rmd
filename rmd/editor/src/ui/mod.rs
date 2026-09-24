@@ -33,6 +33,7 @@ use crate::{
     loader::LoadView,
     session::{LoadReport, Session},
     settings::{KeybindAction, KeybindPreset, Settings},
+    update::UpdateCheck,
 };
 
 mod blame;
@@ -209,6 +210,7 @@ pub struct UiState {
     load_window_size: [f32; 2],
     keybind_preset_prompt: bool,
     copy_to_clipboard: Option<String>,
+    update_check: UpdateCheck,
 }
 
 #[cfg(test)]
@@ -274,6 +276,7 @@ impl UiState {
             load_window_size: [0.0, 0.0],
             keybind_preset_prompt,
             copy_to_clipboard: None,
+            update_check: UpdateCheck::default(),
         })
     }
 
@@ -336,6 +339,11 @@ impl UiState {
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, load: Option<&LoadView>,
     ) -> Result<UiOutput, DockspaceError> {
         let loading = load.is_some() || self.load_notice.is_some();
+
+        if settings.check_for_updates {
+            self.update_check.start();
+        }
+
         let root = ui.get_id(DOCKSPACE_ID);
         ui.dockspace()
             .main_viewport()
