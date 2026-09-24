@@ -272,6 +272,11 @@ impl<'a> MapParser<'a> {
 
         loop {
             self.skip_trivia();
+            // `{dir = 4;\n\t}` and `{}`
+            if self.eat(b'}') {
+                break;
+            }
+
             let name_start = self.offset;
             while matches!(self.peek(), Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')) {
                 self.bump();
@@ -302,7 +307,7 @@ impl<'a> MapParser<'a> {
         Ok(prefab)
     }
 
-    /// `null`, `4`, `"text"`, `/obj/item`, `list(...)`
+    /// `null`, `4`, `"text"`, `/obj/item`, `list(...)`, `newlist(...)`
     fn parse_value(&mut self) -> MapResult<Value> {
         match self.peek() {
             Some(b'"') => Ok(Value::Text(self.scan_quoted(b'"')?.to_string())),
@@ -326,7 +331,8 @@ impl<'a> MapParser<'a> {
 
                 match word {
                     "null" => Ok(Value::Null),
-                    "list" if self.peek() == Some(b'(') => self.parse_list(),
+                    // `newlist(/obj/a, /obj/b)` keeps its spelling through the prefab's verbatim source
+                    "list" | "newlist" if self.peek() == Some(b'(') => self.parse_list(),
                     // `list(ACCEPTING = "DONATIONS")`
                     _ => Ok(Value::Path(TreePath::parse(word))),
                 }
@@ -834,6 +840,25 @@ mod tests {
         );
 
         assert_eq!(get("exponent").map(|var| var.value), Some(Value::Num(2e5)));
+    }
+
+    #[test]
+    fn reads_newlist_and_keeps_its_spelling() {
+        let source = "newlist(/obj/item/a,/obj/item/b)";
+        let vars = prefab_vars(&format!(
+            "\"a\" = (/obj/t{{contents = {source}}},/area)\n\n(1,1,1) = {{\"\na\n\"}}\n"
+        ));
+
+        assert!(matches!(&vars[0].1.value, Value::List(entries) if entries.len() == 2));
+        assert_eq!(vars[0].1.verbatim(), Some(source));
+    }
+
+    #[test]
+    fn allows_a_trailing_semicolon_before_the_closing_brace() {
+        let vars = prefab_vars("\"a\" = (/obj/t{\n\tdir = 8;\n\t\n\t},/area)\n\n(1,1,1) = {\"\na\n\"}\n");
+
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].1.value, Value::Num(8.0));
     }
 
     #[test]

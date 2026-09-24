@@ -58,7 +58,6 @@ pub(super) fn draw_popup(
     }
     let coord = target.coord;
     ui.text_disabled(format!("X: {}, Y: {}, Z: {}", coord.x, coord.y, coord.z));
-    ui.separator();
     // every section starts with its own separator so none of them double up
     let mut action = None;
     if let Some(conflicts) = session

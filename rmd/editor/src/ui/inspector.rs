@@ -22,6 +22,7 @@ use editor::{
 };
 use objtree::{ObjectTree, TypeId};
 
+use super::git::commit_summary;
 use crate::{
     external_editor::SourceLocation,
     session::{DirectionalTypes, Session},
@@ -185,7 +186,8 @@ impl InspectorState {
                         commit.author,
                         blame::relative_time(now, commit.time)
                     ));
-                    ui.text_wrapped(&commit.summary);
+                    let web = session.git_state(id).and_then(|git| git.web.clone());
+                    commit_summary(ui, &commit, web.as_ref(), ui.content_region_avail_width());
                     if ui.small_button("Pin commit tiles") {
                         session.pin_blame(id, index);
                     }

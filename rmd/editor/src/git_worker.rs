@@ -12,7 +12,7 @@ use dmm::Map;
 use editor::{
     blame::{self, BlameResult, GitVersions},
     document::DocumentId,
-    git::{CommitRef, GitError, Operation, RepoPath},
+    git::{CommitRef, GitError, Operation, RepoPath, WebLinks},
 };
 
 pub struct Status {
@@ -20,7 +20,7 @@ pub struct Status {
     pub head: Option<CommitRef>,
     pub operation: Option<Operation>,
     pub unmerged: bool,
-    pub web_commit_base: Option<String>,
+    pub web: Option<WebLinks>,
 }
 
 pub enum Outcome {
@@ -77,13 +77,13 @@ impl GitWorker {
                 let head = repo.head_ref();
                 let operation = repo.operation();
                 let unmerged = repo.unmerged()?.is_some();
-                let web_commit_base = repo.web_commit_base();
+                let web = repo.web_links();
                 Ok(Status {
                     branch,
                     head,
                     operation,
                     unmerged,
-                    web_commit_base,
+                    web,
                 })
             })();
             let _ = sender.send(Finished {

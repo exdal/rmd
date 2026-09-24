@@ -1,3 +1,4 @@
+mod common;
 mod context_menu;
 mod dm;
 mod git;
@@ -38,6 +39,7 @@ use editor::{
     conflict::{Region, Side, describe_tile},
     document::{DocumentId, MapDocument, Selection},
     environment::BundledProfile,
+    git::{CommitInfo, WebLinks},
     icons::materialdesignicons::{
         ICON_ALERT,
         ICON_ALERT_CIRCLE,
@@ -86,6 +88,7 @@ use self::{
         Target as MenuTarget,
         draw_popup as draw_map_menu,
     },
+    git::commit_summary,
     inspector::{InspectorPanel, JumpTarget},
     object_tree::ObjectTreePanel,
     settings::SettingsWindow,
@@ -2260,11 +2263,8 @@ impl UiState {
                 };
 
                 if let Some(commit) = commit {
-                    let url = session
-                        .git_state(id)
-                        .and_then(|git| git.web_commit_base.as_ref())
-                        .map(|base| format!("{base}/{}", commit.hash));
-                    if let Some((bounds, close)) = draw_blame_popup(ui, id, popup, commit, url.as_deref()) {
+                    let web = session.git_state(id).and_then(|git| git.web.as_ref());
+                    if let Some((bounds, close)) = draw_blame_popup(ui, id, popup, commit, web) {
                         popup.bounds = Some(bounds);
                         if close {
                             *blame_popup = None;
@@ -3646,8 +3646,9 @@ fn blame_tooltip_position(ui: &Ui, mouse: [f32; 2]) -> [f32; 2] {
 }
 
 fn draw_blame_popup(
-    ui: &Ui, document: DocumentId, popup: &BlamePopup, commit: &editor::git::CommitInfo, url: Option<&str>,
+    ui: &Ui, document: DocumentId, popup: &BlamePopup, commit: &CommitInfo, web: Option<&WebLinks>,
 ) -> Option<(OverlayRect, bool)> {
+    const WIDTH: f32 = 390.0;
     let flags = WindowFlags::NO_DECORATION
         | WindowFlags::NO_MOVE
         | WindowFlags::NO_SAVED_SETTINGS
@@ -3658,14 +3659,14 @@ fn draw_blame_popup(
     ui.window(format!("Blame##popup-{}", document.get()))
         .flags(flags)
         .position(popup.position, Condition::Always)
-        .size_constraints([0.0, 0.0], [390.0, f32::MAX])
+        .size_constraints([0.0, 0.0], [WIDTH, f32::MAX])
         .build(|| {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |time| time.as_secs() as i64);
-            if let Some(url) = url {
-                ui.text_link_open_url(&commit.short, url);
-                ui.set_item_tooltip(url);
+            if let Some(web) = web {
+                let url = web.commit(&commit.hash);
+                ui.text_link_open_url(&commit.short, &url);
             } else {
                 ui.text(&commit.short);
                 ui.set_item_tooltip("No web remote is configured for this repository");
@@ -3676,7 +3677,8 @@ fn draw_blame_popup(
                 commit.author,
                 editor::blame::relative_time(now, commit.time)
             ));
-            ui.text_wrapped(&commit.summary);
+            let padding = ui.clone_style().window_padding()[0];
+            commit_summary(ui, commit, web, WIDTH - padding * 2.0);
             let close = ui.small_button("Close");
             let min = ui.window_pos();
             let size = ui.window_size();
@@ -5405,6 +5407,7 @@ mod tests {
                 author: String::from("Map author"),
                 time: 1,
                 summary: String::from("Paint the floor"),
+                pull_request: None,
             }],
             map: map.clone(),
         };

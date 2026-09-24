@@ -4,6 +4,7 @@ use dear_imgui_rs::{
     ItemHoveredFlags,
     ListClipper,
     SelectableFlags,
+    StyleColor,
     TabItemFlags,
     TableColumnFlags,
     TableFlags,
@@ -17,6 +18,7 @@ use editor::{
     blame::{self, BOUNDARY, UNCOMMITTED},
     conflict::{OURS_COLOR, OURS_LABEL, Side, THEIRS_COLOR, UNRESOLVED_COLOR, describe_tile},
     document::DocumentId,
+    git::{CommitInfo, WebLinks},
     icons::materialdesignicons::{
         ICON_ALERT,
         ICON_ALERT_CIRCLE,
@@ -29,6 +31,20 @@ use editor::{
     },
 };
 
+use super::{
+    SAVE_ERROR_COLOR,
+    common::{
+        align_right,
+        button_width,
+        centered_note,
+        checkbox_width,
+        label_width,
+        overflow_scroll,
+        same_line_if_fits,
+        table_min_width,
+        text_wrapped_colored,
+    },
+};
 use crate::{
     session::{self, BlameState, GitDocState, Session},
     settings::Settings,
@@ -37,6 +53,7 @@ use crate::{
 const STALE_COLOR: [f32; 4] = [1.0, 0.8, 0.3, 1.0];
 const LEGEND_STEPS: usize = 32;
 const LEGEND_WIDTH: f32 = 140.0;
+const LEGEND_MIN_WIDTH: f32 = 48.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GitTab {
@@ -244,12 +261,15 @@ impl GitPanel {
             (selected, format!(" ({count} selected)"))
         };
         for side in [Side::Ours, Side::Theirs] {
+            let label = format!("Take {}{suffix}##take-{side:?}", conflicts.side_label(side));
             if side == Side::Theirs {
-                ui.same_line();
+                same_line_if_fits(ui, button_width(ui, &label));
             }
-            if ui.button(format!("Take {}{suffix}##take-{side:?}", conflicts.side_label(side))) {
+
+            if ui.button(&label) {
                 actions.push(Action::Resolve(targets.clone(), side));
             }
+
             ui.set_item_tooltip(conflicts.side_detail(side));
         }
 
@@ -259,10 +279,7 @@ impl GitPanel {
         } else {
             format!("{ICON_CHECK} Mark resolved##mark-resolved")
         };
-        align_right(
-            ui,
-            ui.calc_text_size(&label)[0] + ui.clone_style().frame_padding()[0] * 2.0,
-        );
+        align_right(ui, button_width(ui, &label));
         if ui.with_disabled_if(blocker.is_some(), || ui.button(&label)) {
             actions.push(Action::MarkResolved);
         }
@@ -271,8 +288,9 @@ impl GitPanel {
         }
 
         ui.checkbox("Unresolved only", &mut self.unresolved_only);
-        ui.same_line();
-        ui.checkbox("Current level only", &mut self.current_level_only);
+        let label = "Current level only";
+        same_line_if_fits(ui, checkbox_width(ui, label));
+        ui.checkbox(label, &mut self.current_level_only);
 
         let z = session.z();
         let visible = (0..rows.len())
@@ -284,6 +302,7 @@ impl GitPanel {
         let buttons_width = ui.calc_text_size(format!("{OURS_LABEL}{theirs}"))[0]
             + ui.clone_style().frame_padding()[0] * 4.0
             + ui.clone_style().item_spacing()[0];
+        let (scroll, inner_width) = overflow_scroll(ui, table_min_width(ui, &[tile_width, buttons_width], 2));
 
         ui.table("git-conflicts")
             .flags(
@@ -292,24 +311,26 @@ impl GitPanel {
                     | TableFlags::BORDERS_OUTER
                     | TableFlags::RESIZABLE
                     | TableFlags::HIDEABLE
-                    | TableFlags::SCROLL_Y,
+                    | TableFlags::SCROLL_Y
+                    | scroll,
             )
             .sizing_policy(TableSizingPolicy::StretchProp)
-            .freeze(0, 1)
+            .inner_width(inner_width)
+            .freeze(1, 1)
             .headers(true)
             .column("Tile")
             .width(tile_width)
             .flags(TableColumnFlags::NO_HIDE)
             .done()
             .column("Region")
-            .width(ui.calc_text_size("Region")[0])
+            .weight(0.8)
             .done()
             .column("Base")
-            .weight(1.0)
+            .weight(1.5)
             .flags(TableColumnFlags::DEFAULT_HIDE)
             .done()
             .column("Status")
-            .width(ui.calc_text_size(format!("Unresolved{theirs}"))[0].max(tile_width) * 0.6)
+            .weight(1.0)
             .done()
             .column("##actions")
             .width(buttons_width)
@@ -435,13 +456,14 @@ impl GitPanel {
         if ui.checkbox("Show heatmap", &mut show) {
             actions.push(Action::ToggleBlame);
         }
-        ui.same_line();
+
         let blame = session.blame_state(id);
         let label = if blame.is_some() {
             format!("{ICON_REFRESH} Refresh##run-blame")
         } else {
             String::from("Run blame##run-blame")
         };
+        same_line_if_fits(ui, button_width(ui, &label));
         if ui.button(label) {
             actions.push(Action::RunBlame);
         }
@@ -454,7 +476,7 @@ impl GitPanel {
                 .build();
         }
         if session.blame_stale(id) {
-            ui.text_colored(STALE_COLOR, format!("{ICON_ALERT} Map changed since blame ran"));
+            text_wrapped_colored(ui, STALE_COLOR, &format!("{ICON_ALERT} Map changed since blame ran"));
         }
 
         let Some(blame) = blame else {
@@ -465,7 +487,11 @@ impl GitPanel {
         };
 
         if blame.counts.boundary != 0 || blame.result.parse_boundary.is_some() {
-            ui.text_disabled(blame.result.boundary_label());
+            text_wrapped_colored(
+                ui,
+                ui.style_color(StyleColor::TextDisabled),
+                &blame.result.boundary_label(),
+            );
         }
         draw_legend(ui, blame);
         ui.checkbox("Show all commits", &mut self.show_all_commits);
@@ -479,12 +505,15 @@ impl GitPanel {
             )
             .chain(std::iter::once(BOUNDARY).filter(|_| blame.counts.boundary != 0))
             .collect::<Vec<_>>();
-        let web = git.web_commit_base.as_deref();
+        let web = git.web.as_ref();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |time| time.as_secs() as i64);
         let swatch = ui.text_line_height();
+        let commit_width = ui.calc_text_size("Uncommitted")[0];
+        let tiles_width = ui.calc_text_size("000000")[0];
         let z = session.z();
+        let (scroll, inner_width) = overflow_scroll(ui, table_min_width(ui, &[swatch, commit_width, tiles_width], 3));
 
         ui.table("git-blame-commits")
             .flags(
@@ -493,30 +522,32 @@ impl GitPanel {
                     | TableFlags::BORDERS_OUTER
                     | TableFlags::RESIZABLE
                     | TableFlags::HIDEABLE
-                    | TableFlags::SCROLL_Y,
+                    | TableFlags::SCROLL_Y
+                    | scroll,
             )
             .sizing_policy(TableSizingPolicy::StretchProp)
-            .freeze(0, 1)
+            .inner_width(inner_width)
+            .freeze(2, 1)
             .headers(true)
             .column("##heat")
             .width(swatch)
             .flags(TableColumnFlags::NO_HIDE)
             .done()
             .column("Commit")
-            .width(ui.calc_text_size("Uncommitted")[0])
+            .width(commit_width)
             .flags(TableColumnFlags::NO_HIDE)
             .done()
             .column("Author")
             .weight(0.6)
             .done()
             .column("Date")
-            .width(ui.calc_text_size("11 months ago")[0])
+            .weight(0.5)
             .done()
             .column("Summary")
             .weight(1.4)
             .done()
             .column("Tiles")
-            .width(ui.calc_text_size("000000")[0])
+            .width(tiles_width)
             .done()
             .build(|ui| {
                 let clipper = ListClipper::new(cells.len()).begin(ui);
@@ -567,9 +598,8 @@ impl GitPanel {
                     ui.table_next_column();
                     match (commit, web) {
                         (Some(commit), Some(web)) => {
-                            let url = format!("{web}/{}", commit.hash);
+                            let url = web.commit(&commit.hash);
                             ui.text_link_open_url(&commit.short, &url);
-                            ui.set_item_tooltip(&url);
                         },
                         (Some(commit), None) => {
                             ui.text(format!("{ICON_SOURCE_COMMIT} {}", commit.short));
@@ -607,65 +637,83 @@ impl GitPanel {
 }
 
 fn draw_header(ui: &Ui, git: &GitDocState, actions: &mut Vec<Action>) {
+    let refresh_size = ui.frame_height();
+    let reserve = ui.clone_style().item_spacing()[0] + refresh_size;
+
     let branch = git.branch.as_deref().unwrap_or("Reading repository...");
     ui.text(format!("{ICON_SOURCE_BRANCH} {branch}"));
     if let Some(head) = &git.head {
-        ui.same_line();
-        ui.text_disabled(format!("HEAD {}", head.short));
+        let text = format!("HEAD {}", head.short);
+        same_line_if_fits(ui, label_width(ui, &text) + reserve);
+        ui.text_disabled(&text);
         ui.set_item_tooltip(&head.subject);
     }
-    ui.same_line();
+
+    same_line_if_fits(ui, label_width(ui, &git.repo.rel) + reserve);
     ui.text_disabled(&git.repo.rel);
+    ui.set_item_tooltip(&git.repo.rel);
 
     let refresh = format!("{ICON_REFRESH}##refresh-git");
-    align_right(ui, ui.frame_height());
-    if ui.button_with_size(&refresh, [ui.frame_height(), ui.frame_height()]) {
+    align_right(ui, refresh_size);
+    if ui.button_with_size(&refresh, [refresh_size, refresh_size]) {
         actions.push(Action::Refresh);
     }
+
     ui.set_item_tooltip("Refresh Git status");
 
     if let Some(operation) = &git.operation {
-        ui.text_colored(
+        text_wrapped_colored(
+            ui,
             opaque(THEIRS_COLOR),
-            format!(
+            &format!(
                 "{ICON_SOURCE_MERGE} {} {}",
                 operation.kind.label(),
                 operation.theirs.describe()
             ),
         );
     }
+
     if git.pending_load {
         ui.text_colored(
             opaque(UNRESOLVED_COLOR),
             format!("{ICON_ALERT} Merge conflicts on disk"),
         );
-        ui.same_line();
-        if ui.small_button("Load conflicts") {
+        let label = "Load conflicts";
+        same_line_if_fits(ui, button_width(ui, label));
+        if ui.small_button(label) {
             actions.push(Action::LoadConflicts);
         }
     }
+
     if let Some(error) = &git.error {
         if ui.small_button(format!("{ICON_CLOSE_THICK}##dismiss-git-error")) {
             actions.push(Action::ClearError);
         }
+
         ui.set_item_tooltip("Dismiss");
         ui.same_line();
-        ui.text_colored(super::SAVE_ERROR_COLOR, format!("{ICON_ALERT_CIRCLE} {error}"));
+        text_wrapped_colored(ui, SAVE_ERROR_COLOR, &format!("{ICON_ALERT_CIRCLE} {error}"));
     }
+
     ui.spacing();
 }
 
 fn draw_legend(ui: &Ui, blame: &BlameState) {
     let height = ui.text_line_height();
-    let limit = blame.result.history_limit;
+    let spacing = ui.clone_style().item_spacing()[0];
+    let span = blame.result.heat_span;
 
-    if limit != 0 {
+    if span != 0 {
+        let labels = label_width(ui, "Newest") + label_width(ui, "Oldest") + spacing * 2.0;
+        let width = LEGEND_WIDTH
+            .min(ui.content_region_avail_width() - labels)
+            .max(LEGEND_MIN_WIDTH);
         ui.text_disabled("Newest");
         ui.same_line();
         let origin = ui.cursor_screen_pos();
-        let step = LEGEND_WIDTH / LEGEND_STEPS as f32;
+        let step = width / LEGEND_STEPS as f32;
         for index in 0..LEGEND_STEPS {
-            let cell = (index * limit.saturating_sub(1) / (LEGEND_STEPS - 1)) as u32;
+            let cell = (index * span.saturating_sub(1) / (LEGEND_STEPS - 1)) as u32;
             let color = session::blame_color(&blame.result, cell);
             let min = [origin[0] + step * index as f32, origin[1]];
             ui.get_window_draw_list()
@@ -673,21 +721,21 @@ fn draw_legend(ui: &Ui, blame: &BlameState) {
                 .filled(true)
                 .build();
         }
-        ui.dummy([LEGEND_WIDTH, height]);
+        ui.dummy([width, height]);
         ui.same_line();
         ui.text_disabled("Oldest");
-        ui.same_line();
     }
 
     for (cell, label) in [(UNCOMMITTED, "Uncommitted"), (BOUNDARY, "Older")] {
+        if span != 0 || cell != UNCOMMITTED {
+            same_line_if_fits(ui, height + spacing + label_width(ui, label));
+        }
+
         let origin = ui.cursor_screen_pos();
         draw_swatch(ui, origin, height, session::blame_color(&blame.result, cell));
         ui.dummy([height, height]);
         ui.same_line();
         ui.text_disabled(label);
-        if cell == UNCOMMITTED {
-            ui.same_line();
-        }
     }
 }
 
@@ -704,27 +752,27 @@ fn draw_swatch(ui: &Ui, origin: [f32; 2], size: f32, color: [f32; 3]) {
         .build();
 }
 
-/// Moves the next item on this line against the right edge
-fn align_right(ui: &Ui, width: f32) {
-    ui.same_line();
-    let available = ui.content_region_avail()[0];
-    if available > width {
-        let [x, y] = ui.cursor_pos();
-        ui.set_cursor_pos([x + available - width, y]);
-    }
-}
+pub(super) fn commit_summary(ui: &Ui, commit: &CommitInfo, web: Option<&WebLinks>, width: f32) {
+    let (Some(number), Some(web)) = (commit.pull_request, web) else {
+        ui.text_wrapped(&commit.summary);
 
-fn centered_note(ui: &Ui, text: &str) {
-    let width = ui.content_region_avail()[0];
-    let size = ui.calc_text_size(text);
-    let [x, y] = ui.cursor_pos();
-    if width > size[0] {
-        ui.set_cursor_pos([x + (width - size[0]) * 0.5, y + ui.text_line_height()]);
-        ui.text_disabled(text);
+        return;
+    };
+
+    let label = format!("(#{number})");
+    let title = commit.summary.trim_end();
+    let title = title.strip_suffix(&label).map_or(title, str::trim_end);
+    let url = web.pull_request(number);
+    let spacing = ui.clone_style().item_spacing()[0];
+    if ui.calc_text_size(title)[0] + spacing + ui.calc_text_size(&label)[0] <= width {
+        ui.text(title);
+        ui.same_line();
     } else {
-        ui.set_cursor_pos([x, y + ui.text_line_height()]);
-        ui.text_wrapped(text);
+        // same_line after wrapped text lands beside its first line, so the link gets its own
+        ui.text_wrapped(title);
     }
+
+    ui.text_link_open_url(&label, &url);
 }
 
 const fn opaque(color: [f32; 3]) -> [f32; 4] { [color[0], color[1], color[2], 1.0] }

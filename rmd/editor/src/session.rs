@@ -21,7 +21,7 @@ use editor::{
     document::{DocumentId, MapDocument, PlacedTile, PrefabInstanceId, PrefabLocation, Selection, VarMutation},
     focus::AreaFocus,
     frame::{self, FrameInstances, FrameOptions, FrameRenderOptions, PrefabUpdate, TypeVisibility},
-    git::{CommitRef, Operation, RepoPath},
+    git::{CommitRef, Operation, RepoPath, WebLinks},
     node,
     progress::{Progress, Stage},
     tool::{
@@ -346,7 +346,7 @@ pub(crate) struct GitDocState {
     pub branch: Option<String>,
     pub head: Option<CommitRef>,
     pub operation: Option<Operation>,
-    pub web_commit_base: Option<String>,
+    pub web: Option<WebLinks>,
     pub blame: Option<BlameState>,
     pub show_blame: bool,
     pub staging: bool,
@@ -366,7 +366,7 @@ impl GitDocState {
             branch: None,
             head: None,
             operation: None,
-            web_commit_base: None,
+            web: None,
             blame: None,
             show_blame: false,
             staging: false,
@@ -710,7 +710,7 @@ impl Session {
                         git.branch = Some(status.branch);
                         git.head = status.head;
                         git.operation = status.operation;
-                        git.web_commit_base = status.web_commit_base;
+                        git.web = status.web;
                         git.unmerged_on_disk = status.unmerged;
 
                         if !status.unmerged && !document_dirty {
@@ -3910,6 +3910,7 @@ enum BlameHeat {
 const BLAME_BASE_FILL: f32 = 0.55;
 const BLAME_OVERLAY_OPACITY_REDUCTION: f32 = 0.15;
 const BLAME_HOT_OPACITY_REDUCTION: f32 = 0.30;
+const BLAME_COLDEST_HEAT: f32 = 0.12;
 
 fn blame_heatmap(result: &BlameResult, z: u32) -> Vec<editor::bake::Highlight> {
     let mut buckets: BTreeMap<BlameHeat, HashSet<[i32; 2]>> = BTreeMap::new();
@@ -3925,8 +3926,8 @@ fn blame_heatmap(result: &BlameResult, z: u32) -> Vec<editor::bake::Highlight> {
         .map(|(source, covered)| editor::bake::Highlight {
             tiles: editor::bake::highlight_tiles(&covered),
             z: z as i32,
-            color: blame_heatmap_color(source, result.history_limit),
-            fill: blame_heatmap_fill(source, result.history_limit),
+            color: blame_heatmap_color(source, result.heat_span),
+            fill: blame_heatmap_fill(source, result.heat_span),
             outline: false,
             when: editor::bake::HIGHLIGHT_ALWAYS,
             label: None,
@@ -3934,13 +3935,13 @@ fn blame_heatmap(result: &BlameResult, z: u32) -> Vec<editor::bake::Highlight> {
         .collect()
 }
 
-fn blame_heatmap_color(source: BlameHeat, history_limit: usize) -> [f32; 3] {
+fn blame_heatmap_color(source: BlameHeat, heat_span: usize) -> [f32; 3] {
     let index = match source {
         BlameHeat::Commit(index) => index as usize,
         BlameHeat::Worktree => return [0.14, 0.9, 0.32],
         BlameHeat::Boundary => return [0.4, 0.2, 0.8],
     };
-    let color = inferno(blame_revision_heat(index, history_limit));
+    let color = inferno(blame_revision_heat(index, heat_span));
     let peak = color.into_iter().fold(0.0f32, f32::max);
     let gain = (0.85 / peak.max(f32::EPSILON)).max(1.0);
     color.map(|channel| (channel * gain).clamp(0.0, 1.0))
@@ -3956,22 +3957,24 @@ fn blame_heat(result: &BlameResult, cell: u32) -> BlameHeat {
 }
 
 pub(crate) fn blame_color(result: &BlameResult, cell: u32) -> [f32; 3] {
-    blame_heatmap_color(blame_heat(result, cell), result.history_limit)
+    blame_heatmap_color(blame_heat(result, cell), result.heat_span)
 }
 
-fn blame_heatmap_fill(source: BlameHeat, history_limit: usize) -> f32 {
+fn blame_heatmap_fill(source: BlameHeat, heat_span: usize) -> f32 {
     let base = BLAME_BASE_FILL * (1.0 - BLAME_OVERLAY_OPACITY_REDUCTION);
     match source {
         BlameHeat::Commit(index) => {
-            base * (1.0 - BLAME_HOT_OPACITY_REDUCTION * blame_revision_heat(index as usize, history_limit))
+            base * (1.0 - BLAME_HOT_OPACITY_REDUCTION * blame_revision_heat(index as usize, heat_span))
         },
         BlameHeat::Worktree | BlameHeat::Boundary => base,
     }
 }
 
-fn blame_revision_heat(index: usize, history_limit: usize) -> f32 {
-    let remaining = history_limit.saturating_sub(index);
-    ((remaining + 1) as f32).log2() / ((history_limit.max(1) + 1) as f32).log2()
+/// 1.0 at HEAD
+fn blame_revision_heat(index: usize, heat_span: usize) -> f32 {
+    let age = (index as f32 / (heat_span.max(2) - 1) as f32).min(1.0);
+
+    BLAME_COLDEST_HEAT + (1.0 - BLAME_COLDEST_HEAT) * (1.0 - age)
 }
 
 fn inferno(t: f32) -> [f32; 3] {
@@ -4422,15 +4425,20 @@ pub(crate) mod tests {
     use editor::{
         BakeProgram,
         Environment,
+        blame::BlameResult,
         command::EditGroupId,
         document::{DocumentId, MapDocument, PlacedPrefab, PrefabInstanceId, Selection, VarMutation},
         focus::AreaFocus,
+        git::WebLinks,
         tool::{BlockSelectionMode, FillMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
     };
     use objtree::ObjectTree;
     use render::{GuideLine, SpriteInstance};
 
     use super::{
+        BLAME_COLDEST_HEAT,
+        BlameHeat,
+        BlameState,
         DiagnosticSeverity,
         FillOutcome,
         GuideBadge,
@@ -4440,6 +4448,8 @@ pub(crate) mod tests {
         MAX_REPORTED_DIAGNOSTICS,
         Progress,
         Session,
+        blame_heatmap_color,
+        blame_revision_heat,
         build_textures,
         directional_type_target,
         directional_types_for,
@@ -4572,16 +4582,14 @@ pub(crate) mod tests {
 
     #[test]
     fn blame_palette_uses_revision_positions_and_keeps_worktree_green() {
-        use super::BlameHeat;
-
-        let history_limit = 500;
-        let boundary = super::blame_heatmap_color(BlameHeat::Boundary, history_limit);
-        let cold = super::blame_heatmap_color(BlameHeat::Commit(499), history_limit);
-        let middle = super::blame_heatmap_color(BlameHeat::Commit(250), history_limit);
-        let hot = super::blame_heatmap_color(BlameHeat::Commit(0), history_limit);
-        let worktree = super::blame_heatmap_color(BlameHeat::Worktree, history_limit);
-        let short_history = super::blame_heatmap_color(BlameHeat::Commit(1), 2);
-        let long_history = super::blame_heatmap_color(BlameHeat::Commit(1), history_limit);
+        let heat_span = 500;
+        let boundary = blame_heatmap_color(BlameHeat::Boundary, heat_span);
+        let cold = blame_heatmap_color(BlameHeat::Commit(499), heat_span);
+        let middle = blame_heatmap_color(BlameHeat::Commit(250), heat_span);
+        let hot = blame_heatmap_color(BlameHeat::Commit(0), heat_span);
+        let worktree = blame_heatmap_color(BlameHeat::Worktree, heat_span);
+        let short_history = blame_heatmap_color(BlameHeat::Commit(1), 2);
+        let long_history = blame_heatmap_color(BlameHeat::Commit(1), heat_span);
 
         assert!(boundary[2] >= 0.8 && boundary[2] > boundary[0]);
         assert!(cold[2] >= 0.8 && cold[2] > cold[0]);
@@ -4592,13 +4600,26 @@ pub(crate) mod tests {
         assert!(worktree[1] >= 0.8 && worktree[1] > worktree[0] * 3.0 && worktree[1] > worktree[2] * 2.0);
     }
 
-    pub(crate) fn install_blame(session: &mut Session, id: DocumentId, result: editor::blame::BlameResult) {
+    #[test]
+    fn blame_heat_spans_head_to_the_oldest_owning_revision() {
+        let heat = |index| blame_revision_heat(index, 347);
+
+        assert_eq!(heat(0), 1.0);
+        assert_eq!(heat(346), BLAME_COLDEST_HEAT);
+        assert_eq!(heat(400), BLAME_COLDEST_HEAT, "listed commits past the span stay cold");
+        assert!((heat(173) - (1.0 + BLAME_COLDEST_HEAT) / 2.0).abs() < 1e-3);
+        assert!((1..347).all(|index| heat(index) < heat(index - 1)));
+        assert_eq!(blame_revision_heat(0, 1), 1.0);
+        assert_eq!(blame_revision_heat(0, 0), 1.0);
+    }
+
+    pub(crate) fn install_blame(session: &mut Session, id: DocumentId, result: BlameResult) {
         let snapshot = session.state.document(id).unwrap().map.clone();
         let cache = session.caches.get_mut(&id).unwrap();
         let git = cache.git.as_mut().unwrap();
-        git.blame = Some(super::BlameState::new(result, snapshot, cache.map_revision));
+        git.blame = Some(BlameState::new(result, snapshot, cache.map_revision));
         git.show_blame = true;
-        git.web_commit_base = Some(String::from("https://github.com/example/maps/commit"));
+        git.web = WebLinks::from_remote("https://github.com/example/maps.git");
     }
 
     fn examples() -> PathBuf {

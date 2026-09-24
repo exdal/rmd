@@ -94,6 +94,83 @@ pub struct CommitInfo {
     // unix timestamp
     pub time: i64,
     pub summary: String,
+    pub pull_request: Option<u64>,
+}
+
+fn pull_request(summary: &str, body: Option<&str>) -> (Option<u64>, String) {
+    fn number(digits: &str) -> Option<u64> {
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+
+        digits.parse().ok()
+    }
+
+    let trimmed = summary.trim_end();
+    // we only support github like pull requests for now
+    if let Some(number) = trimmed
+        .strip_suffix(')')
+        .and_then(|rest| rest.rsplit_once("(#"))
+        .and_then(|(_, digits)| number(digits))
+    {
+        return (Some(number), summary.to_owned());
+    }
+
+    if let Some(number) = trimmed
+        .strip_prefix("Merge pull request #")
+        .and_then(|rest| number(rest.split_once(' ').map_or(rest, |(digits, _)| digits)))
+    {
+        let title = body.and_then(|body| body.lines().map(str::trim).find(|line| !line.is_empty()));
+
+        return match title {
+            Some(title) => (Some(number), format!("{title} (#{number})")),
+            None => (Some(number), summary.to_owned()),
+        };
+    }
+
+    (None, summary.to_owned())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Forge {
+    GitHub,
+    GitLab,
+    Bitbucket,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebLinks {
+    // scheme://host[:port]/owner/repo
+    repo: String,
+    forge: Forge,
+}
+
+impl WebLinks {
+    /// `git@github.com:owner/repo.git`
+    pub fn from_remote(url: &str) -> Option<Self> { web_links(&gix::url::parse(url.as_bytes().as_bstr()).ok()?) }
+
+    pub fn commit(&self, hash: &str) -> String {
+        let route = match self.forge {
+            Forge::GitLab => "-/commit",
+            Forge::Bitbucket => "commits",
+            Forge::GitHub | Forge::Other => "commit",
+        };
+
+        format!("{}/{route}/{hash}", self.repo)
+    }
+
+    pub fn pull_request(&self, number: u64) -> String {
+        let route = match self.forge {
+            Forge::GitHub => "pull",
+            Forge::GitLab => "-/merge_requests",
+            Forge::Bitbucket => "pull-requests",
+            // Gitea and Forgejo
+            Forge::Other => "pulls",
+        };
+
+        format!("{}/{route}/{number}", self.repo)
+    }
 }
 
 /// The file as one commit left it, `blob` is `None` when that commit deleted it
@@ -173,13 +250,14 @@ impl RepoPath {
 impl Repo {
     fn rel(&self) -> &BStr { self.path.rel.as_bytes().as_bstr() }
 
-    pub fn web_commit_base(&self) -> Option<String> {
+    pub fn web_links(&self) -> Option<WebLinks> {
         let remote = self
             .repo
             .find_fetch_remote(None)
             .ok()
             .or_else(|| self.repo.find_remote("origin").ok())?;
-        commit_url_base(remote.url(gix::remote::Direction::Fetch)?)
+
+        web_links(remote.url(gix::remote::Direction::Fetch)?)
     }
 
     fn abbreviate(&self, id: ObjectId) -> String {
@@ -191,10 +269,11 @@ impl Repo {
     fn commit_info(&self, id: ObjectId) -> GitResult<CommitInfo> {
         let commit = self.repo.find_commit(id).map_err(fail)?;
         let author = commit.author().map_err(fail)?;
-        let summary = commit
-            .message()
-            .map(|message| message.summary().to_str_lossy().into_owned())
-            .unwrap_or_default();
+        let (pull_request, summary) = commit.message().map_or((None, String::new()), |message| {
+            let body = message.body.map(|body| body.to_str_lossy());
+
+            pull_request(&message.summary().to_str_lossy(), body.as_deref())
+        });
 
         Ok(CommitInfo {
             hash: id.to_string(),
@@ -202,6 +281,7 @@ impl Repo {
             author: author.name.to_str_lossy().into_owned(),
             time: commit.time().map_or(0, |time| time.seconds),
             summary,
+            pull_request,
         })
     }
 
@@ -392,7 +472,7 @@ impl Repo {
     }
 }
 
-fn commit_url_base(remote: &gix::Url) -> Option<String> {
+fn web_links(remote: &gix::Url) -> Option<WebLinks> {
     use gix::url::Scheme;
 
     let scheme = match remote.scheme {
@@ -429,50 +509,119 @@ fn commit_url_base(remote: &gix::Url) -> Option<String> {
     }
 
     // surely this wont bite
-    let route = if host == "bitbucket.org" {
-        "commits"
+    let forge = if host == "github.com" {
+        Forge::GitHub
+    } else if host == "bitbucket.org" {
+        Forge::Bitbucket
     } else if host == "gitlab.com" || host.ends_with(".gitlab.com") {
-        "-/commit"
+        Forge::GitLab
     } else {
-        "commit"
+        Forge::Other
     };
 
-    Some(format!("{scheme}://{host}{port}/{encoded}/{route}"))
+    Some(WebLinks {
+        repo: format!("{scheme}://{host}{port}/{encoded}"),
+        forge,
+    })
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{OperationKind, commit_url_base, detect_operation, discover};
+    use super::{OperationKind, detect_operation, discover, pull_request, web_links};
 
     #[test]
     fn commit_links_follow_the_remote_host_without_credentials() {
         for (remote, expected) in [
             (
                 "https://github.com/team/map.git",
-                Some("https://github.com/team/map/commit"),
+                Some((
+                    "https://github.com/team/map/commit/abc",
+                    "https://github.com/team/map/pull/7",
+                )),
             ),
             (
                 "git@github.com:team/map.git",
-                Some("https://github.com/team/map/commit"),
+                Some((
+                    "https://github.com/team/map/commit/abc",
+                    "https://github.com/team/map/pull/7",
+                )),
             ),
             (
                 "https://gitlab.com/team/map.git",
-                Some("https://gitlab.com/team/map/-/commit"),
+                Some((
+                    "https://gitlab.com/team/map/-/commit/abc",
+                    "https://gitlab.com/team/map/-/merge_requests/7",
+                )),
             ),
             (
                 "ssh://git@bitbucket.org/team/map.git",
-                Some("https://bitbucket.org/team/map/commits"),
+                Some((
+                    "https://bitbucket.org/team/map/commits/abc",
+                    "https://bitbucket.org/team/map/pull-requests/7",
+                )),
+            ),
+            (
+                "https://codeberg.org/team/map.git",
+                Some((
+                    "https://codeberg.org/team/map/commit/abc",
+                    "https://codeberg.org/team/map/pulls/7",
+                )),
             ),
             (
                 "https://user:secret@github.com/team/map.git",
-                Some("https://github.com/team/map/commit"),
+                Some((
+                    "https://github.com/team/map/commit/abc",
+                    "https://github.com/team/map/pull/7",
+                )),
             ),
             ("file:///tmp/map.git", None),
         ] {
             let parsed = gix::url::parse(remote).unwrap();
-            assert_eq!(commit_url_base(&parsed).as_deref(), expected, "{remote}");
+            let links = web_links(&parsed).map(|links| (links.commit("abc"), links.pull_request(7)));
+            assert_eq!(
+                links.as_ref().map(|(commit, pull)| (commit.as_str(), pull.as_str())),
+                expected,
+                "{remote}"
+            );
+        }
+    }
+
+    #[test]
+    fn detects_squash_and_merge_pull_requests() {
+        for (summary, body, expected) in [
+            (
+                "Update MetaStation.dmm (#66744)",
+                None,
+                (Some(66744), "Update MetaStation.dmm (#66744)"),
+            ),
+            (
+                "Update MetaStation.dmm (#66744) ",
+                None,
+                (Some(66744), "Update MetaStation.dmm (#66744) "),
+            ),
+            (
+                "Merge pull request #45 from someone/branch",
+                Some("\nFixes the bar\n\nmore words"),
+                (Some(45), "Fixes the bar (#45)"),
+            ),
+            (
+                "Merge pull request #45 from someone/branch",
+                None,
+                (Some(45), "Merge pull request #45 from someone/branch"),
+            ),
+            ("Fix (#12) thing", None, (None, "Fix (#12) thing")),
+            ("Fix thing (#abc)", None, (None, "Fix thing (#abc)")),
+            ("Fix thing (#)", None, (None, "Fix thing (#)")),
+            (
+                "Merge branch 'master' of https://github.com/team/map",
+                None,
+                (None, "Merge branch 'master' of https://github.com/team/map"),
+            ),
+        ] {
+            let (number, text) = pull_request(summary, body);
+            assert_eq!((number, text.as_str()), expected, "{summary}");
         }
     }
 
@@ -537,7 +686,7 @@ pub(crate) mod tests {
         std::fs::create_dir_all(dir.join("maps")).unwrap();
         commit(&dir, "maps/a.dmm", "one\n", "add map");
         commit(&dir, "other.txt", "x\n", "unrelated");
-        commit(&dir, "maps/a.dmm", "two\n", "change map");
+        commit(&dir, "maps/a.dmm", "two\n", "change map (#12)");
 
         let path = discover(&dir.join("maps").join("a.dmm")).expect("inside the repository");
         assert_eq!(path.rel, "maps/a.dmm");
@@ -549,8 +698,12 @@ pub(crate) mod tests {
             &["remote", "add", "origin", "https://github.com/example/maps.git"],
         );
         assert_eq!(
-            path.open().unwrap().web_commit_base().as_deref(),
-            Some("https://github.com/example/maps/commit")
+            path.open()
+                .unwrap()
+                .web_links()
+                .map(|links| links.commit("abc"))
+                .as_deref(),
+            Some("https://github.com/example/maps/commit/abc")
         );
 
         let history = repo.file_history(10, &|| false).unwrap();
@@ -558,7 +711,9 @@ pub(crate) mod tests {
             .iter()
             .map(|version| version.commit.summary.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(summaries, ["change map", "add map"]);
+        assert_eq!(summaries, ["change map (#12)", "add map"]);
+        assert_eq!(history[0].commit.pull_request, Some(12));
+        assert_eq!(history[1].commit.pull_request, None);
         for version in &history {
             let expected = git(&dir, &["rev-parse", "--short", &version.commit.hash]).unwrap();
             assert_eq!(version.commit.short, expected.trim(), "abbreviated like rev-parse");

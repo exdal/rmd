@@ -42,6 +42,8 @@ pub struct BlameResult {
     pub parse_boundary: Option<usize>,
     /// The number of revisions available for blame, capped by the slider and parse boundary.
     pub history_limit: usize,
+    /// Revisions from HEAD through the oldest one that still owns a tile, what the heatmap palette spans
+    pub heat_span: usize,
     cells: Vec<u32>,
 }
 
@@ -222,6 +224,7 @@ pub fn blame(
             commits,
             parse_boundary,
             history_limit: 0,
+            heat_span: 0,
             cells,
         });
     }
@@ -279,12 +282,18 @@ pub fn blame(
     }
 
     let history_limit = parse_boundary.map_or(listed_limit, |boundary| boundary.min(listed_limit));
+    let heat_span = cells
+        .iter()
+        .filter(|cell| (**cell as usize) < history_limit)
+        .max()
+        .map_or(0, |oldest| *oldest as usize + 1);
 
     Ok(BlameResult {
         size,
         commits,
         parse_boundary,
         history_limit,
+        heat_span,
         cells,
     })
 }
@@ -407,6 +416,7 @@ mod tests {
                     author: String::new(),
                     time: 0,
                     summary: String::new(),
+                    pull_request: None,
                 },
                 blob: None,
             })
@@ -457,6 +467,7 @@ mod tests {
                         author: String::from("someone"),
                         time: 1000 - index as i64,
                         summary: String::new(),
+                        pull_request: None,
                     })
                     .collect(),
                 maps: maps.to_vec(),
@@ -556,6 +567,31 @@ mod tests {
         assert_eq!(commit_of(&result, 2, 1).as_deref(), Some("c0"));
         assert_eq!(result.boundary_label(), "Older than blame depth");
         assert_eq!(result.history_limit, 1);
+        assert_eq!(result.heat_span, 1);
+    }
+
+    #[test]
+    fn the_heat_span_ends_at_the_oldest_commit_that_owns_a_tile() {
+        let mut versions = Versions::new(
+            &[
+                Some(leak(grid("ab"))),
+                Some(leak(grid("aa"))),
+                Some(leak(grid("aa"))),
+                Some(leak(grid("aa"))),
+            ],
+            false,
+        );
+        let current = parse(&grid("ab")).0;
+
+        let result = blame(&current, &mut versions, &|| false, &mut |_, _| {}).unwrap();
+
+        assert_eq!(result.history_limit, 4);
+        assert_eq!(result.heat_span, 4, "the tile untouched since the map was added");
+
+        let mut versions = Versions::new(&[Some(leak(grid("ab"))), Some(leak(grid("aa")))], true);
+        let result = blame(&current, &mut versions, &|| false, &mut |_, _| {}).unwrap();
+
+        assert_eq!(result.heat_span, 1, "boundary tiles don't stretch the palette");
     }
 
     #[test]
