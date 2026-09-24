@@ -1,6 +1,6 @@
 use core::types::{Identifier, Value};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     io::Write,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
@@ -49,6 +49,7 @@ pub struct MapDocument {
     focus: Option<AreaFocus>,
     saved_level_count: u32,
     retained_level_count: u32,
+    generation: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -259,10 +260,13 @@ impl MapDocument {
             focus: None,
             saved_level_count: level_count,
             retained_level_count: level_count,
+            generation: 0,
         }
     }
 
     pub fn id(&self) -> DocumentId { self.id }
+
+    pub fn generation(&self) -> u64 { self.generation }
 
     pub fn selection_mask(&self) -> Option<SelectionMask> {
         self.selection
@@ -296,6 +300,7 @@ impl MapDocument {
             id: self.id,
             path: self.path.take(),
             pending_write,
+            generation: self.generation + 1,
             ..Self::new(map, z)
         };
 
@@ -399,27 +404,7 @@ impl MapDocument {
         &mut self, id: PrefabInstanceId, label: impl Into<String>, mutations: &[VarMutation],
         group: Option<EditGroupId>,
     ) -> Option<bool> {
-        let location = self.instance_location(id)?;
-        let mut after = self.placed_tile(location.coord)?;
-        let instance = after.get_mut(location.prefab_index)?;
-
-        let before = instance.prefab().clone();
-        for mutation in mutations {
-            match mutation {
-                VarMutation::Set(name, value) => instance.prefab_mut().set_var(name.clone(), value.clone()),
-                VarMutation::Remove(name) => {
-                    instance.prefab_mut().remove_var(name);
-                },
-            }
-        }
-        if instance.prefab() == &before {
-            return Some(false);
-        }
-
-        let mut edit = Edit::new(label);
-        edit.change(self, location.coord, after);
-
-        Some(self.apply_grouped(edit, group))
+        self.edit_instances(&[id], label, None, mutations, group)
     }
 
     /// this function keeps the ID stable
@@ -427,28 +412,90 @@ impl MapDocument {
         &mut self, id: PrefabInstanceId, label: impl Into<String>, path: core::path::TreePath,
         mutations: &[VarMutation], group: Option<EditGroupId>,
     ) -> Option<bool> {
-        let location = self.instance_location(id)?;
-        let mut after = self.placed_tile(location.coord)?;
-        let instance = after.get_mut(location.prefab_index)?;
+        self.edit_instances(&[id], label, Some(&path), mutations, group)
+    }
 
-        let before = instance.prefab().clone();
-        instance.prefab_mut().path = path;
-        for mutation in mutations {
-            match mutation {
-                VarMutation::Set(name, value) => instance.prefab_mut().set_var(name.clone(), value.clone()),
-                VarMutation::Remove(name) => {
-                    instance.prefab_mut().remove_var(name);
-                },
-            }
-        }
-        if instance.prefab() == &before {
-            return Some(false);
+    /// Changes every placement in `ids` the same way, as one map edit
+    pub fn edit_instances(
+        &mut self, ids: &[PrefabInstanceId], label: impl Into<String>, path: Option<&core::path::TreePath>,
+        mutations: &[VarMutation], group: Option<EditGroupId>,
+    ) -> Option<bool> {
+        let mut by_tile = BTreeMap::<Coord, Vec<usize>>::new();
+        for id in ids {
+            let location = self.instance_location(*id)?;
+            by_tile.entry(location.coord).or_default().push(location.prefab_index);
         }
 
         let mut edit = Edit::new(label);
-        edit.change(self, location.coord, after);
+        for (coord, indices) in by_tile {
+            let mut after = self.placed_tile(coord)?;
+            let mut changed = false;
+            for index in indices {
+                let instance = after.get_mut(index)?;
+                let before = instance.prefab().clone();
+                if let Some(path) = path {
+                    instance.prefab_mut().path = path.clone();
+                }
+                for mutation in mutations {
+                    match mutation {
+                        VarMutation::Set(name, value) => instance.prefab_mut().set_var(name.clone(), value.clone()),
+                        VarMutation::Remove(name) => {
+                            instance.prefab_mut().remove_var(name);
+                        },
+                    }
+                }
+                changed |= instance.prefab() != &before;
+            }
+            if changed {
+                edit.change(self, coord, after);
+            }
+        }
+        if edit.is_empty() {
+            return Some(false);
+        }
 
         Some(self.apply_grouped(edit, group))
+    }
+
+    /// Every placement of exactly `prefab`, on every level
+    pub fn identical_instances(&self, prefab: &Prefab) -> Vec<PrefabInstanceId> {
+        let matching = self
+            .key_usage
+            .keys()
+            .filter_map(|key| {
+                let indices = self
+                    .map
+                    .dictionary
+                    .get(key)?
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, placed)| *placed == prefab)
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>();
+
+                (!indices.is_empty()).then_some((*key, indices))
+            })
+            .collect::<HashMap<_, _>>();
+        let mut found = Vec::new();
+
+        if matching.is_empty() {
+            return found;
+        }
+
+        for (z, level) in self.map.grid.iter().enumerate() {
+            for (row, keys) in level.iter().enumerate() {
+                for (column, key) in keys.iter().enumerate() {
+                    let Some(indices) = matching.get(key) else {
+                        continue;
+                    };
+                    let coord = Coord::new(column as u32 + 1, self.map.size.y - row as u32, z as u32 + 1);
+                    let ids = self.instances.ids_at(coord);
+                    found.extend(indices.iter().filter_map(|index| ids.get(*index).copied()));
+                }
+            }
+        }
+
+        found
     }
 
     pub fn move_instance(
@@ -506,6 +553,7 @@ impl MapDocument {
 
         self.history
             .apply_grouped(&mut self.map, &mut self.instances, &mut self.key_usage, edit, group);
+        self.generation += 1;
         self.clear_stale_instance_selection();
 
         true
@@ -518,6 +566,7 @@ impl MapDocument {
             .history
             .undo(&mut self.map, &mut self.instances, &mut self.key_usage)
             .map(Edit::affected_instances);
+        self.generation += 1;
         self.clear_stale_instance_selection();
 
         affected
@@ -530,6 +579,7 @@ impl MapDocument {
             .history
             .redo(&mut self.map, &mut self.instances, &mut self.key_usage)
             .map(Edit::affected_instances);
+        self.generation += 1;
         self.clear_stale_instance_selection();
 
         affected
@@ -547,6 +597,7 @@ impl MapDocument {
 
         self.map.grid.push(vec![vec![key; width]; height]);
         self.map.size.z = z;
+        self.generation += 1;
         *self.key_usage.entry(key).or_insert(0) += width.saturating_mul(height);
         self.instances.append_level();
 
@@ -620,6 +671,7 @@ impl MapDocument {
         self.instances.truncate_levels(level_count);
         self.map.grid.truncate(level_count as usize);
         self.map.size.z = level_count;
+        self.generation += 1;
         if self.z > level_count {
             self.z = level_count.max(1);
             self.selection = None;
@@ -676,6 +728,53 @@ mod tests {
 
         assert_eq!(ids.len(), 8);
         assert_eq!(ids.iter().copied().collect::<HashSet<_>>().len(), ids.len());
+    }
+
+    #[test]
+    fn identical_instances_are_found_on_every_level_and_edited_as_one_undo() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        let table = Prefab::new(TreePath::parse("/obj/table"));
+        let tables = [(1, 1), (2, 1), (1, 2), (2, 2)]
+            .map(|(x, z)| document.instance_ids_at(Coord::new(x, 1, z))[1])
+            .into_iter()
+            .collect::<HashSet<_>>();
+
+        let found = document.identical_instances(&table);
+        assert_eq!(found.iter().copied().collect::<HashSet<_>>(), tables);
+        assert_eq!(document.identical_instances(&table).len(), 4);
+
+        let name = VarMutation::Set("name".into(), Value::Text(String::from("Oak")));
+        assert_eq!(
+            document.edit_instances(&found, "set name", None, &[name], None),
+            Some(true)
+        );
+        let mut oak = table.clone();
+        oak.set_var("name".into(), Value::Text(String::from("Oak")));
+        assert!(document.identical_instances(&table).is_empty());
+        assert_eq!(
+            document.identical_instances(&oak).into_iter().collect::<HashSet<_>>(),
+            tables
+        );
+
+        assert!(document.undo());
+        assert_eq!(document.identical_instances(&table).len(), 4);
+        assert!(!document.undo(), "the whole edit was one step");
+    }
+
+    #[test]
+    fn identical_instances_include_repeats_within_one_tile() {
+        let table = Prefab::new(TreePath::parse("/obj/table"));
+        let mut map = Map::new(Size { x: 1, y: 2, z: 1 });
+        let doubled = map.intern_tile(vec![table.clone(), table.clone()]);
+        let floor = map.intern_tile(vec![Prefab::new(TreePath::parse("/turf/floor"))]);
+        map.grid[0][0][0] = doubled;
+        map.grid[0][1][0] = floor;
+        let document = MapDocument::new(map, 1);
+
+        assert_eq!(
+            document.identical_instances(&table),
+            document.instance_ids_at(Coord::new(1, 2, 1))
+        );
     }
 
     #[test]

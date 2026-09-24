@@ -104,6 +104,7 @@ use self::{
         draw_conflict_controls,
         draw_guide_badges,
         draw_highlights,
+        draw_identical_outlines,
         draw_overlay_underlay,
         draw_placement_preview,
     },

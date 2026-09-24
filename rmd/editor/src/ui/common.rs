@@ -2,6 +2,9 @@ use dear_imgui_rs::{StyleColor, TableFlags, Ui, WindowHoveredFlags};
 
 const MIN_STRETCH_WIDTH: f32 = 40.0;
 
+/// Marks everything an identical scope edit reaches, in the inspector and on the map
+pub(super) const IDENTICAL_EDIT_COLOR: [f32; 4] = [1.0, 0.7, 0.15, 1.0];
+
 /// Continues the line when the next item fits, wraps it onto a new line otherwise
 pub(super) fn same_line_if_fits(ui: &Ui, width: f32) {
     ui.same_line();

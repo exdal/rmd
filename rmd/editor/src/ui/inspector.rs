@@ -1,7 +1,7 @@
 use core::types::{Identifier, Value};
 use std::collections::{HashMap, HashSet};
 
-use dear_imgui_rs::{DragFlags, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError};
+use dear_imgui_rs::{ChildFlags, DragFlags, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError};
 use dmi::metadata::Dir;
 use dmm::{Coord, Prefab, writer::format_value};
 use editor::{
@@ -13,10 +13,13 @@ use editor::{
 };
 use objtree::{ObjectTree, TypeId};
 
-use super::{common::focus_window_on_hover, git::commit_summary};
+use super::{
+    common::{IDENTICAL_EDIT_COLOR, focus_window_on_hover, text_wrapped_colored},
+    git::commit_summary,
+};
 use crate::{
     external_editor::SourceLocation,
-    session::{DirectionalTypes, Session},
+    session::{DirectionalTypes, EditScope, Session},
     settings::Settings,
     transform::anchor_axis,
 };
@@ -71,6 +74,7 @@ pub struct InspectorState {
     drafts: HashMap<Identifier, VariableDraft>,
     active_drag: Option<(Identifier, EditGroupId)>,
     transform_mode: TransformMode,
+    scope: EditScope,
 }
 
 struct VariableDraft {
@@ -149,6 +153,27 @@ impl InspectorState {
             snapshot.location.coord.x, snapshot.location.coord.y, snapshot.location.coord.z
         ));
         let find_similar = ui.text_link("Find similar...");
+        ui.separator();
+        session.refresh_identical();
+        match self.scope {
+            EditScope::Selected => {
+                let mut identical = false;
+                if ui.checkbox(
+                    format!("Edit all {} identical", session.identical().len()),
+                    &mut identical,
+                ) {
+                    self.scope = EditScope::Identical;
+                }
+                ui.set_item_tooltip(
+                    "Changes apply to every placement of this exact object on the map",
+                );
+            },
+            EditScope::Identical => {
+                if draw_identical_banner(ui, session) {
+                    self.scope = EditScope::Selected;
+                }
+            },
+        }
 
         let mut copy_hash = None;
         if let Some(id) = session.state.active()
@@ -209,6 +234,7 @@ impl InspectorState {
 
         ui.separator();
 
+        let _identical_frames = (self.scope == EditScope::Identical).then(|| identical_frame_colors(ui));
         if snapshot.is_atom {
             self.draw_transform(ui, session, &snapshot);
             self.draw_display(ui, session, &snapshot);
@@ -369,12 +395,12 @@ impl InspectorState {
 
         if commit && draft.text != draft.committed {
             let value = text_value(kind, &draft.text);
-            commit_value(session, property.name.clone(), value, None, draft);
+            commit_value(session, self.scope, property.name.clone(), value, None, draft);
         } else if commit {
             draft.error = None;
         }
         draw_draft_error(ui, draft);
-        draw_reset(ui, session, property);
+        draw_reset(ui, session, self.scope, property);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -404,7 +430,7 @@ impl InspectorState {
         let commit = enter || ui.is_item_deactivated_after_edit();
         if commit && draft.text != draft.committed {
             let value = text_value(kind, &draft.text);
-            commit_value(session, property.name.clone(), value, None, draft);
+            commit_value(session, self.scope, property.name.clone(), value, None, draft);
         } else if commit {
             draft.error = None;
         }
@@ -413,7 +439,7 @@ impl InspectorState {
             ui.text_disabled(warning);
         }
         draw_draft_error(ui, draft);
-        draw_reset(ui, session, property);
+        draw_reset(ui, session, self.scope, property);
     }
 
     fn draw_int_property(
@@ -443,12 +469,12 @@ impl InspectorState {
         };
         if changed {
             let group = self.drag_group(&property.name);
-            commit_int_property(session, self.transform_mode, &property.name, value, group);
+            commit_int_property(session, self.scope, self.transform_mode, &property.name, value, group);
         }
         if ui.is_item_deactivated_after_edit() {
             self.end_drag(&property.name);
         }
-        draw_reset(ui, session, property);
+        draw_reset(ui, session, self.scope, property);
     }
 
     fn draw_float_property(
@@ -468,7 +494,8 @@ impl InspectorState {
         ui.set_next_item_width(-1.0);
         if ui.drag_float("##value", &mut value) {
             let group = self.drag_group(&property.name);
-            session.edit_selected_instance_vars(
+            session.edit_instance_vars_in(
+                self.scope,
                 format!("change {}", property.name),
                 &[VarMutation::Set(property.name.clone(), Value::Num(value))],
                 Some(group),
@@ -477,7 +504,7 @@ impl InspectorState {
         if ui.is_item_deactivated_after_edit() {
             self.end_drag(&property.name);
         }
-        draw_reset(ui, session, property);
+        draw_reset(ui, session, self.scope, property);
     }
 
     fn draw_direction_property(&mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot) {
@@ -520,9 +547,10 @@ impl InspectorState {
                     .build()
                 {
                     if snapshot.directional_types.is_some() {
-                        session.set_selected_directional_type(direction, None);
+                        session.set_directional_type_in(self.scope, direction, None);
                     } else {
-                        session.edit_selected_instance_vars(
+                        session.edit_instance_vars_in(
+                            self.scope,
                             "set dir",
                             &[VarMutation::Set(property.name.clone(), Value::Num(value as f32))],
                             None,
@@ -532,7 +560,7 @@ impl InspectorState {
             }
             combo.end();
         }
-        draw_reset(ui, session, property);
+        draw_reset(ui, session, self.scope, property);
     }
 
     fn draw_color_property(&mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot) {
@@ -555,7 +583,8 @@ impl InspectorState {
             ui.set_next_item_width(-1.0);
             if ui.color_edit4("##picker", &mut color) {
                 let group = self.drag_group(&property.name);
-                session.edit_selected_instance_vars(
+                session.edit_instance_vars_in(
+                    self.scope,
                     "change color",
                     &[VarMutation::Set(
                         property.name.clone(),
@@ -580,22 +609,22 @@ impl InspectorState {
             let commit = enter || ui.is_item_deactivated_after_edit();
             if commit && draft.text != draft.committed {
                 let value = text_value(TextPropertyKind::NullableText, &draft.text);
-                commit_value(session, property.name.clone(), value, None, draft);
+                commit_value(session, self.scope, property.name.clone(), value, None, draft);
             } else if commit {
                 draft.error = None;
             }
             draw_draft_error(ui, draft);
         }
-        draw_reset(ui, session, property);
+        draw_reset(ui, session, self.scope, property);
     }
 
     fn draw_raw_property(&mut self, ui: &Ui, session: &mut Session, property: &InspectorProperty, label: &str) {
         begin_property_row(ui, property, label);
         let _id = ui.push_id(property.name.as_str());
         if let Some(draft) = self.drafts.get_mut(&property.name) {
-            draw_expression_input(ui, session, property.name.clone(), draft);
+            draw_expression_input(ui, session, self.scope, property.name.clone(), draft);
         }
-        draw_reset(ui, session, property);
+        draw_reset(ui, session, self.scope, property);
     }
 
     fn clear(&mut self) {
@@ -857,6 +886,61 @@ fn inspector_variables(
     (overrides, defaults)
 }
 
+fn draw_identical_banner(ui: &Ui, session: &Session) -> bool {
+    let count = session.identical().len();
+    let other_levels = session.state.active_document().map_or(0, |document| {
+        session
+            .identical()
+            .iter()
+            .filter_map(|id| document.instance_location(*id))
+            .filter(|location| location.coord.z != document.z)
+            .count()
+    });
+    let [r, g, b, _] = IDENTICAL_EDIT_COLOR;
+    let _background = ui.push_style_color(StyleColor::ChildBg, [r, g, b, 0.14]);
+    let _border = ui.push_style_color(StyleColor::Border, IDENTICAL_EDIT_COLOR);
+    let mut stop = false;
+    ui.child_window("identical-edit-banner")
+        .child_flags(ChildFlags::BORDERS | ChildFlags::AUTO_RESIZE_Y)
+        .build(ui, || {
+            let noun = if count == 1 { "object" } else { "objects" };
+            text_wrapped_colored(
+                ui,
+                IDENTICAL_EDIT_COLOR,
+                &format!("Editing all {count} identical {noun}"),
+            );
+            let reach = match other_levels {
+                0 => String::from("Every change below applies to each one, outlined on the map."),
+                other => format!("Every change below applies to each one, {other} of them on other levels."),
+            };
+            text_wrapped_colored(ui, ui.style_color(StyleColor::TextDisabled), &reach);
+            stop = ui.button("Edit only this one");
+        });
+
+    stop
+}
+
+/// Tints every value field while an edit reaches more than the selected object
+fn identical_frame_colors(ui: &Ui) -> [dear_imgui_rs::ColorStackToken<'_>; 3] {
+    let tint = |base: StyleColor, strength: f32| {
+        let base = ui.style_color(base);
+        let mut mixed = [0.0; 4];
+        for channel in 0..3 {
+            mixed[channel] = base[channel] + (IDENTICAL_EDIT_COLOR[channel] - base[channel]) * strength;
+        }
+        mixed[3] = base[3].max(0.6);
+
+        mixed
+    };
+
+    let frame = ui.push_style_color(StyleColor::FrameBg, tint(StyleColor::FrameBg, 0.25));
+    let hovered = ui.push_style_color(StyleColor::FrameBgHovered, tint(StyleColor::FrameBgHovered, 0.35));
+    let active = ui.push_style_color(StyleColor::FrameBgActive, tint(StyleColor::FrameBgActive, 0.45));
+
+    // Arrays drop front to back, and the pushes have to pop in reverse
+    [active, hovered, frame]
+}
+
 fn section<'ui>(ui: &'ui Ui, id: &str, title: &str, default_open: bool) -> Option<dear_imgui_rs::TreeNodeToken<'ui>> {
     ui.tree_node_config(id)
         .label(title)
@@ -895,11 +979,12 @@ fn begin_property_row(ui: &Ui, property: &InspectorProperty, label: &str) {
     ui.table_next_column();
 }
 
-fn draw_reset(ui: &Ui, session: &mut Session, property: &InspectorProperty) {
+fn draw_reset(ui: &Ui, session: &mut Session, scope: EditScope, property: &InspectorProperty) {
     ui.table_next_column();
     if property.overridden {
         if ui.small_button("Reset") {
-            session.edit_selected_instance_vars(
+            session.edit_instance_vars_in(
+                scope,
                 format!("reset {}", property.name),
                 &[VarMutation::Remove(property.name.clone())],
                 None,
@@ -943,12 +1028,16 @@ fn transform_axis(mode: TransformMode, name: &Identifier) -> Option<usize> {
     }
 }
 
-fn commit_int_property(session: &mut Session, mode: TransformMode, name: &Identifier, value: i32, group: EditGroupId) {
+fn commit_int_property(
+    session: &mut Session, scope: EditScope, mode: TransformMode, name: &Identifier, value: i32, group: EditGroupId,
+) {
     let label = format!("change {name}");
     let mut committed = value;
     let mut to_coord = None;
 
-    if let Some(axis) = transform_axis(mode, name)
+    // Each identical instance keeps its own tile, so their offsets are set as typed
+    if scope == EditScope::Selected
+        && let Some(axis) = transform_axis(mode, name)
         && let Some(transform) = session.selected_transform()
         && let Some(location) = session.selected_location()
     {
@@ -988,16 +1077,17 @@ fn commit_int_property(session: &mut Session, mode: TransformMode, name: &Identi
             session.move_selected_instance(coord, label, &[mutation], Some(group));
         },
         None => {
-            session.edit_selected_instance_vars(label, &[mutation], Some(group));
+            session.edit_instance_vars_in(scope, label, &[mutation], Some(group));
         },
     }
 }
 
 fn commit_value(
-    session: &mut Session, name: Identifier, value: Value, group: Option<EditGroupId>, draft: &mut VariableDraft,
+    session: &mut Session, scope: EditScope, name: Identifier, value: Value, group: Option<EditGroupId>,
+    draft: &mut VariableDraft,
 ) {
     if session
-        .edit_selected_instance_vars(format!("set {name}"), &[VarMutation::Set(name, value)], group)
+        .edit_instance_vars_in(scope, format!("set {name}"), &[VarMutation::Set(name, value)], group)
         .is_some()
     {
         draft.committed.clone_from(&draft.text);
@@ -1007,7 +1097,9 @@ fn commit_value(
     }
 }
 
-fn draw_expression_input(ui: &Ui, session: &mut Session, name: Identifier, draft: &mut VariableDraft) {
+fn draw_expression_input(
+    ui: &Ui, session: &mut Session, scope: EditScope, name: Identifier, draft: &mut VariableDraft,
+) {
     ui.set_next_item_width(-1.0);
     let enter = ui
         .input_text("##value", &mut draft.text)
@@ -1019,7 +1111,11 @@ fn draw_expression_input(ui: &Ui, session: &mut Session, name: Identifier, draft
         match dmm::parser::parse_value(&draft.text) {
             Ok(value) => {
                 let canonical = format_value(&value);
-                if session.set_selected_instance_var(name, value).is_some() {
+                let label = format!("set {name}");
+                if session
+                    .edit_instance_vars_in(scope, label, &[VarMutation::Set(name, value)], None)
+                    .is_some()
+                {
                     draft.text.clone_from(&canonical);
                     draft.committed = canonical;
                     draft.error = None;
@@ -1119,7 +1215,7 @@ fn draw_variable_section(
                 ui.align_text_to_frame_padding();
                 ui.text(variable.name.as_str());
                 ui.table_next_column();
-                draw_expression_input(ui, session, variable.name.clone(), draft);
+                draw_expression_input(ui, session, state.scope, variable.name.clone(), draft);
             }
         });
 
@@ -1150,6 +1246,8 @@ impl InspectorPanel {
     pub(super) const fn window(&self) -> &WindowKey { &self.window }
 
     pub(super) const fn transform_mode(&self) -> TransformMode { self.state.transform_mode() }
+
+    pub(super) fn edits_identical(&self) -> bool { self.state.scope == EditScope::Identical }
 
     pub(super) fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &Settings, focus: bool,
@@ -1190,6 +1288,95 @@ mod tests {
     use objtree::{ObjectTree, VarDecl};
 
     use super::*;
+
+    fn two_tables() -> (Session, [PrefabInstanceId; 2]) {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        let mut map = dmm::Map::new(dmm::Size { x: 3, y: 1, z: 1 });
+        let key = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/turf/open/floor")),
+            Prefab::new(TreePath::parse("/obj/structure/table")),
+        ]);
+        map.grid[0][0].fill(key);
+        session.apply_map(crate::loader::LoadedMap {
+            path: root.join("identical-test.dmm"),
+            map,
+            z: 1,
+            errors: vec![],
+            repo: None,
+            conflict: None,
+        });
+        let document = session.state.active_document().unwrap();
+        let tables = [1, 2].map(|x| document.instance_ids_at(Coord::new(x, 1, 1))[1]);
+        session.select_instance(Some(tables[0]));
+
+        (session, tables)
+    }
+
+    fn pixel_and_tile(session: &Session, id: PrefabInstanceId) -> (Option<Value>, Coord) {
+        let (prefab, location) = session.state.active_document().unwrap().prefab_instance(id).unwrap();
+
+        (prefab.var(&"pixel_x".into()).cloned(), location.coord)
+    }
+
+    #[test]
+    fn the_identical_banner_replaces_the_checkbox_while_the_mode_is_on() {
+        let _guard = crate::ui::IMGUI_CONTEXT.lock().unwrap();
+        let mut context = crate::ui::fixtures::rectangle_context();
+        let (mut session, _) = two_tables();
+        let settings = Settings::default();
+        let mut panel = InspectorPanel::new().unwrap();
+        panel.state.scope = EditScope::Identical;
+
+        for _ in 0..2 {
+            let ui = context.frame();
+            panel.draw(ui, &mut session, &settings, false);
+            assert!(context.render_legacy().valid());
+        }
+
+        assert!(panel.edits_identical());
+        assert_eq!(session.identical().len(), 3);
+    }
+
+    #[test]
+    fn identical_offsets_are_set_as_typed_instead_of_moving_to_another_tile() {
+        let (mut session, tables) = two_tables();
+        let pixel_x = Identifier::from("pixel_x");
+
+        commit_int_property(
+            &mut session,
+            EditScope::Identical,
+            TransformMode::Pixel,
+            &pixel_x,
+            40,
+            EditGroupId::new(),
+        );
+
+        assert_eq!(
+            tables.map(|id| pixel_and_tile(&session, id)),
+            [
+                (Some(Value::Num(40.0)), Coord::new(1, 1, 1)),
+                (Some(Value::Num(40.0)), Coord::new(2, 1, 1))
+            ]
+        );
+
+        let (mut session, tables) = two_tables();
+        commit_int_property(
+            &mut session,
+            EditScope::Selected,
+            TransformMode::Pixel,
+            &pixel_x,
+            40,
+            EditGroupId::new(),
+        );
+        assert_eq!(
+            pixel_and_tile(&session, tables[0]),
+            (Some(Value::Num(8.0)), Coord::new(2, 1, 1)),
+            "a single object is re-anchored onto the tile it was dragged over"
+        );
+        assert_eq!(pixel_and_tile(&session, tables[1]), (None, Coord::new(2, 1, 1)));
+    }
 
     #[test]
     fn direction_choices_prefer_directional_subtypes_over_dmi_slots() {

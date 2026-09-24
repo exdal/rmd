@@ -53,6 +53,7 @@ use super::{
     draw_guide_badges,
     draw_highlights,
     draw_history_overlay,
+    draw_identical_outlines,
     draw_node_overlay,
     draw_paste_controls,
     draw_placement_preview,
@@ -585,6 +586,19 @@ impl UiState {
                     settings.show_pixel_grid_axis,
                     viewport_min,
                     viewport_max,
+                );
+            }
+
+            if is_active && self.inspector.edits_identical() {
+                session.refresh_identical();
+                draw_identical_outlines(
+                    ui,
+                    session,
+                    camera,
+                    OverlayRect {
+                        min: viewport_min,
+                        max: viewport_max,
+                    },
                 );
             }
 

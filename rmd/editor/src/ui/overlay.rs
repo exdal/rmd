@@ -7,7 +7,7 @@ use editor::{
 };
 use render::Renderer;
 
-use super::{draw_marching_edge, marching_stripe_offset};
+use super::{common::IDENTICAL_EDIT_COLOR, draw_marching_edge, marching_stripe_offset};
 use crate::{
     camera::Controller,
     session::{BlockPreviewSource, GuideBadge, PlacementPreview, Session},
@@ -18,6 +18,30 @@ pub(super) const OVERLAY_PADDING: f32 = 4.0;
 pub(super) const OVERLAY_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 
 const PLACEMENT_PREVIEW_PERIOD: f64 = 1.5;
+
+pub(super) fn draw_identical_outlines(ui: &Ui, session: &Session, camera: &Controller, viewport: OverlayRect) {
+    let [r, g, b, _] = IDENTICAL_EDIT_COLOR;
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(viewport.min, viewport.max, || {
+        for [left, bottom, width, height] in session.identical_bounds() {
+            let top_left = camera.map_to_screen([left, bottom + height]);
+            let bottom_right = camera.map_to_screen([left + width, bottom]);
+            let min = [viewport.min[0] + top_left[0], viewport.min[1] + top_left[1]];
+            let max = [viewport.min[0] + bottom_right[0], viewport.min[1] + bottom_right[1]];
+            if !min.iter().chain(&max).all(|value| value.is_finite())
+                || max[0] < viewport.min[0]
+                || max[1] < viewport.min[1]
+                || min[0] > viewport.max[0]
+                || min[1] > viewport.max[1]
+            {
+                continue;
+            }
+
+            draw.add_rect(min, max, [r, g, b, 0.2]).filled(true).build();
+            draw.add_rect(min, max, IDENTICAL_EDIT_COLOR).thickness(2.0).build();
+        }
+    });
+}
 
 pub(super) fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
     ui.get_window_draw_list()

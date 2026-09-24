@@ -1,4 +1,4 @@
-use core::types::{Identifier, Value};
+use core::path::TreePath;
 
 use dmm::{Coord, Prefab};
 use editor::{
@@ -10,6 +10,22 @@ use editor::{
 use render::SpriteInstance;
 
 use super::{DirectionalTypes, Session, direction_state};
+
+#[derive(Debug)]
+pub(super) struct IdenticalCache {
+    document: DocumentId,
+    generation: u64,
+    focus: Option<PrefabInstanceId>,
+    prefab: Prefab,
+    instances: Vec<PrefabInstanceId>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum EditScope {
+    #[default]
+    Selected,
+    Identical,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct SelectedTransform {
@@ -95,7 +111,10 @@ impl Session {
         }
     }
 
-    pub fn set_selected_instance_var(&mut self, name: Identifier, value: Value) -> Option<bool> {
+    #[cfg(test)]
+    pub fn set_selected_instance_var(
+        &mut self, name: core::types::Identifier, value: core::types::Value,
+    ) -> Option<bool> {
         let label = format!("set {name}");
 
         self.edit_selected_instance_vars(label, &[VarMutation::Set(name, value)], None)
@@ -104,16 +123,125 @@ impl Session {
     pub fn edit_selected_instance_vars(
         &mut self, label: impl Into<String>, mutations: &[VarMutation], group: Option<EditGroupId>,
     ) -> Option<bool> {
-        let selected = self.selected_instance()?;
+        self.edit_instance_vars_in(EditScope::Selected, label, mutations, group)
+    }
+
+    pub(crate) fn edit_instance_vars_in(
+        &mut self, scope: EditScope, label: impl Into<String>, mutations: &[VarMutation], group: Option<EditGroupId>,
+    ) -> Option<bool> {
+        self.edit_instances_in(scope, label, None, mutations, group)
+    }
+
+    pub(super) fn edit_instances_in(
+        &mut self, scope: EditScope, label: impl Into<String>, path: Option<&TreePath>, mutations: &[VarMutation],
+        group: Option<EditGroupId>,
+    ) -> Option<bool> {
+        let targets = self.scope_targets(scope)?;
+        let mut label = label.into();
+        if targets.len() > 1 {
+            label = format!("{label} on {} instances", targets.len());
+        }
         let document = self.state.active_document_mut()?;
 
-        let changed = document.edit_instance_vars(selected, label, mutations, group)?;
+        let changed = document.edit_instances(&targets, label, path, mutations, group)?;
 
         if changed {
-            self.update_instance(selected);
+            self.update_instances(&targets);
         }
 
         Some(changed)
+    }
+
+    fn scope_targets(&mut self, scope: EditScope) -> Option<Vec<PrefabInstanceId>> {
+        let selected = self.selected_instance()?;
+        let mut targets = match scope {
+            EditScope::Selected => Vec::new(),
+            EditScope::Identical => {
+                self.refresh_identical();
+                self.identical().to_vec()
+            },
+        };
+        if !targets.contains(&selected) {
+            targets.push(selected);
+        }
+
+        Some(targets)
+    }
+
+    /// Placements identical to the selected one that an identical scope edit would change, as of the last
+    /// [`Self::refresh_identical`]
+    pub(crate) fn identical(&self) -> &[PrefabInstanceId] {
+        self.identical.as_ref().map_or(&[], |cache| &cache.instances)
+    }
+
+    /// Map pixel bounds as `[left, bottom, width, height]` of the identical placements on the current level,
+    /// besides the selected one
+    pub(crate) fn identical_bounds(&self) -> Vec<[f32; 4]> {
+        let Some(document) = self.state.active_document() else {
+            return Vec::new();
+        };
+        let selected = document.selected_instance();
+        let tile = self.options.tile_size.max(1) as f32;
+        let instances = self.instances();
+
+        self.identical()
+            .iter()
+            .filter(|id| Some(**id) != selected)
+            .filter_map(|id| {
+                let location = document.instance_location(*id)?;
+                if location.coord.z != document.z {
+                    return None;
+                }
+
+                Some(match instances.and_then(|instances| instances.sprite(*id)) {
+                    Some(sprite) => [sprite.x, sprite.y, sprite.width, sprite.height],
+                    None => [
+                        (location.coord.x - 1) as f32 * tile,
+                        (location.coord.y - 1) as f32 * tile,
+                        tile,
+                        tile,
+                    ],
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn refresh_identical(&mut self) {
+        let Some(document) = self.state.active_document() else {
+            self.identical = None;
+            return;
+        };
+        let Some((prefab, _)) = document
+            .selected_instance()
+            .and_then(|selected| document.prefab_instance(selected))
+        else {
+            self.identical = None;
+            return;
+        };
+        let stale = self.identical.as_ref().is_none_or(|cache| {
+            cache.document != document.id()
+                || cache.generation != document.generation()
+                || cache.focus != document.focus().map(|focus| focus.component())
+                || cache.prefab != *prefab
+        });
+        if stale {
+            let instances = document
+                .identical_instances(prefab)
+                .into_iter()
+                .filter(|id| {
+                    document
+                        .instance_location(*id)
+                        .is_some_and(|location| document.allows_edit_at(location.coord))
+                })
+                .collect();
+            self.identical = Some(IdenticalCache {
+                document: document.id(),
+                generation: document.generation(),
+                focus: document.focus().map(|focus| focus.component()),
+                prefab: prefab.clone(),
+                instances,
+            });
+        }
     }
 
     pub fn move_selected_instance(
@@ -140,13 +268,142 @@ impl Session {
 mod tests {
     use core::{path::TreePath, types::Value};
 
-    use dmm::Coord;
-    use editor::tool::Tool;
+    use dmm::{Coord, Prefab};
+    use editor::{
+        document::{PrefabInstanceId, VarMutation},
+        tool::Tool,
+    };
 
+    use super::EditScope;
     use crate::session::{
         Session,
-        fixtures::{assert_render_cache_matches_rebuild, examples},
+        fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session},
     };
+
+    fn place(session: &mut Session, placements: &[(u32, &Prefab)]) -> Vec<PrefabInstanceId> {
+        session.set_tool(Tool::Place);
+        placements
+            .iter()
+            .map(|(x, prefab)| {
+                session.state.choose_prefab((*prefab).clone());
+                session.place_at(Coord::new(*x, 1, 1), None).unwrap()
+            })
+            .collect()
+    }
+
+    fn names(session: &Session, ids: &[PrefabInstanceId]) -> Vec<Option<Value>> {
+        let document = session.state.active_document().unwrap();
+
+        ids.iter()
+            .map(|id| document.prefab_instance(*id).unwrap().0.var(&"name".into()).cloned())
+            .collect()
+    }
+
+    fn set_name(name: &str) -> [VarMutation; 1] { [VarMutation::Set("name".into(), Value::Text(name.to_string()))] }
+
+    #[test]
+    fn an_identical_scope_edit_changes_every_matching_placement_in_one_undo() {
+        let mut session = flat_session(4, 1);
+        let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        let mut other = table.clone();
+        other.set_var("name".into(), Value::Text(String::from("Other")));
+        let ids = place(&mut session, &[(1, &table), (2, &table), (3, &other), (4, &table)]);
+        session.select_instance(Some(ids[0]));
+        session.refresh_identical();
+        assert_eq!(session.identical().len(), 3);
+
+        assert_eq!(
+            session.edit_instance_vars_in(EditScope::Identical, "set name", &set_name("Oak"), None),
+            Some(true)
+        );
+
+        let oak = Some(Value::Text(String::from("Oak")));
+        let other_name = Some(Value::Text(String::from("Other")));
+        assert_eq!(
+            names(&session, &ids),
+            [oak.clone(), oak.clone(), other_name.clone(), oak]
+        );
+        assert_eq!(
+            session.state.active_document().unwrap().undo_label(),
+            Some("set name on 3 instances")
+        );
+        assert_render_cache_matches_rebuild(&session);
+
+        session.undo();
+        assert_eq!(names(&session, &ids), [None, None, other_name, None]);
+    }
+
+    #[test]
+    fn identical_placements_refresh_as_the_map_and_focus_change() {
+        let mut session = focus_session();
+        let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        let ids = place(&mut session, &[(1, &table), (4, &table)]);
+        session.select_instance(Some(ids[0]));
+        session.refresh_identical();
+        assert_eq!(session.identical(), [ids[0], ids[1]]);
+
+        let added = place(&mut session, &[(2, &table)]);
+        session.select_instance(Some(ids[0]));
+        session.refresh_identical();
+        assert_eq!(session.identical().len(), 3, "a new placement joins");
+
+        session.toggle_focus_at(Some(Coord::new(1, 1, 1)));
+        session.refresh_identical();
+        assert_eq!(
+            session.identical(),
+            [ids[0], added[0]],
+            "focus leaves out what it protects"
+        );
+
+        session.edit_instance_vars_in(EditScope::Selected, "set name", &set_name("Oak"), None);
+        session.refresh_identical();
+        assert_eq!(
+            session.identical(),
+            [ids[0]],
+            "the edited one no longer matches the others"
+        );
+    }
+
+    #[test]
+    fn identical_bounds_cover_the_other_placements_on_the_current_level() {
+        let mut session = flat_session(3, 1);
+        let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        let ids = place(&mut session, &[(1, &table), (3, &table)]);
+        session.select_instance(Some(ids[0]));
+        session.refresh_identical();
+
+        let tile = session.options.tile_size as f32;
+        assert_eq!(session.identical_bounds(), [[tile * 2.0, 0.0, tile, tile]]);
+    }
+
+    #[test]
+    fn a_selected_scope_edit_leaves_identical_placements_alone() {
+        let mut session = flat_session(2, 1);
+        let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        let ids = place(&mut session, &[(1, &table), (2, &table)]);
+        session.select_instance(Some(ids[0]));
+
+        session.edit_instance_vars_in(EditScope::Selected, "set name", &set_name("Oak"), None);
+
+        assert_eq!(names(&session, &ids), [Some(Value::Text(String::from("Oak"))), None]);
+    }
+
+    #[test]
+    fn an_identical_scope_edit_skips_placements_outside_the_focused_area() {
+        let mut session = focus_session();
+        let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        let ids = place(&mut session, &[(1, &table), (2, &table), (4, &table)]);
+        session.toggle_focus_at(Some(Coord::new(1, 1, 1)));
+        session.select_instance(Some(ids[0]));
+
+        assert_eq!(
+            session.edit_instance_vars_in(EditScope::Identical, "set name", &set_name("Oak"), None),
+            Some(true)
+        );
+
+        let oak = Some(Value::Text(String::from("Oak")));
+        assert_eq!(names(&session, &ids), [oak.clone(), oak, None]);
+    }
 
     #[test]
     fn the_gizmo_only_shows_for_the_select_tool() {

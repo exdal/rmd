@@ -7,7 +7,7 @@ use dmi::metadata::Dir;
 use editor::{Environment, command::EditGroupId, document::VarMutation, tool::Tool, visual};
 use objtree::{ObjectTree, TypeId};
 
-use super::Session;
+use super::{EditScope, Session};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DirectionalTypes {
@@ -137,6 +137,12 @@ impl Session {
     }
 
     pub(crate) fn set_selected_directional_type(&mut self, direction: Dir, group: Option<EditGroupId>) -> Option<bool> {
+        self.set_directional_type_in(EditScope::Selected, direction, group)
+    }
+
+    pub(crate) fn set_directional_type_in(
+        &mut self, scope: EditScope, direction: Dir, group: Option<EditGroupId>,
+    ) -> Option<bool> {
         let selected = self.selected_instance()?;
         let path = {
             let environment = self.state.environment.as_ref()?;
@@ -146,20 +152,14 @@ impl Session {
 
             directional_type_target(&environment.tree, id, direction)?
         };
-        let document = self.state.active_document_mut()?;
-        let changed = document.replace_instance_path(
-            selected,
+
+        self.edit_instances_in(
+            scope,
             "set direction",
-            path,
+            Some(&path),
             &[VarMutation::Remove(Identifier::from("dir"))],
             group,
-        )?;
-
-        if changed {
-            self.update_instance(selected);
-        }
-
-        Some(changed)
+        )
     }
 
     pub(crate) fn set_placement_direction(&mut self, direction: Dir) -> Option<bool> {
@@ -199,7 +199,39 @@ mod tests {
     use objtree::ObjectTree;
 
     use super::{directional_type_target, directional_types_for};
-    use crate::session::Session;
+    use crate::session::{EditScope, Session};
+
+    #[test]
+    fn an_identical_scope_rotation_moves_every_matching_placement_to_the_new_subtype() {
+        let mut tree = ObjectTree::new();
+        tree.register(&TreePath::parse("/obj/alarm/directional/north"), Location::default());
+        tree.register(&TreePath::parse("/obj/alarm/directional/east"), Location::default());
+        let north = Prefab::new(TreePath::parse("/obj/alarm/directional/north"));
+        let mut map = dmm::Map::new(dmm::Size { x: 3, y: 1, z: 1 });
+        let key = map.intern_tile(vec![north.clone()]);
+        let empty = map.intern_tile(vec![]);
+        map.grid[0][0] = vec![key, empty, key];
+        let mut session = Session::new();
+        session.state.environment = Some(Arc::new(Environment::new(".", tree)));
+        let id = session.state.open_document(editor::document::MapDocument::new(map, 1));
+        session.rebuild_instances(id);
+        let first = session
+            .state
+            .active_document()
+            .unwrap()
+            .instance_ids_at(dmm::Coord::new(1, 1, 1))[0];
+        session.select_instance(Some(first));
+
+        assert_eq!(
+            session.set_directional_type_in(EditScope::Identical, Dir::East, None),
+            Some(true)
+        );
+
+        let east = Prefab::new(TreePath::parse("/obj/alarm/directional/east"));
+        let document = session.state.active_document().unwrap();
+        assert_eq!(document.identical_instances(&east).len(), 2);
+        assert!(document.identical_instances(&north).is_empty());
+    }
 
     #[test]
     fn directional_type_groups_are_discovered_from_base_group_and_direction_paths() {

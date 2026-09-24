@@ -54,7 +54,7 @@ pub(crate) use self::{
     edit::context_placement_group,
     git::GitDocState,
     guides::GuideBadge,
-    instance::SelectedTransform,
+    instance::{EditScope, SelectedTransform},
     level::validate_level,
     node::NodeOverlay,
     palette::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
@@ -103,6 +103,7 @@ pub struct Session {
     /// The last interaction the panel committed, replayed into a bake that lands after it.
     ui_feedback: Option<editor::bake::UiFeedback>,
     node_edit: Option<NodeEditState>,
+    identical: Option<instance::IdenticalCache>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,6 +144,7 @@ impl Session {
             ui_fault: None,
             ui_feedback: None,
             node_edit: None,
+            identical: None,
         }
     }
 }
