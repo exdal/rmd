@@ -7,7 +7,7 @@ use objtree::{ObjectTree, TypeId};
 use render::Renderer;
 
 use super::{
-    fit_icon,
+    common::{fit_icon, focus_window_on_hover},
     settings::{draw_object_tree_filter_settings, draw_object_tree_search_settings},
 };
 use crate::{
@@ -200,7 +200,7 @@ impl ObjectTreePanel {
         ui.window(&self.window).focused(focus).build(|| {
             docked = ui.is_window_docked();
             if settings.focus_windows_on_hover {
-                super::focus_window_on_hover(ui);
+                focus_window_on_hover(ui);
             }
             let mut output = ObjectTreeOutput {
                 reveal: self.reveal,

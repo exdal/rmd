@@ -5,7 +5,7 @@ use dmm::{Coord, Prefab, PrefabInstanceId};
 use editor::{blame::BlameCell, conflict::Side, document::DocumentId};
 use objtree::ObjectTree;
 
-use super::{SelectionTransform, Session, Tool, draw_type_path_search, inspector::SimilarMatchKind};
+use super::{SelectionTransform, Session, Tool, common::fit_icon, draw_type_path_search, inspector::SimilarMatchKind};
 use crate::session::context_placement_group;
 
 pub(super) const POPUP: &str = "Map context##map-context";
@@ -266,7 +266,7 @@ pub(super) fn draw_popup(
         let row_max = ui.item_rect_max();
         let extent = ui.text_line_height().min(row_max[1] - row_min[1]);
         if let Some(thumbnail) = thumbnail {
-            let size = super::fit_icon(thumbnail.texture.width, thumbnail.texture.height, extent);
+            let size = fit_icon(thumbnail.texture.width, thumbnail.texture.height, extent);
             let min = [
                 row_min[0] + (extent - size[0]) * 0.5,
                 row_min[1] + (extent - size[1]) * 0.5,
@@ -398,7 +398,7 @@ mod tests {
 
     use objtree::ObjectTree;
 
-    use crate::{session::context_placement_group, ui::matching_type_paths_up_to_filtered};
+    use crate::{session::context_placement_group, ui::search::matching_type_paths_up_to_filtered};
 
     #[test]
     fn replacement_search_matches_object_types_only() {

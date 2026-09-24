@@ -11,6 +11,7 @@ use dear_imgui_rs::{
 };
 use editor::environment::BundledProfile;
 
+use super::common::focus_window_on_hover;
 use crate::{
     session::Session,
     settings::{
@@ -195,7 +196,7 @@ fn draw_settings_window(
         .flags(flags)
         .build(|| {
             if settings.focus_windows_on_hover {
-                super::focus_window_on_hover(ui);
+                focus_window_on_hover(ui);
             }
             let content_height = ui.content_region_avail()[1].max(1.0);
             ui.child_window("settings-categories")

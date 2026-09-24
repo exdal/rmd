@@ -45,6 +45,7 @@ use super::{
         button_width,
         centered_note,
         checkbox_width,
+        focus_window_on_hover,
         label_width,
         opaque,
         overflow_scroll,
@@ -226,7 +227,7 @@ impl GitPanel {
         ui.window(window.label(title)).focused(focus).build(|| {
             self.visible = true;
             if settings.focus_windows_on_hover {
-                super::focus_window_on_hover(ui);
+                focus_window_on_hover(ui);
             }
             self.draw_contents(ui, session, settings, &mut actions);
         });

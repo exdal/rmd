@@ -22,7 +22,7 @@ use editor::{
 };
 use objtree::{ObjectTree, TypeId};
 
-use super::git::commit_summary;
+use super::{common::focus_window_on_hover, git::commit_summary};
 use crate::{
     external_editor::SourceLocation,
     session::{DirectionalTypes, Session},
@@ -1201,7 +1201,7 @@ impl InspectorPanel {
         let mut output = InspectorOutput::default();
         ui.window(&self.window).build(|| {
             if settings.focus_windows_on_hover {
-                super::focus_window_on_hover(ui);
+                focus_window_on_hover(ui);
             }
             output = self.state.draw(ui, session);
         });
@@ -1256,7 +1256,7 @@ impl InspectorPanel {
             .focused(focus)
             .build(|| {
                 if settings.focus_windows_on_hover {
-                    super::focus_window_on_hover(ui);
+                    focus_window_on_hover(ui);
                 }
                 ui.text_wrapped(&search.prefab_path);
                 let suffix = if rows.len() == 1 { "instance" } else { "instances" };
