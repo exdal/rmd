@@ -1848,6 +1848,32 @@ mod tests {
     }
 
     #[test]
+    fn middle_click_outside_the_map_menu_closes_it_and_pans() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut app = RectangleUiHarness::new();
+        let point = app.tile(5, 8);
+        app.context.io_mut().add_mouse_pos_event(point);
+        app.context.io_mut().add_mouse_button_event(MouseButton::Right, true);
+        app.step();
+        app.context.io_mut().add_mouse_button_event(MouseButton::Right, false);
+        app.step();
+        assert!(app.view.context.is_some(), "right click opens the map menu");
+
+        // the menu opens to the right of the cursor, so a tile to the left is outside it
+        let outside = app.tile(2, 8);
+        app.context.io_mut().add_mouse_pos_event(outside);
+        app.context.io_mut().add_mouse_button_event(MouseButton::Middle, true);
+        app.step();
+        let before = app.tile(5, 8);
+        app.context
+            .io_mut()
+            .add_mouse_pos_event([outside[0] + 40.0, outside[1] + 20.0]);
+        app.step();
+
+        assert_ne!(app.tile(5, 8), before, "the map pans once the menu is gone");
+    }
+
+    #[test]
     fn node_right_click_deletes_on_the_first_unfocused_click_and_shift_opens_the_menu() {
         let _guard = IMGUI_CONTEXT.lock().unwrap();
         let start = Coord::new(5, 8, 1);

@@ -1,6 +1,6 @@
 use core::{path::TreePath, types::Identifier};
 
-use dear_imgui_rs::Ui;
+use dear_imgui_rs::{MouseButton, Ui, WindowHoveredFlags};
 use dmm::{Coord, Prefab, PrefabInstanceId};
 use editor::{blame::BlameCell, conflict::Side, document::DocumentId};
 use objtree::ObjectTree;
@@ -57,6 +57,13 @@ pub(super) fn draw_popup(
     if session.state.active() != Some(target.document) {
         return None;
     }
+
+    if ui.is_mouse_clicked(MouseButton::Middle) && !ui.is_window_hovered_with_flags(WindowHoveredFlags::CHILD_WINDOWS) {
+        ui.close_current_popup();
+
+        return None;
+    }
+
     let coord = target.coord;
     ui.text_disabled(format!("X: {}, Y: {}, Z: {}", coord.x, coord.y, coord.z));
     // every section starts with its own separator so none of them double up
