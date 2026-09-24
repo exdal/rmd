@@ -5191,7 +5191,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        session::tests::{install_blame, install_diff, node_map, node_session, node_tile_has_group},
+        session::fixtures::{install_blame, install_diff, node_map, node_session, node_tile_has_group},
         settings::KeyBinding,
     };
 
