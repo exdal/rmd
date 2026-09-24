@@ -167,6 +167,9 @@ pub(super) struct GitPanel {
     custom_from: String,
     custom_to: String,
     show_all_commits: bool,
+    /// The version row whose comparison was just started, scrolled back into view once the results
+    /// shrink the table
+    reveal_version: Option<usize>,
     /// Whether the window's contents ran last frame, false while another tab covers it
     visible: bool,
 }
@@ -186,6 +189,7 @@ impl GitPanel {
             custom_from: String::new(),
             custom_to: String::new(),
             show_all_commits: false,
+            reveal_version: None,
             visible: false,
         })
     }
@@ -701,7 +705,7 @@ impl GitPanel {
         } else {
             1.0
         };
-        draw_versions(ui, git, share, actions);
+        draw_versions(ui, git, share, &mut self.reveal_version, actions);
 
         if git.diff_loading {
             ui.text_disabled("Comparing...");
@@ -919,7 +923,7 @@ impl GitPanel {
 }
 
 /// The working map and the commits that changed the map, each with buttons to compare it
-fn draw_versions(ui: &Ui, git: &GitDocState, share: f32, actions: &mut Vec<Action>) {
+fn draw_versions(ui: &Ui, git: &GitDocState, share: f32, reveal: &mut Option<usize>, actions: &mut Vec<Action>) {
     let style = ui.clone_style();
     let history = git.history.as_deref().unwrap_or_default();
     let row_height = ui.text_line_height() * 2.0 + style.item_spacing()[1] + VERSION_ROW_PADDING * 2.0;
@@ -960,7 +964,12 @@ fn draw_versions(ui: &Ui, git: &GitDocState, share: f32, actions: &mut Vec<Actio
         .flags(TableColumnFlags::NO_HIDE)
         .done()
         .build(|ui| {
-            let clipper = ListClipper::new(rows).begin(ui);
+            let mut clipper = ListClipper::new(rows).begin(ui);
+            let target = reveal.take().filter(|&target| target < rows);
+            if let Some(target) = target {
+                clipper.include_item_by_index(target);
+            }
+
             for position in clipper.iter() {
                 let _id = ui.push_id(position);
                 ui.table_next_row_with_flags(TableRowFlags::NONE, row_height);
@@ -1020,11 +1029,16 @@ fn draw_versions(ui: &Ui, git: &GitDocState, share: f32, actions: &mut Vec<Actio
                     None => ui.text_disabled("Unsaved and uncommitted edits"),
                 }
 
+                if target == Some(position) {
+                    ui.set_scroll_here_y(0.5);
+                }
+
                 ui.table_next_column();
                 pad_row(ui);
                 let current = commit.map_or(DiffSource::Working, |commit| DiffSource::Revision(commit.hash.clone()));
                 if ui.small_button(&changes) {
                     actions.push(Action::RunDiff(previous, current.clone()));
+                    *reveal = Some(position);
                 }
 
                 ui.set_item_tooltip(match commit {
@@ -1034,6 +1048,7 @@ fn draw_versions(ui: &Ui, git: &GitDocState, share: f32, actions: &mut Vec<Actio
                 if commit.is_some() {
                     if ui.small_button(&working) {
                         actions.push(Action::RunDiff(current, DiffSource::Working));
+                        *reveal = Some(position);
                     }
 
                     ui.set_item_tooltip("Compare with the working map, tiles can be restored from it");
