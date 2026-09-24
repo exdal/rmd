@@ -49,6 +49,7 @@ mod overlay;
 mod paste;
 mod search;
 mod toolbar;
+mod tooltip;
 mod viewport;
 mod welcome;
 
@@ -107,6 +108,7 @@ use self::{
     paste::{PASTE_LABELS, PasteAction, PendingPaste, centered_paste_min, draw_paste_controls, paste_controls},
     search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search, matching_type_paths},
     toolbar::{DEFAULT_CUSTOM_FILL_BOUNDARY, TopOverlayState, draw_top_overlay, request_level_change},
+    tooltip::{draw_conflict_tooltip, draw_diff_tooltip},
     viewport::{ActivePlacementFlash, DeletionStroke, MapViewState, PlacementStroke},
     welcome::{ForgetRequest, WelcomeOutput},
 };

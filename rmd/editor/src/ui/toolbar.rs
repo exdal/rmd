@@ -3,6 +3,7 @@ use core::path::TreePath;
 use dear_imgui_rs::{StyleColor, StyleVar, Ui};
 use editor::{
     icons::materialdesignicons::{
+        ICON_CIRCLE_SMALL,
         ICON_ERASER,
         ICON_EYEDROPPER,
         ICON_FORMAT_COLOR_FILL,
@@ -148,7 +149,8 @@ fn draw_block_select_tool_button(
     let separator_min_y = ui.item_rect_min()[1];
     let separator_max_y = ui.item_rect_max()[1];
     ui.set_item_tooltip(format!(
-        "Rectangle selection ({})\nDrag: {} · Hold Shift while drawing: Border\nShift+gizmo or edge handles: resize",
+        "Rectangle selection ({})\nDrag: {} {ICON_CIRCLE_SMALL} Hold Shift while drawing: Border\nShift+gizmo or edge \
+         handles: resize",
         keybindings.get(KeybindAction::BlockSelectTool).label(ui),
         options.label()
     ));
@@ -210,7 +212,7 @@ fn draw_fill_tool_button(
     let separator_min_y = ui.item_rect_min()[1];
     let separator_max_y = ui.item_rect_max()[1];
     ui.set_item_tooltip(format!(
-        "Bucket ({}) · {}\n{}",
+        "Bucket ({}) {ICON_CIRCLE_SMALL} {}\n{}",
         keybindings.get(KeybindAction::FillTool).label(ui),
         fill_mode.label(),
         if session.selection().is_some() {

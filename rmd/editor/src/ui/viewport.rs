@@ -4,8 +4,9 @@ use dear_imgui_rs::{Condition, Key, MouseButton, Ui, WindowKey, WindowKeyError};
 use dmm::{Coord, Prefab};
 use editor::{
     command::EditGroupId,
-    conflict::{Side, describe_tile},
+    conflict::Side,
     document::{DocumentId, MapDocument, Selection},
+    icons::materialdesignicons::ICON_CIRCLE_SMALL,
     tool::{SelectionMask, SelectionPlacement, SelectionRotation, Tool, rotated_selection_at},
 };
 use render::{InteractionMode, MapViewInteraction, MapViewRect, PickRequest, PlacementFlash, Renderer};
@@ -33,7 +34,7 @@ use super::{
     block_controls_placement,
     block_placement_controls_layout,
     centered_paste_min,
-    common::{focus_window_on_hover, opaque},
+    common::focus_window_on_hover,
     conflict_controls_layout,
     context_menu::{
         Action as MenuAction,
@@ -46,6 +47,8 @@ use super::{
     draw_block_outline,
     draw_block_placement_controls,
     draw_conflict_controls,
+    draw_conflict_tooltip,
+    draw_diff_tooltip,
     draw_fill_limit_warning,
     draw_guide_badges,
     draw_highlights,
@@ -646,28 +649,12 @@ impl UiState {
             let mut tooltip_position = None;
             if blame_popup.is_none() {
                 if let (Some(coord), Some(conflict)) = (pointed_coord, hovered_conflict) {
-                    ui.tooltip(|| {
-                        ui.text(format!("Conflict at {}, {}, {}", coord.x, coord.y, coord.z));
-                        ui.separator();
-                        ui.text(format!("Base:\n{}", describe_tile(conflict.base.as_ref())));
-                        ui.separator();
-                        ui.text(format!("HEAD:\n{}", describe_tile(conflict.ours.as_ref())));
-                        ui.separator();
-                        ui.text(format!("Incoming:\n{}", describe_tile(conflict.theirs.as_ref())));
-                    });
+                    ui.tooltip(|| draw_conflict_tooltip(ui, coord, conflict));
                 } else if let Some((coord, (kind, before, after))) = hovered_diff
                     && let Some(state) = session.git_state(id).and_then(|git| git.diff.as_ref())
                 {
-                    ui.tooltip(|| {
-                        ui.text_colored(
-                            opaque(kind.color()),
-                            format!("{} at {}, {}, {}", kind.label(), coord.x, coord.y, coord.z),
-                        );
-                        ui.separator();
-                        ui.text(format!("{}:\n{}", state.from.label(), describe_tile(before)));
-                        ui.separator();
-                        ui.text(format!("{}:\n{}", state.to.label(), describe_tile(after)));
-                    });
+                    let (from, to) = (state.from.label(), state.to.label());
+                    ui.tooltip(|| draw_diff_tooltip(ui, coord, kind, (&from, before), (&to, after)));
                 } else if let Some((_, (cell, changed))) = hovered_blame {
                     match cell {
                         editor::blame::BlameCell::Commit(_, commit) if !changed => {
@@ -675,7 +662,7 @@ impl UiState {
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map_or(0, |time| time.as_secs() as i64);
                             let detail = format!(
-                                "{} · {} · {}\n{}\n",
+                                "{} {ICON_CIRCLE_SMALL} {} {ICON_CIRCLE_SMALL} {}\n{}\n",
                                 commit.short,
                                 commit.author,
                                 editor::blame::relative_time(now, commit.time),

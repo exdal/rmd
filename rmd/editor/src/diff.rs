@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use dmm::{
     Coord,
     Map,
+    Prefab,
     Tile,
     key::Key,
     merge::{prefabs_equal, tiles_equal},
@@ -11,7 +12,7 @@ use dmm::{
 use crate::{
     bake::{HIGHLIGHT_ALWAYS, Highlight, highlight_tiles},
     command::Edit,
-    conflict::{connected_regions, set_tile},
+    conflict::{connected_regions, describe_prefab, set_tile},
     document::MapDocument,
 };
 
@@ -203,6 +204,146 @@ pub fn diff(from: Option<&Map>, to: Option<&Map>) -> MapDiff {
     result
 }
 
+/// How one object changed between two versions of a tile
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineKind {
+    Kept,
+    Added,
+    Removed,
+    Modified,
+}
+
+impl LineKind {
+    pub const fn color(self) -> Option<[f32; 3]> {
+        match self {
+            Self::Kept => None,
+            Self::Added => Some(ADDED_COLOR),
+            Self::Removed => Some(REMOVED_COLOR),
+            Self::Modified => Some(MODIFIED_COLOR),
+        }
+    }
+}
+
+/// A var of a modified object, `None` on the side that doesn't set it
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VarChange {
+    pub name: String,
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TileLine {
+    pub kind: LineKind,
+    pub text: String,
+    pub vars: Vec<VarChange>,
+}
+
+impl TileLine {
+    fn new(kind: LineKind, prefab: &Prefab) -> Self {
+        Self {
+            kind,
+            text: describe_prefab(prefab),
+            vars: Vec::new(),
+        }
+    }
+}
+
+fn var_changes(before: &Prefab, after: &Prefab) -> Vec<VarChange> {
+    let changed = before
+        .vars
+        .iter()
+        .filter(|(name, old)| after.var(name) != Some(&old.value))
+        .map(|(name, old)| VarChange {
+            name: name.to_string(),
+            before: Some(old.value.to_string()),
+            after: after.var(name).map(ToString::to_string),
+        });
+    let set = after
+        .vars
+        .iter()
+        .filter(|(name, _)| before.var(name).is_none())
+        .map(|(name, new)| VarChange {
+            name: name.to_string(),
+            before: None,
+            after: Some(new.value.to_string()),
+        });
+
+    changed.chain(set).collect()
+}
+
+/// Ends a run of changes: removals first, then additions, pairing objects that kept their path
+fn flush(lines: &mut Vec<TileLine>, removed: &mut Vec<&Prefab>, added: &mut Vec<&Prefab>) {
+    let mut used = vec![false; removed.len()];
+    let pairs = added
+        .iter()
+        .map(|prefab| {
+            let pair = (0..removed.len()).find(|index| !used[*index] && removed[*index].path == prefab.path);
+            if let Some(index) = pair {
+                used[index] = true;
+            }
+
+            pair
+        })
+        .collect::<Vec<_>>();
+
+    lines.extend(
+        removed
+            .iter()
+            .zip(&used)
+            .filter(|(_, used)| !**used)
+            .map(|(prefab, _)| TileLine::new(LineKind::Removed, prefab)),
+    );
+    lines.extend(added.iter().zip(pairs).map(|(prefab, pair)| match pair {
+        Some(index) => TileLine {
+            kind: LineKind::Modified,
+            text: prefab.path.to_string(),
+            vars: var_changes(removed[index], prefab),
+        },
+        None => TileLine::new(LineKind::Added, prefab),
+    }));
+    removed.clear();
+    added.clear();
+}
+
+/// One line per object, like a unified diff of the two object stacks
+pub fn tile_lines(from: Option<&Tile>, to: Option<&Tile>) -> Vec<TileLine> {
+    let from = from.map_or(&[][..], Vec::as_slice);
+    let to = to.map_or(&[][..], Vec::as_slice);
+    // shared[i][j] is how many objects `from[i..]` and `to[j..]` have in common, in order
+    let mut shared = vec![vec![0usize; to.len() + 1]; from.len() + 1];
+    for i in (0..from.len()).rev() {
+        for j in (0..to.len()).rev() {
+            shared[i][j] = if prefabs_equal(&from[i], &to[j]) {
+                shared[i + 1][j + 1] + 1
+            } else {
+                shared[i + 1][j].max(shared[i][j + 1])
+            };
+        }
+    }
+
+    let mut lines = Vec::new();
+    let (mut removed, mut added) = (Vec::new(), Vec::new());
+    let (mut i, mut j) = (0, 0);
+    while i < from.len() || j < to.len() {
+        if i < from.len() && j < to.len() && prefabs_equal(&from[i], &to[j]) {
+            flush(&mut lines, &mut removed, &mut added);
+            lines.push(TileLine::new(LineKind::Kept, &from[i]));
+            i += 1;
+            j += 1;
+        } else if i < from.len() && (j == to.len() || shared[i + 1][j] >= shared[i][j + 1]) {
+            removed.push(&from[i]);
+            i += 1;
+        } else {
+            added.push(&to[j]);
+            j += 1;
+        }
+    }
+    flush(&mut lines, &mut removed, &mut added);
+
+    lines
+}
+
 /// Puts the `from` tiles back at `coords`. Tiles past the edge of the current map are skipped,
 /// ones past the edge of `from` are cleared. `None` when nothing changes.
 pub fn restore_edit(document: &mut MapDocument, from: Option<&Map>, coords: &[Coord], label: &str) -> Option<Edit> {
@@ -222,11 +363,11 @@ pub fn restore_edit(document: &mut MapDocument, from: Option<&Map>, coords: &[Co
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
+    use core::{path::TreePath, types::Value};
 
     use dmm::{Coord, Map, Prefab, Size, Tile};
 
-    use super::{ChangeKind, diff, restore_edit};
+    use super::{ChangeKind, LineKind, VarChange, diff, restore_edit, tile_lines};
     use crate::document::MapDocument;
 
     fn tile(paths: &[&str]) -> Tile { paths.iter().map(|path| Prefab::new(TreePath::parse(path))).collect() }
@@ -315,6 +456,86 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(regions, [(5, 1), (2, 2), (1, 2)]);
+    }
+
+    fn lines(from: Option<&Tile>, to: Option<&Tile>) -> Vec<(LineKind, String)> {
+        tile_lines(from, to)
+            .into_iter()
+            .map(|line| (line.kind, line.text))
+            .collect()
+    }
+
+    fn door(dir: f32) -> Prefab {
+        let mut door = Prefab::new(TreePath::parse("/obj/door"));
+        door.set_var("name".into(), Value::Text(String::from("door")));
+        door.set_var("dir".into(), Value::Num(dir));
+
+        door
+    }
+
+    #[test]
+    fn tile_lines_marks_kept_added_and_removed_objects() {
+        let old = tile(&["/turf/floor", "/obj/table"]);
+        let new = tile(&["/turf/floor", "/obj/chair"]);
+
+        assert_eq!(
+            lines(Some(&old), Some(&new)),
+            [
+                (LineKind::Kept, String::from("/turf/floor")),
+                (LineKind::Removed, String::from("/obj/table")),
+                (LineKind::Added, String::from("/obj/chair")),
+            ]
+        );
+    }
+
+    #[test]
+    fn identical_tiles_are_all_kept() {
+        let old = tile(&["/turf/floor", "/obj/table"]);
+
+        assert!(
+            tile_lines(Some(&old), Some(&old))
+                .iter()
+                .all(|line| line.kind == LineKind::Kept)
+        );
+    }
+
+    #[test]
+    fn same_path_with_changed_vars_is_one_modified_line() {
+        let mut old = tile(&["/turf/floor"]);
+        old.push(door(2.0));
+        let mut new = tile(&["/turf/floor"]);
+        new.push(door(4.0));
+
+        let result = tile_lines(Some(&old), Some(&new));
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[1].kind, LineKind::Modified);
+        assert_eq!(result[1].text, "/obj/door");
+        assert_eq!(
+            result[1].vars,
+            [VarChange {
+                name: String::from("dir"),
+                before: Some(String::from("2")),
+                after: Some(String::from("4")),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_missing_side_is_all_added_or_all_removed() {
+        let old = tile(&["/turf/floor", "/obj/table"]);
+
+        assert!(
+            tile_lines(None, Some(&old))
+                .iter()
+                .all(|line| line.kind == LineKind::Added)
+        );
+        assert!(
+            tile_lines(Some(&old), None)
+                .iter()
+                .all(|line| line.kind == LineKind::Removed)
+        );
+        assert_eq!(tile_lines(Some(&old), None).len(), 2);
     }
 
     #[test]

@@ -18,6 +18,7 @@ use editor::{
     blame::{self, BlameCell},
     command::EditGroupId,
     document::{DocumentId, MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
+    icons::materialdesignicons::ICON_CIRCLE_SMALL,
     visual,
 };
 use objtree::{ObjectTree, TypeId};
@@ -181,7 +182,7 @@ impl InspectorState {
                         .duration_since(std::time::UNIX_EPOCH)
                         .map_or(0, |time| time.as_secs() as i64);
                     ui.text(format!(
-                        "{} · {} · {}",
+                        "{} {ICON_CIRCLE_SMALL} {} {ICON_CIRCLE_SMALL} {}",
                         commit.short,
                         commit.author,
                         blame::relative_time(now, commit.time)

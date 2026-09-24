@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use dmm::{
     Coord,
+    Prefab,
     Tile,
     merge::{TileConflict, tiles_equal},
 };
@@ -81,14 +82,14 @@ pub fn describe_tile(tile: Option<&Tile>) -> String {
     match tile {
         None => String::from("(outside the map)"),
         Some(tile) if tile.is_empty() => String::from("(empty)"),
-        Some(tile) => tile
-            .iter()
-            .map(|prefab| match prefab.vars.len() {
-                0 => prefab.path.to_string(),
-                count => format!("{} {{{count} vars}}", prefab.path),
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
+        Some(tile) => tile.iter().map(describe_prefab).collect::<Vec<_>>().join("\n"),
+    }
+}
+
+pub fn describe_prefab(prefab: &Prefab) -> String {
+    match prefab.vars.len() {
+        0 => prefab.path.to_string(),
+        count => format!("{} {{{count} vars}}", prefab.path),
     }
 }
 

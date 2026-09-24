@@ -3,6 +3,7 @@ use dmm::Coord;
 use editor::{
     document::DocumentId,
     git::{CommitInfo, WebLinks},
+    icons::materialdesignicons::ICON_CIRCLE_SMALL,
 };
 
 use super::{OverlayRect, git::commit_summary};
@@ -59,7 +60,7 @@ pub(super) fn draw_blame_popup(
             }
             ui.same_line();
             ui.text(format!(
-                "· {} · {}",
+                "{ICON_CIRCLE_SMALL} {} {ICON_CIRCLE_SMALL} {}",
                 commit.author,
                 editor::blame::relative_time(now, commit.time)
             ));

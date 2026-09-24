@@ -27,6 +27,7 @@ use editor::{
         ICON_ALERT_CIRCLE,
         ICON_ARROW_RIGHT,
         ICON_CHECK,
+        ICON_CIRCLE_SMALL,
         ICON_CLOSE_THICK,
         ICON_FILE_COMPARE,
         ICON_PENCIL,
@@ -1002,7 +1003,11 @@ fn draw_versions(ui: &Ui, git: &GitDocState, share: f32, actions: &mut Vec<Actio
                 ui.text(&title);
                 match commit {
                     Some(commit) => {
-                        let details = format!("· {} · {}", commit.author, blame::relative_time(now, commit.time));
+                        let details = format!(
+                            "{ICON_CIRCLE_SMALL} {} {ICON_CIRCLE_SMALL} {}",
+                            commit.author,
+                            blame::relative_time(now, commit.time)
+                        );
                         match web {
                             Some(web) => {
                                 ui.text_link_open_url(&commit.short, web.commit(&commit.hash));
