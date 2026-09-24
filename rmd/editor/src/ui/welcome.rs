@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use dear_imgui_rs::{MouseButton, StyleColor, Ui};
+use dear_imgui_rs::{StyleColor, Ui};
 use editor::icons::materialdesignicons::{ICON_ALERT, ICON_ALERT_CIRCLE, ICON_CLOSE_THICK};
 
 use super::{DIAGNOSTIC_WARNING_COLOR, OpenRequest, SAVE_ERROR_COLOR, UiState, common::focus_window_on_hover};
@@ -73,29 +73,30 @@ fn draw_welcome_subtitle(ui: &Ui) {
 fn draw_recent_entry(ui: &Ui, label: &str, id: &str) -> RecentEntry {
     let icon = ICON_CLOSE_THICK.to_string();
     let icon_width = ui.calc_text_size(&icon)[0];
+    let spacing = ui.clone_style().item_spacing()[0];
 
     let open = ui.text_link(format!("{label}##{id}"));
-    let link_min = ui.item_rect_min();
+    let link_hovered = ui.is_item_hovered();
     let link_max = ui.item_rect_max();
-    let icon_min = [link_max[0] + ui.clone_style().item_spacing()[0], link_min[1]];
-    let icon_max = [icon_min[0] + icon_width, link_max[1]];
-    let mut forget = false;
+    // a real item spanning the gap and the icon, so a disabled scope locks it like any widget
+    ui.same_line_with_spacing(0.0, 0.0);
+    let forget = ui.invisible_button(format!("##forget-{id}"), [spacing + icon_width, ui.item_rect_size()[1]]);
+    let icon_hovered = ui.is_item_hovered();
 
-    if ui.is_mouse_hovering_rect(link_min, icon_max) {
-        let hovered = ui.is_mouse_hovering_rect(icon_min, icon_max);
-        let color = if hovered {
+    if link_hovered || icon_hovered {
+        let color = if icon_hovered {
             StyleColor::Text
         } else {
             StyleColor::TextDisabled
         };
+        let icon_min = [link_max[0] + spacing, ui.item_rect_min()[1]];
 
         ui.get_window_draw_list()
             .add_text([icon_min[0], icon_min[1] + 2.0], ui.style_color(color), &icon);
+    }
 
-        if hovered {
-            ui.tooltip_text("Remove from this list");
-            forget = ui.is_mouse_clicked(MouseButton::Left);
-        }
+    if icon_hovered {
+        ui.tooltip_text("Remove from this list");
     }
 
     RecentEntry { open, forget }
@@ -132,6 +133,8 @@ impl UiState {
                 *central_node = Some(dock);
             }
 
+            // everything below stays locked until the codebase finishes loading
+            let _disabled = ui.begin_disabled_with_cond(loading);
             let indent = ((ui.content_region_avail()[0] - WELCOME_CONTENT_WIDTH) / 2.0).max(WELCOME_MIN_INDENT);
             ui.dummy([0.0, WELCOME_MIN_INDENT]);
             ui.indent_by(indent);
@@ -171,7 +174,6 @@ impl UiState {
                 ui.dummy([0.0, WELCOME_MIN_INDENT]);
             }
 
-            let _disabled = ui.begin_disabled_with_cond(loading);
             match codebase {
                 None => {
                     ui.text("Start");
