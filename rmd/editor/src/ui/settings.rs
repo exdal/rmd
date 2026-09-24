@@ -11,6 +11,7 @@ use dear_imgui_rs::{
 };
 use editor::environment::BundledProfile;
 
+use super::common::focus_window_on_hover;
 use crate::{
     session::Session,
     settings::{
@@ -37,6 +38,7 @@ enum SettingsCategory {
     General,
     Viewport,
     Compiler,
+    Git,
     ObjectTree,
     Keybindings,
 }
@@ -56,10 +58,11 @@ pub(super) struct SettingsWindowOutput {
 }
 
 impl SettingsCategory {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::General,
         Self::Viewport,
         Self::Compiler,
+        Self::Git,
         Self::ObjectTree,
         Self::Keybindings,
     ];
@@ -69,6 +72,7 @@ impl SettingsCategory {
             Self::General => "General",
             Self::Viewport => "Viewport",
             Self::Compiler => "Compiler",
+            Self::Git => "Git",
             Self::ObjectTree => "Object Tree",
             Self::Keybindings => "Keybindings",
         }
@@ -192,7 +196,7 @@ fn draw_settings_window(
         .flags(flags)
         .build(|| {
             if settings.focus_windows_on_hover {
-                super::focus_window_on_hover(ui);
+                focus_window_on_hover(ui);
             }
             let content_height = ui.content_region_avail()[1].max(1.0);
             ui.child_window("settings-categories")
@@ -226,6 +230,7 @@ fn draw_settings_window(
                         SettingsCategory::Compiler => {
                             draw_compiler_settings(ui, session, settings, loading, pending_profile)
                         },
+                        SettingsCategory::Git => draw_git_settings(ui, settings),
                         SettingsCategory::ObjectTree => {
                             object_tree_changed |= draw_object_tree_settings(ui, settings);
                         },
@@ -244,6 +249,13 @@ fn draw_settings_window(
         object_tree_changed,
         reload_profile: draw_profile_reload_dialog(ui, pending_profile),
     }
+}
+
+fn draw_git_settings(ui: &Ui, settings: &mut Settings) {
+    ui.checkbox("Enable Git map integration", &mut settings.git_enabled);
+    ui.set_next_item_width(180.0);
+    ui.slider("Blame history depth", 1, 10_000, &mut settings.blame_depth);
+    ui.text_disabled("Tile history follows the first parent of HEAD and does not follow renames.");
 }
 
 fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
@@ -670,7 +682,7 @@ mod tests {
         assert_eq!(SettingsCategory::default(), SettingsCategory::General);
         assert_eq!(
             SettingsCategory::ALL.map(SettingsCategory::label),
-            ["General", "Viewport", "Compiler", "Object Tree", "Keybindings"]
+            ["General", "Viewport", "Compiler", "Git", "Object Tree", "Keybindings"]
         );
     }
 

@@ -1,11 +1,11 @@
 use core::{path::TreePath, types::Identifier};
 
-use dear_imgui_rs::Ui;
+use dear_imgui_rs::{MouseButton, Ui, WindowHoveredFlags};
 use dmm::{Coord, Prefab, PrefabInstanceId};
-use editor::document::DocumentId;
+use editor::{blame::BlameCell, conflict::Side, document::DocumentId};
 use objtree::ObjectTree;
 
-use super::{SelectionTransform, Session, Tool, draw_type_path_search, inspector::SimilarMatchKind};
+use super::{SelectionTransform, Session, Tool, common::fit_icon, draw_type_path_search, inspector::SimilarMatchKind};
 use crate::session::context_placement_group;
 
 pub(super) const POPUP: &str = "Map context##map-context";
@@ -29,6 +29,11 @@ pub(super) struct Target {
 }
 
 pub(super) enum Action {
+    Conflict(Vec<Coord>, Side),
+    BlameCopy(String),
+    BlamePin(u32),
+    BlameRun,
+    Restore(Vec<Coord>),
     Undo,
     Redo,
     Copy(Coord),
@@ -52,9 +57,111 @@ pub(super) fn draw_popup(
     if session.state.active() != Some(target.document) {
         return None;
     }
+
+    if ui.is_mouse_clicked(MouseButton::Middle) && !ui.is_window_hovered_with_flags(WindowHoveredFlags::CHILD_WINDOWS) {
+        ui.close_current_popup();
+
+        return None;
+    }
+
     let coord = target.coord;
     ui.text_disabled(format!("X: {}, Y: {}, Z: {}", coord.x, coord.y, coord.z));
+    // every section starts with its own separator so none of them double up
     let mut action = None;
+    if let Some(conflicts) = session
+        .git_state(target.document)
+        .and_then(|git| git.conflicts.as_ref())
+        && conflicts.conflict_at(coord).is_some()
+    {
+        ui.separator();
+        for side in [Side::Ours, Side::Theirs] {
+            if ui.menu_item(format!("Take {} for this tile", conflicts.side_label(side))) {
+                action = Some(Action::Conflict(vec![coord], side));
+            }
+        }
+
+        if let Some(region) = session
+            .conflict_regions(target.document, Some(coord.z))
+            .iter()
+            .find(|region| region.tiles.contains(&coord))
+        {
+            for side in [Side::Ours, Side::Theirs] {
+                if ui.menu_item(format!("Take {} for region", conflicts.side_label(side))) {
+                    action = Some(Action::Conflict(region.tiles.clone(), side));
+                }
+            }
+        }
+
+        if target.block_selected
+            && let Some(selection) = session.selection()
+        {
+            let coords = session
+                .selection_mode()
+                .tiles(selection)
+                .filter(|coord| conflicts.conflict_at(*coord).is_some())
+                .collect::<Vec<_>>();
+            if !coords.is_empty() {
+                for side in [Side::Ours, Side::Theirs] {
+                    if ui.menu_item(format!("Take {} for selection", conflicts.side_label(side))) {
+                        action = Some(Action::Conflict(coords.clone(), side));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(state) = session
+        .git_state(target.document)
+        .and_then(|git| git.diff.as_ref())
+        .filter(|state| state.restorable())
+        && let Some(diff) = session.diff(target.document)
+    {
+        let mut coords = vec![coord];
+        if target.block_selected
+            && let Some(selection) = session.selection()
+        {
+            coords = session.selection_mode().tiles(selection).collect();
+        }
+        coords.retain(|coord| diff.at(*coord).is_some());
+
+        if !coords.is_empty() {
+            ui.separator();
+            let count = match coords.len() {
+                1 => String::new(),
+                count => format!(" ({count} tiles)"),
+            };
+            if ui.menu_item(format!("Restore from {}{count}", state.from.label())) {
+                action = Some(Action::Restore(coords));
+            }
+        }
+    }
+
+    if let Some(git) = session.git_state(target.document) {
+        ui.separator();
+        if let Some(_menu) = ui.begin_menu("Blame") {
+            if let Some((cell, changed)) = session.blame_at(target.document, coord) {
+                match cell {
+                    BlameCell::Commit(index, commit) if !changed => {
+                        ui.text_disabled(format!("{} {}", commit.short, commit.summary));
+                        if ui.menu_item("Copy hash") {
+                            action = Some(Action::BlameCopy(commit.hash.clone()));
+                        }
+                        if ui.menu_item("Pin commit tiles") {
+                            action = Some(Action::BlamePin(index));
+                        }
+                    },
+                    BlameCell::Boundary if !changed => ui.text_disabled(git.blame.as_ref().map_or_else(
+                        || String::from("Older than blame depth"),
+                        |blame| blame.result.boundary_label(),
+                    )),
+                    _ => ui.text_disabled(editor::blame::pending_note(cell, changed).unwrap_or_default()),
+                }
+            } else if git.blame.is_none() && ui.menu_item("Run blame") {
+                action = Some(Action::BlameRun);
+            }
+        }
+    }
+
     if let Some(node) = target.node.as_ref() {
         ui.separator();
         let label = match node {
@@ -166,7 +273,7 @@ pub(super) fn draw_popup(
         let row_max = ui.item_rect_max();
         let extent = ui.text_line_height().min(row_max[1] - row_min[1]);
         if let Some(thumbnail) = thumbnail {
-            let size = super::fit_icon(thumbnail.texture.width, thumbnail.texture.height, extent);
+            let size = fit_icon(thumbnail.texture.width, thumbnail.texture.height, extent);
             let min = [
                 row_min[0] + (extent - size[0]) * 0.5,
                 row_min[1] + (extent - size[1]) * 0.5,
@@ -298,7 +405,7 @@ mod tests {
 
     use objtree::ObjectTree;
 
-    use crate::{session::context_placement_group, ui::matching_type_paths_up_to_filtered};
+    use crate::{session::context_placement_group, ui::search::matching_type_paths_up_to_filtered};
 
     #[test]
     fn replacement_search_matches_object_types_only() {

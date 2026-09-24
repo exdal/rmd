@@ -12,6 +12,7 @@
 mod baker;
 mod camera;
 mod external_editor;
+mod git_worker;
 mod gizmo;
 mod loader;
 mod logging;
@@ -37,7 +38,7 @@ use dear_imgui_rs::{
     render::SynchronousRendererConsumer,
 };
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
-use editor::environment::BakeOptions;
+use editor::{document::DocumentId, environment::BakeOptions};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use render::{Device, PickRequest, PickResult, Renderer};
 use winit::{
@@ -85,6 +86,7 @@ fn main() -> ExitCode {
     let settings_ready = !loaded_settings.needs_keybind_preset;
     let settings = loaded_settings.settings;
     let mut session = Session::new();
+    session.sync_git_enabled(settings.git_enabled);
     settings.apply_to(&mut session.options);
 
     let (startup_job, pending_map) = match arguments.environment {
@@ -99,7 +101,14 @@ fn main() -> ExitCode {
                 }),
             )
         },
-        None => (arguments.map.map(|path| Job::Map { path, z: arguments.z }), None),
+        None => (
+            arguments.map.map(|path| Job::Map {
+                path,
+                z: arguments.z,
+                git_enabled: settings.git_enabled,
+            }),
+            None,
+        ),
     };
 
     let mut loader = Loader::new();
@@ -137,6 +146,7 @@ fn main() -> ExitCode {
         ui,
         loader,
         pending_map,
+        pending_reload: None,
         deferred_job,
         settings_ready,
         uploaded_texture_revision: None,
@@ -223,6 +233,7 @@ struct Redraw {
     cancel_load: bool,
     copy_to_clipboard: Option<String>,
     reload_profile: Option<ProfileReload>,
+    load_conflicts: Option<DocumentId>,
 }
 
 enum Opened {
@@ -241,6 +252,7 @@ struct App {
     ui: UiState,
     loader: Loader,
     pending_map: Option<PendingMap>,
+    pending_reload: Option<DocumentId>,
     deferred_job: Option<Job>,
     settings_ready: bool,
     uploaded_texture_revision: Option<u64>,
@@ -335,6 +347,7 @@ impl App {
                 cancel_load: false,
                 copy_to_clipboard: None,
                 reload_profile: None,
+                load_conflicts: None,
             });
         };
 
@@ -436,6 +449,7 @@ impl App {
             cancel_load: output.cancel_load,
             copy_to_clipboard: output.copy_to_clipboard,
             reload_profile: output.reload_profile,
+            load_conflicts: output.load_conflicts,
         })
     }
 
@@ -459,7 +473,11 @@ impl App {
 
                 Job::Codebase { path, bake }
             },
-            Opened::Map(path) => Job::Map { path, z: 1 },
+            Opened::Map(path) => Job::Map {
+                path,
+                z: 1,
+                git_enabled: self.settings.git_enabled,
+            },
         });
     }
 
@@ -523,8 +541,12 @@ impl App {
             Outcome::Map(loaded) => {
                 let path = loaded.path.clone();
                 let report = LoadReport::map(&self.diagnostic_path(&path), &loaded.errors);
-                self.session.apply_map(*loaded);
-                self.ui.request_refit(self.session.state.active());
+                if let Some(id) = self.pending_reload.take() {
+                    self.session.reload_map(id, *loaded);
+                } else {
+                    self.session.apply_map(*loaded);
+                    self.ui.request_refit(self.session.state.active());
+                }
                 self.ui.set_open_error(None);
                 self.ui.set_load_notice(None);
                 self.ui
@@ -535,6 +557,7 @@ impl App {
             Outcome::Failed { job, error } => {
                 log::error!("{error}");
                 self.pending_map = None;
+                self.pending_reload = None;
                 self.ui.set_open_error(Some(error.clone()));
                 self.ui.set_load_notice(None);
                 match job {
@@ -551,6 +574,7 @@ impl App {
 
             Outcome::Cancelled => {
                 self.pending_map = None;
+                self.pending_reload = None;
                 self.ui.set_load_notice(None);
             },
         }
@@ -564,7 +588,27 @@ impl App {
             return;
         };
 
-        self.loader.start(Job::Map { path, z: pending.z });
+        self.loader.start(Job::Map {
+            path,
+            z: pending.z,
+            git_enabled: self.settings.git_enabled,
+        });
+    }
+
+    fn load_conflicts(&mut self, id: DocumentId) {
+        if self.loader.is_busy() {
+            return;
+        }
+        let Some(document) = self.session.state.document(id) else {
+            return;
+        };
+        let Some(path) = document.path.clone() else { return };
+        self.pending_reload = Some(id);
+        self.loader.start(Job::Map {
+            path,
+            z: document.z,
+            git_enabled: self.settings.git_enabled,
+        });
     }
 
     fn pick_file(&self, label: &str, extension: &str) -> Option<PathBuf> {
@@ -672,6 +716,10 @@ impl ApplicationHandler for App {
                 }
             },
 
+            WindowEvent::Focused(true) if self.settings.git_enabled => {
+                self.session.refresh_git();
+            },
+
             WindowEvent::RedrawRequested => {
                 let redraw = match self.redraw() {
                     Ok(redraw) => redraw,
@@ -686,6 +734,7 @@ impl ApplicationHandler for App {
                             cancel_load: false,
                             copy_to_clipboard: None,
                             reload_profile: None,
+                            load_conflicts: None,
                         }
                     },
                 };
@@ -705,6 +754,9 @@ impl ApplicationHandler for App {
                 if let Some(profile) = redraw.reload_profile {
                     self.reload_profile(profile);
                 }
+                if let Some(id) = redraw.load_conflicts {
+                    self.load_conflicts(id);
+                }
 
                 if let Some(source) = redraw.open_source {
                     self.open_source(source);
@@ -714,6 +766,7 @@ impl ApplicationHandler for App {
                     self.apply_outcome(outcome);
                 }
                 self.session.poll_bake();
+                self.session.poll_git();
 
                 if redraw.exit {
                     if let Err(e) = self.shutdown() {

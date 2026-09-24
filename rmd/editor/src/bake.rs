@@ -14,6 +14,7 @@ pub use vm::{
         HIGHLIGHT_SELECTED,
         Highlight,
         HighlightTile,
+        highlight_tiles,
     },
     ui::{
         Command as UiCommand,

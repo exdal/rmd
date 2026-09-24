@@ -1,5 +1,6 @@
 pub mod error;
 pub mod key;
+pub mod merge;
 pub mod parser;
 pub mod writer;
 

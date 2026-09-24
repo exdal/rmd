@@ -7,7 +7,7 @@ use objtree::{ObjectTree, TypeId};
 use render::Renderer;
 
 use super::{
-    fit_icon,
+    common::{fit_icon, focus_window_on_hover},
     settings::{draw_object_tree_filter_settings, draw_object_tree_search_settings},
 };
 use crate::{
@@ -190,11 +190,17 @@ impl ObjectTreePanel {
 
     pub(super) fn invalidate_filter(&mut self) { self.filter_revision = u64::MAX; }
 
-    pub(super) fn draw(&mut self, ui: &Ui, session: &mut Session, settings: &mut Settings) -> Option<SourceLocation> {
+    /// Draws the panel, `focus` brings its tab to the front. Returns a source location to open and
+    /// whether the window sits in a dock node.
+    pub(super) fn draw(
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, focus: bool,
+    ) -> (Option<SourceLocation>, bool) {
         let mut open_source = None;
-        ui.window(&self.window).build(|| {
+        let mut docked = false;
+        ui.window(&self.window).focused(focus).build(|| {
+            docked = ui.is_window_docked();
             if settings.focus_windows_on_hover {
-                super::focus_window_on_hover(ui);
+                focus_window_on_hover(ui);
             }
             let mut output = ObjectTreeOutput {
                 reveal: self.reveal,
@@ -330,7 +336,7 @@ impl ObjectTreePanel {
             open_source = output.open_source;
         });
 
-        open_source
+        (open_source, docked)
     }
 }
 
@@ -1116,7 +1122,7 @@ mod tests {
         state.filter_revision = u64::MAX;
         let mut settings = Settings::default();
 
-        state.draw(ui, &mut session, &mut settings);
+        state.draw(ui, &mut session, &mut settings, false);
 
         assert!(context.render_legacy().valid());
     }

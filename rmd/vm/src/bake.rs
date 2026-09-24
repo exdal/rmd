@@ -124,6 +124,33 @@ impl Highlight {
     pub fn shown_when(&self, when: u8) -> bool { self.when & when != 0 }
 }
 
+pub fn highlight_tiles(covered: &HashSet<[i32; 2]>) -> Vec<HighlightTile> {
+    let mut tiles = covered
+        .iter()
+        .map(|tile| {
+            let [x, y] = *tile;
+            let mut edges = 0;
+            if !covered.contains(&[x, y + 1]) {
+                edges |= HIGHLIGHT_EDGE_NORTH;
+            }
+            if !covered.contains(&[x + 1, y]) {
+                edges |= HIGHLIGHT_EDGE_EAST;
+            }
+            if !covered.contains(&[x, y - 1]) {
+                edges |= HIGHLIGHT_EDGE_SOUTH;
+            }
+            if !covered.contains(&[x - 1, y]) {
+                edges |= HIGHLIGHT_EDGE_WEST;
+            }
+
+            HighlightTile { position: *tile, edges }
+        })
+        .collect::<Vec<_>>();
+    tiles.sort_unstable_by_key(|tile| (tile.position[1], tile.position[0]));
+
+    tiles
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ConnectionEndpoint {
     channel: String,
@@ -1314,28 +1341,7 @@ fn highlight_from_fields(
         return Ok(None);
     }
 
-    let mut tiles = covered
-        .iter()
-        .map(|tile| {
-            let [x, y] = *tile;
-            let mut edges = 0;
-            if !covered.contains(&[x, y + 1]) {
-                edges |= HIGHLIGHT_EDGE_NORTH;
-            }
-            if !covered.contains(&[x + 1, y]) {
-                edges |= HIGHLIGHT_EDGE_EAST;
-            }
-            if !covered.contains(&[x, y - 1]) {
-                edges |= HIGHLIGHT_EDGE_SOUTH;
-            }
-            if !covered.contains(&[x - 1, y]) {
-                edges |= HIGHLIGHT_EDGE_WEST;
-            }
-
-            HighlightTile { position: *tile, edges }
-        })
-        .collect::<Vec<_>>();
-    tiles.sort_unstable_by_key(|tile| (tile.position[1], tile.position[0]));
+    let tiles = highlight_tiles(&covered);
 
     let when = field_number(fields, "when", f32::from(HIGHLIGHT_SELECTED)) as u8 & HIGHLIGHT_WHEN;
     let label = field(fields, "label")
