@@ -10,7 +10,7 @@ pub use dmm::PrefabInstanceId;
 use dmm::{Coord, Map, MapFormat, Prefab, key::Key};
 
 use crate::{
-    command::{Edit, EditGroupId, History},
+    command::{Edit, EditGroupId, History, Resize},
     focus::AreaFocus,
     tool::{BlockSelectionMode, SelectionMask},
 };
@@ -534,6 +534,45 @@ impl MapDocument {
         Some(self.apply_grouped(edit, group))
     }
 
+    /// Keeps the bottom-left corner in place, tiles that appear hold `fill`. One undo step, which drops the
+    /// area focus and any selection that no longer fits.
+    pub fn resize(&mut self, width: u32, height: u32, fill: &[Prefab]) -> bool {
+        let (old_width, old_height) = (self.map.size.x, self.map.size.y);
+        if width == 0 || height == 0 || (width, height) == (old_width, old_height) {
+            return false;
+        }
+
+        let mut edit = Edit::new(format!("resize map to {width}x{height}")).resizing(Resize {
+            before: (old_width, old_height),
+            after: (width, height),
+        });
+        for z in 1..=self.map.size.z {
+            for y in 1..=height.max(old_height) {
+                for x in 1..=width.max(old_width) {
+                    let kept = x <= width && y <= height;
+                    let existed = x <= old_width && y <= old_height;
+                    let coord = Coord::new(x, y, z);
+                    if existed && !kept {
+                        edit.change(self, coord, PlacedTile::new());
+                    } else if kept && !existed {
+                        let placed = fill.iter().map(|prefab| self.instantiate(prefab.clone())).collect();
+                        edit.change(self, coord, placed);
+                    }
+                }
+            }
+        }
+
+        self.focus = None;
+        if self
+            .selection
+            .is_some_and(|selection| selection.max.x > width || selection.max.y > height)
+        {
+            self.selection = None;
+        }
+
+        self.apply(edit)
+    }
+
     pub fn set_focus(&mut self, focus: Option<AreaFocus>) { self.focus = focus; }
 
     pub fn focus(&self) -> Option<&AreaFocus> { self.focus.as_ref() }
@@ -775,6 +814,78 @@ mod tests {
             document.identical_instances(&table),
             document.instance_ids_at(Coord::new(1, 2, 1))
         );
+    }
+
+    fn resize_fill() -> Vec<Prefab> {
+        vec![
+            Prefab::new(TreePath::parse("/turf/space")),
+            Prefab::new(TreePath::parse("/area/space")),
+        ]
+    }
+
+    #[test]
+    fn growing_the_map_fills_new_tiles_and_undo_restores_the_old_size() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        let grid = document.map.grid.clone();
+        let corner = document.instance_ids_at(Coord::new(1, 1, 2)).to_vec();
+
+        assert!(document.resize(3, 2, &resize_fill()));
+        assert_eq!(
+            (document.map.size.x, document.map.size.y, document.map.size.z),
+            (3, 2, 2)
+        );
+        assert_eq!(document.instance_ids_at(Coord::new(1, 1, 2)), corner);
+        for coord in [Coord::new(3, 1, 1), Coord::new(1, 2, 1), Coord::new(3, 2, 2)] {
+            assert_eq!(document.map.tile_at(coord), Some(&resize_fill()), "{coord:?}");
+            assert_eq!(document.instance_ids_at(coord).len(), 2);
+        }
+        assert_eq!(document.undo_label(), Some("resize map to 3x2"));
+
+        assert!(document.undo());
+        assert_eq!((document.map.size.x, document.map.size.y), (2, 1));
+        assert_eq!(document.map.grid, grid);
+        assert!(document.instance_ids_at(Coord::new(3, 1, 1)).is_empty());
+        assert!(!document.map.dictionary.values().any(|tile| *tile == resize_fill()));
+
+        assert!(document.redo());
+        assert_eq!(document.map.tile_at(Coord::new(3, 2, 1)), Some(&resize_fill()));
+    }
+
+    #[test]
+    fn shrinking_the_map_drops_tiles_that_undo_brings_back_with_their_ids() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        let removed = Coord::new(2, 1, 2);
+        let removed_ids = document.instance_ids_at(removed).to_vec();
+        let table = document.instance_ids_at(Coord::new(1, 1, 1))[1];
+        document.select_instance(Some(document.instance_ids_at(removed)[1]));
+
+        assert!(document.resize(1, 1, &resize_fill()));
+        assert_eq!(document.map.size.x, 1);
+        assert_eq!(document.map.tile_at(removed), None);
+        assert!(removed_ids.iter().all(|id| document.instance_location(*id).is_none()));
+        assert_eq!(document.selected_instance(), None);
+        assert!(document.instance_location(table).is_some());
+
+        assert!(document.undo());
+        assert_eq!(document.instance_ids_at(removed), removed_ids);
+        assert!(!document.resize(2, 1, &resize_fill()), "the size is unchanged");
+    }
+
+    #[test]
+    fn a_resized_map_saves_at_its_new_size() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        assert!(document.resize(4, 3, &resize_fill()));
+
+        let written = MapWriter::new(&document.map).write();
+        let (parsed, errors) = dmm::parser::parse(&written);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        assert_eq!((parsed.size.x, parsed.size.y, parsed.size.z), (4, 3, 2));
+        assert_eq!(
+            parsed.tile_at(Coord::new(1, 1, 1)),
+            document.map.tile_at(Coord::new(1, 1, 1))
+        );
+        assert_eq!(parsed.tile_at(Coord::new(4, 3, 2)), Some(&resize_fill()));
     }
 
     #[test]

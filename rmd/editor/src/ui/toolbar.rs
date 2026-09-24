@@ -32,9 +32,7 @@ use crate::{
 
 pub(super) const DEFAULT_CUSTOM_FILL_BOUNDARY: &str = "/turf/closed/wall";
 
-pub(super) fn request_level_change(
-    session: &mut Session, delta: i32, dialog: &mut Option<NewLevelDialog>, remembered_type_path: &str,
-) {
+pub(super) fn request_level_change(session: &mut Session, delta: i32, dialog: &mut Option<NewLevelDialog>) {
     if session.change_level(delta) != LevelChange::NewLevelRequested {
         return;
     }
@@ -44,13 +42,12 @@ pub(super) fn request_level_change(
 
     *dialog = Some(NewLevelDialog {
         document,
-        type_path: remembered_type_path.to_owned(),
         error: None,
         open: true,
     });
 }
 
-fn draw_z_levels(ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDialog>, remembered_type_path: &str) {
+fn draw_z_levels(ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDialog>) {
     let current = session.z();
     let button_size = ui.frame_height();
     ui.align_text_to_frame_padding();
@@ -73,9 +70,9 @@ fn draw_z_levels(ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDia
     };
 
     if down {
-        request_level_change(session, -1, dialog, remembered_type_path);
+        request_level_change(session, -1, dialog);
     } else if up {
-        request_level_change(session, 1, dialog, remembered_type_path);
+        request_level_change(session, 1, dialog);
     }
 }
 
@@ -87,7 +84,6 @@ pub(super) struct TopOverlayState<'a> {
     pub(super) custom_fill_boundaries: &'a mut Vec<TreePath>,
     pub(super) custom_fill_search: &'a mut String,
     pub(super) new_level_dialog: &'a mut Option<NewLevelDialog>,
-    pub(super) new_level_type_path: &'a str,
 }
 
 pub(super) fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect, state: TopOverlayState<'_>) {
@@ -99,7 +95,6 @@ pub(super) fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRe
         custom_fill_boundaries,
         custom_fill_search,
         new_level_dialog,
-        new_level_type_path,
     } = state;
     draw_overlay_underlay(ui, bounds);
 
@@ -129,7 +124,7 @@ pub(super) fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRe
     let levels_width = z_level_width(ui, session.level_count());
     let levels_x = (bounds.max[0] - OVERLAY_PADDING - levels_width).max(tools_end + OVERLAY_PADDING);
     ui.set_cursor_screen_pos([levels_x, bounds.min[1] + OVERLAY_PADDING]);
-    draw_z_levels(ui, session, new_level_dialog, new_level_type_path);
+    draw_z_levels(ui, session, new_level_dialog);
 }
 
 fn draw_block_select_tool_button(

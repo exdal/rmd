@@ -711,7 +711,7 @@ mod tests {
     use objtree::VarDecl;
 
     use super::{
-        super::{IMGUI_CONTEXT, MAX_CUSTOM_FILL_SEARCH_RESULTS, matching_type_paths},
+        super::{IMGUI_CONTEXT, MAX_CUSTOM_FILL_SEARCH_RESULTS, search::matching_type_paths_up_to_filtered},
         *,
     };
 
@@ -742,7 +742,7 @@ mod tests {
         }
 
         assert_eq!(
-            matching_type_paths(&tree, "floor").len(),
+            matching_type_paths_up_to_filtered(&tree, "floor", MAX_CUSTOM_FILL_SEARCH_RESULTS, |_| true).len(),
             MAX_CUSTOM_FILL_SEARCH_RESULTS
         );
         assert_eq!(

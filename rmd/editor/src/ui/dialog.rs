@@ -9,7 +9,7 @@ use editor::{
     tool::{FillMode, SelectionMask, Tool},
 };
 
-use super::{UiState, matching_type_paths};
+use super::{DIAGNOSTIC_WARNING_COLOR, UiState};
 use crate::{session::Session, settings::KeybindPreset};
 
 pub(super) const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warning";
@@ -18,11 +18,11 @@ pub(super) const NEW_MAP_POPUP: &str = "New map##new-map";
 
 const NEW_LEVEL_POPUP: &str = "Create Z level##new-z-level";
 
+pub(super) const RESIZE_MAP_POPUP: &str = "Resize map##resize-map";
+
+const RESIZE_MAP_WIDTH: f32 = 320.0;
+
 const NEW_MAP_PATH_WIDTH: f32 = 460.0;
-
-const NEW_LEVEL_PATH_WIDTH: f32 = 420.0;
-
-const NEW_LEVEL_SEARCH_HEIGHT: f32 = 180.0;
 
 const NEW_MAP_DEFAULT_WIDTH: i32 = 255;
 
@@ -96,9 +96,27 @@ pub(super) struct NewMapDialog {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct NewLevelDialog {
     pub(super) document: DocumentId,
-    pub(super) type_path: String,
     pub(super) error: Option<String>,
     pub(super) open: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ResizeMapDialog {
+    width: i32,
+    height: i32,
+    losses: Option<(i32, i32, usize)>,
+    error: Option<String>,
+}
+
+impl ResizeMapDialog {
+    pub(super) fn new(size: Size) -> Self {
+        Self {
+            width: size.x as i32,
+            height: size.y as i32,
+            losses: None,
+            error: None,
+        }
+    }
 }
 
 impl Default for NewMapDialog {
@@ -259,9 +277,94 @@ pub(super) fn draw_new_map_dialog(ui: &Ui, session: &mut Session, dialog: &mut O
     (pick_path, created)
 }
 
-pub(super) fn draw_new_level_dialog(
-    ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDialog>, remembered_type_path: &mut String,
-) {
+/// Returns whether the map was resized
+pub(super) fn draw_resize_map_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<ResizeMapDialog>) -> bool {
+    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
+        | WindowFlags::NO_RESIZE
+        | WindowFlags::NO_MOVE
+        | WindowFlags::NO_COLLAPSE
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::NO_DOCKING;
+    let mut close = false;
+    let mut resized = false;
+
+    if let Some(state) = dialog.as_mut()
+        && let Some(_modal) = ui.begin_modal_popup_config(RESIZE_MAP_POPUP).flags(flags).begin()
+    {
+        let Some(size) = session.map().map(|map| map.size) else {
+            *dialog = None;
+            ui.close_current_popup();
+            return false;
+        };
+        ui.text(format!("Currently {}x{} on {} Z level(s)", size.x, size.y, size.z));
+        for (label, id, value) in [
+            ("Width", "##resize-map-width", &mut state.width),
+            ("Height", "##resize-map-height", &mut state.height),
+        ] {
+            ui.text(label);
+            ui.set_next_item_width(RESIZE_MAP_WIDTH);
+            ui.drag_int_config(id)
+                .range(1, NEW_MAP_MAX_DIMENSION)
+                .flags(DragFlags::ALWAYS_CLAMP)
+                .build(ui, value);
+        }
+
+        let wrap = ui.push_text_wrap_pos(ui.cursor_pos()[0] + RESIZE_MAP_WIDTH);
+        let fill = session.default_fill().map(|fill| fill_label(&fill)).unwrap_or_default();
+        ui.text_disabled(format!("New tiles be filled with {fill}."));
+        let (width, height) = (state.width, state.height);
+        let losses = match state.losses {
+            Some((cached_width, cached_height, losses)) if (cached_width, cached_height) == (width, height) => losses,
+            _ => {
+                let losses = session.resize_losses(width as u32, height as u32);
+                state.losses = Some((width, height, losses));
+                losses
+            },
+        };
+        if losses > 0 {
+            let noun = if losses == 1 { "tile" } else { "tiles" };
+            ui.text_colored(
+                DIAGNOSTIC_WARNING_COLOR,
+                format!("{losses} {noun} will be deleted! You can revert this operation with undo."),
+            );
+        }
+        if let Some(error) = state.error.as_deref() {
+            ui.text_colored(SAVE_ERROR_COLOR, error);
+        }
+        wrap.end();
+        ui.separator();
+
+        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+            close = true;
+            ui.close_current_popup();
+        }
+        ui.same_line();
+        let changed = (width as u32, height as u32) != (size.x, size.y);
+        let clicked = {
+            let _disabled = ui.begin_disabled_with_cond(!changed);
+
+            ui.button("Resize")
+        };
+        if changed && clicked {
+            match session.resize_map(width as u32, height as u32) {
+                Ok(()) => {
+                    resized = true;
+                    close = true;
+                    ui.close_current_popup();
+                },
+                Err(error) => state.error = Some(error),
+            }
+        }
+    }
+
+    if close {
+        *dialog = None;
+    }
+
+    resized
+}
+
+pub(super) fn draw_new_level_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDialog>) {
     let flags = WindowFlags::ALWAYS_AUTO_RESIZE
         | WindowFlags::NO_RESIZE
         | WindowFlags::NO_MOVE
@@ -283,46 +386,10 @@ pub(super) fn draw_new_level_dialog(
         if let Some(document) = session.state.document(state.document) {
             ui.text(format!("Create Z level {}", document.map.size.z.saturating_add(1)));
         }
-        ui.text("Fill type path");
-        ui.set_next_item_width(NEW_LEVEL_PATH_WIDTH);
-        if ui.is_window_appearing() {
-            ui.set_keyboard_focus_here();
+        match session.default_fill() {
+            Ok(fill) => ui.text_disabled(format!("New tiles will be filled with {}.", fill_label(&fill))),
+            Err(error) => ui.text_colored(SAVE_ERROR_COLOR, error),
         }
-        let submitted = ui
-            .input_text("##new-z-level-type-path", &mut state.type_path)
-            .hint("/turf")
-            .enter_returns_true(true)
-            .build();
-
-        let mut selected_path = None;
-        if state.type_path.trim().is_empty() {
-            ui.text_disabled("Type a path to search");
-        } else if let Some(tree) = session.tree() {
-            let matches = matching_type_paths(tree, &state.type_path);
-            if matches.is_empty() {
-                ui.text_disabled("No matching types");
-            } else {
-                ui.child_window("new-z-level-search-results")
-                    .size([NEW_LEVEL_PATH_WIDTH, NEW_LEVEL_SEARCH_HEIGHT])
-                    .border(true)
-                    .build(ui, || {
-                        for path in matches {
-                            let label = path.to_string();
-                            if ui.selectable_config(&label).selected(state.type_path == label).build() {
-                                selected_path = Some(label);
-                            }
-                        }
-                    });
-            }
-        } else {
-            ui.text_disabled("No environment loaded");
-        }
-
-        if let Some(path) = selected_path {
-            state.type_path = path;
-            state.error = None;
-        }
-
         if let Some(error) = state.error.as_deref() {
             ui.text_colored(SAVE_ERROR_COLOR, error);
         }
@@ -333,17 +400,9 @@ pub(super) fn draw_new_level_dialog(
             ui.close_current_popup();
         }
         ui.same_line();
-
-        let can_create = !state.type_path.trim().is_empty();
-        let clicked = {
-            let _disabled = ui.begin_disabled_with_cond(!can_create);
-
-            ui.button("Create")
-        };
-        if can_create && (clicked || submitted) {
-            match session.create_level(state.document, &state.type_path) {
+        if ui.button("Create") || ui.is_key_pressed(Key::Enter) || ui.is_key_pressed(Key::KeypadEnter) {
+            match session.create_level(state.document) {
                 Ok(_) => {
-                    remembered_type_path.clone_from(&state.type_path);
                     close = true;
                     ui.close_current_popup();
                 },
@@ -355,6 +414,14 @@ pub(super) fn draw_new_level_dialog(
     if close {
         *dialog = None;
     }
+}
+
+/// `/turf/open/space and /area/space`
+fn fill_label(fill: &[Prefab]) -> String {
+    fill.iter()
+        .map(|prefab| prefab.path.to_string())
+        .collect::<Vec<_>>()
+        .join(" and ")
 }
 
 fn resolve_new_map_path(codebase_dir: &Path, input: &str) -> Result<PathBuf, String> {
@@ -649,9 +716,14 @@ mod tests {
     use super::{
         FillWarningContext,
         KEYBIND_PRESET_POPUP,
+        NewLevelDialog,
         NewMapDialog,
         PendingFillWarning,
+        RESIZE_MAP_POPUP,
+        ResizeMapDialog,
         draw_keybind_preset_dialog,
+        draw_new_level_dialog,
+        draw_resize_map_dialog,
         resolve_new_map_path,
     };
     use crate::{session::Session, ui::IMGUI_CONTEXT};
@@ -690,6 +762,69 @@ mod tests {
             .state
             .choose_prefab(Prefab::new(TreePath::parse("/turf/open/floor")));
         assert!(!warning.matches(&session, FillMode::Wall, &[]));
+    }
+
+    #[test]
+    fn enter_creates_a_z_level_filled_with_the_default_turf_and_area() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = crate::ui::fixtures::rectangle_context();
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        let document = session
+            .state
+            .open_document(MapDocument::new(dmm::Map::new(Size { x: 2, y: 1, z: 1 }), 1));
+        let mut dialog = Some(NewLevelDialog {
+            document,
+            error: None,
+            open: true,
+        });
+
+        let ui = context.frame();
+        draw_new_level_dialog(ui, &mut session, &mut dialog);
+        assert!(context.render_legacy().valid());
+        assert_eq!(session.level_count(), 1, "opening the dialog creates nothing");
+
+        context.io_mut().add_key_event(dear_imgui_rs::Key::Enter, true);
+        let ui = context.frame();
+        draw_new_level_dialog(ui, &mut session, &mut dialog);
+        assert!(context.render_legacy().valid());
+
+        assert!(dialog.is_none());
+        assert_eq!(session.level_count(), 2);
+        assert_eq!(
+            session.map().unwrap().tile_at(Coord::new(2, 1, 2)),
+            session.default_fill().ok().as_ref()
+        );
+    }
+
+    #[test]
+    fn the_resize_dialog_warns_about_the_tiles_a_shrink_deletes() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = crate::ui::fixtures::rectangle_context();
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        let mut map = dmm::Map::new(Size { x: 3, y: 1, z: 1 });
+        let table = map.intern_tile(vec![Prefab::new(TreePath::parse("/obj/structure/table"))]);
+        map.grid[0][0].fill(table);
+        session.state.open_document(MapDocument::new(map, 1));
+        let mut dialog = Some(ResizeMapDialog::new(Size { x: 3, y: 1, z: 1 }));
+
+        for width in [3, 1] {
+            dialog.as_mut().unwrap().width = width;
+            let ui = context.frame();
+            ui.open_popup(RESIZE_MAP_POPUP);
+            assert!(!draw_resize_map_dialog(ui, &mut session, &mut dialog));
+            assert!(context.render_legacy().valid());
+        }
+
+        assert_eq!(dialog.unwrap().losses, Some((1, 1, 2)));
+        assert_eq!(
+            session.map().unwrap().size.x,
+            3,
+            "nothing changes until Resize is pressed"
+        );
     }
 
     #[test]

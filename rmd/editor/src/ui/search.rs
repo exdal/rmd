@@ -28,15 +28,7 @@ pub(super) fn draw_type_path_search(
         .find(|path| ui.menu_item_enabled_selected_no_shortcut(path.to_string(), false, enabled(path)))
 }
 
-pub(super) fn matching_type_paths(tree: &ObjectTree, query: &str) -> Vec<TreePath> {
-    matching_type_paths_up_to(tree, query, MAX_CUSTOM_FILL_SEARCH_RESULTS)
-}
-
 // im not sure why every single fucking icons appear not centered fuck you
-
-fn matching_type_paths_up_to(tree: &ObjectTree, query: &str, limit: usize) -> Vec<TreePath> {
-    matching_type_paths_up_to_filtered(tree, query, limit, |_| true)
-}
 
 pub(super) fn matching_type_paths_up_to_filtered(
     tree: &ObjectTree, query: &str, limit: usize, allowed: impl Fn(&TreePath) -> bool,
@@ -64,7 +56,11 @@ mod tests {
 
     use objtree::ObjectTree;
 
-    use super::matching_type_paths;
+    use super::{MAX_CUSTOM_FILL_SEARCH_RESULTS, matching_type_paths_up_to_filtered};
+
+    fn matching_type_paths(tree: &ObjectTree, query: &str) -> Vec<TreePath> {
+        matching_type_paths_up_to_filtered(tree, query, MAX_CUSTOM_FILL_SEARCH_RESULTS, |_| true)
+    }
 
     #[test]
     fn custom_fill_search_includes_parent_types_and_ignores_case() {

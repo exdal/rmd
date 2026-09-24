@@ -14,11 +14,19 @@ pub struct TileChange {
     pub after: PlacedTile,
 }
 
+/// Map width and height on each side of an edit
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Resize {
+    pub before: (u32, u32),
+    pub after: (u32, u32),
+}
+
 #[derive(Debug, Clone)]
 pub struct Edit {
     pub label: String,
     pub changes: Vec<TileChange>,
     record_empty: bool,
+    resize: Option<Resize>,
 }
 
 impl Edit {
@@ -27,8 +35,18 @@ impl Edit {
             label: label.into(),
             changes: Vec::new(),
             record_empty: false,
+            resize: None,
         }
     }
+
+    /// The map takes the `after` size before the changes land, and the `before` size once they are undone
+    pub(crate) fn resizing(mut self, resize: Resize) -> Self {
+        self.resize = Some(resize);
+
+        self
+    }
+
+    pub fn resize(&self) -> Option<Resize> { self.resize }
 
     pub fn recorded_when_empty(mut self) -> Self {
         self.record_empty = true;
@@ -108,7 +126,7 @@ impl History {
             return;
         }
 
-        apply_changes(map, instances, key_usage, &edit.changes, ChangeSide::After);
+        apply_edit(map, instances, key_usage, &edit, ChangeSide::After);
 
         let undo_len = self.undo_stack.len();
         if group.is_some()
@@ -135,7 +153,7 @@ impl History {
         &mut self, map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>,
     ) -> Option<&Edit> {
         let entry = self.undo_stack.pop()?;
-        apply_changes(map, instances, key_usage, &entry.edit.changes, ChangeSide::Before);
+        apply_edit(map, instances, key_usage, &entry.edit, ChangeSide::Before);
 
         self.redo_stack.push(entry);
 
@@ -146,7 +164,7 @@ impl History {
         &mut self, map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>,
     ) -> Option<&Edit> {
         let entry = self.redo_stack.pop()?;
-        apply_changes(map, instances, key_usage, &entry.edit.changes, ChangeSide::After);
+        apply_edit(map, instances, key_usage, &entry.edit, ChangeSide::After);
 
         self.undo_stack.push(entry);
 
@@ -170,6 +188,10 @@ impl History {
     pub fn can_undo(&self) -> bool { !self.undo_stack.is_empty() }
 
     pub fn can_redo(&self) -> bool { !self.redo_stack.is_empty() }
+
+    pub fn next_undo(&self) -> Option<&Edit> { self.undo_stack.last().map(|entry| &entry.edit) }
+
+    pub fn next_redo(&self) -> Option<&Edit> { self.redo_stack.last().map(|entry| &entry.edit) }
 
     pub fn undo_label(&self) -> Option<&str> { self.undo_stack.last().map(|entry| entry.edit.label.as_str()) }
 
@@ -198,6 +220,37 @@ fn merge_changes(previous: &mut Vec<TileChange>, next: Vec<TileChange>) {
 enum ChangeSide {
     Before,
     After,
+}
+
+/// Grows the map before the changes land and crops it after, so every changed tile exists while it changes
+fn apply_edit(
+    map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>, edit: &Edit, side: ChangeSide,
+) {
+    let size = edit.resize.map(|resize| match side {
+        ChangeSide::Before => resize.before,
+        ChangeSide::After => resize.after,
+    });
+    if let Some((width, height)) = size {
+        resize_grid(map, key_usage, width.max(map.size.x), height.max(map.size.y));
+    }
+    apply_changes(map, instances, key_usage, &edit.changes, side);
+    if let Some((width, height)) = size {
+        resize_grid(map, key_usage, width, height);
+    }
+}
+
+fn resize_grid(map: &mut Map, key_usage: &mut HashMap<Key, usize>, width: u32, height: u32) {
+    if (map.size.x, map.size.y) == (width, height) {
+        return;
+    }
+    let empty = map.intern_tile(Vec::new());
+    map.resize(width, height, empty);
+
+    key_usage.clear();
+    for key in map.grid.iter().flatten().flatten() {
+        *key_usage.entry(*key).or_insert(0) += 1;
+    }
+    map.dictionary.retain(|key, _| key_usage.contains_key(key));
 }
 
 fn apply_changes(

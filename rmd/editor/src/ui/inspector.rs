@@ -164,9 +164,7 @@ impl InspectorState {
                 ) {
                     self.scope = EditScope::Identical;
                 }
-                ui.set_item_tooltip(
-                    "Changes apply to every placement of this exact object on the map",
-                );
+                ui.set_item_tooltip("Changes apply to every placement of this exact object on the map");
             },
             EditScope::Identical => {
                 if draw_identical_banner(ui, session) {

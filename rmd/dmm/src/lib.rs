@@ -213,6 +213,26 @@ impl Map {
         }
     }
 
+    /// Keeps the bottom-left corner in place and fills new cells with `fill`
+    pub fn resize(&mut self, width: u32, height: u32, fill: Key) {
+        let old_height = self.size.y as usize;
+        let height_cells = height as usize;
+        for level in &mut self.grid {
+            // rows are stored top first, so the top is where rows come and go
+            if height_cells >= old_height {
+                let added = vec![vec![fill; self.size.x as usize]; height_cells - old_height];
+                level.splice(0..0, added);
+            } else {
+                level.drain(0..old_height - height_cells);
+            }
+            for row in level.iter_mut() {
+                row.resize(width as usize, fill);
+            }
+        }
+        self.size.x = width;
+        self.size.y = height;
+    }
+
     pub fn prune_dictionary(&mut self) {
         let used: std::collections::HashSet<Key> = self.grid.iter().flatten().flatten().copied().collect();
 
@@ -227,6 +247,31 @@ mod tests {
     use crate::{Map, Prefab, Size, key::Key};
 
     fn tile(path: &str) -> Vec<Prefab> { vec![Prefab::new(TreePath::parse(path))] }
+
+    #[test]
+    fn resizing_keeps_the_bottom_left_corner() {
+        let mut map = Map::new(Size { x: 2, y: 2, z: 2 });
+        let wall = map.intern_tile(tile("/turf/wall"));
+        let floor = map.intern_tile(tile("/turf/floor"));
+        let space = map.intern_tile(tile("/turf/space"));
+        for level in &mut map.grid {
+            *level = vec![vec![floor, floor], vec![wall, floor]];
+        }
+        let corner = crate::Coord::new(1, 1, 2);
+        assert_eq!(map.key_at(corner), Some(wall));
+
+        map.resize(3, 4, space);
+        assert_eq!((map.size.x, map.size.y, map.size.z), (3, 4, 2));
+        assert_eq!(map.key_at(corner), Some(wall));
+        assert_eq!(map.key_at(crate::Coord::new(2, 2, 2)), Some(floor));
+        assert_eq!(map.key_at(crate::Coord::new(3, 1, 2)), Some(space));
+        assert_eq!(map.key_at(crate::Coord::new(1, 4, 1)), Some(space));
+        assert!(map.grid.iter().flatten().all(|row| row.len() == 3));
+        assert!(map.grid.iter().all(|level| level.len() == 4));
+
+        map.resize(1, 1, space);
+        assert_eq!(map.grid, vec![vec![vec![wall]]; 2]);
+    }
 
     #[test]
     fn intern_tile_does_not_collide_after_pruning() {

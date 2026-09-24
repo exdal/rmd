@@ -27,6 +27,7 @@ pub(super) struct MenuActions {
     pub(super) undo: bool,
     pub(super) redo: bool,
     pub(super) search: bool,
+    pub(super) resize_map: bool,
 }
 
 impl UiState {
@@ -107,6 +108,9 @@ impl UiState {
                     session.map().is_some(),
                 ) {
                     actions.search = true;
+                }
+                if ui.menu_item_enabled_selected_no_shortcut("Resize map...", false, session.map().is_some()) {
+                    actions.resize_map = true;
                 }
             });
             ui.menu("View", || {

@@ -198,6 +198,11 @@ impl Session {
 
     pub fn undo(&mut self) -> bool {
         let reordered = self.undo_label().is_some_and(is_reorder_label);
+        let resized = self
+            .state
+            .active_document()
+            .and_then(|document| document.history.next_undo())
+            .is_some_and(|edit| edit.resize().is_some());
         let Some(affected) = self
             .state
             .active_document_mut()
@@ -206,7 +211,11 @@ impl Session {
             return false;
         };
 
-        if reordered {
+        if resized {
+            if let Some(id) = self.state.active() {
+                self.rebake(id);
+            }
+        } else if reordered {
             self.refresh_reordered_from_affected(&affected);
         } else {
             self.update_instances(&affected);
@@ -223,6 +232,11 @@ impl Session {
 
     pub fn redo(&mut self) -> bool {
         let reordered = self.redo_label().is_some_and(is_reorder_label);
+        let resized = self
+            .state
+            .active_document()
+            .and_then(|document| document.history.next_redo())
+            .is_some_and(|edit| edit.resize().is_some());
         let Some(affected) = self
             .state
             .active_document_mut()
@@ -231,7 +245,11 @@ impl Session {
             return false;
         };
 
-        if reordered {
+        if resized {
+            if let Some(id) = self.state.active() {
+                self.rebake(id);
+            }
+        } else if reordered {
             self.refresh_reordered_from_affected(&affected);
         } else {
             self.update_instances(&affected);

@@ -82,6 +82,8 @@ use self::{
         NewLevelDialog,
         NewMapDialog,
         PendingFillWarning,
+        RESIZE_MAP_POPUP,
+        ResizeMapDialog,
         SAVE_ERROR_COLOR,
         SAVE_MAP_POPUP,
         SaveDialog,
@@ -89,6 +91,7 @@ use self::{
         draw_keybind_preset_dialog,
         draw_new_level_dialog,
         draw_new_map_dialog,
+        draw_resize_map_dialog,
         draw_save_dialog,
     },
     grid::{draw_selected_pixel_grid, draw_tile_grid},
@@ -109,7 +112,7 @@ use self::{
         draw_placement_preview,
     },
     paste::{PASTE_LABELS, PasteAction, PendingPaste, centered_paste_min, draw_paste_controls, paste_controls},
-    search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search, matching_type_paths},
+    search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search},
     toolbar::{DEFAULT_CUSTOM_FILL_BOUNDARY, TopOverlayState, draw_top_overlay, request_level_change},
     tooltip::{draw_conflict_tooltip, draw_diff_tooltip},
     viewport::{ActivePlacementFlash, DeletionStroke, MapViewState, PlacementStroke},
@@ -203,7 +206,7 @@ pub struct UiState {
     popup_was_open: bool,
     new_map_dialog: Option<NewMapDialog>,
     new_level_dialog: Option<NewLevelDialog>,
-    new_level_type_path: String,
+    resize_map_dialog: Option<ResizeMapDialog>,
     save_dialog: Option<SaveDialog>,
     pending_close: Option<DocumentId>,
     pending_conflict_reload: Option<DocumentId>,
@@ -273,7 +276,7 @@ impl UiState {
             popup_was_open: false,
             new_map_dialog: None,
             new_level_dialog: None,
-            new_level_type_path: String::new(),
+            resize_map_dialog: None,
             save_dialog: None,
             pending_close: None,
             pending_conflict_reload: None,
@@ -403,6 +406,7 @@ impl UiState {
             undo,
             redo,
             mut search,
+            resize_map,
         } = self.draw_menu_bar(ui, session, settings, loading);
 
         if session.map().is_some()
@@ -495,12 +499,7 @@ impl UiState {
             settings.show_selected_pixel_grid = !settings.show_selected_pixel_grid;
         }
         if level_delta != 0 {
-            request_level_change(
-                session,
-                level_delta,
-                &mut self.new_level_dialog,
-                &self.new_level_type_path,
-            );
+            request_level_change(session, level_delta, &mut self.new_level_dialog);
         }
         if let Some(depth) = underlay_depth {
             session.set_underlay_depth(depth);
@@ -645,7 +644,17 @@ impl UiState {
 
         self.dm_ui.draw(ui, session, root.raw());
 
-        draw_new_level_dialog(ui, session, &mut self.new_level_dialog, &mut self.new_level_type_path);
+        draw_new_level_dialog(ui, session, &mut self.new_level_dialog);
+
+        if resize_map && let Some(size) = session.map().map(|map| map.size) {
+            self.cancel_edit_gestures(session, session.state.active());
+            self.resize_map_dialog = Some(ResizeMapDialog::new(size));
+            ui.open_popup(RESIZE_MAP_POPUP);
+        }
+
+        if draw_resize_map_dialog(ui, session, &mut self.resize_map_dialog) {
+            self.request_refit(session.state.active());
+        }
 
         self.settings_window
             .finish_keybind_capture(ui, &mut settings.keybindings);

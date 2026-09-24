@@ -1,7 +1,5 @@
-use core::path::TreePath;
-
-use dmm::Prefab;
-use editor::{document::DocumentId, tool::is_placeable};
+use dmm::{Coord, Prefab};
+use editor::{document::DocumentId, tool::default_tile_paths};
 
 use super::{LevelChange, Session};
 
@@ -102,27 +100,9 @@ impl Session {
         }
     }
 
-    pub fn create_level(&mut self, id: DocumentId, type_path: &str) -> Result<u32, String> {
+    pub fn create_level(&mut self, id: DocumentId) -> Result<u32, String> {
         self.cancel_node_edit();
-        let type_path = type_path.trim();
-        if type_path.is_empty() {
-            return Err(String::from("enter a type path"));
-        }
-
-        let requested = TreePath::parse(type_path);
-        let path = {
-            let tree = self.tree().ok_or_else(|| String::from("no codebase is loaded"))?;
-            let type_id = tree
-                .id_of(&requested)
-                .ok_or_else(|| format!("unknown type path: {type_path}"))?;
-            if !is_placeable(tree, type_id) {
-                return Err(format!("type path is not an atom: {type_path}"));
-            }
-
-            tree.get(type_id)
-                .map(|declaration| TreePath::parse(&declaration.path.to_string()))
-                .ok_or_else(|| format!("unknown type path: {type_path}"))?
-        };
+        let fill = self.default_fill()?;
 
         let document = self
             .state
@@ -137,7 +117,7 @@ impl Session {
         }
 
         let z = document
-            .append_level(&[Prefab::new(path)])
+            .append_level(&fill)
             .ok_or_else(|| String::from("could not allocate another Z level"))?;
         document.z = z;
         document.set_focus(None);
@@ -146,6 +126,62 @@ impl Session {
         self.rebake(id);
 
         Ok(z)
+    }
+}
+
+impl Session {
+    pub fn resize_map(&mut self, width: u32, height: u32) -> Result<(), String> {
+        if !(1..=MAX_MAP_DIMENSION).contains(&width) || !(1..=MAX_MAP_DIMENSION).contains(&height) {
+            return Err(format!("map dimensions must each be between 1 and {MAX_MAP_DIMENSION}"));
+        }
+        let fill = self.default_fill()?;
+        let id = self.state.active().ok_or_else(|| String::from("no map is open"))?;
+        if self.node_edit.as_ref().is_some_and(|edit| edit.document == id) {
+            self.cancel_node_edit();
+        }
+
+        let resized = self
+            .state
+            .document_mut(id)
+            .is_some_and(|document| document.resize(width, height, &fill));
+        if resized {
+            self.rebake(id);
+            let cache = self.caches.entry(id).or_default();
+            cache.map_revision = cache.map_revision.wrapping_add(1);
+        }
+
+        Ok(())
+    }
+
+    /// Tiles a resize would delete that hold more than the default turf and area
+    pub fn resize_losses(&self, width: u32, height: u32) -> usize {
+        let (Some(document), Ok(fill)) = (self.state.active_document(), self.default_fill()) else {
+            return 0;
+        };
+        let size = document.map.size;
+        let mut losses = 0;
+        for z in 1..=size.z {
+            for y in 1..=size.y {
+                for x in (1..=size.x).filter(|x| *x > width || y > height) {
+                    if document
+                        .map
+                        .tile_at(Coord::new(x, y, z))
+                        .is_some_and(|tile| *tile != fill)
+                    {
+                        losses += 1;
+                    }
+                }
+            }
+        }
+
+        losses
+    }
+
+    pub(crate) fn default_fill(&self) -> Result<Vec<Prefab>, String> {
+        self.tree()
+            .and_then(default_tile_paths)
+            .map(|(turf, area)| vec![Prefab::new(turf), Prefab::new(area)])
+            .ok_or_else(|| String::from("the codebase does not define usable /turf and /area types"))
     }
 }
 
@@ -163,8 +199,43 @@ mod tests {
     use crate::session::{
         LevelChange,
         Session,
-        fixtures::{examples, focus_session},
+        fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session},
     };
+
+    #[test]
+    fn resizing_the_map_rebuilds_the_render_cache_and_undo_restores_it() {
+        let mut session = flat_session(3, 2);
+        let fill = session.default_fill().unwrap();
+        let tile = session.options.tile_size as f32;
+
+        assert_eq!(session.resize_map(5, 4), Ok(()));
+        let size = session.map().unwrap().size;
+        assert_eq!((size.x, size.y), (5, 4));
+        assert_eq!(session.map().unwrap().tile_at(Coord::new(5, 4, 1)), Some(&fill));
+        assert_eq!(session.extent_px(), (5.0 * tile, 4.0 * tile));
+        assert_render_cache_matches_rebuild(&session);
+
+        assert!(session.undo());
+        let size = session.map().unwrap().size;
+        assert_eq!((size.x, size.y), (3, 2));
+        assert_render_cache_matches_rebuild(&session);
+
+        assert!(session.redo());
+        assert_eq!(session.map().unwrap().size.x, 5);
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    fn resize_losses_count_tiles_with_more_than_the_default_turf_and_area() {
+        let mut session = flat_session(3, 1);
+        assert_eq!(session.resize_map(4, 1), Ok(()));
+
+        assert_eq!(session.resize_losses(3, 1), 0, "only the added default tile goes");
+        assert_eq!(session.resize_losses(2, 1), 1);
+        assert_eq!(session.resize_losses(4, 1), 0);
+        assert!(session.resize_map(0, 1).is_err());
+        assert!(session.resize_map(1, MAX_MAP_DIMENSION + 1).is_err());
+    }
 
     #[test]
     fn validates_one_based_map_levels() {
@@ -211,18 +282,18 @@ mod tests {
         assert!(!session.can_change_level(-1));
         assert_eq!(session.change_level(1), LevelChange::NewLevelRequested);
         assert_eq!(session.level_count(), 1, "the request does not create a level yet");
-        assert!(session.create_level(id, "/missing/type").is_err());
-        assert_eq!(session.level_count(), 1, "an invalid fill path changes nothing");
-        assert_eq!(session.create_level(id, "/turf"), Ok(2));
+        assert_eq!(session.create_level(id), Ok(2));
 
+        let fill = session.default_fill().unwrap();
         let document = session.state.active_document().expect("active document");
         assert_eq!(document.map.size.z, 2);
         assert_eq!(document.z, 2);
         assert!(document.is_dirty());
         for x in 1..=2 {
             assert_eq!(
-                document.map.tile_at(Coord::new(x, 1, 2)).expect("filled tile")[0].path,
-                TreePath::parse("/turf")
+                document.map.tile_at(Coord::new(x, 1, 2)),
+                Some(&fill),
+                "the default turf and area"
             );
         }
         assert_ne!(

@@ -528,10 +528,10 @@ impl UiState {
                     settings.show_selected_pixel_grid = !settings.show_selected_pixel_grid;
                 }
                 if settings.keybindings.get(KeybindAction::LevelUp).is_pressed(ui) {
-                    request_level_change(session, 1, &mut self.new_level_dialog, &self.new_level_type_path);
+                    request_level_change(session, 1, &mut self.new_level_dialog);
                 }
                 if settings.keybindings.get(KeybindAction::LevelDown).is_pressed(ui) {
-                    request_level_change(session, -1, &mut self.new_level_dialog, &self.new_level_type_path);
+                    request_level_change(session, -1, &mut self.new_level_dialog);
                 }
                 if settings.keybindings.get(KeybindAction::Refit).is_pressed(ui) {
                     *refit = true;
@@ -1534,7 +1534,6 @@ impl UiState {
                         custom_fill_boundaries: &mut self.custom_fill_boundaries,
                         custom_fill_search: &mut self.custom_fill_search,
                         new_level_dialog: &mut self.new_level_dialog,
-                        new_level_type_path: &self.new_level_type_path,
                     },
                 );
                 if is_active && session.git_state(id).is_some_and(|git| git.pending_load) {
