@@ -54,6 +54,20 @@ impl Key {
         out
     }
 
+    pub fn capacity(length: usize) -> u32 {
+        const MAX_KEYS: u32 = 65530;
+
+        let mut capacity: u32 = 1;
+        for _ in 0..length {
+            capacity = capacity.saturating_mul(BASE);
+            if capacity >= MAX_KEYS {
+                return MAX_KEYS;
+            }
+        }
+
+        capacity
+    }
+
     pub fn length_for(count: usize) -> usize {
         let mut length = 1;
         let mut capacity = BASE as usize;
@@ -85,6 +99,14 @@ mod tests {
         assert_eq!(Key::length_for(53), 2);
         assert_eq!(Key::length_for(2704), 2);
         assert_eq!(Key::length_for(2705), 3);
+    }
+
+    #[test]
+    fn caps_capacity_below_ymo() {
+        assert_eq!(Key::capacity(1), 52);
+        assert_eq!(Key::capacity(2), 2704);
+        assert_eq!(Key::capacity(3), 65530);
+        assert_eq!(Key::capacity(4), 65530);
     }
 
     #[test]

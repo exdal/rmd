@@ -576,6 +576,7 @@ impl MapDocument {
         saved_map.grid.truncate(retained_level_count as usize);
         saved_map.size.z = retained_level_count;
         saved_map.prune_dictionary();
+        saved_map.reassign_overflowing_keys();
         let contents = dmm::writer::MapWriter::new(&saved_map).with_format(format).write();
 
         if self.needs_initial_save {

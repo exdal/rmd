@@ -153,21 +153,64 @@ impl Map {
             return *key;
         }
 
-        // Keys stay sparse after pruning
-        let next = self
-            .dictionary
-            .keys()
-            .map(|key| key.0)
-            .max()
-            .map_or(0, |max| max.saturating_add(1));
-        let key = Key(next);
-
+        let key = self.free_key();
         self.dictionary.insert(key, tile);
 
-        // Never narrow keys
-        self.key_length = self.key_length.max(Key::length_for((key.0 as usize).saturating_add(1)));
-
         key
+    }
+
+    fn free_key(&mut self) -> Key {
+        self.key_length = self.key_length.max(1);
+
+        loop {
+            let capacity = Key::capacity(self.key_length);
+            if let Some(key) = (0..capacity).map(Key).find(|key| !self.dictionary.contains_key(key)) {
+                return key;
+            }
+
+            if Key::capacity(self.key_length + 1) == capacity {
+                let next = self
+                    .dictionary
+                    .keys()
+                    .map(|key| key.0)
+                    .max()
+                    .map_or(0, |max| max.saturating_add(1));
+                return Key(next);
+            }
+
+            self.key_length += 1;
+        }
+    }
+
+    pub fn reassign_overflowing_keys(&mut self) {
+        let capacity = Key::capacity(self.key_length);
+        let mut overflowing: Vec<Key> = self
+            .dictionary
+            .keys()
+            .copied()
+            .filter(|key| key.0 >= capacity)
+            .collect();
+        if overflowing.is_empty() {
+            return;
+        }
+
+        overflowing.sort();
+
+        let mut remap = HashMap::new();
+        for old in overflowing {
+            let Some(tile) = self.dictionary.remove(&old) else {
+                continue;
+            };
+            let new = self.free_key();
+            self.dictionary.insert(new, tile);
+            remap.insert(old, new);
+        }
+
+        for key in self.grid.iter_mut().flatten().flatten() {
+            if let Some(new) = remap.get(key) {
+                *key = *new;
+            }
+        }
     }
 
     pub fn prune_dictionary(&mut self) {
@@ -208,6 +251,59 @@ mod tests {
         assert_ne!(fresh, kept);
         assert_eq!(map.dictionary.len(), 2);
         assert_eq!(map.dictionary.get(&kept), Some(&tile("/turf/wall")));
+    }
+
+    #[test]
+    fn intern_tile_fills_gaps() {
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        map.key_length = 3;
+        map.dictionary.insert(Key(0), tile("/turf/wall"));
+        map.dictionary.insert(Key::parse("ylZ").unwrap(), tile("/turf/floor"));
+
+        assert_eq!(map.intern_tile(tile("/turf/space")), Key(1));
+    }
+
+    #[test]
+    fn intern_tile_never_exceeds_ymo() {
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        map.key_length = 3;
+        for raw in 0..Key::capacity(3) - 1 {
+            map.dictionary.insert(Key(raw), Vec::new());
+        }
+
+        let last = map.intern_tile(tile("/turf/space"));
+
+        assert_eq!(last, Key(Key::capacity(3) - 1));
+        assert!(last <= Key::parse("ymo").unwrap());
+    }
+
+    #[test]
+    fn intern_tile_widens_once_every_short_key_is_taken() {
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        for raw in 0..52 {
+            map.dictionary.insert(Key(raw), Vec::new());
+        }
+
+        assert_eq!(map.intern_tile(tile("/turf/space")), Key(52));
+        assert_eq!(map.key_length, 2);
+    }
+
+    #[test]
+    fn reassign_overflowing_keys_moves_keys_into_gaps() {
+        let mut map = Map::new(Size { x: 2, y: 1, z: 1 });
+        map.key_length = 3;
+        let overflowing = Key::parse("yog").unwrap();
+        map.dictionary.insert(Key(0), tile("/turf/wall"));
+        map.dictionary.insert(overflowing, tile("/turf/floor"));
+        map.grid[0][0] = vec![Key(0), overflowing];
+
+        map.reassign_overflowing_keys();
+
+        let moved = map.grid[0][0][1];
+        assert_eq!(moved, Key(1));
+        assert_eq!(map.dictionary.get(&moved), Some(&tile("/turf/floor")));
+        assert!(!map.dictionary.contains_key(&overflowing));
+        assert_eq!(map.grid[0][0][0], Key(0));
     }
 
     #[test]
