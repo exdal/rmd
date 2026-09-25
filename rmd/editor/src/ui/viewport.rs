@@ -1635,32 +1635,43 @@ impl UiState {
         };
 
         self.cancel_edit_gestures(session, session.state.active());
-        session.set_active_document(target.document);
-        session.set_level(location.coord.z);
+        self.center_view_on(session, target.document, location.coord);
         if let Some(document) = session.state.active_document_mut() {
             document.set_focus(None);
             document.selection = None;
         }
         session.select_instance(Some(target.instance));
+    }
 
-        let view = match self.map_views.get_mut(&target.document) {
+    pub(super) fn go_to_tile(&mut self, session: &mut Session, document: DocumentId, coord: Coord, now: f64) {
+        self.cancel_edit_gestures(session, session.state.active());
+        self.center_view_on(session, document, coord);
+        self.placement_flash = session.turf_at(document, coord).map(|owner| ActivePlacementFlash {
+            owner,
+            coord,
+            started_at: now,
+        });
+    }
+
+    pub(super) fn center_view_on(&mut self, session: &mut Session, document: DocumentId, coord: Coord) {
+        session.set_active_document(document);
+        session.set_level(coord.z);
+
+        let view = match self.map_views.get_mut(&document) {
             Some(view) => view,
             None => {
-                let Ok(view) = MapViewState::new(target.document) else {
-                    log::error!(
-                        "could not create a map view window for document {}",
-                        target.document.get()
-                    );
+                let Ok(view) = MapViewState::new(document) else {
+                    log::error!("could not create a map view window for document {}", document.get());
 
                     return;
                 };
-                self.map_views.insert(target.document, view);
+                self.map_views.insert(document, view);
                 self.map_views
-                    .get_mut(&target.document)
+                    .get_mut(&document)
                     .expect("the inserted map view is available")
             },
         };
-        view.camera.center_on_tile(location.coord, session.options.tile_size);
+        view.camera.center_on_tile(coord, session.options.tile_size);
         view.refit = false;
         view.focus = true;
     }
@@ -2739,5 +2750,46 @@ mod tests {
         assert!(stroke.move_to([11, 20]));
         assert!(!stroke.move_to([11, 20]));
         assert!(stroke.move_to([10, 20]));
+    }
+
+    #[test]
+    fn going_to_a_tile_opens_a_view_on_its_level_and_flashes_its_turf() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        let mut map = dmm::Map::new(Size { x: 3, y: 3, z: 2 });
+        let tile = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/obj/structure/table")),
+            Prefab::new(TreePath::parse("/turf/open/floor")),
+            Prefab::new(TreePath::parse("/area/station")),
+        ]);
+        for cell in map.grid.iter_mut().flatten().flatten() {
+            *cell = tile;
+        }
+        let document = session.state.open_document(MapDocument::new(map, 1));
+        let target = Coord::new(2, 3, 2);
+        let turf = session.state.document(document).unwrap().instance_ids_at(target)[1];
+        let mut state = super::UiState::new(false).expect("valid window keys");
+
+        state.go_to_tile(&mut session, document, target, 10.0);
+
+        assert_eq!(session.state.active(), Some(document));
+        assert_eq!(session.z(), 2);
+        let mut expected = MapViewState::new(document).unwrap().camera;
+        expected.center_on_tile(target, session.options.tile_size);
+        let view = state.map_views.get(&document).expect("a view opens for the map");
+        assert_eq!(
+            (view.camera.camera.x, view.camera.camera.y),
+            (expected.camera.x, expected.camera.y)
+        );
+        assert!(view.focus);
+        assert_eq!(
+            state.placement_flash,
+            Some(ActivePlacementFlash {
+                owner: turf,
+                coord: target,
+                started_at: 10.0,
+            })
+        );
     }
 }

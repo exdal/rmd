@@ -289,6 +289,7 @@ pub(crate) enum KeybindAction {
     Find,
     FindNext,
     FindPrevious,
+    GoTo,
     Recent1,
     Recent2,
     Recent3,
@@ -305,7 +306,7 @@ pub(crate) enum KeybindAction {
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 37] = [
         Self::Save,
         Self::Undo,
         Self::Redo,
@@ -329,6 +330,7 @@ impl KeybindAction {
         Self::Find,
         Self::FindNext,
         Self::FindPrevious,
+        Self::GoTo,
         Self::Recent1,
         Self::Recent2,
         Self::Recent3,
@@ -381,6 +383,7 @@ impl KeybindAction {
             Self::Find => "Search",
             Self::FindNext => "Next search match",
             Self::FindPrevious => "Previous search match",
+            Self::GoTo => "Go to coordinates",
             Self::Recent1 => "Recent 1",
             Self::Recent2 => "Recent 2",
             Self::Recent3 => "Recent 3",
@@ -422,6 +425,7 @@ impl KeybindAction {
             Self::Find => "find",
             Self::FindNext => "find_next",
             Self::FindPrevious => "find_previous",
+            Self::GoTo => "go-to",
             Self::Recent1 => "recent-1",
             Self::Recent2 => "recent-2",
             Self::Recent3 => "recent-3",
@@ -465,6 +469,7 @@ pub(crate) struct KeyBindings {
     find: KeyBinding,
     find_next: KeyBinding,
     find_previous: KeyBinding,
+    go_to: KeyBinding,
     recent_1: KeyBinding,
     recent_2: KeyBinding,
     recent_3: KeyBinding,
@@ -506,6 +511,7 @@ impl Default for KeyBindings {
             find: KeyBinding::with_ctrl(Key::F),
             find_next: KeyBinding::new(Key::F3),
             find_previous: KeyBinding::with_shift(Key::F3),
+            go_to: KeyBinding::with_ctrl(Key::G),
             recent_1: KeyBinding::new(Key::Key1),
             recent_2: KeyBinding::new(Key::Key2),
             recent_3: KeyBinding::new(Key::Key3),
@@ -549,6 +555,7 @@ impl KeyBindings {
             find: KeyBinding::with_primary(Key::F),
             find_next: KeyBinding::new(Key::F3),
             find_previous: KeyBinding::with_shift(Key::F3),
+            go_to: KeyBinding::with_primary(Key::G),
             recent_1: KeyBinding::new(Key::Q),
             recent_2: KeyBinding::new(Key::W),
             recent_3: KeyBinding::new(Key::E),
@@ -590,6 +597,7 @@ impl KeyBindings {
             KeybindAction::Find => self.find,
             KeybindAction::FindNext => self.find_next,
             KeybindAction::FindPrevious => self.find_previous,
+            KeybindAction::GoTo => self.go_to,
             KeybindAction::Recent1 => self.recent_1,
             KeybindAction::Recent2 => self.recent_2,
             KeybindAction::Recent3 => self.recent_3,
@@ -661,6 +669,7 @@ impl KeyBindings {
             KeybindAction::Find => self.find = binding,
             KeybindAction::FindNext => self.find_next = binding,
             KeybindAction::FindPrevious => self.find_previous = binding,
+            KeybindAction::GoTo => self.go_to = binding,
             KeybindAction::Recent1 => self.recent_1 = binding,
             KeybindAction::Recent2 => self.recent_2 = binding,
             KeybindAction::Recent3 => self.recent_3 = binding,
@@ -1154,6 +1163,7 @@ mod tests {
             (KeybindAction::Paste, KeyBinding::with_primary(Key::V)),
             (KeybindAction::Find, KeyBinding::with_primary(Key::F)),
             (KeybindAction::FindNext, KeyBinding::new(Key::F3)),
+            (KeybindAction::GoTo, KeyBinding::with_primary(Key::G)),
             (KeybindAction::ShowTileGrid, KeyBinding::new(Key::G)),
             (KeybindAction::ShowPixelGrid, KeyBinding::with_shift(Key::G)),
         ];

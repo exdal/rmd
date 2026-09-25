@@ -4,13 +4,24 @@ use editor::{
     focus::AreaFocus,
     frame::{self},
 };
+use objtree::{Roots, TypeId};
 
 use super::Session;
 
 impl Session {
     pub fn area_at(&self, id: DocumentId, coord: Coord) -> Option<PrefabInstanceId> {
+        self.instance_under_root_at(id, coord, |roots| roots.area)
+    }
+
+    pub fn turf_at(&self, id: DocumentId, coord: Coord) -> Option<PrefabInstanceId> {
+        self.instance_under_root_at(id, coord, |roots| roots.turf)
+    }
+
+    fn instance_under_root_at(
+        &self, id: DocumentId, coord: Coord, root: impl FnOnce(Roots) -> Option<TypeId>,
+    ) -> Option<PrefabInstanceId> {
         let environment = self.state.environment.as_ref()?;
-        let area = environment.tree.roots().area?;
+        let root = root(environment.tree.roots())?;
         let document = self.state.document(id)?;
         let tile = document.map.tile_at(coord)?;
 
@@ -19,7 +30,7 @@ impl Session {
             .find_map(|(prefab, owner)| {
                 let id = environment.tree.id_of(&prefab.path)?;
 
-                environment.tree.is_subtype_of(id, area).then_some(*owner)
+                environment.tree.is_subtype_of(id, root).then_some(*owner)
             })
     }
 

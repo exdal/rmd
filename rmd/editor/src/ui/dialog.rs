@@ -12,6 +12,13 @@ use editor::{
 use super::{DIAGNOSTIC_WARNING_COLOR, MAX_CUSTOM_FILL_SEARCH_RESULTS, UiState, draw_type_path_search};
 use crate::{session::Session, settings::KeybindPreset};
 
+const MODAL_FLAGS: WindowFlags = WindowFlags::ALWAYS_AUTO_RESIZE
+    .union(WindowFlags::NO_RESIZE)
+    .union(WindowFlags::NO_MOVE)
+    .union(WindowFlags::NO_COLLAPSE)
+    .union(WindowFlags::NO_SAVED_SETTINGS)
+    .union(WindowFlags::NO_DOCKING);
+
 pub(super) const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warning";
 
 pub(super) const NEW_MAP_POPUP: &str = "New map##new-map";
@@ -20,7 +27,9 @@ const NEW_LEVEL_POPUP: &str = "Create Z level##new-z-level";
 
 pub(super) const RESIZE_MAP_POPUP: &str = "Resize map##resize-map";
 
-const TILE_FILL_WIDTH: f32 = 320.0;
+pub(super) const GO_TO_POPUP: &str = "Go to coordinates##go-to";
+
+const DIALOG_FIELD_WIDTH: f32 = 320.0;
 
 const NEW_MAP_PATH_WIDTH: f32 = 460.0;
 
@@ -187,6 +196,23 @@ impl ResizeMapDialog {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct GoToDialog {
+    x: i32,
+    y: i32,
+    z: i32,
+}
+
+impl GoToDialog {
+    pub(super) fn new(target: Coord) -> Self {
+        Self {
+            x: target.x as i32,
+            y: target.y as i32,
+            z: target.z as i32,
+        }
+    }
+}
+
 impl Default for NewMapDialog {
     fn default() -> Self {
         Self {
@@ -208,13 +234,10 @@ pub(super) fn draw_keybind_preset_dialog(ui: &Ui, open: &mut bool) -> Option<Key
         ui.open_popup(KEYBIND_PRESET_POPUP);
     }
 
-    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
-        | WindowFlags::NO_RESIZE
-        | WindowFlags::NO_MOVE
-        | WindowFlags::NO_COLLAPSE
-        | WindowFlags::NO_SAVED_SETTINGS
-        | WindowFlags::NO_DOCKING;
-    let _modal = ui.begin_modal_popup_config(KEYBIND_PRESET_POPUP).flags(flags).begin()?;
+    let _modal = ui
+        .begin_modal_popup_config(KEYBIND_PRESET_POPUP)
+        .flags(MODAL_FLAGS)
+        .begin()?;
 
     ui.text("Which keybinding preset would you prefer?");
     ui.text_disabled("You can customize individual bindings later in Settings.");
@@ -236,18 +259,12 @@ pub(super) fn draw_keybind_preset_dialog(ui: &Ui, open: &mut bool) -> Option<Key
 }
 
 pub(super) fn draw_new_map_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<NewMapDialog>) -> (bool, bool) {
-    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
-        | WindowFlags::NO_RESIZE
-        | WindowFlags::NO_MOVE
-        | WindowFlags::NO_COLLAPSE
-        | WindowFlags::NO_SAVED_SETTINGS
-        | WindowFlags::NO_DOCKING;
     let mut close = false;
     let mut pick_path = false;
     let mut created = false;
 
     if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = ui.begin_modal_popup_config(NEW_MAP_POPUP).flags(flags).begin()
+        && let Some(_modal) = ui.begin_modal_popup_config(NEW_MAP_POPUP).flags(MODAL_FLAGS).begin()
     {
         ui.text("Path");
         let button_size = ui.frame_height();
@@ -349,17 +366,11 @@ pub(super) fn draw_new_map_dialog(ui: &Ui, session: &mut Session, dialog: &mut O
 pub(super) fn draw_resize_map_dialog(
     ui: &Ui, session: &mut Session, dialog: &mut Option<ResizeMapDialog>, remembered_fill: &mut Option<TileFillPaths>,
 ) -> bool {
-    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
-        | WindowFlags::NO_RESIZE
-        | WindowFlags::NO_MOVE
-        | WindowFlags::NO_COLLAPSE
-        | WindowFlags::NO_SAVED_SETTINGS
-        | WindowFlags::NO_DOCKING;
     let mut close = false;
     let mut resized = false;
 
     if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = ui.begin_modal_popup_config(RESIZE_MAP_POPUP).flags(flags).begin()
+        && let Some(_modal) = ui.begin_modal_popup_config(RESIZE_MAP_POPUP).flags(MODAL_FLAGS).begin()
     {
         let Some(size) = session.map().map(|map| map.size) else {
             *dialog = None;
@@ -372,7 +383,7 @@ pub(super) fn draw_resize_map_dialog(
             ("Height", "##resize-map-height", &mut state.height),
         ] {
             ui.text(label);
-            ui.set_next_item_width(TILE_FILL_WIDTH);
+            ui.set_next_item_width(DIALOG_FIELD_WIDTH);
             ui.drag_int_config(id)
                 .range(1, NEW_MAP_MAX_DIMENSION)
                 .flags(DragFlags::ALWAYS_CLAMP)
@@ -380,7 +391,7 @@ pub(super) fn draw_resize_map_dialog(
         }
 
         let fill = draw_tile_fill_search(ui, session, &mut state.fill);
-        let wrap = ui.push_text_wrap_pos(ui.cursor_pos()[0] + TILE_FILL_WIDTH);
+        let wrap = ui.push_text_wrap_pos(ui.cursor_pos()[0] + DIALOG_FIELD_WIDTH);
         let (width, height) = (state.width, state.height);
         let losses = match (&state.losses, &fill) {
             (_, None) => 0,
@@ -443,15 +454,56 @@ pub(super) fn draw_resize_map_dialog(
     resized
 }
 
+pub(super) fn draw_go_to_dialog(ui: &Ui, session: &Session, dialog: &mut Option<GoToDialog>) -> Option<Coord> {
+    let mut close = false;
+    let mut target = None;
+
+    if let Some(state) = dialog.as_mut()
+        && let Some(_modal) = ui.begin_modal_popup_config(GO_TO_POPUP).flags(MODAL_FLAGS).begin()
+    {
+        let Some(size) = session.map().map(|map| map.size) else {
+            *dialog = None;
+            ui.close_current_popup();
+            return None;
+        };
+        ui.text(format!("Map is {}x{} on {} Z level(s)", size.x, size.y, size.z));
+        for (label, id, value, max) in [
+            ("X", "##go-to-x", &mut state.x, size.x),
+            ("Y", "##go-to-y", &mut state.y, size.y),
+            ("Z", "##go-to-z", &mut state.z, size.z),
+        ] {
+            ui.text(label);
+            ui.set_next_item_width(DIALOG_FIELD_WIDTH);
+            if label == "X" && ui.is_window_appearing() {
+                ui.set_keyboard_focus_here();
+            }
+            ui.input_int(id, value);
+            *value = (*value).clamp(1, max.max(1) as i32);
+        }
+        ui.separator();
+
+        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+            close = true;
+            ui.close_current_popup();
+        }
+        ui.same_line();
+        if ui.button("Go") || ui.is_key_pressed(Key::Enter) || ui.is_key_pressed(Key::KeypadEnter) {
+            target = Some(Coord::new(state.x as u32, state.y as u32, state.z as u32));
+            close = true;
+            ui.close_current_popup();
+        }
+    }
+
+    if close {
+        *dialog = None;
+    }
+
+    target
+}
+
 pub(super) fn draw_new_level_dialog(
     ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDialog>, remembered_fill: &mut Option<TileFillPaths>,
 ) {
-    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
-        | WindowFlags::NO_RESIZE
-        | WindowFlags::NO_MOVE
-        | WindowFlags::NO_COLLAPSE
-        | WindowFlags::NO_SAVED_SETTINGS
-        | WindowFlags::NO_DOCKING;
     let mut close = false;
 
     if let Some(state) = dialog.as_mut()
@@ -463,7 +515,7 @@ pub(super) fn draw_new_level_dialog(
     }
 
     if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = ui.begin_modal_popup_config(NEW_LEVEL_POPUP).flags(flags).begin()
+        && let Some(_modal) = ui.begin_modal_popup_config(NEW_LEVEL_POPUP).flags(MODAL_FLAGS).begin()
     {
         if let Some(document) = session.state.document(state.document) {
             ui.text(format!("Create Z level {}", document.map.size.z.saturating_add(1)));
@@ -527,7 +579,7 @@ fn draw_tile_fill_search(ui: &Ui, session: &Session, search: &mut TileFillSearch
         ),
     ] {
         ui.text(label);
-        ui.set_next_item_width(TILE_FILL_WIDTH);
+        ui.set_next_item_width(DIALOG_FIELD_WIDTH);
         let Some(_combo) = ui.begin_combo(id, search.paths.get_mut(field).as_str()) else {
             continue;
         };
@@ -593,16 +645,10 @@ fn resolve_new_map_path(codebase_dir: &Path, input: &str) -> Result<PathBuf, Str
 }
 
 pub(super) fn draw_save_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<SaveDialog>) {
-    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
-        | WindowFlags::NO_RESIZE
-        | WindowFlags::NO_MOVE
-        | WindowFlags::NO_COLLAPSE
-        | WindowFlags::NO_SAVED_SETTINGS
-        | WindowFlags::NO_DOCKING;
     let mut close = false;
 
     if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = ui.begin_modal_popup_config(SAVE_MAP_POPUP).flags(flags).begin()
+        && let Some(_modal) = ui.begin_modal_popup_config(SAVE_MAP_POPUP).flags(MODAL_FLAGS).begin()
     {
         ui.text("Path");
         ui.set_next_item_width(SAVE_MAP_PATH_WIDTH);
@@ -662,16 +708,10 @@ pub(super) fn draw_fill_limit_warning(
     let mut fill_anyway = false;
     let mut dismiss = false;
 
-    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
-        | WindowFlags::NO_RESIZE
-        | WindowFlags::NO_MOVE
-        | WindowFlags::NO_COLLAPSE
-        | WindowFlags::NO_SAVED_SETTINGS
-        | WindowFlags::NO_DOCKING;
     if let Some(warning) = pending.as_ref()
         && let Some(_modal) = ui
             .begin_modal_popup_config(FILL_LIMIT_WARNING_POPUP)
-            .flags(flags)
+            .flags(MODAL_FLAGS)
             .begin()
     {
         if !warning.matches(session, fill_mode, boundaries) {
@@ -735,13 +775,7 @@ impl UiState {
         if !ui.is_popup_open(EXIT_POPUP) {
             ui.open_popup(EXIT_POPUP);
         }
-        let flags = WindowFlags::ALWAYS_AUTO_RESIZE
-            | WindowFlags::NO_RESIZE
-            | WindowFlags::NO_MOVE
-            | WindowFlags::NO_COLLAPSE
-            | WindowFlags::NO_SAVED_SETTINGS
-            | WindowFlags::NO_DOCKING;
-        let Some(_modal) = ui.begin_modal_popup_config(EXIT_POPUP).flags(flags).begin() else {
+        let Some(_modal) = ui.begin_modal_popup_config(EXIT_POPUP).flags(MODAL_FLAGS).begin() else {
             return false;
         };
 
@@ -780,14 +814,7 @@ impl UiState {
             return;
         };
 
-        let flags = WindowFlags::ALWAYS_AUTO_RESIZE
-            | WindowFlags::NO_RESIZE
-            | WindowFlags::NO_MOVE
-            | WindowFlags::NO_COLLAPSE
-            | WindowFlags::NO_SAVED_SETTINGS
-            | WindowFlags::NO_DOCKING;
-
-        let Some(_modal) = ui.begin_modal_popup_config(CLOSE_MAP_POPUP).flags(flags).begin() else {
+        let Some(_modal) = ui.begin_modal_popup_config(CLOSE_MAP_POPUP).flags(MODAL_FLAGS).begin() else {
             return;
         };
         let writable = session
@@ -853,6 +880,8 @@ mod tests {
 
     use super::{
         FillWarningContext,
+        GO_TO_POPUP,
+        GoToDialog,
         KEYBIND_PRESET_POPUP,
         NewLevelDialog,
         NewMapDialog,
@@ -861,6 +890,7 @@ mod tests {
         ResizeMapDialog,
         TileFillPaths,
         TileFillSearch,
+        draw_go_to_dialog,
         draw_keybind_preset_dialog,
         draw_new_level_dialog,
         draw_resize_map_dialog,
@@ -1037,6 +1067,29 @@ mod tests {
         assert!(dialog.is_some());
         assert_eq!(remembered, None);
         assert_eq!(session.level_count(), 1);
+    }
+
+    #[test]
+    fn the_go_to_dialog_clamps_to_the_map_and_enter_returns_the_tile() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = crate::ui::fixtures::rectangle_context();
+        let mut session = Session::new();
+        session
+            .state
+            .open_document(MapDocument::new(dmm::Map::new(Size { x: 3, y: 2, z: 1 }), 1));
+        let mut dialog = Some(GoToDialog::new(Coord::new(9, 1, 5)));
+
+        let ui = context.frame();
+        ui.open_popup(GO_TO_POPUP);
+        assert_eq!(draw_go_to_dialog(ui, &session, &mut dialog), None);
+        assert!(context.render_legacy().valid());
+        assert_eq!(dialog, Some(GoToDialog { x: 3, y: 1, z: 1 }));
+
+        context.io_mut().add_key_event(dear_imgui_rs::Key::Enter, true);
+        let ui = context.frame();
+        assert_eq!(draw_go_to_dialog(ui, &session, &mut dialog), Some(Coord::new(3, 1, 1)));
+        assert!(context.render_legacy().valid());
+        assert!(dialog.is_none());
     }
 
     #[test]

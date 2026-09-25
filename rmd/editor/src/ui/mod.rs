@@ -16,7 +16,7 @@ use dear_imgui_rs::{
     WindowKey,
     WindowKeyError,
 };
-use dmm::PrefabInstanceId;
+use dmm::{Coord, PrefabInstanceId};
 use editor::{
     document::{DocumentId, MapDocument},
     environment::BundledProfile,
@@ -78,6 +78,8 @@ use self::{
         CLOSE_MAP_POPUP,
         FILL_LIMIT_WARNING_POPUP,
         FillWarningContext,
+        GO_TO_POPUP,
+        GoToDialog,
         NEW_MAP_POPUP,
         NewLevelDialog,
         NewMapDialog,
@@ -90,6 +92,7 @@ use self::{
         TileFillPaths,
         TileFillSearch,
         draw_fill_limit_warning,
+        draw_go_to_dialog,
         draw_keybind_preset_dialog,
         draw_new_level_dialog,
         draw_new_map_dialog,
@@ -209,6 +212,8 @@ pub struct UiState {
     new_map_dialog: Option<NewMapDialog>,
     new_level_dialog: Option<NewLevelDialog>,
     resize_map_dialog: Option<ResizeMapDialog>,
+    go_to_dialog: Option<GoToDialog>,
+    last_go_to: Option<Coord>,
     tile_fill: Option<TileFillPaths>,
     save_dialog: Option<SaveDialog>,
     pending_close: Option<DocumentId>,
@@ -280,6 +285,8 @@ impl UiState {
             new_map_dialog: None,
             new_level_dialog: None,
             resize_map_dialog: None,
+            go_to_dialog: None,
+            last_go_to: None,
             tile_fill: None,
             save_dialog: None,
             pending_close: None,
@@ -410,6 +417,7 @@ impl UiState {
             undo,
             redo,
             mut search,
+            mut go_to,
             resize_map,
         } = self.draw_menu_bar(ui, session, settings, loading);
 
@@ -448,6 +456,7 @@ impl UiState {
             && !self.settings_window.is_capturing_keybind()
             && !ui.io().want_text_input();
         search |= search_keys && settings.keybindings.get(KeybindAction::Find).is_pressed(ui);
+        go_to |= search_keys && settings.keybindings.get(KeybindAction::GoTo).is_pressed(ui);
         if search {
             match session
                 .state
@@ -563,13 +572,7 @@ impl UiState {
             self.copy_to_clipboard = git_output.copy;
         }
         if let Some((id, coord)) = git_output.center {
-            session.set_active_document(id);
-            session.set_level(coord.z);
-            if let Some(view) = self.map_views.get_mut(&id) {
-                view.camera.center_on_tile(coord, session.options.tile_size);
-                view.refit = false;
-                view.focus = true;
-            }
+            self.center_view_on(session, id, coord);
         }
         if let Some(id) = git_output.load_conflicts {
             self.pending_conflict_reload = Some(id);
@@ -659,6 +662,20 @@ impl UiState {
 
         if draw_resize_map_dialog(ui, session, &mut self.resize_map_dialog, &mut self.tile_fill) {
             self.request_refit(session.state.active());
+        }
+
+        if go_to && let Some(size) = session.map().map(|map| map.size) {
+            let (x, y) = self
+                .last_go_to
+                .map_or((size.x.div_ceil(2), size.y.div_ceil(2)), |last| (last.x, last.y));
+            self.go_to_dialog = Some(GoToDialog::new(Coord::new(x, y, session.z())));
+            ui.open_popup(GO_TO_POPUP);
+        }
+        if let Some(coord) = draw_go_to_dialog(ui, session, &mut self.go_to_dialog)
+            && let Some(document) = session.state.active()
+        {
+            self.last_go_to = Some(coord);
+            self.go_to_tile(session, document, coord, ui.time());
         }
 
         self.settings_window
@@ -942,7 +959,7 @@ mod tests {
             KeyBinding::new(dear_imgui_rs::Key::N)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 36);
+        assert_eq!(KeybindAction::ALL.len(), 37);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));

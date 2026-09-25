@@ -106,6 +106,7 @@ const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
             KeybindAction::LevelUp,
             KeybindAction::LevelDown,
             KeybindAction::Refit,
+            KeybindAction::GoTo,
         ],
     ),
     (
