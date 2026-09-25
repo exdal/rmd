@@ -109,6 +109,12 @@ impl FindPanel {
         self.request();
     }
 
+    pub(super) fn open_for_path(&mut self, session: &Session, path: &TreePath) {
+        self.path = path.to_string();
+        self.search_typed_path(session);
+        self.request();
+    }
+
     fn run(&mut self, session: &Session, document: DocumentId, query: SearchQuery, bounds: Option<Selection>) {
         self.search = Some(ActiveSearch {
             instances: session.find_instances(document, &query, bounds),
@@ -410,6 +416,26 @@ mod tests {
         assert_eq!(search.document, document_id);
         assert_eq!(search.instances, [clicked, other_match]);
         assert_eq!(session.selected_instance(), Some(selected));
+    }
+
+    #[test]
+    fn finding_a_tree_type_searches_the_active_map_with_the_current_options() {
+        let mut session = Session::new();
+        let mut find = FindPanel::new().expect("valid window key");
+
+        find.open_for_path(&session, &TreePath::parse("/obj/table"));
+        assert_eq!(find.error, Some("No map is open"));
+        assert!(find.has_focus_request());
+
+        let document_id = session.state.open_document(MapDocument::new(map(), 1));
+        find.subtypes = true;
+        find.open_for_path(&session, &TreePath::parse("/obj"));
+
+        let search = find.search.as_ref().expect("a search ran");
+        assert_eq!(find.error, None);
+        assert_eq!(find.path, "/obj");
+        assert_eq!(search.document, document_id);
+        assert_eq!(search.instances.len(), 6, "subtypes stay on");
     }
 
     #[test]

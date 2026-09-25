@@ -113,7 +113,17 @@ struct ObjectTreeOutput {
     chosen: Option<TypeId>,
     visibility_toggle: Option<TypeId>,
     open_source: Option<SourceLocation>,
+    find: Option<TreePath>,
+    copy_path: Option<String>,
     reveal: Option<TypeId>,
+}
+
+#[derive(Default)]
+pub(super) struct ObjectTreePanelOutput {
+    pub(super) open_source: Option<SourceLocation>,
+    pub(super) find: Option<TreePath>,
+    pub(super) copy_path: Option<String>,
+    pub(super) docked: bool,
 }
 
 impl ObjectTreeFilter {
@@ -190,15 +200,12 @@ impl ObjectTreePanel {
 
     pub(super) fn invalidate_filter(&mut self) { self.filter_revision = u64::MAX; }
 
-    /// Draws the panel, `focus` brings its tab to the front. Returns a source location to open and
-    /// whether the window sits in a dock node.
     pub(super) fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, focus: bool,
-    ) -> (Option<SourceLocation>, bool) {
-        let mut open_source = None;
-        let mut docked = false;
+    ) -> ObjectTreePanelOutput {
+        let mut panel = ObjectTreePanelOutput::default();
         ui.window(&self.window).focused(focus).build(|| {
-            docked = ui.is_window_docked();
+            panel.docked = ui.is_window_docked();
             if settings.focus_windows_on_hover {
                 focus_window_on_hover(ui);
             }
@@ -333,10 +340,12 @@ impl ObjectTreePanel {
             if let Some(id) = output.visibility_toggle {
                 session.toggle_type_visibility(id);
             }
-            open_source = output.open_source;
+            panel.open_source = output.open_source;
+            panel.find = output.find;
+            panel.copy_path = output.copy_path;
         });
 
-        (open_source, docked)
+        panel
     }
 }
 
@@ -518,10 +527,16 @@ fn draw_type_row(
         }
         ui.set_item_tooltip(&node_id);
         let source = session.type_source(row.id);
-        if let Some(_popup) = ui.begin_popup_context_item()
-            && ui.menu_item_enabled_selected_no_shortcut("Open in editor", false, source.is_some())
-        {
-            output.open_source = source;
+        if let Some(_popup) = ui.begin_popup_context_item() {
+            if ui.menu_item_enabled_selected_no_shortcut("Open in editor", false, source.is_some()) {
+                output.open_source = source;
+            }
+            if ui.menu_item_enabled_selected_no_shortcut("Find on map", false, session.map().is_some()) {
+                output.find = Some(decl.path.clone());
+            }
+            if ui.menu_item("Copy type path") {
+                output.copy_path = Some(node_id.clone());
+            }
         }
 
         ui.table_next_column();

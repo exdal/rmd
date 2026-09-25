@@ -604,11 +604,14 @@ impl UiState {
         if self.git_panel.has_focus_request() {
             self.select_object_tree = false;
         }
-        let (mut open_source, object_tree_docked) =
-            self.object_tree.draw(ui, session, settings, self.select_object_tree);
-        if object_tree_docked {
+        let object_tree = self.object_tree.draw(ui, session, settings, self.select_object_tree);
+        if object_tree.docked {
             self.select_object_tree = false;
         }
+        if let Some(path) = &object_tree.find {
+            self.find.open_for_path(session, path);
+        }
+        let mut open_source = object_tree.open_source;
         if self.find.has_focus_request() {
             self.select_inspector = false;
         }
@@ -616,7 +619,7 @@ impl UiState {
         if inspector.docked {
             self.select_inspector = false;
         }
-        self.copy_to_clipboard = inspector.copy_hash;
+        self.copy_to_clipboard = inspector.copy_hash.or(object_tree.copy_path);
         open_source = inspector.open_source.or(open_source);
         if let Some((document, instance)) = inspector.find_similar {
             self.find
