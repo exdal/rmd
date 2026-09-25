@@ -139,6 +139,22 @@ mod settings;
 
 const DOCKSPACE_ID: &str = "rmd-main-dockspace-v4";
 
+fn dock_layout<'a>(
+    left: [&WindowKey; 2], right: [&WindowKey; 2], center: impl IntoIterator<Item = &'a WindowKey>,
+) -> DockLayout {
+    DockLayout::split(
+        DockSplit::Left,
+        0.25,
+        DockLayout::tabs(left),
+        DockLayout::split(
+            DockSplit::Right,
+            0.20 / 0.75,
+            DockLayout::tabs(right),
+            DockLayout::tabs(center),
+        ),
+    )
+}
+
 const LAYER_KEYS: [(KeybindAction, TypeLayer); 4] = [
     (KeybindAction::ToggleAreaLayer, TypeLayer::Area),
     (KeybindAction::ToggleTurfLayer, TypeLayer::Turf),
@@ -217,6 +233,7 @@ pub struct UiState {
     panel_focus_requested: bool,
     settings_window: SettingsWindow,
     layout: DockLayout,
+    reset_layout: bool,
     gizmo: GizmoState,
     gizmo_context: Option<(DocumentId, Tool, u32)>,
     placement_flash: Option<ActivePlacementFlash>,
@@ -265,16 +282,10 @@ impl UiState {
         let git_panel = git::GitPanel::new()?;
         let settings_window = SettingsWindow::new()?;
         let load_window = WindowKey::new("load", "Loading")?;
-        let layout = DockLayout::split(
-            DockSplit::Left,
-            0.25,
-            DockLayout::tabs([object_tree.window(), git_panel.window()]),
-            DockLayout::split(
-                DockSplit::Right,
-                0.20 / 0.75,
-                DockLayout::tabs([inspector.window(), find.window()]),
-                DockLayout::tabs([&welcome_window]),
-            ),
+        let layout = dock_layout(
+            [object_tree.window(), git_panel.window()],
+            [inspector.window(), find.window()],
+            [&welcome_window],
         );
 
         Ok(Self {
@@ -292,6 +303,7 @@ impl UiState {
             panel_focus_requested: false,
             settings_window,
             layout,
+            reset_layout: false,
             gizmo: GizmoState::default(),
             gizmo_context: None,
             placement_flash: None,
@@ -394,11 +406,32 @@ impl UiState {
         }
 
         let root = ui.get_id(DOCKSPACE_ID);
+        // map views only exist at runtime, so a reset has to name them to keep them docked
+        let reset = std::mem::take(&mut self.reset_layout).then(|| {
+            let map_views = session
+                .state
+                .document_ids()
+                .into_iter()
+                .filter_map(|id| self.map_views.get(&id))
+                .map(MapViewState::window);
+            dock_layout(
+                [self.object_tree.window(), self.git_panel.window()],
+                [self.inspector.window(), self.find.window()],
+                std::iter::once(&self.welcome_window).chain(map_views),
+            )
+        });
         ui.dockspace()
             .main_viewport()
             .root_id(root)
             .flags(DockNodeFlags::PASSTHRU_CENTRAL_NODE)
-            .layout(&self.layout, DockLayoutApply::IfMissing)
+            .layout(
+                reset.as_ref().unwrap_or(&self.layout),
+                if reset.is_some() {
+                    DockLayoutApply::Replace
+                } else {
+                    DockLayoutApply::IfMissing
+                },
+            )
             .build()?;
         self.dockspace_root = Some(root);
 
@@ -447,7 +480,11 @@ impl UiState {
             mut search,
             mut go_to,
             resize_map,
+            toggle_mirror_camera,
+            reset_layout,
         } = self.draw_menu_bar(ui, session, settings, loading);
+        self.reset_layout = reset_layout;
+        settings.mirror_camera ^= toggle_mirror_camera;
 
         if session.map().is_some()
             && !open_save_dialog
@@ -878,6 +915,47 @@ mod tests {
             frame(&mut state);
         }
         assert!(state.find.visible(), "a request brings the Search tab forward");
+    }
+
+    #[test]
+    fn resetting_the_layout_keeps_open_map_views_docked() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = rectangle_context();
+        let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
+        context.io_mut().set_config_flags(flags);
+        let mut state = UiState::new(false).unwrap();
+        state.show_welcome = false;
+        let mut session = Session::new();
+        session.apply_map(crate::loader::LoadedMap {
+            path: PathBuf::from("reset-layout-test.dmm"),
+            map: dmm::Map::new(dmm::Size { x: 10, y: 10, z: 1 }),
+            z: 1,
+            errors: vec![],
+            repo: None,
+            conflict: None,
+        });
+        let mut settings = Settings::default();
+        let mut frame = |state: &mut UiState| {
+            let ui = context.frame();
+            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            assert!(context.render_legacy().valid());
+        };
+
+        for _ in 0..4 {
+            frame(&mut state);
+        }
+        assert!(state.central_node.is_some(), "the map view starts docked");
+
+        state.reset_layout = true;
+        state.central_node = None;
+        for _ in 0..3 {
+            frame(&mut state);
+        }
+        assert!(!state.reset_layout);
+        assert!(
+            state.central_node.is_some(),
+            "the map view is docked again after the reset"
+        );
     }
 
     #[test]

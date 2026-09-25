@@ -1,4 +1,5 @@
 use dear_imgui_rs::{DrawListMut, Ui};
+use editor::document::DocumentId;
 
 use crate::{
     camera::Controller,
@@ -27,11 +28,12 @@ fn draw_map_grid_line(
     .build();
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_tile_grid(
-    ui: &Ui, session: &Session, camera: &Controller, min_pixels: u32, show_axis: bool, viewport_min: [f32; 2],
-    viewport_max: [f32; 2],
+    ui: &Ui, session: &Session, id: DocumentId, camera: &Controller, min_pixels: u32, show_axis: bool,
+    viewport_min: [f32; 2], viewport_max: [f32; 2],
 ) {
-    let Some(size) = session.map().map(|map| map.size) else {
+    let Some(size) = session.state.document(id).map(|document| document.map.size) else {
         return;
     };
     let tile_size = session.options.tile_size.max(1) as f32;

@@ -34,6 +34,7 @@ pub(super) struct MenuActions {
     pub(super) toggle_lighting: bool,
     pub(super) toggle_tile_grid: bool,
     pub(super) toggle_pixel_grid: bool,
+    pub(super) toggle_mirror_camera: bool,
     pub(super) level_delta: i32,
     pub(super) underlay_depth: Option<u32>,
     pub(super) refit: bool,
@@ -42,6 +43,7 @@ pub(super) struct MenuActions {
     pub(super) search: bool,
     pub(super) go_to: bool,
     pub(super) resize_map: bool,
+    pub(super) reset_layout: bool,
 }
 
 impl UiState {
@@ -295,6 +297,10 @@ impl UiState {
                 if ui.menu_item_with_shortcut("Refit", settings.keybindings.get(KeybindAction::Refit).label(ui)) {
                     actions.refit = true;
                 }
+                if ui.menu_item_enabled_selected_no_shortcut("Mirror camera", settings.mirror_camera, true) {
+                    actions.toggle_mirror_camera = true;
+                }
+                ui.set_item_tooltip("Keep pan, zoom and Z level the same in every map view");
             });
             ui.menu("Git", || {
                 if ui.menu_item("Git Panel") {
@@ -315,6 +321,11 @@ impl UiState {
 
                 if ui.menu_item_enabled_selected_no_shortcut("Refresh", false, settings.git_enabled) {
                     session.refresh_git();
+                }
+            });
+            ui.menu("Window", || {
+                if ui.menu_item("Reset layout") {
+                    actions.reset_layout = true;
                 }
             });
         });

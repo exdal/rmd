@@ -40,6 +40,12 @@ impl Controller {
         self.camera.y = (coord.y.saturating_sub(1) as f32 + 0.5) * tile_size;
     }
 
+    pub fn mirror(&mut self, source: &Camera) {
+        self.camera.x = source.x;
+        self.camera.y = source.y;
+        self.camera.zoom = source.zoom;
+    }
+
     pub fn pan_by(&mut self, delta: [f32; 2]) {
         let zoom = self.camera.zoom.max(f32::EPSILON);
         self.camera.x -= delta[0] / zoom;

@@ -31,16 +31,26 @@ impl Session {
     }
 
     pub fn set_level(&mut self, z: u32) {
-        if self.z() != z {
+        if let Some(id) = self.state.active() {
+            self.set_level_of(id, z);
+        }
+    }
+
+    pub fn set_level_of(&mut self, id: DocumentId, z: u32) {
+        if self
+            .state
+            .document(id)
+            .is_none_or(|document| z == document.z || !(1..=document.map.size.z.max(1)).contains(&z))
+        {
+            return;
+        }
+
+        if self.state.active() == Some(id) {
             self.cancel_node_edit();
         }
-        let Some(document) = self.state.active_document_mut() else {
+        let Some(document) = self.state.document_mut(id) else {
             return;
         };
-
-        if z == document.z || !(1..=document.map.size.z.max(1)).contains(&z) {
-            return;
-        }
 
         document.z = z;
         document.set_focus(None);

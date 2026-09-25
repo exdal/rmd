@@ -257,6 +257,8 @@ impl MapViewState {
             context: None,
         })
     }
+
+    pub(super) const fn window(&self) -> &WindowKey { &self.window }
 }
 
 fn active_placement_flash(
@@ -442,10 +444,29 @@ impl UiState {
         self.draw_close_confirmation(ui, session);
 
         self.map_views.retain(|id, _| session.state.document(*id).is_some());
+        if settings.mirror_camera {
+            self.mirror_active_camera(session);
+        }
 
         let picking = visible.iter().position(|view| view.interaction.cursor.is_some());
 
         (visible, picking)
+    }
+
+    fn mirror_active_camera(&mut self, session: &mut Session) {
+        let Some(active) = session.state.active() else {
+            return;
+        };
+        let Some(camera) = self.map_views.get(&active).map(|view| view.camera.camera) else {
+            return;
+        };
+        let z = session.z();
+        for (id, view) in &mut self.map_views {
+            if *id != active {
+                view.camera.mirror(&camera);
+                session.set_level_of(*id, z);
+            }
+        }
     }
 
     pub(super) fn draw_map_view(
@@ -668,6 +689,7 @@ impl UiState {
                 draw_tile_grid(
                     ui,
                     session,
+                    id,
                     camera,
                     settings.tile_grid_min_pixels,
                     settings.show_tile_grid_axis,
@@ -2985,6 +3007,42 @@ mod tests {
                 .unwrap()
                 .contains(&table)
         );
+    }
+
+    #[test]
+    fn mirroring_copies_the_active_camera_and_the_levels_other_maps_have() {
+        let mut session = Session::new();
+        let mut ui = crate::ui::UiState::new(false).unwrap();
+        let ids = [3, 2, 3].map(|z| {
+            session
+                .state
+                .open_document(MapDocument::new(dmm::Map::new(Size { x: 4, y: 4, z }), 1))
+        });
+        for id in ids {
+            ui.map_views.insert(id, MapViewState::new(id).unwrap());
+        }
+        let [active, shallow, deep] = ids;
+        session.set_active_document(active);
+        session.set_level(3);
+        let camera = &mut ui.map_views.get_mut(&active).unwrap().camera.camera;
+        camera.x = 48.0;
+        camera.y = 80.0;
+        camera.zoom = 2.5;
+        camera.viewport_width = 640;
+        ui.map_views.get_mut(&deep).unwrap().camera.camera.viewport_width = 320;
+
+        ui.mirror_active_camera(&mut session);
+
+        let mirrored = ui.map_views[&deep].camera.camera;
+        assert_eq!([mirrored.x, mirrored.y, mirrored.zoom], [48.0, 80.0, 2.5]);
+        assert_eq!(mirrored.viewport_width, 320, "each view keeps its own size");
+        assert_eq!(session.state.document(deep).unwrap().z, 3);
+        assert_eq!(
+            session.state.document(shallow).unwrap().z,
+            1,
+            "a map without level 3 stays put"
+        );
+        assert_eq!(ui.map_views[&shallow].camera.camera.zoom, 2.5);
     }
 
     #[test]
