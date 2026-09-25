@@ -40,11 +40,7 @@ pub(super) fn request_level_change(session: &mut Session, delta: i32, dialog: &m
         return;
     };
 
-    *dialog = Some(NewLevelDialog {
-        document,
-        error: None,
-        open: true,
-    });
+    *dialog = Some(NewLevelDialog::new(document));
 }
 
 fn draw_z_levels(ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDialog>) {

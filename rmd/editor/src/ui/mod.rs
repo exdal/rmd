@@ -87,6 +87,8 @@ use self::{
         SAVE_ERROR_COLOR,
         SAVE_MAP_POPUP,
         SaveDialog,
+        TileFillPaths,
+        TileFillSearch,
         draw_fill_limit_warning,
         draw_keybind_preset_dialog,
         draw_new_level_dialog,
@@ -207,6 +209,7 @@ pub struct UiState {
     new_map_dialog: Option<NewMapDialog>,
     new_level_dialog: Option<NewLevelDialog>,
     resize_map_dialog: Option<ResizeMapDialog>,
+    tile_fill: Option<TileFillPaths>,
     save_dialog: Option<SaveDialog>,
     pending_close: Option<DocumentId>,
     pending_conflict_reload: Option<DocumentId>,
@@ -277,6 +280,7 @@ impl UiState {
             new_map_dialog: None,
             new_level_dialog: None,
             resize_map_dialog: None,
+            tile_fill: None,
             save_dialog: None,
             pending_close: None,
             pending_conflict_reload: None,
@@ -644,15 +648,16 @@ impl UiState {
 
         self.dm_ui.draw(ui, session, root.raw());
 
-        draw_new_level_dialog(ui, session, &mut self.new_level_dialog);
+        draw_new_level_dialog(ui, session, &mut self.new_level_dialog, &mut self.tile_fill);
 
         if resize_map && let Some(size) = session.map().map(|map| map.size) {
             self.cancel_edit_gestures(session, session.state.active());
-            self.resize_map_dialog = Some(ResizeMapDialog::new(size));
+            let fill = TileFillSearch::new(session, self.tile_fill.as_ref());
+            self.resize_map_dialog = Some(ResizeMapDialog::new(size, fill));
             ui.open_popup(RESIZE_MAP_POPUP);
         }
 
-        if draw_resize_map_dialog(ui, session, &mut self.resize_map_dialog) {
+        if draw_resize_map_dialog(ui, session, &mut self.resize_map_dialog, &mut self.tile_fill) {
             self.request_refit(session.state.active());
         }
 

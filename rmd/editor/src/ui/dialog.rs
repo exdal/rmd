@@ -9,7 +9,7 @@ use editor::{
     tool::{FillMode, SelectionMask, Tool},
 };
 
-use super::{DIAGNOSTIC_WARNING_COLOR, UiState};
+use super::{DIAGNOSTIC_WARNING_COLOR, MAX_CUSTOM_FILL_SEARCH_RESULTS, UiState, draw_type_path_search};
 use crate::{session::Session, settings::KeybindPreset};
 
 pub(super) const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warning";
@@ -20,7 +20,7 @@ const NEW_LEVEL_POPUP: &str = "Create Z level##new-z-level";
 
 pub(super) const RESIZE_MAP_POPUP: &str = "Resize map##resize-map";
 
-const RESIZE_MAP_WIDTH: f32 = 320.0;
+const TILE_FILL_WIDTH: f32 = 320.0;
 
 const NEW_MAP_PATH_WIDTH: f32 = 460.0;
 
@@ -93,26 +93,94 @@ pub(super) struct NewMapDialog {
     pub(super) error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct NewLevelDialog {
-    pub(super) document: DocumentId,
-    pub(super) error: Option<String>,
-    pub(super) open: bool,
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct TileFillPaths {
+    turf: String,
+    area: String,
+}
+
+impl TileFillPaths {
+    fn defaults(session: &Session) -> Self {
+        session
+            .default_fill()
+            .map(|fill| Self {
+                turf: fill[0].path.to_string(),
+                area: fill[1].path.to_string(),
+            })
+            .unwrap_or_default()
+    }
+
+    fn get_mut(&mut self, field: TileFillField) -> &mut String {
+        match field {
+            TileFillField::Turf => &mut self.turf,
+            TileFillField::Area => &mut self.area,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TileFillField {
+    Turf,
+    Area,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct TileFillSearch {
+    paths: TileFillPaths,
+    query: String,
+    searching: bool,
+    was_searching: bool,
+}
+
+impl TileFillSearch {
+    pub(super) fn new(session: &Session, remembered: Option<&TileFillPaths>) -> Self {
+        Self {
+            paths: remembered.cloned().unwrap_or_else(|| TileFillPaths::defaults(session)),
+            ..Self::default()
+        }
+    }
+
+    fn captures_keys(&self) -> bool { self.searching || self.was_searching }
+
+    fn remember(&self, session: &Session, remembered: &mut Option<TileFillPaths>) {
+        *remembered = (self.paths != TileFillPaths::defaults(session)).then(|| self.paths.clone());
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct NewLevelDialog {
+    pub(super) document: DocumentId,
+    fill: TileFillSearch,
+    error: Option<String>,
+    open: bool,
+}
+
+impl NewLevelDialog {
+    pub(super) fn new(document: DocumentId) -> Self {
+        Self {
+            document,
+            fill: TileFillSearch::default(),
+            error: None,
+            open: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct ResizeMapDialog {
     width: i32,
     height: i32,
-    losses: Option<(i32, i32, usize)>,
+    fill: TileFillSearch,
+    losses: Option<(i32, i32, Vec<Prefab>, usize)>,
     error: Option<String>,
 }
 
 impl ResizeMapDialog {
-    pub(super) fn new(size: Size) -> Self {
+    pub(super) fn new(size: Size, fill: TileFillSearch) -> Self {
         Self {
             width: size.x as i32,
             height: size.y as i32,
+            fill,
             losses: None,
             error: None,
         }
@@ -278,7 +346,9 @@ pub(super) fn draw_new_map_dialog(ui: &Ui, session: &mut Session, dialog: &mut O
 }
 
 /// Returns whether the map was resized
-pub(super) fn draw_resize_map_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<ResizeMapDialog>) -> bool {
+pub(super) fn draw_resize_map_dialog(
+    ui: &Ui, session: &mut Session, dialog: &mut Option<ResizeMapDialog>, remembered_fill: &mut Option<TileFillPaths>,
+) -> bool {
     let flags = WindowFlags::ALWAYS_AUTO_RESIZE
         | WindowFlags::NO_RESIZE
         | WindowFlags::NO_MOVE
@@ -302,22 +372,26 @@ pub(super) fn draw_resize_map_dialog(ui: &Ui, session: &mut Session, dialog: &mu
             ("Height", "##resize-map-height", &mut state.height),
         ] {
             ui.text(label);
-            ui.set_next_item_width(RESIZE_MAP_WIDTH);
+            ui.set_next_item_width(TILE_FILL_WIDTH);
             ui.drag_int_config(id)
                 .range(1, NEW_MAP_MAX_DIMENSION)
                 .flags(DragFlags::ALWAYS_CLAMP)
                 .build(ui, value);
         }
 
-        let wrap = ui.push_text_wrap_pos(ui.cursor_pos()[0] + RESIZE_MAP_WIDTH);
-        let fill = session.default_fill().map(|fill| fill_label(&fill)).unwrap_or_default();
-        ui.text_disabled(format!("New tiles be filled with {fill}."));
+        let fill = draw_tile_fill_search(ui, session, &mut state.fill);
+        let wrap = ui.push_text_wrap_pos(ui.cursor_pos()[0] + TILE_FILL_WIDTH);
         let (width, height) = (state.width, state.height);
-        let losses = match state.losses {
-            Some((cached_width, cached_height, losses)) if (cached_width, cached_height) == (width, height) => losses,
-            _ => {
-                let losses = session.resize_losses(width as u32, height as u32);
-                state.losses = Some((width, height, losses));
+        let losses = match (&state.losses, &fill) {
+            (_, None) => 0,
+            (Some((cached_width, cached_height, cached_fill, losses)), Some(fill))
+                if (*cached_width, *cached_height, cached_fill) == (width, height, fill) =>
+            {
+                *losses
+            },
+            (_, Some(fill)) => {
+                let losses = session.resize_losses(width as u32, height as u32, fill);
+                state.losses = Some((width, height, fill.clone(), losses));
                 losses
             },
         };
@@ -334,20 +408,25 @@ pub(super) fn draw_resize_map_dialog(ui: &Ui, session: &mut Session, dialog: &mu
         wrap.end();
         ui.separator();
 
-        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+        let shortcuts = !state.fill.captures_keys();
+        if ui.button("Cancel") || (shortcuts && ui.is_key_pressed(Key::Escape)) {
             close = true;
             ui.close_current_popup();
         }
         ui.same_line();
         let changed = (width as u32, height as u32) != (size.x, size.y);
         let clicked = {
-            let _disabled = ui.begin_disabled_with_cond(!changed);
+            let _disabled = ui.begin_disabled_with_cond(!changed || fill.is_none());
 
             ui.button("Resize")
         };
-        if changed && clicked {
-            match session.resize_map(width as u32, height as u32) {
+        if changed
+            && clicked
+            && let Some(fill) = fill
+        {
+            match session.resize_map(width as u32, height as u32, &fill) {
                 Ok(()) => {
+                    state.fill.remember(session, remembered_fill);
                     resized = true;
                     close = true;
                     ui.close_current_popup();
@@ -364,7 +443,9 @@ pub(super) fn draw_resize_map_dialog(ui: &Ui, session: &mut Session, dialog: &mu
     resized
 }
 
-pub(super) fn draw_new_level_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDialog>) {
+pub(super) fn draw_new_level_dialog(
+    ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDialog>, remembered_fill: &mut Option<TileFillPaths>,
+) {
     let flags = WindowFlags::ALWAYS_AUTO_RESIZE
         | WindowFlags::NO_RESIZE
         | WindowFlags::NO_MOVE
@@ -377,6 +458,7 @@ pub(super) fn draw_new_level_dialog(ui: &Ui, session: &mut Session, dialog: &mut
         && state.open
     {
         ui.open_popup(NEW_LEVEL_POPUP);
+        state.fill = TileFillSearch::new(session, remembered_fill.as_ref());
         state.open = false;
     }
 
@@ -386,23 +468,30 @@ pub(super) fn draw_new_level_dialog(ui: &Ui, session: &mut Session, dialog: &mut
         if let Some(document) = session.state.document(state.document) {
             ui.text(format!("Create Z level {}", document.map.size.z.saturating_add(1)));
         }
-        match session.default_fill() {
-            Ok(fill) => ui.text_disabled(format!("New tiles will be filled with {}.", fill_label(&fill))),
-            Err(error) => ui.text_colored(SAVE_ERROR_COLOR, error),
-        }
+        let fill = draw_tile_fill_search(ui, session, &mut state.fill);
         if let Some(error) = state.error.as_deref() {
             ui.text_colored(SAVE_ERROR_COLOR, error);
         }
         ui.separator();
 
-        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+        let shortcuts = !state.fill.captures_keys();
+        if ui.button("Cancel") || (shortcuts && ui.is_key_pressed(Key::Escape)) {
             close = true;
             ui.close_current_popup();
         }
         ui.same_line();
-        if ui.button("Create") || ui.is_key_pressed(Key::Enter) || ui.is_key_pressed(Key::KeypadEnter) {
-            match session.create_level(state.document) {
+        let clicked = {
+            let _disabled = ui.begin_disabled_with_cond(fill.is_none());
+
+            ui.button("Create")
+        };
+        let submitted = shortcuts && (ui.is_key_pressed(Key::Enter) || ui.is_key_pressed(Key::KeypadEnter));
+        if (clicked || submitted)
+            && let Some(fill) = fill
+        {
+            match session.create_level(state.document, &fill) {
                 Ok(_) => {
+                    state.fill.remember(session, remembered_fill);
                     close = true;
                     ui.close_current_popup();
                 },
@@ -416,12 +505,61 @@ pub(super) fn draw_new_level_dialog(ui: &Ui, session: &mut Session, dialog: &mut
     }
 }
 
-/// `/turf/open/space and /area/space`
-fn fill_label(fill: &[Prefab]) -> String {
-    fill.iter()
-        .map(|prefab| prefab.path.to_string())
-        .collect::<Vec<_>>()
-        .join(" and ")
+fn draw_tile_fill_search(ui: &Ui, session: &Session, search: &mut TileFillSearch) -> Option<Vec<Prefab>> {
+    search.was_searching = search.searching;
+    search.searching = false;
+    let tree = session.tree();
+    let roots = tree.map(|tree| tree.roots());
+
+    ui.text_disabled("New tiles will be filled with:");
+    for (label, id, field, root) in [
+        (
+            "Turf",
+            "##tile-fill-turf",
+            TileFillField::Turf,
+            roots.and_then(|roots| roots.turf),
+        ),
+        (
+            "Area",
+            "##tile-fill-area",
+            TileFillField::Area,
+            roots.and_then(|roots| roots.area),
+        ),
+    ] {
+        ui.text(label);
+        ui.set_next_item_width(TILE_FILL_WIDTH);
+        let Some(_combo) = ui.begin_combo(id, search.paths.get_mut(field).as_str()) else {
+            continue;
+        };
+        search.searching = true;
+        if ui.is_window_appearing() {
+            search.query.clone_from(search.paths.get_mut(field));
+            ui.set_keyboard_focus_here();
+        }
+        let picked = draw_type_path_search(
+            ui,
+            tree,
+            &mut search.query,
+            "##tile-fill-search",
+            MAX_CUSTOM_FILL_SEARCH_RESULTS,
+            |tree, path| {
+                root.zip(tree.id_of(path))
+                    .is_some_and(|(root, id)| tree.is_subtype_of(id, root))
+            },
+            |_| true,
+        );
+        if let Some(path) = picked {
+            *search.paths.get_mut(field) = path.to_string();
+        }
+    }
+
+    match session.tile_fill(&search.paths.turf, &search.paths.area) {
+        Ok(fill) => Some(fill),
+        Err(error) => {
+            ui.text_colored(SAVE_ERROR_COLOR, error);
+            None
+        },
+    }
 }
 
 fn resolve_new_map_path(codebase_dir: &Path, input: &str) -> Result<PathBuf, String> {
@@ -721,6 +859,8 @@ mod tests {
         PendingFillWarning,
         RESIZE_MAP_POPUP,
         ResizeMapDialog,
+        TileFillPaths,
+        TileFillSearch,
         draw_keybind_preset_dialog,
         draw_new_level_dialog,
         draw_resize_map_dialog,
@@ -774,28 +914,129 @@ mod tests {
         let document = session
             .state
             .open_document(MapDocument::new(dmm::Map::new(Size { x: 2, y: 1, z: 1 }), 1));
-        let mut dialog = Some(NewLevelDialog {
-            document,
-            error: None,
-            open: true,
-        });
+        let mut dialog = Some(NewLevelDialog::new(document));
+        let mut remembered = None;
 
         let ui = context.frame();
-        draw_new_level_dialog(ui, &mut session, &mut dialog);
+        draw_new_level_dialog(ui, &mut session, &mut dialog, &mut remembered);
         assert!(context.render_legacy().valid());
         assert_eq!(session.level_count(), 1, "opening the dialog creates nothing");
+        assert_eq!(
+            dialog.as_ref().unwrap().fill.paths,
+            TileFillPaths::defaults(&session),
+            "the search starts at the defaults"
+        );
 
         context.io_mut().add_key_event(dear_imgui_rs::Key::Enter, true);
         let ui = context.frame();
-        draw_new_level_dialog(ui, &mut session, &mut dialog);
+        draw_new_level_dialog(ui, &mut session, &mut dialog, &mut remembered);
         assert!(context.render_legacy().valid());
 
         assert!(dialog.is_none());
+        assert_eq!(remembered, None, "unchanged defaults are not remembered");
         assert_eq!(session.level_count(), 2);
         assert_eq!(
             session.map().unwrap().tile_at(Coord::new(2, 1, 2)),
             session.default_fill().ok().as_ref()
         );
+    }
+
+    #[test]
+    fn a_changed_fill_is_remembered_for_the_next_z_level_and_resize() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = crate::ui::fixtures::rectangle_context();
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        let document = session
+            .state
+            .open_document(MapDocument::new(dmm::Map::new(Size { x: 2, y: 1, z: 1 }), 1));
+        let mut dialog = Some(NewLevelDialog::new(document));
+        let mut remembered = None;
+
+        let ui = context.frame();
+        draw_new_level_dialog(ui, &mut session, &mut dialog, &mut remembered);
+        assert!(context.render_legacy().valid());
+        dialog.as_mut().unwrap().fill.paths.turf = String::from("/turf/open/floor");
+
+        context.io_mut().add_key_event(dear_imgui_rs::Key::Enter, true);
+        let ui = context.frame();
+        draw_new_level_dialog(ui, &mut session, &mut dialog, &mut remembered);
+        assert!(context.render_legacy().valid());
+
+        let expected = TileFillPaths {
+            turf: String::from("/turf/open/floor"),
+            area: TileFillPaths::defaults(&session).area,
+        };
+        assert_eq!(remembered.as_ref(), Some(&expected));
+        assert_eq!(
+            session.map().unwrap().tile_at(Coord::new(1, 1, 2)).unwrap()[0].path,
+            TreePath::parse("/turf/open/floor")
+        );
+        assert_eq!(
+            ResizeMapDialog::new(
+                Size { x: 2, y: 1, z: 2 },
+                TileFillSearch::new(&session, remembered.as_ref())
+            )
+            .fill
+            .paths,
+            expected
+        );
+    }
+
+    #[test]
+    fn enter_in_an_open_fill_search_does_not_create_a_z_level() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = crate::ui::fixtures::rectangle_context();
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        let document = session
+            .state
+            .open_document(MapDocument::new(dmm::Map::new(Size { x: 2, y: 1, z: 1 }), 1));
+        let mut dialog = Some(NewLevelDialog::new(document));
+        let mut remembered = None;
+
+        let ui = context.frame();
+        draw_new_level_dialog(ui, &mut session, &mut dialog, &mut remembered);
+        assert!(context.render_legacy().valid());
+        dialog.as_mut().unwrap().fill.searching = true;
+
+        context.io_mut().add_key_event(dear_imgui_rs::Key::Enter, true);
+        let ui = context.frame();
+        draw_new_level_dialog(ui, &mut session, &mut dialog, &mut remembered);
+        assert!(context.render_legacy().valid());
+
+        assert!(dialog.is_some());
+        assert_eq!(session.level_count(), 1);
+    }
+
+    #[test]
+    fn an_invalid_fill_path_blocks_z_level_creation() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = crate::ui::fixtures::rectangle_context();
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        let document = session
+            .state
+            .open_document(MapDocument::new(dmm::Map::new(Size { x: 2, y: 1, z: 1 }), 1));
+        let mut dialog = Some(NewLevelDialog::new(document));
+        let mut remembered = None;
+
+        let ui = context.frame();
+        draw_new_level_dialog(ui, &mut session, &mut dialog, &mut remembered);
+        assert!(context.render_legacy().valid());
+        dialog.as_mut().unwrap().fill.paths.area = String::from("/turf");
+
+        context.io_mut().add_key_event(dear_imgui_rs::Key::Enter, true);
+        let ui = context.frame();
+        draw_new_level_dialog(ui, &mut session, &mut dialog, &mut remembered);
+        assert!(context.render_legacy().valid());
+
+        assert!(dialog.is_some());
+        assert_eq!(remembered, None);
+        assert_eq!(session.level_count(), 1);
     }
 
     #[test]
@@ -809,17 +1050,23 @@ mod tests {
         let table = map.intern_tile(vec![Prefab::new(TreePath::parse("/obj/structure/table"))]);
         map.grid[0][0].fill(table);
         session.state.open_document(MapDocument::new(map, 1));
-        let mut dialog = Some(ResizeMapDialog::new(Size { x: 3, y: 1, z: 1 }));
+        let fill = TileFillSearch::new(&session, None);
+        let mut dialog = Some(ResizeMapDialog::new(Size { x: 3, y: 1, z: 1 }, fill));
+        let mut remembered = None;
 
         for width in [3, 1] {
             dialog.as_mut().unwrap().width = width;
             let ui = context.frame();
             ui.open_popup(RESIZE_MAP_POPUP);
-            assert!(!draw_resize_map_dialog(ui, &mut session, &mut dialog));
+            assert!(!draw_resize_map_dialog(ui, &mut session, &mut dialog, &mut remembered));
             assert!(context.render_legacy().valid());
         }
 
-        assert_eq!(dialog.unwrap().losses, Some((1, 1, 2)));
+        let losses = dialog
+            .unwrap()
+            .losses
+            .map(|(width, height, _, losses)| (width, height, losses));
+        assert_eq!(losses, Some((1, 1, 2)));
         assert_eq!(
             session.map().unwrap().size.x,
             3,
