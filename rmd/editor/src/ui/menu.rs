@@ -1,6 +1,14 @@
 use dear_imgui_rs::Ui;
 
-use super::{LAYER_KEYS, OpenRequest, UiState, viewport::EditCommand, welcome::codebase_relative};
+use super::{
+    LAYER_KEYS,
+    OpenRequest,
+    ScreenshotArea,
+    ScreenshotRequest,
+    UiState,
+    viewport::EditCommand,
+    welcome::codebase_relative,
+};
 use crate::{
     session::Session,
     settings::{KeybindAction, Settings},
@@ -20,7 +28,7 @@ pub(super) struct MenuActions {
     pub(super) close_map: bool,
     pub(super) close_all: bool,
     pub(super) edit: Option<EditCommand>,
-    pub(super) screenshot: bool,
+    pub(super) screenshot: Option<ScreenshotRequest>,
     pub(super) toggle_areas: bool,
     pub(super) toggle_area_outlines: bool,
     pub(super) toggle_lighting: bool,
@@ -87,13 +95,20 @@ impl UiState {
                 ) {
                     actions.save_all = true;
                 }
-                if ui.menu_item_enabled_selected_with_shortcut(
-                    "Screenshot...",
-                    settings.keybindings.get(KeybindAction::Screenshot).label(ui),
-                    false,
-                    session.map().is_some(),
-                ) {
-                    actions.screenshot = true;
+                if let Some(_screenshot) = ui.begin_menu_with_enabled("Screenshot", session.map().is_some()) {
+                    let shortcut = settings.keybindings.get(KeybindAction::Screenshot).label(ui);
+                    let selected = session.selection().is_some();
+                    for (label, area, copy, enabled) in [
+                        ("Save map...", ScreenshotArea::Map, false, true),
+                        ("Save selection...", ScreenshotArea::Selection, false, selected),
+                        ("Copy map", ScreenshotArea::Map, true, true),
+                        ("Copy selection", ScreenshotArea::Selection, true, selected),
+                    ] {
+                        let shortcut = (area == ScreenshotArea::Map && !copy).then_some(shortcut.as_str());
+                        if ui.menu_item_enabled_selected(label, shortcut, false, enabled) {
+                            actions.screenshot = Some(ScreenshotRequest { area, copy });
+                        }
+                    }
                 }
                 ui.separator();
                 if ui.menu_item_enabled_selected_with_shortcut(

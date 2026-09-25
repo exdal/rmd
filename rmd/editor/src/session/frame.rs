@@ -1,6 +1,6 @@
 use dmm::{Coord, Size};
 use editor::{
-    document::{DocumentId, PrefabInstanceId},
+    document::{DocumentId, PrefabInstanceId, Selection},
     focus::AreaFocus,
     frame::{self, FrameInstances, FrameRenderOptions},
 };
@@ -169,6 +169,25 @@ impl Session {
             .map_or_else(|| self.tile_extent(None), |id| self.extent_px_of(id))
     }
 
+    pub fn capture_region(&self, id: DocumentId, selection: Option<Selection>) -> Option<([u32; 2], [u32; 2])> {
+        // bottom left origin
+
+        let size = self.state.document(id)?.map.size;
+        let tile = self.options.tile_size.max(1);
+        let (min_x, min_y) = selection.map_or((1, 1), |selection| (selection.min.x, selection.min.y));
+        let (max_x, max_y) = selection.map_or((size.x, size.y), |selection| {
+            (selection.max.x.min(size.x), selection.max.y.min(size.y))
+        });
+        if min_x < 1 || min_y < 1 || min_x > max_x || min_y > max_y {
+            return None;
+        }
+
+        Some((
+            [(min_x - 1) * tile, (min_y - 1) * tile],
+            [(max_x - min_x + 1) * tile, (max_y - min_y + 1) * tile],
+        ))
+    }
+
     pub fn extent_px_of(&self, id: DocumentId) -> (f32, f32) {
         self.tile_extent(self.state.document(id).map(|document| document.map.size))
     }
@@ -307,13 +326,37 @@ mod tests {
     use core::path::TreePath;
 
     use dmm::{Coord, Map, Size};
-    use editor::document::MapDocument;
+    use editor::document::{MapDocument, Selection};
 
     use crate::session::{
         Session,
         TypeLayer,
         fixtures::{examples, flat_session, settle_bake},
     };
+
+    #[test]
+    fn capture_regions_measure_from_the_bottom_left_and_clamp_to_the_map() {
+        let session = flat_session(4, 3);
+        let id = session.state.active().unwrap();
+        let tile = session.options.tile_size;
+        let block = |min: (u32, u32), max: (u32, u32)| {
+            Some(Selection::from_drag(
+                Coord::new(min.0, min.1, 1),
+                Coord::new(max.0, max.1, 1),
+            ))
+        };
+
+        assert_eq!(session.capture_region(id, None), Some(([0, 0], [4 * tile, 3 * tile])));
+        assert_eq!(
+            session.capture_region(id, block((2, 2), (3, 3))),
+            Some(([tile, tile], [2 * tile, 2 * tile]))
+        );
+        assert_eq!(
+            session.capture_region(id, block((3, 2), (9, 9))),
+            Some(([2 * tile, tile], [2 * tile, 2 * tile]))
+        );
+        assert_eq!(session.capture_region(id, block((5, 1), (6, 1))), None);
+    }
 
     #[test]
     fn layer_toggles_hide_a_base_type_and_show_all_restores_everything() {

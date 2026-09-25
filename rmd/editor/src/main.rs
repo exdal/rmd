@@ -39,7 +39,10 @@ use dear_imgui_rs::{
     render::SynchronousRendererConsumer,
 };
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
-use editor::{document::DocumentId, environment::BakeOptions};
+use editor::{
+    document::{DocumentId, Selection},
+    environment::BakeOptions,
+};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use render::{CapturedImage, Device, PickRequest, PickResult, Renderer};
 use winit::{
@@ -55,7 +58,7 @@ use crate::{
     loader::{Job, Loader, Outcome},
     session::{LoadReport, Session},
     settings::{Settings, imgui_ini_path},
-    ui::{LoadNotice, OpenRequest, ProfileReload, UiState},
+    ui::{LoadNotice, OpenRequest, ProfileReload, ScreenshotArea, ScreenshotRequest, UiState},
 };
 
 const FONT_DATA: &[u8] = include_bytes!("../assets/FiraMono-Regular.ttf");
@@ -153,6 +156,7 @@ fn main() -> ExitCode {
         uploaded_texture_revision: None,
         pending_screenshot: None,
         screenshot_dir: None,
+        clipboard: None,
         title,
         consumer: None,
         renderer: None,
@@ -228,8 +232,19 @@ fn window_title(session: &Session) -> String {
     }
 }
 
-fn save_screenshot(
-    renderer: &mut Renderer, session: &Session, scene: &render::Frame<'_>, drawn: &[DocumentId], path: PathBuf,
+enum ScreenshotTarget {
+    File(PathBuf),
+    Clipboard,
+}
+
+struct PendingScreenshot {
+    target: ScreenshotTarget,
+    selection: Option<Selection>,
+}
+
+fn take_screenshot(
+    renderer: &mut Renderer, session: &Session, scene: &render::Frame<'_>, drawn: &[DocumentId],
+    pending: PendingScreenshot, clipboard: &mut Option<arboard::Clipboard>,
 ) {
     let Some(document) = session.state.active() else {
         return;
@@ -238,8 +253,11 @@ fn save_screenshot(
         log::error!("could not take a screenshot: the map is not open in a view");
         return;
     };
-    let (width, height) = session.extent_px_of(document);
-    let image = match renderer.capture(scene, view, [width as u32, height as u32]) {
+    let Some((origin, size)) = session.capture_region(document, pending.selection) else {
+        log::error!("could not take a screenshot: the selection is outside the map");
+        return;
+    };
+    let image = match renderer.capture(scene, view, origin, size) {
         Ok(image) => image,
         Err(e) => {
             log::error!("could not take a screenshot: {e}");
@@ -247,10 +265,38 @@ fn save_screenshot(
         },
     };
 
-    std::thread::spawn(move || match write_png(&path, &image) {
-        Ok(()) => log::info!("saved screenshot to {}", path.display()),
-        Err(e) => log::error!("could not save screenshot to {}: {e}", path.display()),
-    });
+    match pending.target {
+        ScreenshotTarget::File(path) => {
+            std::thread::spawn(move || match write_png(&path, &image) {
+                Ok(()) => log::info!("saved screenshot to {}", path.display()),
+                Err(e) => log::error!("could not save screenshot to {}: {e}", path.display()),
+            });
+        },
+        ScreenshotTarget::Clipboard => copy_image(clipboard, image),
+    }
+}
+
+fn copy_image(clipboard: &mut Option<arboard::Clipboard>, image: CapturedImage) {
+    let clipboard = match clipboard {
+        Some(clipboard) => clipboard,
+        None => match arboard::Clipboard::new() {
+            Ok(created) => clipboard.insert(created),
+            Err(e) => {
+                log::error!("could not open the clipboard: {e}");
+                return;
+            },
+        },
+    };
+    let data = arboard::ImageData {
+        width: image.width as usize,
+        height: image.height as usize,
+        bytes: image.rgba.into(),
+    };
+
+    match clipboard.set_image(data) {
+        Ok(()) => log::info!("copied screenshot to the clipboard"),
+        Err(e) => log::error!("could not copy the screenshot: {e}"),
+    }
 }
 
 fn write_png(path: &Path, image: &CapturedImage) -> Result<(), png::EncodingError> {
@@ -270,7 +316,7 @@ struct Redraw {
     open: Option<OpenRequest>,
     open_source: Option<SourceLocation>,
     pick_new_map_path: bool,
-    screenshot: bool,
+    screenshot: Option<ScreenshotRequest>,
     cancel_load: bool,
     copy_to_clipboard: Option<String>,
     reload_profile: Option<ProfileReload>,
@@ -297,8 +343,9 @@ struct App {
     deferred_job: Option<Job>,
     settings_ready: bool,
     uploaded_texture_revision: Option<u64>,
-    pending_screenshot: Option<PathBuf>,
+    pending_screenshot: Option<PendingScreenshot>,
     screenshot_dir: Option<PathBuf>,
+    clipboard: Option<arboard::Clipboard>,
     title: String,
     consumer: Option<SynchronousRendererConsumer>,
     renderer: Option<Renderer>,
@@ -368,6 +415,7 @@ impl App {
             settings_ready,
             uploaded_texture_revision,
             pending_screenshot,
+            clipboard,
             title,
             consumer,
             renderer,
@@ -388,7 +436,7 @@ impl App {
                 open: None,
                 open_source: None,
                 pick_new_map_path: false,
-                screenshot: false,
+                screenshot: None,
                 cancel_load: false,
                 copy_to_clipboard: None,
                 reload_profile: None,
@@ -447,8 +495,8 @@ impl App {
         let pending = frame.try_render(consumer)?;
         window.pre_present_notify();
         let picked = renderer.draw_imgui(&scene, pending)?;
-        if let Some(path) = pending_screenshot.take() {
-            save_screenshot(renderer, session, &scene, &drawn, path);
+        if let Some(pending) = pending_screenshot.take() {
+            take_screenshot(renderer, session, &scene, &drawn, pending, clipboard);
         }
         if let Some((index, request, pick)) = picked {
             if let Some(document) = drawn.get(index).copied() {
@@ -693,10 +741,31 @@ impl App {
         }
     }
 
-    fn pick_screenshot_path(&mut self) {
+    fn request_screenshot(&mut self, request: ScreenshotRequest) {
         let Some(document) = self.session.state.active_document() else {
             return;
         };
+        let selection = match request.area {
+            ScreenshotArea::Map => None,
+            ScreenshotArea::Selection => match document.selection {
+                Some(selection) => Some(selection),
+                None => return,
+            },
+        };
+        let target = if request.copy {
+            ScreenshotTarget::Clipboard
+        } else {
+            match self.pick_screenshot_path(selection) {
+                Some(path) => ScreenshotTarget::File(path),
+                None => return,
+            }
+        };
+
+        self.pending_screenshot = Some(PendingScreenshot { target, selection });
+    }
+
+    fn pick_screenshot_path(&mut self, selection: Option<Selection>) -> Option<PathBuf> {
+        let document = self.session.state.active_document()?;
         let map_path = document.path.as_deref();
         let stem = map_path
             .and_then(Path::file_stem)
@@ -708,7 +777,13 @@ impl App {
         let dialog = rfd::FileDialog::new()
             .add_filter("PNG image", &["png"])
             .set_title("Save screenshot")
-            .set_file_name(format!("{stem}_z{}.png", document.z));
+            .set_file_name(match selection {
+                Some(selection) => format!(
+                    "{stem}_z{}_{}-{}_{}-{}.png",
+                    document.z, selection.min.x, selection.min.y, selection.max.x, selection.max.y
+                ),
+                None => format!("{stem}_z{}.png", document.z),
+            });
         let dialog = match directory {
             Some(directory) => dialog.set_directory(directory),
             None => dialog,
@@ -718,13 +793,13 @@ impl App {
             None => dialog,
         };
 
-        if let Some(mut path) = dialog.save_file() {
-            if path.extension().is_none() {
-                path.set_extension("png");
-            }
-            self.screenshot_dir = path.parent().map(Path::to_path_buf);
-            self.pending_screenshot = Some(path);
+        let mut path = dialog.save_file()?;
+        if path.extension().is_none() {
+            path.set_extension("png");
         }
+        self.screenshot_dir = path.parent().map(Path::to_path_buf);
+
+        Some(path)
     }
 
     fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -819,7 +894,7 @@ impl ApplicationHandler for App {
                             open: None,
                             open_source: None,
                             pick_new_map_path: false,
-                            screenshot: false,
+                            screenshot: None,
                             cancel_load: false,
                             copy_to_clipboard: None,
                             reload_profile: None,
@@ -837,8 +912,8 @@ impl ApplicationHandler for App {
                 if redraw.pick_new_map_path {
                     self.pick_new_map_path();
                 }
-                if redraw.screenshot {
-                    self.pick_screenshot_path();
+                if let Some(request) = redraw.screenshot {
+                    self.request_screenshot(request);
                 }
                 if let Some(request) = redraw.open {
                     self.apply_open(request);

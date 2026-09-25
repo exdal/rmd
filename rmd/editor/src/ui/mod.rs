@@ -164,7 +164,7 @@ pub struct UiOutput {
     pub open: Option<OpenRequest>,
     pub open_source: Option<SourceLocation>,
     pub pick_new_map_path: bool,
-    pub screenshot: bool,
+    pub screenshot: Option<ScreenshotRequest>,
     pub cancel_load: bool,
     pub copy_to_clipboard: Option<String>,
     pub reload_profile: Option<ProfileReload>,
@@ -176,6 +176,19 @@ pub struct UiOutput {
 pub enum ProfileReload {
     Select(String),
     Force(Option<BundledProfile>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenshotArea {
+    Map,
+    Selection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenshotRequest {
+    pub area: ScreenshotArea,
+    /// To the clipboard instead of a PNG file
+    pub copy: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,7 +413,7 @@ impl UiState {
                 open: None,
                 open_source: None,
                 pick_new_map_path: false,
-                screenshot: false,
+                screenshot: None,
                 cancel_load: false,
                 copy_to_clipboard: None,
                 reload_profile: None,
@@ -483,11 +496,17 @@ impl UiState {
         }
         self.edit_command = edit;
 
-        screenshot |= session.map().is_some()
+        if session.map().is_some()
             && self.save_dialog.is_none()
             && !self.settings_window.is_capturing_keybind()
             && !ui.io().want_text_input()
-            && settings.keybindings.get(KeybindAction::Screenshot).is_pressed(ui);
+            && settings.keybindings.get(KeybindAction::Screenshot).is_pressed(ui)
+        {
+            screenshot = Some(ScreenshotRequest {
+                area: ScreenshotArea::Map,
+                copy: false,
+            });
+        }
 
         let search_keys = session.map().is_some()
             && self.save_dialog.is_none()

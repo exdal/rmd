@@ -1016,7 +1016,10 @@ impl Renderer {
         Ok(())
     }
 
-    pub fn capture(&mut self, frame: &Frame<'_>, view: usize, size: [u32; 2]) -> Result<CapturedImage, GpuError> {
+    /// `origin` is the bottom-left corner of the captured region, in map pixels
+    pub fn capture(
+        &mut self, frame: &Frame<'_>, view: usize, origin: [u32; 2], size: [u32; 2],
+    ) -> Result<CapturedImage, GpuError> {
         let [width, height] = size;
         let rgba_len = (width as usize)
             .checked_mul(height as usize)
@@ -1117,7 +1120,7 @@ impl Renderer {
         let mut frames = self.device.context.create_super_frame_allocator(1);
         let mut rgba = vec![0; rgba_len];
         let result = (|| -> Result<(), GpuError> {
-            for region in capture_tiles(size, tile) {
+            for region in capture_tiles(origin, size, tile) {
                 let camera = CameraPush {
                     center: region.center,
                     viewport: [tile as f32; 2],
@@ -2979,8 +2982,9 @@ struct CaptureTile {
     center: [f32; 2],
 }
 
-fn capture_tiles(size: [u32; 2], tile: u32) -> Vec<CaptureTile> {
+fn capture_tiles(origin: [u32; 2], size: [u32; 2], tile: u32) -> Vec<CaptureTile> {
     let [width, height] = size;
+    let [left, bottom] = origin.map(|value| value as f32);
     let half = tile as f32 / 2.0;
     let mut tiles = Vec::new();
 
@@ -2992,7 +2996,7 @@ fn capture_tiles(size: [u32; 2], tile: u32) -> Vec<CaptureTile> {
                 width: tile.min(width - x),
                 height: tile.min(height - y),
                 // we go up
-                center: [x as f32 + half, (height - y) as f32 - half],
+                center: [left + x as f32 + half, bottom + (height - y) as f32 - half],
             });
         }
     }
@@ -3822,7 +3826,7 @@ mod tests {
 
     #[test]
     fn capture_tiles_cover_the_map_from_the_top_row_down() {
-        let tiles = capture_tiles([8160, 8160], 2048);
+        let tiles = capture_tiles([0, 0], [8160, 8160], 2048);
 
         assert_eq!(tiles.len(), 16);
         assert_eq!(
@@ -3848,9 +3852,32 @@ mod tests {
     }
 
     #[test]
+    fn capture_tiles_offset_their_centers_by_the_region_origin() {
+        assert_eq!(
+            capture_tiles([64, 32], [96, 64], 64),
+            [
+                CaptureTile {
+                    x: 0,
+                    y: 0,
+                    width: 64,
+                    height: 64,
+                    center: [96.0, 64.0],
+                },
+                CaptureTile {
+                    x: 64,
+                    y: 0,
+                    width: 32,
+                    height: 64,
+                    center: [160.0, 64.0],
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn capture_tiles_crop_a_map_smaller_than_one_tile() {
         assert_eq!(
-            capture_tiles([100, 70], 100),
+            capture_tiles([0, 0], [100, 70], 100),
             [CaptureTile {
                 x: 0,
                 y: 0,
