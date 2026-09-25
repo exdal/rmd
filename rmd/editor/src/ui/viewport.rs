@@ -72,10 +72,29 @@ use crate::{
     camera::Controller,
     gizmo::{BlockGizmoKind, BlockGizmoTarget, GizmoMapView},
     session::{BlockPreviewSource, FillOutcome, GuideBadge, Session},
-    settings::{KeybindAction, Settings},
+    settings::{KeyBinding, KeybindAction, Settings},
 };
 
 const PLACEMENT_FLASH_DURATION: f64 = 0.25;
+
+const TOOL_KEYS: [(KeybindAction, Tool); 7] = [
+    (KeybindAction::PlaceTool, Tool::Place),
+    (KeybindAction::SelectTool, Tool::Select),
+    (KeybindAction::NodeTool, Tool::Node),
+    (KeybindAction::BlockSelectTool, Tool::BlockSelect),
+    (KeybindAction::DeleteTool, Tool::Delete),
+    (KeybindAction::ReplaceTool, Tool::Replace),
+    (KeybindAction::FillTool, Tool::Fill),
+];
+
+/// aka Alternate tool
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct MomentaryTool {
+    binding: KeyBinding,
+    tool: Tool,
+    previous: Tool,
+    used: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct ActivePlacementFlash {
@@ -99,25 +118,19 @@ impl ActivePlacementFlash {
 }
 
 #[derive(Debug)]
-pub(super) struct PlacementStroke {
-    prefab: Prefab,
+struct TileStroke {
     z: u32,
     group: EditGroupId,
     visited: HashSet<Coord>,
 }
 
-impl PlacementStroke {
-    fn new(prefab: Prefab, z: u32) -> Self {
+impl TileStroke {
+    fn new(z: u32) -> Self {
         Self {
-            prefab,
             z,
             group: EditGroupId::new(),
             visited: HashSet::new(),
         }
-    }
-
-    fn matches_context(&self, tool: Tool, prefab: Option<&Prefab>, z: u32) -> bool {
-        tool == Tool::Place && prefab == Some(&self.prefab) && z == self.z
     }
 
     fn visit(&mut self, coord: Coord) -> Option<EditGroupId> {
@@ -126,12 +139,41 @@ impl PlacementStroke {
 }
 
 #[derive(Debug)]
-pub(super) struct DeletionStroke {
-    cursor: [u32; 2],
+pub(super) struct PlacementStroke {
+    prefab: Prefab,
+    tiles: TileStroke,
 }
 
-impl DeletionStroke {
-    const fn new(cursor: [u32; 2]) -> Self { Self { cursor } }
+impl PlacementStroke {
+    fn new(prefab: Prefab, z: u32) -> Self {
+        Self {
+            prefab,
+            tiles: TileStroke::new(z),
+        }
+    }
+
+    fn matches_context(&self, tool: Tool, prefab: Option<&Prefab>, z: u32) -> bool {
+        tool == Tool::Place && prefab == Some(&self.prefab) && z == self.tiles.z
+    }
+
+    fn visit(&mut self, coord: Coord) -> Option<EditGroupId> { self.tiles.visit(coord) }
+}
+
+#[derive(Debug)]
+pub(super) struct PickStroke {
+    cursor: [u32; 2],
+    tiles: TileStroke,
+}
+
+impl PickStroke {
+    fn new(cursor: [u32; 2], z: u32) -> Self {
+        Self {
+            cursor,
+            tiles: TileStroke::new(z),
+        }
+    }
+
+    fn clear(&mut self, coord: Coord) -> Option<EditGroupId> { self.tiles.visit(coord) }
 
     fn move_to(&mut self, cursor: [u32; 2]) -> bool {
         let moved = self.cursor != cursor;
@@ -212,11 +254,10 @@ fn active_placement_flash(
 fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewInteraction) {
     interaction.mode = match (tool, interaction.mode) {
         (Tool::Place | Tool::BlockSelect | Tool::Fill, _) => InteractionMode::Place,
-        (Tool::Select, InteractionMode::Select { pick }) => InteractionMode::Select { pick },
+        (Tool::Select | Tool::Replace, InteractionMode::Select { pick }) => InteractionMode::Select { pick },
         (Tool::Delete, InteractionMode::Delete { pick }) => InteractionMode::Delete { pick },
-        (Tool::Select, _) => InteractionMode::Select { pick: None },
+        (Tool::Select | Tool::Replace | Tool::Node, _) => InteractionMode::Select { pick: None },
         (Tool::Delete, _) => InteractionMode::Delete { pick: None },
-        (Tool::Node, _) => InteractionMode::Select { pick: None },
     };
     match tool {
         Tool::Place | Tool::Node | Tool::BlockSelect | Tool::Fill => {
@@ -224,7 +265,7 @@ fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewInteraction) 
             interaction.hovered_area = None;
             interaction.selected = None;
         },
-        Tool::Delete => {
+        Tool::Delete | Tool::Replace => {
             interaction.selected = None;
         },
         Tool::Select => {},
@@ -234,9 +275,8 @@ fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewInteraction) 
 fn interaction_mode(tool: Tool) -> InteractionMode {
     match tool {
         Tool::Place | Tool::BlockSelect | Tool::Fill => InteractionMode::Place,
-        Tool::Select => InteractionMode::Select { pick: None },
+        Tool::Select | Tool::Replace | Tool::Node => InteractionMode::Select { pick: None },
         Tool::Delete => InteractionMode::Delete { pick: None },
-        Tool::Node => InteractionMode::Select { pick: None },
     }
 }
 
@@ -493,6 +533,15 @@ impl UiState {
             let over_overlay = top_overlay.contains(mouse) || bottom_overlay.contains(mouse);
             let hovered = image_hovered && !over_overlay && is_active;
             let focused = ui.is_window_focused();
+            if let Some(momentary) = self.momentary_tool.as_mut() {
+                momentary.used |= hovered && ui.is_mouse_clicked(MouseButton::Left);
+                if !momentary.binding.is_key_held(ui) {
+                    if momentary.used && session.tool() == momentary.tool {
+                        session.set_tool(momentary.previous);
+                    }
+                    self.momentary_tool = None;
+                }
+            }
             if focused
                 && !ui.io().want_text_input()
                 && let Some(index) = settings.keybindings.pressed_recent(ui)
@@ -536,23 +585,18 @@ impl UiState {
                 if settings.keybindings.get(KeybindAction::Refit).is_pressed(ui) {
                     *refit = true;
                 }
-                if settings.keybindings.get(KeybindAction::PlaceTool).is_pressed(ui) {
-                    session.set_tool(Tool::Place);
-                }
-                if settings.keybindings.get(KeybindAction::SelectTool).is_pressed(ui) {
-                    session.set_tool(Tool::Select);
-                }
-                if settings.keybindings.get(KeybindAction::NodeTool).is_pressed(ui) {
-                    session.set_tool(Tool::Node);
-                }
-                if settings.keybindings.get(KeybindAction::BlockSelectTool).is_pressed(ui) {
-                    session.set_tool(Tool::BlockSelect);
-                }
-                if settings.keybindings.get(KeybindAction::DeleteTool).is_pressed(ui) {
-                    session.set_tool(Tool::Delete);
-                }
-                if settings.keybindings.get(KeybindAction::FillTool).is_pressed(ui) {
-                    session.set_tool(Tool::Fill);
+                for (action, tool) in TOOL_KEYS {
+                    let binding = settings.keybindings.get(action);
+                    if binding.is_pressed(ui) && session.tool() != tool {
+                        let previous = session.tool();
+                        session.set_tool(tool);
+                        self.momentary_tool = (session.tool() == tool).then_some(MomentaryTool {
+                            binding,
+                            tool,
+                            previous,
+                            used: false,
+                        });
+                    }
                 }
 
                 if *refit {
@@ -786,7 +830,7 @@ impl UiState {
                         self.gizmo.cancel();
                         self.placement_flash = None;
                         self.placement_stroke = None;
-                        self.deletion_stroke = None;
+                        self.pick_stroke = None;
                         *block_selection_anchor = None;
                         *block_placement = None;
                         *paste = None;
@@ -1089,7 +1133,7 @@ impl UiState {
                             false
                         }
                     },
-                    Tool::Delete => {
+                    Tool::Delete | Tool::Replace => {
                         self.gizmo.cancel();
 
                         false
@@ -1182,10 +1226,10 @@ impl UiState {
                 }
                 if left_clicked {
                     self.placement_stroke = None;
-                    self.deletion_stroke = None;
+                    self.pick_stroke = None;
                 }
-                if !left_down || session.tool() != Tool::Delete {
-                    self.deletion_stroke = None;
+                if !left_down || !matches!(session.tool(), Tool::Delete | Tool::Replace) {
+                    self.pick_stroke = None;
                 }
                 if self.placement_stroke.as_ref().is_some_and(|stroke| {
                     !left_down
@@ -1205,6 +1249,7 @@ impl UiState {
                 {
                     let pixel = [cursor[0].floor() as u32, cursor[1].floor() as u32];
                     interaction.cursor = Some(cursor_in_map_view(cursor, scale));
+                    let alternate = settings.keybindings.get(KeybindAction::ToolAlternate).is_held(ui);
 
                     if let Some(coord) = pointed_coord {
                         interaction.hovered_area = session.area_at(id, coord);
@@ -1220,7 +1265,13 @@ impl UiState {
                                     .can_edit_at(coord)
                                     .then(|| self.placement_stroke.as_mut().and_then(|stroke| stroke.visit(coord)))
                                     .flatten();
-                                let placed = group.and_then(|group| session.place_at(coord, Some(group)));
+                                let placed = group.and_then(|group| {
+                                    if alternate {
+                                        session.place_replacing_objs_at(coord, Some(group))
+                                    } else {
+                                        session.place_at(coord, Some(group))
+                                    }
+                                });
                                 if settings.tile_place_flash
                                     && let Some(owner) = placed
                                 {
@@ -1263,21 +1314,30 @@ impl UiState {
                                     }
                                 }
                             },
-                            Tool::Delete => {
+                            tool @ (Tool::Delete | Tool::Replace) => {
                                 self.placement_stroke = None;
-                                let requests_pick = if left_clicked {
-                                    self.deletion_stroke = Some(DeletionStroke::new(pixel));
-
-                                    true
-                                } else {
-                                    left_down
-                                        && self
-                                            .deletion_stroke
-                                            .as_mut()
-                                            .is_some_and(|stroke| stroke.move_to(pixel))
-                                };
-                                if requests_pick {
-                                    request_pick(interaction, PickRequest::Delete);
+                                if tool == Tool::Replace && session.palette().is_none() {
+                                    ui.tooltip_text("Choose a brush to replace atoms with");
+                                }
+                                if left_clicked {
+                                    self.pick_stroke = Some(PickStroke::new(pixel, session.z()));
+                                }
+                                if tool == Tool::Delete && alternate {
+                                    interaction.cursor = None;
+                                    if let Some(group) =
+                                        self.pick_stroke.as_mut().and_then(|stroke| stroke.clear(coord))
+                                    {
+                                        session.delete_tile(coord, Some(group));
+                                    }
+                                } else if left_clicked
+                                    || (left_down
+                                        && self.pick_stroke.as_mut().is_some_and(|stroke| stroke.move_to(pixel)))
+                                {
+                                    let request = match tool {
+                                        Tool::Delete => PickRequest::Delete,
+                                        _ => PickRequest::Replace,
+                                    };
+                                    request_pick(interaction, request);
                                 }
                             },
                             Tool::Fill => {
@@ -1396,7 +1456,7 @@ impl UiState {
                         self.gizmo.cancel();
                         self.placement_flash = None;
                         self.placement_stroke = None;
-                        self.deletion_stroke = None;
+                        self.pick_stroke = None;
                         *block_selection_anchor = None;
                         *block_placement = None;
                         *paste = None;
@@ -1434,7 +1494,7 @@ impl UiState {
                             session.cut_tile(coord);
                         },
                         MenuAction::Delete(coord) => {
-                            session.delete_tile(coord);
+                            session.delete_tile(coord, None);
                         },
                         MenuAction::Select(instance) => {
                             session.select_instance(Some(instance));
@@ -1693,8 +1753,8 @@ mod tests {
 
     use super::{
         ActivePlacementFlash,
-        DeletionStroke,
         MapViewState,
+        PickStroke,
         PlacementStroke,
         active_placement_flash,
         configure_tool_interaction,
@@ -2743,8 +2803,8 @@ mod tests {
     }
 
     #[test]
-    fn deletion_strokes_only_continue_when_the_cursor_moves() {
-        let mut stroke = DeletionStroke::new([10, 20]);
+    fn pick_strokes_only_continue_when_the_cursor_moves() {
+        let mut stroke = PickStroke::new([10, 20], 1);
 
         assert!(!stroke.move_to([10, 20]));
         assert!(stroke.move_to([11, 20]));
@@ -2791,5 +2851,79 @@ mod tests {
                 started_at: 10.0,
             })
         );
+    }
+
+    #[test]
+    fn a_tapped_tool_key_switches_tools_and_a_held_one_hands_the_old_tool_back() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut app = RectangleUiHarness::new();
+        let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        app.session.state.choose_prefab(table.clone());
+        app.session.set_tool(Tool::Select);
+        let tile = app.tile(5, 8);
+        app.pointer(tile, false);
+
+        app.key(Key::W, true);
+        app.key(Key::W, false);
+        assert_eq!(app.session.tool(), Tool::Place, "a tap keeps the new tool");
+
+        app.session.set_tool(Tool::Select);
+        app.key(Key::W, true);
+        assert_eq!(app.session.tool(), Tool::Place);
+        app.pointer(tile, true);
+        app.pointer(tile, false);
+        app.key(Key::W, false);
+        assert_eq!(app.session.tool(), Tool::Select, "releasing after a click goes back");
+        assert!(
+            app.session
+                .map()
+                .unwrap()
+                .tile_at(Coord::new(5, 8, 1))
+                .unwrap()
+                .contains(&table)
+        );
+    }
+
+    #[test]
+    fn the_alternate_delete_drag_clears_each_tile_in_one_undo_step_with_any_bound_key() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        for (bound, held, clears) in [
+            (None, Key::ModAlt, true),
+            (Some(Key::ModShift), Key::ModShift, true),
+            (Some(Key::ModShift), Key::ModAlt, false),
+        ] {
+            let mut app = RectangleUiHarness::new();
+            if let Some(key) = bound {
+                app.settings
+                    .keybindings
+                    .rebind(KeybindAction::ToolAlternate, KeyBinding::new(key));
+            }
+            let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+            app.session.state.choose_prefab(table.clone());
+            app.session.set_tool(Tool::Place);
+            let coords = [Coord::new(5, 8, 1), Coord::new(6, 8, 1)];
+            for coord in coords {
+                assert!(app.session.place_at(coord, None).is_some());
+            }
+            let holds_table =
+                |app: &RectangleUiHarness, coord| app.session.map().unwrap().tile_at(coord).unwrap().contains(&table);
+            app.session.set_tool(Tool::Delete);
+
+            app.key(held, true);
+            app.pointer(app.tile(5, 8), true);
+            app.pointer(app.tile(6, 8), true);
+            app.pointer(app.tile(6, 8), false);
+            app.key(held, false);
+            assert_eq!(
+                coords.iter().all(|coord| !holds_table(&app, *coord)),
+                clears,
+                "{bound:?} holding {held:?}"
+            );
+
+            if clears {
+                assert!(app.session.undo());
+                assert!(coords.iter().all(|coord| holds_table(&app, *coord)));
+            }
+        }
     }
 }

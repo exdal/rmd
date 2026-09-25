@@ -11,6 +11,7 @@ use objtree::{ObjectTree, TypeId};
 use crate::{
     command::Edit,
     document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection},
+    frame::HiddenTypes,
     visual,
 };
 
@@ -24,6 +25,7 @@ pub enum Tool {
     Node,
     BlockSelect,
     Delete,
+    Replace,
     Fill,
 }
 
@@ -170,6 +172,7 @@ impl Tool {
             Tool::Node => "Node",
             Tool::BlockSelect => "Block Select",
             Tool::Delete => "Delete",
+            Tool::Replace => "Replace",
             Tool::Fill => "Fill",
         }
     }
@@ -178,7 +181,7 @@ impl Tool {
         match self {
             Self::Place => place(context),
             Self::Delete => delete(context),
-            Self::Select | Self::Node | Self::BlockSelect => None,
+            Self::Select | Self::Node | Self::BlockSelect | Self::Replace => None,
             Self::Fill => fill(context, Some(MAX_FILL_TILES), None).ok().flatten(),
         }
     }
@@ -699,12 +702,38 @@ fn directional_type_target(tree: &ObjectTree, selected: TypeId, direction: Dir) 
 
 fn place(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
     let prefab = context.prefab?.clone();
-    let kind = placement_kind(context.tree, &prefab)?;
-    let (after, selected, affected) =
-        place_prefab_on_tile(context.document, context.tree, context.coord, &prefab, kind)?;
+
+    place_on_tile(context.document, context.tree, context.coord, &prefab, None)
+}
+
+pub fn place_replacing_objs(
+    document: &mut MapDocument, tree: &ObjectTree, coord: Coord, prefab: &Prefab, hidden: &HiddenTypes,
+) -> Option<ToolEdit> {
+    place_on_tile(document, tree, coord, prefab, Some(hidden))
+}
+
+fn place_on_tile(
+    document: &mut MapDocument, tree: &ObjectTree, coord: Coord, prefab: &Prefab, replaced_objs: Option<&HiddenTypes>,
+) -> Option<ToolEdit> {
+    let kind = placement_kind(tree, prefab)?;
+    let mut tile = document.placed_tile(coord)?;
+    let mut affected = Vec::new();
+    if let Some(hidden) = replaced_objs
+        && is_obj(tree, &prefab.path)
+    {
+        tile.retain(|placed| {
+            let replaced = is_obj(tree, &placed.prefab().path) && !hidden.hides(placed.prefab());
+            if replaced {
+                affected.push(placed.id());
+            }
+            !replaced
+        });
+    }
+    let (after, selected, placed) = place_prefab_into(document, tree, coord, tile, prefab, kind)?;
+    affected.extend(placed);
 
     let mut edit = Edit::new(format!("place {}", prefab.path));
-    edit.change(context.document, context.coord, after);
+    edit.change(document, coord, after);
 
     Some(ToolEdit {
         edit,
@@ -713,10 +742,25 @@ fn place(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
     })
 }
 
+fn is_obj(tree: &ObjectTree, path: &TreePath) -> bool {
+    tree.roots()
+        .obj
+        .zip(tree.id_of(path))
+        .is_some_and(|(obj, id)| tree.is_subtype_of(id, obj))
+}
+
 fn place_prefab_on_tile(
     document: &mut MapDocument, tree: &ObjectTree, coord: Coord, prefab: &Prefab, kind: PlacementKind,
 ) -> Option<(PlacedTile, PrefabInstanceId, Vec<PrefabInstanceId>)> {
-    let mut after = document.placed_tile(coord)?;
+    let tile = document.placed_tile(coord)?;
+
+    place_prefab_into(document, tree, coord, tile, prefab, kind)
+}
+
+fn place_prefab_into(
+    document: &mut MapDocument, tree: &ObjectTree, coord: Coord, mut after: PlacedTile, prefab: &Prefab,
+    kind: PlacementKind,
+) -> Option<(PlacedTile, PrefabInstanceId, Vec<PrefabInstanceId>)> {
     let mut affected = Vec::new();
 
     let selected = match kind {
@@ -1092,6 +1136,7 @@ mod tests {
         default_tile_paths,
         fill_selection,
         move_selection,
+        place_replacing_objs,
         place_selection,
         place_selection_with_mode,
         rotate_point,
@@ -1101,7 +1146,7 @@ mod tests {
         transform_selection_with_mode,
         transformed_selection,
     };
-    use crate::{document::MapDocument, focus::AreaFocus};
+    use crate::{document::MapDocument, focus::AreaFocus, frame::HiddenTypes};
 
     fn tree() -> objtree::ObjectTree {
         let mut tree = objtree::ObjectTree::new();
@@ -1440,6 +1485,38 @@ mod tests {
         let tile = document.map.tile_at(dmm::Coord::new(1, 1, 1)).unwrap();
         assert_eq!(tile[2].path, TreePath::parse("/area/space"));
         assert_eq!(document.instance_ids_at(dmm::Coord::new(1, 1, 1))[2], area_id);
+    }
+
+    #[test]
+    fn alt_placing_an_object_replaces_only_the_visible_objects() {
+        let tree = tree();
+        let coord = dmm::Coord::new(1, 1, 1);
+        let mut document = map_document(&["/obj/table", "/obj/chair", "/obj/sign", "/turf/floor", "/area/station"]);
+        let hidden = [TreePath::parse("/obj/sign")].into_iter().collect::<HiddenTypes>();
+        let removed = document.instance_ids_at(coord)[..2].to_vec();
+
+        let window = Prefab::new(TreePath::parse("/obj/window"));
+        let action = place_replacing_objs(&mut document, &tree, coord, &window, &hidden).unwrap();
+        assert!(removed.iter().all(|id| action.affected.contains(id)));
+        document.apply(action.edit);
+        let paths = document
+            .map
+            .tile_at(coord)
+            .unwrap()
+            .iter()
+            .map(|prefab| prefab.path.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(paths, ["/obj/sign", "/obj/window", "/turf/floor", "/area/station"]);
+        assert!(document.undo());
+
+        let turf = Prefab::new(TreePath::parse("/turf/wall"));
+        let action = place_replacing_objs(&mut document, &tree, coord, &turf, &hidden).unwrap();
+        document.apply(action.edit);
+        assert_eq!(
+            document.map.tile_at(coord).unwrap().len(),
+            5,
+            "a turf brush keeps the objects"
+        );
     }
 
     #[test]

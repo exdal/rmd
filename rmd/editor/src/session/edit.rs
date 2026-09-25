@@ -4,7 +4,7 @@ use dmm::{Coord, Prefab};
 use editor::{
     command::{Edit, EditGroupId},
     document::{PrefabInstanceId, VarMutation},
-    tool::{FillError, FillMode, MAX_FILL_TILES, Tool, ToolContext, ToolEdit},
+    tool::{self, FillError, FillMode, MAX_FILL_TILES, Tool, ToolContext, ToolEdit},
 };
 use objtree::ObjectTree;
 
@@ -45,23 +45,35 @@ impl Session {
     }
 
     pub fn place_at(&mut self, coord: Coord, group: Option<EditGroupId>) -> Option<PrefabInstanceId> {
+        self.place_with(coord, group, false)
+    }
+
+    pub fn place_replacing_objs_at(&mut self, coord: Coord, group: Option<EditGroupId>) -> Option<PrefabInstanceId> {
+        self.place_with(coord, group, true)
+    }
+
+    fn place_with(&mut self, coord: Coord, group: Option<EditGroupId>, replace_objs: bool) -> Option<PrefabInstanceId> {
         if self.state.tool != Tool::Place || !self.can_edit_at(coord) {
             return None;
         }
         let prefab = self.state.palette.clone()?;
+        let hidden = replace_objs.then(|| self.hidden_types());
         let action = {
             let (environment, document) = self.state.active_pair_mut()?;
 
-            Tool::Place.build_edit(&mut ToolContext {
-                document,
-                tree: &environment.tree,
-                prefab: Some(&prefab),
-                target: None,
-                coord,
-                anchor: None,
-                fill_mode: FillMode::default(),
-                custom_fill_boundaries: &[],
-            })
+            match &hidden {
+                Some(hidden) => tool::place_replacing_objs(document, &environment.tree, coord, &prefab, hidden),
+                None => Tool::Place.build_edit(&mut ToolContext {
+                    document,
+                    tree: &environment.tree,
+                    prefab: Some(&prefab),
+                    target: None,
+                    coord,
+                    anchor: None,
+                    fill_mode: FillMode::default(),
+                    custom_fill_boundaries: &[],
+                }),
+            }
         }?;
         let selected = action.selected?;
         if !self.commit(action, group) {
@@ -142,6 +154,16 @@ impl Session {
 
         self.build_delete(target)
             .is_some_and(|action| self.commit(action, None))
+    }
+
+    pub fn replace_instance(&mut self, target: PrefabInstanceId) -> bool {
+        if self.state.tool != Tool::Replace {
+            return false;
+        }
+
+        self.state
+            .active()
+            .is_some_and(|document| self.replace_instances(document, &[target]))
     }
 
     pub fn delete_context_instance(&mut self, target: PrefabInstanceId) -> bool {
@@ -323,6 +345,30 @@ mod tests {
         Session,
         fixtures::{area_at, examples, flat_session, focus_session},
     };
+
+    #[test]
+    fn the_replace_tool_swaps_a_picked_atom_for_a_brush_of_the_same_kind() {
+        let mut session = flat_session(2, 1);
+        let document = session.state.active().unwrap();
+        let coord = Coord::new(1, 1, 1);
+        session
+            .state
+            .choose_prefab(Prefab::new(TreePath::parse("/obj/structure/table")));
+        session.set_tool(Tool::Place);
+        let table = session.place_at(coord, None).unwrap();
+        let light = Prefab::new(TreePath::parse("/obj/machinery/light"));
+        session.state.choose_prefab(light.clone());
+
+        assert!(
+            !session.replace_instance(table),
+            "only the Replace tool replaces what it picks"
+        );
+        session.set_tool(Tool::Replace);
+        assert!(!session.replace_instance(session.turf_at(document, coord).unwrap()));
+        assert!(session.replace_instance(table));
+        let (prefab, _) = session.state.active_document().unwrap().prefab_instance(table).unwrap();
+        assert_eq!(prefab, &light, "the placement keeps its id");
+    }
 
     #[test]
     fn area_edits_retain_the_seed_component_or_clear_an_invalid_seed() {
@@ -709,7 +755,7 @@ mod tests {
         assert!(session.copy_tile(outside));
         assert!(!session.can_clear_tile(outside));
         assert!(!session.cut_tile(outside));
-        assert!(!session.delete_tile(outside));
+        assert!(!session.delete_tile(outside, None));
         assert!(!session.delete_context_instance(target));
         assert!(!session.reset_instance_to_default(target));
         assert!(!session.replace_context_instance(target, TreePath::parse("/obj/machinery/light")));

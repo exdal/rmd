@@ -468,6 +468,11 @@ impl App {
                         session.delete_instance(owner);
                     }
                 },
+                PickRequest::Replace => {
+                    if let PickResult::Hit(owner) = pick {
+                        session.replace_instance(owner);
+                    }
+                },
                 PickRequest::NodeSeed(coord) => {
                     let picked = match pick {
                         PickResult::Hit(owner) => Some(owner),

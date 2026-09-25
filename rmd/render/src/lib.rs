@@ -92,6 +92,7 @@ impl InteractionMode {
 pub enum PickRequest {
     Select,
     Delete,
+    Replace,
     NodeSeed(Coord),
     NodeDelete(Coord),
 }

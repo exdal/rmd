@@ -6,6 +6,7 @@ use editor::{
         ICON_CIRCLE_SMALL,
         ICON_ERASER,
         ICON_EYEDROPPER,
+        ICON_FIND_REPLACE,
         ICON_FORMAT_COLOR_FILL,
         ICON_MENU_DOWN,
         ICON_PENCIL,
@@ -96,17 +97,19 @@ pub(super) fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRe
 
     ui.set_cursor_screen_pos([bounds.min[0] + OVERLAY_PADDING, bounds.min[1] + OVERLAY_PADDING]);
 
-    draw_tool_button(ui, session, Tool::Place, ICON_PENCIL);
+    draw_tool_button(ui, session, keybindings, Tool::Place, ICON_PENCIL);
     ui.same_line();
-    draw_tool_button(ui, session, Tool::Select, ICON_EYEDROPPER);
+    draw_tool_button(ui, session, keybindings, Tool::Select, ICON_EYEDROPPER);
     if session.node_tool_available() {
         ui.same_line();
-        draw_tool_button(ui, session, Tool::Node, ICON_VECTOR_POLYLINE);
+        draw_tool_button(ui, session, keybindings, Tool::Node, ICON_VECTOR_POLYLINE);
     }
     ui.same_line();
     draw_block_select_tool_button(ui, session, block_selection_options, keybindings, selection_busy);
     ui.same_line();
-    draw_tool_button(ui, session, Tool::Delete, ICON_ERASER);
+    draw_tool_button(ui, session, keybindings, Tool::Delete, ICON_ERASER);
+    ui.same_line();
+    draw_tool_button(ui, session, keybindings, Tool::Replace, ICON_FIND_REPLACE);
     ui.same_line();
     let tools_end = draw_fill_tool_button(
         ui,
@@ -307,7 +310,7 @@ fn draw_fill_tool_button(
     tools_end
 }
 
-fn draw_tool_button(ui: &Ui, session: &mut Session, tool: Tool, icon: char) {
+fn draw_tool_button(ui: &Ui, session: &mut Session, keybindings: KeyBindings, tool: Tool, icon: char) {
     let color = match tool {
         Tool::Delete => [1.0, 0.0, 0.0, 1.0],
         _ => ui.style_color(StyleColor::PlotHistogramHovered),
@@ -315,13 +318,20 @@ fn draw_tool_button(ui: &Ui, session: &mut Session, tool: Tool, icon: char) {
 
     let _color = (session.tool() == tool).then(|| ui.push_style_color(StyleColor::Button, color));
     let clicked = ui.button(icon.to_string());
+    let alternate = || keybindings.get(KeybindAction::ToolAlternate).label(ui);
     ui.set_item_tooltip(match tool {
-        Tool::BlockSelect => "Block Select",
-        Tool::Node => {
-            "Node tool\nDouble-click a node to select its network; drag a handle to connect.\nRight-click a connection \
-             or isolated node to delete it; Shift+right-click for the map menu."
-        },
-        _ => tool.label(),
+        Tool::Place => format!(
+            "Place\n{}: an object brush replaces the objects on the tile",
+            alternate()
+        ),
+        Tool::Delete => format!("Delete\n{}+drag: clear everything visible from each tile", alternate()),
+        Tool::Replace => String::from("Replace\nClick an atom to swap it for the brush"),
+        Tool::BlockSelect => String::from("Block Select"),
+        Tool::Node => String::from(
+            "Node tool\nDouble-click a node to select its network; drag a handle to connect.\nRight-click a \
+             connection or isolated node to delete it; Shift+right-click for the map menu.",
+        ),
+        _ => tool.label().to_owned(),
     });
     if clicked {
         session.set_tool(tool);

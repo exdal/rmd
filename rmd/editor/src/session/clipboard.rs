@@ -1,6 +1,7 @@
 use dmm::Coord;
 use editor::{
     clipboard::{self, TileBlock},
+    command::EditGroupId,
     document::Selection,
     frame::HiddenTypes,
     tool::{BlockSelectionMode, SelectionMask, SelectionRotation, ToolEdit},
@@ -9,7 +10,7 @@ use editor::{
 use super::Session;
 
 impl Session {
-    fn hidden_types(&self) -> HiddenTypes {
+    pub(super) fn hidden_types(&self) -> HiddenTypes {
         self.tree()
             .map(|tree| self.type_visibility.hidden_types(tree))
             .unwrap_or_default()
@@ -82,13 +83,13 @@ impl Session {
         true
     }
 
-    pub fn delete_tile(&mut self, coord: Coord) -> bool {
+    pub fn delete_tile(&mut self, coord: Coord, group: Option<EditGroupId>) -> bool {
         self.build_clear(
             Selection::from_drag(coord, coord),
             BlockSelectionMode::Full,
             "delete tile",
         )
-        .is_some_and(|action| self.commit(action, None))
+        .is_some_and(|action| self.commit(action, group))
     }
 
     pub fn cut_tile(&mut self, coord: Coord) -> bool {
@@ -520,7 +521,7 @@ mod tests {
 
         assert!(session.paste_clipboard(destination, SelectionRotation::Original));
         assert_eq!(session.map().unwrap().tile_at(destination), Some(&before));
-        assert!(session.delete_tile(destination));
+        assert!(session.delete_tile(destination, None));
         assert_render_cache_matches_rebuild(&session);
         assert!(!session.can_clear_tile(destination));
         assert!(session.undo());

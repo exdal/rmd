@@ -120,7 +120,7 @@ use self::{
     search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search},
     toolbar::{DEFAULT_CUSTOM_FILL_BOUNDARY, TopOverlayState, draw_top_overlay, request_level_change},
     tooltip::{draw_conflict_tooltip, draw_diff_tooltip},
-    viewport::{ActivePlacementFlash, DeletionStroke, MapViewState, PlacementStroke},
+    viewport::{ActivePlacementFlash, MapViewState, MomentaryTool, PickStroke, PlacementStroke},
     welcome::{ForgetRequest, WelcomeOutput},
 };
 
@@ -202,7 +202,8 @@ pub struct UiState {
     gizmo_context: Option<(DocumentId, Tool, u32)>,
     placement_flash: Option<ActivePlacementFlash>,
     placement_stroke: Option<PlacementStroke>,
-    deletion_stroke: Option<DeletionStroke>,
+    pick_stroke: Option<PickStroke>,
+    momentary_tool: Option<MomentaryTool>,
     block_selection_options: BlockSelectionOptions,
     fill_mode: FillMode,
     custom_fill_boundaries: Vec<TreePath>,
@@ -275,7 +276,8 @@ impl UiState {
             gizmo_context: None,
             placement_flash: None,
             placement_stroke: None,
-            deletion_stroke: None,
+            pick_stroke: None,
+            momentary_tool: None,
             block_selection_options: BlockSelectionOptions::default(),
             fill_mode: FillMode::default(),
             custom_fill_boundaries: vec![TreePath::parse(DEFAULT_CUSTOM_FILL_BOUNDARY)],
@@ -339,7 +341,7 @@ impl UiState {
         self.gizmo.cancel();
         self.placement_flash = None;
         self.placement_stroke = None;
-        self.deletion_stroke = None;
+        self.pick_stroke = None;
         session.cancel_node_drag();
 
         if let Some(id) = id
@@ -959,7 +961,7 @@ mod tests {
             KeyBinding::new(dear_imgui_rs::Key::N)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 37);
+        assert_eq!(KeybindAction::ALL.len(), 39);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));

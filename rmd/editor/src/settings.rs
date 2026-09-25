@@ -122,6 +122,8 @@ pub(crate) const BINDABLE_KEYS: &[Key] = &[
     Key::Oem102,
 ];
 
+pub(crate) const MODIFIER_KEYS: &[Key] = &[Key::ModCtrl, Key::ModShift, Key::ModAlt, Key::ModSuper];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct KeyBinding {
     key: Key,
@@ -195,10 +197,10 @@ impl KeyBinding {
 
         Self {
             key,
-            ctrl: io.key_ctrl(),
-            shift: io.key_shift(),
-            alt: io.key_alt(),
-            super_key: io.key_super(),
+            ctrl: io.key_ctrl() && key != Key::ModCtrl,
+            shift: io.key_shift() && key != Key::ModShift,
+            alt: io.key_alt() && key != Key::ModAlt,
+            super_key: io.key_super() && key != Key::ModSuper,
         }
     }
 
@@ -211,6 +213,18 @@ impl KeyBinding {
     }
 
     pub fn is_down(self, ui: &Ui) -> bool { ui.is_key_down(self.key) && self.modifiers_match(ui) }
+
+    pub fn is_key_held(self, ui: &Ui) -> bool { ui.is_key_down(self.key) }
+
+    pub fn is_held(self, ui: &Ui) -> bool {
+        let io = ui.io();
+
+        ui.is_key_down(self.key)
+            && (!self.ctrl || io.key_ctrl())
+            && (!self.shift || io.key_shift())
+            && (!self.alt || io.key_alt())
+            && (!self.super_key || io.key_super())
+    }
 
     pub fn is_released(self, ui: &Ui) -> bool { ui.is_key_released(self.key) && self.modifiers_match(ui) }
 
@@ -229,7 +243,7 @@ impl KeyBinding {
             (self.ctrl, "Ctrl"),
             (self.shift, "Shift"),
             (self.alt, "Alt"),
-            (self.super_key, if cfg!(target_os = "macos") { "Cmd" } else { "Super" }),
+            (self.super_key, SUPER_NAME),
         ] {
             if enabled {
                 if !label.is_empty() {
@@ -241,11 +255,20 @@ impl KeyBinding {
         if !label.is_empty() {
             label.push('+');
         }
-        label.push_str(ui.get_key_name(self.key));
+
+        label.push_str(match self.key {
+            Key::ModCtrl => "Ctrl",
+            Key::ModShift => "Shift",
+            Key::ModAlt => "Alt",
+            Key::ModSuper => SUPER_NAME,
+            key => ui.get_key_name(key),
+        });
 
         label
     }
 }
+
+const SUPER_NAME: &str = if cfg!(target_os = "macos") { "Cmd" } else { "Super" };
 
 const fn is_false(value: &bool) -> bool { !*value }
 
@@ -280,8 +303,10 @@ pub(crate) enum KeybindAction {
     NodeTool,
     BlockSelectTool,
     DeleteTool,
+    ReplaceTool,
     FillTool,
     Rotate,
+    ToolAlternate,
     Copy,
     Cut,
     Delete,
@@ -306,7 +331,7 @@ pub(crate) enum KeybindAction {
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 39] = [
         Self::Save,
         Self::Undo,
         Self::Redo,
@@ -321,8 +346,10 @@ impl KeybindAction {
         Self::NodeTool,
         Self::BlockSelectTool,
         Self::DeleteTool,
+        Self::ReplaceTool,
         Self::FillTool,
         Self::Rotate,
+        Self::ToolAlternate,
         Self::Copy,
         Self::Cut,
         Self::Delete,
@@ -374,8 +401,10 @@ impl KeybindAction {
             Self::NodeTool => "Node tool",
             Self::BlockSelectTool => "Block select tool",
             Self::DeleteTool => "Delete tool",
+            Self::ReplaceTool => "Replace tool",
             Self::FillTool => "Fill tool",
             Self::Rotate => "Rotate",
+            Self::ToolAlternate => "Alternate tool action (hold)",
             Self::Copy => "Copy block",
             Self::Cut => "Cut block",
             Self::Delete => "Delete block",
@@ -400,6 +429,8 @@ impl KeybindAction {
         }
     }
 
+    pub const fn is_held(self) -> bool { matches!(self, Self::ToolAlternate) }
+
     pub const fn id(self) -> &'static str {
         match self {
             Self::Save => "save",
@@ -416,8 +447,10 @@ impl KeybindAction {
             Self::NodeTool => "node-tool",
             Self::BlockSelectTool => "block-select-tool",
             Self::DeleteTool => "delete-tool",
+            Self::ReplaceTool => "replace-tool",
             Self::FillTool => "fill-tool",
             Self::Rotate => "rotate",
+            Self::ToolAlternate => "tool-alternate",
             Self::Copy => "copy",
             Self::Cut => "cut",
             Self::Delete => "delete",
@@ -460,8 +493,10 @@ pub(crate) struct KeyBindings {
     node_tool: KeyBinding,
     block_select_tool: KeyBinding,
     delete_tool: KeyBinding,
+    replace_tool: KeyBinding,
     fill_tool: KeyBinding,
     rotate: KeyBinding,
+    tool_alternate: KeyBinding,
     copy: KeyBinding,
     cut: KeyBinding,
     delete: KeyBinding,
@@ -502,8 +537,10 @@ impl Default for KeyBindings {
             node_tool: KeyBinding::new(Key::N),
             block_select_tool: KeyBinding::with_shift(Key::S),
             delete_tool: KeyBinding::new(Key::X),
+            replace_tool: KeyBinding::new(Key::E),
             fill_tool: KeyBinding::new(Key::Q),
             rotate: KeyBinding::new(Key::R),
+            tool_alternate: KeyBinding::new(Key::ModAlt),
             copy: KeyBinding::with_ctrl(Key::C),
             cut: KeyBinding::with_ctrl(Key::X),
             delete: KeyBinding::new(Key::Delete),
@@ -546,8 +583,10 @@ impl KeyBindings {
             node_tool: KeyBinding::new(Key::N),
             block_select_tool: KeyBinding::new(Key::Key3),
             delete_tool: KeyBinding::new(Key::D),
+            replace_tool: KeyBinding::new(Key::Key4),
             fill_tool: KeyBinding::new(Key::Key2),
             rotate: KeyBinding::with_shift(Key::R),
+            tool_alternate: KeyBinding::new(Key::ModAlt),
             copy: KeyBinding::with_primary(Key::C),
             cut: KeyBinding::with_primary(Key::X),
             delete: KeyBinding::new(Key::Delete),
@@ -588,8 +627,10 @@ impl KeyBindings {
             KeybindAction::NodeTool => self.node_tool,
             KeybindAction::BlockSelectTool => self.block_select_tool,
             KeybindAction::DeleteTool => self.delete_tool,
+            KeybindAction::ReplaceTool => self.replace_tool,
             KeybindAction::FillTool => self.fill_tool,
             KeybindAction::Rotate => self.rotate,
+            KeybindAction::ToolAlternate => self.tool_alternate,
             KeybindAction::Copy => self.copy,
             KeybindAction::Cut => self.cut,
             KeybindAction::Delete => self.delete,
@@ -660,8 +701,10 @@ impl KeyBindings {
             KeybindAction::NodeTool => self.node_tool = binding,
             KeybindAction::BlockSelectTool => self.block_select_tool = binding,
             KeybindAction::DeleteTool => self.delete_tool = binding,
+            KeybindAction::ReplaceTool => self.replace_tool = binding,
             KeybindAction::FillTool => self.fill_tool = binding,
             KeybindAction::Rotate => self.rotate = binding,
+            KeybindAction::ToolAlternate => self.tool_alternate = binding,
             KeybindAction::Copy => self.copy = binding,
             KeybindAction::Cut => self.cut = binding,
             KeybindAction::Delete => self.delete = binding,
@@ -1100,6 +1143,7 @@ mod tests {
             (KeybindAction::PlaceTool, Key::W),
             (KeybindAction::SelectTool, Key::S),
             (KeybindAction::DeleteTool, Key::X),
+            (KeybindAction::ReplaceTool, Key::E),
             (KeybindAction::FillTool, Key::Q),
             (KeybindAction::Rotate, Key::R),
             (KeybindAction::ShowTileGrid, Key::G),
@@ -1155,6 +1199,7 @@ mod tests {
             (KeybindAction::NodeTool, KeyBinding::new(Key::N)),
             (KeybindAction::BlockSelectTool, KeyBinding::new(Key::Key3)),
             (KeybindAction::DeleteTool, KeyBinding::new(Key::D)),
+            (KeybindAction::ReplaceTool, KeyBinding::new(Key::Key4)),
             (KeybindAction::FillTool, KeyBinding::new(Key::Key2)),
             (KeybindAction::Rotate, KeyBinding::with_shift(Key::R)),
             (KeybindAction::Copy, KeyBinding::with_primary(Key::C)),
@@ -1199,7 +1244,7 @@ mod tests {
             for (index, action) in KeybindAction::ALL.into_iter().enumerate() {
                 let binding = bindings.get(action);
                 assert!(
-                    BINDABLE_KEYS.contains(&binding.key),
+                    BINDABLE_KEYS.contains(&binding.key) || (action.is_held() && MODIFIER_KEYS.contains(&binding.key)),
                     "{preset:?} binding for {action:?} uses non-bindable key {:?}",
                     binding.key
                 );

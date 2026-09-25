@@ -19,6 +19,7 @@ use crate::{
         KeyBinding,
         KeyBindings,
         KeybindAction,
+        MODIFIER_KEYS,
         ObjectTreeFilterOptions,
         ObjectTreeSearchOptions,
         SelectionHighlight,
@@ -117,8 +118,10 @@ const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
             KeybindAction::NodeTool,
             KeybindAction::BlockSelectTool,
             KeybindAction::DeleteTool,
+            KeybindAction::ReplaceTool,
             KeybindAction::FillTool,
             KeybindAction::Rotate,
+            KeybindAction::ToolAlternate,
         ],
     ),
     ("Recent", &KeybindAction::RECENT),
@@ -671,8 +674,10 @@ fn finish_keybind_capture(ui: &Ui, capturing: &mut Option<KeybindAction>, keybin
 
         return;
     }
-    let Some(key) = BINDABLE_KEYS
+    let modifiers = if action.is_held() { MODIFIER_KEYS } else { &[] };
+    let Some(key) = modifiers
         .iter()
+        .chain(BINDABLE_KEYS)
         .copied()
         .find(|key| ui.is_key_pressed_with_repeat(*key, false))
     else {
@@ -686,6 +691,37 @@ fn finish_keybind_capture(ui: &Ui, capturing: &mut Option<KeybindAction>, keybin
 #[cfg(test)]
 mod tests {
     use super::{super::IMGUI_CONTEXT, *};
+
+    #[test]
+    fn only_held_actions_capture_a_lone_modifier() {
+        let _context = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = dear_imgui_rs::Context::create();
+        context.font_atlas().try_claim_legacy_renderer().unwrap().build();
+        context.io_mut().set_display_size([800.0, 600.0]);
+        context.io_mut().set_delta_time(1.0 / 60.0);
+        let mut keybindings = KeyBindings::default();
+
+        for (action, captured) in [(KeybindAction::Save, false), (KeybindAction::ToolAlternate, true)] {
+            let mut capturing = Some(action);
+            let before = keybindings.get(action);
+            context.io_mut().add_key_event(Key::ModShift, true);
+            let ui = context.frame();
+            finish_keybind_capture(ui, &mut capturing, &mut keybindings);
+            let label = keybindings.get(action).label(ui);
+            assert!(context.render_legacy().valid());
+            context.io_mut().add_key_event(Key::ModShift, false);
+            context.frame();
+            assert!(context.render_legacy().valid());
+
+            assert_eq!(capturing.is_none(), captured, "{action:?}");
+            if captured {
+                assert_eq!(keybindings.get(action), KeyBinding::new(Key::ModShift));
+                assert_eq!(label, "Shift");
+            } else {
+                assert_eq!(keybindings.get(action), before);
+            }
+        }
+    }
 
     #[test]
     fn settings_categories_have_a_stable_order_and_default() {
