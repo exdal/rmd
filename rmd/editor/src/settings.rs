@@ -1188,6 +1188,8 @@ fn settings_path() -> io::Result<PathBuf> {
 
 pub(crate) fn imgui_ini_path() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("imgui.ini")) }
 
+pub(crate) fn backup_dir() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("backup")) }
+
 #[cfg(target_os = "windows")]
 pub(crate) fn log_path() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("latest.log")) }
 

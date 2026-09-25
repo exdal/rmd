@@ -9,6 +9,7 @@
 //!
 //! With no arguments the editor opens on its welcome page, which can open a codebase or a map.
 
+mod backup;
 mod baker;
 mod camera;
 mod external_editor;
@@ -57,7 +58,7 @@ use crate::{
     external_editor::SourceLocation,
     loader::{Job, Loader, Outcome},
     session::{LoadReport, Session},
-    settings::{Settings, imgui_ini_path},
+    settings::{Settings, backup_dir, imgui_ini_path},
     ui::{LoadNotice, OpenRequest, ProfileReload, ScreenshotArea, ScreenshotRequest, UiState},
 };
 
@@ -115,7 +116,13 @@ fn main() -> ExitCode {
         ),
     };
 
-    let mut loader = Loader::new();
+    let mut loader = match backup_dir() {
+        Ok(root) => Loader::with_backups(root),
+        Err(error) => {
+            log::warn!("map backups are off: {error}");
+            Loader::new()
+        },
+    };
     let deferred_job = if settings_ready {
         if let Some(job) = startup_job {
             loader.start(job);

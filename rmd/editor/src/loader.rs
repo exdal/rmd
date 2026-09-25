@@ -79,6 +79,7 @@ pub enum Outcome {
 #[derive(Default)]
 pub struct Loader {
     active: Option<Active>,
+    backups: Option<PathBuf>,
 }
 
 struct Active {
@@ -98,6 +99,13 @@ pub struct LoadView {
 impl Loader {
     pub fn new() -> Self { Self::default() }
 
+    pub fn with_backups(root: PathBuf) -> Self {
+        Self {
+            backups: Some(root),
+            ..Self::default()
+        }
+    }
+
     pub fn is_busy(&self) -> bool { self.active.is_some() }
 
     pub fn start(&mut self, job: Job) {
@@ -109,8 +117,9 @@ impl Loader {
         let (sender, results) = channel();
         let worker = Arc::clone(&progress);
         let running = job.clone();
+        let backups = self.backups.clone();
         thread::spawn(move || {
-            let outcome = run(&running, &worker);
+            let outcome = run(&running, &worker, backups.as_deref());
             let _ = sender.send(outcome);
         });
 
@@ -155,14 +164,14 @@ impl Loader {
     }
 }
 
-fn run(job: &Job, progress: &Progress) -> Outcome {
+fn run(job: &Job, progress: &Progress, backups: Option<&Path>) -> Outcome {
     let result = match job {
         Job::Codebase { path, bake } => load_codebase(path, bake, progress).map(|loaded| Outcome::Codebase {
             path: path.clone(),
             loaded: Box::new(loaded),
         }),
         Job::Map { path, z, git_enabled } => {
-            load_map_with_git(path, *z, progress, *git_enabled).map(|loaded| Outcome::Map(Box::new(loaded)))
+            load_map_with_git(path, *z, progress, *git_enabled, backups).map(|loaded| Outcome::Map(Box::new(loaded)))
         },
     };
 
@@ -208,10 +217,12 @@ pub fn load_codebase(path: &Path, bake: &BakeOptions, progress: &Progress) -> Re
 
 #[cfg(test)]
 pub fn load_map(path: &Path, z: u32, progress: &Progress) -> Result<LoadedMap, String> {
-    load_map_with_git(path, z, progress, false)
+    load_map_with_git(path, z, progress, false, None)
 }
 
-pub fn load_map_with_git(path: &Path, z: u32, progress: &Progress, git_enabled: bool) -> Result<LoadedMap, String> {
+pub fn load_map_with_git(
+    path: &Path, z: u32, progress: &Progress, git_enabled: bool, backups: Option<&Path>,
+) -> Result<LoadedMap, String> {
     let repo = git_enabled.then(|| git::discover(path)).flatten();
     // Git is optional here: when the repository can't be read, open the file as usual
     let unmerged = repo.as_ref().and_then(|repo_path| {
@@ -273,6 +284,11 @@ pub fn load_map_with_git(path: &Path, z: u32, progress: &Progress, git_enabled: 
     progress.enter(Stage::ReadMap, 0);
     progress.set_detail(&path.display().to_string());
     let source = std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    if let Some(root) = backups
+        && let Err(error) = crate::backup::back_up(root, path, &source, std::time::SystemTime::now())
+    {
+        log::warn!("{}: could not back up the map: {error}", path.display());
+    }
     if progress.is_cancelled() {
         return Err(String::from("cancelled"));
     }
@@ -405,7 +421,7 @@ mod tests {
         assert!(fixture_git(&dir, &["commit", "-qam", "ours"]).status.success());
         assert!(!fixture_git(&dir, &["merge", "feature"]).status.success());
 
-        let loaded = super::load_map_with_git(&path, 1, &editor::progress::Progress::new(), true).unwrap();
+        let loaded = super::load_map_with_git(&path, 1, &editor::progress::Progress::new(), true, None).unwrap();
         assert_eq!(loaded.conflict.as_ref().unwrap().conflicts.len(), 1);
         assert_eq!(
             loaded.map.tile_at(dmm::Coord::new(1, 1, 1)).unwrap()[0]
@@ -470,7 +486,7 @@ mod tests {
         for index in [b"not an index".to_vec(), vec![b'x'; 256]] {
             std::fs::write(dir.join(".git").join("index"), index).unwrap();
 
-            let loaded = super::load_map_with_git(&path, 1, &editor::progress::Progress::new(), true)
+            let loaded = super::load_map_with_git(&path, 1, &editor::progress::Progress::new(), true, None)
                 .expect("the map opens without conflict detection");
 
             assert!(loaded.conflict.is_none());
@@ -509,7 +525,7 @@ mod tests {
         assert!(fixture_git(&dir, &["commit", "-qam", "ours"]).status.success());
         assert!(!fixture_git(&dir, &["merge", "feature"]).status.success());
 
-        let loaded = super::load_map_with_git(&path, 1, &editor::progress::Progress::new(), true).unwrap();
+        let loaded = super::load_map_with_git(&path, 1, &editor::progress::Progress::new(), true, None).unwrap();
         assert!(loaded.conflict.as_ref().unwrap().conflicts.is_empty());
         let mut session = crate::session::Session::new();
         session.apply_map(loaded);

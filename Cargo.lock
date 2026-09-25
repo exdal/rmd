@@ -749,6 +749,7 @@ dependencies = [
  "dmm",
  "gix",
  "ir",
+ "jiff",
  "log",
  "objtree",
  "png",
