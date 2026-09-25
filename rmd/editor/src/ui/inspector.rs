@@ -8,13 +8,13 @@ use editor::{
     blame::{self, BlameCell},
     command::EditGroupId,
     document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation},
-    icons::materialdesignicons::ICON_CIRCLE_SMALL,
+    icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_PIN, ICON_PIN_OUTLINE},
     visual,
 };
 use objtree::{ObjectTree, TypeId};
 
 use super::{
-    common::{IDENTICAL_EDIT_COLOR, focus_window_on_hover, text_wrapped_colored},
+    common::{IDENTICAL_EDIT_COLOR, checkbox_width, focus_window_on_hover, text_wrapped_colored},
     git::commit_summary,
 };
 use crate::{
@@ -42,6 +42,18 @@ const DISPLAY_PROPERTIES: &[&str] = &[
 const MOVABLE_PROPERTIES: &[&str] = &[
     "pixel_x", "pixel_y", "pixel_z", "pixel_w", "step_x", "step_y", "step_z", "step_w",
 ];
+const DISPLAY_ROWS: &[&str] = &[
+    "name",
+    "icon",
+    "icon_state",
+    "dir",
+    "plane",
+    "layer",
+    "color",
+    "alpha",
+    "invisibility",
+];
+const ADVANCED_OFFSETS: &[&str] = &["pixel_w", "pixel_z"];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum TransformMode {
@@ -75,6 +87,13 @@ pub struct InspectorState {
     active_drag: Option<(Identifier, EditGroupId)>,
     transform_mode: TransformMode,
     scope: EditScope,
+    filter: InspectorFilter,
+}
+
+#[derive(Default)]
+struct InspectorFilter {
+    query: String,
+    modified_only: bool,
 }
 
 struct VariableDraft {
@@ -87,6 +106,7 @@ struct VariableDraft {
 struct InspectorVariable {
     name: Identifier,
     source: String,
+    overridden: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -131,7 +151,7 @@ enum TextPropertyKind {
 impl InspectorState {
     pub(crate) const fn transform_mode(&self) -> TransformMode { self.transform_mode }
 
-    pub fn draw(&mut self, ui: &Ui, session: &mut Session) -> InspectorOutput {
+    pub fn draw(&mut self, ui: &Ui, session: &mut Session, pins: &mut Vec<String>) -> InspectorOutput {
         let Some(snapshot) = inspector_snapshot(session) else {
             self.clear();
             ui.text_disabled("No object selected");
@@ -231,8 +251,14 @@ impl InspectorState {
         }
 
         ui.separator();
+        self.filter.draw(ui);
 
         let _identical_frames = (self.scope == EditScope::Identical).then(|| identical_frame_colors(ui));
+        let (pinned, overrides, defaults) = split_pinned(&snapshot.overrides, &snapshot.defaults, pins);
+        if !pinned.is_empty() {
+            draw_variable_section(ui, session, self, pins, "inspector-pinned", "Pinned", &pinned);
+        }
+
         if snapshot.is_atom {
             self.draw_transform(ui, session, &snapshot);
             self.draw_display(ui, session, &snapshot);
@@ -242,17 +268,19 @@ impl InspectorState {
             ui,
             session,
             self,
+            pins,
             "inspector-other-overrides",
             "Other overrides",
-            &snapshot.overrides,
+            &overrides,
         );
         draw_variable_section(
             ui,
             session,
             self,
+            pins,
             "inspector-other-defaults",
             "Other defaults",
-            &snapshot.defaults,
+            &defaults,
         );
 
         InspectorOutput {
@@ -263,26 +291,36 @@ impl InspectorState {
     }
 
     fn draw_transform(&mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot) {
-        let Some(section) = section(ui, "inspector-transform", "Transform", true) else {
-            return;
-        };
         if !snapshot.is_movable {
             self.transform_mode = TransformMode::Pixel;
         }
 
+        let (x, y) = self.transform_mode.variables();
+        if !self.shows_any(snapshot, &[x, y]) {
+            return;
+        }
+
+        let Some(section) = section(ui, "inspector-transform", "Transform", true) else {
+            return;
+        };
+
+        let filtering = self.filter.is_active();
+
         property_table(ui, "inspector-transform-properties", |ui| {
-            ui.table_next_row();
-            ui.table_next_column();
-            ui.align_text_to_frame_padding();
-            ui.text("Tile");
-            ui.table_next_column();
-            ui.align_text_to_frame_padding();
-            ui.text(format!(
-                "X {}   Y {}   Z {}",
-                snapshot.location.coord.x, snapshot.location.coord.y, snapshot.location.coord.z
-            ));
-            ui.table_next_column();
-            ui.text_disabled("read-only");
+            if !filtering {
+                ui.table_next_row();
+                ui.table_next_column();
+                ui.align_text_to_frame_padding();
+                ui.text("Tile");
+                ui.table_next_column();
+                ui.align_text_to_frame_padding();
+                ui.text(format!(
+                    "X {}   Y {}   Z {}",
+                    snapshot.location.coord.x, snapshot.location.coord.y, snapshot.location.coord.z
+                ));
+                ui.table_next_column();
+                ui.text_disabled("read-only");
+            }
 
             match self.transform_mode {
                 TransformMode::Pixel => {
@@ -293,6 +331,10 @@ impl InspectorState {
                     self.draw_int_property(ui, session, snapshot, "step_x", "Step X", None);
                     self.draw_int_property(ui, session, snapshot, "step_y", "Step Y", None);
                 },
+            }
+
+            if filtering {
+                return;
             }
 
             ui.table_next_row();
@@ -322,6 +364,11 @@ impl InspectorState {
     }
 
     fn draw_display(&mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot) {
+        let advanced_shown = self.shows_any(snapshot, ADVANCED_OFFSETS);
+        if !advanced_shown && !self.shows_any(snapshot, DISPLAY_ROWS) {
+            return;
+        }
+
         let Some(display_section) = section(ui, "inspector-display", "Display", true) else {
             return;
         };
@@ -354,7 +401,7 @@ impl InspectorState {
             self.draw_int_property(ui, session, snapshot, "invisibility", "Invisibility", Some((0, 101)));
         });
 
-        if let Some(advanced) = section(ui, "inspector-display-advanced", "Advanced offsets", false) {
+        if advanced_shown && let Some(advanced) = section(ui, "inspector-display-advanced", "Advanced offsets", false) {
             ui.text_wrapped("Pixel W/Z are map-format axes. In the current top-down view they add to Pixel X/Y.");
             property_table(ui, "inspector-display-advanced-properties", |ui| {
                 self.draw_int_property(ui, session, snapshot, "pixel_w", "Pixel W", None);
@@ -370,7 +417,7 @@ impl InspectorState {
         &mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot, name: &str, label: &str,
         kind: TextPropertyKind,
     ) {
-        let Some(property) = snapshot.property(name) else {
+        let Some(property) = self.shown(snapshot, name) else {
             return;
         };
         if !text_kind_matches(kind, &property.value) {
@@ -406,7 +453,7 @@ impl InspectorState {
         &mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot, name: &str, label: &str,
         kind: TextPropertyKind, warning: Option<&str>,
     ) {
-        let Some(property) = snapshot.property(name) else {
+        let Some(property) = self.shown(snapshot, name) else {
             return;
         };
         if !text_kind_matches(kind, &property.value) {
@@ -444,7 +491,7 @@ impl InspectorState {
         &mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot, name: &str, label: &str,
         range: Option<(i32, i32)>,
     ) {
-        let Some(property) = snapshot.property(name) else {
+        let Some(property) = self.shown(snapshot, name) else {
             return;
         };
         let Some(number) = property.value.as_num() else {
@@ -478,7 +525,7 @@ impl InspectorState {
     fn draw_float_property(
         &mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot, name: &str, label: &str,
     ) {
-        let Some(property) = snapshot.property(name) else {
+        let Some(property) = self.shown(snapshot, name) else {
             return;
         };
         let Some(mut value) = property.value.as_num() else {
@@ -506,7 +553,7 @@ impl InspectorState {
     }
 
     fn draw_direction_property(&mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot) {
-        let Some(property) = snapshot.property("dir") else {
+        let Some(property) = self.shown(snapshot, "dir") else {
             return;
         };
         let Some(number) = property.value.as_num() else {
@@ -562,7 +609,7 @@ impl InspectorState {
     }
 
     fn draw_color_property(&mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot) {
-        let Some(property) = snapshot.property("color") else {
+        let Some(property) = self.shown(snapshot, "color") else {
             return;
         };
         let color = match &property.value {
@@ -623,6 +670,16 @@ impl InspectorState {
             draw_expression_input(ui, session, self.scope, property.name.clone(), draft);
         }
         draw_reset(ui, session, self.scope, property);
+    }
+
+    fn shown<'a>(&self, snapshot: &'a InspectorSnapshot, name: &str) -> Option<&'a InspectorProperty> {
+        snapshot
+            .property(name)
+            .filter(|property| self.filter.shows(name, property.overridden))
+    }
+
+    fn shows_any(&self, snapshot: &InspectorSnapshot, names: &[&str]) -> bool {
+        names.iter().any(|name| self.shown(snapshot, name).is_some())
     }
 
     fn clear(&mut self) {
@@ -703,6 +760,55 @@ impl InspectorSnapshot {
             .unwrap_or_default()
             .to_string()
     }
+}
+
+impl InspectorFilter {
+    fn is_active(&self) -> bool { self.modified_only || !self.query.trim().is_empty() }
+
+    fn shows(&self, name: &str, overridden: bool) -> bool {
+        let query = self.query.trim().to_ascii_lowercase().replace(' ', "_");
+
+        (overridden || !self.modified_only) && name.to_ascii_lowercase().contains(&query)
+    }
+
+    fn draw(&mut self, ui: &Ui) {
+        let label = "Modified only";
+        let spacing = ui.clone_style().item_spacing()[0];
+        ui.set_next_item_width((ui.content_region_avail_width() - checkbox_width(ui, label) - spacing).max(1.0));
+        ui.input_text("##inspector-filter", &mut self.query)
+            .hint("Filter variables")
+            .build();
+        ui.same_line();
+        ui.checkbox(label, &mut self.modified_only);
+    }
+}
+
+type SplitVariables<'a> = (
+    Vec<&'a InspectorVariable>,
+    Vec<&'a InspectorVariable>,
+    Vec<&'a InspectorVariable>,
+);
+
+fn split_pinned<'a>(
+    overrides: &'a [InspectorVariable], defaults: &'a [InspectorVariable], pins: &[String],
+) -> SplitVariables<'a> {
+    let pinned = pins
+        .iter()
+        .filter_map(|pin| {
+            overrides
+                .iter()
+                .chain(defaults)
+                .find(|variable| variable.name.as_str() == pin)
+        })
+        .collect();
+    let unpinned = |variables: &'a [InspectorVariable]| {
+        variables
+            .iter()
+            .filter(|variable| !pins.iter().any(|pin| pin == variable.name.as_str()))
+            .collect()
+    };
+
+    (pinned, unpinned(overrides), unpinned(defaults))
 }
 
 fn inspector_snapshot(session: &Session) -> Option<InspectorSnapshot> {
@@ -846,6 +952,7 @@ fn inspector_variables(
             source: variable
                 .verbatim()
                 .map_or_else(|| format_value(&variable.value), str::to_string),
+            overridden: true,
         })
         .collect::<Vec<_>>();
     let overridden = prefab.vars.iter().map(|(name, _)| name.clone()).collect::<HashSet<_>>();
@@ -877,6 +984,7 @@ fn inspector_variables(
         .map(|(name, value)| InspectorVariable {
             name,
             source: display_source(&value),
+            overridden: false,
         })
         .collect::<Vec<_>>();
     defaults.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
@@ -1179,13 +1287,21 @@ fn format_color(color: [f32; 4]) -> String {
 }
 
 fn draw_variable_section(
-    ui: &Ui, session: &mut Session, state: &mut InspectorState, id: &str, title: &str, variables: &[InspectorVariable],
+    ui: &Ui, session: &mut Session, state: &mut InspectorState, pins: &mut Vec<String>, id: &str, title: &str,
+    variables: &[&InspectorVariable],
 ) {
+    let shown = variables
+        .iter()
+        .filter(|variable| state.filter.shows(variable.name.as_str(), variable.overridden))
+        .collect::<Vec<_>>();
+    if shown.is_empty() && state.filter.is_active() {
+        return;
+    }
     let Some(section) = section(ui, id, title, true) else {
         return;
     };
 
-    if variables.is_empty() {
+    if shown.is_empty() {
         ui.text_disabled("None");
         section.pop();
 
@@ -1202,7 +1318,7 @@ fn draw_variable_section(
         .weight(0.6)
         .done()
         .build(|ui| {
-            for variable in variables {
+            for variable in shown {
                 let Some(draft) = state.drafts.get_mut(&variable.name) else {
                     continue;
                 };
@@ -1211,6 +1327,10 @@ fn draw_variable_section(
                 ui.table_next_row();
                 ui.table_next_column();
                 ui.align_text_to_frame_padding();
+                if draw_pin(ui, pins.iter().any(|pin| pin == variable.name.as_str())) {
+                    toggle_pin(pins, variable.name.as_str());
+                }
+                ui.same_line();
                 ui.text(variable.name.as_str());
                 ui.table_next_column();
                 draw_expression_input(ui, session, state.scope, variable.name.clone(), draft);
@@ -1218,6 +1338,27 @@ fn draw_variable_section(
         });
 
     section.pop();
+}
+
+fn draw_pin(ui: &Ui, pinned: bool) -> bool {
+    if pinned {
+        ui.text(ICON_PIN.to_string());
+    } else {
+        ui.text_disabled(ICON_PIN_OUTLINE.to_string());
+    }
+
+    let clicked = ui.is_item_clicked();
+    ui.set_item_tooltip(if pinned { "Unpin" } else { "Pin to the top" });
+
+    clicked
+}
+
+fn toggle_pin(pins: &mut Vec<String>, name: &str) {
+    if let Some(index) = pins.iter().position(|pin| pin == name) {
+        pins.remove(index);
+    } else {
+        pins.push(name.to_string());
+    }
 }
 
 pub(super) struct InspectorPanel {
@@ -1248,7 +1389,7 @@ impl InspectorPanel {
     pub(super) fn edits_identical(&self) -> bool { self.state.scope == EditScope::Identical }
 
     pub(super) fn draw(
-        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, focus: bool,
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, focus: bool,
     ) -> InspectorPanelOutput {
         let mut output = InspectorOutput::default();
         let mut docked = false;
@@ -1257,7 +1398,7 @@ impl InspectorPanel {
             if settings.focus_windows_on_hover {
                 focus_window_on_hover(ui);
             }
-            output = self.state.draw(ui, session);
+            output = self.state.draw(ui, session, &mut settings.pinned_vars);
         });
         let find_similar = output
             .find_similar
@@ -1323,18 +1464,40 @@ mod tests {
         let _guard = crate::ui::IMGUI_CONTEXT.lock().unwrap();
         let mut context = crate::ui::fixtures::rectangle_context();
         let (mut session, _) = two_tables();
-        let settings = Settings::default();
+        let mut settings = Settings::default();
         let mut panel = InspectorPanel::new().unwrap();
         panel.state.scope = EditScope::Identical;
 
         for _ in 0..2 {
             let ui = context.frame();
-            panel.draw(ui, &mut session, &settings, false);
+            panel.draw(ui, &mut session, &mut settings, false);
             assert!(context.render_legacy().valid());
         }
 
         assert!(panel.edits_identical());
         assert_eq!(session.identical().len(), 3);
+    }
+
+    #[test]
+    fn a_filtered_panel_with_pins_draws_every_section_state() {
+        let _guard = crate::ui::IMGUI_CONTEXT.lock().unwrap();
+        let mut context = crate::ui::fixtures::rectangle_context();
+        let (mut session, _) = two_tables();
+        let mut settings = Settings {
+            pinned_vars: vec![String::from("desc"), String::from("missing")],
+            ..Settings::default()
+        };
+        let mut panel = InspectorPanel::new().unwrap();
+
+        for (query, modified_only) in [("", false), ("pixel", false), ("", true), ("nothing matches", true)] {
+            panel.state.filter.query = String::from(query);
+            panel.state.filter.modified_only = modified_only;
+            let ui = context.frame();
+            panel.draw(ui, &mut session, &mut settings, false);
+            assert!(context.render_legacy().valid());
+        }
+
+        assert_eq!(settings.pinned_vars, ["desc", "missing"]);
     }
 
     #[test]
@@ -1436,6 +1599,7 @@ mod tests {
             [InspectorVariable {
                 name: "inherited".into(),
                 source: String::from("4"),
+                overridden: true,
             }],
         );
         assert_eq!(
@@ -1444,17 +1608,66 @@ mod tests {
                 InspectorVariable {
                     name: "closest".into(),
                     source: String::from("2"),
+                    overridden: false,
                 },
                 InspectorVariable {
                     name: "parent_only".into(),
                     source: String::from("\"parent\""),
+                    overridden: false,
                 },
                 InspectorVariable {
                     name: "runtime".into(),
                     source: String::from("<runtime>"),
+                    overridden: false,
                 },
             ],
         );
+    }
+
+    #[test]
+    fn the_filter_matches_var_names_and_can_hide_inherited_values() {
+        let mut filter = InspectorFilter::default();
+        assert!(!filter.is_active());
+        assert!(filter.shows("icon_state", false));
+
+        filter.query = String::from(" Icon State ");
+        assert!(filter.is_active());
+        assert!(filter.shows("icon_state", false), "spaces stand in for underscores");
+        assert!(!filter.shows("icon", false));
+
+        filter.query.clear();
+        filter.modified_only = true;
+        assert!(filter.is_active());
+        assert!(filter.shows("name", true));
+        assert!(!filter.shows("name", false));
+    }
+
+    #[test]
+    fn pinned_variables_leave_their_sections_in_pin_order() {
+        let variable = |name: &str, overridden| InspectorVariable {
+            name: name.into(),
+            source: String::new(),
+            overridden,
+        };
+        let overrides = [variable("req_access", true), variable("dir", true)];
+        let defaults = [variable("anchored", false), variable("density", false)];
+        let pins = [
+            String::from("density"),
+            String::from("missing"),
+            String::from("req_access"),
+        ];
+
+        let (pinned, overrides, defaults) = split_pinned(&overrides, &defaults, &pins);
+        let names = |variables: Vec<&InspectorVariable>| {
+            variables
+                .into_iter()
+                .map(|variable| variable.name.as_str().to_string())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(names(pinned), ["density", "req_access"]);
+        assert_eq!(names(overrides), ["dir"]);
+        assert_eq!(names(defaults), ["anchored"]);
     }
 
     #[test]

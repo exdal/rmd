@@ -1030,6 +1030,7 @@ pub(crate) struct Settings {
     pub blame_depth: u32,
     pub check_for_updates: bool,
     pub sanitize_vars_on_save: bool,
+    pub pinned_vars: Vec<String>,
 }
 
 pub(crate) struct SettingsLoad {
@@ -1097,6 +1098,7 @@ impl Default for Settings {
             blame_depth: 500,
             check_for_updates: true,
             sanitize_vars_on_save: false,
+            pinned_vars: Vec::new(),
         }
     }
 }
@@ -1327,6 +1329,7 @@ mod tests {
                 blame_depth: 500,
                 check_for_updates: true,
                 sanitize_vars_on_save: false,
+                pinned_vars: Vec::new(),
             }
         );
     }
@@ -1595,6 +1598,7 @@ mod tests {
             blame_depth: 500,
             check_for_updates: false,
             sanitize_vars_on_save: true,
+            pinned_vars: vec![String::from("req_access")],
         };
         settings.keybindings.rebind(
             KeybindAction::ShowAreas,
@@ -1673,6 +1677,7 @@ mod tests {
             blame_depth: 500,
             check_for_updates: true,
             sanitize_vars_on_save: false,
+            pinned_vars: Vec::new(),
         };
         let mut options = FrameOptions::default();
 
