@@ -236,6 +236,21 @@ impl KeyBinding {
             && (!self.super_key || io.key_super())
     }
 
+    pub fn is_down_with(self, ui: &Ui, held: Self) -> bool {
+        if !held.is_held(ui) {
+            return self.is_down(ui);
+        }
+
+        Self {
+            ctrl: self.ctrl || held.ctrl || held.key == Key::ModCtrl,
+            shift: self.shift || held.shift || held.key == Key::ModShift,
+            alt: self.alt || held.alt || held.key == Key::ModAlt,
+            super_key: self.super_key || held.super_key || held.key == Key::ModSuper,
+            ..self
+        }
+        .is_down(ui)
+    }
+
     pub fn is_released(self, ui: &Ui) -> bool { ui.is_key_released(self.key) && self.modifiers_match(ui) }
 
     fn modifiers_match(self, ui: &Ui) -> bool {
@@ -346,10 +361,18 @@ pub(crate) enum KeybindAction {
     ShowTileGrid,
     ShowPixelGrid,
     Screenshot,
+    PanLeft,
+    PanRight,
+    PanUp,
+    PanDown,
+    PanFaster,
+    PanDrag,
+    ZoomIn,
+    ZoomOut,
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 55] = [
         Self::Save,
         Self::SaveAll,
         Self::CloseMap,
@@ -397,6 +420,14 @@ impl KeybindAction {
         Self::ShowTileGrid,
         Self::ShowPixelGrid,
         Self::Screenshot,
+        Self::PanLeft,
+        Self::PanRight,
+        Self::PanUp,
+        Self::PanDown,
+        Self::PanFaster,
+        Self::PanDrag,
+        Self::ZoomIn,
+        Self::ZoomOut,
     ];
     pub const RECENT: [Self; 10] = [
         Self::Recent1,
@@ -460,10 +491,18 @@ impl KeybindAction {
             Self::ShowTileGrid => "Show tile grid",
             Self::ShowPixelGrid => "Show pixel grid",
             Self::Screenshot => "Screenshot",
+            Self::PanLeft => "Pan left",
+            Self::PanRight => "Pan right",
+            Self::PanUp => "Pan up",
+            Self::PanDown => "Pan down",
+            Self::PanFaster => "Pan faster (hold)",
+            Self::PanDrag => "Drag to pan (hold)",
+            Self::ZoomIn => "Zoom in",
+            Self::ZoomOut => "Zoom out",
         }
     }
 
-    pub const fn is_held(self) -> bool { matches!(self, Self::ToolAlternate) }
+    pub const fn is_held(self) -> bool { matches!(self, Self::ToolAlternate | Self::PanFaster | Self::PanDrag) }
 
     pub const fn id(self) -> &'static str {
         match self {
@@ -514,6 +553,14 @@ impl KeybindAction {
             Self::ShowTileGrid => "show-tile-grid",
             Self::ShowPixelGrid => "show-pixel-grid",
             Self::Screenshot => "screenshot",
+            Self::PanLeft => "pan-left",
+            Self::PanRight => "pan-right",
+            Self::PanUp => "pan-up",
+            Self::PanDown => "pan-down",
+            Self::PanFaster => "pan-faster",
+            Self::PanDrag => "pan-drag",
+            Self::ZoomIn => "zoom-in",
+            Self::ZoomOut => "zoom-out",
         }
     }
 }
@@ -568,6 +615,14 @@ pub(crate) struct KeyBindings {
     show_tile_grid: KeyBinding,
     show_pixel_grid: KeyBinding,
     screenshot: KeyBinding,
+    pan_left: KeyBinding,
+    pan_right: KeyBinding,
+    pan_up: KeyBinding,
+    pan_down: KeyBinding,
+    pan_faster: KeyBinding,
+    pan_drag: KeyBinding,
+    zoom_in: KeyBinding,
+    zoom_out: KeyBinding,
 }
 
 impl Default for KeyBindings {
@@ -620,6 +675,14 @@ impl Default for KeyBindings {
             show_tile_grid: KeyBinding::new(Key::G),
             show_pixel_grid: KeyBinding::with_shift(Key::G),
             screenshot: KeyBinding::new(Key::F12),
+            pan_left: KeyBinding::new(Key::LeftArrow),
+            pan_right: KeyBinding::new(Key::RightArrow),
+            pan_up: KeyBinding::new(Key::UpArrow),
+            pan_down: KeyBinding::new(Key::DownArrow),
+            pan_faster: KeyBinding::new(Key::ModShift),
+            pan_drag: KeyBinding::new(Key::Space),
+            zoom_in: KeyBinding::new(Key::Equal),
+            zoom_out: KeyBinding::new(Key::Minus),
         }
     }
 }
@@ -674,6 +737,14 @@ impl KeyBindings {
             show_tile_grid: KeyBinding::new(Key::G),
             show_pixel_grid: KeyBinding::with_shift(Key::G),
             screenshot: KeyBinding::new(Key::F12),
+            pan_left: KeyBinding::new(Key::LeftArrow),
+            pan_right: KeyBinding::new(Key::RightArrow),
+            pan_up: KeyBinding::new(Key::UpArrow),
+            pan_down: KeyBinding::new(Key::DownArrow),
+            pan_faster: KeyBinding::new(Key::ModShift),
+            pan_drag: KeyBinding::new(Key::Space),
+            zoom_in: KeyBinding::new(Key::Equal),
+            zoom_out: KeyBinding::new(Key::Minus),
         }
     }
 
@@ -726,6 +797,14 @@ impl KeyBindings {
             KeybindAction::ShowTileGrid => self.show_tile_grid,
             KeybindAction::ShowPixelGrid => self.show_pixel_grid,
             KeybindAction::Screenshot => self.screenshot,
+            KeybindAction::PanLeft => self.pan_left,
+            KeybindAction::PanRight => self.pan_right,
+            KeybindAction::PanUp => self.pan_up,
+            KeybindAction::PanDown => self.pan_down,
+            KeybindAction::PanFaster => self.pan_faster,
+            KeybindAction::PanDrag => self.pan_drag,
+            KeybindAction::ZoomIn => self.zoom_in,
+            KeybindAction::ZoomOut => self.zoom_out,
         }
     }
 
@@ -833,6 +912,14 @@ impl KeyBindings {
             KeybindAction::ShowTileGrid => self.show_tile_grid = binding,
             KeybindAction::ShowPixelGrid => self.show_pixel_grid = binding,
             KeybindAction::Screenshot => self.screenshot = binding,
+            KeybindAction::PanLeft => self.pan_left = binding,
+            KeybindAction::PanRight => self.pan_right = binding,
+            KeybindAction::PanUp => self.pan_up = binding,
+            KeybindAction::PanDown => self.pan_down = binding,
+            KeybindAction::PanFaster => self.pan_faster = binding,
+            KeybindAction::PanDrag => self.pan_drag = binding,
+            KeybindAction::ZoomIn => self.zoom_in = binding,
+            KeybindAction::ZoomOut => self.zoom_out = binding,
         }
     }
 }

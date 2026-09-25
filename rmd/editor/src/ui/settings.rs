@@ -125,6 +125,19 @@ const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
         ],
     ),
     (
+        "Camera",
+        &[
+            KeybindAction::PanLeft,
+            KeybindAction::PanRight,
+            KeybindAction::PanUp,
+            KeybindAction::PanDown,
+            KeybindAction::PanFaster,
+            KeybindAction::PanDrag,
+            KeybindAction::ZoomIn,
+            KeybindAction::ZoomOut,
+        ],
+    ),
+    (
         "Tools",
         &[
             KeybindAction::PlaceTool,

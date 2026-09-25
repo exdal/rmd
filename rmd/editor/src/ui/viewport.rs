@@ -77,6 +77,16 @@ use crate::{
 
 const PLACEMENT_FLASH_DURATION: f64 = 0.25;
 
+const KEY_PAN_SPEED: f32 = 800.0;
+const KEY_PAN_FASTER: f32 = 3.0;
+
+const PAN_KEYS: [(KeybindAction, [f32; 2]); 4] = [
+    (KeybindAction::PanLeft, [1.0, 0.0]),
+    (KeybindAction::PanRight, [-1.0, 0.0]),
+    (KeybindAction::PanUp, [0.0, 1.0]),
+    (KeybindAction::PanDown, [0.0, -1.0]),
+];
+
 const EDIT_KEYS: [(KeybindAction, EditCommand); 5] = [
     (KeybindAction::Copy, EditCommand::Copy),
     (KeybindAction::Cut, EditCommand::Cut),
@@ -544,9 +554,10 @@ impl UiState {
             let mouse = ui.io().mouse_pos();
             let over_overlay = top_overlay.contains(mouse) || bottom_overlay.contains(mouse);
             let hovered = image_hovered && !over_overlay && is_active;
+            let drag_panning = hovered && settings.keybindings.get(KeybindAction::PanDrag).is_held(ui);
             let focused = ui.is_window_focused();
             if let Some(momentary) = self.momentary_tool.as_mut() {
-                momentary.used |= hovered && ui.is_mouse_clicked(MouseButton::Left);
+                momentary.used |= hovered && !drag_panning && ui.is_mouse_clicked(MouseButton::Left);
                 if !momentary.binding.is_key_held(ui) {
                     if momentary.used && session.tool() == momentary.tool {
                         session.set_tool(momentary.previous);
@@ -563,7 +574,9 @@ impl UiState {
 
             if hovered && !ui.io().want_text_input() {
                 let io = ui.io();
-                if !self.gizmo.is_interacting() && ui.is_mouse_down(MouseButton::Middle) {
+                if !self.gizmo.is_interacting()
+                    && (ui.is_mouse_down(MouseButton::Middle) || drag_panning && ui.is_mouse_down(MouseButton::Left))
+                {
                     camera.pan_by(io.mouse_delta());
                 }
 
@@ -571,6 +584,29 @@ impl UiState {
                 if !self.gizmo.is_interacting() && wheel != 0.0 {
                     let mouse = io.mouse_pos();
                     camera.zoom_by(wheel, [mouse[0] - viewport_min[0], mouse[1] - viewport_min[1]]);
+                }
+
+                let faster = settings.keybindings.get(KeybindAction::PanFaster);
+                let speed = KEY_PAN_SPEED * io.delta_time() * if faster.is_held(ui) { KEY_PAN_FASTER } else { 1.0 };
+                let pan = PAN_KEYS
+                    .into_iter()
+                    .filter(|(action, _)| settings.keybindings.get(*action).is_down_with(ui, faster))
+                    .fold([0.0; 2], |pan, (_, direction)| {
+                        [pan[0] + direction[0] * speed, pan[1] + direction[1] * speed]
+                    });
+                if pan != [0.0; 2] {
+                    camera.pan_by(pan);
+                }
+                let center = [viewport.0 as f32 * 0.5, viewport.1 as f32 * 0.5];
+                if settings.keybindings.get(KeybindAction::ZoomIn).is_pressed_repeating(ui) {
+                    camera.zoom_by(1.0, center);
+                }
+                if settings
+                    .keybindings
+                    .get(KeybindAction::ZoomOut)
+                    .is_pressed_repeating(ui)
+                {
+                    camera.zoom_by(-1.0, center);
                 }
 
                 if settings.keybindings.get(KeybindAction::ShowAreas).is_pressed(ui) {
@@ -625,6 +661,8 @@ impl UiState {
                     *refit = false;
                 }
             }
+
+            let hovered = hovered && !drag_panning;
 
             if settings.show_tile_grid {
                 draw_tile_grid(
@@ -2946,6 +2984,53 @@ mod tests {
                 .tile_at(Coord::new(5, 8, 1))
                 .unwrap()
                 .contains(&table)
+        );
+    }
+
+    #[test]
+    fn arrow_keys_pan_shift_pans_faster_and_space_drags_the_map_without_placing() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut app = RectangleUiHarness::new();
+        let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        app.session.state.choose_prefab(table.clone());
+        app.session.set_tool(Tool::Place);
+        app.pointer(app.tile(5, 8), false);
+
+        let pan_right = |app: &mut RectangleUiHarness| {
+            let before = app.view.camera.camera.x;
+            app.key(Key::RightArrow, true);
+            app.key(Key::RightArrow, false);
+            app.view.camera.camera.x - before
+        };
+        let slow = pan_right(&mut app);
+        app.key(Key::ModShift, true);
+        let fast = pan_right(&mut app);
+        app.key(Key::ModShift, false);
+        assert!(slow > 0.0, "right pans the view right");
+        assert!(fast > slow * 2.0, "shift pans faster");
+
+        let zoom = app.view.camera.camera.zoom;
+        app.key(Key::Equal, true);
+        app.key(Key::Equal, false);
+        assert!(app.view.camera.camera.zoom > zoom);
+
+        let start = app.tile(5, 8);
+        app.pointer(start, false);
+        let camera = app.view.camera.camera;
+        app.key(Key::Space, true);
+        app.pointer(start, true);
+        app.pointer([start[0] + 64.0, start[1]], true);
+        app.pointer([start[0] + 64.0, start[1]], false);
+        app.key(Key::Space, false);
+        assert_ne!(app.view.camera.camera.x, camera.x, "space and drag pans");
+        assert!(
+            !app.session
+                .map()
+                .unwrap()
+                .dictionary
+                .values()
+                .any(|tile| tile.contains(&table)),
+            "the drag never reaches the place tool"
         );
     }
 
