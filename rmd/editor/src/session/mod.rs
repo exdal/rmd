@@ -52,6 +52,7 @@ pub(crate) use self::{
     diff::DiffSide,
     direction::{DirectionState, DirectionalTypes},
     edit::context_placement_group,
+    frame::TypeLayer,
     git::GitDocState,
     guides::GuideBadge,
     instance::{EditScope, SelectedTransform},

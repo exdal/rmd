@@ -31,7 +31,7 @@ use crate::{
     external_editor::SourceLocation,
     gizmo::GizmoState,
     loader::LoadView,
-    session::{LoadReport, Session},
+    session::{LoadReport, Session, TypeLayer},
     settings::{KeybindAction, KeybindPreset, Settings},
     update::UpdateCheck,
 };
@@ -139,6 +139,13 @@ mod object_tree;
 mod settings;
 
 const DOCKSPACE_ID: &str = "rmd-main-dockspace-v4";
+
+const LAYER_KEYS: [(KeybindAction, TypeLayer); 4] = [
+    (KeybindAction::ToggleAreaLayer, TypeLayer::Area),
+    (KeybindAction::ToggleTurfLayer, TypeLayer::Turf),
+    (KeybindAction::ToggleObjLayer, TypeLayer::Obj),
+    (KeybindAction::ToggleMobLayer, TypeLayer::Mob),
+];
 
 const RELOAD_CONFLICTS_POPUP: &str = "Load merge conflicts##reload-conflicts";
 
@@ -961,7 +968,7 @@ mod tests {
             KeyBinding::new(dear_imgui_rs::Key::N)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 39);
+        assert_eq!(KeybindAction::ALL.len(), 44);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));

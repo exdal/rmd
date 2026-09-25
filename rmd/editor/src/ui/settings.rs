@@ -99,6 +99,11 @@ const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
     (
         "Viewport",
         &[
+            KeybindAction::ToggleAreaLayer,
+            KeybindAction::ToggleTurfLayer,
+            KeybindAction::ToggleObjLayer,
+            KeybindAction::ToggleMobLayer,
+            KeybindAction::ShowAllLayers,
             KeybindAction::ShowAreas,
             KeybindAction::ShowAreaOutlines,
             KeybindAction::ShowLighting,

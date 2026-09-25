@@ -171,6 +171,15 @@ impl TypeVisibility {
         changed
     }
 
+    pub fn show_all(&mut self) -> bool {
+        let changed = !self.hidden.is_empty();
+        self.hidden.clear();
+
+        changed
+    }
+
+    pub fn hides_any(&self) -> bool { !self.hidden.is_empty() }
+
     pub fn hidden_types(&self, tree: &ObjectTree) -> HiddenTypes {
         HiddenTypes(
             self.hidden

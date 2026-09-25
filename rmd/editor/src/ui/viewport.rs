@@ -17,6 +17,7 @@ use super::{
     CLOSE_MAP_POPUP,
     FILL_LIMIT_WARNING_POPUP,
     FillWarningContext,
+    LAYER_KEYS,
     NodeOverlayView,
     NodeRightClick,
     OVERLAY_PADDING,
@@ -563,6 +564,14 @@ impl UiState {
 
                 if settings.keybindings.get(KeybindAction::ShowAreas).is_pressed(ui) {
                     session.toggle_areas();
+                }
+                for (action, layer) in LAYER_KEYS {
+                    if settings.keybindings.get(action).is_pressed(ui) {
+                        session.toggle_layer(layer);
+                    }
+                }
+                if settings.keybindings.get(KeybindAction::ShowAllLayers).is_pressed(ui) {
+                    session.show_all_types();
                 }
                 if settings.keybindings.get(KeybindAction::ShowAreaOutlines).is_pressed(ui) {
                     session.toggle_area_outlines();

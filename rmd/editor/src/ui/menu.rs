@@ -1,6 +1,6 @@
 use dear_imgui_rs::Ui;
 
-use super::{OpenRequest, UiState};
+use super::{LAYER_KEYS, OpenRequest, UiState};
 use crate::{
     session::Session,
     settings::{KeybindAction, Settings},
@@ -131,6 +131,27 @@ impl UiState {
                 ) {
                     actions.toggle_areas = true;
                 }
+                ui.menu("Type layers", || {
+                    for (action, layer) in LAYER_KEYS {
+                        if ui.menu_item_enabled_selected_with_shortcut(
+                            layer.label(),
+                            settings.keybindings.get(action).label(ui),
+                            session.is_layer_visible(layer),
+                            session.tree().is_some(),
+                        ) {
+                            session.toggle_layer(layer);
+                        }
+                    }
+                    ui.separator();
+                    if ui.menu_item_enabled_selected_with_shortcut(
+                        "Show all",
+                        settings.keybindings.get(KeybindAction::ShowAllLayers).label(ui),
+                        false,
+                        session.hides_types(),
+                    ) {
+                        session.show_all_types();
+                    }
+                });
                 if ui.menu_item_enabled_selected_with_shortcut(
                     "Show area outlines",
                     settings.keybindings.get(KeybindAction::ShowAreaOutlines).label(ui),

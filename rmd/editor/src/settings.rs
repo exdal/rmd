@@ -292,6 +292,11 @@ pub(crate) enum KeybindAction {
     Save,
     Undo,
     Redo,
+    ToggleAreaLayer,
+    ToggleTurfLayer,
+    ToggleObjLayer,
+    ToggleMobLayer,
+    ShowAllLayers,
     ShowAreas,
     ShowAreaOutlines,
     ShowLighting,
@@ -331,10 +336,15 @@ pub(crate) enum KeybindAction {
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 39] = [
+    pub const ALL: [Self; 44] = [
         Self::Save,
         Self::Undo,
         Self::Redo,
+        Self::ToggleAreaLayer,
+        Self::ToggleTurfLayer,
+        Self::ToggleObjLayer,
+        Self::ToggleMobLayer,
+        Self::ShowAllLayers,
         Self::ShowAreas,
         Self::ShowAreaOutlines,
         Self::ShowLighting,
@@ -390,6 +400,11 @@ impl KeybindAction {
             Self::Save => "Save",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
+            Self::ToggleAreaLayer => "Toggle area layer",
+            Self::ToggleTurfLayer => "Toggle turf layer",
+            Self::ToggleObjLayer => "Toggle object layer",
+            Self::ToggleMobLayer => "Toggle mob layer",
+            Self::ShowAllLayers => "Show all layers",
             Self::ShowAreas => "Show areas",
             Self::ShowAreaOutlines => "Show area outlines",
             Self::ShowLighting => "Show lighting",
@@ -436,6 +451,11 @@ impl KeybindAction {
             Self::Save => "save",
             Self::Undo => "undo",
             Self::Redo => "redo",
+            Self::ToggleAreaLayer => "toggle-area-layer",
+            Self::ToggleTurfLayer => "toggle-turf-layer",
+            Self::ToggleObjLayer => "toggle-obj-layer",
+            Self::ToggleMobLayer => "toggle-mob-layer",
+            Self::ShowAllLayers => "show-all-layers",
             Self::ShowAreas => "show-areas",
             Self::ShowAreaOutlines => "show-area-outlines",
             Self::ShowLighting => "show-lighting",
@@ -482,6 +502,11 @@ pub(crate) struct KeyBindings {
     save: KeyBinding,
     undo: KeyBinding,
     redo: KeyBinding,
+    toggle_area_layer: KeyBinding,
+    toggle_turf_layer: KeyBinding,
+    toggle_obj_layer: KeyBinding,
+    toggle_mob_layer: KeyBinding,
+    show_all_layers: KeyBinding,
     show_areas: KeyBinding,
     show_area_outlines: KeyBinding,
     show_lighting: KeyBinding,
@@ -526,6 +551,11 @@ impl Default for KeyBindings {
             save: KeyBinding::with_ctrl(Key::S),
             undo: KeyBinding::with_ctrl(Key::Z),
             redo: KeyBinding::with_ctrl(Key::Y),
+            toggle_area_layer: KeyBinding::with_ctrl(Key::Key1),
+            toggle_turf_layer: KeyBinding::with_ctrl(Key::Key2),
+            toggle_obj_layer: KeyBinding::with_ctrl(Key::Key3),
+            toggle_mob_layer: KeyBinding::with_ctrl(Key::Key4),
+            show_all_layers: KeyBinding::with_ctrl(Key::Key0),
             show_areas: KeyBinding::new(Key::A),
             show_area_outlines: KeyBinding::new(Key::O),
             show_lighting: KeyBinding::new(Key::L),
@@ -572,7 +602,12 @@ impl KeyBindings {
             save: KeyBinding::with_primary(Key::S),
             undo: KeyBinding::with_primary(Key::Z),
             redo: KeyBinding::with_primary_shift(Key::Z),
-            show_areas: KeyBinding::with_primary(Key::Key1),
+            toggle_area_layer: KeyBinding::with_primary(Key::Key1),
+            toggle_turf_layer: KeyBinding::with_primary(Key::Key2),
+            toggle_obj_layer: KeyBinding::with_primary(Key::Key3),
+            toggle_mob_layer: KeyBinding::with_primary(Key::Key4),
+            show_all_layers: KeyBinding::with_primary(Key::Key0),
+            show_areas: KeyBinding::new(Key::A),
             show_area_outlines: KeyBinding::with_shift(Key::O),
             show_lighting: KeyBinding::new(Key::L),
             level_up: KeyBinding::with_primary(Key::UpArrow),
@@ -616,6 +651,11 @@ impl KeyBindings {
             KeybindAction::Save => self.save,
             KeybindAction::Undo => self.undo,
             KeybindAction::Redo => self.redo,
+            KeybindAction::ToggleAreaLayer => self.toggle_area_layer,
+            KeybindAction::ToggleTurfLayer => self.toggle_turf_layer,
+            KeybindAction::ToggleObjLayer => self.toggle_obj_layer,
+            KeybindAction::ToggleMobLayer => self.toggle_mob_layer,
+            KeybindAction::ShowAllLayers => self.show_all_layers,
             KeybindAction::ShowAreas => self.show_areas,
             KeybindAction::ShowAreaOutlines => self.show_area_outlines,
             KeybindAction::ShowLighting => self.show_lighting,
@@ -655,6 +695,31 @@ impl KeyBindings {
         }
     }
 
+    fn resolve_duplicates(&mut self) {
+        for (index, action) in KeybindAction::ALL.into_iter().enumerate() {
+            let binding = self.get(action);
+            if !KeybindAction::ALL[..index]
+                .iter()
+                .any(|earlier| self.get(*earlier) == binding)
+            {
+                continue;
+            }
+
+            let free = [Self::default(), Self::strong_dmm()]
+                .map(|preset| preset.get(action))
+                .into_iter()
+                .find(|candidate| {
+                    KeybindAction::ALL
+                        .iter()
+                        .all(|other| *other == action || self.get(*other) != *candidate)
+                });
+
+            if let Some(free) = free {
+                self.set(action, free);
+            }
+        }
+    }
+
     pub fn recent(self, index: usize) -> Option<KeyBinding> {
         KeybindAction::RECENT.get(index).copied().map(|action| self.get(action))
     }
@@ -690,6 +755,11 @@ impl KeyBindings {
             KeybindAction::Save => self.save = binding,
             KeybindAction::Undo => self.undo = binding,
             KeybindAction::Redo => self.redo = binding,
+            KeybindAction::ToggleAreaLayer => self.toggle_area_layer = binding,
+            KeybindAction::ToggleTurfLayer => self.toggle_turf_layer = binding,
+            KeybindAction::ToggleObjLayer => self.toggle_obj_layer = binding,
+            KeybindAction::ToggleMobLayer => self.toggle_mob_layer = binding,
+            KeybindAction::ShowAllLayers => self.show_all_layers = binding,
             KeybindAction::ShowAreas => self.show_areas = binding,
             KeybindAction::ShowAreaOutlines => self.show_area_outlines = binding,
             KeybindAction::ShowLighting => self.show_lighting = binding,
@@ -929,6 +999,7 @@ impl Settings {
     }
 
     fn normalize(&mut self) {
+        self.keybindings.resolve_duplicates();
         self.minimum_light_brightness_percent = self.minimum_light_brightness_percent.min(100);
         self.blame_depth = self.blame_depth.clamp(1, 10_000);
         if !self.object_tree_search.type_paths && !self.object_tree_search.names {
@@ -1189,7 +1260,9 @@ mod tests {
             (KeybindAction::Save, KeyBinding::with_primary(Key::S)),
             (KeybindAction::Undo, KeyBinding::with_primary(Key::Z)),
             (KeybindAction::Redo, KeyBinding::with_primary_shift(Key::Z)),
-            (KeybindAction::ShowAreas, KeyBinding::with_primary(Key::Key1)),
+            (KeybindAction::ToggleAreaLayer, KeyBinding::with_primary(Key::Key1)),
+            (KeybindAction::ToggleMobLayer, KeyBinding::with_primary(Key::Key4)),
+            (KeybindAction::ShowAreas, KeyBinding::new(Key::A)),
             (KeybindAction::ShowAreaOutlines, KeyBinding::with_shift(Key::O)),
             (KeybindAction::LevelUp, KeyBinding::with_primary(Key::UpArrow)),
             (KeybindAction::LevelDown, KeyBinding::with_primary(Key::DownArrow)),
@@ -1233,6 +1306,21 @@ mod tests {
         .enumerate()
         {
             assert_eq!(bindings.recent(index), Some(KeyBinding::new(key)));
+        }
+    }
+
+    #[test]
+    fn a_new_default_that_clashes_with_a_saved_binding_moves_the_later_action() {
+        let mut saved = KeybindPreset::StrongDmm.bindings();
+        saved.show_areas = KeyBinding::with_primary(Key::Key1);
+        saved.toggle_area_layer = KeyBindings::default().toggle_area_layer;
+        saved.resolve_duplicates();
+
+        assert_eq!(saved.toggle_area_layer, KeyBindings::default().toggle_area_layer);
+        for (index, action) in KeybindAction::ALL.into_iter().enumerate() {
+            for other in KeybindAction::ALL.into_iter().skip(index + 1) {
+                assert_ne!(saved.get(action), saved.get(other), "{action:?} and {other:?}");
+            }
         }
     }
 

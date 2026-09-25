@@ -4,10 +4,38 @@ use editor::{
     focus::AreaFocus,
     frame::{self, FrameInstances, FrameRenderOptions},
 };
-use objtree::TypeId;
+use objtree::{Roots, TypeId};
 use render::{Frame, GuideLine, MapViewFrame, MapViewInteraction, MapViewRect, SpritePreview};
 
 use super::{Session, context_placement_group, report_bake_output};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeLayer {
+    Area,
+    Turf,
+    Obj,
+    Mob,
+}
+
+impl TypeLayer {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Area => "Areas",
+            Self::Turf => "Turfs",
+            Self::Obj => "Objects",
+            Self::Mob => "Mobs",
+        }
+    }
+
+    const fn root(self, roots: Roots) -> Option<TypeId> {
+        match self {
+            Self::Area => roots.area,
+            Self::Turf => roots.turf,
+            Self::Obj => roots.obj,
+            Self::Mob => roots.mob,
+        }
+    }
+}
 
 impl Session {
     pub(super) fn instances(&self) -> Option<&FrameInstances> {
@@ -22,6 +50,29 @@ impl Session {
 
     pub fn is_type_visible(&self, id: TypeId) -> bool {
         self.tree().is_some_and(|tree| tree.get(id).is_some()) && self.type_visibility.is_visible(id)
+    }
+
+    pub fn is_layer_visible(&self, layer: TypeLayer) -> bool {
+        self.layer_root(layer)
+            .is_some_and(|root| self.type_visibility.is_visible(root))
+    }
+
+    pub fn toggle_layer(&mut self, layer: TypeLayer) -> bool {
+        self.layer_root(layer)
+            .is_some_and(|root| self.toggle_type_visibility(root))
+    }
+
+    fn layer_root(&self, layer: TypeLayer) -> Option<TypeId> { layer.root(self.tree()?.roots()) }
+
+    pub fn hides_types(&self) -> bool { self.type_visibility.hides_any() }
+
+    pub fn show_all_types(&mut self) -> bool {
+        let changed = self.type_visibility.show_all();
+        if changed {
+            self.rebuild_all_instances();
+        }
+
+        changed
     }
 
     pub fn toggle_type_visibility(&mut self, id: TypeId) -> bool {
@@ -260,8 +311,35 @@ mod tests {
 
     use crate::session::{
         Session,
-        fixtures::{examples, settle_bake},
+        TypeLayer,
+        fixtures::{examples, flat_session, settle_bake},
     };
+
+    #[test]
+    fn layer_toggles_hide_a_base_type_and_show_all_restores_everything() {
+        let mut session = flat_session(2, 1);
+        let turf = session.map().unwrap().tile_at(Coord::new(1, 1, 1)).unwrap()[0].clone();
+        assert!(session.is_layer_visible(TypeLayer::Turf));
+        assert!(!session.hides_types());
+
+        assert!(session.toggle_layer(TypeLayer::Turf));
+        assert!(session.toggle_layer(TypeLayer::Obj));
+        assert!(!session.is_layer_visible(TypeLayer::Turf));
+        assert!(session.is_layer_visible(TypeLayer::Area));
+        assert!(
+            session.hidden_types().hides(&turf),
+            "subtypes are hidden with their base type"
+        );
+
+        assert!(session.toggle_layer(TypeLayer::Turf));
+        assert!(session.is_layer_visible(TypeLayer::Turf));
+        assert!(!session.is_layer_visible(TypeLayer::Obj));
+
+        assert!(session.show_all_types());
+        assert!(session.is_layer_visible(TypeLayer::Obj));
+        assert!(!session.hides_types());
+        assert!(!session.show_all_types(), "nothing left to show");
+    }
 
     #[test]
     fn both_open_maps_contribute_their_own_sprites_to_one_frame() {
