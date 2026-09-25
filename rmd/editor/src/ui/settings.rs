@@ -81,7 +81,15 @@ impl SettingsCategory {
 }
 
 const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
-    ("Application", &[KeybindAction::Save, KeybindAction::Screenshot]),
+    (
+        "Application",
+        &[
+            KeybindAction::Save,
+            KeybindAction::SaveAll,
+            KeybindAction::CloseMap,
+            KeybindAction::Screenshot,
+        ],
+    ),
     (
         "Editing",
         &[
@@ -91,6 +99,7 @@ const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
             KeybindAction::Cut,
             KeybindAction::Delete,
             KeybindAction::Paste,
+            KeybindAction::Deselect,
             KeybindAction::Find,
             KeybindAction::FindNext,
             KeybindAction::FindPrevious,

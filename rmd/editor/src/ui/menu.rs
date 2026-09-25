@@ -1,6 +1,6 @@
 use dear_imgui_rs::Ui;
 
-use super::{LAYER_KEYS, OpenRequest, UiState};
+use super::{LAYER_KEYS, OpenRequest, UiState, viewport::EditCommand, welcome::codebase_relative};
 use crate::{
     session::Session,
     settings::{KeybindAction, Settings},
@@ -15,6 +15,11 @@ pub(super) struct MenuActions {
     pub(super) open: Option<OpenRequest>,
     pub(super) show_welcome: bool,
     pub(super) open_save_dialog: bool,
+    pub(super) new_map: bool,
+    pub(super) save_all: bool,
+    pub(super) close_map: bool,
+    pub(super) close_all: bool,
+    pub(super) edit: Option<EditCommand>,
     pub(super) screenshot: bool,
     pub(super) toggle_areas: bool,
     pub(super) toggle_area_outlines: bool,
@@ -45,9 +50,25 @@ impl UiState {
                 ) {
                     actions.open = Some(OpenRequest::PickCodebase);
                 }
+                if ui.menu_item_enabled_selected_no_shortcut("New map...", false, session.tree().is_some() && !loading)
+                {
+                    actions.new_map = true;
+                }
                 if ui.menu_item_enabled_selected_no_shortcut("Open map...", false, session.tree().is_some() && !loading)
                 {
                     actions.open = Some(OpenRequest::PickMap);
+                }
+                let codebase = session.environment_path().filter(|_| !loading);
+                let has_recent = codebase.is_some_and(|codebase| settings.recent_maps_for(codebase).next().is_some());
+                if let Some(_recent) = ui.begin_menu_with_enabled("Recent maps", has_recent)
+                    && let Some(codebase) = codebase
+                {
+                    let base = session.codebase_dir().unwrap_or(codebase);
+                    for recent in settings.recent_maps_for(codebase) {
+                        if ui.menu_item(codebase_relative(base, &recent.map)) {
+                            actions.open = Some(OpenRequest::Map(recent.map.clone()));
+                        }
+                    }
                 }
                 ui.separator();
                 if ui.menu_item_enabled_selected_with_shortcut(
@@ -59,12 +80,32 @@ impl UiState {
                     actions.open_save_dialog = true;
                 }
                 if ui.menu_item_enabled_selected_with_shortcut(
+                    "Save all",
+                    settings.keybindings.get(KeybindAction::SaveAll).label(ui),
+                    false,
+                    session.state.documents().iter().any(|document| document.is_dirty()),
+                ) {
+                    actions.save_all = true;
+                }
+                if ui.menu_item_enabled_selected_with_shortcut(
                     "Screenshot...",
                     settings.keybindings.get(KeybindAction::Screenshot).label(ui),
                     false,
                     session.map().is_some(),
                 ) {
                     actions.screenshot = true;
+                }
+                ui.separator();
+                if ui.menu_item_enabled_selected_with_shortcut(
+                    "Close map",
+                    settings.keybindings.get(KeybindAction::CloseMap).label(ui),
+                    false,
+                    session.map().is_some(),
+                ) {
+                    actions.close_map = true;
+                }
+                if ui.menu_item_enabled_selected_no_shortcut("Close all", false, !session.state.is_empty()) {
+                    actions.close_all = true;
                 }
                 ui.separator();
                 if ui.menu_item("Welcome") {
@@ -99,6 +140,35 @@ impl UiState {
                     next.is_some(),
                 ) {
                     actions.redo = true;
+                }
+
+                ui.separator();
+                let selected = session.selection().is_some();
+                for (label, action, command, enabled) in [
+                    ("Copy", KeybindAction::Copy, EditCommand::Copy, selected),
+                    ("Cut", KeybindAction::Cut, EditCommand::Cut, selected),
+                    (
+                        "Paste",
+                        KeybindAction::Paste,
+                        EditCommand::Paste,
+                        session.clipboard().is_some(),
+                    ),
+                    ("Delete", KeybindAction::Delete, EditCommand::Delete, selected),
+                    (
+                        "Deselect",
+                        KeybindAction::Deselect,
+                        EditCommand::Deselect,
+                        selected || session.selected_instance().is_some(),
+                    ),
+                ] {
+                    if ui.menu_item_enabled_selected_with_shortcut(
+                        label,
+                        settings.keybindings.get(action).label(ui),
+                        false,
+                        enabled && session.map().is_some(),
+                    ) {
+                        actions.edit = Some(command);
+                    }
                 }
 
                 ui.separator();

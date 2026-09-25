@@ -49,7 +49,7 @@ const SAVE_MAP_PATH_WIDTH: f32 = 460.0;
 
 pub(super) const SAVE_ERROR_COLOR: [f32; 4] = [1.0, 0.4, 0.4, 1.0];
 
-pub(super) const CLOSE_MAP_POPUP: &str = "Unsaved changes##close-map";
+const CLOSE_MAP_POPUP: &str = "Unsaved changes##close-map";
 
 const EXIT_POPUP: &str = "Unsaved changes##exit";
 
@@ -804,15 +804,32 @@ impl UiState {
         false
     }
 
+    pub(super) fn request_close(&mut self, session: &mut Session, ids: impl IntoIterator<Item = DocumentId>) {
+        for id in ids {
+            if !session.state.document(id).is_some_and(MapDocument::is_dirty) {
+                session.close_map(id);
+            } else if !self.close_queue.contains(&id) {
+                self.close_queue.push_back(id);
+            }
+        }
+    }
+
     pub(super) fn draw_close_confirmation(&mut self, ui: &Ui, session: &mut Session) {
-        let Some(id) = self.pending_close else {
+        while let Some(id) = self.close_queue.front().copied()
+            && session.state.document(id).is_none_or(|document| !document.is_dirty())
+        {
+            self.close_queue.pop_front();
+            session.close_map(id);
+        }
+        let Some(id) = self.close_queue.front().copied() else {
             return;
         };
         let Some(title) = session.state.document(id).map(MapDocument::title) else {
-            self.pending_close = None;
-
             return;
         };
+        if !ui.is_popup_open(CLOSE_MAP_POPUP) {
+            ui.open_popup(CLOSE_MAP_POPUP);
+        }
 
         let Some(_modal) = ui.begin_modal_popup_config(CLOSE_MAP_POPUP).flags(MODAL_FLAGS).begin() else {
             return;
@@ -823,6 +840,12 @@ impl UiState {
             .is_some_and(|document| document.path.is_some() && !document.needs_initial_save());
 
         ui.text(format!("{} has unsaved changes.", title.trim_end_matches(" *")));
+        if self.close_queue.len() > 1 {
+            ui.text_disabled(format!(
+                "{} more map(s) with unsaved changes are waiting to close.",
+                self.close_queue.len() - 1
+            ));
+        }
         ui.dummy([0.0, ui.frame_height() * 0.25]);
 
         if ui.button("Save") {
@@ -833,7 +856,7 @@ impl UiState {
                     match session.save_map_as(&path, format) {
                         Ok(()) => {
                             session.close_map(id);
-                            self.pending_close = None;
+                            self.close_queue.pop_front();
                             ui.close_current_popup();
                         },
                         Err(e) => self.open_error = Some(e.to_string()),
@@ -848,7 +871,7 @@ impl UiState {
                         format: session.map_format().unwrap_or_default(),
                         error: None,
                     });
-                    self.pending_close = None;
+                    self.close_queue.clear();
                     ui.close_current_popup();
                     ui.open_popup(SAVE_MAP_POPUP);
                 },
@@ -857,12 +880,12 @@ impl UiState {
         ui.same_line();
         if ui.button("Discard") {
             session.close_map(id);
-            self.pending_close = None;
+            self.close_queue.pop_front();
             ui.close_current_popup();
         }
         ui.same_line();
         if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
-            self.pending_close = None;
+            self.close_queue.clear();
             ui.close_current_popup();
         }
     }
@@ -896,7 +919,10 @@ mod tests {
         draw_resize_map_dialog,
         resolve_new_map_path,
     };
-    use crate::{session::Session, ui::IMGUI_CONTEXT};
+    use crate::{
+        session::Session,
+        ui::{IMGUI_CONTEXT, UiState},
+    };
 
     #[test]
     fn pending_fill_is_invalidated_when_the_mask_document_or_palette_changes() {
@@ -1067,6 +1093,43 @@ mod tests {
         assert!(dialog.is_some());
         assert_eq!(remembered, None);
         assert_eq!(session.level_count(), 1);
+    }
+
+    #[test]
+    fn closing_several_maps_asks_about_each_unsaved_one_and_cancel_keeps_the_rest_open() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = crate::ui::fixtures::rectangle_context();
+        let mut session = Session::new();
+        let map = || dmm::Map::new(Size { x: 1, y: 1, z: 1 });
+        let clean = session.state.open_document(MapDocument::new(map(), 1));
+        let first = session.state.open_document(MapDocument::create("first.dmm", map(), 1));
+        let second = session.state.open_document(MapDocument::create("second.dmm", map(), 1));
+        let mut state = UiState::new(false).unwrap();
+
+        let ids = session.state.document_ids();
+        state.request_close(&mut session, ids);
+        assert!(
+            session.state.document(clean).is_none(),
+            "a map without changes closes at once"
+        );
+        assert_eq!(Vec::from(state.close_queue.clone()), [first, second]);
+
+        session.state.close_document(first);
+        let ui = context.frame();
+        state.draw_close_confirmation(ui, &mut session);
+        assert!(context.render_legacy().valid());
+        assert_eq!(
+            Vec::from(state.close_queue.clone()),
+            [second],
+            "a map that went away leaves the queue"
+        );
+
+        context.io_mut().add_key_event(dear_imgui_rs::Key::Escape, true);
+        let ui = context.frame();
+        state.draw_close_confirmation(ui, &mut session);
+        assert!(context.render_legacy().valid());
+        assert!(state.close_queue.is_empty());
+        assert!(session.state.document(second).is_some());
     }
 
     #[test]

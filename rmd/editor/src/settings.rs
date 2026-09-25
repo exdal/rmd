@@ -182,6 +182,16 @@ impl KeyBinding {
         }
     }
 
+    const fn with_ctrl_shift(key: Key) -> Self {
+        Self {
+            key,
+            ctrl: true,
+            shift: true,
+            alt: false,
+            super_key: false,
+        }
+    }
+
     const fn with_primary_shift(key: Key) -> Self {
         Self {
             key,
@@ -290,6 +300,8 @@ impl KeybindPreset {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeybindAction {
     Save,
+    SaveAll,
+    CloseMap,
     Undo,
     Redo,
     ToggleAreaLayer,
@@ -316,6 +328,7 @@ pub(crate) enum KeybindAction {
     Cut,
     Delete,
     Paste,
+    Deselect,
     Find,
     FindNext,
     FindPrevious,
@@ -336,8 +349,10 @@ pub(crate) enum KeybindAction {
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 47] = [
         Self::Save,
+        Self::SaveAll,
+        Self::CloseMap,
         Self::Undo,
         Self::Redo,
         Self::ToggleAreaLayer,
@@ -364,6 +379,7 @@ impl KeybindAction {
         Self::Cut,
         Self::Delete,
         Self::Paste,
+        Self::Deselect,
         Self::Find,
         Self::FindNext,
         Self::FindPrevious,
@@ -398,6 +414,8 @@ impl KeybindAction {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Save => "Save",
+            Self::SaveAll => "Save all",
+            Self::CloseMap => "Close map",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
             Self::ToggleAreaLayer => "Toggle area layer",
@@ -424,6 +442,7 @@ impl KeybindAction {
             Self::Cut => "Cut block",
             Self::Delete => "Delete block",
             Self::Paste => "Paste block",
+            Self::Deselect => "Deselect",
             Self::Find => "Search",
             Self::FindNext => "Next search match",
             Self::FindPrevious => "Previous search match",
@@ -449,6 +468,8 @@ impl KeybindAction {
     pub const fn id(self) -> &'static str {
         match self {
             Self::Save => "save",
+            Self::SaveAll => "save-all",
+            Self::CloseMap => "close-map",
             Self::Undo => "undo",
             Self::Redo => "redo",
             Self::ToggleAreaLayer => "toggle-area-layer",
@@ -475,6 +496,7 @@ impl KeybindAction {
             Self::Cut => "cut",
             Self::Delete => "delete",
             Self::Paste => "paste",
+            Self::Deselect => "deselect",
             Self::Find => "find",
             Self::FindNext => "find_next",
             Self::FindPrevious => "find_previous",
@@ -500,6 +522,8 @@ impl KeybindAction {
 #[serde(default)]
 pub(crate) struct KeyBindings {
     save: KeyBinding,
+    save_all: KeyBinding,
+    close_map: KeyBinding,
     undo: KeyBinding,
     redo: KeyBinding,
     toggle_area_layer: KeyBinding,
@@ -526,6 +550,7 @@ pub(crate) struct KeyBindings {
     cut: KeyBinding,
     delete: KeyBinding,
     paste: KeyBinding,
+    deselect: KeyBinding,
     find: KeyBinding,
     find_next: KeyBinding,
     find_previous: KeyBinding,
@@ -549,6 +574,8 @@ impl Default for KeyBindings {
     fn default() -> Self {
         Self {
             save: KeyBinding::with_ctrl(Key::S),
+            save_all: KeyBinding::with_ctrl_shift(Key::S),
+            close_map: KeyBinding::with_ctrl(Key::W),
             undo: KeyBinding::with_ctrl(Key::Z),
             redo: KeyBinding::with_ctrl(Key::Y),
             toggle_area_layer: KeyBinding::with_ctrl(Key::Key1),
@@ -575,6 +602,7 @@ impl Default for KeyBindings {
             cut: KeyBinding::with_ctrl(Key::X),
             delete: KeyBinding::new(Key::Delete),
             paste: KeyBinding::with_ctrl(Key::V),
+            deselect: KeyBinding::with_ctrl(Key::D),
             find: KeyBinding::with_ctrl(Key::F),
             find_next: KeyBinding::new(Key::F3),
             find_previous: KeyBinding::with_shift(Key::F3),
@@ -600,6 +628,8 @@ impl KeyBindings {
     fn strong_dmm() -> Self {
         Self {
             save: KeyBinding::with_primary(Key::S),
+            save_all: KeyBinding::with_primary_shift(Key::S),
+            close_map: KeyBinding::with_primary(Key::W),
             undo: KeyBinding::with_primary(Key::Z),
             redo: KeyBinding::with_primary_shift(Key::Z),
             toggle_area_layer: KeyBinding::with_primary(Key::Key1),
@@ -626,6 +656,7 @@ impl KeyBindings {
             cut: KeyBinding::with_primary(Key::X),
             delete: KeyBinding::new(Key::Delete),
             paste: KeyBinding::with_primary(Key::V),
+            deselect: KeyBinding::with_primary(Key::D),
             find: KeyBinding::with_primary(Key::F),
             find_next: KeyBinding::new(Key::F3),
             find_previous: KeyBinding::with_shift(Key::F3),
@@ -649,6 +680,8 @@ impl KeyBindings {
     pub const fn get(self, action: KeybindAction) -> KeyBinding {
         match action {
             KeybindAction::Save => self.save,
+            KeybindAction::SaveAll => self.save_all,
+            KeybindAction::CloseMap => self.close_map,
             KeybindAction::Undo => self.undo,
             KeybindAction::Redo => self.redo,
             KeybindAction::ToggleAreaLayer => self.toggle_area_layer,
@@ -675,6 +708,7 @@ impl KeyBindings {
             KeybindAction::Cut => self.cut,
             KeybindAction::Delete => self.delete,
             KeybindAction::Paste => self.paste,
+            KeybindAction::Deselect => self.deselect,
             KeybindAction::Find => self.find,
             KeybindAction::FindNext => self.find_next,
             KeybindAction::FindPrevious => self.find_previous,
@@ -753,6 +787,8 @@ impl KeyBindings {
     fn set(&mut self, action: KeybindAction, binding: KeyBinding) {
         match action {
             KeybindAction::Save => self.save = binding,
+            KeybindAction::SaveAll => self.save_all = binding,
+            KeybindAction::CloseMap => self.close_map = binding,
             KeybindAction::Undo => self.undo = binding,
             KeybindAction::Redo => self.redo = binding,
             KeybindAction::ToggleAreaLayer => self.toggle_area_layer = binding,
@@ -779,6 +815,7 @@ impl KeyBindings {
             KeybindAction::Cut => self.cut = binding,
             KeybindAction::Delete => self.delete = binding,
             KeybindAction::Paste => self.paste = binding,
+            KeybindAction::Deselect => self.deselect = binding,
             KeybindAction::Find => self.find = binding,
             KeybindAction::FindNext => self.find_next = binding,
             KeybindAction::FindPrevious => self.find_previous = binding,

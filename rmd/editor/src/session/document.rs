@@ -10,6 +10,12 @@ use editor::{
 use super::{GitDocState, MAX_MAP_DIMENSION, Session, is_reorder_label};
 use crate::loader::LoadedMap;
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SaveAllOutcome {
+    pub needs_path: Option<DocumentId>,
+    pub error: Option<String>,
+}
+
 impl Session {
     pub fn apply_map(&mut self, loaded: LoadedMap) {
         let LoadedMap {
@@ -274,6 +280,32 @@ impl Session {
         let Some(id) = self.state.active() else {
             return Err(std::io::Error::other("no map is open"));
         };
+
+        self.save_document(id)
+    }
+
+    pub fn save_all(&mut self) -> SaveAllOutcome {
+        let mut outcome = SaveAllOutcome::default();
+        for id in self.state.document_ids() {
+            let Some(document) = self.state.document(id).filter(|document| document.is_dirty()) else {
+                continue;
+            };
+            if document.path.is_none() || document.needs_initial_save() {
+                outcome.needs_path.get_or_insert(id);
+                continue;
+            }
+            let title = document.title();
+            if let Err(error) = self.save_document(id) {
+                outcome
+                    .error
+                    .get_or_insert_with(|| format!("{}: {error}", title.trim_end_matches(" *")));
+            }
+        }
+
+        outcome
+    }
+
+    fn save_document(&mut self, id: DocumentId) -> std::io::Result<()> {
         let levels = self.state.document(id).map_or(0, |document| document.map.size.z);
         let result = self
             .state
@@ -508,6 +540,31 @@ mod tests {
                 .starts_with("//MAP CONVERTED BY dmm2tgm.py")
         );
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn save_all_writes_every_changed_map_with_a_file_and_names_one_that_needs_a_path() {
+        let saved = std::env::temp_dir().join(format!("rmd-save-all-{}.dmm", std::process::id()));
+        let unsaved = std::env::temp_dir().join(format!("rmd-save-all-new-{}.dmm", std::process::id()));
+        let _ = std::fs::remove_file(&saved);
+        let mut session = Session::new();
+        let first = session
+            .state
+            .open_document(MapDocument::create(&saved, Map::new(Size { x: 1, y: 1, z: 1 }), 1));
+        session.save_map_as(&saved, MapFormat::Tgm).unwrap();
+        assert!(session.state.document_mut(first).unwrap().resize(2, 1, &[]));
+        let second = session
+            .state
+            .open_document(MapDocument::create(&unsaved, Map::new(Size { x: 1, y: 1, z: 1 }), 1));
+
+        let outcome = session.save_all();
+
+        assert_eq!(outcome.needs_path, Some(second));
+        assert_eq!(outcome.error, None);
+        assert!(!session.state.document(first).unwrap().is_dirty());
+        assert!(session.state.document(second).unwrap().is_dirty());
+        assert!(!unsaved.exists(), "a map that never had a file waits for Save As");
+        let _ = std::fs::remove_file(saved);
     }
 
     #[test]

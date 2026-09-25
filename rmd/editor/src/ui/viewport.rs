@@ -14,7 +14,6 @@ use render::{InteractionMode, MapViewInteraction, MapViewRect, PickRequest, Plac
 use super::{
     BlamePopup,
     BlockPlacementAction,
-    CLOSE_MAP_POPUP,
     FILL_LIMIT_WARNING_POPUP,
     FillWarningContext,
     LAYER_KEYS,
@@ -77,6 +76,23 @@ use crate::{
 };
 
 const PLACEMENT_FLASH_DURATION: f64 = 0.25;
+
+const EDIT_KEYS: [(KeybindAction, EditCommand); 5] = [
+    (KeybindAction::Copy, EditCommand::Copy),
+    (KeybindAction::Cut, EditCommand::Cut),
+    (KeybindAction::Delete, EditCommand::Delete),
+    (KeybindAction::Paste, EditCommand::Paste),
+    (KeybindAction::Deselect, EditCommand::Deselect),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EditCommand {
+    Copy,
+    Cut,
+    Delete,
+    Paste,
+    Deselect,
+}
 
 const TOOL_KEYS: [(KeybindAction, Tool); 7] = [
     (KeybindAction::PlaceTool, Tool::Place),
@@ -411,12 +427,7 @@ impl UiState {
         }
 
         if let Some(id) = closing {
-            if session.state.document(id).is_some_and(MapDocument::is_dirty) {
-                self.pending_close = Some(id);
-                ui.open_popup(CLOSE_MAP_POPUP);
-            } else {
-                session.close_map(id);
-            }
+            self.request_close(session, [id]);
         }
         self.draw_close_confirmation(ui, session);
 
@@ -851,27 +862,33 @@ impl UiState {
                             session.redo();
                         }
                     }
-                    if settings.keybindings.get(KeybindAction::Copy).is_pressed(ui) {
-                        session.copy_selection(session.selection_mode());
+                    if let Some((_, command)) = EDIT_KEYS
+                        .into_iter()
+                        .find(|(action, _)| settings.keybindings.get(*action).is_pressed(ui))
+                    {
+                        self.edit_command = Some(command);
                     }
-                    let cut = settings.keybindings.get(KeybindAction::Cut).is_pressed(ui);
-                    let delete = settings.keybindings.get(KeybindAction::Delete).is_pressed(ui);
-                    if (cut || delete) && paste.is_none() && session.selection().is_some() {
+                }
+
+                match self.edit_command.take() {
+                    Some(EditCommand::Copy) => {
+                        session.copy_selection(session.selection_mode());
+                    },
+                    Some(command @ (EditCommand::Cut | EditCommand::Delete))
+                        if paste.is_none() && session.selection().is_some() =>
+                    {
                         restore_rectangle_gesture(session, id, rectangle_gesture);
                         self.gizmo.cancel();
                         *block_selection_anchor = None;
                         *block_placement = None;
 
-                        if cut {
+                        if command == EditCommand::Cut {
                             session.cut_selection();
                         } else {
                             session.delete_selection();
                         }
-                    }
-
-                    if settings.keybindings.get(KeybindAction::Paste).is_pressed(ui)
-                        && let Some(block) = session.clipboard()
-                    {
+                    },
+                    Some(EditCommand::Paste) if let Some(block) = session.clipboard() => {
                         let (width, height) = (block.width(), block.height());
                         restore_rectangle_gesture(session, id, rectangle_gesture);
                         let anchor = pointed_coord.or_else(|| {
@@ -890,7 +907,17 @@ impl UiState {
                                 rotation: SelectionRotation::Original,
                             });
                         }
-                    }
+                    },
+                    Some(EditCommand::Deselect) => {
+                        restore_rectangle_gesture(session, id, rectangle_gesture);
+                        self.gizmo.cancel();
+                        *block_selection_anchor = None;
+                        *block_placement = None;
+                        *paste = None;
+                        session.select_block(None);
+                        session.select_instance(None);
+                    },
+                    _ => {},
                 }
 
                 let tool = session.tool();
@@ -2860,6 +2887,35 @@ mod tests {
                 started_at: 10.0,
             })
         );
+    }
+
+    #[test]
+    fn edit_menu_commands_reach_the_active_map_view() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut app = RectangleUiHarness::new();
+        let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        app.session.state.choose_prefab(table.clone());
+        app.session.set_tool(Tool::Place);
+        let coord = Coord::new(5, 8, 1);
+        assert!(app.session.place_at(coord, None).is_some());
+        app.session.set_tool(Tool::BlockSelect);
+        assert!(
+            app.session
+                .select_block(Some(Selection::from_drag(coord, Coord::new(6, 9, 1))))
+        );
+
+        app.state.edit_command = Some(super::EditCommand::Copy);
+        app.step();
+        assert!(app.session.clipboard().is_some());
+
+        app.state.edit_command = Some(super::EditCommand::Delete);
+        app.step();
+        assert!(!app.session.map().unwrap().tile_at(coord).unwrap().contains(&table));
+        assert!(app.state.edit_command.is_none());
+
+        app.state.edit_command = Some(super::EditCommand::Deselect);
+        app.step();
+        assert_eq!(app.session.selection(), None);
     }
 
     #[test]

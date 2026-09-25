@@ -1,6 +1,6 @@
 use core::path::TreePath;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
 };
 
@@ -75,7 +75,6 @@ use self::{
         restore_rectangle_gesture,
     },
     dialog::{
-        CLOSE_MAP_POPUP,
         FILL_LIMIT_WARNING_POPUP,
         FillWarningContext,
         GO_TO_POPUP,
@@ -120,7 +119,7 @@ use self::{
     search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search},
     toolbar::{DEFAULT_CUSTOM_FILL_BOUNDARY, TopOverlayState, draw_top_overlay, request_level_change},
     tooltip::{draw_conflict_tooltip, draw_diff_tooltip},
-    viewport::{ActivePlacementFlash, MapViewState, MomentaryTool, PickStroke, PlacementStroke},
+    viewport::{ActivePlacementFlash, EditCommand, MapViewState, MomentaryTool, PickStroke, PlacementStroke},
     welcome::{ForgetRequest, WelcomeOutput},
 };
 
@@ -224,7 +223,8 @@ pub struct UiState {
     last_go_to: Option<Coord>,
     tile_fill: Option<TileFillPaths>,
     save_dialog: Option<SaveDialog>,
-    pending_close: Option<DocumentId>,
+    close_queue: VecDeque<DocumentId>,
+    edit_command: Option<EditCommand>,
     pending_conflict_reload: Option<DocumentId>,
     exit_requested: bool,
     show_welcome: bool,
@@ -298,7 +298,8 @@ impl UiState {
             last_go_to: None,
             tile_fill: None,
             save_dialog: None,
-            pending_close: None,
+            close_queue: VecDeque::new(),
+            edit_command: None,
             pending_conflict_reload: None,
             exit_requested: false,
             show_welcome: true,
@@ -414,6 +415,11 @@ impl UiState {
             mut open,
             show_welcome,
             mut open_save_dialog,
+            new_map,
+            mut save_all,
+            mut close_map,
+            close_all,
+            edit,
             mut screenshot,
             toggle_areas,
             toggle_area_outlines,
@@ -453,6 +459,29 @@ impl UiState {
                 open_save_dialog = true;
             }
         }
+
+        let file_keys = session.map().is_some()
+            && self.save_dialog.is_none()
+            && !self.settings_window.is_capturing_keybind()
+            && !ui.io().want_text_input();
+        save_all |= file_keys && settings.keybindings.get(KeybindAction::SaveAll).is_pressed(ui);
+        close_map |= file_keys && settings.keybindings.get(KeybindAction::CloseMap).is_pressed(ui);
+        if save_all {
+            let outcome = session.save_all();
+            if let Some(error) = outcome.error {
+                self.open_error = Some(error);
+            } else if let Some(id) = outcome.needs_path {
+                session.set_active_document(id);
+                open_save_dialog = true;
+            }
+        }
+        if close_map && let Some(id) = session.state.active() {
+            self.request_close(session, [id]);
+        }
+        if close_all {
+            self.request_close(session, session.state.document_ids());
+        }
+        self.edit_command = edit;
 
         screenshot |= session.map().is_some()
             && self.save_dialog.is_none()
@@ -620,7 +649,7 @@ impl UiState {
         let mut welcome = WelcomeOutput::default();
         self.draw_welcome(ui, session, settings, loading, &mut welcome);
         open = welcome.open.or(open);
-        open_new_map_dialog |= welcome.new_map_dialog;
+        open_new_map_dialog |= welcome.new_map_dialog || new_map;
         match welcome.forget {
             Some(ForgetRequest::Codebase(path)) => settings.forget_codebase(&path),
             Some(ForgetRequest::Map(path)) => settings.forget_recent(&path),
@@ -657,6 +686,7 @@ impl UiState {
         } else {
             self.draw_map_views(ui, session, settings, refit)
         };
+        self.edit_command = None;
 
         self.dm_ui.draw(ui, session, root.raw());
 
@@ -968,7 +998,7 @@ mod tests {
             KeyBinding::new(dear_imgui_rs::Key::N)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 44);
+        assert_eq!(KeybindAction::ALL.len(), 47);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));

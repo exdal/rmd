@@ -117,7 +117,7 @@ fn map_matches(base: &Path, map: &Path, needle: &str) -> bool {
     needle.is_empty() || codebase_relative(base, map).to_ascii_lowercase().contains(needle)
 }
 
-fn codebase_relative(base: &Path, path: &Path) -> String {
+pub(super) fn codebase_relative(base: &Path, path: &Path) -> String {
     path.strip_prefix(base).unwrap_or(path).display().to_string()
 }
 
