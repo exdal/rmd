@@ -8,12 +8,34 @@ use std::{
 
 pub use dmm::PrefabInstanceId;
 use dmm::{Coord, Map, MapFormat, Prefab, key::Key};
+use objtree::ObjectTree;
 
 use crate::{
     command::{Edit, EditGroupId, History, Resize},
     focus::AreaFocus,
     tool::{BlockSelectionMode, SelectionMask},
 };
+
+pub fn sanitize_vars(map: &mut Map, tree: &ObjectTree) -> usize {
+    let mut dropped = 0;
+    for prefab in map.dictionary.values_mut().flatten() {
+        let Some(id) = tree.id_of(&prefab.path) else {
+            continue;
+        };
+        prefab.vars.retain(|(name, variable)| {
+            let redundant = variable.value != Value::Unevaluated
+                && tree
+                    .var_inherited(id, name)
+                    .is_some_and(|declaration| declaration.value == variable.value);
+            dropped += usize::from(redundant);
+            !redundant
+        });
+    }
+
+    map.dedupe_dictionary();
+
+    dropped
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DocumentId(u64);
@@ -650,21 +672,32 @@ impl MapDocument {
         Some(z)
     }
 
-    pub fn save(&mut self) -> std::io::Result<()> {
+    pub fn save(&mut self) -> std::io::Result<()> { self.save_with(None) }
+
+    pub fn save_with(&mut self, sanitize: Option<&ObjectTree>) -> std::io::Result<()> {
         let Some(path) = self.path.clone() else {
             return Err(std::io::Error::other("document has no path"));
         };
         let format = self.map.format;
 
-        self.save_as(path, format)
+        self.save_as_with(path, format, sanitize)
     }
 
     pub fn save_as(&mut self, path: impl Into<PathBuf>, format: MapFormat) -> std::io::Result<()> {
+        self.save_as_with(path, format, None)
+    }
+
+    pub fn save_as_with(
+        &mut self, path: impl Into<PathBuf>, format: MapFormat, sanitize: Option<&ObjectTree>,
+    ) -> std::io::Result<()> {
         let path = path.into();
         let retained_level_count = self.retained_level_count.min(self.map.size.z);
         let mut saved_map = self.map.clone();
         saved_map.grid.truncate(retained_level_count as usize);
         saved_map.size.z = retained_level_count;
+        if let Some(tree) = sanitize {
+            sanitize_vars(&mut saved_map, tree);
+        }
         saved_map.prune_dictionary();
         saved_map.reassign_overflowing_keys();
         let contents = dmm::writer::MapWriter::new(&saved_map).with_format(format).write();
@@ -732,11 +765,72 @@ mod tests {
 
     use dmm::{Map, Prefab, Size, writer::MapWriter};
 
-    use super::{Coord, MapDocument, VarMutation};
+    use super::{Coord, MapDocument, VarMutation, sanitize_vars};
     use crate::{
         command::{Edit, EditGroupId},
         focus::AreaFocus,
     };
+
+    #[test]
+    fn sanitizing_drops_constant_defaults_and_merges_tiles_that_become_equal() {
+        let mut tree = objtree::ObjectTree::new();
+        let table = tree.register(&TreePath::parse("/obj/table"), core::location::Location::default());
+        for (name, value) in [
+            ("name", Value::Text(String::from("table"))),
+            ("desc", Value::Unevaluated),
+        ] {
+            tree.get_mut(table).unwrap().vars.insert(
+                name.into(),
+                objtree::VarDecl {
+                    name: name.into(),
+                    declared_type: None,
+                    modifiers: Default::default(),
+                    value,
+                    initializer: None,
+                    declared: true,
+                    location: Default::default(),
+                },
+            );
+        }
+        let with = |vars: &[(&str, Value)]| {
+            let mut prefab = Prefab::new(TreePath::parse("/obj/table"));
+            for (name, value) in vars {
+                prefab.set_var((*name).into(), value.clone());
+            }
+            vec![prefab]
+        };
+        let mut map = Map::new(Size { x: 4, y: 1, z: 1 });
+        let plain = map.intern_tile(with(&[]));
+        let named = map.intern_tile(with(&[("name", Value::Text(String::from("table")))]));
+        let renamed = map.intern_tile(with(&[("name", Value::Text(String::from("desk")))]));
+        let described = map.intern_tile(with(&[("desc", Value::Unevaluated)]));
+        map.grid[0][0] = vec![plain, named, renamed, described];
+
+        assert_eq!(sanitize_vars(&mut map, &tree), 1);
+        assert_eq!(map.grid[0][0], [plain, plain, renamed, described]);
+        assert!(!map.dictionary.contains_key(&named));
+        assert_eq!(
+            map.dictionary[&renamed],
+            with(&[("name", Value::Text(String::from("desk")))])
+        );
+        assert_eq!(
+            map.dictionary[&described],
+            with(&[("desc", Value::Unevaluated)]),
+            "a runtime default is kept"
+        );
+
+        let mut map = Map::new(Size { x: 2, y: 1, z: 1 });
+        let first = map.intern_tile(with(&[]));
+        let copy = dmm::key::Key(first.0 + 1);
+        map.dictionary.insert(copy, with(&[]));
+        map.grid[0][0] = vec![first, copy];
+        assert_eq!(sanitize_vars(&mut map, &tree), 0);
+        assert_eq!(
+            map.grid[0][0],
+            [first, first],
+            "existing duplicates merge even with nothing to drop"
+        );
+    }
 
     fn shared_tile_map() -> Map {
         let mut map = Map::new(Size { x: 2, y: 1, z: 2 });

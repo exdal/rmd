@@ -290,6 +290,11 @@ fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
     ui.text_disabled("Placeholders: {file}, {line}, {column}");
 
     ui.separator();
+    ui.text("Saving");
+    ui.checkbox("Sanitize variables", &mut settings.sanitize_vars_on_save);
+    ui.set_item_tooltip("Leave out variables whose value matches the type's default when writing the map file");
+
+    ui.separator();
     ui.text("Windows");
     ui.checkbox("Focus windows on hover", &mut settings.focus_windows_on_hover);
 

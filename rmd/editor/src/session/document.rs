@@ -305,36 +305,28 @@ impl Session {
         outcome
     }
 
-    fn save_document(&mut self, id: DocumentId) -> std::io::Result<()> {
-        let levels = self.state.document(id).map_or(0, |document| document.map.size.z);
-        let result = self
-            .state
-            .document_mut(id)
-            .ok_or_else(|| std::io::Error::other("no map is open"))?
-            .save();
-
-        if result.is_ok()
-            && self
-                .state
-                .document(id)
-                .is_some_and(|document| document.map.size.z != levels)
-        {
-            self.rebake(id);
-        }
-
-        result
-    }
+    fn save_document(&mut self, id: DocumentId) -> std::io::Result<()> { self.write_document(id, None) }
 
     pub fn save_map_as(&mut self, path: &Path, format: MapFormat) -> std::io::Result<()> {
         let Some(id) = self.state.active() else {
             return Err(std::io::Error::other("no map is open"));
         };
+
+        self.write_document(id, Some((path, format)))
+    }
+
+    fn write_document(&mut self, id: DocumentId, target: Option<(&Path, MapFormat)>) -> std::io::Result<()> {
+        let environment = self.state.environment.clone().filter(|_| self.sanitize_vars_on_save);
+        let sanitize = environment.as_deref().map(|environment| &environment.tree);
         let levels = self.state.document(id).map_or(0, |document| document.map.size.z);
-        let result = self
+        let document = self
             .state
             .document_mut(id)
-            .ok_or_else(|| std::io::Error::other("no map is open"))?
-            .save_as(path, format);
+            .ok_or_else(|| std::io::Error::other("no map is open"))?;
+        let result = match target {
+            Some((path, format)) => document.save_as_with(path, format, sanitize),
+            None => document.save_with(sanitize),
+        };
 
         if result.is_ok()
             && self
@@ -347,6 +339,8 @@ impl Session {
 
         result
     }
+
+    pub fn set_sanitize_vars_on_save(&mut self, enabled: bool) { self.sanitize_vars_on_save = enabled; }
 
     pub(super) fn activate_document(&mut self, document: MapDocument) -> DocumentId {
         self.cancel_node_edit();
@@ -359,14 +353,14 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
+    use core::{path::TreePath, types::Value};
 
-    use dmm::{Coord, Map, MapFormat, Size};
-    use editor::document::MapDocument;
+    use dmm::{Coord, Map, MapFormat, Prefab, Size};
+    use editor::{document::MapDocument, tool::Tool};
 
     use crate::session::{
         Session,
-        fixtures::{assert_render_cache_matches_rebuild, examples},
+        fixtures::{assert_render_cache_matches_rebuild, examples, flat_session},
     };
 
     #[test]
@@ -540,6 +534,47 @@ mod tests {
                 .starts_with("//MAP CONVERTED BY dmm2tgm.py")
         );
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn sanitizing_on_save_leaves_default_values_out_of_the_file_only() {
+        let mut table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        table.set_var("name".into(), Value::Text(String::from("table")));
+        table.set_var("icon_state".into(), Value::Text(String::from("broken")));
+        for sanitize in [false, true] {
+            let mut session = flat_session(1, 1);
+            session.state.choose_prefab(table.clone());
+            session.set_tool(Tool::Place);
+            assert!(session.place_at(Coord::new(1, 1, 1), None).is_some());
+            let path = std::env::temp_dir().join(format!("rmd-sanitize-{sanitize}-{}.dmm", std::process::id()));
+
+            session.set_sanitize_vars_on_save(sanitize);
+            session.save_map_as(&path, MapFormat::Tgm).unwrap();
+
+            let (saved, errors) = dmm::parser::parse(&std::fs::read_to_string(&path).unwrap());
+            assert!(errors.is_empty(), "{errors:?}");
+            let saved_table = saved
+                .tile_at(Coord::new(1, 1, 1))
+                .unwrap()
+                .iter()
+                .find(|prefab| prefab.path == table.path)
+                .unwrap();
+            assert_eq!(saved_table.var(&"name".into()).is_none(), sanitize);
+            assert_eq!(
+                saved_table.var(&"icon_state".into()),
+                Some(&Value::Text(String::from("broken")))
+            );
+            assert!(
+                session
+                    .map()
+                    .unwrap()
+                    .tile_at(Coord::new(1, 1, 1))
+                    .unwrap()
+                    .contains(&table),
+                "the open map keeps every override"
+            );
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     #[test]

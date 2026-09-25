@@ -238,6 +238,40 @@ impl Map {
 
         self.dictionary.retain(|key, _| used.contains(key));
     }
+
+    pub fn dedupe_dictionary(&mut self) {
+        let mut keys = self.dictionary.keys().copied().collect::<Vec<_>>();
+        keys.sort_unstable();
+        let mut remap = HashMap::new();
+
+        {
+            let mut kept = HashMap::<Vec<&TreePath>, Vec<Key>>::new();
+            for key in keys {
+                let tile = &self.dictionary[&key];
+                let candidates = kept
+                    .entry(tile.iter().map(|prefab| &prefab.path).collect())
+                    .or_default();
+                match candidates.iter().find(|candidate| self.dictionary[*candidate] == *tile) {
+                    Some(candidate) => {
+                        remap.insert(key, *candidate);
+                    },
+                    None => candidates.push(key),
+                }
+            }
+        }
+
+        if remap.is_empty() {
+            return;
+        }
+
+        for key in self.grid.iter_mut().flatten().flatten() {
+            if let Some(kept) = remap.get(key) {
+                *key = *kept;
+            }
+        }
+
+        self.prune_dictionary();
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +305,21 @@ mod tests {
 
         map.resize(1, 1, space);
         assert_eq!(map.grid, vec![vec![vec![wall]]; 2]);
+    }
+
+    #[test]
+    fn dedupe_dictionary_keeps_the_lowest_key() {
+        let mut map = Map::new(Size { x: 3, y: 1, z: 1 });
+        map.dictionary.insert(Key(5), tile("/turf/wall"));
+        map.dictionary.insert(Key(2), tile("/turf/wall"));
+        map.dictionary.insert(Key(9), tile("/turf/floor"));
+        map.grid[0][0] = vec![Key(5), Key(2), Key(9)];
+
+        map.dedupe_dictionary();
+
+        assert_eq!(map.grid[0][0], [Key(2), Key(2), Key(9)]);
+        assert_eq!(map.dictionary.len(), 2);
+        assert!(!map.dictionary.contains_key(&Key(5)));
     }
 
     #[test]

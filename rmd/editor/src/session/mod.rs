@@ -95,6 +95,7 @@ pub struct Session {
     baker: Baker,
     git_worker: GitWorker,
     git_enabled: bool,
+    sanitize_vars_on_save: bool,
     /// A map whose merge conflicts were just loaded, for the UI to surface
     loaded_conflicts: Option<DocumentId>,
     queued_bakes: Vec<DocumentId>,
@@ -138,6 +139,7 @@ impl Session {
             baker: Baker::default(),
             git_worker: GitWorker::default(),
             git_enabled: true,
+            sanitize_vars_on_save: false,
             loaded_conflicts: None,
             queued_bakes: Vec::new(),
             standalone_baker: editor::bake::Standalone::default(),

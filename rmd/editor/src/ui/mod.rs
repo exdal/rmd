@@ -571,6 +571,7 @@ impl UiState {
 
         let settings_output = self.settings_window.draw(ui, session, settings, load.is_some());
         session.sync_git_enabled(settings.git_enabled);
+        session.set_sanitize_vars_on_save(settings.sanitize_vars_on_save);
         if settings_output.object_tree_changed {
             self.object_tree.invalidate_filter();
         }

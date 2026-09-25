@@ -942,6 +942,7 @@ pub(crate) struct Settings {
     pub git_enabled: bool,
     pub blame_depth: u32,
     pub check_for_updates: bool,
+    pub sanitize_vars_on_save: bool,
 }
 
 pub(crate) struct SettingsLoad {
@@ -1008,6 +1009,7 @@ impl Default for Settings {
             git_enabled: true,
             blame_depth: 500,
             check_for_updates: true,
+            sanitize_vars_on_save: false,
         }
     }
 }
@@ -1235,6 +1237,7 @@ mod tests {
                 git_enabled: true,
                 blame_depth: 500,
                 check_for_updates: true,
+                sanitize_vars_on_save: false,
             }
         );
     }
@@ -1502,6 +1505,7 @@ mod tests {
             git_enabled: true,
             blame_depth: 500,
             check_for_updates: false,
+            sanitize_vars_on_save: true,
         };
         settings.keybindings.rebind(
             KeybindAction::ShowAreas,
@@ -1579,6 +1583,7 @@ mod tests {
             git_enabled: true,
             blame_depth: 500,
             check_for_updates: true,
+            sanitize_vars_on_save: false,
         };
         let mut options = FrameOptions::default();
 
