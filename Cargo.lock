@@ -136,7 +136,7 @@ dependencies = [
 
 [[package]]
 name = "ast"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "core",
  "lexer",
@@ -351,7 +351,7 @@ dependencies = [
 
 [[package]]
 name = "codegen"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "ast",
  "core",
@@ -736,7 +736,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "editor"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "arboard",
  "ast",
@@ -2870,7 +2870,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "prelude"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "num_enum",
 ]
@@ -3053,7 +3053,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "render"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "ash",
  "dear-imgui-rs",
@@ -3107,7 +3107,7 @@ dependencies = [
 
 [[package]]
 name = "rmdc"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "ast",
  "codegen",
@@ -3859,7 +3859,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "viewer"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "core",
  "dmi",
@@ -3883,7 +3883,7 @@ dependencies = [
 
 [[package]]
 name = "vm"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "ast",
  "codegen",
