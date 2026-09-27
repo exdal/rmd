@@ -3,6 +3,7 @@ use std::{
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
     ops::Range,
+    sync::{Arc, OnceLock},
 };
 
 use codegen::Module;
@@ -173,13 +174,25 @@ struct CacheKey {
     size: [i32; 3],
 }
 
+pub type SharedAppearance = Arc<AppearanceDelta>;
+
+fn shared(appearance: AppearanceDelta) -> SharedAppearance {
+    static EMPTY: OnceLock<SharedAppearance> = OnceLock::new();
+
+    if appearance == AppearanceDelta::default() {
+        return Arc::clone(EMPTY.get_or_init(Default::default));
+    }
+
+    Arc::new(appearance)
+}
+
 #[derive(Debug, Default)]
-struct Contributions(Vec<(u64, AppearanceDelta)>);
+struct Contributions(Vec<(u64, SharedAppearance)>);
 
 impl Contributions {
     fn slot(&self, id: u64) -> Result<usize, usize> { self.0.binary_search_by_key(&id, |(current, _)| *current) }
 
-    fn insert(&mut self, id: u64, appearance: AppearanceDelta) {
+    fn insert(&mut self, id: u64, appearance: SharedAppearance) {
         match self.slot(id) {
             Ok(index) => {
                 if let Some((_, slot)) = self.0.get_mut(index) {
@@ -199,11 +212,11 @@ impl Contributions {
         }
     }
 
-    fn get(&self, id: u64) -> Option<&AppearanceDelta> {
+    fn get(&self, id: u64) -> Option<&SharedAppearance> {
         self.0.get(self.slot(id).ok()?).map(|(_, appearance)| appearance)
     }
 
-    fn iter(&self) -> impl Iterator<Item = &(u64, AppearanceDelta)> { self.0.iter() }
+    fn iter(&self) -> impl Iterator<Item = &(u64, SharedAppearance)> { self.0.iter() }
 }
 
 #[derive(Debug)]
@@ -216,13 +229,13 @@ struct Preview {
 #[derive(Debug, Default)]
 pub struct Bake {
     pub runtime: Runtime,
-    pub appearances: HashMap<u64, AppearanceDelta>,
+    pub appearances: HashMap<u64, SharedAppearance>,
     pub lighting: Option<LightingMap>,
     pub diagnostics: Diagnostics,
     pub attempted: usize,
     pub succeeded: usize,
     pub cache_hits: usize,
-    cache: HashMap<CacheKey, AppearanceDelta>,
+    cache: HashMap<CacheKey, SharedAppearance>,
     epoch: u64,
     fingerprints: HashMap<u64, u64>,
     pub limits: Limits,
@@ -833,7 +846,7 @@ impl Bake {
         })
     }
 
-    fn install_contribution(&mut self, id: u64, mut values: HashMap<u64, AppearanceDelta>) {
+    fn install_contribution(&mut self, id: u64, mut values: HashMap<u64, SharedAppearance>) {
         let shared = values
             .iter()
             .filter(|(target, _)| **target != id)
@@ -895,19 +908,24 @@ impl Bake {
         match self.runtime.preview(tree, module, proc, object, id, self.limits) {
             Ok(preview) => {
                 self.succeeded += 1;
+                let values = preview
+                    .values
+                    .into_iter()
+                    .map(|(target, appearance)| (target, shared(appearance)))
+                    .collect::<HashMap<_, _>>();
                 if preview.memo_safe
-                    && preview.values.len() == 1
-                    && let Some(appearance) = preview.values.get(&id)
+                    && values.len() == 1
+                    && let Some(appearance) = values.get(&id)
                     && let Some(mut key) = key
                 {
                     if preview.position_sensitive {
                         key.position = self.position(id);
                     }
                     if self.cache.len() < 50_000 {
-                        self.cache.insert(key, appearance.clone());
+                        self.cache.insert(key, Arc::clone(appearance));
                     }
                 }
-                self.install_contribution(id, preview.values);
+                self.install_contribution(id, values);
             },
             Err(fault) => self.record_fault(id, fault),
         }
@@ -941,13 +959,23 @@ impl Bake {
         changed
     }
 
-    fn composed(&self, id: u64) -> Option<AppearanceDelta> {
+    fn composed(&self, id: u64) -> Option<SharedAppearance> {
         if self.failed.contains(&id) || !self.atoms.contains_key(&id) {
             return None;
         }
 
         let values = self.by_target.get(&id)?;
-        let mut composed = values.get(id).cloned().unwrap_or_default();
+        // an atom nothing else wrote to looks exactly like its own contribution
+        if let [(root, own)] = values.0.as_slice()
+            && *root == id
+        {
+            return Some(Arc::clone(own));
+        }
+
+        let mut composed = values
+            .get(id)
+            .map(|own| AppearanceDelta::clone(own))
+            .unwrap_or_default();
         for (root, value) in values.iter() {
             if *root == id {
                 continue;
@@ -964,7 +992,7 @@ impl Bake {
             composed.underlays.extend(value.underlays.clone());
         }
 
-        Some(composed)
+        Some(shared(composed))
     }
 
     // replaces changed inputs and reevaluates the surrounding 3 by 3 by 3 neighborhood

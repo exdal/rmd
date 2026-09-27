@@ -14,6 +14,7 @@ pub use vm::{
         HIGHLIGHT_SELECTED,
         Highlight,
         HighlightTile,
+        SharedAppearance,
         highlight_tiles,
     },
     ui::{
@@ -84,7 +85,10 @@ impl Standalone {
         });
 
         world.update(&program.tree, &program.module, vec![atom], &[]);
-        let delta = world.appearances.get(&Self::INSTANCE).cloned();
+        let delta = world
+            .appearances
+            .get(&Self::INSTANCE)
+            .map(|delta| AppearanceDelta::clone(delta));
         world.update(&program.tree, &program.module, Vec::new(), &[Self::INSTANCE]);
 
         for line in world.take_output() {
@@ -192,8 +196,8 @@ pub struct BakeUpdate {
     pub lighting: Option<Range<usize>>,
 }
 
-pub fn appearances(bake: Option<&Bake>) -> &HashMap<u64, AppearanceDelta> {
-    static EMPTY: OnceLock<HashMap<u64, AppearanceDelta>> = OnceLock::new();
+pub fn appearances(bake: Option<&Bake>) -> &HashMap<u64, SharedAppearance> {
+    static EMPTY: OnceLock<HashMap<u64, SharedAppearance>> = OnceLock::new();
 
     bake.map(|bake| &bake.appearances)
         .unwrap_or_else(|| EMPTY.get_or_init(HashMap::new))

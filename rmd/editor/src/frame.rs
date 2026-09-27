@@ -14,7 +14,10 @@ use render::{
     UpdateRange,
     texture::TextureCatalog,
 };
-use vm::matrix::Matrix;
+use vm::{
+    bake::{LightingMap, SharedAppearance},
+    matrix::Matrix,
+};
 
 use crate::{
     document::{MapDocument, PrefabInstanceId},
@@ -59,7 +62,7 @@ struct SpriteGroup {
 }
 
 struct RenderContext<'a> {
-    appearances: &'a HashMap<u64, vm::AppearanceDelta>,
+    appearances: &'a HashMap<u64, SharedAppearance>,
     tree: &'a ObjectTree,
     icons: &'a HashMap<String, Metadata>,
     textures: &'a TextureCatalog,
@@ -245,8 +248,8 @@ pub struct FrameRenderOptions<'a> {
     pub visibility: &'a TypeVisibility,
     pub tile_size: u32,
     /// What the bake made of each atom, keyed by `vm::bake` atom id, empty when baking is off
-    pub appearances: &'a HashMap<u64, vm::AppearanceDelta>,
-    pub lighting: Option<&'a vm::bake::LightingMap>,
+    pub appearances: &'a HashMap<u64, SharedAppearance>,
+    pub lighting: Option<&'a LightingMap>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1198,7 +1201,7 @@ mod tests {
         path::TreePath,
         types::{Identifier, Value, VarModifiers},
     };
-    use std::{collections::HashMap, path::PathBuf};
+    use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
     use dmi::{
         IconFile,
@@ -1218,7 +1221,7 @@ mod tests {
         UpdateRange,
         texture::TextureCatalog,
     };
-    use vm::matrix::Matrix;
+    use vm::{AppearanceDelta, bake::SharedAppearance, matrix::Matrix};
 
     use super::{
         FrameInstances,
@@ -1608,6 +1611,13 @@ mod tests {
         textures
     }
 
+    fn shared(appearances: HashMap<u64, AppearanceDelta>) -> HashMap<u64, SharedAppearance> {
+        appearances
+            .into_iter()
+            .map(|(id, appearance)| (id, Arc::new(appearance)))
+            .collect()
+    }
+
     /// The sprites a list draws, in draw order, without the pages' spare slots.
     fn drawn(instances: &FrameInstances) -> Vec<SpriteInstance> { instances.live_sprites().copied().collect() }
 
@@ -1696,13 +1706,13 @@ mod tests {
             ],
             ..Default::default()
         };
-        let appearances = HashMap::from([(
+        let appearances = shared(HashMap::from([(
             owners[0].get(),
             vm::AppearanceDelta {
                 overlays: vec![frill],
                 ..Default::default()
             },
-        )]);
+        )]));
         let visibility = TypeVisibility::default();
 
         let instances = build_with_options(
@@ -1740,7 +1750,7 @@ mod tests {
                 .set_instance_var(*owner, "plane".into(), Value::Num(-10.0))
                 .unwrap();
         }
-        let appearances = HashMap::from([(
+        let appearances = shared(HashMap::from([(
             owners[0].get(),
             vm::AppearanceDelta {
                 vars: vec![("appearance_flags".into(), Value::Num(32.0))],
@@ -1753,7 +1763,7 @@ mod tests {
                 }],
                 ..Default::default()
             },
-        )]);
+        )]));
         let visibility = TypeVisibility::default();
 
         let instances = build_with_options(
@@ -1786,7 +1796,7 @@ mod tests {
                 .set_instance_var(*owner, "plane".into(), Value::Num(-10.0))
                 .unwrap();
         }
-        let appearances = HashMap::from([(
+        let appearances = shared(HashMap::from([(
             owners[0].get(),
             vm::AppearanceDelta {
                 vars: vec![("appearance_flags".into(), Value::Num(32.0))],
@@ -1800,7 +1810,7 @@ mod tests {
                 }],
                 ..Default::default()
             },
-        )]);
+        )]));
         let visibility = TypeVisibility::default();
 
         let instances = build_with_options(
@@ -1904,7 +1914,7 @@ mod tests {
             vars: vec![("icon_state".into(), Value::Text(state.into()))],
             ..Default::default()
         };
-        let appearances = HashMap::from([
+        let appearances = shared(HashMap::from([
             (
                 owners[0].get(),
                 vm::AppearanceDelta {
@@ -1919,7 +1929,7 @@ mod tests {
                     ..Default::default()
                 },
             ),
-        ]);
+        ]));
         let icons = icons(&["closed"]);
         let mut textures = textures(&["closed"]);
         let missing = textures.insert_missing_icon().unwrap();
