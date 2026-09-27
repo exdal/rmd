@@ -186,7 +186,10 @@ impl Contributions {
                     *slot = appearance;
                 }
             },
-            Err(index) => self.0.insert(index, (id, appearance)),
+            Err(index) => {
+                self.0.reserve_exact(1);
+                self.0.insert(index, (id, appearance));
+            },
         }
     }
 
@@ -1664,6 +1667,10 @@ impl Runtime {
                             }
                         }
                     }
+
+                    appearance.vars.shrink_to_fit();
+                    appearance.overlays.shrink_to_fit();
+                    appearance.underlays.shrink_to_fit();
 
                     // a neighbor the hook only wrote bookkeeping to, like a cable's links, has nothing
                     // to compose, and leaving it out keeps the preview cacheable
