@@ -958,6 +958,65 @@ mod tests {
         );
     }
 
+    /// Whether ImGui has the window docked in the dockspace's central node.
+    fn docked_in_the_center(key: &dear_imgui_rs::WindowKey) -> bool {
+        let name = std::ffi::CString::new(format!("###{}", key.stable_id())).unwrap();
+        // SAFETY: the test's context is current between frames, and the name is NUL-terminated.
+        unsafe {
+            let window = dear_imgui_rs::sys::igFindWindowByID(dear_imgui_rs::sys::igImHashStr(name.as_ptr(), 0, 0));
+            if window.is_null() {
+                return false;
+            }
+
+            let node = dear_imgui_rs::sys::igDockBuilderGetNode((*window).DockId);
+
+            !node.is_null() && dear_imgui_rs::sys::ImGuiDockNode_IsCentralNode(node)
+        }
+    }
+
+    #[test]
+    fn a_new_map_view_ignores_a_saved_dock_node_that_no_longer_exists() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = rectangle_context();
+        let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
+        context.io_mut().set_config_flags(flags);
+        let mut state = UiState::new(false).unwrap();
+        let mut session = Session::new();
+        let mut settings = Settings::default();
+        for _ in 0..3 {
+            let ui = context.frame();
+            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            assert!(context.render_legacy().valid());
+        }
+
+        state.reset_layout = true;
+        session.apply_map(crate::loader::LoadedMap {
+            path: PathBuf::from("saved-dock.dmm"),
+            map: dmm::Map::new(dmm::Size { x: 10, y: 10, z: 1 }),
+            z: 1,
+            errors: vec![],
+            repo: None,
+            conflict: None,
+        });
+        let id = session.state.active().unwrap();
+        // map view keys restart with the document ids every launch, so the ini remembers where an
+        // earlier session's view with this number was docked, in a node the reset does not rebuild
+        context.load_ini_settings(&format!(
+            "[Window][###viewport-{}]\nPos=0,0\nSize=400,300\nCollapsed=0\nDockId=0x0000ABCD,0\n",
+            id.get()
+        ));
+        for _ in 0..4 {
+            let ui = context.frame();
+            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            assert!(context.render_legacy().valid());
+        }
+
+        assert!(
+            docked_in_the_center(state.map_views[&id].window()),
+            "the new map view floats"
+        );
+    }
+
     #[test]
     fn a_search_request_brings_its_tab_forward_while_the_mouse_is_over_the_map() {
         let _guard = IMGUI_CONTEXT.lock().unwrap();

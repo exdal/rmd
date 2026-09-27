@@ -216,6 +216,7 @@ pub(super) struct MapViewState {
     size: (u32, u32),
     pub(super) rect: MapViewRect,
     visible: bool,
+    placed: bool,
     pub(super) refit: bool,
     pub(super) focus: bool,
     hovered_coord: Option<Coord>,
@@ -246,6 +247,7 @@ impl MapViewState {
             size: (1, 1),
             rect: MapViewRect::default(),
             visible: false,
+            placed: false,
             refit: true,
             hovered_coord: None,
             blame_popup: None,
@@ -492,6 +494,7 @@ impl UiState {
             size: view_size,
             rect: view_rect,
             visible: view_visible,
+            placed,
             refit: view_refit,
             focus: view_focus,
             hovered_coord,
@@ -506,9 +509,12 @@ impl UiState {
         *view_refit |= refit_requested;
         let refit = view_refit;
 
-        if let Some(node) = self.central_node.or(self.dockspace_root) {
-            ui.set_next_window_dock_id_with_cond(node, Condition::FirstUseEver);
+        if !std::mem::replace(placed, true)
+            && let Some(node) = self.central_node.or(self.dockspace_root)
+        {
+            ui.set_next_window_dock_id_with_cond(node, Condition::Always);
         }
+
         let map_window = ui
             .window(window.label(title.as_str()))
             .opened(keep_open)
