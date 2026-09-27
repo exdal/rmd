@@ -1448,6 +1448,19 @@ impl Evaluator<'_> {
             GenericValue::Path(path) => self.tree.id_of(&path),
             _ => None,
         };
+        if let Some(ty) = ty {
+            match name.as_str() {
+                "type" => {
+                    return Ok(self
+                        .tree
+                        .get(ty)
+                        .map(|declaration| GenericValue::Path(declaration.path.clone()))
+                        .unwrap_or_default());
+                },
+                "parent_type" => return Ok(self.parent_path(ty)),
+                _ => {},
+            }
+        }
         let value = ty
             .and_then(|ty| self.tree.var_inherited(ty, name))
             .map(|variable| variable.value.clone())
@@ -1884,7 +1897,17 @@ impl Evaluator<'_> {
 }
 
 impl Evaluator<'_> {
-    fn unary(&self, op: Unary, value: GenericValue) -> Result<GenericValue> {
+    fn unary(&mut self, op: Unary, value: GenericValue) -> Result<GenericValue> {
+        if op == Unary::BitNot
+            && let Some(matrix) = self.matrix(&value)
+        {
+            let inverted = matrix
+                .invert()
+                .ok_or_else(|| self.fault(FaultKind::InvalidOperation("singular matrix".into())))?;
+
+            return self.store_matrix(None, inverted);
+        }
+
         Ok(match op {
             Unary::Neg => (-self.number(&value)?).into(),
             Unary::Not => (!value.truthy()).into(),
@@ -1917,6 +1940,10 @@ impl Evaluator<'_> {
                 return self.text(left + &right);
             },
             _ => {},
+        }
+
+        if let Some(value) = self.matrix_binary(op, &left, &right)? {
+            return Ok(value);
         }
 
         if left == GenericValue::Null && matches!(right, GenericValue::List(_)) && matches!(op, Add | BitOr) {

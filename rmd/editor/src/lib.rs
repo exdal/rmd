@@ -161,11 +161,10 @@ impl Environment {
                     .map(|var| &var.value),
             )
             .chain(self.bake_program.iter().flat_map(|program| &program.module.constants))
-            .filter_map(|value| match value {
-                Value::Resource(s) if s.to_ascii_lowercase().ends_with(".dmi") => Some(s.as_str()),
-                _ => None,
+            .fold(BTreeSet::new(), |mut paths, value| {
+                collect_icon_paths(value, &mut paths);
+                paths
             })
-            .collect()
     }
 
     /// `#define FILE_DIR "icons"`
@@ -202,6 +201,24 @@ impl Environment {
         }
 
         failures
+    }
+}
+
+/// `var/static/list/light_overlays = list("32" = 'icons/effects/light_32.dmi')`
+fn collect_icon_paths<'a>(value: &'a Value, paths: &mut BTreeSet<&'a str>) {
+    match value {
+        Value::Resource(path) if path.to_ascii_lowercase().ends_with(".dmi") => {
+            paths.insert(path.as_str());
+        },
+        Value::List(entries) => {
+            for entry in entries {
+                collect_icon_paths(&entry.key, paths);
+                if let Some(value) = &entry.value {
+                    collect_icon_paths(value, paths);
+                }
+            }
+        },
+        _ => {},
     }
 }
 
@@ -396,9 +413,9 @@ mod tests {
     use core::{
         location::Location,
         path::TreePath,
-        types::{Identifier, Value, VarModifiers},
+        types::{Identifier, ListEntry, Value, VarModifiers},
     };
-    use std::path::Path;
+    use std::{collections::BTreeSet, path::Path};
 
     use objtree::{ObjectTree, VarDecl};
 
@@ -467,6 +484,27 @@ mod tests {
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].0, "icons/nope.dmi");
         assert!(environment.icons.is_empty());
+    }
+
+    #[test]
+    fn icon_paths_include_the_ones_a_list_holds() {
+        let entry = |key, value| ListEntry { key, value };
+        let lights = Value::List(vec![
+            entry(
+                Value::Text(String::from("32")),
+                Some(Value::Resource(String::from("icons/light_32.dmi"))),
+            ),
+            entry(Value::Resource(String::from("icons/key.dmi")), None),
+        ]);
+        let environment = Environment::new(
+            "/project/game/tgstation.dme",
+            tree_with_vars(&[("light_overlays", lights)]),
+        );
+
+        assert_eq!(
+            environment.icon_paths(),
+            BTreeSet::from(["icons/key.dmi", "icons/light_32.dmi"])
+        );
     }
 
     fn document(path: &str) -> crate::document::MapDocument {

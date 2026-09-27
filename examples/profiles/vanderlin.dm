@@ -140,7 +140,7 @@
 
 // Fluid pipes keep an associative list of connected directions keyed by the
 // direction number, and assemble their icon state from those keys in list
-// order. Each pipe links its neighbours pairwise from Initialize(), and
+// order. Each pipe links its neighbors pairwise from Initialize(), and
 // adjacent machines link back from setup_water(). Baking every pipe from its
 // own point of view reaches the same result without a load order.
 /obj/structure/water_pipe/proc/demir_bake_connections()

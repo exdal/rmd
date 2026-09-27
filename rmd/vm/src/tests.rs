@@ -28,6 +28,7 @@ use crate::{
         HighlightTile,
         ProfileError,
         has_profile,
+        host_reads,
         profile_catalog,
         profile_type,
         selected_profile_type,
@@ -1594,6 +1595,96 @@ fn baking_exports_icon_and_icon_state_as_a_pair() {
     );
 }
 
+/// The hook never reads `transform`, so `/obj/moved`'s initializer only runs because the profile
+/// roots it for the export.
+#[test]
+fn baking_exports_transforms_the_compat_view_cannot_evaluate() {
+    let (tree, module) = analyze_fixture(fixture!(
+        "programs/baking_exports_transforms_the_compat_view_cannot_evaluate.dm"
+    ));
+    let profile = profile_type(&tree).expect("fixture profile");
+    let roots = ProfileDefinition::resolve(&tree, profile).entry_points();
+    let module = codegen::generate_reachable(&module, &tree, &roots, &host_reads()).expect("fixture should compile");
+    let atoms = ["/obj/moved", "/obj/turned", "/obj/plain"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, path)| Atom {
+            instance: index as u64 + 1,
+            ty: tree.id_of(&TreePath::parse(path)).expect("fixture type"),
+            position: Position::new(index as i32 + 1, 1, 1),
+            vars: Vec::new(),
+        })
+        .collect();
+    let bake = Bake::new(
+        &tree,
+        &module,
+        atoms,
+        [3, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    let transform = |instance: u64| {
+        bake.appearances.get(&instance).and_then(|appearance| {
+            appearance
+                .vars
+                .iter()
+                .find(|(name, _)| name.as_str() == "transform")
+                .and_then(|(_, value)| match value {
+                    Value::List(entries) => entries
+                        .iter()
+                        .map(|entry| entry.key.as_num())
+                        .collect::<Option<Vec<_>>>(),
+                    _ => None,
+                })
+        })
+    };
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    assert_eq!(transform(1), Some(vec![1.0, 0.0, -4.0, 0.0, 1.0, -4.0]));
+    let turned = transform(2).expect("turned transform");
+    let expected = [0.0, 1.0, 0.0, -1.0, 0.0, 0.0];
+    assert!(
+        turned.iter().zip(expected).all(|(got, want)| (got - want).abs() < 1e-6),
+        "{turned:?}"
+    );
+    assert_eq!(transform(3), None);
+}
+
+/// Nothing in the hook reads `icon_state`, so its initializer only exists because the host reads are
+/// roots.
+#[test]
+fn baking_exports_appearance_vars_set_by_runtime_initializers() {
+    let (tree, module) = analyze_fixture(fixture!(
+        "programs/baking_exports_appearance_vars_set_by_runtime_initializers.dm"
+    ));
+    let profile = profile_type(&tree).expect("fixture profile");
+    let roots = ProfileDefinition::resolve(&tree, profile).entry_points();
+    let module = codegen::generate_reachable(&module, &tree, &roots, &host_reads()).expect("fixture should compile");
+    let atom = Atom {
+        instance: 1,
+        ty: tree.id_of(&TreePath::parse("/obj/picked")).expect("fixture type"),
+        position: Position::new(1, 1, 1),
+        vars: Vec::new(),
+    };
+    let bake = Bake::new(
+        &tree,
+        &module,
+        vec![atom],
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    assert!(
+        bake.appearances[&1]
+            .vars
+            .contains(&(Identifier::from("icon_state"), Value::Text("only".into()))),
+        "{:?}",
+        bake.appearances[&1]
+    );
+}
+
 #[test]
 fn baking_exports_sprite_lighting_roles() {
     let (tree, module) = compile(fixture!("programs/baking_exports_sprite_lighting_roles.dm"));
@@ -1982,7 +2073,14 @@ fn world_log_output_uses_a_field_reference() {
 fn locate_in_searches_the_container() {
     let result = run(fixture!("programs/locate_in_searches_the_container.dm"), "test");
 
-    assert_eq!(result, GenericValue::from("1 1 1"));
+    assert_eq!(result, GenericValue::from("1 1 1 1"));
+}
+
+#[test]
+fn initial_reads_the_builtin_type_vars() {
+    let result = run(fixture!("programs/initial_reads_the_builtin_type_vars.dm"), "test");
+
+    assert_eq!(result, GenericValue::from("/obj/parent /obj/parent/child /obj/parent"));
 }
 
 #[test]
@@ -2133,7 +2231,7 @@ fn reachable_codegen_executes_like_full_codegen() {
     let (tree, ir_module) = analyze_fixture(source);
     let entry = proc(&tree, "entry");
     let full = codegen::generate(&ir_module).expect("full codegen");
-    let selected = codegen::generate_reachable(&ir_module, &tree, &[entry]).expect("reachable codegen");
+    let selected = codegen::generate_reachable(&ir_module, &tree, &[entry], &[]).expect("reachable codegen");
 
     let execute = |module: &codegen::Module| {
         let mut runtime = Runtime::default();
@@ -2501,9 +2599,8 @@ fn image_constructor_fills_the_object_new_allocated() {
     );
 }
 
-/// `matrix(M, ...)` is the in-place form every `/matrix` method in `stddef.dm` routes through.
-/// Transforms are unimplemented, so it must hand the matrix back rather than write the argument
-/// list onto `a`/`b`/`c`.
+/// `matrix(M, ...)` is the in-place form every `/matrix` method in `stddef.dm` routes through, so
+/// it must not write the argument list onto `a`/`b`/`c` the way the six-number form does.
 #[test]
 fn matrix_in_place_form_leaves_the_matrix_alone() {
     assert_eq!(
@@ -2512,6 +2609,14 @@ fn matrix_in_place_form_leaves_the_matrix_alone() {
             "test",
         ),
         1.into()
+    );
+}
+
+#[test]
+fn matrix_operations_follow_byond() {
+    assert_eq!(
+        run(fixture!("programs/matrix_operations_follow_byond.dm"), "test"),
+        "2,6,10;1;12;0,1;1;1;-4".into()
     );
 }
 

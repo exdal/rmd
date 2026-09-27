@@ -1578,6 +1578,24 @@ impl<'a, 't> Parser<'a, 't> {
                     end,
                     step,
                 })
+            } else if let Some(&Expression::Assign {
+                kind,
+                lhs_expr,
+                rhs_expr,
+            }) = self.expressions.get(value.index())
+                && self.is_locate_call(rhs_expr)
+            {
+                // `found = locate(/obj) in loc` searches `loc`, it doesn't test the assignment
+                let located = self.make_expr(Expression::Binary {
+                    op: BinaryOp::In,
+                    lhs_expr: rhs_expr,
+                    rhs_expr: start,
+                });
+                self.make_expr(Expression::Assign {
+                    kind,
+                    lhs_expr,
+                    rhs_expr: located,
+                })
             } else {
                 self.make_expr(Expression::Binary {
                     op: BinaryOp::In,
@@ -1588,6 +1606,15 @@ impl<'a, 't> Parser<'a, 't> {
         }
 
         Ok(value)
+    }
+
+    fn is_locate_call(&self, expression: ExpressionId) -> bool {
+        let Some(Expression::Call { callee, args }) = self.expressions.get(expression.index()) else {
+            return false;
+        };
+
+        args.len() == 1
+            && matches!(self.expressions.get(callee.index()), Some(Expression::Identifier(name)) if name.as_str() == "locate")
     }
 
     fn parse_assignment_expression(&mut self) -> ParseResult<ExpressionId> {
@@ -2312,6 +2339,16 @@ mod tests {
         };
 
         assert!(matches!(expressions[true_expr.index()], Expression::Ternary { .. }));
+
+        let (expressions, root) = parse_expr("found = locate(b) in c");
+        let Expression::Assign { rhs_expr, .. } = expressions[root.index()] else {
+            panic!("expected the assignment at the root")
+        };
+
+        assert!(matches!(
+            expressions[rhs_expr.index()],
+            Expression::Binary { op: BinaryOp::In, .. }
+        ));
 
         let (expressions, root) = parse_expr("a ? locate(b) in c : d");
         let Expression::Ternary { true_expr, .. } = expressions[root.index()] else {

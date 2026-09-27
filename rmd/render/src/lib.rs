@@ -140,7 +140,10 @@ pub struct SpriteInstance {
     pub color: [f32; 4],
     /// sort key, from plane and layer
     pub depth: f32,
+    pub transform: [f32; 4],
 }
+
+pub const IDENTITY_TRANSFORM: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 
 pub const AREA_EDGE_NORTH: u32 = 1 << 0;
 pub const AREA_EDGE_EAST: u32 = 1 << 1;

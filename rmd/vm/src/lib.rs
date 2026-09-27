@@ -12,6 +12,7 @@ pub mod heap;
 mod intrinsic;
 pub mod json;
 mod lighting;
+pub mod matrix;
 pub mod profile;
 pub mod ui;
 pub mod value;

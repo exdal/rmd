@@ -133,7 +133,12 @@ impl BundledProfile {
                 "<bundled-profile-goonstation-defines.dm>",
                 "#define USE_PERSPECTIVE_EDITOR_WALLS\n",
             )),
-            Self::Cmss13 | Self::Monkestation | Self::Tgstation | Self::Vanderlin => None,
+            // COCK AND BALL TORTURE
+            Self::Tgstation => Some((
+                "<bundled-profile-tgstation-defines.dm>",
+                "#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n",
+            )),
+            Self::Cmss13 | Self::Monkestation | Self::Vanderlin => None,
         }
     }
 }
@@ -242,7 +247,7 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
                 (Some(module), Some((profile, _))) => {
                     let definition = vm::profile::ProfileDefinition::resolve(&view.tree, profile);
                     let roots = definition.entry_points();
-                    match codegen::generate_reachable(&module, &view.tree, &roots) {
+                    match codegen::generate_reachable(&module, &view.tree, &roots, &vm::bake::host_reads()) {
                         Ok(module) => (
                             Some(BakeProgram {
                                 tree: view.tree,
@@ -598,6 +603,10 @@ mod tests {
         assert_eq!(
             BundledProfile::Goonstation.defines().map(|(_, source)| source),
             Some("#define USE_PERSPECTIVE_EDITOR_WALLS\n")
+        );
+        assert_eq!(
+            BundledProfile::Tgstation.defines().map(|(_, source)| source),
+            Some("#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n")
         );
     }
 }

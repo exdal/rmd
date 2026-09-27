@@ -9,6 +9,7 @@ use crate::{
     builtins::index_arg,
     eval::Evaluator,
     heap::ObjectId,
+    matrix::Matrix,
     value::{ListData, Receiver},
     world::Position,
 };
@@ -718,6 +719,12 @@ impl Evaluator<'_> {
                     .unwrap_or_default())
             },
             Intrinsic::Turn => {
+                if let Some(matrix) = self.matrix(&arg(0)) {
+                    let angle = self.number(&arg(1))?;
+
+                    return self.store_matrix(None, matrix.then(Matrix::turn(angle)));
+                }
+
                 let dirs = [1, 9, 8, 10, 2, 6, 4, 5];
                 let dir = self.number(&arg(0))? as i32;
                 let angle = self.number(&arg(1))?;
@@ -898,13 +905,7 @@ impl Evaluator<'_> {
             Intrinsic::Crash => Err(self.fault(FaultKind::InvalidOperation(arg(0).display()))),
             Intrinsic::Icon => self.construct("/icon", params, None, args),
             Intrinsic::Sound => self.construct("/sound", params, None, args),
-            Intrinsic::Matrix => {
-                let matrix = self.tree.id_of(&TreePath::parse("/matrix"));
-                match self.is_root_type(&arg(0), matrix) {
-                    true => Ok(arg(0)),
-                    false => self.construct("/matrix", params, None, args),
-                }
-            },
+            Intrinsic::Matrix => self.matrix_call(positional()),
             Intrinsic::Regex => {
                 let (target, pattern, flags) = match arg(0) {
                     GenericValue::Object(id) => (Some(id), arg(1), arg(2)),

@@ -49,7 +49,8 @@ func vs_main(
     let position_size = sprite.position_size();
     let flags = sprite.flags();
 
-    let map = position_size.xy + corner * position_size.zw;
+    let half_size = position_size.zw * 0.5;
+    let map = position_size.xy + half_size + sprite.turned(corner * position_size.zw - half_size);
     let view = (map - center) * zoom;
     let clip = view / (viewport * 0.5);
 

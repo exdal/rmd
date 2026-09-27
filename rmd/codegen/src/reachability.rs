@@ -11,9 +11,9 @@ use prelude::Intrinsic;
 use crate::{CodegenError, ProcedureReachability, reachable_blocks};
 
 pub(super) fn reachable_procedures(
-    module: &ir::Module, tree: &ObjectTree, roots: &[ProcId],
+    module: &ir::Module, tree: &ObjectTree, roots: &[ProcId], read_vars: &[Identifier],
 ) -> Result<ProcedureReachability, CodegenError> {
-    Reachability::new(module, tree).collect(roots)
+    Reachability::new(module, tree).collect(roots, read_vars)
 }
 
 struct Reachability<'a> {
@@ -67,9 +67,13 @@ impl<'a> Reachability<'a> {
         }
     }
 
-    fn collect(mut self, roots: &[ProcId]) -> Result<ProcedureReachability, CodegenError> {
+    fn collect(mut self, roots: &[ProcId], read_vars: &[Identifier]) -> Result<ProcedureReachability, CodegenError> {
         for root in roots {
             self.retain(*root);
+        }
+
+        for name in read_vars {
+            self.retain_initializers_named(name);
         }
 
         while let Some(proc_id) = self.pending.pop_front() {

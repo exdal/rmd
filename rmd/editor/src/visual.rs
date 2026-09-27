@@ -2,6 +2,7 @@ use core::types::{Identifier, Value};
 
 use dmm::Prefab;
 use objtree::{ObjectTree, TypeId};
+use vm::matrix::Matrix;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Appearance {
@@ -21,6 +22,7 @@ pub struct Appearance {
     pub alpha: u8,
     pub invisibility: i32,
     pub appearance_flags: u32,
+    pub transform: Matrix,
     pub lighting: vm::AppearanceLighting,
 }
 
@@ -57,6 +59,7 @@ impl Default for Appearance {
             alpha: 255,
             invisibility: 0,
             appearance_flags: 0,
+            transform: Matrix::IDENTITY,
             lighting: vm::AppearanceLighting::Normal,
         }
     }
@@ -157,6 +160,18 @@ pub fn resolve_id(tree: &ObjectTree, id: TypeId, prefab: &Prefab) -> Appearance 
 
     appearance.color = get("color").and_then(|v| v.as_text().map(str::to_string));
 
+    if let Some(Value::List(entries)) = get("transform")
+        && let Ok(components) = <[_; 6]>::try_from(
+            entries
+                .iter()
+                .map(|entry| entry.key.as_num())
+                .collect::<Option<Vec<f32>>>()
+                .unwrap_or_default(),
+        )
+    {
+        appearance.transform = Matrix(components);
+    }
+
     appearance
 }
 
@@ -177,6 +192,9 @@ const RESET_COLOR: u32 = 2;
 
 /// `RESET_ALPHA`
 const RESET_ALPHA: u32 = 4;
+
+/// `RESET_TRANSFORM`
+const RESET_TRANSFORM: u32 = 8;
 
 pub fn resolve_delta(tree: &ObjectTree, id: TypeId, prefab: &Prefab, delta: &vm::AppearanceDelta) -> Appearance {
     let mut derived = prefab.clone();
@@ -245,12 +263,20 @@ pub fn resolve_overlay(tree: &ObjectTree, parent: &Appearance, delta: &vm::Appea
         appearance.alpha = (u16::from(appearance.alpha) * u16::from(parent.alpha) / 255) as u8;
     }
 
+    if flags & RESET_TRANSFORM == 0 {
+        appearance.transform = appearance.transform.then(parent.transform);
+    }
+
     appearance
 }
 
 #[cfg(test)]
 mod tests {
-    use core::{location::Location, path::TreePath, types::VarModifiers};
+    use core::{
+        location::Location,
+        path::TreePath,
+        types::{ListEntry, VarModifiers},
+    };
 
     use objtree::VarDecl;
 
@@ -285,5 +311,41 @@ mod tests {
         assert_eq!(overridden.value, &Value::Num(7.0));
         assert_eq!(overridden.inherited, Some(&Value::Num(2.0)));
         assert_eq!(overridden.origin, ValueOrigin::Instance);
+    }
+
+    fn transform_delta(components: [f32; 6], appearance_flags: u32) -> vm::AppearanceDelta {
+        let entries = components.map(|component| ListEntry {
+            key: Value::Num(component),
+            value: None,
+        });
+
+        vm::AppearanceDelta {
+            vars: vec![
+                ("transform".into(), Value::List(entries.into())),
+                ("appearance_flags".into(), Value::Num(appearance_flags as f32)),
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn overlays_apply_their_own_transform_before_their_parents() {
+        let mut tree = ObjectTree::new();
+        tree.register(&TreePath::parse("/image"), Location::default());
+        let parent = Appearance {
+            transform: Matrix::translate(-4.0, -4.0),
+            ..Default::default()
+        };
+        let scaled = transform_delta([2.0, 0.0, 0.0, 0.0, 2.0, 0.0], 0);
+
+        let overlay = resolve_overlay(&tree, &parent, &scaled);
+        assert_eq!(overlay.transform, Matrix([2.0, 0.0, -4.0, 0.0, 2.0, -4.0]));
+
+        let reset = resolve_overlay(
+            &tree,
+            &parent,
+            &transform_delta([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], RESET_TRANSFORM),
+        );
+        assert!(reset.transform.is_identity());
     }
 }

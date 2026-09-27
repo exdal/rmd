@@ -2,7 +2,7 @@
 // a cmss13 checkout instead, copy it there and `#include` it from `colonialmarines.dme`, the guard
 // keeps BYOND compiling it to nothing.
 //
-// Walls pick corner states from their neighbours in LateInitialize(), and windows, frames and a
+// Walls pick corner states from their neighbors in LateInitialize(), and windows, frames and a
 // few floors pick a junction state through relativewall(). Lights follow TGMC's three systems:
 // static and hybrid lights are corner lights here, and movable lights are masks.
 #ifdef __DEMIR_BAKE__
@@ -48,7 +48,7 @@
 	on = switched && status == 0
 	light_range = on ? brightness : 0
 
-// update_icon() colours the screen by charge state and only lights a closed, working APC.
+// update_icon() colors the screen by charge state and only lights a closed, working APC.
 // Round start has not charged anything yet. APC_NOT_CHARGING is 0 and apc.dm undefines it.
 /obj/structure/machinery/power/apc/demir_prepare_state()
 	if(stat & (BROKEN|MAINT) || !cell_type)

@@ -211,7 +211,7 @@ fn dump_ir(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn std::er
         EntrySelection::All => ir::disasm::dump_with(&module, color),
         selection => {
             let entry = resolve_entry(&tree, &selection)?;
-            match codegen::reachable_procedures(&module, &tree, &[entry.proc])? {
+            match codegen::reachable_procedures(&module, &tree, &[entry.proc], &[])? {
                 codegen::ProcedureReachability::All => ir::disasm::dump_with(&module, color),
                 codegen::ProcedureReachability::Selected(procedures) => {
                     ir::disasm::dump_selected_with(&module, &procedures, color)
@@ -237,7 +237,7 @@ fn dump_bytecode(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn s
         EntrySelection::All => codegen::generate(&module)?,
         selection => {
             let entry = resolve_entry(&tree, &selection)?;
-            codegen::generate_reachable(&module, &tree, &[entry.proc])?
+            codegen::generate_reachable(&module, &tree, &[entry.proc], &[])?
         },
     };
     print!("{}", codegen::disasm::dump(&module)?);
@@ -322,7 +322,7 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
 
     let definition = vm::profile::ProfileDefinition::resolve(&tree, profile);
     let roots = definition.entry_points();
-    let module = codegen::generate_reachable(&ir_module, &tree, &roots)?;
+    let module = codegen::generate_reachable(&ir_module, &tree, &roots, &vm::bake::host_reads())?;
     drop(ast);
     eprintln!("compiled in {:.2}s", compile_started.elapsed().as_secs_f32());
     let roots = entry
@@ -615,7 +615,7 @@ fn evaluate_file_with(path: &Path, selection: EntrySelection) -> Result<Vec<Stri
     }
 
     let entry = resolve_entry(&tree, &selection)?;
-    let module = codegen::generate_reachable(&module, &tree, &[entry.proc])?;
+    let module = codegen::generate_reachable(&module, &tree, &[entry.proc], &[])?;
     let mut runtime = vm::Runtime::default();
     let result = if entry.world {
         runtime.run_world(&tree, &module, entry.proc, Vec::new(), vm::Limits::default())

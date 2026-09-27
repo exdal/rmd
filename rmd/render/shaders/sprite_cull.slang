@@ -40,8 +40,15 @@ func sprite_is_visible(
     let view_min = center - half_extent;
     let view_max = center + half_extent;
     let position_size = sprite.position_size();
-    let sprite_min = position_size.xy;
-    let sprite_max = position_size.xy + position_size.zw;
+    let half_size = position_size.zw * 0.5;
+    let centre = position_size.xy + half_size;
+    let transform = abs(sprite.transform());
+    let extent = f32x2(
+        transform.x * half_size.x + transform.y * half_size.y,
+        transform.z * half_size.x + transform.w * half_size.y
+    );
+    let sprite_min = centre - extent;
+    let sprite_max = centre + extent;
     let intersects = !(
         sprite_max.x < view_min.x || sprite_min.x > view_max.x ||
         sprite_max.y < view_min.y || sprite_min.y > view_max.y

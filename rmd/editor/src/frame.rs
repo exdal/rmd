@@ -14,6 +14,7 @@ use render::{
     UpdateRange,
     texture::TextureCatalog,
 };
+use vm::matrix::Matrix;
 
 use crate::{
     document::{MapDocument, PrefabInstanceId},
@@ -265,13 +266,16 @@ pub fn instance_for(
         .step_y
         .saturating_add(appearance.pixel_y)
         .saturating_add(appearance.pixel_z);
+    let [a, b, c, d, e, f] = Some(appearance.transform.0)
+        .filter(|components| components.iter().all(|component| component.abs() <= 65_504.0))
+        .unwrap_or(Matrix::IDENTITY.0);
 
     SpriteInstance {
         owner,
         area_owner: None,
         texture,
-        x: (tile.x.saturating_sub(1) * tile_size) as f32 + offset_x as f32,
-        y: (tile.y.saturating_sub(1) * tile_size) as f32 + offset_y as f32,
+        x: (tile.x.saturating_sub(1) * tile_size) as f32 + offset_x as f32 + c,
+        y: (tile.y.saturating_sub(1) * tile_size) as f32 + offset_y as f32 + f,
         width: texture.width as f32,
         height: texture.height as f32,
         z: tile.z,
@@ -286,6 +290,7 @@ pub fn instance_for(
         },
         color: [tint[0] * alpha, tint[1] * alpha, tint[2] * alpha, alpha],
         depth: appearance.plane * 1000.0 + appearance.layer,
+        transform: [a, b, d, e],
     }
 }
 
@@ -1240,10 +1245,12 @@ mod tests {
         AREA_EDGE_SOUTH,
         AREA_EDGE_WEST,
         AREA_EDGES_ALL,
+        IDENTITY_TRANSFORM,
         SpriteTexture,
         UpdateRange,
         texture::TextureCatalog,
     };
+    use vm::matrix::Matrix;
 
     use super::{
         FrameInstances,
@@ -1369,6 +1376,33 @@ mod tests {
 
         let shifted = instance_for(owner(), &centred, texture, dmm::Coord::new(1, 1, 1), 32, false);
         assert_eq!((shifted.x, shifted.y), (-16.0, 0.0));
+    }
+
+    /// `smoothrocks.dmi` is 40x40, so tgstation pulls it back 4 pixels to sit centered on its tile.
+    #[test]
+    fn a_transform_translates_the_sprite_and_turns_it_about_its_center() {
+        let texture = SpriteTexture {
+            index: 0,
+            source_position: [0, 0],
+            width: 40,
+            height: 40,
+        };
+        let appearance = Appearance {
+            transform: Matrix::turn(90.0).then(Matrix::translate(-4.0, -4.0)),
+            ..Default::default()
+        };
+
+        let instance = instance_for(owner(), &appearance, texture, dmm::Coord::new(1, 1, 1), 32, false);
+        let [a, b, d, e] = instance.transform;
+        assert_eq!((instance.x, instance.y), (-4.0, -4.0));
+        assert!(a.abs() < 1e-6 && (b - 1.0).abs() < 1e-6 && (d + 1.0).abs() < 1e-6 && e.abs() < 1e-6);
+
+        let unpackable = Appearance {
+            transform: Matrix([f32::NAN, 0.0, 3.0, 0.0, 1.0, 0.0]),
+            ..Default::default()
+        };
+        let instance = instance_for(owner(), &unpackable, texture, dmm::Coord::new(1, 1, 1), 32, false);
+        assert_eq!((instance.x, instance.transform), (0.0, IDENTITY_TRANSFORM));
     }
 
     #[test]

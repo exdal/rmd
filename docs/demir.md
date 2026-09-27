@@ -103,7 +103,10 @@ The bake runtime keeps the profile state created by `New()`. It also keeps succe
 transactions. It exports their results and then restores the runtime heap.
 
 An appearance can change renderable scalar fields, overlays, and underlays. Exported appearances
-can also carry emissive masks, emissive blockers, and overlay light. Export depth and runtime
+can also carry emissive masks, emissive blockers, and overlay light. A `transform` that is not the
+identity is always exported, because the compatibility view cannot evaluate `matrix()`. The editor
+turns and scales each sprite about its center, and an overlay applies its own transform before its
+parent's unless it sets `RESET_TRANSFORM`. Export depth and runtime
 budgets limit cyclic or expanding object graphs.
 
 The bake runtime caches safe full-load appearance previews. Local state and the surrounding 3 by 3
@@ -236,7 +239,7 @@ A profile UI uses the editor dockspace. UI writes can request new appearances, l
 highlights. The editor delays a request while the user drags a widget, then runs it after release.
 
 The Node tool appears when the profile registers a node group. It follows cardinal connections and
-routes around registered blockers. A drag is one undoable edit. Cancelled or unreachable routes
+routes around registered blockers. A drag is one undoable edit. Canceled or unreachable routes
 restore every touched tile.
 
 ## Sandbox and limits

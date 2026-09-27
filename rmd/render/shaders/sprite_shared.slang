@@ -26,9 +26,24 @@ public struct Sprite {
     public u32 packed_color;
     public u32x2 packed_source_position_size;
     public u32 packed_texture_flags;
+    public u32x2 packed_transform;
 
     public func position_size() -> f32x4 {
         return f32x4(this.position, unpack_half2(this.packed_size));
+    }
+
+    /// `a`, `b`, `d`, `e`, about the sprite's center
+    public func transform() -> f32x4 {
+        return f32x4(unpack_half2(this.packed_transform.x), unpack_half2(this.packed_transform.y));
+    }
+
+    public func turned(f32x2 offset) -> f32x2 {
+        let transform = this.transform();
+
+        return f32x2(
+            transform.x * offset.x + transform.y * offset.y,
+            transform.z * offset.x + transform.w * offset.y
+        );
     }
 
     public func color() -> f32x4 {

@@ -39,7 +39,7 @@
 	var/infra_luminosity = 0
 	var/luminosity = 0
 	var/opacity = 0
-	var/matrix/transform
+	var/matrix/transform = matrix()
 	var/blend_mode = 0
 
 	var/gender = NEUTER
@@ -219,7 +219,7 @@
 	var/render_target
 	var/suffix
 	var/text = "i"
-	var/matrix/transform
+	var/matrix/transform = matrix()
 	var/list/underlays = null
 	var/list/verbs
 	var/visibility = 1

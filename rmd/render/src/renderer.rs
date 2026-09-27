@@ -88,6 +88,7 @@ struct GpuSprite {
     color: u32,
     source_position_size: [u32; 2],
     texture_flags: u32,
+    transform: [u32; 2],
 }
 
 #[repr(C)]
@@ -2804,6 +2805,11 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
     if sprite.texture.index > SPRITE_TEXTURE_MASK {
         return Err(out_of_range("texture index"));
     }
+    let [a, b, d, e] = sprite.transform;
+    let transform = [
+        pack_half2(a, b).ok_or_else(|| out_of_range("transform"))?,
+        pack_half2(d, e).ok_or_else(|| out_of_range("transform"))?,
+    ];
 
     Ok(GpuSprite {
         owner: owner_words(sprite.owner),
@@ -2814,6 +2820,7 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
         color,
         source_position_size: [source_position, source_size],
         texture_flags: sprite.texture.index | (flags << SPRITE_FLAGS_SHIFT),
+        transform,
     })
 }
 
@@ -3336,6 +3343,7 @@ mod tests {
             lighting: SpriteLighting::Normal,
             color: [1.0; 4],
             depth: 0.0,
+            transform: crate::IDENTITY_TRANSFORM,
         }
     }
 
@@ -3714,6 +3722,26 @@ mod tests {
     }
 
     #[test]
+    fn a_sprite_transform_packs_as_two_half_pairs() {
+        let mut instance = sprite(1);
+        let identity = gpu_sprite(0, &instance).expect("identity transform");
+        assert_eq!(identity.transform, [0x0000_3c00, 0x3c00_0000]);
+
+        instance.transform = [0.0, 1.0, -1.0, 0.0];
+        let turned = gpu_sprite(0, &instance).expect("turned transform");
+        assert_eq!(turned.transform, [0x3c00_0000, 0x0000_bc00]);
+
+        instance.transform[0] = 70_000.0;
+        assert_eq!(
+            gpu_sprite(7, &instance),
+            Err(GpuError::SpritePackingOutOfRange {
+                sprite: 7,
+                field: "transform"
+            })
+        );
+    }
+
+    #[test]
     fn sprite_packing_rejects_values_outside_the_wire_format() {
         let mut instance = sprite(1);
         instance.x = 70_000.0;
@@ -3988,7 +4016,7 @@ mod tests {
     fn sprite_and_camera_layouts_match_the_shader_scalar_layout() {
         let reflection = shader::reflect(&read_spirv(GEOMETRY_VS_SPV).expect("valid SPIR-V")).expect("shader reflects");
 
-        assert_eq!(size_of::<GpuSprite>(), 48);
+        assert_eq!(size_of::<GpuSprite>(), 56);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<CameraPush>());
     }

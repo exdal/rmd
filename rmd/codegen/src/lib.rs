@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 pub use error::CodegenError;
 use ir::{Argument, IrNode, OutputTarget, Procedure};
+use objtree::ObjectTree;
 use opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, OutputTargetKind, Unary};
 use prelude::Intrinsic;
 
@@ -151,16 +152,17 @@ pub enum ProcedureReachability {
 
 pub fn generate(module: &ir::Module) -> Result<Module, CodegenError> { Generator::new().generate(module, None) }
 
+/// `read_vars` names the vars the host reads off objects itself, which no reachable procedure shows
 pub fn reachable_procedures(
-    module: &ir::Module, tree: &objtree::ObjectTree, roots: &[ProcId],
+    module: &ir::Module, tree: &ObjectTree, roots: &[ProcId], read_vars: &[Identifier],
 ) -> Result<ProcedureReachability, CodegenError> {
-    reachability::reachable_procedures(module, tree, roots)
+    reachability::reachable_procedures(module, tree, roots, read_vars)
 }
 
 pub fn generate_reachable(
-    module: &ir::Module, tree: &objtree::ObjectTree, roots: &[ProcId],
+    module: &ir::Module, tree: &ObjectTree, roots: &[ProcId], read_vars: &[Identifier],
 ) -> Result<Module, CodegenError> {
-    match reachable_procedures(module, tree, roots)? {
+    match reachable_procedures(module, tree, roots, read_vars)? {
         ProcedureReachability::All => Generator::new().generate(module, None),
         ProcedureReachability::Selected(procedures) => Generator::new().generate(module, Some(&procedures)),
     }
@@ -1519,7 +1521,7 @@ mod tests {
         builder.finish()
     }
 
-    fn analyze(source: &str) -> (objtree::ObjectTree, ir::Module) {
+    fn analyze(source: &str) -> (ObjectTree, ir::Module) {
         let (tokens, errors) = lexer::tokenize(source);
         assert!(errors.is_empty(), "{errors:?}");
         let ast = ast::parse(&tokens).expect("fixture should parse");
@@ -1529,7 +1531,7 @@ mod tests {
         (tree, module)
     }
 
-    fn proc_id(tree: &objtree::ObjectTree, owner: &str, name: &str) -> ProcId {
+    fn proc_id(tree: &ObjectTree, owner: &str, name: &str) -> ProcId {
         tree.id_of(&TreePath::parse(owner))
             .and_then(|owner| tree.proc_inherited(owner, &name.into()))
             .and_then(|procedure| procedure.body)
@@ -1923,7 +1925,7 @@ mod tests {
         let dead = proc_id(&tree, "/datum/base", "dead");
         let unused = proc_id(&tree, "/", "unused");
 
-        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+        let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
         for retained in [entry, base_live, child_live] {
             assert_eq!(
@@ -1946,7 +1948,7 @@ mod tests {
         let entry = proc_id(&tree, "/", "entry");
         let status = proc_id(&tree, "/datum/base", "status");
 
-        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+        let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
         assert!(module.function_for_proc(entry).is_some());
         assert!(module.function_for_proc(status).is_none());
@@ -1962,7 +1964,7 @@ mod tests {
         let child = proc_id(&tree, "/datum/wanted/child", "Initialize");
         let unrelated = proc_id(&tree, "/datum/unrelated", "Initialize");
 
-        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+        let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
         for retained in [entry, wanted, child] {
             assert!(
@@ -1993,7 +1995,7 @@ mod tests {
         let initialize = proc_id(&tree, "/", "initialize");
         let unused = proc_id(&tree, "/", "unused");
 
-        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+        let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
         for retained in [entry, latest, previous, inherited, initializer, initialize] {
             assert!(
@@ -2015,7 +2017,7 @@ mod tests {
             .and_then(|variable| variable.initializer)
             .expect("runtime initializer");
 
-        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+        let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
         assert!(module.function_for_proc(entry).is_some());
         assert!(module.function_for_proc(initializer).is_none());
@@ -2033,7 +2035,7 @@ mod tests {
         let live = proc_id(&tree, "/", "live");
         let dead = proc_id(&tree, "/", "dead");
 
-        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+        let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
         for retained in [entry, invoke, call, live] {
             assert!(
@@ -2052,7 +2054,7 @@ mod tests {
         let live = proc_id(&tree, "/datum/base", "live");
         let dead = proc_id(&tree, "/datum/base", "dead");
 
-        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+        let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
         for retained in [entry, call, live] {
             assert!(
@@ -2074,7 +2076,7 @@ mod tests {
         let live_helper = proc_id(&tree, "/", "live_helper");
         let dead_helper = proc_id(&tree, "/", "dead_helper");
 
-        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+        let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
         for retained in [entry, live_new, live_helper] {
             assert!(
@@ -2096,7 +2098,7 @@ mod tests {
         let dead_new = proc_id(&tree, "/datum/dead", "New");
         let unrelated = proc_id(&tree, "/", "unrelated");
 
-        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+        let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
         for retained in [entry, live_new, dead_new] {
             assert!(
@@ -2114,7 +2116,7 @@ mod tests {
         ));
         let entry = proc_id(&tree, "/", "entry");
 
-        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+        let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
         assert_eq!(
             module
@@ -2136,7 +2138,7 @@ mod tests {
         let typesof = proc_id(&tree, "/", "typesof");
         let unrelated = proc_id(&tree, "/", "unrelated");
 
-        let module = generate_reachable(&ir_module, &tree, &[initialize]).expect("generate selected procedures");
+        let module = generate_reachable(&ir_module, &tree, &[initialize], &[]).expect("generate selected procedures");
 
         for retained in [initialize, call, typesof] {
             assert!(
@@ -2155,7 +2157,7 @@ mod tests {
         let entry = proc_id(&tree, "/", "entry");
         let otherwise = proc_id(&tree, "/", "otherwise");
 
-        let module = generate_reachable(&ir_module, &tree, &[entry]).expect("generate selected procedures");
+        let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
         assert!(module.function_for_proc(entry).is_some());
         assert!(module.function_for_proc(otherwise).is_some());

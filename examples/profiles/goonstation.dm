@@ -37,6 +37,21 @@
 	atmos_dmi = image('icons/obj/atmospherics/atmos.dmi')
 	bomb_dmi = image('icons/obj/canisterbomb.dmi')
 
+// `New()` saves the mapped state before update_icon() restores it.
+/obj/disposalpipe/demir_prepare_state()
+	base_icon_state = icon_state
+
+// `New()` reads the mapped endpoints before update_icon() rebuilds the state.
+/obj/cable/demir_prepare_state()
+	if(istype(src, /obj/cable/auto))
+		d1 = 0
+		d2 = 0
+		return
+	var/separator = findtext(icon_state, "-")
+	if(separator)
+		d1 = text2num(copytext(icon_state, 1, separator))
+		d2 = text2num(copytext(icon_state, separator + 1))
+
 /datum/demir/goonstation
 	default = TRUE
 
@@ -73,7 +88,7 @@
 			return
 	underlays = list()
 
-// The screen glow New() builds and power_change() adds. The 0.33 greyscale matrix it uses is
+// The screen glow New() builds and power_change() adds. The 0.33 grayscale matrix it uses is
 // flattened to its brightness.
 /atom/proc/demir_add_screen_glow(glow_icon, glow_state)
 	var/image/screen = image(glow_icon, glow_state, -1)
@@ -143,6 +158,96 @@
 	for(var/image/overlay in overlays)
 		overlay.demir_tag_light()
 
+/atom/proc/demir_bake_icon()
+	UpdateIcon()
+
+// Runtime areas hide their mapping icon in update_icon().
+/area/demir_bake_icon()
+	return
+
+// Conduits and other special mapped states are not endpoint pairs.
+/obj/cable/demir_bake_icon()
+	if(findtext(icon_state, "-"))
+		UpdateIcon()
+
+// Preview the cables an auto spawner would place without creating powernets or deleting the
+// spawner. Each preview reads the current neighborhood, so edits update adjacent spawners too.
+/obj/cable/auto/demir_bake_icon()
+	var/list/connected = list()
+	for(var/direction in list(NORTH, SOUTH, EAST, WEST, NORTHEAST, NORTHWEST, SOUTHEAST, SOUTHWEST))
+		var/turf/neighbor = get_step(src, direction)
+		if(!neighbor)
+			continue
+		var/found = FALSE
+		for(var/obj/cable/auto/spawner in neighbor)
+			if(spawner.cable_type == cable_type || spawner.color == color)
+				found = TRUE
+				break
+		if(found)
+			connected += direction
+
+	// Cardinal routes take priority over diagonals in the native spawner.
+	if((NORTHEAST in connected) && ((NORTH in connected) || (EAST in connected)))
+		connected -= NORTHEAST
+	if((NORTHWEST in connected) && ((NORTH in connected) || (WEST in connected)))
+		connected -= NORTHWEST
+	if((SOUTHEAST in connected) && ((SOUTH in connected) || (EAST in connected)))
+		connected -= SOUTHEAST
+	if((SOUTHWEST in connected) && ((SOUTH in connected) || (WEST in connected)))
+		connected -= SOUTHWEST
+
+	// Mapped cables are added after diagonal suppression; the native spawner forces those links.
+	for(var/direction in list(NORTH, SOUTH, EAST, WEST, NORTHEAST, NORTHWEST, SOUTHEAST, SOUTHWEST))
+		if(direction in connected)
+			continue
+		var/turf/neighbor = get_step(src, direction)
+		if(!neighbor)
+			continue
+		for(var/obj/cable/cable in neighbor)
+			if(istype(cable, /obj/cable/auto) || (cable.type != cable_type && cable.color != color))
+				continue
+			if(!istype(cable, cable_type) && !istype(cable_type, cable))
+				continue
+			var/back = turn(direction, 180)
+			if(cable.d1 == back || cable.d2 == back)
+				connected += direction
+				break
+
+	var/list/directions = list()
+	for(var/direction in list(NORTH, NORTHEAST, EAST, SOUTHEAST, SOUTH, SOUTHWEST, WEST, NORTHWEST))
+		if(direction in connected)
+			directions += direction
+
+	var/center = override_centre_connection
+	for(var/obj/machinery/power/machine in loc)
+		if(istype(machine, /obj/machinery/power/terminal) || istype(machine, /obj/machinery/power/smes))
+			center = TRUE
+			break
+
+	var/suffix = initial(cable_type.iconmod)
+	if(isnull(suffix) && istype(src, /obj/cable/auto/reinforced))
+		suffix = "-thick"
+	var/list/states = list()
+	if(!length(directions))
+		states += "0-1[suffix]"
+	else if(center || length(directions) == 1)
+		for(var/direction in directions)
+			states += "0-[direction][suffix]"
+	else if(length(directions) == 2)
+		states += "[min(directions[1], directions[2])]-[max(directions[1], directions[2])][suffix]"
+	else
+		for(var/i in 1 to length(directions) - 1)
+			states += "[min(directions[i], directions[i + 1])]-[max(directions[i], directions[i + 1])][suffix]"
+		states += "[min(directions[1], directions[length(directions)])]-[max(directions[1], directions[length(directions)])][suffix]"
+
+	if(length(states) == 1)
+		icon_state = states[1]
+		return
+	icon_state = null
+	overlays = list()
+	for(var/state in states)
+		overlays += mutable_appearance(icon, state)
+
 /datum/demir/goonstation/bake(atom/target)
 	if(istype(target, /obj/table))
 		var/obj/table/table = target
@@ -150,7 +255,7 @@
 			table.set_up()
 			target.demir_tag_light()
 			return
-	target.UpdateIcon()
+	target.demir_bake_icon()
 	target.demir_bake_extras()
 	target.demir_tag_light()
 
@@ -198,7 +303,7 @@
 	if(has_light)
 		light = demir_attach_light(0.3, 209 / 255, 27 / 255, 6 / 255)
 
-// New() reads the switch position from the area half a second in, and update_icon() colours it.
+// New() reads the switch position from the area half a second in, and update_icon() colors it.
 /obj/machinery/light_switch/demir_prepare_lights()
 	area = otherarea ? locate(text2path("/area/[otherarea]")) : get_area(src)
 	on = area ? area.lightswitch : on

@@ -1,4 +1,4 @@
-use core::types::{Identifier, ProcId, Value};
+use core::types::{Identifier, ListEntry, ProcId, Value};
 use std::{
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
@@ -20,6 +20,7 @@ use crate::{
     Runtime,
     heap::{Object, ObjectId},
     lighting::{LightSource, LightingAtom, direction_angle, parse_color},
+    matrix,
     world::Position,
 };
 pub use crate::{
@@ -1536,12 +1537,14 @@ impl Runtime {
 
         let profile = self.profile;
         self.heap.begin();
-        let (overlays, underlays, icon, icon_state) = NAMES.with(|names| {
+        let (overlays, underlays, icon, icon_state, transform, host_reads) = NAMES.with(|names| {
             (
                 names.overlays.clone(),
                 names.underlays.clone(),
                 names.icon.clone(),
                 names.icon_state.clone(),
+                names.transform.clone(),
+                names.host_reads.clone(),
             )
         });
         let result = (|| {
@@ -1571,6 +1574,16 @@ impl Runtime {
                 } else {
                     evaluator.runtime.heap.object(id).and_then(|object| object.instance)
                 } {
+                    let target = id == object;
+                    // lazy initializers run here the way a DM read would run them
+                    // one that faults leaves its var at the declared value rather than
+                    // failing the preview, and a neighbor's own preview reads its own
+                    if target {
+                        for name in &host_reads {
+                            let _ = evaluator.read_field(GenericValue::Object(id), name);
+                        }
+                    }
+
                     let mut appearance = export_appearance(&evaluator.runtime.heap, tree, id, 0, &mut export_budget)
                         .map_err(|kind| evaluator.fault(kind))?;
                     if let Some(before) = evaluator.runtime.heap.before_object(id) {
@@ -1588,7 +1601,8 @@ impl Runtime {
                             (name == &icon || name == &icon_state) && before_value(name).as_ref() != Some(value)
                         });
                         appearance.vars.retain(|(name, value)| {
-                            (icon_pair_changed && (name == &icon || name == &icon_state))
+                            (target && name == &transform)
+                                || (icon_pair_changed && (name == &icon || name == &icon_state))
                                 || before_value(name).as_ref() != Some(value)
                         });
                         for (name, extra) in [
@@ -1607,7 +1621,16 @@ impl Runtime {
                             }
                         }
                     }
-                    values.insert(instance, appearance);
+
+                    // a neighbor the hook only wrote bookkeeping to, like a cable's links, has nothing
+                    // to compose, and leaving it out keeps the preview cacheable
+                    let empty = appearance.vars.is_empty()
+                        && appearance.overlays.is_empty()
+                        && appearance.underlays.is_empty()
+                        && matches!(appearance.lighting, AppearanceLighting::Normal);
+                    if target || !empty {
+                        values.insert(instance, appearance);
+                    }
                 }
             }
 
@@ -1625,11 +1648,17 @@ impl Runtime {
 
 thread_local! {
     static NAMES: Names = Names {
-        appearance: APPEARANCE_VARS.iter().map(|name| Identifier::from(*name)).collect(),
+        host_reads: HOST_READS.iter().map(|name| Identifier::from(*name)).collect(),
+        appearance: HOST_READS
+            .iter()
+            .filter(|name| **name != "transform")
+            .map(|name| Identifier::from(*name))
+            .collect(),
         overlays: Identifier::from("overlays"),
         underlays: Identifier::from("underlays"),
         icon: Identifier::from("icon"),
         icon_state: Identifier::from("icon_state"),
+        transform: Identifier::from("transform"),
         dir: Identifier::from("dir"),
         layer: Identifier::from("layer"),
         plane: Identifier::from("plane"),
@@ -1640,11 +1669,13 @@ thread_local! {
 }
 
 struct Names {
+    host_reads: Vec<Identifier>,
     appearance: Vec<Identifier>,
     overlays: Identifier,
     underlays: Identifier,
     icon: Identifier,
     icon_state: Identifier,
+    transform: Identifier,
     dir: Identifier,
     layer: Identifier,
     plane: Identifier,
@@ -1653,7 +1684,9 @@ struct Names {
     overlay_light: Identifier,
 }
 
-const APPEARANCE_VARS: &[&str] = &[
+pub fn host_reads() -> Vec<Identifier> { HOST_READS.iter().map(|name| Identifier::from(*name)).collect() }
+
+const HOST_READS: &[&str] = &[
     "name",
     "icon",
     "icon_state",
@@ -1670,6 +1703,7 @@ const APPEARANCE_VARS: &[&str] = &[
     "alpha",
     "invisibility",
     "appearance_flags",
+    "transform",
 ];
 
 fn export_appearance(
@@ -1721,6 +1755,23 @@ fn export_with_names(
             *budget = budget.checked_sub(cost).ok_or(FaultKind::Memory)?;
             appearance.vars.push((name.clone(), value));
         }
+    }
+
+    // Compat views can't evaluate `matrix()`, so a transform travels even when the bake left it alone.
+    if let Some(matrix) = object
+        .vars
+        .get(&names.transform)
+        .and_then(|value| matrix::read(heap, tree, value))
+        .filter(|matrix| !matrix.is_identity())
+    {
+        *budget = budget.checked_sub(1).ok_or(FaultKind::Memory)?;
+        let components = matrix.0.map(|component| ListEntry {
+            key: Value::Num(component),
+            value: None,
+        });
+        appearance
+            .vars
+            .push((names.transform.clone(), Value::List(components.into())));
     }
 
     for name in [&names.overlays, &names.underlays] {

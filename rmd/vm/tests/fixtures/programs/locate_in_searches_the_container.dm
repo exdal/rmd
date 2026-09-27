@@ -7,4 +7,6 @@
     var/list/things = list(new /datum/a, wanted)
     var/datum/b/found = locate(/datum/b) in things
     var/missing = locate(/datum/b) in list(new /datum/a)
-    return "[found == wanted] [isnull(missing)] [istype(things ? locate(/datum/a) in things : null, /datum/a)]"
+    var/datum/b/assigned
+    assigned = locate(/datum/b) in things
+    return "[found == wanted] [isnull(missing)] [istype(things ? locate(/datum/a) in things : null, /datum/a)] [assigned == wanted]"
