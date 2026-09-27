@@ -21,6 +21,9 @@
 /datum/controller/subsystem/mapping/demir_preview/New()
 	SSmapping = src
 
+/datum/controller/subsystem/mapping/demir_preview/level_trait(z, trait)
+	return null
+
 /datum/controller/subsystem/overlays/demir_preview/New()
 	SSoverlays = src
 	stats = list()
@@ -75,11 +78,16 @@
 	InitGlobalstarlight_color()
 	InitGlobalareas()
 	InitGlobalareas_by_type()
+	InitGlobalstation_levels_cache()
 
 /atom/proc/demir_prepare_smoothing()
 	SETUP_SMOOTHING()
 	if(uses_integrity)
 		atom_integrity = max_integrity
+
+// Grass and ash is problematic, we need to handle this like this, gg.
+/turf/open/misc/Initialize(mapload)
+	return INITIALIZE_HINT_NORMAL
 
 // The light_system switch that closes /atom/movable/Initialize(). The component draws its own
 // mask and cone.
@@ -453,6 +461,9 @@
 		var/obj/machinery/atmospherics/atmos_target = target
 		atmos_target.demir_bake_connections()
 	else if(src.smooth && (target.smoothing_flags & USES_SMOOTHING))
+		if(istype(target, /turf/open/misc/grass) || istype(target, /turf/open/misc/ashplanet))
+			target.Initialize(TRUE)
+
 		target.smooth_icon()
 	if(ismovable(target))
 		var/atom/movable/movable_target = target
