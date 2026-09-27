@@ -26,7 +26,7 @@ use crate::{
 
 mod pages;
 
-use pages::{SpritePage, replace_owner_sprites};
+use pages::{OwnerKeys, SpritePage, replace_owner_sprites};
 
 /// - 0: z level
 /// - 1: plane times 1000
@@ -82,7 +82,8 @@ pub struct FrameInstances {
     area_component_tiles: HashMap<PrefabInstanceId, HashSet<Coord>>,
     sprite_sort_keys: Vec<SpriteKey>,
     pages: Vec<SpritePage>,
-    owner_keys: HashMap<PrefabInstanceId, Vec<SpriteKey>>,
+    owner_keys: HashMap<PrefabInstanceId, OwnerKeys>,
+    /// only primaries that are not among their owner's sprites, the rest are found through `owner_keys`
     primary_sprites: HashMap<PrefabInstanceId, SpriteInstance>,
     area_tile_indices: HashMap<PrefabInstanceId, usize>,
     placement_orders: HashMap<PrefabInstanceId, usize>,
@@ -135,7 +136,9 @@ impl FrameInstances {
         }
     }
 
-    pub fn sprite(&self, owner: PrefabInstanceId) -> Option<&SpriteInstance> { self.primary_sprites.get(&owner) }
+    pub fn sprite(&self, owner: PrefabInstanceId) -> Option<&SpriteInstance> {
+        self.primary_sprites.get(&owner).or_else(|| self.keyed_primary(owner))
+    }
 
     pub fn area_component_at(&self, coord: Coord) -> Option<PrefabInstanceId> {
         self.area_components.get(&coord).copied()
@@ -404,12 +407,13 @@ pub fn build_with_options(
                     if rendered.is_area {
                         area_owners_by_coord.entry(coord).or_default().push(owner);
                     }
-                    if let Some(primary) = rendered.primary {
-                        primary_sprites.insert(owner, primary);
+                    let (keys, unkeyed_primary) = OwnerKeys::of(&rendered);
+                    if let Some(keys) = keys {
+                        owner_keys.insert(owner, keys);
                     }
 
-                    if !rendered.sprites.is_empty() {
-                        owner_keys.insert(owner, rendered.sprites.iter().map(|(key, _)| *key).collect());
+                    if let Some(primary) = unkeyed_primary {
+                        primary_sprites.insert(owner, primary);
                     }
 
                     keyed_sprites.extend(rendered.sprites);
@@ -1649,6 +1653,9 @@ mod tests {
         assert_eq!(actual.area_component_tiles, expected.area_component_tiles);
         assert_eq!(actual.sprite_sort_keys.len(), actual.sprites.len());
         assert_eq!(actual.primary_sprites, expected.primary_sprites);
+        for owner in actual.placements.keys().chain(expected.placements.keys()) {
+            assert_eq!(actual.sprite(*owner), expected.sprite(*owner));
+        }
 
         for (owner, sprite) in &actual.primary_sprites {
             assert_eq!(sprite.owner, *owner);

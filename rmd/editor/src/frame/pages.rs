@@ -33,6 +33,42 @@ fn spare_sprite(z: u32) -> SpriteInstance {
     }
 }
 
+/// Where an owner's sprites sort, its primary sprite's key first
+#[derive(Debug, Clone)]
+pub(super) enum OwnerKeys {
+    One(SpriteKey),
+    Many(Box<[SpriteKey]>),
+}
+
+impl OwnerKeys {
+    /// the keys of a rendered prefab, and its primary sprite when that is not one of its sprites
+    pub(super) fn of(rendered: &RenderedPrefab) -> (Option<Self>, Option<SpriteInstance>) {
+        let mut keys = rendered.sprites.iter().map(|(key, _)| *key).collect::<Vec<_>>();
+        let primary = rendered
+            .primary
+            .map(|primary| rendered.sprites.iter().position(|(_, sprite)| *sprite == primary));
+        if let Some(Some(index)) = primary {
+            keys.swap(0, index);
+        }
+
+        let keys = match keys.len() {
+            0 => None,
+            1 => Some(Self::One(keys[0])),
+            _ => Some(Self::Many(keys.into_boxed_slice())),
+        };
+        let unkeyed = rendered.primary.filter(|_| primary == Some(None));
+
+        (keys, unkeyed)
+    }
+
+    fn as_slice(&self) -> &[SpriteKey] {
+        match self {
+            Self::One(key) => std::slice::from_ref(key),
+            Self::Many(keys) => keys,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SpritePage {
     start: usize,
@@ -103,6 +139,17 @@ impl FrameInstances {
         self.sprites = sprites;
     }
 
+    /// an owner's primary sprite, found through the first of its keys
+    pub(super) fn keyed_primary(&self, owner: PrefabInstanceId) -> Option<&SpriteInstance> {
+        let key = self.owner_keys.get(&owner)?.as_slice().first()?;
+        let page = self.pages[self.page_of(key)?];
+        let index = self.sprite_sort_keys[page.start..page.start + page.len]
+            .binary_search(key)
+            .ok()?;
+
+        self.sprites.get(page.start + index)
+    }
+
     fn page_of(&self, key: &SpriteKey) -> Option<usize> {
         let index = self.pages.partition_point(|page| page.lower <= *key).checked_sub(1)?;
 
@@ -164,8 +211,9 @@ pub(super) fn replace_owner_sprites(
     };
 
     for (owner, rendered) in rendered {
+        instances.primary_sprites.remove(owner);
         if let Some(keys) = instances.owner_keys.remove(owner) {
-            for key in &keys {
+            for key in keys.as_slice() {
                 if let Some(page) = instances.page_of(key) {
                     touch(instances, page);
                     instances.remove_from_page(page, key);
@@ -173,17 +221,17 @@ pub(super) fn replace_owner_sprites(
             }
         }
 
-        if let Some(primary) = rendered.as_ref().and_then(|rendered| rendered.primary) {
-            instances.primary_sprites.insert(*owner, primary);
-        } else {
-            instances.primary_sprites.remove(owner);
+        let Some(rendered) = rendered else {
+            continue;
+        };
+
+        let (keys, unkeyed_primary) = OwnerKeys::of(rendered);
+        if let Some(keys) = keys {
+            instances.owner_keys.insert(*owner, keys);
         }
 
-        if let Some(rendered) = rendered
-            && !rendered.sprites.is_empty()
-        {
-            let keys = rendered.sprites.iter().map(|(key, _)| *key).collect();
-            instances.owner_keys.insert(*owner, keys);
+        if let Some(primary) = unkeyed_primary {
+            instances.primary_sprites.insert(*owner, primary);
         }
     }
 
@@ -276,10 +324,14 @@ pub(super) mod tests {
             live += page.len;
         }
 
-        let owned = instances.owner_keys.values().map(Vec::len).sum::<usize>();
+        let owned = instances
+            .owner_keys
+            .values()
+            .map(|keys| keys.as_slice().len())
+            .sum::<usize>();
         assert_eq!(owned, live);
         for (owner, keys) in &instances.owner_keys {
-            for key in keys {
+            for key in keys.as_slice() {
                 let page = instances.pages[instances.page_of(key).expect("a page for every key")];
                 let index = instances.sprite_sort_keys[page.start..page.start + page.len]
                     .binary_search(key)
