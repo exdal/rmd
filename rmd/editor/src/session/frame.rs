@@ -118,7 +118,7 @@ impl Session {
             active_z: document.z,
             level_count: document.map.size.z.max(1),
             revision: cache.revision,
-            pending_update: cache.frame_update,
+            pending_update: cache.frame_update.clone(),
             lighting: (self.options.show_lighting && !cache.instances.light_tiles.is_empty()).then_some(
                 render::LightingFrame {
                     size: cache.instances.lighting_size,
@@ -420,12 +420,10 @@ mod tests {
         assert_eq!(frame.picking, Some(1));
         assert_ne!(frame.map_views[0].rect, frame.map_views[1].rect);
         // Each map view carries its own map's sprites, not a shared cache.
-        assert!(!frame.map_views[0].sprite_instances.is_empty());
-        assert!(!frame.map_views[1].sprite_instances.is_empty());
-        assert_ne!(
-            frame.map_views[0].sprite_instances.len(),
-            frame.map_views[1].sprite_instances.len(),
-        );
+        for id in &ids {
+            assert!(session.caches[id].instances.live_sprites().next().is_some());
+        }
+        assert_ne!(frame.map_views[0].sprite_instances, frame.map_views[1].sprite_instances);
     }
 
     #[test]
@@ -518,7 +516,7 @@ mod tests {
             )
             .expect("second frame");
         assert_ne!(first.revision, second.revision);
-        assert_ne!(first.sprite_instances.len(), second.sprite_instances.len());
+        assert_ne!(first.sprite_instances, second.sprite_instances);
     }
 
     #[test]

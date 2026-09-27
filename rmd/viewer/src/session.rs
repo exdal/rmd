@@ -101,7 +101,8 @@ impl Session {
             )
         });
         if let Some(instances) = instances {
-            self.sprite_instances = instances.sprites;
+            // the viewer never edits, so it has no use for the pages' spare slots
+            self.sprite_instances = instances.live_sprites().copied().collect();
             self.light_tiles = instances.light_tiles;
             self.lighting_size = instances.lighting_size;
         } else {

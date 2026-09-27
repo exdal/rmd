@@ -2458,7 +2458,7 @@ impl Renderer {
         let (Some(view), Some(uploaded)) = (frame.map_views.first(), self.uploaded.first()) else {
             return Ok(false);
         };
-        let Some(update) = view.pending_update else {
+        let Some(update) = view.pending_update.as_ref() else {
             return Ok(false);
         };
         if uploaded.base != 0
@@ -2466,9 +2466,12 @@ impl Renderer {
             || uploaded.revision != update.previous_revision
             || view.sprite_instances.len() > self.sprite_capacity
             || view.area_tiles.len() > self.area_tile_capacity
-            || !valid_update_range(update.sprites, view.sprite_instances.len())
+            || !update
+                .sprites
+                .iter()
+                .all(|range| valid_update_range(Some(*range), view.sprite_instances.len()))
             || !valid_update_range(update.area_tiles, view.area_tiles.len())
-            || (uploaded.count != view.sprite_instances.len() && update.sprites.is_none())
+            || (uploaded.count != view.sprite_instances.len() && update.sprites.is_empty())
             || (uploaded.area_count != view.area_tiles.len() && update.area_tiles.is_none())
         {
             return Ok(false);
@@ -2480,24 +2483,26 @@ impl Renderer {
             return Ok(false);
         }
 
-        let sprite_payload = update
+        let sprite_payloads = update
             .sprites
-            .map(|range| gpu_sprite_range(view.sprite_instances, range))
-            .transpose()?;
+            .iter()
+            .map(|range| gpu_sprite_range(view.sprite_instances, *range))
+            .collect::<Result<Vec<_>, _>>()?;
         let area_payload = update
             .area_tiles
             .map(|range| gpu_sprite_range(view.area_tiles, range))
             .transpose()?;
-        if sprite_payload.as_ref().is_some_and(|payload| !payload.is_empty())
+        if sprite_payloads.iter().any(|payload| !payload.is_empty())
             || area_payload.as_ref().is_some_and(|payload| !payload.is_empty())
         {
             self.graph.wait()?;
         }
-        if let (Some(range), Some(payload), Some(buffer)) =
-            (update.sprites, sprite_payload.as_ref(), self.sprites.as_mut())
-            && !payload.is_empty()
-        {
-            buffer.write(gpu_sprite_offset(range.start)?, payload)?;
+        if let Some(buffer) = self.sprites.as_mut() {
+            for (range, payload) in update.sprites.iter().zip(&sprite_payloads) {
+                if !payload.is_empty() {
+                    buffer.write(gpu_sprite_offset(range.start)?, payload)?;
+                }
+            }
         }
         if let (Some(range), Some(payload), Some(buffer)) =
             (update.area_tiles, area_payload.as_ref(), self.area_tiles.as_mut())
@@ -2505,8 +2510,8 @@ impl Renderer {
         {
             buffer.write(gpu_sprite_offset(range.start)?, payload)?;
         }
-        if let Some(range) = update.sprites {
-            self.color_area_outlines(sprites, range)?;
+        for range in &update.sprites {
+            self.color_area_outlines(sprites, *range)?;
         }
         if let (Some(buffer), Some(range)) = (self.area_tiles, update.area_tiles) {
             self.color_area_outlines(buffer, range)?;

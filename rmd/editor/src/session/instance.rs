@@ -497,9 +497,14 @@ mod tests {
         assert_eq!(session.revision(), revision.wrapping_add(1));
         let update = session.frame_update().unwrap();
         assert_eq!(update.previous_revision, revision);
-        let sprites = update.sprites.unwrap();
-        assert_eq!(sprites.end, sprites.start + 1);
-        assert_eq!(session.instances().unwrap().sprites[sprites.start].owner, selected);
+        let [sprites] = update.sprites[..] else {
+            panic!("one changed span: {:?}", update.sprites);
+        };
+        assert!(
+            session.instances().unwrap().sprites[sprites.start..sprites.end]
+                .iter()
+                .any(|sprite| sprite.owner == selected)
+        );
         assert_eq!(session.selected_transform().unwrap().pixel, [7, 0]);
         assert_eq!(
             session

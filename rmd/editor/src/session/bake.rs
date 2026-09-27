@@ -429,6 +429,136 @@ mod tests {
         }
     }
 
+    // Times each phase of one placement on the largest SecondCity map. Run with `--nocapture`.
+    #[test]
+    #[ignore = "requires the local target/SecondCity checkout"]
+    fn secondcity_placement_timings() {
+        use std::time::Instant;
+
+        use editor::command::Edit;
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/SecondCity");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(editor::environment::BundledProfile::SecondCity),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+            .expect("SecondCity codebase");
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+
+        session
+            .open_map(&root.join("_maps/map_files/Vampire/san_fangsisco/sanfangsisco.dmm"), 1)
+            .expect("San Fangsisco");
+
+        let started = Instant::now();
+        while session.baker.is_busy() {
+            session.poll_bake();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        eprintln!("full bake settled in {:?}", started.elapsed());
+
+        let id = session.state.active().expect("active map");
+        let open_floors = {
+            let document = session.state.active_document().unwrap();
+            let size = document.map.size;
+            (1..=size.z)
+                .flat_map(|z| (1..=size.y).flat_map(move |y| (1..=size.x).map(move |x| Coord::new(x, y, z))))
+                .filter(|coord| {
+                    document.map.tile_at(*coord).is_some_and(|tile| {
+                        tile.iter()
+                            .any(|prefab| prefab.path.to_string().starts_with("/turf/open/floor"))
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        eprintln!("{} open floors", open_floors.len());
+        let open_floor = |quarter: usize| open_floors[open_floors.len() * quarter / 4];
+
+        let place = |session: &mut Session, label: &str, coord: Coord, replace_turf: bool, path: &str| {
+            let document = session.state.active_document_mut().unwrap();
+            let mut after = document.placed_tile(coord).expect("placed tile");
+            let placed = document.instantiate(Prefab::new(TreePath::parse(path)));
+            let mut affected = vec![placed.id()];
+            if replace_turf {
+                let index = after
+                    .iter()
+                    .position(|placed| placed.prefab().path.to_string().starts_with("/turf/"))
+                    .expect("a turf");
+                affected.push(after.remove(index).id());
+                after.insert(index, placed);
+            } else {
+                after.push(placed);
+            }
+
+            let mut edit = Edit::new("place");
+            edit.change(document, coord, after);
+
+            let clock = Instant::now();
+            assert!(document.apply(edit));
+            let apply = clock.elapsed();
+
+            let clock = Instant::now();
+            let update = {
+                let Session { state, caches, .. } = &mut *session;
+                let bake = caches.get_mut(&id).and_then(|cache| cache.bake.as_mut()).expect("bake");
+                editor::bake::update(
+                    bake,
+                    state.environment.as_ref().unwrap(),
+                    state.document(id).unwrap(),
+                    &affected,
+                )
+            };
+            let bake = clock.elapsed();
+            let changed = update.appearances.len();
+            let lighting = update.lighting.as_ref().map_or(0, |range| range.len());
+
+            let clock = Instant::now();
+            session.apply_bake_update(id, update);
+            let frame = clock.elapsed();
+            let cache = session.active_cache();
+            let uploaded = cache
+                .frame_update
+                .iter()
+                .flat_map(|update| &update.sprites)
+                .map(|range| range.end - range.start)
+                .sum::<usize>();
+
+            eprintln!(
+                "{label}: apply {apply:?}, bake {bake:?} ({changed} appearances, {lighting} light tiles), frame \
+                 {frame:?} ({uploaded} of {} sprites uploaded)",
+                cache.instances.sprites.len()
+            );
+        };
+
+        place(
+            &mut session,
+            "object",
+            open_floor(1),
+            false,
+            "/obj/structure/table/wood",
+        );
+        place(
+            &mut session,
+            "wall",
+            open_floor(2),
+            true,
+            "/turf/closed/wall/vampwall/city",
+        );
+
+        let bake = session.caches.get_mut(&id).and_then(|cache| cache.bake.as_mut());
+        let lighting = bake.and_then(|bake| bake.lighting.take());
+        assert!(lighting.is_some(), "the map was lit");
+
+        place(
+            &mut session,
+            "wall, lighting off",
+            open_floor(3),
+            true,
+            "/turf/closed/wall/vampwall/city",
+        );
+    }
+
     #[test]
     fn a_map_draws_before_its_bake_lands() {
         let root = examples();
@@ -440,7 +570,7 @@ mod tests {
         assert!(
             session
                 .instances()
-                .is_some_and(|instances| !instances.sprites.is_empty())
+                .is_some_and(|instances| instances.live_sprites().next().is_some())
         );
         assert!(session.active_cache().bake.is_none());
 

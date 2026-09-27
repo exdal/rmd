@@ -249,10 +249,11 @@ pub struct CapturedImage {
     pub rgba: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameUpdate {
     pub previous_revision: u64,
-    pub sprites: Option<UpdateRange>,
+    /// disjoint spans of the sprite list to upload again, in order
+    pub sprites: Vec<UpdateRange>,
     pub area_tiles: Option<UpdateRange>,
 }
 

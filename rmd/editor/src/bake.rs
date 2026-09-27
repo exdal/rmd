@@ -531,7 +531,7 @@ mod tests {
             &document,
             options(&visibility, &bake),
         );
-        let depths = instances.sprites.iter().map(|sprite| sprite.depth).collect::<Vec<_>>();
+        let depths = instances.live_sprites().map(|sprite| sprite.depth).collect::<Vec<_>>();
 
         assert_eq!(depths, [1.0, owner.layer, owner.layer]);
     }
@@ -576,7 +576,7 @@ mod tests {
         );
 
         // Every wall draws itself and its `light` overlay.
-        assert_eq!(instances.sprites.len(), 18);
+        assert_eq!(instances.live_sprites().count(), 18);
 
         let mut edit = Edit::new("remove wall");
         edit.change(&document, Coord::new(2, 2, 1), vec![]);
@@ -602,7 +602,7 @@ mod tests {
             options(&visibility, &bake),
         );
 
-        assert_eq!(instances.sprites, rebuilt.sprites);
+        assert!(instances.live_sprites().eq(rebuilt.live_sprites()));
 
         let affected = document.undo_with_affected().expect("undo");
         update(&mut bake, &environment, &document, &affected);

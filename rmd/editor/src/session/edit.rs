@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(session.revision(), revision.wrapping_add(1));
         let update = session.frame_update().expect("area edit must remain incremental");
         assert_eq!(update.previous_revision, revision);
-        assert!(update.sprites.is_some());
+        assert!(!update.sprites.is_empty());
     }
 
     #[test]
