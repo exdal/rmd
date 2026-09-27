@@ -84,6 +84,15 @@ pub struct Atom {
     pub vars: Vec<(Identifier, Value)>,
 }
 
+/// What the bake keeps of an [`Atom`] once its map overrides are on the heap
+#[derive(Debug, Clone, Copy)]
+struct Placed {
+    ty: TypeId,
+    position: Position,
+    /// hash of the map overrides, all a fingerprint needs of them
+    constants: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeGroup {
     pub subtype: TypeId,
@@ -174,6 +183,47 @@ struct CacheKey {
     size: [i32; 3],
 }
 
+// one bit per heap object because object ids are dense
+#[derive(Debug, Default)]
+struct ObjectSet(Vec<u64>);
+
+impl ObjectSet {
+    const BITS: usize = u64::BITS as usize;
+
+    fn bit(object: ObjectId) -> (usize, u64) {
+        let index = object.0 as usize;
+
+        (index / Self::BITS, 1 << (index % Self::BITS))
+    }
+
+    fn contains(&self, object: ObjectId) -> bool {
+        let (word, mask) = Self::bit(object);
+
+        self.0.get(word).is_some_and(|bits| bits & mask != 0)
+    }
+
+    /// false when the object was already in the set
+    fn insert(&mut self, object: ObjectId) -> bool {
+        let (word, mask) = Self::bit(object);
+        if self.0.len() <= word {
+            self.0.resize(word + 1, 0);
+        }
+
+        let bits = &mut self.0[word];
+        let added = *bits & mask == 0;
+        *bits |= mask;
+
+        added
+    }
+
+    fn remove(&mut self, object: ObjectId) {
+        let (word, mask) = Self::bit(object);
+        if let Some(bits) = self.0.get_mut(word) {
+            *bits &= !mask;
+        }
+    }
+}
+
 pub type SharedAppearance = Arc<AppearanceDelta>;
 
 fn shared(appearance: AppearanceDelta) -> SharedAppearance {
@@ -239,7 +289,7 @@ pub struct Bake {
     epoch: u64,
     fingerprints: HashMap<u64, u64>,
     pub limits: Limits,
-    atoms: HashMap<u64, Atom>,
+    atoms: HashMap<u64, Placed>,
     objects: HashMap<u64, ObjectId>,
     cells: HashMap<Position, Vec<u64>>,
     failed: HashSet<u64>,
@@ -248,8 +298,9 @@ pub struct Bake {
     areas: HashMap<(TypeId, u64), ObjectId>,
     area_members: HashMap<ObjectId, HashSet<u64>>,
     initialized: bool,
-    prepared: HashMap<ObjectId, Option<Fault>>,
-    lit: HashSet<ObjectId>,
+    prepared: ObjectSet,
+    prepare_faults: HashMap<ObjectId, Fault>,
+    lit: ObjectSet,
     contributions: HashMap<u64, Vec<u64>>,
     by_target: HashMap<u64, Contributions>,
     dirty_appearances: HashSet<u64>,
@@ -475,6 +526,11 @@ impl Bake {
         let mut hasher = DefaultHasher::new();
         hash_constants(&atom.vars, &mut hasher);
         let fingerprint = hasher.finish();
+        let placed = Placed {
+            ty: atom.ty,
+            position: atom.position,
+            constants: fingerprint,
+        };
 
         let area_key = tree
             .roots()
@@ -485,7 +541,7 @@ impl Bake {
             self.objects.insert(atom.instance, object);
             self.area_members.entry(object).or_default().insert(atom.instance);
             self.cells.entry(atom.position).or_default().push(atom.instance);
-            self.atoms.insert(atom.instance, atom);
+            self.atoms.insert(atom.instance, placed);
 
             return;
         }
@@ -524,7 +580,7 @@ impl Bake {
 
         self.fingerprints.insert(atom.instance, fingerprint);
         self.cells.entry(atom.position).or_default().push(atom.instance);
-        self.atoms.insert(atom.instance, atom);
+        self.atoms.insert(atom.instance, placed);
     }
 
     fn link_cell(&mut self, tree: &ObjectTree, position: Position) {
@@ -580,11 +636,12 @@ impl Bake {
             return;
         };
 
-        if let Some(fault) = self.prepared.get(&object).cloned() {
-            if let Some(fault) = fault {
+        if self.prepared.contains(object) {
+            if let Some(fault) = self.prepare_faults.get(&object).cloned() {
                 self.failed.insert(id);
                 self.record_fault(id, fault);
             }
+
             return;
         }
 
@@ -595,8 +652,9 @@ impl Bake {
                 .run(tree, module, proc, profile, Some(object), args, self.limits)
                 .err()
         });
-        self.prepared.insert(object, fault.clone());
+        self.prepared.insert(object);
         if let Some(fault) = fault {
+            self.prepare_faults.insert(object, fault.clone());
             self.failed.insert(id);
             self.record_fault(id, fault);
         }
@@ -804,7 +862,7 @@ impl Bake {
         vars.sort_unstable();
 
         let mut hasher = DefaultHasher::new();
-        hash_constants(&atom.vars, &mut hasher);
+        atom.constants.hash(&mut hasher);
         vars.hash(&mut hasher);
         self.fingerprints.insert(id, hasher.finish());
     }
@@ -1046,8 +1104,9 @@ impl Bake {
                 if !shared {
                     self.area_members.remove(&object);
                     self.areas.retain(|_, value| *value != object);
-                    self.prepared.remove(&object);
-                    self.lit.remove(&object);
+                    self.prepared.remove(object);
+                    self.prepare_faults.remove(&object);
+                    self.lit.remove(object);
                     let _ = self.runtime.heap.delete_unplaced_contents(object);
                     let _ = self.runtime.heap.relocate(object, None);
                     if let Ok(object) = self.runtime.heap.object_mut(object) {
@@ -1174,6 +1233,7 @@ impl Bake {
         drop(std::mem::take(&mut self.cells));
         freed("object, fingerprint and cell maps");
         drop(std::mem::take(&mut self.prepared));
+        drop(std::mem::take(&mut self.prepare_faults));
         drop(std::mem::take(&mut self.lit));
         freed("prepared and lit sets");
         drop(std::mem::take(&mut self.connection_endpoints));
@@ -1228,7 +1288,7 @@ impl Bake {
                 .filter_map(|id| self.objects.get(id).copied())
                 .collect::<HashSet<_>>();
             for object in &objects {
-                self.lit.remove(object);
+                self.lit.remove(*object);
                 if let Ok(object) = self.runtime.heap.object_mut(*object) {
                     for name in &schema {
                         object.vars.remove(name);
