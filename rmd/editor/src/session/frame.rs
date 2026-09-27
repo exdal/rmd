@@ -207,6 +207,10 @@ impl Session {
     }
 
     pub(super) fn rebuild_instances(&mut self, id: DocumentId) {
+        if let Some(cache) = self.caches.get_mut(&id) {
+            drop(std::mem::take(&mut cache.instances));
+        }
+
         let bake = self.caches.get(&id).and_then(|cache| cache.bake.as_ref());
         let instances = match (self.state.environment.as_ref(), self.state.document(id)) {
             (Some(environment), Some(document)) => frame::build_with_options(
