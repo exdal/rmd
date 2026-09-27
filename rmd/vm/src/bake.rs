@@ -863,8 +863,12 @@ impl Bake {
             }
         }
 
-        self.contributions
-            .insert(id, values.keys().copied().collect::<Vec<_>>());
+        // an atom that only changed itself needs no list, removing it looks in its own slot
+        if values.keys().any(|target| *target != id) {
+            self.contributions
+                .insert(id, values.keys().copied().collect::<Vec<_>>());
+        }
+
         for (target, appearance) in values {
             self.by_target.entry(target).or_default().insert(id, appearance);
             self.dirty_appearances.insert(target);
@@ -932,13 +936,14 @@ impl Bake {
     }
 
     fn remove_contribution(&mut self, id: u64) {
-        if let Some(targets) = self.contributions.remove(&id) {
-            for target in targets {
-                if let Some(values) = self.by_target.get_mut(&target) {
-                    values.remove(id);
-                }
-                self.dirty_appearances.insert(target);
+        // no list means the atom only ever contributed to itself
+        let targets = self.contributions.remove(&id).unwrap_or_else(|| vec![id]);
+        for target in targets {
+            if let Some(values) = self.by_target.get_mut(&target) {
+                values.remove(id);
             }
+
+            self.dirty_appearances.insert(target);
         }
     }
 
