@@ -276,6 +276,160 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the local target/SecondCity checkout"]
+    fn bundled_secondcity_profile_bakes_city_maps() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/SecondCity");
+        let entry = root.join("tgstation.dme");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(editor::environment::BundledProfile::SecondCity),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&entry, &options, &Progress::new()).expect("SecondCity codebase");
+        assert!(
+            !loaded.diagnostics.bake_preprocess.iter().any(|error| error.is_fatal()),
+            "{:?}",
+            loaded.diagnostics.bake_preprocess
+        );
+        assert!(
+            loaded.diagnostics.bake_sema.is_empty(),
+            "{:?}",
+            loaded.diagnostics.bake_sema
+        );
+        assert!(loaded.diagnostics.codegen.is_none(), "{:?}", loaded.diagnostics.codegen);
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        assert_eq!(
+            loaded
+                .environment
+                .profiles
+                .as_ref()
+                .map(|profiles| profiles.active.as_str()),
+            Some("/datum/demir/secondcity")
+        );
+        assert!(loaded.environment.bake_program.is_some());
+
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+
+        // A lone city wall under an outdoor floor: the wall stands its frill on that floor, and the
+        // floor is moonlit. Beside the wall, a low wall builds its window under a patch of grass.
+        let area = Prefab::new(TreePath::parse("/area/vtm/outside"));
+        let concrete = Prefab::new(TreePath::parse("/turf/open/floor/plating/concrete"));
+        let mut city_map = Map::new(Size { x: 2, y: 2, z: 2 });
+        let wall = city_map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/turf/closed/wall/vampwall/city")),
+            area.clone(),
+        ]);
+        let floor = city_map.intern_tile(vec![concrete.clone(), area.clone()]);
+        let low_wall = city_map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/obj/structure/platform/lowwall/city/window")),
+            concrete,
+            area.clone(),
+        ]);
+        let grass = city_map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/turf/open/misc/grass")),
+            area.clone(),
+        ]);
+        let ash = city_map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/turf/open/misc/ashplanet/ash")),
+            area,
+        ]);
+        // Rows run from the top, so the floor is north of the wall.
+        city_map.grid[0][0] = vec![floor, grass];
+        city_map.grid[0][1] = vec![wall, low_wall];
+        // Large smoothing turfs above the first level, which the default level traits don't cover.
+        city_map.grid[1][0] = vec![grass, grass];
+        city_map.grid[1][1] = vec![ash, ash];
+        session.activate_document(MapDocument::new(city_map, 1));
+        settle_bake(&mut session);
+        let city_bake = session.active_cache().bake.as_ref().expect("city wall bake");
+        assert_eq!(city_bake.diagnostics.count(), 0, "{:?}", city_bake.diagnostics.entries);
+        let smoothed = |sheet: &str, state: &str| {
+            city_bake.appearances.values().any(|appearance| {
+                let text = |var: &str| {
+                    appearance
+                        .vars
+                        .iter()
+                        .find(|(name, _)| name.as_str() == var)
+                        .and_then(|(_, value)| value.as_text())
+                };
+
+                text("icon").is_some_and(|icon| icon.ends_with(sheet))
+                    && text("icon_state").is_some_and(|icon_state| icon_state.starts_with(state))
+            })
+        };
+        assert!(
+            smoothed("floor/grass.dmi", "grass-"),
+            "the grass did not smooth from its junction sheet"
+        );
+        assert!(
+            smoothed("floors/ash.dmi", "ash-"),
+            "the ash did not smooth from its junction sheet"
+        );
+        assert!(
+            city_bake
+                .appearances
+                .values()
+                .flat_map(|appearance| &appearance.overlays)
+                .any(|overlay| overlay
+                    .vars
+                    .iter()
+                    .any(|(name, value)| name.as_str() == "pixel_y" && value.as_num() == Some(32.0))),
+            "the city wall drew no frill"
+        );
+        assert!(
+            city_bake
+                .appearances
+                .values()
+                .flat_map(|appearance| &appearance.overlays)
+                .any(
+                    |overlay| overlay.vars.iter().any(|(name, value)| name.as_str() == "icon_state"
+                        && value.as_text().is_some_and(|state| state.starts_with("window-")))
+                ),
+            "the low wall drew no window"
+        );
+        assert!(
+            city_bake
+                .lighting
+                .as_ref()
+                .is_some_and(|lighting| lighting.tiles.iter().any(|tile| tile
+                    .corners
+                    .iter()
+                    .flatten()
+                    .any(|channel| *channel > 0.0))),
+            "the outdoor floor was not moonlit"
+        );
+
+        for name in ["runtimetown.dmm", "san_fangsisco/sanfangsisco.dmm"] {
+            session
+                .open_map(&root.join("_maps/map_files/Vampire").join(name), 1)
+                .expect("SecondCity map");
+            settle_bake(&mut session);
+            let bake = session.active_cache().bake.as_ref().expect("completed map bake");
+            assert!(bake.succeeded > 0, "{name} baked no atoms");
+
+            let faults = bake
+                .diagnostics
+                .entries
+                .iter()
+                .map(|entry| {
+                    let file = session
+                        .state
+                        .environment
+                        .as_ref()
+                        .and_then(|environment| environment.bake_file(entry.fault.location.file));
+                    format!(
+                        "{} atoms: {:?} at {}",
+                        entry.count,
+                        entry.fault.kind,
+                        entry.fault.location.display(file)
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(bake.diagnostics.count(), 0, "{name}: {faults:#?}");
+        }
+    }
+
+    #[test]
     fn a_map_draws_before_its_bake_lands() {
         let root = examples();
         let mut session = Session::new();

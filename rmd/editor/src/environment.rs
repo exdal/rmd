@@ -74,15 +74,17 @@ pub enum BundledProfile {
     Cmss13,
     Goonstation,
     Monkestation,
+    SecondCity,
     Tgstation,
     Vanderlin,
 }
 
 impl BundledProfile {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Cmss13,
         Self::Goonstation,
         Self::Monkestation,
+        Self::SecondCity,
         Self::Tgstation,
         Self::Vanderlin,
     ];
@@ -92,6 +94,7 @@ impl BundledProfile {
             Self::Cmss13 => "CMSS13",
             Self::Goonstation => "Goonstation",
             Self::Monkestation => "Monkestation",
+            Self::SecondCity => "SecondCity",
             Self::Tgstation => "tgstation",
             Self::Vanderlin => "Vanderlin",
         }
@@ -102,6 +105,7 @@ impl BundledProfile {
             Self::Cmss13 => "/datum/demir/cmss13",
             Self::Goonstation => "/datum/demir/goonstation",
             Self::Monkestation => "/datum/demir/monkestation",
+            Self::SecondCity => "/datum/demir/secondcity",
             Self::Tgstation => "/datum/demir/tgstation",
             Self::Vanderlin => "/datum/demir/vanderlin",
         }
@@ -112,6 +116,7 @@ impl BundledProfile {
             Self::Cmss13 => "<bundled-profile-cmss13.dm>",
             Self::Goonstation => "<bundled-profile-goonstation.dm>",
             Self::Monkestation => "<bundled-profile-monkestation.dm>",
+            Self::SecondCity => "<bundled-profile-secondcity.dm>",
             Self::Tgstation => "<bundled-profile-tgstation.dm>",
             Self::Vanderlin => "<bundled-profile-vanderlin.dm>",
         }
@@ -122,6 +127,7 @@ impl BundledProfile {
             Self::Cmss13 => include_str!("../../../examples/profiles/cmss13.dm"),
             Self::Goonstation => include_str!("../../../examples/profiles/goonstation.dm"),
             Self::Monkestation => include_str!("../../../examples/profiles/monkestation.dm"),
+            Self::SecondCity => include_str!("../../../examples/profiles/secondcity.dm"),
             Self::Tgstation => include_str!("../../../examples/profiles/tgstation.dm"),
             Self::Vanderlin => include_str!("../../../examples/profiles/vanderlin.dm"),
         }
@@ -136,6 +142,10 @@ impl BundledProfile {
             // COCK AND BALL TORTURE
             Self::Tgstation => Some((
                 "<bundled-profile-tgstation-defines.dm>",
+                "#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n",
+            )),
+            Self::SecondCity => Some((
+                "<bundled-profile-secondcity-defines.dm>",
                 "#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n",
             )),
             Self::Cmss13 | Self::Monkestation | Self::Vanderlin => None,
@@ -593,6 +603,7 @@ mod tests {
                 "/datum/demir/cmss13",
                 "/datum/demir/goonstation",
                 "/datum/demir/monkestation",
+                "/datum/demir/secondcity",
                 "/datum/demir/tgstation",
                 "/datum/demir/vanderlin",
             ]
@@ -606,6 +617,10 @@ mod tests {
         );
         assert_eq!(
             BundledProfile::Tgstation.defines().map(|(_, source)| source),
+            Some("#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n")
+        );
+        assert_eq!(
+            BundledProfile::SecondCity.defines().map(|(_, source)| source),
             Some("#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n")
         );
     }
