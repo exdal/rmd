@@ -1942,7 +1942,7 @@ fn export_value(value: &GenericValue) -> Result<Value, FaultKind> {
         GenericValue::Num(number) => Value::Num(*number),
         GenericValue::Text(text) => Value::Text(text.to_string()),
         GenericValue::Resource(path) => Value::Resource(path.to_string()),
-        GenericValue::Path(path) => Value::Path(path.clone()),
+        GenericValue::Path(path) => Value::Path((**path).clone()),
         _ => return Err(FaultKind::Unsupported("appearance value".into())),
     })
 }

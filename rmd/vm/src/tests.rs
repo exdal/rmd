@@ -2760,3 +2760,10 @@ fn alists_inherit_list_intrinsics_through_proc_dispatch() {
         12.into()
     );
 }
+
+/// Every object var and list entry on a bake heap holds one of these, a million atoms' worth on a
+/// large map.
+#[test]
+fn a_runtime_value_stays_three_words() {
+    assert!(size_of::<GenericValue>() <= 24, "{} bytes", size_of::<GenericValue>());
+}

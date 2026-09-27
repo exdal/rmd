@@ -508,7 +508,7 @@ impl Evaluator<'_> {
             Intrinsic::Istype => {
                 let value = arg(0);
                 let base_path = match arg(1) {
-                    GenericValue::Path(path) => Some(path),
+                    GenericValue::Path(path) => Some(*path),
                     _ => None,
                 };
                 let matches = match &value {
@@ -559,7 +559,7 @@ impl Evaluator<'_> {
                 Ok(self
                     .tree
                     .id_of(&path)
-                    .map(|_| GenericValue::Path(path))
+                    .map(|_| GenericValue::Path(Box::new(path)))
                     .unwrap_or_default())
             },
             Intrinsic::Min | Intrinsic::Max => {

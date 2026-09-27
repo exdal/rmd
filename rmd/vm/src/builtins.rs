@@ -21,7 +21,7 @@ impl Evaluator<'_> {
                     }
 
                     if let Some(decl) = self.tree.get(id) {
-                        entries.push((GenericValue::Path(decl.path.clone()), None));
+                        entries.push((GenericValue::Path(Box::new(decl.path.clone())), None));
                     }
                 }
             }

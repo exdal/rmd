@@ -166,7 +166,7 @@ impl Runtime {
             Value::Num(number) => GenericValue::Num(*number),
             Value::Text(text) => GenericValue::Text(text.as_str().into()),
             Value::Resource(path) => GenericValue::Resource(path.as_str().into()),
-            Value::Path(path) => GenericValue::Path(path.clone()),
+            Value::Path(path) => GenericValue::Path(Box::new(path.clone())),
             Value::Unevaluated => return Err(FaultKind::Unsupported("nonconstant initializer".into())),
             Value::List(entries) => {
                 let entries = entries
@@ -706,10 +706,10 @@ impl<'a> Evaluator<'a> {
                     let count = self.u32(frame)? as usize;
                     let names = (0..count).map(|_| self.identifier(frame)).collect::<Result<Vec<_>>>()?;
                     let values = self.pop_many(frame, count)?;
-                    frame.stack.push(GenericValue::ModifiedType(ModifiedType {
+                    frame.stack.push(GenericValue::ModifiedType(Box::new(ModifiedType {
                         path,
                         overrides: names.into_iter().zip(values).collect::<Vec<_>>(),
-                    }));
+                    })));
                 },
                 Op::MakeList => {
                     let args = self.argument_values(frame)?;
@@ -1454,7 +1454,7 @@ impl Evaluator<'_> {
                     return Ok(self
                         .tree
                         .get(ty)
-                        .map(|declaration| GenericValue::Path(declaration.path.clone()))
+                        .map(|declaration| GenericValue::Path(Box::new(declaration.path.clone())))
                         .unwrap_or_default());
                 },
                 "parent_type" => return Ok(self.parent_path(ty)),
@@ -1525,7 +1525,7 @@ impl Evaluator<'_> {
                 "type" => self
                     .world_type()
                     .and_then(|ty| self.tree.get(ty))
-                    .map(|declaration| GenericValue::Path(declaration.path.clone()))
+                    .map(|declaration| GenericValue::Path(Box::new(declaration.path.clone())))
                     .unwrap_or_default(),
                 _ => {
                     let world = self
@@ -1634,7 +1634,7 @@ impl Evaluator<'_> {
                         return Ok(self
                             .tree
                             .get(object.ty)
-                            .map(|declaration| GenericValue::Path(declaration.path.clone()))
+                            .map(|declaration| GenericValue::Path(Box::new(declaration.path.clone())))
                             .unwrap_or_default());
                     },
                     "parent_type" => return Ok(self.parent_path(object.ty)),
@@ -1742,7 +1742,7 @@ impl Evaluator<'_> {
             .get(ty)
             .and_then(|declaration| declaration.parent)
             .and_then(|parent| self.tree.get(parent))
-            .map(|declaration| GenericValue::Path(declaration.path.clone()))
+            .map(|declaration| GenericValue::Path(Box::new(declaration.path.clone())))
             .unwrap_or_default()
     }
 
@@ -2351,8 +2351,12 @@ impl Evaluator<'_> {
         &mut self, ty: GenericValue, args: Vec<(Option<Identifier>, GenericValue)>,
     ) -> Result<GenericValue> {
         let (path, overrides) = match ty {
-            GenericValue::Path(path) => (path, Vec::new()),
-            GenericValue::ModifiedType(modified) => (modified.path, modified.overrides),
+            GenericValue::Path(path) => (*path, Vec::new()),
+            GenericValue::ModifiedType(modified) => {
+                let ModifiedType { path, overrides } = *modified;
+
+                (path, overrides)
+            },
             _ => return Err(self.fault(FaultKind::InvalidOperation("new requires type".into()))),
         };
 
