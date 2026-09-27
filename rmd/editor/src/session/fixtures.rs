@@ -23,6 +23,58 @@ use render::{FrameUpdate, SpriteInstance};
 use super::{BlameState, DiffSide, DiffState, DocumentCache, Session};
 use crate::git_worker::Revision;
 
+/// Counts live heap bytes, so memory tests can measure what a structure holds by dropping it.
+struct CountingAllocator;
+
+static LIVE_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static PEAK_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+// SAFETY: every call forwards to the system allocator unchanged, only the byte counts are added.
+unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        let pointer = unsafe { std::alloc::System.alloc(layout) };
+        if !pointer.is_null() {
+            counted(layout.size() as isize);
+        }
+
+        pointer
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(pointer, layout) };
+        counted(-(layout.size() as isize));
+    }
+
+    unsafe fn realloc(&self, pointer: *mut u8, layout: std::alloc::Layout, size: usize) -> *mut u8 {
+        let moved = unsafe { std::alloc::System.realloc(pointer, layout, size) };
+        if !moved.is_null() {
+            counted(size as isize - layout.size() as isize);
+        }
+
+        moved
+    }
+}
+
+fn counted(change: isize) {
+    use std::sync::atomic::Ordering;
+
+    let live = if change >= 0 {
+        LIVE_BYTES.fetch_add(change as usize, Ordering::Relaxed) + change as usize
+    } else {
+        LIVE_BYTES.fetch_sub(change.unsigned_abs(), Ordering::Relaxed) - change.unsigned_abs()
+    };
+    PEAK_BYTES.fetch_max(live, Ordering::Relaxed);
+}
+
+/// Heap bytes currently allocated by the whole test process.
+pub(crate) fn live_bytes() -> usize { LIVE_BYTES.load(std::sync::atomic::Ordering::Relaxed) }
+
+/// The most heap bytes allocated at once since the last call, which restarts the count.
+pub(crate) fn take_peak_bytes() -> usize { PEAK_BYTES.swap(live_bytes(), std::sync::atomic::Ordering::Relaxed) }
+
 /// The editor always loads in the background, but tests want one blocking call.
 impl Session {
     pub(crate) fn load_environment(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {

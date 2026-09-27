@@ -1117,6 +1117,49 @@ impl Bake {
         groups
     }
 
+    /// Frees the bake one part at a time and calls `freed` after each, so a caller that counts
+    /// allocations can see what each part held.
+    #[doc(hidden)]
+    pub fn release_in_stages(mut self, mut freed: impl FnMut(&'static str)) {
+        drop(std::mem::take(&mut self.appearances));
+        freed("composed appearances");
+        drop(std::mem::take(&mut self.by_target));
+        freed("contributions by target");
+        drop(std::mem::take(&mut self.contributions));
+        freed("contribution lists");
+        drop(std::mem::take(&mut self.cache));
+        freed("appearance cache");
+        drop(self.lighting.take());
+        freed("lighting map");
+        drop(std::mem::take(&mut self.atoms));
+        freed("atoms");
+        drop(std::mem::take(&mut self.objects));
+        drop(std::mem::take(&mut self.fingerprints));
+        drop(std::mem::take(&mut self.cells));
+        freed("object, fingerprint and cell maps");
+        drop(std::mem::take(&mut self.prepared));
+        drop(std::mem::take(&mut self.lit));
+        freed("prepared and lit sets");
+        drop(std::mem::take(&mut self.connection_endpoints));
+        drop(std::mem::take(&mut self.connection_index));
+        drop(std::mem::take(&mut self.highlights));
+        freed("connections and highlights");
+        drop(std::mem::take(&mut self.runtime.heap.lists));
+        freed("heap lists");
+        for object in &mut self.runtime.heap.objects {
+            object.vars = Default::default();
+        }
+        freed("heap object vars");
+        for object in &mut self.runtime.heap.objects {
+            object.contents = Vec::new();
+        }
+        freed("heap object contents");
+        drop(std::mem::take(&mut self.runtime.heap.objects));
+        freed("heap objects");
+        drop(self);
+        freed("everything else");
+    }
+
     pub fn rebake(&mut self, tree: &ObjectTree, module: &Module, request: crate::ui::Rebake) -> BakeUpdate {
         if !self.initialized || request.is_empty() {
             return BakeUpdate::default();

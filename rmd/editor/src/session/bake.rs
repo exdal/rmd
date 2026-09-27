@@ -182,7 +182,7 @@ mod tests {
 
     use crate::session::{
         Session,
-        fixtures::{assert_render_cache_matches_rebuild, examples, settle_bake},
+        fixtures::{assert_render_cache_matches_rebuild, examples, live_bytes, settle_bake, take_peak_bytes},
     };
 
     #[test]
@@ -429,7 +429,8 @@ mod tests {
         }
     }
 
-    // Times each phase of one placement on the largest SecondCity map. Run with `--nocapture`.
+    // Times each phase of one placement on the largest SecondCity map, and reports what the heap
+    // holds along the way. Run with `--nocapture`.
     #[test]
     #[ignore = "requires the local target/SecondCity checkout"]
     fn secondcity_placement_timings() {
@@ -442,14 +443,32 @@ mod tests {
             forced_profile: Some(editor::environment::BundledProfile::SecondCity),
             ..Default::default()
         };
+        let megabytes = |bytes: usize| bytes as f64 / (1024.0 * 1024.0);
+        let report = |label: &str| {
+            eprintln!(
+                "{label}: {:.0} MB live, {:.0} MB peak",
+                megabytes(live_bytes()),
+                megabytes(take_peak_bytes())
+            );
+        };
+        eprintln!(
+            "GenericValue {} B, AppearanceDelta {} B, SpriteInstance {} B",
+            size_of::<vm::GenericValue>(),
+            size_of::<vm::AppearanceDelta>(),
+            size_of::<render::SpriteInstance>()
+        );
+        take_peak_bytes();
+
         let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
             .expect("SecondCity codebase");
         let mut session = Session::new();
         session.apply_codebase(loaded);
+        report("codebase loaded");
 
         session
             .open_map(&root.join("_maps/map_files/Vampire/san_fangsisco/sanfangsisco.dmm"), 1)
             .expect("San Fangsisco");
+        report("map opened");
 
         let started = Instant::now();
         while session.baker.is_busy() {
@@ -457,6 +476,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         eprintln!("full bake settled in {:?}", started.elapsed());
+        report("bake landed");
 
         let id = session.state.active().expect("active map");
         let open_floors = {
@@ -557,6 +577,33 @@ mod tests {
             true,
             "/turf/closed/wall/vampwall/city",
         );
+        report("placed");
+
+        // what each part holds, measured by what freeing it gives back
+        let mut last = live_bytes();
+        let mut freed = |label: &str| {
+            let now = live_bytes();
+            eprintln!("  {label}: {:.1} MB", megabytes(last.saturating_sub(now)));
+            last = now;
+        };
+        let cache = session.caches.get_mut(&id).expect("map cache");
+        let instances = std::mem::take(&mut cache.instances);
+        let bake = cache.bake.take().expect("bake");
+        eprintln!("frame cache:");
+        instances.release_in_stages(&mut freed);
+        eprintln!("bake:");
+        bake.release_in_stages(&mut freed);
+        drop(lighting);
+        freed("lighting map, taken earlier");
+        eprintln!("session:");
+        session.caches.clear();
+        freed("other document caches");
+        drop(session.state.close_document(id));
+        freed("map document and history");
+        session.state.environment = None;
+        freed("codebase environment");
+        drop(session);
+        freed("rest of the session");
     }
 
     #[test]

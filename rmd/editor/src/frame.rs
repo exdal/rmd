@@ -89,6 +89,32 @@ pub struct FrameInstances {
 }
 
 impl FrameInstances {
+    /// Frees the cache one part at a time and calls `freed` after each, so a caller that counts
+    /// allocations can see what each part held.
+    #[doc(hidden)]
+    pub fn release_in_stages(mut self, mut freed: impl FnMut(&'static str)) {
+        drop(std::mem::take(&mut self.sprites));
+        freed("sprites");
+        drop(std::mem::take(&mut self.sprite_sort_keys));
+        drop(std::mem::take(&mut self.pages));
+        freed("sort keys and pages");
+        drop(std::mem::take(&mut self.owner_keys));
+        freed("owner keys");
+        drop(std::mem::take(&mut self.primary_sprites));
+        freed("primary sprites");
+        drop(std::mem::take(&mut self.placements));
+        drop(std::mem::take(&mut self.placement_orders));
+        freed("placements and orders");
+        drop(std::mem::take(&mut self.area_tiles));
+        drop(std::mem::take(&mut self.area_tile_indices));
+        drop(std::mem::take(&mut self.area_components));
+        drop(std::mem::take(&mut self.area_component_tiles));
+        drop(std::mem::take(&mut self.area_owners_by_coord));
+        freed("area tiles and components");
+        drop(self);
+        freed("everything else");
+    }
+
     pub fn reorder_placements(&mut self, ids: &[PrefabInstanceId]) {
         let mut orders = ids
             .iter()
