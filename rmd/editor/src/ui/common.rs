@@ -23,6 +23,11 @@ pub(super) fn align_right(ui: &Ui, width: f32) {
     }
 }
 
+pub(crate) fn dpi(ui: &Ui) -> f32 {
+    let style = unsafe { ui.style() };
+    style.font_scale_dpi() * style.font_scale_main()
+}
+
 pub(super) fn label_width(ui: &Ui, label: &str) -> f32 { ui.calc_text_size_with_opts(label, true, -1.0)[0] }
 
 pub(super) fn button_width(ui: &Ui, label: &str) -> f32 {
@@ -65,7 +70,7 @@ pub(super) fn overflow_scroll(ui: &Ui, min_width: f32) -> (TableFlags, f32) {
 pub(super) fn table_min_width(ui: &Ui, fixed: &[f32], stretch: usize) -> f32 {
     let padding = ui.clone_style().cell_padding()[0] * 2.0 + 1.0;
     let columns = fixed.len() + stretch;
-    fixed.iter().sum::<f32>() + MIN_STRETCH_WIDTH * stretch as f32 + padding * columns as f32
+    fixed.iter().sum::<f32>() + MIN_STRETCH_WIDTH * dpi(ui) * stretch as f32 + padding * columns as f32
 }
 
 pub(super) const fn opaque(color: [f32; 3]) -> [f32; 4] { [color[0], color[1], color[2], 1.0] }

@@ -3,7 +3,12 @@ use dmm::Prefab;
 use editor::icons::materialdesignicons::ICON_IMAGE_BROKEN;
 use render::Renderer;
 
-use super::{OVERLAY_PADDING, OverlayRect, common::fit_icon, draw_overlay_underlay};
+use super::{
+    OverlayRect,
+    common::{dpi, fit_icon},
+    draw_overlay_underlay,
+    overlay_padding,
+};
 use crate::{session::Session, settings::KeyBindings};
 
 const RECENT_ICON_SIZE: f32 = 48.0;
@@ -20,7 +25,8 @@ pub(super) fn draw_history_overlay(
     let button_size = recent_button_size(ui);
     let palette = session.palette().cloned();
     let mut chosen = None;
-    ui.set_cursor_screen_pos([bounds.min[0] + OVERLAY_PADDING, bounds.min[1] + OVERLAY_PADDING]);
+    let padding = overlay_padding(ui);
+    ui.set_cursor_screen_pos([bounds.min[0] + padding, bounds.min[1] + padding]);
 
     for (index, prefab) in recent_prefabs.iter().enumerate() {
         if index > 0 {
@@ -34,7 +40,7 @@ pub(super) fn draw_history_overlay(
             .then(|| ui.push_style_color(StyleColor::Button, ui.style_color(StyleColor::ButtonActive)));
         let clicked = match session.prefab_thumbnail(prefab) {
             Some(thumbnail) => {
-                let image_size = fit_recent_icon(thumbnail.texture.width, thumbnail.texture.height);
+                let image_size = fit_recent_icon(thumbnail.texture.width, thumbnail.texture.height, dpi(ui));
                 let padding = [(button_size - image_size[0]) * 0.5, (button_size - image_size[1]) * 0.5];
                 let _padding = ui.push_style_var(StyleVar::FramePadding(padding));
 
@@ -65,10 +71,12 @@ pub(super) fn draw_history_overlay(
 pub(super) fn recent_button_size(ui: &Ui) -> f32 {
     let padding = ui.clone_style().frame_padding();
 
-    RECENT_ICON_SIZE + padding[0].max(padding[1]) * 2.0
+    RECENT_ICON_SIZE * dpi(ui) + padding[0].max(padding[1]) * 2.0
 }
 
-fn fit_recent_icon(width: u32, height: u32) -> [f32; 2] { fit_icon(width, height, RECENT_ICON_SIZE) }
+fn fit_recent_icon(width: u32, height: u32, scale: f32) -> [f32; 2] {
+    fit_icon(width, height, RECENT_ICON_SIZE * scale)
+}
 
 fn draw_recent_badge(ui: &Ui, key: &str) {
     let item_min = ui.item_rect_min();
@@ -102,10 +110,10 @@ mod tests {
 
     #[test]
     fn recent_icons_fit_inside_a_square_without_changing_aspect_ratio() {
-        assert_eq!(fit_recent_icon(32, 32), [RECENT_ICON_SIZE, RECENT_ICON_SIZE]);
-        assert_eq!(fit_recent_icon(64, 32), [RECENT_ICON_SIZE, RECENT_ICON_SIZE / 2.0]);
-        assert_eq!(fit_recent_icon(16, 32), [RECENT_ICON_SIZE / 2.0, RECENT_ICON_SIZE]);
-        assert_eq!(fit_recent_icon(0, 0), [RECENT_ICON_SIZE, RECENT_ICON_SIZE]);
+        assert_eq!(fit_recent_icon(32, 32, 1.0), [RECENT_ICON_SIZE, RECENT_ICON_SIZE]);
+        assert_eq!(fit_recent_icon(64, 32, 1.0), [RECENT_ICON_SIZE, RECENT_ICON_SIZE / 2.0]);
+        assert_eq!(fit_recent_icon(16, 32, 1.0), [RECENT_ICON_SIZE / 2.0, RECENT_ICON_SIZE]);
+        assert_eq!(fit_recent_icon(0, 0, 1.0), [RECENT_ICON_SIZE, RECENT_ICON_SIZE]);
     }
 
     #[test]

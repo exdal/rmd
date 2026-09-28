@@ -7,7 +7,7 @@ use objtree::{ObjectTree, TypeId};
 use render::Renderer;
 
 use super::{
-    common::{fit_icon, focus_window_on_hover},
+    common::{dpi, fit_icon, focus_window_on_hover},
     settings::{draw_object_tree_filter_settings, draw_object_tree_search_settings},
 };
 use crate::{
@@ -577,6 +577,7 @@ fn draw_object_tree_lines(
     let style = ui.clone_style();
     let indent = style.indent_spacing();
     let arrow_center_offset = style.frame_padding()[0] + ui.current_font_size() * 0.5;
+    let scale = dpi(ui);
     let draw = ui.get_window_draw_list();
 
     if depth > 0 {
@@ -603,24 +604,25 @@ fn draw_object_tree_lines(
                 [x, end],
                 OBJECT_TREE_LINE_COLORS[ancestor_depth % OBJECT_TREE_LINE_COLORS.len()],
             )
-            .thickness(OBJECT_TREE_LINE_THICKNESS)
+            .thickness(OBJECT_TREE_LINE_THICKNESS * scale)
             .build();
         }
     }
 
     if depth > 0 {
         let x = cursor[0] - indent + arrow_center_offset;
-        let length = if row.leaf {
-            OBJECT_TREE_LEAF_BRANCH_LENGTH
-        } else {
-            OBJECT_TREE_BRANCH_LENGTH
-        };
+        let length = scale
+            * if row.leaf {
+                OBJECT_TREE_LEAF_BRANCH_LENGTH
+            } else {
+                OBJECT_TREE_BRANCH_LENGTH
+            };
         draw.add_line(
             [x, midpoint],
             [cursor[0] + length, midpoint],
             OBJECT_TREE_LINE_COLORS[(depth - 1) % OBJECT_TREE_LINE_COLORS.len()],
         )
-        .thickness(OBJECT_TREE_LINE_THICKNESS)
+        .thickness(OBJECT_TREE_LINE_THICKNESS * scale)
         .build();
     }
 
@@ -631,7 +633,7 @@ fn draw_object_tree_lines(
             [x, node_rect.max[1]],
             OBJECT_TREE_LINE_COLORS[depth % OBJECT_TREE_LINE_COLORS.len()],
         )
-        .thickness(OBJECT_TREE_LINE_THICKNESS)
+        .thickness(OBJECT_TREE_LINE_THICKNESS * scale)
         .build();
     }
 }

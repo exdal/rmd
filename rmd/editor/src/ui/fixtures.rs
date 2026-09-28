@@ -8,12 +8,12 @@ use render::MapViewInteraction;
 
 use super::{
     MapViewState,
-    OVERLAY_PADDING,
     OverlayRect,
     PlacementControls,
     UiState,
     block_placement_controls_layout,
     conflict_controls_layout,
+    overlay_padding,
     recent_button_size,
     viewport::MapViewDraw,
 };
@@ -131,8 +131,8 @@ impl RectangleUiHarness {
                 min[1] + self.view.rect.height as f32,
             ];
             let controls = OverlayRect {
-                min: [min[0], min[1] + ui.frame_height() + 2.0 * OVERLAY_PADDING],
-                max: [max[0], max[1] - recent_button_size(ui) - 2.0 * OVERLAY_PADDING],
+                min: [min[0], min[1] + ui.frame_height() + 2.0 * overlay_padding(ui)],
+                max: [max[0], max[1] - recent_button_size(ui) - 2.0 * overlay_padding(ui)],
             };
             if let Some((position, _)) = conflict_controls_layout(
                 ui,
@@ -159,8 +159,8 @@ impl RectangleUiHarness {
                 min[1] + self.view.rect.height as f32,
             ];
             let controls = OverlayRect {
-                min: [min[0], min[1] + ui.frame_height() + 2.0 * OVERLAY_PADDING],
-                max: [max[0], max[1] - recent_button_size(ui) - 2.0 * OVERLAY_PADDING],
+                min: [min[0], min[1] + ui.frame_height() + 2.0 * overlay_padding(ui)],
+                max: [max[0], max[1] - recent_button_size(ui) - 2.0 * overlay_padding(ui)],
             };
             let (position, _) = block_placement_controls_layout(
                 ui,

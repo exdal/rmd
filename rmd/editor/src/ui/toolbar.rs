@@ -20,11 +20,11 @@ use super::{
     BlockSelectionOptions,
     MAX_CUSTOM_FILL_SEARCH_RESULTS,
     NewLevelDialog,
-    OVERLAY_PADDING,
     OverlayRect,
     draw_overlay_underlay,
     draw_selection_mode_controls,
     draw_type_path_search,
+    overlay_padding,
 };
 use crate::{
     session::{LevelChange, Session},
@@ -95,7 +95,8 @@ pub(super) fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRe
     } = state;
     draw_overlay_underlay(ui, bounds);
 
-    ui.set_cursor_screen_pos([bounds.min[0] + OVERLAY_PADDING, bounds.min[1] + OVERLAY_PADDING]);
+    let padding = overlay_padding(ui);
+    ui.set_cursor_screen_pos([bounds.min[0] + padding, bounds.min[1] + padding]);
 
     draw_tool_button(ui, session, keybindings, Tool::Place, ICON_PENCIL);
     ui.same_line();
@@ -121,8 +122,8 @@ pub(super) fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRe
     );
 
     let levels_width = z_level_width(ui, session.level_count());
-    let levels_x = (bounds.max[0] - OVERLAY_PADDING - levels_width).max(tools_end + OVERLAY_PADDING);
-    ui.set_cursor_screen_pos([levels_x, bounds.min[1] + OVERLAY_PADDING]);
+    let levels_x = (bounds.max[0] - padding - levels_width).max(tools_end + padding);
+    ui.set_cursor_screen_pos([levels_x, bounds.min[1] + padding]);
     draw_z_levels(ui, session, new_level_dialog);
 }
 

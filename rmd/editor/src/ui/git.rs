@@ -46,6 +46,7 @@ use super::{
         button_width,
         centered_note,
         checkbox_width,
+        dpi,
         focus_window_on_hover,
         label_width,
         opaque,
@@ -926,7 +927,7 @@ impl GitPanel {
 fn draw_versions(ui: &Ui, git: &GitDocState, share: f32, reveal: &mut Option<usize>, actions: &mut Vec<Action>) {
     let style = ui.clone_style();
     let history = git.history.as_deref().unwrap_or_default();
-    let row_height = ui.text_line_height() * 2.0 + style.item_spacing()[1] + VERSION_ROW_PADDING * 2.0;
+    let row_height = ui.text_line_height() * 2.0 + style.item_spacing()[1] + VERSION_ROW_PADDING * dpi(ui) * 2.0;
     let header = ui.text_line_height() + style.cell_padding()[1] * 2.0;
     let rows = history.len() + 1;
     let content = header + (row_height + style.cell_padding()[1] * 2.0) * rows as f32;
@@ -1065,28 +1066,29 @@ fn draw_versions(ui: &Ui, git: &GitDocState, share: f32, reveal: &mut Option<usi
 
 /// Text on a pill of the style's active header colour, which the style already pairs with its text
 fn draw_badge(ui: &Ui, text: &str) {
+    let padding = BADGE_PADDING * dpi(ui);
     let size = ui.calc_text_size(text);
     let origin = ui.cursor_screen_pos();
     ui.get_window_draw_list()
         .add_rect(
             origin,
-            [origin[0] + size[0] + BADGE_PADDING * 2.0, origin[1] + size[1]],
+            [origin[0] + size[0] + padding * 2.0, origin[1] + size[1]],
             ui.style_color(StyleColor::HeaderActive),
         )
         .filled(true)
-        .rounding(ui.clone_style().frame_rounding().max(2.0))
+        .rounding(ui.clone_style().frame_rounding().max(2.0 * dpi(ui)))
         .build();
-    ui.set_cursor_screen_pos([origin[0] + BADGE_PADDING, origin[1]]);
+    ui.set_cursor_screen_pos([origin[0] + padding, origin[1]]);
     ui.text(text);
     // the next item starts past the pill, not the text
-    ui.same_line_with_spacing(0.0, BADGE_PADDING);
+    ui.same_line_with_spacing(0.0, padding);
     ui.dummy([0.0, size[1]]);
 }
 
 /// Keeps the two lines of a version row off its borders
 fn pad_row(ui: &Ui) {
     let [x, y] = ui.cursor_pos();
-    ui.set_cursor_pos([x, y + VERSION_ROW_PADDING]);
+    ui.set_cursor_pos([x, y + VERSION_ROW_PADDING * dpi(ui)]);
 }
 
 fn unix_now() -> i64 {
@@ -1164,9 +1166,10 @@ fn draw_legend(ui: &Ui, blame: &BlameState) {
 
     if span != 0 {
         let labels = label_width(ui, "Newest") + label_width(ui, "Oldest") + spacing * 2.0;
-        let width = LEGEND_WIDTH
+        let scale = dpi(ui);
+        let width = (LEGEND_WIDTH * scale)
             .min(ui.content_region_avail_width() - labels)
-            .max(LEGEND_MIN_WIDTH);
+            .max(LEGEND_MIN_WIDTH * scale);
         ui.text_disabled("Newest");
         ui.same_line();
         let origin = ui.cursor_screen_pos();

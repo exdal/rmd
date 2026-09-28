@@ -11,7 +11,10 @@ use dear_imgui_rs::{
 };
 use editor::environment::BundledProfile;
 
-use super::{common::focus_window_on_hover, dialog::draw_keybind_preset_dialog};
+use super::{
+    common::{button_width, dpi, focus_window_on_hover},
+    dialog::draw_keybind_preset_dialog,
+};
 use crate::{
     session::Session,
     settings::{
@@ -24,6 +27,7 @@ use crate::{
         ObjectTreeSearchOptions,
         SelectionHighlight,
         Settings,
+        UI_SCALE_PERCENT,
         backup_dir,
     },
     ui::ProfileReload,
@@ -54,6 +58,7 @@ struct SettingsWindowState<'a> {
     resetting_keybinds: &'a mut bool,
     measured: &'a mut [f32; 2],
     pending_profile: &'a mut Option<ProfileReload>,
+    ui_scale_draft: &'a mut Option<u32>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -166,6 +171,7 @@ pub(super) struct SettingsWindow {
     resetting_keybinds: bool,
     measured: [f32; 2],
     pending_profile: Option<ProfileReload>,
+    ui_scale_draft: Option<u32>,
 }
 
 impl SettingsWindow {
@@ -178,6 +184,7 @@ impl SettingsWindow {
             resetting_keybinds: false,
             measured: SETTINGS_WINDOW_SIZE,
             pending_profile: None,
+            ui_scale_draft: None,
         })
     }
 
@@ -198,6 +205,7 @@ impl SettingsWindow {
                 resetting_keybinds: &mut self.resetting_keybinds,
                 measured: &mut self.measured,
                 pending_profile: &mut self.pending_profile,
+                ui_scale_draft: &mut self.ui_scale_draft,
             },
             session,
             settings,
@@ -221,9 +229,11 @@ fn draw_settings_window(
         resetting_keybinds,
         measured,
         pending_profile,
+        ui_scale_draft,
     } = state;
     if !*open {
         *capturing = None;
+        *ui_scale_draft = None;
 
         return SettingsWindowOutput::default();
     }
@@ -232,11 +242,12 @@ fn draw_settings_window(
     let position = [center[0] - measured[0] / 2.0, center[1] - measured[1] / 2.0];
     let flags = WindowFlags::NO_COLLAPSE | WindowFlags::NO_DOCKING;
     let mut object_tree_changed = false;
+    let scale = dpi(ui);
     ui.window(window)
         .opened(open)
         .position(position, Condition::Appearing)
-        .size(SETTINGS_WINDOW_SIZE, Condition::FirstUseEver)
-        .size_constraints(SETTINGS_WINDOW_MIN_SIZE, [f32::MAX, f32::MAX])
+        .size(SETTINGS_WINDOW_SIZE.map(|size| size * scale), Condition::FirstUseEver)
+        .size_constraints(SETTINGS_WINDOW_MIN_SIZE.map(|size| size * scale), [f32::MAX, f32::MAX])
         .flags(flags)
         .build(|| {
             if settings.focus_windows_on_hover {
@@ -244,7 +255,7 @@ fn draw_settings_window(
             }
             let content_height = ui.content_region_avail()[1].max(1.0);
             ui.child_window("settings-categories")
-                .size([SETTINGS_CATEGORY_WIDTH, content_height])
+                .size([SETTINGS_CATEGORY_WIDTH * dpi(ui), content_height])
                 .border(true)
                 .build(ui, || {
                     for candidate in SettingsCategory::ALL {
@@ -269,7 +280,7 @@ fn draw_settings_window(
                     ui.separator();
 
                     match category {
-                        SettingsCategory::General => draw_general_settings(ui, settings),
+                        SettingsCategory::General => draw_general_settings(ui, settings, ui_scale_draft),
                         SettingsCategory::Viewport => draw_viewport_settings(ui, session, settings),
                         SettingsCategory::Compiler => {
                             draw_compiler_settings(ui, session, settings, loading, pending_profile)
@@ -289,6 +300,7 @@ fn draw_settings_window(
 
     if !*open {
         *capturing = None;
+        *ui_scale_draft = None;
     }
     if let Some(preset) = draw_keybind_preset_dialog(ui, resetting_keybinds) {
         settings.keybindings = preset.bindings();
@@ -309,12 +321,12 @@ fn draw_section_heading(ui: &Ui, label: &str) { draw_heading(ui, label, SETTINGS
 
 fn draw_git_settings(ui: &Ui, settings: &mut Settings) {
     ui.checkbox("Enable Git map integration", &mut settings.git_enabled);
-    ui.set_next_item_width(180.0);
+    ui.set_next_item_width(180.0 * dpi(ui));
     ui.slider("Blame history depth", 1, 10_000, &mut settings.blame_depth);
     ui.text_disabled("Tile history follows the first parent of HEAD and does not follow renames.");
 }
 
-fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
+fn draw_general_settings(ui: &Ui, settings: &mut Settings, ui_scale_draft: &mut Option<u32>) {
     draw_section_heading(ui, "External editor");
     ui.text("Command");
     ui.set_next_item_width(-1.0);
@@ -337,6 +349,52 @@ fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
     ui.separator();
     draw_section_heading(ui, "Updates");
     ui.checkbox("Check for new releases on startup", &mut settings.check_for_updates);
+
+    ui.separator();
+    draw_section_heading(ui, "Appearance");
+    let os_scale_percent = os_scale_percent(ui);
+    ui.text(format!("UI scale (%) (OS: {os_scale_percent}%)"));
+    let active_percent = settings.ui_scale_override_percent.unwrap_or(os_scale_percent);
+    let draft = ui_scale_draft.get_or_insert(active_percent);
+    let spacing = ui.clone_style().item_spacing()[0];
+    let buttons_width = button_width(ui, "Apply") + spacing + button_width(ui, "Reset");
+    let available = ui.content_region_avail()[0];
+    ui.set_next_item_width((260.0 * dpi(ui)).min((available - buttons_width - spacing).max(1.0)));
+    ui.slider(
+        "##ui-scale-percent",
+        *UI_SCALE_PERCENT.start(),
+        *UI_SCALE_PERCENT.end(),
+        draft,
+    );
+    ui.same_line();
+    let can_apply =
+        *draft != active_percent || (settings.ui_scale_override_percent.is_some() && *draft == os_scale_percent);
+    {
+        let _disabled = ui.begin_disabled_with_cond(!can_apply);
+        if ui.button("Apply") {
+            settings.ui_scale_override_percent = (*draft != os_scale_percent).then_some(*draft);
+        }
+    }
+    ui.same_line();
+    let can_reset = settings.ui_scale_override_percent.is_some() || *draft != os_scale_percent;
+    let _disabled = ui.begin_disabled_with_cond(!can_reset);
+    if ui.button("Reset") {
+        settings.ui_scale_override_percent = None;
+        *draft = os_scale_percent;
+    }
+    ui.set_item_tooltip(format!("Use the OS scale ({os_scale_percent}%)"));
+}
+
+fn os_scale_percent(ui: &Ui) -> u32 {
+    let scale = ui
+        .main_viewport()
+        .dpi_scale()
+        .max(ui.io().display_framebuffer_scale()[0]);
+    if scale.is_finite() && scale > 0.0 {
+        (scale * 100.0).round().clamp(50.0, 500.0) as u32
+    } else {
+        100
+    }
 }
 
 fn show_backups() {
@@ -357,7 +415,7 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
     ui.separator();
     draw_section_heading(ui, "Lighting");
     ui.checkbox("Show lighting", &mut session.options.show_lighting);
-    ui.set_next_item_width(200.0);
+    ui.set_next_item_width(200.0 * dpi(ui));
     ui.slider(
         "Minimum brightness (%)",
         0,
@@ -374,7 +432,7 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
     ui.separator();
     draw_section_heading(ui, "Grid");
     ui.checkbox("Tile grid overlay", &mut settings.show_tile_grid);
-    ui.set_next_item_width(120.0);
+    ui.set_next_item_width(120.0 * dpi(ui));
     drag_min_pixels(
         ui,
         "Hide tile grid below (px per tile)",
@@ -383,7 +441,7 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
     ui.checkbox("Tile grid axis", &mut settings.show_tile_grid_axis);
 
     ui.checkbox("Pixel grid on selected tile", &mut settings.show_selected_pixel_grid);
-    ui.set_next_item_width(120.0);
+    ui.set_next_item_width(120.0 * dpi(ui));
     drag_min_pixels(
         ui,
         "Hide pixel grid below (px per world px)",
@@ -757,7 +815,73 @@ fn finish_keybind_capture(ui: &Ui, capturing: &mut Option<KeybindAction>, keybin
 
 #[cfg(test)]
 mod tests {
+    use dear_imgui_rs::MouseButton;
+
     use super::{super::IMGUI_CONTEXT, *};
+
+    #[test]
+    fn ui_scale_changes_only_when_apply_is_clicked() {
+        let _context = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = super::super::fixtures::rectangle_context();
+        context.io_mut().set_display_framebuffer_scale([1.5, 1.5]);
+        let mut settings = Settings::default();
+        let mut draft = None;
+        let draw = |context: &mut dear_imgui_rs::Context, settings: &mut Settings, draft: &mut Option<u32>| {
+            let ui = context.frame();
+            let mut centers = [[0.0; 2]; 2];
+            ui.window("ui-scale-settings-test")
+                .position([20.0, 20.0], Condition::Always)
+                .size([650.0, 500.0], Condition::Always)
+                .build(|| {
+                    draw_general_settings(ui, settings, draft);
+                    let min = ui.item_rect_min();
+                    let max = ui.item_rect_max();
+                    let y = (min[1] + max[1]) * 0.5;
+                    let apply_max = min[0] - ui.clone_style().item_spacing()[0];
+                    centers = [
+                        [apply_max - button_width(ui, "Apply") * 0.5, y],
+                        [(min[0] + max[0]) * 0.5, y],
+                    ];
+                });
+            assert!(context.render_legacy().valid());
+            centers
+        };
+        let click = |context: &mut dear_imgui_rs::Context,
+                     settings: &mut Settings,
+                     draft: &mut Option<u32>,
+                     position: [f32; 2]| {
+            context.io_mut().add_mouse_pos_event(position);
+            draw(context, settings, draft);
+            context.io_mut().add_mouse_button_event(MouseButton::Left, true);
+            draw(context, settings, draft);
+            context.io_mut().add_mouse_button_event(MouseButton::Left, false);
+            draw(context, settings, draft);
+        };
+
+        draw(&mut context, &mut settings, &mut draft);
+        assert_eq!(draft, Some(150));
+        draft = Some(100);
+        let [apply, _] = draw(&mut context, &mut settings, &mut draft);
+        assert_eq!(settings.ui_scale_override_percent, None);
+
+        click(&mut context, &mut settings, &mut draft, apply);
+        assert_eq!(settings.ui_scale_override_percent, Some(100));
+
+        draft = Some(150);
+        let [apply, _] = draw(&mut context, &mut settings, &mut draft);
+        click(&mut context, &mut settings, &mut draft, apply);
+        assert_eq!(settings.ui_scale_override_percent, None);
+
+        draft = Some(120);
+        let [apply, _] = draw(&mut context, &mut settings, &mut draft);
+        click(&mut context, &mut settings, &mut draft, apply);
+        assert_eq!(settings.ui_scale_override_percent, Some(120));
+
+        let [_, reset] = draw(&mut context, &mut settings, &mut draft);
+        click(&mut context, &mut settings, &mut draft, reset);
+        assert_eq!(settings.ui_scale_override_percent, None);
+        assert_eq!(draft, Some(150));
+    }
 
     #[test]
     fn only_held_actions_capture_a_lone_modifier() {
@@ -832,6 +956,7 @@ mod tests {
             let mut resetting_keybinds = false;
             let mut measured = SETTINGS_WINDOW_SIZE;
             let mut pending_profile = None;
+            let mut ui_scale_draft = None;
             let mut session = Session::new();
             let mut settings = Settings::default();
 
@@ -845,6 +970,7 @@ mod tests {
                     resetting_keybinds: &mut resetting_keybinds,
                     measured: &mut measured,
                     pending_profile: &mut pending_profile,
+                    ui_scale_draft: &mut ui_scale_draft,
                 },
                 &mut session,
                 &mut settings,
@@ -876,6 +1002,7 @@ mod tests {
             let mut resetting_keybinds = false;
             let mut measured = SETTINGS_WINDOW_SIZE;
             let mut pending_profile = None;
+            let mut ui_scale_draft = None;
             let mut session = Session::new();
             let mut environment = editor::Environment::new("station.dme", objtree::ObjectTree::new());
             environment.bake_options.forced_profile = forced_profile;
@@ -900,6 +1027,7 @@ mod tests {
                     resetting_keybinds: &mut resetting_keybinds,
                     measured: &mut measured,
                     pending_profile: &mut pending_profile,
+                    ui_scale_draft: &mut ui_scale_draft,
                 },
                 &mut session,
                 &mut settings,

@@ -4,7 +4,7 @@ use std::ffi::CStr;
 
 use ash::{khr, vk};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
-use vir::{Context, DomainFlag, Image, ImageAttachment, PersistentAllocator, SwapChain};
+use vir::{Context, DomainFlag, Image, ImageAttachment, PersistentAllocator, SwapChain, allocator::Allocator};
 
 use crate::error::GpuError;
 
@@ -16,7 +16,8 @@ pub struct Device {
     pub max_bindless_textures: u32,
     pub max_compute_work_group_count_x: u32,
     pub max_image_dimension_2d: u32,
-    _entry: ash::Entry,
+    graphics_family: u32,
+    entry: ash::Entry,
 }
 
 impl Device {
@@ -42,7 +43,7 @@ impl Device {
         let surface = create_surface(&entry, context.instance(), window, display)?;
 
         Ok(Self {
-            _entry: entry,
+            entry,
             context,
             surface,
             physical_device,
@@ -50,18 +51,59 @@ impl Device {
             max_bindless_textures,
             max_compute_work_group_count_x,
             max_image_dimension_2d,
+            graphics_family: graphics,
         })
     }
 
+    pub fn create_surface(
+        &self, window: RawWindowHandle, display: RawDisplayHandle,
+    ) -> Result<vk::SurfaceKHR, GpuError> {
+        let surface = create_surface(&self.entry, self.context.instance(), window, display)?;
+        let supported = unsafe {
+            self.context.surface_loader().get_physical_device_surface_support(
+                self.physical_device,
+                self.graphics_family,
+                surface,
+            )
+        };
+        if !matches!(supported, Ok(true)) {
+            self.destroy_surface(surface);
+
+            return Err(GpuError::UnsupportedWindow);
+        }
+
+        Ok(surface)
+    }
+
+    pub fn destroy_surface(&self, surface: vk::SurfaceKHR) {
+        unsafe { self.context.surface_loader().destroy_surface(surface, None) };
+    }
+
+    /// The caller waits for the device to be idle first.
+    pub fn destroy_swapchain(&mut self, swapchain: SwapChain) {
+        for attachment in &swapchain.attachments {
+            self.allocator.deallocate_image_view(attachment.image_view());
+        }
+        for semaphore in &swapchain.semaphores {
+            self.allocator.deallocate_semaphore(*semaphore);
+        }
+
+        unsafe {
+            self.context
+                .swapchain_loader()
+                .destroy_swapchain(swapchain.handle, None)
+        };
+    }
+
     pub fn create_swapchain(
-        &mut self, width: u32, height: u32, old: Option<&SwapChain>,
+        &mut self, surface: vk::SurfaceKHR, width: u32, height: u32, old: Option<&SwapChain>,
     ) -> Result<(SwapChain, vk::Extent2D, vk::Format), GpuError> {
         let old_handle = old.map_or(vk::SwapchainKHR::null(), |s| s.handle);
         let (handle, format, extent) = build_swapchain(
             self.context.surface_loader(),
             self.context.swapchain_loader(),
             self.physical_device,
-            self.surface,
+            surface,
             width,
             height,
             old_handle,
@@ -91,7 +133,7 @@ impl Device {
             })
             .collect::<Vec<_>>();
 
-        let swapchain = SwapChain::new(&mut self.allocator, handle, self.surface, attachments)?;
+        let swapchain = SwapChain::new(&mut self.allocator, handle, surface, attachments)?;
 
         Ok((swapchain, extent, format))
     }

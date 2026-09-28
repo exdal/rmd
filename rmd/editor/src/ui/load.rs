@@ -6,7 +6,7 @@ use std::{
 use dear_imgui_rs::{Condition, InputTextMultilineFlags, Key, StyleColor, Ui, WindowFlags, WindowKey};
 use editor::progress::{Snapshot, Stage};
 
-use super::SAVE_ERROR_COLOR;
+use super::{SAVE_ERROR_COLOR, common::dpi};
 use crate::{
     loader::LoadView,
     session::{DiagnosticSeverity, LoadReport, MAX_REPORTED_DIAGNOSTICS},
@@ -228,7 +228,7 @@ fn draw_selectable_text(ui: &Ui, id: &str, text: &mut String, lines: usize, colo
     let _color = color.map(|color| ui.push_style_color(StyleColor::Text, color));
     let height = ui.text_line_height_with_spacing() * lines as f32 + ui.clone_style().frame_padding()[1] * 2.0;
 
-    ui.input_text_multiline(id, text, [LOAD_TEXT_WIDTH, height])
+    ui.input_text_multiline(id, text, [LOAD_TEXT_WIDTH * dpi(ui), height])
         .flags(InputTextMultilineFlags::READ_ONLY | InputTextMultilineFlags::WORD_WRAP)
         .build();
 }
@@ -238,7 +238,7 @@ fn wrapped_lines(ui: &Ui, text: &str) -> usize {
         .map(|line| {
             let width = ui.calc_text_size(line)[0];
 
-            ((width / LOAD_TEXT_WIDTH).ceil() as usize).max(1)
+            ((width / (LOAD_TEXT_WIDTH * dpi(ui))).ceil() as usize).max(1)
         })
         .sum::<usize>()
         .max(1)
@@ -254,12 +254,14 @@ fn draw_load_progress(ui: &Ui, snapshot: &Snapshot) {
     match snapshot.fraction() {
         Some(fraction) => ui
             .progress_bar(fraction)
-            .size([LOAD_POPUP_WIDTH, 0.0])
+            .size([LOAD_POPUP_WIDTH * dpi(ui), 0.0])
             .overlay_text(format!("{} / {}", grouped(snapshot.done), grouped(snapshot.total)))
             .build(),
 
         None => {
-            let bar = ui.progress_bar(-(ui.time() as f32)).size([LOAD_POPUP_WIDTH, 0.0]);
+            let bar = ui
+                .progress_bar(-(ui.time() as f32))
+                .size([LOAD_POPUP_WIDTH * dpi(ui), 0.0]);
             match (snapshot.stage, snapshot.done) {
                 (Stage::Preprocess, done) if done > 0 => bar.overlay_text(format!("{} files", grouped(done))).build(),
                 _ => bar.overlay_text("").build(),

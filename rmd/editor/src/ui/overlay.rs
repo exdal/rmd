@@ -7,15 +7,21 @@ use editor::{
 };
 use render::Renderer;
 
-use super::{common::IDENTICAL_EDIT_COLOR, draw_marching_edge, marching_stripe_offset};
+use super::{
+    common::{IDENTICAL_EDIT_COLOR, dpi},
+    draw_marching_edge,
+    marching_stripe_offset,
+};
 use crate::{
     camera::Controller,
     session::{BlockPreviewSource, GuideBadge, PlacementPreview, Session},
 };
 
-pub(super) const OVERLAY_PADDING: f32 = 4.0;
+const OVERLAY_PADDING: f32 = 4.0;
 
 pub(super) const OVERLAY_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
+
+pub(super) fn overlay_padding(ui: &Ui) -> f32 { OVERLAY_PADDING * dpi(ui) }
 
 const PLACEMENT_PREVIEW_PERIOD: f64 = 1.5;
 

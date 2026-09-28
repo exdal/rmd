@@ -9,7 +9,7 @@ use editor::{
     tool::{FillMode, SelectionMask, Tool},
 };
 
-use super::{DIAGNOSTIC_WARNING_COLOR, MAX_CUSTOM_FILL_SEARCH_RESULTS, UiState, draw_type_path_search};
+use super::{DIAGNOSTIC_WARNING_COLOR, MAX_CUSTOM_FILL_SEARCH_RESULTS, UiState, common::dpi, draw_type_path_search};
 use crate::{session::Session, settings::KeybindPreset};
 
 const MODAL_FLAGS: WindowFlags = WindowFlags::ALWAYS_AUTO_RESIZE
@@ -269,7 +269,7 @@ pub(super) fn draw_new_map_dialog(ui: &Ui, session: &mut Session, dialog: &mut O
         ui.text("Path");
         let button_size = ui.frame_height();
         let spacing = ui.clone_style().item_spacing()[0];
-        ui.set_next_item_width(NEW_MAP_PATH_WIDTH - button_size - spacing);
+        ui.set_next_item_width(NEW_MAP_PATH_WIDTH * dpi(ui) - button_size - spacing);
         let submitted = ui
             .input_text("##new-map-path", &mut state.path)
             .enter_returns_true(true)
@@ -298,7 +298,7 @@ pub(super) fn draw_new_map_dialog(ui: &Ui, session: &mut Session, dialog: &mut O
             ("Z levels", "##new-map-levels", &mut state.levels),
         ] {
             ui.text(label);
-            ui.set_next_item_width(NEW_MAP_PATH_WIDTH);
+            ui.set_next_item_width(NEW_MAP_PATH_WIDTH * dpi(ui));
             ui.drag_int_config(id)
                 .range(1, NEW_MAP_MAX_DIMENSION)
                 .flags(DragFlags::ALWAYS_CLAMP)
@@ -383,7 +383,7 @@ pub(super) fn draw_resize_map_dialog(
             ("Height", "##resize-map-height", &mut state.height),
         ] {
             ui.text(label);
-            ui.set_next_item_width(DIALOG_FIELD_WIDTH);
+            ui.set_next_item_width(DIALOG_FIELD_WIDTH * dpi(ui));
             ui.drag_int_config(id)
                 .range(1, NEW_MAP_MAX_DIMENSION)
                 .flags(DragFlags::ALWAYS_CLAMP)
@@ -391,7 +391,7 @@ pub(super) fn draw_resize_map_dialog(
         }
 
         let fill = draw_tile_fill_search(ui, session, &mut state.fill);
-        let wrap = ui.push_text_wrap_pos(ui.cursor_pos()[0] + DIALOG_FIELD_WIDTH);
+        let wrap = ui.push_text_wrap_pos(ui.cursor_pos()[0] + DIALOG_FIELD_WIDTH * dpi(ui));
         let (width, height) = (state.width, state.height);
         let losses = match (&state.losses, &fill) {
             (_, None) => 0,
@@ -473,7 +473,7 @@ pub(super) fn draw_go_to_dialog(ui: &Ui, session: &Session, dialog: &mut Option<
             ("Z", "##go-to-z", &mut state.z, size.z),
         ] {
             ui.text(label);
-            ui.set_next_item_width(DIALOG_FIELD_WIDTH);
+            ui.set_next_item_width(DIALOG_FIELD_WIDTH * dpi(ui));
             if label == "X" && ui.is_window_appearing() {
                 ui.set_keyboard_focus_here();
             }
@@ -579,7 +579,7 @@ fn draw_tile_fill_search(ui: &Ui, session: &Session, search: &mut TileFillSearch
         ),
     ] {
         ui.text(label);
-        ui.set_next_item_width(DIALOG_FIELD_WIDTH);
+        ui.set_next_item_width(DIALOG_FIELD_WIDTH * dpi(ui));
         let Some(_combo) = ui.begin_combo(id, search.paths.get_mut(field).as_str()) else {
             continue;
         };
@@ -651,7 +651,7 @@ pub(super) fn draw_save_dialog(ui: &Ui, session: &mut Session, dialog: &mut Opti
         && let Some(_modal) = ui.begin_modal_popup_config(SAVE_MAP_POPUP).flags(MODAL_FLAGS).begin()
     {
         ui.text("Path");
-        ui.set_next_item_width(SAVE_MAP_PATH_WIDTH);
+        ui.set_next_item_width(SAVE_MAP_PATH_WIDTH * dpi(ui));
         let submitted = ui
             .input_text("##save-map-path", &mut state.path)
             .enter_returns_true(true)

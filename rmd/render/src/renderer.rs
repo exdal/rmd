@@ -1,7 +1,7 @@
 use std::{collections::HashMap, ops::Range, time::Instant};
 
 use ash::vk;
-use dear_imgui_rs::render::PendingFrame;
+use dear_imgui_rs::render::{PendingFrame, ReconciledFrame};
 use dmi::IconFile;
 use vir::{
     Access,
@@ -46,11 +46,14 @@ use crate::{
     SpritePreview,
     VisibilityId,
     extent3d,
-    imgui::{ImGuiPass, ImGuiSlots},
+    imgui::{ImGuiFrame, ImGuiPass, ImGuiSlots},
     read_spirv,
     spec,
     texture::TextureCatalog,
+    viewport::{SecondaryViewport, ViewportTarget, sync_targets},
 };
+
+type PlatformWindows<'a> = &'a mut dyn FnMut(&mut ReconciledFrame<'_>) -> Vec<SecondaryViewport>;
 
 const GEOMETRY_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.vert.spv"));
 const SPRITE_SHADE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.frag.spv"));
@@ -372,6 +375,7 @@ struct FrameGraphState {
     show_areas: bool,
     show_area_outlines: bool,
     map_views: Vec<MapViewState>,
+    viewports: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -386,6 +390,7 @@ struct MapViewState {
 impl FrameGraphState {
     fn new(viewport: vk::Extent2D, with_imgui: bool, frame: &Frame<'_>) -> Self {
         Self {
+            viewports: Vec::new(),
             extent: [viewport.width, viewport.height],
             with_imgui,
             show_areas: frame.show_areas,
@@ -414,6 +419,7 @@ struct Recorded {
     pick_result: Option<ValueId>,
     state: FrameGraphState,
     ui: Option<ImGuiSlots>,
+    viewport_ui: Vec<Option<ImGuiSlots>>,
 }
 
 struct MapViewPass {
@@ -676,6 +682,8 @@ pub struct Renderer {
     recorded: Option<Recorded>,
     frames: Option<SuperFrameAllocator>,
     swapchain: Option<SwapChain>,
+    viewports: Vec<ViewportTarget>,
+    failed_viewports: Vec<(u32, [u32; 2])>,
     sprite_pipeline: PipelineId,
     scene_pipeline: PipelineId,
     visibility_pipeline: PipelineId,
@@ -881,6 +889,8 @@ impl Renderer {
             recorded: None,
             frames: None,
             swapchain: None,
+            viewports: Vec::new(),
+            failed_viewports: Vec::new(),
             sprite_pipeline,
             scene_pipeline,
             visibility_pipeline,
@@ -987,8 +997,11 @@ impl Renderer {
         Ok(())
     }
 
+    /// `platform_windows` runs once the frame's textures are reconciled, updates ImGui's platform
+    /// windows and returns the secondary viewports to draw alongside the main one.
     pub fn draw_imgui(
         &mut self, frame: &Frame<'_>, pending: PendingFrame<'_>,
+        mut platform_windows: impl FnMut(&mut ReconciledFrame<'_>) -> Vec<SecondaryViewport>,
     ) -> Result<Option<(usize, PickRequest, PickResult)>, GpuError> {
         if pending.draw_requirements().requires_raw_callback_support() {
             return Err(GpuError::RawDrawCallback);
@@ -1005,7 +1018,21 @@ impl Renderer {
             self.imgui = Some(imgui);
         }
 
-        self.draw_inner(frame, None, Some(pending))
+        self.draw_inner(frame, None, Some((pending, &mut platform_windows)))
+    }
+
+    pub fn release_viewports(&mut self) -> Result<(), GpuError> {
+        if self.viewports.is_empty() {
+            return Ok(());
+        }
+
+        self.device.wait_idle()?;
+        self.recorded = None;
+        for target in std::mem::take(&mut self.viewports) {
+            target.destroy(&mut self.device);
+        }
+
+        Ok(())
     }
 
     pub fn reset_imgui_textures(&mut self) -> Result<(), GpuError> {
@@ -1189,15 +1216,21 @@ impl Renderer {
         self.device.wait_idle()?;
         self.recorded = None;
 
-        let (swapchain, extent, _) =
-            self.device
-                .create_swapchain(self.extent.width, self.extent.height, self.swapchain.as_ref())?;
+        let (swapchain, extent, _) = self.device.create_swapchain(
+            self.device.surface,
+            self.extent.width,
+            self.extent.height,
+            self.swapchain.as_ref(),
+        )?;
         self.frames = Some(
             self.device
                 .context
                 .create_super_frame_allocator(swapchain.attachments.len()),
         );
-        self.swapchain = Some(swapchain);
+
+        if let Some(old) = self.swapchain.replace(swapchain) {
+            self.device.destroy_swapchain(old);
+        }
         self.extent = extent;
         self.stale = false;
 
@@ -1697,6 +1730,8 @@ impl Renderer {
 
         let pick_host = pick_after.map(|pick| module.export(pick, Access::HostRead, DomainFlag::Host));
         let mut sampled_map_view_roots = Vec::new();
+        let mut viewport_presents = Vec::new();
+        let mut viewport_ui = Vec::new();
         let (presented_attachment, ui) = if with_imgui {
             for map_view in &map_views {
                 let sampled = module.export(
@@ -1710,6 +1745,14 @@ impl Renderer {
             let imgui = self.imgui.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
             let target_attachment = module.clear(swapchain_attachment, vir::clear::f32::BLACK);
             let map_view_outputs = map_views.iter().map(|view| view.output_attachment).collect::<Vec<_>>();
+
+            for target in &self.viewports {
+                let acquired = module.acquire_next_image(&target.swapchain);
+                let cleared = module.clear(acquired, vir::clear::f32::BLACK);
+                let (drawn, slots) = imgui.record(&mut module, cleared, &map_view_outputs);
+                viewport_presents.push(module.present(drawn));
+                viewport_ui.push(slots);
+            }
 
             imgui.record(&mut module, target_attachment, &map_view_outputs)
         } else if let Some(map_view) = map_views.first() {
@@ -1725,6 +1768,7 @@ impl Renderer {
         if let Some(pick_host) = pick_host {
             roots.push(pick_host);
         }
+        roots.extend(viewport_presents);
         roots.push(present);
         let program = module.compile_all(&self.graph, &roots)?;
 
@@ -1736,21 +1780,75 @@ impl Renderer {
             pick_result,
             state,
             ui,
+            viewport_ui,
         });
 
         Ok(())
     }
 
     fn draw_inner(
-        &mut self, frame: &Frame<'_>, viewport: Option<vk::Extent2D>, pending: Option<PendingFrame<'_>>,
+        &mut self, frame: &Frame<'_>, viewport: Option<vk::Extent2D>,
+        imgui: Option<(PendingFrame<'_>, PlatformWindows<'_>)>,
     ) -> Result<Option<(usize, PickRequest, PickResult)>, GpuError> {
         if self.stale {
             self.recreate_swapchain()?;
         }
 
+        // taken out for the frame so `self` stays free to re-record around the borrowed allocator
+        let mut frames = self.frames.take().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+        let result = self.draw_frame(&mut frames, frame, viewport, imgui);
+        self.frames = Some(frames);
+
+        result
+    }
+
+    fn prepare_ui(
+        &mut self, next: &mut FrameAllocator, pending: PendingFrame<'_>, platform_windows: PlatformWindows<'_>,
+    ) -> Result<(ImGuiFrame, Vec<ImGuiFrame>), GpuError> {
+        let imgui = self.imgui.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+        let feedback = imgui.poll_textures(&mut self.device, &mut self.graph, next, pending.texture_requests())?;
+        let mut reconciled = pending
+            .reconcile_texture_feedback(feedback)
+            .map_err(|e| GpuError::ImGui(e.to_string()))?;
+
+        let secondary = platform_windows(&mut reconciled);
+        if sync_targets(
+            &mut self.device,
+            &mut self.viewports,
+            &mut self.failed_viewports,
+            &secondary,
+        )? {
+            self.recorded = None;
+        }
+
+        let imgui = self.imgui.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+        let main = imgui.prepare(next, reconciled.draw_data(), self.extent, &self.textures)?;
+        let mut others = Vec::with_capacity(self.viewports.len());
+        for target in &self.viewports {
+            let viewport = secondary
+                .iter()
+                .find(|viewport| viewport.id() == target.id)
+                .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+            others.push(imgui.prepare(next, viewport.draw_data(), target.extent, &self.textures)?);
+        }
+
+        Ok((main, others))
+    }
+
+    fn draw_frame(
+        &mut self, frames: &mut SuperFrameAllocator, frame: &Frame<'_>, viewport: Option<vk::Extent2D>,
+        imgui: Option<(PendingFrame<'_>, PlatformWindows<'_>)>,
+    ) -> Result<Option<(usize, PickRequest, PickResult)>, GpuError> {
+        let next = frames.get_next_frame()?;
+        let with_imgui = imgui.is_some();
+        let ui_frames = match imgui {
+            Some((pending, platform_windows)) => Some(self.prepare_ui(next, pending, platform_windows)?),
+            None => None,
+        };
+
         let viewport = viewport.unwrap_or(self.extent);
-        let with_imgui = pending.is_some();
-        let graph_state = FrameGraphState::new(viewport, with_imgui, frame);
+        let mut graph_state = FrameGraphState::new(viewport, with_imgui, frame);
+        graph_state.viewports = self.viewports.iter().map(|target| target.id).collect();
         if self
             .recorded
             .as_ref()
@@ -1767,8 +1865,6 @@ impl Renderer {
             (self.highlight_started_at.elapsed().as_secs_f32() * HIGHLIGHT_STRIPE_SPEED) % HIGHLIGHT_STRIPE_PERIOD;
 
         let recorded = self.recorded.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
-        let frames = self.frames.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
-        let next = frames.get_next_frame()?;
         let prepared_guides = Self::prepare_guides(next, frame)?;
         let sprites = self.sprites.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
         recorded.program.set(recorded.sprites, sprites);
@@ -2002,16 +2098,14 @@ impl Renderer {
             );
         }
 
-        if let Some(pending) = pending {
-            let imgui = self.imgui.as_mut().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
-            let feedback = imgui.poll_textures(&mut self.device, &mut self.graph, next, pending.texture_requests())?;
-            let reconciled = pending
-                .reconcile_texture_feedback(feedback)
-                .map_err(|e| GpuError::ImGui(e.to_string()))?;
-            let ui_frame = imgui.prepare(next, reconciled.draw_data(), self.extent, &self.textures)?;
-
+        if let (Some((main, others)), Some(imgui)) = (ui_frames.as_ref(), self.imgui.as_ref()) {
             if let Some(slots) = recorded.ui.as_ref() {
-                imgui.bind(&mut recorded.program, slots, &ui_frame);
+                imgui.bind(&mut recorded.program, slots, main);
+            }
+            for (slots, ui_frame) in recorded.viewport_ui.iter().zip(others) {
+                if let Some(slots) = slots {
+                    imgui.bind(&mut recorded.program, slots, ui_frame);
+                }
             }
         }
 
@@ -2022,7 +2116,9 @@ impl Renderer {
             {
                 Ok(()) => true,
                 Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR) => {
+                    // one program presents every window and cannot tell which one failed
                     self.stale = true;
+                    self.viewports.iter_mut().for_each(ViewportTarget::mark_stale);
 
                     false
                 },
@@ -2950,6 +3046,14 @@ impl Drop for Renderer {
     fn drop(&mut self) {
         let _ = self.device.wait_idle();
         self.recorded = None;
+
+        for target in std::mem::take(&mut self.viewports) {
+            target.destroy(&mut self.device);
+        }
+
+        if let Some(swapchain) = self.swapchain.take() {
+            self.device.destroy_swapchain(swapchain);
+        }
 
         if let Some(imgui) = self.imgui.as_mut() {
             imgui.destroy(&mut self.device);

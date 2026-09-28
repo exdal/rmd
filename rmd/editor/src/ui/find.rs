@@ -16,7 +16,7 @@ use editor::{
     search::{SearchQuery, resolve_instances},
 };
 
-use super::common::{centered_note, focus_window_on_hover, text_wrapped_colored};
+use super::common::{centered_note, dpi, focus_window_on_hover, text_wrapped_colored};
 use crate::{session::Session, settings::Settings};
 
 const SEARCH_WINDOW_SIZE: [f32; 2] = [460.0, 360.0];
@@ -205,7 +205,7 @@ impl FindPanel {
         } = self;
 
         ui.window(&*window)
-            .size(SEARCH_WINDOW_SIZE, Condition::FirstUseEver)
+            .size(SEARCH_WINDOW_SIZE.map(|size| size * dpi(ui)), Condition::FirstUseEver)
             .focused(focus)
             .build(|| {
                 *visible = true;

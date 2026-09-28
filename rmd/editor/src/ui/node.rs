@@ -2,6 +2,7 @@ use dear_imgui_rs::Ui;
 use dmm::Coord;
 use editor::{node, tool::Tool};
 
+use super::common::dpi;
 use crate::{camera::Controller, session::NodeOverlay};
 
 const NODE_HANDLE_RADIUS: f32 = 6.0;
@@ -78,7 +79,7 @@ fn closest_node_connection(
 
 fn hit_node_overlay(
     overlay: &NodeOverlay, mouse: [f32; 2], hovered_tile: Option<Coord>, center: impl Fn(Coord) -> [f32; 2],
-    interactive: bool,
+    interactive: bool, scale: f32,
 ) -> NodeOverlayHit {
     if !interactive {
         return NodeOverlayHit::default();
@@ -92,7 +93,7 @@ fn hit_node_overlay(
             let position = center(coord);
             let distance = (position[0] - mouse[0]).powi(2) + (position[1] - mouse[1]).powi(2);
 
-            (distance <= (NODE_HANDLE_RADIUS + 3.0).powi(2)).then_some((distance, coord))
+            (distance <= ((NODE_HANDLE_RADIUS + 3.0) * scale).powi(2)).then_some((distance, coord))
         })
         .min_by(|left, right| left.0.total_cmp(&right.0))
         .map(|(_, coord)| coord);
@@ -105,7 +106,7 @@ fn hit_node_overlay(
         let first = attached.next().map(|(index, _)| index);
         if attached.next().is_none() { first } else { None }
     } else {
-        closest_node_connection(mouse, &overlay.connections, &center, NODE_CONNECTION_TOLERANCE).or_else(|| {
+        closest_node_connection(mouse, &overlay.connections, &center, NODE_CONNECTION_TOLERANCE * scale).or_else(|| {
             hovered_tile
                 .and_then(|coord| node::connection_at_tile(&overlay.connections, coord))
                 .and_then(|connection| overlay.connections.iter().position(|current| current == connection))
@@ -142,24 +143,27 @@ pub(super) fn draw_node_overlay(ui: &Ui, overlay: &NodeOverlay, view: NodeOverla
 
         [viewport_min[0] + local[0], viewport_min[1] + local[1]]
     };
-    let hit = hit_node_overlay(overlay, ui.io().mouse_pos(), hovered_tile, center, interactive);
+    let scale = dpi(ui);
+    let hit = hit_node_overlay(overlay, ui.io().mouse_pos(), hovered_tile, center, interactive, scale);
 
     let draw = ui.get_window_draw_list();
     draw.with_clip_rect(viewport_min, viewport_max, || {
         for (from, to) in &overlay.segments {
-            draw.add_line(center(*from), center(*to), EDGE).thickness(2.0).build();
+            draw.add_line(center(*from), center(*to), EDGE)
+                .thickness(2.0 * scale)
+                .build();
         }
         if let Some(connection) = hit.connection.as_ref() {
             for segment in connection.windows(2) {
                 draw.add_line(center(segment[0]), center(segment[1]), CONNECTION_HOVER)
-                    .thickness(4.0)
+                    .thickness(4.0 * scale)
                     .build();
             }
         }
         let route_color = if overlay.route_valid { ROUTE } else { INVALID_ROUTE };
         for segment in overlay.route.windows(2) {
             draw.add_line(center(segment[0]), center(segment[1]), route_color)
-                .thickness(4.0)
+                .thickness(4.0 * scale)
                 .build();
         }
         for coord in &overlay.nodes {
@@ -170,10 +174,10 @@ pub(super) fn draw_node_overlay(ui: &Ui, overlay: &NodeOverlay, view: NodeOverla
             } else {
                 HANDLE
             };
-            draw.add_circle(center(*coord), NODE_HANDLE_RADIUS, [0.05, 0.05, 0.05, 0.95])
+            draw.add_circle(center(*coord), NODE_HANDLE_RADIUS * scale, [0.05, 0.05, 0.05, 0.95])
                 .filled(true)
                 .build();
-            draw.add_circle(center(*coord), NODE_HANDLE_RADIUS - 2.0, color)
+            draw.add_circle(center(*coord), (NODE_HANDLE_RADIUS - 2.0) * scale, color)
                 .filled(true)
                 .build();
         }
@@ -231,19 +235,19 @@ mod tests {
         };
         let center = |coord: Coord| [coord.x as f32 * 32.0, coord.y as f32 * 32.0];
 
-        let segment = hit_node_overlay(&overlay, [48.0, 32.0], Some(left), center, true);
+        let segment = hit_node_overlay(&overlay, [48.0, 32.0], Some(left), center, true, 1.0);
         assert_eq!(segment.handle, None);
         assert_eq!(segment.connection, Some(connection.clone()));
 
-        let endpoint = hit_node_overlay(&overlay, center(left), Some(left), center, true);
+        let endpoint = hit_node_overlay(&overlay, center(left), Some(left), center, true, 1.0);
         assert_eq!(endpoint.handle, Some(left));
         assert_eq!(endpoint.connection, Some(connection));
 
-        let branch = hit_node_overlay(&overlay, center(junction), Some(junction), center, true);
+        let branch = hit_node_overlay(&overlay, center(junction), Some(junction), center, true, 1.0);
         assert_eq!(branch.handle, Some(junction));
         assert!(branch.connection.is_none());
 
-        let isolated = hit_node_overlay(&overlay, center(standalone), Some(standalone), center, true);
+        let isolated = hit_node_overlay(&overlay, center(standalone), Some(standalone), center, true, 1.0);
         assert_eq!(isolated.standalone, Some(standalone));
         assert!(isolated.connection.is_none());
     }

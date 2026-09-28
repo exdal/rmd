@@ -17,7 +17,7 @@ use crate::{
     session::{DirectionState, DirectionalTypes, SelectedTransform, Session},
     settings::{KeybindAction, Settings},
     transform::anchor_to_tile,
-    ui::TransformMode,
+    ui::{TransformMode, dpi},
 };
 
 const AXIS_LENGTH: f32 = 48.0;
@@ -27,6 +27,9 @@ const CENTER_HALF_SIZE: f32 = 5.0;
 const HIT_RADIUS: f32 = 7.0;
 const LINE_THICKNESS: f32 = 3.0;
 const HOT_LINE_THICKNESS: f32 = 5.0;
+const RESIZE_HANDLE_OFFSET: f32 = 7.0;
+const RESIZE_HANDLE_HIT_HALF_SIZE: f32 = 5.0;
+const RESIZE_HANDLE_HALF_SIZE: f32 = 3.5;
 const DIRECTION_HOLD_SECONDS: f64 = 0.2;
 const DIRECTION_TIME_EPSILON: f64 = 1.0e-9;
 const DIRECTION_INNER_RADIUS: f32 = 22.0;
@@ -281,6 +284,7 @@ impl GizmoState {
         }
 
         let mouse = ui.io().mouse_pos();
+        let scale = dpi(ui);
         let initial_origin = gizmo_origin(camera, map_view.min, target.sprite);
         let direction_origin = session
             .selected_location()
@@ -303,7 +307,7 @@ impl GizmoState {
 
         let hovered_handle = values
             .filter(|_| map_view.hovered)
-            .and_then(|_| handle_at(mouse, initial_origin, map_view.min, map_view.max));
+            .and_then(|_| handle_at(mouse, initial_origin, map_view.min, map_view.max, scale));
 
         if self.direction.is_none()
             && self.drag.is_none()
@@ -359,7 +363,7 @@ impl GizmoState {
         let hovered = if self.drag.is_some() {
             None
         } else if map_view.hovered && values.is_some() {
-            handle_at(mouse, origin, map_view.min, map_view.max)
+            handle_at(mouse, origin, map_view.min, map_view.max, scale)
         } else {
             None
         };
@@ -378,8 +382,7 @@ impl GizmoState {
             draw_direction_wheel(
                 ui,
                 wheel_origin,
-                map_view.min,
-                map_view.max,
+                map_view,
                 set,
                 current_direction(selected_direction_target(target).state, set),
                 hovered_direction,
@@ -388,7 +391,7 @@ impl GizmoState {
             if let Some(handle) = hot {
                 ui.set_mouse_cursor(Some(handle.cursor()));
             }
-            draw_gizmo(ui, origin, map_view.min, map_view.max, hot);
+            draw_gizmo(ui, origin, map_view, hot);
         }
 
         GizmoResponse {
@@ -415,6 +418,7 @@ impl GizmoState {
         } = target;
 
         let mouse = ui.io().mouse_pos();
+        let scale = dpi(ui);
         let initial_origin = block_center_origin(camera, map_view.min, selection, tile_size);
         let was_dragging = self.block_drag.is_some();
         let mut resizing = self.block_drag.is_some_and(|drag| drag.action.is_resize());
@@ -426,10 +430,10 @@ impl GizmoState {
 
         let hovered_handle = map_view
             .hovered
-            .then(|| handle_at(mouse, initial_origin, map_view.min, map_view.max))
+            .then(|| handle_at(mouse, initial_origin, map_view.min, map_view.max, scale))
             .flatten();
         let resize_handle = (map_view.hovered && kind == BlockGizmoKind::Selection)
-            .then(|| resize_handle_at(camera, map_view, selection, tile_size, mouse))
+            .then(|| resize_handle_at(camera, map_view, selection, tile_size, mouse, scale))
             .flatten();
         let action = block_drag_action(kind, ui.io().key_shift(), hovered_handle, resize_handle);
         if self.block_direction.is_none()
@@ -462,7 +466,7 @@ impl GizmoState {
         let hovered = if self.block_drag.is_some() {
             None
         } else if map_view.hovered {
-            handle_at(mouse, origin, map_view.min, map_view.max)
+            handle_at(mouse, origin, map_view.min, map_view.max, scale)
         } else {
             None
         };
@@ -487,7 +491,7 @@ impl GizmoState {
         let hovered = if self.block_drag.is_some() {
             None
         } else if map_view.hovered {
-            handle_at(ui.io().mouse_pos(), origin, map_view.min, map_view.max)
+            handle_at(ui.io().mouse_pos(), origin, map_view.min, map_view.max, dpi(ui))
         } else {
             None
         };
@@ -509,14 +513,13 @@ impl GizmoState {
             draw_direction_wheel(
                 ui,
                 wheel_origin,
-                map_view.min,
-                map_view.max,
+                map_view,
                 set,
                 Some(rotation_direction(target.rotation)),
                 hovered_direction,
             );
         } else {
-            draw_gizmo(ui, origin, map_view.min, map_view.max, hot);
+            draw_gizmo(ui, origin, map_view, hot);
             let resize_handle = if target.kind == BlockGizmoKind::Selection {
                 draw_resize_handles(ui, camera, map_view, target.selection, target.tile_size)
             } else {
@@ -586,6 +589,7 @@ impl GizmoState {
                         map_view.min,
                         map_view.max,
                         cardinal_direction_set(),
+                        dpi(ui),
                     );
                     if hovered != last_hovered {
                         last_hovered = hovered;
@@ -654,8 +658,7 @@ impl GizmoState {
             draw_direction_wheel(
                 ui,
                 wheel_origin,
-                map_view.min,
-                map_view.max,
+                map_view,
                 set,
                 current_direction(state, set),
                 hovered_direction,
@@ -738,7 +741,14 @@ impl GizmoState {
                 if key_released || !key_down {
                     self.direction = None;
                 } else {
-                    let hovered = direction_at(ui.io().mouse_pos(), origin, map_view.min, map_view.max, gesture.set);
+                    let hovered = direction_at(
+                        ui.io().mouse_pos(),
+                        origin,
+                        map_view.min,
+                        map_view.max,
+                        gesture.set,
+                        dpi(ui),
+                    );
                     if hovered != last_hovered {
                         last_hovered = hovered;
                         if let Some(direction) = hovered
@@ -880,15 +890,16 @@ fn resize_cursor(x: i8, y: i8) -> MouseCursor {
 }
 
 fn resize_handle_positions(
-    camera: &Controller, viewport_min: [f32; 2], selection: Selection, tile_size: u32,
+    camera: &Controller, viewport_min: [f32; 2], selection: Selection, tile_size: u32, scale: f32,
 ) -> [(i8, i8, [f32; 2]); 8] {
     let size = tile_size.max(1) as f32;
+    let offset = RESIZE_HANDLE_OFFSET * scale;
     let lower = camera.map_to_screen([(selection.min.x - 1) as f32 * size, (selection.min.y - 1) as f32 * size]);
     let upper = camera.map_to_screen([selection.max.x as f32 * size, selection.max.y as f32 * size]);
-    let left = viewport_min[0] + lower[0] - 7.0;
-    let right = viewport_min[0] + upper[0] + 7.0;
-    let bottom = viewport_min[1] + lower[1] + 7.0;
-    let top = viewport_min[1] + upper[1] - 7.0;
+    let left = viewport_min[0] + lower[0] - offset;
+    let right = viewport_min[0] + upper[0] + offset;
+    let bottom = viewport_min[1] + lower[1] + offset;
+    let top = viewport_min[1] + upper[1] - offset;
     let center = [(left + right) * 0.5, (top + bottom) * 0.5];
     [
         (-1, -1, [left, bottom]),
@@ -903,18 +914,20 @@ fn resize_handle_positions(
 }
 
 fn resize_handle_at(
-    camera: &Controller, view: GizmoMapView, selection: Selection, tile_size: u32, mouse: [f32; 2],
+    camera: &Controller, view: GizmoMapView, selection: Selection, tile_size: u32, mouse: [f32; 2], scale: f32,
 ) -> Option<(i8, i8)> {
     if !contains(mouse, view.min, view.max) {
         return None;
     }
-    resize_handle_positions(camera, view.min, selection, tile_size)
+
+    let reach = RESIZE_HANDLE_HIT_HALF_SIZE * scale;
+    resize_handle_positions(camera, view.min, selection, tile_size, scale)
         .into_iter()
         .find(|(_, _, position)| {
             contains(
                 mouse,
-                [position[0] - 5.0, position[1] - 5.0],
-                [position[0] + 5.0, position[1] + 5.0],
+                [position[0] - reach, position[1] - reach],
+                [position[0] + reach, position[1] + reach],
             )
         })
         .map(|(x, y, _)| (x, y))
@@ -923,15 +936,17 @@ fn resize_handle_at(
 fn draw_resize_handles(
     ui: &Ui, camera: &Controller, view: GizmoMapView, selection: Selection, tile_size: u32,
 ) -> Option<(i8, i8)> {
+    let scale = dpi(ui);
     let hovered = view
         .hovered
-        .then(|| resize_handle_at(camera, view, selection, tile_size, ui.io().mouse_pos()))
+        .then(|| resize_handle_at(camera, view, selection, tile_size, ui.io().mouse_pos(), scale))
         .flatten();
+    let half_size = RESIZE_HANDLE_HALF_SIZE * scale;
     let draw = ui.get_window_draw_list();
     draw.with_clip_rect(view.min, view.max, || {
-        for (x, y, position) in resize_handle_positions(camera, view.min, selection, tile_size) {
-            let min = [position[0] - 3.5, position[1] - 3.5];
-            let max = [position[0] + 3.5, position[1] + 3.5];
+        for (x, y, position) in resize_handle_positions(camera, view.min, selection, tile_size, scale) {
+            let min = [position[0] - half_size, position[1] - half_size];
+            let max = [position[0] + half_size, position[1] + half_size];
             let color = if hovered == Some((x, y)) {
                 [1.0, 0.85, 0.25, 1.0]
             } else {
@@ -944,10 +959,14 @@ fn draw_resize_handles(
     hovered
 }
 
-fn handle_at(point: [f32; 2], origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [f32; 2]) -> Option<Handle> {
+fn handle_at(
+    point: [f32; 2], origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [f32; 2], scale: f32,
+) -> Option<Handle> {
     if !contains(point, viewport_min, viewport_max) {
         return None;
     }
+
+    let point = unscaled(point, origin, scale);
 
     let center_min = [origin[0] - CENTER_HALF_SIZE, origin[1] - CENTER_HALF_SIZE];
     let center_max = [origin[0] + CENTER_HALF_SIZE, origin[1] + CENTER_HALF_SIZE];
@@ -967,6 +986,13 @@ fn handle_at(point: [f32; 2], origin: [f32; 2], viewport_min: [f32; 2], viewport
         && (point[0] - origin[0]).abs() <= HIT_RADIUS;
 
     on_y.then_some(Handle::Y)
+}
+
+fn unscaled(point: [f32; 2], origin: [f32; 2], scale: f32) -> [f32; 2] {
+    [
+        origin[0] + (point[0] - origin[0]) / scale,
+        origin[1] + (point[1] - origin[1]) / scale,
+    ]
 }
 
 fn contains(point: [f32; 2], min: [f32; 2], max: [f32; 2]) -> bool {
@@ -1129,12 +1155,12 @@ fn direction_vector(direction: Dir) -> [f32; 2] {
     }
 }
 
-fn direction_head(origin: [f32; 2], direction: Dir, expansion: f32) -> [[f32; 2]; 3] {
+fn direction_head(origin: [f32; 2], direction: Dir, expansion: f32, scale: f32) -> [[f32; 2]; 3] {
     let vector = direction_vector(direction);
     let perpendicular = [-vector[1], vector[0]];
-    let tip_radius = DIRECTION_TIP_RADIUS + expansion;
-    let base_radius = DIRECTION_TIP_RADIUS - DIRECTION_ARROW_LENGTH - expansion;
-    let half_width = DIRECTION_ARROW_HALF_WIDTH + expansion;
+    let tip_radius = (DIRECTION_TIP_RADIUS + expansion) * scale;
+    let base_radius = (DIRECTION_TIP_RADIUS - DIRECTION_ARROW_LENGTH - expansion) * scale;
+    let half_width = (DIRECTION_ARROW_HALF_WIDTH + expansion) * scale;
     let tip = [origin[0] + vector[0] * tip_radius, origin[1] + vector[1] * tip_radius];
     let base = [origin[0] + vector[0] * base_radius, origin[1] + vector[1] * base_radius];
 
@@ -1152,12 +1178,13 @@ fn direction_head(origin: [f32; 2], direction: Dir, expansion: f32) -> [[f32; 2]
 }
 
 fn direction_at(
-    point: [f32; 2], origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [f32; 2], set: DirectionSet,
+    point: [f32; 2], origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [f32; 2], set: DirectionSet, scale: f32,
 ) -> Option<Dir> {
     if !contains(point, viewport_min, viewport_max) {
         return None;
     }
 
+    let point = unscaled(point, origin, scale);
     let delta = [point[0] - origin[0], point[1] - origin[1]];
     let radius_squared = delta[0] * delta[0] + delta[1] * delta[1];
     if !(DIRECTION_INNER_RADIUS * DIRECTION_INNER_RADIUS..=DIRECTION_OUTER_RADIUS * DIRECTION_OUTER_RADIUS)
@@ -1257,37 +1284,44 @@ fn themed_color(ui: &Ui, color: StyleColor, alpha: f32) -> [f32; 4] {
     [red, green, blue, alpha]
 }
 
-fn draw_gizmo(ui: &Ui, origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [f32; 2], hot: Option<Handle>) {
+fn draw_gizmo(ui: &Ui, origin: [f32; 2], map_view: GizmoMapView, hot: Option<Handle>) {
     let center = themed_color(ui, StyleColor::Text, 1.0);
     let hot_color = themed_color(ui, StyleColor::ButtonHovered, 1.0);
     let shadow_color = themed_color(ui, StyleColor::BorderShadow, 0.85);
+    let scale = dpi(ui);
+    let axis_length = AXIS_LENGTH * scale;
+    let arrow_length = ARROW_LENGTH * scale;
+    let arrow_half_width = ARROW_HALF_WIDTH * scale;
+    let center_half_size = CENTER_HALF_SIZE * scale;
     let draw_list = ui.get_window_draw_list();
-    draw_list.with_clip_rect(viewport_min, viewport_max, || {
-        let x_base = [origin[0] + AXIS_LENGTH - ARROW_LENGTH, origin[1]];
-        let x_tip = [origin[0] + AXIS_LENGTH, origin[1]];
-        let y_base = [origin[0], origin[1] - AXIS_LENGTH + ARROW_LENGTH];
-        let y_tip = [origin[0], origin[1] - AXIS_LENGTH];
+    draw_list.with_clip_rect(map_view.min, map_view.max, || {
+        let x_base = [origin[0] + axis_length - arrow_length, origin[1]];
+        let x_tip = [origin[0] + axis_length, origin[1]];
+        let y_base = [origin[0], origin[1] - axis_length + arrow_length];
+        let y_tip = [origin[0], origin[1] - axis_length];
         let x_color = if hot == Some(Handle::X) { hot_color } else { X_COLOR };
         let y_color = if hot == Some(Handle::Y) { hot_color } else { Y_COLOR };
         let center_color = if hot == Some(Handle::XY) { hot_color } else { center };
-        let x_thickness = if hot == Some(Handle::X) {
-            HOT_LINE_THICKNESS
-        } else {
-            LINE_THICKNESS
-        };
-        let y_thickness = if hot == Some(Handle::Y) {
-            HOT_LINE_THICKNESS
-        } else {
-            LINE_THICKNESS
-        };
+        let x_thickness = scale
+            * if hot == Some(Handle::X) {
+                HOT_LINE_THICKNESS
+            } else {
+                LINE_THICKNESS
+            };
+        let y_thickness = scale
+            * if hot == Some(Handle::Y) {
+                HOT_LINE_THICKNESS
+            } else {
+                LINE_THICKNESS
+            };
 
         draw_list
             .add_line(origin, x_base, shadow_color)
-            .thickness(x_thickness + 2.0)
+            .thickness(x_thickness + 2.0 * scale)
             .build();
         draw_list
             .add_line(origin, y_base, shadow_color)
-            .thickness(y_thickness + 2.0)
+            .thickness(y_thickness + 2.0 * scale)
             .build();
         draw_list
             .add_line(origin, x_base, x_color)
@@ -1300,8 +1334,8 @@ fn draw_gizmo(ui: &Ui, origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [
         draw_list
             .add_triangle(
                 x_tip,
-                [x_base[0], x_base[1] - ARROW_HALF_WIDTH],
-                [x_base[0], x_base[1] + ARROW_HALF_WIDTH],
+                [x_base[0], x_base[1] - arrow_half_width],
+                [x_base[0], x_base[1] + arrow_half_width],
                 x_color,
             )
             .filled(true)
@@ -1309,19 +1343,19 @@ fn draw_gizmo(ui: &Ui, origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [
         draw_list
             .add_triangle(
                 y_tip,
-                [y_base[0] - ARROW_HALF_WIDTH, y_base[1]],
-                [y_base[0] + ARROW_HALF_WIDTH, y_base[1]],
+                [y_base[0] - arrow_half_width, y_base[1]],
+                [y_base[0] + arrow_half_width, y_base[1]],
                 y_color,
             )
             .filled(true)
             .build();
 
-        let center_min = [origin[0] - CENTER_HALF_SIZE, origin[1] - CENTER_HALF_SIZE];
-        let center_max = [origin[0] + CENTER_HALF_SIZE, origin[1] + CENTER_HALF_SIZE];
+        let center_min = [origin[0] - center_half_size, origin[1] - center_half_size];
+        let center_max = [origin[0] + center_half_size, origin[1] + center_half_size];
         draw_list
             .add_rect(
-                [center_min[0] - 1.0, center_min[1] - 1.0],
-                [center_max[0] + 1.0, center_max[1] + 1.0],
+                [center_min[0] - scale, center_min[1] - scale],
+                [center_max[0] + scale, center_max[1] + scale],
                 shadow_color,
             )
             .filled(true)
@@ -1330,8 +1364,8 @@ fn draw_gizmo(ui: &Ui, origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [
             .add_rect(center_min, center_max, center_color)
             .filled(true)
             .build();
-        draw_list.add_text([x_tip[0] + 3.0, x_tip[1] - 8.0], x_color, "X");
-        draw_list.add_text([y_tip[0] - 4.0, y_tip[1] - 17.0], y_color, "Y");
+        draw_list.add_text([x_tip[0] + 3.0 * scale, x_tip[1] - 8.0 * scale], x_color, "X");
+        draw_list.add_text([y_tip[0] - 4.0 * scale, y_tip[1] - 17.0 * scale], y_color, "Y");
     });
 }
 
@@ -1341,12 +1375,16 @@ fn direction_angle(direction: Dir) -> f32 {
     vector[1].atan2(vector[0])
 }
 
-fn direction_sector(origin: [f32; 2], direction: Dir, slots: u8) -> Vec<[[f32; 2]; 4]> {
+fn direction_sector(origin: [f32; 2], direction: Dir, slots: u8, scale: f32) -> Vec<[[f32; 2]; 4]> {
     let center = direction_angle(direction);
     let half_width = std::f32::consts::PI / slots as f32;
     let start = center - half_width + DIRECTION_SECTOR_GAP;
     let end = center + half_width - DIRECTION_SECTOR_GAP;
-    let point = |angle: f32, radius: f32| [origin[0] + angle.cos() * radius, origin[1] + angle.sin() * radius];
+    let point = |angle: f32, radius: f32| {
+        let radius = radius * scale;
+
+        [origin[0] + angle.cos() * radius, origin[1] + angle.sin() * radius]
+    };
     let mut quads = Vec::with_capacity(DIRECTION_SECTOR_SEGMENTS);
 
     for segment in 0..DIRECTION_SECTOR_SEGMENTS {
@@ -1366,8 +1404,7 @@ fn direction_sector(origin: [f32; 2], direction: Dir, slots: u8) -> Vec<[[f32; 2
 }
 
 fn draw_direction_wheel(
-    ui: &Ui, origin: [f32; 2], viewport_min: [f32; 2], viewport_max: [f32; 2], set: DirectionSet, current: Option<Dir>,
-    hovered: Option<Dir>,
+    ui: &Ui, origin: [f32; 2], map_view: GizmoMapView, set: DirectionSet, current: Option<Dir>, hovered: Option<Dir>,
 ) {
     let direction_color = themed_color(ui, StyleColor::Text, 1.0);
     let wheel_color = themed_color(ui, StyleColor::WindowBg, 0.28);
@@ -1375,8 +1412,9 @@ fn draw_direction_wheel(
     let current_color = themed_color(ui, StyleColor::Tab, 0.56);
     let hot_direction_color = themed_color(ui, StyleColor::PlotHistogramHovered, 0.68);
     let shadow_color = themed_color(ui, StyleColor::BorderShadow, 0.85);
+    let scale = dpi(ui);
     let draw_list = ui.get_window_draw_list();
-    draw_list.with_clip_rect(viewport_min, viewport_max, || {
+    draw_list.with_clip_rect(map_view.min, map_view.max, || {
         for direction in set.slot_directions() {
             let color = if !set.contains(direction) {
                 wheel_color
@@ -1388,7 +1426,7 @@ fn draw_direction_wheel(
                 sector_color
             };
 
-            for quad in direction_sector(origin, direction, set.slots) {
+            for quad in direction_sector(origin, direction, set.slots, scale) {
                 draw_list
                     .add_triangle(quad[0], quad[1], quad[2], color)
                     .filled(true)
@@ -1401,22 +1439,22 @@ fn draw_direction_wheel(
         }
 
         draw_list
-            .add_circle(origin, DIRECTION_OUTER_RADIUS, shadow_color)
-            .thickness(1.5)
+            .add_circle(origin, DIRECTION_OUTER_RADIUS * scale, shadow_color)
+            .thickness(1.5 * scale)
             .build();
         draw_list
-            .add_circle(origin, DIRECTION_INNER_RADIUS, wheel_color)
-            .thickness(1.5)
+            .add_circle(origin, DIRECTION_INNER_RADIUS * scale, wheel_color)
+            .thickness(1.5 * scale)
             .build();
 
         for direction in set.directions() {
-            let shadow = direction_head(origin, direction, 1.5);
+            let shadow = direction_head(origin, direction, 1.5, scale);
             draw_list
                 .add_triangle(shadow[0], shadow[1], shadow[2], shadow_color)
                 .filled(true)
                 .build();
 
-            let head = direction_head(origin, direction, 0.0);
+            let head = direction_head(origin, direction, 0.0, scale);
             draw_list
                 .add_triangle(head[0], head[1], head[2], direction_color)
                 .filled(true)
@@ -1471,16 +1509,19 @@ mod tests {
         let viewport_max = [200.0, 200.0];
         let origin = [150.0, 150.0];
 
-        assert_eq!(handle_at(origin, origin, viewport_min, viewport_max), Some(Handle::XY));
         assert_eq!(
-            handle_at([180.0, 150.0], origin, viewport_min, viewport_max),
+            handle_at(origin, origin, viewport_min, viewport_max, 1.0),
+            Some(Handle::XY)
+        );
+        assert_eq!(
+            handle_at([180.0, 150.0], origin, viewport_min, viewport_max, 1.0),
             Some(Handle::X)
         );
         assert_eq!(
-            handle_at([150.0, 120.0], origin, viewport_min, viewport_max),
+            handle_at([150.0, 120.0], origin, viewport_min, viewport_max, 1.0),
             Some(Handle::Y)
         );
-        assert_eq!(handle_at([205.0, 150.0], origin, viewport_min, viewport_max), None);
+        assert_eq!(handle_at([205.0, 150.0], origin, viewport_min, viewport_max, 1.0), None);
     }
 
     #[test]
@@ -1610,11 +1651,14 @@ mod tests {
         };
         for zoom in [0.1, 1.0, 3.0] {
             camera.camera.zoom = zoom;
-            for (x, y, position) in resize_handle_positions(&camera, view.min, selection, 32) {
-                assert_eq!(resize_handle_at(&camera, view, selection, 32, position), Some((x, y)));
+            for (x, y, position) in resize_handle_positions(&camera, view.min, selection, 32, 1.0) {
+                assert_eq!(
+                    resize_handle_at(&camera, view, selection, 32, position, 1.0),
+                    Some((x, y))
+                );
             }
             let center = block_center_origin(&camera, view.min, selection, 32);
-            assert_eq!(resize_handle_at(&camera, view, selection, 32, center), None);
+            assert_eq!(resize_handle_at(&camera, view, selection, 32, center, 1.0), None);
         }
     }
 
@@ -1702,19 +1746,26 @@ mod tests {
             let point = [origin[0] + vector[0] * 70.0, origin[1] + vector[1] * 70.0];
 
             assert_eq!(
-                direction_at(point, origin, viewport_min, viewport_max, set),
+                direction_at(point, origin, viewport_min, viewport_max, set, 1.0),
                 Some(direction)
             );
-            assert_eq!(handle_at(point, origin, viewport_min, viewport_max), None);
+            assert_eq!(handle_at(point, origin, viewport_min, viewport_max, 1.0), None);
         }
 
-        assert_eq!(direction_at(origin, origin, viewport_min, viewport_max, set), None);
+        assert_eq!(direction_at(origin, origin, viewport_min, viewport_max, set, 1.0), None);
         assert_eq!(
-            direction_at([origin[0] + 100.0, origin[1]], origin, viewport_min, viewport_max, set),
+            direction_at(
+                [origin[0] + 100.0, origin[1]],
+                origin,
+                viewport_min,
+                viewport_max,
+                set,
+                1.0
+            ),
             None
         );
         assert_eq!(
-            direction_at([301.0, 150.0], origin, viewport_min, viewport_max, set),
+            direction_at([301.0, 150.0], origin, viewport_min, viewport_max, set, 1.0),
             None
         );
     }
@@ -1736,11 +1787,11 @@ mod tests {
         let origin = [100.0, 100.0];
 
         assert_eq!(
-            direction_at([100.0, 40.0], origin, [0.0, 0.0], [200.0, 200.0], set),
+            direction_at([100.0, 40.0], origin, [0.0, 0.0], [200.0, 200.0], set, 1.0),
             Some(Dir::North)
         );
         assert_eq!(
-            direction_at([160.0, 100.0], origin, [0.0, 0.0], [200.0, 200.0], set),
+            direction_at([160.0, 100.0], origin, [0.0, 0.0], [200.0, 200.0], set, 1.0),
             None
         );
     }

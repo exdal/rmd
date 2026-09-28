@@ -6,7 +6,7 @@ use editor::{
     icons::materialdesignicons::ICON_CIRCLE_SMALL,
 };
 
-use super::{OverlayRect, git::commit_summary};
+use super::{OverlayRect, common::dpi, git::commit_summary};
 
 pub(super) struct BlamePopup {
     pub(super) coord: Coord,
@@ -36,6 +36,7 @@ pub(super) fn draw_blame_popup(
     ui: &Ui, document: DocumentId, popup: &BlamePopup, commit: &CommitInfo, web: Option<&WebLinks>,
 ) -> Option<(OverlayRect, bool)> {
     const WIDTH: f32 = 390.0;
+    let width = WIDTH * dpi(ui);
     let flags = WindowFlags::NO_DECORATION
         | WindowFlags::NO_MOVE
         | WindowFlags::NO_SAVED_SETTINGS
@@ -46,7 +47,7 @@ pub(super) fn draw_blame_popup(
     ui.window(format!("Blame##popup-{}", document.get()))
         .flags(flags)
         .position(popup.position, Condition::Always)
-        .size_constraints([0.0, 0.0], [WIDTH, f32::MAX])
+        .size_constraints([0.0, 0.0], [width, f32::MAX])
         .build(|| {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -65,7 +66,7 @@ pub(super) fn draw_blame_popup(
                 editor::blame::relative_time(now, commit.time)
             ));
             let padding = ui.clone_style().window_padding()[0];
-            commit_summary(ui, commit, web, WIDTH - padding * 2.0);
+            commit_summary(ui, commit, web, width - padding * 2.0);
             let close = ui.small_button("Close");
             let min = ui.window_pos();
             let size = ui.window_size();

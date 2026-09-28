@@ -55,7 +55,6 @@ mod tooltip;
 mod viewport;
 mod welcome;
 
-pub(crate) use self::load::LoadNotice;
 use self::{
     blame::{BlamePopup, blame_tooltip_position, draw_blame_popup},
     block::{
@@ -105,7 +104,6 @@ use self::{
     node::{NodeOverlayView, NodeRightClick, draw_node_overlay, node_right_click},
     overlay::{
         OVERLAY_BG,
-        OVERLAY_PADDING,
         OverlayRect,
         conflict_controls_layout,
         draw_conflict_controls,
@@ -114,6 +112,7 @@ use self::{
         draw_identical_outlines,
         draw_overlay_underlay,
         draw_placement_preview,
+        overlay_padding,
     },
     paste::{PASTE_LABELS, PasteAction, PendingPaste, centered_paste_min, draw_paste_controls, paste_controls},
     search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search},
@@ -122,6 +121,7 @@ use self::{
     viewport::{ActivePlacementFlash, EditCommand, MapViewState, MomentaryTool, PickStroke, PlacementStroke},
     welcome::{ForgetRequest, WelcomeOutput},
 };
+pub(crate) use self::{common::dpi, load::LoadNotice};
 
 mod common;
 
@@ -215,6 +215,26 @@ pub enum OpenRequest {
     Map(PathBuf),
 }
 
+struct StartupPanelFocus {
+    remaining_draws: u8,
+}
+
+impl StartupPanelFocus {
+    const fn new() -> Self { Self { remaining_draws: 3 } }
+
+    const fn requested(&self) -> bool { self.remaining_draws > 0 }
+
+    fn cancel(&mut self) { self.remaining_draws = 0; }
+
+    fn after_draw(&mut self, docked: bool) {
+        if docked {
+            self.cancel();
+        } else {
+            self.remaining_draws = self.remaining_draws.saturating_sub(1);
+        }
+    }
+}
+
 pub struct UiState {
     object_tree: ObjectTreePanel,
     map_views: HashMap<DocumentId, MapViewState>,
@@ -225,10 +245,10 @@ pub struct UiState {
     inspector: InspectorPanel,
     find: find::FindPanel,
     git_panel: git::GitPanel,
-    /// Keeps the object tree in front of the Git tab until it has docked at startup
-    select_object_tree: bool,
-    /// Keeps the inspector in front of the Search tab until it has docked at startup
-    select_inspector: bool,
+    /// Keeps the object tree in front of the Git tab while its saved layout settles
+    select_object_tree: StartupPanelFocus,
+    /// Keeps the inspector in front of the Search tab while its saved layout settles
+    select_inspector: StartupPanelFocus,
     /// A docked tab only comes forward if it still holds the focus when its tab bar updates next frame
     panel_focus_requested: bool,
     settings_window: SettingsWindow,
@@ -271,7 +291,7 @@ pub struct UiState {
 }
 
 #[cfg(test)]
-static IMGUI_CONTEXT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static IMGUI_CONTEXT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 impl UiState {
     pub fn new(keybind_preset_prompt: bool) -> Result<Self, WindowKeyError> {
@@ -298,8 +318,8 @@ impl UiState {
             inspector,
             find,
             git_panel,
-            select_object_tree: true,
-            select_inspector: true,
+            select_object_tree: StartupPanelFocus::new(),
+            select_inspector: StartupPanelFocus::new(),
             panel_focus_requested: false,
             settings_window,
             layout,
@@ -639,23 +659,23 @@ impl UiState {
         self.panel_focus_requested = self.find.has_focus_request() || self.git_panel.has_focus_request();
         // The Git tab shares the object tree's dock node, a request to show it wins
         if self.git_panel.has_focus_request() {
-            self.select_object_tree = false;
+            self.select_object_tree.cancel();
         }
-        let object_tree = self.object_tree.draw(ui, session, settings, self.select_object_tree);
-        if object_tree.docked {
-            self.select_object_tree = false;
-        }
+        let object_tree = self
+            .object_tree
+            .draw(ui, session, settings, self.select_object_tree.requested());
+        self.select_object_tree.after_draw(object_tree.docked);
         if let Some(path) = &object_tree.find {
             self.find.open_for_path(session, path);
         }
         let mut open_source = object_tree.open_source;
         if self.find.has_focus_request() {
-            self.select_inspector = false;
+            self.select_inspector.cancel();
         }
-        let inspector = self.inspector.draw(ui, session, settings, self.select_inspector);
-        if inspector.docked {
-            self.select_inspector = false;
-        }
+        let inspector = self
+            .inspector
+            .draw(ui, session, settings, self.select_inspector.requested());
+        self.select_inspector.after_draw(inspector.docked);
         self.copy_to_clipboard = inspector.copy_hash.or(object_tree.copy_path);
         open_source = inspector.open_source.or(open_source);
         if let Some((document, instance)) = inspector.find_similar {
@@ -907,7 +927,10 @@ mod tests {
         for _ in 0..4 {
             frame(&mut state);
         }
-        assert!(!state.select_inspector, "the inspector docked and took the front");
+        assert!(
+            !state.select_inspector.requested(),
+            "the inspector docked and took the front"
+        );
         assert!(!state.find.visible(), "the Search tab waits behind the inspector");
 
         state.find.request();
@@ -915,6 +938,84 @@ mod tests {
             frame(&mut state);
         }
         assert!(state.find.visible(), "a request brings the Search tab forward");
+    }
+
+    #[test]
+    fn restored_floating_panels_release_startup_focus() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+
+        for panel in ["inspector", "object-tree"] {
+            let mut saved = {
+                let mut context = rectangle_context();
+                let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
+                context.io_mut().set_config_flags(flags);
+                let mut state = UiState::new(false).unwrap();
+                let mut session = Session::new();
+                let mut settings = Settings::default();
+                for _ in 0..4 {
+                    let ui = context.frame();
+                    state.draw(ui, &mut session, &mut settings, None).unwrap();
+                    assert!(context.render_legacy().valid());
+                }
+                let mut ini = String::new();
+                context.save_ini_settings(&mut ini);
+                ini
+            };
+
+            // A detached panel has a saved window entry without a dock node.
+            let header = format!("[Window][{panel}]");
+            let start = saved.find(&header).expect("panel saved in the layout");
+            let end = saved[start..].find("\n\n").map_or(saved.len(), |offset| start + offset);
+            let section = &saved[start..end];
+            assert!(section.contains("DockId="));
+            let floating = section
+                .lines()
+                .filter(|line| !line.starts_with("DockId="))
+                .collect::<Vec<_>>()
+                .join("\n");
+            saved.replace_range(start..end, &floating);
+
+            let mut context = rectangle_context();
+            let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
+            context.io_mut().set_config_flags(flags);
+            context.load_ini_settings(&saved);
+            let mut state = UiState::new(false).unwrap();
+            let mut session = Session::new();
+            let mut settings = Settings {
+                focus_windows_on_hover: false,
+                ..Settings::default()
+            };
+            for _ in 0..4 {
+                let ui = context.frame();
+                state.draw(ui, &mut session, &mut settings, None).unwrap();
+                assert!(context.render_legacy().valid());
+            }
+            let name = std::ffi::CString::new(format!("###{panel}")).unwrap();
+            // SAFETY: the context is current between frames and the window ID is NUL-terminated.
+            let window =
+                unsafe { dear_imgui_rs::sys::igFindWindowByID(dear_imgui_rs::sys::igImHashStr(name.as_ptr(), 0, 0)) };
+            assert!(!window.is_null(), "{panel} was not restored");
+            assert_eq!(unsafe { (*window).DockId }, 0, "{panel} did not restore floating");
+            let focus_pending = match panel {
+                "inspector" => state.select_inspector.requested(),
+                _ => state.select_object_tree.requested(),
+            };
+            assert!(!focus_pending, "{panel} still requests focus after restoring floating");
+
+            let ui = context.frame();
+            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            ui.window("focus-sentinel").focused(true).build(|| {});
+            assert!(context.render_legacy().valid());
+
+            let ui = context.frame();
+            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            let mut retained_focus = false;
+            ui.window("focus-sentinel").build(|| {
+                retained_focus = ui.is_window_focused();
+            });
+            assert!(context.render_legacy().valid());
+            assert!(retained_focus, "{panel} took focus back from another window");
+        }
     }
 
     #[test]
@@ -1072,7 +1173,10 @@ mod tests {
         for _ in 0..4 {
             frame(&mut state);
         }
-        assert!(!state.select_object_tree, "the object tree docked and took the front");
+        assert!(
+            !state.select_object_tree.requested(),
+            "the object tree docked and took the front"
+        );
         assert!(!state.git_panel.visible(), "the Git tab waits behind the object tree");
 
         state.git_panel.request(git::GitTab::Conflicts);

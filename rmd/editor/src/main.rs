@@ -22,6 +22,7 @@ mod settings;
 mod transform;
 mod ui;
 mod update;
+mod viewports;
 
 use std::{
     fs,
@@ -49,7 +50,7 @@ use render::{CapturedImage, Device, PickRequest, PickResult, Renderer};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    event::WindowEvent,
+    event::{Event, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
 };
@@ -169,6 +170,7 @@ fn main() -> ExitCode {
         renderer: None,
         platform: None,
         imgui: None,
+        scaled_style: None,
         window: None,
     };
 
@@ -358,6 +360,7 @@ struct App {
     renderer: Option<Renderer>,
     platform: Option<WinitPlatform>,
     imgui: Option<Context>,
+    scaled_style: Option<viewports::ScaledStyle>,
     window: Option<Arc<Window>>,
 }
 
@@ -399,6 +402,24 @@ impl App {
         imgui.io_mut().set_backend_flags(backend);
         let consumer = imgui.create_synchronous_renderer_consumer()?;
 
+        let viewports_enabled = match platform.enable_viewports(&mut imgui) {
+            Ok(()) => {
+                viewports::install(&mut imgui);
+                imgui.enable_multi_viewport();
+                true
+            },
+            Err(e) => {
+                log::warn!("imgui windows stay inside the main window: {e}");
+                false
+            },
+        };
+        let mut scaled_style = viewports::ScaledStyle::new(&mut imgui, viewports_enabled && !cfg!(target_os = "macos"));
+        scaled_style.apply(
+            &mut imgui,
+            window.scale_factor() as f32,
+            self.settings.ui_scale_override_percent,
+        );
+
         let mut renderer = Renderer::new(device, size.width, size.height, self.session.textures.len())?;
         renderer.upload_textures(&self.session.textures)?;
 
@@ -407,12 +428,13 @@ impl App {
         self.renderer = Some(renderer);
         self.platform = Some(platform);
         self.imgui = Some(imgui);
+        self.scaled_style = Some(scaled_style);
         self.window = Some(window);
 
         Ok(())
     }
 
-    fn redraw(&mut self) -> Result<Redraw, Box<dyn std::error::Error>> {
+    fn redraw(&mut self, event_loop: &ActiveEventLoop) -> Result<Redraw, Box<dyn std::error::Error>> {
         let Self {
             session,
             settings,
@@ -428,6 +450,7 @@ impl App {
             renderer,
             platform,
             imgui,
+            scaled_style,
             window,
             ..
         } = self;
@@ -463,6 +486,10 @@ impl App {
                 log::error!("{e}");
                 ui.set_open_error(Some(e.to_string()));
             }
+        }
+
+        if let Some(scaled_style) = scaled_style.as_mut() {
+            scaled_style.apply(imgui, window.scale_factor() as f32, settings.ui_scale_override_percent);
         }
 
         platform.prepare_frame(imgui, window)?;
@@ -501,7 +528,20 @@ impl App {
         let scene = session.frame(&map_views, picking);
         let pending = frame.try_render(consumer)?;
         window.pre_present_notify();
-        let picked = renderer.draw_imgui(&scene, pending)?;
+        let picked = renderer.draw_imgui(&scene, pending, |reconciled| {
+            if !platform.viewports_enabled() {
+                return Vec::new();
+            }
+
+            let (collected, faults) = platform
+                .with_event_loop(event_loop, |_| viewports::collect(reconciled))
+                .into_parts();
+            for fault in faults {
+                log::error!("{fault}");
+            }
+
+            collected.unwrap_or_default()
+        })?;
         if let Some(pending) = pending_screenshot.take() {
             take_screenshot(renderer, session, &scene, &drawn, pending, clipboard);
         }
@@ -812,6 +852,16 @@ impl App {
     fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.capture_window_settings();
 
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.release_viewports()?;
+        }
+        if let (Some(platform), Some(context)) = (self.platform.as_mut(), self.imgui.as_mut())
+            && platform.viewports_enabled()
+        {
+            viewports::uninstall(context);
+            platform.disable_viewports(context)?;
+        }
+
         if let (Some(context), Some(consumer), Some(renderer)) =
             (self.imgui.as_mut(), self.consumer.as_ref(), self.renderer.as_mut())
         {
@@ -862,6 +912,13 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let is_main_window = self.window.as_ref().is_some_and(|window| window.id() == id);
         if !is_main_window {
+            if let (Some(platform), Some(imgui), Some(window)) =
+                (self.platform.as_mut(), self.imgui.as_mut(), self.window.as_ref())
+                && let Err(e) = platform.handle_event(imgui, window, &Event::<()>::WindowEvent { window_id: id, event })
+            {
+                log::error!("{e}");
+            }
+
             return;
         }
 
@@ -891,7 +948,7 @@ impl ApplicationHandler for App {
             },
 
             WindowEvent::RedrawRequested => {
-                let redraw = match self.redraw() {
+                let redraw = match self.redraw(event_loop) {
                     Ok(redraw) => redraw,
                     Err(e) => {
                         log::error!("{e}");
@@ -909,6 +966,10 @@ impl ApplicationHandler for App {
                         }
                     },
                 };
+
+                if let (Some(platform), Some(imgui)) = (self.platform.as_ref(), self.imgui.as_mut()) {
+                    viewports::finish_frame(platform, imgui, event_loop);
+                }
 
                 if let (Some(text), Some(imgui)) = (redraw.copy_to_clipboard, self.imgui.as_ref()) {
                     imgui.set_clipboard_text(text);

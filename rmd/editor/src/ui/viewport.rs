@@ -19,7 +19,6 @@ use super::{
     LAYER_KEYS,
     NodeOverlayView,
     NodeRightClick,
-    OVERLAY_PADDING,
     OverlayRect,
     PasteAction,
     PendingBlockPlacement,
@@ -34,7 +33,7 @@ use super::{
     block_controls_placement,
     block_placement_controls_layout,
     centered_paste_min,
-    common::focus_window_on_hover,
+    common::{dpi, focus_window_on_hover},
     conflict_controls_layout,
     context_menu::{
         Action as MenuAction,
@@ -62,6 +61,7 @@ use super::{
     draw_top_overlay,
     find::JumpTarget,
     node_right_click,
+    overlay_padding,
     paste_controls,
     recent_button_size,
     rectangle_drag_coord,
@@ -561,8 +561,9 @@ impl UiState {
             let viewport_min = ui.item_rect_min();
             let viewport_max = ui.item_rect_max();
 
-            let top_overlay_height = ui.frame_height() + OVERLAY_PADDING * 2.0;
-            let history_overlay_height = recent_button_size(ui) + OVERLAY_PADDING * 2.0;
+            let overlay_padding = overlay_padding(ui);
+            let top_overlay_height = ui.frame_height() + overlay_padding * 2.0;
+            let history_overlay_height = recent_button_size(ui) + overlay_padding * 2.0;
             let top_overlay = OverlayRect {
                 min: viewport_min,
                 max: [
@@ -614,7 +615,8 @@ impl UiState {
                 }
 
                 let faster = settings.keybindings.get(KeybindAction::PanFaster);
-                let speed = KEY_PAN_SPEED * io.delta_time() * if faster.is_held(ui) { KEY_PAN_FASTER } else { 1.0 };
+                let speed =
+                    KEY_PAN_SPEED * dpi(ui) * io.delta_time() * if faster.is_held(ui) { KEY_PAN_FASTER } else { 1.0 };
                 let pan = PAN_KEYS
                     .into_iter()
                     .filter(|(action, _)| settings.keybindings.get(*action).is_down_with(ui, faster))
@@ -1083,11 +1085,12 @@ impl UiState {
                     )
                     .is_some_and(|(_, bounds)| bounds.contains(mouse))
                 });
+                let banner_scale = dpi(ui);
                 let banner_capture_mouse = session.git_state(id).is_some_and(|git| git.pending_load)
-                    && mouse[0] >= viewport_min[0] + 8.0
-                    && mouse[0] <= viewport_min[0] + 320.0
-                    && mouse[1] >= top_overlay.max[1] + 4.0
-                    && mouse[1] <= top_overlay.max[1] + ui.frame_height() + 16.0;
+                    && mouse[0] >= viewport_min[0] + 8.0 * banner_scale
+                    && mouse[0] <= viewport_min[0] + 320.0 * banner_scale
+                    && mouse[1] >= top_overlay.max[1] + 4.0 * banner_scale
+                    && mouse[1] <= top_overlay.max[1] + ui.frame_height() + 16.0 * banner_scale;
 
                 let controls_hit_test = match *paste {
                     Some(_) => paste_controls(self.gizmo.block_rotation_open(), paste_target)
@@ -1699,7 +1702,11 @@ impl UiState {
                     },
                 );
                 if is_active && session.git_state(id).is_some_and(|git| git.pending_load) {
-                    ui.set_cursor_screen_pos([viewport_min[0] + 12.0, top_overlay.max[1] + 8.0]);
+                    let banner_scale = dpi(ui);
+                    ui.set_cursor_screen_pos([
+                        viewport_min[0] + 12.0 * banner_scale,
+                        top_overlay.max[1] + 8.0 * banner_scale,
+                    ]);
                     ui.text("Merge conflicts on disk");
                     ui.same_line();
                     if ui.small_button("Load conflicts") {

@@ -3,13 +3,15 @@ use core::path::TreePath;
 use dear_imgui_rs::Ui;
 use objtree::ObjectTree;
 
+use super::common::dpi;
+
 pub(super) const MAX_CUSTOM_FILL_SEARCH_RESULTS: usize = 50;
 
 pub(super) fn draw_type_path_search(
     ui: &Ui, tree: Option<&ObjectTree>, query: &mut String, input_id: &str, limit: usize,
     allowed: impl Fn(&ObjectTree, &TreePath) -> bool, enabled: impl Fn(&TreePath) -> bool,
 ) -> Option<TreePath> {
-    ui.set_next_item_width(320.0);
+    ui.set_next_item_width(320.0 * dpi(ui));
     ui.input_text(input_id, query).hint("Search type paths").build();
     if query.trim().is_empty() {
         ui.text_disabled("Type a path to search");

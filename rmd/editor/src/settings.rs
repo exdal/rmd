@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 const MAX_RECENT: usize = 10;
 const DEFAULT_PREFERRED_EDITOR: &str = "code --goto {file}:{line}:{column}";
+pub const UI_SCALE_PERCENT: std::ops::RangeInclusive<u32> = 50..=200;
 
 pub(crate) const BINDABLE_KEYS: &[Key] = &[
     Key::Tab,
@@ -1007,6 +1008,8 @@ pub(crate) struct Settings {
     pub show_lighting: bool,
     pub minimum_light_brightness_percent: u32,
     pub focus_windows_on_hover: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_scale_override_percent: Option<u32>,
     pub tile_place_flash: bool,
     pub selection_guide_line: bool,
     pub show_tile_grid: bool,
@@ -1076,6 +1079,7 @@ impl Default for Settings {
             show_lighting: true,
             minimum_light_brightness_percent: 0,
             focus_windows_on_hover: true,
+            ui_scale_override_percent: None,
             tile_place_flash: true,
             selection_guide_line: true,
             show_tile_grid: true,
@@ -1131,6 +1135,9 @@ impl Settings {
     fn normalize(&mut self) {
         self.keybindings.resolve_duplicates();
         self.minimum_light_brightness_percent = self.minimum_light_brightness_percent.min(100);
+        self.ui_scale_override_percent = self
+            .ui_scale_override_percent
+            .map(|scale| scale.clamp(*UI_SCALE_PERCENT.start(), *UI_SCALE_PERCENT.end()));
         self.blame_depth = self.blame_depth.clamp(1, 10_000);
         if !self.object_tree_search.type_paths && !self.object_tree_search.names {
             self.object_tree_search = ObjectTreeSearchOptions::default();
@@ -1308,6 +1315,7 @@ mod tests {
                 show_lighting: true,
                 minimum_light_brightness_percent: 0,
                 focus_windows_on_hover: true,
+                ui_scale_override_percent: None,
                 tile_place_flash: true,
                 selection_guide_line: true,
                 show_tile_grid: true,
@@ -1553,6 +1561,20 @@ mod tests {
     }
 
     #[test]
+    fn ui_scale_defaults_to_the_os_and_stays_in_the_supported_range() {
+        let missing: Settings = toml::from_str("").unwrap();
+        assert_eq!(missing.ui_scale_override_percent, None);
+        let previous_default: Settings = toml::from_str("ui_scale_percent = 100\n").unwrap();
+        assert_eq!(previous_default.ui_scale_override_percent, None);
+
+        for (stored, expected) in [(1, 50), (250, 200)] {
+            let settings = toml::from_str(&format!("ui_scale_override_percent = {stored}\n")).unwrap();
+            let loaded = SettingsLoad::from_file_result(Ok(Some(settings)));
+            assert_eq!(loaded.settings.ui_scale_override_percent, Some(expected));
+        }
+    }
+
+    #[test]
     fn settings_round_trip_through_toml() {
         let mut settings = Settings {
             maximized: true,
@@ -1562,6 +1584,7 @@ mod tests {
             show_lighting: true,
             minimum_light_brightness_percent: 35,
             focus_windows_on_hover: false,
+            ui_scale_override_percent: Some(150),
             tile_place_flash: false,
             selection_guide_line: false,
             show_tile_grid: false,
@@ -1636,6 +1659,7 @@ mod tests {
         assert!(encoded.contains("custom_enabled = true"));
         assert!(encoded.contains("custom_type_path = \"/atom/movable/lighting\""));
         assert!(encoded.contains("minimum_light_brightness_percent = 35"));
+        assert!(encoded.contains("ui_scale_override_percent = 150"));
         assert!(encoded.contains("[[profile_selections]]"));
         assert!(encoded.contains("profile = \"/datum/demir/tgstation/debug\""));
         assert!(encoded.contains("[[forced_profile_selections]]"));
@@ -1655,6 +1679,7 @@ mod tests {
             show_lighting: true,
             minimum_light_brightness_percent: 35,
             focus_windows_on_hover: true,
+            ui_scale_override_percent: None,
             tile_place_flash: false,
             selection_guide_line: false,
             show_tile_grid: true,

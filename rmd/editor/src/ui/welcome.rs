@@ -3,7 +3,13 @@ use std::path::{Path, PathBuf};
 use dear_imgui_rs::{StyleColor, Ui};
 use editor::icons::materialdesignicons::{ICON_ALERT, ICON_ALERT_CIRCLE, ICON_CLOSE_THICK};
 
-use super::{DIAGNOSTIC_WARNING_COLOR, OpenRequest, SAVE_ERROR_COLOR, UiState, common::focus_window_on_hover};
+use super::{
+    DIAGNOSTIC_WARNING_COLOR,
+    OpenRequest,
+    SAVE_ERROR_COLOR,
+    UiState,
+    common::{dpi, focus_window_on_hover},
+};
 use crate::{
     session::{DiagnosticSeverity, Session},
     settings::Settings,
@@ -151,8 +157,10 @@ impl UiState {
 
             // everything below stays locked until the codebase finishes loading
             let _disabled = ui.begin_disabled_with_cond(loading);
-            let indent = ((ui.content_region_avail()[0] - WELCOME_CONTENT_WIDTH) / 2.0).max(WELCOME_MIN_INDENT);
-            ui.dummy([0.0, WELCOME_MIN_INDENT]);
+            let scale = dpi(ui);
+            let min_indent = WELCOME_MIN_INDENT * scale;
+            let indent = ((ui.content_region_avail()[0] - WELCOME_CONTENT_WIDTH * scale) / 2.0).max(min_indent);
+            ui.dummy([0.0, min_indent]);
             ui.indent_by(indent);
 
             {
@@ -165,7 +173,7 @@ impl UiState {
                 None => draw_welcome_subtitle(ui, release),
             }
 
-            ui.dummy([0.0, WELCOME_MIN_INDENT]);
+            ui.dummy([0.0, min_indent]);
 
             let warnings = diagnostics.count(DiagnosticSeverity::Warning);
             if warnings > 0 {
@@ -187,7 +195,7 @@ impl UiState {
                 }
             }
             if warnings + errors > 0 {
-                ui.dummy([0.0, WELCOME_MIN_INDENT]);
+                ui.dummy([0.0, min_indent]);
             }
 
             match codebase {
@@ -197,7 +205,7 @@ impl UiState {
                         out.open = Some(OpenRequest::PickCodebase);
                     }
 
-                    ui.dummy([0.0, WELCOME_MIN_INDENT]);
+                    ui.dummy([0.0, min_indent]);
                     ui.text("Recent codebases");
                     if settings.recent_codebases.is_empty() {
                         ui.text_disabled("No recent codebases");
@@ -224,7 +232,7 @@ impl UiState {
                         out.open = Some(OpenRequest::PickMap);
                     }
 
-                    ui.dummy([0.0, WELCOME_MIN_INDENT]);
+                    ui.dummy([0.0, min_indent]);
                     ui.text("Recent maps");
                     let mut empty = true;
                     for (index, recent) in settings.recent_maps_for(codebase).enumerate() {
@@ -243,12 +251,12 @@ impl UiState {
                         ui.text_disabled("No recent maps in this codebase");
                     }
 
-                    ui.dummy([0.0, WELCOME_MIN_INDENT]);
+                    ui.dummy([0.0, min_indent]);
                     ui.text("Maps");
                     if session.maps().is_empty() {
                         ui.text_disabled("No maps found in this codebase");
                     } else {
-                        ui.set_next_item_width(WELCOME_CONTENT_WIDTH);
+                        ui.set_next_item_width(WELCOME_CONTENT_WIDTH * scale);
                         ui.input_text("##welcome-map-filter", map_filter)
                             .hint("Filter maps")
                             .build();

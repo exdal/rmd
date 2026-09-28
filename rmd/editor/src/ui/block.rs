@@ -6,7 +6,7 @@ use editor::{
     tool::{BlockSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
 };
 
-use super::{OVERLAY_BG, OVERLAY_PADDING, OverlayRect, PASTE_LABELS, draw_overlay_underlay};
+use super::{OVERLAY_BG, OverlayRect, PASTE_LABELS, common::dpi, draw_overlay_underlay, overlay_padding};
 use crate::{camera::Controller, session::Session};
 
 const BLOCK_PLACEMENT_LABELS: [&str; 4] = ["Move", "Copy", "Fill selection", "Clear selection"];
@@ -408,10 +408,11 @@ pub(super) fn block_placement_controls_layout(
         (selection.min[0] + selection.max[0]) * 0.5,
         (selection.min[1] + selection.max[1]) * 0.5,
     ];
-    let min_x = controls_bounds.min[0] + OVERLAY_PADDING;
-    let min_y = controls_bounds.min[1] + OVERLAY_PADDING;
-    let max_x = (controls_bounds.max[0] - width - OVERLAY_PADDING).max(min_x);
-    let max_y = (controls_bounds.max[1] - height - OVERLAY_PADDING).max(min_y);
+    let padding = overlay_padding(ui);
+    let min_x = controls_bounds.min[0] + padding;
+    let min_y = controls_bounds.min[1] + padding;
+    let max_x = (controls_bounds.max[0] - width - padding).max(min_x);
+    let max_y = (controls_bounds.max[1] - height - padding).max(min_y);
     let position = [
         (center[0] - width * 0.5).clamp(min_x, max_x),
         (if rows > 1 {
@@ -428,11 +429,8 @@ pub(super) fn block_placement_controls_layout(
         .clamp(min_y, max_y),
     ];
     let bounds = OverlayRect {
-        min: [position[0] - OVERLAY_PADDING, position[1] - OVERLAY_PADDING],
-        max: [
-            position[0] + width + OVERLAY_PADDING,
-            position[1] + height + OVERLAY_PADDING,
-        ],
+        min: [position[0] - padding, position[1] - padding],
+        max: [position[0] + width + padding, position[1] + height + padding],
     };
 
     (position, bounds)
@@ -532,7 +530,7 @@ pub(super) fn draw_selection_mode_controls(ui: &Ui, session: &mut Session, optio
         ui.same_line();
     }
     if !next.full_rectangle {
-        ui.set_next_item_width(100.0);
+        ui.set_next_item_width(100.0 * dpi(ui));
         changed |= ui
             .drag_int_config("##selection-border-width")
             .range(1, i32::MAX)

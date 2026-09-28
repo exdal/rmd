@@ -5,10 +5,11 @@ pub mod imgui;
 pub mod renderer;
 mod spec;
 pub mod texture;
+pub mod viewport;
 
 use dmm::{Coord, PrefabInstanceId};
 
-pub use crate::{device::Device, error::GpuError, renderer::Renderer};
+pub use crate::{device::Device, error::GpuError, renderer::Renderer, viewport::SecondaryViewport};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VisibilityId(std::num::NonZeroU32);

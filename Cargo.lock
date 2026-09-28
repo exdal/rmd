@@ -593,9 +593,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba01aa3fcd47adad86c7a333700ae69e72070d42b9945d7d4ba096b5f30d4e46"
 dependencies = [
  "dear-imgui-rs",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "thiserror 2.0.20",
  "web-sys",
  "web-time",
+ "windows-sys 0.61.2",
  "winit",
 ]
 
@@ -3065,6 +3068,7 @@ dependencies = [
  "dear-imgui-rs",
  "dmi",
  "dmm",
+ "log",
  "raw-window-handle",
  "shader-slang",
  "vir",
