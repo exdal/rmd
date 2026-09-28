@@ -24,6 +24,7 @@ use crate::{
         ObjectTreeSearchOptions,
         SelectionHighlight,
         Settings,
+        backup_dir,
     },
     ui::ProfileReload,
 };
@@ -316,6 +317,9 @@ fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
     ui.text("Saving");
     ui.checkbox("Sanitize variables", &mut settings.sanitize_vars_on_save);
     ui.set_item_tooltip("Leave out variables whose value matches the type's default when writing the map file");
+    if ui.button("Show backups") {
+        show_backups();
+    }
 
     ui.separator();
     ui.text("Windows");
@@ -324,6 +328,16 @@ fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
     ui.separator();
     ui.text("Updates");
     ui.checkbox("Check for new releases on startup", &mut settings.check_for_updates);
+}
+
+fn show_backups() {
+    let result = backup_dir().and_then(|dir| {
+        std::fs::create_dir_all(&dir)?;
+        editor::process::open_directory(&dir)
+    });
+    if let Err(error) = result {
+        log::error!("could not open the backups folder: {error}");
+    }
 }
 
 fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Settings) {
