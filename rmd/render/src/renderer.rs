@@ -70,6 +70,8 @@ const GUIDE_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/guide.vert
 const GUIDE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/guide.frag.spv"));
 const LIGHTING_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/lighting.vert.spv"));
 const LIGHTING_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/lighting.frag.spv"));
+const BLUR_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blur.vert.spv"));
+const BLUR_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blur.frag.spv"));
 const PICK_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pick.comp.spv"));
 const CAPTURE_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/capture.comp.spv"));
 const UPLOAD_BATCH_BYTES: usize = 64 * 1024 * 1024;
@@ -197,6 +199,20 @@ struct LightingPush {
     level_count: u32,
     base: u32,
     minimum_brightness: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct BlurPush {
+    sample_step: [f32; 2],
+}
+
+impl BlurPush {
+    fn for_camera(camera: &CameraPush) -> Self {
+        Self {
+            sample_step: [camera.zoom / camera.viewport[0], camera.zoom / camera.viewport[1]],
+        }
+    }
 }
 
 struct LightingSlots {
@@ -374,6 +390,7 @@ struct FrameGraphState {
     with_imgui: bool,
     show_areas: bool,
     show_area_outlines: bool,
+    blur_underlays: bool,
     map_views: Vec<MapViewState>,
     viewports: Vec<u32>,
 }
@@ -395,6 +412,7 @@ impl FrameGraphState {
             with_imgui,
             show_areas: frame.show_areas,
             show_area_outlines: frame.show_area_outlines,
+            blur_underlays: frame.underlay_depth > 0,
             map_views: frame
                 .map_views
                 .iter()
@@ -430,6 +448,7 @@ struct MapViewPass {
     camera: ValueId,
     underlay_camera: ValueId,
     active_camera: ValueId,
+    blur: ValueId,
     cull: CullSlots,
     lighting: Option<LightingSlots>,
     preview: Option<PreviewSlots>,
@@ -444,6 +463,7 @@ struct MapScene {
     camera: ValueId,
     underlay_camera: ValueId,
     active_camera: ValueId,
+    blur: ValueId,
     draw_commands: ValueId,
     visible_indices: ValueId,
     cull: CullSlots,
@@ -690,6 +710,7 @@ pub struct Renderer {
     overlay_light_pipeline: PipelineId,
     cull_pipelines: [PipelineId; 3],
     lighting_pipeline: PipelineId,
+    blur_pipeline: PipelineId,
     interaction_pipeline: PipelineId,
     guide_pipeline: PipelineId,
     pick_pipeline: PipelineId,
@@ -699,6 +720,7 @@ pub struct Renderer {
     textures: Vec<TextureImage>,
     fallback: Option<TextureImage>,
     sampler: vk::Sampler,
+    blur_sampler: vk::Sampler,
     sprites: Option<Buffer>,
     sprite_capacity: usize,
     area_tiles: Option<Buffer>,
@@ -840,6 +862,19 @@ impl Renderer {
                 return Err(error.into());
             },
         };
+        let blur_pipeline = match graph.declare_pipeline(
+            GraphicsPipelineInfo::new()
+                .with_shader(&read_spirv(BLUR_VS_SPV)?)
+                .with_shader(&read_spirv(BLUR_FS_SPV)?),
+        ) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                drop(graph);
+                bindless.destroy(&device);
+
+                return Err(error.into());
+            },
+        };
         let pick_pipeline = match graph.declare_compute_pipeline(ComputePipelineInfo::new(&read_spirv(PICK_CS_SPV)?)) {
             Ok(pipeline) => pipeline,
             Err(error) => {
@@ -897,6 +932,7 @@ impl Renderer {
             overlay_light_pipeline,
             cull_pipelines,
             lighting_pipeline,
+            blur_pipeline,
             interaction_pipeline,
             guide_pipeline,
             pick_pipeline,
@@ -906,6 +942,7 @@ impl Renderer {
             textures: Vec::new(),
             fallback: None,
             sampler: vk::Sampler::null(),
+            blur_sampler: vk::Sampler::null(),
             sprites: None,
             sprite_capacity: 0,
             area_tiles: None,
@@ -931,6 +968,7 @@ impl Renderer {
             .device
             .allocator
             .allocate_sampler(&SamplerInfo::nearest().with_address_mode(vk::SamplerAddressMode::CLAMP_TO_EDGE))?;
+        renderer.blur_sampler = renderer.device.allocator.allocate_sampler(&SamplerInfo::linear().with_address_mode(vk::SamplerAddressMode::CLAMP_TO_EDGE))?;
         let pick_readback = renderer.device.allocator.allocate_buffer(
             &BufferInfo::new(4, vk::BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuToCpu)
                 .with_name("pick readback"),
@@ -1105,6 +1143,7 @@ impl Renderer {
             tile_extent,
             frame.show_areas,
             frame.show_area_outlines,
+            frame.underlay_depth > 0,
             "capture",
         );
         let pixels_slot = module.declare_buffer_var("capture pixels", Access::HostRead);
@@ -1172,6 +1211,7 @@ impl Renderer {
                         ..camera
                     },
                 );
+                program.set_bytes(scene.blur, &BlurPush::for_camera(&camera));
                 bind_sprite_cull(&mut program, &scene.cull, &plan);
                 if let (Some(slots), Some((lighting, base, _))) = (&scene.lighting, lighting) {
                     program.set_bytes(
@@ -1240,7 +1280,7 @@ impl Renderer {
     #[allow(clippy::too_many_arguments)]
     fn record_map_scene(
         &self, module: &mut Module, sprites: ValueId, lights: Option<ValueId>, viewport: vk::Extent2D,
-        show_areas: bool, show_area_outlines: bool, name: &str,
+        show_areas: bool, show_area_outlines: bool, blur_underlays: bool, name: &str,
     ) -> MapScene {
         let extent = module.declare_extent_3d_var(&format!("{name} extent"), extent3d(viewport));
         let mut scene_attachment = module.transient_image_sized(
@@ -1273,6 +1313,7 @@ impl Renderer {
         let underlay_camera =
             module.declare_bytes_var(&format!("{name} underlay camera"), size_of::<CameraPush>() as u32);
         let active_camera = module.declare_bytes_var(&format!("{name} active camera"), size_of::<CameraPush>() as u32);
+        let blur = module.declare_bytes_var(&format!("{name} blur"), size_of::<BlurPush>() as u32);
 
         let (cull_values, cull) = record_sprite_cull(
             module,
@@ -1289,6 +1330,58 @@ impl Renderer {
         );
         let draw_commands = cull_values.commands;
         let visible_indices = cull_values.visible;
+
+        if blur_underlays {
+            let mut underlay_attachment = module.transient_image_sized(
+                &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
+                    .with_usage(vk::ImageUsageFlags::SAMPLED)
+                    .with_name(format!("{name} underlay attachment")),
+                extent,
+            );
+            underlay_attachment = module.clear(underlay_attachment, vir::clear::f32::TRANSPARENT);
+            // emissive and level still take the underlays so lighting picks their own level
+            [underlay_attachment, emissive_attachment, level_attachment, _, _] = module
+                .begin_rendering([
+                    (underlay_attachment, Access::ColorRW),
+                    (emissive_attachment, Access::ColorRW),
+                    (level_attachment, Access::ColorRW),
+                    (draw_commands, Access::IndirectRead),
+                    (visible_indices, Access::VertexRead),
+                ])
+                .with_name(format!("{name} underlays"))
+                .bind_graphics_pipeline(self.scene_pipeline)
+                .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                .set_viewport(0, Rect2D::framebuffer())
+                .set_scissor(0, Rect2D::framebuffer())
+                .set_color_blend(0, BlendPreset::PremultipliedAlphaBlend)
+                .set_color_blend(1, BlendPreset::PremultipliedAlphaBlend)
+                .set_color_blend(2, BlendPreset::Off)
+                .set_rasterization(RasterizationState {
+                    cull_mode: vk::CullModeFlags::NONE,
+                    ..Default::default()
+                })
+                .bind_buffer(0, 1, sprites)
+                .bind_buffer(0, 2, visible_indices)
+                .specialize_constant(spec::SPRITE_INDIRECT, true)
+                .specialize_constant(spec::SHOW_AREAS, show_areas)
+                .specialize_constant(spec::SHOW_AREA_OUTLINES, show_area_outlines)
+                .push_constants_from(underlay_camera)
+                .draw_indirect_at(draw_commands, 0, 1u32, DRAW_INDIRECT_STRIDE)
+                .end_rendering();
+
+            [scene_attachment] = module
+                .begin_rendering([(scene_attachment, Access::ColorRW)])
+                .with_name(format!("{name} underlay blur"))
+                .bind_graphics_pipeline(self.blur_pipeline)
+                .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+                .set_viewport(0, Rect2D::framebuffer())
+                .set_scissor(0, Rect2D::framebuffer())
+                .broadcast_color_blend(BlendPreset::PremultipliedAlphaBlend)
+                .bind_texture(0, 0, underlay_attachment, self.blur_sampler)
+                .push_constants_from(blur)
+                .draw(3, 1)
+                .end_rendering();
+        }
 
         [scene_attachment, emissive_attachment, level_attachment, _, _] = module
             .begin_rendering([
@@ -1315,8 +1408,6 @@ impl Renderer {
             .specialize_constant(spec::SPRITE_INDIRECT, true)
             .specialize_constant(spec::SHOW_AREAS, show_areas)
             .specialize_constant(spec::SHOW_AREA_OUTLINES, show_area_outlines)
-            .push_constants_from(underlay_camera)
-            .draw_indirect_at(draw_commands, 0, 1u32, DRAW_INDIRECT_STRIDE)
             .push_constants_from(active_camera)
             .draw_indirect_at(
                 draw_commands,
@@ -1434,6 +1525,7 @@ impl Renderer {
             camera,
             underlay_camera,
             active_camera,
+            blur,
             draw_commands,
             visible_indices,
             cull,
@@ -1469,6 +1561,7 @@ impl Renderer {
                 camera,
                 underlay_camera,
                 active_camera,
+                blur,
                 draw_commands,
                 visible_indices,
                 cull,
@@ -1480,6 +1573,7 @@ impl Renderer {
                 viewport,
                 state.show_areas,
                 state.show_area_outlines,
+                state.blur_underlays,
                 &format!("map view {index}"),
             );
             let mut visibility_attachment = module.transient_image_sized(
@@ -1719,6 +1813,7 @@ impl Renderer {
                 camera,
                 underlay_camera,
                 active_camera,
+                blur,
                 cull,
                 lighting,
                 preview,
@@ -1963,6 +2058,9 @@ impl Renderer {
                     ..plan.camera
                 },
             );
+            recorded
+                .program
+                .set_bytes(map_view.blur, &BlurPush::for_camera(&plan.camera));
 
             let buffers = self.cull.get(index).ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
             recorded.program.set(map_view.cull.visible, buffers.visible);
@@ -3063,6 +3161,7 @@ impl Drop for Renderer {
         destroy_images(&mut self.device, std::mem::take(&mut self.textures));
         destroy_images(&mut self.device, self.fallback.take());
         self.device.allocator.deallocate_sampler(self.sampler);
+        self.device.allocator.deallocate_sampler(self.blur_sampler);
 
         for buffers in std::mem::take(&mut self.cull) {
             buffers.destroy(&mut self.device);
@@ -3376,6 +3475,8 @@ mod tests {
     use super::{
         AREA_COLOR_CS_SPV,
         AreaColorPush,
+        BLUR_FS_SPV,
+        BlurPush,
         CAPTURE_CS_SPV,
         CAPTURE_WORKGROUP_SIZE,
         CULL_WORKGROUP_SIZE,
@@ -4160,6 +4261,20 @@ mod tests {
         assert_eq!(bindings, [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)]);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<LightingPush>());
+    }
+
+    #[test]
+    fn blur_shader_layout_matches_the_renderer() {
+        let reflection = shader::reflect(&read_spirv(BLUR_FS_SPV).expect("valid SPIR-V")).expect("shader reflects");
+        let bindings = reflection
+            .bindings
+            .iter()
+            .map(|binding| (binding.set, binding.binding))
+            .collect::<Vec<_>>();
+
+        assert_eq!(bindings, [(0, 0)]);
+        assert_eq!(reflection.push_constant_offset, 0);
+        assert_eq!(reflection.push_constant_size as usize, size_of::<BlurPush>());
     }
 
     #[test]
