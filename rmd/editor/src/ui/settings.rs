@@ -11,7 +11,7 @@ use dear_imgui_rs::{
 };
 use editor::environment::BundledProfile;
 
-use super::common::focus_window_on_hover;
+use super::{common::focus_window_on_hover, dialog::draw_keybind_preset_dialog};
 use crate::{
     session::Session,
     settings::{
@@ -48,6 +48,7 @@ struct SettingsWindowState<'a> {
     open: &'a mut bool,
     category: &'a mut SettingsCategory,
     capturing: &'a mut Option<KeybindAction>,
+    resetting_keybinds: &'a mut bool,
     measured: &'a mut [f32; 2],
     pending_profile: &'a mut Option<ProfileReload>,
 }
@@ -159,6 +160,7 @@ pub(super) struct SettingsWindow {
     open: bool,
     category: SettingsCategory,
     capturing: Option<KeybindAction>,
+    resetting_keybinds: bool,
     measured: [f32; 2],
     pending_profile: Option<ProfileReload>,
 }
@@ -170,6 +172,7 @@ impl SettingsWindow {
             open: false,
             category: SettingsCategory::default(),
             capturing: None,
+            resetting_keybinds: false,
             measured: SETTINGS_WINDOW_SIZE,
             pending_profile: None,
         })
@@ -189,6 +192,7 @@ impl SettingsWindow {
                 open: &mut self.open,
                 category: &mut self.category,
                 capturing: &mut self.capturing,
+                resetting_keybinds: &mut self.resetting_keybinds,
                 measured: &mut self.measured,
                 pending_profile: &mut self.pending_profile,
             },
@@ -211,6 +215,7 @@ fn draw_settings_window(
         open,
         category,
         capturing,
+        resetting_keybinds,
         measured,
         pending_profile,
     } = state;
@@ -270,7 +275,9 @@ fn draw_settings_window(
                         SettingsCategory::ObjectTree => {
                             object_tree_changed |= draw_object_tree_settings(ui, settings);
                         },
-                        SettingsCategory::Keybindings => draw_keybinding_settings(ui, capturing, settings),
+                        SettingsCategory::Keybindings => {
+                            draw_keybinding_settings(ui, capturing, resetting_keybinds, settings)
+                        },
                     }
                 });
 
@@ -279,6 +286,9 @@ fn draw_settings_window(
 
     if !*open {
         *capturing = None;
+    }
+    if let Some(preset) = draw_keybind_preset_dialog(ui, resetting_keybinds) {
+        settings.keybindings = preset.bindings();
     }
 
     SettingsWindowOutput {
@@ -656,9 +666,11 @@ pub(super) fn draw_object_tree_filter_settings(ui: &Ui, options: &mut ObjectTree
     changed
 }
 
-fn draw_keybinding_settings(ui: &Ui, capturing: &mut Option<KeybindAction>, settings: &mut Settings) {
+fn draw_keybinding_settings(
+    ui: &Ui, capturing: &mut Option<KeybindAction>, resetting_keybinds: &mut bool, settings: &mut Settings,
+) {
     if ui.button("Reset keybindings") {
-        settings.keybindings = KeyBindings::default();
+        *resetting_keybinds = true;
         *capturing = None;
     }
 
@@ -794,6 +806,7 @@ mod tests {
                 .expect("valid settings window key");
             let mut open = true;
             let mut capturing = None;
+            let mut resetting_keybinds = false;
             let mut measured = SETTINGS_WINDOW_SIZE;
             let mut pending_profile = None;
             let mut session = Session::new();
@@ -806,6 +819,7 @@ mod tests {
                     open: &mut open,
                     category: &mut category,
                     capturing: &mut capturing,
+                    resetting_keybinds: &mut resetting_keybinds,
                     measured: &mut measured,
                     pending_profile: &mut pending_profile,
                 },
@@ -836,6 +850,7 @@ mod tests {
             let mut open = true;
             let mut category = SettingsCategory::Compiler;
             let mut capturing = None;
+            let mut resetting_keybinds = false;
             let mut measured = SETTINGS_WINDOW_SIZE;
             let mut pending_profile = None;
             let mut session = Session::new();
@@ -859,6 +874,7 @@ mod tests {
                     open: &mut open,
                     category: &mut category,
                     capturing: &mut capturing,
+                    resetting_keybinds: &mut resetting_keybinds,
                     measured: &mut measured,
                     pending_profile: &mut pending_profile,
                 },
