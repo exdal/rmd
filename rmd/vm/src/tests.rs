@@ -8,6 +8,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+use defines::{EAST, NORTH, NORTHEAST, SOUTH, SOUTHWEST, WEST};
 use objtree::{ObjectTree, TypeId};
 
 use crate::{
@@ -1046,6 +1047,53 @@ fn defining_a_node_group_outside_initialize_is_blocked() {
 }
 
 #[test]
+fn rotations_follow_the_most_specific_registered_type() {
+    let (tree, module) = compile(fixture!(
+        "programs/rotations_follow_the_most_specific_registered_type.dm"
+    ));
+    let bake = Bake::new(
+        &tree,
+        &module,
+        Vec::new(),
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    assert_eq!(bake.diagnostics.count(), 0);
+    assert_eq!(bake.rotations().len(), 2);
+    let directions = |path: &str| {
+        let ty = tree.id_of(&TreePath::parse(path)).unwrap();
+        crate::bake::rotation_for(&tree, bake.rotations(), ty).map(|rotation| rotation.directions.clone())
+    };
+    assert_eq!(directions("/obj/machine"), Some(vec![NORTH, SOUTH, EAST, WEST]));
+    assert_eq!(directions("/obj/machine/tank"), Some(vec![NORTH, SOUTH, EAST, WEST]));
+    assert_eq!(directions("/obj/machine/pump/fast"), Some(vec![NORTHEAST, SOUTHWEST]));
+    assert_eq!(directions("/obj"), None);
+}
+
+#[test]
+fn declaring_a_rotation_outside_initialize_is_blocked() {
+    let (tree, module) = compile(fixture!(
+        "programs/declaring_a_rotation_outside_initialize_is_blocked.dm"
+    ));
+    let fault = Runtime::default()
+        .run(
+            &tree,
+            &module,
+            hook(&tree, ProfileHook::Bake),
+            None,
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
+        .expect_err("rotations are declared once, at initialization");
+    assert!(
+        matches!(&fault.kind, FaultKind::Blocked(message) if message.contains("outside a profile's New()")),
+        "{fault:?}",
+    );
+}
+
+#[test]
 fn a_ui_interaction_the_profile_ignores_keeps_nothing() {
     let (tree, module) = compile(fixture!(
         "programs/a_ui_interaction_the_profile_ignores_keeps_nothing.dm"
@@ -1877,6 +1925,41 @@ fn neighbor_overlay_changes_are_exported_and_rolled_back() {
     assert_eq!(bake.appearances[&2].overlays.len(), 2);
     bake.update(&tree, &module, Vec::new(), &[1]);
     assert_eq!(bake.appearances[&2].overlays.len(), 1);
+}
+
+#[test]
+fn assigning_appearance_lists_empties_or_copies_them() {
+    let (tree, module) = compile(fixture!(
+        "programs/assigning_appearance_lists_empties_or_copies_them.dm"
+    ));
+    let ty = tree.id_of(&TreePath::parse("/obj/machine")).unwrap();
+    let atoms = vec![Atom {
+        instance: 1,
+        ty,
+        position: Position::new(1, 1, 1),
+        vars: Vec::new(),
+    }];
+    let bake = Bake::new(
+        &tree,
+        &module,
+        atoms,
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.diagnostics.count(), 0);
+    let appearance = &bake.appearances[&1];
+    assert_eq!(appearance.underlays.len(), 1, "a list assignment copies the list");
+    assert_eq!(appearance.overlays.len(), 1, "a null assignment leaves an empty list");
+    assert_eq!(
+        appearance.overlays[0]
+            .vars
+            .iter()
+            .find(|(name, _)| name.as_str() == "icon_state")
+            .map(|(_, value)| value),
+        Some(&core::types::Value::Text("edge".into()))
+    );
 }
 
 #[test]

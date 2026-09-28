@@ -1,4 +1,4 @@
-use core::{path::TreePath, types::Identifier};
+use core::{path::TreePath, types::Identifier, vars};
 use std::collections::{HashMap, HashSet};
 
 use dear_imgui_rs::{ListClipper, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError};
@@ -355,7 +355,7 @@ fn matching_object_types(tree: &ObjectTree, query: &str, options: ObjectTreeSear
         return Vec::new();
     }
 
-    let name = Identifier::from("name");
+    let name = Identifier::from(vars::NAME);
     let mut matches = tree
         .iter()
         .filter(|decl| {

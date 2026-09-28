@@ -7,4 +7,5 @@ edition = "2024"
 path = "src/lib.rs"
 
 [dependencies]
+defines = { path = "../defines" }
 png = "0.18"

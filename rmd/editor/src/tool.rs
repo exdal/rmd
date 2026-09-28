@@ -1,6 +1,7 @@
 use core::{
     path::TreePath,
     types::{Identifier, Value},
+    vars,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -546,7 +547,7 @@ fn transform_prefab(tree: &ObjectTree, prefab: &mut Prefab, transform: Selection
     };
     let appearance = visual::resolve_id(tree, id, prefab);
     let path_direction = directional_type_group(tree, id).and_then(|(_, direction)| direction);
-    let dir_name = Identifier::from("dir");
+    let dir_name = Identifier::from(vars::DIR);
     let direction = path_direction.or_else(|| match visual::resolve_value(tree, id, prefab, &dir_name) {
         Some(resolved) => resolved.value.as_num().and_then(|value| Dir::from_bits(value as u32)),
         None => Dir::from_bits(appearance.dir),
@@ -556,16 +557,16 @@ fn transform_prefab(tree: &ObjectTree, prefab: &mut Prefab, transform: Selection
     if let Some(direction) = target_direction {
         if let Some(path) = directional_type_target(tree, id, direction) {
             prefab.path = path;
-            prefab.remove_var(&Identifier::from("dir"));
+            prefab.remove_var(&Identifier::from(vars::DIR));
         } else {
-            set_resolved_number(tree, prefab, "dir", direction.to_bits() as i32);
+            set_resolved_number(tree, prefab, vars::DIR, direction.to_bits() as i32);
         }
     }
 
     for (x_name, y_name, values) in [
-        ("pixel_x", "pixel_y", [appearance.pixel_x, appearance.pixel_y]),
-        ("pixel_w", "pixel_z", [appearance.pixel_w, appearance.pixel_z]),
-        ("step_x", "step_y", [appearance.step_x, appearance.step_y]),
+        (vars::PIXEL_X, vars::PIXEL_Y, [appearance.pixel_x, appearance.pixel_y]),
+        (vars::PIXEL_W, vars::PIXEL_Z, [appearance.pixel_w, appearance.pixel_z]),
+        (vars::STEP_X, vars::STEP_Y, [appearance.step_x, appearance.step_y]),
     ] {
         let [x, y] = transform_vector(values, transform);
         set_resolved_number(tree, prefab, x_name, x);
@@ -578,13 +579,13 @@ fn set_resolved_number(tree: &ObjectTree, prefab: &mut Prefab, name: &str, value
         .id_of(&prefab.path)
         .map(|id| visual::resolve_id(tree, id, &Prefab::new(prefab.path.clone())))
         .map(|appearance| match name {
-            "dir" => appearance.dir as i32,
-            "pixel_x" => appearance.pixel_x,
-            "pixel_y" => appearance.pixel_y,
-            "pixel_w" => appearance.pixel_w,
-            "pixel_z" => appearance.pixel_z,
-            "step_x" => appearance.step_x,
-            "step_y" => appearance.step_y,
+            vars::DIR => appearance.dir as i32,
+            vars::PIXEL_X => appearance.pixel_x,
+            vars::PIXEL_Y => appearance.pixel_y,
+            vars::PIXEL_W => appearance.pixel_w,
+            vars::PIXEL_Z => appearance.pixel_z,
+            vars::STEP_X => appearance.step_x,
+            vars::STEP_Y => appearance.step_y,
             _ => value,
         });
     let name = Identifier::from(name);

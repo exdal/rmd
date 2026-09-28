@@ -1,6 +1,7 @@
-use core::{path::TreePath, types::Identifier};
+use core::{path::TreePath, types::Identifier, vars};
 use std::collections::{HashMap, HashSet};
 
+use defines::{FLOAT_LAYER, KEEP_APART, KEEP_TOGETHER};
 use dmi::metadata::{Dir, Metadata};
 use dmm::{Coord, Map, Prefab};
 use objtree::{ObjectTree, TypeId};
@@ -57,6 +58,8 @@ struct RenderedPrefab {
 struct SpriteGroup {
     plane: f32,
     layer: f32,
+    // the parent's own icon floats at `FLOAT_LAYER`, so `FLOAT_LAYER - 1` sorts under it
+    float: f32,
     keep_apart: bool,
     sprites: Vec<SpriteInstance>,
 }
@@ -666,7 +669,19 @@ impl RenderContext<'_> {
             own.push(sprite);
         }
 
-        self.grouped(owner, &appearance, own, delta, coord, area_owner, depth + 1)
+        let float = delta
+            .vars
+            .iter()
+            .find(|(name, _)| name.as_str() == vars::LAYER)
+            .and_then(|(_, value)| value.as_num())
+            .filter(|layer| *layer < 0.0)
+            .unwrap_or(FLOAT_LAYER);
+        let mut groups = self.grouped(owner, &appearance, own, delta, coord, area_owner, depth + 1);
+        for group in &mut groups {
+            group.float = float;
+        }
+
+        groups
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -683,6 +698,7 @@ impl RenderContext<'_> {
             groups.push(SpriteGroup {
                 plane: parent.plane,
                 layer: parent.layer,
+                float: FLOAT_LAYER,
                 keep_apart: false,
                 sprites: own,
             });
@@ -695,11 +711,10 @@ impl RenderContext<'_> {
             left.plane
                 .total_cmp(&right.plane)
                 .then_with(|| left.layer.total_cmp(&right.layer))
+                .then_with(|| left.float.total_cmp(&right.float))
         });
 
         // TODO: type intrinsocs
-        const KEEP_TOGETHER: u32 = 32;
-        const KEEP_APART: u32 = 64;
         if parent.appearance_flags & KEEP_TOGETHER != 0 && !groups.is_empty() {
             let mut together = Vec::new();
             let mut apart = Vec::new();
@@ -714,6 +729,7 @@ impl RenderContext<'_> {
                 apart.push(SpriteGroup {
                     plane: parent.plane,
                     layer: parent.layer,
+                    float: FLOAT_LAYER,
                     keep_apart: false,
                     sprites: together,
                 });
@@ -729,6 +745,7 @@ impl RenderContext<'_> {
             left.plane
                 .total_cmp(&right.plane)
                 .then_with(|| left.layer.total_cmp(&right.layer))
+                .then_with(|| left.float.total_cmp(&right.float))
         });
 
         groups
@@ -804,6 +821,7 @@ impl RenderContext<'_> {
             vec![SpriteGroup {
                 plane: appearance.plane,
                 layer: appearance.layer,
+                float: FLOAT_LAYER,
                 keep_apart: false,
                 sprites: own,
             }]
@@ -818,6 +836,7 @@ impl RenderContext<'_> {
             groups.push(SpriteGroup {
                 plane: appearance.plane,
                 layer: appearance.layer,
+                float: FLOAT_LAYER,
                 keep_apart: false,
                 sprites: vec![sprite],
             });

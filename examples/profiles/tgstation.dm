@@ -158,6 +158,13 @@
 	icon_state = "manifoldlayer_center"
 	return ..()
 
+// TGSTATION FIX YOUR SHIT: the ternary takes `FLOAT_LAYER - HAS_TRAIT(...)` as its condition, leaving every
+// connection on absolute layer 1, under the floor once a hidden manifold sinks onto FLOOR_PLANE.
+/obj/machinery/atmospherics/pipe/layer_manifold/get_attached_image(p_dir, p_layer, p_color)
+	var/mutable_appearance/connection = ..()
+	connection.layer = FLOAT_LAYER - (HAS_TRAIT(src, TRAIT_UNDERFLOOR) ? 1 : 0.01)
+	return connection
+
 /obj/machinery/atmospherics/pipe/multiz/demir_bake_connections()
 	icon_state = ""
 	center = mutable_appearance(icon, "adapter_center", layer = HIGH_OBJ_LAYER)
@@ -374,6 +381,8 @@
 		demir_node_group(/obj/structure/disposalpipe, DEMIR_NODE_BLOCKERS, /obj/structure/disposalpipe/segment)
 		demir_node_group(/obj/structure/disposalconstruct, DEMIR_NODE_BLOCKERS)
 		register_disposal_node_orientations()
+
+		demir_rotatable(/obj/machinery/atmospherics, GLOB.cardinals)
 
 // ui() rolls its writes back on every frame but the one the viewer touched something on, so the
 // profile's own vars are where panel state belongs. Every other hook reads them off src, and the

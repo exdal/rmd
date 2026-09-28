@@ -1,4 +1,4 @@
-use core::types::Identifier;
+use core::{types::Identifier, vars};
 use std::{
     cmp::Ordering,
     collections::{BinaryHeap, HashMap, HashSet, VecDeque},
@@ -431,7 +431,7 @@ fn resolved_number(tree: &ObjectTree, prefab: &Prefab, name: &str) -> Option<u32
 }
 
 fn effective_direction(tree: &ObjectTree, prefab: &Prefab) -> u32 {
-    resolved_number(tree, prefab, "dir").unwrap_or_else(|| visual::resolve(tree, prefab).dir)
+    resolved_number(tree, prefab, vars::DIR).unwrap_or_else(|| visual::resolve(tree, prefab).dir)
 }
 
 fn ports(tree: &ObjectTree, group: &ResolvedGroup, prefab: &Prefab) -> NodePorts {

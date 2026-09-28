@@ -1,5 +1,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
+use defines::{EAST, NORTH, SOUTH, WEST};
+
 use crate::heap::{Heap, ObjectId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -13,9 +15,14 @@ impl Position {
     pub fn new(x: i32, y: i32, z: i32) -> Self { Self { x, y, z } }
 
     pub fn step(self, dir: i32) -> Self {
+        let dir = dir as u32;
         Self {
-            x: self.x.saturating_add(i32::from(dir & 4 != 0) - i32::from(dir & 8 != 0)),
-            y: self.y.saturating_add(i32::from(dir & 1 != 0) - i32::from(dir & 2 != 0)),
+            x: self
+                .x
+                .saturating_add(i32::from(dir & EAST != 0) - i32::from(dir & WEST != 0)),
+            y: self
+                .y
+                .saturating_add(i32::from(dir & NORTH != 0) - i32::from(dir & SOUTH != 0)),
             z: self.z,
         }
     }

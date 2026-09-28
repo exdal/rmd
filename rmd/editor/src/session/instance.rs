@@ -36,6 +36,7 @@ pub(crate) struct SelectedTransform {
     pub is_movable: bool,
     pub dir: u32,
     pub dmi_directions: Option<u32>,
+    pub declared: Option<[bool; 8]>,
     pub directional_types: Option<DirectionalTypes>,
 }
 
@@ -83,7 +84,7 @@ impl Session {
             .roots()
             .movable
             .is_some_and(|movable| environment.tree.is_subtype_of(id, movable));
-        let direction = direction_state(environment, id, &appearance);
+        let direction = direction_state(environment, id, &appearance, self.declared_directions(&prefab.path));
 
         Some(SelectedTransform {
             selected,
@@ -93,6 +94,7 @@ impl Session {
             is_movable,
             dir: direction.dir,
             dmi_directions: direction.dmi_directions,
+            declared: direction.declared,
             directional_types: direction.directional_types,
         })
     }

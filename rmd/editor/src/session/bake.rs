@@ -276,6 +276,172 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the local target/tgstation checkout"]
+    fn a_hidden_layer_manifold_draws_its_connections_above_the_floor() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(editor::environment::BundledProfile::Tgstation),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+            .expect("tgstation codebase");
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+
+        let floor = || {
+            vec![
+                Prefab::new(TreePath::parse("/turf/open/floor/iron")),
+                Prefab::new(TreePath::parse("/area/station/engineering/main")),
+            ]
+        };
+        let with = |path: &str, dir: Option<f32>| {
+            let mut prefab = Prefab::new(TreePath::parse(path));
+            if let Some(dir) = dir {
+                prefab.set_var("dir".into(), Value::Num(dir));
+            }
+            let mut tile = vec![prefab];
+            tile.extend(floor());
+            tile
+        };
+        let pipe = "/obj/machinery/atmospherics/pipe/smart/manifold4w/cyan/hidden";
+        let manifold = "/obj/machinery/atmospherics/pipe/layer_manifold/cyan/hidden";
+        let size = Size { x: 5, y: 3, z: 1 };
+        let mut map = Map::new(size);
+        let empty = map.intern_tile(floor());
+        let pipe_tile = map.intern_tile(with(pipe, None));
+        let vertical = map.intern_tile(with(manifold, Some(1.0)));
+        let horizontal = map.intern_tile(with(manifold, Some(8.0)));
+        for y in 1..=size.y {
+            for x in 1..=size.x {
+                let key = match (x, y) {
+                    (1, 2) => vertical,
+                    (4, 2) => horizontal,
+                    (1, _) | (3, 2) | (5, 2) => pipe_tile,
+                    _ => empty,
+                };
+                map.grid[0][(size.y - y) as usize][x as usize - 1] = key;
+            }
+        }
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+
+        let bake = session.active_cache().bake.as_ref().expect("manifold bake");
+        assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
+        let environment = session.state.environment.as_ref().unwrap();
+        let document = session.state.active_document().unwrap();
+        let resolved = |instance: editor::document::PrefabInstanceId| {
+            let (prefab, _) = document.prefab_instance(instance).unwrap();
+            let ty = environment.tree.id_of(&prefab.path).unwrap();
+            let delta = bake.appearances.get(&instance.get());
+            let appearance = delta.map_or_else(
+                || editor::visual::resolve_id(&environment.tree, ty, prefab),
+                |delta| editor::visual::resolve_delta(&environment.tree, ty, prefab, delta),
+            );
+            (prefab.path.to_string(), appearance, delta)
+        };
+        let depth = |appearance: &editor::visual::Appearance| appearance.plane * 1000.0 + appearance.layer;
+
+        for (coord, expected) in [
+            (Coord::new(1, 2, 1), ["intact_1_3", "intact_2_3"]),
+            (Coord::new(4, 2, 1), ["intact_4_3", "intact_8_3"]),
+        ] {
+            let placed = document
+                .instance_ids_at(coord)
+                .iter()
+                .map(|id| resolved(*id))
+                .collect::<Vec<_>>();
+            let (_, owner, delta) = placed.iter().find(|(path, ..)| path == manifold).unwrap();
+            let (_, turf, _) = placed.iter().find(|(path, ..)| path.starts_with("/turf/")).unwrap();
+            let mut states = Vec::new();
+            for overlay in &delta.expect("baked manifold").overlays {
+                let connection = editor::visual::resolve_overlay(&environment.tree, owner, overlay);
+                let Some(state) = connection
+                    .icon_state
+                    .clone()
+                    .filter(|state| state.starts_with("intact_"))
+                else {
+                    continue;
+                };
+                assert_eq!(
+                    (connection.plane, connection.layer),
+                    (owner.plane, owner.layer),
+                    "{coord:?}"
+                );
+                assert!(depth(&connection) > depth(turf), "{coord:?} draws under its floor");
+                states.push(state);
+            }
+            states.sort();
+            assert_eq!(states, expected, "{coord:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the local target/tgstation checkout"]
+    fn a_thermomachine_rotates_its_baked_pipe_with_dir() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(editor::environment::BundledProfile::Tgstation),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+            .expect("tgstation codebase");
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+
+        let path = TreePath::parse("/obj/machinery/atmospherics/components/unary/thermomachine");
+        let mut thermomachine = Prefab::new(path.clone());
+        thermomachine.set_var("dir".into(), Value::Num(1.0));
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        let tile = map.intern_tile(vec![
+            thermomachine,
+            Prefab::new(TreePath::parse("/turf/open/floor/iron")),
+            Prefab::new(TreePath::parse("/area/station/engineering/main")),
+        ]);
+        map.grid[0][0][0] = tile;
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+
+        let instance = session
+            .state
+            .active_document()
+            .unwrap()
+            .instance_ids_at(Coord::new(1, 1, 1))[0];
+        let pipe_dir = |session: &Session| {
+            let bake = session.active_cache().bake.as_ref().expect("thermomachine bake");
+            assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
+            let environment = session.state.environment.as_ref().unwrap();
+            let document = session.state.active_document().unwrap();
+            let (prefab, _) = document.prefab_instance(instance).unwrap();
+            let ty = environment.tree.id_of(&prefab.path).unwrap();
+            let delta = &bake.appearances[&instance.get()];
+            let owner = editor::visual::resolve_delta(&environment.tree, ty, prefab, delta);
+
+            delta
+                .overlays
+                .iter()
+                .map(|overlay| editor::visual::resolve_overlay(&environment.tree, &owner, overlay))
+                .find(|overlay| overlay.icon_state.as_deref() == Some("pipe"))
+                .map(|overlay| overlay.dir)
+        };
+
+        let mut cardinals = [false; 8];
+        cardinals[..4].fill(true);
+        assert_eq!(session.declared_directions(&path), Some(cardinals));
+        assert_eq!(pipe_dir(&session), Some(1));
+
+        session.select_instance(Some(instance));
+        session.edit_selected_instance_vars(
+            "set dir",
+            &[editor::document::VarMutation::Set("dir".into(), Value::Num(4.0))],
+            None,
+        );
+        settle_bake(&mut session);
+        assert_eq!(pipe_dir(&session), Some(4));
+    }
+
+    #[test]
     #[ignore = "requires the local target/SecondCity checkout"]
     fn bundled_secondcity_profile_bakes_city_maps() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/SecondCity");

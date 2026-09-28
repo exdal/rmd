@@ -4,6 +4,7 @@ pub mod error;
 use core::{
     path::{PathFlags, TreePath},
     types::{Identifier, Value},
+    vars,
 };
 
 use ast::{AST, Declaration, Expression, Literal, SettingMode, Statement};
@@ -227,7 +228,7 @@ impl<'a> Analyzer<'a> {
                 let folded = fold(self.ast, *value);
 
                 // `parent_type = /some/path`
-                if name.as_str() == "parent_type" {
+                if name.as_str() == vars::PARENT_TYPE {
                     if let Value::Path(path) = &folded
                         && let Some(decl) = self.tree.get_mut(id)
                     {

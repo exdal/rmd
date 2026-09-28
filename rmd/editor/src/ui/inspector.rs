@@ -1,4 +1,7 @@
-use core::types::{Identifier, Value};
+use core::{
+    types::{Identifier, Value},
+    vars,
+};
 use std::collections::{HashMap, HashSet};
 
 use dear_imgui_rs::{ChildFlags, DragFlags, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError};
@@ -25,35 +28,42 @@ use crate::{
 };
 
 const DISPLAY_PROPERTIES: &[&str] = &[
-    "name",
-    "icon",
-    "icon_state",
-    "dir",
-    "pixel_x",
-    "pixel_y",
-    "pixel_w",
-    "pixel_z",
-    "plane",
-    "layer",
-    "color",
-    "alpha",
-    "invisibility",
+    vars::NAME,
+    vars::ICON,
+    vars::ICON_STATE,
+    vars::DIR,
+    vars::PIXEL_X,
+    vars::PIXEL_Y,
+    vars::PIXEL_W,
+    vars::PIXEL_Z,
+    vars::PLANE,
+    vars::LAYER,
+    vars::COLOR,
+    vars::ALPHA,
+    vars::INVISIBILITY,
 ];
 const MOVABLE_PROPERTIES: &[&str] = &[
-    "pixel_x", "pixel_y", "pixel_z", "pixel_w", "step_x", "step_y", "step_z", "step_w",
+    vars::PIXEL_X,
+    vars::PIXEL_Y,
+    vars::PIXEL_Z,
+    vars::PIXEL_W,
+    vars::STEP_X,
+    vars::STEP_Y,
+    "step_z",
+    "step_w",
 ];
 const DISPLAY_ROWS: &[&str] = &[
-    "name",
-    "icon",
-    "icon_state",
-    "dir",
-    "plane",
-    "layer",
-    "color",
-    "alpha",
-    "invisibility",
+    vars::NAME,
+    vars::ICON,
+    vars::ICON_STATE,
+    vars::DIR,
+    vars::PLANE,
+    vars::LAYER,
+    vars::COLOR,
+    vars::ALPHA,
+    vars::INVISIBILITY,
 ];
-const ADVANCED_OFFSETS: &[&str] = &["pixel_w", "pixel_z"];
+const ADVANCED_OFFSETS: &[&str] = &[vars::PIXEL_W, vars::PIXEL_Z];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum TransformMode {
@@ -74,8 +84,8 @@ impl TransformMode {
 
     pub(crate) const fn variables(self) -> (&'static str, &'static str) {
         match self {
-            Self::Pixel => ("pixel_x", "pixel_y"),
-            Self::Step => ("step_x", "step_y"),
+            Self::Pixel => (vars::PIXEL_X, vars::PIXEL_Y),
+            Self::Step => (vars::STEP_X, vars::STEP_Y),
         }
     }
 }
@@ -129,6 +139,7 @@ struct InspectorSnapshot {
     overrides: Vec<InspectorVariable>,
     defaults: Vec<InspectorVariable>,
     icon_states: Vec<(String, u32)>,
+    declared_directions: Option<[bool; 8]>,
     directional_types: Option<DirectionalTypes>,
     icon_known: bool,
     icon_state_known: bool,
@@ -324,12 +335,12 @@ impl InspectorState {
 
             match self.transform_mode {
                 TransformMode::Pixel => {
-                    self.draw_int_property(ui, session, snapshot, "pixel_x", "Pixel X", None);
-                    self.draw_int_property(ui, session, snapshot, "pixel_y", "Pixel Y", None);
+                    self.draw_int_property(ui, session, snapshot, vars::PIXEL_X, "Pixel X", None);
+                    self.draw_int_property(ui, session, snapshot, vars::PIXEL_Y, "Pixel Y", None);
                 },
                 TransformMode::Step => {
-                    self.draw_int_property(ui, session, snapshot, "step_x", "Step X", None);
-                    self.draw_int_property(ui, session, snapshot, "step_y", "Step Y", None);
+                    self.draw_int_property(ui, session, snapshot, vars::STEP_X, "Step X", None);
+                    self.draw_int_property(ui, session, snapshot, vars::STEP_Y, "Step Y", None);
                 },
             }
 
@@ -374,12 +385,12 @@ impl InspectorState {
         };
 
         property_table(ui, "inspector-display-properties", |ui| {
-            self.draw_text_property(ui, session, snapshot, "name", "Name", TextPropertyKind::Text);
+            self.draw_text_property(ui, session, snapshot, vars::NAME, "Name", TextPropertyKind::Text);
             self.draw_asset_property(
                 ui,
                 session,
                 snapshot,
-                "icon",
+                vars::ICON,
                 "Icon",
                 TextPropertyKind::Resource,
                 (!snapshot.icon_known).then_some("The current DMI is not loaded"),
@@ -388,24 +399,31 @@ impl InspectorState {
                 ui,
                 session,
                 snapshot,
-                "icon_state",
+                vars::ICON_STATE,
                 "Icon state",
                 TextPropertyKind::Text,
                 (!snapshot.icon_state_known).then_some("The current state is not present in the DMI"),
             );
             self.draw_direction_property(ui, session, snapshot);
-            self.draw_float_property(ui, session, snapshot, "plane", "Plane");
-            self.draw_float_property(ui, session, snapshot, "layer", "Layer");
+            self.draw_float_property(ui, session, snapshot, vars::PLANE, "Plane");
+            self.draw_float_property(ui, session, snapshot, vars::LAYER, "Layer");
             self.draw_color_property(ui, session, snapshot);
-            self.draw_int_property(ui, session, snapshot, "alpha", "Alpha", Some((0, 255)));
-            self.draw_int_property(ui, session, snapshot, "invisibility", "Invisibility", Some((0, 101)));
+            self.draw_int_property(ui, session, snapshot, vars::ALPHA, "Alpha", Some((0, 255)));
+            self.draw_int_property(
+                ui,
+                session,
+                snapshot,
+                vars::INVISIBILITY,
+                "Invisibility",
+                Some((0, 101)),
+            );
         });
 
         if advanced_shown && let Some(advanced) = section(ui, "inspector-display-advanced", "Advanced offsets", false) {
             ui.text_wrapped("Pixel W/Z are map-format axes. In the current top-down view they add to Pixel X/Y.");
             property_table(ui, "inspector-display-advanced-properties", |ui| {
-                self.draw_int_property(ui, session, snapshot, "pixel_w", "Pixel W", None);
-                self.draw_int_property(ui, session, snapshot, "pixel_z", "Pixel Z", None);
+                self.draw_int_property(ui, session, snapshot, vars::PIXEL_W, "Pixel W", None);
+                self.draw_int_property(ui, session, snapshot, vars::PIXEL_Z, "Pixel Z", None);
             });
             advanced.pop();
         }
@@ -553,7 +571,7 @@ impl InspectorState {
     }
 
     fn draw_direction_property(&mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot) {
-        let Some(property) = self.shown(snapshot, "dir") else {
+        let Some(property) = self.shown(snapshot, vars::DIR) else {
             return;
         };
         let Some(number) = property.value.as_num() else {
@@ -566,14 +584,14 @@ impl InspectorState {
         let count = snapshot
             .icon_states
             .iter()
-            .find(|(name, _)| name == &snapshot.text("icon_state"))
+            .find(|(name, _)| name == &snapshot.text(vars::ICON_STATE))
             .map_or(8, |(_, dirs)| match dirs {
                 1 => 1,
                 4 => 4,
                 8 => 8,
                 _ => 8,
             });
-        let directions = direction_choices(count, snapshot.directional_types);
+        let directions = direction_choices(count, snapshot.declared_directions, snapshot.directional_types);
         let current = selected_direction(bits, snapshot.directional_types);
         let preview = current
             .map(direction_label)
@@ -581,7 +599,7 @@ impl InspectorState {
             .unwrap_or_else(|| format!("Custom ({number})"));
 
         begin_property_row(ui, property, "Direction");
-        let _id = ui.push_id("dir");
+        let _id = ui.push_id(vars::DIR);
         ui.set_next_item_width(-1.0);
         if let Some(combo) = ui.begin_combo("##value", &preview) {
             for direction in directions {
@@ -609,7 +627,7 @@ impl InspectorState {
     }
 
     fn draw_color_property(&mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot) {
-        let Some(property) = self.shown(snapshot, "color") else {
+        let Some(property) = self.shown(snapshot, vars::COLOR) else {
             return;
         };
         let color = match &property.value {
@@ -623,7 +641,7 @@ impl InspectorState {
         };
 
         begin_property_row(ui, property, "Color");
-        let _id = ui.push_id("color");
+        let _id = ui.push_id(vars::COLOR);
         if let Some(mut color) = color {
             ui.set_next_item_width(-1.0);
             if ui.color_edit4("##picker", &mut color) {
@@ -840,17 +858,18 @@ fn inspector_snapshot(session: &Session) -> Option<InspectorSnapshot> {
 
     let (overrides, defaults) = inspector_variables(tree, prefab, &special);
     let icon = properties
-        .get(&Identifier::from("icon"))
+        .get(&Identifier::from(vars::ICON))
         .and_then(|property| property.value.as_text())
         .unwrap_or_default()
         .to_string();
     let icon_state = properties
-        .get(&Identifier::from("icon_state"))
+        .get(&Identifier::from(vars::ICON_STATE))
         .and_then(|property| property.value.as_text())
         .unwrap_or_default()
         .to_string();
     let metadata = session.icon_metadata(&icon);
     let directional_types = session.selected_directional_types();
+    let declared_directions = session.declared_directions(&prefab.path);
     let icon_states = metadata
         .map(|metadata| {
             metadata
@@ -872,6 +891,7 @@ fn inspector_snapshot(session: &Session) -> Option<InspectorSnapshot> {
         overrides,
         defaults,
         icon_states,
+        declared_directions,
         directional_types,
         icon_known: icon.is_empty() || metadata.is_some(),
         icon_state_known: icon_state.is_empty()
@@ -916,19 +936,26 @@ fn property_snapshot(
 
 fn builtin_default(name: &str) -> Value {
     match name {
-        "dir" | "layer" => Value::Num(2.0),
-        "alpha" => Value::Num(255.0),
-        "pixel_x" | "pixel_y" | "pixel_w" | "pixel_z" | "plane" | "invisibility" | "step_x" | "step_y" => {
-            Value::Num(0.0)
-        },
+        vars::DIR | vars::LAYER => Value::Num(2.0),
+        vars::ALPHA => Value::Num(255.0),
+        vars::PIXEL_X
+        | vars::PIXEL_Y
+        | vars::PIXEL_W
+        | vars::PIXEL_Z
+        | vars::PLANE
+        | vars::INVISIBILITY
+        | vars::STEP_X
+        | vars::STEP_Y => Value::Num(0.0),
         _ => Value::Null,
     }
 }
 
 fn property_editor_text(name: &str, value: &Value, source: &str) -> String {
     match (name, value) {
-        ("name" | "icon_state" | "color", Value::Text(text)) | ("icon", Value::Resource(text)) => text.clone(),
-        ("name" | "icon" | "icon_state" | "color", Value::Null) => String::new(),
+        (vars::NAME | vars::ICON_STATE | vars::COLOR, Value::Text(text)) | (vars::ICON, Value::Resource(text)) => {
+            text.clone()
+        },
+        (vars::NAME | vars::ICON | vars::ICON_STATE | vars::COLOR, Value::Null) => String::new(),
         _ => source.to_string(),
     }
 }
@@ -1257,11 +1284,13 @@ fn direction_label(direction: Dir) -> &'static str {
     }
 }
 
-fn direction_choices(count: usize, directional_types: Option<DirectionalTypes>) -> Vec<Dir> {
-    if let Some(types) = directional_types {
+fn direction_choices(
+    count: usize, declared: Option<[bool; 8]>, directional_types: Option<DirectionalTypes>,
+) -> Vec<Dir> {
+    if let Some(supported) = directional_types.map(|types| types.supported).or(declared) {
         return Dir::ORDER
             .into_iter()
-            .zip(types.supported)
+            .zip(supported)
             .filter_map(|(direction, supported)| supported.then_some(direction))
             .collect();
     }
@@ -1551,11 +1580,19 @@ mod tests {
         };
 
         assert_eq!(
-            direction_choices(8, Some(types)),
+            direction_choices(8, None, Some(types)),
             [Dir::North, Dir::East, Dir::Northwest]
         );
         assert_eq!(selected_direction(Dir::South.to_bits(), Some(types)), Some(Dir::North));
-        assert_eq!(direction_choices(4, None), Dir::ORDER[..4]);
+        assert_eq!(direction_choices(4, None, None), Dir::ORDER[..4]);
+
+        let mut cardinals = [false; 8];
+        cardinals[..4].fill(true);
+        assert_eq!(direction_choices(1, Some(cardinals), None), Dir::ORDER[..4]);
+        assert_eq!(
+            direction_choices(1, Some(cardinals), Some(types)),
+            [Dir::North, Dir::East, Dir::Northwest]
+        );
         assert_eq!(selected_direction(Dir::South.to_bits(), None), Some(Dir::South));
     }
 

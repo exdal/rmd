@@ -1,6 +1,7 @@
 use core::{
     path::{PathFlags, TreePath},
     types::{Identifier, ProcId, Value},
+    vars,
 };
 use std::{
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
@@ -40,6 +41,7 @@ pub struct Runtime {
     pub(crate) ui: crate::ui::Panel,
     pub(crate) groups: std::collections::HashMap<TypeId, u32>,
     pub(crate) node_groups: Vec<crate::bake::NodeGroup>,
+    pub(crate) rotations: Vec<crate::bake::Rotation>,
     pub(crate) defining_groups: bool,
     output: Vec<String>,
     pub(crate) global: Option<ObjectId>,
@@ -857,7 +859,7 @@ impl<'a> Evaluator<'a> {
                         let _access = self.enum_operand::<Access>(frame, "access")?;
                         let value = self.pop(frame)?;
                         let object = self.pop(frame)?;
-                        if object != GenericValue::World || name.as_str() != "log" {
+                        if object != GenericValue::World || name.as_str() != vars::LOG {
                             return Err(self.fault(FaultKind::Blocked("output".into())));
                         }
                         self.runtime.output.push(value.display());
@@ -1067,7 +1069,7 @@ impl Evaluator<'_> {
 
     fn name_target(&self, frame: &Frame, name: &Identifier) -> GenericValue {
         if let Some(id) = frame.src.list()
-            && name.as_str() == "len"
+            && name.as_str() == vars::LEN
         {
             return GenericValue::List(id);
         }
@@ -1081,16 +1083,16 @@ impl Evaluator<'_> {
                     .is_some_and(|(owner, _)| owner.id != TypeId::ROOT)
                 || matches!(
                     name.as_str(),
-                    "loc"
-                        | "contents"
-                        | "x"
-                        | "y"
-                        | "z"
-                        | "type"
-                        | "parent_type"
-                        | "overlays"
-                        | "underlays"
-                        | "appearance"
+                    vars::LOC
+                        | vars::CONTENTS
+                        | vars::X
+                        | vars::Y
+                        | vars::Z
+                        | vars::TYPE
+                        | vars::PARENT_TYPE
+                        | vars::OVERLAYS
+                        | vars::UNDERLAYS
+                        | vars::APPEARANCE
                 ))
         {
             return GenericValue::Object(src);
@@ -1405,7 +1407,7 @@ impl Evaluator<'_> {
                     self.read_field(GenericValue::Object(id), &name)
                 }
             },
-            GenericValue::List(id) | GenericValue::ArgList(id) if name.as_str() == "len" => {
+            GenericValue::List(id) | GenericValue::ArgList(id) if name.as_str() == vars::LEN => {
                 self.read_field(GenericValue::List(id), &name)
             },
             GenericValue::List(id) | GenericValue::ArgList(id) => {
@@ -1450,14 +1452,14 @@ impl Evaluator<'_> {
         };
         if let Some(ty) = ty {
             match name.as_str() {
-                "type" => {
+                vars::TYPE => {
                     return Ok(self
                         .tree
                         .get(ty)
                         .map(|declaration| GenericValue::Path(Box::new(declaration.path.clone())))
                         .unwrap_or_default());
                 },
-                "parent_type" => return Ok(self.parent_path(ty)),
+                vars::PARENT_TYPE => return Ok(self.parent_path(ty)),
                 _ => {},
             }
         }
@@ -1480,7 +1482,7 @@ impl Evaluator<'_> {
         let ty = object.ty;
 
         let mut names = object.vars.keys().cloned().collect::<HashSet<_>>();
-        names.extend(["type", "parent_type", "vars", "tag"].map(Identifier::from));
+        names.extend([vars::TYPE, vars::PARENT_TYPE, vars::VARS, vars::TAG].map(Identifier::from));
         for declaration in self.tree.ancestors(ty) {
             names.extend(declaration.vars.keys().cloned());
         }
@@ -1492,7 +1494,7 @@ impl Evaluator<'_> {
         let mut entries = Vec::with_capacity(names.len());
         for name in names {
             let value = match name.as_str() {
-                "vars" => GenericValue::Null,
+                vars::VARS => GenericValue::Null,
                 _ => self.read_field(GenericValue::Object(id), &name)?,
             };
             entries.push((GenericValue::Text(name.as_str().into()), Some(value)));
@@ -1510,8 +1512,8 @@ impl Evaluator<'_> {
                 "maxx" => (self.runtime.world.size[0] as f32).into(),
                 "maxy" => (self.runtime.world.size[1] as f32).into(),
                 "maxz" => (self.runtime.world.size[2] as f32).into(),
-                "log" => GenericValue::Null,
-                "contents" => {
+                vars::LOG => GenericValue::Null,
+                vars::CONTENTS => {
                     self.memo_safe = false;
                     let values = self
                         .runtime
@@ -1522,7 +1524,7 @@ impl Evaluator<'_> {
                         .collect::<Vec<_>>();
                     self.list(values)?
                 },
-                "type" => self
+                vars::TYPE => self
                     .world_type()
                     .and_then(|ty| self.tree.get(ty))
                     .map(|declaration| GenericValue::Path(Box::new(declaration.path.clone())))
@@ -1540,7 +1542,7 @@ impl Evaluator<'_> {
                 let global = self.runtime.global.map(GenericValue::Object).unwrap_or_default();
                 self.read_field(global, name)
             },
-            GenericValue::List(id) | GenericValue::ArgList(id) if key == "len" => {
+            GenericValue::List(id) | GenericValue::ArgList(id) if key == vars::LEN => {
                 Ok((self.runtime.heap.list(id).map_or(0, |list| list.entries.len()) as f32).into())
             },
             GenericValue::Path(path) => {
@@ -1550,10 +1552,10 @@ impl Evaluator<'_> {
                     .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
 
                 match key {
-                    "type" => {
+                    vars::TYPE => {
                         return Ok(GenericValue::Path(path));
                     },
-                    "parent_type" => {
+                    vars::PARENT_TYPE => {
                         return Ok(self.parent_path(ty));
                     },
                     _ => {},
@@ -1582,11 +1584,11 @@ impl Evaluator<'_> {
                 self.constant(&value)
             },
             GenericValue::Object(id) => {
-                if matches!(key, "overlays" | "underlays") {
+                if matches!(key, vars::OVERLAYS | vars::UNDERLAYS) {
                     self.appearance_reads.insert(id);
                 }
 
-                if key == "vars" {
+                if key == vars::VARS {
                     return self.read_vars(id);
                 }
 
@@ -1617,7 +1619,7 @@ impl Evaluator<'_> {
                     .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
 
                 match key {
-                    "appearance" => {
+                    vars::APPEARANCE => {
                         let vars = object.vars.clone();
                         let ty = object.ty;
                         self.reserve(vars.len() + 1)?;
@@ -1630,28 +1632,28 @@ impl Evaluator<'_> {
                             .map(GenericValue::Object)
                             .map_err(|kind| self.fault(kind));
                     },
-                    "type" => {
+                    vars::TYPE => {
                         return Ok(self
                             .tree
                             .get(object.ty)
                             .map(|declaration| GenericValue::Path(Box::new(declaration.path.clone())))
                             .unwrap_or_default());
                     },
-                    "parent_type" => return Ok(self.parent_path(object.ty)),
-                    "loc" => return Ok(object.loc.map(GenericValue::Object).unwrap_or_default()),
-                    "x" | "y" | "z" if self.has_coordinates(object.ty) => {
+                    vars::PARENT_TYPE => return Ok(self.parent_path(object.ty)),
+                    vars::LOC => return Ok(object.loc.map(GenericValue::Object).unwrap_or_default()),
+                    vars::X | vars::Y | vars::Z if self.has_coordinates(object.ty) => {
                         self.position_sensitive = true;
                         let position = self.runtime.world.position(&self.runtime.heap, id);
                         return Ok(position
                             .map(|position| match key {
-                                "x" => position.x,
-                                "y" => position.y,
+                                vars::X => position.x,
+                                vars::Y => position.y,
                                 _ => position.z,
                             })
                             .unwrap_or(0)
                             .into());
                     },
-                    "contents" => {
+                    vars::CONTENTS => {
                         if self
                             .tree
                             .roots()
@@ -1709,11 +1711,13 @@ impl Evaluator<'_> {
                 let value = declaration.map(|variable| variable.value.clone());
                 let value = match value {
                     // `var/list/overlays = null` in the prelude, which BYOND never leaves null
-                    None | Some(Value::Null) if matches!(key, "overlays" | "underlays" | "vis_contents") => {
+                    None | Some(Value::Null)
+                        if matches!(key, vars::OVERLAYS | vars::UNDERLAYS | vars::VIS_CONTENTS) =>
+                    {
                         self.list(Vec::new())?
                     },
                     Some(value) => self.constant(&value)?,
-                    None if key == "tag" => GenericValue::Null,
+                    None if key == vars::TAG => GenericValue::Null,
                     None => return Err(self.fault(FaultKind::MissingVariable(key.into()))),
                 };
 
@@ -1771,12 +1775,12 @@ impl Evaluator<'_> {
                 let global = self.runtime.global.map(GenericValue::Object).unwrap_or_default();
                 self.write_field(global, name, value)
             },
-            GenericValue::World if key == "log" => Ok(()),
+            GenericValue::World if key == vars::LOG => Ok(()),
             GenericValue::World => match self.runtime.world_object {
                 Some(world) => self.write_field(GenericValue::Object(world), name, value),
                 None => Ok(()),
             },
-            GenericValue::List(id) | GenericValue::ArgList(id) if key == "len" => {
+            GenericValue::List(id) | GenericValue::ArgList(id) if key == vars::LEN => {
                 let length = self.number(&value)?;
                 if length < 0.0 || !length.is_finite() {
                     return Err(self.fault(FaultKind::InvalidOperation("invalid list length".into())));
@@ -1787,7 +1791,7 @@ impl Evaluator<'_> {
                 list.reindex();
                 Ok(())
             },
-            GenericValue::Object(id) if key == "appearance" => {
+            GenericValue::Object(id) if key == vars::APPEARANCE => {
                 let source = value
                     .object()
                     .and_then(|source| self.runtime.heap.object(source))
@@ -1808,14 +1812,31 @@ impl Evaluator<'_> {
                 self.object_mut(id)?.vars.extend(vars);
                 Ok(())
             },
-            GenericValue::Object(id) if key == "loc" => self
+            // BYOND keeps these as the atom's own lists: null empties one and a list is copied in
+            GenericValue::Object(id) if matches!(key, vars::OVERLAYS | vars::UNDERLAYS | vars::VIS_CONTENTS) => {
+                let entries = match value {
+                    GenericValue::Null => Vec::new(),
+                    GenericValue::List(list) | GenericValue::ArgList(list) => self
+                        .runtime
+                        .heap
+                        .list(list)
+                        .ok_or_else(|| self.fault(FaultKind::InvalidReference))?
+                        .entries
+                        .clone(),
+                    value => vec![(value, None)],
+                };
+                let list = self.list(entries)?;
+                self.object_mut(id)?.vars.insert(name, list);
+                Ok(())
+            },
+            GenericValue::Object(id) if key == vars::LOC => self
                 .runtime
                 .heap
                 .relocate(id, value.object())
                 .map_err(|kind| self.fault(kind)),
             GenericValue::Object(id)
-                if !(matches!(key, "type" | "parent_type" | "contents")
-                    || matches!(key, "x" | "y" | "z")
+                if !(matches!(key, vars::TYPE | vars::PARENT_TYPE | vars::CONTENTS)
+                    || matches!(key, vars::X | vars::Y | vars::Z)
                         && self
                             .runtime
                             .heap

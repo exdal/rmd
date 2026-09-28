@@ -1,4 +1,7 @@
-use core::types::{Identifier, ListEntry, ProcId, Value};
+use core::{
+    types::{Identifier, ListEntry, ProcId, Value},
+    vars,
+};
 use std::{
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
@@ -106,6 +109,20 @@ pub struct NodeOrientation {
     pub subtype: TypeId,
     pub direction: u32,
     pub openings: u32,
+}
+
+/// `demir_rotatable(subtype, directions)`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rotation {
+    pub subtype: TypeId,
+    pub directions: Vec<u32>,
+}
+
+pub fn rotation_for<'a>(tree: &ObjectTree, rotations: &'a [Rotation], ty: TypeId) -> Option<&'a Rotation> {
+    rotations
+        .iter()
+        .filter(|rotation| tree.is_subtype_of(ty, rotation.subtype))
+        .max_by_key(|rotation| tree.ancestors(rotation.subtype).count())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -346,6 +363,8 @@ impl Bake {
             &[]
         }
     }
+
+    pub fn rotations(&self) -> &[Rotation] { if self.initialized { &self.runtime.rotations } else { &[] } }
 
     pub fn with_progress(
         tree: &ObjectTree, module: &Module, atoms: Vec<Atom>, size: [i32; 3], limits: Limits, icons: IconStates,
@@ -753,12 +772,12 @@ impl Bake {
                 let inner_range = object_number(object, tree, "demir_light_inner_range", 0.0).clamp(0.0, range);
                 let angle = object_number(object, tree, "demir_light_angle", 360.0).clamp(0.0, 360.0);
                 let icon_size = world_icon_size(tree);
-                let offset_x = object_number(object, tree, "pixel_x", 0.0)
-                    + object_number(object, tree, "pixel_w", 0.0)
-                    + object_number(object, tree, "step_x", 0.0);
-                let offset_y = object_number(object, tree, "pixel_y", 0.0)
-                    + object_number(object, tree, "pixel_z", 0.0)
-                    + object_number(object, tree, "step_y", 0.0);
+                let offset_x = object_number(object, tree, vars::PIXEL_X, 0.0)
+                    + object_number(object, tree, vars::PIXEL_W, 0.0)
+                    + object_number(object, tree, vars::STEP_X, 0.0);
+                let offset_y = object_number(object, tree, vars::PIXEL_Y, 0.0)
+                    + object_number(object, tree, vars::PIXEL_Z, 0.0)
+                    + object_number(object, tree, vars::STEP_Y, 0.0);
                 let light_offset_x = finite_or(object_number(object, tree, "demir_light_offset_x", 0.0), 0.0);
                 let light_offset_y = finite_or(object_number(object, tree, "demir_light_offset_y", 0.0), 0.0);
                 LightSource {
@@ -784,7 +803,7 @@ impl Bake {
 
         let blocks_value = object_number(object, tree, "demir_blocks_light", -1.0);
         let blocks = if blocks_value == -1.0 {
-            object_truthy(object, tree, "opacity", false)
+            object_truthy(object, tree, vars::OPACITY, false)
         } else {
             blocks_value != 0.0
         };
@@ -1794,17 +1813,17 @@ thread_local! {
         host_reads: HOST_READS.iter().map(|name| Identifier::from(*name)).collect(),
         appearance: HOST_READS
             .iter()
-            .filter(|name| **name != "transform")
+            .filter(|name| **name != vars::TRANSFORM)
             .map(|name| Identifier::from(*name))
             .collect(),
-        overlays: Identifier::from("overlays"),
-        underlays: Identifier::from("underlays"),
-        icon: Identifier::from("icon"),
-        icon_state: Identifier::from("icon_state"),
-        transform: Identifier::from("transform"),
-        dir: Identifier::from("dir"),
-        layer: Identifier::from("layer"),
-        plane: Identifier::from("plane"),
+        overlays: Identifier::from(vars::OVERLAYS),
+        underlays: Identifier::from(vars::UNDERLAYS),
+        icon: Identifier::from(vars::ICON),
+        icon_state: Identifier::from(vars::ICON_STATE),
+        transform: Identifier::from(vars::TRANSFORM),
+        dir: Identifier::from(vars::DIR),
+        layer: Identifier::from(vars::LAYER),
+        plane: Identifier::from(vars::PLANE),
         emissive: Identifier::from("demir_emissive"),
         emissive_blocker: Identifier::from("demir_emissive_blocker"),
         overlay_light: Identifier::from("demir_overlay_light"),
@@ -1830,23 +1849,23 @@ struct Names {
 pub fn host_reads() -> Vec<Identifier> { HOST_READS.iter().map(|name| Identifier::from(*name)).collect() }
 
 const HOST_READS: &[&str] = &[
-    "name",
-    "icon",
-    "icon_state",
-    "dir",
-    "layer",
-    "plane",
-    "pixel_x",
-    "pixel_y",
-    "pixel_w",
-    "pixel_z",
-    "step_x",
-    "step_y",
-    "color",
-    "alpha",
-    "invisibility",
-    "appearance_flags",
-    "transform",
+    vars::NAME,
+    vars::ICON,
+    vars::ICON_STATE,
+    vars::DIR,
+    vars::LAYER,
+    vars::PLANE,
+    vars::PIXEL_X,
+    vars::PIXEL_Y,
+    vars::PIXEL_W,
+    vars::PIXEL_Z,
+    vars::STEP_X,
+    vars::STEP_Y,
+    vars::COLOR,
+    vars::ALPHA,
+    vars::INVISIBILITY,
+    vars::APPEARANCE_FLAGS,
+    vars::TRANSFORM,
 ];
 
 fn export_appearance(
@@ -1885,7 +1904,7 @@ fn export_with_names(
             Some(GenericValue::Object(icon)) if *name == names.icon => icon_file(heap, *icon, &names.icon),
             value => value,
         };
-        let value = if name.as_str() == "color" && matches!(runtime_value, Some(GenericValue::List(_))) {
+        let value = if name.as_str() == vars::COLOR && matches!(runtime_value, Some(GenericValue::List(_))) {
             None
         } else {
             runtime_value.map(export_value).transpose()?.or_else(|| {

@@ -1,6 +1,7 @@
 use core::{
     path::TreePath,
     types::{Identifier, IrNodeId, ProcId, Value},
+    vars,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -281,7 +282,7 @@ impl<'a> Reachability<'a> {
     fn retain_field_initializers(&mut self, object: IrNodeId, current: ProcId, name: &Identifier) {
         let mut seen = HashSet::new();
         let Some(types) = self.receiver_types(object, current, &mut seen) else {
-            if name.as_str() == "vars" {
+            if name.as_str() == vars::VARS {
                 self.retain_every_initializer();
             } else {
                 self.retain_initializers_named(name);
@@ -295,7 +296,7 @@ impl<'a> Reachability<'a> {
                 false => vec![ty],
             };
             for candidate in candidates {
-                if name.as_str() == "vars" {
+                if name.as_str() == vars::VARS {
                     self.retain_all_initializers_for_type(candidate);
                 } else if let Some((_, variable)) = self.tree.var_declaration(candidate, name) {
                     self.retain(variable.initializer.unwrap_or(ProcId::INVALID));

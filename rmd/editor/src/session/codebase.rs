@@ -1,4 +1,4 @@
-use core::{path::TreePath, types::Identifier};
+use core::{path::TreePath, types::Identifier, vars};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -299,7 +299,7 @@ impl Session {
         let tree = self.tree()?;
         let world = tree.id_of(&TreePath::parse("/world"))?;
 
-        tree.var_inherited(world, &Identifier::from("name"))?
+        tree.var_inherited(world, &Identifier::from(vars::NAME))?
             .value
             .as_text()
             .filter(|name| !name.is_empty())

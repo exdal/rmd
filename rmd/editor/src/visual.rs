@@ -1,5 +1,9 @@
-use core::types::{Identifier, Value};
+use core::{
+    types::{Identifier, Value},
+    vars,
+};
 
+use defines::{FLOAT_PLANE, RESET_ALPHA, RESET_COLOR, RESET_TRANSFORM, SOUTH};
 use dmm::Prefab;
 use objtree::{ObjectTree, TypeId};
 use vm::matrix::Matrix;
@@ -45,8 +49,7 @@ impl Default for Appearance {
             name: None,
             icon: None,
             icon_state: None,
-            // SOUTH
-            dir: 2,
+            dir: SOUTH,
             layer: 2.0,
             plane: 0.0,
             pixel_x: 0,
@@ -105,62 +108,62 @@ pub fn resolve_id(tree: &ObjectTree, id: TypeId, prefab: &Prefab) -> Appearance 
         resolve_value(tree, id, prefab, &key).map(|resolved| resolved.value.clone())
     };
 
-    appearance.name = get("name").and_then(|v| v.as_text().map(str::to_string));
-    appearance.icon = get("icon").and_then(|v| v.as_text().map(str::to_string));
-    appearance.icon_state = get("icon_state").and_then(|v| v.as_text().map(str::to_string));
+    appearance.name = get(vars::NAME).and_then(|v| v.as_text().map(str::to_string));
+    appearance.icon = get(vars::ICON).and_then(|v| v.as_text().map(str::to_string));
+    appearance.icon_state = get(vars::ICON_STATE).and_then(|v| v.as_text().map(str::to_string));
 
-    if let Some(dir) = get("dir").and_then(|v| v.as_num()) {
+    if let Some(dir) = get(vars::DIR).and_then(|v| v.as_num()) {
         appearance.dir = dir as u32;
     }
 
-    if let Some(layer) = get("layer").and_then(|v| v.as_num()) {
+    if let Some(layer) = get(vars::LAYER).and_then(|v| v.as_num()) {
         appearance.layer = layer;
     }
 
-    if let Some(plane) = get("plane").and_then(|v| v.as_num()) {
+    if let Some(plane) = get(vars::PLANE).and_then(|v| v.as_num()) {
         appearance.plane = plane;
     }
 
-    if let Some(pixel_x) = get("pixel_x").and_then(|v| v.as_num()) {
+    if let Some(pixel_x) = get(vars::PIXEL_X).and_then(|v| v.as_num()) {
         appearance.pixel_x = pixel_x as i32;
     }
 
-    if let Some(pixel_y) = get("pixel_y").and_then(|v| v.as_num()) {
+    if let Some(pixel_y) = get(vars::PIXEL_Y).and_then(|v| v.as_num()) {
         appearance.pixel_y = pixel_y as i32;
     }
 
-    if let Some(pixel_w) = get("pixel_w").and_then(|v| v.as_num()) {
+    if let Some(pixel_w) = get(vars::PIXEL_W).and_then(|v| v.as_num()) {
         appearance.pixel_w = pixel_w as i32;
     }
 
-    if let Some(pixel_z) = get("pixel_z").and_then(|v| v.as_num()) {
+    if let Some(pixel_z) = get(vars::PIXEL_Z).and_then(|v| v.as_num()) {
         appearance.pixel_z = pixel_z as i32;
     }
 
-    if let Some(step_x) = get("step_x").and_then(|v| v.as_num()) {
+    if let Some(step_x) = get(vars::STEP_X).and_then(|v| v.as_num()) {
         appearance.step_x = step_x as i32;
     }
 
-    if let Some(step_y) = get("step_y").and_then(|v| v.as_num()) {
+    if let Some(step_y) = get(vars::STEP_Y).and_then(|v| v.as_num()) {
         appearance.step_y = step_y as i32;
     }
 
-    if let Some(alpha) = get("alpha").and_then(|v| v.as_num()) {
+    if let Some(alpha) = get(vars::ALPHA).and_then(|v| v.as_num()) {
         appearance.alpha = alpha.clamp(0.0, 255.0) as u8;
     }
 
-    if let Some(invisibility) = get("invisibility").and_then(|v| v.as_num()) {
+    if let Some(invisibility) = get(vars::INVISIBILITY).and_then(|v| v.as_num()) {
         appearance.invisibility = invisibility as i32;
     }
 
     // TODO: type intrinsics
-    if let Some(appearance_flags) = get("appearance_flags").and_then(|v| v.as_num()) {
+    if let Some(appearance_flags) = get(vars::APPEARANCE_FLAGS).and_then(|v| v.as_num()) {
         appearance.appearance_flags = appearance_flags as u32;
     }
 
-    appearance.color = get("color").and_then(|v| v.as_text().map(str::to_string));
+    appearance.color = get(vars::COLOR).and_then(|v| v.as_text().map(str::to_string));
 
-    if let Some(Value::List(entries)) = get("transform")
+    if let Some(Value::List(entries)) = get(vars::TRANSFORM)
         && let Ok(components) = <[_; 6]>::try_from(
             entries
                 .iter()
@@ -183,18 +186,6 @@ pub fn sort_key(appearance: &Appearance, index: usize) -> (i32, i32, usize) {
         index,
     )
 }
-
-/// `FLOAT_PLANE`
-const FLOAT_PLANE: f32 = -32767.0;
-
-/// `RESET_COLOR`
-const RESET_COLOR: u32 = 2;
-
-/// `RESET_ALPHA`
-const RESET_ALPHA: u32 = 4;
-
-/// `RESET_TRANSFORM`
-const RESET_TRANSFORM: u32 = 8;
 
 pub fn resolve_delta(tree: &ObjectTree, id: TypeId, prefab: &Prefab, delta: &vm::AppearanceDelta) -> Appearance {
     let mut derived = prefab.clone();
@@ -220,7 +211,7 @@ pub fn resolve_overlay(tree: &ObjectTree, parent: &Appearance, delta: &vm::Appea
     let own_dir = delta
         .vars
         .iter()
-        .find(|(name, _)| name.as_str() == "dir")
+        .find(|(name, _)| name.as_str() == vars::DIR)
         .and_then(|(_, value)| value.as_num());
     if own_dir.is_none_or(|dir| dir == 0.0) {
         appearance.dir = parent.dir;
@@ -245,7 +236,7 @@ pub fn resolve_overlay(tree: &ObjectTree, parent: &Appearance, delta: &vm::Appea
     let flags = delta
         .vars
         .iter()
-        .find(|(name, _)| name.as_str() == "appearance_flags")
+        .find(|(name, _)| name.as_str() == vars::APPEARANCE_FLAGS)
         .and_then(|(_, value)| value.as_num())
         .unwrap_or(0.0) as u32;
 

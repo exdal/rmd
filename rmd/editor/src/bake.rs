@@ -541,6 +541,56 @@ mod tests {
     }
 
     #[test]
+    fn overlays_below_float_layer_draw_under_their_owner() {
+        let environment = environment(
+            r##"
+/datum/demir/test/bake(atom/target)
+    if(!istype(target, /obj/structure/table))
+        return
+    var/image/above = new
+    above.icon_state = "floor"
+    above.layer = -1
+    above.color = "#0000ff"
+    var/image/below = new
+    below.icon_state = "light"
+    below.layer = -1.01
+    below.color = "#ff0000"
+    target.overlays += above
+    target.overlays += below
+"##,
+        );
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        let key = map.intern_tile(vec![Prefab::new(TreePath::parse("/obj/structure/table"))]);
+        map.grid[0] = vec![vec![key]];
+        let document = MapDocument::new(map, 1);
+        let bake = build(&environment, &document).expect("baking is on");
+        assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+
+        let mut textures = render::texture::TextureCatalog::new();
+        textures
+            .insert(
+                "icons/test.dmi",
+                &dmi::IconFile::load(examples().join("icons/test.dmi")).expect("test icon"),
+            )
+            .expect("pack test icon");
+        let visibility = frame::TypeVisibility::default();
+        let instances = frame::build_with_options(
+            &environment.tree,
+            &environment.icons,
+            &textures,
+            &document,
+            options(&visibility, &bake),
+        );
+        let colors = instances
+            .live_sprites()
+            .filter(|sprite| sprite.depth > 1.0)
+            .map(|sprite| sprite.color)
+            .collect::<Vec<_>>();
+
+        assert_eq!(colors, [[1.0, 0.0, 0.0, 1.0], [1.0; 4], [0.0, 0.0, 1.0, 1.0]]);
+    }
+
+    #[test]
     fn derived_sprites_follow_edits_and_history_without_changing_map_bytes() {
         let environment = environment(WALLS);
         let mut map = Map::new(Size { x: 3, y: 3, z: 1 });

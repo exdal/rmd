@@ -1,11 +1,13 @@
-use core::{path::TreePath, types::Identifier};
+use core::{path::TreePath, types::Identifier, vars};
 use std::{collections::HashSet, path::PathBuf};
+
+use defines::{EAST, NORTH, NORTHEAST, NORTHWEST, SOUTH, SOUTHEAST, SOUTHWEST, WEST};
 
 use crate::{
     FaultKind,
     GenericValue,
     Intrinsic,
-    bake::NodeGroup,
+    bake::{NodeGroup, Rotation},
     builtins::index_arg,
     eval::Evaluator,
     heap::ObjectId,
@@ -123,7 +125,7 @@ impl Evaluator<'_> {
                         .runtime
                         .heap
                         .object(id)
-                        .and_then(|object| object.vars.get(&Identifier::from("icon")))
+                        .and_then(|object| object.vars.get(&Identifier::from(vars::ICON)))
                         .cloned()
                         .unwrap_or_default();
                 }
@@ -342,6 +344,60 @@ impl Evaluator<'_> {
                         openings,
                     });
                 }
+                Ok(GenericValue::Null)
+            },
+
+            Intrinsic::DemirRotatable => {
+                if !self.runtime.defining_groups {
+                    return Err(self.fault(FaultKind::Blocked(format!("{name} outside a profile's New()"))));
+                }
+
+                let Some(subtype) = args.first().and_then(|(_, value)| match value {
+                    GenericValue::Path(path) => self.tree.id_of(path),
+                    GenericValue::Object(id) => self.runtime.heap.object(*id).map(|object| object.ty),
+                    _ => None,
+                }) else {
+                    return Ok(GenericValue::Null);
+                };
+
+                let values = match arg(1) {
+                    value @ (GenericValue::List(_) | GenericValue::ArgList(_)) => {
+                        self.iter_values(value)?.into_iter().map(|(value, _)| value).collect()
+                    },
+                    value => vec![value],
+                };
+                let mut directions = Vec::new();
+                for value in values {
+                    let Some(direction) = value
+                        .num()
+                        .filter(|number| number.fract() == 0.0 && *number >= 0.0)
+                        .map(|number| number as u32)
+                    else {
+                        continue;
+                    };
+                    if matches!(
+                        direction,
+                        NORTH | SOUTH | EAST | WEST | NORTHEAST | NORTHWEST | SOUTHEAST | SOUTHWEST
+                    ) && !directions.contains(&direction)
+                    {
+                        directions.push(direction);
+                    }
+                }
+                if directions.is_empty() {
+                    return Ok(GenericValue::Null);
+                }
+
+                if let Some(rotation) = self
+                    .runtime
+                    .rotations
+                    .iter_mut()
+                    .find(|rotation| rotation.subtype == subtype)
+                {
+                    rotation.directions = directions;
+                } else {
+                    self.runtime.rotations.push(Rotation { subtype, directions });
+                }
+
                 Ok(GenericValue::Null)
             },
 
@@ -927,7 +983,7 @@ impl Evaluator<'_> {
                     },
                 };
 
-                self.write_field(GenericValue::Object(id), "name".into(), pattern)?;
+                self.write_field(GenericValue::Object(id), vars::NAME.into(), pattern)?;
                 self.write_field(GenericValue::Object(id), "flags".into(), flags)?;
 
                 Ok(GenericValue::Object(id))
@@ -1339,7 +1395,7 @@ impl Evaluator<'_> {
     fn range_add(
         &mut self, entries: &mut Vec<GenericValue>, areas: &mut HashSet<ObjectId>, id: ObjectId,
     ) -> Result<()> {
-        let invisibility = self.read_field(GenericValue::Object(id), &Identifier::from("invisibility"))?;
+        let invisibility = self.read_field(GenericValue::Object(id), &Identifier::from(vars::INVISIBILITY))?;
         if invisibility.num().is_some_and(|value| value >= 101.0) {
             return Ok(());
         }

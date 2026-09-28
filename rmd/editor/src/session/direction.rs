@@ -1,6 +1,7 @@
 use core::{
     path::TreePath,
     types::{Identifier, Value},
+    vars,
 };
 
 use dmi::metadata::Dir;
@@ -19,11 +20,12 @@ pub(crate) struct DirectionalTypes {
 pub(crate) struct DirectionState {
     pub dir: u32,
     pub dmi_directions: Option<u32>,
+    pub declared: Option<[bool; 8]>,
     pub directional_types: Option<DirectionalTypes>,
 }
 
 pub(super) fn direction_state(
-    environment: &Environment, id: TypeId, appearance: &visual::Appearance,
+    environment: &Environment, id: TypeId, appearance: &visual::Appearance, declared: Option<[bool; 8]>,
 ) -> DirectionState {
     let dmi_directions = appearance
         .icon
@@ -35,6 +37,7 @@ pub(super) fn direction_state(
     DirectionState {
         dir: appearance.dir,
         dmi_directions,
+        declared,
         directional_types: directional_types_for(&environment.tree, id),
     }
 }
@@ -113,6 +116,21 @@ fn directional_type_target(tree: &ObjectTree, selected: TypeId, direction: Dir) 
 }
 
 impl Session {
+    pub(crate) fn declared_directions(&self, path: &TreePath) -> Option<[bool; 8]> {
+        let program = self.state.environment.as_ref()?.bake_program.as_ref()?;
+        let bake = self.caches.get(&self.state.active()?)?.bake.as_ref()?;
+        let ty = program.tree.id_of(path)?;
+        let rotation = vm::bake::rotation_for(&program.tree, bake.rotations(), ty)?;
+        let mut supported = [false; 8];
+        for direction in rotation.directions.iter().filter_map(|bits| Dir::from_bits(*bits)) {
+            if let Some(index) = Dir::ORDER.iter().position(|candidate| *candidate == direction) {
+                supported[index] = true;
+            }
+        }
+
+        Some(supported)
+    }
+
     pub(crate) fn selected_directional_types(&self) -> Option<DirectionalTypes> {
         let environment = self.state.environment.as_ref()?;
         let document = self.state.active_document()?;
@@ -133,7 +151,12 @@ impl Session {
         let id = environment.tree.id_of(&prefab.path)?;
         let appearance = visual::resolve_id(&environment.tree, id, prefab);
 
-        Some(direction_state(environment, id, &appearance))
+        Some(direction_state(
+            environment,
+            id,
+            &appearance,
+            self.declared_directions(&prefab.path),
+        ))
     }
 
     pub(crate) fn set_selected_directional_type(&mut self, direction: Dir, group: Option<EditGroupId>) -> Option<bool> {
@@ -157,7 +180,7 @@ impl Session {
             scope,
             "set direction",
             Some(&path),
-            &[VarMutation::Remove(Identifier::from("dir"))],
+            &[VarMutation::Remove(Identifier::from(vars::DIR))],
             group,
         )
     }
@@ -179,9 +202,9 @@ impl Session {
         if directional {
             let environment = self.state.environment.as_ref()?;
             prefab.path = directional_type_target(&environment.tree, id, direction)?;
-            prefab.remove_var(&Identifier::from("dir"));
+            prefab.remove_var(&Identifier::from(vars::DIR));
         } else {
-            prefab.set_var(Identifier::from("dir"), Value::Num(direction.to_bits() as f32));
+            prefab.set_var(Identifier::from(vars::DIR), Value::Num(direction.to_bits() as f32));
         }
 
         Some(self.state.replace_palette(prefab))

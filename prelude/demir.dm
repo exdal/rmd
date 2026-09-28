@@ -148,6 +148,14 @@
 /proc/demir_node_orientation(subtype, direction, openings)
 	set __demir_intrin = 726
 
+// Let placements of `subtype` and its descendants take each `dir` in `directions`, one direction
+// or a list of them. The editor offers these in the inspector and the rotation gizmo even when the
+// icon state has fewer directions, for types whose `dir` drives code rather than the sprite.
+// Call this procedure only from the profile's New(). The most specific registered subtype wins,
+// and repeating a subtype replaces its directions.
+/proc/demir_rotatable(subtype, directions)
+	set __demir_intrin = 727
+
 // Rebaking
 
 // Add `type` and its descendants to the bit group `group`. demir_rebake() can select that group.

@@ -1,4 +1,4 @@
-use core::{path::TreePath, types::Identifier};
+use core::{path::TreePath, types::Identifier, vars};
 
 use dear_imgui_rs::{MouseButton, Ui, WindowHoveredFlags};
 use dmm::{Coord, Prefab, PrefabInstanceId};
@@ -383,7 +383,7 @@ pub(super) fn draw_popup(
 }
 
 fn display_name(tree: Option<&ObjectTree>, prefab: &Prefab) -> String {
-    let name = Identifier::from("name");
+    let name = Identifier::from(vars::NAME);
     prefab
         .var(&name)
         .or_else(|| {

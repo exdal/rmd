@@ -1,4 +1,4 @@
-use core::types::Identifier;
+use core::{types::Identifier, vars};
 
 use objtree::TypeId;
 
@@ -77,8 +77,8 @@ impl Evaluator<'_> {
                 key
             };
 
-            if key.as_str() == "icon" && matches!(value, GenericValue::Object(_)) {
-                self.write_field(GenericValue::Object(id), "appearance".into(), value)?;
+            if key.as_str() == vars::ICON && matches!(value, GenericValue::Object(_)) {
+                self.write_field(GenericValue::Object(id), vars::APPEARANCE.into(), value)?;
             } else {
                 self.write_field(GenericValue::Object(id), key, value)?;
             }

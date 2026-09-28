@@ -436,6 +436,8 @@
 		demir_node_group(/obj/structure/disposalconstruct, DEMIR_NODE_BLOCKERS)
 		register_disposal_node_orientations()
 
+		demir_rotatable(/obj/machinery/atmospherics, GLOB.cardinals)
+
 // ui() rolls its writes back on every frame but the one the viewer touched something on, so the
 // profile's own vars are where panel state belongs. Every other hook reads them off src, and the
 // frame that changes one re-derives appearances, highlights and lighting.

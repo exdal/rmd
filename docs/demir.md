@@ -196,6 +196,12 @@ The profile owns the conversion from its codebase's variables and icon direction
 Repeated group registrations may add blockers or set the orientable subtype once, conflicting
 subtype values are ignored.
 
+Call `demir_rotatable(subtype, directions)` from `New()` when a type's `dir` matters but its icon
+state has fewer directions, such as a machine whose body sprite never turns while its ports do. The
+inspector and the rotation gizmo then offer those directions and write `dir`. `directions` is one
+direction or a list of them. The most specific registered subtype wins, and `/directional/<dir>`
+subtypes still take priority.
+
 The prelude is the complete DM interface. It defines every hook, helper, flag, lighting field, and
 UI procedure. The editor embeds the example integrations so they can be forced without changing a
 codebase. The files remain usable as templates for codebase-owned profiles:

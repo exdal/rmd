@@ -1,4 +1,4 @@
-use core::types::IrNodeId;
+use core::{types::IrNodeId, vars};
 use std::collections::{HashMap, HashSet};
 
 use crate::{IrNode, Module, Procedure};
@@ -181,7 +181,17 @@ fn tracked_storage(module: &Module, pointer: IrNodeId) -> bool {
 fn is_observable_name(name: &str) -> bool {
     matches!(
         name,
-        "len" | "loc" | "contents" | "x" | "y" | "z" | "type" | "parent_type" | "appearance" | "overlays" | "underlays"
+        vars::LEN
+            | vars::LOC
+            | vars::CONTENTS
+            | vars::X
+            | vars::Y
+            | vars::Z
+            | vars::TYPE
+            | vars::PARENT_TYPE
+            | vars::APPEARANCE
+            | vars::OVERLAYS
+            | vars::UNDERLAYS
     )
 }
 

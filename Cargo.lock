@@ -600,6 +600,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "defines"
+version = "1.0.0"
+
+[[package]]
 name = "defmt"
 version = "0.3.100"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -697,6 +701,7 @@ dependencies = [
 name = "dmi"
 version = "1.0.0"
 dependencies = [
+ "defines",
  "png",
 ]
 
@@ -745,6 +750,7 @@ dependencies = [
  "core",
  "dear-imgui-rs",
  "dear-imgui-winit",
+ "defines",
  "dmi",
  "dmm",
  "gix",
@@ -3888,6 +3894,7 @@ dependencies = [
  "ast",
  "codegen",
  "core",
+ "defines",
  "ir",
  "lexer",
  "objtree",

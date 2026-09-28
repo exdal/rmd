@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 bitflags = "2"
 core = { path = "../core" }
+defines = { path = "../defines" }
 preprocessor = { path = "../preprocessor" }
 ast = { path = "../ast" }
 sema = { path = "../sema" }

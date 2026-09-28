@@ -1,4 +1,7 @@
-use core::types::{Identifier, Value};
+use core::{
+    types::{Identifier, Value},
+    vars,
+};
 
 use dear_imgui_rs::{MouseButton, MouseCursor, StyleColor, Ui};
 use dmi::metadata::Dir;
@@ -682,7 +685,11 @@ impl GizmoState {
             && map_view.hovered
             && rotation_key.is_pressed(ui)
             && origin.is_some()
-            && let Some(set) = direction_set(target.state.dmi_directions, target.state.directional_types)
+            && let Some(set) = direction_set(
+                target.state.dmi_directions,
+                target.state.declared,
+                target.state.directional_types,
+            )
         {
             self.direction = Some(DirectionGesture {
                 target: target.id,
@@ -970,14 +977,16 @@ fn contains(point: [f32; 2], min: [f32; 2], max: [f32; 2]) -> bool {
         && point[1] <= max[1]
 }
 
-fn direction_set(dmi_directions: Option<u32>, directional_types: Option<DirectionalTypes>) -> Option<DirectionSet> {
+fn direction_set(
+    dmi_directions: Option<u32>, declared: Option<[bool; 8]>, directional_types: Option<DirectionalTypes>,
+) -> Option<DirectionSet> {
     let mut set = DirectionSet {
         supported: [false; 8],
         slots: 4,
     };
 
-    if let Some(directional_types) = directional_types {
-        for (direction, supported) in Dir::ORDER.into_iter().zip(directional_types.supported) {
+    if let Some(supported) = directional_types.map(|types| types.supported).or(declared) {
+        for (direction, supported) in Dir::ORDER.into_iter().zip(supported) {
             set.supported[clockwise_index(direction)] = supported;
         }
     } else {
@@ -1030,6 +1039,7 @@ fn selected_direction_target(target: SelectedTransform) -> DirectionTarget {
         state: DirectionState {
             dir: target.dir,
             dmi_directions: target.dmi_directions,
+            declared: target.declared,
             directional_types: target.directional_types,
         },
     }
@@ -1101,7 +1111,7 @@ fn apply_direction(session: &mut Session, target: DirectionTarget, direction: Di
 }
 
 fn direction_mutation(direction: Dir) -> VarMutation {
-    VarMutation::Set(Identifier::from("dir"), Value::Num(direction.to_bits() as f32))
+    VarMutation::Set(Identifier::from(vars::DIR), Value::Num(direction.to_bits() as f32))
 }
 
 fn direction_vector(direction: Dir) -> [f32; 2] {
@@ -1622,18 +1632,18 @@ mod tests {
 
     #[test]
     fn direction_picker_only_uses_supported_dmi_directions() {
-        assert_eq!(direction_set(None, None), None);
-        assert_eq!(direction_set(Some(1), None), None);
-        assert_eq!(direction_set(Some(2), None), None);
+        assert_eq!(direction_set(None, None, None), None);
+        assert_eq!(direction_set(Some(1), None, None), None);
+        assert_eq!(direction_set(Some(2), None, None), None);
 
-        let four = direction_set(Some(4), None).unwrap();
+        let four = direction_set(Some(4), None, None).unwrap();
         assert_eq!(four.slots, 4);
         assert_eq!(
             four.directions().collect::<Vec<_>>(),
             [Dir::North, Dir::East, Dir::South, Dir::West]
         );
 
-        let eight = direction_set(Some(8), None).unwrap();
+        let eight = direction_set(Some(8), None, None).unwrap();
         assert_eq!(eight.slots, 8);
         assert_eq!(eight.directions().collect::<Vec<_>>(), CLOCKWISE_DIRECTIONS);
     }
@@ -1649,7 +1659,7 @@ mod tests {
             current: Some(Dir::North),
         };
 
-        let set = direction_set(Some(8), Some(types)).unwrap();
+        let set = direction_set(Some(8), None, Some(types)).unwrap();
         assert_eq!(set.directions().collect::<Vec<_>>(), [Dir::North, Dir::East, Dir::West]);
         assert_eq!(set.slots, 4);
 
@@ -1657,7 +1667,27 @@ mod tests {
             supported: [true, false, false, false, false, false, false, false],
             current: None,
         };
-        assert_eq!(direction_set(Some(8), Some(one_type)), None);
+        assert_eq!(direction_set(Some(8), None, Some(one_type)), None);
+    }
+
+    #[test]
+    fn profile_declared_directions_rotate_a_single_direction_icon() {
+        let mut cardinals = [false; 8];
+        cardinals[..4].fill(true);
+
+        let set = direction_set(Some(1), Some(cardinals), None).unwrap();
+        assert_eq!(
+            set.directions().collect::<Vec<_>>(),
+            [Dir::North, Dir::East, Dir::South, Dir::West]
+        );
+        assert_eq!(set.slots, 4);
+
+        let types = DirectionalTypes {
+            supported: [false, true, true, false, false, false, false, false],
+            current: None,
+        };
+        let set = direction_set(Some(1), Some(cardinals), Some(types)).unwrap();
+        assert_eq!(set.directions().collect::<Vec<_>>(), [Dir::North, Dir::East]);
     }
 
     #[test]
@@ -1665,7 +1695,7 @@ mod tests {
         let origin = [150.0, 150.0];
         let viewport_min = [0.0, 0.0];
         let viewport_max = [300.0, 300.0];
-        let set = direction_set(Some(8), None).unwrap();
+        let set = direction_set(Some(8), None, None).unwrap();
 
         for direction in CLOCKWISE_DIRECTIONS {
             let vector = direction_vector(direction);
@@ -1696,6 +1726,7 @@ mod tests {
         supported[3] = true;
         let set = direction_set(
             None,
+            None,
             Some(DirectionalTypes {
                 supported,
                 current: None,
@@ -1716,7 +1747,7 @@ mod tests {
 
     #[test]
     fn tap_rotates_clockwise_and_skips_unsupported_directions() {
-        let four = direction_set(Some(4), None).unwrap();
+        let four = direction_set(Some(4), None, None).unwrap();
         assert_eq!(next_clockwise_direction(four, Some(Dir::North)), Some(Dir::East));
         assert_eq!(next_clockwise_direction(four, Some(Dir::East)), Some(Dir::South));
         assert_eq!(next_clockwise_direction(four, Some(Dir::South)), Some(Dir::West));
@@ -1727,6 +1758,7 @@ mod tests {
         supported[2] = true;
         supported[7] = true;
         let sparse = direction_set(
+            None,
             None,
             Some(DirectionalTypes {
                 supported,

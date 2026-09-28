@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 codegen = { path = "../codegen" }
 core = { path = "../core" }
+defines = { path = "../defines" }
 objtree = { path = "../objtree" }
 prelude = { path = "../../prelude" }
 serde = "1.0"

@@ -1,4 +1,7 @@
-use core::types::{Identifier, Value};
+use core::{
+    types::{Identifier, Value},
+    vars,
+};
 use std::collections::{HashMap, HashSet};
 
 use dmm::{Coord, Prefab};
@@ -637,9 +640,9 @@ impl Session {
                 let prefab = placed.prefab_mut();
                 let inherited = visual::resolve(tree, &Prefab::new(prefab.path.clone())).dir;
                 if inherited == direction {
-                    prefab.remove_var(&Identifier::from("dir"));
+                    prefab.remove_var(&Identifier::from(vars::DIR));
                 } else {
-                    prefab.set_var(Identifier::from("dir"), Value::Num(direction as f32));
+                    prefab.set_var(Identifier::from(vars::DIR), Value::Num(direction as f32));
                 }
             }
 

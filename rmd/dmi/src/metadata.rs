@@ -1,3 +1,5 @@
+use defines::{EAST, NORTH, NORTHEAST, NORTHWEST, SOUTH, SOUTHEAST, SOUTHWEST, WEST};
+
 use crate::error::MetadataError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,27 +28,27 @@ impl Dir {
 
     pub fn to_bits(self) -> u32 {
         match self {
-            Dir::North => 1,
-            Dir::South => 2,
-            Dir::East => 4,
-            Dir::West => 8,
-            Dir::Northeast => 5,
-            Dir::Northwest => 9,
-            Dir::Southeast => 6,
-            Dir::Southwest => 10,
+            Dir::North => NORTH,
+            Dir::South => SOUTH,
+            Dir::East => EAST,
+            Dir::West => WEST,
+            Dir::Northeast => NORTHEAST,
+            Dir::Northwest => NORTHWEST,
+            Dir::Southeast => SOUTHEAST,
+            Dir::Southwest => SOUTHWEST,
         }
     }
 
     pub fn from_bits(bits: u32) -> Option<Self> {
         Some(match bits {
-            1 => Dir::North,
-            2 => Dir::South,
-            4 => Dir::East,
-            8 => Dir::West,
-            5 => Dir::Northeast,
-            9 => Dir::Northwest,
-            6 => Dir::Southeast,
-            10 => Dir::Southwest,
+            NORTH => Dir::North,
+            SOUTH => Dir::South,
+            EAST => Dir::East,
+            WEST => Dir::West,
+            NORTHEAST => Dir::Northeast,
+            NORTHWEST => Dir::Northwest,
+            SOUTHEAST => Dir::Southeast,
+            SOUTHWEST => Dir::Southwest,
             _ => return None,
         })
     }
