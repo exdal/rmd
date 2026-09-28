@@ -318,21 +318,39 @@ fn draw_tool_button(ui: &Ui, session: &mut Session, keybindings: KeyBindings, to
 
     let _color = (session.tool() == tool).then(|| ui.push_style_color(StyleColor::Button, color));
     let clicked = ui.button(icon.to_string());
-    let alternate = || keybindings.get(KeybindAction::ToolAlternate).label(ui);
-    ui.set_item_tooltip(match tool {
-        Tool::Place => format!(
-            "Place\n{}: an object brush replaces the objects on the tile",
-            alternate()
+    let alternate = keybindings.get(KeybindAction::ToolAlternate).label(ui);
+    let (action, help) = match tool {
+        Tool::Place => (
+            KeybindAction::PlaceTool,
+            format!("Click to place the brush\n{alternate}: object brush replaces tile objects"),
         ),
-        Tool::Delete => format!("Delete\n{}+drag: clear everything visible from each tile", alternate()),
-        Tool::Replace => String::from("Replace\nClick an atom to swap it for the brush"),
-        Tool::BlockSelect => String::from("Block Select"),
-        Tool::Node => String::from(
-            "Node tool\nDouble-click a node to select its network; drag a handle to connect.\nRight-click a \
-             connection or isolated node to delete it; Shift+right-click for the map menu.",
+        Tool::Select => (KeybindAction::SelectTool, String::from("Click an atom to select it")),
+        Tool::Node => (
+            KeybindAction::NodeTool,
+            String::from(
+                "Double-click: select network, drag handle: connect\nRight-click: delete, Shift+right-click: map menu",
+            ),
         ),
-        _ => tool.label().to_owned(),
-    });
+        Tool::BlockSelect => (KeybindAction::BlockSelectTool, String::from("Drag to select an area")),
+        Tool::Delete => (
+            KeybindAction::DeleteTool,
+            format!("Click an atom to delete it\n{alternate}+drag: clear visible atoms"),
+        ),
+        Tool::Replace => (
+            KeybindAction::ReplaceTool,
+            String::from("Click an atom to swap it for the brush"),
+        ),
+        Tool::Fill => (
+            KeybindAction::FillTool,
+            String::from("Click to fill a connected region"),
+        ),
+    };
+    ui.set_item_tooltip(format!(
+        "{} ({})\n{help}",
+        tool.label(),
+        keybindings.get(action).label(ui)
+    ));
+
     if clicked {
         session.set_tool(tool);
     }
