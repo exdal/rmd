@@ -33,6 +33,8 @@ const SETTINGS_WINDOW_SIZE: [f32; 2] = [760.0, 560.0];
 const SETTINGS_WINDOW_MIN_SIZE: [f32; 2] = [620.0, 420.0];
 const SETTINGS_CATEGORY_WIDTH: f32 = 160.0;
 const PROFILE_RELOAD_POPUP: &str = "Reload codebase profile?";
+const SETTINGS_TITLE_SCALE: f32 = 1.4;
+const SETTINGS_SECTION_SCALE: f32 = 1.2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum SettingsCategory {
@@ -263,7 +265,7 @@ fn draw_settings_window(
                 .size([0.0, content_height])
                 .border(true)
                 .build(ui, || {
-                    ui.text(category.label());
+                    draw_heading(ui, category.label(), SETTINGS_TITLE_SCALE);
                     ui.separator();
 
                     match category {
@@ -298,6 +300,13 @@ fn draw_settings_window(
     }
 }
 
+fn draw_heading(ui: &Ui, label: &str, scale: f32) {
+    let _font = ui.push_font_with_size(None, ui.clone_style().font_size_base() * scale);
+    ui.text(label);
+}
+
+fn draw_section_heading(ui: &Ui, label: &str) { draw_heading(ui, label, SETTINGS_SECTION_SCALE); }
+
 fn draw_git_settings(ui: &Ui, settings: &mut Settings) {
     ui.checkbox("Enable Git map integration", &mut settings.git_enabled);
     ui.set_next_item_width(180.0);
@@ -306,7 +315,7 @@ fn draw_git_settings(ui: &Ui, settings: &mut Settings) {
 }
 
 fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
-    ui.text("External editor");
+    draw_section_heading(ui, "External editor");
     ui.text("Command");
     ui.set_next_item_width(-1.0);
     ui.input_text("##preferred-editor", &mut settings.preferred_editor)
@@ -314,7 +323,7 @@ fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
     ui.text_disabled("Placeholders: {file}, {line}, {column}");
 
     ui.separator();
-    ui.text("Saving");
+    draw_section_heading(ui, "Saving");
     ui.checkbox("Sanitize variables", &mut settings.sanitize_vars_on_save);
     ui.set_item_tooltip("Leave out variables whose value matches the type's default when writing the map file");
     if ui.button("Show backups") {
@@ -322,11 +331,11 @@ fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
     }
 
     ui.separator();
-    ui.text("Windows");
+    draw_section_heading(ui, "Windows");
     ui.checkbox("Focus windows on hover", &mut settings.focus_windows_on_hover);
 
     ui.separator();
-    ui.text("Updates");
+    draw_section_heading(ui, "Updates");
     ui.checkbox("Check for new releases on startup", &mut settings.check_for_updates);
 }
 
@@ -341,12 +350,12 @@ fn show_backups() {
 }
 
 fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Settings) {
-    ui.text("Areas");
+    draw_section_heading(ui, "Areas");
     ui.checkbox("Show areas", &mut session.options.show_areas);
     ui.checkbox("Show area outlines", &mut session.options.show_area_outlines);
 
     ui.separator();
-    ui.text("Lighting");
+    draw_section_heading(ui, "Lighting");
     ui.checkbox("Show lighting", &mut session.options.show_lighting);
     ui.set_next_item_width(200.0);
     ui.slider(
@@ -358,12 +367,12 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
     ui.set_item_tooltip("0% keeps original lighting, 100% removes darkness.");
 
     ui.separator();
-    ui.text("Feedback");
+    draw_section_heading(ui, "Feedback");
     ui.checkbox("Tile placement flash", &mut settings.tile_place_flash);
     ui.checkbox("Selection guide lines", &mut settings.selection_guide_line);
 
     ui.separator();
-    ui.text("Grid");
+    draw_section_heading(ui, "Grid");
     ui.checkbox("Tile grid overlay", &mut settings.show_tile_grid);
     ui.set_next_item_width(120.0);
     drag_min_pixels(
@@ -383,7 +392,7 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
     ui.checkbox("Pixel grid axis", &mut settings.show_pixel_grid_axis);
 
     ui.separator();
-    ui.text("Selection");
+    draw_section_heading(ui, "Selection");
     ui.text("Highlight style");
     for (index, highlight) in SelectionHighlight::ALL.into_iter().enumerate() {
         if index > 0 {
@@ -398,18 +407,18 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
 fn draw_compiler_settings(
     ui: &Ui, session: &Session, settings: &mut Settings, loading: bool, pending_profile: &mut Option<ProfileReload>,
 ) {
-    ui.text("Codebase");
+    draw_section_heading(ui, "Codebase");
     draw_profile_setting(ui, session, settings, loading, pending_profile);
 
     ui.separator();
     draw_optimization_settings(ui, session, settings);
 
     ui.separator();
-    ui.text("On next load");
+    draw_section_heading(ui, "On next load");
     ui.checkbox("Run DM appearance baking", &mut settings.bake_enabled);
 
     ui.separator();
-    ui.text("Diagnostics");
+    draw_section_heading(ui, "Diagnostics");
 
     let retained = session.diagnostics.bake.iter().map(|entry| entry.count).sum::<usize>();
     ui.text(format!("{retained} atoms retained their static appearance"));
@@ -438,7 +447,7 @@ fn draw_compiler_settings(
 }
 
 fn draw_optimization_settings(ui: &Ui, session: &Session, settings: &mut Settings) {
-    ui.text("Optimization");
+    draw_section_heading(ui, "Optimization");
     ui.checkbox("Enable compiler optimizations", &mut settings.optimizations_enabled);
 
     let Some(environment) = session.state.environment.as_deref() else {
@@ -630,15 +639,15 @@ fn drag_min_pixels(ui: &Ui, label: &str, value: &mut u32) {
 }
 
 fn draw_object_tree_settings(ui: &Ui, settings: &mut Settings) -> bool {
-    ui.text("Search fields");
+    draw_section_heading(ui, "Search fields");
     let mut changed = draw_object_tree_search_settings(ui, &mut settings.object_tree_search);
 
     ui.separator();
-    ui.text("Type filters");
+    draw_section_heading(ui, "Type filters");
     changed |= draw_object_tree_filter_settings(ui, &mut settings.object_tree_filter);
 
     ui.separator();
-    ui.text("Appearance");
+    draw_section_heading(ui, "Appearance");
     ui.checkbox("Line indicators", &mut settings.object_tree_line_indicators);
 
     changed
@@ -690,7 +699,7 @@ fn draw_keybinding_settings(
 
     for (index, &(group, actions)) in SETTINGS_KEYBINDING_GROUPS.iter().enumerate() {
         ui.separator();
-        ui.text(group);
+        draw_section_heading(ui, group);
         ui.table(format!("settings-keybindings-{index}"))
             .flags(TableFlags::BORDERS_INNER_V | TableFlags::ROW_BG)
             .sizing_policy(TableSizingPolicy::StretchProp)
