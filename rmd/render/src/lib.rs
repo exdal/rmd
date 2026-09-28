@@ -58,7 +58,6 @@ impl HighlightStyle {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct MapViewInteraction {
     pub cursor: Option<[u32; 2]>,
-    pub hovered_area: Option<PrefabInstanceId>,
     pub selected: Option<PrefabInstanceId>,
     pub placement_flash: Option<PlacementFlash>,
     pub highlight: HighlightStyle,
@@ -136,6 +135,7 @@ pub struct SpriteInstance {
     pub z: u32,
     pub is_area: bool,
     pub hidden: bool,
+    pub click_through: bool,
     pub area_edges: u32,
     pub lighting: SpriteLighting,
     /// premultiplied RGBA
@@ -191,7 +191,6 @@ pub struct MapViewFrame<'a> {
     pub rect: MapViewRect,
     pub camera: Camera,
     pub sprite_instances: &'a [SpriteInstance],
-    pub area_tiles: &'a [SpriteInstance],
     pub focused_area: Option<PrefabInstanceId>,
     pub active_z: u32,
     pub level_count: u32,
@@ -256,7 +255,6 @@ pub struct FrameUpdate {
     pub previous_revision: u64,
     /// disjoint spans of the sprite list to upload again, in order
     pub sprites: Vec<UpdateRange>,
-    pub area_tiles: Option<UpdateRange>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

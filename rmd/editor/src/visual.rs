@@ -25,6 +25,7 @@ pub struct Appearance {
     pub color: Option<String>,
     pub alpha: u8,
     pub invisibility: i32,
+    pub mouse_opacity: u8,
     pub appearance_flags: u32,
     pub transform: Matrix,
     pub lighting: vm::AppearanceLighting,
@@ -61,6 +62,7 @@ impl Default for Appearance {
             color: None,
             alpha: 255,
             invisibility: 0,
+            mouse_opacity: 1,
             appearance_flags: 0,
             transform: Matrix::IDENTITY,
             lighting: vm::AppearanceLighting::Normal,
@@ -154,6 +156,10 @@ pub fn resolve_id(tree: &ObjectTree, id: TypeId, prefab: &Prefab) -> Appearance 
 
     if let Some(invisibility) = get(vars::INVISIBILITY).and_then(|v| v.as_num()) {
         appearance.invisibility = invisibility as i32;
+    }
+
+    if let Some(mouse_opacity) = get(vars::MOUSE_OPACITY).and_then(|v| v.as_num()) {
+        appearance.mouse_opacity = mouse_opacity.clamp(0.0, 2.0) as u8;
     }
 
     // TODO: type intrinsics

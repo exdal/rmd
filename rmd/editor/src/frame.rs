@@ -55,7 +55,6 @@ struct RenderedPrefab {
     is_area: bool,
     sprites: Vec<(SpriteKey, SpriteInstance)>,
     primary: Option<SpriteInstance>,
-    area_tile: Option<SpriteInstance>,
 }
 
 struct SpriteGroup {
@@ -81,7 +80,6 @@ struct RenderContext<'a> {
 #[derive(Debug, Default)]
 pub struct FrameInstances {
     pub sprites: Vec<SpriteInstance>,
-    pub area_tiles: Vec<SpriteInstance>,
     pub light_tiles: Vec<render::LightTile>,
     pub lighting_size: [u32; 3],
     area_components: HashMap<Coord, PrefabInstanceId>,
@@ -91,7 +89,6 @@ pub struct FrameInstances {
     owner_keys: HashMap<PrefabInstanceId, OwnerKeys>,
     /// only primaries that are not among their owner's sprites, the rest are found through `owner_keys`
     primary_sprites: HashMap<PrefabInstanceId, SpriteInstance>,
-    area_tile_indices: HashMap<PrefabInstanceId, usize>,
     placement_orders: HashMap<PrefabInstanceId, usize>,
     next_placement_order: usize,
     placements: HashMap<PrefabInstanceId, CachedPlacement>,
@@ -115,12 +112,10 @@ impl FrameInstances {
         drop(std::mem::take(&mut self.placements));
         drop(std::mem::take(&mut self.placement_orders));
         freed("placements and orders");
-        drop(std::mem::take(&mut self.area_tiles));
-        drop(std::mem::take(&mut self.area_tile_indices));
         drop(std::mem::take(&mut self.area_components));
         drop(std::mem::take(&mut self.area_component_tiles));
         drop(std::mem::take(&mut self.area_owners_by_coord));
-        freed("area tiles and components");
+        freed("area components");
         drop(self);
         freed("everything else");
     }
@@ -189,7 +184,6 @@ pub enum PrefabUpdate {
     Buffers {
         /// disjoint and in order
         sprites: Vec<UpdateRange>,
-        area_tiles: Option<UpdateRange>,
     },
     Rebuild,
 }
@@ -328,6 +322,7 @@ pub fn instance_for(
         z: tile.z,
         is_area,
         hidden: false,
+        click_through: false,
         area_edges: 0,
         lighting: match appearance.lighting {
             vm::AppearanceLighting::Normal => render::SpriteLighting::Normal,
@@ -365,10 +360,8 @@ pub fn build_with_options(
     options: FrameRenderOptions<'_>,
 ) -> FrameInstances {
     let mut keyed_sprites = Vec::new();
-    let mut area_tiles = Vec::new();
     let mut primary_sprites = HashMap::new();
     let mut owner_keys = HashMap::new();
-    let mut area_tile_indices = HashMap::new();
     let mut placement_orders = HashMap::new();
     let mut placements = HashMap::new();
     let mut area_owners_by_coord = HashMap::<Coord, Vec<PrefabInstanceId>>::new();
@@ -429,10 +422,6 @@ pub fn build_with_options(
                     }
 
                     keyed_sprites.extend(rendered.sprites);
-                    if let Some(area_tile) = rendered.area_tile {
-                        area_tile_indices.insert(owner, area_tiles.len());
-                        area_tiles.push(area_tile);
-                    }
                 }
             }
         }
@@ -440,7 +429,6 @@ pub fn build_with_options(
 
     keyed_sprites.sort_by_key(|(key, _)| *key);
     let mut instances = FrameInstances {
-        area_tiles,
         light_tiles: options
             .lighting
             .map(|lighting| lighting.tiles.iter().copied().map(light_tile).collect())
@@ -449,7 +437,6 @@ pub fn build_with_options(
         area_components,
         area_component_tiles,
         primary_sprites,
-        area_tile_indices,
         placement_orders,
         next_placement_order: order.saturating_add(1),
         placements,
@@ -609,18 +596,6 @@ pub fn update_prefabs_with_options(
         })
         .collect::<Vec<_>>();
     let sprite_update = replace_owner_sprites(instances, &rendered);
-    let mut area_tile_update = None;
-
-    for (affected_owner, rendered) in rendered {
-        merge_update_range(
-            &mut area_tile_update,
-            replace_area_tile(
-                instances,
-                affected_owner,
-                rendered.and_then(|rendered| rendered.area_tile),
-            ),
-        );
-    }
 
     for (owner, _, current) in changes {
         if current.is_none() {
@@ -628,16 +603,11 @@ pub fn update_prefabs_with_options(
         }
     }
 
-    clamp_update_range(&mut area_tile_update, instances.area_tiles.len());
-
-    if sprite_update.is_empty() && area_tile_update.is_none() {
+    if sprite_update.is_empty() {
         return PrefabUpdate::Unchanged;
     }
 
-    PrefabUpdate::Buffers {
-        sprites: sprite_update,
-        area_tiles: area_tile_update,
-    }
+    PrefabUpdate::Buffers { sprites: sprite_update }
 }
 
 fn current_placement(tree: &ObjectTree, document: &MapDocument, owner: PrefabInstanceId) -> Option<CurrentPlacement> {
@@ -774,7 +744,6 @@ impl RenderContext<'_> {
             .unwrap_or_else(|| visual::resolve_id(self.tree, id, prefab));
         let texture = sprite_texture(self.icons, self.textures, &appearance);
         let mut own = Vec::with_capacity(if is_area { 2 } else { 1 });
-        let mut area_tile = None;
 
         if is_area {
             if let Some(texture) = texture {
@@ -782,17 +751,6 @@ impl RenderContext<'_> {
                 sprite.area_owner = area_owner;
                 own.push(sprite);
             }
-
-            let mut tile = area_outline(
-                owner,
-                &appearance,
-                texture.unwrap_or_default(),
-                coord,
-                self.tile_size,
-                area_owner,
-            );
-            tile.area_edges = render::AREA_EDGES_ALL;
-            area_tile = Some(tile);
 
             let edges = self
                 .area
@@ -861,13 +819,20 @@ impl RenderContext<'_> {
         }
 
         let mut primary = primary.or_else(|| sprites.first().map(|(_, sprite)| *sprite));
+        // `mouse_opacity = 0` on objects too would lock out mapped dirt and decals
+        let is_turf = self
+            .tree
+            .roots()
+            .turf
+            .is_some_and(|turf| self.tree.is_subtype_of(id, turf));
+        if is_turf && appearance.mouse_opacity == 0 {
+            for sprite in sprites.iter_mut().map(|(_, sprite)| sprite).chain(&mut primary) {
+                sprite.click_through = true;
+            }
+        }
+
         if !self.visibility.is_visible(id) {
-            for sprite in sprites
-                .iter_mut()
-                .map(|(_, sprite)| sprite)
-                .chain(&mut primary)
-                .chain(&mut area_tile)
-            {
+            for sprite in sprites.iter_mut().map(|(_, sprite)| sprite).chain(&mut primary) {
                 sprite.hidden = true;
             }
         }
@@ -876,7 +841,6 @@ impl RenderContext<'_> {
             is_area,
             sprites,
             primary,
-            area_tile,
         }
     }
 }
@@ -937,65 +901,6 @@ fn remove_area_owner(instances: &mut FrameInstances, coord: Coord, owner: Prefab
     owners.retain(|candidate| *candidate != owner);
     if owners.is_empty() {
         instances.area_owners_by_coord.remove(&coord);
-    }
-}
-
-fn replace_area_tile(
-    instances: &mut FrameInstances, owner: PrefabInstanceId, next: Option<SpriteInstance>,
-) -> Option<UpdateRange> {
-    match (instances.area_tile_indices.get(&owner).copied(), next) {
-        (Some(index), Some(next)) if instances.area_tiles[index] == next => None,
-        (Some(index), Some(next)) => {
-            instances.area_tiles[index] = next;
-
-            Some(UpdateRange {
-                start: index,
-                end: index + 1,
-            })
-        },
-        (None, Some(next)) => {
-            let index = instances.area_tiles.len();
-            instances.area_tiles.push(next);
-            instances.area_tile_indices.insert(owner, index);
-
-            Some(UpdateRange {
-                start: index,
-                end: index + 1,
-            })
-        },
-        (Some(index), None) => {
-            instances.area_tiles.swap_remove(index);
-            instances.area_tile_indices.remove(&owner);
-            if let Some(swapped) = instances.area_tiles.get(index) {
-                instances.area_tile_indices.insert(swapped.owner, index);
-            }
-
-            Some(UpdateRange {
-                start: index,
-                end: (index + 1).min(instances.area_tiles.len()),
-            })
-        },
-        (None, None) => None,
-    }
-}
-
-fn merge_update_range(target: &mut Option<UpdateRange>, next: Option<UpdateRange>) {
-    let Some(next) = next else {
-        return;
-    };
-    match target {
-        Some(current) => {
-            current.start = current.start.min(next.start);
-            current.end = current.end.max(next.end);
-        },
-        None => *target = Some(next),
-    }
-}
-
-fn clamp_update_range(range: &mut Option<UpdateRange>, len: usize) {
-    if let Some(range) = range {
-        range.start = range.start.min(len);
-        range.end = range.end.min(len).max(range.start);
     }
 }
 
@@ -1532,7 +1437,7 @@ mod tests {
     }
 
     #[test]
-    fn hidden_types_keep_their_sprites_and_area_tiles_flagged() {
+    fn hidden_types_keep_their_sprites_flagged() {
         let tree = tree(&[("/obj/table", "table", 2.0), ("/area/station", "floor", 1.0)]);
         let document = document(one_tile_map(&["/obj/table", "/area/station"]));
         let coord = Coord::new(1, 1, 1);
@@ -1570,7 +1475,6 @@ mod tests {
                 .iter()
                 .any(|sprite| sprite.owner == object_owner && sprite.hidden)
         );
-        assert_eq!(without_objects.area_tiles.len(), 1);
 
         visibility.set_subtree(&tree, object, true);
         visibility.set_subtree(&tree, area, false);
@@ -1588,7 +1492,37 @@ mod tests {
         );
         assert!(without_areas.live_sprites().any(|sprite| sprite.owner == object_owner));
         assert!(without_areas.live_sprites().all(|sprite| sprite.owner != area_owner));
-        assert!(without_areas.area_tiles.iter().all(|tile| tile.hidden));
+    }
+
+    #[test]
+    fn only_turfs_with_mouse_opacity_zero_are_click_through() {
+        let tree = tree(&[("/turf/openspace", "floor", 2.0), ("/obj/dirt", "table", 3.0)]);
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        let tile = ["/turf/openspace", "/obj/dirt"]
+            .into_iter()
+            .map(|path| {
+                let mut prefab = Prefab::new(TreePath::parse(path));
+                prefab.set_var(Identifier::from("mouse_opacity"), Value::Num(0.0));
+                prefab
+            })
+            .collect();
+        map.grid[0][0][0] = map.intern_tile(tile);
+        let document = document(map);
+        let owners = document.instance_ids_at(Coord::new(1, 1, 1));
+        let icons = icons(&["floor", "table"]);
+        let textures = textures(&["floor", "table"]);
+
+        let instances = build(&tree, &icons, &textures, &document, 32);
+        let click_through = |owner| {
+            instances
+                .live_sprites()
+                .filter(|sprite| sprite.owner == owner)
+                .map(|sprite| sprite.click_through)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(click_through(owners[0]), [true]);
+        assert_eq!(click_through(owners[1]), [false]);
     }
 
     fn one_tile_map(paths: &[&str]) -> Map {
@@ -1678,17 +1612,6 @@ mod tests {
         }
         assert!(remaining.is_empty(), "{} sprites missing", remaining.len());
         assert_pages_hold(actual);
-        let actual_tiles = actual
-            .area_tiles
-            .iter()
-            .map(|tile| (tile.owner, *tile))
-            .collect::<HashMap<_, _>>();
-        let expected_tiles = expected
-            .area_tiles
-            .iter()
-            .map(|tile| (tile.owner, *tile))
-            .collect::<HashMap<_, _>>();
-        assert_eq!(actual_tiles, expected_tiles);
         assert_eq!(actual.area_components, expected.area_components);
         assert_eq!(actual.area_component_tiles, expected.area_component_tiles);
         assert_eq!(actual.sprite_sort_keys.len(), actual.sprites.len());
@@ -1700,9 +1623,6 @@ mod tests {
         for (owner, sprite) in &actual.primary_sprites {
             assert_eq!(sprite.owner, *owner);
             assert_eq!(actual.sprite(*owner), Some(sprite));
-        }
-        for (owner, index) in &actual.area_tile_indices {
-            assert_eq!(actual.area_tiles.get(*index).map(|tile| tile.owner), Some(*owner));
         }
     }
 
@@ -2066,7 +1986,6 @@ mod tests {
                 start: 0,
                 end: instances.sprites.len(),
             }],
-            area_tiles: None,
         };
 
         document
@@ -2140,7 +2059,7 @@ mod tests {
     }
 
     #[test]
-    fn area_icon_edits_patch_sprite_and_area_tile_buffers() {
+    fn area_icon_edits_patch_the_sprite_buffer() {
         let tree = tree(&[("/area/station", "floor", 1.0)]);
         let icons = icons(&["floor", "alert"]);
         let textures = textures(&["floor", "alert"]);
@@ -2154,10 +2073,7 @@ mod tests {
         let update = update_prefab(&mut instances, &tree, &icons, &textures, &document, owner, 32);
         assert!(matches!(
             update,
-            PrefabUpdate::Buffers {
-                ref sprites,
-                area_tiles: Some(_),
-            } if !sprites.is_empty()
+            PrefabUpdate::Buffers { ref sprites } if !sprites.is_empty()
         ));
         assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
     }
@@ -2181,10 +2097,7 @@ mod tests {
         let update = update_prefab(&mut instances, &tree, &icons, &textures, &document, owner, 32);
         assert!(matches!(
             update,
-            PrefabUpdate::Buffers {
-                ref sprites,
-                area_tiles: Some(_),
-            } if !sprites.is_empty()
+            PrefabUpdate::Buffers { ref sprites } if !sprites.is_empty()
         ));
         assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
 
@@ -2211,12 +2124,9 @@ mod tests {
         let update = update_prefab(&mut instances, &tree, &icons, &textures, &document, owner, 32);
         assert!(matches!(
             update,
-            PrefabUpdate::Buffers {
-                ref sprites,
-                area_tiles: Some(_),
-            } if !sprites.is_empty()
+            PrefabUpdate::Buffers { ref sprites } if !sprites.is_empty()
         ));
-        assert!(instances.area_tiles.is_empty());
+        assert!(instances.live_sprites().all(|sprite| !sprite.is_area));
         assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
 
         document
@@ -2251,9 +2161,6 @@ mod tests {
         assert_eq!((outline.width, outline.height), (32.0, 32.0));
         assert_eq!((sprites[0].is_area, sprites[0].area_edges), (true, 0));
         assert_eq!((sprites[1].is_area, sprites[1].area_edges), (true, AREA_EDGES_ALL));
-        assert_eq!(instances.area_tiles.len(), 1);
-        assert_eq!(instances.area_tiles[0].owner, area.owner);
-        assert_eq!(instances.area_tiles[0].area_edges, AREA_EDGES_ALL);
         assert_eq!(instances.sprite(area_owner).unwrap().area_edges, 0);
 
         document
@@ -2280,19 +2187,6 @@ mod tests {
             9
         );
         assert_eq!(sprites.iter().filter(|sprite| sprite.area_edges != 0).count(), 8);
-        assert_eq!(instances.area_tiles.len(), 9);
-        assert!(
-            instances
-                .area_tiles
-                .iter()
-                .all(|sprite| sprite.area_edges == AREA_EDGES_ALL)
-        );
-        assert!(
-            instances
-                .area_tiles
-                .iter()
-                .any(|sprite| (sprite.x, sprite.y) == (48.0, 48.0))
-        );
         assert!(
             sprites
                 .iter()
@@ -2451,10 +2345,7 @@ mod tests {
 
         assert!(matches!(
             update,
-            PrefabUpdate::Buffers {
-                ref sprites,
-                area_tiles: Some(_),
-            } if !sprites.is_empty()
+            PrefabUpdate::Buffers { ref sprites } if !sprites.is_empty()
         ));
         assert_ne!(
             instances.area_component_at(Coord::new(1, 1, 1)),
@@ -2480,7 +2371,7 @@ mod tests {
 
         let update = update_prefabs(&mut instances, &tree, &icons, &textures, &document, &owners, 32);
 
-        let PrefabUpdate::Buffers { sprites, area_tiles } = update else {
+        let PrefabUpdate::Buffers { sprites } = update else {
             panic!("batched area deletion must stay incremental");
         };
         assert!(!sprites.is_empty());
@@ -2489,7 +2380,6 @@ mod tests {
                 .iter()
                 .all(|range| range.start <= range.end && range.end <= instances.sprites.len())
         );
-        assert!(area_tiles.is_some_and(|range| range.start <= range.end && range.end <= instances.area_tiles.len()));
         assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
     }
 
@@ -2519,7 +2409,6 @@ mod tests {
                 .filter(|sprite| sprite.owner == area_owner)
                 .all(|sprite| sprite.area_owner == component)
         );
-        assert_eq!(instances.area_tiles[0].area_owner, component);
     }
 
     #[test]
@@ -2536,9 +2425,6 @@ mod tests {
         assert_eq!(sprites[0].texture, Default::default());
         assert_eq!(sprites[0].color, [1.0; 4]);
         assert_eq!(instances.sprite(sprites[0].owner), Some(&sprites[0]));
-        assert_eq!(instances.area_tiles.len(), 1);
-        assert_eq!(instances.area_tiles[0].texture, Default::default());
-        assert_eq!(instances.area_tiles[0].color, [1.0; 4]);
     }
 
     #[test]

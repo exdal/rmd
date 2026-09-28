@@ -293,7 +293,6 @@ fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewInteraction) 
     match tool {
         Tool::Place | Tool::Node | Tool::BlockSelect | Tool::Fill => {
             interaction.cursor = None;
-            interaction.hovered_area = None;
             interaction.selected = None;
         },
         Tool::Delete | Tool::Replace => {
@@ -1357,7 +1356,6 @@ impl UiState {
                     let alternate = settings.keybindings.get(KeybindAction::ToolAlternate).is_held(ui);
 
                     if let Some(coord) = pointed_coord {
-                        interaction.hovered_area = session.area_at(id, coord);
                         match session.tool() {
                             Tool::Place => {
                                 if left_clicked {
@@ -1763,9 +1761,6 @@ impl UiState {
                     );
                 }
                 configure_tool_interaction(session.tool(), interaction);
-                if session.focused_area().is_some() {
-                    interaction.hovered_area = None;
-                }
 
                 draw_fill_limit_warning(
                     ui,
@@ -2827,7 +2822,6 @@ mod tests {
         let owner = PrefabInstanceId::from_raw(7).unwrap();
         let interaction = MapViewInteraction {
             cursor: Some([10, 20]),
-            hovered_area: Some(owner),
             selected: Some(owner),
             placement_flash: Some(PlacementFlash { owner, strength: 0.5 }),
             highlight: HighlightStyle::Tint,

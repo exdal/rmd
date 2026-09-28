@@ -14,7 +14,8 @@ public static const u32 SPRITE_FLAG_EMISSIVE_BLOCKER = 1 << 6;
 public static const u32 SPRITE_FLAG_OVERLAY_LIGHT = 1 << 7;
 public static const u32 SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT = 1 << 8;
 public static const u32 SPRITE_FLAG_FULLBRIGHT = 1 << 9;
-public static const u32 SPRITE_FLAGS_SHIFT = 22;
+public static const u32 SPRITE_FLAG_CLICK_THROUGH = 1 << 10;
+public static const u32 SPRITE_FLAGS_SHIFT = 21;
 public static const u32 SPRITE_TEXTURE_MASK = (1 << SPRITE_FLAGS_SHIFT) - 1;
 
 public struct Sprite {

@@ -11,6 +11,7 @@ pub const LAYER: &str = "layer";
 pub const LEN: &str = "len";
 pub const LOC: &str = "loc";
 pub const LOG: &str = "log";
+pub const MOUSE_OPACITY: &str = "mouse_opacity";
 pub const NAME: &str = "name";
 pub const OPACITY: &str = "opacity";
 pub const OVERLAYS: &str = "overlays";

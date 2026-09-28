@@ -161,13 +161,12 @@ impl Session {
     pub(super) fn publish_frame_update(&mut self, id: DocumentId, update: PrefabUpdate) {
         match update {
             PrefabUpdate::Unchanged => {},
-            PrefabUpdate::Buffers { sprites, area_tiles } => {
+            PrefabUpdate::Buffers { sprites } => {
                 let revision = self.bump_revision();
                 let cache = self.caches.entry(id).or_default();
                 cache.frame_update = Some(FrameUpdate {
                     previous_revision: std::mem::replace(&mut cache.revision, revision),
                     sprites,
-                    area_tiles,
                 });
             },
             PrefabUpdate::Rebuild => self.rebuild_instances(id),

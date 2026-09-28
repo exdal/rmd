@@ -193,7 +193,7 @@ func fs_visibility(VSOutput input) -> u32 {
 
     let flags = sprites[input.sprite_id - 1].flags();
     if ((flags & (SPRITE_AREA_EDGE_MASK | SPRITE_FLAG_EMISSIVE_MASK | SPRITE_FLAG_EMISSIVE_BLOCKER |
-                  SPRITE_FLAG_OVERLAY_LIGHT | SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT)) != 0) {
+                  SPRITE_FLAG_OVERLAY_LIGHT | SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT | SPRITE_FLAG_CLICK_THROUGH)) != 0) {
         discard;
     }
 

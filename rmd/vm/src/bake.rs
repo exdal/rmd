@@ -1824,6 +1824,7 @@ const HOST_READS: &[&str] = &[
     vars::COLOR,
     vars::ALPHA,
     vars::INVISIBILITY,
+    vars::MOUSE_OPACITY,
     vars::APPEARANCE_FLAGS,
     vars::TRANSFORM,
 ];

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 use render::{SpriteInstance, SpriteTexture, UpdateRange};
 
-use super::{FrameInstances, PrefabUpdate, RenderedPrefab, SpriteKey, TypeVisibility, merge_update_range};
+use super::{FrameInstances, PrefabUpdate, RenderedPrefab, SpriteKey, TypeVisibility};
 use crate::document::PrefabInstanceId;
 
 const PAGE_CAPACITY: usize = 256;
@@ -27,6 +27,7 @@ fn spare_sprite(z: u32) -> SpriteInstance {
         z,
         is_area: false,
         hidden: false,
+        click_through: false,
         area_edges: 0,
         lighting: render::SpriteLighting::Normal,
         color: [0.0; 4],
@@ -245,19 +246,7 @@ impl FrameInstances {
             primary.hidden = !primary.hidden;
         }
 
-        let mut area_tiles = None;
-        for (index, tile) in self.area_tiles.iter_mut().enumerate().filter(|(_, tile)| flips(tile)) {
-            tile.hidden = !tile.hidden;
-            merge_update_range(
-                &mut area_tiles,
-                Some(UpdateRange {
-                    start: index,
-                    end: index + 1,
-                }),
-            );
-        }
-
-        PrefabUpdate::Buffers { sprites, area_tiles }
+        PrefabUpdate::Buffers { sprites }
     }
 }
 
@@ -472,10 +461,9 @@ pub(super) mod tests {
         let mut visibility = TypeVisibility::default();
 
         visibility.set_subtree(&tree, table, false);
-        let PrefabUpdate::Buffers { sprites, area_tiles } = instances.apply_visibility(&visibility) else {
+        let PrefabUpdate::Buffers { sprites } = instances.apply_visibility(&visibility) else {
             panic!("hiding a placed type must flag its sprites");
         };
-        assert_eq!(area_tiles, None);
         for range in &sprites {
             assert!(
                 instances.sprites[range.start..range.end]

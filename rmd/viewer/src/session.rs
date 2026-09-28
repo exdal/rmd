@@ -162,7 +162,6 @@ impl Session {
             },
             camera,
             sprite_instances: &self.sprite_instances,
-            area_tiles: &[],
             focused_area: None,
             active_z: self.z(),
             level_count: self.document.as_ref().map_or(1, |document| document.map.size.z.max(1)),

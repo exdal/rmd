@@ -125,7 +125,6 @@ impl Session {
             rect,
             camera,
             sprite_instances: &cache.instances.sprites,
-            area_tiles: &cache.instances.area_tiles,
             focused_area: document.focus().map(AreaFocus::component),
             active_z: document.z,
             level_count: document.map.size.z.max(1),

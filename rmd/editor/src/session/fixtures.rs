@@ -461,5 +461,4 @@ pub(super) fn assert_render_cache_matches_rebuild(session: &Session) {
     );
 
     assert_same_sprites(&session.instances().unwrap().sprites, &expected.sprites);
-    assert_same_sprites(&session.instances().unwrap().area_tiles, &expected.area_tiles);
 }

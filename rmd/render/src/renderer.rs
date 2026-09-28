@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Range, time::Instant};
+use std::{ops::Range, time::Instant};
 
 use ash::vk;
 use dear_imgui_rs::render::{PendingFrame, ReconciledFrame};
@@ -109,7 +109,8 @@ const SPRITE_FLAG_EMISSIVE_BLOCKER: u32 = 1 << 6;
 const SPRITE_FLAG_OVERLAY_LIGHT: u32 = 1 << 7;
 const SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT: u32 = 1 << 8;
 const SPRITE_FLAG_FULLBRIGHT: u32 = 1 << 9;
-const SPRITE_FLAGS_SHIFT: u32 = 22;
+const SPRITE_FLAG_CLICK_THROUGH: u32 = 1 << 10;
+const SPRITE_FLAGS_SHIFT: u32 = 21;
 const SPRITE_TEXTURE_MASK: u32 = (1 << SPRITE_FLAGS_SHIFT) - 1;
 const SPRITE_TEXTURE_CAPACITY: u32 = SPRITE_TEXTURE_MASK + 1;
 const TEXTURE_RESERVE: usize = 8192;
@@ -223,8 +224,6 @@ struct InteractionSlots {
     push: ValueId,
     connected_owners: ValueId,
     pick_push: ValueId,
-    area_tiles: ValueId,
-    hover_draw: ValueId,
     highlight_draw: ValueId,
 }
 
@@ -552,14 +551,6 @@ struct MapViewPlan {
     visible: VisibleRange,
 }
 
-impl MapViewPlan {
-    fn bind_scene(&self, cmd: &mut vir::Recorder<'_>) {
-        cmd.set_viewport(0, Rect2D::framebuffer())
-            .set_scissor(0, Rect2D::framebuffer())
-            .push_constants(&self.camera);
-    }
-}
-
 fn bind_sprite_cull(program: &mut Program, slots: &CullSlots, plan: &MapViewPlan) {
     let sprite_count = plan.visible.count;
     program.set_bytes(
@@ -583,10 +574,6 @@ struct UploadedMapView {
     revision: u64,
     base: u32,
     count: usize,
-    area_base: u32,
-    area_count: usize,
-    area_owners: Vec<dmm::PrefabInstanceId>,
-    area_tile_indices: HashMap<dmm::PrefabInstanceId, u32>,
     ranges: Vec<LevelRange>,
 }
 
@@ -723,8 +710,6 @@ pub struct Renderer {
     blur_sampler: vk::Sampler,
     sprites: Option<Buffer>,
     sprite_capacity: usize,
-    area_tiles: Option<Buffer>,
-    area_tile_capacity: usize,
     lights: Option<Buffer>,
     light_capacity: usize,
     cull: Vec<CullBuffers>,
@@ -945,8 +930,6 @@ impl Renderer {
             blur_sampler: vk::Sampler::null(),
             sprites: None,
             sprite_capacity: 0,
-            area_tiles: None,
-            area_tile_capacity: 0,
             lights: None,
             light_capacity: 0,
             cull: Vec::new(),
@@ -968,7 +951,10 @@ impl Renderer {
             .device
             .allocator
             .allocate_sampler(&SamplerInfo::nearest().with_address_mode(vk::SamplerAddressMode::CLAMP_TO_EDGE))?;
-        renderer.blur_sampler = renderer.device.allocator.allocate_sampler(&SamplerInfo::linear().with_address_mode(vk::SamplerAddressMode::CLAMP_TO_EDGE))?;
+        renderer.blur_sampler = renderer
+            .device
+            .allocator
+            .allocate_sampler(&SamplerInfo::linear().with_address_mode(vk::SamplerAddressMode::CLAMP_TO_EDGE))?;
         let pick_readback = renderer.device.allocator.allocate_buffer(
             &BufferInfo::new(4, vk::BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuToCpu)
                 .with_name("pick readback"),
@@ -1626,10 +1612,7 @@ impl Renderer {
                     extent,
                 );
                 highlighted_scene_attachment = module.clear(highlighted_scene_attachment, vir::clear::f32::BLACK);
-                let area_tiles =
-                    module.declare_buffer_var(&format!("map view {index} hover area tiles"), Access::ComputeWrite);
                 let highlight_draw = module.declare_callback_var(&format!("map view {index} highlight draw"));
-                let hover_draw = module.declare_callback_var(&format!("map view {index} hover area draw"));
                 let connected_owners =
                     module.declare_buffer_var(&format!("map view {index} connected owners"), Access::HostWrite);
 
@@ -1651,31 +1634,6 @@ impl Renderer {
                     .specialize_constant(spec::DELETE_MODE, view.delete_mode)
                     .push_constants_from(push)
                     .record_from(highlight_draw)
-                    .end_rendering();
-
-                [highlighted_scene_attachment, _] = module
-                    .begin_rendering([
-                        (highlighted_scene_attachment, Access::ColorRW),
-                        (visible_indices, Access::VertexRead),
-                    ])
-                    .with_name(format!("map view {index} hover area outline"))
-                    .bind_graphics_pipeline(self.sprite_pipeline)
-                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-                    .set_viewport(0, Rect2D::framebuffer())
-                    .set_scissor(0, Rect2D::framebuffer())
-                    .broadcast_color_blend(BlendPreset::PremultipliedAlphaBlend)
-                    .set_rasterization(RasterizationState {
-                        cull_mode: vk::CullModeFlags::NONE,
-                        ..Default::default()
-                    })
-                    .bind_buffer(0, 1, area_tiles)
-                    .bind_buffer(0, 2, visible_indices)
-                    .specialize_constant(spec::SPRITE_INDIRECT, false)
-                    .specialize_constant(spec::SHOW_AREAS, state.show_areas)
-                    .specialize_constant(spec::SHOW_AREA_OUTLINES, true)
-                    .specialize_constant(spec::SPRITE_EDGE_ONLY, false)
-                    .push_constants_from(camera)
-                    .record_from(hover_draw)
                     .end_rendering();
 
                 let guide_lines =
@@ -1735,8 +1693,6 @@ impl Renderer {
                         push,
                         connected_owners,
                         pick_push,
-                        area_tiles,
-                        hover_draw,
                         highlight_draw,
                     }),
                     Some(GuideSlots {
@@ -2030,8 +1986,6 @@ impl Renderer {
                 .filter(|cursor| cursor[0] < view.rect.width && cursor[1] < view.rect.height)
         });
         let pick = picking.and_then(|index| frame.map_views[index].interaction.mode.pick());
-        let area_tiles = self.area_tiles.as_ref().unwrap_or(sprites);
-
         if let Some(slot) = recorded.pick_result {
             let pick_readback = self
                 .pick_readback
@@ -2041,7 +1995,7 @@ impl Renderer {
         }
 
         for (index, map_view) in recorded.map_views.iter().enumerate() {
-            let (((view, uploaded), uploaded_lighting), plan) = (visible[index], plans[index].clone());
+            let (((view, _), uploaded_lighting), plan) = (visible[index], plans[index].clone());
             let map_extent = vk::Extent2D {
                 width: view.rect.width.max(1),
                 height: view.rect.height.max(1),
@@ -2136,7 +2090,6 @@ impl Renderer {
                 should_pick,
                 pick.is_some() && picking_map == Some(index) && local_cursor.is_some(),
             );
-            recorded.program.set(slots.area_tiles, area_tiles);
 
             if let Some(slots) = &map_view.guides {
                 let count = guides.line_count;
@@ -2168,24 +2121,6 @@ impl Renderer {
                         .set_scissor(0, Rect2D::framebuffer())
                         .push_constants(&push)
                         .draw(4, 1);
-                }),
-            );
-
-            let hover = view
-                .interaction
-                .hovered_area
-                .and_then(|owner| uploaded.area_tile_indices.get(&owner).copied())
-                .map(|base| (plan, uploaded.area_base + base));
-            recorded.program.set(
-                slots.hover_draw,
-                PassCallback::new(move |cmd| {
-                    let Some((plan, base)) = hover.as_ref() else {
-                        return;
-                    };
-
-                    plan.bind_scene(cmd);
-                    cmd.push_constants_at(std::mem::offset_of!(CameraPush, base) as u32, base);
-                    cmd.draw(4, 1);
                 }),
             );
 
@@ -2267,36 +2202,20 @@ impl Renderer {
         let total: usize = frame.map_views.iter().map(|view| view.sprite_instances.len()).sum();
         u32::try_from(total).map_err(|_| GpuError::SpriteUploadTooLarge)?;
         let mut payload = Vec::with_capacity(total);
-        let area_total: usize = frame.map_views.iter().map(|view| view.area_tiles.len()).sum();
-        u32::try_from(area_total).map_err(|_| GpuError::SpriteUploadTooLarge)?;
-        let mut area_payload = Vec::with_capacity(area_total);
 
         let mut uploaded = Vec::with_capacity(frame.map_views.len());
         for view in frame.map_views {
             let base = u32::try_from(payload.len()).map_err(|_| GpuError::SpriteUploadTooLarge)?;
-            let area_base = u32::try_from(area_payload.len()).map_err(|_| GpuError::SpriteUploadTooLarge)?;
 
             for sprite in view.sprite_instances {
                 let index = payload.len();
                 payload.push(gpu_sprite(index, sprite)?);
             }
 
-            let mut area_tile_indices = HashMap::with_capacity(view.area_tiles.len());
-            for area in view.area_tiles {
-                let index = area_payload.len();
-                let local = u32::try_from(index).map_err(|_| GpuError::SpriteUploadTooLarge)? - area_base;
-                area_tile_indices.insert(area.owner, local);
-                area_payload.push(gpu_sprite(index, area)?);
-            }
-
             uploaded.push(UploadedMapView {
                 revision: view.revision,
                 base,
                 count: view.sprite_instances.len(),
-                area_base,
-                area_count: view.area_tiles.len(),
-                area_owners: view.area_tiles.iter().map(|area| area.owner).collect(),
-                area_tile_indices,
                 ranges: level_ranges(view.sprite_instances),
             });
         }
@@ -2332,45 +2251,8 @@ impl Renderer {
             buffer.write(0, &payload)?;
         }
 
-        if area_total > 0 && (self.area_tiles.is_none() || self.area_tile_capacity < area_total) {
-            let capacity = area_total
-                .max(1024)
-                .checked_next_power_of_two()
-                .ok_or(GpuError::SpriteUploadTooLarge)?;
-            let size = capacity
-                .checked_mul(size_of::<GpuSprite>())
-                .ok_or(GpuError::SpriteUploadTooLarge)?;
-            let size = u64::try_from(size).map_err(|_| GpuError::SpriteUploadTooLarge)?;
-            let mut buffer = self.device.allocator.allocate_buffer(
-                &BufferInfo::new(size, vk::BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::CpuToGpu)
-                    .with_name("area tile outlines"),
-            )?;
-            if let Err(error) = buffer.write(0, &area_payload) {
-                self.device.allocator.deallocate_buffer(buffer);
-
-                return Err(error.into());
-            }
-
-            if let Some(old) = self.area_tiles.replace(buffer) {
-                self.device.allocator.deallocate_buffer(old);
-            }
-
-            self.area_tile_capacity = capacity;
-        } else if let Some(buffer) = self.area_tiles.as_mut() {
-            buffer.write(0, &area_payload)?;
-        }
-
         let sprites = *self.sprites.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
         self.color_area_outlines(sprites, crate::UpdateRange { start: 0, end: total })?;
-        if let Some(area_tiles) = self.area_tiles {
-            self.color_area_outlines(
-                area_tiles,
-                crate::UpdateRange {
-                    start: 0,
-                    end: area_total,
-                },
-            )?;
-        }
 
         self.uploaded = uploaded;
 
@@ -2656,39 +2538,26 @@ impl Renderer {
             return Ok(false);
         };
         if uploaded.base != 0
-            || uploaded.area_base != 0
             || uploaded.revision != update.previous_revision
             || view.sprite_instances.len() > self.sprite_capacity
-            || view.area_tiles.len() > self.area_tile_capacity
             || !update
                 .sprites
                 .iter()
                 .all(|range| valid_update_range(Some(*range), view.sprite_instances.len()))
-            || !valid_update_range(update.area_tiles, view.area_tiles.len())
             || (uploaded.count != view.sprite_instances.len() && update.sprites.is_empty())
-            || (uploaded.area_count != view.area_tiles.len() && update.area_tiles.is_none())
         {
             return Ok(false);
         }
         let Some(sprites) = self.sprites else {
             return Ok(false);
         };
-        if !view.area_tiles.is_empty() && self.area_tiles.is_none() {
-            return Ok(false);
-        }
 
         let sprite_payloads = update
             .sprites
             .iter()
             .map(|range| gpu_sprite_range(view.sprite_instances, *range))
             .collect::<Result<Vec<_>, _>>()?;
-        let area_payload = update
-            .area_tiles
-            .map(|range| gpu_sprite_range(view.area_tiles, range))
-            .transpose()?;
-        if sprite_payloads.iter().any(|payload| !payload.is_empty())
-            || area_payload.as_ref().is_some_and(|payload| !payload.is_empty())
-        {
+        if sprite_payloads.iter().any(|payload| !payload.is_empty()) {
             self.graph.wait()?;
         }
         if let Some(buffer) = self.sprites.as_mut() {
@@ -2698,26 +2567,8 @@ impl Renderer {
                 }
             }
         }
-        if let (Some(range), Some(payload), Some(buffer)) =
-            (update.area_tiles, area_payload.as_ref(), self.area_tiles.as_mut())
-            && !payload.is_empty()
-        {
-            buffer.write(gpu_sprite_offset(range.start)?, payload)?;
-        }
         for range in &update.sprites {
             self.color_area_outlines(sprites, *range)?;
-        }
-        if let (Some(buffer), Some(range)) = (self.area_tiles, update.area_tiles) {
-            self.color_area_outlines(buffer, range)?;
-            let Some(uploaded) = self.uploaded.first_mut() else {
-                return Ok(false);
-            };
-            patch_area_tile_indices(
-                &mut uploaded.area_tile_indices,
-                &mut uploaded.area_owners,
-                view.area_tiles,
-                range,
-            )?;
         }
 
         let Some(uploaded) = self.uploaded.first_mut() else {
@@ -2728,7 +2579,6 @@ impl Renderer {
         }
         uploaded.revision = view.revision;
         uploaded.count = view.sprite_instances.len();
-        uploaded.area_count = view.area_tiles.len();
 
         Ok(true)
     }
@@ -2909,37 +2759,6 @@ fn valid_update_range(range: Option<crate::UpdateRange>, len: usize) -> bool {
     range.is_none_or(|range| range.start <= range.end && range.end <= len)
 }
 
-fn patch_area_tile_indices(
-    indices: &mut HashMap<dmm::PrefabInstanceId, u32>, uploaded_owners: &mut Vec<dmm::PrefabInstanceId>,
-    area_tiles: &[SpriteInstance], range: crate::UpdateRange,
-) -> Result<(), GpuError> {
-    let old_len = uploaded_owners.len();
-    for owner in uploaded_owners.iter().take(range.end.min(old_len)).skip(range.start) {
-        indices.remove(owner);
-    }
-    for owner in uploaded_owners.iter().take(old_len).skip(area_tiles.len()) {
-        indices.remove(owner);
-    }
-
-    uploaded_owners.truncate(area_tiles.len());
-    if uploaded_owners.len() < area_tiles.len() {
-        uploaded_owners.extend(area_tiles[uploaded_owners.len()..].iter().map(|area| area.owner));
-    }
-    for (index, (uploaded_owner, area)) in uploaded_owners
-        .iter_mut()
-        .zip(area_tiles)
-        .enumerate()
-        .take(range.end)
-        .skip(range.start)
-    {
-        *uploaded_owner = area.owner;
-        let index = u32::try_from(index).map_err(|_| GpuError::SpriteUploadTooLarge)?;
-        indices.insert(area.owner, index);
-    }
-
-    Ok(())
-}
-
 fn gpu_sprite_offset(start: usize) -> Result<u64, GpuError> {
     start
         .checked_mul(size_of::<GpuSprite>())
@@ -2998,6 +2817,9 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
     };
     if sprite.is_area && sprite.area_edges == 0 {
         flags |= SPRITE_FLAG_FULLBRIGHT;
+    }
+    if sprite.click_through {
+        flags |= SPRITE_FLAG_CLICK_THROUGH;
     }
     flags |= match sprite.lighting {
         crate::SpriteLighting::Normal => 0,
@@ -3170,9 +2992,6 @@ impl Drop for Renderer {
             preview.destroy(&mut self.device);
         }
         if let Some(buffer) = self.sprites.take() {
-            self.device.allocator.deallocate_buffer(buffer);
-        }
-        if let Some(buffer) = self.area_tiles.take() {
             self.device.allocator.deallocate_buffer(buffer);
         }
         if let Some(buffer) = self.lights.take() {
@@ -3466,7 +3285,6 @@ fn batch_ranges(sizes: &[usize], budget: usize) -> Option<Vec<Range<usize>>> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use ash::vk;
     use dmm::PrefabInstanceId;
@@ -3501,6 +3319,7 @@ mod tests {
         SPRITE_CULL_COMPACT_CS_SPV,
         SPRITE_CULL_SCAN_CS_SPV,
         SPRITE_FLAG_AREA,
+        SPRITE_FLAG_CLICK_THROUGH,
         SPRITE_FLAG_EMISSIVE_BLOCKER,
         SPRITE_FLAG_EMISSIVE_MASK,
         SPRITE_FLAG_FULLBRIGHT,
@@ -3526,7 +3345,6 @@ mod tests {
         meshopt_dequantize_unorm,
         meshopt_quantize_half,
         pack_unorm4x8,
-        patch_area_tile_indices,
         project_guide_line,
         spec,
         split_owner,
@@ -3566,6 +3384,7 @@ mod tests {
             z,
             is_area: false,
             hidden: false,
+            click_through: false,
             area_edges: 0,
             lighting: SpriteLighting::Normal,
             color: [1.0; 4],
@@ -3574,18 +3393,11 @@ mod tests {
         }
     }
 
-    fn owners(count: usize) -> Vec<PrefabInstanceId> {
-        (1..=count)
-            .map(|raw| PrefabInstanceId::from_raw(raw as u64).expect("nonzero prefab instance ID"))
-            .collect()
-    }
-
     fn map_view(rect: MapViewRect) -> MapViewFrame<'static> {
         MapViewFrame {
             rect,
             camera: Camera::default(),
             sprite_instances: &[],
-            area_tiles: &[],
             focused_area: None,
             active_z: 1,
             level_count: 1,
@@ -3793,44 +3605,6 @@ mod tests {
     }
 
     #[test]
-    fn area_owner_indices_follow_swapped_removals_and_appends() {
-        let owners = owners(4);
-        let mut tiles = owners[..3]
-            .iter()
-            .map(|owner| {
-                let mut sprite = sprite(1);
-                sprite.owner = *owner;
-                sprite
-            })
-            .collect::<Vec<_>>();
-        let mut uploaded = owners[..3].to_vec();
-        let mut indices = uploaded
-            .iter()
-            .enumerate()
-            .map(|(index, owner)| (*owner, index as u32))
-            .collect::<HashMap<_, _>>();
-
-        tiles.swap_remove(1);
-        patch_area_tile_indices(&mut indices, &mut uploaded, &tiles, UpdateRange { start: 1, end: 2 }).unwrap();
-        assert_eq!(uploaded, vec![owners[0], owners[2]]);
-        assert_eq!(indices.get(&owners[0]), Some(&0));
-        assert_eq!(indices.get(&owners[1]), None);
-        assert_eq!(indices.get(&owners[2]), Some(&1));
-
-        let mut appended = sprite(1);
-        appended.owner = owners[3];
-        tiles.push(appended);
-        patch_area_tile_indices(&mut indices, &mut uploaded, &tiles, UpdateRange { start: 2, end: 3 }).unwrap();
-        assert_eq!(uploaded, vec![owners[0], owners[2], owners[3]]);
-        assert_eq!(indices.get(&owners[3]), Some(&2));
-
-        tiles.pop();
-        patch_area_tile_indices(&mut indices, &mut uploaded, &tiles, UpdateRange { start: 2, end: 2 }).unwrap();
-        assert_eq!(uploaded, vec![owners[0], owners[2]]);
-        assert_eq!(indices.get(&owners[3]), None);
-    }
-
-    #[test]
     fn area_edges_and_tile_geometry_reach_the_gpu() {
         let mut area = sprite(37);
         area.area_owner = PrefabInstanceId::from_raw(0x1234_5678_9abc_def0);
@@ -3875,6 +3649,18 @@ mod tests {
             gpu.texture_flags >> SPRITE_FLAGS_SHIFT,
             SPRITE_FLAG_AREA | SPRITE_FLAG_FULLBRIGHT
         );
+    }
+
+    #[test]
+    fn click_through_sprites_keep_the_largest_texture_index() {
+        let mut openspace = sprite(1);
+        openspace.click_through = true;
+        openspace.texture.index = SPRITE_TEXTURE_MASK;
+
+        let gpu = gpu_sprite(0, &openspace).expect("pack");
+
+        assert_eq!(gpu.texture_flags & SPRITE_TEXTURE_MASK, SPRITE_TEXTURE_MASK);
+        assert_eq!(gpu.texture_flags >> SPRITE_FLAGS_SHIFT, SPRITE_FLAG_CLICK_THROUGH);
     }
 
     #[test]
