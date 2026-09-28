@@ -1566,6 +1566,42 @@ fn range_and_orange_spiral_out_with_areas_once() {
 }
 
 #[test]
+fn block_lists_turfs_inside_the_map() {
+    let (tree, module) = compile(fixture!("programs/block_lists_turfs_inside_the_map.dm"));
+    let ty = |path: &str| tree.id_of(&TreePath::parse(path)).expect("fixture type");
+    let mut atoms = Vec::new();
+    for y in 1..=3 {
+        for x in 1..=3 {
+            for path in ["/area/zone", "/turf/floor"] {
+                atoms.push(Atom {
+                    instance: atoms.len() as u64 + 1,
+                    ty: ty(path),
+                    position: Position::new(x, y, 1),
+                    vars: Vec::new(),
+                });
+            }
+        }
+    }
+    let bake = Bake::new(
+        &tree,
+        &module,
+        atoms,
+        [3, 3, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    let corner = bake.appearances[&2]
+        .vars
+        .iter()
+        .find(|(name, _)| name.as_str() == "name")
+        .and_then(|(_, value)| value.as_text())
+        .expect("the corner turf names what it found");
+    assert_eq!(corner, "1,1 2,1 1,2 2,2 | 2,1 3,1 2,2 3,2 2,3 3,3 | 3,2 | ");
+}
+
+#[test]
 fn baking_exports_icon_objects_and_ignores_timed_effects() {
     let (tree, module) = compile(fixture!(
         "programs/baking_exports_icon_objects_and_ignores_timed_effects.dm"

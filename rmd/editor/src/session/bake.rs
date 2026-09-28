@@ -380,6 +380,61 @@ mod tests {
 
     #[test]
     #[ignore = "requires the local target/tgstation checkout"]
+    fn lava_lights_only_where_it_borders_another_turf() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(editor::environment::BundledProfile::Tgstation),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+            .expect("tgstation codebase");
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+
+        let lava = "/turf/open/lava/plasma";
+        let area = "/area/station/engineering/main";
+        let tile = |turf: &str| vec![Prefab::new(TreePath::parse(turf)), Prefab::new(TreePath::parse(area))];
+        let mut map = Map::new(Size { x: 3, y: 1, z: 1 });
+        let lava_tile = map.intern_tile(tile(lava));
+        let floor_tile = map.intern_tile(tile("/turf/open/floor/iron"));
+        map.grid[0][0] = vec![lava_tile, lava_tile, floor_tile];
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+
+        let floor = Coord::new(3, 1, 1);
+        let floor_light = |session: &Session| {
+            let bake = session.active_cache().bake.as_ref().expect("lava bake");
+            assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
+            bake.lighting
+                .as_ref()
+                .and_then(|lighting| lighting.tile(vm::world::Position::new(3, 1, 1)))
+                .map_or(0.0, |tile| tile.corners.iter().flatten().sum::<f32>())
+        };
+        assert!(floor_light(&session) > 0.0, "the lava beside the floor cast no light");
+
+        let bake = session.active_cache().bake.as_ref().unwrap();
+        let lightings = bake
+            .appearances
+            .values()
+            .flat_map(|appearance| &appearance.overlays)
+            .map(|overlay| overlay.lighting)
+            .collect::<Vec<_>>();
+        assert!(
+            lightings.contains(&vm::AppearanceLighting::OverlayLight),
+            "{lightings:?}"
+        );
+        assert!(lightings.contains(&vm::AppearanceLighting::Emissive), "{lightings:?}");
+
+        session.state.choose_prefab(Prefab::new(TreePath::parse(lava)));
+        session.set_tool(Tool::Place);
+        assert!(session.place_at(floor, None).is_some());
+        settle_bake(&mut session);
+        assert_eq!(floor_light(&session), 0.0, "lava surrounded by lava kept its light");
+    }
+
+    #[test]
+    #[ignore = "requires the local target/tgstation checkout"]
     fn a_thermomachine_rotates_its_baked_pipe_with_dir() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
         let options = editor::environment::BakeOptions {

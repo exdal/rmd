@@ -665,6 +665,39 @@ impl Bake {
         }
     }
 
+    fn relight(&mut self, tree: &ObjectTree, module: &Module, ids: &[u64]) {
+        if self.profile.procedure(ProfileHook::Light).is_none() || ids.is_empty() {
+            return;
+        }
+
+        let schema = LIGHT_SCHEMA.map(Identifier::from);
+        let objects = ids
+            .iter()
+            .filter_map(|id| self.objects.get(id).copied())
+            .collect::<HashSet<_>>();
+        for object in &objects {
+            self.lit.remove(*object);
+            if let Ok(object) = self.runtime.heap.object_mut(*object) {
+                for name in &schema {
+                    object.vars.remove(name);
+                }
+            }
+        }
+
+        for id in ids {
+            self.light(tree, module, *id);
+        }
+
+        if self.lighting.is_some() {
+            for id in ids {
+                let light = self.harvest_light(tree, *id);
+                if let Some(lighting) = self.lighting.as_mut() {
+                    lighting.set(*id, light);
+                }
+            }
+        }
+    }
+
     fn connect(&mut self, tree: &ObjectTree, module: &Module, id: u64) {
         self.connection_endpoints.remove(&id);
         if let Some(previous) = self.connection_faults.remove(&id) {
@@ -1121,25 +1154,23 @@ impl Bake {
             self.link_cell(tree, *position);
         }
         if self.initialized {
-            for id in inserted {
-                self.prepare(tree, module, id);
-                self.connect(tree, module, id);
-                self.highlight(tree, module, id);
-                self.light(tree, module, id);
-                self.fingerprint(id);
+            for id in &inserted {
+                self.prepare(tree, module, *id);
+                self.connect(tree, module, *id);
+                self.highlight(tree, module, *id);
+                self.light(tree, module, *id);
+                self.fingerprint(*id);
 
                 if self.lighting.is_some() {
-                    let light = self.harvest_light(tree, id);
+                    let light = self.harvest_light(tree, *id);
                     if let Some(lighting) = self.lighting.as_mut() {
-                        lighting.set(id, light);
+                        lighting.set(*id, light);
                     }
                 }
             }
         }
 
         self.rebuild_connection_index();
-
-        let lighting = self.lighting.as_mut().and_then(LightingMap::solve_dirty);
 
         let mut affected = HashSet::new();
         for position in dirty {
@@ -1161,6 +1192,19 @@ impl Bake {
 
         let mut affected = affected.into_iter().collect::<Vec<_>>();
         affected.sort_unstable();
+        if self.initialized {
+            // a light hook can read its neighbors, like lava that only shines beside another turf
+            let inserted = inserted.into_iter().collect::<HashSet<_>>();
+            let neighbors = affected
+                .iter()
+                .copied()
+                .filter(|id| !inserted.contains(id))
+                .collect::<Vec<_>>();
+            self.relight(tree, module, &neighbors);
+        }
+
+        let lighting = self.lighting.as_mut().and_then(LightingMap::solve_dirty);
+
         if self.initialized {
             for id in &affected {
                 self.bake_atom(tree, module, *id);
@@ -1260,34 +1304,7 @@ impl Bake {
         };
 
         let ids = selected(request.light);
-        if self.profile.procedure(ProfileHook::Light).is_some() && !ids.is_empty() {
-            let schema = LIGHT_SCHEMA.map(Identifier::from);
-            let objects = ids
-                .iter()
-                .filter_map(|id| self.objects.get(id).copied())
-                .collect::<HashSet<_>>();
-            for object in &objects {
-                self.lit.remove(*object);
-                if let Ok(object) = self.runtime.heap.object_mut(*object) {
-                    for name in &schema {
-                        object.vars.remove(name);
-                    }
-                }
-            }
-
-            for id in &ids {
-                self.light(tree, module, *id);
-            }
-
-            if self.lighting.is_some() {
-                for id in &ids {
-                    let light = self.harvest_light(tree, *id);
-                    if let Some(lighting) = self.lighting.as_mut() {
-                        lighting.set(*id, light);
-                    }
-                }
-            }
-        }
+        self.relight(tree, module, &ids);
         let lighting = self.lighting.as_mut().and_then(LightingMap::solve_dirty);
 
         for id in selected(request.highlight) {

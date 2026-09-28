@@ -114,6 +114,7 @@ impl Evaluator<'_> {
             | Intrinsic::MovableBump => Ok(GenericValue::Null),
 
             Intrinsic::DmNewIcon => Ok(arg(0)),
+            Intrinsic::Block => self.block(&positional()),
             Intrinsic::Range | Intrinsic::Orange => self.range_list([arg(0), arg(1)], intrinsic == Intrinsic::Range),
             Intrinsic::IconStates => {
                 let mut icon = arg(0);
@@ -1126,7 +1127,6 @@ impl Evaluator<'_> {
 
             Intrinsic::Alert
             | Intrinsic::Astype
-            | Intrinsic::Block
             | Intrinsic::BoundPixloc
             | Intrinsic::BoundsDist
             | Intrinsic::Bounds
@@ -1362,6 +1362,58 @@ impl Evaluator<'_> {
         }
 
         self.range_finish(entries)
+    }
+
+    /// `block(Start, End)` or `block(x1, y1, z1, x2 = x1, y2 = y1, z2 = z1)`
+    fn block(&mut self, args: &[GenericValue]) -> Result<GenericValue> {
+        self.memo_safe = false;
+        let (start, end) = match args {
+            [GenericValue::Object(start), GenericValue::Object(end), ..] => {
+                let world = &self.runtime.world;
+                match (
+                    world.position(&self.runtime.heap, *start),
+                    world.position(&self.runtime.heap, *end),
+                ) {
+                    (Some(start), Some(end)) => ([start.x, start.y, start.z], [end.x, end.y, end.z]),
+                    _ => return self.list(Vec::new()),
+                }
+            },
+            _ => {
+                let mut start = [0; 3];
+                for (axis, value) in start.iter_mut().enumerate() {
+                    *value = self.number(args.get(axis).unwrap_or(&GenericValue::Null))? as i32;
+                }
+                let mut end = start;
+                for (axis, value) in end.iter_mut().enumerate() {
+                    match args.get(axis + 3) {
+                        None | Some(GenericValue::Null) => {},
+                        Some(coordinate) => *value = self.number(coordinate)? as i32,
+                    }
+                }
+                (start, end)
+            },
+        };
+
+        let size = self.runtime.world.size;
+        let low = std::array::from_fn::<i32, 3, _>(|axis| start[axis].min(end[axis]).max(1));
+        let high = std::array::from_fn::<i32, 3, _>(|axis| start[axis].max(end[axis]).min(size[axis]));
+        let count = (0..3)
+            .map(|axis| usize::try_from(i64::from(high[axis]) - i64::from(low[axis]) + 1).unwrap_or(0))
+            .product::<usize>();
+        self.charge(count)?;
+
+        let mut entries = Vec::with_capacity(count);
+        for z in low[2]..=high[2] {
+            for y in low[1]..=high[1] {
+                for x in low[0]..=high[0] {
+                    if let Some(turf) = self.runtime.world.turf_at(Position::new(x, y, z)) {
+                        entries.push((GenericValue::Object(turf), None));
+                    }
+                }
+            }
+        }
+
+        self.list(entries)
     }
 
     fn range_finish(&mut self, entries: Vec<GenericValue>) -> Result<GenericValue> {

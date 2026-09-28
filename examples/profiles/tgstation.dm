@@ -474,6 +474,8 @@
 			target.Initialize(TRUE)
 
 		target.smooth_icon()
+	if(islava(target) && !(src.smooth && (target.smoothing_flags & USES_SMOOTHING)))
+		target.update_appearance()
 	if(ismovable(target))
 		var/atom/movable/movable_target = target
 		movable_target.demir_add_overlay_light()
@@ -500,6 +502,11 @@
 /obj/machinery/light/demir_apply_light()
 	setDir(dir)
 	power_change()
+	return ..()
+
+// Inline in the lava's Initialize(). Only lava bordering another turf casts light.
+/turf/open/lava/demir_apply_light()
+	refresh_light()
 	return ..()
 
 // Space is a fullbright area, so its tiles never hold a lighting object and only the ones
