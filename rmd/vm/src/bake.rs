@@ -59,7 +59,7 @@ const HIGHLIGHT_MAX_PER_ATOM: usize = 16;
 const HIGHLIGHT_MAX_LABEL: usize = 64;
 const HIGHLIGHT_DEFAULT_COLOR: [f32; 3] = [1.0, 0.5, 0.0];
 
-const LIGHT_SCHEMA: [&str; 18] = [
+const LIGHT_SCHEMA: [&str; 19] = [
     "demir_light_range",
     "demir_light_inner_range",
     "demir_light_power",
@@ -75,6 +75,7 @@ const LIGHT_SCHEMA: [&str; 18] = [
     "demir_light_quadratic",
     "demir_light_constant",
     "demir_blocks_light",
+    "demir_z_transparent",
     "demir_ambient_color",
     "demir_ambient_power",
     "demir_fullbright",
@@ -807,6 +808,7 @@ impl Bake {
             position,
             source,
             blocks,
+            transparent: object_truthy(object, tree, "demir_z_transparent", false),
             ambient,
             fullbright: object_truthy(object, tree, "demir_fullbright", false),
         };

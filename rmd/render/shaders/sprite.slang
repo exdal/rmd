@@ -222,5 +222,7 @@ func fs_overlay_light(VSOutput input) -> f32x4 {
     }
 
     let color = sample_sprite(input);
-    return f32x4(color.rgb * (subtract ? -1.0 : 1.0), color.a);
+    let straight = color.a > 0.0 ? color.rgb / color.a : f32x3(0.0);
+    let gamma = linear_to_srgb(straight) * color.a;
+    return f32x4(gamma * (subtract ? -1.0 : 1.0), color.a);
 }

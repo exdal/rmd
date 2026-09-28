@@ -435,6 +435,48 @@ mod tests {
 
     #[test]
     #[ignore = "requires the local target/tgstation checkout"]
+    fn lava_lights_the_level_above_through_openspace() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(editor::environment::BundledProfile::Tgstation),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+            .expect("tgstation codebase");
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+
+        // Every lava tile has only lava around it on its own level, so it can only light up because
+        // of the level above.
+        let area = "/area/station/engineering/main";
+        let tile = |turf: &str| vec![Prefab::new(TreePath::parse(turf)), Prefab::new(TreePath::parse(area))];
+        let mut map = Map::new(Size { x: 3, y: 3, z: 2 });
+        let lava = map.intern_tile(tile("/turf/open/lava/plasma"));
+        let floor = map.intern_tile(tile("/turf/open/floor/iron"));
+        let openspace = map.intern_tile(tile("/turf/open/openspace"));
+        map.grid[0] = vec![vec![lava; 3]; 3];
+        map.grid[1] = vec![vec![floor; 3]; 3];
+        map.grid[1][1][1] = openspace;
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+
+        let bake = session.active_cache().bake.as_ref().expect("lava bake");
+        assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
+        let lighting = bake.lighting.as_ref().expect("lightmap");
+        let hole = lighting
+            .tile(vm::world::Position::new(2, 2, 2))
+            .expect("openspace tile");
+        assert!(
+            hole.corners.iter().all(|corner| corner.iter().sum::<f32>() > 0.0),
+            "{hole:?}"
+        );
+        let corner = lighting.tile(vm::world::Position::new(1, 1, 2)).expect("floor tile");
+        assert_eq!(corner.corners[0], [0.0; 3], "light rose past the openspace tile");
+    }
+
+    #[test]
+    #[ignore = "requires the local target/tgstation checkout"]
     fn a_thermomachine_rotates_its_baked_pipe_with_dir() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
         let options = editor::environment::BakeOptions {

@@ -37,6 +37,8 @@
 	var/demir_light_constant = 0
 	/// Use `opacity` when this value is -1.
 	var/demir_blocks_light = -1
+	/// Let light pass between levels through this cell.
+	var/demir_z_transparent = 0
 	var/demir_ambient_color = null
 	/// Set ambient power from 0 to 1.
 	var/demir_ambient_power = 0

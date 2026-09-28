@@ -95,7 +95,8 @@ A full bake runs seven stages:
 3. **Prepare** calls `prepare` for each runtime object and keeps successful changes.
 4. **Connections** collects profile-defined endpoints and matches their channels.
 5. **Highlights** collects the regions declared for each placement.
-6. **Light** calls `light`, reads the neutral lighting fields, and solves each z level.
+6. **Light** calls `light`, reads the neutral lighting fields, and solves the lightmap. Consecutive z
+   levels form one stack, and light crosses levels through `demir_z_transparent` cells.
 7. **Smooth** calls `bake` and exports the resulting appearance changes.
 
 The bake runtime keeps the profile state created by `New()`. It also keeps successful changes from
@@ -159,7 +160,8 @@ list of tile offsets. It can also set `color`, `fill`, `outline`, `when`, and `l
 field combines the selected, hovered, and always flags.
 
 `light` writes the `demir_light_*` fields declared on `/atom`. The schema supports point and cone
-sources, blockers, ambient light, fullbright cells, and appearance-based light roles. See
+sources, blockers, cells that pass light between levels, ambient light, fullbright cells, and
+appearance-based light roles. See
 [`prelude/demir.dm`](../prelude/demir.dm) for the complete field list.
 
 `ui` can call the `imgui_*` procedures declared in the prelude. The editor retains widget values

@@ -544,6 +544,8 @@
 		if(istype(target, /turf/closed/wall/vampwall))
 			var/turf/closed/wall/vampwall/wall = target
 			wall.demir_bake_frill()
+	if(islava(target) && !(src.smooth && (target.smoothing_flags & USES_SMOOTHING)))
+		target.update_appearance()
 	if(ismovable(target))
 		var/atom/movable/movable_target = target
 		movable_target.demir_add_overlay_light()
@@ -571,6 +573,27 @@
 	setDir(dir)
 	power_change()
 	return ..()
+
+// Inline in the lava's Initialize(). Only lava bordering another turf casts light.
+/turf/open/lava/demir_apply_light()
+	refresh_light()
+	// The preview has no plane offsets, so refresh_light() never checks the levels above and below.
+	if(!light_on)
+		for(var/turf/around as anything in block(x - 1, y - 1, z - 1, x + 1, y + 1, z + 1))
+			if(!islava(around))
+				set_light(l_on = TRUE)
+				break
+	return ..()
+
+// Initialize() adds TURF_Z_TRANSPARENT_TRAIT, which lets light cross levels.
+/turf/open/openspace
+	demir_z_transparent = 1
+
+/turf/open/floor/glass
+	demir_z_transparent = 1
+
+/turf/open/space/openspace
+	demir_z_transparent = 1
 
 // Space is a fullbright area, so its tiles never hold a lighting object and only the ones
 // touching a statically lit turf call enable_starlight().

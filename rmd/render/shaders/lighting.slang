@@ -83,6 +83,9 @@ func fs_main(
         displayed_light = lerp(combined_light, f32x3(1.0), (minimum_brightness - luminance) / (1.0 - luminance));
     }
     let emission = emissive_mask.Sample(input.uv).r;
+    let factor = lerp(displayed_light, f32x3(1.0), emission);
+    let straight = color.a > 0.0 ? color.rgb / color.a : f32x3(0.0);
+    let lit = srgb_to_linear(linear_to_srgb(straight) * factor) * color.a;
 
-    return f32x4(color.rgb * lerp(displayed_light, f32x3(1.0), emission), color.a);
+    return f32x4(lit, color.a);
 }

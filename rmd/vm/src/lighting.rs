@@ -10,8 +10,6 @@ const EPSILON: f32 = 1.0e-6;
 const BUCKET: usize = 16;
 const MAX_REGIONS: usize = 16;
 
-/// The four static-light samples for one map tile, ordered southwest, southeast,
-/// northwest, northeast.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LightTile {
     pub corners: [[f32; 3]; 4],
@@ -21,9 +19,6 @@ impl Default for LightTile {
     fn default() -> Self { Self { corners: [[0.0; 3]; 4] } }
 }
 
-/// A dense, z-major static lightmap. Tile coordinates are one-based at the API
-/// boundary and use the same x/y/z convention as [`Position`].
-///
 /// An edit re-solves only the corners its atoms can reach. Sources are summed in id order, which
 /// keeps that bit for bit equal to solving the whole level again.
 #[derive(Debug, Clone)]
@@ -34,6 +29,7 @@ pub struct LightingMap {
     cells: Vec<Cell>,
     points: Vec<[f32; 3]>,
     buckets: Vec<Vec<u64>>,
+    transparent: Vec<u32>,
     reach: Vec<i32>,
     ambient: HashMap<usize, Vec<u64>>,
     dirty: Vec<Vec<Rect>>,
@@ -67,6 +63,7 @@ impl LightingMap {
             cells: vec![Cell::default(); tiles],
             points: vec![[0.0; 3]; points],
             buckets: vec![Vec::new(); buckets],
+            transparent: vec![0; buckets],
             reach: vec![0; levels],
             ambient: HashMap::new(),
             dirty: vec![Vec::new(); levels],
@@ -123,6 +120,8 @@ impl LightingMap {
     }
 
     fn width(&self) -> usize { self.size[0] as usize }
+
+    fn levels(&self) -> usize { self.reach.len() }
 
     fn height(&self) -> usize { self.size[1] as usize }
 
@@ -204,6 +203,41 @@ impl LightingMap {
         ids
     }
 
+    fn any_transparent(&self, level: usize, cells: Rect) -> bool {
+        let (Some(area), Some(first)) = (cells.intersect(self.cell_bounds()), self.bucket(level, 1, 1)) else {
+            return false;
+        };
+
+        let columns = self.width().div_ceil(BUCKET);
+        (bucket_of(area.y0)..=bucket_of(area.y1)).any(|row| {
+            let start = first + row * columns;
+            self.transparent
+                .get(start + bucket_of(area.x0)..=start + bucket_of(area.x1))
+                .unwrap_or_default()
+                .iter()
+                .any(|count| *count > 0)
+        })
+    }
+
+    fn reaches(&self, from: usize, to: usize, cells: Rect, bound: i32) -> bool {
+        if from == to {
+            return true;
+        }
+
+        usize::try_from(bound).is_ok_and(|bound| from.abs_diff(to) <= bound)
+            && (from.min(to) + 1..=from.max(to)).all(|level| self.any_transparent(level, cells))
+    }
+
+    fn column_open(&self, x: i32, y: i32, from: usize, to: usize) -> bool {
+        let (low, high) = (from.min(to), from.max(to));
+        let open = if to < from { low..high } else { low + 1..high + 1 };
+
+        (low + 1..=high).all(|level| self.cell(level, x, y).is_some_and(|cell| cell.transparent > 0))
+            && open
+                .into_iter()
+                .all(|level| self.cell(level, x, y).is_some_and(|cell| !cell.blocked()))
+    }
+
     fn replace(&mut self, id: u64, atom: Option<LightingAtom>, track: bool) {
         let atom = atom.filter(|atom| atom.affects_lighting());
         if self.atoms.get(&id) == atom.as_ref() {
@@ -229,6 +263,11 @@ impl LightingMap {
         };
         let Position { x, y, .. } = atom.position;
 
+        // Both sides of a transparency change are counted when the source marks its reach.
+        if attach {
+            self.apply_transparent(level, cell, atom, attach, track);
+        }
+
         if let Some(source) = atom.source {
             let (source_x, source_y, bound) = source.footprint();
             if let Some(bucket) = self
@@ -249,8 +288,12 @@ impl LightingMap {
             }
 
             if track {
-                self.mark(level, Rect::reach(source_x, source_y, bound).corners());
+                self.mark_source(level, source);
             }
+        }
+
+        if !attach {
+            self.apply_transparent(level, cell, atom, attach, track);
         }
 
         if atom.blocks
@@ -305,6 +348,31 @@ impl LightingMap {
         }
     }
 
+    fn apply_transparent(&mut self, level: usize, cell: usize, atom: LightingAtom, attach: bool, track: bool) {
+        let Some(state) = atom.transparent.then(|| self.cells.get_mut(cell)).flatten() else {
+            return;
+        };
+
+        let before = state.transparent > 0;
+        state.transparent = step(state.transparent, attach);
+        let after = state.transparent > 0;
+        if before == after {
+            return;
+        }
+
+        let Position { x, y, .. } = atom.position;
+        if let Some(count) = self
+            .bucket(level, x, y)
+            .and_then(|bucket| self.transparent.get_mut(bucket))
+        {
+            *count = step(*count, after);
+        }
+
+        if track {
+            self.mark_column(x, y);
+        }
+    }
+
     fn mark(&mut self, level: usize, corners: Rect) {
         let Some(corners) = corners.intersect(self.corner_bounds()) else {
             return;
@@ -315,16 +383,55 @@ impl LightingMap {
         }
     }
 
-    /// A blocker at `(x, y)` shades whatever lies behind it for every source that reaches it.
-    fn mark_shadows(&mut self, level: usize, x: i32, y: i32) {
-        for id in self.sources_near(level, Rect::cell(x, y)) {
-            let Some(source) = self.atoms.get(&id).and_then(|atom| atom.source) else {
-                continue;
-            };
+    fn mark_source(&mut self, level: usize, source: LightSource) {
+        let (x, y, bound) = source.footprint();
+        let reach = Rect::reach(x, y, bound);
+        for target in 0..self.levels() {
+            if self.reaches(level, target, reach, bound) {
+                self.mark(target, reach.corners());
+            }
+        }
+    }
 
+    fn sources_over(&self, x: i32, y: i32) -> Vec<(usize, LightSource)> {
+        let mut sources = Vec::new();
+        for level in 0..self.levels() {
+            for id in self.sources_near(level, Rect::cell(x, y)) {
+                let Some(source) = self.atoms.get(&id).and_then(|atom| atom.source) else {
+                    continue;
+                };
+
+                let (source_x, source_y, bound) = source.footprint();
+                if Rect::reach(source_x, source_y, bound).contains(x, y) {
+                    sources.push((level, source));
+                }
+            }
+        }
+
+        sources
+    }
+
+    /// A blocker at `(x, y)` shades whatever lies behind it for every source that reaches it, and
+    /// cuts the column light crosses levels through.
+    fn mark_shadows(&mut self, level: usize, x: i32, y: i32) {
+        for (source_level, source) in self.sources_over(x, y) {
             let (source_x, source_y, bound) = source.footprint();
-            if Rect::reach(source_x, source_y, bound).contains(x, y) {
-                self.mark(level, Rect::reach(source_x, source_y, bound).corners());
+            if self.reaches(source_level, level, Rect::reach(source_x, source_y, bound), bound) {
+                self.mark_source(source_level, source);
+            }
+        }
+    }
+
+    /// Transparency at `(x, y)` decides which levels the sources over it land on, so this can't
+    /// go by the buckets that just changed.
+    fn mark_column(&mut self, x: i32, y: i32) {
+        for (source_level, source) in self.sources_over(x, y) {
+            let (source_x, source_y, bound) = source.footprint();
+            let corners = Rect::reach(source_x, source_y, bound).corners();
+            for target in 0..self.levels() {
+                if usize::try_from(bound).is_ok_and(|bound| source_level.abs_diff(target) <= bound) {
+                    self.mark(target, corners);
+                }
             }
         }
     }
@@ -336,9 +443,9 @@ impl LightingMap {
                 continue;
             };
 
-            let (source_x, source_y, bound) = source.footprint();
+            let (source_x, source_y, _) = source.footprint();
             if source.edge_only && source_x.abs_diff(x) + source_y.abs_diff(y) == 1 {
-                self.mark(level, Rect::reach(source_x, source_y, bound).corners());
+                self.mark_source(level, source);
             }
         }
     }
@@ -358,7 +465,20 @@ impl LightingMap {
         let mut regular = vec![[0.0f32; 3]; count];
         let mut peaks = vec![[0.0f32; 3]; count];
         let mut stamps = vec![0usize; count];
-        for (stamp, id) in self.sources_near(level, targets).into_iter().enumerate() {
+        let mut candidates = Vec::new();
+        for source_level in 0..self.levels() {
+            let reach = self.reach.get(source_level).copied().unwrap_or(0);
+            if self.reaches(source_level, level, targets.expand(reach), reach) {
+                candidates.extend(
+                    self.sources_near(source_level, targets)
+                        .into_iter()
+                        .map(|id| (id, source_level)),
+                );
+            }
+        }
+        candidates.sort_unstable();
+
+        for (stamp, (id, source_level)) in candidates.into_iter().enumerate() {
             let stamp = stamp + 1;
             let Some(source) = self.atoms.get(&id).and_then(|atom| atom.source) else {
                 continue;
@@ -369,14 +489,18 @@ impl LightingMap {
                 continue;
             };
 
-            if source.edge_only && !self.touches_dark_cell(level, source_x, source_y) {
+            if !self.reaches(source_level, level, area, bound)
+                || source.edge_only && !self.touches_dark_cell(source_level, source_x, source_y)
+            {
                 continue;
             }
 
+            let dz = level as f32 - source_level as f32;
             for target_y in area.y0..=area.y1 {
                 for target_x in area.x0..=area.x1 {
-                    if self.cell(level, target_x, target_y).is_none_or(Cell::blocked)
-                        || !self.line_of_sight(level, source_x, source_y, target_x, target_y)
+                    if self.cell(source_level, target_x, target_y).is_none_or(Cell::blocked)
+                        || (source_level != level && !self.column_open(target_x, target_y, source_level, level))
+                        || !self.line_of_sight(source_level, source_x, source_y, target_x, target_y)
                     {
                         continue;
                     }
@@ -402,8 +526,11 @@ impl LightingMap {
                         }
 
                         *seen = stamp;
-                        let strength =
-                            source.strength(corner_x as f32 - source.origin[0], corner_y as f32 - source.origin[1]);
+                        let strength = source.strength(
+                            corner_x as f32 - source.origin[0],
+                            corner_y as f32 - source.origin[1],
+                            dz,
+                        );
                         if strength == 0.0 || !strength.is_finite() {
                             continue;
                         }
@@ -585,7 +712,6 @@ impl Rect {
         }
     }
 
-    /// The corners of these cells.
     fn corners(self) -> Self {
         Self {
             x0: self.x0.saturating_sub(1),
@@ -594,7 +720,6 @@ impl Rect {
         }
     }
 
-    /// The cells touching these corners.
     fn cells(self) -> Self {
         Self {
             x1: self.x1.saturating_add(1),
@@ -631,13 +756,18 @@ pub(crate) struct LightingAtom {
     pub position: Position,
     pub source: Option<LightSource>,
     pub blocks: bool,
+    pub transparent: bool,
     pub ambient: [f32; 3],
     pub fullbright: bool,
 }
 
 impl LightingAtom {
     pub(crate) fn affects_lighting(self) -> bool {
-        self.source.is_some() || self.blocks || self.fullbright || self.ambient.iter().any(|value| *value != 0.0)
+        self.source.is_some()
+            || self.blocks
+            || self.transparent
+            || self.fullbright
+            || self.ambient.iter().any(|value| *value != 0.0)
     }
 }
 
@@ -662,9 +792,8 @@ pub(crate) struct LightSource {
 }
 
 impl LightSource {
-    fn strength(self, dx: f32, dy: f32) -> f32 {
-        let planar_squared = dx * dx + dy * dy;
-        let distance_squared = (planar_squared + self.height).max(0.0);
+    fn strength(self, dx: f32, dy: f32, dz: f32) -> f32 {
+        let distance_squared = (dx * dx + dy * dy + dz * dz + self.height).max(0.0);
         if !self.in_cone(dx, dy) {
             return 0.0;
         }
@@ -685,7 +814,6 @@ impl LightSource {
         (1.0 - normalized).powf(self.curve.max(EPSILON)) * self.power * cone
     }
 
-    /// The source atom's one-based cell, and how many cells past it the light can land.
     fn footprint(self) -> (i32, i32, i32) {
         let center = [self.cell[0] as f32 - 0.5, self.cell[1] as f32 - 0.5];
         let offset = (self.origin[0] - center[0])
@@ -713,6 +841,7 @@ impl LightSource {
 #[derive(Debug, Clone, Copy, Default)]
 struct Cell {
     blockers: u32,
+    transparent: u32,
     fullbright: u32,
     ambient: [f32; 3],
 }
@@ -824,6 +953,7 @@ mod tests {
             position,
             source: None,
             blocks: true,
+            transparent: false,
             ambient: [0.0; 3],
             fullbright: false,
         }
@@ -849,6 +979,7 @@ mod tests {
                 constant: 0.0,
             }),
             blocks: false,
+            transparent: false,
             ambient: [0.0; 3],
             fullbright: false,
         }
@@ -896,8 +1027,8 @@ mod tests {
         light.constant = -0.11;
 
         let expected = 1.6 * ((1.6 * 2.2) / (2.5f32.powi(2) + 0.5f32.powi(2) + 2.4f32.powi(2)) - 0.11);
-        assert!((light.strength(2.5, 0.5) - expected).abs() < 1e-6);
-        assert_eq!(light.strength(10.0, 10.0), 0.0);
+        assert!((light.strength(2.5, 0.5, 0.0) - expected).abs() < 1e-6);
+        assert_eq!(light.strength(10.0, 10.0, 0.0), 0.0);
         assert_eq!(light.footprint(), (3, 3, 3));
     }
 
@@ -926,6 +1057,7 @@ mod tests {
                 position: Position::new(2, 2, 1),
                 source: None,
                 blocks: true,
+                transparent: false,
                 ambient: [0.0; 3],
                 fullbright: false,
             },
@@ -936,6 +1068,51 @@ mod tests {
         assert!(shadow.corners[CORNER_SW][0] > 0.0);
         assert_eq!(shadow.corners[CORNER_SE], [0.0; 3]);
         assert_eq!(shadow.corners[CORNER_NE], [0.0; 3]);
+    }
+
+    fn transparent(position: Position) -> LightingAtom {
+        LightingAtom {
+            blocks: false,
+            transparent: true,
+            ..blocker(position)
+        }
+    }
+
+    #[test]
+    fn light_falls_through_a_transparent_cell_to_the_level_below() {
+        let lamp = source(Position::new(2, 2, 2));
+        let closed = solved([3, 3, 2], &[lamp]);
+        assert_eq!(closed.tile(Position::new(2, 2, 1)).unwrap().corners, [[0.0; 3]; 4]);
+
+        let open = solved([3, 3, 2], &[lamp, transparent(Position::new(2, 2, 2))]);
+        let below = open.tile(Position::new(2, 2, 1)).unwrap();
+        let level = open.tile(Position::new(2, 2, 2)).unwrap();
+        assert!(below.corners.iter().all(|corner| corner[0] > 0.0));
+        assert!(below.corners[CORNER_NE][0] < level.corners[CORNER_NE][0]);
+        assert_eq!(open.tile(Position::new(3, 3, 1)).unwrap().corners[CORNER_NE], [0.0; 3]);
+    }
+
+    #[test]
+    fn light_rises_into_transparent_cells_above() {
+        let lamp = source(Position::new(2, 2, 1));
+        let open = solved([3, 3, 2], &[lamp, transparent(Position::new(2, 2, 2))]);
+        let hole = open.tile(Position::new(2, 2, 2)).unwrap();
+        assert!(hole.corners.iter().all(|corner| corner[0] > 0.0));
+        assert_eq!(
+            open.tile(Position::new(3, 3, 2)).unwrap().corners[CORNER_SW],
+            hole.corners[CORNER_NE]
+        );
+        assert_eq!(open.tile(Position::new(3, 3, 2)).unwrap().corners[CORNER_NE], [0.0; 3]);
+
+        let covered = solved(
+            [3, 3, 2],
+            &[
+                lamp,
+                transparent(Position::new(2, 2, 2)),
+                blocker(Position::new(2, 2, 2)),
+            ],
+        );
+        assert_eq!(covered.tile(Position::new(2, 2, 2)).unwrap().corners, [[0.0; 3]; 4]);
     }
 
     #[test]
@@ -961,6 +1138,7 @@ mod tests {
                 position: Position::new(1, 1, 1),
                 source: None,
                 blocks: false,
+                transparent: false,
                 ambient: [0.1, 0.2, 0.3],
                 fullbright: false,
             },
@@ -968,6 +1146,7 @@ mod tests {
                 position: Position::new(2, 1, 1),
                 source: None,
                 blocks: false,
+                transparent: false,
                 ambient: [0.0; 3],
                 fullbright: true,
             },
@@ -1090,6 +1269,20 @@ mod tests {
             }),
         );
         assert_edit_matches_full_solve(&mut map, &mut atoms, lamp, None);
+
+        let hole = next + 3;
+        assert_edit_matches_full_solve(&mut map, &mut atoms, hole, Some(transparent(Position::new(10, 10, 2))));
+        assert_edit_matches_full_solve(&mut map, &mut atoms, lamp, Some(source(Position::new(9, 10, 1))));
+        assert_edit_matches_full_solve(&mut map, &mut atoms, lamp, Some(source(Position::new(12, 11, 1))));
+        let glass = next + 4;
+        assert_edit_matches_full_solve(&mut map, &mut atoms, glass, Some(transparent(Position::new(11, 11, 2))));
+        assert_edit_matches_full_solve(&mut map, &mut atoms, hole, None);
+        let upstairs = next + 5;
+        assert_edit_matches_full_solve(&mut map, &mut atoms, upstairs, Some(source(Position::new(13, 11, 2))));
+        assert_edit_matches_full_solve(&mut map, &mut atoms, wall, Some(blocker(Position::new(11, 11, 1))));
+        assert_edit_matches_full_solve(&mut map, &mut atoms, wall, Some(blocker(Position::new(11, 11, 2))));
+        assert_edit_matches_full_solve(&mut map, &mut atoms, glass, None);
+        assert_edit_matches_full_solve(&mut map, &mut atoms, upstairs, None);
     }
 
     #[test]
