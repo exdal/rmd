@@ -39,12 +39,15 @@ type SpriteKey = (u32, i32, i32, usize, usize);
 #[derive(Debug, Clone, Copy)]
 struct CachedPlacement {
     coord: Coord,
+    type_id: TypeId,
     is_area: bool,
+    hidden: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct CurrentPlacement {
     coord: Coord,
+    type_id: TypeId,
     is_area: bool,
 }
 
@@ -140,7 +143,10 @@ impl FrameInstances {
     }
 
     pub fn sprite(&self, owner: PrefabInstanceId) -> Option<&SpriteInstance> {
-        self.primary_sprites.get(&owner).or_else(|| self.keyed_primary(owner))
+        self.primary_sprites
+            .get(&owner)
+            .or_else(|| self.keyed_primary(owner))
+            .filter(|sprite| !sprite.hidden)
     }
 
     pub fn area_component_at(&self, coord: Coord) -> Option<PrefabInstanceId> {
@@ -321,6 +327,7 @@ pub fn instance_for(
         height: texture.height as f32,
         z: tile.z,
         is_area,
+        hidden: false,
         area_edges: 0,
         lighting: match appearance.lighting {
             vm::AppearanceLighting::Normal => render::SpriteLighting::Normal,
@@ -404,7 +411,9 @@ pub fn build_with_options(
                         owner,
                         CachedPlacement {
                             coord,
+                            type_id: id,
                             is_area: rendered.is_area,
+                            hidden: !options.visibility.is_visible(id),
                         },
                     );
                     if rendered.is_area {
@@ -549,7 +558,9 @@ pub fn update_prefabs_with_options(
                     *owner,
                     CachedPlacement {
                         coord: current.coord,
+                        type_id: current.type_id,
                         is_area: current.is_area,
+                        hidden: !options.visibility.is_visible(current.type_id),
                     },
                 );
                 if current.is_area {
@@ -636,6 +647,7 @@ fn current_placement(tree: &ObjectTree, document: &MapDocument, owner: PrefabIns
 
     Some(CurrentPlacement {
         coord: location.coord,
+        type_id: id,
         is_area,
     })
 }
@@ -764,15 +776,6 @@ impl RenderContext<'_> {
         let mut own = Vec::with_capacity(if is_area { 2 } else { 1 });
         let mut area_tile = None;
 
-        if !self.visibility.is_visible(id) {
-            return RenderedPrefab {
-                is_area,
-                sprites: Vec::new(),
-                primary: None,
-                area_tile,
-            };
-        }
-
         if is_area {
             if let Some(texture) = texture {
                 let mut sprite = self.instance(owner, &appearance, texture, coord, true);
@@ -857,7 +860,18 @@ impl RenderContext<'_> {
             }
         }
 
-        let primary = primary.or_else(|| sprites.first().map(|(_, sprite)| *sprite));
+        let mut primary = primary.or_else(|| sprites.first().map(|(_, sprite)| *sprite));
+        if !self.visibility.is_visible(id) {
+            for sprite in sprites
+                .iter_mut()
+                .map(|(_, sprite)| sprite)
+                .chain(&mut primary)
+                .chain(&mut area_tile)
+            {
+                sprite.hidden = true;
+            }
+        }
+
         RenderedPrefab {
             is_area,
             sprites,
@@ -1518,7 +1532,7 @@ mod tests {
     }
 
     #[test]
-    fn hidden_types_emit_neither_sprites_nor_area_tiles() {
+    fn hidden_types_keep_their_sprites_and_area_tiles_flagged() {
         let tree = tree(&[("/obj/table", "table", 2.0), ("/area/station", "floor", 1.0)]);
         let document = document(one_tile_map(&["/obj/table", "/area/station"]));
         let coord = Coord::new(1, 1, 1);
@@ -1549,6 +1563,13 @@ mod tests {
                 .all(|sprite| sprite.owner != object_owner)
         );
         assert!(without_objects.live_sprites().any(|sprite| sprite.owner == area_owner));
+        assert!(without_objects.sprite(object_owner).is_none());
+        assert!(
+            without_objects
+                .sprites
+                .iter()
+                .any(|sprite| sprite.owner == object_owner && sprite.hidden)
+        );
         assert_eq!(without_objects.area_tiles.len(), 1);
 
         visibility.set_subtree(&tree, object, true);
@@ -1567,7 +1588,7 @@ mod tests {
         );
         assert!(without_areas.live_sprites().any(|sprite| sprite.owner == object_owner));
         assert!(without_areas.live_sprites().all(|sprite| sprite.owner != area_owner));
-        assert!(without_areas.area_tiles.is_empty());
+        assert!(without_areas.area_tiles.iter().all(|tile| tile.hidden));
     }
 
     fn one_tile_map(paths: &[&str]) -> Map {

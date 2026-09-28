@@ -1,4 +1,5 @@
 pub mod arena;
+pub mod bitset;
 pub mod interner;
 pub mod location;
 pub mod path;

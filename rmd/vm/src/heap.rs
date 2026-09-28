@@ -1,4 +1,4 @@
-use core::interner::SymbolMap;
+use core::{bitset::BitIndex, interner::SymbolMap};
 use std::collections::HashMap;
 
 use objtree::TypeId;
@@ -19,6 +19,10 @@ struct Journal {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ObjectId(pub u32);
+
+impl BitIndex for ObjectId {
+    fn bit_index(self) -> usize { self.0 as usize }
+}
 
 #[derive(Debug, Clone)]
 pub struct Object {

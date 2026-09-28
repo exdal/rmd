@@ -1,4 +1,5 @@
 use core::{
+    bitset::BitSet,
     types::{Identifier, ListEntry, ProcId, Value},
     vars,
 };
@@ -200,47 +201,6 @@ struct CacheKey {
     size: [i32; 3],
 }
 
-// one bit per heap object because object ids are dense
-#[derive(Debug, Default)]
-struct ObjectSet(Vec<u64>);
-
-impl ObjectSet {
-    const BITS: usize = u64::BITS as usize;
-
-    fn bit(object: ObjectId) -> (usize, u64) {
-        let index = object.0 as usize;
-
-        (index / Self::BITS, 1 << (index % Self::BITS))
-    }
-
-    fn contains(&self, object: ObjectId) -> bool {
-        let (word, mask) = Self::bit(object);
-
-        self.0.get(word).is_some_and(|bits| bits & mask != 0)
-    }
-
-    /// false when the object was already in the set
-    fn insert(&mut self, object: ObjectId) -> bool {
-        let (word, mask) = Self::bit(object);
-        if self.0.len() <= word {
-            self.0.resize(word + 1, 0);
-        }
-
-        let bits = &mut self.0[word];
-        let added = *bits & mask == 0;
-        *bits |= mask;
-
-        added
-    }
-
-    fn remove(&mut self, object: ObjectId) {
-        let (word, mask) = Self::bit(object);
-        if let Some(bits) = self.0.get_mut(word) {
-            *bits &= !mask;
-        }
-    }
-}
-
 pub type SharedAppearance = Arc<AppearanceDelta>;
 
 fn shared(appearance: AppearanceDelta) -> SharedAppearance {
@@ -315,9 +275,9 @@ pub struct Bake {
     areas: HashMap<(TypeId, u64), ObjectId>,
     area_members: HashMap<ObjectId, HashSet<u64>>,
     initialized: bool,
-    prepared: ObjectSet,
+    prepared: BitSet<ObjectId>,
     prepare_faults: HashMap<ObjectId, Fault>,
-    lit: ObjectSet,
+    lit: BitSet<ObjectId>,
     contributions: HashMap<u64, Vec<u64>>,
     by_target: HashMap<u64, Contributions>,
     dirty_appearances: HashSet<u64>,

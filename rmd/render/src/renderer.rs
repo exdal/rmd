@@ -2781,6 +2781,22 @@ fn gpu_light_offset(start: usize) -> Result<u64, GpuError> {
 }
 
 fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuError> {
+    // the cull pass drops it like a spare page slot, and the cache keeps the real sprite to show it again
+    if sprite.hidden {
+        return gpu_sprite(
+            index,
+            &SpriteInstance {
+                x: -1.0e9,
+                y: -1.0e9,
+                width: 0.0,
+                height: 0.0,
+                color: [0.0; 4],
+                hidden: false,
+                ..*sprite
+            },
+        );
+    }
+
     let mut flags = if sprite.is_area {
         SPRITE_FLAG_AREA | ((sprite.area_edges & AREA_EDGES_ALL) << SPRITE_AREA_EDGE_SHIFT)
     } else {
@@ -3344,6 +3360,7 @@ mod tests {
             height: 0.0,
             z,
             is_area: false,
+            hidden: false,
             area_edges: 0,
             lighting: SpriteLighting::Normal,
             color: [1.0; 4],

@@ -5,6 +5,7 @@ pub mod parser;
 pub mod writer;
 
 use core::{
+    bitset::BitIndex,
     path::TreePath,
     types::{Identifier, Value},
 };
@@ -27,6 +28,10 @@ impl PrefabInstanceId {
     }
 
     pub const fn get(self) -> u64 { self.0.get() }
+}
+
+impl BitIndex for PrefabInstanceId {
+    fn bit_index(self) -> usize { self.get() as usize }
 }
 
 /// DM counts `y` from the bottom

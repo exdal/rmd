@@ -154,21 +154,24 @@ impl Session {
             });
         }
 
+        self.publish_frame_update(id, update);
+        self.revalidate_focus();
+    }
+
+    pub(super) fn publish_frame_update(&mut self, id: DocumentId, update: PrefabUpdate) {
         match update {
             PrefabUpdate::Unchanged => {},
             PrefabUpdate::Buffers { sprites, area_tiles } => {
-                let previous_revision = cache.revision;
-                cache.revision = *next_revision;
-                *next_revision = next_revision.wrapping_add(1).max(1);
+                let revision = self.bump_revision();
+                let cache = self.caches.entry(id).or_default();
                 cache.frame_update = Some(FrameUpdate {
-                    previous_revision,
+                    previous_revision: std::mem::replace(&mut cache.revision, revision),
                     sprites,
                     area_tiles,
                 });
             },
             PrefabUpdate::Rebuild => self.rebuild_instances(id),
         }
-        self.revalidate_focus();
     }
 }
 

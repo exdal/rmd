@@ -2,7 +2,7 @@ use dmm::{Coord, Size};
 use editor::{
     document::{DocumentId, PrefabInstanceId, Selection},
     focus::AreaFocus,
-    frame::{self, FrameInstances, FrameRenderOptions},
+    frame::{self, FrameInstances, FrameRenderOptions, PrefabUpdate},
 };
 use objtree::{Roots, TypeId};
 use render::{Frame, GuideLine, MapViewFrame, MapViewInteraction, MapViewRect, SpritePreview};
@@ -69,7 +69,7 @@ impl Session {
     pub fn show_all_types(&mut self) -> bool {
         let changed = self.type_visibility.show_all();
         if changed {
-            self.rebuild_all_instances();
+            self.apply_type_visibility();
         }
 
         changed
@@ -87,11 +87,23 @@ impl Session {
 
             self.type_visibility.set_subtree(&environment.tree, id, visible)
         };
+
         if changed {
-            self.rebuild_all_instances();
+            self.apply_type_visibility();
         }
 
         changed
+    }
+
+    fn apply_type_visibility(&mut self) {
+        for id in self.state.document_ids() {
+            let update = self.caches.get_mut(&id).map_or(PrefabUpdate::Unchanged, |cache| {
+                cache.instances.apply_visibility(&self.type_visibility)
+            });
+            self.publish_frame_update(id, update);
+        }
+
+        self.revalidate_focus();
     }
 
     pub fn set_underlay_depth(&mut self, depth: u32) {
@@ -200,12 +212,6 @@ impl Session {
         })
     }
 
-    fn rebuild_all_instances(&mut self) {
-        for id in self.state.document_ids() {
-            self.rebuild_instances(id);
-        }
-    }
-
     pub(super) fn rebuild_instances(&mut self, id: DocumentId) {
         if let Some(cache) = self.caches.get_mut(&id) {
             drop(std::mem::take(&mut cache.instances));
@@ -238,7 +244,7 @@ impl Session {
         self.revalidate_focus();
     }
 
-    fn bump_revision(&mut self) -> u64 {
+    pub(super) fn bump_revision(&mut self) -> u64 {
         let revision = self.next_revision;
         self.next_revision = self.next_revision.wrapping_add(1).max(1);
 
@@ -451,10 +457,20 @@ mod tests {
             .expect("the example map is baked")
             .cache_hits = usize::MAX;
 
+        let revision = session.active_cache().revision;
         assert!(session.toggle_type_visibility(table));
         assert_eq!(
             session.active_cache().bake.as_ref().map(|bake| bake.cache_hits),
             Some(usize::MAX)
+        );
+        assert_eq!(
+            session
+                .active_cache()
+                .frame_update
+                .as_ref()
+                .map(|update| update.previous_revision),
+            Some(revision),
+            "the renderer patches the pages it touched instead of uploading a rebuilt cache"
         );
     }
 

@@ -1,8 +1,9 @@
+use core::bitset::BitSet;
 use std::collections::BTreeMap;
 
 use render::{SpriteInstance, SpriteTexture, UpdateRange};
 
-use super::{FrameInstances, RenderedPrefab, SpriteKey};
+use super::{FrameInstances, PrefabUpdate, RenderedPrefab, SpriteKey, TypeVisibility, merge_update_range};
 use crate::document::PrefabInstanceId;
 
 const PAGE_CAPACITY: usize = 256;
@@ -25,6 +26,7 @@ fn spare_sprite(z: u32) -> SpriteInstance {
         height: 0.0,
         z,
         is_area: false,
+        hidden: false,
         area_edges: 0,
         lighting: render::SpriteLighting::Normal,
         color: [0.0; 4],
@@ -79,7 +81,9 @@ pub(super) struct SpritePage {
 
 impl FrameInstances {
     pub fn live_sprites(&self) -> impl Iterator<Item = &SpriteInstance> {
-        self.sprites.iter().filter(|sprite| sprite.owner != SPARE_OWNER)
+        self.sprites
+            .iter()
+            .filter(|sprite| sprite.owner != SPARE_OWNER && !sprite.hidden)
     }
 
     pub(super) fn lay_out(&mut self, keyed: Vec<(SpriteKey, SpriteInstance)>, levels: u32) {
@@ -198,6 +202,65 @@ impl FrameInstances {
     }
 }
 
+impl FrameInstances {
+    /// flags the sprites of every placement whose type changed visibility, without rendering anything again
+    pub fn apply_visibility(&mut self, visibility: &TypeVisibility) -> PrefabUpdate {
+        let mut flipped = BitSet::default();
+        for (owner, placement) in &mut self.placements {
+            let hidden = !visibility.is_visible(placement.type_id);
+            if placement.hidden != hidden {
+                placement.hidden = hidden;
+                flipped.insert(*owner);
+            }
+        }
+
+        if flipped.is_empty() {
+            return PrefabUpdate::Unchanged;
+        }
+
+        let flips = |sprite: &SpriteInstance| flipped.contains(sprite.owner);
+
+        let mut sprites = Vec::<UpdateRange>::new();
+        for page in &self.pages {
+            let mut touched = false;
+            for sprite in &mut self.sprites[page.start..page.start + page.len] {
+                if flips(sprite) {
+                    sprite.hidden = !sprite.hidden;
+                    touched = true;
+                }
+            }
+
+            if !touched {
+                continue;
+            }
+
+            let (start, end) = (page.start, page.start + PAGE_CAPACITY);
+            match sprites.last_mut() {
+                Some(range) if range.end == start => range.end = end,
+                _ => sprites.push(UpdateRange { start, end }),
+            }
+        }
+
+        for primary in self.primary_sprites.values_mut().filter(|primary| flips(primary)) {
+            primary.hidden = !primary.hidden;
+        }
+
+        let mut area_tiles = None;
+        for (index, tile) in self.area_tiles.iter_mut().enumerate().filter(|(_, tile)| flips(tile)) {
+            tile.hidden = !tile.hidden;
+            merge_update_range(
+                &mut area_tiles,
+                Some(UpdateRange {
+                    start: index,
+                    end: index + 1,
+                }),
+            );
+        }
+
+        PrefabUpdate::Buffers { sprites, area_tiles }
+    }
+}
+
 pub(super) fn replace_owner_sprites(
     instances: &mut FrameInstances, rendered: &[(PrefabInstanceId, Option<RenderedPrefab>)],
 ) -> Vec<UpdateRange> {
@@ -294,8 +357,11 @@ pub(super) mod tests {
         document::{MapDocument, PrefabInstanceId},
         frame::{
             FrameInstances,
+            FrameRenderOptions,
             PrefabUpdate,
+            TypeVisibility,
             build,
+            build_with_options,
             tests::{assert_render_data_matches, document, icons, textures, tree},
             update_prefab,
             update_prefabs,
@@ -391,6 +457,57 @@ pub(super) mod tests {
         assert_eq!(sprites[0].end - sprites[0].start, PAGE_CAPACITY);
         assert_eq!(instances.sprites.len(), slots);
         assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+    }
+
+    #[test]
+    fn toggling_visibility_flags_the_cached_sprites_and_restores_them_exactly() {
+        let tree = tree(&[("/turf/floor", "floor", 2.0), ("/obj/table", "table", 3.0)]);
+        let icons = icons(&["floor", "table"]);
+        let textures = textures(&["floor", "table"]);
+        let mut document = document(floor_map(24, 24, 2));
+        let tables = [(3, 3), (20, 7)].map(|(x, y)| place(&mut document, Coord::new(x, y, 1), "/obj/table"));
+        let mut instances = build(&tree, &icons, &textures, &document, 32);
+        let original = instances.sprites.clone();
+        let table = tree.id_of(&TreePath::parse("/obj/table")).unwrap();
+        let mut visibility = TypeVisibility::default();
+
+        visibility.set_subtree(&tree, table, false);
+        let PrefabUpdate::Buffers { sprites, area_tiles } = instances.apply_visibility(&visibility) else {
+            panic!("hiding a placed type must flag its sprites");
+        };
+        assert_eq!(area_tiles, None);
+        for range in &sprites {
+            assert!(
+                instances.sprites[range.start..range.end]
+                    .iter()
+                    .any(|sprite| tables.contains(&sprite.owner)),
+                "only pages holding a table are uploaded"
+            );
+        }
+        let rebuilt = build_with_options(
+            &tree,
+            &icons,
+            &textures,
+            &document,
+            FrameRenderOptions {
+                visibility: &visibility,
+                tile_size: 32,
+                appearances: &std::collections::HashMap::new(),
+                lighting: None,
+            },
+        );
+        assert_eq!(instances.sprites, rebuilt.sprites);
+        assert!(tables.iter().all(|table| instances.sprite(*table).is_none()));
+        assert_pages_hold(&instances);
+        assert_eq!(instances.apply_visibility(&visibility), PrefabUpdate::Unchanged);
+
+        visibility.set_subtree(&tree, table, true);
+        assert!(matches!(
+            instances.apply_visibility(&visibility),
+            PrefabUpdate::Buffers { .. }
+        ));
+        assert_eq!(instances.sprites, original);
+        assert!(tables.iter().all(|table| instances.sprite(*table).is_some()));
     }
 
     #[test]

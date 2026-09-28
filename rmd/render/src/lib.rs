@@ -134,6 +134,7 @@ pub struct SpriteInstance {
     pub height: f32,
     pub z: u32,
     pub is_area: bool,
+    pub hidden: bool,
     pub area_edges: u32,
     pub lighting: SpriteLighting,
     /// premultiplied RGBA
