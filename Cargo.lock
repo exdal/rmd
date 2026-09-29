@@ -863,6 +863,7 @@ dependencies = [
  "raw-window-handle",
  "render",
  "rfd",
+ "ring",
  "sema",
  "semver",
  "serde",

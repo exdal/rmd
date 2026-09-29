@@ -67,6 +67,7 @@ pub struct Environment {
     pub bake_options: environment::BakeOptions,
     pub optimization_timings: ir::opt::OptimizationTimings,
     pub icons: HashMap<String, Metadata>,
+    pub icon_files: Vec<PathBuf>,
     pub maps: Vec<PathBuf>,
     pub files: Vec<PathBuf>,
     /// `#define FILE_DIR "icons"`
@@ -84,6 +85,7 @@ impl Environment {
             bake_options: environment::BakeOptions::default(),
             optimization_timings: ir::opt::OptimizationTimings::default(),
             icons: HashMap::new(),
+            icon_files: Vec::new(),
             maps: Vec::new(),
             files: Vec::new(),
             resource_dirs: Vec::new(),
@@ -109,6 +111,7 @@ impl Environment {
             bake_options: options,
             optimization_timings: compiled.optimization_timings,
             icons: HashMap::new(),
+            icon_files: Vec::new(),
             maps: compiled.maps,
             files: compiled.files,
             resource_dirs: compiled.resource_dirs,
@@ -187,6 +190,7 @@ impl Environment {
             match IconFile::load_metadata(&found) {
                 Ok(metadata) => {
                     self.icons.insert(name, metadata);
+                    self.icon_files.push(found);
                 },
                 Err(e) => failures.push((name, e)),
             }
@@ -202,6 +206,52 @@ impl Environment {
 
         failures
     }
+
+    pub fn fingerprint(&self) -> std::io::Result<[u8; 32]> {
+        let base = self.base_dir();
+        let mut files = self
+            .files
+            .iter()
+            .chain(self.bake_files.iter())
+            .chain(&self.icon_files)
+            .filter(|path| !environment::is_map(path))
+            .filter_map(|path| Some((fingerprint_key(base, path)?, path)))
+            .collect::<Vec<_>>();
+
+        files.sort_unstable();
+        files.dedup_by(|a, b| a.0 == b.0);
+
+        let mut context = ring::digest::Context::new(&ring::digest::SHA256);
+        for (key, path) in files {
+            let bytes = std::fs::read(path)?;
+            context.update(key.as_bytes());
+            context.update(&[0]);
+            context.update(&(bytes.len() as u64).to_le_bytes());
+            context.update(&bytes);
+        }
+
+        let mut hash = [0; 32];
+        hash.copy_from_slice(context.finish().as_ref());
+
+        Ok(hash)
+    }
+
+    pub fn git_hint(&self) -> Option<String> {
+        let head = git::discover(&self.root)?.open().ok()?.head_ref()?;
+
+        Some(head.short)
+    }
+}
+
+// the prelude and anything else outside the codebase is left out
+fn fingerprint_key(base: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(base).ok()?;
+    let parts = relative
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().to_ascii_lowercase())
+        .collect::<Vec<_>>();
+
+    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 /// `var/static/list/light_overlays = list("32" = 'icons/effects/light_32.dmi')`
@@ -505,6 +555,52 @@ mod tests {
             environment.icon_paths(),
             BTreeSet::from(["icons/key.dmi", "icons/light_32.dmi"])
         );
+    }
+
+    fn fingerprint_fixture(name: &str) -> (std::path::PathBuf, Environment) {
+        let dir = std::env::temp_dir().join(format!("rmd-fingerprint-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (path, contents) in [
+            ("game.dme", "#include \"code/a.dm\""),
+            ("code/a.dm", "/obj/a"),
+            ("icons/a.dmi", "png"),
+            ("_maps/a.dmm", "map"),
+        ] {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).expect("temp dir");
+            std::fs::write(path, contents).expect("write fixture");
+        }
+
+        let mut environment = Environment::new(dir.join("game.dme"), ObjectTree::new());
+        environment.files = ["game.dme", "code/a.dm", "_maps/a.dmm"]
+            .into_iter()
+            .map(|path| dir.join(path))
+            .chain([std::path::PathBuf::from("<stddef.dm>")])
+            .collect();
+        environment.icon_files = vec![dir.join("icons/a.dmi")];
+
+        (dir, environment)
+    }
+
+    #[test]
+    fn fingerprints_follow_sources_and_icons_but_not_maps() {
+        let (dir, environment) = fingerprint_fixture("follow");
+        let (other_dir, other) = fingerprint_fixture("other");
+        let original = environment.fingerprint().unwrap();
+        assert_eq!(original, other.fingerprint().unwrap());
+
+        std::fs::write(dir.join("_maps/a.dmm"), "edited map").unwrap();
+        assert_eq!(environment.fingerprint().unwrap(), original);
+
+        std::fs::write(dir.join("icons/a.dmi"), "new sprite").unwrap();
+        let icon_changed = environment.fingerprint().unwrap();
+        assert_ne!(icon_changed, original);
+
+        std::fs::write(dir.join("code/a.dm"), "/obj/b").unwrap();
+        assert_ne!(environment.fingerprint().unwrap(), icon_changed);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other_dir);
     }
 
     fn document(path: &str) -> crate::document::MapDocument {
