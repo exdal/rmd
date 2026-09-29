@@ -3,7 +3,7 @@ mod server;
 mod stream;
 mod tls;
 
-pub use protocol::live::{CodebaseId, Comment, CommentId, Cursor, MAX_COMMENT_LEN, PeerId, PeerInfo};
+pub use protocol::live::{CodebaseId, Comment, CommentId, Cursor, MAX_COMMENT_LEN, PeerId, PeerInfo, is_map_path};
 
 pub use crate::{
     client::{Client, Event},

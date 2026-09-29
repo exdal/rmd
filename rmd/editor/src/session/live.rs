@@ -1,6 +1,7 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     net::{Ipv4Addr, SocketAddr},
+    path::{Path, PathBuf},
     sync::mpsc,
     time::Instant,
 };
@@ -9,6 +10,7 @@ use editor::{document::DocumentId, tool::Tool};
 use net::{Client, CodebaseId, Comment, CommentId, Cursor, Event, PeerId, PeerInfo, Server, ServerConfig};
 
 use super::Session;
+use crate::loader::LoadedMap;
 
 // how fast a remote cursor closes the gap to its latest position, per second
 const CURSOR_SMOOTHING: f32 = 20.0;
@@ -66,11 +68,28 @@ pub(crate) struct LiveShare {
     pub you: Option<PeerId>,
     pub peers: BTreeMap<PeerId, RemotePeer>,
     pub comments: BTreeMap<CommentId, Comment>,
+    pub shared: BTreeMap<String, PeerId>,
+    pub skipped: BTreeMap<String, ReceivedMap>,
+    received: BTreeSet<String>,
+    prepared: (mpsc::Sender<Prepared>, mpsc::Receiver<Prepared>),
     server: Option<Server>,
     codebase: Option<CodebaseId>,
     pending: Option<PendingJoin>,
     client: Option<Client>,
     last_poll: Instant,
+}
+
+enum Prepared {
+    Upload { path: String, bytes: Vec<u8> },
+    Snapshot(ReceivedMap),
+}
+
+pub(crate) struct ReceivedMap {
+    path: String,
+    file: PathBuf,
+    map: dmm::Map,
+    errors: Vec<dmm::error::MapError>,
+    modified: bool,
 }
 
 struct PendingJoin {
@@ -106,7 +125,39 @@ impl LiveShare {
 
     pub fn git_hint(&self) -> Option<&str> { self.codebase.as_ref()?.git_hint.as_deref() }
 
-    fn apply(&mut self, event: Event) {
+    fn receive_map(&self, path: String, bytes: Vec<u8>, codebase: Option<&Path>) {
+        if !net::is_map_path(&path) {
+            log::warn!("ignoring a shared map outside the codebase: {path}");
+            return;
+        }
+
+        let Some(file) = codebase.map(|codebase| codebase.join(&path)) else {
+            return;
+        };
+
+        let prepared = self.prepared.0.clone();
+        std::thread::spawn(move || {
+            let modified = std::fs::read(&file).map_or(true, |disk| disk != bytes);
+            let text = match String::from_utf8(bytes) {
+                Ok(text) => text,
+                Err(e) => {
+                    log::warn!("{path}: the shared map is not text: {e}");
+                    return;
+                },
+            };
+
+            let (map, errors) = dmm::parser::parse(&text);
+            let _ = prepared.send(Prepared::Snapshot(ReceivedMap {
+                path,
+                file,
+                map,
+                errors,
+                modified,
+            }));
+        });
+    }
+
+    fn apply(&mut self, event: Event, codebase: Option<&Path>) {
         match event {
             Event::Connected { you, peers, comments } => {
                 self.status = LiveStatus::Connected;
@@ -131,6 +182,10 @@ impl LiveShare {
             Event::CommentDeleted(id) => {
                 self.comments.remove(&id);
             },
+            Event::MapShared { path, by } => {
+                self.shared.insert(path, by);
+            },
+            Event::MapSnapshot { path, bytes } => self.receive_map(path, bytes, codebase),
             Event::Rejected(reason) => self.end(format!("rejected: {reason}")),
             Event::Disconnected(reason) => self.end(reason),
         }
@@ -140,6 +195,9 @@ impl LiveShare {
         self.status = LiveStatus::Ended(reason);
         self.peers.clear();
         self.comments.clear();
+        self.shared.clear();
+        self.skipped.clear();
+        self.received.clear();
         self.client = None;
     }
 }
@@ -198,6 +256,10 @@ impl Session {
                 codebase,
             }),
             comments: BTreeMap::new(),
+            shared: BTreeMap::new(),
+            skipped: BTreeMap::new(),
+            received: BTreeSet::new(),
+            prepared: mpsc::channel(),
             client: None,
             last_poll: Instant::now(),
         });
@@ -240,6 +302,7 @@ impl Session {
 
     pub fn poll_live(&mut self) {
         self.drop_comment_tool();
+        let codebase = self.codebase_dir().map(Path::to_path_buf);
         let Some(live) = self.live.as_mut() else {
             return;
         };
@@ -276,8 +339,10 @@ impl Session {
             .unwrap_or_default();
 
         for event in events {
-            live.apply(event);
+            live.apply(event, codebase.as_deref());
         }
+
+        let prepared = live.prepared.1.try_iter().collect::<Vec<_>>();
 
         let now = Instant::now();
         let elapsed = now.duration_since(live.last_poll).as_secs_f32();
@@ -285,6 +350,115 @@ impl Session {
         for peer in live.peers.values_mut() {
             peer.follow(elapsed);
         }
+
+        let waiting = self
+            .live
+            .as_mut()
+            .map(|live| std::mem::take(&mut live.skipped))
+            .unwrap_or_default();
+        for received in waiting.into_values() {
+            self.open_shared_map(received);
+        }
+
+        for prepared in prepared {
+            match prepared {
+                Prepared::Upload { path, bytes } => {
+                    if let Some(client) = self.live.as_ref().and_then(|live| live.client.as_ref()) {
+                        client.share_map(path, bytes);
+                    }
+                },
+                Prepared::Snapshot(received) => self.open_shared_map(received),
+            }
+        }
+    }
+
+    pub fn can_share_live_map(&self) -> bool {
+        self.comment_tool_available() && self.state.active().and_then(|id| self.live_map_path(id)).is_some()
+    }
+
+    pub fn share_live_map(&self) {
+        let Some(live) = self.live.as_ref() else {
+            return;
+        };
+
+        let Some((id, document)) = self.state.active().zip(self.state.active_document()) else {
+            return;
+        };
+
+        let Some(path) = self.live_map_path(id) else {
+            return;
+        };
+
+        let map = document.map.clone();
+        let prepared = live.prepared.0.clone();
+        std::thread::spawn(move || {
+            let bytes = dmm::writer::write(&map).into_bytes();
+            let _ = prepared.send(Prepared::Upload { path, bytes });
+        });
+    }
+
+    fn open_shared_map(&mut self, received: ReceivedMap) {
+        let Some(live) = self.live.as_mut() else {
+            return;
+        };
+
+        let open = self.state.document_for_path(&received.file);
+        // a local copy with unsaved work waits until it is saved or closed, our copy of the session's map does not
+        if open.is_some_and(|id| {
+            !live.received.contains(&received.path)
+                && self.state.document(id).is_some_and(|document| document.is_dirty())
+        }) {
+            live.skipped.insert(received.path.clone(), received);
+            return;
+        }
+
+        let ReceivedMap {
+            path,
+            file,
+            map,
+            errors,
+            modified,
+        } = received;
+
+        live.received.insert(path);
+
+        let repo = self.git_enabled.then(|| editor::git::discover(&file)).flatten();
+        let loaded = LoadedMap {
+            path: file.clone(),
+            map,
+            z: 1,
+            errors,
+            repo,
+            conflict: None,
+        };
+
+        match open {
+            Some(id) => {
+                self.reload_map(id, loaded);
+            },
+            None => self.apply_map(loaded),
+        }
+
+        if modified
+            && let Some(document) = self
+                .state
+                .document_for_path(&file)
+                .and_then(|id| self.state.document_mut(id))
+        {
+            document.mark_unsaved();
+        }
+    }
+
+    fn live_map_path(&self, id: DocumentId) -> Option<String> {
+        let path = self.state.document(id)?.path.as_deref()?;
+        let relative = path.strip_prefix(self.codebase_dir()?).ok()?;
+        let path = relative
+            .components()
+            .map(|part| part.as_os_str().to_str())
+            .collect::<Option<Vec<_>>>()?
+            .join("/");
+
+        net::is_map_path(&path).then_some(path)
     }
 
     pub fn live_cursor(&self, cursor: Option<Cursor>) {
@@ -441,6 +615,91 @@ mod tests {
 
         host.leave_live();
         assert_eq!(host.tool(), Tool::Select);
+    }
+
+    fn codebase_with_map(name: &str, rows: &str) -> (PathBuf, Session) {
+        let dir = std::env::temp_dir().join(format!("rmd-live-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("_maps")).unwrap();
+        std::fs::write(dir.join("game.dme"), "").unwrap();
+        std::fs::write(
+            dir.join("_maps/a.dmm"),
+            format!("\"a\" = (/turf,/area)\n\n(1,1,1) = {{\"\n{rows}\n\"}}\n"),
+        )
+        .unwrap();
+
+        let mut session = Session::new();
+        session.state.environment = Some(Arc::new(Environment::new(dir.join("game.dme"), ObjectTree::new())));
+
+        (dir, session)
+    }
+
+    fn open_local(session: &mut Session, file: PathBuf) -> DocumentId {
+        let text = std::fs::read_to_string(&file).unwrap();
+        let (map, errors) = dmm::parser::parse(&text);
+        assert!(errors.is_empty());
+        session.apply_map(LoadedMap {
+            path: file.clone(),
+            map,
+            z: 1,
+            errors,
+            repo: None,
+            conflict: None,
+        });
+
+        session.state.document_for_path(&file).unwrap()
+    }
+
+    #[test]
+    fn a_shared_map_waits_for_unsaved_work_then_replaces_the_local_copy() {
+        let (host_dir, mut host) = codebase_with_map("share-host", "aa");
+        let (guest_dir, mut guest) = codebase_with_map("share-guest", "a");
+        open_local(&mut host, host_dir.join("_maps/a.dmm"));
+        let local = open_local(&mut guest, guest_dir.join("_maps/a.dmm"));
+        guest.state.document_mut(local).unwrap().mark_unsaved();
+
+        host.host_live(0, String::from("hunter2"), String::from("host"))
+            .unwrap();
+        poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
+        assert!(host.can_share_live_map());
+        host.share_live_map();
+        poll_until(&mut [&mut host], |sessions| {
+            sessions[0]
+                .live()
+                .is_some_and(|live| live.shared.contains_key("_maps/a.dmm"))
+        });
+
+        let port = host.live().and_then(LiveShare::host).unwrap().0.port();
+        guest
+            .join_live(
+                format!("127.0.0.1:{port}"),
+                String::from("hunter2"),
+                String::from("guest"),
+            )
+            .unwrap();
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            sessions[1]
+                .live()
+                .is_some_and(|live| live.skipped.contains_key("_maps/a.dmm"))
+        });
+        assert_eq!(guest.state.document(local).unwrap().map.size.x, 1);
+
+        guest.close_map(local);
+        let file = guest_dir.join("_maps/a.dmm");
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            sessions[1].state.document_for_path(&file).is_some()
+        });
+
+        let received = guest
+            .state
+            .document(guest.state.document_for_path(&file).unwrap())
+            .unwrap();
+        assert_eq!(received.map.size.x, 2);
+        assert!(received.is_dirty());
+        assert!(guest.live().unwrap().skipped.is_empty());
+
+        let _ = std::fs::remove_dir_all(&host_dir);
+        let _ = std::fs::remove_dir_all(&guest_dir);
     }
 
     #[test]

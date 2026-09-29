@@ -3,7 +3,7 @@ pub mod live;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-pub use crate::frame::{FrameReader, MAX_FRAME_LEN, encode_frame, write_frame};
+pub use crate::frame::{FrameReader, MAX_FRAME_LEN, encode_frame, split_frame, write_frame};
 
 pub const MAGIC: [u8; 4] = *b"RMD\0";
 pub const VERSION: u16 = 1;
@@ -58,6 +58,7 @@ impl Hello {
 pub enum Error {
     Codec(postcard::Error),
     FrameTooLarge { len: usize, max: usize },
+    Truncated,
     BadMagic,
     Version { ours: u16, theirs: u16 },
     WrongService { expected: Service, got: Service },
@@ -68,6 +69,7 @@ impl std::fmt::Display for Error {
         match self {
             Self::Codec(e) => write!(f, "malformed message: {e}"),
             Self::FrameTooLarge { len, max } => write!(f, "frame of {len} bytes exceeds the {max} byte limit"),
+            Self::Truncated => write!(f, "the stream ended inside a frame"),
             Self::BadMagic => write!(f, "peer does not speak the rmd protocol"),
             Self::Version { ours, theirs } => {
                 write!(f, "protocol version mismatch: ours is {ours}, theirs is {theirs}")

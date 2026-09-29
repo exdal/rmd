@@ -219,3 +219,43 @@ fn anyone_can_delete_a_comment_for_everyone() {
         [second, third]
     );
 }
+
+#[test]
+fn shared_maps_reach_everyone_else_and_late_joiners() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    let alice_id = wait_for(&alice, |event| match event {
+        Event::Connected { you, .. } => Some(you),
+        _ => None,
+    });
+
+    let bob = join(&server, PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    let map = b"\"aa\" = (/turf/open/floor)\n".repeat(50_000);
+    alice.share_map(String::from("../outside.dmm"), b"nope".to_vec());
+    alice.share_map(String::from("_maps/test.dmm"), map.clone());
+
+    for client in [&alice, &bob] {
+        let shared = wait_for(client, |event| match event {
+            Event::MapShared { path, by } => Some((path, by)),
+            _ => None,
+        });
+        assert_eq!(shared, (String::from("_maps/test.dmm"), alice_id));
+    }
+
+    let received = wait_for(&bob, |event| match event {
+        Event::MapSnapshot { path, bytes } => Some((path, bytes)),
+        _ => None,
+    });
+    assert_eq!(received.0, "_maps/test.dmm");
+    assert_eq!(received.1, map);
+
+    let carol = join(&server, PASSWORD, "carol");
+    let (path, bytes) = wait_for(&carol, |event| match event {
+        Event::MapSnapshot { path, bytes } => Some((path, bytes)),
+        _ => None,
+    });
+    assert_eq!(path, "_maps/test.dmm");
+    assert_eq!(bytes, map);
+}

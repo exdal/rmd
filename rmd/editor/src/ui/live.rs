@@ -194,7 +194,7 @@ pub(super) fn draw_live_status(ui: &Ui, live: &LiveShare) {
         LiveStatus::Connecting => (PENDING_COLOR, String::from("Live: connecting...")),
         LiveStatus::Connected => {
             let others = live.peers.len();
-            let color = if live.peers.values().all(|peer| live.same_codebase(&peer.info)) {
+            let color = if live.skipped.is_empty() && live.peers.values().all(|peer| live.same_codebase(&peer.info)) {
                 LIVE_COLOR
             } else {
                 DIAGNOSTIC_WARNING_COLOR
@@ -231,6 +231,24 @@ pub(super) fn draw_live_status(ui: &Ui, live: &LiveShare) {
                     format!("{}: different codebase ({theirs}, you are on {ours})", peer.info.nick),
                 );
             }
+        }
+
+        if !live.shared.is_empty() {
+            ui.separator();
+            ui.text("Shared maps");
+            for (path, by) in &live.shared {
+                match live.nick_of(*by) {
+                    Some(nick) => ui.text(format!("{path} (from {nick})")),
+                    None => ui.text(path),
+                }
+            }
+        }
+
+        for path in live.skipped.keys() {
+            ui.text_colored(
+                DIAGNOSTIC_WARNING_COLOR,
+                format!("{path}: save or close your copy to receive the shared one"),
+            );
         }
     });
 }

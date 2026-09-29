@@ -21,6 +21,7 @@ use protocol::{
         PeerInfo,
         Relayed,
         ServerMessage,
+        Transfer,
     },
 };
 use quinn::{Connection, Endpoint};
@@ -29,7 +30,7 @@ use tokio::sync::{mpsc as channel, oneshot, watch};
 use crate::{
     Error,
     fail,
-    stream::{read_message, write_message},
+    stream::{read_message, receive_transfer, send_transfer, write_message},
 };
 
 const CURSOR_INTERVAL: Duration = Duration::from_millis(50);
@@ -51,13 +52,26 @@ pub enum Event {
     },
     Comment(Comment),
     CommentDeleted(CommentId),
+    MapShared {
+        path: String,
+        by: PeerId,
+    },
+    MapSnapshot {
+        path: String,
+        bytes: Vec<u8>,
+    },
     Disconnected(String),
+}
+
+enum Command {
+    Message(ClientMessage),
+    ShareMap { path: String, bytes: Vec<u8> },
 }
 
 pub struct Client {
     events: mpsc::Receiver<Event>,
     cursor: watch::Sender<Option<Cursor>>,
-    outbox: channel::UnboundedSender<ClientMessage>,
+    outbox: channel::UnboundedSender<Command>,
     shutdown: Option<oneshot::Sender<()>>,
 }
 
@@ -100,10 +114,16 @@ impl Client {
     pub fn poll(&self) -> impl Iterator<Item = Event> + '_ { self.events.try_iter() }
 
     pub fn send_comment(&self, map: String, z: u32, pos: [f32; 2], text: String) {
-        let _ = self.outbox.send(ClientMessage::Comment { map, z, pos, text });
+        self.send(ClientMessage::Comment { map, z, pos, text });
     }
 
-    pub fn delete_comment(&self, id: CommentId) { let _ = self.outbox.send(ClientMessage::DeleteComment(id)); }
+    pub fn delete_comment(&self, id: CommentId) { self.send(ClientMessage::DeleteComment(id)); }
+
+    pub fn share_map(&self, path: String, bytes: Vec<u8>) {
+        let _ = self.outbox.send(Command::ShareMap { path, bytes });
+    }
+
+    fn send(&self, message: ClientMessage) { let _ = self.outbox.send(Command::Message(message)); }
 
     pub fn send_cursor(&self, cursor: Option<Cursor>) {
         self.cursor.send_if_modified(|current| {
@@ -125,7 +145,7 @@ impl Drop for Client {
 
 async fn run(
     addr: &str, hello: ClientHello, cursor: watch::Receiver<Option<Cursor>>,
-    outbox: channel::UnboundedReceiver<ClientMessage>, events: &mpsc::Sender<Event>, mut stop: oneshot::Receiver<()>,
+    outbox: channel::UnboundedReceiver<Command>, events: &mpsc::Sender<Event>, mut stop: oneshot::Receiver<()>,
 ) -> Result<(), Error> {
     let remote = tokio::net::lookup_host(addr)
         .await
@@ -160,7 +180,7 @@ async fn run(
 
 async fn session(
     connection: &Connection, hello: ClientHello, mut cursor: watch::Receiver<Option<Cursor>>,
-    mut outbox: channel::UnboundedReceiver<ClientMessage>, events: &mpsc::Sender<Event>,
+    mut outbox: channel::UnboundedReceiver<Command>, events: &mpsc::Sender<Event>,
 ) -> Result<(), Error> {
     let emit = |event| {
         let _ = events.send(event);
@@ -190,10 +210,19 @@ async fn session(
                 Some(ServerMessage::PeerLeft(id)) => emit(Event::PeerLeft(id)),
                 Some(ServerMessage::Comment(comment)) => emit(Event::Comment(comment)),
                 Some(ServerMessage::CommentDeleted(id)) => emit(Event::CommentDeleted(id)),
+                Some(ServerMessage::MapShared { path, by }) => emit(Event::MapShared { path, by }),
                 Some(other) => log::warn!("unexpected message from the host: {other:?}"),
                 None => return Err(fail("the host ended the session")),
             },
-            Some(message) = outbox.recv() => write_message(&mut send, &message).await?,
+            Some(command) = outbox.recv() => match command {
+                Command::Message(message) => write_message(&mut send, &message).await?,
+                Command::ShareMap { path, bytes } => {
+                    tokio::spawn(upload(connection.clone(), path, bytes));
+                },
+            },
+            stream = connection.accept_uni() => {
+                tokio::spawn(download(stream.map_err(fail)?, events.clone()));
+            },
             datagram = connection.read_datagram() => {
                 let datagram = datagram.map_err(fail)?;
                 match protocol::decode::<Relayed>(&datagram) {
@@ -213,5 +242,20 @@ async fn session(
                 }
             },
         }
+    }
+}
+
+async fn upload(connection: Connection, path: String, bytes: Vec<u8>) {
+    if let Err(e) = send_transfer(&connection, &Transfer::Map { path: path.clone() }, &bytes).await {
+        log::warn!("could not share {path}: {e}");
+    }
+}
+
+async fn download(stream: quinn::RecvStream, events: mpsc::Sender<Event>) {
+    match receive_transfer(stream).await {
+        Ok((Transfer::Map { path }, bytes)) => {
+            let _ = events.send(Event::MapSnapshot { path, bytes });
+        },
+        Err(e) => log::warn!("could not receive a map: {e}"),
     }
 }

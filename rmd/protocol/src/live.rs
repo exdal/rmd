@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_NICK_LEN: usize = 32;
 pub const MAX_COMMENT_LEN: usize = 500;
+pub const MAX_MAP_LEN: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PeerId(pub u32);
@@ -65,6 +66,24 @@ pub enum ServerMessage {
     PeerLeft(PeerId),
     Comment(Comment),
     CommentDeleted(CommentId),
+    MapShared {
+        path: String,
+        by: PeerId,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Transfer {
+    Map { path: String },
+}
+
+/// `_maps/map_files/Station/station.dmm`
+pub fn is_map_path(path: &str) -> bool {
+    let segments_ok = path
+        .split('/')
+        .all(|segment| !segment.is_empty() && segment != "." && segment != ".." && !segment.contains(['\\', ':']));
+
+    segments_ok && path.to_ascii_lowercase().ends_with(".dmm")
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -141,6 +160,33 @@ mod tests {
         });
         round_trip(ServerMessage::PeerJoined(peer(3)));
         round_trip(ServerMessage::PeerLeft(PeerId(3)));
+        round_trip(ServerMessage::MapShared {
+            path: String::from("_maps/test.dmm"),
+            by: PeerId(1),
+        });
+        round_trip(Transfer::Map {
+            path: String::from("_maps/test.dmm"),
+        });
+    }
+
+    #[test]
+    fn map_paths_stay_inside_the_codebase() {
+        assert!(is_map_path("_maps/map_files/Station/station.dmm"));
+        assert!(is_map_path("Box.DMM"));
+
+        for path in [
+            "",
+            "/etc/x.dmm",
+            "../x.dmm",
+            "_maps/../../x.dmm",
+            "a//b.dmm",
+            "./a.dmm",
+            "C:/a.dmm",
+            "a\\b.dmm",
+            "a.dm",
+        ] {
+            assert!(!is_map_path(path), "{path}");
+        }
     }
 
     #[test]

@@ -28,6 +28,24 @@ pub fn encode_frame<T: Serialize>(value: &T) -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
+pub fn split_frame(bytes: &[u8]) -> Result<(&[u8], &[u8]), Error> {
+    let header = bytes.first_chunk::<HEADER_LEN>().ok_or(Error::Truncated)?;
+    let len = u32::from_le_bytes(*header) as usize;
+    if len > MAX_FRAME_LEN {
+        return Err(Error::FrameTooLarge {
+            len,
+            max: MAX_FRAME_LEN,
+        });
+    }
+
+    let rest = &bytes[HEADER_LEN..];
+    if rest.len() < len {
+        return Err(Error::Truncated);
+    }
+
+    Ok(rest.split_at(len))
+}
+
 #[derive(Debug)]
 pub struct FrameReader {
     buffer: Vec<u8>,
@@ -140,6 +158,16 @@ mod tests {
         reader.push(&5u32.to_le_bytes());
 
         assert_eq!(reader.next_frame(), Err(Error::FrameTooLarge { len: 5, max: 4 }));
+    }
+
+    #[test]
+    fn a_frame_splits_off_its_trailing_payload() {
+        let mut bytes = framed(&[b"head"]);
+        bytes.extend_from_slice(b"raw payload");
+
+        assert_eq!(split_frame(&bytes), Ok((&b"head"[..], &b"raw payload"[..])));
+        assert_eq!(split_frame(&bytes[..5]), Err(Error::Truncated));
+        assert_eq!(split_frame(&[1, 0]), Err(Error::Truncated));
     }
 
     #[test]

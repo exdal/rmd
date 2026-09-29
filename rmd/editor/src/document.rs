@@ -357,6 +357,8 @@ impl MapDocument {
 
     pub fn needs_initial_save(&self) -> bool { self.needs_initial_save }
 
+    pub fn mark_unsaved(&mut self) { self.pending_write = true; }
+
     pub fn instance_ids_at(&self, coord: Coord) -> &[PrefabInstanceId] { self.instances.ids_at(coord) }
 
     pub fn instance_location(&self, id: PrefabInstanceId) -> Option<PrefabLocation> { self.instances.location(id) }

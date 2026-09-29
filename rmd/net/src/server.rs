@@ -26,6 +26,8 @@ use protocol::{
         PeerInfo,
         Relayed,
         ServerMessage,
+        Transfer,
+        is_map_path,
     },
 };
 use quinn::{Connection, Endpoint};
@@ -35,7 +37,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::{
     Error,
     fail,
-    stream::{read_message, write_message},
+    stream::{read_message, receive_transfer, send_transfer, write_message},
 };
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -130,6 +132,12 @@ struct State {
     peers: HashMap<PeerId, Peer>,
     comments: Vec<Comment>,
     last_comment: u32,
+    maps: HashMap<String, SharedMap>,
+}
+
+struct SharedMap {
+    by: PeerId,
+    bytes: Bytes,
 }
 
 struct Peer {
@@ -200,6 +208,32 @@ impl Shared {
             let _ = peer.outbox.send(ServerMessage::CommentDeleted(id));
         }
     }
+
+    fn share_map(&self, by: PeerId, path: String, bytes: Bytes) {
+        let mut state = self.state.lock().unwrap();
+        for (id, peer) in state.peers.iter() {
+            let _ = peer.outbox.send(ServerMessage::MapShared { path: path.clone(), by });
+            if *id != by {
+                tokio::spawn(push_map(peer.connection.clone(), path.clone(), bytes.clone()));
+            }
+        }
+
+        state.maps.insert(path, SharedMap { by, bytes });
+    }
+}
+
+async fn push_map(connection: Connection, path: String, bytes: Bytes) {
+    if let Err(e) = send_transfer(&connection, &Transfer::Map { path }, &bytes).await {
+        log::debug!("could not send a map to {}: {e}", connection.remote_address());
+    }
+}
+
+async fn upload(shared: Arc<Shared>, from: PeerId, stream: quinn::RecvStream) {
+    match receive_transfer(stream).await {
+        Ok((Transfer::Map { path }, bytes)) if is_map_path(&path) => shared.share_map(from, path, Bytes::from(bytes)),
+        Ok((Transfer::Map { path }, _)) => log::info!("{from:?} tried to share {path}, which is not a map path"),
+        Err(e) => log::info!("dropping an upload from {from:?}: {e}"),
+    }
 }
 
 async fn serve(endpoint: Endpoint, shared: Arc<Shared>, mut stop: oneshot::Receiver<()>) {
@@ -237,7 +271,7 @@ async fn handle(incoming: quinn::Incoming, shared: Arc<Shared>) {
     connection.close(0u32.into(), b"");
 }
 
-async fn session(connection: &Connection, shared: &Shared) -> Result<(), Error> {
+async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Error> {
     let (mut send, mut recv) = tokio::time::timeout(HANDSHAKE_TIMEOUT, connection.accept_bi())
         .await
         .map_err(|_| fail("handshake timed out"))?
@@ -288,6 +322,14 @@ async fn session(connection: &Connection, shared: &Shared) -> Result<(), Error> 
             let _ = peer.outbox.send(ServerMessage::PeerJoined(info.clone()));
         }
 
+        for (path, map) in state.maps.iter() {
+            let _ = outbox.send(ServerMessage::MapShared {
+                path: path.clone(),
+                by: map.by,
+            });
+            tokio::spawn(push_map(connection.clone(), path.clone(), map.bytes.clone()));
+        }
+
         state.peers.insert(
             id,
             Peer {
@@ -317,6 +359,9 @@ async fn session(connection: &Connection, shared: &Shared) -> Result<(), Error> 
                     None => return Ok(()),
                 },
                 datagram = connection.read_datagram() => shared.relay(id, &datagram.map_err(fail)?),
+                stream = connection.accept_uni() => {
+                    tokio::spawn(upload(shared.clone(), id, stream.map_err(fail)?));
+                },
             }
         }
     }

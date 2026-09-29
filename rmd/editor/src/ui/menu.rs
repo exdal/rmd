@@ -336,6 +336,10 @@ impl UiState {
                 }
 
                 ui.separator();
+                if ui.menu_item_enabled_selected_no_shortcut("Share current map", false, session.can_share_live_map()) {
+                    session.share_live_map();
+                }
+
                 let hosting = session.live().is_some_and(|live| live.is_hosting());
                 let label = if hosting { "Stop hosting" } else { "Leave" };
                 if ui.menu_item_enabled_selected_no_shortcut(label, false, session.live().is_some()) {
