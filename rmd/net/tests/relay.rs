@@ -172,3 +172,50 @@ fn comments_reach_everyone_and_late_joiners() {
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0].text, "move this door");
 }
+
+#[test]
+fn anyone_can_delete_a_comment_for_everyone() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
+    let bob = join(&server, PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    let comment = |client: &Client| {
+        wait_for(client, |event| match event {
+            Event::Comment(comment) => Some(comment.id),
+            _ => None,
+        })
+    };
+
+    for text in ["first", "second"] {
+        alice.send_comment(String::from("_maps/test.dmm"), 1, [0.0, 0.0], String::from(text));
+    }
+
+    let first = comment(&bob);
+    let second = comment(&bob);
+    assert_ne!(first, second);
+
+    bob.delete_comment(first);
+    for client in [&alice, &bob] {
+        let deleted = wait_for(client, |event| match event {
+            Event::CommentDeleted(id) => Some(id),
+            _ => None,
+        });
+        assert_eq!(deleted, first);
+    }
+
+    alice.send_comment(String::from("_maps/test.dmm"), 1, [0.0, 0.0], String::from("third"));
+    let third = comment(&bob);
+    assert!(third != first && third != second);
+
+    let carol = join(&server, PASSWORD, "carol");
+    let comments = wait_for(&carol, |event| match event {
+        Event::Connected { comments, .. } => Some(comments),
+        _ => None,
+    });
+    assert_eq!(
+        comments.iter().map(|comment| comment.id).collect::<Vec<_>>(),
+        [second, third]
+    );
+}

@@ -14,6 +14,7 @@ use protocol::{
         ClientMessage,
         CodebaseId,
         Comment,
+        CommentId,
         Cursor,
         Datagram,
         PeerId,
@@ -49,6 +50,7 @@ pub enum Event {
         cursor: Option<Cursor>,
     },
     Comment(Comment),
+    CommentDeleted(CommentId),
     Disconnected(String),
 }
 
@@ -100,6 +102,8 @@ impl Client {
     pub fn send_comment(&self, map: String, z: u32, pos: [f32; 2], text: String) {
         let _ = self.outbox.send(ClientMessage::Comment { map, z, pos, text });
     }
+
+    pub fn delete_comment(&self, id: CommentId) { let _ = self.outbox.send(ClientMessage::DeleteComment(id)); }
 
     pub fn send_cursor(&self, cursor: Option<Cursor>) {
         self.cursor.send_if_modified(|current| {
@@ -185,6 +189,7 @@ async fn session(
                 Some(ServerMessage::PeerJoined(peer)) => emit(Event::PeerJoined(peer)),
                 Some(ServerMessage::PeerLeft(id)) => emit(Event::PeerLeft(id)),
                 Some(ServerMessage::Comment(comment)) => emit(Event::Comment(comment)),
+                Some(ServerMessage::CommentDeleted(id)) => emit(Event::CommentDeleted(id)),
                 Some(other) => log::warn!("unexpected message from the host: {other:?}"),
                 None => return Err(fail("the host ended the session")),
             },

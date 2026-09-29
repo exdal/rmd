@@ -48,6 +48,7 @@ pub enum ClientMessage {
         pos: [f32; 2],
         text: String,
     },
+    DeleteComment(CommentId),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -63,6 +64,7 @@ pub enum ServerMessage {
     PeerJoined(PeerInfo),
     PeerLeft(PeerId),
     Comment(Comment),
+    CommentDeleted(CommentId),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,6 +133,8 @@ mod tests {
             pos: comment.pos,
             text: comment.text.clone(),
         });
+        round_trip(ClientMessage::DeleteComment(comment.id));
+        round_trip(ServerMessage::CommentDeleted(comment.id));
         round_trip(ServerMessage::Comment(comment));
         round_trip(ServerMessage::Reject {
             reason: String::from("wrong password"),

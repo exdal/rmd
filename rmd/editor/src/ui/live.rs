@@ -1,12 +1,12 @@
 use dear_imgui_rs::{Key, Ui};
-use editor::document::DocumentId;
-use net::{MAX_COMMENT_LEN, PeerId};
+use editor::{document::DocumentId, icons::materialdesignicons::ICON_CLOSE};
+use net::{Comment, CommentId, MAX_COMMENT_LEN, PeerId};
 
 use super::{
     DIAGNOSTIC_WARNING_COLOR,
     common::dpi,
     dialog::{DIALOG_FIELD_WIDTH, MODAL_FLAGS, SAVE_ERROR_COLOR},
-    overlay::OVERLAY_BG,
+    overlay::{OVERLAY_BG, OverlayRect},
 };
 use crate::{
     camera::Controller,
@@ -236,11 +236,12 @@ pub(super) fn draw_live_status(ui: &Ui, live: &LiveShare) {
 }
 
 pub(super) fn draw_remote_cursors(
-    ui: &Ui, camera: &Controller, viewport_min: [f32; 2], viewport_max: [f32; 2], live: &LiveShare, map: &str, z: u32,
+    ui: &Ui, camera: &Controller, viewport: OverlayRect, live: &LiveShare, map: &str, z: u32,
 ) {
     let scale = dpi(ui);
+    let viewport_min = viewport.min;
     let draw = ui.get_window_draw_list();
-    draw.with_clip_rect(viewport_min, viewport_max, || {
+    draw.with_clip_rect(viewport.min, viewport.max, || {
         for peer in live.peers.values() {
             if !peer
                 .cursor
@@ -304,53 +305,123 @@ pub(super) fn draw_comment_composer(ui: &Ui, session: &Session, draft: &mut Opti
     }
 }
 
-pub(super) fn draw_comments(
-    ui: &Ui, camera: &Controller, viewport_min: [f32; 2], viewport_max: [f32; 2], live: &LiveShare, map: &str, z: u32,
-) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CommentHit {
+    pub(super) id: CommentId,
+    pub(super) delete: bool,
+}
+
+struct CommentLayout<'a> {
+    comment: &'a Comment,
+    // the author may have left
+    nick: Option<&'a str>,
+    min: [f32; 2],
+    max: [f32; 2],
+    row: [f32; 2],
+    text: [f32; 2],
+    delete: [f32; 2],
+    delete_size: [f32; 2],
+}
+
+impl CommentLayout<'_> {
+    fn contains(&self, point: [f32; 2]) -> bool {
+        (self.min[0]..=self.max[0]).contains(&point[0]) && (self.min[1]..=self.max[1]).contains(&point[1])
+    }
+
+    fn delete_contains(&self, point: [f32; 2]) -> bool {
+        let max = [
+            self.delete[0] + self.delete_size[0],
+            self.delete[1] + self.delete_size[1],
+        ];
+
+        (self.delete[0]..=max[0]).contains(&point[0]) && (self.delete[1]..=max[1]).contains(&point[1])
+    }
+}
+
+fn comment_layouts<'a>(
+    ui: &'a Ui, camera: &'a Controller, viewport_min: [f32; 2], live: &'a LiveShare, map: &'a str, z: u32,
+) -> impl Iterator<Item = CommentLayout<'a>> + 'a {
     let scale = dpi(ui);
     let padding = 6.0 * scale;
     let wrap = COMMENT_WIDTH * scale;
     let header = COMMENT_HEADER * scale;
-    let draw = ui.get_window_draw_list();
-    draw.with_clip_rect(viewport_min, viewport_max, || {
-        for comment in live
-            .comments
-            .values()
-            .filter(|comment| comment.map == map && comment.z == z)
-        {
+    let delete_size = ui.calc_text_size(ICON_CLOSE.to_string());
+
+    live.comments
+        .values()
+        .filter(move |comment| comment.map == map && comment.z == z)
+        .filter_map(move |comment| {
             let local = camera.map_to_screen(comment.pos);
             if !local.iter().all(|value| value.is_finite()) {
-                continue;
+                return None;
             }
 
-            let color = peer_color(comment.author);
-            // the author may have left
             let nick = live.nick_of(comment.author);
-            let nick_size = nick.map_or([0.0; 2], |nick| ui.calc_text_size(nick));
-            let nick_gap = if nick.is_some() { padding * 0.5 } else { 0.0 };
+            let nick_width = nick.map_or(0.0, |nick| ui.calc_text_size(nick)[0]);
             let text_size = ui.calc_text_size_with_opts(&comment.text, false, wrap);
+            let width = (nick_width + padding + delete_size[0]).max(text_size[0]);
             let min = [viewport_min[0] + local[0], viewport_min[1] + local[1]];
             let max = [
-                min[0] + nick_size[0].max(text_size[0]) + padding * 2.0,
-                min[1] + header + nick_size[1] + nick_gap + text_size[1] + padding * 2.0,
+                min[0] + width + padding * 2.0,
+                min[1] + header + delete_size[1] + text_size[1] + padding * 2.5,
             ];
 
-            draw.add_rect(min, max, COMMENT_BG).filled(true).build();
-            draw.add_rect(min, [max[0], min[1] + header], color)
+            let row = [min[0] + padding, min[1] + header + padding];
+            Some(CommentLayout {
+                comment,
+                nick,
+                min,
+                max,
+                row,
+                text: [row[0], row[1] + delete_size[1] + padding * 0.5],
+                delete: [max[0] - padding - delete_size[0], row[1]],
+                delete_size,
+            })
+        })
+}
+
+pub(super) fn comment_at(
+    ui: &Ui, camera: &Controller, viewport_min: [f32; 2], live: &LiveShare, map: &str, z: u32, point: [f32; 2],
+) -> Option<CommentHit> {
+    comment_layouts(ui, camera, viewport_min, live, map, z)
+        .filter(|layout| layout.contains(point))
+        .last()
+        .map(|layout| CommentHit {
+            id: layout.comment.id,
+            delete: layout.delete_contains(point),
+        })
+}
+
+pub(super) fn draw_comments(
+    ui: &Ui, camera: &Controller, viewport: OverlayRect, live: &LiveShare, map: &str, z: u32,
+    hovered: Option<CommentHit>,
+) {
+    let header = COMMENT_HEADER * dpi(ui);
+    let wrap = COMMENT_WIDTH * dpi(ui);
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(viewport.min, viewport.max, || {
+        for layout in comment_layouts(ui, camera, viewport.min, live, map, z) {
+            let color = peer_color(layout.comment.author);
+            draw.add_rect(layout.min, layout.max, COMMENT_BG).filled(true).build();
+            draw.add_rect(layout.min, [layout.max[0], layout.min[1] + header], color)
                 .filled(true)
                 .build();
 
-            let nick_pos = [min[0] + padding, min[1] + header + padding];
-            if let Some(nick) = nick {
-                draw.add_text(nick_pos, color, nick);
+            if let Some(nick) = layout.nick {
+                draw.add_text(layout.row, color, nick);
+            }
+
+            if let Some(hit) = hovered.filter(|hit| hit.id == layout.comment.id) {
+                let icon = if hit.delete { SAVE_ERROR_COLOR } else { PENDING_COLOR };
+                draw.add_text(layout.delete, icon, ICON_CLOSE.to_string());
             }
 
             draw.add_text_with_font(
                 ui.current_font(),
                 ui.current_font_size(),
-                [nick_pos[0], nick_pos[1] + nick_size[1] + nick_gap],
+                layout.text,
                 [1.0; 4],
-                &comment.text,
+                &layout.comment.text,
                 wrap,
                 None,
             );

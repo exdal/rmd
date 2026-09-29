@@ -128,6 +128,9 @@ impl LiveShare {
             Event::Comment(comment) => {
                 self.comments.insert(comment.id, comment);
             },
+            Event::CommentDeleted(id) => {
+                self.comments.remove(&id);
+            },
             Event::Rejected(reason) => self.end(format!("rejected: {reason}")),
             Event::Disconnected(reason) => self.end(reason),
         }
@@ -220,6 +223,12 @@ impl Session {
 
         if let Some(client) = self.live.as_ref().and_then(|live| live.client.as_ref()) {
             client.send_comment(map, document.z, pos, text);
+        }
+    }
+
+    pub fn delete_live_comment(&self, id: CommentId) {
+        if let Some(client) = self.live.as_ref().and_then(|live| live.client.as_ref()) {
+            client.delete_comment(id);
         }
     }
 

@@ -129,6 +129,7 @@ struct Shared {
 struct State {
     peers: HashMap<PeerId, Peer>,
     comments: Vec<Comment>,
+    last_comment: u32,
 }
 
 struct Peer {
@@ -171,8 +172,9 @@ impl Shared {
         };
 
         let mut state = self.state.lock().unwrap();
+        state.last_comment += 1;
         let comment = Comment {
-            id: CommentId(state.comments.len() as u32 + 1),
+            id: CommentId(state.last_comment),
             author,
             map,
             z,
@@ -185,6 +187,18 @@ impl Shared {
         }
 
         state.comments.push(comment);
+    }
+
+    fn delete_comment(&self, id: CommentId) {
+        let mut state = self.state.lock().unwrap();
+        let Some(index) = state.comments.iter().position(|comment| comment.id == id) else {
+            return;
+        };
+
+        state.comments.remove(index);
+        for peer in state.peers.values() {
+            let _ = peer.outbox.send(ServerMessage::CommentDeleted(id));
+        }
     }
 }
 
@@ -299,6 +313,7 @@ async fn session(connection: &Connection, shared: &Shared) -> Result<(), Error> 
                 message = read_message::<ClientMessage>(&mut recv, &mut reader) => match message? {
                     Some(ClientMessage::Hello(_)) => return Err(fail("sent a second hello")),
                     Some(ClientMessage::Comment { map, z, pos, text }) => shared.comment(id, map, z, pos, &text),
+                    Some(ClientMessage::DeleteComment(comment)) => shared.delete_comment(comment),
                     None => return Ok(()),
                 },
                 datagram = connection.read_datagram() => shared.relay(id, &datagram.map_err(fail)?),

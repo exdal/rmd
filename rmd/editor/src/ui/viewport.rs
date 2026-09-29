@@ -60,7 +60,7 @@ use super::{
     draw_tile_grid,
     draw_top_overlay,
     find::JumpTarget,
-    live::{COMMENT_POPUP, CommentDraft, draw_comment_composer, draw_comments, draw_remote_cursors},
+    live::{COMMENT_POPUP, CommentDraft, comment_at, draw_comment_composer, draw_comments, draw_remote_cursors},
     node_right_click,
     overlay_padding,
     paste_controls,
@@ -582,7 +582,24 @@ impl UiState {
 
             let mouse = ui.io().mouse_pos();
             let over_overlay = top_overlay.contains(mouse) || bottom_overlay.contains(mouse);
-            let hovered = image_hovered && !over_overlay && is_active;
+            let comment_hit = session
+                .live()
+                .zip(session.live_map_key(id))
+                .filter(|_| image_hovered && !over_overlay)
+                .and_then(|(live, map)| {
+                    let z = session.state.document(id)?.z;
+
+                    comment_at(ui, camera, viewport_min, live, &map, z, mouse)
+                });
+
+            if let Some(hit) = comment_hit
+                && hit.delete
+                && ui.is_mouse_clicked(MouseButton::Left)
+            {
+                session.delete_live_comment(hit.id);
+            }
+
+            let hovered = image_hovered && !over_overlay && comment_hit.is_none() && is_active;
             let drag_panning = hovered && settings.keybindings.get(KeybindAction::PanDrag).is_held(ui);
             let focused = ui.is_window_focused();
             if let Some(momentary) = self.momentary_tool.as_mut() {
@@ -756,8 +773,12 @@ impl UiState {
                 && let Some(map) = session.live_map_key(id)
                 && let Some(z) = session.state.document(id).map(|document| document.z)
             {
-                draw_comments(ui, camera, viewport_min, viewport_max, live, &map, z);
-                draw_remote_cursors(ui, camera, viewport_min, viewport_max, live, &map, z);
+                let viewport = OverlayRect {
+                    min: viewport_min,
+                    max: viewport_max,
+                };
+                draw_comments(ui, camera, viewport, live, &map, z, comment_hit);
+                draw_remote_cursors(ui, camera, viewport, live, &map, z);
             }
 
             if self.comment_draft.as_ref().is_some_and(|draft| draft.document == id) {
@@ -787,7 +808,8 @@ impl UiState {
             });
             *hovered_coord = pointed_coord;
             if is_active && let Some(map) = session.live_map_key(id) {
-                session.live_cursor(cursor.map(|cursor| net::Cursor {
+                let pointer = (image_hovered && !over_overlay).then_some(mouse).and_then(in_viewport);
+                session.live_cursor(pointer.map(|cursor| net::Cursor {
                     map,
                     z: session.z(),
                     pos: camera.screen_to_map(cursor),
