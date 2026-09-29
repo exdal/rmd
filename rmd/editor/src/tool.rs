@@ -28,6 +28,7 @@ pub enum Tool {
     Delete,
     Replace,
     Fill,
+    Comment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,6 +176,7 @@ impl Tool {
             Tool::Delete => "Delete",
             Tool::Replace => "Replace",
             Tool::Fill => "Fill",
+            Tool::Comment => "Comment",
         }
     }
 
@@ -182,7 +184,7 @@ impl Tool {
         match self {
             Self::Place => place(context),
             Self::Delete => delete(context),
-            Self::Select | Self::Node | Self::BlockSelect | Self::Replace => None,
+            Self::Select | Self::Node | Self::BlockSelect | Self::Replace | Self::Comment => None,
             Self::Fill => fill(context, Some(MAX_FILL_TILES), None).ok().flatten(),
         }
     }

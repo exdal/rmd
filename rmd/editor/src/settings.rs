@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 const MAX_RECENT: usize = 10;
 const DEFAULT_PREFERRED_EDITOR: &str = "code --goto {file}:{line}:{column}";
+pub(crate) const DEFAULT_LIVE_SHARE_PORT: u16 = 3131;
 pub const UI_SCALE_PERCENT: std::ops::RangeInclusive<u32> = 50..=200;
 
 pub(crate) const BINDABLE_KEYS: &[Key] = &[
@@ -338,6 +339,7 @@ pub(crate) enum KeybindAction {
     DeleteTool,
     ReplaceTool,
     FillTool,
+    CommentTool,
     Rotate,
     ToolAlternate,
     Copy,
@@ -373,7 +375,7 @@ pub(crate) enum KeybindAction {
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 55] = [
+    pub const ALL: [Self; 56] = [
         Self::Save,
         Self::SaveAll,
         Self::CloseMap,
@@ -397,6 +399,7 @@ impl KeybindAction {
         Self::DeleteTool,
         Self::ReplaceTool,
         Self::FillTool,
+        Self::CommentTool,
         Self::Rotate,
         Self::ToolAlternate,
         Self::Copy,
@@ -468,6 +471,7 @@ impl KeybindAction {
             Self::DeleteTool => "Delete tool",
             Self::ReplaceTool => "Replace tool",
             Self::FillTool => "Fill tool",
+            Self::CommentTool => "Comment tool",
             Self::Rotate => "Rotate",
             Self::ToolAlternate => "Alternate tool action (hold)",
             Self::Copy => "Copy block",
@@ -530,6 +534,7 @@ impl KeybindAction {
             Self::DeleteTool => "delete-tool",
             Self::ReplaceTool => "replace-tool",
             Self::FillTool => "fill-tool",
+            Self::CommentTool => "comment-tool",
             Self::Rotate => "rotate",
             Self::ToolAlternate => "tool-alternate",
             Self::Copy => "copy",
@@ -592,6 +597,7 @@ pub(crate) struct KeyBindings {
     delete_tool: KeyBinding,
     replace_tool: KeyBinding,
     fill_tool: KeyBinding,
+    comment_tool: KeyBinding,
     rotate: KeyBinding,
     tool_alternate: KeyBinding,
     copy: KeyBinding,
@@ -652,6 +658,7 @@ impl Default for KeyBindings {
             delete_tool: KeyBinding::new(Key::X),
             replace_tool: KeyBinding::new(Key::E),
             fill_tool: KeyBinding::new(Key::Q),
+            comment_tool: KeyBinding::new(Key::T),
             rotate: KeyBinding::new(Key::R),
             tool_alternate: KeyBinding::new(Key::ModAlt),
             copy: KeyBinding::with_ctrl(Key::C),
@@ -714,6 +721,7 @@ impl KeyBindings {
             delete_tool: KeyBinding::new(Key::D),
             replace_tool: KeyBinding::new(Key::Key4),
             fill_tool: KeyBinding::new(Key::Key2),
+            comment_tool: KeyBinding::with_shift(Key::T),
             rotate: KeyBinding::with_shift(Key::R),
             tool_alternate: KeyBinding::new(Key::ModAlt),
             copy: KeyBinding::with_primary(Key::C),
@@ -774,6 +782,7 @@ impl KeyBindings {
             KeybindAction::DeleteTool => self.delete_tool,
             KeybindAction::ReplaceTool => self.replace_tool,
             KeybindAction::FillTool => self.fill_tool,
+            KeybindAction::CommentTool => self.comment_tool,
             KeybindAction::Rotate => self.rotate,
             KeybindAction::ToolAlternate => self.tool_alternate,
             KeybindAction::Copy => self.copy,
@@ -889,6 +898,7 @@ impl KeyBindings {
             KeybindAction::DeleteTool => self.delete_tool = binding,
             KeybindAction::ReplaceTool => self.replace_tool = binding,
             KeybindAction::FillTool => self.fill_tool = binding,
+            KeybindAction::CommentTool => self.comment_tool = binding,
             KeybindAction::Rotate => self.rotate = binding,
             KeybindAction::ToolAlternate => self.tool_alternate = binding,
             KeybindAction::Copy => self.copy = binding,
@@ -968,6 +978,24 @@ impl Default for ObjectTreeSearchOptions {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct LiveShareSettings {
+    pub nick: String,
+    pub address: String,
+    pub port: u16,
+}
+
+impl Default for LiveShareSettings {
+    fn default() -> Self {
+        Self {
+            nick: String::new(),
+            address: String::new(),
+            port: DEFAULT_LIVE_SHARE_PORT,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct ObjectTreeFilterOptions {
@@ -1035,6 +1063,7 @@ pub(crate) struct Settings {
     pub check_for_updates: bool,
     pub sanitize_vars_on_save: bool,
     pub pinned_vars: Vec<String>,
+    pub live_share: LiveShareSettings,
 }
 
 pub(crate) struct SettingsLoad {
@@ -1105,6 +1134,7 @@ impl Default for Settings {
             check_for_updates: true,
             sanitize_vars_on_save: false,
             pinned_vars: Vec::new(),
+            live_share: LiveShareSettings::default(),
         }
     }
 }
@@ -1341,6 +1371,7 @@ mod tests {
                 check_for_updates: true,
                 sanitize_vars_on_save: false,
                 pinned_vars: Vec::new(),
+                live_share: LiveShareSettings::default(),
             }
         );
     }
@@ -1626,6 +1657,7 @@ mod tests {
             check_for_updates: false,
             sanitize_vars_on_save: true,
             pinned_vars: vec![String::from("req_access")],
+            live_share: LiveShareSettings::default(),
         };
         settings.keybindings.rebind(
             KeybindAction::ShowAreas,
@@ -1708,6 +1740,7 @@ mod tests {
             check_for_updates: true,
             sanitize_vars_on_save: false,
             pinned_vars: Vec::new(),
+            live_share: LiveShareSettings::default(),
         };
         let mut options = FrameOptions::default();
 

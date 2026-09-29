@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const MAX_NICK_LEN: usize = 32;
+pub const MAX_COMMENT_LEN: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PeerId(pub u32);
@@ -25,17 +26,43 @@ pub struct ClientHello {
     pub codebase: CodebaseId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ClientMessage {
-    Hello(ClientHello),
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct CommentId(pub u32);
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Comment {
+    pub id: CommentId,
+    pub author: PeerId,
+    pub map: String,
+    pub z: u32,
+    pub pos: [f32; 2],
+    pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ClientMessage {
+    Hello(ClientHello),
+    Comment {
+        map: String,
+        z: u32,
+        pos: [f32; 2],
+        text: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ServerMessage {
-    Welcome { you: PeerId, peers: Vec<PeerInfo> },
-    Reject { reason: String },
+    Welcome {
+        you: PeerId,
+        peers: Vec<PeerInfo>,
+        comments: Vec<Comment>,
+    },
+    Reject {
+        reason: String,
+    },
     PeerJoined(PeerInfo),
     PeerLeft(PeerId),
+    Comment(Comment),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -85,10 +112,26 @@ mod tests {
             password: String::from("hunter2"),
             codebase: peer(1).codebase,
         }));
+        let comment = Comment {
+            id: CommentId(4),
+            author: PeerId(1),
+            map: String::from("_maps/test.dmm"),
+            z: 1,
+            pos: [16.0, 48.5],
+            text: String::from("needs more firelocks"),
+        };
         round_trip(ServerMessage::Welcome {
             you: PeerId(2),
             peers: vec![peer(1), peer(2)],
+            comments: vec![comment.clone()],
         });
+        round_trip(ClientMessage::Comment {
+            map: comment.map.clone(),
+            z: comment.z,
+            pos: comment.pos,
+            text: comment.text.clone(),
+        });
+        round_trip(ServerMessage::Comment(comment));
         round_trip(ServerMessage::Reject {
             reason: String::from("wrong password"),
         });

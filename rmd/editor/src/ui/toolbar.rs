@@ -4,6 +4,7 @@ use dear_imgui_rs::{StyleColor, StyleVar, Ui};
 use editor::{
     icons::materialdesignicons::{
         ICON_CIRCLE_SMALL,
+        ICON_COMMENT_TEXT_OUTLINE,
         ICON_ERASER,
         ICON_EYEDROPPER,
         ICON_FIND_REPLACE,
@@ -104,6 +105,11 @@ pub(super) fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRe
     if session.node_tool_available() {
         ui.same_line();
         draw_tool_button(ui, session, keybindings, Tool::Node, ICON_VECTOR_POLYLINE);
+    }
+
+    if session.comment_tool_available() {
+        ui.same_line();
+        draw_tool_button(ui, session, keybindings, Tool::Comment, ICON_COMMENT_TEXT_OUTLINE);
     }
     ui.same_line();
     draw_block_select_tool_button(ui, session, block_selection_options, keybindings, selection_busy);
@@ -344,6 +350,10 @@ fn draw_tool_button(ui: &Ui, session: &mut Session, keybindings: KeyBindings, to
         Tool::Fill => (
             KeybindAction::FillTool,
             String::from("Click to fill a connected region"),
+        ),
+        Tool::Comment => (
+            KeybindAction::CommentTool,
+            String::from("Click to leave a comment for everyone in the live session"),
         ),
     };
     ui.set_item_tooltip(format!(

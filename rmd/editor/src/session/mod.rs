@@ -30,6 +30,7 @@ mod guides;
 mod highlight;
 mod instance;
 mod level;
+mod live;
 mod node;
 mod palette;
 mod panel;
@@ -57,6 +58,7 @@ pub(crate) use self::{
     guides::GuideBadge,
     instance::{EditScope, SelectedTransform},
     level::validate_level,
+    live::{LiveShare, LiveStatus},
     node::NodeOverlay,
     palette::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
     preview::{BlockPreviewSource, PlacementPreview},
@@ -106,6 +108,7 @@ pub struct Session {
     ui_feedback: Option<editor::bake::UiFeedback>,
     node_edit: Option<NodeEditState>,
     identical: Option<instance::IdenticalCache>,
+    live: Option<LiveShare>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +151,7 @@ impl Session {
             ui_feedback: None,
             node_edit: None,
             identical: None,
+            live: None,
         }
     }
 }

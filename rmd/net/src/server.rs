@@ -14,7 +14,19 @@ use protocol::{
     FrameReader,
     Hello,
     Service,
-    live::{ClientHello, ClientMessage, Datagram, MAX_NICK_LEN, PeerId, PeerInfo, Relayed, ServerMessage},
+    live::{
+        ClientHello,
+        ClientMessage,
+        Comment,
+        CommentId,
+        Datagram,
+        MAX_COMMENT_LEN,
+        MAX_NICK_LEN,
+        PeerId,
+        PeerInfo,
+        Relayed,
+        ServerMessage,
+    },
 };
 use quinn::{Connection, Endpoint};
 use ring::rand::SecureRandom;
@@ -66,7 +78,7 @@ impl Server {
         let addr = endpoint.local_addr().map_err(fail)?;
         let shared = Arc::new(Shared {
             password: config.password.clone(),
-            peers: Mutex::default(),
+            state: Mutex::default(),
             next_id: AtomicU32::new(1),
         });
 
@@ -109,8 +121,14 @@ impl Drop for Server {
 
 struct Shared {
     password: String,
-    peers: Mutex<HashMap<PeerId, Peer>>,
+    state: Mutex<State>,
     next_id: AtomicU32,
+}
+
+#[derive(Default)]
+struct State {
+    peers: HashMap<PeerId, Peer>,
+    comments: Vec<Comment>,
 }
 
 struct Peer {
@@ -121,8 +139,8 @@ struct Peer {
 
 impl Shared {
     fn broadcast(&self, from: PeerId, message: &ServerMessage) {
-        let peers = self.peers.lock().unwrap();
-        for (id, peer) in peers.iter() {
+        let state = self.state.lock().unwrap();
+        for (id, peer) in state.peers.iter() {
             if *id != from {
                 let _ = peer.outbox.send(message.clone());
             }
@@ -139,12 +157,34 @@ impl Shared {
         };
 
         let relayed = Bytes::from(relayed);
-        let peers = self.peers.lock().unwrap();
-        for (id, peer) in peers.iter() {
+        let state = self.state.lock().unwrap();
+        for (id, peer) in state.peers.iter() {
             if *id != from {
                 let _ = peer.connection.send_datagram(relayed.clone());
             }
         }
+    }
+
+    fn comment(&self, author: PeerId, map: String, z: u32, pos: [f32; 2], text: &str) {
+        let Some(text) = clean_text(text, MAX_COMMENT_LEN) else {
+            return;
+        };
+
+        let mut state = self.state.lock().unwrap();
+        let comment = Comment {
+            id: CommentId(state.comments.len() as u32 + 1),
+            author,
+            map,
+            z,
+            pos,
+            text,
+        };
+
+        for peer in state.peers.values() {
+            let _ = peer.outbox.send(ServerMessage::Comment(comment.clone()));
+        }
+
+        state.comments.push(comment);
     }
 }
 
@@ -221,16 +261,20 @@ async fn session(connection: &Connection, shared: &Shared) -> Result<(), Error> 
 
     let (outbox, mut inbox) = mpsc::unbounded_channel();
     {
-        let mut peers = shared.peers.lock().unwrap();
-        let mut others = peers.values().map(|peer| peer.info.clone()).collect::<Vec<_>>();
+        let mut state = shared.state.lock().unwrap();
+        let mut others = state.peers.values().map(|peer| peer.info.clone()).collect::<Vec<_>>();
         others.sort_by_key(|peer| peer.id);
 
-        let _ = outbox.send(ServerMessage::Welcome { you: id, peers: others });
-        for peer in peers.values() {
+        let _ = outbox.send(ServerMessage::Welcome {
+            you: id,
+            peers: others,
+            comments: state.comments.clone(),
+        });
+        for peer in state.peers.values() {
             let _ = peer.outbox.send(ServerMessage::PeerJoined(info.clone()));
         }
 
-        peers.insert(
+        state.peers.insert(
             id,
             Peer {
                 info: info.clone(),
@@ -254,6 +298,7 @@ async fn session(connection: &Connection, shared: &Shared) -> Result<(), Error> 
                 },
                 message = read_message::<ClientMessage>(&mut recv, &mut reader) => match message? {
                     Some(ClientMessage::Hello(_)) => return Err(fail("sent a second hello")),
+                    Some(ClientMessage::Comment { map, z, pos, text }) => shared.comment(id, map, z, pos, &text),
                     None => return Ok(()),
                 },
                 datagram = connection.read_datagram() => shared.relay(id, &datagram.map_err(fail)?),
@@ -262,7 +307,7 @@ async fn session(connection: &Connection, shared: &Shared) -> Result<(), Error> 
     }
     .await;
 
-    shared.peers.lock().unwrap().remove(&id);
+    shared.state.lock().unwrap().peers.remove(&id);
     shared.broadcast(id, &ServerMessage::PeerLeft(id));
     log::info!("{} left", info.nick);
 
@@ -277,6 +322,7 @@ async fn handshake(recv: &mut quinn::RecvStream, reader: &mut FrameReader) -> Re
     hello.check(Service::LiveShare).map_err(fail)?;
     match read_message::<ClientMessage>(recv, reader).await? {
         Some(ClientMessage::Hello(hello)) => Ok(hello),
+        Some(_) => Err(fail("skipped the handshake")),
         None => Err(fail("closed before the handshake")),
     }
 }
@@ -286,18 +332,14 @@ fn admit(password: &str, hello: &ClientHello) -> Result<String, &'static str> {
         return Err("wrong password");
     }
 
-    clean_nick(&hello.nick).ok_or("nick is empty")
+    clean_text(&hello.nick, MAX_NICK_LEN).ok_or("nick is empty")
 }
 
-fn clean_nick(nick: &str) -> Option<String> {
-    let nick = nick
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(MAX_NICK_LEN)
-        .collect::<String>();
+fn clean_text(text: &str, max: usize) -> Option<String> {
+    let text = text.chars().filter(|c| !c.is_control()).take(max).collect::<String>();
 
-    let nick = nick.trim();
-    (!nick.is_empty()).then(|| nick.to_owned())
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 #[cfg(test)]
@@ -306,9 +348,12 @@ mod tests {
 
     #[test]
     fn nicks_lose_control_characters_and_excess_length() {
-        assert_eq!(clean_nick("  mapper\n"), Some(String::from("mapper")));
-        assert_eq!(clean_nick("\u{7}\t "), None);
-        assert_eq!(clean_nick(&"a".repeat(100)).map(|nick| nick.len()), Some(MAX_NICK_LEN));
+        assert_eq!(clean_text("  mapper\n", MAX_NICK_LEN), Some(String::from("mapper")));
+        assert_eq!(clean_text("\u{7}\t ", MAX_NICK_LEN), None);
+        assert_eq!(
+            clean_text(&"a".repeat(100), MAX_NICK_LEN).map(|nick| nick.len()),
+            Some(MAX_NICK_LEN)
+        );
     }
 
     #[test]

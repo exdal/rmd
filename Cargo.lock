@@ -857,6 +857,7 @@ dependencies = [
  "ir",
  "jiff",
  "log",
+ "net",
  "objtree",
  "png",
  "preprocessor",

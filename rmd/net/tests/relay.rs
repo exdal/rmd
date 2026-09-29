@@ -53,14 +53,14 @@ fn cursors_reach_the_other_peers_stamped_with_the_sender() {
 
     let alice = join(&server, PASSWORD, "alice");
     let (alice_id, peers) = wait_for(&alice, |event| match event {
-        Event::Connected { you, peers } => Some((you, peers)),
+        Event::Connected { you, peers, .. } => Some((you, peers)),
         _ => None,
     });
     assert!(peers.is_empty());
 
     let bob = join(&server, PASSWORD, "bob");
     let (bob_id, peers) = wait_for(&bob, |event| match event {
-        Event::Connected { you, peers } => Some((you, peers)),
+        Event::Connected { you, peers, .. } => Some((you, peers)),
         _ => None,
     });
     assert_eq!(peers.len(), 1);
@@ -134,4 +134,41 @@ fn an_unreachable_host_disconnects() {
         Event::Disconnected(reason) => Some(reason),
         _ => None,
     });
+}
+
+#[test]
+fn comments_reach_everyone_and_late_joiners() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    let alice_id = wait_for(&alice, |event| match event {
+        Event::Connected { you, .. } => Some(you),
+        _ => None,
+    });
+
+    let bob = join(&server, PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    alice.send_comment(
+        String::from("_maps/test.dmm"),
+        1,
+        [32.0, 64.0],
+        String::from("  move this door\n"),
+    );
+    for client in [&alice, &bob] {
+        let comment = wait_for(client, |event| match event {
+            Event::Comment(comment) => Some(comment),
+            _ => None,
+        });
+        assert_eq!(comment.author, alice_id);
+        assert_eq!(comment.text, "move this door");
+    }
+
+    alice.send_comment(String::from("_maps/test.dmm"), 1, [0.0, 0.0], String::from("   "));
+    let carol = join(&server, PASSWORD, "carol");
+    let comments = wait_for(&carol, |event| match event {
+        Event::Connected { comments, .. } => Some(comments),
+        _ => None,
+    });
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].text, "move this door");
 }

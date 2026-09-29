@@ -6,6 +6,7 @@ use super::{
     ScreenshotArea,
     ScreenshotRequest,
     UiState,
+    live::{LiveDialogKind, draw_live_status},
     viewport::EditCommand,
     welcome::codebase_relative,
 };
@@ -44,6 +45,7 @@ pub(super) struct MenuActions {
     pub(super) go_to: bool,
     pub(super) resize_map: bool,
     pub(super) reset_layout: bool,
+    pub(super) live_dialog: Option<LiveDialogKind>,
 }
 
 impl UiState {
@@ -323,11 +325,33 @@ impl UiState {
                     session.refresh_git();
                 }
             });
+            ui.menu("Live Share", || {
+                let idle = session.live().is_none() && session.tree().is_some() && !loading;
+                if ui.menu_item_enabled_selected_no_shortcut("Host...", false, idle) {
+                    actions.live_dialog = Some(LiveDialogKind::Host);
+                }
+
+                if ui.menu_item_enabled_selected_no_shortcut("Join...", false, idle) {
+                    actions.live_dialog = Some(LiveDialogKind::Join);
+                }
+
+                ui.separator();
+                let hosting = session.live().is_some_and(|live| live.is_hosting());
+                let label = if hosting { "Stop hosting" } else { "Leave" };
+                if ui.menu_item_enabled_selected_no_shortcut(label, false, session.live().is_some()) {
+                    session.leave_live();
+                }
+            });
             ui.menu("Window", || {
                 if ui.menu_item("Reset layout") {
                     actions.reset_layout = true;
                 }
             });
+
+            if let Some(live) = session.live() {
+                ui.separator();
+                draw_live_status(ui, live);
+            }
         });
 
         actions

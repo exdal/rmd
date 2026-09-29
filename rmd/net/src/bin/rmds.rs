@@ -1,4 +1,4 @@
-// rmds [--port 7777] [--password <password>]
+// rmds [--port 3131] [--password <password>]
 
 use std::{
     net::{Ipv4Addr, SocketAddr},
@@ -7,10 +7,10 @@ use std::{
 
 use net::{Server, ServerConfig};
 
-const DEFAULT_PORT: u16 = 7777;
+const DEFAULT_PORT: u16 = 3131;
 
 fn usage() -> ExitCode {
-    log::error!("usage: rmds [--port 7777] [--password <password>]");
+    log::error!("usage: rmds [--port 3131] [--password <password>]");
 
     ExitCode::FAILURE
 }

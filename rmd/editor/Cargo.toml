@@ -23,6 +23,7 @@ codegen = { path = "../codegen" }
 vm = { path = "../vm" }
 dmm = { path = "../dmm" }
 dmi = { path = "../dmi" }
+net = { path = "../net" }
 render = { path = "../render" }
 winit = "0.30.12"
 raw-window-handle = "0.6.0"

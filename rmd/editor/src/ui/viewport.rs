@@ -60,6 +60,7 @@ use super::{
     draw_tile_grid,
     draw_top_overlay,
     find::JumpTarget,
+    live::{COMMENT_POPUP, CommentDraft, draw_comment_composer, draw_comments, draw_remote_cursors},
     node_right_click,
     overlay_padding,
     paste_controls,
@@ -104,7 +105,7 @@ pub(super) enum EditCommand {
     Deselect,
 }
 
-const TOOL_KEYS: [(KeybindAction, Tool); 7] = [
+const TOOL_KEYS: [(KeybindAction, Tool); 8] = [
     (KeybindAction::PlaceTool, Tool::Place),
     (KeybindAction::SelectTool, Tool::Select),
     (KeybindAction::NodeTool, Tool::Node),
@@ -112,6 +113,7 @@ const TOOL_KEYS: [(KeybindAction, Tool); 7] = [
     (KeybindAction::DeleteTool, Tool::Delete),
     (KeybindAction::ReplaceTool, Tool::Replace),
     (KeybindAction::FillTool, Tool::Fill),
+    (KeybindAction::CommentTool, Tool::Comment),
 ];
 
 /// aka Alternate tool
@@ -287,11 +289,11 @@ fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewInteraction) 
         (Tool::Place | Tool::BlockSelect | Tool::Fill, _) => InteractionMode::Place,
         (Tool::Select | Tool::Replace, InteractionMode::Select { pick }) => InteractionMode::Select { pick },
         (Tool::Delete, InteractionMode::Delete { pick }) => InteractionMode::Delete { pick },
-        (Tool::Select | Tool::Replace | Tool::Node, _) => InteractionMode::Select { pick: None },
+        (Tool::Select | Tool::Replace | Tool::Node | Tool::Comment, _) => InteractionMode::Select { pick: None },
         (Tool::Delete, _) => InteractionMode::Delete { pick: None },
     };
     match tool {
-        Tool::Place | Tool::Node | Tool::BlockSelect | Tool::Fill => {
+        Tool::Place | Tool::Node | Tool::BlockSelect | Tool::Fill | Tool::Comment => {
             interaction.cursor = None;
             interaction.selected = None;
         },
@@ -305,7 +307,7 @@ fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewInteraction) 
 fn interaction_mode(tool: Tool) -> InteractionMode {
     match tool {
         Tool::Place | Tool::BlockSelect | Tool::Fill => InteractionMode::Place,
-        Tool::Select | Tool::Replace | Tool::Node => InteractionMode::Select { pick: None },
+        Tool::Select | Tool::Replace | Tool::Node | Tool::Comment => InteractionMode::Select { pick: None },
         Tool::Delete => InteractionMode::Delete { pick: None },
     }
 }
@@ -750,6 +752,17 @@ impl UiState {
             }
 
             draw_guide_badges(ui, camera, viewport_min, viewport_max, guide_badges);
+            if let Some(live) = session.live()
+                && let Some(map) = session.live_map_key(id)
+                && let Some(z) = session.state.document(id).map(|document| document.z)
+            {
+                draw_comments(ui, camera, viewport_min, viewport_max, live, &map, z);
+                draw_remote_cursors(ui, camera, viewport_min, viewport_max, live, &map, z);
+            }
+
+            if self.comment_draft.as_ref().is_some_and(|draft| draft.document == id) {
+                draw_comment_composer(ui, session, &mut self.comment_draft);
+            }
 
             let in_viewport = |point: [f32; 2]| {
                 let local = [point[0] - viewport_min[0], point[1] - viewport_min[1]];
@@ -773,6 +786,13 @@ impl UiState {
                 camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
             });
             *hovered_coord = pointed_coord;
+            if is_active && let Some(map) = session.live_map_key(id) {
+                session.live_cursor(cursor.map(|cursor| net::Cursor {
+                    map,
+                    z: session.z(),
+                    pos: camera.screen_to_map(cursor),
+                }));
+            }
             let hovered_conflict = pointed_coord.and_then(|coord| {
                 session
                     .git_state(id)
@@ -1146,7 +1166,7 @@ impl UiState {
                             .draw_placement_direction(ui, session, settings, camera, pointed_coord, gizmo_map_view)
                             .captures_mouse
                     },
-                    Tool::Node => {
+                    Tool::Node | Tool::Comment => {
                         self.gizmo.cancel();
 
                         false
@@ -1396,6 +1416,13 @@ impl UiState {
                                 }
                             },
                             Tool::Node => {},
+                            Tool::Comment => {
+                                self.placement_stroke = None;
+                                if left_clicked {
+                                    self.comment_draft = Some(CommentDraft::new(id, camera.screen_to_map(cursor)));
+                                    ui.open_popup(COMMENT_POPUP);
+                                }
+                            },
                             Tool::BlockSelect => {
                                 self.placement_stroke = None;
                                 if block_placement.is_none()

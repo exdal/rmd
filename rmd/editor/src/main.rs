@@ -1002,6 +1002,7 @@ impl ApplicationHandler for App {
                 }
                 self.session.poll_bake();
                 self.session.poll_git();
+                self.session.poll_live();
 
                 if redraw.exit {
                     if let Err(e) = self.shutdown() {

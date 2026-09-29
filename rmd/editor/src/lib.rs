@@ -215,7 +215,7 @@ impl Environment {
             .chain(self.bake_files.iter())
             .chain(&self.icon_files)
             .filter(|path| !environment::is_map(path))
-            .filter_map(|path| Some((fingerprint_key(base, path)?, path)))
+            .filter_map(|path| Some((codebase_key(base, path)?, path)))
             .collect::<Vec<_>>();
 
         files.sort_unstable();
@@ -244,7 +244,7 @@ impl Environment {
 }
 
 // the prelude and anything else outside the codebase is left out
-fn fingerprint_key(base: &Path, path: &Path) -> Option<String> {
+pub fn codebase_key(base: &Path, path: &Path) -> Option<String> {
     let relative = path.strip_prefix(base).ok()?;
     let parts = relative
         .components()
