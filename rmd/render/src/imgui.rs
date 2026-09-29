@@ -619,11 +619,11 @@ impl ImGuiPass {
                 None => {
                     // a patch lands over what is already there, so only a texture this upload
                     // created has nothing to preserve
-                    let layout = match texture.uploaded {
-                        true => TEXTURE_RESTING.into(),
-                        false => vk::ImageLayout::UNDEFINED,
+                    let (layout, access) = match texture.uploaded {
+                        true => (TEXTURE_RESTING.into(), TEXTURE_RESTING),
+                        false => (vk::ImageLayout::UNDEFINED, Access::None),
                     };
-                    let value = module.import_attachment(&texture.attachment(layout));
+                    let value = module.import_attachment(&texture.attachment(layout), access);
                     module.set_name(value, format!("imgui texture {}", upload.texture.id()));
                     values.push((upload.texture, value));
                     values.len().saturating_sub(1)

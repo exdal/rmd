@@ -2,9 +2,6 @@ import common;
 import spec;
 import sprite_shared;
 
-[[vk::binding(0, 0)]]
-Sampler2D scene;
-
 [[vk::binding(1, 0)]]
 Texture2D<u32> visibility;
 
@@ -88,15 +85,8 @@ func marching_color(f32 path_position, f32 stripe_offset) -> f32x4 {
     return wrapped < 6.0 ? f32x4(1.0) : accent_color();
 }
 
-func tint_with(f32x4 color, f32x4 accent, f32 strength) -> f32x4 {
-    // premultiplied, like the scene it blends over
-    let tint = f32x4(accent.rgb * color.a, color.a);
-
-    return lerp(color, tint, strength);
-}
-
-func tint_color(f32x4 color, f32 strength) -> f32x4 {
-    return tint_with(color, accent_color(), strength);
+func tint_with(f32x4 accent, f32 strength) -> f32x4 {
+    return f32x4(accent.rgb * strength, strength);
 }
 
 [shader("fragment")]
@@ -109,7 +99,6 @@ func fs_main(
     uniform u32x2 focused_area_owner,
     uniform u32 connected_count
 ) -> f32x4 {
-    let color = scene.Sample(input.uv);
     let pixel = i32x2(input.position.xy);
     u32 width;
     u32 height;
@@ -127,23 +116,31 @@ func fs_main(
     }
 
     if (!any(selected_owner != u32x2(0)) && !any(hovered_owner != u32x2(0)) && connected_count == 0) {
-        return color;
+        discard;
     }
 
     let owner = owner_at(pixel, width, height);
     let on_selected = any(selected_owner != u32x2(0)) && same_owner(owner, selected_owner);
     if (on_selected) {
-        return HIGHLIGHT_TINT ? tint_color(color, SELECTED_TINT_STRENGTH) : color;
+        if (!HIGHLIGHT_TINT) {
+            discard;
+        }
+
+        return tint_with(accent_color(), SELECTED_TINT_STRENGTH);
     }
 
     // the selection's links read as orange in either highlight style, matching their guide lines
     if (is_connected_owner(owner, connected_count)) {
-        return tint_with(color, GUIDE_ACCENT, CONNECTED_TINT_STRENGTH);
+        return tint_with(GUIDE_ACCENT, CONNECTED_TINT_STRENGTH);
     }
 
     let on_hovered = any(hovered_owner != u32x2(0)) && same_owner(owner, hovered_owner);
     if (on_hovered) {
-        return HIGHLIGHT_TINT ? tint_color(color, HOVERED_TINT_STRENGTH) : color;
+        if (!HIGHLIGHT_TINT) {
+            discard;
+        }
+
+        return tint_with(accent_color(), HOVERED_TINT_STRENGTH);
     }
 
     // tinting fills the sprite itself, so nothing is traced around it
@@ -178,7 +175,8 @@ func fs_main(
         }
     }
 
-    return color;
+    discard;
+    return f32x4(0.0);  // fuck off slang
 }
 
 [shader("compute")]

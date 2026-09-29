@@ -2,7 +2,7 @@
 
 use std::ffi::CStr;
 
-use ash::{khr, vk};
+use ash::{ext, khr, vk};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use vir::{Context, DomainFlag, Image, ImageAttachment, PersistentAllocator, SwapChain, allocator::Allocator};
 
@@ -146,12 +146,16 @@ impl Device {
 }
 
 fn create_instance(entry: &ash::Entry, window: RawWindowHandle) -> Result<ash::Instance, GpuError> {
-    let extensions = [
-        khr::surface::NAME.to_owned(),
-        khr::get_surface_capabilities2::NAME.to_owned(),
-        khr::get_physical_device_properties2::NAME.to_owned(),
-        surface_extension(window)?.to_owned(),
+    let mut extensions = vec![
+        khr::surface::NAME,
+        khr::get_surface_capabilities2::NAME,
+        khr::get_physical_device_properties2::NAME,
+        surface_extension(window)?,
     ];
+    let available = unsafe { entry.enumerate_instance_extension_properties(None) }?;
+    if has_extension(&available, ext::debug_utils::NAME) {
+        extensions.push(ext::debug_utils::NAME);
+    }
     let pointers = extensions.iter().map(|name| name.as_ptr()).collect::<Vec<_>>();
 
     let app_info = vk::ApplicationInfo::default()
@@ -183,12 +187,7 @@ fn select_physical_device(
             }
 
             let extensions = unsafe { instance.enumerate_device_extension_properties(handle) }.ok()?;
-            let has_swapchain = extensions
-                .iter()
-                .filter_map(|e| e.extension_name_as_c_str().ok())
-                .any(|name| name == khr::swapchain::NAME);
-
-            if !has_swapchain {
+            if !has_extension(&extensions, khr::swapchain::NAME) {
                 return None;
             }
 
@@ -198,6 +197,17 @@ fn select_physical_device(
             if features.features.independent_blend == vk::FALSE
                 || vk12.runtime_descriptor_array == vk::FALSE
                 || vk12.shader_sampled_image_array_non_uniform_indexing == vk::FALSE
+            {
+                return None;
+            }
+
+            let mut subgroup = vk::PhysicalDeviceSubgroupProperties::default();
+            let mut properties2 = vk::PhysicalDeviceProperties2::default().push_next(&mut subgroup);
+            unsafe { instance.get_physical_device_properties2(handle, &mut properties2) };
+            if !subgroup.supported_stages.contains(vk::ShaderStageFlags::COMPUTE)
+                || !subgroup
+                    .supported_operations
+                    .contains(vk::SubgroupFeatureFlags::BASIC | vk::SubgroupFeatureFlags::BALLOT)
             {
                 return None;
             }
@@ -257,7 +267,11 @@ fn create_device(instance: &ash::Instance, physical_device: vk::PhysicalDevice) 
         })
         .collect::<Vec<_>>();
 
-    let extensions = [khr::swapchain::NAME.as_ptr()];
+    let mut extensions = vec![khr::swapchain::NAME.as_ptr()];
+    let available = unsafe { instance.enumerate_device_extension_properties(physical_device) }?;
+    if has_extension(&available, khr::push_descriptor::NAME) {
+        extensions.push(khr::push_descriptor::NAME.as_ptr());
+    }
 
     let mut vk13 = vk::PhysicalDeviceVulkan13Features::default()
         .synchronization2(true)
@@ -289,6 +303,13 @@ fn create_device(instance: &ash::Instance, physical_device: vk::PhysicalDevice) 
         .push_next(&mut features);
 
     Ok(unsafe { instance.create_device(physical_device, &create_info, None) }?)
+}
+
+fn has_extension(extensions: &[vk::ExtensionProperties], name: &CStr) -> bool {
+    extensions
+        .iter()
+        .filter_map(|extension| extension.extension_name_as_c_str().ok())
+        .any(|extension| extension == name)
 }
 
 fn first_queue(families: &[vk::QueueFamilyProperties], flags: vk::QueueFlags) -> Option<u32> {

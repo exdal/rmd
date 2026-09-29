@@ -4,6 +4,7 @@ module spec;
 [[vk::constant_id(2)]] public const bool SPRITE_EDGE_ONLY = false;
 [[vk::constant_id(3)]] public const bool SHOW_AREAS = false;
 [[vk::constant_id(4)]] public const bool SHOW_AREA_OUTLINES = true;
+[[vk::constant_id(5)]] public const uint SPRITE_LIST = 0;
 
 [[vk::constant_id(10)]] public const bool HIGHLIGHT_TINT = false;
 [[vk::constant_id(11)]] public const bool DELETE_MODE = false;

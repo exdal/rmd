@@ -11,9 +11,6 @@ StructuredBuffer<Sprite> sprites;
 [[vk::binding(2, 0)]]
 StructuredBuffer<u32> visible_sprite_indices;
 
-[[vk::binding(3, 0)]]
-Texture2D<u32> rendered_levels;
-
 struct VSOutput {
     f32x4 position : SV_Position;
     f32x2 uv;
@@ -43,7 +40,14 @@ func vs_main(
     uniform f32 placement_flash_strength
 ) -> VSOutput {
     let slot = instance_id + base;
-    let sprite_index = SPRITE_INDIRECT ? visible_sprite_indices[slot] : slot;
+    var sprite_index = slot;
+    if (SPRITE_INDIRECT) {
+        u32 capacity;
+        u32 stride;
+        visible_sprite_indices.GetDimensions(capacity, stride);
+        sprite_index = visible_sprite_indices[SPRITE_LIST * (capacity / SPRITE_LIST_COUNT) + slot];
+    }
+
     let sprite = sprites[sprite_index];
     let corner = CORNERS[vertex_id & 3];
     let position_size = sprite.position_size();
@@ -55,7 +59,7 @@ func vs_main(
     let clip = view / (viewport * 0.5);
 
     VSOutput output;
-    output.position = f32x4(clip.x, -clip.y, 0.0, 1.0);
+    output.position = f32x4(clip.x, -clip.y, f32(sprite.z) / LEVEL_DEPTH_SCALE, 1.0);
     let local_uv = f32x2(corner.x, 1.0 - corner.y);
     output.uv = f32x2(sprite.source_position()) + local_uv * f32x2(sprite.source_size());
     output.local = corner;
@@ -154,7 +158,6 @@ func fs_main(VSOutput input) -> f32x4 {
 struct SceneOutput {
     f32x4 color : SV_Target0;
     f32x4 emissive : SV_Target1;
-    u32 level : SV_Target2;
 };
 
 [shader("fragment")]
@@ -180,7 +183,6 @@ func fs_scene(VSOutput input) -> SceneOutput {
     output.emissive = (flags & (SPRITE_FLAG_EMISSIVE_MASK | SPRITE_FLAG_FULLBRIGHT)) != 0
         ? f32x4(color.a)
         : f32x4(0.0, 0.0, 0.0, color.a);
-    output.level = sprites[input.sprite_id - 1].z;
 
     return output;
 }
@@ -215,9 +217,6 @@ func fs_overlay_light(VSOutput input) -> f32x4 {
     let add = (flags & SPRITE_FLAG_OVERLAY_LIGHT) != 0;
     let subtract = (flags & SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT) != 0;
     if (!add && !subtract) {
-        discard;
-    }
-    if (sprites[input.sprite_id - 1].z != rendered_levels.Load(i32x3(i32x2(input.position.xy), 0))) {
         discard;
     }
 

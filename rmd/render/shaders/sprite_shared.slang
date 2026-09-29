@@ -18,6 +18,23 @@ public static const u32 SPRITE_FLAG_CLICK_THROUGH = 1 << 10;
 public static const u32 SPRITE_FLAGS_SHIFT = 21;
 public static const u32 SPRITE_TEXTURE_MASK = (1 << SPRITE_FLAGS_SHIFT) - 1;
 
+public static const u32 SPRITE_LIST_SCENE = 0;
+public static const u32 SPRITE_LIST_OVERLAY_LIGHT = 1;
+public static const u32 SPRITE_LIST_AREA_OUTLINE = 2;
+public static const u32 SPRITE_LIST_COUNT = 3;
+
+public func sprite_list(u32 flags) -> u32 {
+    if ((flags & SPRITE_AREA_EDGE_MASK) != 0) {
+        return SPRITE_LIST_AREA_OUTLINE;
+    }
+
+    if ((flags & (SPRITE_FLAG_OVERLAY_LIGHT | SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT)) != 0) {
+        return SPRITE_LIST_OVERLAY_LIGHT;
+    }
+
+    return SPRITE_LIST_SCENE;
+}
+
 public struct Sprite {
     public u32x2 owner;
     public u32x2 area_owner;

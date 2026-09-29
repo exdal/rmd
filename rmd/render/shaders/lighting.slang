@@ -1,7 +1,7 @@
 import common;
 
 [[vk::binding(0, 0)]]
-Sampler2D scene;
+Texture2D<f32x4> scene;
 
 struct LightTile {
     u32 southwest;
@@ -14,13 +14,13 @@ struct LightTile {
 StructuredBuffer<LightTile> light_tiles;
 
 [[vk::binding(2, 0)]]
-Sampler2D emissive_mask;
+Texture2D<f32> emissive_mask;
 
 [[vk::binding(3, 0)]]
-Sampler2D overlay_lightmap;
+Texture2D<f32x4> overlay_lightmap;
 
 [[vk::binding(4, 0)]]
-Texture2D<u32> rendered_levels;
+Texture2D<f32> rendered_levels;
 
 struct VSOutput {
     f32x4 position : SV_Position;
@@ -28,7 +28,7 @@ struct VSOutput {
 };
 
 [shader("vertex")]
-func vs_main(u32 vertex_id: SV_VertexID)->VSOutput {
+func vs_main(u32 vertex_id: SV_VertexID) -> VSOutput {
     let uv = f32x2((vertex_id << 1) & 2, vertex_id & 2);
 
     VSOutput output;
@@ -49,8 +49,11 @@ func fs_main(
     uniform u32 base,
     uniform f32 minimum_brightness
 ) -> f32x4 {
-    let color = scene.Sample(input.uv);
-    let level = rendered_levels.Load(i32x3(i32x2(input.position.xy), 0));
+    let pixel = i32x3(i32x2(input.position.xy), 0);
+    let color = scene.Load(pixel);
+    let emission = emissive_mask.Load(pixel);
+    let overlay_light = overlay_lightmap.Load(pixel).rgb;
+    let level = u32(round(rendered_levels.Load(pixel) * LEVEL_DEPTH_SCALE));
     if (zoom <= 0.0 || tile_size <= 0.0 || level == 0 || level > level_count) {
         return color;
     }
@@ -75,14 +78,12 @@ func fs_main(
     let south = lerp(southwest, southeast, local.x);
     let north = lerp(northwest, northeast, local.x);
     let light = lerp(south, north, local.y);
-    let overlay_light = overlay_lightmap.Sample(input.uv).rgb;
     let combined_light = saturate(light + overlay_light);
     let luminance = dot(combined_light, f32x3(0.2126, 0.7152, 0.0722));
     var displayed_light = combined_light;
     if (luminance < minimum_brightness) {
         displayed_light = lerp(combined_light, f32x3(1.0), (minimum_brightness - luminance) / (1.0 - luminance));
     }
-    let emission = emissive_mask.Sample(input.uv).r;
     let factor = lerp(displayed_light, f32x3(1.0), emission);
     let straight = color.a > 0.0 ? color.rgb / color.a : f32x3(0.0);
     let lit = srgb_to_linear(linear_to_srgb(straight) * factor) * color.a;

@@ -10,8 +10,11 @@ use vir::{
     Buffer,
     BufferImageCopy,
     BufferInfo,
+    ClearValue,
+    ColorBlendAttachmentState,
     ComputePipelineInfo,
     DRAW_INDIRECT_STRIDE,
+    DepthState,
     DomainFlag,
     DrawIndirectCommand,
     FrameAllocator,
@@ -78,9 +81,22 @@ const UPLOAD_BATCH_BYTES: usize = 64 * 1024 * 1024;
 const HIGHLIGHT_STRIPE_PERIOD: f32 = 12.0;
 const HIGHLIGHT_STRIPE_SPEED: f32 = 12.0;
 const CULL_WORKGROUP_SIZE: u32 = 64;
-const SPRITE_DRAW_COMMANDS: u64 = 2;
+// an underlay and an active command per list
+const SPRITE_DRAW_COMMANDS: u64 = 2 * SPRITE_LISTS as u64;
 const CAPTURE_TILE_SIZE: u32 = 2048;
 const CAPTURE_WORKGROUP_SIZE: u32 = 8;
+const LEVEL_DEPTH_FORMAT: vk::Format = vk::Format::D16_UNORM;
+const LEVEL_DEPTH_WRITE: DepthState = DepthState::testing(vk::CompareOp::ALWAYS);
+const HIGHLIGHT_BLEND: ColorBlendAttachmentState = ColorBlendAttachmentState {
+    blend_enable: true,
+    src_color_blend_factor: vk::BlendFactor::DST_ALPHA,
+    dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+    color_blend_op: vk::BlendOp::ADD,
+    src_alpha_blend_factor: vk::BlendFactor::ZERO,
+    dst_alpha_blend_factor: vk::BlendFactor::ONE,
+    alpha_blend_op: vk::BlendOp::ADD,
+    color_write_mask: vk::ColorComponentFlags::RGBA,
+};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -113,6 +129,11 @@ const SPRITE_FLAG_CLICK_THROUGH: u32 = 1 << 10;
 const SPRITE_FLAGS_SHIFT: u32 = 21;
 const SPRITE_TEXTURE_MASK: u32 = (1 << SPRITE_FLAGS_SHIFT) - 1;
 const SPRITE_TEXTURE_CAPACITY: u32 = SPRITE_TEXTURE_MASK + 1;
+// the cull sorts visible sprites into one list per kind, so each pass draws only what it shades
+const SPRITE_LIST_SCENE: u32 = 0;
+const SPRITE_LIST_OVERLAY_LIGHT: u32 = 1;
+const SPRITE_LIST_AREA_OUTLINE: u32 = 2;
+const SPRITE_LISTS: u32 = 3;
 const TEXTURE_RESERVE: usize = 8192;
 
 #[repr(C)]
@@ -146,14 +167,15 @@ struct CullPush {
     sprite_count: u32,
     chunk_count: u32,
     active_first_relative: u32,
+    list_capacity: u32,
 }
 
 #[repr(C)]
 struct CullChunk {
-    count: u32,
-    underlay_count: u32,
-    offset: u32,
-    underlay_offset: u32,
+    count: [u32; SPRITE_LISTS as usize],
+    underlay_count: [u32; SPRITE_LISTS as usize],
+    offset: [u32; SPRITE_LISTS as usize],
+    underlay_offset: [u32; SPRITE_LISTS as usize],
 }
 
 #[repr(C)]
@@ -222,6 +244,8 @@ struct LightingSlots {
 
 struct InteractionSlots {
     push: ValueId,
+    has_highlight: ValueId,
+    needs_visibility: ValueId,
     connected_owners: ValueId,
     pick_push: ValueId,
     highlight_draw: ValueId,
@@ -239,6 +263,38 @@ struct CullValues {
     visible: ValueId,
     chunks: ValueId,
     commands: ValueId,
+}
+
+fn sprite_draw_offset(list: u32, active: bool) -> u64 {
+    u64::from(DRAW_INDIRECT_STRIDE) * u64::from(list * 2 + u32::from(active))
+}
+
+fn scene_attachments(
+    color: ValueId, emissive: ValueId, level_depth: Option<ValueId>, commands: ValueId, visible: ValueId,
+) -> Vec<(ValueId, Access)> {
+    let mut attachments = vec![
+        (color, Access::ColorRW),
+        (emissive, Access::ColorRW),
+        (commands, Access::IndirectRead),
+        (visible, Access::VertexRead),
+    ];
+    if let Some(level_depth) = level_depth {
+        attachments.push((level_depth, Access::DepthStencilRW));
+    }
+    attachments
+}
+
+fn end_scene_pass(module: &mut Module, level_depth: Option<ValueId>) -> (ValueId, ValueId, Option<ValueId>) {
+    match level_depth {
+        Some(_) => {
+            let [color, emissive, _, _, level_depth] = module.end_rendering();
+            (color, emissive, Some(level_depth))
+        },
+        None => {
+            let [color, emissive, _, _] = module.end_rendering();
+            (color, emissive, None)
+        },
+    }
 }
 
 fn record_sprite_cull(
@@ -322,8 +378,9 @@ impl CullBuffers {
             .max(1024)
             .checked_next_power_of_two()
             .ok_or(GpuError::SpriteUploadTooLarge)?;
+        // every list gets a region of its own, as long as the whole range
         let indices = capacity
-            .checked_mul(size_of::<u32>())
+            .checked_mul(SPRITE_LISTS as usize * size_of::<u32>())
             .and_then(|size| u64::try_from(size).ok())
             .ok_or(GpuError::SpriteUploadTooLarge)?;
         let chunk_count = u32::try_from(capacity)
@@ -444,6 +501,7 @@ struct MapViewPass {
     visibility_attachment: ValueId,
     output_attachment: ValueId,
     extent: ValueId,
+    area_outlines: ValueId,
     camera: ValueId,
     underlay_camera: ValueId,
     active_camera: ValueId,
@@ -458,6 +516,7 @@ struct MapViewPass {
 
 struct MapScene {
     extent: ValueId,
+    area_outlines: ValueId,
     scene: ValueId,
     camera: ValueId,
     underlay_camera: ValueId,
@@ -470,6 +529,7 @@ struct MapScene {
 }
 
 struct GuideSlots {
+    has_lines: ValueId,
     lines: ValueId,
     push: ValueId,
     draw: ValueId,
@@ -551,7 +611,7 @@ struct MapViewPlan {
     visible: VisibleRange,
 }
 
-fn bind_sprite_cull(program: &mut Program, slots: &CullSlots, plan: &MapViewPlan) {
+fn bind_sprite_cull(program: &mut Program, slots: &CullSlots, plan: &MapViewPlan, buffers: &CullBuffers) {
     let sprite_count = plan.visible.count;
     program.set_bytes(
         slots.push,
@@ -564,6 +624,7 @@ fn bind_sprite_cull(program: &mut Program, slots: &CullSlots, plan: &MapViewPlan
             sprite_count,
             chunk_count: sprite_count.div_ceil(CULL_WORKGROUP_SIZE),
             active_first_relative: plan.visible.underlay_count,
+            list_capacity: buffers.sprite_capacity as u32,
         },
     );
     program.set(slots.sprite_count, sprite_count);
@@ -1095,7 +1156,6 @@ impl Renderer {
             .filter(|map_view| !map_view.rect.is_empty())
             .count();
         let cull = self.cull.get(cull_index).ok_or(GpuError::CaptureUnavailable)?;
-        let (cull_visible, cull_chunks, cull_commands) = (cull.visible, cull.chunks, cull.commands);
         let sprites = *self.sprites.as_ref().ok_or(GpuError::CaptureUnavailable)?;
         let lighting = match map_view.lighting.filter(|lighting| !lighting.tiles.is_empty()) {
             Some(lighting) => {
@@ -1150,10 +1210,11 @@ impl Renderer {
         let mut program = module.compile(&self.graph, pixels)?;
 
         program.set(scene.extent, extent3d(tile_extent));
+        program.set(scene.area_outlines, frame.show_area_outlines);
         program.set(sprites_slot, sprites);
-        program.set(scene.cull.visible, cull_visible);
-        program.set(scene.cull.chunks, cull_chunks);
-        program.set(scene.cull.commands, cull_commands);
+        program.set(scene.cull.visible, cull.visible);
+        program.set(scene.cull.chunks, cull.chunks);
+        program.set(scene.cull.commands, cull.commands);
         if let (Some(slot), Some((_, _, lights))) = (lights_slot, lighting) {
             program.set(slot, lights);
         }
@@ -1198,7 +1259,7 @@ impl Renderer {
                     },
                 );
                 program.set_bytes(scene.blur, &BlurPush::for_camera(&camera));
-                bind_sprite_cull(&mut program, &scene.cull, &plan);
+                bind_sprite_cull(&mut program, &scene.cull, &plan, cull);
                 if let (Some(slots), Some((lighting, base, _))) = (&scene.lighting, lighting) {
                     program.set_bytes(
                         slots.push,
@@ -1283,13 +1344,16 @@ impl Renderer {
             extent,
         );
         emissive_attachment = module.clear(emissive_attachment, vir::clear::f32::BLACK);
-        let mut level_attachment = module.transient_image_sized(
-            &ImageInfo::color_target(viewport, vk::Format::R32_UINT)
-                .with_usage(vk::ImageUsageFlags::SAMPLED)
-                .with_name(format!("{name} level attachment")),
-            extent,
-        );
-        level_attachment = module.clear(level_attachment, vir::clear::u32::TRANSPARENT);
+        // only lighting reads the level back
+        let mut level_depth = lights.map(|_| {
+            let depth = module.transient_image_sized(
+                &ImageInfo::depth_target(viewport, LEVEL_DEPTH_FORMAT)
+                    .with_usage(vk::ImageUsageFlags::SAMPLED)
+                    .with_name(format!("{name} level depth")),
+                extent,
+            );
+            module.clear(depth, ClearValue::depth(0.0))
+        });
 
         let visible_indices = module.declare_buffer_var(&format!("{name} visible sprite indices"), Access::VertexRead);
         let chunks = module.declare_buffer_var(&format!("{name} cull chunks"), Access::ComputeRead);
@@ -1326,14 +1390,14 @@ impl Renderer {
             );
             underlay_attachment = module.clear(underlay_attachment, vir::clear::f32::TRANSPARENT);
             // emissive and level still take the underlays so lighting picks their own level
-            [underlay_attachment, emissive_attachment, level_attachment, _, _] = module
-                .begin_rendering([
-                    (underlay_attachment, Access::ColorRW),
-                    (emissive_attachment, Access::ColorRW),
-                    (level_attachment, Access::ColorRW),
-                    (draw_commands, Access::IndirectRead),
-                    (visible_indices, Access::VertexRead),
-                ])
+            module
+                .begin_rendering(scene_attachments(
+                    underlay_attachment,
+                    emissive_attachment,
+                    level_depth,
+                    draw_commands,
+                    visible_indices,
+                ))
                 .with_name(format!("{name} underlays"))
                 .bind_graphics_pipeline(self.scene_pipeline)
                 .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
@@ -1341,7 +1405,7 @@ impl Renderer {
                 .set_scissor(0, Rect2D::framebuffer())
                 .set_color_blend(0, BlendPreset::PremultipliedAlphaBlend)
                 .set_color_blend(1, BlendPreset::PremultipliedAlphaBlend)
-                .set_color_blend(2, BlendPreset::Off)
+                .set_depth(LEVEL_DEPTH_WRITE)
                 .set_rasterization(RasterizationState {
                     cull_mode: vk::CullModeFlags::NONE,
                     ..Default::default()
@@ -1352,8 +1416,13 @@ impl Renderer {
                 .specialize_constant(spec::SHOW_AREAS, show_areas)
                 .specialize_constant(spec::SHOW_AREA_OUTLINES, show_area_outlines)
                 .push_constants_from(underlay_camera)
-                .draw_indirect_at(draw_commands, 0, 1u32, DRAW_INDIRECT_STRIDE)
-                .end_rendering();
+                .draw_indirect_at(
+                    draw_commands,
+                    sprite_draw_offset(SPRITE_LIST_SCENE, false),
+                    1u32,
+                    DRAW_INDIRECT_STRIDE,
+                );
+            (underlay_attachment, emissive_attachment, level_depth) = end_scene_pass(module, level_depth);
 
             [scene_attachment] = module
                 .begin_rendering([(scene_attachment, Access::ColorRW)])
@@ -1369,14 +1438,14 @@ impl Renderer {
                 .end_rendering();
         }
 
-        [scene_attachment, emissive_attachment, level_attachment, _, _] = module
-            .begin_rendering([
-                (scene_attachment, Access::ColorRW),
-                (emissive_attachment, Access::ColorRW),
-                (level_attachment, Access::ColorRW),
-                (draw_commands, Access::IndirectRead),
-                (visible_indices, Access::VertexRead),
-            ])
+        module
+            .begin_rendering(scene_attachments(
+                scene_attachment,
+                emissive_attachment,
+                level_depth,
+                draw_commands,
+                visible_indices,
+            ))
             .with_name(format!("{name} sprites"))
             .bind_graphics_pipeline(self.scene_pipeline)
             .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
@@ -1384,7 +1453,7 @@ impl Renderer {
             .set_scissor(0, Rect2D::framebuffer())
             .set_color_blend(0, BlendPreset::PremultipliedAlphaBlend)
             .set_color_blend(1, BlendPreset::PremultipliedAlphaBlend)
-            .set_color_blend(2, BlendPreset::Off)
+            .set_depth(LEVEL_DEPTH_WRITE)
             .set_rasterization(RasterizationState {
                 cull_mode: vk::CullModeFlags::NONE,
                 ..Default::default()
@@ -1397,13 +1466,13 @@ impl Renderer {
             .push_constants_from(active_camera)
             .draw_indirect_at(
                 draw_commands,
-                u64::from(DRAW_INDIRECT_STRIDE),
+                sprite_draw_offset(SPRITE_LIST_SCENE, true),
                 1u32,
                 DRAW_INDIRECT_STRIDE,
-            )
-            .end_rendering();
+            );
+        (scene_attachment, emissive_attachment, level_depth) = end_scene_pass(module, level_depth);
 
-        let lighting = if let Some(light_tiles) = lights {
+        let lighting = if let (Some(light_tiles), Some(level_depth)) = (lights, level_depth) {
             let mut overlay_lightmap = module.transient_image_sized(
                 &ImageInfo::color_target(viewport, vk::Format::R16G16B16A16_SFLOAT)
                     .with_usage(vk::ImageUsageFlags::SAMPLED)
@@ -1411,10 +1480,11 @@ impl Renderer {
                 extent,
             );
             overlay_lightmap = module.clear(overlay_lightmap, vir::clear::f32::BLACK);
-            [overlay_lightmap, _, _, _] = module
+            let lit_level;
+            [overlay_lightmap, lit_level, _, _] = module
                 .begin_rendering([
                     (overlay_lightmap, Access::ColorRW),
-                    (level_attachment, Access::FragmentSampled),
+                    (level_depth, Access::DepthStencilRead),
                     (draw_commands, Access::IndirectRead),
                     (visible_indices, Access::VertexRead),
                 ])
@@ -1424,22 +1494,29 @@ impl Renderer {
                 .set_viewport(0, Rect2D::framebuffer())
                 .set_scissor(0, Rect2D::framebuffer())
                 .broadcast_color_blend(BlendPreset::Additive)
+                // a light only lands where its own level is the one drawn
+                .set_depth(DepthState::read_only(vk::CompareOp::EQUAL))
                 .set_rasterization(RasterizationState {
                     cull_mode: vk::CullModeFlags::NONE,
                     ..Default::default()
                 })
                 .bind_buffer(0, 1, sprites)
                 .bind_buffer(0, 2, visible_indices)
-                .bind_image(0, 3, level_attachment)
                 .specialize_constant(spec::SPRITE_INDIRECT, true)
                 .specialize_constant(spec::SHOW_AREAS, show_areas)
                 .specialize_constant(spec::SHOW_AREA_OUTLINES, show_area_outlines)
+                .specialize_constant(spec::SPRITE_LIST, SPRITE_LIST_OVERLAY_LIGHT)
                 .push_constants_from(underlay_camera)
-                .draw_indirect_at(draw_commands, 0, 1u32, DRAW_INDIRECT_STRIDE)
+                .draw_indirect_at(
+                    draw_commands,
+                    sprite_draw_offset(SPRITE_LIST_OVERLAY_LIGHT, false),
+                    1u32,
+                    DRAW_INDIRECT_STRIDE,
+                )
                 .push_constants_from(active_camera)
                 .draw_indirect_at(
                     draw_commands,
-                    u64::from(DRAW_INDIRECT_STRIDE),
+                    sprite_draw_offset(SPRITE_LIST_OVERLAY_LIGHT, true),
                     1u32,
                     DRAW_INDIRECT_STRIDE,
                 )
@@ -1459,11 +1536,11 @@ impl Renderer {
                 .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_LIST)
                 .set_viewport(0, Rect2D::framebuffer())
                 .set_scissor(0, Rect2D::framebuffer())
-                .bind_texture(0, 0, scene_attachment, self.sampler)
+                .bind_image(0, 0, scene_attachment)
                 .bind_buffer(0, 1, light_tiles)
-                .bind_texture(0, 2, emissive_attachment, self.sampler)
-                .bind_texture(0, 3, overlay_lightmap, self.sampler)
-                .bind_image(0, 4, level_attachment)
+                .bind_image(0, 2, emissive_attachment)
+                .bind_image(0, 3, overlay_lightmap)
+                .bind_image(0, 4, lit_level)
                 .push_constants_from(push)
                 .draw(3, 1)
                 .end_rendering();
@@ -1474,39 +1551,49 @@ impl Renderer {
             None
         };
 
-        [scene_attachment, _, _] = module
-            .begin_rendering([
-                (scene_attachment, Access::ColorRW),
-                (draw_commands, Access::IndirectRead),
-                (visible_indices, Access::VertexRead),
-            ])
-            .with_name(format!("{name} area outlines"))
-            .bind_graphics_pipeline(self.sprite_pipeline)
-            .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-            .set_viewport(0, Rect2D::framebuffer())
-            .set_scissor(0, Rect2D::framebuffer())
-            .broadcast_color_blend(BlendPreset::PremultipliedAlphaBlend)
-            .set_rasterization(RasterizationState {
-                cull_mode: vk::CullModeFlags::NONE,
-                ..Default::default()
-            })
-            .bind_buffer(0, 1, sprites)
-            .bind_buffer(0, 2, visible_indices)
-            .specialize_constant(spec::SPRITE_INDIRECT, true)
-            .specialize_constant(spec::SHOW_AREAS, show_areas)
-            .specialize_constant(spec::SHOW_AREA_OUTLINES, show_area_outlines)
-            .specialize_constant(spec::SPRITE_EDGE_ONLY, true)
-            .push_constants_from(active_camera)
-            .draw_indirect_at(
-                draw_commands,
-                u64::from(DRAW_INDIRECT_STRIDE),
-                1u32,
-                DRAW_INDIRECT_STRIDE,
-            )
-            .end_rendering();
+        let area_outlines = module.declare_bool_var(&format!("{name} area outlines"), show_area_outlines);
+        let scene_attachment = module.set_condition(
+            area_outlines,
+            |m| {
+                let [outlined, _, _] = m
+                    .begin_rendering([
+                        (scene_attachment, Access::ColorRW),
+                        (draw_commands, Access::IndirectRead),
+                        (visible_indices, Access::VertexRead),
+                    ])
+                    .with_name(format!("{name} area outlines"))
+                    .bind_graphics_pipeline(self.sprite_pipeline)
+                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                    .set_viewport(0, Rect2D::framebuffer())
+                    .set_scissor(0, Rect2D::framebuffer())
+                    .broadcast_color_blend(BlendPreset::PremultipliedAlphaBlend)
+                    .set_rasterization(RasterizationState {
+                        cull_mode: vk::CullModeFlags::NONE,
+                        ..Default::default()
+                    })
+                    .bind_buffer(0, 1, sprites)
+                    .bind_buffer(0, 2, visible_indices)
+                    .specialize_constant(spec::SPRITE_INDIRECT, true)
+                    .specialize_constant(spec::SHOW_AREAS, show_areas)
+                    .specialize_constant(spec::SHOW_AREA_OUTLINES, show_area_outlines)
+                    .specialize_constant(spec::SPRITE_EDGE_ONLY, true)
+                    .specialize_constant(spec::SPRITE_LIST, SPRITE_LIST_AREA_OUTLINE)
+                    .push_constants_from(active_camera)
+                    .draw_indirect_at(
+                        draw_commands,
+                        sprite_draw_offset(SPRITE_LIST_AREA_OUTLINE, true),
+                        1u32,
+                        DRAW_INDIRECT_STRIDE,
+                    )
+                    .end_rendering();
+                outlined
+            },
+            |_| scene_attachment,
+        );
 
         MapScene {
             extent,
+            area_outlines,
             scene: scene_attachment,
             camera,
             underlay_camera,
@@ -1543,6 +1630,7 @@ impl Renderer {
             };
             let MapScene {
                 extent,
+                area_outlines,
                 scene: scene_attachment,
                 camera,
                 underlay_camera,
@@ -1562,105 +1650,122 @@ impl Renderer {
                 state.blur_underlays,
                 &format!("map view {index}"),
             );
-            let mut visibility_attachment = module.transient_image_sized(
+            let visibility_attachment = module.transient_image_sized(
                 &ImageInfo::color_target(viewport, vk::Format::R32_UINT)
                     .with_usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
                     .with_name(format!("map view {index} visibility attachment")),
                 extent,
             );
-            visibility_attachment = module.clear(visibility_attachment, vir::clear::u32::TRANSPARENT);
 
-            [visibility_attachment, _, _] = module
-                .begin_rendering([
-                    (visibility_attachment, Access::ColorRW),
-                    (draw_commands, Access::IndirectRead),
-                    (visible_indices, Access::VertexRead),
-                ])
-                .with_name(format!("map view {index} visibility"))
-                .bind_graphics_pipeline(self.visibility_pipeline)
-                .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-                .set_viewport(0, Rect2D::framebuffer())
-                .set_scissor(0, Rect2D::framebuffer())
-                .broadcast_color_blend(BlendPreset::Off)
-                .set_rasterization(RasterizationState {
-                    cull_mode: vk::CullModeFlags::NONE,
-                    ..Default::default()
-                })
-                .bind_buffer(0, 1, sprites)
-                .bind_buffer(0, 2, visible_indices)
-                .specialize_constant(spec::SPRITE_INDIRECT, true)
-                .specialize_constant(spec::SHOW_AREAS, state.show_areas)
-                .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
-                .push_constants_from(active_camera)
-                .draw_indirect_at(
-                    draw_commands,
-                    u64::from(DRAW_INDIRECT_STRIDE),
-                    1u32,
-                    DRAW_INDIRECT_STRIDE,
-                )
-                .end_rendering();
+            let (mut output_attachment, visibility_attachment, interaction, guides, should_pick) = if with_imgui {
+                // every pass that reads visibility runs only when this one does
+                let needs_visibility = module.declare_bool_var(&format!("map view {index} needs visibility"), false);
+                let visibility_attachment = module.set_condition(
+                    needs_visibility,
+                    |m| {
+                        let cleared = m.clear(visibility_attachment, vir::clear::u32::TRANSPARENT);
+                        let [drawn, _, _] = m
+                            .begin_rendering([
+                                (cleared, Access::ColorRW),
+                                (draw_commands, Access::IndirectRead),
+                                (visible_indices, Access::VertexRead),
+                            ])
+                            .with_name(format!("map view {index} visibility"))
+                            .bind_graphics_pipeline(self.visibility_pipeline)
+                            .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                            .set_viewport(0, Rect2D::framebuffer())
+                            .set_scissor(0, Rect2D::framebuffer())
+                            .broadcast_color_blend(BlendPreset::Off)
+                            .set_rasterization(RasterizationState {
+                                cull_mode: vk::CullModeFlags::NONE,
+                                ..Default::default()
+                            })
+                            .bind_buffer(0, 1, sprites)
+                            .bind_buffer(0, 2, visible_indices)
+                            .specialize_constant(spec::SPRITE_INDIRECT, true)
+                            .specialize_constant(spec::SHOW_AREAS, state.show_areas)
+                            .specialize_constant(spec::SHOW_AREA_OUTLINES, state.show_area_outlines)
+                            .push_constants_from(active_camera)
+                            .draw_indirect_at(
+                                draw_commands,
+                                sprite_draw_offset(SPRITE_LIST_SCENE, true),
+                                1u32,
+                                DRAW_INDIRECT_STRIDE,
+                            )
+                            .end_rendering();
+                        drawn
+                    },
+                    |_| visibility_attachment,
+                );
 
-            let (mut output_attachment, interaction, guides, should_pick) = if with_imgui {
                 let push = module.declare_bytes_var(
                     &format!("map view {index} interaction"),
                     size_of::<InteractionPush>() as u32,
                 );
-                let mut highlighted_scene_attachment = module.transient_image_sized(
-                    &ImageInfo::color_target(viewport, vk::Format::R8G8B8A8_SRGB)
-                        .with_usage(vk::ImageUsageFlags::SAMPLED)
-                        .with_name(format!("map view {index} highlighted scene attachment")),
-                    extent,
-                );
-                highlighted_scene_attachment = module.clear(highlighted_scene_attachment, vir::clear::f32::BLACK);
+                let has_highlight = module.declare_bool_var(&format!("map view {index} has highlight"), false);
                 let highlight_draw = module.declare_callback_var(&format!("map view {index} highlight draw"));
                 let connected_owners =
                     module.declare_buffer_var(&format!("map view {index} connected owners"), Access::HostWrite);
-
-                [highlighted_scene_attachment, _] = module
-                    .begin_rendering([
-                        (highlighted_scene_attachment, Access::ColorRW),
-                        (connected_owners, Access::FragmentRead),
-                    ])
-                    .with_name(format!("map view {index} highlights"))
-                    .bind_graphics_pipeline(self.interaction_pipeline)
-                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-                    .set_viewport(0, Rect2D::framebuffer())
-                    .set_scissor(0, Rect2D::framebuffer())
-                    .bind_texture(0, 0, scene_attachment, self.sampler)
-                    .bind_image(0, 1, visibility_attachment)
-                    .bind_buffer(0, 2, sprites)
-                    .bind_buffer(0, 4, connected_owners)
-                    .specialize_constant(spec::HIGHLIGHT_TINT, view.highlight_tint)
-                    .specialize_constant(spec::DELETE_MODE, view.delete_mode)
-                    .push_constants_from(push)
-                    .record_from(highlight_draw)
-                    .end_rendering();
+                let highlighted_scene_attachment = module.set_condition(
+                    has_highlight,
+                    |m| {
+                        let [highlighted, _] = m
+                            .begin_rendering([
+                                (scene_attachment, Access::ColorRW),
+                                (connected_owners, Access::FragmentRead),
+                            ])
+                            .with_name(format!("map view {index} highlights"))
+                            .bind_graphics_pipeline(self.interaction_pipeline)
+                            .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                            .set_viewport(0, Rect2D::framebuffer())
+                            .set_scissor(0, Rect2D::framebuffer())
+                            .broadcast_color_blend(HIGHLIGHT_BLEND)
+                            .bind_image(0, 1, visibility_attachment)
+                            .bind_buffer(0, 2, sprites)
+                            .bind_buffer(0, 4, connected_owners)
+                            .specialize_constant(spec::HIGHLIGHT_TINT, view.highlight_tint)
+                            .specialize_constant(spec::DELETE_MODE, view.delete_mode)
+                            .push_constants_from(push)
+                            .record_from(highlight_draw)
+                            .end_rendering();
+                        highlighted
+                    },
+                    |_| scene_attachment,
+                );
 
                 let guide_lines =
                     module.declare_buffer_var(&format!("map view {index} guide lines"), Access::HostWrite);
                 let guide_push =
                     module.declare_bytes_var(&format!("map view {index} guide push"), size_of::<GuidePush>() as u32);
                 let guide_draw = module.declare_callback_var(&format!("map view {index} guide draw"));
-                [highlighted_scene_attachment, _] = module
-                    .begin_rendering([
-                        (highlighted_scene_attachment, Access::ColorRW),
-                        (guide_lines, Access::VertexRead | Access::FragmentRead),
-                    ])
-                    .with_name(format!("map view {index} guides"))
-                    .bind_graphics_pipeline(self.guide_pipeline)
-                    .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-                    .set_viewport(0, Rect2D::framebuffer())
-                    .set_scissor(0, Rect2D::framebuffer())
-                    .set_rasterization(RasterizationState {
-                        cull_mode: vk::CullModeFlags::NONE,
-                        ..Default::default()
-                    })
-                    .bind_buffer(0, 0, guide_lines)
-                    .bind_image(0, 1, visibility_attachment)
-                    .bind_buffer(0, 2, sprites)
-                    .push_constants_from(guide_push)
-                    .record_from(guide_draw)
-                    .end_rendering();
+                let has_guide_lines = module.declare_bool_var(&format!("map view {index} has guides"), false);
+                let guided_scene_attachment = module.set_condition(
+                    has_guide_lines,
+                    |m| {
+                        let [guided, _] = m
+                            .begin_rendering([
+                                (highlighted_scene_attachment, Access::ColorRW),
+                                (guide_lines, Access::VertexRead | Access::FragmentRead),
+                            ])
+                            .with_name(format!("map view {index} guides"))
+                            .bind_graphics_pipeline(self.guide_pipeline)
+                            .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                            .set_viewport(0, Rect2D::framebuffer())
+                            .set_scissor(0, Rect2D::framebuffer())
+                            .set_rasterization(RasterizationState {
+                                cull_mode: vk::CullModeFlags::NONE,
+                                ..Default::default()
+                            })
+                            .bind_buffer(0, 0, guide_lines)
+                            .bind_image(0, 1, visibility_attachment)
+                            .bind_buffer(0, 2, sprites)
+                            .push_constants_from(guide_push)
+                            .record_from(guide_draw)
+                            .end_rendering();
+                        guided
+                    },
+                    |_| highlighted_scene_attachment,
+                );
 
                 let pick_push =
                     module.declare_bytes_var(&format!("map view {index} pick cursor"), size_of::<PickPush>() as u32);
@@ -1688,14 +1793,18 @@ impl Renderer {
                 pick_after = Some(next_pick);
 
                 (
-                    highlighted_scene_attachment,
+                    guided_scene_attachment,
+                    visibility_attachment,
                     Some(InteractionSlots {
                         push,
+                        has_highlight,
+                        needs_visibility,
                         connected_owners,
                         pick_push,
                         highlight_draw,
                     }),
                     Some(GuideSlots {
+                        has_lines: has_guide_lines,
                         lines: guide_lines,
                         push: guide_push,
                         draw: guide_draw,
@@ -1703,7 +1812,7 @@ impl Renderer {
                     Some(should_pick),
                 )
             } else {
-                (scene_attachment, None, None, None)
+                (scene_attachment, visibility_attachment, None, None, None)
             };
 
             let preview = if view.preview {
@@ -1751,7 +1860,14 @@ impl Renderer {
                     .push_constants_from(camera)
                     .draw_indirect_at(
                         values.commands,
-                        u64::from(DRAW_INDIRECT_STRIDE),
+                        sprite_draw_offset(SPRITE_LIST_SCENE, true),
+                        1u32,
+                        DRAW_INDIRECT_STRIDE,
+                    )
+                    .specialize_constant(spec::SPRITE_LIST, SPRITE_LIST_AREA_OUTLINE)
+                    .draw_indirect_at(
+                        values.commands,
+                        sprite_draw_offset(SPRITE_LIST_AREA_OUTLINE, true),
                         1u32,
                         DRAW_INDIRECT_STRIDE,
                     )
@@ -1766,6 +1882,7 @@ impl Renderer {
                 visibility_attachment,
                 output_attachment,
                 extent,
+                area_outlines,
                 camera,
                 underlay_camera,
                 active_camera,
@@ -2020,7 +2137,7 @@ impl Renderer {
             recorded.program.set(map_view.cull.visible, buffers.visible);
             recorded.program.set(map_view.cull.chunks, buffers.chunks);
             recorded.program.set(map_view.cull.commands, buffers.commands);
-            bind_sprite_cull(&mut recorded.program, &map_view.cull, &plan);
+            bind_sprite_cull(&mut recorded.program, &map_view.cull, &plan, buffers);
 
             if let Some(slots) = &map_view.lighting {
                 let lighting = view.lighting.ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
@@ -2055,8 +2172,14 @@ impl Renderer {
                 recorded.program.set(slots.cull.visible, uploaded.cull.visible);
                 recorded.program.set(slots.cull.chunks, uploaded.cull.chunks);
                 recorded.program.set(slots.cull.commands, uploaded.cull.commands);
-                bind_sprite_cull(&mut recorded.program, &slots.cull, &plan);
+                bind_sprite_cull(&mut recorded.program, &slots.cull, &plan, &uploaded.cull);
             }
+
+            // a focused area shows its own outlines even with outlines turned off
+            recorded.program.set(
+                map_view.area_outlines,
+                frame.show_area_outlines || view.focused_area.is_some(),
+            );
 
             let Some(slots) = map_view.interaction.as_ref() else {
                 continue;
@@ -2086,12 +2209,18 @@ impl Renderer {
                 },
             );
             let should_pick = map_view.should_pick.ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
-            recorded.program.set(
-                should_pick,
-                pick.is_some() && picking_map == Some(index) && local_cursor.is_some(),
-            );
+            let picks = pick.is_some() && picking_map == Some(index) && local_cursor.is_some();
+            recorded.program.set(should_pick, picks);
+
+            let has_highlight = interaction.selected.is_some() || local_cursor.is_some() || guides.connected_count > 0;
+            let has_guide_lines = guides.line_count > 0;
+            recorded.program.set(slots.has_highlight, has_highlight);
+            recorded
+                .program
+                .set(slots.needs_visibility, has_highlight || has_guide_lines || picks);
 
             if let Some(slots) = &map_view.guides {
+                recorded.program.set(slots.has_lines, has_guide_lines);
                 let count = guides.line_count;
                 recorded.program.set(slots.lines, guides.lines);
                 recorded.program.set_bytes(
@@ -3207,8 +3336,10 @@ fn upload_batch(
         let mut offset = 0u64;
 
         for (source, texture) in sources.iter().zip(textures) {
-            let destination_attachment =
-                module.import_attachment(&ImageAttachment::from_image(&texture.image, vk::ImageLayout::UNDEFINED));
+            let destination_attachment = module.import_attachment(
+                &ImageAttachment::from_image(&texture.image, vk::ImageLayout::UNDEFINED),
+                Access::None,
+            );
             let copied_attachment = module.copy_buffer_to_image_region(
                 source_buffer,
                 destination_attachment,
@@ -4226,7 +4357,7 @@ mod tests {
             .collect::<Vec<_>>();
         bindings.sort_unstable();
 
-        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2), (0, 4)]);
+        assert_eq!(bindings, [(0, 1), (0, 2), (0, 4)]);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<InteractionPush>());
     }
@@ -4325,7 +4456,7 @@ mod tests {
             (SPRITE_SCENE_FS_SPV, vec![(0, 1), (1, 0)]),
             (SPRITE_VIS_FS_SPV, vec![(0, 1), (1, 0)]),
             (SPRITE_SHADE_FS_SPV, vec![(0, 1), (1, 0)]),
-            (SPRITE_OVERLAY_LIGHT_FS_SPV, vec![(0, 1), (0, 3), (1, 0)]),
+            (SPRITE_OVERLAY_LIGHT_FS_SPV, vec![(0, 1), (1, 0)]),
         ] {
             let reflection = shader::reflect(&read_spirv(spirv).expect("valid SPIR-V")).expect("shader reflects");
             let mut bindings = reflection
@@ -4345,6 +4476,7 @@ mod tests {
             (GEOMETRY_VS_SPV, spec::SHOW_AREAS),
             (GEOMETRY_VS_SPV, spec::SHOW_AREA_OUTLINES),
             (GEOMETRY_VS_SPV, spec::SPRITE_INDIRECT),
+            (GEOMETRY_VS_SPV, spec::SPRITE_LIST),
             (SPRITE_SHADE_FS_SPV, spec::SPRITE_EDGE_ONLY),
             (SPRITE_CULL_CLASSIFY_CS_SPV, spec::SHOW_AREAS),
             (SPRITE_CULL_CLASSIFY_CS_SPV, spec::SHOW_AREA_OUTLINES),
