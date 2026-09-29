@@ -223,6 +223,13 @@ enum ChangeSide {
 }
 
 /// Grows the map before the changes land and crops it after, so every changed tile exists while it changes
+/// Applies an edit that the undo history never sees
+pub(crate) fn apply_unrecorded(
+    map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>, edit: &Edit,
+) {
+    apply_edit(map, instances, key_usage, edit, ChangeSide::After);
+}
+
 fn apply_edit(
     map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>, edit: &Edit, side: ChangeSide,
 ) {

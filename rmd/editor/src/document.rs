@@ -1,6 +1,6 @@
 use core::types::{Identifier, Value};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     io::Write,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
@@ -11,7 +11,7 @@ use dmm::{Coord, Map, MapFormat, Prefab, key::Key};
 use objtree::ObjectTree;
 
 use crate::{
-    command::{Edit, EditGroupId, History, Resize},
+    command::{self, Edit, EditGroupId, History, Resize},
     focus::AreaFocus,
     tool::{BlockSelectionMode, SelectionMask},
 };
@@ -72,6 +72,23 @@ pub struct MapDocument {
     saved_level_count: u32,
     retained_level_count: u32,
     generation: u64,
+    journal: Option<Journal>,
+}
+
+/// journal of local edits touched since it was last taken
+#[derive(Debug, Default)]
+pub struct Journal {
+    pub coords: BTreeSet<Coord>,
+    pub reshaped: bool,
+}
+
+impl Journal {
+    fn record(&mut self, edit: &Edit) {
+        self.coords.extend(edit.changes.iter().map(|change| change.coord));
+        self.reshaped |= edit.resize().is_some();
+    }
+
+    pub fn is_empty(&self) -> bool { self.coords.is_empty() && !self.reshaped }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -283,7 +300,39 @@ impl MapDocument {
             saved_level_count: level_count,
             retained_level_count: level_count,
             generation: 0,
+            journal: None,
         }
+    }
+
+    pub fn start_journal(&mut self) { self.journal.get_or_insert_default(); }
+
+    pub fn is_journaling(&self) -> bool { self.journal.is_some() }
+
+    pub fn take_journal(&mut self) -> Option<Journal> {
+        let journal = self.journal.as_mut().filter(|journal| !journal.is_empty())?;
+
+        Some(std::mem::take(journal))
+    }
+
+    pub fn apply_remote(&mut self, tiles: Vec<(Coord, Vec<Prefab>)>) -> Vec<PrefabInstanceId> {
+        let mut edit = Edit::new("remote edit");
+        for (coord, tile) in tiles {
+            if self.map.tile_at(coord).is_none() {
+                continue;
+            }
+
+            let placed = tile.into_iter().map(|prefab| self.instantiate(prefab)).collect();
+            edit.change(self, coord, placed);
+        }
+
+        let affected = edit.affected_instances();
+        // these edits come from remote, not from us: dont do command recording stuff
+        command::apply_unrecorded(&mut self.map, &mut self.instances, &mut self.key_usage, &edit);
+        self.generation += 1;
+        self.pending_write = true;
+        self.clear_stale_instance_selection();
+
+        affected
     }
 
     pub fn id(&self) -> DocumentId { self.id }
@@ -614,6 +663,10 @@ impl MapDocument {
             self.retained_level_count = self.retained_level_count.max(z);
         }
 
+        if let Some(journal) = self.journal.as_mut() {
+            journal.record(&edit);
+        }
+
         self.history
             .apply_grouped(&mut self.map, &mut self.instances, &mut self.key_usage, edit, group);
         self.generation += 1;
@@ -625,10 +678,19 @@ impl MapDocument {
     pub fn undo(&mut self) -> bool { self.undo_with_affected().is_some() }
 
     pub fn undo_with_affected(&mut self) -> Option<Vec<PrefabInstanceId>> {
-        let affected = self
+        let replaced = self
             .history
-            .undo(&mut self.map, &mut self.instances, &mut self.key_usage)
-            .map(Edit::affected_instances);
+            .next_undo()
+            .map(|edit| self.current_ids(edit))
+            .unwrap_or_default();
+        let edit = self
+            .history
+            .undo(&mut self.map, &mut self.instances, &mut self.key_usage);
+        if let (Some(edit), Some(journal)) = (edit, self.journal.as_mut()) {
+            journal.record(edit);
+        }
+
+        let affected = edit.map(|edit| with_replaced(edit, replaced));
         self.generation += 1;
         self.clear_stale_instance_selection();
 
@@ -638,14 +700,31 @@ impl MapDocument {
     pub fn redo(&mut self) -> bool { self.redo_with_affected().is_some() }
 
     pub fn redo_with_affected(&mut self) -> Option<Vec<PrefabInstanceId>> {
-        let affected = self
+        let replaced = self
             .history
-            .redo(&mut self.map, &mut self.instances, &mut self.key_usage)
-            .map(Edit::affected_instances);
+            .next_redo()
+            .map(|edit| self.current_ids(edit))
+            .unwrap_or_default();
+        let edit = self
+            .history
+            .redo(&mut self.map, &mut self.instances, &mut self.key_usage);
+        if let (Some(edit), Some(journal)) = (edit, self.journal.as_mut()) {
+            journal.record(edit);
+        }
+
+        let affected = edit.map(|edit| with_replaced(edit, replaced));
         self.generation += 1;
         self.clear_stale_instance_selection();
 
         affected
+    }
+
+    // edits made elsewhere can leave atoms on these tiles that the history entry never saw
+    fn current_ids(&self, edit: &Edit) -> Vec<PrefabInstanceId> {
+        edit.changes
+            .iter()
+            .flat_map(|change| self.instances.ids_at(change.coord).iter().copied())
+            .collect()
     }
 
     pub fn undo_label(&self) -> Option<&str> { self.history.undo_label() }
@@ -660,6 +739,10 @@ impl MapDocument {
 
         self.map.grid.push(vec![vec![key; width]; height]);
         self.map.size.z = z;
+        if let Some(journal) = self.journal.as_mut() {
+            journal.reshaped = true;
+        }
+
         self.generation += 1;
         *self.key_usage.entry(key).or_insert(0) += width.saturating_mul(height);
         self.instances.append_level();
@@ -760,6 +843,15 @@ impl MapDocument {
     }
 }
 
+fn with_replaced(edit: &Edit, replaced: Vec<PrefabInstanceId>) -> Vec<PrefabInstanceId> {
+    let mut affected = edit.affected_instances();
+    affected.extend(replaced);
+    affected.sort_unstable();
+    affected.dedup();
+
+    affected
+}
+
 #[cfg(test)]
 mod tests {
     use core::{path::TreePath, types::Value};
@@ -772,6 +864,41 @@ mod tests {
         command::{Edit, EditGroupId},
         focus::AreaFocus,
     };
+
+    #[test]
+    fn undo_and_redo_report_the_atoms_they_replace_even_after_a_remote_edit() {
+        let coord = Coord::new(1, 1, 1);
+        let floor = Prefab::new(TreePath::parse("/turf/floor"));
+        let wall = Prefab::new(TreePath::parse("/turf/wall"));
+        let mut document = MapDocument::new(Map::new(Size { x: 1, y: 1, z: 1 }), 1);
+        let placed = vec![document.instantiate(floor.clone())];
+        let mut edit = Edit::new("floor");
+        edit.change(&document, coord, placed);
+        assert!(document.apply(edit));
+
+        let placed = vec![document.instantiate(wall.clone())];
+        let mut edit = Edit::new("wall");
+        edit.change(&document, coord, placed);
+        assert!(document.apply(edit));
+
+        document.apply_remote(vec![(coord, vec![wall.clone()])]);
+        let remote = document.instance_ids_at(coord).to_vec();
+
+        let affected = document.undo_with_affected().unwrap();
+        for id in &remote {
+            assert!(affected.contains(id), "undo left {id:?} behind for the baker");
+        }
+
+        let restored = document.instance_ids_at(coord).to_vec();
+        document.apply_remote(vec![(coord, vec![floor])]);
+        let remote = document.instance_ids_at(coord).to_vec();
+        assert_ne!(remote, restored);
+
+        let affected = document.redo_with_affected().unwrap();
+        for id in &remote {
+            assert!(affected.contains(id), "redo left {id:?} behind for the baker");
+        }
+    }
 
     #[test]
     fn sanitizing_drops_constant_defaults_and_merges_tiles_that_become_equal() {

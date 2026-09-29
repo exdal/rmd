@@ -50,6 +50,16 @@ pub enum ClientMessage {
         text: String,
     },
     DeleteComment(CommentId),
+    Edit(MapEdit),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MapEdit {
+    pub path: String,
+    pub generation: u32,
+    pub coords: Vec<[u32; 3]>,
+    /// the changed tiles as a one row map, in `coords` order
+    pub patch: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -69,12 +79,17 @@ pub enum ServerMessage {
     MapShared {
         path: String,
         by: PeerId,
+        generation: u32,
+    },
+    Edit {
+        by: PeerId,
+        edit: MapEdit,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Transfer {
-    Map { path: String },
+    Map { path: String, generation: u32 },
 }
 
 /// `_maps/map_files/Station/station.dmm`
@@ -163,10 +178,21 @@ mod tests {
         round_trip(ServerMessage::MapShared {
             path: String::from("_maps/test.dmm"),
             by: PeerId(1),
+            generation: 2,
         });
         round_trip(Transfer::Map {
             path: String::from("_maps/test.dmm"),
+            generation: 2,
         });
+
+        let edit = MapEdit {
+            path: String::from("_maps/test.dmm"),
+            generation: 2,
+            coords: vec![[1, 2, 1], [3, 4, 1]],
+            patch: String::from("\"a\" = (/turf,/area)\n"),
+        };
+        round_trip(ClientMessage::Edit(edit.clone()));
+        round_trip(ServerMessage::Edit { by: PeerId(1), edit });
     }
 
     #[test]

@@ -17,6 +17,7 @@ use protocol::{
         CommentId,
         Cursor,
         Datagram,
+        MapEdit,
         PeerId,
         PeerInfo,
         Relayed,
@@ -55,10 +56,16 @@ pub enum Event {
     MapShared {
         path: String,
         by: PeerId,
+        generation: u32,
     },
     MapSnapshot {
         path: String,
+        generation: u32,
         bytes: Vec<u8>,
+    },
+    Edit {
+        by: PeerId,
+        edit: MapEdit,
     },
     Disconnected(String),
 }
@@ -122,6 +129,8 @@ impl Client {
     pub fn share_map(&self, path: String, bytes: Vec<u8>) {
         let _ = self.outbox.send(Command::ShareMap { path, bytes });
     }
+
+    pub fn send_edit(&self, edit: MapEdit) { self.send(ClientMessage::Edit(edit)); }
 
     fn send(&self, message: ClientMessage) { let _ = self.outbox.send(Command::Message(message)); }
 
@@ -210,7 +219,8 @@ async fn session(
                 Some(ServerMessage::PeerLeft(id)) => emit(Event::PeerLeft(id)),
                 Some(ServerMessage::Comment(comment)) => emit(Event::Comment(comment)),
                 Some(ServerMessage::CommentDeleted(id)) => emit(Event::CommentDeleted(id)),
-                Some(ServerMessage::MapShared { path, by }) => emit(Event::MapShared { path, by }),
+                Some(ServerMessage::MapShared { path, by, generation }) => emit(Event::MapShared { path, by, generation }),
+                Some(ServerMessage::Edit { by, edit }) => emit(Event::Edit { by, edit }),
                 Some(other) => log::warn!("unexpected message from the host: {other:?}"),
                 None => return Err(fail("the host ended the session")),
             },
@@ -246,15 +256,28 @@ async fn session(
 }
 
 async fn upload(connection: Connection, path: String, bytes: Vec<u8>) {
-    if let Err(e) = send_transfer(&connection, &Transfer::Map { path: path.clone() }, &bytes).await {
+    if let Err(e) = send_transfer(
+        &connection,
+        &Transfer::Map {
+            path: path.clone(),
+            generation: 0,
+        },
+        &bytes,
+    )
+    .await
+    {
         log::warn!("could not share {path}: {e}");
     }
 }
 
 async fn download(stream: quinn::RecvStream, events: mpsc::Sender<Event>) {
     match receive_transfer(stream).await {
-        Ok((Transfer::Map { path }, bytes)) => {
-            let _ = events.send(Event::MapSnapshot { path, bytes });
+        Ok((Transfer::Map { path, generation }, bytes)) => {
+            let _ = events.send(Event::MapSnapshot {
+                path,
+                generation,
+                bytes,
+            });
         },
         Err(e) => log::warn!("could not receive a map: {e}"),
     }

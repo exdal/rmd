@@ -1,13 +1,14 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::mpsc,
     time::Instant,
 };
 
+use dmm::Coord;
 use editor::{document::DocumentId, tool::Tool};
-use net::{Client, CodebaseId, Comment, CommentId, Cursor, Event, PeerId, PeerInfo, Server, ServerConfig};
+use net::{Client, CodebaseId, Comment, CommentId, Cursor, Event, MapEdit, PeerId, PeerInfo, Server, ServerConfig};
 
 use super::Session;
 use crate::loader::LoadedMap;
@@ -68,7 +69,7 @@ pub(crate) struct LiveShare {
     pub you: Option<PeerId>,
     pub peers: BTreeMap<PeerId, RemotePeer>,
     pub comments: BTreeMap<CommentId, Comment>,
-    pub shared: BTreeMap<String, PeerId>,
+    pub shared: BTreeMap<String, SharedMap>,
     pub skipped: BTreeMap<String, ReceivedMap>,
     received: BTreeSet<String>,
     prepared: (mpsc::Sender<Prepared>, mpsc::Receiver<Prepared>),
@@ -79,6 +80,30 @@ pub(crate) struct LiveShare {
     last_poll: Instant,
 }
 
+pub(crate) struct SharedMap {
+    pub by: PeerId,
+    generation: u32,
+    loaded_generation: Option<u32>,
+    // edits from the server that arrived before our copy of the map was loaded
+    inbox: Vec<(PeerId, MapEdit)>,
+    // tiles we edited whose edits the server hasn't sent back yet, counted per tile
+    in_flight: HashMap<Coord, u32>,
+}
+
+impl SharedMap {
+    fn new(by: PeerId, generation: u32) -> Self {
+        Self {
+            by,
+            generation,
+            loaded_generation: None,
+            inbox: Vec::new(),
+            in_flight: HashMap::new(),
+        }
+    }
+
+    fn is_ready(&self) -> bool { self.loaded_generation == Some(self.generation) }
+}
+
 enum Prepared {
     Upload { path: String, bytes: Vec<u8> },
     Snapshot(ReceivedMap),
@@ -86,6 +111,7 @@ enum Prepared {
 
 pub(crate) struct ReceivedMap {
     path: String,
+    generation: u32,
     file: PathBuf,
     map: dmm::Map,
     errors: Vec<dmm::error::MapError>,
@@ -125,7 +151,7 @@ impl LiveShare {
 
     pub fn git_hint(&self) -> Option<&str> { self.codebase.as_ref()?.git_hint.as_deref() }
 
-    fn receive_map(&self, path: String, bytes: Vec<u8>, codebase: Option<&Path>) {
+    fn receive_map(&self, path: String, generation: u32, bytes: Vec<u8>, codebase: Option<&Path>) {
         if !net::is_map_path(&path) {
             log::warn!("ignoring a shared map outside the codebase: {path}");
             return;
@@ -149,6 +175,7 @@ impl LiveShare {
             let (map, errors) = dmm::parser::parse(&text);
             let _ = prepared.send(Prepared::Snapshot(ReceivedMap {
                 path,
+                generation,
                 file,
                 map,
                 errors,
@@ -182,10 +209,36 @@ impl LiveShare {
             Event::CommentDeleted(id) => {
                 self.comments.remove(&id);
             },
-            Event::MapShared { path, by } => {
-                self.shared.insert(path, by);
+            Event::MapShared { path, by, generation } => {
+                // the snapshot may have come first
+                let shared = self
+                    .shared
+                    .entry(path)
+                    .or_insert_with(|| SharedMap::new(by, generation));
+
+                if shared.generation != generation {
+                    *shared = SharedMap::new(by, generation);
+                }
+
+                shared.by = by;
+                if Some(by) == self.you {
+                    shared.loaded_generation = Some(generation);
+                }
             },
-            Event::MapSnapshot { path, bytes } => self.receive_map(path, bytes, codebase),
+            Event::MapSnapshot {
+                path,
+                generation,
+                bytes,
+            } => self.receive_map(path, generation, bytes, codebase),
+            Event::Edit { by, edit } => {
+                if let Some(shared) = self
+                    .shared
+                    .get_mut(&edit.path)
+                    .filter(|shared| shared.generation == edit.generation)
+                {
+                    shared.inbox.push((by, edit));
+                }
+            },
             Event::Rejected(reason) => self.end(format!("rejected: {reason}")),
             Event::Disconnected(reason) => self.end(reason),
         }
@@ -370,24 +423,163 @@ impl Session {
                 Prepared::Snapshot(received) => self.open_shared_map(received),
             }
         }
+
+        self.apply_live_edits();
+        self.send_live_edits();
+    }
+
+    fn shared_document(&self, path: &str) -> Option<DocumentId> {
+        self.state.document_for_path(&self.codebase_dir()?.join(path))
+    }
+
+    fn apply_live_edits(&mut self) {
+        let Some(live) = self.live.as_mut() else {
+            return;
+        };
+
+        let you = live.you;
+        let mut incoming = Vec::new();
+        for (path, shared) in live.shared.iter_mut().filter(|(_, shared)| shared.is_ready()) {
+            for (by, edit) in shared.inbox.drain(..) {
+                incoming.push((path.clone(), by, edit));
+            }
+        }
+
+        for (path, by, edit) in incoming {
+            let tiles = match editor::patch::decode(&edit.patch, edit.coords.len()) {
+                Ok(tiles) => tiles,
+                Err(e) => {
+                    log::warn!("{path}: dropping an edit that does not parse: {e}");
+                    continue;
+                },
+            };
+
+            let coords = edit.coords.iter().map(|&[x, y, z]| Coord::new(x, y, z));
+            let Some(shared) = self.live.as_mut().and_then(|live| live.shared.get_mut(&path)) else {
+                continue;
+            };
+
+            // TODO: we should probably not do this in the first place, this is literally wasted push pop
+            if Some(by) == you {
+                for coord in coords {
+                    if let Some(count) = shared.in_flight.get_mut(&coord) {
+                        *count -= 1;
+                        if *count == 0 {
+                            shared.in_flight.remove(&coord);
+                        }
+                    }
+                }
+
+                continue;
+            }
+
+            let tiles = coords
+                .zip(tiles)
+                .filter(|(coord, _)| !shared.in_flight.contains_key(coord))
+                .collect::<Vec<_>>();
+
+            let Some(id) = self.shared_document(&path).filter(|_| !tiles.is_empty()) else {
+                continue;
+            };
+
+            let Some(document) = self.state.document_mut(id) else {
+                continue;
+            };
+
+            let affected = document.apply_remote(tiles);
+            self.update_document_instances(id, &affected);
+            if let Some(cache) = self.caches.get_mut(&id) {
+                cache.map_revision = cache.map_revision.wrapping_add(1);
+            }
+        }
+    }
+
+    fn send_live_edits(&mut self) {
+        let Some(live) = self.live.as_ref() else {
+            return;
+        };
+
+        let ready = live
+            .shared
+            .iter()
+            .filter(|(_, shared)| shared.is_ready())
+            .map(|(path, shared)| (path.clone(), shared.generation))
+            .collect::<Vec<_>>();
+
+        for (path, generation) in ready {
+            let Some(id) = self.shared_document(&path) else {
+                continue;
+            };
+
+            let Some(journal) = self.state.document_mut(id).and_then(|document| document.take_journal()) else {
+                continue;
+            };
+
+            if journal.reshaped {
+                self.share_live_document(id);
+                continue;
+            }
+
+            let Some((coords, patch)) = self
+                .state
+                .document(id)
+                .and_then(|document| editor::patch::encode(&document.map, journal.coords))
+            else {
+                continue;
+            };
+
+            let Some(live) = self.live.as_mut() else {
+                return;
+            };
+
+            if let Some(shared) = live.shared.get_mut(&path) {
+                for coord in &coords {
+                    *shared.in_flight.entry(*coord).or_insert(0) += 1;
+                }
+            }
+
+            if let Some(client) = live.client.as_ref() {
+                client.send_edit(MapEdit {
+                    path,
+                    generation,
+                    coords: coords.iter().map(|coord| [coord.x, coord.y, coord.z]).collect(),
+                    patch,
+                });
+            }
+        }
     }
 
     pub fn can_share_live_map(&self) -> bool {
         self.comment_tool_available() && self.state.active().and_then(|id| self.live_map_path(id)).is_some()
     }
 
-    pub fn share_live_map(&self) {
-        let Some(live) = self.live.as_ref() else {
-            return;
-        };
+    pub fn share_live_map(&mut self) {
+        if let Some(id) = self.state.active() {
+            self.share_live_document(id);
+        }
+    }
 
-        let Some((id, document)) = self.state.active().zip(self.state.active_document()) else {
-            return;
-        };
-
+    fn share_live_document(&mut self, id: DocumentId) {
         let Some(path) = self.live_map_path(id) else {
             return;
         };
+
+        let Some(document) = self.state.document_mut(id) else {
+            return;
+        };
+
+        // edits so far are part of the snapshot, the journal only carries what comes after it
+        document.start_journal();
+        document.take_journal();
+
+        let Some(live) = self.live.as_mut() else {
+            return;
+        };
+
+        // hold back new edits until the server numbers this share
+        if let Some(shared) = live.shared.get_mut(&path) {
+            shared.loaded_generation = None;
+        }
 
         let map = document.map.clone();
         let prepared = live.prepared.0.clone();
@@ -414,12 +606,25 @@ impl Session {
 
         let ReceivedMap {
             path,
+            generation,
             file,
             map,
             errors,
             modified,
         } = received;
 
+        let shared = live
+            .shared
+            .entry(path.clone())
+            .or_insert_with(|| SharedMap::new(PeerId(0), generation));
+
+        if generation < shared.generation {
+            return;
+        }
+
+        shared.generation = generation;
+        shared.loaded_generation = Some(generation);
+        shared.in_flight.clear();
         live.received.insert(path);
 
         let repo = self.git_enabled.then(|| editor::git::discover(&file)).flatten();
@@ -439,13 +644,15 @@ impl Session {
             None => self.apply_map(loaded),
         }
 
-        if modified
-            && let Some(document) = self
-                .state
-                .document_for_path(&file)
-                .and_then(|id| self.state.document_mut(id))
+        if let Some(document) = self
+            .state
+            .document_for_path(&file)
+            .and_then(|id| self.state.document_mut(id))
         {
-            document.mark_unsaved();
+            document.start_journal();
+            if modified {
+                document.mark_unsaved();
+            }
         }
     }
 
@@ -700,6 +907,119 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&host_dir);
         let _ = std::fs::remove_dir_all(&guest_dir);
+    }
+
+    fn paint(session: &mut Session, file: &Path, coord: Coord, path: &str) {
+        let id = session.state.document_for_path(file).unwrap();
+        let document = session.state.document_mut(id).unwrap();
+        let mut tile = document.map.tile_at(coord).cloned().unwrap();
+        tile.insert(0, dmm::Prefab::new(core::path::TreePath::parse(path)));
+
+        let placed = tile.into_iter().map(|prefab| document.instantiate(prefab)).collect();
+        let mut edit = editor::command::Edit::new("paint");
+        edit.change(document, coord, placed);
+        assert!(document.apply(edit));
+    }
+
+    fn top(session: &Session, file: &Path, coord: Coord) -> Option<String> {
+        let document = session.state.document(session.state.document_for_path(file)?)?;
+
+        Some(document.map.tile_at(coord)?.first()?.path.to_string())
+    }
+
+    fn settled(sessions: &[&mut Session]) -> bool {
+        sessions.iter().all(|session| {
+            session.live().is_some_and(|live| {
+                live.shared
+                    .values()
+                    .all(|shared| shared.in_flight.is_empty() && shared.inbox.is_empty())
+            })
+        })
+    }
+
+    #[test]
+    fn edits_sync_both_ways_converge_and_replay_for_late_joiners() {
+        let (host_dir, mut host) = codebase_with_map("sync-host", "aa");
+        let (guest_dir, mut guest) = codebase_with_map("sync-guest", "aa");
+        let (late_dir, mut late) = codebase_with_map("sync-late", "aa");
+        let host_file = host_dir.join("_maps/a.dmm");
+        let guest_file = guest_dir.join("_maps/a.dmm");
+        let late_file = late_dir.join("_maps/a.dmm");
+        let (left, right) = (Coord::new(1, 1, 1), Coord::new(2, 1, 1));
+        open_local(&mut host, host_file.clone());
+
+        host.host_live(0, String::from("hunter2"), String::from("host"))
+            .unwrap();
+        poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
+        host.share_live_map();
+        let port = host.live().and_then(LiveShare::host).unwrap().0.port();
+        let join = |session: &mut Session, nick: &str| {
+            session
+                .join_live(format!("127.0.0.1:{port}"), String::from("hunter2"), String::from(nick))
+                .unwrap();
+        };
+
+        join(&mut guest, "guest");
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            sessions[1].state.document_for_path(&guest_file).is_some() && settled(sessions)
+        });
+
+        paint(&mut host, &host_file, left, "/obj/host");
+        paint(&mut guest, &guest_file, right, "/obj/guest");
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            top(sessions[1], &guest_file, left).as_deref() == Some("/obj/host")
+                && top(sessions[0], &host_file, right).as_deref() == Some("/obj/guest")
+        });
+
+        paint(&mut host, &host_file, left, "/obj/first");
+        paint(&mut guest, &guest_file, left, "/obj/second");
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            settled(sessions) && top(sessions[0], &host_file, left) == top(sessions[1], &guest_file, left)
+        });
+        let winner = top(&host, &host_file, left);
+        assert_eq!(winner, top(&guest, &guest_file, left));
+        assert!(matches!(winner.as_deref(), Some("/obj/first" | "/obj/second")));
+
+        let id = host.state.document_for_path(&host_file).unwrap();
+        host.state.set_active(id);
+        assert!(host.undo());
+        assert_eq!(top(&host, &host_file, left).as_deref(), Some("/obj/host"));
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            settled(sessions) && top(sessions[1], &guest_file, left).as_deref() == Some("/obj/host")
+        });
+
+        join(&mut late, "late");
+        poll_until(&mut [&mut host, &mut guest, &mut late], |sessions| {
+            sessions[2].state.document_for_path(&late_file).is_some() && settled(sessions)
+        });
+        for coord in [left, right] {
+            assert_eq!(
+                top(&late, &late_file, coord),
+                top(&host, &host_file, coord),
+                "{coord:?}"
+            );
+        }
+
+        let id = host.state.document_for_path(&host_file).unwrap();
+        let document = host.state.document_mut(id).unwrap();
+        let fill = document.map.tile_at(right).cloned().unwrap();
+        assert!(document.resize(3, 1, &fill));
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            let document = sessions[1]
+                .state
+                .document(sessions[1].state.document_for_path(&guest_file).unwrap());
+            document.is_some_and(|document| document.map.size.x == 3) && settled(sessions)
+        });
+
+        let corner = Coord::new(3, 1, 1);
+        paint(&mut host, &host_file, corner, "/obj/after_resize");
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            top(sessions[1], &guest_file, corner).as_deref() == Some("/obj/after_resize")
+        });
+
+        for dir in [host_dir, guest_dir, late_dir] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     #[test]

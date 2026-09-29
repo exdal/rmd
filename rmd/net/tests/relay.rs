@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use net::{Client, CodebaseId, Cursor, Event, Server, ServerConfig};
+use net::{Client, CodebaseId, Cursor, Event, MapEdit, Server, ServerConfig};
 
 const PASSWORD: &str = "hunter2";
 
@@ -238,14 +238,14 @@ fn shared_maps_reach_everyone_else_and_late_joiners() {
 
     for client in [&alice, &bob] {
         let shared = wait_for(client, |event| match event {
-            Event::MapShared { path, by } => Some((path, by)),
+            Event::MapShared { path, by, .. } => Some((path, by)),
             _ => None,
         });
         assert_eq!(shared, (String::from("_maps/test.dmm"), alice_id));
     }
 
     let received = wait_for(&bob, |event| match event {
-        Event::MapSnapshot { path, bytes } => Some((path, bytes)),
+        Event::MapSnapshot { path, bytes, .. } => Some((path, bytes)),
         _ => None,
     });
     assert_eq!(received.0, "_maps/test.dmm");
@@ -253,9 +253,66 @@ fn shared_maps_reach_everyone_else_and_late_joiners() {
 
     let carol = join(&server, PASSWORD, "carol");
     let (path, bytes) = wait_for(&carol, |event| match event {
-        Event::MapSnapshot { path, bytes } => Some((path, bytes)),
+        Event::MapSnapshot { path, bytes, .. } => Some((path, bytes)),
         _ => None,
     });
     assert_eq!(path, "_maps/test.dmm");
     assert_eq!(bytes, map);
+}
+
+#[test]
+fn edits_reach_everyone_and_replay_for_late_joiners_until_the_map_is_shared_again() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
+    let bob = join(&server, PASSWORD, "bob");
+    let bob_id = wait_for(&bob, |event| match event {
+        Event::Connected { you, .. } => Some(you),
+        _ => None,
+    });
+
+    alice.share_map(String::from("_maps/test.dmm"), b"map".to_vec());
+    let generation = wait_for(&bob, |event| match event {
+        Event::MapShared { generation, .. } => Some(generation),
+        _ => None,
+    });
+    assert_eq!(generation, 1);
+
+    let edit = |generation, patch: &str| MapEdit {
+        path: String::from("_maps/test.dmm"),
+        generation,
+        coords: vec![[1, 1, 1]],
+        patch: String::from(patch),
+    };
+    bob.send_edit(edit(0, "stale"));
+    bob.send_edit(edit(1, "fresh"));
+    for client in [&alice, &bob] {
+        let (by, received) = wait_for(client, |event| match event {
+            Event::Edit { by, edit } => Some((by, edit)),
+            _ => None,
+        });
+        assert_eq!(by, bob_id);
+        assert_eq!(received, edit(1, "fresh"));
+    }
+
+    let carol = join(&server, PASSWORD, "carol");
+    let replayed = wait_for(&carol, |event| match event {
+        Event::Edit { edit, .. } => Some(edit),
+        _ => None,
+    });
+    assert_eq!(replayed, edit(1, "fresh"));
+
+    alice.share_map(String::from("_maps/test.dmm"), b"map again".to_vec());
+    let generation = wait_for(&carol, |event| match event {
+        Event::MapShared { generation, .. } => Some(generation),
+        _ => None,
+    });
+    assert_eq!(generation, 2);
+
+    let dave = join(&server, PASSWORD, "dave");
+    wait_for(&dave, |event| match event {
+        Event::MapSnapshot { generation, bytes, .. } => Some((generation, bytes)),
+        Event::Edit { .. } => panic!("the log was not reset"),
+        _ => None,
+    });
 }

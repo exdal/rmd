@@ -22,6 +22,7 @@ use protocol::{
         Datagram,
         MAX_COMMENT_LEN,
         MAX_NICK_LEN,
+        MapEdit,
         PeerId,
         PeerInfo,
         Relayed,
@@ -41,7 +42,6 @@ use crate::{
 };
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_CONTROL_FRAME: usize = 64 * 1024;
 const PASSWORD_ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
 const PASSWORD_LEN: usize = 8;
 
@@ -138,6 +138,8 @@ struct State {
 struct SharedMap {
     by: PeerId,
     bytes: Bytes,
+    generation: u32,
+    edits: Vec<(PeerId, MapEdit)>,
 }
 
 struct Peer {
@@ -211,27 +213,61 @@ impl Shared {
 
     fn share_map(&self, by: PeerId, path: String, bytes: Bytes) {
         let mut state = self.state.lock().unwrap();
+        let generation = state.maps.get(&path).map_or(1, |map| map.generation + 1);
         for (id, peer) in state.peers.iter() {
-            let _ = peer.outbox.send(ServerMessage::MapShared { path: path.clone(), by });
+            let _ = peer.outbox.send(ServerMessage::MapShared {
+                path: path.clone(),
+                by,
+                generation,
+            });
             if *id != by {
-                tokio::spawn(push_map(peer.connection.clone(), path.clone(), bytes.clone()));
+                tokio::spawn(push_map(
+                    peer.connection.clone(),
+                    path.clone(),
+                    generation,
+                    bytes.clone(),
+                ));
             }
         }
 
-        state.maps.insert(path, SharedMap { by, bytes });
+        state.maps.insert(
+            path,
+            SharedMap {
+                by,
+                bytes,
+                generation,
+                edits: Vec::new(),
+            },
+        );
+    }
+
+    fn edit(&self, by: PeerId, edit: MapEdit) {
+        let mut state = self.state.lock().unwrap();
+        let State { peers, maps, .. } = &mut *state;
+        let Some(map) = maps.get_mut(&edit.path).filter(|map| map.generation == edit.generation) else {
+            return;
+        };
+
+        for peer in peers.values() {
+            let _ = peer.outbox.send(ServerMessage::Edit { by, edit: edit.clone() });
+        }
+
+        map.edits.push((by, edit));
     }
 }
 
-async fn push_map(connection: Connection, path: String, bytes: Bytes) {
-    if let Err(e) = send_transfer(&connection, &Transfer::Map { path }, &bytes).await {
+async fn push_map(connection: Connection, path: String, generation: u32, bytes: Bytes) {
+    if let Err(e) = send_transfer(&connection, &Transfer::Map { path, generation }, &bytes).await {
         log::debug!("could not send a map to {}: {e}", connection.remote_address());
     }
 }
 
 async fn upload(shared: Arc<Shared>, from: PeerId, stream: quinn::RecvStream) {
     match receive_transfer(stream).await {
-        Ok((Transfer::Map { path }, bytes)) if is_map_path(&path) => shared.share_map(from, path, Bytes::from(bytes)),
-        Ok((Transfer::Map { path }, _)) => log::info!("{from:?} tried to share {path}, which is not a map path"),
+        Ok((Transfer::Map { path, .. }, bytes)) if is_map_path(&path) => {
+            shared.share_map(from, path, Bytes::from(bytes));
+        },
+        Ok((Transfer::Map { path, .. }, _)) => log::info!("{from:?} tried to share {path}, which is not a map path"),
         Err(e) => log::info!("dropping an upload from {from:?}: {e}"),
     }
 }
@@ -277,7 +313,7 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
         .map_err(|_| fail("handshake timed out"))?
         .map_err(fail)?;
 
-    let mut reader = FrameReader::with_max(MAX_CONTROL_FRAME);
+    let mut reader = FrameReader::new();
     let hello = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake(&mut recv, &mut reader))
         .await
         .map_err(|_| fail("handshake timed out"))??;
@@ -326,8 +362,20 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
             let _ = outbox.send(ServerMessage::MapShared {
                 path: path.clone(),
                 by: map.by,
+                generation: map.generation,
             });
-            tokio::spawn(push_map(connection.clone(), path.clone(), map.bytes.clone()));
+            tokio::spawn(push_map(
+                connection.clone(),
+                path.clone(),
+                map.generation,
+                map.bytes.clone(),
+            ));
+            for (by, edit) in &map.edits {
+                let _ = outbox.send(ServerMessage::Edit {
+                    by: *by,
+                    edit: edit.clone(),
+                });
+            }
         }
 
         state.peers.insert(
@@ -356,6 +404,7 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
                     Some(ClientMessage::Hello(_)) => return Err(fail("sent a second hello")),
                     Some(ClientMessage::Comment { map, z, pos, text }) => shared.comment(id, map, z, pos, &text),
                     Some(ClientMessage::DeleteComment(comment)) => shared.delete_comment(comment),
+                    Some(ClientMessage::Edit(edit)) => shared.edit(id, edit),
                     None => return Ok(()),
                 },
                 datagram = connection.read_datagram() => shared.relay(id, &datagram.map_err(fail)?),

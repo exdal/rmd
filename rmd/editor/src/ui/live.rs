@@ -236,8 +236,8 @@ pub(super) fn draw_live_status(ui: &Ui, live: &LiveShare) {
         if !live.shared.is_empty() {
             ui.separator();
             ui.text("Shared maps");
-            for (path, by) in &live.shared {
-                match live.nick_of(*by) {
+            for (path, shared) in &live.shared {
+                match live.nick_of(shared.by) {
                     Some(nick) => ui.text(format!("{path} (from {nick})")),
                     None => ui.text(path),
                 }

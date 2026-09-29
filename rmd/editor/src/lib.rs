@@ -12,6 +12,7 @@ pub mod frame;
 pub mod git;
 pub mod icons;
 pub mod node;
+pub mod patch;
 pub mod process;
 pub mod progress;
 pub mod search;
