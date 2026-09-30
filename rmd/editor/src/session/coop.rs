@@ -548,7 +548,7 @@ impl Session {
     pub fn comment_tool_available(&self) -> bool { self.coop.as_ref().is_some_and(Coop::is_connected) }
 
     pub fn add_coop_comment(&self, id: DocumentId, pos: [f32; 2], text: String) {
-        let (Some(map), Some(document)) = (self.coop_map_key(id), self.state.document(id)) else {
+        let (Some(map), Some(document)) = (self.coop_map_path(id), self.state.document(id)) else {
             return;
         };
 
@@ -1103,7 +1103,7 @@ impl Session {
         }
     }
 
-    fn coop_map_path(&self, id: DocumentId) -> Option<String> {
+    pub fn coop_map_path(&self, id: DocumentId) -> Option<String> {
         self.coop_file_path(self.state.document(id)?.path.as_deref()?)
     }
 
@@ -1122,13 +1122,6 @@ impl Session {
         if let Some(client) = self.coop.as_ref().and_then(|coop| coop.client.as_ref()) {
             client.send_cursor(cursor);
         }
-    }
-
-    pub fn coop_map_key(&self, id: DocumentId) -> Option<String> {
-        self.coop.as_ref()?;
-        let path = self.state.document(id)?.path.as_deref()?;
-
-        editor::codebase_key(self.codebase_dir()?, path)
     }
 }
 

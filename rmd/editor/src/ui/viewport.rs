@@ -614,7 +614,7 @@ impl UiState {
             let over_overlay = top_overlay.contains(mouse) || bottom_overlay.contains(mouse);
             let comment_hit = session
                 .coop()
-                .zip(session.coop_map_key(id))
+                .zip(session.coop_map_path(id))
                 .filter(|_| image_hovered && !over_overlay)
                 .and_then(|(coop, map)| {
                     let z = session.state.document(id)?.z;
@@ -800,7 +800,7 @@ impl UiState {
 
             draw_guide_badges(ui, camera, viewport_min, viewport_max, guide_badges);
             if let Some(coop) = session.coop()
-                && let Some(map) = session.coop_map_key(id)
+                && let Some(map) = session.coop_map_path(id)
                 && let Some(z) = session.state.document(id).map(|document| document.z)
             {
                 let viewport = OverlayRect {
@@ -837,7 +837,7 @@ impl UiState {
                 camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
             });
             *hovered_coord = pointed_coord;
-            if is_active && let Some(map) = session.coop_map_key(id) {
+            if is_active && let Some(map) = session.coop_map_path(id) {
                 let pointer = (image_hovered && !over_overlay).then_some(mouse).and_then(in_viewport);
                 session.coop_cursor(pointer.map(|cursor| net::Cursor {
                     map,
