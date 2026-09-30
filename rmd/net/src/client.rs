@@ -108,15 +108,16 @@ pub enum Direction {
     Receiving,
 }
 
-enum Command {
-    Message(ClientMessage),
-    ShareMap { path: String, bytes: Vec<u8> },
+struct Share {
+    path: String,
+    bytes: Vec<u8>,
 }
 
 pub struct Client {
     events: mpsc::Receiver<Event>,
     cursor: watch::Sender<Option<Cursor>>,
-    outbox: channel::UnboundedSender<Command>,
+    outbox: channel::UnboundedSender<ClientMessage>,
+    shares: channel::UnboundedSender<Share>,
     shutdown: Option<oneshot::Sender<()>>,
 }
 
@@ -125,6 +126,7 @@ impl Client {
         let (events_tx, events) = mpsc::channel();
         let (cursor, cursor_rx) = watch::channel(None);
         let (outbox, inbox) = channel::unbounded_channel();
+        let (shares, shares_rx) = channel::unbounded_channel();
         let (shutdown, stop) = oneshot::channel();
         let hello = ClientHello {
             nick,
@@ -135,7 +137,7 @@ impl Client {
         let failed = events_tx.clone();
         let spawned = thread::Builder::new().name(String::from("rmd-coop")).spawn(move || {
             let result = crate::runtime()
-                .and_then(|runtime| runtime.block_on(run(&addr, hello, cursor_rx, inbox, &events_tx, stop)));
+                .and_then(|runtime| runtime.block_on(run(&addr, hello, cursor_rx, inbox, shares_rx, &events_tx, stop)));
 
             if let Err(e) = result {
                 let _ = events_tx.send(Event::Disconnected(e.to_string()));
@@ -150,6 +152,7 @@ impl Client {
             events,
             cursor,
             outbox,
+            shares,
             shutdown: Some(shutdown),
         }
     }
@@ -162,15 +165,13 @@ impl Client {
 
     pub fn delete_comment(&self, id: CommentId) { self.send(ClientMessage::DeleteComment(id)); }
 
-    pub fn share_map(&self, path: String, bytes: Vec<u8>) {
-        let _ = self.outbox.send(Command::ShareMap { path, bytes });
-    }
+    pub fn share_map(&self, path: String, bytes: Vec<u8>) { let _ = self.shares.send(Share { path, bytes }); }
 
     pub fn send_edit(&self, edit: MapEdit) { self.send(ClientMessage::Edit(edit)); }
 
     pub fn resync(&self, path: String) { self.send(ClientMessage::Resync { path }); }
 
-    fn send(&self, message: ClientMessage) { let _ = self.outbox.send(Command::Message(message)); }
+    fn send(&self, message: ClientMessage) { let _ = self.outbox.send(message); }
 
     pub fn send_cursor(&self, cursor: Option<Cursor>) {
         self.cursor.send_if_modified(|current| {
@@ -192,7 +193,8 @@ impl Drop for Client {
 
 async fn run(
     addr: &str, hello: ClientHello, cursor: watch::Receiver<Option<Cursor>>,
-    outbox: channel::UnboundedReceiver<Command>, events: &mpsc::Sender<Event>, mut stop: oneshot::Receiver<()>,
+    outbox: channel::UnboundedReceiver<ClientMessage>, shares: channel::UnboundedReceiver<Share>,
+    events: &mpsc::Sender<Event>, mut stop: oneshot::Receiver<()>,
 ) -> Result<(), Error> {
     let remote = lookup_host(addr)
         .await
@@ -216,7 +218,7 @@ async fn run(
 
     let mut uploads = JoinSet::new();
     let result = tokio::select! {
-        result = session(&connection, hello, cursor, outbox, events, &mut uploads) => result,
+        result = session(&connection, hello, cursor, outbox, shares, events, &mut uploads) => result,
         _ = &mut stop => Ok(()),
     };
 
@@ -240,7 +242,8 @@ async fn run(
 
 async fn session(
     connection: &Connection, hello: ClientHello, mut cursor: watch::Receiver<Option<Cursor>>,
-    mut outbox: channel::UnboundedReceiver<Command>, events: &mpsc::Sender<Event>, uploads: &mut JoinSet<()>,
+    mut outbox: channel::UnboundedReceiver<ClientMessage>, mut shares: channel::UnboundedReceiver<Share>,
+    events: &mpsc::Sender<Event>, uploads: &mut JoinSet<()>,
 ) -> Result<(), Error> {
     let emit = |event| {
         let _ = events.send(event);
@@ -261,51 +264,64 @@ async fn session(
         None => return Err(fail("the host closed the connection")),
     }
 
-    let mut throttle = time::interval(CURSOR_INTERVAL);
-    throttle.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    loop {
-        tokio::select! {
-            message = read_message(&mut recv, &mut reader) => match message? {
-                Some(ServerMessage::PeerJoined(peer)) => emit(Event::PeerJoined(peer)),
-                Some(ServerMessage::PeerLeft(id)) => emit(Event::PeerLeft(id)),
-                Some(ServerMessage::Comment(comment)) => emit(Event::Comment(comment)),
-                Some(ServerMessage::CommentDeleted(id)) => emit(Event::CommentDeleted(id)),
-                Some(ServerMessage::MapShared { path, by, generation }) => emit(Event::MapShared { path, by, generation }),
-                Some(ServerMessage::Edit { by, seq, edit }) => emit(Event::Edit { by, seq, edit }),
-                Some(ServerMessage::MapIncoming { path, by, len }) => emit(Event::MapIncoming { path, by, len }),
-                Some(ServerMessage::MapCancelled { path, by }) => emit(Event::MapCancelled { path, by }),
-                Some(other) => log::warn!("unexpected message from the host: {other:?}"),
-                None => return Err(fail("the host ended the session")),
-            },
-            Some(command) = outbox.recv() => match command {
-                Command::Message(message) => write_message(&mut send, &message).await?,
-                Command::ShareMap { path, bytes } => {
+    // a write stalled on flow control must not stop us reading, or both ends can wait on each other
+    let writer = async {
+        while let Some(message) = outbox.recv().await {
+            write_message(&mut send, &message).await?;
+        }
+
+        Ok::<_, Error>(())
+    };
+
+    let reader = async {
+        let mut throttle = time::interval(CURSOR_INTERVAL);
+        throttle.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                message = read_message(&mut recv, &mut reader) => match message? {
+                    Some(ServerMessage::PeerJoined(peer)) => emit(Event::PeerJoined(peer)),
+                    Some(ServerMessage::PeerLeft(id)) => emit(Event::PeerLeft(id)),
+                    Some(ServerMessage::Comment(comment)) => emit(Event::Comment(comment)),
+                    Some(ServerMessage::CommentDeleted(id)) => emit(Event::CommentDeleted(id)),
+                    Some(ServerMessage::MapShared { path, by, generation }) => emit(Event::MapShared { path, by, generation }),
+                    Some(ServerMessage::Edit { by, seq, edit }) => emit(Event::Edit { by, seq, edit }),
+                    Some(ServerMessage::MapIncoming { path, by, len }) => emit(Event::MapIncoming { path, by, len }),
+                    Some(ServerMessage::MapCancelled { path, by }) => emit(Event::MapCancelled { path, by }),
+                    Some(other) => log::warn!("unexpected message from the host: {other:?}"),
+                    None => return Err(fail("the host ended the session")),
+                },
+                Some(Share { path, bytes }) = shares.recv() => {
                     uploads.spawn(upload(connection.clone(), path, bytes, events.clone()));
                 },
-            },
-            Some(_) = uploads.join_next() => {},
-            stream = connection.accept_uni() => {
-                tokio::spawn(download(stream.map_err(fail)?, events.clone()));
-            },
-            datagram = connection.read_datagram() => {
-                let datagram = datagram.map_err(fail)?;
-                match protocol::decode::<Relayed>(&datagram) {
-                    Ok(Relayed { from, datagram: Datagram::Cursor(cursor) }) => emit(Event::Cursor { from, cursor }),
-                    Err(e) => log::debug!("dropping a datagram: {e}"),
-                }
-            },
-            _ = throttle.tick() => {
-                if !cursor.has_changed().unwrap_or(false) {
-                    continue;
-                }
+                Some(_) = uploads.join_next() => {},
+                stream = connection.accept_uni() => {
+                    tokio::spawn(download(stream.map_err(fail)?, events.clone()));
+                },
+                datagram = connection.read_datagram() => {
+                    let datagram = datagram.map_err(fail)?;
+                    match protocol::decode::<Relayed>(&datagram) {
+                        Ok(Relayed { from, datagram: Datagram::Cursor(cursor) }) => emit(Event::Cursor { from, cursor }),
+                        Err(e) => log::debug!("dropping a datagram: {e}"),
+                    }
+                },
+                _ = throttle.tick() => {
+                    if !cursor.has_changed().unwrap_or(false) {
+                        continue;
+                    }
 
-                let datagram = Datagram::Cursor(cursor.borrow_and_update().clone());
-                let bytes = protocol::encode(&datagram).map_err(fail)?;
-                if let Err(e) = connection.send_datagram(Bytes::from(bytes)) {
-                    log::warn!("could not send the cursor: {e}");
-                }
-            },
+                    let datagram = Datagram::Cursor(cursor.borrow_and_update().clone());
+                    let bytes = protocol::encode(&datagram).map_err(fail)?;
+                    if let Err(e) = connection.send_datagram(Bytes::from(bytes)) {
+                        log::warn!("could not send the cursor: {e}");
+                    }
+                },
+            }
         }
+    };
+
+    tokio::select! {
+        result = writer => result,
+        result = reader => result,
     }
 }
 

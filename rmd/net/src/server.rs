@@ -488,16 +488,18 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
 
     log::info!("{} joined as {id:?} from {}", info.nick, connection.remote_address());
 
-    let result = async {
+    // a write stalled on flow control must not stop us reading, or both ends can wait on each other
+    let writer = async {
+        while let Some(message) = inbox.recv().await {
+            write_message(&mut send, &message).await?;
+        }
+
+        Ok::<_, Error>(())
+    };
+
+    let reader = async {
         loop {
             tokio::select! {
-                message = inbox.recv() => {
-                    let Some(message) = message else {
-                        return Ok(());
-                    };
-
-                    write_message(&mut send, &message).await?;
-                },
                 message = read_message::<ClientMessage>(&mut recv, &mut reader) => match message? {
                     Some(ClientMessage::Hello(_)) => return Err(fail("sent a second hello")),
                     Some(ClientMessage::Comment { map, z, pos, text }) => shared.comment(id, map, z, pos, &text),
@@ -512,8 +514,12 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
                 },
             }
         }
-    }
-    .await;
+    };
+
+    let result = tokio::select! {
+        result = writer => result,
+        result = reader => result,
+    };
 
     shared.state.lock().unwrap().peers.remove(&id);
     shared.broadcast(id, &ServerMessage::PeerLeft(id));
