@@ -117,8 +117,8 @@ pub(crate) enum SharedState {
         done: u64,
         total: u64,
     },
-    // parsing the snapshot
-    Loading,
+    // parsing the snapshot of this generation
+    Loading(GenerationId),
     Ready,
     Closed,
     // arrived, but an unsaved local copy is in the way
@@ -128,7 +128,18 @@ pub(crate) enum SharedState {
 impl SharedState {
     const RECEIVING: Self = Self::Receiving { done: 0, total: 0 };
 
-    pub fn is_arriving(&self) -> bool { matches!(self, Self::Incoming { .. } | Self::Receiving { .. } | Self::Loading) }
+    pub fn is_arriving(&self) -> bool {
+        matches!(self, Self::Incoming { .. } | Self::Receiving { .. } | Self::Loading(_))
+    }
+
+    // a newer snapshot replaces one still parsing
+    fn accepts(&self, generation: GenerationId) -> bool {
+        match *self {
+            Self::Incoming { .. } | Self::Receiving { .. } => true,
+            Self::Loading(loading) => loading < generation,
+            _ => false,
+        }
+    }
 }
 
 pub(crate) struct SharedMap {
@@ -191,7 +202,7 @@ impl SharedMap {
 enum Prepared {
     Upload { path: String, bytes: Vec<u8> },
     Snapshot(ReceivedMap),
-    Unreadable(String),
+    Unreadable { path: String, generation: GenerationId },
 }
 
 pub(crate) struct ReceivedMap {
@@ -246,17 +257,16 @@ impl Coop {
             return;
         };
 
-        let Some(shared_map) = self.shared_maps.get_mut(&path).filter(|shared_map| {
-            matches!(
-                shared_map.state,
-                SharedState::Incoming { .. } | SharedState::Receiving { .. }
-            )
-        }) else {
+        let Some(shared_map) = self
+            .shared_maps
+            .get_mut(&path)
+            .filter(|shared_map| shared_map.state.accepts(generation))
+        else {
             log::debug!("{path}: dropping a snapshot nobody is waiting for");
             return;
         };
 
-        shared_map.state = SharedState::Loading;
+        shared_map.state = SharedState::Loading(generation);
 
         let prepared = self.prepared.0.clone();
         thread::spawn(move || {
@@ -265,7 +275,7 @@ impl Coop {
                 Ok(text) => text,
                 Err(e) => {
                     log::warn!("{path}: the shared map is not text: {e}");
-                    let _ = prepared.send(Prepared::Unreadable(path));
+                    let _ = prepared.send(Prepared::Unreadable { path, generation });
                     return;
                 },
             };
@@ -604,9 +614,12 @@ impl Session {
 
         let mut waiting = Vec::new();
         for shared_map in coop.shared_maps.values_mut() {
-            if matches!(shared_map.state, SharedState::Waiting(_))
-                && let SharedState::Waiting(received) = mem::replace(&mut shared_map.state, SharedState::Loading)
-            {
+            let SharedState::Waiting(received) = &shared_map.state else {
+                continue;
+            };
+
+            let loading = SharedState::Loading(received.generation);
+            if let SharedState::Waiting(received) = mem::replace(&mut shared_map.state, loading) {
                 waiting.push(*received);
             }
         }
@@ -623,9 +636,9 @@ impl Session {
                     }
                 },
                 Prepared::Snapshot(received) => self.open_shared_map(received),
-                Prepared::Unreadable(path) => {
+                Prepared::Unreadable { path, generation } => {
                     if let Some(shared_map) = self.coop.as_mut().and_then(|coop| coop.shared_maps.get_mut(&path))
-                        && matches!(shared_map.state, SharedState::Loading)
+                        && matches!(shared_map.state, SharedState::Loading(loading) if loading == generation)
                     {
                         shared_map.restart(SharedState::Closed);
                     }
@@ -1006,7 +1019,9 @@ impl Session {
             .coop
             .as_mut()
             .and_then(|coop| coop.shared_maps.get_mut(&received.path))
-            .filter(|shared_map| matches!(shared_map.state, SharedState::Loading))
+            .filter(|shared_map| {
+                matches!(shared_map.state, SharedState::Loading(loading) if loading == received.generation)
+            })
         else {
             return;
         };

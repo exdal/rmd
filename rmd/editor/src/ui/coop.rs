@@ -217,7 +217,7 @@ pub(super) fn map_note(coop: &Coop, path: &str) -> String {
         },
         state @ SharedState::Sending { .. } => format!("sharing {}", percent(state)),
         state @ SharedState::Receiving { .. } => format!("receiving {}", percent(state)),
-        SharedState::Loading => String::from("loading"),
+        SharedState::Loading(_) => String::from("loading"),
         SharedState::Closed => String::from("closed"),
         SharedState::Waiting(_) => String::from("waiting"),
         SharedState::Ready => return String::new(),
@@ -252,7 +252,7 @@ fn transfer_line(coop: &Coop, path: &str, state: &SharedState) -> Option<String>
         SharedState::Receiving { done, total } => {
             format!("Receiving {path}: {} / {}", megabytes(done), megabytes(total))
         },
-        SharedState::Loading => format!("Loading {path}"),
+        SharedState::Loading(_) => format!("Loading {path}"),
         SharedState::Ready | SharedState::Closed | SharedState::Waiting(_) => return None,
     };
 
