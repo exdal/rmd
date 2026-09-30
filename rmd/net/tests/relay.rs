@@ -403,6 +403,37 @@ fn a_new_share_carries_the_edits_its_snapshot_missed() {
 }
 
 #[test]
+fn heavy_traffic_both_ways_does_not_stall_the_session() {
+    const EDITS: u32 = 20;
+
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    let path = String::from("_maps/test.dmm");
+    alice.share_map(path.clone(), None, b"map".to_vec());
+    wait_for(&alice, |event| matches!(event, Event::MapShared { .. }).then_some(()));
+
+    // every edit is echoed back, so both ends write far more than a stream window at once
+    for _ in 0..EDITS {
+        alice.send_edit(MapEdit {
+            path: path.clone(),
+            generation: GenerationId(1),
+            coords: vec![[1, 1, 1]],
+            patch: "a".repeat(512 * 1024),
+        });
+    }
+
+    for expected in 0..EDITS {
+        let seq = wait_for(&alice, |event| match event {
+            Event::Edit { seq, .. } => Some(seq),
+            _ => None,
+        });
+        assert_eq!(seq, SeqId(expected));
+    }
+}
+
+#[test]
 fn a_resync_sends_the_snapshot_and_the_numbered_log_again() {
     let server = server();
     let alice = join(&server, PASSWORD, "alice");

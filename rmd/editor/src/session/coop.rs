@@ -1375,6 +1375,45 @@ mod tests {
     }
 
     #[test]
+    fn a_newer_snapshot_replaces_one_still_loading() {
+        let (dir, mut session) = hosting("snapshot-mid-load");
+        let path = "_maps/a.dmm";
+        incoming(&mut session, &dir);
+
+        let snapshot = |generation, rows: &str| Event::MapSnapshot {
+            path: String::from(path),
+            generation: GenerationId(generation),
+            bytes: format!("\"a\" = (/turf,/area)\n\n(1,1,1) = {{\"\n{rows}\n\"}}\n").into_bytes(),
+        };
+
+        // both arrive before the first one is parsed
+        let coop = session.coop.as_mut().unwrap();
+        coop.apply(snapshot(1, "aa"), Some(&dir));
+        coop.apply(snapshot(2, "aaa"), Some(&dir));
+        coop.apply(
+            Event::MapShared {
+                path: String::from(path),
+                by: OTHER,
+                generation: GenerationId(2),
+            },
+            Some(&dir),
+        );
+
+        let file = dir.join(path);
+        poll_until(&mut [&mut session], |sessions| {
+            let shared_map = &sessions[0].coop().unwrap().shared_maps[path];
+            let document = sessions[0].state.document_for_path(&file);
+            shared_map.is_ready()
+                && shared_map.generation == Some(GenerationId(2))
+                && document
+                    .and_then(|id| sessions[0].state.document(id))
+                    .is_some_and(|document| document.map.size.x == 3)
+        });
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn sharing_a_file_needs_it_open_and_a_connection() {
         let (dir, mut session) = codebase_with_map("share-file", "aa");
         let file = dir.join("_maps/a.dmm");
