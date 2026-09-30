@@ -10,19 +10,19 @@ use super::{
 };
 use crate::{
     camera::Controller,
-    session::{LiveShare, LiveStatus, Session},
+    session::{Coop, CoopStatus, Session},
     settings::Settings,
 };
 
-pub(super) const HOST_POPUP: &str = "Host live share##live-host";
+pub(super) const HOST_POPUP: &str = "Host co-op##coop-host";
 
-pub(super) const JOIN_POPUP: &str = "Join live share##live-join";
+pub(super) const JOIN_POPUP: &str = "Join co-op##coop-join";
 
-const LIVE_COLOR: [f32; 4] = [0.45, 0.85, 0.45, 1.0];
+const CONNECTED_COLOR: [f32; 4] = [0.45, 0.85, 0.45, 1.0];
 
 const PENDING_COLOR: [f32; 4] = [0.7, 0.7, 0.7, 1.0];
 
-pub(super) const COMMENT_POPUP: &str = "##live-comment";
+pub(super) const COMMENT_POPUP: &str = "##coop-comment";
 
 const COMMENT_WIDTH: f32 = 240.0;
 
@@ -47,13 +47,13 @@ impl CommentDraft {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum LiveDialogKind {
+pub(super) enum CoopDialogKind {
     Host,
     Join,
 }
 
-pub(super) struct LiveDialog {
-    kind: LiveDialogKind,
+pub(super) struct CoopDialog {
+    kind: CoopDialogKind,
     nick: String,
     address: String,
     port: i32,
@@ -61,9 +61,9 @@ pub(super) struct LiveDialog {
     error: Option<String>,
 }
 
-impl LiveDialog {
-    pub(super) fn new(kind: LiveDialogKind, settings: &Settings) -> Self {
-        let nick = Some(settings.live_share.nick.clone())
+impl CoopDialog {
+    pub(super) fn new(kind: CoopDialogKind, settings: &Settings) -> Self {
+        let nick = Some(settings.coop.nick.clone())
             .filter(|nick| !nick.is_empty())
             .or_else(|| std::env::var("USER").ok())
             .or_else(|| std::env::var("USERNAME").ok())
@@ -72,8 +72,8 @@ impl LiveDialog {
         Self {
             kind,
             nick,
-            address: settings.live_share.address.clone(),
-            port: i32::from(settings.live_share.port),
+            address: settings.coop.address.clone(),
+            port: i32::from(settings.coop.port),
             password: String::new(),
             error: None,
         }
@@ -81,14 +81,14 @@ impl LiveDialog {
 
     pub(super) const fn popup(&self) -> &'static str {
         match self.kind {
-            LiveDialogKind::Host => HOST_POPUP,
-            LiveDialogKind::Join => JOIN_POPUP,
+            CoopDialogKind::Host => HOST_POPUP,
+            CoopDialogKind::Join => JOIN_POPUP,
         }
     }
 }
 
-pub(super) fn draw_live_dialog(
-    ui: &Ui, session: &mut Session, settings: &mut Settings, dialog: &mut Option<LiveDialog>,
+pub(super) fn draw_coop_dialog(
+    ui: &Ui, session: &mut Session, settings: &mut Settings, dialog: &mut Option<CoopDialog>,
 ) {
     let mut close = false;
 
@@ -105,21 +105,21 @@ pub(super) fn draw_live_dialog(
         }
 
         submitted |= ui
-            .input_text("##live-nick", &mut state.nick)
+            .input_text("##coop-nick", &mut state.nick)
             .enter_returns_true(true)
             .build();
         match state.kind {
-            LiveDialogKind::Host => {
+            CoopDialogKind::Host => {
                 ui.text("Port");
                 ui.set_next_item_width(width);
-                ui.input_int("##live-port", &mut state.port);
+                ui.input_int("##coop-port", &mut state.port);
                 state.port = state.port.clamp(1, i32::from(u16::MAX));
             },
-            LiveDialogKind::Join => {
+            CoopDialogKind::Join => {
                 ui.text("Address");
                 ui.set_next_item_width(width);
                 submitted |= ui
-                    .input_text("##live-address", &mut state.address)
+                    .input_text("##coop-address", &mut state.address)
                     .hint("host:port")
                     .enter_returns_true(true)
                     .build();
@@ -129,7 +129,7 @@ pub(super) fn draw_live_dialog(
         ui.text("Password");
         ui.set_next_item_width(width);
         submitted |= ui
-            .input_text("##live-password", &mut state.password)
+            .input_text("##coop-password", &mut state.password)
             .enter_returns_true(true)
             .build();
 
@@ -147,12 +147,12 @@ pub(super) fn draw_live_dialog(
         let address = state.address.trim();
         let password = state.password.trim();
         let ready =
-            !nick.is_empty() && !password.is_empty() && (state.kind == LiveDialogKind::Host || !address.is_empty());
+            !nick.is_empty() && !password.is_empty() && (state.kind == CoopDialogKind::Host || !address.is_empty());
 
         ui.same_line();
         let label = match state.kind {
-            LiveDialogKind::Host => "Host",
-            LiveDialogKind::Join => "Join",
+            CoopDialogKind::Host => "Host",
+            CoopDialogKind::Join => "Join",
         };
 
         let clicked = {
@@ -162,16 +162,16 @@ pub(super) fn draw_live_dialog(
 
         if ready && (clicked || submitted) {
             let result = match state.kind {
-                LiveDialogKind::Host => session.host_live(state.port as u16, password.to_owned(), nick.to_owned()),
-                LiveDialogKind::Join => session.join_live(address.to_owned(), password.to_owned(), nick.to_owned()),
+                CoopDialogKind::Host => session.host_coop(state.port as u16, password.to_owned(), nick.to_owned()),
+                CoopDialogKind::Join => session.join_coop(address.to_owned(), password.to_owned(), nick.to_owned()),
             };
 
             match result {
                 Ok(()) => {
-                    settings.live_share.nick = nick.to_owned();
+                    settings.coop.nick = nick.to_owned();
                     match state.kind {
-                        LiveDialogKind::Host => settings.live_share.port = state.port as u16,
-                        LiveDialogKind::Join => settings.live_share.address = address.to_owned(),
+                        CoopDialogKind::Host => settings.coop.port = state.port as u16,
+                        CoopDialogKind::Join => settings.coop.address = address.to_owned(),
                     }
 
                     settings.save();
@@ -188,24 +188,24 @@ pub(super) fn draw_live_dialog(
     }
 }
 
-pub(super) fn draw_live_status(ui: &Ui, live: &LiveShare) {
-    let (color, label) = match &live.status {
-        LiveStatus::Hashing => (PENDING_COLOR, String::from("Live: reading codebase...")),
-        LiveStatus::Connecting => (PENDING_COLOR, String::from("Live: connecting...")),
-        LiveStatus::Connected => {
-            let others = live.peers.len();
-            let color = if live.skipped.is_empty() && live.peers.values().all(|peer| live.same_codebase(&peer.info)) {
-                LIVE_COLOR
+pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
+    let (color, label) = match &coop.status {
+        CoopStatus::Hashing => (PENDING_COLOR, String::from("Co-op: reading codebase...")),
+        CoopStatus::Connecting => (PENDING_COLOR, String::from("Co-op: connecting...")),
+        CoopStatus::Connected => {
+            let others = coop.peers.len();
+            let color = if coop.skipped.is_empty() && coop.peers.values().all(|peer| coop.same_codebase(&peer.info)) {
+                CONNECTED_COLOR
             } else {
                 DIAGNOSTIC_WARNING_COLOR
             };
 
             (
                 color,
-                format!("Live: {} {}", others + 1, if others == 0 { "user" } else { "users" }),
+                format!("Co-op: {} {}", others + 1, if others == 0 { "user" } else { "users" }),
             )
         },
-        LiveStatus::Ended(reason) => (SAVE_ERROR_COLOR, format!("Live: {reason}")),
+        CoopStatus::Ended(reason) => (SAVE_ERROR_COLOR, format!("Co-op: {reason}")),
     };
 
     ui.text_colored(color, label);
@@ -214,18 +214,18 @@ pub(super) fn draw_live_status(ui: &Ui, live: &LiveShare) {
     }
 
     ui.tooltip(|| {
-        if let Some((addr, password)) = live.host() {
+        if let Some((addr, password)) = coop.host() {
             ui.text(format!("Hosting on port {} with password {password}", addr.port()));
             ui.separator();
         }
 
-        ui.text(format!("{} (you)", live.nick));
-        for peer in live.peers.values() {
-            if live.same_codebase(&peer.info) {
+        ui.text(format!("{} (you)", coop.nick));
+        for peer in coop.peers.values() {
+            if coop.same_codebase(&peer.info) {
                 ui.text_colored(peer_color(peer.info.id), &peer.info.nick);
             } else {
                 let theirs = peer.info.codebase.git_hint.as_deref().unwrap_or("no git");
-                let ours = live.git_hint().unwrap_or("no git");
+                let ours = coop.git_hint().unwrap_or("no git");
                 ui.text_colored(
                     DIAGNOSTIC_WARNING_COLOR,
                     format!("{}: different codebase ({theirs}, you are on {ours})", peer.info.nick),
@@ -233,18 +233,18 @@ pub(super) fn draw_live_status(ui: &Ui, live: &LiveShare) {
             }
         }
 
-        if !live.shared.is_empty() {
+        if !coop.shared.is_empty() {
             ui.separator();
             ui.text("Shared maps");
-            for (path, shared) in &live.shared {
-                match live.nick_of(shared.by) {
+            for (path, shared) in &coop.shared {
+                match coop.nick_of(shared.by) {
                     Some(nick) => ui.text(format!("{path} (from {nick})")),
                     None => ui.text(path),
                 }
             }
         }
 
-        for path in live.skipped.keys() {
+        for path in coop.skipped.keys() {
             ui.text_colored(
                 DIAGNOSTIC_WARNING_COLOR,
                 format!("{path}: save or close your copy to receive the shared one"),
@@ -253,14 +253,12 @@ pub(super) fn draw_live_status(ui: &Ui, live: &LiveShare) {
     });
 }
 
-pub(super) fn draw_remote_cursors(
-    ui: &Ui, camera: &Controller, viewport: OverlayRect, live: &LiveShare, map: &str, z: u32,
-) {
+pub(super) fn draw_remote_cursors(ui: &Ui, camera: &Controller, viewport: OverlayRect, coop: &Coop, map: &str, z: u32) {
     let scale = dpi(ui);
     let viewport_min = viewport.min;
     let draw = ui.get_window_draw_list();
     draw.with_clip_rect(viewport.min, viewport.max, || {
-        for peer in live.peers.values() {
+        for peer in coop.peers.values() {
             if !peer
                 .cursor
                 .as_ref()
@@ -314,7 +312,7 @@ pub(super) fn draw_comment_composer(ui: &Ui, session: &Session, draft: &mut Opti
 
     let text = state.text.trim();
     if submitted && !text.is_empty() {
-        session.add_live_comment(state.document, state.pos, text.chars().take(MAX_COMMENT_LEN).collect());
+        session.add_coop_comment(state.document, state.pos, text.chars().take(MAX_COMMENT_LEN).collect());
     }
 
     if submitted || ui.is_key_pressed(Key::Escape) {
@@ -357,7 +355,7 @@ impl CommentLayout<'_> {
 }
 
 fn comment_layouts<'a>(
-    ui: &'a Ui, camera: &'a Controller, viewport_min: [f32; 2], live: &'a LiveShare, map: &'a str, z: u32,
+    ui: &'a Ui, camera: &'a Controller, viewport_min: [f32; 2], coop: &'a Coop, map: &'a str, z: u32,
 ) -> impl Iterator<Item = CommentLayout<'a>> + 'a {
     let scale = dpi(ui);
     let padding = 6.0 * scale;
@@ -365,7 +363,7 @@ fn comment_layouts<'a>(
     let header = COMMENT_HEADER * scale;
     let delete_size = ui.calc_text_size(ICON_CLOSE.to_string());
 
-    live.comments
+    coop.comments
         .values()
         .filter(move |comment| comment.map == map && comment.z == z)
         .filter_map(move |comment| {
@@ -374,7 +372,7 @@ fn comment_layouts<'a>(
                 return None;
             }
 
-            let nick = live.nick_of(comment.author);
+            let nick = coop.nick_of(comment.author);
             let nick_width = nick.map_or(0.0, |nick| ui.calc_text_size(nick)[0]);
             let text_size = ui.calc_text_size_with_opts(&comment.text, false, wrap);
             let width = (nick_width + padding + delete_size[0]).max(text_size[0]);
@@ -399,9 +397,9 @@ fn comment_layouts<'a>(
 }
 
 pub(super) fn comment_at(
-    ui: &Ui, camera: &Controller, viewport_min: [f32; 2], live: &LiveShare, map: &str, z: u32, point: [f32; 2],
+    ui: &Ui, camera: &Controller, viewport_min: [f32; 2], coop: &Coop, map: &str, z: u32, point: [f32; 2],
 ) -> Option<CommentHit> {
-    comment_layouts(ui, camera, viewport_min, live, map, z)
+    comment_layouts(ui, camera, viewport_min, coop, map, z)
         .filter(|layout| layout.contains(point))
         .last()
         .map(|layout| CommentHit {
@@ -411,14 +409,13 @@ pub(super) fn comment_at(
 }
 
 pub(super) fn draw_comments(
-    ui: &Ui, camera: &Controller, viewport: OverlayRect, live: &LiveShare, map: &str, z: u32,
-    hovered: Option<CommentHit>,
+    ui: &Ui, camera: &Controller, viewport: OverlayRect, coop: &Coop, map: &str, z: u32, hovered: Option<CommentHit>,
 ) {
     let header = COMMENT_HEADER * dpi(ui);
     let wrap = COMMENT_WIDTH * dpi(ui);
     let draw = ui.get_window_draw_list();
     draw.with_clip_rect(viewport.min, viewport.max, || {
-        for layout in comment_layouts(ui, camera, viewport.min, live, map, z) {
+        for layout in comment_layouts(ui, camera, viewport.min, coop, map, z) {
             let color = peer_color(layout.comment.author);
             draw.add_rect(layout.min, layout.max, COMMENT_BG).filled(true).build();
             draw.add_rect(layout.min, [layout.max[0], layout.min[1] + header], color)

@@ -9,7 +9,7 @@ use protocol::{
     FrameReader,
     Hello,
     Service,
-    live::{
+    coop::{
         ClientHello,
         ClientMessage,
         CodebaseId,
@@ -96,7 +96,7 @@ impl Client {
 
         let failed = events_tx.clone();
         let spawned = std::thread::Builder::new()
-            .name(String::from("rmd-live"))
+            .name(String::from("rmd-coop"))
             .spawn(move || {
                 let result = crate::runtime()
                     .and_then(|runtime| runtime.block_on(run(&addr, hello, cursor_rx, inbox, &events_tx, stop)));
@@ -196,7 +196,7 @@ async fn session(
     };
 
     let (mut send, mut recv) = connection.open_bi().await.map_err(fail)?;
-    write_message(&mut send, &Hello::new(Service::LiveShare)).await?;
+    write_message(&mut send, &Hello::new(Service::Coop)).await?;
     write_message(&mut send, &ClientMessage::Hello(hello)).await?;
 
     let mut reader = FrameReader::new();

@@ -6,7 +6,7 @@ use super::{
     ScreenshotArea,
     ScreenshotRequest,
     UiState,
-    live::{LiveDialogKind, draw_live_status},
+    coop::{CoopDialogKind, draw_coop_status},
     viewport::EditCommand,
     welcome::codebase_relative,
 };
@@ -45,7 +45,7 @@ pub(super) struct MenuActions {
     pub(super) go_to: bool,
     pub(super) resize_map: bool,
     pub(super) reset_layout: bool,
-    pub(super) live_dialog: Option<LiveDialogKind>,
+    pub(super) coop_dialog: Option<CoopDialogKind>,
 }
 
 impl UiState {
@@ -325,25 +325,25 @@ impl UiState {
                     session.refresh_git();
                 }
             });
-            ui.menu("Live Share", || {
-                let idle = session.live().is_none() && session.tree().is_some() && !loading;
+            ui.menu("Co-op", || {
+                let idle = session.coop().is_none() && session.tree().is_some() && !loading;
                 if ui.menu_item_enabled_selected_no_shortcut("Host...", false, idle) {
-                    actions.live_dialog = Some(LiveDialogKind::Host);
+                    actions.coop_dialog = Some(CoopDialogKind::Host);
                 }
 
                 if ui.menu_item_enabled_selected_no_shortcut("Join...", false, idle) {
-                    actions.live_dialog = Some(LiveDialogKind::Join);
+                    actions.coop_dialog = Some(CoopDialogKind::Join);
                 }
 
                 ui.separator();
-                if ui.menu_item_enabled_selected_no_shortcut("Share current map", false, session.can_share_live_map()) {
-                    session.share_live_map();
+                if ui.menu_item_enabled_selected_no_shortcut("Share current map", false, session.can_share_coop_map()) {
+                    session.share_coop_map();
                 }
 
-                let hosting = session.live().is_some_and(|live| live.is_hosting());
+                let hosting = session.coop().is_some_and(|coop| coop.is_hosting());
                 let label = if hosting { "Stop hosting" } else { "Leave" };
-                if ui.menu_item_enabled_selected_no_shortcut(label, false, session.live().is_some()) {
-                    session.leave_live();
+                if ui.menu_item_enabled_selected_no_shortcut(label, false, session.coop().is_some()) {
+                    session.leave_coop();
                 }
             });
             ui.menu("Window", || {
@@ -352,9 +352,9 @@ impl UiState {
                 }
             });
 
-            if let Some(live) = session.live() {
+            if let Some(coop) = session.coop() {
                 ui.separator();
-                draw_live_status(ui, live);
+                draw_coop_status(ui, coop);
             }
         });
 

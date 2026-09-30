@@ -1,5 +1,5 @@
+pub mod coop;
 pub mod frame;
-pub mod live;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -10,7 +10,7 @@ pub const VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Service {
-    LiveShare,
+    Coop,
     Bridge,
 }
 
@@ -95,19 +95,19 @@ mod tests {
 
     #[test]
     fn hello_round_trips_and_checks() {
-        let hello = Hello::new(Service::LiveShare);
+        let hello = Hello::new(Service::Coop);
         let decoded: Hello = decode(&encode(&hello).unwrap()).unwrap();
 
         assert_eq!(decoded, hello);
-        assert_eq!(decoded.check(Service::LiveShare), Ok(()));
+        assert_eq!(decoded.check(Service::Coop), Ok(()));
     }
 
     #[test]
     fn hello_rejects_foreign_peers() {
-        let mut hello = Hello::new(Service::LiveShare);
+        let mut hello = Hello::new(Service::Coop);
         hello.version = VERSION + 1;
         assert_eq!(
-            hello.check(Service::LiveShare),
+            hello.check(Service::Coop),
             Err(Error::Version {
                 ours: VERSION,
                 theirs: VERSION + 1
@@ -115,16 +115,16 @@ mod tests {
         );
 
         assert_eq!(
-            Hello::new(Service::Bridge).check(Service::LiveShare),
+            Hello::new(Service::Bridge).check(Service::Coop),
             Err(Error::WrongService {
-                expected: Service::LiveShare,
+                expected: Service::Coop,
                 got: Service::Bridge
             })
         );
 
-        let mut hello = Hello::new(Service::LiveShare);
+        let mut hello = Hello::new(Service::Coop);
         hello.magic = *b"HTTP";
-        assert_eq!(hello.check(Service::LiveShare), Err(Error::BadMagic));
+        assert_eq!(hello.check(Service::Coop), Err(Error::BadMagic));
     }
 
     #[test]

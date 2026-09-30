@@ -17,6 +17,7 @@ mod blame;
 mod block;
 mod clipboard;
 mod codebase;
+mod coop;
 mod diff;
 mod direction;
 mod document;
@@ -30,7 +31,6 @@ mod guides;
 mod highlight;
 mod instance;
 mod level;
-mod live;
 mod node;
 mod palette;
 mod panel;
@@ -50,6 +50,7 @@ use self::{
 pub(crate) use self::{
     blame::{BlameState, blame_color},
     codebase::{DiagnosticSeverity, LoadReport, MAX_REPORTED_DIAGNOSTICS, build_textures, discover_maps},
+    coop::{Coop, CoopStatus},
     diff::DiffSide,
     direction::{DirectionState, DirectionalTypes},
     edit::context_placement_group,
@@ -58,7 +59,6 @@ pub(crate) use self::{
     guides::GuideBadge,
     instance::{EditScope, SelectedTransform},
     level::validate_level,
-    live::{LiveShare, LiveStatus},
     node::NodeOverlay,
     palette::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
     preview::{BlockPreviewSource, PlacementPreview},
@@ -108,7 +108,7 @@ pub struct Session {
     ui_feedback: Option<editor::bake::UiFeedback>,
     node_edit: Option<NodeEditState>,
     identical: Option<instance::IdenticalCache>,
-    live: Option<LiveShare>,
+    coop: Option<Coop>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,7 +151,7 @@ impl Session {
             ui_feedback: None,
             node_edit: None,
             identical: None,
-            live: None,
+            coop: None,
         }
     }
 }

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 const MAX_RECENT: usize = 10;
 const DEFAULT_PREFERRED_EDITOR: &str = "code --goto {file}:{line}:{column}";
-pub(crate) const DEFAULT_LIVE_SHARE_PORT: u16 = 3131;
+pub(crate) const DEFAULT_COOP_PORT: u16 = 3131;
 pub const UI_SCALE_PERCENT: std::ops::RangeInclusive<u32> = 50..=200;
 
 pub(crate) const BINDABLE_KEYS: &[Key] = &[
@@ -980,18 +980,18 @@ impl Default for ObjectTreeSearchOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub(crate) struct LiveShareSettings {
+pub(crate) struct CoopSettings {
     pub nick: String,
     pub address: String,
     pub port: u16,
 }
 
-impl Default for LiveShareSettings {
+impl Default for CoopSettings {
     fn default() -> Self {
         Self {
             nick: String::new(),
             address: String::new(),
-            port: DEFAULT_LIVE_SHARE_PORT,
+            port: DEFAULT_COOP_PORT,
         }
     }
 }
@@ -1063,7 +1063,7 @@ pub(crate) struct Settings {
     pub check_for_updates: bool,
     pub sanitize_vars_on_save: bool,
     pub pinned_vars: Vec<String>,
-    pub live_share: LiveShareSettings,
+    pub coop: CoopSettings,
 }
 
 pub(crate) struct SettingsLoad {
@@ -1134,7 +1134,7 @@ impl Default for Settings {
             check_for_updates: true,
             sanitize_vars_on_save: false,
             pinned_vars: Vec::new(),
-            live_share: LiveShareSettings::default(),
+            coop: CoopSettings::default(),
         }
     }
 }
@@ -1371,7 +1371,7 @@ mod tests {
                 check_for_updates: true,
                 sanitize_vars_on_save: false,
                 pinned_vars: Vec::new(),
-                live_share: LiveShareSettings::default(),
+                coop: CoopSettings::default(),
             }
         );
     }
@@ -1657,7 +1657,7 @@ mod tests {
             check_for_updates: false,
             sanitize_vars_on_save: true,
             pinned_vars: vec![String::from("req_access")],
-            live_share: LiveShareSettings::default(),
+            coop: CoopSettings::default(),
         };
         settings.keybindings.rebind(
             KeybindAction::ShowAreas,
@@ -1740,7 +1740,7 @@ mod tests {
             check_for_updates: true,
             sanitize_vars_on_save: false,
             pinned_vars: Vec::new(),
-            live_share: LiveShareSettings::default(),
+            coop: CoopSettings::default(),
         };
         let mut options = FrameOptions::default();
 

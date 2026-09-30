@@ -3,7 +3,7 @@ mod server;
 mod stream;
 mod tls;
 
-pub use protocol::live::{
+pub use protocol::coop::{
     CodebaseId,
     Comment,
     CommentId,

@@ -16,7 +16,7 @@ use crate::loader::LoadedMap;
 // how fast a remote cursor closes the gap to its latest position, per second
 const CURSOR_SMOOTHING: f32 = 20.0;
 
-pub(crate) enum LiveStatus {
+pub(crate) enum CoopStatus {
     Hashing,
     Connecting,
     Connected,
@@ -63,8 +63,8 @@ impl RemotePeer {
     }
 }
 
-pub(crate) struct LiveShare {
-    pub status: LiveStatus,
+pub(crate) struct Coop {
+    pub status: CoopStatus,
     pub nick: String,
     pub you: Option<PeerId>,
     pub peers: BTreeMap<PeerId, RemotePeer>,
@@ -124,10 +124,10 @@ struct PendingJoin {
     codebase: mpsc::Receiver<Result<CodebaseId, String>>,
 }
 
-impl LiveShare {
+impl Coop {
     pub fn is_hosting(&self) -> bool { self.server.is_some() }
 
-    pub fn is_connected(&self) -> bool { matches!(self.status, LiveStatus::Connected) }
+    pub fn is_connected(&self) -> bool { matches!(self.status, CoopStatus::Connected) }
 
     pub fn nick_of(&self, id: PeerId) -> Option<&str> {
         if self.you == Some(id) {
@@ -187,7 +187,7 @@ impl LiveShare {
     fn apply(&mut self, event: Event, codebase: Option<&Path>) {
         match event {
             Event::Connected { you, peers, comments } => {
-                self.status = LiveStatus::Connected;
+                self.status = CoopStatus::Connected;
                 self.you = Some(you);
                 self.peers = peers.into_iter().map(|info| (info.id, RemotePeer::new(info))).collect();
                 self.comments = comments.into_iter().map(|comment| (comment.id, comment)).collect();
@@ -245,7 +245,7 @@ impl LiveShare {
     }
 
     fn end(&mut self, reason: String) {
-        self.status = LiveStatus::Ended(reason);
+        self.status = CoopStatus::Ended(reason);
         self.peers.clear();
         self.comments.clear();
         self.shared.clear();
@@ -256,9 +256,9 @@ impl LiveShare {
 }
 
 impl Session {
-    pub fn live(&self) -> Option<&LiveShare> { self.live.as_ref() }
+    pub fn coop(&self) -> Option<&Coop> { self.coop.as_ref() }
 
-    pub fn host_live(&mut self, port: u16, password: String, nick: String) -> Result<(), String> {
+    pub fn host_coop(&mut self, port: u16, password: String, nick: String) -> Result<(), String> {
         let server = Server::spawn(ServerConfig {
             bind: SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)),
             password,
@@ -267,21 +267,21 @@ impl Session {
 
         let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, server.local_addr().port())).to_string();
         let password = server.password().to_owned();
-        self.start_live(addr, password, nick, Some(server))
+        self.start_coop(addr, password, nick, Some(server))
     }
 
-    pub fn join_live(&mut self, addr: String, password: String, nick: String) -> Result<(), String> {
-        self.start_live(addr, password, nick, None)
+    pub fn join_coop(&mut self, addr: String, password: String, nick: String) -> Result<(), String> {
+        self.start_coop(addr, password, nick, None)
     }
 
-    fn start_live(
+    fn start_coop(
         &mut self, addr: String, password: String, nick: String, server: Option<Server>,
     ) -> Result<(), String> {
         let Some(environment) = self.state.environment.clone() else {
             return Err(String::from("open a codebase first"));
         };
 
-        self.leave_live();
+        self.leave_coop();
 
         let (sender, codebase) = mpsc::channel();
         std::thread::spawn(move || {
@@ -296,8 +296,8 @@ impl Session {
             let _ = sender.send(codebase);
         });
 
-        self.live = Some(LiveShare {
-            status: LiveStatus::Hashing,
+        self.coop = Some(Coop {
+            status: CoopStatus::Hashing,
             nick,
             you: None,
             peers: BTreeMap::new(),
@@ -320,29 +320,29 @@ impl Session {
         Ok(())
     }
 
-    pub fn leave_live(&mut self) {
+    pub fn leave_coop(&mut self) {
         // a server waits for its peers to hear the close, keep that off the frame
-        if let Some(server) = self.live.take().and_then(|mut live| live.server.take()) {
+        if let Some(server) = self.coop.take().and_then(|mut coop| coop.server.take()) {
             std::thread::spawn(move || drop(server));
         }
 
         self.drop_comment_tool();
     }
 
-    pub fn comment_tool_available(&self) -> bool { self.live.as_ref().is_some_and(LiveShare::is_connected) }
+    pub fn comment_tool_available(&self) -> bool { self.coop.as_ref().is_some_and(Coop::is_connected) }
 
-    pub fn add_live_comment(&self, id: DocumentId, pos: [f32; 2], text: String) {
-        let (Some(map), Some(document)) = (self.live_map_key(id), self.state.document(id)) else {
+    pub fn add_coop_comment(&self, id: DocumentId, pos: [f32; 2], text: String) {
+        let (Some(map), Some(document)) = (self.coop_map_key(id), self.state.document(id)) else {
             return;
         };
 
-        if let Some(client) = self.live.as_ref().and_then(|live| live.client.as_ref()) {
+        if let Some(client) = self.coop.as_ref().and_then(|coop| coop.client.as_ref()) {
             client.send_comment(map, document.z, pos, text);
         }
     }
 
-    pub fn delete_live_comment(&self, id: CommentId) {
-        if let Some(client) = self.live.as_ref().and_then(|live| live.client.as_ref()) {
+    pub fn delete_coop_comment(&self, id: CommentId) {
+        if let Some(client) = self.coop.as_ref().and_then(|coop| coop.client.as_ref()) {
             client.delete_comment(id);
         }
     }
@@ -353,61 +353,61 @@ impl Session {
         }
     }
 
-    pub fn poll_live(&mut self) {
+    pub fn poll_coop(&mut self) {
         self.drop_comment_tool();
         let codebase = self.codebase_dir().map(Path::to_path_buf);
-        let Some(live) = self.live.as_mut() else {
+        let Some(coop) = self.coop.as_mut() else {
             return;
         };
 
-        if let Some(pending) = live.pending.as_ref() {
+        if let Some(pending) = coop.pending.as_ref() {
             match pending.codebase.try_recv() {
                 Ok(Ok(codebase)) => {
-                    let pending = live.pending.take().expect("checked above");
-                    live.client = Some(Client::connect(
+                    let pending = coop.pending.take().expect("checked above");
+                    coop.client = Some(Client::connect(
                         pending.addr,
                         pending.password,
-                        live.nick.clone(),
+                        coop.nick.clone(),
                         codebase.clone(),
                     ));
-                    live.codebase = Some(codebase);
-                    live.status = LiveStatus::Connecting;
+                    coop.codebase = Some(codebase);
+                    coop.status = CoopStatus::Connecting;
                 },
                 Ok(Err(e)) => {
-                    live.pending = None;
-                    live.end(e);
+                    coop.pending = None;
+                    coop.end(e);
                 },
                 Err(mpsc::TryRecvError::Empty) => {},
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    live.pending = None;
-                    live.end(String::from("could not read the codebase"));
+                    coop.pending = None;
+                    coop.end(String::from("could not read the codebase"));
                 },
             }
         }
 
-        let events = live
+        let events = coop
             .client
             .as_ref()
             .map(|client| client.poll().collect::<Vec<_>>())
             .unwrap_or_default();
 
         for event in events {
-            live.apply(event, codebase.as_deref());
+            coop.apply(event, codebase.as_deref());
         }
 
-        let prepared = live.prepared.1.try_iter().collect::<Vec<_>>();
+        let prepared = coop.prepared.1.try_iter().collect::<Vec<_>>();
 
         let now = Instant::now();
-        let elapsed = now.duration_since(live.last_poll).as_secs_f32();
-        live.last_poll = now;
-        for peer in live.peers.values_mut() {
+        let elapsed = now.duration_since(coop.last_poll).as_secs_f32();
+        coop.last_poll = now;
+        for peer in coop.peers.values_mut() {
             peer.follow(elapsed);
         }
 
         let waiting = self
-            .live
+            .coop
             .as_mut()
-            .map(|live| std::mem::take(&mut live.skipped))
+            .map(|coop| std::mem::take(&mut coop.skipped))
             .unwrap_or_default();
         for received in waiting.into_values() {
             self.open_shared_map(received);
@@ -416,7 +416,7 @@ impl Session {
         for prepared in prepared {
             match prepared {
                 Prepared::Upload { path, bytes } => {
-                    if let Some(client) = self.live.as_ref().and_then(|live| live.client.as_ref()) {
+                    if let Some(client) = self.coop.as_ref().and_then(|coop| coop.client.as_ref()) {
                         client.share_map(path, bytes);
                     }
                 },
@@ -424,22 +424,22 @@ impl Session {
             }
         }
 
-        self.apply_live_edits();
-        self.send_live_edits();
+        self.apply_coop_edits();
+        self.send_coop_edits();
     }
 
     fn shared_document(&self, path: &str) -> Option<DocumentId> {
         self.state.document_for_path(&self.codebase_dir()?.join(path))
     }
 
-    fn apply_live_edits(&mut self) {
-        let Some(live) = self.live.as_mut() else {
+    fn apply_coop_edits(&mut self) {
+        let Some(coop) = self.coop.as_mut() else {
             return;
         };
 
-        let you = live.you;
+        let you = coop.you;
         let mut incoming = Vec::new();
-        for (path, shared) in live.shared.iter_mut().filter(|(_, shared)| shared.is_ready()) {
+        for (path, shared) in coop.shared.iter_mut().filter(|(_, shared)| shared.is_ready()) {
             for (by, edit) in shared.inbox.drain(..) {
                 incoming.push((path.clone(), by, edit));
             }
@@ -455,7 +455,7 @@ impl Session {
             };
 
             let coords = edit.coords.iter().map(|&[x, y, z]| Coord::new(x, y, z));
-            let Some(shared) = self.live.as_mut().and_then(|live| live.shared.get_mut(&path)) else {
+            let Some(shared) = self.coop.as_mut().and_then(|coop| coop.shared.get_mut(&path)) else {
                 continue;
             };
 
@@ -494,12 +494,12 @@ impl Session {
         }
     }
 
-    fn send_live_edits(&mut self) {
-        let Some(live) = self.live.as_ref() else {
+    fn send_coop_edits(&mut self) {
+        let Some(coop) = self.coop.as_ref() else {
             return;
         };
 
-        let ready = live
+        let ready = coop
             .shared
             .iter()
             .filter(|(_, shared)| shared.is_ready())
@@ -516,7 +516,7 @@ impl Session {
             };
 
             if journal.reshaped {
-                self.share_live_document(id);
+                self.share_coop_document(id);
                 continue;
             }
 
@@ -528,17 +528,17 @@ impl Session {
                 continue;
             };
 
-            let Some(live) = self.live.as_mut() else {
+            let Some(coop) = self.coop.as_mut() else {
                 return;
             };
 
-            if let Some(shared) = live.shared.get_mut(&path) {
+            if let Some(shared) = coop.shared.get_mut(&path) {
                 for coord in &coords {
                     *shared.in_flight.entry(*coord).or_insert(0) += 1;
                 }
             }
 
-            if let Some(client) = live.client.as_ref() {
+            if let Some(client) = coop.client.as_ref() {
                 client.send_edit(MapEdit {
                     path,
                     generation,
@@ -549,18 +549,18 @@ impl Session {
         }
     }
 
-    pub fn can_share_live_map(&self) -> bool {
-        self.comment_tool_available() && self.state.active().and_then(|id| self.live_map_path(id)).is_some()
+    pub fn can_share_coop_map(&self) -> bool {
+        self.comment_tool_available() && self.state.active().and_then(|id| self.coop_map_path(id)).is_some()
     }
 
-    pub fn share_live_map(&mut self) {
+    pub fn share_coop_map(&mut self) {
         if let Some(id) = self.state.active() {
-            self.share_live_document(id);
+            self.share_coop_document(id);
         }
     }
 
-    fn share_live_document(&mut self, id: DocumentId) {
-        let Some(path) = self.live_map_path(id) else {
+    fn share_coop_document(&mut self, id: DocumentId) {
+        let Some(path) = self.coop_map_path(id) else {
             return;
         };
 
@@ -572,17 +572,17 @@ impl Session {
         document.start_journal();
         document.take_journal();
 
-        let Some(live) = self.live.as_mut() else {
+        let Some(coop) = self.coop.as_mut() else {
             return;
         };
 
         // hold back new edits until the server numbers this share
-        if let Some(shared) = live.shared.get_mut(&path) {
+        if let Some(shared) = coop.shared.get_mut(&path) {
             shared.loaded_generation = None;
         }
 
         let map = document.map.clone();
-        let prepared = live.prepared.0.clone();
+        let prepared = coop.prepared.0.clone();
         std::thread::spawn(move || {
             let bytes = dmm::writer::write(&map).into_bytes();
             let _ = prepared.send(Prepared::Upload { path, bytes });
@@ -590,17 +590,17 @@ impl Session {
     }
 
     fn open_shared_map(&mut self, received: ReceivedMap) {
-        let Some(live) = self.live.as_mut() else {
+        let Some(coop) = self.coop.as_mut() else {
             return;
         };
 
         let open = self.state.document_for_path(&received.file);
         // a local copy with unsaved work waits until it is saved or closed, our copy of the session's map does not
         if open.is_some_and(|id| {
-            !live.received.contains(&received.path)
+            !coop.received.contains(&received.path)
                 && self.state.document(id).is_some_and(|document| document.is_dirty())
         }) {
-            live.skipped.insert(received.path.clone(), received);
+            coop.skipped.insert(received.path.clone(), received);
             return;
         }
 
@@ -613,7 +613,7 @@ impl Session {
             modified,
         } = received;
 
-        let shared = live
+        let shared = coop
             .shared
             .entry(path.clone())
             .or_insert_with(|| SharedMap::new(PeerId(0), generation));
@@ -625,7 +625,7 @@ impl Session {
         shared.generation = generation;
         shared.loaded_generation = Some(generation);
         shared.in_flight.clear();
-        live.received.insert(path);
+        coop.received.insert(path);
 
         let repo = self.git_enabled.then(|| editor::git::discover(&file)).flatten();
         let loaded = LoadedMap {
@@ -656,7 +656,7 @@ impl Session {
         }
     }
 
-    fn live_map_path(&self, id: DocumentId) -> Option<String> {
+    fn coop_map_path(&self, id: DocumentId) -> Option<String> {
         let path = self.state.document(id)?.path.as_deref()?;
         let relative = path.strip_prefix(self.codebase_dir()?).ok()?;
         let path = relative
@@ -668,14 +668,14 @@ impl Session {
         net::is_map_path(&path).then_some(path)
     }
 
-    pub fn live_cursor(&self, cursor: Option<Cursor>) {
-        if let Some(client) = self.live.as_ref().and_then(|live| live.client.as_ref()) {
+    pub fn coop_cursor(&self, cursor: Option<Cursor>) {
+        if let Some(client) = self.coop.as_ref().and_then(|coop| coop.client.as_ref()) {
             client.send_cursor(cursor);
         }
     }
 
-    pub fn live_map_key(&self, id: DocumentId) -> Option<String> {
-        self.live.as_ref()?;
+    pub fn coop_map_key(&self, id: DocumentId) -> Option<String> {
+        self.coop.as_ref()?;
         let path = self.state.document(id)?.path.as_deref()?;
 
         editor::codebase_key(self.codebase_dir()?, path)
@@ -706,7 +706,7 @@ mod tests {
         while !done(sessions) {
             assert!(Instant::now() < deadline, "timed out");
             for session in sessions.iter_mut() {
-                session.poll_live();
+                session.poll_coop();
             }
 
             std::thread::sleep(Duration::from_millis(5));
@@ -715,61 +715,61 @@ mod tests {
 
     fn connected(session: &Session) -> bool {
         session
-            .live()
-            .is_some_and(|live| matches!(live.status, LiveStatus::Connected))
+            .coop()
+            .is_some_and(|coop| matches!(coop.status, CoopStatus::Connected))
     }
 
     #[test]
     fn a_joined_peer_sees_the_hosts_cursor() {
         let mut host = session();
-        host.host_live(0, String::from("hunter2"), String::from("host"))
+        host.host_coop(0, String::from("hunter2"), String::from("host"))
             .unwrap();
         poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
 
-        let (addr, password) = host.live().and_then(LiveShare::host).unwrap();
+        let (addr, password) = host.coop().and_then(Coop::host).unwrap();
         let (addr, password) = (format!("127.0.0.1:{}", addr.port()), password.to_owned());
         let mut guest = session();
-        guest.join_live(addr, password, String::from("guest")).unwrap();
+        guest.join_coop(addr, password, String::from("guest")).unwrap();
         poll_until(&mut [&mut host, &mut guest], |sessions| {
-            connected(sessions[1]) && sessions[0].live().is_some_and(|live| live.peers.len() == 1)
+            connected(sessions[1]) && sessions[0].coop().is_some_and(|coop| coop.peers.len() == 1)
         });
 
-        let peer = guest.live().unwrap().peers.values().next().unwrap();
+        let peer = guest.coop().unwrap().peers.values().next().unwrap();
         assert_eq!(peer.info.nick, "host");
-        assert!(guest.live().unwrap().same_codebase(&peer.info));
+        assert!(guest.coop().unwrap().same_codebase(&peer.info));
 
         let cursor = Cursor {
             map: String::from("_maps/a.dmm"),
             z: 1,
             pos: [32.0, 64.0],
         };
-        host.live_cursor(Some(cursor.clone()));
+        host.coop_cursor(Some(cursor.clone()));
         poll_until(&mut [&mut host, &mut guest], |sessions| {
             sessions[1]
-                .live()
-                .is_some_and(|live| live.peers.values().any(|peer| peer.cursor.as_ref() == Some(&cursor)))
+                .coop()
+                .is_some_and(|coop| coop.peers.values().any(|peer| peer.cursor.as_ref() == Some(&cursor)))
         });
 
-        guest.leave_live();
+        guest.leave_coop();
         poll_until(&mut [&mut host], |sessions| {
-            sessions[0].live().is_some_and(|live| live.peers.is_empty())
+            sessions[0].coop().is_some_and(|coop| coop.peers.is_empty())
         });
     }
 
     #[test]
     fn a_wrong_password_ends_the_session_with_the_reason() {
         let mut host = session();
-        host.host_live(0, String::from("hunter2"), String::from("host"))
+        host.host_coop(0, String::from("hunter2"), String::from("host"))
             .unwrap();
-        let port = host.live().and_then(LiveShare::host).unwrap().0.port();
+        let port = host.coop().and_then(Coop::host).unwrap().0.port();
 
         let mut guest = session();
         guest
-            .join_live(format!("127.0.0.1:{port}"), String::from("nope"), String::from("guest"))
+            .join_coop(format!("127.0.0.1:{port}"), String::from("nope"), String::from("guest"))
             .unwrap();
         poll_until(&mut [&mut guest], |sessions| {
-            sessions[0].live().is_some_and(
-                |live| matches!(&live.status, LiveStatus::Ended(reason) if reason.contains("wrong password")),
+            sessions[0].coop().is_some_and(
+                |coop| matches!(&coop.status, CoopStatus::Ended(reason) if reason.contains("wrong password")),
             )
         });
     }
@@ -814,18 +814,18 @@ mod tests {
         host.set_tool(Tool::Comment);
         assert_eq!(host.tool(), Tool::Select);
 
-        host.host_live(0, String::from("hunter2"), String::from("host"))
+        host.host_coop(0, String::from("hunter2"), String::from("host"))
             .unwrap();
         poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
         host.set_tool(Tool::Comment);
         assert_eq!(host.tool(), Tool::Comment);
 
-        host.leave_live();
+        host.leave_coop();
         assert_eq!(host.tool(), Tool::Select);
     }
 
     fn codebase_with_map(name: &str, rows: &str) -> (PathBuf, Session) {
-        let dir = std::env::temp_dir().join(format!("rmd-live-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rmd-coop-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("_maps")).unwrap();
         std::fs::write(dir.join("game.dme"), "").unwrap();
@@ -865,20 +865,20 @@ mod tests {
         let local = open_local(&mut guest, guest_dir.join("_maps/a.dmm"));
         guest.state.document_mut(local).unwrap().mark_unsaved();
 
-        host.host_live(0, String::from("hunter2"), String::from("host"))
+        host.host_coop(0, String::from("hunter2"), String::from("host"))
             .unwrap();
         poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
-        assert!(host.can_share_live_map());
-        host.share_live_map();
+        assert!(host.can_share_coop_map());
+        host.share_coop_map();
         poll_until(&mut [&mut host], |sessions| {
             sessions[0]
-                .live()
-                .is_some_and(|live| live.shared.contains_key("_maps/a.dmm"))
+                .coop()
+                .is_some_and(|coop| coop.shared.contains_key("_maps/a.dmm"))
         });
 
-        let port = host.live().and_then(LiveShare::host).unwrap().0.port();
+        let port = host.coop().and_then(Coop::host).unwrap().0.port();
         guest
-            .join_live(
+            .join_coop(
                 format!("127.0.0.1:{port}"),
                 String::from("hunter2"),
                 String::from("guest"),
@@ -886,8 +886,8 @@ mod tests {
             .unwrap();
         poll_until(&mut [&mut host, &mut guest], |sessions| {
             sessions[1]
-                .live()
-                .is_some_and(|live| live.skipped.contains_key("_maps/a.dmm"))
+                .coop()
+                .is_some_and(|coop| coop.skipped.contains_key("_maps/a.dmm"))
         });
         assert_eq!(guest.state.document(local).unwrap().map.size.x, 1);
 
@@ -903,7 +903,7 @@ mod tests {
             .unwrap();
         assert_eq!(received.map.size.x, 2);
         assert!(received.is_dirty());
-        assert!(guest.live().unwrap().skipped.is_empty());
+        assert!(guest.coop().unwrap().skipped.is_empty());
 
         let _ = std::fs::remove_dir_all(&host_dir);
         let _ = std::fs::remove_dir_all(&guest_dir);
@@ -929,8 +929,8 @@ mod tests {
 
     fn settled(sessions: &[&mut Session]) -> bool {
         sessions.iter().all(|session| {
-            session.live().is_some_and(|live| {
-                live.shared
+            session.coop().is_some_and(|coop| {
+                coop.shared
                     .values()
                     .all(|shared| shared.in_flight.is_empty() && shared.inbox.is_empty())
             })
@@ -948,14 +948,14 @@ mod tests {
         let (left, right) = (Coord::new(1, 1, 1), Coord::new(2, 1, 1));
         open_local(&mut host, host_file.clone());
 
-        host.host_live(0, String::from("hunter2"), String::from("host"))
+        host.host_coop(0, String::from("hunter2"), String::from("host"))
             .unwrap();
         poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
-        host.share_live_map();
-        let port = host.live().and_then(LiveShare::host).unwrap().0.port();
+        host.share_coop_map();
+        let port = host.coop().and_then(Coop::host).unwrap().0.port();
         let join = |session: &mut Session, nick: &str| {
             session
-                .join_live(format!("127.0.0.1:{port}"), String::from("hunter2"), String::from(nick))
+                .join_coop(format!("127.0.0.1:{port}"), String::from("hunter2"), String::from(nick))
                 .unwrap();
         };
 
@@ -1023,10 +1023,10 @@ mod tests {
     }
 
     #[test]
-    fn live_share_needs_a_codebase() {
+    fn coop_needs_a_codebase() {
         assert!(
             Session::new()
-                .join_live(String::from("127.0.0.1:1"), String::from("pw"), String::from("me"))
+                .join_coop(String::from("127.0.0.1:1"), String::from("pw"), String::from("me"))
                 .is_err()
         );
     }

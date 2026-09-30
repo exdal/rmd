@@ -353,7 +353,7 @@ fn draw_tool_button(ui: &Ui, session: &mut Session, keybindings: KeyBindings, to
         ),
         Tool::Comment => (
             KeybindAction::CommentTool,
-            String::from("Click to leave a comment for everyone in the live session"),
+            String::from("Click to leave a comment for everyone in the co-op session"),
         ),
     };
     ui.set_item_tooltip(format!(

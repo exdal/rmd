@@ -38,13 +38,13 @@ use crate::{
 
 mod blame;
 mod block;
+mod coop;
 mod dialog;
 mod find;
 #[cfg(test)]
 mod fixtures;
 mod grid;
 mod history;
-mod live;
 mod load;
 mod menu;
 mod node;
@@ -271,8 +271,8 @@ pub struct UiState {
     new_level_dialog: Option<NewLevelDialog>,
     resize_map_dialog: Option<ResizeMapDialog>,
     go_to_dialog: Option<GoToDialog>,
-    live_dialog: Option<live::LiveDialog>,
-    comment_draft: Option<live::CommentDraft>,
+    coop_dialog: Option<coop::CoopDialog>,
+    comment_draft: Option<coop::CommentDraft>,
     last_go_to: Option<Coord>,
     tile_fill: Option<TileFillPaths>,
     save_dialog: Option<SaveDialog>,
@@ -343,7 +343,7 @@ impl UiState {
             new_level_dialog: None,
             resize_map_dialog: None,
             go_to_dialog: None,
-            live_dialog: None,
+            coop_dialog: None,
             comment_draft: None,
             last_go_to: None,
             tile_fill: None,
@@ -507,7 +507,7 @@ impl UiState {
             resize_map,
             toggle_mirror_camera,
             reset_layout,
-            live_dialog,
+            coop_dialog,
         } = self.draw_menu_bar(ui, session, settings, loading);
         self.reset_layout = reset_layout;
         settings.mirror_camera ^= toggle_mirror_camera;
@@ -803,13 +803,13 @@ impl UiState {
             self.go_to_tile(session, document, coord, ui.time());
         }
 
-        if let Some(kind) = live_dialog {
-            let dialog = live::LiveDialog::new(kind, settings);
+        if let Some(kind) = coop_dialog {
+            let dialog = coop::CoopDialog::new(kind, settings);
             ui.open_popup(dialog.popup());
-            self.live_dialog = Some(dialog);
+            self.coop_dialog = Some(dialog);
         }
 
-        live::draw_live_dialog(ui, session, settings, &mut self.live_dialog);
+        coop::draw_coop_dialog(ui, session, settings, &mut self.coop_dialog);
 
         self.settings_window
             .finish_keybind_capture(ui, &mut settings.keybindings);

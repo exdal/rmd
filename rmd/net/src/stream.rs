@@ -1,7 +1,7 @@
 use protocol::{
     FrameReader,
     MAX_FRAME_LEN,
-    live::{MAX_MAP_LEN, Transfer},
+    coop::{MAX_MAP_LEN, Transfer},
 };
 use serde::{Serialize, de::DeserializeOwned};
 

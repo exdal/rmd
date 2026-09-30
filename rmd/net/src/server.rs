@@ -14,7 +14,7 @@ use protocol::{
     FrameReader,
     Hello,
     Service,
-    live::{
+    coop::{
         ClientHello,
         ClientMessage,
         Comment,
@@ -428,7 +428,7 @@ async fn handshake(recv: &mut quinn::RecvStream, reader: &mut FrameReader) -> Re
         .await?
         .ok_or_else(|| fail("closed before the handshake"))?;
 
-    hello.check(Service::LiveShare).map_err(fail)?;
+    hello.check(Service::Coop).map_err(fail)?;
     match read_message::<ClientMessage>(recv, reader).await? {
         Some(ClientMessage::Hello(hello)) => Ok(hello),
         Some(_) => Err(fail("skipped the handshake")),
