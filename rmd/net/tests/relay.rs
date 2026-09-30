@@ -8,6 +8,7 @@ use net::{
     Client,
     CodebaseId,
     Cursor,
+    Direction,
     Event,
     GenerationId,
     Impairment,
@@ -52,6 +53,18 @@ fn wait_for<T>(client: &Client, mut matches: impl FnMut(Event) -> Option<T>) -> 
         assert!(Instant::now() < deadline, "timed out waiting for an event");
         thread::sleep(Duration::from_millis(5));
     }
+}
+
+fn collect_until(client: &Client, mut last: impl FnMut(&Event) -> bool) -> Vec<Event> {
+    let mut events = Vec::new();
+    wait_for(client, |event| {
+        let done = last(&event);
+        events.push(event);
+
+        done.then_some(())
+    });
+
+    events
 }
 
 fn cursor(x: f32) -> Cursor {
@@ -433,4 +446,111 @@ fn edits_and_snapshots_survive_a_lossy_link() {
     for client in [&alice, &bob] {
         wait_for(client, |event| matches!(event, Event::Comment(_)).then_some(()));
     }
+}
+
+#[test]
+fn peers_see_an_upload_before_it_lands() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    let alice_id = wait_for(&alice, |event| match event {
+        Event::Connected { you, .. } => Some(you),
+        _ => None,
+    });
+
+    let bob = join(&server, PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    let path = String::from("_maps/test.dmm");
+    let map = vec![b'a'; 1_300_000];
+    let len = map.len() as u64;
+    alice.share_map(path.clone(), map);
+
+    let sent = collect_until(&alice, |event| matches!(event, Event::MapShared { .. }));
+    let sending = sent
+        .iter()
+        .filter_map(|event| match event {
+            Event::Progress {
+                direction: Direction::Sending,
+                done,
+                total,
+                ..
+            } => Some((*done, *total)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sending.first(), Some(&(0, len)));
+    assert_eq!(sending.last(), Some(&(len, len)));
+
+    let received = collect_until(&bob, |event| matches!(event, Event::MapSnapshot { .. }));
+    let incoming = received
+        .iter()
+        .position(|event| {
+            *event
+                == Event::MapIncoming {
+                    path: path.clone(),
+                    by: alice_id,
+                    len,
+                }
+        })
+        .expect("bob never heard about the upload");
+    let shared = received
+        .iter()
+        .position(|event| matches!(event, Event::MapShared { .. }))
+        .expect("bob never heard about the share");
+    assert!(incoming < shared);
+
+    let receiving = received
+        .iter()
+        .filter_map(|event| match event {
+            Event::Progress {
+                direction: Direction::Receiving,
+                done,
+                total,
+                ..
+            } => Some((*done, *total)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(receiving.first(), Some(&(0, len)));
+    assert_eq!(receiving.last(), Some(&(len, len)));
+}
+
+#[test]
+fn a_dropped_upload_is_cancelled() {
+    let server = server();
+    let proxy = LossyProxy::spawn(
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        server.local_addr(),
+        Impairment {
+            latency: Duration::from_millis(50),
+            ..Impairment::default()
+        },
+    )
+    .unwrap();
+
+    let alice = join_at(proxy.local_addr(), PASSWORD, "alice");
+    let alice_id = wait_for(&alice, |event| match event {
+        Event::Connected { you, .. } => Some(you),
+        _ => None,
+    });
+
+    let bob = join(&server, PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    let path = String::from("_maps/test.dmm");
+    alice.share_map(path.clone(), vec![b'a'; 32 * 1024 * 1024]);
+    wait_for(&bob, |event| matches!(event, Event::MapIncoming { .. }).then_some(()));
+    drop(alice);
+
+    let cancelled = wait_for(&bob, |event| match event {
+        Event::MapCancelled { path, by } => Some((path, by)),
+        Event::MapShared { .. } => panic!("the upload finished before it was dropped"),
+        _ => None,
+    });
+    assert_eq!(cancelled, (path, alice_id));
+
+    let carol = join(&server, PASSWORD, "carol");
+    wait_for(&carol, |event| matches!(event, Event::Connected { .. }).then_some(()));
+    thread::sleep(Duration::from_millis(200));
+    assert!(!carol.poll().any(|event| matches!(event, Event::MapIncoming { .. })));
 }

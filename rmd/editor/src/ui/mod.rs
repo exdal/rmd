@@ -214,6 +214,7 @@ pub enum OpenRequest {
     PickMap,
     Codebase(PathBuf),
     Map(PathBuf),
+    ShareMap(PathBuf),
 }
 
 struct StartupPanelFocus {

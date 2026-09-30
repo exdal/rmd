@@ -2,7 +2,7 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::mpsc,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use bytes::Bytes;
@@ -32,18 +32,21 @@ use quinn::{Connection, Endpoint};
 use tokio::{
     net::lookup_host,
     sync::{mpsc as channel, oneshot, watch},
+    task::JoinSet,
     time::{self, MissedTickBehavior},
 };
 
 use crate::{
     Error,
     fail,
-    stream::{read_message, receive_transfer, send_transfer, write_message},
+    stream::{read_message, read_payload, read_transfer_header, send_transfer, write_message},
     tls,
 };
 
 const CURSOR_INTERVAL: Duration = Duration::from_millis(50);
 const CLOSE_GRACE: Duration = Duration::from_millis(500);
+const RESET_POLL: Duration = Duration::from_millis(5);
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -76,7 +79,33 @@ pub enum Event {
         seq: SeqId,
         edit: MapEdit,
     },
+    MapIncoming {
+        path: String,
+        by: PeerId,
+        len: u64,
+    },
+    MapCancelled {
+        path: String,
+        by: PeerId,
+    },
+    Progress {
+        path: String,
+        direction: Direction,
+        done: u64,
+        total: u64,
+    },
+    TransferFailed {
+        path: String,
+        direction: Direction,
+        reason: String,
+    },
     Disconnected(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Sending,
+    Receiving,
 }
 
 enum Command {
@@ -185,10 +214,23 @@ async fn run(
         _ = &mut stop => return Ok(()),
     };
 
+    let mut uploads = JoinSet::new();
     let result = tokio::select! {
-        result = session(&connection, hello, cursor, outbox, events) => result,
+        result = session(&connection, hello, cursor, outbox, events, &mut uploads) => result,
         _ = &mut stop => Ok(()),
     };
+
+    // quinn holds the close back while anything else is queued behind a full congestion window,
+    // so the resets of unfinished uploads go out first
+    while uploads.try_join_next().is_some() {}
+    let resets = connection.stats().frame_tx.reset_stream + uploads.len() as u64;
+    uploads.shutdown().await;
+    let _ = time::timeout(CLOSE_GRACE, async {
+        while connection.stats().frame_tx.reset_stream < resets {
+            time::sleep(RESET_POLL).await;
+        }
+    })
+    .await;
 
     connection.close(0u32.into(), b"");
     let _ = time::timeout(CLOSE_GRACE, endpoint.wait_idle()).await;
@@ -198,7 +240,7 @@ async fn run(
 
 async fn session(
     connection: &Connection, hello: ClientHello, mut cursor: watch::Receiver<Option<Cursor>>,
-    mut outbox: channel::UnboundedReceiver<Command>, events: &mpsc::Sender<Event>,
+    mut outbox: channel::UnboundedReceiver<Command>, events: &mpsc::Sender<Event>, uploads: &mut JoinSet<()>,
 ) -> Result<(), Error> {
     let emit = |event| {
         let _ = events.send(event);
@@ -230,15 +272,18 @@ async fn session(
                 Some(ServerMessage::CommentDeleted(id)) => emit(Event::CommentDeleted(id)),
                 Some(ServerMessage::MapShared { path, by, generation }) => emit(Event::MapShared { path, by, generation }),
                 Some(ServerMessage::Edit { by, seq, edit }) => emit(Event::Edit { by, seq, edit }),
+                Some(ServerMessage::MapIncoming { path, by, len }) => emit(Event::MapIncoming { path, by, len }),
+                Some(ServerMessage::MapCancelled { path, by }) => emit(Event::MapCancelled { path, by }),
                 Some(other) => log::warn!("unexpected message from the host: {other:?}"),
                 None => return Err(fail("the host ended the session")),
             },
             Some(command) = outbox.recv() => match command {
                 Command::Message(message) => write_message(&mut send, &message).await?,
                 Command::ShareMap { path, bytes } => {
-                    tokio::spawn(upload(connection.clone(), path, bytes));
+                    uploads.spawn(upload(connection.clone(), path, bytes, events.clone()));
                 },
             },
+            Some(_) = uploads.join_next() => {},
             stream = connection.accept_uni() => {
                 tokio::spawn(download(stream.map_err(fail)?, events.clone()));
             },
@@ -264,30 +309,84 @@ async fn session(
     }
 }
 
-async fn upload(connection: Connection, path: String, bytes: Vec<u8>) {
-    if let Err(e) = send_transfer(
-        &connection,
-        &Transfer::Map {
-            path: path.clone(),
-            generation: GenerationId(0),
-        },
-        &bytes,
-    )
-    .await
-    {
-        log::warn!("could not share {path}: {e}");
+struct Throttle {
+    path: String,
+    direction: Direction,
+    total: u64,
+    last: Option<Instant>,
+    events: mpsc::Sender<Event>,
+}
+
+impl Throttle {
+    fn new(path: String, direction: Direction, total: u64, events: mpsc::Sender<Event>) -> Self {
+        Self {
+            path,
+            direction,
+            total,
+            last: None,
+            events,
+        }
+    }
+
+    fn report(&mut self, done: u64) {
+        let now = Instant::now();
+        if done < self.total && self.last.is_some_and(|last| now - last < PROGRESS_INTERVAL) {
+            return;
+        }
+
+        self.last = Some(now);
+        let _ = self.events.send(Event::Progress {
+            path: self.path.clone(),
+            direction: self.direction,
+            done,
+            total: self.total,
+        });
+    }
+
+    fn fail(&self, reason: String) {
+        let _ = self.events.send(Event::TransferFailed {
+            path: self.path.clone(),
+            direction: self.direction,
+            reason,
+        });
     }
 }
 
-async fn download(stream: quinn::RecvStream, events: mpsc::Sender<Event>) {
-    match receive_transfer(stream).await {
-        Ok((Transfer::Map { path, generation }, bytes)) => {
-            let _ = events.send(Event::MapSnapshot {
-                path,
+async fn upload(connection: Connection, path: String, bytes: Vec<u8>, events: mpsc::Sender<Event>) {
+    let header = Transfer::Map {
+        path: path.clone(),
+        generation: GenerationId(0),
+        len: bytes.len() as u64,
+    };
+
+    let mut throttle = Throttle::new(path, Direction::Sending, bytes.len() as u64, events);
+    if let Err(e) = send_transfer(&connection, &header, &bytes, |done| throttle.report(done)).await {
+        log::warn!("could not share {}: {e}", throttle.path);
+        throttle.fail(e.to_string());
+    }
+}
+
+async fn download(mut stream: quinn::RecvStream, events: mpsc::Sender<Event>) {
+    let (path, generation, len) = match read_transfer_header(&mut stream).await {
+        Ok(Transfer::Map { path, generation, len }) => (path, generation, len),
+        Err(e) => {
+            log::warn!("could not receive a map: {e}");
+            return;
+        },
+    };
+
+    let mut throttle = Throttle::new(path, Direction::Receiving, len, events);
+    match read_payload(&mut stream, len, |done| throttle.report(done)).await {
+        Ok(bytes) => {
+            let _ = throttle.events.send(Event::MapSnapshot {
+                path: throttle.path,
                 generation,
                 bytes,
             });
         },
-        Err(e) => log::warn!("could not receive a map: {e}"),
+        Err(e) => {
+            log::warn!("could not receive {}: {e}", throttle.path);
+            throttle.fail(e.to_string());
+        },
     }
 }

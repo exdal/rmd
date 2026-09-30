@@ -107,11 +107,24 @@ pub enum ServerMessage {
         seq: SeqId,
         edit: MapEdit,
     },
+    MapIncoming {
+        path: String,
+        by: PeerId,
+        len: u64,
+    },
+    MapCancelled {
+        path: String,
+        by: PeerId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Transfer {
-    Map { path: String, generation: GenerationId },
+    Map {
+        path: String,
+        generation: GenerationId,
+        len: u64,
+    },
 }
 
 /// `_maps/map_files/Station/station.dmm`
@@ -206,9 +219,19 @@ mod tests {
             by: PeerId(1),
             generation: GenerationId(2),
         });
+        round_trip(ServerMessage::MapIncoming {
+            path: String::from("_maps/test.dmm"),
+            by: PeerId(1),
+            len: 6 * 1024 * 1024,
+        });
+        round_trip(ServerMessage::MapCancelled {
+            path: String::from("_maps/test.dmm"),
+            by: PeerId(1),
+        });
         round_trip(Transfer::Map {
             path: String::from("_maps/test.dmm"),
             generation: GenerationId(2),
+            len: 1234,
         });
 
         let edit = MapEdit {

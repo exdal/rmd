@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, HashMap},
     fs,
     mem,
     net::{Ipv4Addr, SocketAddr},
@@ -9,14 +9,20 @@ use std::{
     time::Instant,
 };
 
-use dmm::{Coord, error::MapError, parser, writer};
-use editor::{document::DocumentId, git, patch, tool::Tool};
+use dmm::{Coord, Size, error::MapError, parser, writer};
+use editor::{
+    document::{DocumentId, MapDocument},
+    git,
+    patch,
+    tool::Tool,
+};
 use net::{
     Client,
     CodebaseId,
     Comment,
     CommentId,
     Cursor,
+    Direction,
     Event,
     GenerationId,
     MapEdit,
@@ -86,9 +92,7 @@ pub(crate) struct Coop {
     pub you: Option<PeerId>,
     pub peers: BTreeMap<PeerId, RemotePeer>,
     pub comments: BTreeMap<CommentId, Comment>,
-    pub shared: BTreeMap<String, SharedMap>,
-    pub skipped: BTreeMap<String, ReceivedMap>,
-    received: BTreeSet<String>,
+    pub shared_maps: BTreeMap<String, SharedMap>,
     prepared: (mpsc::Sender<Prepared>, mpsc::Receiver<Prepared>),
     server: Option<Server>,
     codebase: Option<CodebaseId>,
@@ -97,19 +101,45 @@ pub(crate) struct Coop {
     last_poll: Instant,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SharedState {
-    // no copy loaded yet, or our own share waiting for the server to number it
+    // someone is uploading it, `before` comes back if they give up
+    Incoming {
+        by: PeerId,
+        len: u64,
+        before: Box<SharedState>,
+    },
+    // our own share, until the server numbers it
+    Sending {
+        done: u64,
+        total: u64,
+    },
+    Receiving {
+        done: u64,
+        total: u64,
+    },
+    // parsing the snapshot
     Loading,
     Ready,
     Closed,
-    Resyncing,
+    // arrived, but an unsaved local copy is in the way
+    Waiting(Box<ReceivedMap>),
+}
+
+impl SharedState {
+    const RECEIVING: Self = Self::Receiving { done: 0, total: 0 };
+
+    pub fn is_arriving(&self) -> bool { matches!(self, Self::Incoming { .. } | Self::Receiving { .. } | Self::Loading) }
 }
 
 pub(crate) struct SharedMap {
     pub by: PeerId,
     pub state: SharedState,
-    generation: GenerationId,
+    // none until the server numbers the share
+    generation: Option<GenerationId>,
+    // an empty read only document standing in for the map until it arrives
+    pending_document: Option<DocumentId>,
+    // our open copy is the session's, so a new snapshot replaces it even when unsaved
+    received: bool,
     // edits from the server by seq, applied in order once our copy of the map is loaded
     inbox: BTreeMap<SeqId, (PeerId, MapEdit)>,
     next_seq: SeqId,
@@ -118,21 +148,40 @@ pub(crate) struct SharedMap {
 }
 
 impl SharedMap {
-    fn new(by: PeerId, generation: GenerationId) -> Self {
+    fn new(by: PeerId, state: SharedState) -> Self {
         Self {
             by,
-            state: SharedState::Loading,
-            generation,
+            state,
+            generation: None,
+            pending_document: None,
+            received: false,
             inbox: BTreeMap::new(),
             next_seq: SeqId(0),
             in_flight: HashMap::new(),
         }
     }
 
-    fn is_ready(&self) -> bool { self.state == SharedState::Ready }
+    fn is_ready(&self) -> bool { matches!(self.state, SharedState::Ready) }
+
+    // an upload that never got numbered leaves nothing behind
+    fn is_abandoned(&self) -> bool {
+        self.generation.is_none() && matches!(self.state, SharedState::Closed) && self.pending_document.is_none()
+    }
 
     fn restart(&mut self, state: SharedState) {
         self.state = state;
+        self.forget_edits();
+    }
+
+    // the old generation's edits don't apply to a new one
+    fn renumber(&mut self, generation: GenerationId) {
+        if self.generation != Some(generation) {
+            self.generation = Some(generation);
+            self.forget_edits();
+        }
+    }
+
+    fn forget_edits(&mut self) {
         self.inbox.clear();
         self.next_seq = SeqId(0);
         self.in_flight.clear();
@@ -142,6 +191,7 @@ impl SharedMap {
 enum Prepared {
     Upload { path: String, bytes: Vec<u8> },
     Snapshot(ReceivedMap),
+    Unreadable(String),
 }
 
 pub(crate) struct ReceivedMap {
@@ -186,7 +236,7 @@ impl Coop {
 
     pub fn git_hint(&self) -> Option<&str> { self.codebase.as_ref()?.git_hint.as_deref() }
 
-    fn receive_map(&self, path: String, generation: GenerationId, bytes: Vec<u8>, codebase: Option<&Path>) {
+    fn receive_map(&mut self, path: String, generation: GenerationId, bytes: Vec<u8>, codebase: Option<&Path>) {
         if !net::is_map_path(&path) {
             log::warn!("ignoring a shared map outside the codebase: {path}");
             return;
@@ -196,6 +246,18 @@ impl Coop {
             return;
         };
 
+        let Some(shared_map) = self.shared_maps.get_mut(&path).filter(|shared_map| {
+            matches!(
+                shared_map.state,
+                SharedState::Incoming { .. } | SharedState::Receiving { .. }
+            )
+        }) else {
+            log::debug!("{path}: dropping a snapshot nobody is waiting for");
+            return;
+        };
+
+        shared_map.state = SharedState::Loading;
+
         let prepared = self.prepared.0.clone();
         thread::spawn(move || {
             let modified = fs::read(&file).map_or(true, |disk| disk != bytes);
@@ -203,6 +265,7 @@ impl Coop {
                 Ok(text) => text,
                 Err(e) => {
                     log::warn!("{path}: the shared map is not text: {e}");
+                    let _ = prepared.send(Prepared::Unreadable(path));
                     return;
                 },
             };
@@ -244,20 +307,88 @@ impl Coop {
             Event::CommentDeleted(id) => {
                 self.comments.remove(&id);
             },
-            Event::MapShared { path, by, generation } => {
-                // the snapshot may have come first
-                let shared = self
-                    .shared
+            Event::MapIncoming { path, by, len } => {
+                let shared_map = self
+                    .shared_maps
                     .entry(path)
-                    .or_insert_with(|| SharedMap::new(by, generation));
+                    .or_insert_with(|| SharedMap::new(by, SharedState::Closed));
 
-                if shared.generation != generation {
-                    *shared = SharedMap::new(by, generation);
+                let before = match mem::replace(&mut shared_map.state, SharedState::Closed) {
+                    SharedState::Incoming { before, .. } => before,
+                    state => Box::new(state),
+                };
+
+                shared_map.state = SharedState::Incoming { by, len, before };
+            },
+            Event::MapCancelled { path, by } => {
+                let Some(shared_map) = self.shared_maps.get_mut(&path) else {
+                    return;
+                };
+
+                shared_map.state = match mem::replace(&mut shared_map.state, SharedState::Closed) {
+                    SharedState::Incoming {
+                        by: uploader, before, ..
+                    } if uploader == by => *before,
+                    state => state,
+                };
+
+                if shared_map.is_abandoned() {
+                    self.shared_maps.remove(&path);
                 }
+            },
+            Event::MapShared { path, by, generation } => {
+                let you = self.you;
+                let shared_map = self
+                    .shared_maps
+                    .entry(path)
+                    .or_insert_with(|| SharedMap::new(by, SharedState::RECEIVING));
 
-                shared.by = by;
-                if Some(by) == self.you {
-                    shared.state = SharedState::Ready;
+                let is_known = shared_map.generation == Some(generation);
+                shared_map.by = by;
+                shared_map.renumber(generation);
+                if Some(by) == you {
+                    // we share this map, skip all sharing stuff
+                    shared_map.state = SharedState::Ready;
+                    shared_map.received = true;
+                } else if !is_known
+                    && matches!(
+                        shared_map.state,
+                        SharedState::Incoming { .. } | SharedState::Ready | SharedState::Waiting(_)
+                    )
+                {
+                    // a map closed while it was uploading stays closed, and the snapshot may have come first
+                    shared_map.state = SharedState::RECEIVING;
+                }
+            },
+            Event::Progress {
+                path,
+                direction: Direction::Sending,
+                done,
+                total,
+            } => {
+                if let Some(shared_map) = self.shared_maps.get_mut(&path)
+                    && matches!(shared_map.state, SharedState::Sending { .. })
+                {
+                    shared_map.state = SharedState::Sending { done, total };
+                }
+            },
+            Event::Progress {
+                path,
+                direction: Direction::Receiving,
+                done,
+                total,
+            } => {
+                // special case handling:L the download can beat its announcement
+                let shared_map = self
+                    .shared_maps
+                    .entry(path)
+                    .or_insert_with(|| SharedMap::new(PeerId(0), SharedState::RECEIVING));
+
+                if matches!(
+                    shared_map.state,
+                    SharedState::Incoming { .. } | SharedState::Receiving { .. }
+                ) {
+                    shared_map.state = SharedState::Receiving { done, total };
                 }
             },
             Event::MapSnapshot {
@@ -265,13 +396,36 @@ impl Coop {
                 generation,
                 bytes,
             } => self.receive_map(path, generation, bytes, codebase),
+            Event::TransferFailed {
+                path,
+                direction,
+                reason,
+            } => {
+                log::warn!("{path}: the transfer failed: {reason}");
+                let Some(shared_map) = self.shared_maps.get_mut(&path) else {
+                    return;
+                };
+
+                let is_sending = matches!(shared_map.state, SharedState::Sending { .. });
+                let is_receiving = matches!(shared_map.state, SharedState::Receiving { .. });
+                match direction {
+                    Direction::Sending if is_sending && shared_map.generation.is_some() => {
+                        shared_map.state = SharedState::Ready
+                    },
+                    Direction::Sending if is_sending => {
+                        self.shared_maps.remove(&path);
+                    },
+                    Direction::Receiving if is_receiving => shared_map.restart(SharedState::Closed),
+                    _ => {},
+                }
+            },
             Event::Edit { by, seq, edit } => {
-                if let Some(shared) = self.shared.get_mut(&edit.path).filter(|shared| {
-                    shared.generation == edit.generation
-                        && shared.state != SharedState::Closed
-                        && seq >= shared.next_seq
+                if let Some(shared_map) = self.shared_maps.get_mut(&edit.path).filter(|shared_map| {
+                    shared_map.generation == Some(edit.generation)
+                        && !matches!(shared_map.state, SharedState::Closed)
+                        && seq >= shared_map.next_seq
                 }) {
-                    shared.inbox.insert(seq, (by, edit));
+                    shared_map.inbox.insert(seq, (by, edit));
                 }
             },
             Event::Rejected(reason) => self.end(format!("rejected: {reason}")),
@@ -279,13 +433,11 @@ impl Coop {
         }
     }
 
+    // shared maps stay until the session closes their pending documents
     fn end(&mut self, reason: String) {
         self.status = CoopStatus::Ended(reason);
         self.peers.clear();
         self.comments.clear();
-        self.shared.clear();
-        self.skipped.clear();
-        self.received.clear();
         self.client = None;
     }
 }
@@ -344,9 +496,7 @@ impl Session {
                 codebase,
             }),
             comments: BTreeMap::new(),
-            shared: BTreeMap::new(),
-            skipped: BTreeMap::new(),
-            received: BTreeSet::new(),
+            shared_maps: BTreeMap::new(),
             prepared: mpsc::channel(),
             client: None,
             last_poll: Instant::now(),
@@ -356,12 +506,24 @@ impl Session {
     }
 
     pub fn leave_coop(&mut self) {
+        let Some(mut coop) = self.coop.take() else {
+            return;
+        };
+
         // a server waits for its peers to hear the close, keep that off the frame
-        if let Some(server) = self.coop.take().and_then(|mut coop| coop.server.take()) {
+        if let Some(server) = coop.server.take() {
             thread::spawn(move || drop(server));
         }
 
-        self.lock_resyncing_documents();
+        for id in coop
+            .shared_maps
+            .into_values()
+            .filter_map(|shared_map| shared_map.pending_document)
+        {
+            self.close_map(id);
+        }
+
+        self.lock_receiving_documents();
         self.drop_comment_tool();
     }
 
@@ -440,12 +602,16 @@ impl Session {
             peer.follow(elapsed);
         }
 
-        let waiting = self
-            .coop
-            .as_mut()
-            .map(|coop| mem::take(&mut coop.skipped))
-            .unwrap_or_default();
-        for received in waiting.into_values() {
+        let mut waiting = Vec::new();
+        for shared_map in coop.shared_maps.values_mut() {
+            if matches!(shared_map.state, SharedState::Waiting(_))
+                && let SharedState::Waiting(received) = mem::replace(&mut shared_map.state, SharedState::Loading)
+            {
+                waiting.push(*received);
+            }
+        }
+
+        for received in waiting {
             self.open_shared_map(received);
         }
 
@@ -457,6 +623,13 @@ impl Session {
                     }
                 },
                 Prepared::Snapshot(received) => self.open_shared_map(received),
+                Prepared::Unreadable(path) => {
+                    if let Some(shared_map) = self.coop.as_mut().and_then(|coop| coop.shared_maps.get_mut(&path))
+                        && matches!(shared_map.state, SharedState::Loading)
+                    {
+                        shared_map.restart(SharedState::Closed);
+                    }
+                },
             }
         }
 
@@ -466,14 +639,15 @@ impl Session {
     }
 
     fn follow_shared_documents(&mut self) {
+        self.follow_pending_documents();
         let Some(coop) = self.coop.as_ref() else {
             return;
         };
 
         let mut closed = Vec::new();
         let mut reopened = Vec::new();
-        for (path, shared) in &coop.shared {
-            match (shared.state, self.shared_document(path).is_some()) {
+        for (path, shared_map) in &coop.shared_maps {
+            match (&shared_map.state, self.shared_document(path).is_some()) {
                 (SharedState::Ready, false) => closed.push(path.clone()),
                 (SharedState::Closed, true) => reopened.push(path.clone()),
                 _ => {},
@@ -482,8 +656,8 @@ impl Session {
 
         if let Some(coop) = self.coop.as_mut() {
             for path in &closed {
-                if let Some(shared) = coop.shared.get_mut(path) {
-                    shared.restart(SharedState::Closed);
+                if let Some(shared_map) = coop.shared_maps.get_mut(path) {
+                    shared_map.restart(SharedState::Closed);
                 }
             }
         }
@@ -492,43 +666,137 @@ impl Session {
             self.resync_coop_map(&path);
         }
 
-        self.lock_resyncing_documents();
+        self.lock_receiving_documents();
     }
 
-    fn lock_resyncing_documents(&mut self) {
-        let locks = self
-            .state
-            .document_ids()
-            .into_iter()
-            .map(|id| {
-                let resyncing = self
-                    .coop_map_path(id)
-                    .zip(self.coop.as_ref())
-                    .and_then(|(path, coop)| coop.shared.get(&path))
-                    .is_some_and(|shared| shared.state == SharedState::Resyncing);
+    fn follow_pending_documents(&mut self) {
+        let Some(codebase) = self.codebase_dir().map(Path::to_path_buf) else {
+            return;
+        };
 
-                (id, resyncing)
-            })
-            .collect::<Vec<_>>();
+        let Some(coop) = self.coop.as_mut() else {
+            return;
+        };
 
-        for (id, resyncing) in locks {
-            if let Some(document) = self.state.document_mut(id) {
-                document.set_read_only(resyncing);
+        let is_connected = coop.is_connected();
+        let mut stale = Vec::new();
+        let mut gone = Vec::new();
+        let mut wanted = Vec::new();
+        for (path, shared_map) in &mut coop.shared_maps {
+            match shared_map.pending_document {
+                // the user closed it before the map arrived
+                Some(id) if self.state.document(id).is_none() => {
+                    shared_map.pending_document = None;
+                    if shared_map.state.is_arriving() {
+                        shared_map.restart(SharedState::Closed);
+                    }
+                },
+                // stale map
+                Some(id) if !is_connected || !shared_map.state.is_arriving() => {
+                    shared_map.pending_document = None;
+                    stale.push(id);
+                    if shared_map.is_abandoned() {
+                        gone.push(path.clone());
+                    }
+                },
+                None if is_connected && shared_map.state.is_arriving() => wanted.push(path.clone()),
+                _ => {},
+            }
+        }
+
+        if is_connected {
+            for path in gone {
+                coop.shared_maps.remove(&path);
+            }
+        } else {
+            coop.shared_maps.clear();
+        }
+
+        for id in stale {
+            self.close_map(id);
+        }
+
+        for path in wanted {
+            // an open copy shows the progress itself
+            if self.shared_document(&path).is_some() {
+                continue;
+            }
+
+            let mut document = MapDocument::open(codebase.join(&path), dmm::Map::new(Size { x: 1, y: 1, z: 1 }), 1);
+            document.set_read_only(true);
+            let id = self.activate_document(document);
+            if let Some(shared_map) = self.coop.as_mut().and_then(|coop| coop.shared_maps.get_mut(&path)) {
+                shared_map.pending_document = Some(id);
             }
         }
     }
 
-    pub fn open_coop_map(&mut self, path: &str) {
+    fn lock_receiving_documents(&mut self) {
+        let locks = self
+            .state
+            .document_ids()
+            .into_iter()
+            .map(|id| (id, self.coop_receiving(id).is_some()))
+            .collect::<Vec<_>>();
+
+        for (id, locked) in locks {
+            if let Some(document) = self.state.document_mut(id) {
+                document.set_read_only(locked);
+            }
+        }
+    }
+
+    fn coop_shared_map(&self, id: DocumentId) -> Option<&SharedMap> {
+        self.coop.as_ref()?.shared_maps.get(&self.coop_map_path(id)?)
+    }
+
+    // the map is on its way and will replace this document
+    pub fn coop_receiving(&self, id: DocumentId) -> Option<&SharedState> {
+        let shared_map = self.coop_shared_map(id)?;
+        let is_replaced = shared_map.pending_document == Some(id)
+            || shared_map.received
+            || self.state.document(id).is_some_and(|document| !document.is_dirty());
+
+        (shared_map.state.is_arriving() && is_replaced).then_some(&shared_map.state)
+    }
+
+    pub fn coop_transfer(&self, id: DocumentId) -> Option<&SharedState> {
+        let shared_map = self.coop_shared_map(id)?;
+        let is_sending = matches!(shared_map.state, SharedState::Sending { .. });
+
+        (is_sending || shared_map.state.is_arriving()).then_some(&shared_map.state)
+    }
+
+    pub fn is_coop_shared_file(&self, file: &Path) -> bool {
+        self.coop_file_path(file)
+            .zip(self.coop.as_ref())
+            .is_some_and(|(path, coop)| coop.shared_maps.contains_key(&path))
+    }
+
+    pub fn open_coop_file(&mut self, file: &Path) -> bool {
+        let Some(path) = self.coop_file_path(file).filter(|_| self.is_coop_shared_file(file)) else {
+            return false;
+        };
+
+        self.open_coop_map(&path)
+    }
+
+    pub fn open_coop_map(&mut self, path: &str) -> bool {
         if let Some(id) = self.shared_document(path) {
-            self.set_active_document(id);
-        } else if self
+            return self.set_active_document(id);
+        }
+
+        if self
             .coop
             .as_ref()
-            .and_then(|coop| coop.shared.get(path))
-            .is_some_and(|shared| shared.state == SharedState::Closed)
+            .and_then(|coop| coop.shared_maps.get(path))
+            .is_some_and(|shared_map| matches!(shared_map.state, SharedState::Closed))
         {
             self.resync_coop_map(path);
+            self.follow_pending_documents();
         }
+
+        self.shared_document(path).is_some()
     }
 
     fn resync_coop_map(&mut self, path: &str) {
@@ -536,13 +804,13 @@ impl Session {
             return;
         };
 
-        let Some(shared) = coop.shared.get_mut(path) else {
+        let Some(shared_map) = coop.shared_maps.get_mut(path) else {
             return;
         };
 
-        shared.restart(SharedState::Resyncing);
+        shared_map.restart(SharedState::RECEIVING);
         // the snapshot replaces whatever copy is open, unsaved or not
-        coop.received.insert(path.to_owned());
+        shared_map.received = true;
         if let Some(client) = coop.client.as_ref() {
             client.resync(path.to_owned());
         }
@@ -557,11 +825,18 @@ impl Session {
             return;
         };
 
+        // we need ourselves here, this function is also used to keep us synced with the server
+        // I WANT YOU TO KEEP IN SYNC!
         let you = coop.you;
+
         let mut incoming = Vec::new();
-        for (path, shared) in coop.shared.iter_mut().filter(|(_, shared)| shared.is_ready()) {
-            while let Some((by, edit)) = shared.inbox.remove(&shared.next_seq) {
-                shared.next_seq = shared.next_seq.next();
+        for (path, shared_map) in coop
+            .shared_maps
+            .iter_mut()
+            .filter(|(_, shared_map)| shared_map.is_ready())
+        {
+            while let Some((by, edit)) = shared_map.inbox.remove(&shared_map.next_seq) {
+                shared_map.next_seq = shared_map.next_seq.next();
                 incoming.push((path.clone(), by, edit));
             }
         }
@@ -576,7 +851,7 @@ impl Session {
             };
 
             let coords = edit.coords.iter().map(|&[x, y, z]| Coord::new(x, y, z));
-            let Some(shared) = self.coop.as_mut().and_then(|coop| coop.shared.get_mut(&path)) else {
+            let Some(shared_map) = self.coop.as_mut().and_then(|coop| coop.shared_maps.get_mut(&path)) else {
                 continue;
             };
 
@@ -584,16 +859,16 @@ impl Session {
             // anything else applies, including our own edits replayed after a resync
             let mut applied = Vec::new();
             for (coord, tile) in coords.zip(tiles) {
-                let Some(count) = shared.in_flight.get_mut(&coord) else {
+                let Some(count) = shared_map.in_flight.get_mut(&coord) else {
                     applied.push((coord, tile));
                     continue;
                 };
 
+                // bookkeeping
                 if Some(by) == you {
-                    // TODO: move this to a func
                     *count -= 1;
                     if *count == 0 {
-                        shared.in_flight.remove(&coord);
+                        shared_map.in_flight.remove(&coord);
                     }
                 }
             }
@@ -620,10 +895,10 @@ impl Session {
         };
 
         let ready = coop
-            .shared
+            .shared_maps
             .iter()
-            .filter(|(_, shared)| shared.is_ready())
-            .map(|(path, shared)| (path.clone(), shared.generation))
+            .filter(|(_, shared_map)| shared_map.is_ready())
+            .filter_map(|(path, shared_map)| Some((path.clone(), shared_map.generation?)))
             .collect::<Vec<_>>();
 
         for (path, generation) in ready {
@@ -652,9 +927,9 @@ impl Session {
                 return;
             };
 
-            if let Some(shared) = coop.shared.get_mut(&path) {
+            if let Some(shared_map) = coop.shared_maps.get_mut(&path) {
                 for coord in &coords {
-                    *shared.in_flight.entry(*coord).or_insert(0) += 1;
+                    *shared_map.in_flight.entry(*coord).or_insert(0) += 1;
                 }
             }
 
@@ -671,6 +946,21 @@ impl Session {
 
     pub fn can_share_coop_map(&self) -> bool {
         self.comment_tool_available() && self.state.active().and_then(|id| self.coop_map_path(id)).is_some()
+    }
+
+    pub fn share_coop_file(&mut self, file: &Path) -> bool {
+        let Some(id) = self
+            .state
+            .document_for_path(file)
+            .filter(|_| self.comment_tool_available())
+        else {
+            return false;
+        };
+
+        self.set_active_document(id);
+        self.share_coop_document(id);
+
+        true
     }
 
     pub fn share_coop_map(&mut self) {
@@ -697,9 +987,11 @@ impl Session {
         };
 
         // hold back new edits until the server numbers this share
-        if let Some(shared) = coop.shared.get_mut(&path) {
-            shared.state = SharedState::Loading;
-        }
+        let you = coop.you.unwrap_or(PeerId(0));
+        coop.shared_maps
+            .entry(path.clone())
+            .or_insert_with(|| SharedMap::new(you, SharedState::Closed))
+            .state = SharedState::Sending { done: 0, total: 0 };
 
         let map = document.map.clone();
         let prepared = coop.prepared.0.clone();
@@ -710,46 +1002,46 @@ impl Session {
     }
 
     fn open_shared_map(&mut self, received: ReceivedMap) {
-        let Some(coop) = self.coop.as_mut() else {
+        let Some(shared_map) = self
+            .coop
+            .as_mut()
+            .and_then(|coop| coop.shared_maps.get_mut(&received.path))
+            .filter(|shared_map| matches!(shared_map.state, SharedState::Loading))
+        else {
             return;
         };
 
+        if shared_map
+            .generation
+            .is_some_and(|current| received.generation < current)
+        {
+            // a newer share is on its way
+            shared_map.state = SharedState::RECEIVING;
+            return;
+        }
+
         let open = self.state.document_for_path(&received.file);
         // a local copy with unsaved work waits until it is saved or closed, our copy of the session's map does not
-        if open.is_some_and(|id| {
-            !coop.received.contains(&received.path)
-                && self.state.document(id).is_some_and(|document| document.is_dirty())
-        }) {
-            coop.skipped.insert(received.path.clone(), received);
+        if !shared_map.received && open.is_some_and(|id| self.state.document(id).is_some_and(MapDocument::is_dirty)) {
+            shared_map.state = SharedState::Waiting(Box::new(received));
             return;
         }
 
         let ReceivedMap {
-            path,
             generation,
             file,
             map,
             errors,
             modified,
+            ..
         } = received;
 
-        let shared = coop
-            .shared
-            .entry(path.clone())
-            .or_insert_with(|| SharedMap::new(PeerId(0), generation));
-
-        if generation < shared.generation {
-            return;
-        }
-
-        // the snapshot of a new share can beat its announcement, the old generation's edits don't apply to it
-        if generation > shared.generation {
-            *shared = SharedMap::new(shared.by, generation);
-        }
-
-        shared.state = SharedState::Ready;
-        shared.in_flight.clear();
-        coop.received.insert(path);
+        // the snapshot of a new share can beat its announcement
+        shared_map.renumber(generation);
+        shared_map.state = SharedState::Ready;
+        shared_map.in_flight.clear();
+        shared_map.pending_document = None;
+        shared_map.received = true;
 
         let repo = self.git_enabled.then(|| git::discover(&file)).flatten();
         let loaded = LoadedMap {
@@ -781,8 +1073,11 @@ impl Session {
     }
 
     fn coop_map_path(&self, id: DocumentId) -> Option<String> {
-        let path = self.state.document(id)?.path.as_deref()?;
-        let relative = path.strip_prefix(self.codebase_dir()?).ok()?;
+        self.coop_file_path(self.state.document(id)?.path.as_deref()?)
+    }
+
+    fn coop_file_path(&self, file: &Path) -> Option<String> {
+        let relative = file.strip_prefix(self.codebase_dir()?).ok()?;
         let path = relative
             .components()
             .map(|part| part.as_os_str().to_str())
@@ -953,6 +1248,142 @@ mod tests {
         assert_eq!(host.tool(), Tool::Select);
     }
 
+    const OTHER: PeerId = PeerId(99);
+
+    fn hosting(name: &str) -> (PathBuf, Session) {
+        let (dir, mut session) = codebase_with_map(name, "aa");
+        session
+            .host_coop(0, String::from("hunter2"), String::from("host"))
+            .unwrap();
+        poll_until(&mut [&mut session], |sessions| connected(sessions[0]));
+
+        (dir, session)
+    }
+
+    fn deliver(session: &mut Session, dir: &Path, event: Event) {
+        session.coop.as_mut().unwrap().apply(event, Some(dir));
+        session.poll_coop();
+    }
+
+    fn incoming(session: &mut Session, dir: &Path) {
+        deliver(
+            session,
+            dir,
+            Event::MapIncoming {
+                path: String::from("_maps/a.dmm"),
+                by: OTHER,
+                len: 1234,
+            },
+        );
+    }
+
+    #[test]
+    fn an_incoming_share_opens_a_locked_pending_document() {
+        let (dir, mut session) = hosting("pending-open");
+        let file = dir.join("_maps/a.dmm");
+        incoming(&mut session, &dir);
+
+        let id = session.state.document_for_path(&file).expect("no pending document");
+        assert_eq!(session.state.active(), Some(id));
+        assert!(session.state.document(id).unwrap().is_read_only());
+        assert!(session.is_coop_shared_file(&file));
+        assert!(matches!(
+            session.coop_receiving(id),
+            Some(SharedState::Incoming {
+                by: OTHER,
+                len: 1234,
+                ..
+            })
+        ));
+
+        deliver(
+            &mut session,
+            &dir,
+            Event::MapCancelled {
+                path: String::from("_maps/a.dmm"),
+                by: OTHER,
+            },
+        );
+        assert!(session.state.document_for_path(&file).is_none());
+        assert!(!session.is_coop_shared_file(&file));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sharing_a_file_needs_it_open_and_a_connection() {
+        let (dir, mut session) = codebase_with_map("share-file", "aa");
+        let file = dir.join("_maps/a.dmm");
+        open_local(&mut session, file.clone());
+        assert!(!session.share_coop_file(&file), "shared without a session");
+
+        session
+            .host_coop(0, String::from("hunter2"), String::from("host"))
+            .unwrap();
+        poll_until(&mut [&mut session], |sessions| connected(sessions[0]));
+        assert!(!session.share_coop_file(&dir.join("_maps/missing.dmm")));
+        assert!(session.share_coop_file(&file));
+        poll_until(&mut [&mut session], |sessions| {
+            sessions[0].coop().unwrap().shared_maps.contains_key("_maps/a.dmm") && settled(sessions)
+        });
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn closing_a_pending_document_drops_its_snapshot_until_reopened() {
+        let (dir, mut session) = hosting("pending-close");
+        let file = dir.join("_maps/a.dmm");
+        let path = "_maps/a.dmm";
+        incoming(&mut session, &dir);
+        session.close_map(session.state.document_for_path(&file).unwrap());
+        session.poll_coop();
+        assert!(
+            session.state.document_for_path(&file).is_none(),
+            "the closed document came back"
+        );
+
+        deliver(
+            &mut session,
+            &dir,
+            Event::MapShared {
+                path: String::from(path),
+                by: OTHER,
+                generation: GenerationId(1),
+            },
+        );
+        assert!(session.state.document_for_path(&file).is_none());
+
+        let (map, errors) = parser::parse(&fs::read_to_string(&file).unwrap());
+        session.open_shared_map(ReceivedMap {
+            path: String::from(path),
+            generation: GenerationId(1),
+            file: file.clone(),
+            map,
+            errors,
+            modified: false,
+        });
+        session.poll_coop();
+        assert!(session.state.document_for_path(&file).is_none());
+        assert!(matches!(
+            session.coop().unwrap().shared_maps[path].state,
+            SharedState::Closed
+        ));
+
+        assert!(session.open_coop_file(&file));
+        let id = session
+            .state
+            .document_for_path(&file)
+            .expect("reopening shows a pending document");
+        assert!(matches!(
+            session.coop().unwrap().shared_maps[path].state,
+            SharedState::Receiving { .. }
+        ));
+        assert!(session.coop_receiving(id).is_some());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
     fn codebase_with_map(name: &str, rows: &str) -> (PathBuf, Session) {
         let dir = env::temp_dir().join(format!("rmd-coop-{name}-{}", process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -1002,7 +1433,7 @@ mod tests {
         poll_until(&mut [&mut host], |sessions| {
             sessions[0]
                 .coop()
-                .is_some_and(|coop| coop.shared.contains_key("_maps/a.dmm"))
+                .is_some_and(|coop| coop.shared_maps.contains_key("_maps/a.dmm"))
         });
 
         let port = host.coop().and_then(Coop::host).unwrap().0.port();
@@ -1016,7 +1447,8 @@ mod tests {
         poll_until(&mut [&mut host, &mut guest], |sessions| {
             sessions[1]
                 .coop()
-                .is_some_and(|coop| coop.skipped.contains_key("_maps/a.dmm"))
+                .and_then(|coop| coop.shared_maps.get("_maps/a.dmm"))
+                .is_some_and(|shared_map| matches!(shared_map.state, SharedState::Waiting(_)))
         });
         assert_eq!(guest.state.document(local).unwrap().map.size.x, 1);
 
@@ -1032,7 +1464,7 @@ mod tests {
             .unwrap();
         assert_eq!(received.map.size.x, 2);
         assert!(received.is_dirty());
-        assert!(guest.coop().unwrap().skipped.is_empty());
+        assert!(guest.coop().unwrap().shared_maps["_maps/a.dmm"].is_ready());
 
         let _ = fs::remove_dir_all(&host_dir);
         let _ = fs::remove_dir_all(&guest_dir);
@@ -1059,9 +1491,12 @@ mod tests {
     fn settled(sessions: &[&mut Session]) -> bool {
         sessions.iter().all(|session| {
             session.coop().is_some_and(|coop| {
-                coop.shared
-                    .values()
-                    .all(|shared| shared.in_flight.is_empty() && shared.inbox.is_empty())
+                coop.shared_maps.values().all(|shared_map| {
+                    matches!(shared_map.state, SharedState::Ready | SharedState::Closed)
+                        && shared_map.pending_document.is_none()
+                        && shared_map.in_flight.is_empty()
+                        && shared_map.inbox.is_empty()
+                })
             })
         })
     }
@@ -1196,7 +1631,10 @@ mod tests {
 
         guest.close_map(guest.state.document_for_path(&guest_file).unwrap());
         poll_until(&mut [&mut host, &mut guest], |sessions| {
-            sessions[1].coop().unwrap().shared["_maps/a.dmm"].state == SharedState::Closed
+            matches!(
+                sessions[1].coop().unwrap().shared_maps["_maps/a.dmm"].state,
+                SharedState::Closed
+            )
         });
 
         paint(&mut host, &host_file, right, "/obj/missed");
@@ -1217,7 +1655,11 @@ mod tests {
         guest.close_map(guest.state.document_for_path(&guest_file).unwrap());
         paint(&mut host, &host_file, right, "/obj/missed_again");
         poll_until(&mut [&mut host, &mut guest], |sessions| {
-            settled(sessions) && sessions[1].coop().unwrap().shared["_maps/a.dmm"].state == SharedState::Closed
+            settled(sessions)
+                && matches!(
+                    sessions[1].coop().unwrap().shared_maps["_maps/a.dmm"].state,
+                    SharedState::Closed
+                )
         });
 
         let reopened = open_local(&mut guest, guest_file.clone());
@@ -1299,7 +1741,10 @@ mod tests {
 
         b.close_map(b.state.document_for_path(&b_file).unwrap());
         poll_until(&mut [&mut a, &mut b], |sessions| {
-            sessions[1].coop().unwrap().shared["_maps/a.dmm"].state == SharedState::Closed
+            matches!(
+                sessions[1].coop().unwrap().shared_maps["_maps/a.dmm"].state,
+                SharedState::Closed
+            )
         });
         for &coord in &tiles {
             paint(&mut a, &a_file, coord, "/obj/while_closed");

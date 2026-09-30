@@ -159,6 +159,7 @@ fn main() -> ExitCode {
         loader,
         pending_map,
         pending_reload: None,
+        pending_share: None,
         deferred_job,
         settings_ready,
         uploaded_texture_revision: None,
@@ -349,6 +350,7 @@ struct App {
     loader: Loader,
     pending_map: Option<PendingMap>,
     pending_reload: Option<DocumentId>,
+    pending_share: Option<PathBuf>,
     deferred_job: Option<Job>,
     settings_ready: bool,
     uploaded_texture_revision: Option<u64>,
@@ -603,15 +605,30 @@ impl App {
     }
 
     fn apply_open(&mut self, request: OpenRequest) {
+        self.pending_share = None;
         let resolved = match request {
             OpenRequest::PickCodebase => self.pick_file("BYOND environment", "dme").map(Opened::Codebase),
             OpenRequest::PickMap => self.pick_file("BYOND map", "dmm").map(Opened::Map),
             OpenRequest::Codebase(path) => Some(Opened::Codebase(path)),
             OpenRequest::Map(path) => Some(Opened::Map(path)),
+            OpenRequest::ShareMap(path) => {
+                if self.session.open_coop_file(&path) || self.session.share_coop_file(&path) {
+                    return;
+                }
+
+                self.pending_share = Some(path.clone());
+                Some(Opened::Map(path))
+            },
         };
         let Some(resolved) = resolved else {
             return;
         };
+
+        if let Opened::Map(path) = &resolved
+            && self.session.open_coop_file(path)
+        {
+            return;
+        }
 
         self.ui.set_open_error(None);
         self.ui.set_load_notice(None);
@@ -696,6 +713,10 @@ impl App {
                     self.session.apply_map(*loaded);
                     self.ui.request_refit(self.session.state.active());
                 }
+
+                if self.pending_share.take_if(|pending| *pending == path).is_some() {
+                    self.session.share_coop_file(&path);
+                }
                 self.ui.set_open_error(None);
                 self.ui.set_load_notice(None);
                 self.ui
@@ -707,6 +728,7 @@ impl App {
                 log::error!("{error}");
                 self.pending_map = None;
                 self.pending_reload = None;
+                self.pending_share = None;
                 self.ui.set_open_error(Some(error.clone()));
                 self.ui.set_load_notice(None);
                 match job {
@@ -724,6 +746,7 @@ impl App {
             Outcome::Cancelled => {
                 self.pending_map = None;
                 self.pending_reload = None;
+                self.pending_share = None;
                 self.ui.set_load_notice(None);
             },
         }

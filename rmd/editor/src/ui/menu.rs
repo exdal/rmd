@@ -6,7 +6,7 @@ use super::{
     ScreenshotArea,
     ScreenshotRequest,
     UiState,
-    coop::{CoopDialogKind, draw_coop_status, shared_map_note},
+    coop::{CoopDialogKind, draw_coop_status},
     viewport::EditCommand,
     welcome::codebase_relative,
 };
@@ -338,23 +338,6 @@ impl UiState {
                 ui.separator();
                 if ui.menu_item_enabled_selected_no_shortcut("Share current map", false, session.can_share_coop_map()) {
                     session.share_coop_map();
-                }
-
-                let shared = session
-                    .coop()
-                    .map(|coop| {
-                        coop.shared
-                            .iter()
-                            .map(|(path, shared)| (path.clone(), format!("{path}{}", shared_map_note(shared))))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                if let Some(_shared) = ui.begin_menu_with_enabled("Shared maps", !shared.is_empty()) {
-                    for (path, label) in shared {
-                        if ui.menu_item(label) {
-                            session.open_coop_map(&path);
-                        }
-                    }
                 }
 
                 let hosting = session.coop().is_some_and(|coop| coop.is_hosting());

@@ -1,6 +1,6 @@
 use std::env;
 
-use dear_imgui_rs::{Key, Ui};
+use dear_imgui_rs::{Key, StyleColor, Ui, sys};
 use editor::{document::DocumentId, icons::materialdesignicons::ICON_CLOSE};
 use net::{Comment, CommentId, MAX_COMMENT_LEN, PeerId};
 
@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     camera::Controller,
-    session::{Coop, CoopStatus, Session, SharedMap, SharedState},
+    session::{Coop, CoopStatus, Session, SharedState},
     settings::Settings,
 };
 
@@ -23,6 +23,14 @@ pub(super) const JOIN_POPUP: &str = "Join co-op##coop-join";
 const CONNECTED_COLOR: [f32; 4] = [0.45, 0.85, 0.45, 1.0];
 
 const PENDING_COLOR: [f32; 4] = [0.7, 0.7, 0.7, 1.0];
+
+const RECEIVING_WIDTH: f32 = 280.0;
+
+const TAB_FILL_ALPHA: f32 = 0.45;
+
+const TAB_SWEEP_SPEED: f32 = 0.6;
+
+const TAB_SWEEP_WIDTH: f32 = 0.3;
 
 pub(super) const COMMENT_POPUP: &str = "##coop-comment";
 
@@ -190,12 +198,123 @@ pub(super) fn draw_coop_dialog(
     }
 }
 
-pub(super) fn shared_map_note(shared: &SharedMap) -> &'static str {
-    match shared.state {
-        SharedState::Closed => " (closed)",
-        SharedState::Resyncing => " (syncing)",
-        SharedState::Loading | SharedState::Ready => "",
+pub(super) fn shared_maps(coop: &Coop) -> Vec<(String, String)> {
+    coop.shared_maps
+        .keys()
+        .map(|path| (path.clone(), map_note(coop, path)))
+        .collect()
+}
+
+pub(super) fn map_note(coop: &Coop, path: &str) -> String {
+    let Some(shared_map) = coop.shared_maps.get(path) else {
+        return String::new();
+    };
+
+    let note = match &shared_map.state {
+        SharedState::Incoming { by, .. } => match coop.nick_of(*by) {
+            Some(nick) => format!("uploading from {nick}"),
+            None => String::from("uploading"),
+        },
+        state @ SharedState::Sending { .. } => format!("sharing {}", percent(state)),
+        state @ SharedState::Receiving { .. } => format!("receiving {}", percent(state)),
+        SharedState::Loading => String::from("loading"),
+        SharedState::Closed => String::from("closed"),
+        SharedState::Waiting(_) => String::from("waiting"),
+        SharedState::Ready => return String::new(),
+    };
+
+    format!("({note})")
+}
+
+fn fraction(state: &SharedState) -> Option<f32> {
+    match *state {
+        SharedState::Sending { done, total } | SharedState::Receiving { done, total } if total > 0 => {
+            Some(done as f32 / total as f32)
+        },
+        _ => None,
     }
+}
+
+fn percent(state: &SharedState) -> String {
+    fraction(state).map_or_else(String::new, |fraction| format!("{:.0}%", fraction * 100.0))
+}
+
+fn megabytes(bytes: u64) -> String { format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0)) }
+
+fn transfer_line(coop: &Coop, path: &str, state: &SharedState) -> Option<String> {
+    let line = match *state {
+        SharedState::Incoming { by, len, .. } => {
+            let nick = coop.nick_of(by).unwrap_or("someone");
+            format!("Waiting for {nick} to upload {path} ({})", megabytes(len))
+        },
+        SharedState::Sending { total: 0, .. } => format!("Sharing {path}: preparing"),
+        SharedState::Sending { done, total } => format!("Sharing {path}: {} / {}", megabytes(done), megabytes(total)),
+        SharedState::Receiving { done, total } => {
+            format!("Receiving {path}: {} / {}", megabytes(done), megabytes(total))
+        },
+        SharedState::Loading => format!("Loading {path}"),
+        SharedState::Ready | SharedState::Closed | SharedState::Waiting(_) => return None,
+    };
+
+    Some(line)
+}
+
+pub(super) fn draw_tab_progress(ui: &Ui, state: &SharedState) {
+    let (min, max) = unsafe {
+        let window = sys::igGetCurrentWindow();
+        if (*window).DockTabIsVisible() {
+            let rect = (*window).DC.DockTabItemRect;
+            ([rect.Min.x, rect.Min.y], [rect.Max.x, rect.Max.y])
+        } else {
+            let rect = sys::ImGuiWindow_TitleBarRect(window);
+            ([rect.Min.x, rect.Min.y], [rect.Max.x, rect.Max.y])
+        }
+    };
+
+    let width = max[0] - min[0];
+    let (from, to) = match fraction(state) {
+        Some(fraction) => (0.0, fraction),
+        None => {
+            let start = (ui.time() as f32 * TAB_SWEEP_SPEED).fract() * (1.0 + TAB_SWEEP_WIDTH) - TAB_SWEEP_WIDTH;
+            (start.max(0.0), (start + TAB_SWEEP_WIDTH).min(1.0))
+        },
+    };
+
+    let mut color = ui.style_color(StyleColor::PlotHistogram);
+    color[3] *= TAB_FILL_ALPHA;
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(min, max, || {
+        draw.add_rect([min[0] + width * from, min[1]], [min[0] + width * to, max[1]], color)
+            .filled(true)
+            .build();
+    });
+}
+
+pub(super) fn draw_receiving(ui: &Ui, coop: &Coop, name: &str, state: &SharedState) {
+    let (text, overlay) = match *state {
+        SharedState::Incoming { by, len, .. } => (
+            format!("Waiting for {} to upload {name}", coop.nick_of(by).unwrap_or("someone")),
+            megabytes(len),
+        ),
+        SharedState::Receiving { done, total } | SharedState::Sending { done, total } => (
+            format!("Receiving {name}"),
+            format!("{} / {}", megabytes(done), megabytes(total)),
+        ),
+        _ => (format!("Loading {name}"), String::new()),
+    };
+
+    let width = RECEIVING_WIDTH * dpi(ui);
+    let avail = ui.content_region_avail();
+    let height = ui.text_line_height_with_spacing() + ui.frame_height();
+    let origin = ui.cursor_pos();
+    let left = origin[0] + ((avail[0] - width) / 2.0).max(0.0);
+    ui.set_cursor_pos([left, origin[1] + ((avail[1] - height) / 2.0).max(0.0)]);
+    ui.text(&text);
+    ui.set_cursor_pos([left, ui.cursor_pos()[1]]);
+    ui.progress_bar(fraction(state).unwrap_or(-(ui.time() as f32)))
+        .size([width, 0.0])
+        .overlay_text(overlay)
+        .build();
 }
 
 pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
@@ -204,7 +323,11 @@ pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
         CoopStatus::Connecting => (PENDING_COLOR, String::from("Co-op: connecting...")),
         CoopStatus::Connected => {
             let others = coop.peers.len();
-            let color = if coop.skipped.is_empty() && coop.peers.values().all(|peer| coop.same_codebase(&peer.info)) {
+            let is_waiting = coop
+                .shared_maps
+                .values()
+                .any(|shared_map| matches!(shared_map.state, SharedState::Waiting(_)));
+            let color = if !is_waiting && coop.peers.values().all(|peer| coop.same_codebase(&peer.info)) {
                 CONNECTED_COLOR
             } else {
                 DIAGNOSTIC_WARNING_COLOR
@@ -243,23 +366,38 @@ pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
             }
         }
 
-        if !coop.shared.is_empty() {
+        if !coop.shared_maps.is_empty() {
             ui.separator();
             ui.text("Shared maps");
-            for (path, shared) in &coop.shared {
-                let note = shared_map_note(shared);
-                match coop.nick_of(shared.by) {
-                    Some(nick) => ui.text(format!("{path} (from {nick}){note}")),
+            for (path, shared_map) in &coop.shared_maps {
+                let note = map_note(coop, path);
+                match coop.nick_of(shared_map.by) {
+                    Some(nick) => ui.text(format!("{path} (from {nick}) {note}")),
                     None => ui.text(format!("{path}{note}")),
                 }
             }
         }
 
-        for path in coop.skipped.keys() {
-            ui.text_colored(
-                DIAGNOSTIC_WARNING_COLOR,
-                format!("{path}: save or close your copy to receive the shared one"),
-            );
+        let transfers = coop
+            .shared_maps
+            .iter()
+            .filter_map(|(path, shared_map)| transfer_line(coop, path, &shared_map.state))
+            .collect::<Vec<_>>();
+        if !transfers.is_empty() {
+            ui.separator();
+            ui.text("Transfers");
+            for line in transfers {
+                ui.text(line);
+            }
+        }
+
+        for (path, shared_map) in &coop.shared_maps {
+            if matches!(shared_map.state, SharedState::Waiting(_)) {
+                ui.text_colored(
+                    DIAGNOSTIC_WARNING_COLOR,
+                    format!("{path}: save or close your copy to receive the shared one"),
+                );
+            }
         }
     });
 }

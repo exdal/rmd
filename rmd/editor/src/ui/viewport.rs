@@ -6,7 +6,7 @@ use editor::{
     command::EditGroupId,
     conflict::Side,
     document::{DocumentId, MapDocument, Selection},
-    icons::materialdesignicons::ICON_CIRCLE_SMALL,
+    icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_WEB},
     tool::{SelectionMask, SelectionPlacement, SelectionRotation, Tool, rotated_selection_at},
 };
 use render::{InteractionMode, MapViewInteraction, MapViewRect, PickRequest, PlacementFlash, Renderer};
@@ -42,7 +42,16 @@ use super::{
         Target as MenuTarget,
         draw_popup as draw_map_menu,
     },
-    coop::{COMMENT_POPUP, CommentDraft, comment_at, draw_comment_composer, draw_comments, draw_remote_cursors},
+    coop::{
+        COMMENT_POPUP,
+        CommentDraft,
+        comment_at,
+        draw_comment_composer,
+        draw_comments,
+        draw_receiving,
+        draw_remote_cursors,
+        draw_tab_progress,
+    },
     draw_blame_popup,
     draw_block_outline,
     draw_block_placement_controls,
@@ -486,9 +495,21 @@ impl UiState {
             keep_open,
         } = draw;
         session.hide_block_preview(id);
-        let Some(title) = session.state.document(id).map(MapDocument::title) else {
+        let Some(name) = session.state.document(id).map(MapDocument::title) else {
             return;
         };
+
+        let is_shared = session
+            .state
+            .document(id)
+            .and_then(|document| document.path.as_deref())
+            .is_some_and(|path| session.is_coop_shared_file(path));
+        let title = if is_shared {
+            format!("{ICON_WEB} {name}")
+        } else {
+            name.clone()
+        };
+
         let MapViewState {
             window,
             camera,
@@ -539,6 +560,15 @@ impl UiState {
             let dock = ui.get_window_dock_id();
             if dock.raw() != 0 {
                 self.central_node = Some(dock);
+            }
+
+            if let Some(state) = session.coop_transfer(id) {
+                draw_tab_progress(ui, state);
+            }
+
+            if let Some((coop, state)) = session.coop().zip(session.coop_receiving(id)) {
+                draw_receiving(ui, coop, &name, state);
+                return;
             }
 
             let (image_size, viewport) = panel_extent(ui.content_region_avail());

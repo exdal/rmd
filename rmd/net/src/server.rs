@@ -23,6 +23,7 @@ use protocol::{
         Datagram,
         GenerationId,
         MAX_COMMENT_LEN,
+        MAX_MAP_LEN,
         MAX_NICK_LEN,
         MapEdit,
         PeerId,
@@ -44,7 +45,7 @@ use tokio::{
 use crate::{
     Error,
     fail,
-    stream::{read_message, receive_transfer, send_transfer, write_message},
+    stream::{read_message, read_payload, read_transfer_header, send_transfer, write_message},
     tls,
 };
 
@@ -140,6 +141,7 @@ struct State {
     comments: Vec<Comment>,
     last_comment: CommentId,
     maps: HashMap<String, SharedMap>,
+    uploads: HashMap<String, (PeerId, u64)>,
 }
 
 struct SharedMap {
@@ -218,8 +220,43 @@ impl Shared {
         }
     }
 
+    fn upload_started(&self, by: PeerId, path: &str, len: u64) {
+        self.state.lock().unwrap().uploads.insert(path.to_owned(), (by, len));
+        self.broadcast(
+            by,
+            &ServerMessage::MapIncoming {
+                path: path.to_owned(),
+                by,
+                len,
+            },
+        );
+    }
+
+    fn upload_failed(&self, by: PeerId, path: &str) {
+        {
+            let mut state = self.state.lock().unwrap();
+            if state.uploads.get(path).is_none_or(|(uploader, _)| *uploader != by) {
+                return;
+            }
+
+            state.uploads.remove(path);
+        }
+
+        self.broadcast(
+            by,
+            &ServerMessage::MapCancelled {
+                path: path.to_owned(),
+                by,
+            },
+        );
+    }
+
     fn share_map(&self, by: PeerId, path: String, bytes: Bytes) {
         let mut state = self.state.lock().unwrap();
+        if state.uploads.get(&path).is_some_and(|(uploader, _)| *uploader == by) {
+            state.uploads.remove(&path);
+        }
+
         let generation = state
             .maps
             .get(&path)
@@ -297,18 +334,42 @@ fn replay(outbox: &mpsc::UnboundedSender<ServerMessage>, connection: &Connection
 }
 
 async fn push_map(connection: Connection, path: String, generation: GenerationId, bytes: Bytes) {
-    if let Err(e) = send_transfer(&connection, &Transfer::Map { path, generation }, &bytes).await {
+    let header = Transfer::Map {
+        path,
+        generation,
+        len: bytes.len() as u64,
+    };
+
+    if let Err(e) = send_transfer(&connection, &header, &bytes, |_| {}).await {
         log::debug!("could not send a map to {}: {e}", connection.remote_address());
     }
 }
 
-async fn upload(shared: Arc<Shared>, from: PeerId, stream: quinn::RecvStream) {
-    match receive_transfer(stream).await {
-        Ok((Transfer::Map { path, .. }, bytes)) if is_map_path(&path) => {
-            shared.share_map(from, path, Bytes::from(bytes));
+async fn upload(shared: Arc<Shared>, from: PeerId, mut stream: quinn::RecvStream) {
+    let (path, len) = match read_transfer_header(&mut stream).await {
+        Ok(Transfer::Map { path, len, .. }) if is_map_path(&path) => (path, len),
+        Ok(Transfer::Map { path, .. }) => {
+            log::info!("{from:?} tried to share {path}, which is not a map path");
+            return;
         },
-        Ok((Transfer::Map { path, .. }, _)) => log::info!("{from:?} tried to share {path}, which is not a map path"),
-        Err(e) => log::info!("dropping an upload from {from:?}: {e}"),
+        Err(e) => {
+            log::info!("dropping an upload from {from:?}: {e}");
+            return;
+        },
+    };
+
+    if len > MAX_MAP_LEN as u64 {
+        log::info!("{from:?} tried to share {path}, which is {len} bytes");
+        return;
+    }
+
+    shared.upload_started(from, &path, len);
+    match read_payload(&mut stream, len, |_| {}).await {
+        Ok(bytes) => shared.share_map(from, path, Bytes::from(bytes)),
+        Err(e) => {
+            log::info!("dropping an upload of {path} from {from:?}: {e}");
+            shared.upload_failed(from, &path);
+        },
     }
 }
 
@@ -405,6 +466,14 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
                 generation: map.generation,
             });
             replay(&outbox, connection, path, map);
+        }
+
+        for (path, (by, len)) in state.uploads.iter() {
+            let _ = outbox.send(ServerMessage::MapIncoming {
+                path: path.clone(),
+                by: *by,
+                len: *len,
+            });
         }
 
         state.peers.insert(
