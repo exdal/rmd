@@ -4,7 +4,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-use net::{Client, CodebaseId, Cursor, Event, GenerationId, MapEdit, SeqId, Server, ServerConfig};
+use net::{
+    Client,
+    CodebaseId,
+    Cursor,
+    Event,
+    GenerationId,
+    Impairment,
+    LossyProxy,
+    MapEdit,
+    SeqId,
+    Server,
+    ServerConfig,
+};
 
 const PASSWORD: &str = "hunter2";
 
@@ -16,9 +28,11 @@ fn server() -> Server {
     .unwrap()
 }
 
-fn join(server: &Server, password: &str, nick: &str) -> Client {
+fn join(server: &Server, password: &str, nick: &str) -> Client { join_at(server.local_addr(), password, nick) }
+
+fn join_at(addr: SocketAddr, password: &str, nick: &str) -> Client {
     Client::connect(
-        server.local_addr().to_string(),
+        addr.to_string(),
         password.to_owned(),
         nick.to_owned(),
         CodebaseId {
@@ -363,4 +377,60 @@ fn a_resync_sends_the_snapshot_and_the_numbered_log_again() {
         replayed,
         [(SeqId(0), String::from("first")), (SeqId(1), String::from("second"))]
     );
+}
+
+#[test]
+fn edits_and_snapshots_survive_a_lossy_link() {
+    let server = server();
+    let proxy = LossyProxy::spawn(
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        server.local_addr(),
+        Impairment {
+            latency: Duration::from_millis(20),
+            jitter: Duration::from_millis(20),
+            loss: 0.05,
+            seed: 7,
+        },
+    )
+    .unwrap();
+
+    let alice = join_at(proxy.local_addr(), PASSWORD, "alice");
+    wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
+    let bob = join_at(proxy.local_addr(), PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    let path = String::from("_maps/test.dmm");
+    let map = (0..200_000).map(|i| b'a' + (i % 26) as u8).collect::<Vec<_>>();
+    alice.share_map(path.clone(), map.clone());
+    let received = wait_for(&bob, |event| match event {
+        Event::MapSnapshot { bytes, .. } => Some(bytes),
+        _ => None,
+    });
+    assert!(received == map, "the snapshot arrived damaged");
+
+    for patch in 0..50 {
+        bob.send_edit(MapEdit {
+            path: path.clone(),
+            generation: GenerationId(1),
+            coords: vec![[1, 1, 1]],
+            patch: patch.to_string(),
+        });
+    }
+
+    let mut edits = Vec::new();
+    while edits.len() < 50 {
+        edits.push(wait_for(&alice, |event| match event {
+            Event::Edit { seq, edit, .. } => Some((seq, edit.patch)),
+            _ => None,
+        }));
+    }
+    assert_eq!(
+        edits,
+        (0..50).map(|seq| (SeqId(seq), seq.to_string())).collect::<Vec<_>>()
+    );
+
+    alice.send_comment(path, 1, [0.0, 0.0], String::from("laggy"));
+    for client in [&alice, &bob] {
+        wait_for(client, |event| matches!(event, Event::Comment(_)).then_some(()));
+    }
 }

@@ -7,11 +7,7 @@ use dmm::{Coord, Map, Prefab, Size, parser, writer};
 pub fn encode(map: &Map, coords: impl IntoIterator<Item = Coord>) -> Option<(Vec<Coord>, String)> {
     let tiles = coords
         .into_iter()
-        .filter_map(|coord| {
-            map.tile_at(coord)
-                .filter(|tile| !tile.is_empty())
-                .map(|tile| (coord, tile))
-        })
+        .filter_map(|coord| map.tile_at(coord).map(|tile| (coord, tile)))
         .collect::<Vec<_>>();
 
     if tiles.is_empty() {
@@ -92,6 +88,20 @@ ba
         }
 
         assert!(encode(&map, [Coord::new(9, 9, 9)]).is_none());
+    }
+
+    #[test]
+    fn an_emptied_tile_is_sent_too() {
+        let (mut map, _) = parser::parse(MAP);
+        let empty = map.intern_tile(Vec::new());
+        map.grid[0][0][0] = empty;
+
+        let (coords, patch) = encode(&map, [Coord::new(1, 2, 1), Coord::new(2, 2, 1)]).unwrap();
+        assert_eq!(coords, [Coord::new(1, 2, 1), Coord::new(2, 2, 1)]);
+
+        let tiles = decode(&patch, coords.len()).unwrap();
+        assert!(tiles[0].is_empty());
+        assert_eq!(Some(&tiles[1]), map.tile_at(Coord::new(2, 2, 1)));
     }
 
     #[test]

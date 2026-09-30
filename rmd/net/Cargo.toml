@@ -13,6 +13,7 @@ path = "src/bin/rmds.rs"
 [dependencies]
 protocol = { path = "../protocol" }
 bytes = "1"
+fastrand = "2"
 log = "0.4"
 quinn = { version = "0.11", default-features = false, features = ["log", "runtime-tokio", "rustls-ring"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }

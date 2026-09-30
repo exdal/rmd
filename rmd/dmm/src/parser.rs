@@ -231,6 +231,12 @@ impl<'a> MapParser<'a> {
         self.expect(b'(')?;
 
         let mut tile = Tile::new();
+        self.skip_trivia();
+        // `"b" = ()`, a tile everything was deleted from
+        if self.eat(b')') {
+            return Ok((key, text, tile));
+        }
+
         loop {
             self.skip_trivia();
             tile.push(self.parse_prefab()?);
@@ -937,6 +943,18 @@ mod tests {
 
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(map.format, MapFormat::Standard);
+    }
+
+    #[test]
+    fn an_empty_tile_parses() {
+        let (map, errors) = parse(concat!(
+            "\"a\" = (/turf,/area)\n",
+            "\"b\" = ( )\n",
+            "\n(1,1,1) = {\"\nab\n\"}\n",
+        ));
+
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(map.tile_at(Coord::new(2, 1, 1)).map(|tile| tile.len()), Some(0));
     }
 
     #[test]

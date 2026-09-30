@@ -1,17 +1,20 @@
-// rmds [--port 3131] [--password <password>]
+// rmds [--port 3131] [--password <password>] [--latency <ms>] [--jitter <ms>] [--loss <percent>]
 
 use std::{
     env,
     net::{Ipv4Addr, SocketAddr},
     process::ExitCode,
+    time::Duration,
 };
 
-use net::{Server, ServerConfig};
+use net::{Impairment, LossyProxy, Server, ServerConfig};
 
 const DEFAULT_PORT: u16 = 3131;
 
 fn usage() -> ExitCode {
-    log::error!("usage: rmds [--port 3131] [--password <password>]");
+    log::error!(
+        "usage: rmds [--port 3131] [--password <password>] [--latency <ms>] [--jitter <ms>] [--loss <percent>]"
+    );
 
     ExitCode::FAILURE
 }
@@ -30,8 +33,16 @@ fn main() -> ExitCode {
         },
     };
 
+    let public = SocketAddr::from((Ipv4Addr::UNSPECIFIED, arguments.port));
+    let simulated = !arguments.impairment.is_none();
+    // a simulated link puts the server behind a lossy proxy that takes the public port
+    let bind = if simulated {
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 0))
+    } else {
+        public
+    };
     let server = match Server::spawn(ServerConfig {
-        bind: SocketAddr::from((Ipv4Addr::UNSPECIFIED, arguments.port)),
+        bind,
         password: arguments.password.unwrap_or_else(net::random_password),
     }) {
         Ok(server) => server,
@@ -42,26 +53,56 @@ fn main() -> ExitCode {
         },
     };
 
-    log::info!(
-        "listening on {} with password {}",
-        server.local_addr(),
-        server.password()
-    );
+    let impairment = Impairment {
+        seed: fastrand::u64(..),
+        ..arguments.impairment
+    };
+    let proxy = match simulated
+        .then(|| LossyProxy::spawn(public, server.local_addr(), impairment))
+        .transpose()
+    {
+        Ok(proxy) => proxy,
+        Err(e) => {
+            log::error!("{e}");
+
+            return ExitCode::FAILURE;
+        },
+    };
+
+    let addr = proxy.as_ref().map_or(server.local_addr(), LossyProxy::local_addr);
+    log::info!("listening on {addr} with password {}", server.password());
+    if simulated {
+        log::info!(
+            "simulating {}ms latency, {}ms jitter and {}% loss each way",
+            impairment.latency.as_millis(),
+            impairment.jitter.as_millis(),
+            impairment.loss * 100.0
+        );
+    }
+
     server.wait();
 
     ExitCode::SUCCESS
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 struct Arguments {
     port: u16,
     password: Option<String>,
+    impairment: Impairment,
 }
 
 fn parse_arguments(arguments: &[String]) -> Result<Arguments, String> {
     let mut parsed = Arguments {
         port: DEFAULT_PORT,
         password: None,
+        impairment: Impairment::default(),
+    };
+    let millis = |value: &str| {
+        value
+            .parse()
+            .map(Duration::from_millis)
+            .map_err(|_| format!("invalid milliseconds '{value}'"))
     };
 
     let mut arguments = arguments.iter();
@@ -71,6 +112,12 @@ fn parse_arguments(arguments: &[String]) -> Result<Arguments, String> {
             "--port" => parsed.port = value.parse().map_err(|_| format!("invalid port '{value}'"))?,
             "--password" if !value.is_empty() => parsed.password = Some(value.clone()),
             "--password" => return Err(String::from("the password cannot be empty")),
+            "--latency" => parsed.impairment.latency = millis(value)?,
+            "--jitter" => parsed.impairment.jitter = millis(value)?,
+            "--loss" => match value.parse::<f64>() {
+                Ok(percent) if (0.0..=100.0).contains(&percent) => parsed.impairment.loss = percent / 100.0,
+                _ => return Err(format!("invalid loss '{value}', expected a percentage")),
+            },
             _ => return Err(format!("unknown flag '{flag}'")),
         }
     }
@@ -111,14 +158,25 @@ mod tests {
             parse(&[]),
             Ok(Arguments {
                 port: DEFAULT_PORT,
-                password: None
+                password: None,
+                impairment: Impairment::default(),
             })
         );
         assert_eq!(
             parse(&["--password", "hunter2", "--port", "9000"]),
             Ok(Arguments {
                 port: 9000,
-                password: Some(String::from("hunter2"))
+                password: Some(String::from("hunter2")),
+                impairment: Impairment::default(),
+            })
+        );
+        assert_eq!(
+            parse(&["--latency", "150", "--jitter", "50", "--loss", "5"]).map(|arguments| arguments.impairment),
+            Ok(Impairment {
+                latency: Duration::from_millis(150),
+                jitter: Duration::from_millis(50),
+                loss: 0.05,
+                seed: 0,
             })
         );
     }
@@ -129,5 +187,7 @@ mod tests {
         assert!(parse(&["--port", "70000"]).is_err());
         assert!(parse(&["--password", ""]).is_err());
         assert!(parse(&["--verbose", "yes"]).is_err());
+        assert!(parse(&["--latency", "-5"]).is_err());
+        assert!(parse(&["--loss", "120"]).is_err());
     }
 }

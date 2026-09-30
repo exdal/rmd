@@ -1,4 +1,5 @@
 mod client;
+mod proxy;
 mod server;
 mod stream;
 mod tls;
@@ -22,6 +23,7 @@ use tokio::runtime::{Builder, Runtime};
 
 pub use crate::{
     client::{Client, Event},
+    proxy::{Impairment, LossyProxy},
     server::{Server, ServerConfig, random_password},
 };
 

@@ -818,6 +818,7 @@ mod tests {
 
     use dmm::Prefab;
     use editor::{Environment, command::Edit};
+    use net::{Impairment, LossyProxy};
     use objtree::ObjectTree;
 
     use super::*;
@@ -1145,6 +1146,19 @@ mod tests {
             top(sessions[1], &guest_file, corner).as_deref() == Some("/obj/after_resize")
         });
 
+        let id = host.state.document_for_path(&host_file).unwrap();
+        let document = host.state.document_mut(id).unwrap();
+        let mut edit = Edit::new("erase everything");
+        edit.change(document, corner, Vec::new());
+        assert!(document.apply(edit));
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            let guest = &sessions[1];
+            let document = guest
+                .state
+                .document(guest.state.document_for_path(&guest_file).unwrap());
+            document.is_some_and(|document| document.map.tile_at(corner).is_some_and(|tile| tile.is_empty()))
+        });
+
         for dir in [host_dir, guest_dir, late_dir] {
             let _ = fs::remove_dir_all(dir);
         }
@@ -1218,6 +1232,86 @@ mod tests {
         assert!(!guest.state.document(reopened).unwrap().is_read_only());
 
         for dir in [host_dir, guest_dir] {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn edits_converge_through_a_lossy_link() {
+        let server = Server::spawn(ServerConfig {
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            password: String::from("hunter2"),
+        })
+        .unwrap();
+        let proxy = LossyProxy::spawn(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            server.local_addr(),
+            Impairment {
+                latency: Duration::from_millis(20),
+                jitter: Duration::from_millis(20),
+                loss: 0.05,
+                seed: 11,
+            },
+        )
+        .unwrap();
+
+        let (a_dir, mut a) = codebase_with_map("lossy-a", "aaaa");
+        let (b_dir, mut b) = codebase_with_map("lossy-b", "aaaa");
+        let a_file = a_dir.join("_maps/a.dmm");
+        let b_file = b_dir.join("_maps/a.dmm");
+        open_local(&mut a, a_file.clone());
+        for (session, nick) in [(&mut a, "a"), (&mut b, "b")] {
+            session
+                .join_coop(
+                    proxy.local_addr().to_string(),
+                    String::from("hunter2"),
+                    String::from(nick),
+                )
+                .unwrap();
+        }
+
+        poll_until(&mut [&mut a, &mut b], |sessions| {
+            sessions.iter().all(|session| connected(session))
+        });
+        a.share_coop_map();
+        poll_until(&mut [&mut a, &mut b], |sessions| {
+            sessions[1].state.document_for_path(&b_file).is_some() && settled(sessions)
+        });
+
+        let tiles = (1..=4).map(|x| Coord::new(x, 1, 1)).collect::<Vec<_>>();
+        let converged = |sessions: &[&mut Session]| {
+            settled(sessions)
+                && tiles
+                    .iter()
+                    .all(|&coord| top(sessions[0], &a_file, coord) == top(sessions[1], &b_file, coord))
+        };
+        for round in 0..10 {
+            for &coord in &tiles {
+                paint(&mut a, &a_file, coord, &format!("/obj/a{round}"));
+                paint(&mut b, &b_file, coord, &format!("/obj/b{round}"));
+            }
+
+            a.poll_coop();
+            b.poll_coop();
+        }
+
+        poll_until(&mut [&mut a, &mut b], converged);
+
+        b.close_map(b.state.document_for_path(&b_file).unwrap());
+        poll_until(&mut [&mut a, &mut b], |sessions| {
+            sessions[1].coop().unwrap().shared["_maps/a.dmm"].state == SharedState::Closed
+        });
+        for &coord in &tiles {
+            paint(&mut a, &a_file, coord, "/obj/while_closed");
+        }
+
+        b.open_coop_map("_maps/a.dmm");
+        poll_until(&mut [&mut a, &mut b], |sessions| {
+            sessions[1].state.document_for_path(&b_file).is_some() && converged(sessions)
+        });
+        assert_eq!(top(&b, &b_file, tiles[0]).as_deref(), Some("/obj/while_closed"));
+
+        for dir in [a_dir, b_dir] {
             let _ = fs::remove_dir_all(dir);
         }
     }
