@@ -8,7 +8,21 @@ use std::{
 
 use dmm::Coord;
 use editor::{document::DocumentId, tool::Tool};
-use net::{Client, CodebaseId, Comment, CommentId, Cursor, Event, MapEdit, PeerId, PeerInfo, Server, ServerConfig};
+use net::{
+    Client,
+    CodebaseId,
+    Comment,
+    CommentId,
+    Cursor,
+    Event,
+    GenerationId,
+    MapEdit,
+    PeerId,
+    PeerInfo,
+    SeqId,
+    Server,
+    ServerConfig,
+};
 
 use super::Session;
 use crate::loader::LoadedMap;
@@ -82,26 +96,38 @@ pub(crate) struct Coop {
 
 pub(crate) struct SharedMap {
     pub by: PeerId,
-    generation: u32,
-    loaded_generation: Option<u32>,
-    // edits from the server that arrived before our copy of the map was loaded
-    inbox: Vec<(PeerId, MapEdit)>,
+    pub closed: bool,
+    generation: GenerationId,
+    loaded_generation: Option<GenerationId>,
+    // edits from the server by seq, applied in order once our copy of the map is loaded
+    inbox: BTreeMap<SeqId, (PeerId, MapEdit)>,
+    next_seq: SeqId,
     // tiles we edited whose edits the server hasn't sent back yet, counted per tile
     in_flight: HashMap<Coord, u32>,
 }
 
 impl SharedMap {
-    fn new(by: PeerId, generation: u32) -> Self {
+    fn new(by: PeerId, generation: GenerationId) -> Self {
         Self {
             by,
+            closed: false,
             generation,
             loaded_generation: None,
-            inbox: Vec::new(),
+            inbox: BTreeMap::new(),
+            next_seq: SeqId(0),
             in_flight: HashMap::new(),
         }
     }
 
     fn is_ready(&self) -> bool { self.loaded_generation == Some(self.generation) }
+
+    fn restart(&mut self, closed: bool) {
+        self.closed = closed;
+        self.loaded_generation = None;
+        self.inbox.clear();
+        self.next_seq = SeqId(0);
+        self.in_flight.clear();
+    }
 }
 
 enum Prepared {
@@ -111,7 +137,7 @@ enum Prepared {
 
 pub(crate) struct ReceivedMap {
     path: String,
-    generation: u32,
+    generation: GenerationId,
     file: PathBuf,
     map: dmm::Map,
     errors: Vec<dmm::error::MapError>,
@@ -151,7 +177,7 @@ impl Coop {
 
     pub fn git_hint(&self) -> Option<&str> { self.codebase.as_ref()?.git_hint.as_deref() }
 
-    fn receive_map(&self, path: String, generation: u32, bytes: Vec<u8>, codebase: Option<&Path>) {
+    fn receive_map(&self, path: String, generation: GenerationId, bytes: Vec<u8>, codebase: Option<&Path>) {
         if !net::is_map_path(&path) {
             log::warn!("ignoring a shared map outside the codebase: {path}");
             return;
@@ -230,13 +256,13 @@ impl Coop {
                 generation,
                 bytes,
             } => self.receive_map(path, generation, bytes, codebase),
-            Event::Edit { by, edit } => {
+            Event::Edit { by, seq, edit } => {
                 if let Some(shared) = self
                     .shared
                     .get_mut(&edit.path)
-                    .filter(|shared| shared.generation == edit.generation)
+                    .filter(|shared| shared.generation == edit.generation && !shared.closed && seq >= shared.next_seq)
                 {
-                    shared.inbox.push((by, edit));
+                    shared.inbox.insert(seq, (by, edit));
                 }
             },
             Event::Rejected(reason) => self.end(format!("rejected: {reason}")),
@@ -424,8 +450,68 @@ impl Session {
             }
         }
 
+        self.follow_shared_documents();
         self.apply_coop_edits();
         self.send_coop_edits();
+    }
+
+    fn follow_shared_documents(&mut self) {
+        let Some(coop) = self.coop.as_ref() else {
+            return;
+        };
+
+        let mut closed = Vec::new();
+        let mut reopened = Vec::new();
+        for (path, shared) in &coop.shared {
+            let open = self.shared_document(path).is_some();
+            if shared.is_ready() && !open {
+                closed.push(path.clone());
+            } else if shared.closed && open {
+                reopened.push(path.clone());
+            }
+        }
+
+        if let Some(coop) = self.coop.as_mut() {
+            for path in &closed {
+                if let Some(shared) = coop.shared.get_mut(path) {
+                    shared.restart(true);
+                }
+            }
+        }
+
+        for path in reopened {
+            self.resync_coop_map(&path);
+        }
+    }
+
+    pub fn open_coop_map(&mut self, path: &str) {
+        if let Some(id) = self.shared_document(path) {
+            self.set_active_document(id);
+        } else if self
+            .coop
+            .as_ref()
+            .and_then(|coop| coop.shared.get(path))
+            .is_some_and(|shared| shared.closed)
+        {
+            self.resync_coop_map(path);
+        }
+    }
+
+    fn resync_coop_map(&mut self, path: &str) {
+        let Some(coop) = self.coop.as_mut() else {
+            return;
+        };
+
+        let Some(shared) = coop.shared.get_mut(path) else {
+            return;
+        };
+
+        shared.restart(false);
+        // the snapshot replaces whatever copy is open, unsaved or not
+        coop.received.insert(path.to_owned());
+        if let Some(client) = coop.client.as_ref() {
+            client.resync(path.to_owned());
+        }
     }
 
     fn shared_document(&self, path: &str) -> Option<DocumentId> {
@@ -440,7 +526,8 @@ impl Session {
         let you = coop.you;
         let mut incoming = Vec::new();
         for (path, shared) in coop.shared.iter_mut().filter(|(_, shared)| shared.is_ready()) {
-            for (by, edit) in shared.inbox.drain(..) {
+            while let Some((by, edit)) = shared.inbox.remove(&shared.next_seq) {
+                shared.next_seq = shared.next_seq.next();
                 incoming.push((path.clone(), by, edit));
             }
         }
@@ -459,26 +546,25 @@ impl Session {
                 continue;
             };
 
-            // TODO: we should probably not do this in the first place, this is literally wasted push pop
-            if Some(by) == you {
-                for coord in coords {
-                    if let Some(count) = shared.in_flight.get_mut(&coord) {
-                        *count -= 1;
-                        if *count == 0 {
-                            shared.in_flight.remove(&coord);
-                        }
+            // a tile we have in flight keeps our version until the server echoes it back,
+            // anything else applies, including our own edits replayed after a resync
+            let mut applied = Vec::new();
+            for (coord, tile) in coords.zip(tiles) {
+                let Some(count) = shared.in_flight.get_mut(&coord) else {
+                    applied.push((coord, tile));
+                    continue;
+                };
+
+                if Some(by) == you {
+                    // TODO: move this to a func
+                    *count -= 1;
+                    if *count == 0 {
+                        shared.in_flight.remove(&coord);
                     }
                 }
-
-                continue;
             }
 
-            let tiles = coords
-                .zip(tiles)
-                .filter(|(coord, _)| !shared.in_flight.contains_key(coord))
-                .collect::<Vec<_>>();
-
-            let Some(id) = self.shared_document(&path).filter(|_| !tiles.is_empty()) else {
+            let Some(id) = self.shared_document(&path).filter(|_| !applied.is_empty()) else {
                 continue;
             };
 
@@ -486,7 +572,7 @@ impl Session {
                 continue;
             };
 
-            let affected = document.apply_remote(tiles);
+            let affected = document.apply_remote(applied);
             self.update_document_instances(id, &affected);
             if let Some(cache) = self.caches.get_mut(&id) {
                 cache.map_revision = cache.map_revision.wrapping_add(1);
@@ -1018,6 +1104,73 @@ mod tests {
         });
 
         for dir in [host_dir, guest_dir, late_dir] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn a_closed_shared_map_resyncs_when_reopened() {
+        let (host_dir, mut host) = codebase_with_map("resync-host", "aa");
+        let (guest_dir, mut guest) = codebase_with_map("resync-guest", "aa");
+        let host_file = host_dir.join("_maps/a.dmm");
+        let guest_file = guest_dir.join("_maps/a.dmm");
+        let (left, right) = (Coord::new(1, 1, 1), Coord::new(2, 1, 1));
+        open_local(&mut host, host_file.clone());
+
+        host.host_coop(0, String::from("hunter2"), String::from("host"))
+            .unwrap();
+        poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
+        host.share_coop_map();
+        let port = host.coop().and_then(Coop::host).unwrap().0.port();
+        guest
+            .join_coop(
+                format!("127.0.0.1:{port}"),
+                String::from("hunter2"),
+                String::from("guest"),
+            )
+            .unwrap();
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            sessions[1].state.document_for_path(&guest_file).is_some() && settled(sessions)
+        });
+
+        paint(&mut guest, &guest_file, left, "/obj/guest");
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            settled(sessions) && top(sessions[0], &host_file, left).as_deref() == Some("/obj/guest")
+        });
+
+        guest.close_map(guest.state.document_for_path(&guest_file).unwrap());
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            sessions[1].coop().unwrap().shared["_maps/a.dmm"].closed
+        });
+
+        paint(&mut host, &host_file, right, "/obj/missed");
+        poll_until(&mut [&mut host, &mut guest], settled);
+        assert!(guest.state.document_for_path(&guest_file).is_none());
+
+        guest.open_coop_map("_maps/a.dmm");
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            settled(sessions) && top(sessions[1], &guest_file, right).as_deref() == Some("/obj/missed")
+        });
+        assert_eq!(top(&guest, &guest_file, left).as_deref(), Some("/obj/guest"));
+
+        paint(&mut host, &host_file, left, "/obj/after");
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            top(sessions[1], &guest_file, left).as_deref() == Some("/obj/after")
+        });
+
+        guest.close_map(guest.state.document_for_path(&guest_file).unwrap());
+        paint(&mut host, &host_file, right, "/obj/missed_again");
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            settled(sessions) && sessions[1].coop().unwrap().shared["_maps/a.dmm"].closed
+        });
+
+        open_local(&mut guest, guest_file.clone());
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            settled(sessions) && top(sessions[1], &guest_file, right).as_deref() == Some("/obj/missed_again")
+        });
+        assert_eq!(top(&guest, &guest_file, left).as_deref(), Some("/obj/after"));
+
+        for dir in [host_dir, guest_dir] {
             let _ = std::fs::remove_dir_all(dir);
         }
     }

@@ -17,10 +17,12 @@ use protocol::{
         CommentId,
         Cursor,
         Datagram,
+        GenerationId,
         MapEdit,
         PeerId,
         PeerInfo,
         Relayed,
+        SeqId,
         ServerMessage,
         Transfer,
     },
@@ -56,15 +58,16 @@ pub enum Event {
     MapShared {
         path: String,
         by: PeerId,
-        generation: u32,
+        generation: GenerationId,
     },
     MapSnapshot {
         path: String,
-        generation: u32,
+        generation: GenerationId,
         bytes: Vec<u8>,
     },
     Edit {
         by: PeerId,
+        seq: SeqId,
         edit: MapEdit,
     },
     Disconnected(String),
@@ -131,6 +134,8 @@ impl Client {
     }
 
     pub fn send_edit(&self, edit: MapEdit) { self.send(ClientMessage::Edit(edit)); }
+
+    pub fn resync(&self, path: String) { self.send(ClientMessage::Resync { path }); }
 
     fn send(&self, message: ClientMessage) { let _ = self.outbox.send(Command::Message(message)); }
 
@@ -220,7 +225,7 @@ async fn session(
                 Some(ServerMessage::Comment(comment)) => emit(Event::Comment(comment)),
                 Some(ServerMessage::CommentDeleted(id)) => emit(Event::CommentDeleted(id)),
                 Some(ServerMessage::MapShared { path, by, generation }) => emit(Event::MapShared { path, by, generation }),
-                Some(ServerMessage::Edit { by, edit }) => emit(Event::Edit { by, edit }),
+                Some(ServerMessage::Edit { by, seq, edit }) => emit(Event::Edit { by, seq, edit }),
                 Some(other) => log::warn!("unexpected message from the host: {other:?}"),
                 None => return Err(fail("the host ended the session")),
             },
@@ -260,7 +265,7 @@ async fn upload(connection: Connection, path: String, bytes: Vec<u8>) {
         &connection,
         &Transfer::Map {
             path: path.clone(),
-            generation: 0,
+            generation: GenerationId(0),
         },
         &bytes,
     )

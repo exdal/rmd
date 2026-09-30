@@ -27,8 +27,26 @@ pub struct ClientHello {
     pub codebase: CodebaseId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct CommentId(pub u32);
+
+impl CommentId {
+    pub fn next(self) -> Self { Self(self.0 + 1) }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct GenerationId(pub u32);
+
+impl GenerationId {
+    pub fn next(self) -> Self { Self(self.0 + 1) }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SeqId(pub u32);
+
+impl SeqId {
+    pub fn next(self) -> Self { Self(self.0 + 1) }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Comment {
@@ -51,12 +69,15 @@ pub enum ClientMessage {
     },
     DeleteComment(CommentId),
     Edit(MapEdit),
+    Resync {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MapEdit {
     pub path: String,
-    pub generation: u32,
+    pub generation: GenerationId,
     pub coords: Vec<[u32; 3]>,
     /// the changed tiles as a one row map, in `coords` order
     pub patch: String,
@@ -79,17 +100,18 @@ pub enum ServerMessage {
     MapShared {
         path: String,
         by: PeerId,
-        generation: u32,
+        generation: GenerationId,
     },
     Edit {
         by: PeerId,
+        seq: SeqId,
         edit: MapEdit,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Transfer {
-    Map { path: String, generation: u32 },
+    Map { path: String, generation: GenerationId },
 }
 
 /// `_maps/map_files/Station/station.dmm`
@@ -178,21 +200,28 @@ mod tests {
         round_trip(ServerMessage::MapShared {
             path: String::from("_maps/test.dmm"),
             by: PeerId(1),
-            generation: 2,
+            generation: GenerationId(2),
         });
         round_trip(Transfer::Map {
             path: String::from("_maps/test.dmm"),
-            generation: 2,
+            generation: GenerationId(2),
         });
 
         let edit = MapEdit {
             path: String::from("_maps/test.dmm"),
-            generation: 2,
+            generation: GenerationId(2),
             coords: vec![[1, 2, 1], [3, 4, 1]],
             patch: String::from("\"a\" = (/turf,/area)\n"),
         };
         round_trip(ClientMessage::Edit(edit.clone()));
-        round_trip(ServerMessage::Edit { by: PeerId(1), edit });
+        round_trip(ServerMessage::Edit {
+            by: PeerId(1),
+            seq: SeqId(7),
+            edit,
+        });
+        round_trip(ClientMessage::Resync {
+            path: String::from("_maps/test.dmm"),
+        });
     }
 
     #[test]

@@ -340,6 +340,28 @@ impl UiState {
                     session.share_coop_map();
                 }
 
+                let shared = session
+                    .coop()
+                    .map(|coop| {
+                        coop.shared
+                            .iter()
+                            .map(|(path, shared)| (path.clone(), shared.closed))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if let Some(_shared) = ui.begin_menu_with_enabled("Shared maps", !shared.is_empty()) {
+                    for (path, closed) in shared {
+                        let label = if closed {
+                            format!("{path} (closed)")
+                        } else {
+                            path.clone()
+                        };
+                        if ui.menu_item(label) {
+                            session.open_coop_map(&path);
+                        }
+                    }
+                }
+
                 let hosting = session.coop().is_some_and(|coop| coop.is_hosting());
                 let label = if hosting { "Stop hosting" } else { "Leave" };
                 if ui.menu_item_enabled_selected_no_shortcut(label, false, session.coop().is_some()) {

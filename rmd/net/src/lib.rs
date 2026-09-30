@@ -8,10 +8,12 @@ pub use protocol::coop::{
     Comment,
     CommentId,
     Cursor,
+    GenerationId,
     MAX_COMMENT_LEN,
     MapEdit,
     PeerId,
     PeerInfo,
+    SeqId,
     is_map_path,
 };
 

@@ -20,12 +20,14 @@ use protocol::{
         Comment,
         CommentId,
         Datagram,
+        GenerationId,
         MAX_COMMENT_LEN,
         MAX_NICK_LEN,
         MapEdit,
         PeerId,
         PeerInfo,
         Relayed,
+        SeqId,
         ServerMessage,
         Transfer,
         is_map_path,
@@ -131,14 +133,14 @@ struct Shared {
 struct State {
     peers: HashMap<PeerId, Peer>,
     comments: Vec<Comment>,
-    last_comment: u32,
+    last_comment: CommentId,
     maps: HashMap<String, SharedMap>,
 }
 
 struct SharedMap {
     by: PeerId,
     bytes: Bytes,
-    generation: u32,
+    generation: GenerationId,
     edits: Vec<(PeerId, MapEdit)>,
 }
 
@@ -182,9 +184,9 @@ impl Shared {
         };
 
         let mut state = self.state.lock().unwrap();
-        state.last_comment += 1;
+        state.last_comment = state.last_comment.next();
         let comment = Comment {
-            id: CommentId(state.last_comment),
+            id: state.last_comment,
             author,
             map,
             z,
@@ -213,7 +215,10 @@ impl Shared {
 
     fn share_map(&self, by: PeerId, path: String, bytes: Bytes) {
         let mut state = self.state.lock().unwrap();
-        let generation = state.maps.get(&path).map_or(1, |map| map.generation + 1);
+        let generation = state
+            .maps
+            .get(&path)
+            .map_or(GenerationId(1), |map| map.generation.next());
         for (id, peer) in state.peers.iter() {
             let _ = peer.outbox.send(ServerMessage::MapShared {
                 path: path.clone(),
@@ -248,15 +253,45 @@ impl Shared {
             return;
         };
 
+        let seq = SeqId(map.edits.len() as u32);
         for peer in peers.values() {
-            let _ = peer.outbox.send(ServerMessage::Edit { by, edit: edit.clone() });
+            let _ = peer.outbox.send(ServerMessage::Edit {
+                by,
+                seq,
+                edit: edit.clone(),
+            });
         }
 
         map.edits.push((by, edit));
     }
+
+    fn resync(&self, id: PeerId, path: &str) {
+        let state = self.state.lock().unwrap();
+        let (Some(peer), Some(map)) = (state.peers.get(&id), state.maps.get(path)) else {
+            return;
+        };
+
+        replay(&peer.outbox, &peer.connection, path, map);
+    }
 }
 
-async fn push_map(connection: Connection, path: String, generation: u32, bytes: Bytes) {
+fn replay(outbox: &mpsc::UnboundedSender<ServerMessage>, connection: &Connection, path: &str, map: &SharedMap) {
+    tokio::spawn(push_map(
+        connection.clone(),
+        path.to_owned(),
+        map.generation,
+        map.bytes.clone(),
+    ));
+    for (seq, (by, edit)) in map.edits.iter().enumerate() {
+        let _ = outbox.send(ServerMessage::Edit {
+            by: *by,
+            seq: SeqId(seq as u32),
+            edit: edit.clone(),
+        });
+    }
+}
+
+async fn push_map(connection: Connection, path: String, generation: GenerationId, bytes: Bytes) {
     if let Err(e) = send_transfer(&connection, &Transfer::Map { path, generation }, &bytes).await {
         log::debug!("could not send a map to {}: {e}", connection.remote_address());
     }
@@ -364,18 +399,7 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
                 by: map.by,
                 generation: map.generation,
             });
-            tokio::spawn(push_map(
-                connection.clone(),
-                path.clone(),
-                map.generation,
-                map.bytes.clone(),
-            ));
-            for (by, edit) in &map.edits {
-                let _ = outbox.send(ServerMessage::Edit {
-                    by: *by,
-                    edit: edit.clone(),
-                });
-            }
+            replay(&outbox, connection, path, map);
         }
 
         state.peers.insert(
@@ -405,6 +429,7 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
                     Some(ClientMessage::Comment { map, z, pos, text }) => shared.comment(id, map, z, pos, &text),
                     Some(ClientMessage::DeleteComment(comment)) => shared.delete_comment(comment),
                     Some(ClientMessage::Edit(edit)) => shared.edit(id, edit),
+                    Some(ClientMessage::Resync { path }) => shared.resync(id, &path),
                     None => return Ok(()),
                 },
                 datagram = connection.read_datagram() => shared.relay(id, &datagram.map_err(fail)?),

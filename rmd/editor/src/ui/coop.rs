@@ -237,9 +237,10 @@ pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
             ui.separator();
             ui.text("Shared maps");
             for (path, shared) in &coop.shared {
+                let closed = if shared.closed { " (closed)" } else { "" };
                 match coop.nick_of(shared.by) {
-                    Some(nick) => ui.text(format!("{path} (from {nick})")),
-                    None => ui.text(path),
+                    Some(nick) => ui.text(format!("{path} (from {nick}){closed}")),
+                    None => ui.text(format!("{path}{closed}")),
                 }
             }
         }

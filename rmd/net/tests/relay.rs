@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use net::{Client, CodebaseId, Cursor, Event, MapEdit, Server, ServerConfig};
+use net::{Client, CodebaseId, Cursor, Event, GenerationId, MapEdit, SeqId, Server, ServerConfig};
 
 const PASSWORD: &str = "hunter2";
 
@@ -276,7 +276,7 @@ fn edits_reach_everyone_and_replay_for_late_joiners_until_the_map_is_shared_agai
         Event::MapShared { generation, .. } => Some(generation),
         _ => None,
     });
-    assert_eq!(generation, 1);
+    assert_eq!(generation, GenerationId(1));
 
     let edit = |generation, patch: &str| MapEdit {
         path: String::from("_maps/test.dmm"),
@@ -284,15 +284,16 @@ fn edits_reach_everyone_and_replay_for_late_joiners_until_the_map_is_shared_agai
         coords: vec![[1, 1, 1]],
         patch: String::from(patch),
     };
-    bob.send_edit(edit(0, "stale"));
-    bob.send_edit(edit(1, "fresh"));
+    bob.send_edit(edit(GenerationId(0), "stale"));
+    bob.send_edit(edit(GenerationId(1), "fresh"));
     for client in [&alice, &bob] {
-        let (by, received) = wait_for(client, |event| match event {
-            Event::Edit { by, edit } => Some((by, edit)),
+        let (by, seq, received) = wait_for(client, |event| match event {
+            Event::Edit { by, seq, edit } => Some((by, seq, edit)),
             _ => None,
         });
         assert_eq!(by, bob_id);
-        assert_eq!(received, edit(1, "fresh"));
+        assert_eq!(seq, SeqId(0));
+        assert_eq!(received, edit(GenerationId(1), "fresh"));
     }
 
     let carol = join(&server, PASSWORD, "carol");
@@ -300,14 +301,14 @@ fn edits_reach_everyone_and_replay_for_late_joiners_until_the_map_is_shared_agai
         Event::Edit { edit, .. } => Some(edit),
         _ => None,
     });
-    assert_eq!(replayed, edit(1, "fresh"));
+    assert_eq!(replayed, edit(GenerationId(1), "fresh"));
 
     alice.share_map(String::from("_maps/test.dmm"), b"map again".to_vec());
     let generation = wait_for(&carol, |event| match event {
         Event::MapShared { generation, .. } => Some(generation),
         _ => None,
     });
-    assert_eq!(generation, 2);
+    assert_eq!(generation, GenerationId(2));
 
     let dave = join(&server, PASSWORD, "dave");
     wait_for(&dave, |event| match event {
@@ -315,4 +316,50 @@ fn edits_reach_everyone_and_replay_for_late_joiners_until_the_map_is_shared_agai
         Event::Edit { .. } => panic!("the log was not reset"),
         _ => None,
     });
+}
+
+#[test]
+fn a_resync_sends_the_snapshot_and_the_numbered_log_again() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
+    let bob = join(&server, PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    let path = String::from("_maps/test.dmm");
+    alice.share_map(path.clone(), b"map".to_vec());
+    wait_for(&bob, |event| matches!(event, Event::MapSnapshot { .. }).then_some(()));
+
+    let edit = |patch: &str| MapEdit {
+        path: path.clone(),
+        generation: GenerationId(1),
+        coords: vec![[1, 1, 1]],
+        patch: String::from(patch),
+    };
+    bob.send_edit(edit("first"));
+    bob.send_edit(edit("second"));
+    wait_for(&bob, |event| {
+        matches!(event, Event::Edit { seq: SeqId(1), .. }).then_some(())
+    });
+
+    bob.resync(path.clone());
+    let mut snapshot = None;
+    let mut replayed = Vec::new();
+    while snapshot.is_none() || replayed.len() < 2 {
+        let event = wait_for(&bob, |event| match event {
+            Event::MapSnapshot { .. } | Event::Edit { .. } => Some(event),
+            _ => None,
+        });
+
+        match event {
+            Event::MapSnapshot { generation, bytes, .. } => snapshot = Some((generation, bytes)),
+            Event::Edit { seq, edit, .. } => replayed.push((seq, edit.patch)),
+            _ => unreachable!(),
+        }
+    }
+    assert_eq!(snapshot, Some((GenerationId(1), b"map".to_vec())));
+    assert_eq!(
+        replayed,
+        [(SeqId(0), String::from("first")), (SeqId(1), String::from("second"))]
+    );
 }
