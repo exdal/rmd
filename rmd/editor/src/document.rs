@@ -327,6 +327,7 @@ impl MapDocument {
                 continue;
             }
 
+            self.retained_level_count = self.retained_level_count.max(coord.z);
             let placed = tile.into_iter().map(|prefab| self.instantiate(prefab)).collect();
             edit.change(self, coord, placed);
         }
@@ -848,6 +849,10 @@ impl MapDocument {
         self.instances.truncate_levels(level_count);
         self.map.grid.truncate(level_count as usize);
         self.map.size.z = level_count;
+        if let Some(journal) = self.journal.as_mut() {
+            journal.reshaped = true;
+        }
+
         self.generation += 1;
         if self.z > level_count {
             self.z = level_count.max(1);
@@ -1656,6 +1661,45 @@ mod tests {
         assert_eq!(document.map.size.z, 3);
         assert_eq!(document.z, 3);
         assert!(!document.is_dirty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn removing_appended_levels_on_save_reshapes_the_journal() {
+        let dir = std::env::temp_dir().join(format!("rmd-journal-levels-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let target = dir.join("map.dmm");
+        let mut document = MapDocument::new(shared_tile_map(), 2);
+        let fill = [Prefab::new(TreePath::parse("/turf"))];
+        assert_eq!(document.append_level(&fill), Some(3));
+        document.start_journal();
+
+        document.save_as(&target, dmm::MapFormat::Standard).expect("save");
+
+        assert_eq!(document.map.size.z, 2);
+        assert!(document.take_journal().is_some_and(|journal| journal.reshaped));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_retains_appended_levels_with_remote_edits() {
+        let dir = std::env::temp_dir().join(format!("rmd-remote-levels-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let target = dir.join("map.dmm");
+        let mut document = MapDocument::new(shared_tile_map(), 2);
+        let fill = [Prefab::new(TreePath::parse("/turf"))];
+        assert_eq!(document.append_level(&fill), Some(3));
+
+        let marker = vec![Prefab::new(TreePath::parse("/obj/marker"))];
+        document.apply_remote(vec![(Coord::new(1, 1, 3), marker)]);
+        document.save_as(&target, dmm::MapFormat::Standard).expect("save");
+
+        let (written, errors) = dmm::parser::parse(&std::fs::read_to_string(&target).expect("written map"));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(written.size.z, 3);
+        assert_eq!(document.map.size.z, 3);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
