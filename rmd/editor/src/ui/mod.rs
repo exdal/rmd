@@ -768,11 +768,12 @@ impl UiState {
             }
         }
 
-        let (map_views, picking) = if session.state.is_empty() {
-            (Vec::new(), None)
+        let (map_views, picking, coop_cursor) = if session.state.is_empty() {
+            (Vec::new(), None, None)
         } else {
             self.draw_map_views(ui, session, settings, refit)
         };
+        session.coop_cursor(coop_cursor);
         self.edit_command = None;
 
         self.dm_ui.draw(ui, session, root.raw());

@@ -119,6 +119,7 @@ impl RectangleUiHarness {
 
                 refit_requested: false,
                 keep_open: &mut true,
+                coop_cursor: &mut None,
             },
         );
 

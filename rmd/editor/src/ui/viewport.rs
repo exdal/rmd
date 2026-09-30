@@ -248,6 +248,7 @@ pub(super) struct MapViewDraw<'a> {
 
     pub(super) refit_requested: bool,
     pub(super) keep_open: &'a mut bool,
+    pub(super) coop_cursor: &'a mut Option<net::Cursor>,
 }
 
 impl MapViewState {
@@ -370,9 +371,10 @@ fn panel_extent(available: [f32; 2]) -> ([f32; 2], (u32, u32)) {
 impl UiState {
     pub(super) fn draw_map_views(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, refit_active: bool,
-    ) -> (Vec<VisibleMapView>, Option<usize>) {
+    ) -> (Vec<VisibleMapView>, Option<usize>, Option<net::Cursor>) {
         let mut closing = None;
         let mut visible = Vec::new();
+        let mut coop_cursor = None;
 
         for (&id, view) in &mut self.map_views {
             if view.rectangle_gesture.is_some_and(|gesture| {
@@ -430,6 +432,7 @@ impl UiState {
 
                     refit_requested: refit,
                     keep_open: &mut keep_open,
+                    coop_cursor: &mut coop_cursor,
                 },
             );
 
@@ -462,7 +465,7 @@ impl UiState {
 
         let picking = visible.iter().position(|view| view.interaction.cursor.is_some());
 
-        (visible, picking)
+        (visible, picking, coop_cursor)
     }
 
     fn mirror_active_camera(&mut self, session: &mut Session) {
@@ -493,6 +496,7 @@ impl UiState {
 
             refit_requested,
             keep_open,
+            coop_cursor,
         } = draw;
         session.hide_block_preview(id);
         let Some(name) = session.state.document(id).map(MapDocument::title) else {
@@ -839,11 +843,11 @@ impl UiState {
             *hovered_coord = pointed_coord;
             if is_active && let Some(map) = session.coop_map_path(id) {
                 let pointer = (image_hovered && !over_overlay).then_some(mouse).and_then(in_viewport);
-                session.coop_cursor(pointer.map(|cursor| net::Cursor {
+                *coop_cursor = pointer.map(|cursor| net::Cursor {
                     map,
                     z: session.z(),
                     pos: camera.screen_to_map(cursor),
-                }));
+                });
             }
             let hovered_conflict = pointed_coord.and_then(|coord| {
                 session
@@ -1965,6 +1969,69 @@ mod tests {
             restore_rectangle_gesture,
         },
     };
+
+    fn open_blank_map(session: &mut Session, path: PathBuf) -> DocumentId {
+        session.apply_map(crate::loader::LoadedMap {
+            path,
+            map: dmm::Map::new(Size { x: 20, y: 20, z: 1 }),
+            z: 1,
+            errors: vec![],
+            repo: None,
+            conflict: None,
+        });
+
+        session.state.active().unwrap()
+    }
+
+    fn cursor_frame(
+        context: &mut dear_imgui_rs::Context, state: &mut super::UiState, session: &mut Session,
+        settings: &mut Settings,
+    ) -> Option<net::Cursor> {
+        context.io_mut().add_mouse_pos_event([400.0, 300.0]);
+        let ui = context.frame();
+        for id in session.state.document_ids() {
+            let name = format!("###viewport-{}", id.get());
+            ui.set_window_pos_by_name(&name, [0.0; 2]);
+            ui.set_window_size_by_name(&name, [800.0, 600.0]);
+        }
+
+        let (_, _, cursor) = state.draw_map_views(ui, session, settings, false);
+        assert!(context.render_legacy().valid());
+
+        cursor
+    }
+
+    #[test]
+    fn the_coop_cursor_clears_when_a_map_outside_the_codebase_takes_over() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut session = Session::new();
+        session
+            .load_environment(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme"))
+            .unwrap();
+        let file = session.codebase_dir().unwrap().join("_maps/cursor.dmm");
+        let shared = open_blank_map(&mut session, file);
+        let outside = open_blank_map(&mut session, std::env::temp_dir().join("rmd-cursor-outside.dmm"));
+
+        let mut context = rectangle_context();
+        let mut state = super::UiState::new(false).unwrap();
+        let mut settings = Settings::default();
+        cursor_frame(&mut context, &mut state, &mut session, &mut settings);
+
+        let mut focus = |state: &mut super::UiState, session: &mut Session, id| {
+            state.map_views.get_mut(&id).unwrap().focus = true;
+            (0..3)
+                .map(|_| cursor_frame(&mut context, state, session, &mut settings))
+                .last()
+                .flatten()
+        };
+
+        let cursor = focus(&mut state, &mut session, shared);
+        assert_eq!(session.state.active(), Some(shared));
+        assert_eq!(cursor.map(|cursor| cursor.map).as_deref(), Some("_maps/cursor.dmm"));
+
+        assert_eq!(focus(&mut state, &mut session, outside), None);
+        assert_eq!(session.state.active(), Some(outside));
+    }
 
     #[test]
     fn clicking_a_blamed_tile_opens_a_popup_without_placing_a_tile() {
