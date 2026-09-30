@@ -3,6 +3,8 @@ mod server;
 mod stream;
 mod tls;
 
+use std::{error, fmt};
+
 pub use protocol::coop::{
     CodebaseId,
     Comment,
@@ -16,6 +18,7 @@ pub use protocol::coop::{
     SeqId,
     is_map_path,
 };
+use tokio::runtime::{Builder, Runtime};
 
 pub use crate::{
     client::{Client, Event},
@@ -25,17 +28,12 @@ pub use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error(pub String);
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.0) }
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.0) }
 }
 
-impl std::error::Error for Error {}
+impl error::Error for Error {}
 
-pub(crate) fn fail(error: impl std::fmt::Display) -> Error { Error(error.to_string()) }
+pub(crate) fn fail(error: impl fmt::Display) -> Error { Error(error.to_string()) }
 
-pub(crate) fn runtime() -> Result<tokio::runtime::Runtime, Error> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(fail)
-}
+pub(crate) fn runtime() -> Result<Runtime, Error> { Builder::new_current_thread().enable_all().build().map_err(fail) }

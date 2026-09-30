@@ -1,3 +1,5 @@
+use std::env;
+
 use dear_imgui_rs::{Key, Ui};
 use editor::{document::DocumentId, icons::materialdesignicons::ICON_CLOSE};
 use net::{Comment, CommentId, MAX_COMMENT_LEN, PeerId};
@@ -10,7 +12,7 @@ use super::{
 };
 use crate::{
     camera::Controller,
-    session::{Coop, CoopStatus, Session},
+    session::{Coop, CoopStatus, Session, SharedMap, SharedState},
     settings::Settings,
 };
 
@@ -65,8 +67,8 @@ impl CoopDialog {
     pub(super) fn new(kind: CoopDialogKind, settings: &Settings) -> Self {
         let nick = Some(settings.coop.nick.clone())
             .filter(|nick| !nick.is_empty())
-            .or_else(|| std::env::var("USER").ok())
-            .or_else(|| std::env::var("USERNAME").ok())
+            .or_else(|| env::var("USER").ok())
+            .or_else(|| env::var("USERNAME").ok())
             .unwrap_or_default();
 
         Self {
@@ -188,6 +190,14 @@ pub(super) fn draw_coop_dialog(
     }
 }
 
+pub(super) fn shared_map_note(shared: &SharedMap) -> &'static str {
+    match shared.state {
+        SharedState::Closed => " (closed)",
+        SharedState::Resyncing => " (syncing)",
+        SharedState::Loading | SharedState::Ready => "",
+    }
+}
+
 pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
     let (color, label) = match &coop.status {
         CoopStatus::Hashing => (PENDING_COLOR, String::from("Co-op: reading codebase...")),
@@ -237,10 +247,10 @@ pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
             ui.separator();
             ui.text("Shared maps");
             for (path, shared) in &coop.shared {
-                let closed = if shared.closed { " (closed)" } else { "" };
+                let note = shared_map_note(shared);
                 match coop.nick_of(shared.by) {
-                    Some(nick) => ui.text(format!("{path} (from {nick}){closed}")),
-                    None => ui.text(format!("{path}{closed}")),
+                    Some(nick) => ui.text(format!("{path} (from {nick}){note}")),
+                    None => ui.text(format!("{path}{note}")),
                 }
             }
         }

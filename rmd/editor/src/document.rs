@@ -73,6 +73,7 @@ pub struct MapDocument {
     retained_level_count: u32,
     generation: u64,
     journal: Option<Journal>,
+    read_only: bool,
 }
 
 /// journal of local edits touched since it was last taken
@@ -301,10 +302,15 @@ impl MapDocument {
             retained_level_count: level_count,
             generation: 0,
             journal: None,
+            read_only: false,
         }
     }
 
     pub fn start_journal(&mut self) { self.journal.get_or_insert_default(); }
+
+    pub fn set_read_only(&mut self, read_only: bool) { self.read_only = read_only; }
+
+    pub fn is_read_only(&self) -> bool { self.read_only }
 
     pub fn is_journaling(&self) -> bool { self.journal.is_some() }
 
@@ -650,12 +656,14 @@ impl MapDocument {
 
     pub fn focus(&self) -> Option<&AreaFocus> { self.focus.as_ref() }
 
-    pub fn allows_edit_at(&self, coord: Coord) -> bool { self.focus.as_ref().is_none_or(|focus| focus.allows(coord)) }
+    pub fn allows_edit_at(&self, coord: Coord) -> bool {
+        !self.read_only && self.focus.as_ref().is_none_or(|focus| focus.allows(coord))
+    }
 
     pub fn apply(&mut self, edit: Edit) -> bool { self.apply_grouped(edit, None) }
 
     pub fn apply_grouped(&mut self, edit: Edit, group: Option<EditGroupId>) -> bool {
-        if self.focus.as_ref().is_some_and(|focus| !focus.allows_edit(&edit)) {
+        if self.read_only || self.focus.as_ref().is_some_and(|focus| !focus.allows_edit(&edit)) {
             return false;
         }
 
@@ -678,6 +686,10 @@ impl MapDocument {
     pub fn undo(&mut self) -> bool { self.undo_with_affected().is_some() }
 
     pub fn undo_with_affected(&mut self) -> Option<Vec<PrefabInstanceId>> {
+        if self.read_only {
+            return None;
+        }
+
         let replaced = self
             .history
             .next_undo()
@@ -700,6 +712,10 @@ impl MapDocument {
     pub fn redo(&mut self) -> bool { self.redo_with_affected().is_some() }
 
     pub fn redo_with_affected(&mut self) -> Option<Vec<PrefabInstanceId>> {
+        if self.read_only {
+            return None;
+        }
+
         let replaced = self
             .history
             .next_redo()
@@ -732,6 +748,10 @@ impl MapDocument {
     pub fn redo_label(&self) -> Option<&str> { self.history.redo_label() }
 
     pub fn append_level(&mut self, tile: &[Prefab]) -> Option<u32> {
+        if self.read_only {
+            return None;
+        }
+
         let z = self.map.size.z.checked_add(1)?;
         let key = self.map.intern_tile(tile.to_vec());
         let width = self.map.size.x as usize;
@@ -1193,6 +1213,38 @@ mod tests {
                 .and_then(|(prefab, _)| prefab.var(&"name".into())),
             Some(&core::types::Value::Text("selected".into())),
         );
+    }
+
+    #[test]
+    fn a_read_only_document_refuses_local_edits_but_takes_remote_ones() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        let coord = Coord::new(1, 1, 1);
+        let id = document.instance_ids_at(coord)[1];
+        let top = |document: &MapDocument| {
+            document
+                .prefab_instance(document.instance_ids_at(coord)[0])
+                .map(|(prefab, _)| prefab.path.to_string())
+        };
+        assert_eq!(
+            document.set_instance_var(id, "name".into(), core::types::Value::Text("before".into())),
+            Some(true),
+        );
+
+        document.set_read_only(true);
+        assert!(!document.allows_edit_at(coord));
+        assert_eq!(
+            document.set_instance_var(id, "name".into(), core::types::Value::Text("after".into())),
+            Some(false),
+        );
+        assert!(!document.resize(3, 1, &[]));
+        assert!(document.append_level(&[]).is_none());
+        assert!(!document.undo());
+
+        document.apply_remote(vec![(coord, vec![Prefab::new(TreePath::parse("/turf/wall"))])]);
+        assert_eq!(top(&document).as_deref(), Some("/turf/wall"));
+
+        document.replace_map(shared_tile_map(), false);
+        assert!(!document.is_read_only());
     }
 
     #[test]

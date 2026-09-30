@@ -114,6 +114,8 @@ impl FrameReader {
 
 #[cfg(test)]
 mod tests {
+    use std::slice;
+
     use super::*;
 
     fn framed(payloads: &[&[u8]]) -> Vec<u8> {
@@ -143,7 +145,7 @@ mod tests {
         let mut frames = Vec::new();
 
         for byte in &bytes {
-            reader.push(std::slice::from_ref(byte));
+            reader.push(slice::from_ref(byte));
             while let Some(frame) = reader.next_frame().unwrap() {
                 frames.push(frame.to_vec());
             }

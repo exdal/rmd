@@ -1,13 +1,16 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
+    fs,
+    mem,
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::mpsc,
+    thread,
     time::Instant,
 };
 
-use dmm::Coord;
-use editor::{document::DocumentId, tool::Tool};
+use dmm::{Coord, error::MapError, parser, writer};
+use editor::{document::DocumentId, git, patch, tool::Tool};
 use net::{
     Client,
     CodebaseId,
@@ -94,11 +97,19 @@ pub(crate) struct Coop {
     last_poll: Instant,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SharedState {
+    // no copy loaded yet, or our own share waiting for the server to number it
+    Loading,
+    Ready,
+    Closed,
+    Resyncing,
+}
+
 pub(crate) struct SharedMap {
     pub by: PeerId,
-    pub closed: bool,
+    pub state: SharedState,
     generation: GenerationId,
-    loaded_generation: Option<GenerationId>,
     // edits from the server by seq, applied in order once our copy of the map is loaded
     inbox: BTreeMap<SeqId, (PeerId, MapEdit)>,
     next_seq: SeqId,
@@ -110,20 +121,18 @@ impl SharedMap {
     fn new(by: PeerId, generation: GenerationId) -> Self {
         Self {
             by,
-            closed: false,
+            state: SharedState::Loading,
             generation,
-            loaded_generation: None,
             inbox: BTreeMap::new(),
             next_seq: SeqId(0),
             in_flight: HashMap::new(),
         }
     }
 
-    fn is_ready(&self) -> bool { self.loaded_generation == Some(self.generation) }
+    fn is_ready(&self) -> bool { self.state == SharedState::Ready }
 
-    fn restart(&mut self, closed: bool) {
-        self.closed = closed;
-        self.loaded_generation = None;
+    fn restart(&mut self, state: SharedState) {
+        self.state = state;
         self.inbox.clear();
         self.next_seq = SeqId(0);
         self.in_flight.clear();
@@ -140,7 +149,7 @@ pub(crate) struct ReceivedMap {
     generation: GenerationId,
     file: PathBuf,
     map: dmm::Map,
-    errors: Vec<dmm::error::MapError>,
+    errors: Vec<MapError>,
     modified: bool,
 }
 
@@ -188,8 +197,8 @@ impl Coop {
         };
 
         let prepared = self.prepared.0.clone();
-        std::thread::spawn(move || {
-            let modified = std::fs::read(&file).map_or(true, |disk| disk != bytes);
+        thread::spawn(move || {
+            let modified = fs::read(&file).map_or(true, |disk| disk != bytes);
             let text = match String::from_utf8(bytes) {
                 Ok(text) => text,
                 Err(e) => {
@@ -198,7 +207,7 @@ impl Coop {
                 },
             };
 
-            let (map, errors) = dmm::parser::parse(&text);
+            let (map, errors) = parser::parse(&text);
             let _ = prepared.send(Prepared::Snapshot(ReceivedMap {
                 path,
                 generation,
@@ -248,7 +257,7 @@ impl Coop {
 
                 shared.by = by;
                 if Some(by) == self.you {
-                    shared.loaded_generation = Some(generation);
+                    shared.state = SharedState::Ready;
                 }
             },
             Event::MapSnapshot {
@@ -257,11 +266,11 @@ impl Coop {
                 bytes,
             } => self.receive_map(path, generation, bytes, codebase),
             Event::Edit { by, seq, edit } => {
-                if let Some(shared) = self
-                    .shared
-                    .get_mut(&edit.path)
-                    .filter(|shared| shared.generation == edit.generation && !shared.closed && seq >= shared.next_seq)
-                {
+                if let Some(shared) = self.shared.get_mut(&edit.path).filter(|shared| {
+                    shared.generation == edit.generation
+                        && shared.state != SharedState::Closed
+                        && seq >= shared.next_seq
+                }) {
                     shared.inbox.insert(seq, (by, edit));
                 }
             },
@@ -310,7 +319,7 @@ impl Session {
         self.leave_coop();
 
         let (sender, codebase) = mpsc::channel();
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             let codebase = environment
                 .fingerprint()
                 .map(|hash| CodebaseId {
@@ -349,9 +358,10 @@ impl Session {
     pub fn leave_coop(&mut self) {
         // a server waits for its peers to hear the close, keep that off the frame
         if let Some(server) = self.coop.take().and_then(|mut coop| coop.server.take()) {
-            std::thread::spawn(move || drop(server));
+            thread::spawn(move || drop(server));
         }
 
+        self.lock_resyncing_documents();
         self.drop_comment_tool();
     }
 
@@ -433,7 +443,7 @@ impl Session {
         let waiting = self
             .coop
             .as_mut()
-            .map(|coop| std::mem::take(&mut coop.skipped))
+            .map(|coop| mem::take(&mut coop.skipped))
             .unwrap_or_default();
         for received in waiting.into_values() {
             self.open_shared_map(received);
@@ -463,24 +473,48 @@ impl Session {
         let mut closed = Vec::new();
         let mut reopened = Vec::new();
         for (path, shared) in &coop.shared {
-            let open = self.shared_document(path).is_some();
-            if shared.is_ready() && !open {
-                closed.push(path.clone());
-            } else if shared.closed && open {
-                reopened.push(path.clone());
+            match (shared.state, self.shared_document(path).is_some()) {
+                (SharedState::Ready, false) => closed.push(path.clone()),
+                (SharedState::Closed, true) => reopened.push(path.clone()),
+                _ => {},
             }
         }
 
         if let Some(coop) = self.coop.as_mut() {
             for path in &closed {
                 if let Some(shared) = coop.shared.get_mut(path) {
-                    shared.restart(true);
+                    shared.restart(SharedState::Closed);
                 }
             }
         }
 
         for path in reopened {
             self.resync_coop_map(&path);
+        }
+
+        self.lock_resyncing_documents();
+    }
+
+    fn lock_resyncing_documents(&mut self) {
+        let locks = self
+            .state
+            .document_ids()
+            .into_iter()
+            .map(|id| {
+                let resyncing = self
+                    .coop_map_path(id)
+                    .zip(self.coop.as_ref())
+                    .and_then(|(path, coop)| coop.shared.get(&path))
+                    .is_some_and(|shared| shared.state == SharedState::Resyncing);
+
+                (id, resyncing)
+            })
+            .collect::<Vec<_>>();
+
+        for (id, resyncing) in locks {
+            if let Some(document) = self.state.document_mut(id) {
+                document.set_read_only(resyncing);
+            }
         }
     }
 
@@ -491,7 +525,7 @@ impl Session {
             .coop
             .as_ref()
             .and_then(|coop| coop.shared.get(path))
-            .is_some_and(|shared| shared.closed)
+            .is_some_and(|shared| shared.state == SharedState::Closed)
         {
             self.resync_coop_map(path);
         }
@@ -506,7 +540,7 @@ impl Session {
             return;
         };
 
-        shared.restart(false);
+        shared.restart(SharedState::Resyncing);
         // the snapshot replaces whatever copy is open, unsaved or not
         coop.received.insert(path.to_owned());
         if let Some(client) = coop.client.as_ref() {
@@ -533,7 +567,7 @@ impl Session {
         }
 
         for (path, by, edit) in incoming {
-            let tiles = match editor::patch::decode(&edit.patch, edit.coords.len()) {
+            let tiles = match patch::decode(&edit.patch, edit.coords.len()) {
                 Ok(tiles) => tiles,
                 Err(e) => {
                     log::warn!("{path}: dropping an edit that does not parse: {e}");
@@ -609,7 +643,7 @@ impl Session {
             let Some((coords, patch)) = self
                 .state
                 .document(id)
-                .and_then(|document| editor::patch::encode(&document.map, journal.coords))
+                .and_then(|document| patch::encode(&document.map, journal.coords))
             else {
                 continue;
             };
@@ -664,13 +698,13 @@ impl Session {
 
         // hold back new edits until the server numbers this share
         if let Some(shared) = coop.shared.get_mut(&path) {
-            shared.loaded_generation = None;
+            shared.state = SharedState::Loading;
         }
 
         let map = document.map.clone();
         let prepared = coop.prepared.0.clone();
-        std::thread::spawn(move || {
-            let bytes = dmm::writer::write(&map).into_bytes();
+        thread::spawn(move || {
+            let bytes = writer::write(&map).into_bytes();
             let _ = prepared.send(Prepared::Upload { path, bytes });
         });
     }
@@ -708,12 +742,16 @@ impl Session {
             return;
         }
 
-        shared.generation = generation;
-        shared.loaded_generation = Some(generation);
+        // the snapshot of a new share can beat its announcement, the old generation's edits don't apply to it
+        if generation > shared.generation {
+            *shared = SharedMap::new(shared.by, generation);
+        }
+
+        shared.state = SharedState::Ready;
         shared.in_flight.clear();
         coop.received.insert(path);
 
-        let repo = self.git_enabled.then(|| editor::git::discover(&file)).flatten();
+        let repo = self.git_enabled.then(|| git::discover(&file)).flatten();
         let loaded = LoadedMap {
             path: file.clone(),
             map,
@@ -770,12 +808,16 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use core::path::TreePath;
     use std::{
+        env,
+        process,
         sync::Arc,
         time::{Duration, Instant},
     };
 
-    use editor::Environment;
+    use dmm::Prefab;
+    use editor::{Environment, command::Edit};
     use objtree::ObjectTree;
 
     use super::*;
@@ -795,7 +837,7 @@ mod tests {
                 session.poll_coop();
             }
 
-            std::thread::sleep(Duration::from_millis(5));
+            thread::sleep(Duration::from_millis(5));
         }
     }
 
@@ -911,11 +953,11 @@ mod tests {
     }
 
     fn codebase_with_map(name: &str, rows: &str) -> (PathBuf, Session) {
-        let dir = std::env::temp_dir().join(format!("rmd-coop-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("_maps")).unwrap();
-        std::fs::write(dir.join("game.dme"), "").unwrap();
-        std::fs::write(
+        let dir = env::temp_dir().join(format!("rmd-coop-{name}-{}", process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("_maps")).unwrap();
+        fs::write(dir.join("game.dme"), "").unwrap();
+        fs::write(
             dir.join("_maps/a.dmm"),
             format!("\"a\" = (/turf,/area)\n\n(1,1,1) = {{\"\n{rows}\n\"}}\n"),
         )
@@ -928,8 +970,8 @@ mod tests {
     }
 
     fn open_local(session: &mut Session, file: PathBuf) -> DocumentId {
-        let text = std::fs::read_to_string(&file).unwrap();
-        let (map, errors) = dmm::parser::parse(&text);
+        let text = fs::read_to_string(&file).unwrap();
+        let (map, errors) = parser::parse(&text);
         assert!(errors.is_empty());
         session.apply_map(LoadedMap {
             path: file.clone(),
@@ -991,18 +1033,18 @@ mod tests {
         assert!(received.is_dirty());
         assert!(guest.coop().unwrap().skipped.is_empty());
 
-        let _ = std::fs::remove_dir_all(&host_dir);
-        let _ = std::fs::remove_dir_all(&guest_dir);
+        let _ = fs::remove_dir_all(&host_dir);
+        let _ = fs::remove_dir_all(&guest_dir);
     }
 
     fn paint(session: &mut Session, file: &Path, coord: Coord, path: &str) {
         let id = session.state.document_for_path(file).unwrap();
         let document = session.state.document_mut(id).unwrap();
         let mut tile = document.map.tile_at(coord).cloned().unwrap();
-        tile.insert(0, dmm::Prefab::new(core::path::TreePath::parse(path)));
+        tile.insert(0, Prefab::new(TreePath::parse(path)));
 
         let placed = tile.into_iter().map(|prefab| document.instantiate(prefab)).collect();
-        let mut edit = editor::command::Edit::new("paint");
+        let mut edit = Edit::new("paint");
         edit.change(document, coord, placed);
         assert!(document.apply(edit));
     }
@@ -1104,7 +1146,7 @@ mod tests {
         });
 
         for dir in [host_dir, guest_dir, late_dir] {
-            let _ = std::fs::remove_dir_all(dir);
+            let _ = fs::remove_dir_all(dir);
         }
     }
 
@@ -1140,7 +1182,7 @@ mod tests {
 
         guest.close_map(guest.state.document_for_path(&guest_file).unwrap());
         poll_until(&mut [&mut host, &mut guest], |sessions| {
-            sessions[1].coop().unwrap().shared["_maps/a.dmm"].closed
+            sessions[1].coop().unwrap().shared["_maps/a.dmm"].state == SharedState::Closed
         });
 
         paint(&mut host, &host_file, right, "/obj/missed");
@@ -1161,17 +1203,22 @@ mod tests {
         guest.close_map(guest.state.document_for_path(&guest_file).unwrap());
         paint(&mut host, &host_file, right, "/obj/missed_again");
         poll_until(&mut [&mut host, &mut guest], |sessions| {
-            settled(sessions) && sessions[1].coop().unwrap().shared["_maps/a.dmm"].closed
+            settled(sessions) && sessions[1].coop().unwrap().shared["_maps/a.dmm"].state == SharedState::Closed
         });
 
-        open_local(&mut guest, guest_file.clone());
+        let reopened = open_local(&mut guest, guest_file.clone());
+        guest.poll_coop();
+        assert!(guest.state.document(reopened).unwrap().is_read_only());
+        assert!(!guest.can_edit_at(left));
+
         poll_until(&mut [&mut host, &mut guest], |sessions| {
             settled(sessions) && top(sessions[1], &guest_file, right).as_deref() == Some("/obj/missed_again")
         });
         assert_eq!(top(&guest, &guest_file, left).as_deref(), Some("/obj/after"));
+        assert!(!guest.state.document(reopened).unwrap().is_read_only());
 
         for dir in [host_dir, guest_dir] {
-            let _ = std::fs::remove_dir_all(dir);
+            let _ = fs::remove_dir_all(dir);
         }
     }
 

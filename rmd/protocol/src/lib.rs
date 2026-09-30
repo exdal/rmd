@@ -1,6 +1,8 @@
 pub mod coop;
 pub mod frame;
 
+use std::{error, fmt};
+
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub use crate::frame::{FrameReader, MAX_FRAME_LEN, encode_frame, split_frame, write_frame};
@@ -64,8 +66,8 @@ pub enum Error {
     WrongService { expected: Service, got: Service },
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Codec(e) => write!(f, "malformed message: {e}"),
             Self::FrameTooLarge { len, max } => write!(f, "frame of {len} bytes exceeds the {max} byte limit"),
@@ -79,7 +81,7 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl error::Error for Error {}
 
 impl From<postcard::Error> for Error {
     fn from(e: postcard::Error) -> Self { Self::Codec(e) }

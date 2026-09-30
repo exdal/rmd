@@ -1,5 +1,6 @@
 use std::{
     net::{Ipv4Addr, SocketAddr},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -35,7 +36,7 @@ fn wait_for<T>(client: &Client, mut matches: impl FnMut(Event) -> Option<T>) -> 
         }
 
         assert!(Instant::now() < deadline, "timed out waiting for an event");
-        std::thread::sleep(Duration::from_millis(5));
+        thread::sleep(Duration::from_millis(5));
     }
 }
 
@@ -89,7 +90,7 @@ fn cursors_reach_the_other_peers_stamped_with_the_sender() {
         }
 
         assert!(Instant::now() < deadline, "no cursor arrived");
-        std::thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(20));
     };
     assert_eq!(received.0, alice_id);
     assert_eq!(

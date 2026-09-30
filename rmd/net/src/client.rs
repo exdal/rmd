@@ -1,6 +1,7 @@
 use std::{
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::mpsc,
+    thread,
     time::Duration,
 };
 
@@ -28,12 +29,17 @@ use protocol::{
     },
 };
 use quinn::{Connection, Endpoint};
-use tokio::sync::{mpsc as channel, oneshot, watch};
+use tokio::{
+    net::lookup_host,
+    sync::{mpsc as channel, oneshot, watch},
+    time::{self, MissedTickBehavior},
+};
 
 use crate::{
     Error,
     fail,
     stream::{read_message, receive_transfer, send_transfer, write_message},
+    tls,
 };
 
 const CURSOR_INTERVAL: Duration = Duration::from_millis(50);
@@ -98,16 +104,14 @@ impl Client {
         };
 
         let failed = events_tx.clone();
-        let spawned = std::thread::Builder::new()
-            .name(String::from("rmd-coop"))
-            .spawn(move || {
-                let result = crate::runtime()
-                    .and_then(|runtime| runtime.block_on(run(&addr, hello, cursor_rx, inbox, &events_tx, stop)));
+        let spawned = thread::Builder::new().name(String::from("rmd-coop")).spawn(move || {
+            let result = crate::runtime()
+                .and_then(|runtime| runtime.block_on(run(&addr, hello, cursor_rx, inbox, &events_tx, stop)));
 
-                if let Err(e) = result {
-                    let _ = events_tx.send(Event::Disconnected(e.to_string()));
-                }
-            });
+            if let Err(e) = result {
+                let _ = events_tx.send(Event::Disconnected(e.to_string()));
+            }
+        });
 
         if let Err(e) = spawned {
             let _ = failed.send(Event::Disconnected(e.to_string()));
@@ -161,7 +165,7 @@ async fn run(
     addr: &str, hello: ClientHello, cursor: watch::Receiver<Option<Cursor>>,
     outbox: channel::UnboundedReceiver<Command>, events: &mpsc::Sender<Event>, mut stop: oneshot::Receiver<()>,
 ) -> Result<(), Error> {
-    let remote = tokio::net::lookup_host(addr)
+    let remote = lookup_host(addr)
         .await
         .map_err(|e| fail(format!("could not resolve {addr}: {e}")))?
         .next()
@@ -173,9 +177,9 @@ async fn run(
     };
 
     let mut endpoint = Endpoint::client(bind).map_err(fail)?;
-    endpoint.set_default_client_config(crate::tls::client_config()?);
+    endpoint.set_default_client_config(tls::client_config()?);
 
-    let connecting = endpoint.connect(remote, crate::tls::SERVER_NAME).map_err(fail)?;
+    let connecting = endpoint.connect(remote, tls::SERVER_NAME).map_err(fail)?;
     let connection = tokio::select! {
         connection = connecting => connection.map_err(fail)?,
         _ = &mut stop => return Ok(()),
@@ -187,7 +191,7 @@ async fn run(
     };
 
     connection.close(0u32.into(), b"");
-    let _ = tokio::time::timeout(CLOSE_GRACE, endpoint.wait_idle()).await;
+    let _ = time::timeout(CLOSE_GRACE, endpoint.wait_idle()).await;
 
     result
 }
@@ -215,8 +219,8 @@ async fn session(
         None => return Err(fail("the host closed the connection")),
     }
 
-    let mut throttle = tokio::time::interval(CURSOR_INTERVAL);
-    throttle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut throttle = time::interval(CURSOR_INTERVAL);
+    throttle.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             message = read_message(&mut recv, &mut reader) => match message? {

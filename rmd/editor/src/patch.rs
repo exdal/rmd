@@ -1,4 +1,4 @@
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Coord, Map, Prefab, Size, parser, writer};
 
 // I kinda dont like this patch sending business, but for now its okay
 // if I was bikeshedding I would be sending delta compressed binary
@@ -30,12 +30,12 @@ pub fn encode(map: &Map, coords: impl IntoIterator<Item = Coord>) -> Option<(Vec
 
     Some((
         tiles.into_iter().map(|(coord, _)| coord).collect(),
-        dmm::writer::write(&patch),
+        writer::write(&patch),
     ))
 }
 
 pub fn decode(patch: &str, count: usize) -> Result<Vec<Vec<Prefab>>, String> {
-    let (map, errors) = dmm::parser::parse(patch);
+    let (map, errors) = parser::parse(patch);
     if let Some(error) = errors.first() {
         return Err(error.to_string());
     }
@@ -71,7 +71,7 @@ ba
 
     #[test]
     fn tiles_survive_the_round_trip_in_order() {
-        let (map, errors) = dmm::parser::parse(MAP);
+        let (map, errors) = parser::parse(MAP);
         assert!(errors.is_empty());
 
         let (coords, patch) = encode(
@@ -96,7 +96,7 @@ ba
 
     #[test]
     fn a_patch_of_the_wrong_shape_is_refused() {
-        let (map, _) = dmm::parser::parse(MAP);
+        let (map, _) = parser::parse(MAP);
         let (_, patch) = encode(&map, [Coord::new(1, 1, 1)]).unwrap();
 
         assert!(decode(&patch, 2).is_err());

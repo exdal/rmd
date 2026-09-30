@@ -6,6 +6,7 @@ use std::{
         Mutex,
         atomic::{AtomicU32, Ordering},
     },
+    thread,
     time::Duration,
 };
 
@@ -34,13 +35,17 @@ use protocol::{
     },
 };
 use quinn::{Connection, Endpoint};
-use ring::rand::SecureRandom;
-use tokio::sync::{mpsc, oneshot};
+use ring::rand::{SecureRandom, SystemRandom};
+use tokio::{
+    sync::{mpsc, oneshot},
+    time,
+};
 
 use crate::{
     Error,
     fail,
     stream::{read_message, receive_transfer, send_transfer, write_message},
+    tls,
 };
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -49,7 +54,7 @@ const PASSWORD_LEN: usize = 8;
 
 pub fn random_password() -> String {
     let mut bytes = [0; PASSWORD_LEN];
-    ring::rand::SystemRandom::new()
+    SystemRandom::new()
         .fill(&mut bytes)
         .expect("the system random number generator failed");
 
@@ -68,7 +73,7 @@ pub struct Server {
     addr: SocketAddr,
     password: String,
     shutdown: Option<oneshot::Sender<()>>,
-    thread: Option<std::thread::JoinHandle<()>>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 impl Server {
@@ -76,7 +81,7 @@ impl Server {
         let runtime = crate::runtime()?;
         let endpoint = {
             let _context = runtime.enter();
-            Endpoint::server(crate::tls::server_config()?, config.bind).map_err(fail)?
+            Endpoint::server(tls::server_config()?, config.bind).map_err(fail)?
         };
 
         let addr = endpoint.local_addr().map_err(fail)?;
@@ -87,7 +92,7 @@ impl Server {
         });
 
         let (shutdown, stop) = oneshot::channel();
-        let thread = std::thread::Builder::new()
+        let thread = thread::Builder::new()
             .name(String::from("rmd-server"))
             .spawn(move || runtime.block_on(serve(endpoint, shared, stop)))
             .map_err(fail)?;
@@ -343,13 +348,13 @@ async fn handle(incoming: quinn::Incoming, shared: Arc<Shared>) {
 }
 
 async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Error> {
-    let (mut send, mut recv) = tokio::time::timeout(HANDSHAKE_TIMEOUT, connection.accept_bi())
+    let (mut send, mut recv) = time::timeout(HANDSHAKE_TIMEOUT, connection.accept_bi())
         .await
         .map_err(|_| fail("handshake timed out"))?
         .map_err(fail)?;
 
     let mut reader = FrameReader::new();
-    let hello = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake(&mut recv, &mut reader))
+    let hello = time::timeout(HANDSHAKE_TIMEOUT, handshake(&mut recv, &mut reader))
         .await
         .map_err(|_| fail("handshake timed out"))??;
 
@@ -365,7 +370,7 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
             .await?;
 
             // let the client read the rejection and hang up first
-            let _ = tokio::time::timeout(Duration::from_secs(2), connection.closed()).await;
+            let _ = time::timeout(Duration::from_secs(2), connection.closed()).await;
 
             return Err(fail(reason));
         },

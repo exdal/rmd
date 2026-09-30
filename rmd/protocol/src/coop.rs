@@ -145,10 +145,14 @@ pub struct Relayed {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Debug;
+
+    use serde::de::DeserializeOwned;
+
     use super::*;
     use crate::{decode, encode};
 
-    fn round_trip<T: Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug>(value: T) {
+    fn round_trip<T: Serialize + DeserializeOwned + PartialEq + Debug>(value: T) {
         assert_eq!(decode::<T>(&encode(&value).unwrap()).unwrap(), value);
     }
 

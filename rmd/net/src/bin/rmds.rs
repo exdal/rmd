@@ -1,6 +1,7 @@
 // rmds [--port 3131] [--password <password>]
 
 use std::{
+    env,
     net::{Ipv4Addr, SocketAddr},
     process::ExitCode,
 };
@@ -19,7 +20,7 @@ fn main() -> ExitCode {
     let _ = log::set_logger(&StderrLogger);
     log::set_max_level(log::LevelFilter::Info);
 
-    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    let arguments = env::args().skip(1).collect::<Vec<_>>();
     let arguments = match parse_arguments(&arguments) {
         Ok(arguments) => arguments,
         Err(error) => {
