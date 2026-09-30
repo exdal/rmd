@@ -123,6 +123,7 @@ pub enum Transfer {
     Map {
         path: String,
         generation: GenerationId,
+        next_seq: SeqId,
         len: u64,
     },
 }
@@ -231,6 +232,7 @@ mod tests {
         round_trip(Transfer::Map {
             path: String::from("_maps/test.dmm"),
             generation: GenerationId(2),
+            next_seq: SeqId(3),
             len: 1234,
         });
 

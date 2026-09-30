@@ -326,12 +326,12 @@ impl UiState {
                 }
             });
             ui.menu("Co-op", || {
-                let idle = session.coop().is_none() && session.tree().is_some() && !loading;
-                if ui.menu_item_enabled_selected_no_shortcut("Host...", false, idle) {
+                let is_idle = session.coop().is_none() && session.tree().is_some() && !loading;
+                if ui.menu_item_enabled_selected_no_shortcut("Host...", false, is_idle) {
                     actions.coop_dialog = Some(CoopDialogKind::Host);
                 }
 
-                if ui.menu_item_enabled_selected_no_shortcut("Join...", false, idle) {
+                if ui.menu_item_enabled_selected_no_shortcut("Join...", false, is_idle) {
                     actions.coop_dialog = Some(CoopDialogKind::Join);
                 }
 
@@ -340,8 +340,8 @@ impl UiState {
                     session.share_coop_map();
                 }
 
-                let hosting = session.coop().is_some_and(|coop| coop.is_hosting());
-                let label = if hosting { "Stop hosting" } else { "Leave" };
+                let is_hosting = session.coop().is_some_and(|coop| coop.is_hosting());
+                let label = if is_hosting { "Stop hosting" } else { "Leave" };
                 if ui.menu_item_enabled_selected_no_shortcut(label, false, session.coop().is_some()) {
                     session.leave_coop();
                 }

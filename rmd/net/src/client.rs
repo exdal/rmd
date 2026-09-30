@@ -110,6 +110,7 @@ pub enum Direction {
 
 struct Share {
     path: String,
+    base: Option<(GenerationId, SeqId)>,
     bytes: Vec<u8>,
 }
 
@@ -165,7 +166,11 @@ impl Client {
 
     pub fn delete_comment(&self, id: CommentId) { self.send(ClientMessage::DeleteComment(id)); }
 
-    pub fn share_map(&self, path: String, bytes: Vec<u8>) { let _ = self.shares.send(Share { path, bytes }); }
+    // `base` is the generation our copy tracks and the next edit of it the snapshot lacks,
+    // so the server can carry peers' later edits into the new generation
+    pub fn share_map(&self, path: String, base: Option<(GenerationId, SeqId)>, bytes: Vec<u8>) {
+        let _ = self.shares.send(Share { path, base, bytes });
+    }
 
     pub fn send_edit(&self, edit: MapEdit) { self.send(ClientMessage::Edit(edit)); }
 
@@ -175,10 +180,10 @@ impl Client {
 
     pub fn send_cursor(&self, cursor: Option<Cursor>) {
         self.cursor.send_if_modified(|current| {
-            let changed = *current != cursor;
+            let is_changed = *current != cursor;
             *current = cursor;
 
-            changed
+            is_changed
         });
     }
 }
@@ -290,8 +295,8 @@ async fn session(
                     Some(other) => log::warn!("unexpected message from the host: {other:?}"),
                     None => return Err(fail("the host ended the session")),
                 },
-                Some(Share { path, bytes }) = shares.recv() => {
-                    uploads.spawn(upload(connection.clone(), path, bytes, events.clone()));
+                Some(share) = shares.recv() => {
+                    uploads.spawn(upload(connection.clone(), share, events.clone()));
                 },
                 Some(_) = uploads.join_next() => {},
                 stream = connection.accept_uni() => {
@@ -368,10 +373,12 @@ impl Throttle {
     }
 }
 
-async fn upload(connection: Connection, path: String, bytes: Vec<u8>, events: mpsc::Sender<Event>) {
+async fn upload(connection: Connection, Share { path, base, bytes }: Share, events: mpsc::Sender<Event>) {
+    let (generation, next_seq) = base.unwrap_or((GenerationId(0), SeqId(0)));
     let header = Transfer::Map {
         path: path.clone(),
-        generation: GenerationId(0),
+        generation,
+        next_seq,
         len: bytes.len() as u64,
     };
 
@@ -384,7 +391,9 @@ async fn upload(connection: Connection, path: String, bytes: Vec<u8>, events: mp
 
 async fn download(mut stream: quinn::RecvStream, events: mpsc::Sender<Event>) {
     let (path, generation, len) = match read_transfer_header(&mut stream).await {
-        Ok(Transfer::Map { path, generation, len }) => (path, generation, len),
+        Ok(Transfer::Map {
+            path, generation, len, ..
+        }) => (path, generation, len),
         Err(e) => {
             log::warn!("could not receive a map: {e}");
             return;

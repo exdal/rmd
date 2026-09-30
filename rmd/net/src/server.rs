@@ -148,6 +148,7 @@ struct SharedMap {
     by: PeerId,
     bytes: Bytes,
     generation: GenerationId,
+    replaced: Option<GenerationId>,
     edits: Vec<(PeerId, MapEdit)>,
 }
 
@@ -251,16 +252,36 @@ impl Shared {
         );
     }
 
-    fn share_map(&self, by: PeerId, path: String, bytes: Bytes) {
+    fn share_map(&self, by: PeerId, path: String, base: GenerationId, next_seq: SeqId, bytes: Bytes) {
         let mut state = self.state.lock().unwrap();
         if state.uploads.get(&path).is_some_and(|(uploader, _)| *uploader == by) {
             state.uploads.remove(&path);
         }
 
-        let generation = state
-            .maps
-            .get(&path)
-            .map_or(GenerationId(1), |map| map.generation.next());
+        let previous = state.maps.get(&path);
+        let generation = previous.map_or(GenerationId(1), |map| map.generation.next());
+        // peers kept editing while the snapshot was on its way, and the sharer's own edits are already in it
+        let edits = previous
+            .filter(|map| map.generation == base)
+            .map(|map| {
+                map.edits
+                    .iter()
+                    .skip(next_seq.0 as usize)
+                    .filter(|(author, _)| *author != by)
+                    .map(|(author, edit)| {
+                        (
+                            *author,
+                            MapEdit {
+                                generation,
+                                ..edit.clone()
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let replaced = previous.map(|map| map.generation);
         for (id, peer) in state.peers.iter() {
             let _ = peer.outbox.send(ServerMessage::MapShared {
                 path: path.clone(),
@@ -275,6 +296,14 @@ impl Shared {
                     bytes.clone(),
                 ));
             }
+
+            for (seq, (author, edit)) in edits.iter().enumerate() {
+                let _ = peer.outbox.send(ServerMessage::Edit {
+                    by: *author,
+                    seq: SeqId(seq as u32),
+                    edit: edit.clone(),
+                });
+            }
         }
 
         state.maps.insert(
@@ -283,17 +312,27 @@ impl Shared {
                 by,
                 bytes,
                 generation,
-                edits: Vec::new(),
+                replaced,
+                edits,
             },
         );
     }
 
-    fn edit(&self, by: PeerId, edit: MapEdit) {
+    fn edit(&self, by: PeerId, mut edit: MapEdit) {
         let mut state = self.state.lock().unwrap();
         let State { peers, maps, .. } = &mut *state;
-        let Some(map) = maps.get_mut(&edit.path).filter(|map| map.generation == edit.generation) else {
+        let Some(map) = maps.get_mut(&edit.path) else {
             return;
         };
+
+        // sent before the peer heard of the new share, which doesn't have it
+        if map.replaced == Some(edit.generation) && by != map.by {
+            edit.generation = map.generation;
+        }
+
+        if map.generation != edit.generation {
+            return;
+        }
 
         let seq = SeqId(map.edits.len() as u32);
         for peer in peers.values() {
@@ -337,6 +376,7 @@ async fn push_map(connection: Connection, path: String, generation: GenerationId
     let header = Transfer::Map {
         path,
         generation,
+        next_seq: SeqId(0),
         len: bytes.len() as u64,
     };
 
@@ -346,8 +386,13 @@ async fn push_map(connection: Connection, path: String, generation: GenerationId
 }
 
 async fn upload(shared: Arc<Shared>, from: PeerId, mut stream: quinn::RecvStream) {
-    let (path, len) = match read_transfer_header(&mut stream).await {
-        Ok(Transfer::Map { path, len, .. }) if is_map_path(&path) => (path, len),
+    let (path, base, next_seq, len) = match read_transfer_header(&mut stream).await {
+        Ok(Transfer::Map {
+            path,
+            generation,
+            next_seq,
+            len,
+        }) if is_map_path(&path) => (path, generation, next_seq, len),
         Ok(Transfer::Map { path, .. }) => {
             log::info!("{from:?} tried to share {path}, which is not a map path");
             return;
@@ -365,7 +410,7 @@ async fn upload(shared: Arc<Shared>, from: PeerId, mut stream: quinn::RecvStream
 
     shared.upload_started(from, &path, len);
     match read_payload(&mut stream, len, |_| {}).await {
-        Ok(bytes) => shared.share_map(from, path, Bytes::from(bytes)),
+        Ok(bytes) => shared.share_map(from, path, base, next_seq, Bytes::from(bytes)),
         Err(e) => {
             log::info!("dropping an upload of {path} from {from:?}: {e}");
             shared.upload_failed(from, &path);

@@ -34,9 +34,9 @@ fn main() -> ExitCode {
     };
 
     let public = SocketAddr::from((Ipv4Addr::UNSPECIFIED, arguments.port));
-    let simulated = !arguments.impairment.is_none();
+    let is_simulated = !arguments.impairment.is_none();
     // a simulated link puts the server behind a lossy proxy that takes the public port
-    let bind = if simulated {
+    let bind = if is_simulated {
         SocketAddr::from((Ipv4Addr::LOCALHOST, 0))
     } else {
         public
@@ -57,7 +57,7 @@ fn main() -> ExitCode {
         seed: fastrand::u64(..),
         ..arguments.impairment
     };
-    let proxy = match simulated
+    let proxy = match is_simulated
         .then(|| LossyProxy::spawn(public, server.local_addr(), impairment))
         .transpose()
     {
@@ -71,7 +71,7 @@ fn main() -> ExitCode {
 
     let addr = proxy.as_ref().map_or(server.local_addr(), LossyProxy::local_addr);
     log::info!("listening on {addr} with password {}", server.password());
-    if simulated {
+    if is_simulated {
         log::info!(
             "simulating {}ms latency, {}ms jitter and {}% loss each way",
             impairment.latency.as_millis(),

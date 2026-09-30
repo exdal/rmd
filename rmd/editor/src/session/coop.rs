@@ -200,9 +200,16 @@ impl SharedMap {
 }
 
 enum Prepared {
-    Upload { path: String, bytes: Vec<u8> },
+    Upload {
+        path: String,
+        base: Option<(GenerationId, SeqId)>,
+        bytes: Vec<u8>,
+    },
     Snapshot(ReceivedMap),
-    Unreadable { path: String, generation: GenerationId },
+    Unreadable {
+        path: String,
+        generation: GenerationId,
+    },
 }
 
 pub(crate) struct ReceivedMap {
@@ -211,7 +218,7 @@ pub(crate) struct ReceivedMap {
     file: PathBuf,
     map: dmm::Map,
     errors: Vec<MapError>,
-    modified: bool,
+    is_modified: bool,
 }
 
 struct PendingJoin {
@@ -270,7 +277,7 @@ impl Coop {
 
         let prepared = self.prepared.0.clone();
         thread::spawn(move || {
-            let modified = fs::read(&file).map_or(true, |disk| disk != bytes);
+            let is_modified = fs::read(&file).map_or(true, |disk| disk != bytes);
             let text = match String::from_utf8(bytes) {
                 Ok(text) => text,
                 Err(e) => {
@@ -287,7 +294,7 @@ impl Coop {
                 file,
                 map,
                 errors,
-                modified,
+                is_modified,
             }));
         });
     }
@@ -631,9 +638,9 @@ impl Session {
 
         for prepared in prepared {
             match prepared {
-                Prepared::Upload { path, bytes } => {
+                Prepared::Upload { path, base, bytes } => {
                     if let Some(client) = self.coop.as_ref().and_then(|coop| coop.client.as_ref()) {
-                        client.share_map(path, bytes);
+                        client.share_map(path, base, bytes);
                     }
                 },
                 Prepared::Snapshot(received) => self.open_shared_map(received),
@@ -1000,18 +1007,26 @@ impl Session {
             return;
         };
 
-        // hold back new edits until the server numbers this share
         let you = coop.you.unwrap_or(PeerId(0));
-        coop.shared_maps
+        let shared_map = coop
+            .shared_maps
             .entry(path.clone())
-            .or_insert_with(|| SharedMap::new(you, SharedState::Closed))
-            .state = SharedState::Sending { done: 0, total: 0 };
+            .or_insert_with(|| SharedMap::new(you, SharedState::Closed));
+
+        // only a copy that follows its generation has the edits before `next_seq`
+        let base = shared_map
+            .generation
+            .filter(|_| shared_map.is_ready())
+            .map(|generation| (generation, shared_map.next_seq));
+
+        // hold back new edits until the server numbers this share
+        shared_map.state = SharedState::Sending { done: 0, total: 0 };
 
         let map = document.map.clone();
         let prepared = coop.prepared.0.clone();
         thread::spawn(move || {
             let bytes = writer::write(&map).into_bytes();
-            let _ = prepared.send(Prepared::Upload { path, bytes });
+            let _ = prepared.send(Prepared::Upload { path, base, bytes });
         });
     }
 
@@ -1048,7 +1063,7 @@ impl Session {
             file,
             map,
             errors,
-            modified,
+            is_modified,
             ..
         } = received;
 
@@ -1082,7 +1097,7 @@ impl Session {
             .and_then(|id| self.state.document_mut(id))
         {
             document.start_journal();
-            if modified {
+            if is_modified {
                 document.mark_unsaved();
             }
         }
@@ -1417,7 +1432,7 @@ mod tests {
             file: file.clone(),
             map,
             errors,
-            modified: false,
+            is_modified: false,
         });
         session.poll_coop();
         assert!(session.state.document_for_path(&file).is_none());
@@ -1651,6 +1666,48 @@ mod tests {
         });
 
         for dir in [host_dir, guest_dir, late_dir] {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn a_reshare_keeps_edits_its_snapshot_missed() {
+        let (host_dir, mut host) = codebase_with_map("reshare-host", "aa");
+        let (guest_dir, mut guest) = codebase_with_map("reshare-guest", "aa");
+        let host_file = host_dir.join("_maps/a.dmm");
+        let guest_file = guest_dir.join("_maps/a.dmm");
+        let left = Coord::new(1, 1, 1);
+        let id = open_local(&mut host, host_file.clone());
+
+        host.host_coop(0, String::from("hunter2"), String::from("host"))
+            .unwrap();
+        poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
+        host.share_coop_map();
+        let port = host.coop().and_then(Coop::host).unwrap().0.port();
+        guest
+            .join_coop(
+                format!("127.0.0.1:{port}"),
+                String::from("hunter2"),
+                String::from("guest"),
+            )
+            .unwrap();
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            sessions[1].state.document_for_path(&guest_file).is_some() && settled(sessions)
+        });
+
+        // the server has the edit, but the host shares again before it applies it
+        paint(&mut guest, &guest_file, left, "/obj/guest");
+        poll_until(&mut [&mut guest], settled);
+        host.share_coop_document(id);
+
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            settled(sessions)
+                && sessions[1].coop().unwrap().shared_maps["_maps/a.dmm"].generation == Some(GenerationId(2))
+                && top(sessions[0], &host_file, left).as_deref() == Some("/obj/guest")
+                && top(sessions[1], &guest_file, left).as_deref() == Some("/obj/guest")
+        });
+
+        for dir in [host_dir, guest_dir] {
             let _ = fs::remove_dir_all(dir);
         }
     }

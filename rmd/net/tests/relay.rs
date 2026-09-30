@@ -261,8 +261,8 @@ fn shared_maps_reach_everyone_else_and_late_joiners() {
     wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
 
     let map = b"\"aa\" = (/turf/open/floor)\n".repeat(50_000);
-    alice.share_map(String::from("../outside.dmm"), b"nope".to_vec());
-    alice.share_map(String::from("_maps/test.dmm"), map.clone());
+    alice.share_map(String::from("../outside.dmm"), None, b"nope".to_vec());
+    alice.share_map(String::from("_maps/test.dmm"), None, map.clone());
 
     for client in [&alice, &bob] {
         let shared = wait_for(client, |event| match event {
@@ -299,7 +299,7 @@ fn edits_reach_everyone_and_replay_for_late_joiners_until_the_map_is_shared_agai
         _ => None,
     });
 
-    alice.share_map(String::from("_maps/test.dmm"), b"map".to_vec());
+    alice.share_map(String::from("_maps/test.dmm"), None, b"map".to_vec());
     let generation = wait_for(&bob, |event| match event {
         Event::MapShared { generation, .. } => Some(generation),
         _ => None,
@@ -331,7 +331,7 @@ fn edits_reach_everyone_and_replay_for_late_joiners_until_the_map_is_shared_agai
     });
     assert_eq!(replayed, edit(GenerationId(1), "fresh"));
 
-    alice.share_map(String::from("_maps/test.dmm"), b"map again".to_vec());
+    alice.share_map(String::from("_maps/test.dmm"), None, b"map again".to_vec());
     let generation = wait_for(&carol, |event| match event {
         Event::MapShared { generation, .. } => Some(generation),
         _ => None,
@@ -347,6 +347,62 @@ fn edits_reach_everyone_and_replay_for_late_joiners_until_the_map_is_shared_agai
 }
 
 #[test]
+fn a_new_share_carries_the_edits_its_snapshot_missed() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    let alice_id = wait_for(&alice, |event| match event {
+        Event::Connected { you, .. } => Some(you),
+        _ => None,
+    });
+    let bob = join(&server, PASSWORD, "bob");
+    let bob_id = wait_for(&bob, |event| match event {
+        Event::Connected { you, .. } => Some(you),
+        _ => None,
+    });
+
+    let path = String::from("_maps/test.dmm");
+    let edit = |generation, patch: &str| MapEdit {
+        path: path.clone(),
+        generation,
+        coords: vec![[1, 1, 1]],
+        patch: String::from(patch),
+    };
+    let next_edit = |client: &Client| {
+        wait_for(client, |event| match event {
+            Event::Edit { by, seq, edit } => Some((by, seq, edit)),
+            _ => None,
+        })
+    };
+    let shared = |client: &Client, generation| {
+        wait_for(client, |event| {
+            matches!(event, Event::MapShared { generation: shared, .. } if shared == generation).then_some(())
+        });
+    };
+
+    alice.share_map(path.clone(), None, b"map".to_vec());
+    shared(&bob, GenerationId(1));
+
+    bob.send_edit(edit(GenerationId(1), "seen"));
+    assert_eq!(next_edit(&alice).1, SeqId(0));
+    alice.send_edit(edit(GenerationId(1), "own"));
+    assert_eq!(next_edit(&alice).1, SeqId(1));
+    bob.send_edit(edit(GenerationId(1), "missed"));
+    assert_eq!(next_edit(&alice).1, SeqId(2));
+
+    // the snapshot has the first edit, and alice's own edit is in it too
+    alice.share_map(path.clone(), Some((GenerationId(1), SeqId(1))), b"map again".to_vec());
+    shared(&bob, GenerationId(2));
+    assert_eq!(next_edit(&bob), (bob_id, SeqId(0), edit(GenerationId(2), "missed")));
+
+    bob.send_edit(edit(GenerationId(1), "late"));
+    assert_eq!(next_edit(&bob), (bob_id, SeqId(1), edit(GenerationId(2), "late")));
+
+    alice.send_edit(edit(GenerationId(1), "stale"));
+    alice.send_edit(edit(GenerationId(2), "after"));
+    assert_eq!(next_edit(&bob), (alice_id, SeqId(2), edit(GenerationId(2), "after")));
+}
+
+#[test]
 fn a_resync_sends_the_snapshot_and_the_numbered_log_again() {
     let server = server();
     let alice = join(&server, PASSWORD, "alice");
@@ -355,7 +411,7 @@ fn a_resync_sends_the_snapshot_and_the_numbered_log_again() {
     wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
 
     let path = String::from("_maps/test.dmm");
-    alice.share_map(path.clone(), b"map".to_vec());
+    alice.share_map(path.clone(), None, b"map".to_vec());
     wait_for(&bob, |event| matches!(event, Event::MapSnapshot { .. }).then_some(()));
 
     let edit = |patch: &str| MapEdit {
@@ -414,7 +470,7 @@ fn edits_and_snapshots_survive_a_lossy_link() {
 
     let path = String::from("_maps/test.dmm");
     let map = (0..200_000).map(|i| b'a' + (i % 26) as u8).collect::<Vec<_>>();
-    alice.share_map(path.clone(), map.clone());
+    alice.share_map(path.clone(), None, map.clone());
     let received = wait_for(&bob, |event| match event {
         Event::MapSnapshot { bytes, .. } => Some(bytes),
         _ => None,
@@ -463,7 +519,7 @@ fn peers_see_an_upload_before_it_lands() {
     let path = String::from("_maps/test.dmm");
     let map = vec![b'a'; 1_300_000];
     let len = map.len() as u64;
-    alice.share_map(path.clone(), map);
+    alice.share_map(path.clone(), None, map);
 
     let sent = collect_until(&alice, |event| matches!(event, Event::MapShared { .. }));
     let sending = sent
@@ -538,7 +594,7 @@ fn a_dropped_upload_is_cancelled() {
     wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
 
     let path = String::from("_maps/test.dmm");
-    alice.share_map(path.clone(), vec![b'a'; 32 * 1024 * 1024]);
+    alice.share_map(path.clone(), None, vec![b'a'; 32 * 1024 * 1024]);
     wait_for(&bob, |event| matches!(event, Event::MapIncoming { .. }).then_some(()));
     drop(alice);
 

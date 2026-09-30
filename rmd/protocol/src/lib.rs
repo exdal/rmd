@@ -16,7 +16,6 @@ pub enum Service {
     Bridge,
 }
 
-/// The first frame on every connection, whatever the transport
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
     pub magic: [u8; 4],

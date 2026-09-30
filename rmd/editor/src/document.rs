@@ -76,7 +76,6 @@ pub struct MapDocument {
     read_only: bool,
 }
 
-/// journal of local edits touched since it was last taken
 #[derive(Debug, Default)]
 pub struct Journal {
     pub coords: BTreeSet<Coord>,

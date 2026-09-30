@@ -156,7 +156,7 @@ pub(super) fn draw_coop_dialog(
         let nick = state.nick.trim();
         let address = state.address.trim();
         let password = state.password.trim();
-        let ready =
+        let is_ready =
             !nick.is_empty() && !password.is_empty() && (state.kind == CoopDialogKind::Host || !address.is_empty());
 
         ui.same_line();
@@ -166,11 +166,11 @@ pub(super) fn draw_coop_dialog(
         };
 
         let clicked = {
-            let _disabled = ui.begin_disabled_with_cond(!ready);
+            let _disabled = ui.begin_disabled_with_cond(!is_ready);
             ui.button(label)
         };
 
-        if ready && (clicked || submitted) {
+        if is_ready && (clicked || submitted) {
             let result = match state.kind {
                 CoopDialogKind::Host => session.host_coop(state.port as u16, password.to_owned(), nick.to_owned()),
                 CoopDialogKind::Join => session.join_coop(address.to_owned(), password.to_owned(), nick.to_owned()),
