@@ -419,8 +419,9 @@ impl Coop {
                 let is_sending = matches!(shared_map.state, SharedState::Sending { .. });
                 let is_receiving = matches!(shared_map.state, SharedState::Receiving { .. });
                 match direction {
+                    // our copy no longer matches what peers have, so take the server's again
                     Direction::Sending if is_sending && shared_map.generation.is_some() => {
-                        shared_map.state = SharedState::Ready
+                        shared_map.restart(SharedState::Closed)
                     },
                     Direction::Sending if is_sending => {
                         self.shared_maps.remove(&path);
@@ -1321,6 +1322,46 @@ mod tests {
         );
         assert!(session.state.document_for_path(&file).is_none());
         assert!(!session.is_coop_shared_file(&file));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failed_reshare_resyncs_the_map_from_the_server() {
+        let (dir, mut session) = hosting("reshare-failed");
+        let file = dir.join("_maps/a.dmm");
+        let path = "_maps/a.dmm";
+        let id = open_local(&mut session, file.clone());
+        session.share_coop_map();
+        poll_until(&mut [&mut session], |sessions| {
+            sessions[0].coop().unwrap().shared_maps.contains_key(path) && settled(sessions)
+        });
+
+        let document = session.state.document_mut(id).unwrap();
+        let fill = document.map.tile_at(Coord::new(1, 1, 1)).cloned().unwrap();
+        assert!(document.resize(3, 1, &fill));
+        session.share_coop_document(id);
+
+        // the upload never reaches the server
+        let prepared = session.coop().unwrap().prepared.1.recv_timeout(Duration::from_secs(10));
+        assert!(matches!(prepared, Ok(Prepared::Upload { .. })));
+        deliver(
+            &mut session,
+            &dir,
+            Event::TransferFailed {
+                path: String::from(path),
+                direction: Direction::Sending,
+                reason: String::from("lost"),
+            },
+        );
+
+        poll_until(&mut [&mut session], |sessions| {
+            let document = sessions[0].state.document_for_path(&file);
+            settled(sessions)
+                && document
+                    .and_then(|id| sessions[0].state.document(id))
+                    .is_some_and(|document| document.map.size.x == 2)
+        });
 
         let _ = fs::remove_dir_all(dir);
     }
