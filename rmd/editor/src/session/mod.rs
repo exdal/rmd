@@ -50,7 +50,7 @@ use self::{
 pub(crate) use self::{
     blame::{BlameState, blame_color},
     codebase::{DiagnosticSeverity, LoadReport, MAX_REPORTED_DIAGNOSTICS, build_textures, discover_maps},
-    coop::{Coop, CoopStatus, PeerChange, SharedState},
+    coop::{Activity, Coop, CoopStatus, SharedState},
     diff::DiffSide,
     direction::{DirectionState, DirectionalTypes},
     edit::context_placement_group,

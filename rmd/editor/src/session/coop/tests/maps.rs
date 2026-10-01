@@ -413,6 +413,10 @@ fn anyone_can_stop_sharing_a_map_and_every_copy_stays_open() {
         assert!(!session.is_coop_shared_file(&file));
         assert!(!session.can_stop_sharing_coop_map());
         assert!(!session.state.document(id).unwrap().is_read_only());
+        assert!(matches!(
+            session.coop().unwrap().activity.back(),
+            Some((_, Activity::Unshared { path, nick: Some(nick), .. })) if path == "_maps/a.dmm" && nick == "guest"
+        ));
     }
 
     for dir in [host_dir, guest_dir] {

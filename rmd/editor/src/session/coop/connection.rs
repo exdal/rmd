@@ -70,7 +70,7 @@ impl Session {
             stopping_server: None,
             comments: BTreeMap::new(),
             shared_maps: BTreeMap::new(),
-            peer_changes: VecDeque::new(),
+            activity: VecDeque::new(),
             following: None,
             prepared: mpsc::channel(),
             client: Some(client),

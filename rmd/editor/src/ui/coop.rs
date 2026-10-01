@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     camera::Controller,
-    session::{Coop, CoopStatus, PeerChange, Session, SharedState},
+    session::{Activity, Coop, CoopStatus, Session, SharedState},
     settings::Settings,
 };
 
@@ -581,9 +581,9 @@ pub(super) fn draw_coop_peers(ui: &Ui, coop: &Coop, following: Option<PeerId>) -
     clicked
 }
 
-pub(super) fn draw_peer_changes(ui: &Ui, coop: &Coop) {
+pub(super) fn draw_activity(ui: &Ui, coop: &Coop) {
     let recent = coop
-        .peer_changes
+        .activity
         .iter()
         .map(|(at, change)| (at.elapsed().as_secs_f32(), change))
         .filter(|(age, _)| *age < NOTICE_SECONDS)
@@ -618,22 +618,33 @@ pub(super) fn draw_peer_changes(ui: &Ui, coop: &Coop) {
         ((NOTICE_SECONDS - newest) / NOTICE_FADE).clamp(0.0, 1.0),
     ));
     let _background = ui.push_style_color(StyleColor::WindowBg, ui.clone_style().color(StyleColor::PopupBg));
-    ui.window("##coop-peer-changes").flags(flags).build(|| {
+    ui.window("##coop-activity").flags(flags).build(|| {
         unsafe { sys::igBringWindowToDisplayFront(sys::igGetCurrentWindow()) };
 
-        for (index, (_, change)) in recent.iter().enumerate() {
-            let (info, verb) = match change {
-                PeerChange::Joined(info) => (info, "joined"),
-                PeerChange::Left(info) => (info, "left"),
-            };
-
+        for (index, (_, activity)) in recent.iter().enumerate() {
             if index > 0 {
                 ui.spacing();
             }
 
-            ui.text_colored(peer_color(info.id), &info.nick);
-            ui.same_line();
-            ui.text_disabled(verb);
+            match activity {
+                Activity::Joined(info) => {
+                    ui.text_colored(peer_color(info.id), &info.nick);
+                    ui.same_line();
+                    ui.text_disabled("joined");
+                },
+                Activity::Left(info) => {
+                    ui.text_colored(peer_color(info.id), &info.nick);
+                    ui.same_line();
+                    ui.text_disabled("left");
+                },
+                Activity::Unshared { path, by, nick } => {
+                    ui.text_colored(peer_color(*by), nick.as_deref().unwrap_or(NICK_PLACEHOLDER));
+                    ui.same_line();
+                    ui.text_disabled("stopped sharing");
+                    ui.same_line();
+                    ui.text(path);
+                },
+            }
         }
     });
 }

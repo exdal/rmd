@@ -3,7 +3,7 @@ use std::{fs, mem, path::Path, thread};
 use dmm::parser;
 use net::{Direction, Event, GenerationId, PeerId};
 
-use super::{Coop, CoopStatus, PeerChange, Prepared, ReceivedMap, RemotePeer, SharedMap, SharedState};
+use super::{Activity, Coop, CoopStatus, Prepared, ReceivedMap, RemotePeer, SharedMap, SharedState};
 
 impl Coop {
     fn receive_map(&mut self, path: String, generation: GenerationId, bytes: Vec<u8>, codebase: Option<&Path>) {
@@ -66,12 +66,12 @@ impl Coop {
                 self.comments = comments.into_iter().map(|comment| (comment.id, comment)).collect();
             },
             Event::PeerJoined(info) => {
-                self.record(PeerChange::Joined(info.clone()));
+                self.record(Activity::Joined(info.clone()));
                 self.peers.insert(info.id, RemotePeer::new(info));
             },
             Event::PeerLeft(id) => {
                 if let Some(peer) = self.peers.remove(&id) {
-                    self.record(PeerChange::Left(peer.info));
+                    self.record(Activity::Left(peer.info));
                 }
 
                 if self.following.as_ref().is_some_and(|following| following.peer == id) {

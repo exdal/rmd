@@ -7,7 +7,7 @@ use editor::{
 };
 use net::PeerId;
 
-use super::{Coop, Prepared, ReceivedMap, SharedMap, SharedState};
+use super::{Activity, Coop, Prepared, ReceivedMap, SharedMap, SharedState};
 use crate::{loader::LoadedMap, session::Session};
 
 impl Session {
@@ -335,6 +335,12 @@ impl Session {
         };
 
         log::info!("{path}: {} stopped sharing", coop.nick_of(by).unwrap_or("a peer"));
+        let nick = coop.nick_of(by).map(str::to_owned);
+        coop.record(Activity::Unshared {
+            path: path.to_owned(),
+            by,
+            nick,
+        });
         if let Some(id) = shared_map.pending_document {
             self.close_map(id);
         }

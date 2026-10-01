@@ -59,17 +59,17 @@ fn peers_joining_and_leaving_are_recorded() {
         connected(sessions[1]) && sessions[0].coop().is_some_and(|coop| coop.peers.len() == 1)
     });
 
-    let changes = &host.coop().unwrap().peer_changes;
+    let changes = &host.coop().unwrap().activity;
     assert_eq!(changes.len(), 1);
-    assert!(matches!(&changes[0].1, PeerChange::Joined(info) if info.nick == "guest"));
-    assert!(guest.coop().unwrap().peer_changes.is_empty());
+    assert!(matches!(&changes[0].1, Activity::Joined(info) if info.nick == "guest"));
+    assert!(guest.coop().unwrap().activity.is_empty());
 
     guest.leave_coop();
     poll_until(&mut [&mut host], |sessions| {
         sessions[0]
             .coop()
-            .and_then(|coop| coop.peer_changes.back())
-            .is_some_and(|(_, change)| matches!(change, PeerChange::Left(info) if info.nick == "guest"))
+            .and_then(|coop| coop.activity.back())
+            .is_some_and(|(_, change)| matches!(change, Activity::Left(info) if info.nick == "guest"))
     });
 }
 
