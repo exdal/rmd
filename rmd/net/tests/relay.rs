@@ -18,6 +18,7 @@ use net::{
     SeqId,
     Server,
     ServerConfig,
+    View,
 };
 
 const PASSWORD: &str = "hunter2";
@@ -133,6 +134,38 @@ fn cursors_reach_the_other_peers_stamped_with_the_sender() {
         _ => None,
     });
     assert_eq!(left, bob_id);
+}
+
+#[test]
+fn views_reach_the_other_peers_and_repeat() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    let alice_id = wait_for(&alice, |event| match event {
+        Event::Connected { you, .. } => Some(you),
+        _ => None,
+    });
+
+    let bob = join(&server, PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    let view = View {
+        map: String::from("_maps/test.dmm"),
+        z: 2,
+        center: [320.0, 160.0],
+        zoom: 1.5,
+    };
+    alice.send_view(Some(view.clone()));
+    let received = |client: &Client| {
+        wait_for(client, |event| match event {
+            Event::View { from, view: Some(view) } => Some((from, view)),
+            _ => None,
+        })
+    };
+
+    assert_eq!(received(&bob), (alice_id, view.clone()));
+
+    // nothing new was sent, so this one is the refresh
+    assert_eq!(received(&bob), (alice_id, view));
 }
 
 #[test]

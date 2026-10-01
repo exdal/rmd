@@ -26,6 +26,7 @@ use protocol::{
         SeqId,
         ServerMessage,
         Transfer,
+        View,
     },
 };
 use quinn::{Connection, Endpoint};
@@ -47,6 +48,7 @@ const CURSOR_INTERVAL: Duration = Duration::from_millis(50);
 const CLOSE_GRACE: Duration = Duration::from_millis(500);
 const RESET_POLL: Duration = Duration::from_millis(5);
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+const VIEW_REFRESH: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -65,6 +67,10 @@ pub enum Event {
     Cursor {
         from: PeerId,
         cursor: Option<Cursor>,
+    },
+    View {
+        from: PeerId,
+        view: Option<View>,
     },
     Comment(Comment),
     CommentDeleted(CommentId),
@@ -116,6 +122,11 @@ pub enum Direction {
     Receiving,
 }
 
+struct Presence {
+    cursor: watch::Receiver<Option<Cursor>>,
+    view: watch::Receiver<Option<View>>,
+}
+
 struct Share {
     path: String,
     base: Option<(GenerationId, SeqId)>,
@@ -125,6 +136,7 @@ struct Share {
 pub struct Client {
     events: mpsc::Receiver<Event>,
     cursor: watch::Sender<Option<Cursor>>,
+    view: watch::Sender<Option<View>>,
     outbox: channel::UnboundedSender<ClientMessage>,
     shares: channel::UnboundedSender<Share>,
     shutdown: Option<oneshot::Sender<()>>,
@@ -134,6 +146,11 @@ impl Client {
     pub fn connect(addr: String, password: String, nick: String, codebase: CodebaseId) -> Self {
         let (events_tx, events) = mpsc::channel();
         let (cursor, cursor_rx) = watch::channel(None);
+        let (view, view_rx) = watch::channel(None);
+        let presence = Presence {
+            cursor: cursor_rx,
+            view: view_rx,
+        };
         let (outbox, inbox) = channel::unbounded_channel();
         let (shares, shares_rx) = channel::unbounded_channel();
         let (shutdown, stop) = oneshot::channel();
@@ -146,7 +163,7 @@ impl Client {
         let failed = events_tx.clone();
         let spawned = thread::Builder::new().name(String::from("rmd-coop")).spawn(move || {
             let result = crate::runtime()
-                .and_then(|runtime| runtime.block_on(run(&addr, hello, cursor_rx, inbox, shares_rx, &events_tx, stop)));
+                .and_then(|runtime| runtime.block_on(run(&addr, hello, presence, inbox, shares_rx, &events_tx, stop)));
 
             if let Err(e) = result {
                 let _ = events_tx.send(Event::Disconnected(e.to_string()));
@@ -160,6 +177,7 @@ impl Client {
         Self {
             events,
             cursor,
+            view,
             outbox,
             shares,
             shutdown: Some(shutdown),
@@ -196,6 +214,15 @@ impl Client {
             is_changed
         });
     }
+
+    pub fn send_view(&self, view: Option<View>) {
+        self.view.send_if_modified(|current| {
+            let is_changed = *current != view;
+            *current = view;
+
+            is_changed
+        });
+    }
 }
 
 impl Drop for Client {
@@ -207,9 +234,8 @@ impl Drop for Client {
 }
 
 async fn run(
-    addr: &str, hello: ClientHello, cursor: watch::Receiver<Option<Cursor>>,
-    outbox: channel::UnboundedReceiver<ClientMessage>, shares: channel::UnboundedReceiver<Share>,
-    events: &mpsc::Sender<Event>, mut stop: oneshot::Receiver<()>,
+    addr: &str, hello: ClientHello, presence: Presence, outbox: channel::UnboundedReceiver<ClientMessage>,
+    shares: channel::UnboundedReceiver<Share>, events: &mpsc::Sender<Event>, mut stop: oneshot::Receiver<()>,
 ) -> Result<(), Error> {
     let remote = lookup_host(addr)
         .await
@@ -233,7 +259,7 @@ async fn run(
 
     let mut uploads = JoinSet::new();
     let result = tokio::select! {
-        result = session(&connection, hello, cursor, outbox, shares, events, &mut uploads) => result,
+        result = session(&connection, hello, presence, outbox, shares, events, &mut uploads) => result,
         _ = &mut stop => Ok(()),
     };
 
@@ -256,7 +282,7 @@ async fn run(
 }
 
 async fn session(
-    connection: &Connection, hello: ClientHello, mut cursor: watch::Receiver<Option<Cursor>>,
+    connection: &Connection, hello: ClientHello, mut presence: Presence,
     mut outbox: channel::UnboundedReceiver<ClientMessage>, mut shares: channel::UnboundedReceiver<Share>,
     events: &mpsc::Sender<Event>, uploads: &mut JoinSet<()>,
 ) -> Result<(), Error> {
@@ -317,6 +343,7 @@ async fn session(
     let reader = async {
         let mut throttle = time::interval(CURSOR_INTERVAL);
         throttle.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut last_view: Option<Instant> = None;
         loop {
             tokio::select! {
                 message = read_message(&mut recv, &mut reader) => match message? {
@@ -349,18 +376,20 @@ async fn session(
                     let datagram = datagram.map_err(fail)?;
                     match protocol::decode::<Relayed>(&datagram) {
                         Ok(Relayed { from, datagram: Datagram::Cursor(cursor) }) => emit(Event::Cursor { from, cursor }),
+                        Ok(Relayed { from, datagram: Datagram::View(view) }) => emit(Event::View { from, view }),
                         Err(e) => log::debug!("dropping a datagram: {e}"),
                     }
                 },
                 _ = throttle.tick() => {
-                    if !cursor.has_changed().unwrap_or(false) {
-                        continue;
+                    if presence.cursor.has_changed().unwrap_or(false) {
+                        send_datagram(connection, &Datagram::Cursor(presence.cursor.borrow_and_update().clone()))?;
                     }
 
-                    let datagram = Datagram::Cursor(cursor.borrow_and_update().clone());
-                    let bytes = protocol::encode(&datagram).map_err(fail)?;
-                    if let Err(e) = connection.send_datagram(Bytes::from(bytes)) {
-                        log::warn!("could not send the cursor: {e}");
+                    let is_stale = presence.view.borrow().is_some()
+                        && last_view.is_none_or(|last| last.elapsed() >= VIEW_REFRESH);
+                    if presence.view.has_changed().unwrap_or(false) || is_stale {
+                        send_datagram(connection, &Datagram::View(presence.view.borrow_and_update().clone()))?;
+                        last_view = Some(Instant::now());
                     }
                 },
             }
@@ -371,6 +400,15 @@ async fn session(
         result = writer => result,
         result = reader => result,
     }
+}
+
+fn send_datagram(connection: &Connection, datagram: &Datagram) -> Result<(), Error> {
+    let bytes = protocol::encode(datagram).map_err(fail)?;
+    if let Err(e) = connection.send_datagram(Bytes::from(bytes)) {
+        log::warn!("could not send a datagram: {e}");
+    }
+
+    Ok(())
 }
 
 struct Throttle {

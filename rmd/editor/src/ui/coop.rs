@@ -476,10 +476,8 @@ pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
     });
 }
 
-pub(super) fn draw_coop_peers(ui: &Ui, coop: &Coop) {
-    let Some(you) = coop.you.filter(|_| coop.is_connected()) else {
-        return;
-    };
+pub(super) fn draw_coop_peers(ui: &Ui, coop: &Coop, following: Option<PeerId>) -> Option<PeerId> {
+    let you = coop.you.filter(|_| coop.is_connected())?;
 
     let scale = dpi(ui);
     let pad = 4.0 * scale;
@@ -492,6 +490,7 @@ pub(super) fn draw_coop_peers(ui: &Ui, coop: &Coop) {
         )
         .collect::<Vec<_>>();
 
+    let mut clicked = None;
     for (index, (id, nick, peer)) in entries.iter().enumerate() {
         let text_size = ui.calc_text_size(nick);
         let width = text_size[0] + 2.0 * pad;
@@ -514,27 +513,62 @@ pub(super) fn draw_coop_peers(ui: &Ui, coop: &Coop) {
                 });
             }
 
-            return;
+            return clicked;
         }
 
-        ui.invisible_button(format!("##peer-{}", id.0), [width, text_size[1]]);
+        let is_pressed = ui.invisible_button(format!("##peer-{}", id.0), [width, text_size[1]]);
+        let is_hovered = ui.is_item_hovered();
+        let is_following = following == Some(*id);
+        if is_pressed && peer.is_some() {
+            clicked = Some(*id);
+        }
+
         let (min, max) = (ui.item_rect_min(), ui.item_rect_max());
         let color = peer_color(*id);
         let draw = ui.get_window_draw_list();
+        let highlight = if is_following {
+            Some(0.16)
+        } else {
+            (is_hovered && peer.is_some()).then_some(0.08)
+        };
+
+        if let Some(amount) = highlight {
+            draw.add_rect(min, max, menu_highlight(ui, amount))
+                .filled(true)
+                .rounding(ui.clone_style().frame_rounding())
+                .build();
+        }
+
         draw.add_text([min[0] + pad, min[1]], color, nick);
-        draw.add_line([min[0], max[1] + scale], [max[0], max[1] + scale], color)
-            .thickness(2.0 * scale)
+        draw.add_rect([min[0], max[1]], [max[0], max[1] + 2.0 * scale], color)
+            .filled(true)
             .build();
 
-        if ui.is_item_hovered() {
-            ui.tooltip_text(match peer.map(|peer| peer.cursor.as_ref()) {
-                None => String::from("you"),
-                Some(None) => String::from("not over a shared map"),
-                Some(Some(cursor)) if cursor.z > 1 => format!("on {} (z {})", cursor.map, cursor.z),
-                Some(Some(cursor)) => format!("on {}", cursor.map),
-            });
+        if !is_hovered {
+            continue;
         }
+
+        let Some(peer) = peer else {
+            ui.tooltip_text("you");
+            continue;
+        };
+
+        ui.tooltip(|| {
+            match peer.cursor.as_ref() {
+                None => ui.text("not over a shared map"),
+                Some(cursor) if cursor.z > 1 => ui.text(format!("on {} (z {})", cursor.map, cursor.z)),
+                Some(cursor) => ui.text(format!("on {}", cursor.map)),
+            }
+
+            ui.text_disabled(if is_following {
+                "following, click to stop"
+            } else {
+                "click to follow"
+            });
+        });
     }
+
+    clicked
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -596,22 +630,22 @@ pub(super) fn draw_coop_notice(
         match &coop.status {
             CoopStatus::CodebaseMismatch { .. } if coop.was_hosting() => {
                 ui.text_colored(DIAGNOSTIC_WARNING_COLOR, "Your codebase changed while hosting.");
-                ui.text_wrapped("Guests were disconnected. Host again to start a session on the new codebase.");
+                ui.text("Guests were disconnected. Host again to start a session on the new codebase.");
             },
             CoopStatus::CodebaseMismatch { expected } => {
                 ui.text_colored(DIAGNOSTIC_WARNING_COLOR, "Your codebase differs from the session.");
-                ui.text_wrapped("Update your checkout to match the session, then reload and retry.");
-                ui.text_wrapped(format!(
+                ui.text("Update your checkout to match the session, then reload and retry.");
+                ui.text(format!(
                     "Your codebase: {}",
                     codebase_description(coop.local_codebase())
                 ));
-                ui.text_wrapped(format!("Session codebase: {}", codebase_description(expected)));
+                ui.text(format!("Session codebase: {}", codebase_description(expected)));
             },
-            CoopStatus::Ended(reason) => ui.text_wrapped(format!("Co-op stopped: {reason}")),
+            CoopStatus::Ended(reason) => ui.text(format!("Co-op stopped: {reason}")),
             _ => {},
         }
 
-        ui.text_wrapped("Open maps and unsaved changes are preserved.");
+        ui.text("Open maps and unsaved changes are preserved.");
     }
 
     ui.separator();
@@ -834,6 +868,17 @@ pub(super) fn draw_comments(
             );
         }
     });
+}
+
+// the menu bar background moved toward the text color, so nicks stay readable in any theme
+fn menu_highlight(ui: &Ui, amount: f32) -> [f32; 4] {
+    let mut color = ui.style_color(StyleColor::MenuBarBg);
+    let text = ui.style_color(StyleColor::Text);
+    for channel in 0..3 {
+        color[channel] += (text[channel] - color[channel]) * amount;
+    }
+
+    color
 }
 
 fn peer_color(id: PeerId) -> [f32; 4] {

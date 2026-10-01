@@ -71,6 +71,7 @@ impl Session {
             stopping_server: None,
             comments: BTreeMap::new(),
             shared_maps: BTreeMap::new(),
+            following: None,
             prepared: mpsc::channel(),
             client: Some(client),
             last_poll: Instant::now(),
@@ -251,12 +252,7 @@ impl Session {
         for prepared in prepared {
             match prepared {
                 Prepared::Upload { path, base, bytes } => {
-                    if let Some(client) = self
-                        .coop
-                        .as_ref()
-                        .filter(|coop| coop.can_collaborate())
-                        .and_then(|coop| coop.client.as_ref())
-                    {
+                    if let Some(client) = self.collaborating_client() {
                         client.share_map(path, base, bytes);
                     }
                 },

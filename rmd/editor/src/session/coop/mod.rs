@@ -9,7 +9,20 @@ use std::{
 
 use dmm::{Coord, error::MapError};
 use editor::document::DocumentId;
-use net::{Client, CodebaseId, Comment, CommentId, Cursor, GenerationId, MapEdit, PeerId, PeerInfo, SeqId, Server};
+use net::{
+    Client,
+    CodebaseId,
+    Comment,
+    CommentId,
+    Cursor,
+    GenerationId,
+    MapEdit,
+    PeerId,
+    PeerInfo,
+    SeqId,
+    Server,
+    View,
+};
 
 use super::Session;
 
@@ -36,6 +49,7 @@ pub(crate) struct RemotePeer {
     pub info: PeerInfo,
     pub cursor: Option<Cursor>,
     pub shown: [f32; 2],
+    pub view: Option<View>,
 }
 
 impl RemotePeer {
@@ -44,6 +58,7 @@ impl RemotePeer {
             info,
             cursor: None,
             shown: [0.0; 2],
+            view: None,
         }
     }
 
@@ -79,6 +94,7 @@ pub(crate) struct Coop {
     pub peers: BTreeMap<PeerId, RemotePeer>,
     pub comments: BTreeMap<CommentId, Comment>,
     pub shared_maps: BTreeMap<String, SharedMap>,
+    following: Option<Following>,
     prepared: (mpsc::Sender<Prepared>, mpsc::Receiver<Prepared>),
     server: Option<Server>,
     codebase: CodebaseId,
@@ -89,6 +105,11 @@ pub(crate) struct Coop {
     stopping_server: Option<mpsc::Receiver<()>>,
     client: Option<Client>,
     last_poll: Instant,
+}
+
+struct Following {
+    peer: PeerId,
+    document: Option<DocumentId>,
 }
 
 pub(crate) enum SharedState {
@@ -256,6 +277,7 @@ impl Coop {
         self.status = CoopStatus::Ended(reason);
         self.peers.clear();
         self.comments.clear();
+        self.following = None;
         self.client = None;
         self.paused = false;
         self.needs_cleanup = true;
@@ -272,4 +294,12 @@ impl Coop {
 
 impl Session {
     pub fn coop(&self) -> Option<&Coop> { self.coop.as_ref() }
+
+    fn collaborating_client(&self) -> Option<&Client> {
+        self.coop
+            .as_ref()
+            .filter(|coop| coop.can_collaborate())?
+            .client
+            .as_ref()
+    }
 }

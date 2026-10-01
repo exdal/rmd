@@ -70,10 +70,20 @@ impl Coop {
             },
             Event::PeerLeft(id) => {
                 self.peers.remove(&id);
+                if self.following.as_ref().is_some_and(|following| following.peer == id) {
+                    self.following = None;
+                }
             },
             Event::Cursor { from, cursor } => {
                 if let Some(peer) = self.peers.get_mut(&from) {
                     peer.set_cursor(cursor);
+                }
+            },
+            Event::View { from, view } => {
+                if let Some(peer) = self.peers.get_mut(&from) {
+                    peer.view = view.filter(|view| {
+                        view.zoom.is_finite() && view.zoom > 0.0 && view.center.iter().all(|value| value.is_finite())
+                    });
                 }
             },
             Event::Comment(comment) => {

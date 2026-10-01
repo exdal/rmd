@@ -18,6 +18,7 @@ pub use protocol::coop::{
     PeerId,
     PeerInfo,
     SeqId,
+    View,
     is_map_path,
 };
 use tokio::runtime::{Builder, Runtime};

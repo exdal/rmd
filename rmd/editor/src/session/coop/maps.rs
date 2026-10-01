@@ -182,12 +182,12 @@ impl Session {
             return false;
         };
 
-        self.open_coop_map(&path)
+        self.open_coop_map(&path).is_some()
     }
 
-    pub fn open_coop_map(&mut self, path: &str) -> bool {
+    pub fn open_coop_map(&mut self, path: &str) -> Option<DocumentId> {
         if let Some(id) = self.shared_document(path) {
-            return self.set_active_document(id);
+            return self.set_active_document(id).then_some(id);
         }
 
         if self
@@ -200,7 +200,7 @@ impl Session {
             self.follow_pending_documents();
         }
 
-        self.shared_document(path).is_some()
+        self.shared_document(path)
     }
 
     fn resync_coop_map(&mut self, path: &str) {
@@ -304,12 +304,7 @@ impl Session {
             return;
         };
 
-        if let Some(client) = self
-            .coop
-            .as_ref()
-            .filter(|coop| coop.can_collaborate())
-            .and_then(|coop| coop.client.as_ref())
-        {
+        if let Some(client) = self.collaborating_client() {
             client.unshare_map(path);
         }
     }

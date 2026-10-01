@@ -24,6 +24,7 @@ use net::{
     PeerInfo,
     Server,
     ServerConfig,
+    View,
 };
 
 use super::*;

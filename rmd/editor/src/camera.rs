@@ -1,6 +1,8 @@
 use dmm::{Coord, Size};
 use render::Camera;
 
+pub fn clamp_zoom(zoom: f32) -> f32 { zoom.clamp(0.05, 64.0) }
+
 pub struct Controller {
     pub camera: Camera,
 }
@@ -26,7 +28,7 @@ impl Controller {
         );
         let fit = (viewport_w / width_px.max(1.0)).min(viewport_h / height_px.max(1.0));
 
-        self.camera.zoom = (fit * 0.95).clamp(0.05, 64.0);
+        self.camera.zoom = clamp_zoom(fit * 0.95);
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -54,7 +56,7 @@ impl Controller {
 
     pub fn zoom_by(&mut self, steps: f32, cursor: [f32; 2]) {
         let before = self.screen_to_map(cursor);
-        self.camera.zoom = (self.camera.zoom * 1.2_f32.powf(steps)).clamp(0.05, 64.0);
+        self.camera.zoom = clamp_zoom(self.camera.zoom * 1.2_f32.powf(steps));
         let after = self.screen_to_map(cursor);
 
         self.camera.x += before[0] - after[0];

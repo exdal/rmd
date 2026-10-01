@@ -169,3 +169,181 @@ fn coop_needs_a_codebase() {
             .is_err()
     );
 }
+
+fn following(name: &str) -> (PathBuf, Session, DocumentId, DocumentId) {
+    let (dir, mut session) = hosting(name);
+    fs::write(
+        dir.join("_maps/b.dmm"),
+        "\"a\" = (/turf,/area)\n\n(1,1,1) = {\"\na\n\"}\n(1,1,2) = {\"\na\n\"}\n",
+    )
+    .unwrap();
+
+    let mut maps = Vec::new();
+    for file in ["_maps/a.dmm", "_maps/b.dmm"] {
+        let id = open_local(&mut session, dir.join(file));
+        session.share_coop_map();
+        poll_until(&mut [&mut session], |sessions| {
+            sessions[0].coop_shared_map_path(id).is_some() && settled(sessions)
+        });
+        maps.push(id);
+    }
+
+    let codebase = session.coop().unwrap().local_codebase().clone();
+    deliver(
+        &mut session,
+        &dir,
+        Event::PeerJoined(PeerInfo {
+            id: OTHER,
+            nick: String::from("other"),
+            codebase,
+        }),
+    );
+
+    (dir, session, maps[0], maps[1])
+}
+
+fn look_at(session: &mut Session, dir: &Path, map: &str, z: u32) {
+    deliver(
+        session,
+        dir,
+        Event::View {
+            from: OTHER,
+            view: Some(View {
+                map: String::from(map),
+                z,
+                center: [16.0, 16.0],
+                zoom: 2.0,
+            }),
+        },
+    );
+}
+
+#[test]
+fn following_a_peer_brings_their_map_and_level_forward() {
+    let (dir, mut session, a, b) = following("follow");
+    assert_eq!(session.state.active(), Some(b));
+    look_at(&mut session, &dir, "_maps/a.dmm", 1);
+
+    session.toggle_coop_follow(OTHER);
+    assert_eq!(session.coop_following(), Some(OTHER));
+    let (document, view) = session.coop_follow_target().unwrap();
+    assert_eq!((document, view.zoom), (a, 2.0));
+    assert_eq!(session.state.active(), Some(a));
+
+    look_at(&mut session, &dir, "_maps/b.dmm", 2);
+    assert_eq!(session.coop_follow_target().map(|(document, _)| document), Some(b));
+    assert_eq!(session.state.active(), Some(b));
+    assert_eq!(session.state.document(b).unwrap().z, 2);
+
+    session.toggle_coop_follow(OTHER);
+    assert_eq!(session.coop_following(), None);
+    assert!(session.coop_follow_target().is_none());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn switching_documents_or_the_peer_leaving_stops_following() {
+    let (dir, mut session, a, b) = following("follow-stop");
+    look_at(&mut session, &dir, "_maps/a.dmm", 1);
+    session.toggle_coop_follow(OTHER);
+    assert!(session.coop_follow_target().is_some());
+
+    session.set_active_document(b);
+    assert!(session.coop_follow_target().is_none());
+    assert_eq!(session.coop_following(), None);
+    assert_eq!(session.state.active(), Some(b));
+
+    session.toggle_coop_follow(OTHER);
+    deliver(&mut session, &dir, Event::PeerLeft(OTHER));
+    assert_eq!(session.coop_following(), None);
+
+    let you = session.coop().unwrap().you.unwrap();
+    session.toggle_coop_follow(you);
+    assert_eq!(session.coop_following(), None);
+    assert_eq!(session.state.active(), Some(b));
+    assert!(session.state.document(a).is_some());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn following_reopens_a_closed_shared_map() {
+    let (dir, mut session, a, _) = following("follow-reopen");
+    let file = dir.join("_maps/a.dmm");
+    session.close_map(a);
+    session.poll_coop();
+    assert!(session.state.document_for_path(&file).is_none());
+
+    look_at(&mut session, &dir, "_maps/a.dmm", 1);
+    session.toggle_coop_follow(OTHER);
+    let (document, _) = session.coop_follow_target().unwrap();
+    assert_eq!(session.state.document_for_path(&file), Some(document));
+
+    poll_until(&mut [&mut session], |sessions| {
+        sessions[0].coop_shared_map_path(document).is_some()
+    });
+    assert_eq!(session.coop_follow_target().map(|(id, _)| id), Some(document));
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_map_someone_shares_does_not_stop_following() {
+    let (dir, mut session, a, _) = following("follow-share");
+    look_at(&mut session, &dir, "_maps/a.dmm", 1);
+    session.toggle_coop_follow(OTHER);
+    assert!(session.coop_follow_target().is_some());
+
+    deliver(
+        &mut session,
+        &dir,
+        Event::MapIncoming {
+            path: String::from("_maps/c.dmm"),
+            by: OTHER,
+            len: 1234,
+        },
+    );
+    assert_ne!(
+        session.state.active(),
+        Some(a),
+        "the incoming map opens as the active document"
+    );
+
+    assert_eq!(session.coop_follow_target().map(|(id, _)| id), Some(a));
+    assert_eq!(session.state.active(), Some(a));
+    assert_eq!(session.coop_following(), Some(OTHER));
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_broken_view_is_dropped() {
+    let (dir, mut session, ..) = following("follow-broken");
+    for (center, zoom) in [
+        ([0.0, 0.0], 0.0),
+        ([0.0, 0.0], -1.0),
+        ([f32::NAN, 0.0], 1.0),
+        ([0.0, 0.0], f32::INFINITY),
+    ] {
+        deliver(
+            &mut session,
+            &dir,
+            Event::View {
+                from: OTHER,
+                view: Some(View {
+                    map: String::from("_maps/a.dmm"),
+                    z: 1,
+                    center,
+                    zoom,
+                }),
+            },
+        );
+        assert!(
+            session.coop().unwrap().peers[&OTHER].view.is_none(),
+            "{center:?} at {zoom}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}

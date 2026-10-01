@@ -161,8 +161,19 @@ pub struct Cursor {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct View {
+    /// `_maps/map_files/Station/station.dmm`
+    pub map: String,
+    pub z: u32,
+    /// map pixels from the bottom left corner
+    pub center: [f32; 2],
+    pub zoom: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Datagram {
     Cursor(Option<Cursor>),
+    View(Option<View>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -308,6 +319,13 @@ mod tests {
 
         round_trip(Datagram::Cursor(Some(cursor.clone())));
         round_trip(Datagram::Cursor(None));
+        round_trip(Datagram::View(Some(View {
+            map: cursor.map.clone(),
+            z: 3,
+            center: [512.0, 96.5],
+            zoom: 1.5,
+        })));
+        round_trip(Datagram::View(None));
         round_trip(Relayed {
             from: PeerId(7),
             datagram: Datagram::Cursor(Some(cursor)),
@@ -325,7 +343,18 @@ mod tests {
             })),
         };
 
+        let view = Relayed {
+            from: PeerId(u32::MAX),
+            datagram: Datagram::View(Some(View {
+                map: "m".repeat(200),
+                z: u32::MAX,
+                center: [f32::MAX, f32::MIN],
+                zoom: f32::MAX,
+            })),
+        };
+
         // QUIC guarantees at least 1200 byte packets, minus header overhead
         assert!(encode(&relayed).unwrap().len() < 1100);
+        assert!(encode(&view).unwrap().len() < 1100);
     }
 }

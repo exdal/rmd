@@ -370,7 +370,9 @@ impl UiState {
             if let Some(coop) = session.coop() {
                 ui.separator();
                 draw_coop_status(ui, coop);
-                draw_coop_peers(ui, coop);
+                if let Some(peer) = draw_coop_peers(ui, coop, session.coop_following()) {
+                    session.toggle_coop_follow(peer);
+                }
             }
         });
 
