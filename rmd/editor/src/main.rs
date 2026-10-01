@@ -34,6 +34,7 @@ use std::{
 
 use dear_imgui_rs::{
     BackendFlags,
+    ClipboardBackend,
     ConfigFlags,
     Context,
     FontSource,
@@ -288,6 +289,18 @@ fn take_screenshot(
     }
 }
 
+struct SystemClipboard(arboard::Clipboard);
+
+impl ClipboardBackend for SystemClipboard {
+    fn get(&mut self) -> Option<String> { self.0.get_text().ok() }
+
+    fn set(&mut self, value: &str) {
+        if let Err(e) = self.0.set_text(value) {
+            log::error!("could not copy to the clipboard: {e}");
+        }
+    }
+}
+
 fn copy_image(clipboard: &mut Option<arboard::Clipboard>, image: CapturedImage) {
     let clipboard = match clipboard {
         Some(clipboard) => clipboard,
@@ -380,6 +393,11 @@ impl App {
         let device = Device::new(window.window_handle()?.as_raw(), window.display_handle()?.as_raw())?;
 
         let mut imgui = Context::create();
+        match arboard::Clipboard::new() {
+            Ok(clipboard) => imgui.set_clipboard_backend(SystemClipboard(clipboard)),
+            Err(e) => log::error!("could not open the clipboard: {e}"),
+        }
+
         let mut alternate_row = imgui.style().color(StyleColor::TableRowBgAlt);
         alternate_row[3] *= TABLE_ROW_ALT_ALPHA_SCALE;
         imgui.style_mut().set_color(StyleColor::TableRowBgAlt, alternate_row);
