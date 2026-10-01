@@ -136,7 +136,7 @@ pub(super) fn draw_coop_dialog(
                 ui.set_next_item_width(width);
                 submitted |= ui
                     .input_text("##coop-address", &mut state.address)
-                    .hint("host:port")
+                    .hint("host:port or [IPv6]:port")
                     .enter_returns_true(true)
                     .build();
             },

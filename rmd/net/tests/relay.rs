@@ -1,5 +1,5 @@
 use std::{
-    net::{Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     thread,
     time::{Duration, Instant},
 };
@@ -305,6 +305,36 @@ fn an_unreachable_host_disconnects() {
         Event::Disconnected(reason) => Some(reason),
         _ => None,
     });
+}
+
+#[test]
+fn a_dual_stack_server_accepts_ipv4_and_ipv6_clients() {
+    let server = Server::spawn(ServerConfig {
+        bind: SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)),
+        codebase: None,
+        password: String::from(PASSWORD),
+    })
+    .unwrap();
+    let port = server.local_addr().port();
+
+    let alice = join_at(SocketAddr::from((Ipv4Addr::LOCALHOST, port)), PASSWORD, "alice");
+    wait_for(&alice, |event| match event {
+        Event::Connected { .. } => Some(()),
+        _ => None,
+    });
+
+    // without IPv6 the server falls back to IPv4 and only that half applies
+    if !server.local_addr().is_ipv6() {
+        return;
+    }
+
+    let bob = join_at(SocketAddr::from((Ipv6Addr::LOCALHOST, port)), PASSWORD, "bob");
+    let peers = wait_for(&bob, |event| match event {
+        Event::Connected { peers, .. } => Some(peers),
+        _ => None,
+    });
+    assert_eq!(peers.len(), 1);
+    assert_eq!(peers[0].nick, "alice");
 }
 
 #[test]

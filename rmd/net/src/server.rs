@@ -36,7 +36,7 @@ use protocol::{
         is_map_path,
     },
 };
-use quinn::{Connection, Endpoint};
+use quinn::{Connection, Endpoint, EndpointConfig, TokioRuntime};
 use ring::rand::{SecureRandom, SystemRandom};
 use tokio::{
     sync::{mpsc, oneshot},
@@ -46,6 +46,7 @@ use tokio::{
 use crate::{
     Error,
     fail,
+    socket,
     stream::{read_message, read_payload, read_transfer_header, send_transfer, write_message},
     tls,
 };
@@ -84,7 +85,14 @@ impl Server {
         let runtime = crate::runtime()?;
         let endpoint = {
             let _context = runtime.enter();
-            Endpoint::server(tls::server_config()?, config.bind).map_err(fail)?
+            let socket = socket::bind_udp(config.bind).map_err(fail)?;
+            Endpoint::new(
+                EndpointConfig::default(),
+                Some(tls::server_config()?),
+                socket,
+                Arc::new(TokioRuntime),
+            )
+            .map_err(fail)?
         };
 
         let addr = endpoint.local_addr().map_err(fail)?;

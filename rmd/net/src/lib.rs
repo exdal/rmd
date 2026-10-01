@@ -1,6 +1,7 @@
 mod client;
 mod proxy;
 mod server;
+mod socket;
 mod stream;
 mod tls;
 

@@ -2,7 +2,7 @@
 
 use std::{
     env,
-    net::{Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     process::ExitCode,
     time::Duration,
 };
@@ -33,7 +33,7 @@ fn main() -> ExitCode {
         },
     };
 
-    let public = SocketAddr::from((Ipv4Addr::UNSPECIFIED, arguments.port));
+    let public = SocketAddr::from((Ipv6Addr::UNSPECIFIED, arguments.port));
     let is_simulated = !arguments.impairment.is_none();
     // a simulated link puts the server behind a lossy proxy that takes the public port
     let bind = if is_simulated {

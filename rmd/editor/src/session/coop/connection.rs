@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     mem,
-    net::{Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     path::Path,
     sync::mpsc,
     thread,
@@ -26,7 +26,7 @@ impl Session {
     pub fn host_coop(&mut self, port: u16, password: String, nick: String) -> Result<(), String> {
         let codebase = self.loaded_codebase_id()?;
         let server = Server::spawn(ServerConfig {
-            bind: SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)),
+            bind: SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)),
             password,
             codebase: Some(codebase.clone()),
         })

@@ -19,5 +19,6 @@ quinn = { version = "0.11", default-features = false, features = ["log", "runtim
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
 ring = "0.17"
 serde = "1"
+socket2 = "0.6"
 rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std"] }
 tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }

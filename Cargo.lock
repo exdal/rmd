@@ -2513,6 +2513,7 @@ dependencies = [
  "ring",
  "rustls",
  "serde",
+ "socket2",
  "tokio",
 ]
 

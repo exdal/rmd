@@ -15,7 +15,7 @@ use tokio::{
     time::{self, Instant},
 };
 
-use crate::{Error, fail};
+use crate::{Error, fail, socket};
 
 const MAX_DATAGRAM: usize = 64 * 1024;
 
@@ -41,7 +41,12 @@ pub struct LossyProxy {
 impl LossyProxy {
     pub fn spawn(bind: SocketAddr, upstream: SocketAddr, impairment: Impairment) -> Result<Self, Error> {
         let runtime = crate::runtime()?;
-        let front = runtime.block_on(UdpSocket::bind(bind)).map_err(fail)?;
+        let front = socket::bind_udp(bind).map_err(fail)?;
+        front.set_nonblocking(true).map_err(fail)?;
+        let front = {
+            let _context = runtime.enter();
+            UdpSocket::from_std(front).map_err(fail)?
+        };
         let addr = front.local_addr().map_err(fail)?;
 
         let (shutdown, stop) = oneshot::channel();
