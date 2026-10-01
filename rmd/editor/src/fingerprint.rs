@@ -7,6 +7,17 @@ use net::CodebaseHash;
 use objtree::ObjectTree;
 use ring::digest::{Context, SHA256};
 
+#[repr(u8)]
+enum ValueTag {
+    Null,
+    Num,
+    Text,
+    Resource,
+    Path,
+    List,
+    Unevaluated,
+}
+
 pub(crate) fn object_tree(tree: &ObjectTree, builtin_files: &[FileId]) -> CodebaseHash {
     let is_builtin = |location: &Location| builtin_files.contains(&location.file);
     let mut types = tree
@@ -33,13 +44,9 @@ pub(crate) fn object_tree(tree: &ObjectTree, builtin_files: &[FileId]) -> Codeba
     write_len(&mut context, types.len());
     for (path, decl, vars) in types {
         write_str(&mut context, &path);
-        match &decl.parent_type {
-            Some(parent) => {
-                context.update(&[1]);
-                write_str(&mut context, &parent.to_string());
-            },
-            None => context.update(&[0]),
-        }
+        write_option(&mut context, decl.parent_type.as_ref(), |context, parent| {
+            write_str(context, &parent.to_string());
+        });
 
         write_len(&mut context, vars.len());
         for var in vars {
@@ -55,38 +62,41 @@ pub(crate) fn object_tree(tree: &ObjectTree, builtin_files: &[FileId]) -> Codeba
 
 fn write_value(context: &mut Context, value: &Value) {
     match value {
-        Value::Null => context.update(&[0]),
+        Value::Null => write_tag(context, ValueTag::Null),
         Value::Num(num) => {
-            context.update(&[1]);
+            write_tag(context, ValueTag::Num);
             context.update(&num.to_bits().to_le_bytes());
         },
         Value::Text(text) => {
-            context.update(&[2]);
+            write_tag(context, ValueTag::Text);
             write_str(context, text);
         },
         Value::Resource(path) => {
-            context.update(&[3]);
+            write_tag(context, ValueTag::Resource);
             write_str(context, path);
         },
         Value::Path(path) => {
-            context.update(&[4]);
+            write_tag(context, ValueTag::Path);
             write_str(context, &path.to_string());
         },
         Value::List(entries) => {
-            context.update(&[5]);
+            write_tag(context, ValueTag::List);
             write_len(context, entries.len());
             for entry in entries {
                 write_value(context, &entry.key);
-                match &entry.value {
-                    Some(value) => {
-                        context.update(&[1]);
-                        write_value(context, value);
-                    },
-                    None => context.update(&[0]),
-                }
+                write_option(context, entry.value.as_ref(), write_value);
             }
         },
-        Value::Unevaluated => context.update(&[6]),
+        Value::Unevaluated => write_tag(context, ValueTag::Unevaluated),
+    }
+}
+
+fn write_tag(context: &mut Context, tag: ValueTag) { context.update(&[tag as u8]); }
+
+fn write_option<T>(context: &mut Context, value: Option<T>, write: impl FnOnce(&mut Context, T)) {
+    context.update(&[u8::from(value.is_some())]);
+    if let Some(value) = value {
+        write(context, value);
     }
 }
 
