@@ -37,7 +37,7 @@ impl CommentId {
     pub fn next(self) -> Self { Self(self.0 + 1) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct GenerationId(pub u32);
 
 impl GenerationId {
@@ -129,6 +129,7 @@ pub enum ServerMessage {
     MapUnshared {
         path: String,
         by: PeerId,
+        generation: Option<GenerationId>,
     },
 }
 
@@ -299,6 +300,7 @@ mod tests {
         round_trip(ServerMessage::MapUnshared {
             path: String::from("_maps/test.dmm"),
             by: PeerId(1),
+            generation: Some(GenerationId(3)),
         });
     }
 

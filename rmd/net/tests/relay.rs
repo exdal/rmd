@@ -913,18 +913,54 @@ fn start_slow_download(server: &Server) -> (Client, LossyProxy, Client) {
     (alice, proxy, bob)
 }
 
+// the rest of the 8 MB would keep reaching the proxy if the server were still pushing it
+fn assert_push_stopped(proxy: &LossyProxy) {
+    let before = proxy.downstream_bytes();
+    thread::sleep(Duration::from_millis(1500));
+    let sent = proxy.downstream_bytes() - before;
+    assert!(
+        sent < 200_000,
+        "the server kept pushing, {sent} more bytes reached bob's link"
+    );
+}
+
 #[test]
 fn unsharing_a_map_stops_its_download() {
     let server = server();
-    let (alice, _proxy, bob) = start_slow_download(&server);
+    let (alice, proxy, bob) = start_slow_download(&server);
 
     alice.unshare_map(String::from(SLOW_MAP));
-    let is_stopped = wait_for(&bob, |event| match event {
-        Event::TransferFailed { path, .. } if path == SLOW_MAP => Some(true),
-        Event::MapSnapshot { path, .. } if path == SLOW_MAP => Some(false),
+    wait_for(&bob, |event| matches!(event, Event::MapUnshared { .. }).then_some(()));
+    assert_push_stopped(&proxy);
+
+    for event in bob.poll() {
+        let is_late = match &event {
+            Event::Progress { path, .. } | Event::TransferFailed { path, .. } | Event::MapSnapshot { path, .. } => {
+                path == SLOW_MAP
+            },
+            _ => false,
+        };
+        assert!(!is_late, "{event:?} arrived after the map stopped being shared");
+    }
+}
+
+#[test]
+fn sharing_a_map_again_replaces_its_download_in_flight() {
+    let server = server();
+    let (alice, proxy, bob) = start_slow_download(&server);
+
+    alice.share_map(String::from(SLOW_MAP), None, b"replacement".to_vec());
+    wait_for(&bob, |event| match event {
+        Event::TransferFailed { path, reason, .. } if path == SLOW_MAP => {
+            panic!("the replaced download reported a failure: {reason}")
+        },
+        Event::MapSnapshot { path, bytes, .. } if path == SLOW_MAP => {
+            assert_eq!(bytes, b"replacement", "the replaced snapshot still arrived");
+            Some(())
+        },
         _ => None,
     });
-    assert!(is_stopped, "the download finished after the map stopped being shared");
+    assert_push_stopped(&proxy);
 }
 
 #[test]
@@ -946,4 +982,32 @@ fn stopping_the_server_mid_download_disconnects_peers_promptly() {
         "bob heard of the shutdown after {:?}",
         started.elapsed()
     );
+}
+
+#[test]
+fn sharing_a_map_again_after_unsharing_gets_a_newer_generation() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
+    let bob = join(&server, PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    let path = String::from("_maps/test.dmm");
+    let snapshot = |client: &Client| {
+        wait_for(client, |event| match event {
+            Event::MapSnapshot { generation, bytes, .. } => Some((generation, bytes)),
+            _ => None,
+        })
+    };
+
+    alice.share_map(path.clone(), None, b"first".to_vec());
+    let (first, _) = snapshot(&bob);
+
+    alice.unshare_map(path.clone());
+    wait_for(&bob, |event| matches!(event, Event::MapUnshared { .. }).then_some(()));
+
+    alice.share_map(path, None, b"second".to_vec());
+    let (second, bytes) = snapshot(&bob);
+    assert!(second > first, "{second:?} must be newer than {first:?}");
+    assert_eq!(bytes, b"second");
 }

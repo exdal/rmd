@@ -166,7 +166,8 @@ struct State {
     last_comment: CommentId,
     maps: HashMap<String, SharedMap>,
     uploads: HashMap<String, (PeerId, u64)>,
-    pushes: JoinSet<()>,
+    // generations never repeat, even for a path shared again after it stopped
+    last_generation: GenerationId,
 }
 
 impl State {
@@ -189,10 +190,19 @@ struct SharedMap {
     pushes: Vec<AbortHandle>,
 }
 
+impl SharedMap {
+    fn abort_pushes(&self) {
+        for push in &self.pushes {
+            push.abort();
+        }
+    }
+}
+
 struct Peer {
     info: PeerInfo,
     connection: Connection,
     outbox: mpsc::UnboundedSender<ServerMessage>,
+    pushes: JoinSet<()>,
 }
 
 impl Shared {
@@ -296,10 +306,14 @@ impl Shared {
         }
 
         let State {
-            peers, maps, pushes, ..
+            peers,
+            maps,
+            last_generation,
+            ..
         } = &mut *state;
         let previous = maps.remove(&path);
-        let generation = previous.as_ref().map_or(GenerationId(1), |map| map.generation.next());
+        *last_generation = last_generation.next();
+        let generation = *last_generation;
         // peers kept editing while the snapshot was on its way, and the sharer's own edits are already in it
         let edits = previous
             .as_ref()
@@ -323,8 +337,13 @@ impl Shared {
             .unwrap_or_default();
 
         let replaced = previous.as_ref().map(|map| map.generation);
-        let mut map_pushes = previous.map(|map| map.pushes).unwrap_or_default();
-        for (id, peer) in peers.iter() {
+        // peers drop an older generation anyway
+        if let Some(previous) = &previous {
+            previous.abort_pushes();
+        }
+
+        let mut map_pushes = Vec::new();
+        for (id, peer) in peers.iter_mut() {
             let _ = peer.outbox.send(ServerMessage::MapShared {
                 path: path.clone(),
                 by,
@@ -332,7 +351,7 @@ impl Shared {
             });
             if *id != by {
                 push(
-                    pushes,
+                    &mut peer.pushes,
                     &mut map_pushes,
                     peer.connection.clone(),
                     path.clone(),
@@ -394,31 +413,30 @@ impl Shared {
     // echoed even for a map we don't have, so a peer that still shows it can drop it
     fn unshare(&self, by: PeerId, path: &str) {
         let mut state = self.state.lock().unwrap();
-        if let Some(map) = state.maps.remove(path) {
-            for push in map.pushes {
-                push.abort();
-            }
-        }
+        let generation = state.maps.remove(path).map(|map| {
+            map.abort_pushes();
+
+            map.generation
+        });
 
         state.comments.retain(|comment| comment.map != path);
         for peer in state.peers.values() {
             let _ = peer.outbox.send(ServerMessage::MapUnshared {
                 path: path.to_owned(),
                 by,
+                generation,
             });
         }
     }
 
     fn resync(&self, id: PeerId, path: &str) {
         let mut state = self.state.lock().unwrap();
-        let State {
-            peers, maps, pushes, ..
-        } = &mut *state;
-        let (Some(peer), Some(map)) = (peers.get(&id), maps.get_mut(path)) else {
+        let State { peers, maps, .. } = &mut *state;
+        let (Some(peer), Some(map)) = (peers.get_mut(&id), maps.get_mut(path)) else {
             return;
         };
 
-        replay(&peer.outbox, &peer.connection, path, map, pushes);
+        replay(&peer.outbox, &peer.connection, path, map, &mut peer.pushes);
     }
 }
 
@@ -512,18 +530,15 @@ async fn serve(endpoint: Endpoint, shared: Arc<Shared>, mut stop: oneshot::Recei
         }
     }
 
-    let (connections, mut pushes) = {
-        let mut state = shared.state.lock().unwrap();
-        let connections = state
-            .peers
-            .values()
-            .map(|peer| peer.connection.clone())
-            .collect::<Vec<_>>();
-
-        (connections, mem::take(&mut state.pushes))
-    };
-
-    abort_transfers(&mut pushes, &connections).await;
+    let pushes = shared
+        .state
+        .lock()
+        .unwrap()
+        .peers
+        .values_mut()
+        .map(|peer| (peer.connection.clone(), mem::take(&mut peer.pushes)))
+        .collect::<Vec<_>>();
+    abort_transfers(pushes).await;
     endpoint.close(0u32.into(), b"server shutting down");
     let _ = time::timeout(CLOSE_GRACE, endpoint.wait_idle()).await;
 }
@@ -600,14 +615,14 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
                     let _ = peer.outbox.send(ServerMessage::PeerJoined(info.clone()));
                 }
 
-                let State { maps, pushes, .. } = &mut *state;
-                for (path, map) in maps.iter_mut() {
+                let mut pushes = JoinSet::new();
+                for (path, map) in state.maps.iter_mut() {
                     let _ = outbox.send(ServerMessage::MapShared {
                         path: path.clone(),
                         by: map.by,
                         generation: map.generation,
                     });
-                    replay(&outbox, connection, path, map, pushes);
+                    replay(&outbox, connection, path, map, &mut pushes);
                 }
 
                 for (path, (by, len)) in state.uploads.iter() {
@@ -624,6 +639,7 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
                         info: info.clone(),
                         connection: connection.clone(),
                         outbox,
+                        pushes,
                     },
                 );
                 None

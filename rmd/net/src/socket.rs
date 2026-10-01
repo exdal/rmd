@@ -7,7 +7,12 @@ use socket2::{Domain, Protocol, Socket, Type};
 
 pub(crate) fn bind_udp(addr: SocketAddr) -> io::Result<UdpSocket> {
     match bind(addr) {
-        Err(_) if addr.is_ipv6() && addr.ip().is_unspecified() => {
+        // a taken port or a missing permission would fail on IPv4 too, so only a missing IPv6 falls back
+        Err(e)
+            if addr.is_ipv6()
+                && addr.ip().is_unspecified()
+                && !matches!(e.kind(), io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied) =>
+        {
             bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, addr.port())))
         },
         result => result,

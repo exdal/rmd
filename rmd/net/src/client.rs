@@ -1,7 +1,8 @@
 use std::{
+    collections::HashMap,
+    future,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-    slice,
-    sync::mpsc,
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -270,7 +271,7 @@ async fn run(
         _ = &mut stop => Ok(()),
     };
 
-    abort_transfers(&mut uploads, slice::from_ref(&connection)).await;
+    abort_transfers([(connection.clone(), uploads)]).await;
     connection.close(0u32.into(), b"");
     let _ = time::timeout(CLOSE_GRACE, endpoint.wait_idle()).await;
 
@@ -336,6 +337,7 @@ async fn session(
         Ok::<_, Error>(())
     };
 
+    let unshared = Unshared::default();
     let reader = async {
         let mut throttle = time::interval(CURSOR_INTERVAL);
         throttle.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -357,7 +359,9 @@ async fn session(
                     Some(ServerMessage::Edit { by, seq, edit }) => emit(Event::Edit { by, seq, edit }),
                     Some(ServerMessage::MapIncoming { path, by, len }) => emit(Event::MapIncoming { path, by, len }),
                     Some(ServerMessage::MapCancelled { path, by }) => emit(Event::MapCancelled { path, by }),
-                    Some(ServerMessage::MapUnshared { path, by }) => emit(Event::MapUnshared { path, by }),
+                    Some(ServerMessage::MapUnshared { path, by, generation }) => {
+                        unshared.stop(&path, generation, || emit(Event::MapUnshared { path: path.clone(), by }));
+                    },
                     Some(other) => log::warn!("unexpected message from the host: {other:?}"),
                     None => return Err(fail("the host ended the session")),
                 },
@@ -366,7 +370,7 @@ async fn session(
                 },
                 Some(_) = uploads.join_next() => {},
                 stream = connection.accept_uni() => {
-                    tokio::spawn(download(stream.map_err(fail)?, events.clone()));
+                    tokio::spawn(download(stream.map_err(fail)?, events.clone(), unshared.clone()));
                 },
                 datagram = connection.read_datagram() => {
                     let datagram = datagram.map_err(fail)?;
@@ -407,12 +411,36 @@ fn send_datagram(connection: &Connection, datagram: &Datagram) -> Result<(), Err
     Ok(())
 }
 
+// a download's bytes can be read after its map stopped being shared, since they travel on another stream
+#[derive(Clone, Default)]
+struct Unshared(Arc<Mutex<HashMap<String, GenerationId>>>);
+
+impl Unshared {
+    fn stop(&self, path: &str, generation: Option<GenerationId>, emit: impl FnOnce()) {
+        let mut stopped = self.0.lock().unwrap();
+        if let Some(generation) = generation {
+            let last = stopped.entry(path.to_owned()).or_insert(generation);
+            *last = (*last).max(generation);
+        }
+
+        emit();
+    }
+
+    fn emit_unless_stopped(&self, path: &str, generation: GenerationId, emit: impl FnOnce()) {
+        let stopped = self.0.lock().unwrap();
+        if stopped.get(path).is_none_or(|last| generation > *last) {
+            emit();
+        }
+    }
+}
+
 struct Throttle {
     path: String,
     direction: Direction,
     total: u64,
     last: Option<Instant>,
     events: mpsc::Sender<Event>,
+    download: Option<(Unshared, GenerationId)>,
 }
 
 impl Throttle {
@@ -423,6 +451,18 @@ impl Throttle {
             total,
             last: None,
             events,
+            download: None,
+        }
+    }
+
+    fn send(&self, event: Event) {
+        match &self.download {
+            Some((unshared, generation)) => unshared.emit_unless_stopped(&self.path, *generation, || {
+                let _ = self.events.send(event);
+            }),
+            None => {
+                let _ = self.events.send(event);
+            },
         }
     }
 
@@ -433,7 +473,7 @@ impl Throttle {
         }
 
         self.last = Some(now);
-        let _ = self.events.send(Event::Progress {
+        self.send(Event::Progress {
             path: self.path.clone(),
             direction: self.direction,
             done,
@@ -442,7 +482,7 @@ impl Throttle {
     }
 
     fn fail(&self, reason: String) {
-        let _ = self.events.send(Event::TransferFailed {
+        self.send(Event::TransferFailed {
             path: self.path.clone(),
             direction: self.direction,
             reason,
@@ -466,7 +506,7 @@ async fn upload(connection: Connection, Share { path, base, bytes }: Share, even
     }
 }
 
-async fn download(mut stream: quinn::RecvStream, events: mpsc::Sender<Event>) {
+async fn download(mut stream: quinn::RecvStream, events: mpsc::Sender<Event>, unshared: Unshared) {
     let (path, generation, len) = match read_transfer_header(&mut stream).await {
         Ok(Transfer::Map {
             path, generation, len, ..
@@ -477,18 +517,61 @@ async fn download(mut stream: quinn::RecvStream, events: mpsc::Sender<Event>) {
         },
     };
 
-    let mut throttle = Throttle::new(path, Direction::Receiving, len, events);
+    let mut throttle = Throttle {
+        download: Some((unshared, generation)),
+        ..Throttle::new(path, Direction::Receiving, len, events)
+    };
     match read_payload(&mut stream, len, |done| throttle.report(done)).await {
-        Ok(bytes) => {
-            let _ = throttle.events.send(Event::MapSnapshot {
-                path: throttle.path,
-                generation,
-                bytes,
-            });
-        },
+        Ok(bytes) => throttle.send(Event::MapSnapshot {
+            path: throttle.path.clone(),
+            generation,
+            bytes,
+        }),
         Err(e) => {
+            // the server cancels a push on purpose and says why on the control stream
+            let is_cancelled = tokio::select! {
+                biased;
+                reset = stream.received_reset() => matches!(reset, Ok(Some(_))),
+                () = future::ready(()) => false,
+            };
+            if is_cancelled {
+                return;
+            }
+
             log::warn!("could not receive {}: {e}", throttle.path);
             throttle.fail(e.to_string());
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stopped_share_silences_only_its_own_downloads() {
+        let unshared = Unshared::default();
+        let path = "_maps/test.dmm";
+        let is_emitted = |path: &str, generation| {
+            let mut is_emitted = false;
+            unshared.emit_unless_stopped(path, generation, || is_emitted = true);
+
+            is_emitted
+        };
+        assert!(is_emitted(path, GenerationId(2)), "nothing has stopped yet");
+
+        let mut is_announced = false;
+        unshared.stop(path, Some(GenerationId(2)), || is_announced = true);
+        assert!(is_announced);
+        assert!(!is_emitted(path, GenerationId(1)));
+        assert!(!is_emitted(path, GenerationId(2)));
+        assert!(is_emitted(path, GenerationId(3)), "sharing the path again goes through");
+        assert!(is_emitted("_maps/other.dmm", GenerationId(1)));
+
+        unshared.stop(path, Some(GenerationId(1)), || {});
+        assert!(
+            !is_emitted(path, GenerationId(2)),
+            "an older stop doesn't reopen a newer one"
+        );
     }
 }

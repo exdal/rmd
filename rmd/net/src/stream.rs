@@ -82,19 +82,21 @@ impl Drop for Outgoing {
 
 // quinn holds the close back while anything else is queued behind a full congestion window,
 // so the resets of unfinished transfers go out first
-pub(crate) async fn abort_transfers(transfers: &mut JoinSet<()>, connections: &[Connection]) {
-    let reset_count = || {
-        connections
-            .iter()
-            .map(|connection| connection.stats().frame_tx.reset_stream)
-            .sum::<u64>()
-    };
+pub(crate) async fn abort_transfers(transfers: impl IntoIterator<Item = (Connection, JoinSet<()>)>) {
+    let reset_count = |connection: &Connection| connection.stats().frame_tx.reset_stream;
+    let mut expected = Vec::new();
+    for (connection, mut transfers) in transfers {
+        while transfers.try_join_next().is_some() {}
+        let resets = reset_count(&connection) + transfers.len() as u64;
+        transfers.shutdown().await;
+        expected.push((connection, resets));
+    }
 
-    while transfers.try_join_next().is_some() {}
-    let resets = reset_count() + transfers.len() as u64;
-    transfers.shutdown().await;
     let _ = time::timeout(CLOSE_GRACE, async {
-        while reset_count() < resets {
+        while expected
+            .iter()
+            .any(|(connection, resets)| reset_count(connection) < *resets)
+        {
             time::sleep(RESET_POLL).await;
         }
     })

@@ -2,7 +2,11 @@ use std::{
     collections::HashMap,
     io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc,
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
     time::Duration,
 };
@@ -34,6 +38,7 @@ impl Impairment {
 
 pub struct LossyProxy {
     addr: SocketAddr,
+    downstream: Arc<AtomicU64>,
     shutdown: Option<oneshot::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -47,7 +52,10 @@ impl LossyProxy {
             let _context = runtime.enter();
             UdpSocket::from_std(front).map_err(fail)?
         };
+
         let addr = front.local_addr().map_err(fail)?;
+        let downstream = Arc::new(AtomicU64::new(0));
+        let counter = downstream.clone();
 
         let (shutdown, stop) = oneshot::channel();
         let thread = thread::Builder::new()
@@ -56,7 +64,7 @@ impl LossyProxy {
                 runtime.block_on(async move {
                     tokio::select! {
                         _ = stop => {},
-                        _ = forward(Arc::new(front), upstream, impairment) => {},
+                        _ = forward(Arc::new(front), upstream, impairment, counter) => {},
                     }
                 });
             })
@@ -64,12 +72,15 @@ impl LossyProxy {
 
         Ok(Self {
             addr,
+            downstream,
             shutdown: Some(shutdown),
             thread: Some(thread),
         })
     }
 
     pub fn local_addr(&self) -> SocketAddr { self.addr }
+
+    pub fn downstream_bytes(&self) -> u64 { self.downstream.load(Ordering::Relaxed) }
 }
 
 impl Drop for LossyProxy {
@@ -139,7 +150,7 @@ async fn deliver(mut packets: mpsc::UnboundedReceiver<Packet>) {
     }
 }
 
-async fn forward(front: Arc<UdpSocket>, upstream: SocketAddr, impairment: Impairment) {
+async fn forward(front: Arc<UdpSocket>, upstream: SocketAddr, impairment: Impairment, downstream: Arc<AtomicU64>) {
     let up = Lane::spawn(impairment, impairment.seed);
     let down = Lane::spawn(impairment, impairment.seed.wrapping_add(1));
 
@@ -166,7 +177,13 @@ async fn forward(front: Arc<UdpSocket>, upstream: SocketAddr, impairment: Impair
                     },
                 };
 
-                tokio::spawn(reply(socket.clone(), front.clone(), client, down.clone()));
+                tokio::spawn(reply(
+                    socket.clone(),
+                    front.clone(),
+                    client,
+                    down.clone(),
+                    downstream.clone(),
+                ));
                 clients.insert(client, socket.clone());
 
                 socket
@@ -177,9 +194,12 @@ async fn forward(front: Arc<UdpSocket>, upstream: SocketAddr, impairment: Impair
     }
 }
 
-async fn reply(upstream: Arc<UdpSocket>, front: Arc<UdpSocket>, client: SocketAddr, down: Arc<Lane>) {
+async fn reply(
+    upstream: Arc<UdpSocket>, front: Arc<UdpSocket>, client: SocketAddr, down: Arc<Lane>, downstream: Arc<AtomicU64>,
+) {
     let mut buf = vec![0; MAX_DATAGRAM];
     while let Ok(len) = upstream.recv(&mut buf).await {
+        downstream.fetch_add(len as u64, Ordering::Relaxed);
         down.push(&buf[..len], &front, Some(client));
     }
 }
