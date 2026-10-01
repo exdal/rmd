@@ -224,15 +224,17 @@ impl Session {
         self.state.document_for_path(&self.codebase_dir()?.join(path))
     }
 
+    pub fn can_share_coop_maps(&self) -> bool { self.coop.as_ref().is_some_and(Coop::can_collaborate) }
+
     pub fn can_share_coop_map(&self) -> bool {
-        self.comment_tool_available() && self.state.active().and_then(|id| self.coop_map_path(id)).is_some()
+        self.can_share_coop_maps() && self.state.active().and_then(|id| self.coop_map_path(id)).is_some()
     }
 
     pub fn share_coop_file(&mut self, file: &Path) -> bool {
         let Some(id) = self
             .state
             .document_for_path(file)
-            .filter(|_| self.comment_tool_available())
+            .filter(|_| self.can_share_coop_maps())
         else {
             return false;
         };
@@ -264,7 +266,6 @@ impl Session {
 
         // edits so far are part of the snapshot, the journal only carries what comes after it
         document.start_journal();
-        document.take_journal();
 
         let Some(coop) = self.coop.as_mut() else {
             return;
@@ -291,6 +292,43 @@ impl Session {
             let bytes = writer::write(&map).into_bytes();
             let _ = prepared.send(Prepared::Upload { path, base, bytes });
         });
+    }
+
+    pub fn can_stop_sharing_coop_map(&self) -> bool {
+        self.can_share_coop_maps() && self.state.active().is_some_and(|id| self.coop_shared_map(id).is_some())
+    }
+
+    // every peer, us included, drops the map once the server echoes this
+    pub fn stop_sharing_coop_map(&mut self) {
+        let Some(path) = self.state.active().and_then(|id| self.coop_map_path(id)) else {
+            return;
+        };
+
+        if let Some(client) = self
+            .coop
+            .as_ref()
+            .filter(|coop| coop.can_collaborate())
+            .and_then(|coop| coop.client.as_ref())
+        {
+            client.unshare_map(path);
+        }
+    }
+
+    // open copies stay as local maps, only a document still waiting for the map closes
+    pub(super) fn forget_coop_map(&mut self, path: &str, by: PeerId) {
+        let Some(coop) = self.coop.as_mut() else {
+            return;
+        };
+
+        coop.comments.retain(|_, comment| comment.map != path);
+        let Some(shared_map) = coop.shared_maps.remove(path) else {
+            return;
+        };
+
+        log::info!("{path}: {} stopped sharing", coop.nick_of(by).unwrap_or("a peer"));
+        if let Some(id) = shared_map.pending_document {
+            self.close_map(id);
+        }
     }
 
     pub(super) fn open_shared_map(&mut self, received: ReceivedMap) {

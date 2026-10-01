@@ -144,7 +144,7 @@ fn map_matches(base: &Path, map: &Path, needle: &str) -> bool {
 }
 
 fn share_tooltip(session: &Session, map: &Path) -> Option<&'static str> {
-    if !session.comment_tool_available() {
+    if !session.can_share_coop_maps() {
         return None;
     }
 

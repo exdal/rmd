@@ -305,7 +305,7 @@ impl MapDocument {
         }
     }
 
-    pub fn start_journal(&mut self) { self.journal.get_or_insert_default(); }
+    pub fn start_journal(&mut self) { self.journal = Some(Journal::default()); }
 
     pub fn set_read_only(&mut self, read_only: bool) { self.read_only = read_only; }
 
@@ -1680,6 +1680,17 @@ mod tests {
         assert!(document.take_journal().is_some_and(|journal| journal.reshaped));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn starting_the_journal_again_forgets_earlier_edits() {
+        let mut document = MapDocument::new(shared_tile_map(), 2);
+        document.start_journal();
+        assert_eq!(document.append_level(&[Prefab::new(TreePath::parse("/turf"))]), Some(3));
+
+        document.start_journal();
+
+        assert!(document.take_journal().is_none());
     }
 
     #[test]

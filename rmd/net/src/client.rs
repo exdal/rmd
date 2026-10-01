@@ -92,6 +92,10 @@ pub enum Event {
         path: String,
         by: PeerId,
     },
+    MapUnshared {
+        path: String,
+        by: PeerId,
+    },
     Progress {
         path: String,
         direction: Direction,
@@ -179,6 +183,8 @@ impl Client {
     pub fn send_edit(&self, edit: MapEdit) { self.send(ClientMessage::Edit(edit)); }
 
     pub fn resync(&self, path: String) { self.send(ClientMessage::Resync { path }); }
+
+    pub fn unshare_map(&self, path: String) { self.send(ClientMessage::Unshare { path }); }
 
     fn send(&self, message: ClientMessage) { let _ = self.outbox.send(message); }
 
@@ -328,6 +334,7 @@ async fn session(
                     Some(ServerMessage::Edit { by, seq, edit }) => emit(Event::Edit { by, seq, edit }),
                     Some(ServerMessage::MapIncoming { path, by, len }) => emit(Event::MapIncoming { path, by, len }),
                     Some(ServerMessage::MapCancelled { path, by }) => emit(Event::MapCancelled { path, by }),
+                    Some(ServerMessage::MapUnshared { path, by }) => emit(Event::MapUnshared { path, by }),
                     Some(other) => log::warn!("unexpected message from the host: {other:?}"),
                     None => return Err(fail("the host ended the session")),
                 },

@@ -9,7 +9,7 @@ use std::{
 };
 
 use editor::{Environment, tool::Tool};
-use net::{Client, CodebaseId, Server, ServerConfig};
+use net::{Client, CodebaseId, Event, Server, ServerConfig};
 
 use super::{Coop, CoopConnection, CoopStatus, Prepared, SharedState};
 use crate::session::Session;
@@ -202,9 +202,21 @@ impl Session {
             .map(|client| client.poll().collect::<Vec<_>>())
             .unwrap_or_default();
 
+        // in order, so a share arriving after a stop in the same batch still applies
         for event in events {
-            coop.apply(event, codebase.as_deref());
+            match event {
+                Event::MapUnshared { path, by } => self.forget_coop_map(&path, by),
+                event => {
+                    if let Some(coop) = self.coop.as_mut() {
+                        coop.apply(event, codebase.as_deref());
+                    }
+                },
+            }
         }
+
+        let Some(coop) = self.coop.as_mut() else {
+            return;
+        };
 
         if !coop.is_connected() {
             self.clean_ended_coop();

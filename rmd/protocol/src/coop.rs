@@ -75,6 +75,9 @@ pub enum ClientMessage {
     Resync {
         path: String,
     },
+    Unshare {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +123,10 @@ pub enum ServerMessage {
         len: u64,
     },
     MapCancelled {
+        path: String,
+        by: PeerId,
+    },
+    MapUnshared {
         path: String,
         by: PeerId,
     },
@@ -261,6 +268,13 @@ mod tests {
         });
         round_trip(ClientMessage::Resync {
             path: String::from("_maps/test.dmm"),
+        });
+        round_trip(ClientMessage::Unshare {
+            path: String::from("_maps/test.dmm"),
+        });
+        round_trip(ServerMessage::MapUnshared {
+            path: String::from("_maps/test.dmm"),
+            by: PeerId(1),
         });
     }
 

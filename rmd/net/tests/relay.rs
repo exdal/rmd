@@ -455,6 +455,70 @@ fn edits_reach_everyone_and_replay_for_late_joiners_until_the_map_is_shared_agai
 }
 
 #[test]
+fn anyone_can_stop_sharing_a_map_for_everyone() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
+    let bob = join(&server, PASSWORD, "bob");
+    let bob_id = wait_for(&bob, |event| match event {
+        Event::Connected { you, .. } => Some(you),
+        _ => None,
+    });
+
+    alice.share_map(String::from("_maps/test.dmm"), None, b"map".to_vec());
+    alice.share_map(String::from("_maps/other.dmm"), None, b"other".to_vec());
+    alice.send_comment(String::from("_maps/test.dmm"), 1, [0.0, 0.0], String::from("gone"));
+    alice.send_comment(String::from("_maps/other.dmm"), 1, [0.0, 0.0], String::from("kept"));
+    let mut pending = 4;
+    collect_until(&bob, |event| {
+        if matches!(event, Event::MapShared { .. } | Event::Comment(_)) {
+            pending -= 1;
+        }
+
+        pending == 0
+    });
+
+    bob.unshare_map(String::from("_maps/test.dmm"));
+    for client in [&alice, &bob] {
+        let unshared = wait_for(client, |event| match event {
+            Event::MapUnshared { path, by } => Some((path, by)),
+            _ => None,
+        });
+        assert_eq!(unshared, (String::from("_maps/test.dmm"), bob_id));
+    }
+
+    bob.send_edit(MapEdit {
+        path: String::from("_maps/test.dmm"),
+        generation: GenerationId(1),
+        coords: vec![[1, 1, 1]],
+        patch: String::from("late"),
+    });
+    bob.send_comment(String::from("_maps/other.dmm"), 1, [0.0, 0.0], String::from("marker"));
+    let events = collect_until(&alice, |event| matches!(event, Event::Comment(_)));
+    assert!(
+        !events.iter().any(|event| matches!(event, Event::Edit { .. })),
+        "an edit to a map nobody shares went through"
+    );
+
+    let carol = join(&server, PASSWORD, "carol");
+    let comments = wait_for(&carol, |event| match event {
+        Event::Connected { comments, .. } => Some(comments),
+        _ => None,
+    });
+    assert_eq!(
+        comments.iter().map(|comment| comment.text.as_str()).collect::<Vec<_>>(),
+        ["kept", "marker"]
+    );
+
+    let events = collect_until(&carol, |event| matches!(event, Event::MapSnapshot { .. }));
+    for event in events {
+        if let Event::MapShared { path, .. } | Event::MapSnapshot { path, .. } = event {
+            assert_eq!(path, "_maps/other.dmm");
+        }
+    }
+}
+
+#[test]
 fn a_new_share_carries_the_edits_its_snapshot_missed() {
     let server = server();
     let alice = join(&server, PASSWORD, "alice");

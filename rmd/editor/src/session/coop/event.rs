@@ -204,6 +204,8 @@ impl Coop {
                     shared_map.inbox.insert(seq, (by, edit));
                 }
             },
+            // the session closes its pending document too, see `forget_coop_map`
+            Event::MapUnshared { .. } => {},
             Event::CodebaseMismatch { expected } => self.mismatch(expected),
             Event::Rejected(reason) => self.end(format!("rejected: {reason}")),
             Event::Disconnected(reason) => self.end(reason),

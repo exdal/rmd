@@ -363,6 +363,19 @@ impl Shared {
         map.edits.push((by, edit));
     }
 
+    // echoed even for a map we don't have, so a peer that still shows it can drop it
+    fn unshare(&self, by: PeerId, path: &str) {
+        let mut state = self.state.lock().unwrap();
+        state.maps.remove(path);
+        state.comments.retain(|comment| comment.map != path);
+        for peer in state.peers.values() {
+            let _ = peer.outbox.send(ServerMessage::MapUnshared {
+                path: path.to_owned(),
+                by,
+            });
+        }
+    }
+
     fn resync(&self, id: PeerId, path: &str) {
         let state = self.state.lock().unwrap();
         let (Some(peer), Some(map)) = (state.peers.get(&id), state.maps.get(path)) else {
@@ -581,6 +594,7 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
                     Some(ClientMessage::DeleteComment(comment)) => shared.delete_comment(comment),
                     Some(ClientMessage::Edit(edit)) => shared.edit(id, edit),
                     Some(ClientMessage::Resync { path }) => shared.resync(id, &path),
+                    Some(ClientMessage::Unshare { path }) => shared.unshare(id, &path),
                     None => return Ok(()),
                 },
                 datagram = connection.read_datagram() => shared.relay(id, &datagram.map_err(fail)?),

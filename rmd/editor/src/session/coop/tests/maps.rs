@@ -365,3 +365,90 @@ fn a_closed_shared_map_resyncs_when_reopened() {
         let _ = fs::remove_dir_all(dir);
     }
 }
+
+#[test]
+fn anyone_can_stop_sharing_a_map_and_every_copy_stays_open() {
+    let (host_dir, mut host) = codebase_with_map("unshare-host", "aa");
+    let (guest_dir, mut guest) = codebase_with_map("unshare-guest", "aa");
+    let host_map = open_local(&mut host, host_dir.join("_maps/a.dmm"));
+    host.host_coop(0, String::from("hunter2"), String::from("host"))
+        .unwrap();
+    poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
+    host.share_coop_map();
+
+    let port = host.coop().and_then(Coop::host).unwrap().0.port();
+    guest
+        .join_coop(
+            format!("127.0.0.1:{port}"),
+            String::from("hunter2"),
+            String::from("guest"),
+        )
+        .unwrap();
+    let guest_file = guest_dir.join("_maps/a.dmm");
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        sessions[1].state.document_for_path(&guest_file).is_some() && settled(sessions)
+    });
+
+    host.add_coop_comment(host_map, [0.0, 0.0], String::from("gone"));
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        sessions
+            .iter()
+            .all(|session| session.coop().unwrap().comments.len() == 1)
+    });
+
+    let guest_map = guest.state.document_for_path(&guest_file).unwrap();
+    assert!(guest.can_stop_sharing_coop_map());
+    guest.stop_sharing_coop_map();
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        sessions
+            .iter()
+            .all(|session| session.coop().unwrap().shared_maps.is_empty())
+    });
+
+    for (session, file, id) in [
+        (&host, host_dir.join("_maps/a.dmm"), host_map),
+        (&guest, guest_file, guest_map),
+    ] {
+        assert!(session.coop().unwrap().comments.is_empty());
+        assert!(!session.is_coop_shared_file(&file));
+        assert!(!session.can_stop_sharing_coop_map());
+        assert!(!session.state.document(id).unwrap().is_read_only());
+    }
+
+    for dir in [host_dir, guest_dir] {
+        let _ = fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn stopping_a_share_closes_the_document_waiting_for_it() {
+    let (dir, mut session) = hosting("unshare-pending");
+    let file = dir.join("_maps/a.dmm");
+    incoming(&mut session, &dir);
+    assert!(session.state.document_for_path(&file).is_some());
+
+    session.forget_coop_map("_maps/a.dmm", OTHER);
+
+    assert!(session.state.document_for_path(&file).is_none());
+    assert!(!session.is_coop_shared_file(&file));
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn stopping_a_share_keeps_an_out_of_date_copy() {
+    let (host_dir, mut host, guest_dir, mut guest, local) = guest_out_of_date("unshare-waiting");
+    host.stop_sharing_coop_map();
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        sessions[1].coop().unwrap().shared_maps.is_empty()
+    });
+
+    let document = guest.state.document(local).unwrap();
+    assert!(document.is_dirty());
+    assert!(!document.is_read_only());
+    assert_eq!(document.map.size.x, 1);
+    assert_eq!(guest.coop_out_of_date(local), None);
+
+    let _ = fs::remove_dir_all(host_dir);
+    let _ = fs::remove_dir_all(guest_dir);
+}

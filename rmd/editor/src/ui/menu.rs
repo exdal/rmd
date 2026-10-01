@@ -340,6 +340,14 @@ impl UiState {
                     session.share_coop_map();
                 }
 
+                if ui.menu_item_enabled_selected_no_shortcut(
+                    "Stop sharing current map",
+                    false,
+                    session.can_stop_sharing_coop_map(),
+                ) {
+                    session.stop_sharing_coop_map();
+                }
+
                 let is_notice_available = session.coop().is_some_and(|coop| {
                     matches!(coop.status, CoopStatus::Ended(_) | CoopStatus::CodebaseMismatch { .. })
                 });
