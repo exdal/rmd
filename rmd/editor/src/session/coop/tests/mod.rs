@@ -70,7 +70,7 @@ const OTHER: PeerId = PeerId(99);
 fn hosting(name: &str) -> (PathBuf, Session) {
     let (dir, mut session) = codebase_with_map(name, "aa");
     session
-        .host_coop(0, String::from("hunter2"), String::from("host"))
+        .host_coop(0, net::hash_password("hunter2"), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut session], |sessions| connected(sessions[0]));
 
@@ -135,7 +135,7 @@ fn guest_out_of_date(name: &str) -> (PathBuf, Session, PathBuf, Session, Documen
     let local = open_local(&mut guest, guest_dir.join("_maps/a.dmm"));
     guest.state.document_mut(local).unwrap().mark_unsaved();
 
-    host.host_coop(0, String::from("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
     assert!(host.can_share_coop_map());
@@ -146,11 +146,11 @@ fn guest_out_of_date(name: &str) -> (PathBuf, Session, PathBuf, Session, Documen
             .is_some_and(|coop| coop.shared_maps.contains_key("_maps/a.dmm"))
     });
 
-    let port = host.coop().and_then(Coop::host).unwrap().0.port();
+    let port = host.coop().and_then(Coop::host).unwrap().port();
     guest
         .join_coop(
             format!("127.0.0.1:{port}"),
-            String::from("hunter2"),
+            net::hash_password("hunter2"),
             String::from("guest"),
         )
         .unwrap();

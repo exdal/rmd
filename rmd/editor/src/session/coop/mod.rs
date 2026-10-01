@@ -17,6 +17,7 @@ use net::{
     Cursor,
     GenerationId,
     MapEdit,
+    PasswordHash,
     PeerId,
     PeerInfo,
     SeqId,
@@ -234,8 +235,8 @@ pub(crate) struct ReceivedMap {
 
 #[derive(Clone)]
 enum CoopConnection {
-    Host { port: u16, password: String },
-    Join { addr: String, password: String },
+    Host { port: u16, password: PasswordHash },
+    Join { addr: String, password: PasswordHash },
 }
 
 impl Coop {
@@ -261,11 +262,7 @@ impl Coop {
         self.peers.get(&id).map(|peer| peer.info.nick.as_str())
     }
 
-    pub fn host(&self) -> Option<(SocketAddr, &str)> {
-        self.server
-            .as_ref()
-            .map(|server| (server.local_addr(), server.password()))
-    }
+    pub fn host(&self) -> Option<SocketAddr> { self.server.as_ref().map(Server::local_addr) }
 
     fn mismatch(&mut self, expected: CodebaseId) {
         self.end(String::from("different codebase"));

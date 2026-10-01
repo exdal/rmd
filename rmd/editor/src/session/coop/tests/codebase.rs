@@ -13,9 +13,13 @@ fn a_different_codebase_is_rejected_without_touching_unsaved_maps_then_can_retry
     let file = guest_dir.join("_maps/a.dmm");
     let local = open_local(&mut guest, file.clone());
     guest.state.document_mut(local).unwrap().mark_unsaved();
-    let port = host.coop().unwrap().host().unwrap().0.port();
+    let port = host.coop().unwrap().host().unwrap().port();
     guest
-        .join_coop(format!("127.0.0.1:{port}"), "hunter2".into(), "guest".into())
+        .join_coop(
+            format!("127.0.0.1:{port}"),
+            net::hash_password("hunter2"),
+            "guest".into(),
+        )
         .unwrap();
     poll_until(&mut [&mut host, &mut guest], |sessions| {
         matches!(sessions[1].coop().unwrap().status, CoopStatus::CodebaseMismatch { .. })
@@ -136,9 +140,13 @@ fn changing_a_hosts_codebase_stops_its_relay_and_closes_pending_documents() {
     let mut guest = Session::new();
     let (guest_dir, environment) = codebase_with_map("host-codebase-change-guest", "a");
     guest.state.environment = environment.state.environment.clone();
-    let port = host.coop().unwrap().host().unwrap().0.port();
+    let port = host.coop().unwrap().host().unwrap().port();
     guest
-        .join_coop(format!("127.0.0.1:{port}"), "hunter2".into(), "guest".into())
+        .join_coop(
+            format!("127.0.0.1:{port}"),
+            net::hash_password("hunter2"),
+            "guest".into(),
+        )
         .unwrap();
     poll_until(&mut [&mut host, &mut guest], |sessions| connected(sessions[1]));
     incoming(&mut host, &dir);

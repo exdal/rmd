@@ -28,6 +28,7 @@ use protocol::{
         MAX_MAP_LEN,
         MAX_NICK_LEN,
         MapEdit,
+        PasswordHash,
         PeerId,
         PeerInfo,
         Relayed,
@@ -38,7 +39,10 @@ use protocol::{
     },
 };
 use quinn::{Connection, Endpoint, EndpointConfig, TokioRuntime};
-use ring::rand::{SecureRandom, SystemRandom};
+use ring::{
+    digest,
+    rand::{SecureRandom, SystemRandom},
+};
 use tokio::{
     sync::{mpsc, oneshot},
     task::{AbortHandle, JoinSet},
@@ -77,15 +81,19 @@ pub fn random_password() -> String {
         .collect()
 }
 
+pub fn hash_password(password: &str) -> PasswordHash {
+    let digest = digest::digest(&digest::SHA256, password.as_bytes());
+    PasswordHash(digest.as_ref().try_into().expect("SHA-256 digests are 32 bytes"))
+}
+
 pub struct ServerConfig {
     pub bind: SocketAddr,
-    pub password: String,
+    pub password: PasswordHash,
     pub codebase: Option<CodebaseId>,
 }
 
 pub struct Server {
     addr: SocketAddr,
-    password: String,
     shutdown: Option<oneshot::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -107,7 +115,7 @@ impl Server {
 
         let addr = endpoint.local_addr().map_err(fail)?;
         let shared = Arc::new(Shared {
-            password: config.password.clone(),
+            password: config.password,
             state: Mutex::new(State {
                 codebase: config.codebase,
                 ..State::default()
@@ -123,15 +131,12 @@ impl Server {
 
         Ok(Self {
             addr,
-            password: config.password,
             shutdown: Some(shutdown),
             thread: Some(thread),
         })
     }
 
     pub fn local_addr(&self) -> SocketAddr { self.addr }
-
-    pub fn password(&self) -> &str { &self.password }
 
     pub fn wait(mut self) {
         if let Some(thread) = self.thread.take() {
@@ -153,7 +158,7 @@ impl Drop for Server {
 }
 
 struct Shared {
-    password: String,
+    password: PasswordHash,
     state: Mutex<State>,
     next_id: AtomicU32,
 }
@@ -709,8 +714,8 @@ async fn handshake(recv: &mut quinn::RecvStream, reader: &mut FrameReader) -> Re
     }
 }
 
-fn admit(password: &str, hello: &ClientHello) -> Result<String, &'static str> {
-    if hello.password != password {
+fn admit(password: &PasswordHash, hello: &ClientHello) -> Result<String, &'static str> {
+    if hello.password != *password {
         return Err("wrong password");
     }
 
@@ -772,5 +777,11 @@ mod tests {
         assert_eq!(password.len(), PASSWORD_LEN);
         assert!(password.bytes().all(|byte| PASSWORD_ALPHABET.contains(&byte)));
         assert_ne!(password, random_password());
+    }
+
+    #[test]
+    fn passwords_hash_deterministically() {
+        assert_eq!(hash_password("hunter2"), hash_password("hunter2"));
+        assert_ne!(hash_password("hunter2"), hash_password("hunter3"));
     }
 }

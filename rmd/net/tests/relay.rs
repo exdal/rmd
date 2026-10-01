@@ -20,6 +20,7 @@ use net::{
     ServerConfig,
     Tool,
     View,
+    hash_password,
 };
 
 const PASSWORD: &str = "hunter2";
@@ -28,7 +29,7 @@ fn server() -> Server {
     Server::spawn(ServerConfig {
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         codebase: None,
-        password: String::from(PASSWORD),
+        password: hash_password(PASSWORD),
     })
     .unwrap()
 }
@@ -38,7 +39,7 @@ fn join(server: &Server, password: &str, nick: &str) -> Client { join_at(server.
 fn join_at(addr: SocketAddr, password: &str, nick: &str) -> Client {
     Client::connect(
         addr.to_string(),
-        password.to_owned(),
+        hash_password(password),
         nick.to_owned(),
         CodebaseId {
             hash: CodebaseHash([7; 32]),
@@ -186,7 +187,7 @@ fn a_wrong_password_is_rejected() {
 fn join_codebase(server: &Server, hash: u8, hint: &str) -> Client {
     Client::connect(
         server.local_addr().to_string(),
-        PASSWORD.to_owned(),
+        hash_password(PASSWORD),
         format!("peer-{hash}"),
         CodebaseId {
             hash: CodebaseHash([hash; 32]),
@@ -253,7 +254,7 @@ fn hosting_pins_the_codebase_before_the_first_client() {
     };
     let server = Server::spawn(ServerConfig {
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-        password: PASSWORD.to_owned(),
+        password: hash_password(PASSWORD),
         codebase: Some(expected.clone()),
     })
     .unwrap();
@@ -293,7 +294,7 @@ fn simultaneous_first_clients_cannot_establish_different_codebases() {
 fn an_unreachable_host_disconnects() {
     let client = Client::connect(
         String::from("not a host"),
-        String::from(PASSWORD),
+        hash_password(PASSWORD),
         String::from("alice"),
         CodebaseId {
             hash: CodebaseHash([0; 32]),
@@ -312,7 +313,7 @@ fn a_dual_stack_server_accepts_ipv4_and_ipv6_clients() {
     let server = Server::spawn(ServerConfig {
         bind: SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)),
         codebase: None,
-        password: String::from(PASSWORD),
+        password: hash_password(PASSWORD),
     })
     .unwrap();
     let port = server.local_addr().port();

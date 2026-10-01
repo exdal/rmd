@@ -1370,7 +1370,7 @@ mod tests {
         };
 
         let (mut host, _) = open(2);
-        host.host_coop(0, String::from("hunter2"), String::from("host"))
+        host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
             .unwrap();
         poll_until(&mut [&mut host], &|sessions| {
             sessions[0].coop().is_some_and(|coop| coop.is_connected())
@@ -1382,11 +1382,11 @@ mod tests {
 
         let (mut guest, local) = open(1);
         guest.state.document_mut(local).unwrap().mark_unsaved();
-        let port = host.coop().and_then(|coop| coop.host()).unwrap().0.port();
+        let port = host.coop().and_then(|coop| coop.host()).unwrap().port();
         guest
             .join_coop(
                 format!("127.0.0.1:{port}"),
-                String::from("hunter2"),
+                net::hash_password("hunter2"),
                 String::from("guest"),
             )
             .unwrap();
@@ -1433,7 +1433,7 @@ mod tests {
         let original = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme");
         session.load_environment(&original).unwrap();
         session
-            .join_coop("not a host".into(), "password".into(), "guest".into())
+            .join_coop("not a host".into(), net::hash_password("password"), "guest".into())
             .unwrap();
         let dir = std::env::temp_dir().join(format!("rmd-codebase-notice-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1542,7 +1542,7 @@ mod tests {
         assert!(session.coop().is_none());
 
         session
-            .join_coop("not a host".into(), "password".into(), "guest".into())
+            .join_coop("not a host".into(), net::hash_password("password"), "guest".into())
             .unwrap();
         session.load_environment(&original).unwrap();
         for _ in 0..3 {

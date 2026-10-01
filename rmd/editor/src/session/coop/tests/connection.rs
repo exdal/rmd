@@ -3,14 +3,15 @@ use super::*;
 #[test]
 fn a_joined_peer_sees_the_hosts_cursor() {
     let mut host = session();
-    host.host_coop(0, String::from("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
 
-    let (addr, password) = host.coop().and_then(Coop::host).unwrap();
-    let (addr, password) = (format!("127.0.0.1:{}", addr.port()), password.to_owned());
+    let addr = format!("127.0.0.1:{}", host.coop().and_then(Coop::host).unwrap().port());
     let mut guest = session();
-    guest.join_coop(addr, password, String::from("guest")).unwrap();
+    guest
+        .join_coop(addr, net::hash_password("hunter2"), String::from("guest"))
+        .unwrap();
     poll_until(&mut [&mut host, &mut guest], |sessions| {
         connected(sessions[1]) && sessions[0].coop().is_some_and(|coop| coop.peers.len() == 1)
     });
@@ -41,13 +42,17 @@ fn a_joined_peer_sees_the_hosts_cursor() {
 #[test]
 fn a_wrong_password_ends_the_session_with_the_reason() {
     let mut host = session();
-    host.host_coop(0, String::from("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
         .unwrap();
-    let port = host.coop().and_then(Coop::host).unwrap().0.port();
+    let port = host.coop().and_then(Coop::host).unwrap().port();
 
     let mut guest = session();
     guest
-        .join_coop(format!("127.0.0.1:{port}"), String::from("nope"), String::from("guest"))
+        .join_coop(
+            format!("127.0.0.1:{port}"),
+            net::hash_password("nope"),
+            String::from("guest"),
+        )
         .unwrap();
     poll_until(&mut [&mut guest], |sessions| {
         sessions[0]
@@ -97,7 +102,7 @@ fn the_comment_tool_only_works_while_connected() {
     host.set_tool(Tool::Comment);
     assert_eq!(host.tool(), Tool::Select);
 
-    host.host_coop(0, String::from("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
     host.set_tool(Tool::Comment);
@@ -114,14 +119,14 @@ fn cursors_and_comments_need_a_shared_map() {
     let (guest_dir, mut guest) = codebase_with_map("unshared-guest", "aa");
     let host_map = open_local(&mut host, host_dir.join("_maps/a.dmm"));
     let guest_map = open_local(&mut guest, guest_dir.join("_maps/a.dmm"));
-    host.host_coop(0, String::from("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
-    let port = host.coop().and_then(Coop::host).unwrap().0.port();
+    let port = host.coop().and_then(Coop::host).unwrap().port();
     guest
         .join_coop(
             format!("127.0.0.1:{port}"),
-            String::from("hunter2"),
+            net::hash_password("hunter2"),
             String::from("guest"),
         )
         .unwrap();
@@ -167,7 +172,11 @@ fn cursors_and_comments_need_a_shared_map() {
 fn coop_needs_a_codebase() {
     assert!(
         Session::new()
-            .join_coop(String::from("127.0.0.1:1"), String::from("pw"), String::from("me"))
+            .join_coop(
+                String::from("127.0.0.1:1"),
+                net::hash_password("pw"),
+                String::from("me")
+            )
             .is_err()
     );
 }

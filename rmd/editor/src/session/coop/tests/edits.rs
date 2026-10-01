@@ -11,14 +11,18 @@ fn edits_sync_both_ways_converge_and_replay_for_late_joiners() {
     let (left, right) = (Coord::new(1, 1, 1), Coord::new(2, 1, 1));
     open_local(&mut host, host_file.clone());
 
-    host.host_coop(0, String::from("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
     host.share_coop_map();
-    let port = host.coop().and_then(Coop::host).unwrap().0.port();
+    let port = host.coop().and_then(Coop::host).unwrap().port();
     let join = |session: &mut Session, nick: &str| {
         session
-            .join_coop(format!("127.0.0.1:{port}"), String::from("hunter2"), String::from(nick))
+            .join_coop(
+                format!("127.0.0.1:{port}"),
+                net::hash_password("hunter2"),
+                String::from(nick),
+            )
             .unwrap();
     };
 
@@ -107,15 +111,15 @@ fn a_reshare_keeps_edits_its_snapshot_missed() {
     let left = Coord::new(1, 1, 1);
     let id = open_local(&mut host, host_file.clone());
 
-    host.host_coop(0, String::from("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
     host.share_coop_map();
-    let port = host.coop().and_then(Coop::host).unwrap().0.port();
+    let port = host.coop().and_then(Coop::host).unwrap().port();
     guest
         .join_coop(
             format!("127.0.0.1:{port}"),
-            String::from("hunter2"),
+            net::hash_password("hunter2"),
             String::from("guest"),
         )
         .unwrap();
@@ -145,7 +149,7 @@ fn edits_converge_through_a_lossy_link() {
     let server = Server::spawn(ServerConfig {
         codebase: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-        password: String::from("hunter2"),
+        password: net::hash_password("hunter2"),
     })
     .unwrap();
     let proxy = LossyProxy::spawn(
@@ -169,7 +173,7 @@ fn edits_converge_through_a_lossy_link() {
         session
             .join_coop(
                 proxy.local_addr().to_string(),
-                String::from("hunter2"),
+                net::hash_password("hunter2"),
                 String::from(nick),
             )
             .unwrap();

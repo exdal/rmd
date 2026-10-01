@@ -178,8 +178,12 @@ pub(super) fn draw_coop_dialog(
 
         if is_ready && (clicked || submitted) {
             let result = match state.kind {
-                CoopDialogKind::Host => session.host_coop(state.port as u16, password.to_owned(), nick.to_owned()),
-                CoopDialogKind::Join => session.join_coop(address.to_owned(), password.to_owned(), nick.to_owned()),
+                CoopDialogKind::Host => {
+                    session.host_coop(state.port as u16, net::hash_password(password), nick.to_owned())
+                },
+                CoopDialogKind::Join => {
+                    session.join_coop(address.to_owned(), net::hash_password(password), nick.to_owned())
+                },
             };
 
             match result {
@@ -434,8 +438,8 @@ pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
     }
 
     ui.tooltip(|| {
-        if let Some((addr, password)) = coop.host() {
-            ui.text(format!("Hosting on port {} with password {password}", addr.port()));
+        if let Some(addr) = coop.host() {
+            ui.text(format!("Hosting on port {}", addr.port()));
             if !coop.shared_maps.is_empty() {
                 ui.separator();
             }

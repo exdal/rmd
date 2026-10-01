@@ -9,7 +9,7 @@ use std::{
 };
 
 use editor::{Environment, tool::Tool};
-use net::{Client, CodebaseId, Event, Server, ServerConfig};
+use net::{Client, CodebaseId, Event, PasswordHash, Server, ServerConfig};
 
 use super::{Coop, CoopConnection, CoopStatus, Prepared, SharedState};
 use crate::session::Session;
@@ -23,7 +23,7 @@ impl Session {
         })
     }
 
-    pub fn host_coop(&mut self, port: u16, password: String, nick: String) -> Result<(), String> {
+    pub fn host_coop(&mut self, port: u16, password: PasswordHash, nick: String) -> Result<(), String> {
         let codebase = self.loaded_codebase_id()?;
         let server = Server::spawn(ServerConfig {
             bind: SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)),
@@ -33,26 +33,25 @@ impl Session {
         .map_err(|e| format!("could not host on port {port}: {e}"))?;
 
         let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, server.local_addr().port())).to_string();
-        let password = server.password().to_owned();
         let connection = CoopConnection::Host {
             port: server.local_addr().port(),
-            password: password.clone(),
+            password,
         };
         self.start_coop(addr, password, nick, codebase, connection, Some(server))
     }
 
-    pub fn join_coop(&mut self, addr: String, password: String, nick: String) -> Result<(), String> {
+    pub fn join_coop(&mut self, addr: String, password: PasswordHash, nick: String) -> Result<(), String> {
         let codebase = self.loaded_codebase_id()?;
         let connection = CoopConnection::Join {
             addr: addr.clone(),
-            password: password.clone(),
+            password,
         };
         self.start_coop(addr, password, nick, codebase, connection, None)
     }
 
     fn start_coop(
-        &mut self, addr: String, password: String, nick: String, codebase: CodebaseId, connection: CoopConnection,
-        server: Option<Server>,
+        &mut self, addr: String, password: PasswordHash, nick: String, codebase: CodebaseId,
+        connection: CoopConnection, server: Option<Server>,
     ) -> Result<(), String> {
         let environment_root = self.environment_path().ok_or("open a codebase first")?.to_path_buf();
         self.leave_coop();

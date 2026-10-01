@@ -10,6 +10,9 @@ pub struct PeerId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CodebaseHash(pub [u8; 32]);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PasswordHash(pub [u8; 32]);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodebaseId {
     pub hash: CodebaseHash,
@@ -26,7 +29,7 @@ pub struct PeerInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
     pub nick: String,
-    pub password: String,
+    pub password: PasswordHash,
     pub codebase: CodebaseId,
 }
 
@@ -224,7 +227,7 @@ mod tests {
     fn control_messages_round_trip() {
         round_trip(ClientMessage::Hello(ClientHello {
             nick: String::from("mapper"),
-            password: String::from("hunter2"),
+            password: PasswordHash([1; 32]),
             codebase: peer(1).codebase,
         }));
         let comment = Comment {

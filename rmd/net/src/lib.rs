@@ -16,6 +16,7 @@ pub use protocol::coop::{
     GenerationId,
     MAX_COMMENT_LEN,
     MapEdit,
+    PasswordHash,
     PeerId,
     PeerInfo,
     SeqId,
@@ -28,7 +29,7 @@ use tokio::runtime::{Builder, Runtime};
 pub use crate::{
     client::{Client, Direction, Event},
     proxy::{Impairment, LossyProxy},
-    server::{Server, ServerConfig, random_password},
+    server::{Server, ServerConfig, hash_password, random_password},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

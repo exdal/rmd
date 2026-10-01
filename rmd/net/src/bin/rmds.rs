@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use net::{Impairment, LossyProxy, Server, ServerConfig};
+use net::{Impairment, LossyProxy, PasswordHash, Server, ServerConfig};
 
 const DEFAULT_PORT: u16 = 3131;
 
@@ -44,7 +44,11 @@ fn main() -> ExitCode {
     let server = match Server::spawn(ServerConfig {
         bind,
         codebase: None,
-        password: arguments.password.unwrap_or_else(net::random_password),
+        password: arguments.password.unwrap_or_else(|| {
+            let password = net::random_password();
+            log::info!("generated password {password}");
+            net::hash_password(&password)
+        }),
     }) {
         Ok(server) => server,
         Err(e) => {
@@ -71,7 +75,7 @@ fn main() -> ExitCode {
     };
 
     let addr = proxy.as_ref().map_or(server.local_addr(), LossyProxy::local_addr);
-    log::info!("listening on {addr} with password {}", server.password());
+    log::info!("listening on {addr}");
     if is_simulated {
         log::info!(
             "simulating {}ms latency, {}ms jitter and {}% loss each way",
@@ -89,7 +93,7 @@ fn main() -> ExitCode {
 #[derive(Debug, PartialEq)]
 struct Arguments {
     port: u16,
-    password: Option<String>,
+    password: Option<PasswordHash>,
     impairment: Impairment,
 }
 
@@ -111,7 +115,7 @@ fn parse_arguments(arguments: &[String]) -> Result<Arguments, String> {
         let value = arguments.next().ok_or_else(|| format!("{flag} needs a value"))?;
         match flag.as_str() {
             "--port" => parsed.port = value.parse().map_err(|_| format!("invalid port '{value}'"))?,
-            "--password" if !value.is_empty() => parsed.password = Some(value.clone()),
+            "--password" if !value.is_empty() => parsed.password = Some(net::hash_password(value)),
             "--password" => return Err(String::from("the password cannot be empty")),
             "--latency" => parsed.impairment.latency = millis(value)?,
             "--jitter" => parsed.impairment.jitter = millis(value)?,
@@ -167,7 +171,7 @@ mod tests {
             parse(&["--password", "hunter2", "--port", "9000"]),
             Ok(Arguments {
                 port: 9000,
-                password: Some(String::from("hunter2")),
+                password: Some(net::hash_password("hunter2")),
                 impairment: Impairment::default(),
             })
         );

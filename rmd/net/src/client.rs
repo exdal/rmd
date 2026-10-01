@@ -22,6 +22,7 @@ use protocol::{
         Datagram,
         GenerationId,
         MapEdit,
+        PasswordHash,
         PeerId,
         PeerInfo,
         Relayed,
@@ -151,7 +152,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn connect(addr: String, password: String, nick: String, codebase: CodebaseId) -> Self {
+    pub fn connect(addr: String, password: PasswordHash, nick: String, codebase: CodebaseId) -> Self {
         let (events_tx, events) = mpsc::channel();
         let (cursor, cursor_rx) = watch::channel(None);
         let (view, view_rx) = watch::channel(None);
