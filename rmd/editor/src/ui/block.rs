@@ -2,7 +2,7 @@ use dear_imgui_rs::{DragFlags, DrawListMut, Key, Ui};
 use dmm::{Coord, Size};
 use editor::{
     document::{DocumentId, Selection},
-    icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_MULTIPLICATION},
+    icons::materialdesignicons::ICON_CIRCLE_SMALL,
     tool::{BlockSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
 };
 
@@ -241,7 +241,7 @@ pub(super) fn draw_block_outline(
             BlockSelectionMode::Hollow { line_width } => format!("Border {line_width}"),
         };
         let label = format!(
-            "{} {ICON_MULTIPLICATION} {} {ICON_CIRCLE_SMALL} {mode_label}",
+            "{} x {} {ICON_CIRCLE_SMALL} {mode_label}",
             displayed.width(),
             displayed.height()
         );
@@ -459,7 +459,7 @@ pub(super) fn draw_block_placement_controls(
     };
     ui.align_text_to_frame_padding();
     ui.text(format!(
-        "{} {ICON_MULTIPLICATION} {} {ICON_CIRCLE_SMALL} {mode_label}",
+        "{} x {} {ICON_CIRCLE_SMALL} {mode_label}",
         placement.target.width(),
         placement.target.height()
     ));

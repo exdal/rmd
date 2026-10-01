@@ -2,18 +2,7 @@ use core::path::TreePath;
 
 use dear_imgui_rs::{StyleColor, StyleVar, Ui};
 use editor::{
-    icons::materialdesignicons::{
-        ICON_CIRCLE_SMALL,
-        ICON_COMMENT_TEXT_OUTLINE,
-        ICON_ERASER,
-        ICON_EYEDROPPER,
-        ICON_FIND_REPLACE,
-        ICON_FORMAT_COLOR_FILL,
-        ICON_MENU_DOWN,
-        ICON_PENCIL,
-        ICON_SELECT_DRAG,
-        ICON_VECTOR_POLYLINE,
-    },
+    icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_MENU_DOWN},
     tool::{FillMode, Tool},
 };
 
@@ -99,24 +88,24 @@ pub(super) fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRe
     let padding = overlay_padding(ui);
     ui.set_cursor_screen_pos([bounds.min[0] + padding, bounds.min[1] + padding]);
 
-    draw_tool_button(ui, session, keybindings, Tool::Place, ICON_PENCIL);
+    draw_tool_button(ui, session, keybindings, Tool::Place);
     ui.same_line();
-    draw_tool_button(ui, session, keybindings, Tool::Select, ICON_EYEDROPPER);
+    draw_tool_button(ui, session, keybindings, Tool::Select);
     if session.node_tool_available() {
         ui.same_line();
-        draw_tool_button(ui, session, keybindings, Tool::Node, ICON_VECTOR_POLYLINE);
+        draw_tool_button(ui, session, keybindings, Tool::Node);
     }
 
     if session.comment_tool_available() {
         ui.same_line();
-        draw_tool_button(ui, session, keybindings, Tool::Comment, ICON_COMMENT_TEXT_OUTLINE);
+        draw_tool_button(ui, session, keybindings, Tool::Comment);
     }
     ui.same_line();
     draw_block_select_tool_button(ui, session, block_selection_options, keybindings, selection_busy);
     ui.same_line();
-    draw_tool_button(ui, session, keybindings, Tool::Delete, ICON_ERASER);
+    draw_tool_button(ui, session, keybindings, Tool::Delete);
     ui.same_line();
-    draw_tool_button(ui, session, keybindings, Tool::Replace, ICON_FIND_REPLACE);
+    draw_tool_button(ui, session, keybindings, Tool::Replace);
     ui.same_line();
     let tools_end = draw_fill_tool_button(
         ui,
@@ -143,7 +132,7 @@ fn draw_block_select_tool_button(
     let spacing = ui.clone_style().item_spacing();
     let connected = ui.push_style_var(StyleVar::ItemSpacing([0.0, spacing[1]]));
 
-    if ui.button(format!("{ICON_SELECT_DRAG}##block-select-tool")) {
+    if ui.button(format!("{}##block-select-tool", Tool::BlockSelect.icon())) {
         session.set_tool(Tool::BlockSelect);
     }
     let separator_x = ui.item_rect_max()[0];
@@ -206,7 +195,7 @@ fn draw_fill_tool_button(
     let spacing = ui.clone_style().item_spacing();
     let connected = ui.push_style_var(StyleVar::ItemSpacing([0.0, spacing[1]]));
 
-    if ui.button(format!("{ICON_FORMAT_COLOR_FILL}##fill-tool")) {
+    if ui.button(format!("{}##fill-tool", Tool::Fill.icon())) {
         session.set_tool(Tool::Fill);
     }
     let separator_x = ui.item_rect_max()[0];
@@ -317,14 +306,14 @@ fn draw_fill_tool_button(
     tools_end
 }
 
-fn draw_tool_button(ui: &Ui, session: &mut Session, keybindings: KeyBindings, tool: Tool, icon: char) {
+fn draw_tool_button(ui: &Ui, session: &mut Session, keybindings: KeyBindings, tool: Tool) {
     let color = match tool {
         Tool::Delete => [1.0, 0.0, 0.0, 1.0],
         _ => ui.style_color(StyleColor::PlotHistogramHovered),
     };
 
     let _color = (session.tool() == tool).then(|| ui.push_style_color(StyleColor::Button, color));
-    let clicked = ui.button(icon.to_string());
+    let clicked = ui.button(tool.icon().to_string());
     let alternate = keybindings.get(KeybindAction::ToolAlternate).label(ui);
     let (action, help) = match tool {
         Tool::Place => (

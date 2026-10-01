@@ -92,6 +92,7 @@ pub(super) fn share_presence(session: &Session, frame: &ViewFrame<'_>, coop: &mu
         map: map.clone(),
         z: session.z(),
         pos: camera.screen_to_map(cursor),
+        tool: session.tool().into(),
     });
     coop.view = Some(net::View {
         map,

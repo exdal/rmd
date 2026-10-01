@@ -18,6 +18,7 @@ use net::{
     SeqId,
     Server,
     ServerConfig,
+    Tool,
     View,
 };
 
@@ -75,6 +76,7 @@ fn cursor(x: f32) -> Cursor {
         map: String::from("_maps/test.dmm"),
         z: 1,
         pos: [x, 64.0],
+        tool: Tool::Place,
     }
 }
 

@@ -18,6 +18,7 @@ pub use protocol::coop::{
     PeerId,
     PeerInfo,
     SeqId,
+    Tool,
     View,
     is_map_path,
 };

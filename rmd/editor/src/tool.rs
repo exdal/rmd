@@ -13,6 +13,16 @@ use crate::{
     command::Edit,
     document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection},
     frame::HiddenTypes,
+    icons::materialdesignicons::{
+        ICON_COMMENT_TEXT_OUTLINE,
+        ICON_ERASER,
+        ICON_EYEDROPPER,
+        ICON_FIND_REPLACE,
+        ICON_FORMAT_COLOR_FILL,
+        ICON_PENCIL,
+        ICON_SELECT_DRAG,
+        ICON_VECTOR_POLYLINE,
+    },
     visual,
 };
 
@@ -180,6 +190,19 @@ impl Tool {
         }
     }
 
+    pub fn icon(self) -> char {
+        match self {
+            Tool::Place => ICON_PENCIL,
+            Tool::Select => ICON_EYEDROPPER,
+            Tool::Node => ICON_VECTOR_POLYLINE,
+            Tool::BlockSelect => ICON_SELECT_DRAG,
+            Tool::Delete => ICON_ERASER,
+            Tool::Replace => ICON_FIND_REPLACE,
+            Tool::Fill => ICON_FORMAT_COLOR_FILL,
+            Tool::Comment => ICON_COMMENT_TEXT_OUTLINE,
+        }
+    }
+
     pub fn build_edit(self, context: &mut ToolContext<'_>) -> Option<ToolEdit> {
         match self {
             Self::Place => place(context),
@@ -202,6 +225,36 @@ impl Tool {
             fill(context, max_tiles, mask)
         } else {
             Ok(self.build_edit(context))
+        }
+    }
+}
+
+impl From<Tool> for net::Tool {
+    fn from(tool: Tool) -> Self {
+        match tool {
+            Tool::Place => Self::Place,
+            Tool::Select => Self::Select,
+            Tool::Node => Self::Node,
+            Tool::BlockSelect => Self::BlockSelect,
+            Tool::Delete => Self::Delete,
+            Tool::Replace => Self::Replace,
+            Tool::Fill => Self::Fill,
+            Tool::Comment => Self::Comment,
+        }
+    }
+}
+
+impl From<net::Tool> for Tool {
+    fn from(tool: net::Tool) -> Self {
+        match tool {
+            net::Tool::Place => Self::Place,
+            net::Tool::Select => Self::Select,
+            net::Tool::Node => Self::Node,
+            net::Tool::BlockSelect => Self::BlockSelect,
+            net::Tool::Delete => Self::Delete,
+            net::Tool::Replace => Self::Replace,
+            net::Tool::Fill => Self::Fill,
+            net::Tool::Comment => Self::Comment,
         }
     }
 }

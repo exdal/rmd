@@ -151,6 +151,18 @@ pub fn is_map_path(path: &str) -> bool {
     segments_ok && path.to_ascii_lowercase().ends_with(".dmm")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Tool {
+    Place,
+    Select,
+    Node,
+    BlockSelect,
+    Delete,
+    Replace,
+    Fill,
+    Comment,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cursor {
     /// `_maps/map_files/Station/station.dmm`
@@ -158,6 +170,7 @@ pub struct Cursor {
     pub z: u32,
     /// map pixels from the bottom left corner
     pub pos: [f32; 2],
+    pub tool: Tool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -315,6 +328,7 @@ mod tests {
             map: String::from("_maps/map_files/Station/station.dmm"),
             z: 2,
             pos: [1234.5, -8.25],
+            tool: Tool::Fill,
         };
 
         round_trip(Datagram::Cursor(Some(cursor.clone())));
@@ -340,6 +354,7 @@ mod tests {
                 map: "m".repeat(200),
                 z: u32::MAX,
                 pos: [f32::MAX, f32::MIN],
+                tool: Tool::BlockSelect,
             })),
         };
 

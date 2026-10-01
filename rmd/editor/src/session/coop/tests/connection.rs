@@ -23,6 +23,7 @@ fn a_joined_peer_sees_the_hosts_cursor() {
         map: String::from("_maps/a.dmm"),
         z: 1,
         pos: [32.0, 64.0],
+        tool: net::Tool::Fill,
     };
     host.coop_cursor(Some(cursor.clone()));
     poll_until(&mut [&mut host, &mut guest], |sessions| {
@@ -61,6 +62,7 @@ fn remote_cursors_glide_but_jump_across_maps_and_levels() {
         map: String::from(map),
         z,
         pos: [x, 0.0],
+        tool: net::Tool::Select,
     };
     let mut peer = RemotePeer::new(PeerInfo {
         id: PeerId(1),

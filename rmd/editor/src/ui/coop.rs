@@ -1,7 +1,7 @@
 use std::{env, iter};
 
 use dear_imgui_rs::{Key, PopupQueryFlags, StyleColor, Ui, sys};
-use editor::{document::DocumentId, icons::materialdesignicons::ICON_CLOSE};
+use editor::{document::DocumentId, icons::materialdesignicons::ICON_CLOSE, tool::Tool};
 use net::{CodebaseId, Comment, CommentId, MAX_COMMENT_LEN, PeerId};
 
 use super::{
@@ -685,13 +685,9 @@ pub(super) fn draw_remote_cursors(ui: &Ui, camera: &Controller, viewport: Overla
     let draw = ui.get_window_draw_list();
     draw.with_clip_rect(viewport.min, viewport.max, || {
         for peer in coop.peers.values() {
-            if !peer
-                .cursor
-                .as_ref()
-                .is_some_and(|cursor| cursor.map == map && cursor.z == z)
-            {
+            let Some(cursor) = peer.cursor.as_ref().filter(|cursor| cursor.map == map && cursor.z == z) else {
                 continue;
-            }
+            };
 
             let local = camera.map_to_screen(peer.shown);
             if !local.iter().all(|value| value.is_finite()) {
@@ -705,12 +701,13 @@ pub(super) fn draw_remote_cursors(ui: &Ui, camera: &Controller, viewport: Overla
             draw.add_triangle(tip, bottom, side, color).filled(true).build();
             draw.add_triangle(tip, bottom, side, [0.0, 0.0, 0.0, 1.0]).build();
 
-            let text_size = ui.calc_text_size(&peer.info.nick);
+            let label = format!("{} {}", Tool::from(cursor.tool).icon(), peer.info.nick);
+            let text_size = ui.calc_text_size(&label);
             let min = [side[0] + 2.0 * scale, side[1]];
             let max = [min[0] + text_size[0] + 6.0, min[1] + text_size[1] + 4.0];
             draw.add_rect(min, max, OVERLAY_BG).filled(true).build();
             draw.add_rect(min, max, color).build();
-            draw.add_text([min[0] + 3.0, min[1] + 2.0], color, &peer.info.nick);
+            draw.add_text([min[0] + 3.0, min[1] + 2.0], color, &label);
         }
     });
 }
