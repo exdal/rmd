@@ -89,6 +89,9 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/setup-slang.ps1 -Platform windows-x86_64
 
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
       - name: Show Rust toolchain versions
         run: |
           rustc --version
@@ -106,16 +109,19 @@ jobs:
       - name: Build the editor
         run: cargo build --release --locked --package editor --bin rmde --target x86_64-pc-windows-msvc
 
-      - name: Stage the Windows artifact
+      - name: Build the server
+        run: cargo build --release --locked --package net --bin rmds --target x86_64-pc-windows-msvc
+
+      - name: Stage the Windows artifacts
         shell: pwsh
         env:
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
-          $destination = Join-Path 'dist' "rmd-$env:VERSION-x86_64-pc-windows-msvc.exe"
           New-Item -ItemType Directory -Path 'dist' -Force | Out-Null
-          Copy-Item -LiteralPath 'target/x86_64-pc-windows-msvc/release/rmde.exe' -Destination $destination
+          Copy-Item -LiteralPath 'target/x86_64-pc-windows-msvc/release/rmde.exe' -Destination (Join-Path 'dist' "rmd-$env:VERSION-x86_64-pc-windows-msvc.exe")
+          Copy-Item -LiteralPath 'target/x86_64-pc-windows-msvc/release/rmds.exe' -Destination (Join-Path 'dist' "rmd-server-$env:VERSION-x86_64-pc-windows-msvc.exe")
 
-      - name: Upload the Windows artifact
+      - name: Upload the Windows editor artifact
         uses: actions/upload-artifact@v4
         with:
           name: rmd-${{ needs.metadata.outputs.version }}-x86_64-pc-windows-msvc.exe
@@ -124,8 +130,17 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+      - name: Upload the Windows server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmd-server-${{ needs.metadata.outputs.version }}-x86_64-pc-windows-msvc.exe
+          path: dist/rmd-server-${{ needs.metadata.outputs.version }}-x86_64-pc-windows-msvc.exe
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
   linux:
-    name: Build Linux x64
+    name: Test and build Linux x64
     needs: metadata
     runs-on: ubuntu-24.04
     steps:
@@ -154,28 +169,50 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/setup-slang.ps1 -Platform linux-x86_64
 
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --workspace --all-targets --all-features --locked
+
       - name: Build the editor
         run: cargo build --release --locked --package editor --bin rmde --target x86_64-unknown-linux-gnu
 
-      - name: Stage and inspect the Linux artifact
+      - name: Build the server
+        run: cargo build --release --locked --package net --bin rmds --target x86_64-unknown-linux-gnu
+
+      - name: Stage and inspect the Linux artifacts
         env:
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           mkdir -p dist
-          destination="dist/rmd-$VERSION-x86_64-unknown-linux-gnu"
-          cp target/x86_64-unknown-linux-gnu/release/rmde "$destination"
-          chmod +x "$destination"
-          file "$destination"
-          if ldd "$destination" | grep --quiet 'not found'; then
-            ldd "$destination"
-            exit 1
-          fi
+          stage() {
+            destination="dist/$2"
+            cp "target/x86_64-unknown-linux-gnu/release/$1" "$destination"
+            chmod +x "$destination"
+            file "$destination"
+            if ldd "$destination" | grep --quiet 'not found'; then
+              ldd "$destination"
+              exit 1
+            fi
+          }
+          stage rmde "rmd-$VERSION-x86_64-unknown-linux-gnu"
+          stage rmds "rmd-server-$VERSION-x86_64-unknown-linux-gnu"
 
-      - name: Upload the Linux artifact
+      - name: Upload the Linux editor artifact
         uses: actions/upload-artifact@v4
         with:
           name: rmd-${{ needs.metadata.outputs.version }}-x86_64-unknown-linux-gnu
           path: dist/rmd-${{ needs.metadata.outputs.version }}-x86_64-unknown-linux-gnu
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload the Linux server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmd-server-${{ needs.metadata.outputs.version }}-x86_64-unknown-linux-gnu
+          path: dist/rmd-server-${{ needs.metadata.outputs.version }}-x86_64-unknown-linux-gnu
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
