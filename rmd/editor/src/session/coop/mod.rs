@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
     net::SocketAddr,
     path::PathBuf,
     sync::mpsc,
@@ -38,12 +38,19 @@ mod tests;
 // how fast a remote cursor closes the gap to its latest position, per second
 const CURSOR_SMOOTHING: f32 = 20.0;
 
+const MAX_PEER_CHANGES: usize = 8;
+
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum CoopStatus {
     Connecting,
     Connected,
     Ended(String),
     CodebaseMismatch { expected: CodebaseId },
+}
+
+pub(crate) enum PeerChange {
+    Joined(PeerInfo),
+    Left(PeerInfo),
 }
 
 pub(crate) struct RemotePeer {
@@ -95,6 +102,7 @@ pub(crate) struct Coop {
     pub peers: BTreeMap<PeerId, RemotePeer>,
     pub comments: BTreeMap<CommentId, Comment>,
     pub shared_maps: BTreeMap<String, SharedMap>,
+    pub peer_changes: VecDeque<(Instant, PeerChange)>,
     following: Option<Following>,
     prepared: (mpsc::Sender<Prepared>, mpsc::Receiver<Prepared>),
     server: Option<Server>,
@@ -269,10 +277,18 @@ impl Coop {
         self.status = CoopStatus::CodebaseMismatch { expected };
     }
 
+    fn record(&mut self, change: PeerChange) {
+        self.peer_changes.push_back((Instant::now(), change));
+        if self.peer_changes.len() > MAX_PEER_CHANGES {
+            self.peer_changes.pop_front();
+        }
+    }
+
     // shared maps stay until the session closes their pending documents
     fn end(&mut self, reason: String) {
         self.status = CoopStatus::Ended(reason);
         self.peers.clear();
+        self.peer_changes.clear();
         self.comments.clear();
         self.following = None;
         self.client = None;

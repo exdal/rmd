@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     mem,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     path::Path,
@@ -70,6 +70,7 @@ impl Session {
             stopping_server: None,
             comments: BTreeMap::new(),
             shared_maps: BTreeMap::new(),
+            peer_changes: VecDeque::new(),
             following: None,
             prepared: mpsc::channel(),
             client: Some(client),

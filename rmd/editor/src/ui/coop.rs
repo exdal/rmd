@@ -1,6 +1,6 @@
 use std::{env, iter};
 
-use dear_imgui_rs::{Key, PopupQueryFlags, StyleColor, Ui, sys};
+use dear_imgui_rs::{Condition, Key, PopupQueryFlags, StyleColor, StyleVar, Ui, WindowFlags, sys};
 use editor::{document::DocumentId, icons::materialdesignicons::ICON_CLOSE, tool::Tool};
 use net::{CodebaseId, Comment, CommentId, MAX_COMMENT_LEN, PeerId};
 
@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     camera::Controller,
-    session::{Coop, CoopStatus, Session, SharedState},
+    session::{Coop, CoopStatus, PeerChange, Session, SharedState},
     settings::Settings,
 };
 
@@ -45,6 +45,12 @@ const COMMENT_WIDTH: f32 = 240.0;
 const COMMENT_HEADER: f32 = 5.0;
 
 const COMMENT_BG: [f32; 4] = [0.1, 0.1, 0.12, 0.94];
+
+const NOTICE_SECONDS: f32 = 4.0;
+
+const NOTICE_FADE: f32 = 1.0;
+
+const NOTICE_INSET: f32 = 10.0;
 
 pub(super) struct CommentDraft {
     pub(super) document: DocumentId,
@@ -573,6 +579,63 @@ pub(super) fn draw_coop_peers(ui: &Ui, coop: &Coop, following: Option<PeerId>) -
     }
 
     clicked
+}
+
+pub(super) fn draw_peer_changes(ui: &Ui, coop: &Coop) {
+    let recent = coop
+        .peer_changes
+        .iter()
+        .map(|(at, change)| (at.elapsed().as_secs_f32(), change))
+        .filter(|(age, _)| *age < NOTICE_SECONDS)
+        .collect::<Vec<_>>();
+    let Some((newest, _)) = recent.last() else {
+        return;
+    };
+
+    let viewport = ui.main_viewport();
+    let (pos, size) = (viewport.work_pos(), viewport.work_size());
+    let inset = NOTICE_INSET * dpi(ui);
+    unsafe {
+        sys::igSetNextWindowPos(
+            sys::ImVec2 {
+                x: pos[0] + size[0] - inset,
+                y: pos[1] + size[1] - inset,
+            },
+            Condition::Always as i32,
+            sys::ImVec2 { x: 1.0, y: 1.0 },
+        );
+    }
+
+    let flags = WindowFlags::NO_DECORATION
+        | WindowFlags::NO_MOVE
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::NO_DOCKING
+        | WindowFlags::NO_FOCUS_ON_APPEARING
+        | WindowFlags::ALWAYS_AUTO_RESIZE
+        | WindowFlags::NO_NAV
+        | WindowFlags::NO_INPUTS;
+    let _alpha = ui.push_style_var(StyleVar::Alpha(
+        ((NOTICE_SECONDS - newest) / NOTICE_FADE).clamp(0.0, 1.0),
+    ));
+    let _background = ui.push_style_color(StyleColor::WindowBg, ui.clone_style().color(StyleColor::PopupBg));
+    ui.window("##coop-peer-changes").flags(flags).build(|| {
+        unsafe { sys::igBringWindowToDisplayFront(sys::igGetCurrentWindow()) };
+
+        for (index, (_, change)) in recent.iter().enumerate() {
+            let (info, verb) = match change {
+                PeerChange::Joined(info) => (info, "joined"),
+                PeerChange::Left(info) => (info, "left"),
+            };
+
+            if index > 0 {
+                ui.spacing();
+            }
+
+            ui.text_colored(peer_color(info.id), &info.nick);
+            ui.same_line();
+            ui.text_disabled(verb);
+        }
+    });
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

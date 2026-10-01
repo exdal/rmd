@@ -40,6 +40,40 @@ fn a_joined_peer_sees_the_hosts_cursor() {
 }
 
 #[test]
+fn peers_joining_and_leaving_are_recorded() {
+    let mut host = session();
+    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+        .unwrap();
+    poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
+
+    let port = host.coop().and_then(Coop::host).unwrap().port();
+    let mut guest = session();
+    guest
+        .join_coop(
+            format!("127.0.0.1:{port}"),
+            net::hash_password("hunter2"),
+            String::from("guest"),
+        )
+        .unwrap();
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        connected(sessions[1]) && sessions[0].coop().is_some_and(|coop| coop.peers.len() == 1)
+    });
+
+    let changes = &host.coop().unwrap().peer_changes;
+    assert_eq!(changes.len(), 1);
+    assert!(matches!(&changes[0].1, PeerChange::Joined(info) if info.nick == "guest"));
+    assert!(guest.coop().unwrap().peer_changes.is_empty());
+
+    guest.leave_coop();
+    poll_until(&mut [&mut host], |sessions| {
+        sessions[0]
+            .coop()
+            .and_then(|coop| coop.peer_changes.back())
+            .is_some_and(|(_, change)| matches!(change, PeerChange::Left(info) if info.nick == "guest"))
+    });
+}
+
+#[test]
 fn a_wrong_password_ends_the_session_with_the_reason() {
     let mut host = session();
     host.host_coop(0, net::hash_password("hunter2"), String::from("host"))

@@ -501,6 +501,9 @@ impl UiState {
         self.dm_ui.draw(ui, session, root.raw());
         self.draw_map_dialogs(ui, session, &menu);
         let coop_open = self.draw_coop_dialogs(ui, session, settings, loading, menu.coop_dialog);
+        if let Some(coop) = session.coop() {
+            coop::draw_peer_changes(ui, coop);
+        }
 
         self.settings_window
             .finish_keybind_capture(ui, &mut settings.keybindings);
