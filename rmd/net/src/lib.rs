@@ -7,6 +7,7 @@ mod tls;
 use std::{error, fmt};
 
 pub use protocol::coop::{
+    CodebaseHash,
     CodebaseId,
     Comment,
     CommentId,

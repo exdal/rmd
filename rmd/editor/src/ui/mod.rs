@@ -1,6 +1,7 @@
 use core::path::TreePath;
 use std::{
     collections::{HashMap, VecDeque},
+    mem,
     path::{Path, PathBuf},
 };
 
@@ -215,6 +216,7 @@ pub enum OpenRequest {
     Codebase(PathBuf),
     Map(PathBuf),
     ShareMap(PathBuf),
+    ReloadCoop,
 }
 
 struct StartupPanelFocus {
@@ -273,6 +275,7 @@ pub struct UiState {
     resize_map_dialog: Option<ResizeMapDialog>,
     go_to_dialog: Option<GoToDialog>,
     coop_dialog: Option<coop::CoopDialog>,
+    coop_notice: coop::CoopNotice,
     comment_draft: Option<coop::CommentDraft>,
     last_go_to: Option<Coord>,
     tile_fill: Option<TileFillPaths>,
@@ -280,6 +283,7 @@ pub struct UiState {
     close_queue: VecDeque<DocumentId>,
     edit_command: Option<EditCommand>,
     pending_conflict_reload: Option<DocumentId>,
+    save_requested: bool,
     exit_requested: bool,
     show_welcome: bool,
     welcome_map_filter: String,
@@ -345,6 +349,7 @@ impl UiState {
             resize_map_dialog: None,
             go_to_dialog: None,
             coop_dialog: None,
+            coop_notice: coop::CoopNotice::default(),
             comment_draft: None,
             last_go_to: None,
             tile_fill: None,
@@ -352,6 +357,7 @@ impl UiState {
             close_queue: VecDeque::new(),
             edit_command: None,
             pending_conflict_reload: None,
+            save_requested: false,
             exit_requested: false,
             show_welcome: true,
             welcome_map_filter: String::new(),
@@ -368,6 +374,8 @@ impl UiState {
     }
 
     pub fn set_open_error(&mut self, error: Option<String>) { self.open_error = error; }
+
+    pub fn reset_coop_notice(&mut self) { self.coop_notice.reset(); }
 
     pub fn reveal_selected_instance(&mut self, session: &Session) {
         self.object_tree.reveal_selected_instance(session);
@@ -513,12 +521,15 @@ impl UiState {
         self.reset_layout = reset_layout;
         settings.mirror_camera ^= toggle_mirror_camera;
 
+        // https://i.redd.it/ggq5w2aliicf1.png
+        let is_save_requested = mem::take(&mut self.save_requested);
         if session.map().is_some()
             && !open_save_dialog
             && self.save_dialog.is_none()
-            && !self.settings_window.is_capturing_keybind()
-            && !ui.io().want_text_input()
-            && settings.keybindings.get(KeybindAction::Save).is_pressed(ui)
+            && (is_save_requested
+                || !self.settings_window.is_capturing_keybind()
+                    && !ui.io().want_text_input()
+                    && settings.keybindings.get(KeybindAction::Save).is_pressed(ui))
         {
             if session.can_save_map_in_place() {
                 if let Err(error) = session.save_map() {
@@ -812,6 +823,26 @@ impl UiState {
         }
 
         coop::draw_coop_dialog(ui, session, settings, &mut self.coop_dialog);
+
+        match coop::draw_out_of_date_dialog(ui, session) {
+            Some((id, coop::OutOfDateChoice::SaveMine)) => {
+                session.set_active_document(id);
+                self.save_requested = true;
+            },
+            Some((id, coop::OutOfDateChoice::DiscardMine)) => session.discard_for_coop_map(id),
+            Some((_, coop::OutOfDateChoice::Leave)) => session.leave_coop(),
+            None => {},
+        }
+
+        match coop::draw_coop_notice(ui, session.coop(), loading, &mut self.coop_notice) {
+            Some(coop::CoopNoticeChoice::Retry) => match session.retry_coop() {
+                Ok(()) => self.coop_notice.reset(),
+                Err(error) => self.open_error = Some(error),
+            },
+            Some(coop::CoopNoticeChoice::ReloadAndRetry) => open = Some(OpenRequest::ReloadCoop),
+            Some(coop::CoopNoticeChoice::Dismiss) => session.leave_coop(),
+            None => {},
+        }
 
         self.settings_window
             .finish_keybind_capture(ui, &mut settings.keybindings);
@@ -1247,6 +1278,235 @@ mod tests {
 
         assert!(state.git_panel.visible());
         assert_eq!(session.diff(id).map(|diff| diff.len()), Some(1));
+    }
+
+    #[test]
+    fn an_out_of_date_map_asks_in_a_popup_until_the_user_leaves() {
+        use std::{
+            thread,
+            time::{Duration, Instant},
+        };
+
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme");
+        let open = |width: u32| {
+            let mut session = Session::new();
+            session.load_environment(&entry).unwrap();
+            let path = session.codebase_dir().unwrap().join("_maps/out-of-date.dmm");
+            session.apply_map(crate::loader::LoadedMap {
+                path,
+                map: dmm::Map::new(Size { x: width, y: 1, z: 1 }),
+                z: 1,
+                errors: vec![],
+                repo: None,
+                conflict: None,
+            });
+            let id = session.state.active().unwrap();
+
+            (session, id)
+        };
+        let poll_until = |sessions: &mut [&mut Session], done: &dyn Fn(&[&mut Session]) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !done(sessions) {
+                assert!(Instant::now() < deadline, "co-op never got there");
+                for session in sessions.iter_mut() {
+                    session.poll_coop();
+                }
+
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+
+        let (mut host, _) = open(2);
+        host.host_coop(0, String::from("hunter2"), String::from("host"))
+            .unwrap();
+        poll_until(&mut [&mut host], &|sessions| {
+            sessions[0].coop().is_some_and(|coop| coop.is_connected())
+        });
+        host.share_coop_map();
+        poll_until(&mut [&mut host], &|sessions| {
+            sessions[0].coop().is_some_and(|coop| !coop.shared_maps.is_empty())
+        });
+
+        let (mut guest, local) = open(1);
+        guest.state.document_mut(local).unwrap().mark_unsaved();
+        let port = host.coop().and_then(|coop| coop.host()).unwrap().0.port();
+        guest
+            .join_coop(
+                format!("127.0.0.1:{port}"),
+                String::from("hunter2"),
+                String::from("guest"),
+            )
+            .unwrap();
+        poll_until(&mut [&mut host, &mut guest], &|sessions| {
+            sessions[1].coop_out_of_date(local).is_some()
+        });
+
+        let mut context = rectangle_context();
+        let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
+        context.io_mut().set_config_flags(flags);
+        let mut state = UiState::new(false).unwrap();
+        let mut settings = Settings {
+            check_for_updates: false,
+            ..Settings::default()
+        };
+        let mut frame = |state: &mut UiState, session: &mut Session| {
+            let ui = context.frame();
+            state.draw(ui, session, &mut settings, None).unwrap();
+            let is_open = ui.is_popup_open(super::coop::OUT_OF_DATE_POPUP);
+            assert!(context.render_legacy().valid());
+            is_open
+        };
+        assert!((0..3).map(|_| frame(&mut state, &mut guest)).last().unwrap());
+
+        guest.leave_coop();
+        assert!(!(0..3).map(|_| frame(&mut state, &mut guest)).last().unwrap());
+        let document = guest.state.document(local).unwrap();
+        assert!(document.is_dirty());
+        assert!(!document.is_read_only());
+        assert_eq!(document.map.size.x, 1);
+    }
+
+    #[test]
+    fn the_codebase_dialog_supports_retry_close_and_escape_without_maps() {
+        use dear_imgui_rs::{Key, MouseButton, sys};
+
+        use super::OpenRequest;
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = rectangle_context();
+        let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
+        context.io_mut().set_config_flags(flags);
+        let mut state = UiState::new(false).unwrap();
+        let mut session = Session::new();
+        let original = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme");
+        session.load_environment(&original).unwrap();
+        session
+            .join_coop("not a host".into(), "password".into(), "guest".into())
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("rmd-codebase-notice-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("game.dme"), "/obj/different").unwrap();
+        session.load_environment(&dir.join("game.dme")).unwrap();
+        assert!(matches!(
+            session.coop().unwrap().status,
+            crate::session::CoopStatus::CodebaseMismatch { .. }
+        ));
+        assert!(session.state.is_empty());
+        let mut settings = Settings {
+            check_for_updates: false,
+            ..Settings::default()
+        };
+        let load = crate::loader::LoadView {
+            title: "Opening codebase",
+            path: "game.dme".into(),
+            snapshot: editor::progress::Progress::new().snapshot(),
+            cancelling: false,
+            cancellable: true,
+        };
+        let frame = |context: &mut dear_imgui_rs::Context,
+                     state: &mut UiState,
+                     session: &mut Session,
+                     settings: &mut Settings,
+                     loading: bool| {
+            let ui = context.frame();
+            let output = state.draw(ui, session, settings, loading.then_some(&load)).unwrap();
+            let is_open = ui.is_popup_open(super::coop::STATUS_POPUP);
+            assert!(context.render_legacy().valid());
+            (output.open, is_open)
+        };
+        for _ in 0..4 {
+            assert_eq!(
+                frame(&mut context, &mut state, &mut session, &mut settings, true),
+                (None, false),
+                "the dialog waits for loading to finish"
+            );
+        }
+
+        let work_pos = context.main_viewport().work_pos();
+        for _ in 0..4 {
+            assert_eq!(
+                frame(&mut context, &mut state, &mut session, &mut settings, false),
+                (None, true)
+            );
+        }
+
+        let (position, size) = unsafe {
+            let window = sys::igFindWindowByName(c"Co-op unavailable##coop-status".as_ptr());
+            assert!(!window.is_null());
+            assert_ne!((*window).Flags & sys::ImGuiWindowFlags_Modal, 0);
+            ([(*window).Pos.x, (*window).Pos.y], [(*window).Size.x, (*window).Size.y])
+        };
+        assert_eq!(
+            context.main_viewport().work_pos(),
+            work_pos,
+            "the modal preserves the dockspace layout"
+        );
+        let padding = context.style().window_padding();
+        let close = [position[0] + padding[0] + 8.0, position[1] + size[1] - padding[1] - 8.0];
+        let retry = [close[0] + 80.0, close[1]];
+        for down in [false, true, false] {
+            context.io_mut().add_mouse_pos_event(retry);
+            context.io_mut().add_mouse_button_event(MouseButton::Left, down);
+            assert_eq!(
+                frame(&mut context, &mut state, &mut session, &mut settings, true),
+                (None, true),
+                "retry is disabled while loading"
+            );
+        }
+
+        let mut requested = None;
+        for down in [false, true, false] {
+            context.io_mut().add_mouse_pos_event(retry);
+            context.io_mut().add_mouse_button_event(MouseButton::Left, down);
+            requested = frame(&mut context, &mut state, &mut session, &mut settings, false)
+                .0
+                .or(requested);
+        }
+
+        assert_eq!(requested, Some(OpenRequest::ReloadCoop));
+        for _ in 0..2 {
+            assert_eq!(
+                frame(&mut context, &mut state, &mut session, &mut settings, false),
+                (None, false),
+                "the previous failure must not reopen during a retry"
+            );
+        }
+
+        state.reset_coop_notice();
+        for _ in 0..3 {
+            assert_eq!(
+                frame(&mut context, &mut state, &mut session, &mut settings, false),
+                (None, true),
+                "a repeated mismatch opens the dialog for the new attempt"
+            );
+        }
+
+        for down in [false, true, false] {
+            context.io_mut().add_mouse_pos_event(close);
+            context.io_mut().add_mouse_button_event(MouseButton::Left, down);
+            frame(&mut context, &mut state, &mut session, &mut settings, false);
+        }
+
+        assert!(session.coop().is_none());
+
+        session
+            .join_coop("not a host".into(), "password".into(), "guest".into())
+            .unwrap();
+        session.load_environment(&original).unwrap();
+        for _ in 0..3 {
+            assert_eq!(
+                frame(&mut context, &mut state, &mut session, &mut settings, false),
+                (None, true)
+            );
+        }
+
+        context.io_mut().add_key_event(Key::Escape, true);
+        assert_eq!(
+            frame(&mut context, &mut state, &mut session, &mut settings, false),
+            (None, false)
+        );
+        assert!(session.coop().is_none());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

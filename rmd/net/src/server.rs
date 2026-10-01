@@ -18,6 +18,7 @@ use protocol::{
     coop::{
         ClientHello,
         ClientMessage,
+        CodebaseId,
         Comment,
         CommentId,
         Datagram,
@@ -68,6 +69,7 @@ pub fn random_password() -> String {
 pub struct ServerConfig {
     pub bind: SocketAddr,
     pub password: String,
+    pub codebase: Option<CodebaseId>,
 }
 
 pub struct Server {
@@ -88,7 +90,10 @@ impl Server {
         let addr = endpoint.local_addr().map_err(fail)?;
         let shared = Arc::new(Shared {
             password: config.password.clone(),
-            state: Mutex::default(),
+            state: Mutex::new(State {
+                codebase: config.codebase,
+                ..State::default()
+            }),
             next_id: AtomicU32::new(1),
         });
 
@@ -137,11 +142,23 @@ struct Shared {
 
 #[derive(Default)]
 struct State {
+    codebase: Option<CodebaseId>,
     peers: HashMap<PeerId, Peer>,
     comments: Vec<Comment>,
     last_comment: CommentId,
     maps: HashMap<String, SharedMap>,
     uploads: HashMap<String, (PeerId, u64)>,
+}
+
+impl State {
+    fn pin_codebase(&mut self, candidate: &CodebaseId) -> Result<CodebaseId, CodebaseId> {
+        let expected = self.codebase.get_or_insert_with(|| candidate.clone());
+        if expected.hash == candidate.hash {
+            Ok(expected.clone())
+        } else {
+            Err(expected.clone())
+        }
+    }
 }
 
 struct SharedMap {
@@ -490,45 +507,58 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
     };
 
     let (outbox, mut inbox) = mpsc::unbounded_channel();
-    {
+    let mismatch = {
         let mut state = shared.state.lock().unwrap();
-        let mut others = state.peers.values().map(|peer| peer.info.clone()).collect::<Vec<_>>();
-        others.sort_by_key(|peer| peer.id);
+        match state.pin_codebase(&info.codebase) {
+            Err(expected) => Some(expected),
+            Ok(codebase) => {
+                let mut others = state.peers.values().map(|peer| peer.info.clone()).collect::<Vec<_>>();
+                others.sort_by_key(|peer| peer.id);
 
-        let _ = outbox.send(ServerMessage::Welcome {
-            you: id,
-            peers: others,
-            comments: state.comments.clone(),
-        });
-        for peer in state.peers.values() {
-            let _ = peer.outbox.send(ServerMessage::PeerJoined(info.clone()));
-        }
+                let _ = outbox.send(ServerMessage::Welcome {
+                    you: id,
+                    codebase,
+                    peers: others,
+                    comments: state.comments.clone(),
+                });
+                for peer in state.peers.values() {
+                    let _ = peer.outbox.send(ServerMessage::PeerJoined(info.clone()));
+                }
 
-        for (path, map) in state.maps.iter() {
-            let _ = outbox.send(ServerMessage::MapShared {
-                path: path.clone(),
-                by: map.by,
-                generation: map.generation,
-            });
-            replay(&outbox, connection, path, map);
-        }
+                for (path, map) in state.maps.iter() {
+                    let _ = outbox.send(ServerMessage::MapShared {
+                        path: path.clone(),
+                        by: map.by,
+                        generation: map.generation,
+                    });
+                    replay(&outbox, connection, path, map);
+                }
 
-        for (path, (by, len)) in state.uploads.iter() {
-            let _ = outbox.send(ServerMessage::MapIncoming {
-                path: path.clone(),
-                by: *by,
-                len: *len,
-            });
-        }
+                for (path, (by, len)) in state.uploads.iter() {
+                    let _ = outbox.send(ServerMessage::MapIncoming {
+                        path: path.clone(),
+                        by: *by,
+                        len: *len,
+                    });
+                }
 
-        state.peers.insert(
-            id,
-            Peer {
-                info: info.clone(),
-                connection: connection.clone(),
-                outbox,
+                state.peers.insert(
+                    id,
+                    Peer {
+                        info: info.clone(),
+                        connection: connection.clone(),
+                        outbox,
+                    },
+                );
+                None
             },
-        );
+        }
+    };
+
+    if let Some(expected) = mismatch {
+        write_message(&mut send, &ServerMessage::CodebaseMismatch { expected }).await?;
+        let _ = time::timeout(Duration::from_secs(2), connection.closed()).await;
+        return Err(fail("different codebase"));
     }
 
     log::info!("{} joined as {id:?} from {}", info.nick, connection.remote_address());
@@ -603,7 +633,34 @@ fn clean_text(text: &str, max: usize) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use protocol::coop::CodebaseHash;
+
     use super::*;
+
+    #[test]
+    fn an_empty_relay_keeps_its_codebase_and_ignores_git_hints() {
+        let original = CodebaseId {
+            hash: CodebaseHash([7; 32]),
+            git_hint: Some(String::from("main")),
+        };
+        let mut state = State::default();
+        assert_eq!(state.pin_codebase(&original), Ok(original.clone()));
+        state.peers.clear();
+        assert_eq!(
+            state.pin_codebase(&CodebaseId {
+                hash: CodebaseHash([8; 32]),
+                git_hint: None
+            }),
+            Err(original.clone())
+        );
+        assert_eq!(
+            state.pin_codebase(&CodebaseId {
+                hash: original.hash,
+                git_hint: Some(String::from("other"))
+            }),
+            Ok(original)
+        );
+    }
 
     #[test]
     fn nicks_lose_control_characters_and_excess_length() {

@@ -7,9 +7,12 @@ pub const MAX_MAP_LEN: usize = 64 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PeerId(pub u32);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CodebaseHash(pub [u8; 32]);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodebaseId {
-    pub hash: [u8; 32],
+    pub hash: CodebaseHash,
     pub git_hint: Option<String>,
 }
 
@@ -87,11 +90,15 @@ pub struct MapEdit {
 pub enum ServerMessage {
     Welcome {
         you: PeerId,
+        codebase: CodebaseId,
         peers: Vec<PeerInfo>,
         comments: Vec<Comment>,
     },
     Reject {
         reason: String,
+    },
+    CodebaseMismatch {
+        expected: CodebaseId,
     },
     PeerJoined(PeerInfo),
     PeerLeft(PeerId),
@@ -175,7 +182,7 @@ mod tests {
             id: PeerId(id),
             nick: format!("peer{id}"),
             codebase: CodebaseId {
-                hash: [id as u8; 32],
+                hash: CodebaseHash([id as u8; 32]),
                 git_hint: id.is_multiple_of(2).then(|| String::from("abc1234")),
             },
         }
@@ -198,6 +205,7 @@ mod tests {
         };
         round_trip(ServerMessage::Welcome {
             you: PeerId(2),
+            codebase: peer(1).codebase,
             peers: vec![peer(1), peer(2)],
             comments: vec![comment.clone()],
         });
@@ -212,6 +220,9 @@ mod tests {
         round_trip(ServerMessage::Comment(comment));
         round_trip(ServerMessage::Reject {
             reason: String::from("wrong password"),
+        });
+        round_trip(ServerMessage::CodebaseMismatch {
+            expected: peer(1).codebase,
         });
         round_trip(ServerMessage::PeerJoined(peer(3)));
         round_trip(ServerMessage::PeerLeft(PeerId(3)));

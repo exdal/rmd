@@ -6,6 +6,7 @@ use std::{
 
 use net::{
     Client,
+    CodebaseHash,
     CodebaseId,
     Cursor,
     Direction,
@@ -24,6 +25,7 @@ const PASSWORD: &str = "hunter2";
 fn server() -> Server {
     Server::spawn(ServerConfig {
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        codebase: None,
         password: String::from(PASSWORD),
     })
     .unwrap()
@@ -37,7 +39,7 @@ fn join_at(addr: SocketAddr, password: &str, nick: &str) -> Client {
         password.to_owned(),
         nick.to_owned(),
         CodebaseId {
-            hash: [7; 32],
+            hash: CodebaseHash([7; 32]),
             git_hint: None,
         },
     )
@@ -146,6 +148,112 @@ fn a_wrong_password_is_rejected() {
     assert_eq!(reason, "wrong password");
 }
 
+fn join_codebase(server: &Server, hash: u8, hint: &str) -> Client {
+    Client::connect(
+        server.local_addr().to_string(),
+        PASSWORD.to_owned(),
+        format!("peer-{hash}"),
+        CodebaseId {
+            hash: CodebaseHash([hash; 32]),
+            git_hint: Some(hint.to_owned()),
+        },
+    )
+}
+
+#[test]
+fn a_different_codebase_receives_only_a_rejection_even_with_cached_data() {
+    let server = server();
+    let alice = join_codebase(&server, 7, "main");
+    wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
+    alice.send_comment(
+        "_maps/test.dmm".into(),
+        1,
+        [0.0, 0.0],
+        "private to this codebase".into(),
+    );
+    wait_for(&alice, |event| matches!(event, Event::Comment(_)).then_some(()));
+    alice.share_map("_maps/test.dmm".into(), None, b"map".to_vec());
+    let generation = wait_for(&alice, |event| match event {
+        Event::MapShared { generation, .. } => Some(generation),
+        _ => None,
+    });
+    alice.send_edit(MapEdit {
+        path: "_maps/test.dmm".into(),
+        generation,
+        coords: vec![[1, 1, 1]],
+        patch: "edit".into(),
+    });
+    wait_for(&alice, |event| matches!(event, Event::Edit { .. }).then_some(()));
+
+    let wrong = join_codebase(&server, 8, "main");
+    wrong.share_map("_maps/wrong.dmm".into(), None, b"wrong codebase".to_vec());
+    let expected = wait_for(&wrong, |event| match event {
+        Event::CodebaseMismatch { expected } => Some(expected),
+        other => panic!("mismatched client received {other:?}"),
+    });
+    assert_eq!(expected.hash, CodebaseHash([7; 32]));
+    assert_eq!(expected.git_hint.as_deref(), Some("main"));
+
+    let matching = join_codebase(&server, 7, "another-branch");
+    let peers = wait_for(&matching, |event| match event {
+        Event::Connected { peers, codebase, .. } => {
+            assert_eq!(codebase, expected);
+            Some(peers)
+        },
+        _ => None,
+    });
+    assert_eq!(peers.len(), 1, "a rejected peer was announced");
+    assert!(
+        matching
+            .poll()
+            .all(|event| !matches!(event, Event::MapShared { path, .. } if path == "_maps/wrong.dmm"))
+    );
+}
+
+#[test]
+fn hosting_pins_the_codebase_before_the_first_client() {
+    let expected = CodebaseId {
+        hash: CodebaseHash([7; 32]),
+        git_hint: None,
+    };
+    let server = Server::spawn(ServerConfig {
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        password: PASSWORD.to_owned(),
+        codebase: Some(expected.clone()),
+    })
+    .unwrap();
+    let wrong = join_codebase(&server, 8, "main");
+    assert_eq!(
+        wait_for(&wrong, |event| match event {
+            Event::CodebaseMismatch { expected } => Some(expected),
+            other => panic!("mismatched first client received {other:?}"),
+        }),
+        expected
+    );
+    let matching = join_codebase(&server, 7, "main");
+    wait_for(&matching, |event| {
+        matches!(event, Event::Connected { .. }).then_some(())
+    });
+}
+
+#[test]
+fn simultaneous_first_clients_cannot_establish_different_codebases() {
+    let server = server();
+    let clients = [join_codebase(&server, 7, "main"), join_codebase(&server, 8, "main")];
+    let admitted = clients
+        .iter()
+        .map(|client| {
+            wait_for(client, |event| match event {
+                Event::Connected { codebase, .. } => Some((true, codebase.hash)),
+                Event::CodebaseMismatch { expected } => Some((false, expected.hash)),
+                _ => None,
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(admitted[0].0, admitted[1].0);
+    assert_eq!(admitted[0].1, admitted[1].1);
+}
+
 #[test]
 fn an_unreachable_host_disconnects() {
     let client = Client::connect(
@@ -153,7 +261,7 @@ fn an_unreachable_host_disconnects() {
         String::from(PASSWORD),
         String::from("alice"),
         CodebaseId {
-            hash: [0; 32],
+            hash: CodebaseHash([0; 32]),
             git_hint: None,
         },
     );

@@ -52,10 +52,14 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 pub enum Event {
     Connected {
         you: PeerId,
+        codebase: CodebaseId,
         peers: Vec<PeerInfo>,
         comments: Vec<Comment>,
     },
     Rejected(String),
+    CodebaseMismatch {
+        expected: CodebaseId,
+    },
     PeerJoined(PeerInfo),
     PeerLeft(PeerId),
     Cursor {
@@ -256,11 +260,37 @@ async fn session(
 
     let (mut send, mut recv) = connection.open_bi().await.map_err(fail)?;
     write_message(&mut send, &Hello::new(Service::Coop)).await?;
+    let local_codebase = hello.codebase.clone();
     write_message(&mut send, &ClientMessage::Hello(hello)).await?;
 
     let mut reader = FrameReader::new();
     match read_message(&mut recv, &mut reader).await? {
-        Some(ServerMessage::Welcome { you, peers, comments }) => emit(Event::Connected { you, peers, comments }),
+        Some(ServerMessage::Welcome {
+            you,
+            codebase,
+            peers,
+            comments,
+        }) => {
+            if codebase.hash != local_codebase.hash {
+                emit(Event::CodebaseMismatch { expected: codebase });
+                return Ok(());
+            }
+
+            if peers.iter().any(|peer| peer.codebase.hash != local_codebase.hash) {
+                return Err(fail("the relay admitted a peer with a different codebase"));
+            }
+
+            emit(Event::Connected {
+                you,
+                codebase,
+                peers,
+                comments,
+            });
+        },
+        Some(ServerMessage::CodebaseMismatch { expected }) => {
+            emit(Event::CodebaseMismatch { expected });
+            return Ok(());
+        },
         Some(ServerMessage::Reject { reason }) => {
             emit(Event::Rejected(reason));
             return Ok(());
@@ -284,7 +314,13 @@ async fn session(
         loop {
             tokio::select! {
                 message = read_message(&mut recv, &mut reader) => match message? {
-                    Some(ServerMessage::PeerJoined(peer)) => emit(Event::PeerJoined(peer)),
+                    Some(ServerMessage::PeerJoined(peer)) => {
+                        if peer.codebase.hash != local_codebase.hash {
+                            return Err(fail("the relay admitted a peer with a different codebase"));
+                        }
+
+                        emit(Event::PeerJoined(peer));
+                    },
                     Some(ServerMessage::PeerLeft(id)) => emit(Event::PeerLeft(id)),
                     Some(ServerMessage::Comment(comment)) => emit(Event::Comment(comment)),
                     Some(ServerMessage::CommentDeleted(id)) => emit(Event::CommentDeleted(id)),

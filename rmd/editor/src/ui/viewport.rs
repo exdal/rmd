@@ -6,7 +6,7 @@ use editor::{
     command::EditGroupId,
     conflict::Side,
     document::{DocumentId, MapDocument, Selection},
-    icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_WEB},
+    icons::materialdesignicons::{ICON_ALERT, ICON_CIRCLE_SMALL, ICON_WEB},
     tool::{SelectionMask, SelectionPlacement, SelectionRotation, Tool, rotated_selection_at},
 };
 use render::{InteractionMode, MapViewInteraction, MapViewRect, PickRequest, PlacementFlash, Renderer};
@@ -50,6 +50,7 @@ use super::{
         draw_comments,
         draw_receiving,
         draw_remote_cursors,
+        draw_tab_out_of_date,
         draw_tab_progress,
     },
     draw_blame_popup,
@@ -508,7 +509,10 @@ impl UiState {
             .document(id)
             .and_then(|document| document.path.as_deref())
             .is_some_and(|path| session.is_coop_shared_file(path));
-        let title = if is_shared {
+        let is_out_of_date = session.coop_out_of_date(id).is_some();
+        let title = if is_out_of_date {
+            format!("{ICON_ALERT} {name}")
+        } else if is_shared {
             format!("{ICON_WEB} {name}")
         } else {
             name.clone()
@@ -570,6 +574,10 @@ impl UiState {
                 draw_tab_progress(ui, state);
             }
 
+            if is_out_of_date {
+                draw_tab_out_of_date(ui);
+            }
+
             if let Some((coop, state)) = session.coop().zip(session.coop_receiving(id)) {
                 draw_receiving(ui, coop, &name, state);
                 return;
@@ -618,7 +626,7 @@ impl UiState {
             let over_overlay = top_overlay.contains(mouse) || bottom_overlay.contains(mouse);
             let comment_hit = session
                 .coop()
-                .zip(session.coop_map_path(id))
+                .zip(session.coop_shared_map_path(id))
                 .filter(|_| image_hovered && !over_overlay)
                 .and_then(|(coop, map)| {
                     let z = session.state.document(id)?.z;
@@ -804,7 +812,7 @@ impl UiState {
 
             draw_guide_badges(ui, camera, viewport_min, viewport_max, guide_badges);
             if let Some(coop) = session.coop()
-                && let Some(map) = session.coop_map_path(id)
+                && let Some(map) = session.coop_shared_map_path(id)
                 && let Some(z) = session.state.document(id).map(|document| document.z)
             {
                 let viewport = OverlayRect {
@@ -841,7 +849,7 @@ impl UiState {
                 camera.screen_to_tile(cursor, size, session.options.tile_size, session.z())
             });
             *hovered_coord = pointed_coord;
-            if is_active && let Some(map) = session.coop_map_path(id) {
+            if is_active && let Some(map) = session.coop_shared_map_path(id) {
                 let pointer = (image_hovered && !over_overlay).then_some(mouse).and_then(in_viewport);
                 *coop_cursor = pointer.map(|cursor| net::Cursor {
                     map,
@@ -1474,7 +1482,7 @@ impl UiState {
                             Tool::Node => {},
                             Tool::Comment => {
                                 self.placement_stroke = None;
-                                if left_clicked {
+                                if left_clicked && session.coop_shared_map_path(id).is_some() {
                                     self.comment_draft = Some(CommentDraft::new(id, camera.screen_to_map(cursor)));
                                     ui.open_popup(COMMENT_POPUP);
                                 }
@@ -1927,7 +1935,11 @@ impl UiState {
 #[cfg(test)]
 mod tests {
     use core::path::TreePath;
-    use std::path::PathBuf;
+    use std::{
+        path::PathBuf,
+        thread,
+        time::{Duration, Instant},
+    };
 
     use dear_imgui_rs::{Condition, DockLayout, Key, MouseButton};
     use dmm::{Coord, Prefab, PrefabInstanceId, Size};
@@ -2002,7 +2014,7 @@ mod tests {
     }
 
     #[test]
-    fn the_coop_cursor_clears_when_a_map_outside_the_codebase_takes_over() {
+    fn the_coop_cursor_only_follows_shared_maps() {
         let _guard = IMGUI_CONTEXT.lock().unwrap();
         let mut session = Session::new();
         session
@@ -2025,12 +2037,36 @@ mod tests {
                 .flatten()
         };
 
-        let cursor = focus(&mut state, &mut session, shared);
+        assert_eq!(
+            focus(&mut state, &mut session, shared),
+            None,
+            "the map is not shared yet"
+        );
         assert_eq!(session.state.active(), Some(shared));
+
+        session
+            .host_coop(0, String::from("hunter2"), String::from("host"))
+            .unwrap();
+        let poll_until = |session: &mut Session, done: &dyn Fn(&Session) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !done(session) {
+                assert!(Instant::now() < deadline, "co-op never got there");
+                session.poll_coop();
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        poll_until(&mut session, &|session| {
+            session.coop().is_some_and(|coop| coop.is_connected())
+        });
+        session.share_coop_map();
+        poll_until(&mut session, &|session| session.coop_shared_map_path(shared).is_some());
+
+        let cursor = focus(&mut state, &mut session, shared);
         assert_eq!(cursor.map(|cursor| cursor.map).as_deref(), Some("_maps/cursor.dmm"));
 
         assert_eq!(focus(&mut state, &mut session, outside), None);
         assert_eq!(session.state.active(), Some(outside));
+        session.leave_coop();
     }
 
     #[test]

@@ -7,6 +7,7 @@ pub mod diff;
 pub mod document;
 pub mod environment;
 pub mod error;
+mod fingerprint;
 pub mod focus;
 pub mod frame;
 pub mod git;
@@ -26,7 +27,8 @@ use std::{
     sync::Arc,
 };
 
-use dmi::{IconFile, error::IconError, metadata::Metadata};
+use dmi::{IconFile, IconInfo, error::IconError, metadata::Metadata};
+use net::CodebaseHash;
 use objtree::ObjectTree;
 
 use crate::{
@@ -69,10 +71,12 @@ pub struct Environment {
     pub optimization_timings: ir::opt::OptimizationTimings,
     pub icons: HashMap<String, Metadata>,
     pub icon_files: Vec<PathBuf>,
+    pub icon_info: HashMap<String, IconInfo>,
     pub maps: Vec<PathBuf>,
     pub files: Vec<PathBuf>,
     /// `#define FILE_DIR "icons"`
     pub resource_dirs: Vec<PathBuf>,
+    fingerprint: Option<CodebaseHash>,
 }
 
 impl Environment {
@@ -87,9 +91,11 @@ impl Environment {
             optimization_timings: ir::opt::OptimizationTimings::default(),
             icons: HashMap::new(),
             icon_files: Vec::new(),
+            icon_info: HashMap::new(),
             maps: Vec::new(),
             files: Vec::new(),
             resource_dirs: Vec::new(),
+            fingerprint: None,
         }
     }
 
@@ -113,9 +119,11 @@ impl Environment {
             optimization_timings: compiled.optimization_timings,
             icons: HashMap::new(),
             icon_files: Vec::new(),
+            icon_info: HashMap::new(),
             maps: compiled.maps,
             files: compiled.files,
             resource_dirs: compiled.resource_dirs,
+            fingerprint: Some(compiled.fingerprint),
         };
 
         let search_dirs = environment.resource_dirs.clone();
@@ -188,9 +196,10 @@ impl Environment {
                 .find_map(|dir| resolve_resource_path(dir, &name))
                 .unwrap_or_else(|| base.join(&name));
 
-            match IconFile::load_metadata(&found) {
-                Ok(metadata) => {
-                    self.icons.insert(name, metadata);
+            match IconFile::load_info(&found) {
+                Ok(info) => {
+                    self.icons.insert(name.clone(), info.metadata.clone());
+                    self.icon_info.insert(name, info);
                     self.icon_files.push(found);
                 },
                 Err(e) => failures.push((name, e)),
@@ -208,33 +217,9 @@ impl Environment {
         failures
     }
 
-    pub fn fingerprint(&self) -> std::io::Result<[u8; 32]> {
-        let base = self.base_dir();
-        let mut files = self
-            .files
-            .iter()
-            .chain(self.bake_files.iter())
-            .chain(&self.icon_files)
-            .filter(|path| !environment::is_map(path))
-            .filter_map(|path| Some((codebase_key(base, path)?, path)))
-            .collect::<Vec<_>>();
-
-        files.sort_unstable();
-        files.dedup_by(|a, b| a.0 == b.0);
-
-        let mut context = ring::digest::Context::new(&ring::digest::SHA256);
-        for (key, path) in files {
-            let bytes = std::fs::read(path)?;
-            context.update(key.as_bytes());
-            context.update(&[0]);
-            context.update(&(bytes.len() as u64).to_le_bytes());
-            context.update(&bytes);
-        }
-
-        let mut hash = [0; 32];
-        hash.copy_from_slice(context.finish().as_ref());
-
-        Ok(hash)
+    pub fn fingerprint(&self) -> std::io::Result<CodebaseHash> {
+        self.fingerprint
+            .ok_or_else(|| std::io::Error::other("the codebase was not loaded from disk"))
     }
 
     pub fn git_hint(&self) -> Option<String> {
@@ -468,6 +453,7 @@ mod tests {
     };
     use std::{collections::BTreeSet, path::Path};
 
+    use net::CodebaseHash;
     use objtree::{ObjectTree, VarDecl};
 
     use crate::{EditorState, Environment, RECENT_PREFAB_CAPACITY, progress::Progress};
@@ -558,50 +544,161 @@ mod tests {
         );
     }
 
-    fn fingerprint_fixture(name: &str) -> (std::path::PathBuf, Environment) {
+    const FINGERPRINT_DME: &str = "#include \"code/a.dm\"";
+
+    const FINGERPRINT_CODE: &str =
+        "/obj/a\n\tname = \"a\"\n\ticon = 'icons/a.dmi'\n\n/obj/b\n\n/obj/a/proc/act()\n\treturn 1\n";
+
+    fn write_codebase(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("rmd-fingerprint-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        for (path, contents) in [
-            ("game.dme", "#include \"code/a.dm\""),
-            ("code/a.dm", "/obj/a"),
-            ("icons/a.dmi", "png"),
-            ("_maps/a.dmm", "map"),
-        ] {
+        for (path, contents) in files {
             let path = dir.join(path);
-            std::fs::create_dir_all(path.parent().unwrap()).expect("temp dir");
-            std::fs::write(path, contents).expect("write fixture");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
         }
 
-        let mut environment = Environment::new(dir.join("game.dme"), ObjectTree::new());
-        environment.files = ["game.dme", "code/a.dm", "_maps/a.dmm"]
-            .into_iter()
-            .map(|path| dir.join(path))
-            .chain([std::path::PathBuf::from("<stddef.dm>")])
-            .collect();
-        environment.icon_files = vec![dir.join("icons/a.dmi")];
+        std::fs::create_dir_all(dir.join("icons")).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/icons/test.dmi"),
+            dir.join("icons/a.dmi"),
+        )
+        .unwrap();
 
-        (dir, environment)
+        dir
+    }
+
+    fn load_fingerprint(dir: &Path) -> CodebaseHash {
+        Environment::load(dir.join("game.dme"))
+            .unwrap()
+            .0
+            .fingerprint()
+            .unwrap()
+    }
+
+    fn fingerprint_of(name: &str, code: &str) -> CodebaseHash {
+        let dir = write_codebase(name, &[("game.dme", FINGERPRINT_DME), ("code/a.dm", code)]);
+        let fingerprint = load_fingerprint(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        fingerprint
     }
 
     #[test]
-    fn fingerprints_follow_sources_and_icons_but_not_maps() {
-        let (dir, environment) = fingerprint_fixture("follow");
-        let (other_dir, other) = fingerprint_fixture("other");
-        let original = environment.fingerprint().unwrap();
-        assert_eq!(original, other.fingerprint().unwrap());
+    fn formatting_procs_and_file_layout_do_not_change_the_fingerprint() {
+        let original = fingerprint_of("original", FINGERPRINT_CODE);
+        assert_eq!(
+            fingerprint_of("crlf", &FINGERPRINT_CODE.replace('\n', "\r\n")),
+            original
+        );
+        assert_eq!(
+            fingerprint_of("comment", &format!("// a comment\n{FINGERPRINT_CODE}/* trailing */\n")),
+            original
+        );
+        assert_eq!(
+            fingerprint_of("proc", &FINGERPRINT_CODE.replace("return 1", "return 2")),
+            original
+        );
+
+        let (types, procs) = FINGERPRINT_CODE.split_at(FINGERPRINT_CODE.find("/obj/a/proc").unwrap());
+        let dir = write_codebase(
+            "split",
+            &[
+                ("game.dme", "#include \"code/a.dm\"\n#include \"code/b.dm\""),
+                ("code/a.dm", types),
+                ("code/b.dm", procs),
+            ],
+        );
+        assert_eq!(load_fingerprint(&dir), original);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn types_and_defaults_change_the_fingerprint() {
+        let original = fingerprint_of("defaults", FINGERPRINT_CODE);
+        assert_ne!(
+            fingerprint_of("default", &FINGERPRINT_CODE.replace("name = \"a\"", "name = \"b\"")),
+            original
+        );
+        assert_ne!(fingerprint_of("type", &format!("{FINGERPRINT_CODE}/obj/c\n")), original);
+        assert_ne!(
+            fingerprint_of("parent", &format!("{FINGERPRINT_CODE}/obj/a\n\tparent_type = /obj/b\n")),
+            original
+        );
+    }
+
+    #[test]
+    fn overriding_a_builtin_var_changes_the_fingerprint() {
+        assert_ne!(
+            fingerprint_of(
+                "builtin",
+                &format!("{FINGERPRINT_CODE}/atom\n\tdemir_light_range = 2\n")
+            ),
+            fingerprint_of("builtin-original", FINGERPRINT_CODE)
+        );
+    }
+
+    #[test]
+    fn icons_and_maps_do_not_change_the_fingerprint() {
+        let dir = write_codebase(
+            "assets",
+            &[
+                ("game.dme", FINGERPRINT_DME),
+                ("code/a.dm", FINGERPRINT_CODE),
+                ("_maps/a.dmm", "map"),
+            ],
+        );
+        let original = load_fingerprint(&dir);
 
         std::fs::write(dir.join("_maps/a.dmm"), "edited map").unwrap();
-        assert_eq!(environment.fingerprint().unwrap(), original);
+        let mut icon = std::fs::read(dir.join("icons/a.dmi")).unwrap();
+        icon.extend_from_slice(b"changed icon bytes");
+        std::fs::write(dir.join("icons/a.dmi"), icon).unwrap();
+        assert_eq!(load_fingerprint(&dir), original);
 
-        std::fs::write(dir.join("icons/a.dmi"), "new sprite").unwrap();
-        let icon_changed = environment.fingerprint().unwrap();
-        assert_ne!(icon_changed, original);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
-        std::fs::write(dir.join("code/a.dm"), "/obj/b").unwrap();
-        assert_ne!(environment.fingerprint().unwrap(), icon_changed);
+    #[test]
+    fn builtin_declarations_are_not_fingerprinted() {
+        // the synthetic root sits in the first opened file, which is a built-in prelude file
+        let root = core::location::Location::default().file;
+        assert_eq!(
+            fingerprint_of("empty", ""),
+            crate::fingerprint::object_tree(&ObjectTree::new(), &[root])
+        );
+    }
 
-        let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::remove_dir_all(&other_dir);
+    #[test]
+    fn an_unloaded_environment_has_no_fingerprint() {
+        assert!(Environment::new("game.dme", ObjectTree::new()).fingerprint().is_err());
+    }
+
+    #[test]
+    fn local_bake_settings_do_not_change_the_fingerprint() {
+        use crate::environment::{BakeOptions, BundledProfile};
+
+        let entry = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme");
+        let fingerprint = |options| {
+            Environment::load_with(&entry, options, &Progress::new())
+                .unwrap()
+                .0
+                .fingerprint()
+                .unwrap()
+        };
+        let baking = BakeOptions {
+            enabled: true,
+            ..Default::default()
+        };
+        let original = fingerprint(BakeOptions::default());
+        assert_eq!(fingerprint(baking.clone()), original);
+
+        let forced = BakeOptions {
+            forced_profile: Some(BundledProfile::Tgstation),
+            ..baking
+        };
+        assert_eq!(fingerprint(forced), original);
     }
 
     fn document(path: &str) -> crate::document::MapDocument {

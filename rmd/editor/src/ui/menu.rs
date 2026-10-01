@@ -11,7 +11,7 @@ use super::{
     welcome::codebase_relative,
 };
 use crate::{
-    session::Session,
+    session::{CoopStatus, Session},
     settings::{KeybindAction, Settings},
 };
 
@@ -338,6 +338,13 @@ impl UiState {
                 ui.separator();
                 if ui.menu_item_enabled_selected_no_shortcut("Share current map", false, session.can_share_coop_map()) {
                     session.share_coop_map();
+                }
+
+                let is_notice_available = session.coop().is_some_and(|coop| {
+                    matches!(coop.status, CoopStatus::Ended(_) | CoopStatus::CodebaseMismatch { .. })
+                });
+                if ui.menu_item_enabled_selected_no_shortcut("Session status...", false, is_notice_available) {
+                    self.coop_notice.request();
                 }
 
                 let is_hosting = session.coop().is_some_and(|coop| coop.is_hosting());

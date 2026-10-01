@@ -43,6 +43,7 @@ fn main() -> ExitCode {
     };
     let server = match Server::spawn(ServerConfig {
         bind,
+        codebase: None,
         password: arguments.password.unwrap_or_else(net::random_password),
     }) {
         Ok(server) => server,

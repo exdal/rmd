@@ -4,7 +4,6 @@ use std::{
     sync::Arc,
 };
 
-use dmi::IconFile;
 use editor::{
     Environment,
     frame::TypeVisibility,
@@ -66,7 +65,6 @@ pub(crate) fn build_textures(environment: &Environment, progress: &Progress) -> 
     textures
         .insert_missing_icon()
         .expect("one built-in texture fits in the catalog");
-    let base = environment.base_dir();
     let names = environment.icon_paths();
 
     progress.enter(Stage::Textures, names.len());
@@ -76,25 +74,11 @@ pub(crate) fn build_textures(environment: &Environment, progress: &Progress) -> 
         }
         progress.advance(name);
 
-        if !environment.icons.contains_key(name) {
-            continue;
-        }
-
-        let mut candidates =
-            std::iter::once(base.join(name)).chain(environment.resource_dirs.iter().map(|dir| dir.join(name)));
-
-        let Some(path) = candidates.find(|path| path.is_file()) else {
-            log::warn!("could not find '{name}' on disk");
+        let Some(info) = environment.icon_info.get(name) else {
             continue;
         };
-
-        match IconFile::load_info(&path) {
-            Ok(info) => {
-                if let Err(e) = textures.insert_info(name, &info) {
-                    log::warn!("{e}");
-                }
-            },
-            Err(e) => log::warn!("could not read '{name}': {e}"),
+        if let Err(e) = textures.insert_info(name, info) {
+            log::warn!("{e}");
         }
     }
 
@@ -251,6 +235,7 @@ pub(crate) fn report(environment: &Environment, diagnostics: &editor::environmen
 
 impl Session {
     pub fn apply_codebase(&mut self, loaded: LoadedCodebase) -> LoadReport {
+        self.check_coop_codebase(&loaded.environment);
         self.cancel_node_edit();
         if self.state.tool == Tool::Node {
             self.state.tool = Tool::Select;

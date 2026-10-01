@@ -11,6 +11,7 @@ use std::{
 
 use dmm::{Coord, Size, error::MapError, parser, writer};
 use editor::{
+    Environment,
     document::{DocumentId, MapDocument},
     git,
     patch,
@@ -39,11 +40,12 @@ use crate::loader::LoadedMap;
 // how fast a remote cursor closes the gap to its latest position, per second
 const CURSOR_SMOOTHING: f32 = 20.0;
 
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) enum CoopStatus {
-    Hashing,
     Connecting,
     Connected,
     Ended(String),
+    CodebaseMismatch { expected: CodebaseId },
 }
 
 pub(crate) struct RemotePeer {
@@ -95,8 +97,12 @@ pub(crate) struct Coop {
     pub shared_maps: BTreeMap<String, SharedMap>,
     prepared: (mpsc::Sender<Prepared>, mpsc::Receiver<Prepared>),
     server: Option<Server>,
-    codebase: Option<CodebaseId>,
-    pending: Option<PendingJoin>,
+    codebase: CodebaseId,
+    connection: CoopConnection,
+    environment_root: PathBuf,
+    paused: bool,
+    needs_cleanup: bool,
+    stopping_server: Option<mpsc::Receiver<()>>,
     client: Option<Client>,
     last_poll: Instant,
 }
@@ -221,16 +227,26 @@ pub(crate) struct ReceivedMap {
     is_modified: bool,
 }
 
-struct PendingJoin {
-    addr: String,
-    password: String,
-    codebase: mpsc::Receiver<Result<CodebaseId, String>>,
+#[derive(Clone)]
+enum CoopConnection {
+    Host { port: u16, password: String },
+    Join { addr: String, password: String },
 }
 
 impl Coop {
     pub fn is_hosting(&self) -> bool { self.server.is_some() }
 
     pub fn is_connected(&self) -> bool { matches!(self.status, CoopStatus::Connected) }
+
+    pub fn is_paused(&self) -> bool { self.paused }
+
+    pub fn was_hosting(&self) -> bool { matches!(self.connection, CoopConnection::Host { .. }) }
+
+    pub fn can_retry(&self) -> bool { self.stopping_server.is_none() && !self.paused }
+
+    pub fn local_codebase(&self) -> &CodebaseId { &self.codebase }
+
+    fn can_collaborate(&self) -> bool { self.is_connected() && !self.paused }
 
     pub fn nick_of(&self, id: PeerId) -> Option<&str> {
         if self.you == Some(id) {
@@ -246,13 +262,14 @@ impl Coop {
             .map(|server| (server.local_addr(), server.password()))
     }
 
-    pub fn same_codebase(&self, peer: &PeerInfo) -> bool {
-        self.codebase
-            .as_ref()
-            .is_none_or(|codebase| codebase.hash == peer.codebase.hash)
-    }
+    pub fn same_codebase(&self, peer: &PeerInfo) -> bool { self.codebase.hash == peer.codebase.hash }
 
-    pub fn git_hint(&self) -> Option<&str> { self.codebase.as_ref()?.git_hint.as_deref() }
+    pub fn git_hint(&self) -> Option<&str> { self.codebase.git_hint.as_deref() }
+
+    fn mismatch(&mut self, expected: CodebaseId) {
+        self.end(String::from("different codebase"));
+        self.status = CoopStatus::CodebaseMismatch { expected };
+    }
 
     fn receive_map(&mut self, path: String, generation: GenerationId, bytes: Vec<u8>, codebase: Option<&Path>) {
         if !net::is_map_path(&path) {
@@ -300,8 +317,14 @@ impl Coop {
     }
 
     fn apply(&mut self, event: Event, codebase: Option<&Path>) {
+        if matches!(self.status, CoopStatus::Ended(_) | CoopStatus::CodebaseMismatch { .. }) {
+            return;
+        }
+
         match event {
-            Event::Connected { you, peers, comments } => {
+            Event::Connected {
+                you, peers, comments, ..
+            } => {
                 self.status = CoopStatus::Connected;
                 self.you = Some(you);
                 self.peers = peers.into_iter().map(|info| (info.id, RemotePeer::new(info))).collect();
@@ -446,6 +469,7 @@ impl Coop {
                     shared_map.inbox.insert(seq, (by, edit));
                 }
             },
+            Event::CodebaseMismatch { expected } => self.mismatch(expected),
             Event::Rejected(reason) => self.end(format!("rejected: {reason}")),
             Event::Disconnected(reason) => self.end(reason),
         }
@@ -457,70 +481,158 @@ impl Coop {
         self.peers.clear();
         self.comments.clear();
         self.client = None;
+        self.paused = false;
+        self.needs_cleanup = true;
+        if let Some(server) = self.server.take() {
+            let (done, stopping) = mpsc::channel();
+            self.stopping_server = Some(stopping);
+            thread::spawn(move || {
+                drop(server);
+                let _ = done.send(());
+            });
+        }
     }
 }
 
 impl Session {
     pub fn coop(&self) -> Option<&Coop> { self.coop.as_ref() }
 
+    fn loaded_codebase_id(&self) -> Result<CodebaseId, String> {
+        let environment = self.state.environment.as_ref().ok_or("open a codebase first")?;
+        Ok(CodebaseId {
+            hash: environment.fingerprint().map_err(|error| error.to_string())?,
+            git_hint: environment.git_hint(),
+        })
+    }
+
     pub fn host_coop(&mut self, port: u16, password: String, nick: String) -> Result<(), String> {
+        let codebase = self.loaded_codebase_id()?;
         let server = Server::spawn(ServerConfig {
             bind: SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)),
             password,
+            codebase: Some(codebase.clone()),
         })
         .map_err(|e| format!("could not host on port {port}: {e}"))?;
 
         let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, server.local_addr().port())).to_string();
         let password = server.password().to_owned();
-        self.start_coop(addr, password, nick, Some(server))
+        let connection = CoopConnection::Host {
+            port: server.local_addr().port(),
+            password: password.clone(),
+        };
+        self.start_coop(addr, password, nick, codebase, connection, Some(server))
     }
 
     pub fn join_coop(&mut self, addr: String, password: String, nick: String) -> Result<(), String> {
-        self.start_coop(addr, password, nick, None)
+        let codebase = self.loaded_codebase_id()?;
+        let connection = CoopConnection::Join {
+            addr: addr.clone(),
+            password: password.clone(),
+        };
+        self.start_coop(addr, password, nick, codebase, connection, None)
     }
 
     fn start_coop(
-        &mut self, addr: String, password: String, nick: String, server: Option<Server>,
+        &mut self, addr: String, password: String, nick: String, codebase: CodebaseId, connection: CoopConnection,
+        server: Option<Server>,
     ) -> Result<(), String> {
-        let Some(environment) = self.state.environment.clone() else {
-            return Err(String::from("open a codebase first"));
-        };
-
+        let environment_root = self.environment_path().ok_or("open a codebase first")?.to_path_buf();
         self.leave_coop();
-
-        let (sender, codebase) = mpsc::channel();
-        thread::spawn(move || {
-            let codebase = environment
-                .fingerprint()
-                .map(|hash| CodebaseId {
-                    hash,
-                    git_hint: environment.git_hint(),
-                })
-                .map_err(|e| format!("could not read the codebase: {e}"));
-
-            let _ = sender.send(codebase);
-        });
-
+        let client = Client::connect(addr, password, nick.clone(), codebase.clone());
         self.coop = Some(Coop {
-            status: CoopStatus::Hashing,
+            status: CoopStatus::Connecting,
             nick,
             you: None,
             peers: BTreeMap::new(),
             server,
-            codebase: None,
-            pending: Some(PendingJoin {
-                addr,
-                password,
-                codebase,
-            }),
+            codebase,
+            connection,
+            environment_root,
+            paused: false,
+            needs_cleanup: false,
+            stopping_server: None,
             comments: BTreeMap::new(),
             shared_maps: BTreeMap::new(),
             prepared: mpsc::channel(),
-            client: None,
+            client: Some(client),
             last_poll: Instant::now(),
         });
 
         Ok(())
+    }
+
+    pub fn retry_coop(&mut self) -> Result<(), String> {
+        let coop = self.coop.as_ref().ok_or("no co-op attempt to retry")?;
+        if !coop.can_retry() {
+            return Err(String::from("wait for the previous co-op attempt to finish"));
+        }
+
+        let nick = coop.nick.clone();
+        match coop.connection.clone() {
+            CoopConnection::Host { port, password } => self.host_coop(port, password, nick),
+            CoopConnection::Join { addr, password } => self.join_coop(addr, password, nick),
+        }
+    }
+
+    pub fn begin_coop_reload(&mut self) {
+        if let Some(coop) = self.coop.as_mut() {
+            coop.paused = true;
+        }
+
+        self.lock_coop_documents();
+    }
+
+    pub fn finish_coop_reload(&mut self) {
+        if let Some(coop) = self.coop.as_mut() {
+            coop.paused = false;
+        }
+
+        self.lock_coop_documents();
+    }
+
+    pub(super) fn check_coop_codebase(&mut self, environment: &Environment) {
+        if let Some(coop) = self.coop.as_mut() {
+            let local = environment.fingerprint().map(|hash| CodebaseId {
+                hash,
+                git_hint: environment.git_hint(),
+            });
+            if matches!(coop.status, CoopStatus::Connecting | CoopStatus::Connected) {
+                match &local {
+                    Ok(local) if local.hash != coop.codebase.hash => coop.mismatch(coop.codebase.clone()),
+                    Ok(_) if environment.root != coop.environment_root => {
+                        coop.end(String::from("codebase switched; co-op disconnected"));
+                    },
+                    Err(error) => coop.end(format!("cannot verify the loaded codebase: {error}")),
+                    _ => {},
+                }
+            }
+
+            if let Ok(local) = local {
+                coop.codebase = local;
+            }
+        }
+
+        self.finish_coop_reload();
+        self.clean_ended_coop();
+    }
+
+    fn clean_ended_coop(&mut self) {
+        let Some(coop) = self.coop.as_mut().filter(|coop| coop.needs_cleanup) else {
+            return;
+        };
+
+        coop.needs_cleanup = false;
+        let pending = mem::take(&mut coop.shared_maps)
+            .into_values()
+            .filter_map(|map| map.pending_document)
+            .collect::<Vec<_>>();
+        coop.prepared = mpsc::channel();
+
+        for id in pending {
+            self.close_map(id);
+        }
+
+        self.lock_coop_documents();
     }
 
     pub fn leave_coop(&mut self) {
@@ -541,64 +653,57 @@ impl Session {
             self.close_map(id);
         }
 
-        self.lock_receiving_documents();
-        self.drop_comment_tool();
+        self.lock_coop_documents();
     }
 
-    pub fn comment_tool_available(&self) -> bool { self.coop.as_ref().is_some_and(Coop::is_connected) }
+    pub fn comment_tool_available(&self) -> bool { self.coop.as_ref().is_some_and(Coop::can_collaborate) }
 
     pub fn add_coop_comment(&self, id: DocumentId, pos: [f32; 2], text: String) {
-        let (Some(map), Some(document)) = (self.coop_map_path(id), self.state.document(id)) else {
+        let (Some(map), Some(document)) = (self.coop_shared_map_path(id), self.state.document(id)) else {
             return;
         };
 
-        if let Some(client) = self.coop.as_ref().and_then(|coop| coop.client.as_ref()) {
+        if let Some(client) = self
+            .coop
+            .as_ref()
+            .filter(|coop| coop.can_collaborate())
+            .and_then(|coop| coop.client.as_ref())
+        {
             client.send_comment(map, document.z, pos, text);
         }
     }
 
     pub fn delete_coop_comment(&self, id: CommentId) {
-        if let Some(client) = self.coop.as_ref().and_then(|coop| coop.client.as_ref()) {
+        if let Some(client) = self
+            .coop
+            .as_ref()
+            .filter(|coop| coop.can_collaborate())
+            .and_then(|coop| coop.client.as_ref())
+        {
             client.delete_comment(id);
         }
     }
 
-    fn drop_comment_tool(&mut self) {
+    pub fn poll_coop(&mut self) {
         if self.state.tool == Tool::Comment && !self.comment_tool_available() {
             self.state.tool = Tool::Select;
         }
-    }
 
-    pub fn poll_coop(&mut self) {
-        self.drop_comment_tool();
         let codebase = self.codebase_dir().map(Path::to_path_buf);
         let Some(coop) = self.coop.as_mut() else {
             return;
         };
 
-        if let Some(pending) = coop.pending.as_ref() {
-            match pending.codebase.try_recv() {
-                Ok(Ok(codebase)) => {
-                    let pending = coop.pending.take().expect("checked above");
-                    coop.client = Some(Client::connect(
-                        pending.addr,
-                        pending.password,
-                        coop.nick.clone(),
-                        codebase.clone(),
-                    ));
-                    coop.codebase = Some(codebase);
-                    coop.status = CoopStatus::Connecting;
-                },
-                Ok(Err(e)) => {
-                    coop.pending = None;
-                    coop.end(e);
-                },
-                Err(mpsc::TryRecvError::Empty) => {},
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    coop.pending = None;
-                    coop.end(String::from("could not read the codebase"));
-                },
-            }
+        if coop
+            .stopping_server
+            .as_ref()
+            .is_some_and(|stopping| !matches!(stopping.try_recv(), Err(mpsc::TryRecvError::Empty)))
+        {
+            coop.stopping_server = None;
+        }
+
+        if coop.paused {
+            return;
         }
 
         let events = coop
@@ -609,6 +714,11 @@ impl Session {
 
         for event in events {
             coop.apply(event, codebase.as_deref());
+        }
+
+        if !coop.is_connected() {
+            self.clean_ended_coop();
+            return;
         }
 
         let prepared = coop.prepared.1.try_iter().collect::<Vec<_>>();
@@ -639,7 +749,12 @@ impl Session {
         for prepared in prepared {
             match prepared {
                 Prepared::Upload { path, base, bytes } => {
-                    if let Some(client) = self.coop.as_ref().and_then(|coop| coop.client.as_ref()) {
+                    if let Some(client) = self
+                        .coop
+                        .as_ref()
+                        .filter(|coop| coop.can_collaborate())
+                        .and_then(|coop| coop.client.as_ref())
+                    {
                         client.share_map(path, base, bytes);
                     }
                 },
@@ -687,7 +802,7 @@ impl Session {
             self.resync_coop_map(&path);
         }
 
-        self.lock_receiving_documents();
+        self.lock_coop_documents();
     }
 
     fn follow_pending_documents(&mut self) {
@@ -752,12 +867,19 @@ impl Session {
         }
     }
 
-    fn lock_receiving_documents(&mut self) {
+    fn lock_coop_documents(&mut self) {
         let locks = self
             .state
             .document_ids()
             .into_iter()
-            .map(|id| (id, self.coop_receiving(id).is_some()))
+            .map(|id| {
+                (
+                    id,
+                    self.coop_receiving(id).is_some()
+                        || self.coop_out_of_date(id).is_some()
+                        || self.coop.as_ref().is_some_and(|coop| coop.paused) && self.coop_shared_map(id).is_some(),
+                )
+            })
             .collect::<Vec<_>>();
 
         for (id, locked) in locks {
@@ -779,6 +901,30 @@ impl Session {
             || self.state.document(id).is_some_and(|document| !document.is_dirty());
 
         (shared_map.state.is_arriving() && is_replaced).then_some(&shared_map.state)
+    }
+
+    // a newer snapshot from this peer waits on the document's unsaved changes
+    pub fn coop_out_of_date(&self, id: DocumentId) -> Option<PeerId> {
+        let shared_map = self.coop_shared_map(id)?;
+        // saved or handed over, the next poll replaces it
+        let is_waiting = matches!(shared_map.state, SharedState::Waiting(_))
+            && !shared_map.received
+            && self.state.document(id).is_some_and(MapDocument::is_dirty);
+
+        is_waiting.then_some(shared_map.by)
+    }
+
+    // hands the unsaved copy over to the session, so the waiting snapshot replaces it
+    pub fn discard_for_coop_map(&mut self, id: DocumentId) {
+        let Some(path) = self.coop_map_path(id) else {
+            return;
+        };
+
+        if let Some(shared_map) = self.coop.as_mut().and_then(|coop| coop.shared_maps.get_mut(&path))
+            && matches!(shared_map.state, SharedState::Waiting(_))
+        {
+            shared_map.received = true;
+        }
     }
 
     pub fn coop_transfer(&self, id: DocumentId) -> Option<&SharedState> {
@@ -991,6 +1137,10 @@ impl Session {
     }
 
     fn share_coop_document(&mut self, id: DocumentId) {
+        if !self.coop.as_ref().is_some_and(Coop::can_collaborate) {
+            return;
+        }
+
         let Some(path) = self.coop_map_path(id) else {
             return;
         };
@@ -1107,6 +1257,14 @@ impl Session {
         self.coop_file_path(self.state.document(id)?.path.as_deref()?)
     }
 
+    // peers only line up on a map they all have the shared copy of
+    pub fn coop_shared_map_path(&self, id: DocumentId) -> Option<String> {
+        let path = self.coop_map_path(id)?;
+        let is_ready = self.coop.as_ref()?.shared_maps.get(&path)?.is_ready();
+
+        is_ready.then_some(path)
+    }
+
     fn coop_file_path(&self, file: &Path) -> Option<String> {
         let relative = file.strip_prefix(self.codebase_dir()?).ok()?;
         let path = relative
@@ -1119,7 +1277,12 @@ impl Session {
     }
 
     pub fn coop_cursor(&self, cursor: Option<Cursor>) {
-        if let Some(client) = self.coop.as_ref().and_then(|coop| coop.client.as_ref()) {
+        if let Some(client) = self
+            .coop
+            .as_ref()
+            .filter(|coop| coop.can_collaborate())
+            .and_then(|coop| coop.client.as_ref())
+        {
             client.send_cursor(cursor);
         }
     }
@@ -1131,20 +1294,21 @@ mod tests {
     use std::{
         env,
         process,
-        sync::Arc,
         time::{Duration, Instant},
     };
 
     use dmm::Prefab;
-    use editor::{Environment, command::Edit};
-    use net::{Impairment, LossyProxy};
-    use objtree::ObjectTree;
+    use editor::command::Edit;
+    use net::{CodebaseHash, Impairment, LossyProxy};
 
     use super::*;
+    use crate::session::fixtures;
 
     fn session() -> Session {
         let mut session = Session::new();
-        session.state.environment = Some(Arc::new(Environment::new("game.dme", ObjectTree::new())));
+        session
+            .load_environment(&fixtures::examples().join("test.dme"))
+            .unwrap();
 
         session
     }
@@ -1233,7 +1397,7 @@ mod tests {
             id: PeerId(1),
             nick: String::from("peer"),
             codebase: CodebaseId {
-                hash: [0; 32],
+                hash: CodebaseHash([0; 32]),
                 git_hint: None,
             },
         });
@@ -1269,6 +1433,7 @@ mod tests {
         assert_eq!(host.tool(), Tool::Comment);
 
         host.leave_coop();
+        host.poll_coop();
         assert_eq!(host.tool(), Tool::Select);
     }
 
@@ -1499,7 +1664,7 @@ mod tests {
         .unwrap();
 
         let mut session = Session::new();
-        session.state.environment = Some(Arc::new(Environment::new(dir.join("game.dme"), ObjectTree::new())));
+        session.load_environment(&dir.join("game.dme")).unwrap();
 
         (dir, session)
     }
@@ -1520,10 +1685,10 @@ mod tests {
         session.state.document_for_path(&file).unwrap()
     }
 
-    #[test]
-    fn a_shared_map_waits_for_unsaved_work_then_replaces_the_local_copy() {
-        let (host_dir, mut host) = codebase_with_map("share-host", "aa");
-        let (guest_dir, mut guest) = codebase_with_map("share-guest", "a");
+    // the guest has an unsaved one tile wide copy while the host shares a two tile wide one
+    fn guest_out_of_date(name: &str) -> (PathBuf, Session, PathBuf, Session, DocumentId) {
+        let (host_dir, mut host) = codebase_with_map(&format!("{name}-host"), "aa");
+        let (guest_dir, mut guest) = codebase_with_map(&format!("{name}-guest"), "a");
         open_local(&mut host, host_dir.join("_maps/a.dmm"));
         let local = open_local(&mut guest, guest_dir.join("_maps/a.dmm"));
         guest.state.document_mut(local).unwrap().mark_unsaved();
@@ -1555,6 +1720,81 @@ mod tests {
         });
         assert_eq!(guest.state.document(local).unwrap().map.size.x, 1);
 
+        (host_dir, host, guest_dir, guest, local)
+    }
+
+    #[test]
+    fn cursors_and_comments_need_a_shared_map() {
+        let (host_dir, mut host) = codebase_with_map("unshared-host", "aa");
+        let (guest_dir, mut guest) = codebase_with_map("unshared-guest", "aa");
+        let host_map = open_local(&mut host, host_dir.join("_maps/a.dmm"));
+        let guest_map = open_local(&mut guest, guest_dir.join("_maps/a.dmm"));
+        host.host_coop(0, String::from("hunter2"), String::from("host"))
+            .unwrap();
+        poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
+        let port = host.coop().and_then(Coop::host).unwrap().0.port();
+        guest
+            .join_coop(
+                format!("127.0.0.1:{port}"),
+                String::from("hunter2"),
+                String::from("guest"),
+            )
+            .unwrap();
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            connected(sessions[1]) && sessions[0].coop().is_some_and(|coop| coop.peers.len() == 1)
+        });
+
+        assert_eq!(host.coop_shared_map_path(host_map), None);
+        assert_eq!(guest.coop_shared_map_path(guest_map), None);
+        host.add_coop_comment(host_map, [0.0, 0.0], String::from("unshared"));
+
+        host.share_coop_map();
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            settled(sessions)
+                && sessions.iter().all(|session| {
+                    session
+                        .coop()
+                        .is_some_and(|coop| coop.shared_maps.contains_key("_maps/a.dmm"))
+                })
+        });
+        let guest_map = guest.state.document_for_path(&guest_dir.join("_maps/a.dmm")).unwrap();
+        assert_eq!(host.coop_shared_map_path(host_map).as_deref(), Some("_maps/a.dmm"));
+        assert_eq!(guest.coop_shared_map_path(guest_map).as_deref(), Some("_maps/a.dmm"));
+
+        host.add_coop_comment(host_map, [0.0, 0.0], String::from("shared"));
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            sessions[1].coop().is_some_and(|coop| !coop.comments.is_empty())
+        });
+        let texts = guest
+            .coop()
+            .unwrap()
+            .comments
+            .values()
+            .map(|comment| comment.text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(texts, ["shared"]);
+
+        let _ = fs::remove_dir_all(host_dir);
+        let _ = fs::remove_dir_all(guest_dir);
+    }
+
+    #[test]
+    fn an_out_of_date_copy_has_no_cursors_or_comments() {
+        let (host_dir, host, guest_dir, guest, local) = guest_out_of_date("cursor-out-of-date");
+        let host_map = host.state.document_for_path(&host_dir.join("_maps/a.dmm")).unwrap();
+        assert_eq!(host.coop_shared_map_path(host_map).as_deref(), Some("_maps/a.dmm"));
+        assert_eq!(guest.coop_shared_map_path(local), None);
+
+        let _ = fs::remove_dir_all(host_dir);
+        let _ = fs::remove_dir_all(guest_dir);
+    }
+
+    fn width_on_disk(file: &Path) -> u32 { parser::parse(&fs::read_to_string(file).unwrap()).0.size.x }
+
+    #[test]
+    fn a_shared_map_waits_for_unsaved_work_then_replaces_the_local_copy() {
+        let (host_dir, mut host, guest_dir, mut guest, local) = guest_out_of_date("share");
+
         guest.close_map(local);
         let file = guest_dir.join("_maps/a.dmm");
         poll_until(&mut [&mut host, &mut guest], |sessions| {
@@ -1571,6 +1811,248 @@ mod tests {
 
         let _ = fs::remove_dir_all(&host_dir);
         let _ = fs::remove_dir_all(&guest_dir);
+    }
+
+    #[test]
+    fn an_out_of_date_copy_is_read_only_until_discarded() {
+        let (host_dir, mut host, guest_dir, mut guest, local) = guest_out_of_date("discard");
+        let host_id = host.coop().unwrap().you;
+        assert_eq!(guest.coop_out_of_date(local), host_id);
+        assert!(guest.state.document(local).unwrap().is_read_only());
+
+        guest.discard_for_coop_map(local);
+        assert_eq!(guest.coop_out_of_date(local), None, "a handed over copy no longer asks");
+        let file = guest_dir.join("_maps/a.dmm");
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            sessions[1]
+                .state
+                .document_for_path(&file)
+                .and_then(|id| sessions[1].state.document(id))
+                .is_some_and(|document| document.map.size.x == 2)
+        });
+
+        let id = guest.state.document_for_path(&file).unwrap();
+        assert_eq!(guest.coop_out_of_date(id), None);
+        assert!(!guest.state.document(id).unwrap().is_read_only());
+        assert!(guest.coop().unwrap().shared_maps["_maps/a.dmm"].is_ready());
+        assert_eq!(width_on_disk(&file), 1);
+
+        let _ = fs::remove_dir_all(&host_dir);
+        let _ = fs::remove_dir_all(&guest_dir);
+    }
+
+    #[test]
+    fn leaving_keeps_an_out_of_date_copy() {
+        let (host_dir, mut host, guest_dir, mut guest, local) = guest_out_of_date("leave");
+        guest.leave_coop();
+        host.poll_coop();
+
+        let document = guest.state.document(local).unwrap();
+        assert!(document.is_dirty());
+        assert!(!document.is_read_only());
+        assert_eq!(document.map.size.x, 1);
+        assert_eq!(width_on_disk(&guest_dir.join("_maps/a.dmm")), 1);
+
+        let _ = fs::remove_dir_all(host_dir);
+        let _ = fs::remove_dir_all(guest_dir);
+    }
+
+    #[test]
+    fn saving_an_out_of_date_copy_loads_the_shared_one() {
+        let (host_dir, mut host, guest_dir, mut guest, local) = guest_out_of_date("save");
+        let file = guest_dir.join("_maps/a.dmm");
+        fs::write(&file, "").unwrap();
+
+        guest.save_document(local).unwrap();
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            sessions[1]
+                .state
+                .document_for_path(&file)
+                .and_then(|id| sessions[1].state.document(id))
+                .is_some_and(|document| document.map.size.x == 2)
+        });
+
+        let id = guest.state.document_for_path(&file).unwrap();
+        assert!(!guest.state.document(id).unwrap().is_read_only());
+        assert!(guest.coop().unwrap().shared_maps["_maps/a.dmm"].is_ready());
+        assert_eq!(width_on_disk(&file), 1);
+
+        let _ = fs::remove_dir_all(&host_dir);
+        let _ = fs::remove_dir_all(&guest_dir);
+    }
+
+    #[test]
+    fn a_different_codebase_is_rejected_without_touching_unsaved_maps_then_can_retry() {
+        let (host_dir, mut host) = hosting("codebase-reject-host");
+        let host_file = host_dir.join("_maps/a.dmm");
+        open_local(&mut host, host_file);
+        host.share_coop_map();
+        poll_until(&mut [&mut host], settled);
+        let (guest_dir, mut guest) = codebase_with_map("codebase-reject-guest", "a");
+        fs::write(guest_dir.join("game.dme"), "/obj/different").unwrap();
+        guest.load_environment(&guest_dir.join("game.dme")).unwrap();
+        let file = guest_dir.join("_maps/a.dmm");
+        let local = open_local(&mut guest, file.clone());
+        guest.state.document_mut(local).unwrap().mark_unsaved();
+        let port = host.coop().unwrap().host().unwrap().0.port();
+        guest
+            .join_coop(format!("127.0.0.1:{port}"), "hunter2".into(), "guest".into())
+            .unwrap();
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            matches!(sessions[1].coop().unwrap().status, CoopStatus::CodebaseMismatch { .. })
+        });
+        assert!(guest.coop().unwrap().shared_maps.is_empty());
+        assert!(host.coop().unwrap().peers.is_empty());
+        assert!(!guest.can_share_coop_map());
+        guest.share_coop_map();
+        assert!(guest.coop().unwrap().shared_maps.is_empty());
+        let document = guest.state.document(local).unwrap();
+        assert_eq!(document.map.size.x, 1);
+        assert!(document.is_dirty());
+        assert!(!document.is_read_only());
+        assert_eq!(width_on_disk(&file), 1);
+
+        fs::write(guest_dir.join("game.dme"), "").unwrap();
+        guest.load_environment(&guest_dir.join("game.dme")).unwrap();
+        guest.retry_coop().unwrap();
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            connected(sessions[1]) && sessions[1].coop_out_of_date(local).is_some()
+        });
+        assert!(guest.state.document(local).unwrap().is_dirty());
+        guest.leave_coop();
+        assert!(guest.coop().is_none());
+        assert!(!guest.state.document(local).unwrap().is_read_only());
+        let _ = fs::remove_dir_all(host_dir);
+        let _ = fs::remove_dir_all(guest_dir);
+    }
+
+    #[test]
+    fn a_matching_reload_pauses_edits_and_keeps_the_connection_and_unsaved_map() {
+        let (host_dir, mut host, guest_dir, mut guest, local) = guest_out_of_date("matching-reload");
+        guest.discard_for_coop_map(local);
+        let file = guest_dir.join("_maps/a.dmm");
+        poll_until(&mut [&mut host, &mut guest], settled);
+        let local = guest.state.document_for_path(&file).unwrap();
+        let you = guest.coop().unwrap().you;
+        guest.state.document_mut(local).unwrap().mark_unsaved();
+        guest.begin_coop_reload();
+        assert!(!guest.can_share_coop_map());
+        assert!(!guest.comment_tool_available());
+        assert!(guest.state.document(local).unwrap().is_read_only());
+        paint(
+            &mut host,
+            &host_dir.join("_maps/a.dmm"),
+            Coord::new(1, 1, 1),
+            "/obj/reloaded",
+        );
+        host.poll_coop();
+        guest.poll_coop();
+        assert_ne!(
+            top(&guest, &file, Coord::new(1, 1, 1)).as_deref(),
+            Some("/obj/reloaded")
+        );
+        guest.load_environment(&guest_dir.join("game.dme")).unwrap();
+        assert_eq!(guest.coop().unwrap().you, you);
+        assert!(!guest.coop().unwrap().is_paused());
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            top(sessions[1], &file, Coord::new(1, 1, 1)).as_deref() == Some("/obj/reloaded")
+        });
+        assert!(guest.state.document(local).unwrap().is_dirty());
+        assert!(!guest.state.document(local).unwrap().is_read_only());
+        guest.begin_coop_reload();
+        guest.finish_coop_reload(); // A cancelled or failed load keeps the previous environment.
+        assert_eq!(guest.coop().unwrap().you, you);
+        assert!(guest.can_share_coop_map());
+        let _ = fs::remove_dir_all(host_dir);
+        let _ = fs::remove_dir_all(guest_dir);
+    }
+
+    #[test]
+    fn an_incompatible_reload_drops_waiting_snapshots_and_late_workers() {
+        let (host_dir, mut host, guest_dir, mut guest, local) = guest_out_of_date("incompatible-reload");
+        let stale_worker = guest.coop().unwrap().prepared.0.clone();
+        let file = guest_dir.join("_maps/a.dmm");
+        guest.begin_coop_reload();
+        fs::write(guest_dir.join("game.dme"), "/obj/different").unwrap();
+        guest.load_environment(&guest_dir.join("game.dme")).unwrap();
+        assert!(matches!(
+            guest.coop().unwrap().status,
+            CoopStatus::CodebaseMismatch { .. }
+        ));
+        assert!(guest.coop().unwrap().client.is_none());
+        assert!(guest.coop().unwrap().shared_maps.is_empty());
+        assert!(guest.state.document(local).unwrap().is_dirty());
+        assert!(!guest.state.document(local).unwrap().is_read_only());
+        assert_eq!(guest.state.document(local).unwrap().map.size.x, 1);
+        assert!(
+            stale_worker
+                .send(Prepared::Unreadable {
+                    path: "_maps/a.dmm".into(),
+                    generation: GenerationId(1)
+                })
+                .is_err()
+        );
+        deliver(
+            &mut guest,
+            &guest_dir,
+            Event::MapIncoming {
+                path: "_maps/a.dmm".into(),
+                by: OTHER,
+                len: 1,
+            },
+        );
+        assert!(guest.coop().unwrap().shared_maps.is_empty());
+        assert_eq!(guest.state.document(local).unwrap().map.size.x, 1);
+        assert_eq!(width_on_disk(&file), 1);
+        poll_until(&mut [&mut host], |sessions| {
+            sessions[0].coop().unwrap().peers.is_empty()
+        });
+        let _ = fs::remove_dir_all(host_dir);
+        let _ = fs::remove_dir_all(guest_dir);
+    }
+
+    #[test]
+    fn changing_a_hosts_codebase_stops_its_relay_and_closes_pending_documents() {
+        let (dir, mut host) = hosting("host-codebase-change");
+        let mut guest = Session::new();
+        let (guest_dir, environment) = codebase_with_map("host-codebase-change-guest", "a");
+        guest.state.environment = environment.state.environment.clone();
+        let port = host.coop().unwrap().host().unwrap().0.port();
+        guest
+            .join_coop(format!("127.0.0.1:{port}"), "hunter2".into(), "guest".into())
+            .unwrap();
+        poll_until(&mut [&mut host, &mut guest], |sessions| connected(sessions[1]));
+        incoming(&mut host, &dir);
+        let pending = host.state.document_for_path(&dir.join("_maps/a.dmm")).unwrap();
+        fs::write(dir.join("game.dme"), "/obj/new_codebase").unwrap();
+        host.load_environment(&dir.join("game.dme")).unwrap();
+        assert!(host.coop().unwrap().was_hosting());
+        assert!(!host.coop().unwrap().is_hosting());
+        assert!(host.state.document(pending).is_none());
+        poll_until(&mut [&mut guest], |sessions| {
+            matches!(sessions[0].coop().unwrap().status, CoopStatus::Ended(_))
+        });
+        poll_until(&mut [&mut host], |sessions| sessions[0].coop().unwrap().can_retry());
+        host.retry_coop().unwrap();
+        poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
+        guest.retry_coop().unwrap();
+        poll_until(&mut [&mut host, &mut guest], |sessions| {
+            matches!(sessions[1].coop().unwrap().status, CoopStatus::CodebaseMismatch { .. })
+        });
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(guest_dir);
+    }
+
+    #[test]
+    fn switching_codebase_roots_disconnects_even_when_the_loaded_bytes_match() {
+        let (dir, mut host) = hosting("switch-codebase");
+        let (other_dir, _) = codebase_with_map("switch-codebase-other", "a");
+        host.begin_coop_reload();
+        host.load_environment(&other_dir.join("game.dme")).unwrap();
+        assert!(matches!(host.coop().unwrap().status, CoopStatus::Ended(_)));
+        assert!(!host.coop().unwrap().is_hosting());
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(other_dir);
     }
 
     fn paint(session: &mut Session, file: &Path, coord: Coord, path: &str) {
@@ -1826,6 +2308,7 @@ mod tests {
     #[test]
     fn edits_converge_through_a_lossy_link() {
         let server = Server::spawn(ServerConfig {
+            codebase: None,
             bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             password: String::from("hunter2"),
         })

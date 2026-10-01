@@ -1,8 +1,8 @@
 use std::env;
 
-use dear_imgui_rs::{Key, StyleColor, Ui, sys};
+use dear_imgui_rs::{Key, PopupQueryFlags, StyleColor, Ui, sys};
 use editor::{document::DocumentId, icons::materialdesignicons::ICON_CLOSE};
-use net::{Comment, CommentId, MAX_COMMENT_LEN, PeerId};
+use net::{CodebaseId, Comment, CommentId, MAX_COMMENT_LEN, PeerId};
 
 use super::{
     DIAGNOSTIC_WARNING_COLOR,
@@ -19,6 +19,12 @@ use crate::{
 pub(super) const HOST_POPUP: &str = "Host co-op##coop-host";
 
 pub(super) const JOIN_POPUP: &str = "Join co-op##coop-join";
+
+pub(super) const STATUS_POPUP: &str = "Co-op unavailable##coop-status";
+
+pub(super) const OUT_OF_DATE_POPUP: &str = "Map out of date##coop-out-of-date";
+
+const NICK_PLACEHOLDER: &str = "someone";
 
 const CONNECTED_COLOR: [f32; 4] = [0.45, 0.85, 0.45, 1.0];
 
@@ -219,7 +225,7 @@ pub(super) fn map_note(coop: &Coop, path: &str) -> String {
         state @ SharedState::Receiving { .. } => format!("receiving {}", percent(state)),
         SharedState::Loading(_) => String::from("loading"),
         SharedState::Closed => String::from("closed"),
-        SharedState::Waiting(_) => String::from("waiting"),
+        SharedState::Waiting(_) => String::from("out of date"),
         SharedState::Ready => return String::new(),
     };
 
@@ -244,7 +250,7 @@ fn megabytes(bytes: u64) -> String { format!("{:.1} MB", bytes as f64 / (1024.0 
 fn transfer_line(coop: &Coop, path: &str, state: &SharedState) -> Option<String> {
     let line = match *state {
         SharedState::Incoming { by, len, .. } => {
-            let nick = coop.nick_of(by).unwrap_or("someone");
+            let nick = coop.nick_of(by).unwrap_or(NICK_PLACEHOLDER);
             format!("Waiting for {nick} to upload {path} ({})", megabytes(len))
         },
         SharedState::Sending { total: 0, .. } => format!("Sharing {path}: preparing"),
@@ -259,8 +265,8 @@ fn transfer_line(coop: &Coop, path: &str, state: &SharedState) -> Option<String>
     Some(line)
 }
 
-pub(super) fn draw_tab_progress(ui: &Ui, state: &SharedState) {
-    let (min, max) = unsafe {
+fn tab_rect() -> ([f32; 2], [f32; 2]) {
+    unsafe {
         let window = sys::igGetCurrentWindow();
         if (*window).DockTabIsVisible() {
             let rect = (*window).DC.DockTabItemRect;
@@ -269,8 +275,19 @@ pub(super) fn draw_tab_progress(ui: &Ui, state: &SharedState) {
             let rect = sys::ImGuiWindow_TitleBarRect(window);
             ([rect.Min.x, rect.Min.y], [rect.Max.x, rect.Max.y])
         }
-    };
+    }
+}
 
+fn fill_tab(ui: &Ui, min: [f32; 2], max: [f32; 2], mut color: [f32; 4]) {
+    color[3] *= TAB_FILL_ALPHA;
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(min, max, || {
+        draw.add_rect(min, max, color).filled(true).build();
+    });
+}
+
+pub(super) fn draw_tab_progress(ui: &Ui, state: &SharedState) {
+    let (min, max) = tab_rect();
     let width = max[0] - min[0];
     let (from, to) = match fraction(state) {
         Some(fraction) => (0.0, fraction),
@@ -280,20 +297,93 @@ pub(super) fn draw_tab_progress(ui: &Ui, state: &SharedState) {
         },
     };
 
-    let mut color = ui.style_color(StyleColor::PlotHistogram);
-    color[3] *= TAB_FILL_ALPHA;
-    let draw = ui.get_window_draw_list();
-    draw.with_clip_rect(min, max, || {
-        draw.add_rect([min[0] + width * from, min[1]], [min[0] + width * to, max[1]], color)
-            .filled(true)
-            .build();
-    });
+    fill_tab(
+        ui,
+        [min[0] + width * from, min[1]],
+        [min[0] + width * to, max[1]],
+        ui.style_color(StyleColor::PlotHistogram),
+    );
+}
+
+pub(super) fn draw_tab_out_of_date(ui: &Ui) {
+    let (min, max) = tab_rect();
+    fill_tab(ui, min, max, DIAGNOSTIC_WARNING_COLOR);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OutOfDateChoice {
+    SaveMine,
+    DiscardMine,
+    Leave,
+}
+
+pub(super) fn draw_out_of_date_dialog(ui: &Ui, session: &Session) -> Option<(DocumentId, OutOfDateChoice)> {
+    let out_of_date = session
+        .state
+        .document_ids()
+        .into_iter()
+        .find_map(|id| Some((id, session.coop_out_of_date(id)?)));
+    if out_of_date.is_some()
+        && !ui.is_popup_open(OUT_OF_DATE_POPUP)
+        && !ui.is_popup_open_with_flags("", PopupQueryFlags::ANY_POPUP)
+    {
+        ui.open_popup(OUT_OF_DATE_POPUP);
+    }
+
+    let _modal = ui
+        .begin_modal_popup_config(OUT_OF_DATE_POPUP)
+        .flags(MODAL_FLAGS)
+        .begin()?;
+    let found = out_of_date.and_then(|(id, by)| Some((id, by, session.coop()?, session.state.document(id)?)));
+    let Some((id, by, coop, document)) = found else {
+        ui.close_current_popup();
+        return None;
+    };
+
+    let nick = coop.nick_of(by).unwrap_or(NICK_PLACEHOLDER);
+    ui.text(format!(
+        "{nick} shared a newer {}.",
+        document.title().trim_end_matches(" *")
+    ));
+    ui.text("Your copy has unsaved changes and is read only until you choose.");
+    ui.text_disabled("Leaving co-op keeps your copy as it is.");
+    ui.dummy([0.0, ui.frame_height() * 0.25]);
+
+    let mut choice = None;
+    if ui.button("Save mine, load shared") {
+        choice = Some(OutOfDateChoice::SaveMine);
+    }
+
+    ui.same_line();
+    if ui.button("Discard mine, load shared") {
+        choice = Some(OutOfDateChoice::DiscardMine);
+    }
+
+    ui.same_line();
+    let leave = if coop.is_hosting() {
+        "Stop hosting, keep mine"
+    } else {
+        "Leave co-op, keep mine"
+    };
+    if ui.button(leave) {
+        choice = Some(OutOfDateChoice::Leave);
+    }
+    ui.set_item_tooltip("Roach out");
+
+    if choice.is_some() {
+        ui.close_current_popup();
+    }
+
+    choice.map(|choice| (id, choice))
 }
 
 pub(super) fn draw_receiving(ui: &Ui, coop: &Coop, name: &str, state: &SharedState) {
     let (text, overlay) = match *state {
         SharedState::Incoming { by, len, .. } => (
-            format!("Waiting for {} to upload {name}", coop.nick_of(by).unwrap_or("someone")),
+            format!(
+                "Waiting for {} to upload {name}",
+                coop.nick_of(by).unwrap_or(NICK_PLACEHOLDER)
+            ),
             megabytes(len),
         ),
         SharedState::Receiving { done, total } | SharedState::Sending { done, total } => (
@@ -319,8 +409,8 @@ pub(super) fn draw_receiving(ui: &Ui, coop: &Coop, name: &str, state: &SharedSta
 
 pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
     let (color, label) = match &coop.status {
-        CoopStatus::Hashing => (PENDING_COLOR, String::from("Co-op: reading codebase...")),
         CoopStatus::Connecting => (PENDING_COLOR, String::from("Co-op: connecting...")),
+        CoopStatus::Connected if coop.is_paused() => (PENDING_COLOR, String::from("Co-op: reloading codebase...")),
         CoopStatus::Connected => {
             let others = coop.peers.len();
             let is_waiting = coop
@@ -339,6 +429,7 @@ pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
             )
         },
         CoopStatus::Ended(reason) => (SAVE_ERROR_COLOR, format!("Co-op: {reason}")),
+        CoopStatus::CodebaseMismatch { .. } => (DIAGNOSTIC_WARNING_COLOR, String::from("Co-op: different codebase")),
     };
 
     ui.text_colored(color, label);
@@ -395,11 +486,119 @@ pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
             if matches!(shared_map.state, SharedState::Waiting(_)) {
                 ui.text_colored(
                     DIAGNOSTIC_WARNING_COLOR,
-                    format!("{path}: save or close your copy to receive the shared one"),
+                    format!("{path}: out of date, save or discard your copy to load the shared one"),
                 );
             }
         }
     });
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CoopNoticeChoice {
+    Retry,
+    ReloadAndRetry,
+    Dismiss,
+}
+
+fn codebase_description(codebase: &CodebaseId) -> String {
+    let hash = codebase.hash.0[..6]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    match codebase.git_hint.as_deref() {
+        Some(hint) => format!("{hint} ({hash})"),
+        None => hash,
+    }
+}
+
+#[derive(Default)]
+pub(super) struct CoopNotice {
+    status: Option<CoopStatus>,
+    requested: bool,
+}
+
+impl CoopNotice {
+    pub(super) fn request(&mut self) { self.requested = true; }
+
+    pub(super) fn reset(&mut self) { *self = Self::default(); }
+
+    fn observe(&mut self, coop: Option<&Coop>) {
+        let status = coop
+            .map(|coop| &coop.status)
+            .filter(|status| matches!(status, CoopStatus::Ended(_) | CoopStatus::CodebaseMismatch { .. }))
+            .cloned();
+        if status != self.status {
+            self.status = status;
+            self.requested = self.status.is_some();
+        }
+    }
+}
+
+pub(super) fn draw_coop_notice(
+    ui: &Ui, coop: Option<&Coop>, is_loading: bool, notice: &mut CoopNotice,
+) -> Option<CoopNoticeChoice> {
+    notice.observe(coop);
+    let coop = coop.filter(|_| notice.status.is_some())?;
+    if notice.requested && !is_loading && !ui.is_popup_open_with_flags("", PopupQueryFlags::ANY_POPUP) {
+        ui.open_popup(STATUS_POPUP);
+        notice.requested = false;
+    }
+
+    let _modal = ui.begin_modal_popup_config(STATUS_POPUP).flags(MODAL_FLAGS).begin()?;
+    // a host's own codebase is the session's, so hosting again needs no reload
+    let is_mismatch = matches!(coop.status, CoopStatus::CodebaseMismatch { .. }) && !coop.was_hosting();
+    {
+        let _wrap = ui.push_text_wrap_pos(ui.cursor_pos()[0] + DIALOG_FIELD_WIDTH * dpi(ui));
+        match &coop.status {
+            CoopStatus::CodebaseMismatch { .. } if coop.was_hosting() => {
+                ui.text_colored(DIAGNOSTIC_WARNING_COLOR, "Your codebase changed while hosting.");
+                ui.text_wrapped("Guests were disconnected. Host again to start a session on the new codebase.");
+            },
+            CoopStatus::CodebaseMismatch { expected } => {
+                ui.text_colored(DIAGNOSTIC_WARNING_COLOR, "Your codebase differs from the session.");
+                ui.text_wrapped("Update your checkout to match the session, then reload and retry.");
+                ui.text_wrapped(format!(
+                    "Your codebase: {}",
+                    codebase_description(coop.local_codebase())
+                ));
+                ui.text_wrapped(format!("Session codebase: {}", codebase_description(expected)));
+            },
+            CoopStatus::Ended(reason) => ui.text_wrapped(format!("Co-op stopped: {reason}")),
+            _ => {},
+        }
+
+        ui.text_wrapped("Open maps and unsaved changes are preserved.");
+    }
+
+    ui.separator();
+    if ui.button("Close") || ui.is_key_pressed(Key::Escape) {
+        notice.reset();
+        ui.close_current_popup();
+        return Some(CoopNoticeChoice::Dismiss);
+    }
+
+    ui.same_line();
+    let label = match (is_mismatch, coop.was_hosting()) {
+        (true, _) => "Reload codebase and retry",
+        (false, true) => "Host again",
+        (false, false) => "Retry",
+    };
+
+    let is_clicked = {
+        let _disabled = ui.begin_disabled_with_cond(is_loading || !coop.can_retry());
+        ui.button(label)
+    };
+
+    if !is_clicked {
+        return None;
+    }
+
+    ui.close_current_popup();
+    Some(if is_mismatch {
+        CoopNoticeChoice::ReloadAndRetry
+    } else {
+        CoopNoticeChoice::Retry
+    })
 }
 
 pub(super) fn draw_remote_cursors(ui: &Ui, camera: &Controller, viewport: OverlayRect, coop: &Coop, map: &str, z: u32) {
