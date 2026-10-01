@@ -6,7 +6,7 @@ use super::{
     ScreenshotArea,
     ScreenshotRequest,
     UiState,
-    coop::{CoopDialogKind, draw_coop_status},
+    coop::{CoopDialogKind, draw_coop_peers, draw_coop_status},
     viewport::EditCommand,
     welcome::codebase_relative,
 };
@@ -370,6 +370,7 @@ impl UiState {
             if let Some(coop) = session.coop() {
                 ui.separator();
                 draw_coop_status(ui, coop);
+                draw_coop_peers(ui, coop);
             }
         });
 

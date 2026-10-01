@@ -17,7 +17,7 @@ fn a_joined_peer_sees_the_hosts_cursor() {
 
     let peer = guest.coop().unwrap().peers.values().next().unwrap();
     assert_eq!(peer.info.nick, "host");
-    assert!(guest.coop().unwrap().same_codebase(&peer.info));
+    assert_eq!(peer.info.codebase.hash, guest.coop().unwrap().local_codebase().hash);
 
     let cursor = Cursor {
         map: String::from("_maps/a.dmm"),

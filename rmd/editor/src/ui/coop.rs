@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, iter};
 
 use dear_imgui_rs::{Key, PopupQueryFlags, StyleColor, Ui, sys};
 use editor::{document::DocumentId, icons::materialdesignicons::ICON_CLOSE};
@@ -412,53 +412,36 @@ pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
         CoopStatus::Connecting => (PENDING_COLOR, String::from("Co-op: connecting...")),
         CoopStatus::Connected if coop.is_paused() => (PENDING_COLOR, String::from("Co-op: reloading codebase...")),
         CoopStatus::Connected => {
-            let others = coop.peers.len();
             let is_waiting = coop
                 .shared_maps
                 .values()
                 .any(|shared_map| matches!(shared_map.state, SharedState::Waiting(_)));
-            let color = if !is_waiting && coop.peers.values().all(|peer| coop.same_codebase(&peer.info)) {
-                CONNECTED_COLOR
-            } else {
+            let color = if is_waiting {
                 DIAGNOSTIC_WARNING_COLOR
+            } else {
+                CONNECTED_COLOR
             };
 
-            (
-                color,
-                format!("Co-op: {} {}", others + 1, if others == 0 { "user" } else { "users" }),
-            )
+            (color, String::from("Co-op:"))
         },
         CoopStatus::Ended(reason) => (SAVE_ERROR_COLOR, format!("Co-op: {reason}")),
         CoopStatus::CodebaseMismatch { .. } => (DIAGNOSTIC_WARNING_COLOR, String::from("Co-op: different codebase")),
     };
 
     ui.text_colored(color, label);
-    if !ui.is_item_hovered() {
+    if !ui.is_item_hovered() || coop.host().is_none() && coop.shared_maps.is_empty() {
         return;
     }
 
     ui.tooltip(|| {
         if let Some((addr, password)) = coop.host() {
             ui.text(format!("Hosting on port {} with password {password}", addr.port()));
-            ui.separator();
-        }
-
-        ui.text(format!("{} (you)", coop.nick));
-        for peer in coop.peers.values() {
-            if coop.same_codebase(&peer.info) {
-                ui.text_colored(peer_color(peer.info.id), &peer.info.nick);
-            } else {
-                let theirs = peer.info.codebase.git_hint.as_deref().unwrap_or("no git");
-                let ours = coop.git_hint().unwrap_or("no git");
-                ui.text_colored(
-                    DIAGNOSTIC_WARNING_COLOR,
-                    format!("{}: different codebase ({theirs}, you are on {ours})", peer.info.nick),
-                );
+            if !coop.shared_maps.is_empty() {
+                ui.separator();
             }
         }
 
         if !coop.shared_maps.is_empty() {
-            ui.separator();
             ui.text("Shared maps");
             for (path, shared_map) in &coop.shared_maps {
                 let note = map_note(coop, path);
@@ -491,6 +474,67 @@ pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
             }
         }
     });
+}
+
+pub(super) fn draw_coop_peers(ui: &Ui, coop: &Coop) {
+    let Some(you) = coop.you.filter(|_| coop.is_connected()) else {
+        return;
+    };
+
+    let scale = dpi(ui);
+    let pad = 4.0 * scale;
+    let spacing = 8.0 * scale;
+    let entries = iter::once((you, coop.nick.as_str(), None))
+        .chain(
+            coop.peers
+                .values()
+                .map(|peer| (peer.info.id, peer.info.nick.as_str(), Some(peer))),
+        )
+        .collect::<Vec<_>>();
+
+    for (index, (id, nick, peer)) in entries.iter().enumerate() {
+        let text_size = ui.calc_text_size(nick);
+        let width = text_size[0] + 2.0 * pad;
+        let rest = entries.len() - index - 1;
+        let more = format!("+{}", rest + 1);
+        let reserved = if rest == 0 {
+            0.0
+        } else {
+            spacing + ui.calc_text_size(&more)[0]
+        };
+
+        ui.same_line_with_spacing(0.0, spacing);
+        if ui.content_region_avail()[0] < width + reserved {
+            ui.text_disabled(&more);
+            if ui.is_item_hovered() {
+                ui.tooltip(|| {
+                    for (_, nick, _) in &entries[index..] {
+                        ui.text(nick);
+                    }
+                });
+            }
+
+            return;
+        }
+
+        ui.invisible_button(format!("##peer-{}", id.0), [width, text_size[1]]);
+        let (min, max) = (ui.item_rect_min(), ui.item_rect_max());
+        let color = peer_color(*id);
+        let draw = ui.get_window_draw_list();
+        draw.add_text([min[0] + pad, min[1]], color, nick);
+        draw.add_line([min[0], max[1] + scale], [max[0], max[1] + scale], color)
+            .thickness(2.0 * scale)
+            .build();
+
+        if ui.is_item_hovered() {
+            ui.tooltip_text(match peer.map(|peer| peer.cursor.as_ref()) {
+                None => String::from("you"),
+                Some(None) => String::from("not over a shared map"),
+                Some(Some(cursor)) if cursor.z > 1 => format!("on {} (z {})", cursor.map, cursor.z),
+                Some(Some(cursor)) => format!("on {}", cursor.map),
+            });
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

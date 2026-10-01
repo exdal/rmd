@@ -246,10 +246,6 @@ impl Coop {
             .map(|server| (server.local_addr(), server.password()))
     }
 
-    pub fn same_codebase(&self, peer: &PeerInfo) -> bool { self.codebase.hash == peer.codebase.hash }
-
-    pub fn git_hint(&self) -> Option<&str> { self.codebase.git_hint.as_deref() }
-
     fn mismatch(&mut self, expected: CodebaseId) {
         self.end(String::from("different codebase"));
         self.status = CoopStatus::CodebaseMismatch { expected };
