@@ -40,7 +40,6 @@ pub(crate) fn object_tree(tree: &ObjectTree, builtin_files: &[FileId]) -> Codeba
     types.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
     let mut context = Context::new(&SHA256);
-    context.update(b"rmd object tree v3\0");
     write_len(&mut context, types.len());
     for (path, decl, vars) in types {
         write_str(&mut context, &path);
