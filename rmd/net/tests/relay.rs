@@ -878,3 +878,72 @@ fn a_dropped_upload_is_cancelled() {
     thread::sleep(Duration::from_millis(200));
     assert!(!carol.poll().any(|event| matches!(event, Event::MapIncoming { .. })));
 }
+
+const SLOW_MAP: &str = "_maps/slow.dmm";
+
+// bob sits behind a slow link, so a large snapshot is still on its way to him when this returns
+fn start_slow_download(server: &Server) -> (Client, LossyProxy, Client) {
+    let alice = join(server, PASSWORD, "alice");
+    wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    let proxy = LossyProxy::spawn(
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        server.local_addr(),
+        Impairment {
+            latency: Duration::from_millis(100),
+            jitter: Duration::ZERO,
+            loss: 0.0,
+            seed: 1,
+        },
+    )
+    .unwrap();
+    let bob = join_at(proxy.local_addr(), PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    alice.share_map(String::from(SLOW_MAP), None, vec![b'a'; 8_000_000]);
+    wait_for(&bob, |event| match event {
+        Event::Progress {
+            path,
+            direction: Direction::Receiving,
+            ..
+        } if path == SLOW_MAP => Some(()),
+        _ => None,
+    });
+
+    (alice, proxy, bob)
+}
+
+#[test]
+fn unsharing_a_map_stops_its_download() {
+    let server = server();
+    let (alice, _proxy, bob) = start_slow_download(&server);
+
+    alice.unshare_map(String::from(SLOW_MAP));
+    let is_stopped = wait_for(&bob, |event| match event {
+        Event::TransferFailed { path, .. } if path == SLOW_MAP => Some(true),
+        Event::MapSnapshot { path, .. } if path == SLOW_MAP => Some(false),
+        _ => None,
+    });
+    assert!(is_stopped, "the download finished after the map stopped being shared");
+}
+
+#[test]
+fn stopping_the_server_mid_download_disconnects_peers_promptly() {
+    let server = server();
+    let (_alice, _proxy, bob) = start_slow_download(&server);
+
+    let started = Instant::now();
+    drop(server);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "shutting down took {:?}",
+        started.elapsed()
+    );
+
+    wait_for(&bob, |event| matches!(event, Event::Disconnected(_)).then_some(()));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "bob heard of the shutdown after {:?}",
+        started.elapsed()
+    );
+}

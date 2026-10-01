@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    mem,
     net::SocketAddr,
     sync::{
         Arc,
@@ -40,6 +41,7 @@ use quinn::{Connection, Endpoint, EndpointConfig, TokioRuntime};
 use ring::rand::{SecureRandom, SystemRandom};
 use tokio::{
     sync::{mpsc, oneshot},
+    task::{AbortHandle, JoinSet},
     time,
 };
 
@@ -47,7 +49,15 @@ use crate::{
     Error,
     fail,
     socket,
-    stream::{read_message, read_payload, read_transfer_header, send_transfer, write_message},
+    stream::{
+        CLOSE_GRACE,
+        abort_transfers,
+        read_message,
+        read_payload,
+        read_transfer_header,
+        send_transfer,
+        write_message,
+    },
     tls,
 };
 
@@ -156,6 +166,7 @@ struct State {
     last_comment: CommentId,
     maps: HashMap<String, SharedMap>,
     uploads: HashMap<String, (PeerId, u64)>,
+    pushes: JoinSet<()>,
 }
 
 impl State {
@@ -175,6 +186,7 @@ struct SharedMap {
     generation: GenerationId,
     replaced: Option<GenerationId>,
     edits: Vec<(PeerId, MapEdit)>,
+    pushes: Vec<AbortHandle>,
 }
 
 struct Peer {
@@ -283,10 +295,14 @@ impl Shared {
             state.uploads.remove(&path);
         }
 
-        let previous = state.maps.get(&path);
-        let generation = previous.map_or(GenerationId(1), |map| map.generation.next());
+        let State {
+            peers, maps, pushes, ..
+        } = &mut *state;
+        let previous = maps.remove(&path);
+        let generation = previous.as_ref().map_or(GenerationId(1), |map| map.generation.next());
         // peers kept editing while the snapshot was on its way, and the sharer's own edits are already in it
         let edits = previous
+            .as_ref()
             .filter(|map| map.generation == base)
             .map(|map| {
                 map.edits
@@ -306,20 +322,23 @@ impl Shared {
             })
             .unwrap_or_default();
 
-        let replaced = previous.map(|map| map.generation);
-        for (id, peer) in state.peers.iter() {
+        let replaced = previous.as_ref().map(|map| map.generation);
+        let mut map_pushes = previous.map(|map| map.pushes).unwrap_or_default();
+        for (id, peer) in peers.iter() {
             let _ = peer.outbox.send(ServerMessage::MapShared {
                 path: path.clone(),
                 by,
                 generation,
             });
             if *id != by {
-                tokio::spawn(push_map(
+                push(
+                    pushes,
+                    &mut map_pushes,
                     peer.connection.clone(),
                     path.clone(),
                     generation,
                     bytes.clone(),
-                ));
+                );
             }
 
             for (seq, (author, edit)) in edits.iter().enumerate() {
@@ -331,7 +350,7 @@ impl Shared {
             }
         }
 
-        state.maps.insert(
+        maps.insert(
             path,
             SharedMap {
                 by,
@@ -339,6 +358,7 @@ impl Shared {
                 generation,
                 replaced,
                 edits,
+                pushes: map_pushes,
             },
         );
     }
@@ -374,7 +394,12 @@ impl Shared {
     // echoed even for a map we don't have, so a peer that still shows it can drop it
     fn unshare(&self, by: PeerId, path: &str) {
         let mut state = self.state.lock().unwrap();
-        state.maps.remove(path);
+        if let Some(map) = state.maps.remove(path) {
+            for push in map.pushes {
+                push.abort();
+            }
+        }
+
         state.comments.retain(|comment| comment.map != path);
         for peer in state.peers.values() {
             let _ = peer.outbox.send(ServerMessage::MapUnshared {
@@ -385,22 +410,30 @@ impl Shared {
     }
 
     fn resync(&self, id: PeerId, path: &str) {
-        let state = self.state.lock().unwrap();
-        let (Some(peer), Some(map)) = (state.peers.get(&id), state.maps.get(path)) else {
+        let mut state = self.state.lock().unwrap();
+        let State {
+            peers, maps, pushes, ..
+        } = &mut *state;
+        let (Some(peer), Some(map)) = (peers.get(&id), maps.get_mut(path)) else {
             return;
         };
 
-        replay(&peer.outbox, &peer.connection, path, map);
+        replay(&peer.outbox, &peer.connection, path, map, pushes);
     }
 }
 
-fn replay(outbox: &mpsc::UnboundedSender<ServerMessage>, connection: &Connection, path: &str, map: &SharedMap) {
-    tokio::spawn(push_map(
+fn replay(
+    outbox: &mpsc::UnboundedSender<ServerMessage>, connection: &Connection, path: &str, map: &mut SharedMap,
+    pushes: &mut JoinSet<()>,
+) {
+    push(
+        pushes,
+        &mut map.pushes,
         connection.clone(),
         path.to_owned(),
         map.generation,
         map.bytes.clone(),
-    ));
+    );
     for (seq, (by, edit)) in map.edits.iter().enumerate() {
         let _ = outbox.send(ServerMessage::Edit {
             by: *by,
@@ -408,6 +441,15 @@ fn replay(outbox: &mpsc::UnboundedSender<ServerMessage>, connection: &Connection
             edit: edit.clone(),
         });
     }
+}
+
+fn push(
+    pushes: &mut JoinSet<()>, map_pushes: &mut Vec<AbortHandle>, connection: Connection, path: String,
+    generation: GenerationId, bytes: Bytes,
+) {
+    while pushes.try_join_next().is_some() {}
+    map_pushes.retain(|push| !push.is_finished());
+    map_pushes.push(pushes.spawn(push_map(connection, path, generation, bytes)));
 }
 
 async fn push_map(connection: Connection, path: String, generation: GenerationId, bytes: Bytes) {
@@ -470,8 +512,20 @@ async fn serve(endpoint: Endpoint, shared: Arc<Shared>, mut stop: oneshot::Recei
         }
     }
 
+    let (connections, mut pushes) = {
+        let mut state = shared.state.lock().unwrap();
+        let connections = state
+            .peers
+            .values()
+            .map(|peer| peer.connection.clone())
+            .collect::<Vec<_>>();
+
+        (connections, mem::take(&mut state.pushes))
+    };
+
+    abort_transfers(&mut pushes, &connections).await;
     endpoint.close(0u32.into(), b"server shutting down");
-    endpoint.wait_idle().await;
+    let _ = time::timeout(CLOSE_GRACE, endpoint.wait_idle()).await;
 }
 
 async fn handle(incoming: quinn::Incoming, shared: Arc<Shared>) {
@@ -546,13 +600,14 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
                     let _ = peer.outbox.send(ServerMessage::PeerJoined(info.clone()));
                 }
 
-                for (path, map) in state.maps.iter() {
+                let State { maps, pushes, .. } = &mut *state;
+                for (path, map) in maps.iter_mut() {
                     let _ = outbox.send(ServerMessage::MapShared {
                         path: path.clone(),
                         by: map.by,
                         generation: map.generation,
                     });
-                    replay(&outbox, connection, path, map);
+                    replay(&outbox, connection, path, map, pushes);
                 }
 
                 for (path, (by, len)) in state.uploads.iter() {

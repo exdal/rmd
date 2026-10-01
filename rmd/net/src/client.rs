@@ -1,5 +1,6 @@
 use std::{
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    slice,
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -40,13 +41,19 @@ use tokio::{
 use crate::{
     Error,
     fail,
-    stream::{read_message, read_payload, read_transfer_header, send_transfer, write_message},
+    stream::{
+        CLOSE_GRACE,
+        abort_transfers,
+        read_message,
+        read_payload,
+        read_transfer_header,
+        send_transfer,
+        write_message,
+    },
     tls,
 };
 
 const CURSOR_INTERVAL: Duration = Duration::from_millis(50);
-const CLOSE_GRACE: Duration = Duration::from_millis(500);
-const RESET_POLL: Duration = Duration::from_millis(5);
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 const VIEW_REFRESH: Duration = Duration::from_secs(1);
 
@@ -263,18 +270,7 @@ async fn run(
         _ = &mut stop => Ok(()),
     };
 
-    // quinn holds the close back while anything else is queued behind a full congestion window,
-    // so the resets of unfinished uploads go out first
-    while uploads.try_join_next().is_some() {}
-    let resets = connection.stats().frame_tx.reset_stream + uploads.len() as u64;
-    uploads.shutdown().await;
-    let _ = time::timeout(CLOSE_GRACE, async {
-        while connection.stats().frame_tx.reset_stream < resets {
-            time::sleep(RESET_POLL).await;
-        }
-    })
-    .await;
-
+    abort_transfers(&mut uploads, slice::from_ref(&connection)).await;
     connection.close(0u32.into(), b"");
     let _ = time::timeout(CLOSE_GRACE, endpoint.wait_idle()).await;
 

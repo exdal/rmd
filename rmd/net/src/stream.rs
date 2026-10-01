@@ -1,11 +1,17 @@
+use std::time::Duration;
+
 use protocol::{
     FrameReader,
     coop::{MAX_MAP_LEN, Transfer},
 };
+use quinn::Connection;
 use serde::{Serialize, de::DeserializeOwned};
+use tokio::{task::JoinSet, time};
 
 use crate::{Error, fail};
 
+pub(crate) const CLOSE_GRACE: Duration = Duration::from_millis(500);
+const RESET_POLL: Duration = Duration::from_millis(5);
 const CHUNK_LEN: usize = 64 * 1024;
 const MAX_HEADER_LEN: usize = 64 * 1024;
 
@@ -72,6 +78,27 @@ impl Drop for Outgoing {
             let _ = self.stream.reset(0u32.into());
         }
     }
+}
+
+// quinn holds the close back while anything else is queued behind a full congestion window,
+// so the resets of unfinished transfers go out first
+pub(crate) async fn abort_transfers(transfers: &mut JoinSet<()>, connections: &[Connection]) {
+    let reset_count = || {
+        connections
+            .iter()
+            .map(|connection| connection.stats().frame_tx.reset_stream)
+            .sum::<u64>()
+    };
+
+    while transfers.try_join_next().is_some() {}
+    let resets = reset_count() + transfers.len() as u64;
+    transfers.shutdown().await;
+    let _ = time::timeout(CLOSE_GRACE, async {
+        while reset_count() < resets {
+            time::sleep(RESET_POLL).await;
+        }
+    })
+    .await;
 }
 
 pub(crate) async fn read_transfer_header(recv: &mut quinn::RecvStream) -> Result<Transfer, Error> {
