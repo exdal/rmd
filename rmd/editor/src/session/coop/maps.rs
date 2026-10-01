@@ -226,8 +226,10 @@ impl Session {
 
     pub fn can_share_coop_maps(&self) -> bool { self.coop.as_ref().is_some_and(Coop::can_collaborate) }
 
-    pub fn can_share_coop_map(&self) -> bool {
-        self.can_share_coop_maps() && self.state.active().and_then(|id| self.coop_map_path(id)).is_some()
+    pub fn can_share_coop_map(&self) -> bool { self.state.active().is_some_and(|id| self.can_share_coop_document(id)) }
+
+    pub fn can_share_coop_document(&self, id: DocumentId) -> bool {
+        self.can_share_coop_maps() && self.coop_map_path(id).is_some()
     }
 
     pub fn share_coop_file(&mut self, file: &Path) -> bool {
@@ -251,7 +253,7 @@ impl Session {
         }
     }
 
-    pub(super) fn share_coop_document(&mut self, id: DocumentId) {
+    pub fn share_coop_document(&mut self, id: DocumentId) {
         if !self.coop.as_ref().is_some_and(Coop::can_collaborate) {
             return;
         }
@@ -295,12 +297,24 @@ impl Session {
     }
 
     pub fn can_stop_sharing_coop_map(&self) -> bool {
-        self.can_share_coop_maps() && self.state.active().is_some_and(|id| self.coop_shared_map(id).is_some())
+        self.state
+            .active()
+            .is_some_and(|id| self.can_stop_sharing_coop_document(id))
+    }
+
+    pub fn can_stop_sharing_coop_document(&self, id: DocumentId) -> bool {
+        self.can_share_coop_maps() && self.coop_shared_map(id).is_some()
+    }
+
+    pub fn stop_sharing_coop_map(&mut self) {
+        if let Some(id) = self.state.active() {
+            self.stop_sharing_coop_document(id);
+        }
     }
 
     // every peer, us included, drops the map once the server echoes this
-    pub fn stop_sharing_coop_map(&mut self) {
-        let Some(path) = self.state.active().and_then(|id| self.coop_map_path(id)) else {
+    pub fn stop_sharing_coop_document(&mut self, id: DocumentId) {
+        let Some(path) = self.coop_map_path(id) else {
             return;
         };
 

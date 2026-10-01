@@ -18,7 +18,7 @@ pub(super) use self::{
 use self::{
     hover::draw_git_hover,
     overlays::{banner_contains, draw_recent_prefabs},
-    presence::{draw_coop_status, hit_comment, share_presence},
+    presence::{draw_coop_status, draw_tab_menu, hit_comment, share_presence},
     selection::{
         ViewGestures,
         block_controls_contain,
@@ -412,6 +412,7 @@ impl UiState {
             .opened(keep_open)
             .focused(mem::take(focus));
         map_window.build(|| {
+            draw_tab_menu(ui, session, id);
             self.activate_on_focus(ui, session, settings, id, gestures);
 
             let is_receiving = draw_coop_status(ui, session, id, &name, is_out_of_date);

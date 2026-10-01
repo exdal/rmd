@@ -53,6 +53,24 @@ pub(super) fn draw_coop_status(ui: &Ui, session: &Session, id: DocumentId, name:
     true
 }
 
+pub(super) fn draw_tab_menu(ui: &Ui, session: &mut Session, id: DocumentId) {
+    if !session.can_share_coop_maps() {
+        return;
+    }
+
+    let Some(_menu) = ui.begin_popup_context_item() else {
+        return;
+    };
+
+    if ui.menu_item_enabled_selected_no_shortcut("Share map", false, session.can_share_coop_document(id)) {
+        session.share_coop_document(id);
+    }
+
+    if ui.menu_item_enabled_selected_no_shortcut("Stop sharing", false, session.can_stop_sharing_coop_document(id)) {
+        session.stop_sharing_coop_document(id);
+    }
+}
+
 pub(super) fn hit_comment(ui: &Ui, session: &mut Session, frame: &ViewFrame<'_>) -> Option<CommentHit> {
     let hit = session
         .coop()
