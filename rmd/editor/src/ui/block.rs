@@ -140,6 +140,17 @@ pub(super) fn marching_stripe_offset(ui: &Ui) -> f32 {
     (ui.time() as f32 * BLOCK_STRIPE_SPEED).rem_euclid(BLOCK_STRIPE_LENGTH * 2.0)
 }
 
+pub(super) fn fill_selection(draw: &DrawListMut<'_>, bounds: OverlayRect, inner: Option<OverlayRect>, color: [f32; 4]) {
+    match inner {
+        Some(inner) => {
+            for region in ring_regions(bounds, inner) {
+                draw.add_rect(region.min, region.max, color).filled(true).build();
+            }
+        },
+        None => draw.add_rect(bounds.min, bounds.max, color).filled(true).build(),
+    }
+}
+
 fn draw_marching_border(draw: &DrawListMut<'_>, bounds: OverlayRect, clip: OverlayRect, offset: f32, accent: [f32; 4]) {
     for (start, end, on_accent) in block_border_segments(bounds, clip, offset) {
         draw.add_line(start, end, if on_accent { accent } else { BLOCK_SELECTION_WHITE })
@@ -200,13 +211,7 @@ pub(super) fn draw_block_outline(
     let draw = ui.get_window_draw_list();
     draw.with_clip_rect(viewport.min, viewport.max, || {
         let tint = [0.25, 0.85, 0.5, 0.12];
-        if let Some(inner) = inner_bounds {
-            for region in ring_regions(bounds, inner) {
-                draw.add_rect(region.min, region.max, tint).filled(true).build();
-            }
-        } else {
-            draw.add_rect(bounds.min, bounds.max, tint).filled(true).build();
-        }
+        fill_selection(&draw, bounds, inner_bounds, tint);
         draw.add_rect(bounds.min, bounds.max, BLOCK_SELECTION_SHADOW)
             .thickness(4.0)
             .build();
@@ -244,7 +249,7 @@ pub(super) fn draw_block_outline(
     });
 }
 
-pub(super) fn ring_regions(bounds: OverlayRect, inner: OverlayRect) -> [OverlayRect; 4] {
+fn ring_regions(bounds: OverlayRect, inner: OverlayRect) -> [OverlayRect; 4] {
     [
         OverlayRect {
             min: bounds.min,

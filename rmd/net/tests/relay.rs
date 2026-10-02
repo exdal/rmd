@@ -254,7 +254,12 @@ fn stats_count_relayed_presence() {
         stats.peers.iter().map(|peer| peer.nick.as_str()).collect::<Vec<_>>(),
         ["alice", "bob"]
     );
-    assert!(stats.peers.iter().all(|peer| peer.sent.bytes > 0 && peer.received.packets > 0));
+    assert!(
+        stats
+            .peers
+            .iter()
+            .all(|peer| peer.sent.bytes > 0 && peer.received.packets > 0)
+    );
 
     let cursors = stats.received.0["cursor"];
     assert_eq!(cursors.messages, 1);

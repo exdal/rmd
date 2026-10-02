@@ -11,7 +11,7 @@ use net::{CodebaseId, Comment, CommentId, MAX_COMMENT_LEN, PeerId};
 
 use super::{
     DIAGNOSTIC_WARNING_COLOR,
-    block::{block_selection_bounds, hollow_selection_inner, ring_regions},
+    block::{block_selection_bounds, fill_selection, hollow_selection_inner},
     common::dpi,
     dialog::{DIALOG_FIELD_WIDTH, MODAL_FLAGS, SAVE_ERROR_COLOR},
     overlay::{OVERLAY_BG, OverlayRect},
@@ -794,14 +794,7 @@ pub(super) fn draw_remote_selections(
 
             let mut color = peer_color(peer.info.id);
             color[3] = REMOTE_SELECTION_FILL;
-            match inner {
-                Some(inner) => {
-                    for region in ring_regions(bounds, inner) {
-                        draw.add_rect(region.min, region.max, color).filled(true).build();
-                    }
-                },
-                None => draw.add_rect(bounds.min, bounds.max, color).filled(true).build(),
-            }
+            fill_selection(&draw, bounds, inner, color);
 
             color[3] = REMOTE_SELECTION_OUTLINE;
             for border in iter::once(bounds).chain(inner) {
