@@ -2,6 +2,7 @@ mod client;
 mod proxy;
 mod server;
 mod socket;
+mod stats;
 mod stream;
 mod tls;
 
@@ -32,6 +33,7 @@ pub use crate::{
     client::{Client, Direction, Event, SELECTION_REFRESH},
     proxy::{Impairment, LossyProxy},
     server::{Server, ServerConfig, hash_password, random_password},
+    stats::{Count, PeerStats, ServerStats, Traffic, Transport},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

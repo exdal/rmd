@@ -239,6 +239,31 @@ fn a_cleared_selection_is_sent_once() {
 }
 
 #[test]
+fn stats_count_relayed_presence() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
+    let bob = join(&server, PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    alice.send_cursor(Some(cursor(1.0)));
+    wait_for(&bob, |event| matches!(event, Event::Cursor { .. }).then_some(()));
+
+    let stats = server.stats();
+    assert_eq!(
+        stats.peers.iter().map(|peer| peer.nick.as_str()).collect::<Vec<_>>(),
+        ["alice", "bob"]
+    );
+    assert!(stats.peers.iter().all(|peer| peer.sent.bytes > 0 && peer.received.packets > 0));
+
+    let cursors = stats.received.0["cursor"];
+    assert_eq!(cursors.messages, 1);
+    assert!(cursors.bytes > 0);
+    assert_eq!(stats.sent.0["cursor"].messages, 1);
+    assert_eq!(stats.sent.0["welcome"].messages, 2);
+}
+
+#[test]
 fn a_wrong_password_is_rejected() {
     let server = server();
     let client = join(&server, "letmein", "mallory");

@@ -83,6 +83,19 @@ pub enum ClientMessage {
     },
 }
 
+impl ClientMessage {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Hello(_) => "hello",
+            Self::Comment { .. } => "comment",
+            Self::DeleteComment(_) => "delete comment",
+            Self::Edit(_) => "edit",
+            Self::Resync { .. } => "resync",
+            Self::Unshare { .. } => "unshare",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MapEdit {
     pub path: String,
@@ -134,6 +147,25 @@ pub enum ServerMessage {
         by: PeerId,
         generation: Option<GenerationId>,
     },
+}
+
+impl ServerMessage {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Welcome { .. } => "welcome",
+            Self::Reject { .. } => "reject",
+            Self::CodebaseMismatch { .. } => "codebase mismatch",
+            Self::PeerJoined(_) => "peer joined",
+            Self::PeerLeft(_) => "peer left",
+            Self::Comment(_) => "comment",
+            Self::CommentDeleted(_) => "comment deleted",
+            Self::MapShared { .. } => "map shared",
+            Self::Edit { .. } => "edit",
+            Self::MapIncoming { .. } => "map incoming",
+            Self::MapCancelled { .. } => "map cancelled",
+            Self::MapUnshared { .. } => "map unshared",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,6 +240,16 @@ pub enum Datagram {
     Cursor(Option<Cursor>),
     View(Option<View>),
     Selection(Option<Selection>),
+}
+
+impl Datagram {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Cursor(_) => "cursor",
+            Self::View(_) => "view",
+            Self::Selection(_) => "selection",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

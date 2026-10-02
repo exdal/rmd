@@ -32,10 +32,11 @@ pub(crate) async fn read_message<T: DeserializeOwned>(
     }
 }
 
-pub(crate) async fn write_message<T: Serialize>(send: &mut quinn::SendStream, message: &T) -> Result<(), Error> {
+pub(crate) async fn write_message<T: Serialize>(send: &mut quinn::SendStream, message: &T) -> Result<usize, Error> {
     let frame = protocol::encode_frame(message).map_err(fail)?;
+    send.write_all(&frame).await.map_err(fail)?;
 
-    send.write_all(&frame).await.map_err(fail)
+    Ok(frame.len())
 }
 
 pub(crate) async fn send_transfer(

@@ -51,6 +51,10 @@ use tokio::{
 
 use crate::{
     Error,
+    PeerStats,
+    ServerStats,
+    Traffic,
+    Transport,
     fail,
     socket,
     stream::{
@@ -94,6 +98,7 @@ pub struct ServerConfig {
 
 pub struct Server {
     addr: SocketAddr,
+    shared: Arc<Shared>,
     shutdown: Option<oneshot::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -121,22 +126,61 @@ impl Server {
                 ..State::default()
             }),
             next_id: AtomicU32::new(1),
+            meter: Arc::default(),
         });
 
         let (shutdown, stop) = oneshot::channel();
+        let serving = shared.clone();
         let thread = thread::Builder::new()
             .name(String::from("rmd-server"))
-            .spawn(move || runtime.block_on(serve(endpoint, shared, stop)))
+            .spawn(move || runtime.block_on(serve(endpoint, serving, stop)))
             .map_err(fail)?;
 
         Ok(Self {
             addr,
+            shared,
             shutdown: Some(shutdown),
             thread: Some(thread),
         })
     }
 
     pub fn local_addr(&self) -> SocketAddr { self.addr }
+
+    pub fn stats(&self) -> ServerStats {
+        let mut peers = self
+            .shared
+            .state
+            .lock()
+            .unwrap()
+            .peers
+            .values()
+            .map(|peer| {
+                let stats = peer.connection.stats();
+                PeerStats {
+                    id: peer.info.id,
+                    nick: peer.info.nick.clone(),
+                    addr: peer.connection.remote_address(),
+                    rtt: stats.path.rtt,
+                    sent: Transport {
+                        bytes: stats.udp_tx.bytes,
+                        packets: stats.udp_tx.datagrams,
+                    },
+                    received: Transport {
+                        bytes: stats.udp_rx.bytes,
+                        packets: stats.udp_rx.datagrams,
+                    },
+                    lost_packets: stats.path.lost_packets,
+                }
+            })
+            .collect::<Vec<_>>();
+        peers.sort_by_key(|peer| peer.id);
+
+        ServerStats {
+            peers,
+            received: self.shared.meter.received.lock().unwrap().clone(),
+            sent: self.shared.meter.sent.lock().unwrap().clone(),
+        }
+    }
 
     pub fn wait(mut self) {
         if let Some(thread) = self.thread.take() {
@@ -161,6 +205,19 @@ struct Shared {
     password: PasswordHash,
     state: Mutex<State>,
     next_id: AtomicU32,
+    meter: Arc<Meter>,
+}
+
+#[derive(Default)]
+struct Meter {
+    received: Mutex<Traffic>,
+    sent: Mutex<Traffic>,
+}
+
+impl Meter {
+    fn received(&self, kind: &'static str, bytes: usize) { self.received.lock().unwrap().record(kind, bytes as u64); }
+
+    fn sent(&self, kind: &'static str, bytes: usize) { self.sent.lock().unwrap().record(kind, bytes as u64); }
 }
 
 #[derive(Default)]
@@ -225,6 +282,8 @@ impl Shared {
             return;
         };
 
+        let kind = datagram.kind();
+        self.meter.received(kind, bytes.len());
         let Ok(relayed) = protocol::encode(&Relayed { from, datagram }) else {
             return;
         };
@@ -232,8 +291,8 @@ impl Shared {
         let relayed = Bytes::from(relayed);
         let state = self.state.lock().unwrap();
         for (id, peer) in state.peers.iter() {
-            if *id != from {
-                let _ = peer.connection.send_datagram(relayed.clone());
+            if *id != from && peer.connection.send_datagram(relayed.clone()).is_ok() {
+                self.meter.sent(kind, relayed.len());
             }
         }
     }
@@ -358,6 +417,7 @@ impl Shared {
                 push(
                     &mut peer.pushes,
                     &mut map_pushes,
+                    self.meter.clone(),
                     peer.connection.clone(),
                     path.clone(),
                     generation,
@@ -441,17 +501,18 @@ impl Shared {
             return;
         };
 
-        replay(&peer.outbox, &peer.connection, path, map, &mut peer.pushes);
+        replay(&peer.outbox, &peer.connection, path, map, &mut peer.pushes, &self.meter);
     }
 }
 
 fn replay(
     outbox: &mpsc::UnboundedSender<ServerMessage>, connection: &Connection, path: &str, map: &mut SharedMap,
-    pushes: &mut JoinSet<()>,
+    pushes: &mut JoinSet<()>, meter: &Arc<Meter>,
 ) {
     push(
         pushes,
         &mut map.pushes,
+        meter.clone(),
         connection.clone(),
         path.to_owned(),
         map.generation,
@@ -467,15 +528,15 @@ fn replay(
 }
 
 fn push(
-    pushes: &mut JoinSet<()>, map_pushes: &mut Vec<AbortHandle>, connection: Connection, path: String,
-    generation: GenerationId, bytes: Bytes,
+    pushes: &mut JoinSet<()>, map_pushes: &mut Vec<AbortHandle>, meter: Arc<Meter>, connection: Connection,
+    path: String, generation: GenerationId, bytes: Bytes,
 ) {
     while pushes.try_join_next().is_some() {}
     map_pushes.retain(|push| !push.is_finished());
-    map_pushes.push(pushes.spawn(push_map(connection, path, generation, bytes)));
+    map_pushes.push(pushes.spawn(push_map(meter, connection, path, generation, bytes)));
 }
 
-async fn push_map(connection: Connection, path: String, generation: GenerationId, bytes: Bytes) {
+async fn push_map(meter: Arc<Meter>, connection: Connection, path: String, generation: GenerationId, bytes: Bytes) {
     let header = Transfer::Map {
         path,
         generation,
@@ -483,8 +544,9 @@ async fn push_map(connection: Connection, path: String, generation: GenerationId
         len: bytes.len() as u64,
     };
 
-    if let Err(e) = send_transfer(&connection, &header, &bytes, |_| {}).await {
-        log::debug!("could not send a map to {}: {e}", connection.remote_address());
+    match send_transfer(&connection, &header, &bytes, |_| {}).await {
+        Ok(()) => meter.sent("map", bytes.len()),
+        Err(e) => log::debug!("could not send a map to {}: {e}", connection.remote_address()),
     }
 }
 
@@ -513,7 +575,10 @@ async fn upload(shared: Arc<Shared>, from: PeerId, mut stream: quinn::RecvStream
 
     shared.upload_started(from, &path, len);
     match read_payload(&mut stream, len, |_| {}).await {
-        Ok(bytes) => shared.share_map(from, path, base, next_seq, Bytes::from(bytes)),
+        Ok(bytes) => {
+            shared.meter.received("map", bytes.len());
+            shared.share_map(from, path, base, next_seq, Bytes::from(bytes));
+        },
         Err(e) => {
             log::info!("dropping an upload of {path} from {from:?}: {e}");
             shared.upload_failed(from, &path);
@@ -627,7 +692,7 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
                         by: map.by,
                         generation: map.generation,
                     });
-                    replay(&outbox, connection, path, map, &mut pushes);
+                    replay(&outbox, connection, path, map, &mut pushes, &shared.meter);
                 }
 
                 for (path, (by, len)) in state.uploads.iter() {
@@ -663,7 +728,8 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
     // a write stalled on flow control must not stop us reading, or both ends can wait on each other
     let writer = async {
         while let Some(message) = inbox.recv().await {
-            write_message(&mut send, &message).await?;
+            let len = write_message(&mut send, &message).await?;
+            shared.meter.sent(message.kind(), len);
         }
 
         Ok::<_, Error>(())
@@ -672,7 +738,7 @@ async fn session(connection: &Connection, shared: &Arc<Shared>) -> Result<(), Er
     let reader = async {
         loop {
             tokio::select! {
-                message = read_message::<ClientMessage>(&mut recv, &mut reader) => match message? {
+                message = read_message::<ClientMessage>(&mut recv, &mut reader) => match message?.inspect(|message| shared.meter.received(message.kind(), 0)) {
                     Some(ClientMessage::Hello(_)) => return Err(fail("sent a second hello")),
                     Some(ClientMessage::Comment { map, z, pos, text }) => shared.comment(id, map, z, pos, &text),
                     Some(ClientMessage::DeleteComment(comment)) => shared.delete_comment(comment),
