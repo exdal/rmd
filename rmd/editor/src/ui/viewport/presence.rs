@@ -144,8 +144,8 @@ impl UiState {
             && let Some(z) = session.state.document(frame.id).map(|document| document.z)
         {
             let viewport = frame.layout.viewport;
-            draw_comments(ui, frame.camera, viewport, coop, &map, z, comment_hit);
             draw_remote_selections(ui, frame.camera, viewport, coop, &map, z, session.options.tile_size);
+            draw_comments(ui, frame.camera, viewport, coop, &map, z, comment_hit);
             draw_remote_cursors(ui, frame.camera, viewport, coop, &map, z);
         }
 
