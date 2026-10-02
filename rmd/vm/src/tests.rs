@@ -2466,6 +2466,22 @@ fn null_is_the_identity_for_addition() {
         run(fixture!("programs/null_is_the_identity_for_addition-2.dm"), "test",),
         "x".into()
     );
+
+    assert_eq!(
+        run(fixture!("programs/null_is_the_identity_for_addition-3.dm"), "test",),
+        "closed".into()
+    );
+}
+
+#[test]
+fn rgb2num_splits_channels_and_keeps_spelled_alpha() {
+    assert_eq!(
+        run(
+            fixture!("programs/rgb2num_splits_channels_and_keeps_spelled_alpha.dm"),
+            "test",
+        ),
+        "243,255,250,196|0,255,136|3".into()
+    );
 }
 
 #[test]

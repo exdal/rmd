@@ -92,7 +92,7 @@
 
 // Fixtures are STATIC_LIGHT, but their light vars stay at the type defaults until update() copies
 // brightness, bulb_power and bulb_colour over them through set_light().
-/obj/machinery/light/proc/demir_prepare_light_state()
+/obj/machinery/light/demir_prepare_light_state()
 	light_on = on
 	if(!on)
 		return
@@ -122,7 +122,7 @@
 	..()
 
 // Flashlights normally derive light_on from their mapped on/icon state during Initialize().
-/obj/item/flashlight/proc/demir_prepare_light_state()
+/obj/item/flashlight/demir_prepare_light_state()
 	if(icon_state == "[initial(icon_state)]-on")
 		on = TRUE
 	light_on = on
@@ -135,7 +135,7 @@
 	on = TRUE
 	light_on = TRUE
 
-/obj/item/clothing/head/helmet/leather/shaman_hood/proc/demir_prepare_light_state()
+/obj/item/clothing/head/helmet/leather/shaman_hood/demir_prepare_light_state()
 	light_on = on
 
 // Fluid pipes keep an associative list of connected directions keyed by the
@@ -143,7 +143,7 @@
 // order. Each pipe links its neighbors pairwise from Initialize(), and
 // adjacent machines link back from setup_water(). Baking every pipe from its
 // own point of view reaches the same result without a load order.
-/obj/structure/water_pipe/proc/demir_bake_connections()
+/obj/structure/water_pipe/demir_bake_appearance()
 	for(var/key in connected)
 		connected[key] = 0
 
@@ -192,28 +192,30 @@
 			GLOB = new /datum/controller/global_vars/demir_preview
 		sun_color = demir_daylight_color()
 
+/atom/proc/demir_prepare_light_state()
+	return
+
 /datum/demir/vanderlin/prepare(atom/target)
 	target.demir_prepare_smoothing()
-	if(istype(target, /obj/item/flashlight))
-		var/obj/item/flashlight/flashlight = target
-		flashlight.demir_prepare_light_state()
-	else if(istype(target, /obj/item/clothing/head/helmet/leather/shaman_hood))
-		var/obj/item/clothing/head/helmet/leather/shaman_hood/hood = target
-		hood.demir_prepare_light_state()
-	else if(istype(target, /obj/machinery/light))
-		var/obj/machinery/light/fixture = target
-		fixture.demir_prepare_light_state()
+	target.demir_prepare_light_state()
+
+/atom/proc/demir_bake_appearance()
+	if(smoothing_flags & USES_SMOOTHING)
+		smooth_icon()
+
+/atom/proc/demir_finish_appearance()
+	return
+
+/atom/movable/demir_finish_appearance()
+	demir_add_overlay_light()
+
+// Water pipes bypass both generic smoothing and overlay lighting.
+/obj/structure/water_pipe/demir_finish_appearance()
+	return
 
 /datum/demir/vanderlin/bake(atom/target)
-	if(istype(target, /obj/structure/water_pipe))
-		var/obj/structure/water_pipe/pipe = target
-		pipe.demir_bake_connections()
-		return
-	if(target.smoothing_flags & USES_SMOOTHING)
-		target.smooth_icon()
-	if(ismovable(target))
-		var/atom/movable/movable_target = target
-		movable_target.demir_add_overlay_light()
+	target.demir_bake_appearance()
+	target.demir_finish_appearance()
 
 
 // The day cycle picks one of the daytime tints at random. Noon is what a mapper wants to see, and

@@ -184,11 +184,15 @@ pub fn resolve_id(tree: &ObjectTree, id: TypeId, prefab: &Prefab) -> Appearance 
     appearance
 }
 
-/// Plane, layer, prefab index
+pub(crate) fn sort_component(value: f32) -> i32 {
+    let bits = value.to_bits() as i32;
+    bits ^ (((bits >> 31) as u32 >> 1) as i32)
+}
+
 pub fn sort_key(appearance: &Appearance, index: usize) -> (i32, i32, usize) {
     (
-        (appearance.plane * 1000.0) as i32,
-        (appearance.layer * 1000.0) as i32,
+        sort_component(appearance.plane),
+        sort_component(appearance.layer),
         index,
     )
 }
@@ -278,6 +282,43 @@ mod tests {
     use objtree::VarDecl;
 
     use super::*;
+
+    #[test]
+    fn sort_keys_preserve_float_order_and_placement_ties() {
+        let values = [
+            -f32::INFINITY,
+            -13.001,
+            -13.0,
+            -0.0,
+            0.0,
+            2.0,
+            2.0001,
+            2.001,
+            f32::INFINITY,
+        ];
+        for left in values {
+            for right in values {
+                assert_eq!(sort_component(left).cmp(&sort_component(right)), left.total_cmp(&right));
+            }
+        }
+        let floor = Appearance {
+            plane: -13.0,
+            layer: 2.0,
+            ..Default::default()
+        };
+        let decal = Appearance {
+            layer: 2.001,
+            ..floor.clone()
+        };
+        let lower_plane = Appearance {
+            plane: -13.001,
+            layer: 3.0,
+            ..floor.clone()
+        };
+        assert!(sort_key(&floor, 1) < sort_key(&decal, 0));
+        assert!(sort_key(&lower_plane, 1) < sort_key(&floor, 0));
+        assert!(sort_key(&floor, 0) < sort_key(&floor, 1));
+    }
 
     #[test]
     fn resolved_values_report_instance_and_inherited_sources() {

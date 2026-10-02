@@ -43,14 +43,14 @@
 
 // `New()` reads the mapped endpoints before update_icon() rebuilds the state.
 /obj/cable/demir_prepare_state()
-	if(istype(src, /obj/cable/auto))
-		d1 = 0
-		d2 = 0
-		return
 	var/separator = findtext(icon_state, "-")
 	if(separator)
 		d1 = text2num(copytext(icon_state, 1, separator))
 		d2 = text2num(copytext(icon_state, separator + 1))
+
+/obj/cable/auto/demir_prepare_state()
+	d1 = 0
+	d2 = 0
 
 /datum/demir/goonstation
 	default = TRUE
@@ -248,15 +248,18 @@
 	for(var/state in states)
 		overlays += mutable_appearance(icon, state)
 
+/atom/proc/demir_bake_appearance()
+	demir_bake_icon()
+	demir_bake_extras()
+
+/obj/table/demir_bake_appearance()
+	if(auto && materialless_icon_state() == "0")
+		set_up()
+		return
+	return ..()
+
 /datum/demir/goonstation/bake(atom/target)
-	if(istype(target, /obj/table))
-		var/obj/table/table = target
-		if(table.auto && table.materialless_icon_state() == "0")
-			table.set_up()
-			target.demir_tag_light()
-			return
-	target.demir_bake_icon()
-	target.demir_bake_extras()
+	target.demir_bake_appearance()
 	target.demir_tag_light()
 
 // RobustLight2 precomputes a point light's radius from its brightness and

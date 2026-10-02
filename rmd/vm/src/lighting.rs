@@ -874,49 +874,46 @@ fn normalize_color(mut color: [f32; 3]) -> [f32; 3] {
     color.map(|channel| channel.max(0.0))
 }
 
-pub(crate) fn parse_color(text: Option<&str>) -> [f32; 3] {
-    let Some(text) = text.map(str::trim) else {
-        return [1.0; 3];
-    };
+pub(crate) fn color_bytes(text: &str) -> Option<([u8; 4], bool)> {
+    let text = text.trim();
     let Some(hex) = text.strip_prefix('#') else {
-        return match text.to_ascii_lowercase().as_str() {
-            "black" => [0.0, 0.0, 0.0],
-            "red" => [1.0, 0.0, 0.0],
-            "green" => [0.0, 0.75, 0.0],
-            "lime" => [0.0, 1.0, 0.0],
-            "blue" => [0.0, 0.0, 1.0],
-            "yellow" => [1.0, 1.0, 0.0],
-            "cyan" | "aqua" => [0.0, 1.0, 1.0],
-            "magenta" | "fuchsia" => [1.0, 0.0, 1.0],
-            "white" => [1.0; 3],
-            _ => [1.0; 3],
+        let [r, g, b] = match text.to_ascii_lowercase().as_str() {
+            "black" => [0, 0, 0],
+            "red" => [255, 0, 0],
+            "green" => [0, 192, 0],
+            "lime" => [0, 255, 0],
+            "blue" => [0, 0, 255],
+            "yellow" => [255, 255, 0],
+            "cyan" | "aqua" => [0, 255, 255],
+            "magenta" | "fuchsia" => [255, 0, 255],
+            "white" => [255; 3],
+            _ => return None,
         };
+
+        return Some(([r, g, b, 255], false));
     };
-    let bytes = match hex.len() {
+
+    let mut out = [255u8; 4];
+    match hex.len() {
         3 | 4 => {
-            let mut out = [255u8; 4];
             for (slot, digit) in out.iter_mut().zip(hex.chars()) {
-                let Some(value) = digit.to_digit(16) else {
-                    return [1.0; 3];
-                };
-                *slot = value as u8 * 17;
+                *slot = digit.to_digit(16)? as u8 * 17;
             }
-            out
         },
         6 | 8 => {
-            let mut out = [255u8; 4];
             for (slot, pair) in out.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
-                let Ok(pair) = std::str::from_utf8(pair) else {
-                    return [1.0; 3];
-                };
-                let Ok(value) = u8::from_str_radix(pair, 16) else {
-                    return [1.0; 3];
-                };
-                *slot = value;
+                *slot = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
             }
-            out
         },
-        _ => return [1.0; 3],
+        _ => return None,
+    }
+
+    Some((out, matches!(hex.len(), 4 | 8)))
+}
+
+pub(crate) fn parse_color(text: Option<&str>) -> [f32; 3] {
+    let Some((bytes, _)) = text.and_then(color_bytes) else {
+        return [1.0; 3];
     };
     let alpha = f32::from(bytes[3]) / 255.0;
     [
@@ -1160,6 +1157,9 @@ mod tests {
     #[test]
     fn colors_parse_alpha_and_byond_directions() {
         assert_eq!(parse_color(Some("#ff000080")), [128.0 / 255.0, 0.0, 0.0]);
+        assert_eq!(color_bytes("#f3fffac4"), Some(([0xf3, 0xff, 0xfa, 0xc4], true)));
+        assert_eq!(color_bytes("#0f8"), Some(([0x00, 0xff, 0x88, 0xff], false)));
+        assert_eq!(color_bytes("teal-ish"), None);
         assert_eq!(direction_angle(5.0), 45.0);
         assert_eq!(direction_angle(8.0), 270.0);
     }

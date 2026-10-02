@@ -804,6 +804,25 @@ impl Evaluator<'_> {
                 self.text(color)
             },
             Intrinsic::Rgb => Err(self.fault(FaultKind::Blocked(name.into()))),
+            Intrinsic::Rgb2num
+                if args
+                    .iter()
+                    .skip(1)
+                    .all(|(_, space)| matches!(space, GenericValue::Null) || space.num() == Some(0.0)) =>
+            {
+                let Some((bytes, alpha)) = arg(0).text().and_then(crate::lighting::color_bytes) else {
+                    return Err(self.fault(FaultKind::Blocked(name.into())));
+                };
+                let channels = if alpha { &bytes[..] } else { &bytes[..3] };
+
+                self.list(
+                    channels
+                        .iter()
+                        .map(|channel| (GenericValue::Num(f32::from(*channel)), None))
+                        .collect(),
+                )
+            },
+            Intrinsic::Rgb2num => Err(self.fault(FaultKind::Blocked(name.into()))),
             Intrinsic::Num2text => {
                 let n = self.number(&arg(0))?;
 
@@ -1182,7 +1201,6 @@ impl Evaluator<'_> {
             | Intrinsic::Refcount
             | Intrinsic::ReplacetextChar
             | Intrinsic::ReplacetextExChar
-            | Intrinsic::Rgb2num
             | Intrinsic::Roll
             | Intrinsic::Run
             | Intrinsic::Sha1

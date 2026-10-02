@@ -1984,6 +1984,10 @@ impl Evaluator<'_> {
             return Ok(right);
         }
 
+        if matches!(left, GenericValue::Text(_)) && right == GenericValue::Null && op == Add {
+            return Ok(left);
+        }
+
         if let GenericValue::List(id) = left
             && matches!(op, Add | Sub | BitOr | BitAnd | BitXor)
         {

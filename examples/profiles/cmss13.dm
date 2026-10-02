@@ -24,9 +24,10 @@
 
 // Walls fill a shared damage overlay cache on first draw. Filling it here keeps it out of every
 // rolled-back preview.
-/turf/closed/wall/proc/demir_prepare_overlays()
+/turf/closed/wall/demir_prepare_state()
 	if(!damage_overlays[1])
 		generate_damage_overlays()
+	return ..()
 
 /atom/proc/demir_prepare_state()
 	return
@@ -61,9 +62,6 @@
 	opacity = density
 
 /datum/demir/cmss13/prepare(atom/target)
-	if(istype(target, /turf/closed/wall))
-		var/turf/closed/wall/wall = target
-		wall.demir_prepare_overlays()
 	target.demir_prepare_state()
 
 /proc/demir_overlay_icon(pixel_bounds)
@@ -189,13 +187,21 @@
 	for(var/image/overlay in overlays)
 		overlay.demir_tag_emissive()
 
+/atom/proc/demir_finish_appearance()
+	if(tiles_with)
+		relativewall()
+
+// Walls already derive their connections in demir_bake_icon().
+/turf/closed/wall/demir_finish_appearance()
+	return
+
+/atom/movable/demir_finish_appearance()
+	..()
+	demir_add_overlay_light()
+
 /datum/demir/cmss13/bake(atom/target)
 	target.demir_bake_icon()
-	if(target.tiles_with && !istype(target, /turf/closed/wall))
-		target.relativewall()
-	if(ismovable(target))
-		var/atom/movable/movable_target = target
-		movable_target.demir_add_overlay_light()
+	target.demir_finish_appearance()
 	target.demir_tag_emissive()
 
 // Initialize() hands every light that is neither movable nor directional to update_light(), which

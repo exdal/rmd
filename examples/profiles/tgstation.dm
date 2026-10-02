@@ -13,6 +13,7 @@
 #define DEMIR_GROUP_CABLES (1<<0)
 #define DEMIR_GROUP_PIPES (1<<1)
 #define DEMIR_GROUP_DISPOSALS (1<<2)
+#define DEMIR_GROUP_LIGHTS (1<<3)
 #define DEMIR_GROUP_UNDERFLOOR (DEMIR_GROUP_CABLES | DEMIR_GROUP_PIPES | DEMIR_GROUP_DISPOSALS)
 
 #define DEMIR_NODE_BLOCKERS list(/turf/closed, /obj/effect/spawner/structure/window)
@@ -143,7 +144,7 @@
 
 // Link this device's nodes with the codebase's own connection checks; atmos_init()
 // then runs its native update_appearance() without starting pipe networks.
-/obj/machinery/atmospherics/proc/demir_bake_connections()
+/obj/machinery/atmospherics/demir_bake_appearance()
 	// GAGS sheets are generated at runtime, so keep the prebuilt map preview state.
 	var/preview_state = icon_state
 	var/gags = greyscale_config
@@ -154,7 +155,7 @@
 	if(gags)
 		icon_state = preview_state
 
-/obj/machinery/atmospherics/pipe/layer_manifold/demir_bake_connections()
+/obj/machinery/atmospherics/pipe/layer_manifold/demir_bake_appearance()
 	icon_state = "manifoldlayer_center"
 	return ..()
 
@@ -165,7 +166,7 @@
 	connection.layer = FLOAT_LAYER - (HAS_TRAIT(src, TRAIT_UNDERFLOOR) ? 1 : 0.01)
 	return connection
 
-/obj/machinery/atmospherics/pipe/multiz/demir_bake_connections()
+/obj/machinery/atmospherics/pipe/multiz/demir_bake_appearance()
 	icon_state = ""
 	center = mutable_appearance(icon, "adapter_center", layer = HIGH_OBJ_LAYER)
 	pipe = mutable_appearance(icon, "pipe-[piping_layer]")
@@ -173,7 +174,7 @@
 
 // The duct's post_machine_initialize() links both ends and repaints the neighbor, which a
 // per-placement bake would export as half-linked neighbor states, so this mirrors its checks.
-/obj/machinery/duct/proc/demir_bake_connections()
+/obj/machinery/duct/demir_bake_appearance()
 	neighbours = list()
 	for(var/check_dir in GLOB.cardinals)
 		var/turf/step_turf = get_step(src, check_dir)
@@ -188,7 +189,7 @@
 
 // Structure window spawners are mapping helpers. Preview the grille and windows
 // their native Initialize() creates without committing those temporary atoms.
-/obj/effect/spawner/structure/window/proc/demir_bake_spawned_appearance()
+/obj/effect/spawner/structure/window/demir_bake_appearance()
 	var/list/nearby_turfs = list(loc)
 	for(var/direction in list(NORTH, SOUTH, EAST, WEST, NORTHEAST, NORTHWEST, SOUTHEAST, SOUTHWEST))
 		nearby_turfs += get_step(src, direction)
@@ -280,7 +281,7 @@
 		layer = BELOW_CATWALK_LAYER
 
 // Inline in the airlock's Initialize().
-/obj/machinery/door/airlock/proc/demir_bake_appearance()
+/obj/machinery/door/airlock/demir_bake_appearance()
 	if(glass)
 		airlock_material = "glass"
 	update_appearance(UPDATE_ICON)
@@ -292,12 +293,6 @@
 	height = world.maxy
 
 /obj/docking_port/proc/demir_highlight()
-	if(istype(src, /obj/docking_port/mobile) && !(width && height))
-		var/obj/docking_port/mobile/port = src
-		var/datum/map_template/shuttle/demir_preview/template = new
-		template.port_x_offset = x
-		template.port_y_offset = y
-		port.calculate_docking_port_information(template)
 	if(width < 1 || height < 1)
 		return null
 
@@ -313,14 +308,23 @@
 		"label" = name || "docking port",
 	)
 
-/datum/demir/tgstation/highlights(atom/target)
-	if(!istype(target, /obj/docking_port))
-		return null
+/obj/docking_port/mobile/demir_highlight()
+	if(!(width && height))
+		var/datum/map_template/shuttle/demir_preview/template = new
+		template.port_x_offset = x
+		template.port_y_offset = y
+		calculate_docking_port_information(template)
+	return ..()
 
-	var/obj/docking_port/port = target
-	var/list/highlight = port.demir_highlight()
+/atom/proc/demir_highlights()
+	return null
 
+/obj/docking_port/demir_highlights()
+	var/list/highlight = demir_highlight()
 	return highlight ? list(highlight) : null
+
+/datum/demir/tgstation/highlights(atom/target)
+	return target.demir_highlights()
 
 // The DISP_DIR_* rule is inline in the pipe's Initialize().
 /datum/demir/tgstation/proc/register_disposal_node_orientations()
@@ -364,6 +368,7 @@
 		demir_define_group(DEMIR_GROUP_PIPES, /obj/machinery/duct)
 		demir_define_group(DEMIR_GROUP_DISPOSALS, /obj/structure/disposalpipe)
 		demir_define_group(DEMIR_GROUP_DISPOSALS, /obj/structure/disposalconstruct)
+		demir_define_group(DEMIR_GROUP_LIGHTS, /obj/machinery/light)
 
 		// The node tool copies the seeded map prefab along a cardinal route and keeps
 		// every route out of closed turfs. Each pipe color and piping layer the mapping
@@ -404,6 +409,7 @@
 		src.lighting = lit
 		// Every area carries the fullbright flag, so this one is not worth narrowing.
 		demir_rebake(DEMIR_BAKE_LIGHT)
+		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_LIGHTS)
 
 	imgui_separator("Under-floor")
 	var/cables = imgui_checkbox("Cables", src.show_cables)
@@ -428,58 +434,104 @@
 
 	imgui_end()
 
+/atom/proc/demir_prepare_state()
+	demir_prepare_smoothing()
+
+// Inline in the flashlight's Initialize().
+/obj/item/flashlight/demir_prepare_state()
+	..()
+	if(start_on)
+		set_light_on(TRUE)
+
+/turf/open/floor/light/demir_prepare_state()
+	..()
+	update_appearance()
+
+// Atmos Initialize() normally derives each port from dir before atmos_init().
+// Smart pipes need those neighboring port directions for can_be_node().
+/obj/machinery/atmospherics/demir_prepare_state()
+	..()
+	if(pipe_flags & PIPING_CARDINAL_AUTONORMALIZE)
+		normalize_cardinal_directions()
+	set_init_directions(initialize_directions)
+
+/obj/structure/closet/demir_prepare_state()
+	..()
+	PopulateContents()
+
+// The bake builds atoms without New(), where an area sets up its power bookkeeping.
+/area/demir_prepare_state()
+	New()
+	return ..()
+
 /datum/demir/tgstation/prepare(atom/target)
-	// The bake builds atoms without New(), which is where an area sets up its power bookkeeping.
-	if(isarea(target))
-		target.New()
-	target.demir_prepare_smoothing()
-	// Inline in the flashlight's Initialize().
-	if(istype(target, /obj/item/flashlight))
-		var/obj/item/flashlight/flashlight = target
-		if(flashlight.start_on)
-			flashlight.set_light_on(TRUE)
-	if(istype(target, /turf/open/floor/light))
-		var/turf/open/floor/light/light_floor = target
-		light_floor.update_appearance()
-	// Atmos Initialize() normally derives each port from dir before atmos_init().
-	// Smart pipes need those neighboring port directions for can_be_node().
-	if(istype(target, /obj/machinery/atmospherics))
-		var/obj/machinery/atmospherics/atmos_target = target
-		if(atmos_target.pipe_flags & PIPING_CARDINAL_AUTONORMALIZE)
-			atmos_target.normalize_cardinal_directions()
-		atmos_target.set_init_directions(atmos_target.initialize_directions)
-	if(istype(target, /obj/structure/closet))
-		var/obj/structure/closet/closet = target
-		closet.PopulateContents()
+	target.demir_prepare_state()
+
+/atom/proc/demir_bake_smoothing()
+	var/datum/demir/tgstation/profile = demir_profile()
+	if(!profile.smooth || !(smoothing_flags & USES_SMOOTHING))
+		return
+	demir_smooth_icon()
+
+/atom/proc/demir_smooth_icon()
+	smooth_icon()
+
+/turf/open/misc/grass/demir_smooth_icon()
+	Initialize(TRUE)
+	return ..()
+
+/turf/open/misc/ashplanet/demir_smooth_icon()
+	Initialize(TRUE)
+	return ..()
+
+/atom/proc/demir_bake_appearance()
+	demir_bake_smoothing()
+
+/obj/structure/cable/demir_bake_appearance()
+	connect_cable(TRUE)
+	LateInitialize()
+
+// Multilayer cables bypass the ordinary cable setup, but retain the default smoothing path.
+/obj/structure/cable/multilayer/demir_bake_appearance()
+	demir_bake_smoothing()
+
+/obj/structure/closet/demir_bake_appearance()
+	update_appearance(UPDATE_ICON)
+
+/obj/machinery/light/demir_bake_appearance()
+	var/datum/demir/tgstation/profile = demir_profile()
+	if(profile.lighting)
+		update_appearance(UPDATE_ICON)
+	return ..()
+
+/obj/machinery/light
+	var/demir_calculating_light = FALSE
+
+// Native power changes also redraw the fixture. Leave that redraw to the appearance bake,
+// so it exports the native overlays rather than treating them as existing map appearance.
+/obj/machinery/light/update_appearance(updates = ALL)
+	if(demir_calculating_light)
+		return
+	return ..()
+
+/obj/structure/extinguisher_cabinet/demir_bake_appearance()
+	update_appearance(UPDATE_ICON)
+
+/atom/proc/demir_finish_appearance()
+	return
+
+/atom/movable/demir_finish_appearance()
+	demir_add_overlay_light()
+	demir_apply_underfloor()
+
+/turf/open/lava/demir_finish_appearance()
+	var/datum/demir/tgstation/profile = demir_profile()
+	if(!(profile.smooth && (smoothing_flags & USES_SMOOTHING)))
+		update_appearance()
 
 /datum/demir/tgstation/bake(atom/target)
-	if(istype(target, /obj/effect/spawner/structure/window))
-		var/obj/effect/spawner/structure/window/spawner = target
-		spawner.demir_bake_spawned_appearance()
-	else if(istype(target, /obj/structure/cable) && !istype(target, /obj/structure/cable/multilayer))
-		var/obj/structure/cable/cable = target
-		cable.connect_cable(TRUE)
-		cable.LateInitialize()
-	else if(istype(target, /obj/machinery/duct))
-		var/obj/machinery/duct/duct = target
-		duct.demir_bake_connections()
-	else if(istype(target, /obj/machinery/door/airlock))
-		var/obj/machinery/door/airlock/airlock = target
-		airlock.demir_bake_appearance()
-	else if(istype(target, /obj/machinery/atmospherics))
-		var/obj/machinery/atmospherics/atmos_target = target
-		atmos_target.demir_bake_connections()
-	else if(src.smooth && (target.smoothing_flags & USES_SMOOTHING))
-		if(istype(target, /turf/open/misc/grass) || istype(target, /turf/open/misc/ashplanet))
-			target.Initialize(TRUE)
-
-		target.smooth_icon()
-	if(islava(target) && !(src.smooth && (target.smoothing_flags & USES_SMOOTHING)))
-		target.update_appearance()
-	if(ismovable(target))
-		var/atom/movable/movable_target = target
-		movable_target.demir_add_overlay_light()
-		movable_target.demir_apply_underfloor()
+	target.demir_bake_appearance()
+	target.demir_finish_appearance()
 	target.demir_tag_emissive()
 
 /atom/proc/demir_apply_light()
@@ -500,8 +552,10 @@
 // Fixtures ship with `on = FALSE`. Initialize() aims the light through setDir() and
 // post_machine_initialize() switches it on from the area's lightswitch and power.
 /obj/machinery/light/demir_apply_light()
+	demir_calculating_light = TRUE
 	setDir(dir)
 	power_change()
+	demir_calculating_light = FALSE
 	return ..()
 
 // Inline in the lava's Initialize(). Only lava bordering another turf casts light.
@@ -557,30 +611,31 @@
 		return "[kind]:text:[value]"
 	return null
 
-/datum/demir/tgstation/connections(atom/target)
-	var/channel
-	var/roles
-	if(istype(target, /obj/machinery/button/door))
-		var/obj/machinery/button/door/button = target
-		if(!button.device)
-			button.setup_device(TRUE)
-		var/obj/item/assembly/control/controller = button.device
-		var/kind = istype(controller, /obj/item/assembly/control/airlock) ? "airlock" : "poddoor"
-		channel = get_connection_key(kind, controller?.id)
-		roles = DEMIR_CONNECTION_SOURCE
-	else if(istype(target, /obj/machinery/door/poddoor))
-		var/obj/machinery/door/poddoor/poddoor = target
-		channel = get_connection_key("poddoor", poddoor.id)
-		roles = DEMIR_CONNECTION_TARGET
-	else if(istype(target, /obj/machinery/door/airlock))
-		var/obj/machinery/door/airlock/airlock = target
-		channel = get_connection_key("airlock", airlock.id_tag)
-		roles = DEMIR_CONNECTION_TARGET
-
+/proc/demir_connection(kind, value, roles)
+	var/channel = get_connection_key(kind, value)
 	var/list/connections = list()
 	if(channel)
 		connections[channel] = roles
 	return connections
+
+/atom/proc/demir_connections()
+	return list()
+
+/obj/machinery/button/door/demir_connections()
+	if(!device)
+		setup_device(TRUE)
+	var/obj/item/assembly/control/controller = device
+	var/kind = istype(controller, /obj/item/assembly/control/airlock) ? "airlock" : "poddoor"
+	return demir_connection(kind, controller?.id, DEMIR_CONNECTION_SOURCE)
+
+/obj/machinery/door/poddoor/demir_connections()
+	return demir_connection("poddoor", id, DEMIR_CONNECTION_TARGET)
+
+/obj/machinery/door/airlock/demir_connections()
+	return demir_connection("airlock", id_tag, DEMIR_CONNECTION_TARGET)
+
+/datum/demir/tgstation/connections(atom/target)
+	return target.demir_connections()
 
 // A border object only blocks the side it stands on, and the lighting corners care about
 // whether the whole tile is concealed. IS_OPAQUE_TURF wants ALL_CARDINALS.
@@ -593,6 +648,7 @@
 #undef DEMIR_GROUP_CABLES
 #undef DEMIR_GROUP_PIPES
 #undef DEMIR_GROUP_DISPOSALS
+#undef DEMIR_GROUP_LIGHTS
 #undef DEMIR_GROUP_UNDERFLOOR
 
 #endif

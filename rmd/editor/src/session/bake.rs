@@ -278,6 +278,326 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the local target/MonkeStation2.0 checkout"]
+    fn monkestation_fixtures_light_corners_like_the_game() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(String::from("monkestation")),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+            .expect("Monkestation codebase");
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+
+        let area = "/area/station/engineering/main";
+        let floor = || {
+            vec![
+                Prefab::new(TreePath::parse("/turf/open/floor/iron")),
+                Prefab::new(TreePath::parse(area)),
+            ]
+        };
+        let mut map = Map::new(Size { x: 8, y: 1, z: 1 });
+        let mut lit = floor();
+        lit.insert(0, Prefab::new(TreePath::parse("/obj/machinery/light")));
+        let lit_tile = map.intern_tile(lit);
+        let floor_tile = map.intern_tile(floor());
+        map.grid[0][0] = vec![floor_tile; 8];
+        map.grid[0][0][0] = lit_tile;
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+
+        let bake = session.active_cache().bake.as_ref().expect("fixture bake");
+        assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
+        let corners = |x| {
+            bake.lighting
+                .as_ref()
+                .and_then(|lighting| lighting.tile(vm::world::Position::new(x, 1, 1)))
+                .expect("lit tile")
+                .corners
+        };
+
+        // LIGHT_COLOR_DEFAULT is #f3fffac4, and PARSE_LIGHT_COLOR drops its alpha.
+        let color = [243.0 / 255.0, 1.0, 250.0 / 255.0];
+        for (got, want) in corners(1)[0].iter().zip(color) {
+            assert!((got - want).abs() < 1e-3, "fixture tile {:?}", corners(1));
+        }
+
+        // LUM_FALLOFF with the bulb's outer 7, inner 1.5 and curve 2.36, power 1, for the south-west
+        // corner of the sixth tile.
+        let distance = (4.5f32 * 4.5 + 0.5 * 0.5).sqrt();
+        let falloff = ((7.0 - distance) / (7.0f32 - 1.5)).clamp(0.0, 1.0).powf(2.36);
+        let got = corners(6)[0][1];
+        assert!((got - falloff).abs() < 1e-3, "got {got}, the game lights {falloff}");
+    }
+
+    #[test]
+    #[ignore = "requires the local target/MonkeStation2.0 checkout"]
+    fn monkestation_windows_take_department_colors_and_sills() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(String::from("monkestation")),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+            .expect("Monkestation codebase");
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+
+        let window = "/obj/structure/window/reinforced/fulltile";
+        let spawner = "/obj/effect/spawner/structure/window/reinforced";
+        let tile = |path: &str, area: &str| {
+            vec![
+                Prefab::new(TreePath::parse(path)),
+                Prefab::new(TreePath::parse("/turf/open/floor/iron")),
+                Prefab::new(TreePath::parse(area)),
+            ]
+        };
+        let science = "/area/station/science/lab";
+        let mut map = Map::new(Size { x: 4, y: 1, z: 1 });
+        let science_window = map.intern_tile(tile(window, science));
+        let science_spawner = map.intern_tile(tile(spawner, science));
+        let hallway_window = map.intern_tile(tile(window, "/area/station/hallway/primary/central"));
+        map.grid[0][0] = vec![science_window, science_window, science_spawner, hallway_window];
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+
+        let bake = session.active_cache().bake.as_ref().expect("window bake");
+        assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
+        let environment = session.state.environment.as_ref().unwrap();
+        let document = session.state.active_document().unwrap();
+        let baked = |x, path: &str| {
+            let instance = *document
+                .instance_ids_at(Coord::new(x, 1, 1))
+                .iter()
+                .find(|id| document.prefab_instance(**id).unwrap().0.path.to_string() == path)
+                .unwrap();
+            let (prefab, _) = document.prefab_instance(instance).unwrap();
+            let ty = environment.tree.id_of(&prefab.path).unwrap();
+            let delta = bake.appearances.get(&instance.get()).expect("baked appearance");
+            let owner = editor::visual::resolve_delta(&environment.tree, ty, prefab, delta);
+            let overlays = delta
+                .overlays
+                .iter()
+                .map(|overlay| editor::visual::resolve_overlay(&environment.tree, &owner, overlay))
+                .collect::<Vec<_>>();
+            (owner, overlays)
+        };
+        // Overlay colors carry an alpha byte.
+        let color = |appearance: &editor::visual::Appearance| {
+            appearance
+                .color
+                .as_deref()
+                .map(|color| color.get(..7).unwrap_or(color).to_ascii_lowercase())
+        };
+        let has_sill = |overlays: &[editor::visual::Appearance]| {
+            overlays.iter().any(|overlay| {
+                overlay
+                    .icon
+                    .as_deref()
+                    .is_some_and(|icon| icon.ends_with("window_sill.dmi"))
+            })
+        };
+
+        // SSstation_coloring paints science purple.
+        let (owner, overlays) = baked(1, window);
+        assert_eq!(color(&owner).as_deref(), Some("#d381c9"));
+        assert!(has_sill(&overlays), "{overlays:#?}");
+
+        let (_, overlays) = baked(3, spawner);
+        assert!(
+            overlays
+                .iter()
+                .any(|overlay| color(overlay).as_deref() == Some("#d381c9"))
+        );
+        assert!(has_sill(&overlays), "{overlays:#?}");
+
+        // Outside a department, the window keeps get_default_color().
+        let (owner, _) = baked(4, window);
+        assert!(
+            ["#1a356e", "#305a6d", "#164f41"].contains(&color(&owner).as_deref().unwrap_or_default()),
+            "{:?}",
+            owner.color
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the local target/MonkeStation2.0 checkout"]
+    fn monkestation_computers_draw_their_powered_overlays() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(String::from("monkestation")),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+            .expect("Monkestation codebase");
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+
+        let computer = "/obj/machinery/computer";
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        let tile = map.intern_tile(vec![
+            Prefab::new(TreePath::parse(computer)),
+            Prefab::new(TreePath::parse("/turf/open/floor/iron")),
+            Prefab::new(TreePath::parse("/area/station/engineering/main")),
+        ]);
+        map.grid[0][0][0] = tile;
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+
+        let bake = session.active_cache().bake.as_ref().expect("computer bake");
+        assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
+        let environment = session.state.environment.as_ref().unwrap();
+        let document = session.state.active_document().unwrap();
+        let instance = *document
+            .instance_ids_at(Coord::new(1, 1, 1))
+            .iter()
+            .find(|id| document.prefab_instance(**id).unwrap().0.path.to_string() == computer)
+            .unwrap();
+        let (prefab, _) = document.prefab_instance(instance).unwrap();
+        let ty = environment.tree.id_of(&prefab.path).unwrap();
+        let delta = bake.appearances.get(&instance.get()).expect("baked computer");
+        let owner = editor::visual::resolve_delta(&environment.tree, ty, prefab, delta);
+        let overlays = delta
+            .overlays
+            .iter()
+            .map(|overlay| editor::visual::resolve_overlay(&environment.tree, &owner, overlay))
+            .collect::<Vec<_>>();
+
+        // The keyboard, then the screen and its emissive copy.
+        let states = overlays
+            .iter()
+            .filter_map(|overlay| overlay.icon_state.as_deref())
+            .collect::<Vec<_>>();
+        assert!(states.contains(&"generic_key"), "{states:?}");
+        assert!(states.contains(&"generic"), "{states:?}");
+        assert!(
+            overlays
+                .iter()
+                .any(|overlay| overlay.lighting == vm::AppearanceLighting::Emissive),
+            "{overlays:#?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the local target/tgstation checkout"]
+    fn tgstation_fixture_glows_follow_the_lighting_toggle() {
+        use std::collections::HashMap;
+
+        use editor::{
+            bake::{UiCommand, UiFeedback, UiValue},
+            visual,
+        };
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(String::from("tgstation")),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+            .expect("tgstation codebase");
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+
+        type Fixture<'a> = (&'a str, &'a [(&'a str, f32)], bool);
+        let fixtures: &[Fixture<'_>] = &[
+            ("/obj/machinery/light", &[], true),
+            ("/obj/machinery/light/small", &[], true),
+            ("/obj/machinery/light/floor", &[], true),
+            ("/obj/machinery/light", &[("nightshift_enabled", 1.0)], true),
+            ("/obj/machinery/light", &[("major_emergency", 1.0)], true),
+            ("/obj/machinery/light/broken", &[], false),
+            ("/obj/machinery/light/burned", &[], false),
+            ("/obj/machinery/light/empty", &[], false),
+        ];
+        let mut map = Map::new(Size {
+            x: fixtures.len() as u32,
+            y: 1,
+            z: 1,
+        });
+        for (index, (path, vars, _)) in fixtures.iter().enumerate() {
+            let mut fixture = Prefab::new(TreePath::parse(path));
+            for (name, value) in *vars {
+                fixture.set_var((*name).into(), Value::Num(*value));
+            }
+            let tile = map.intern_tile(vec![
+                fixture,
+                Prefab::new(TreePath::parse("/turf/open/floor/iron")),
+                Prefab::new(TreePath::parse("/area/station/engineering/main")),
+            ]);
+            map.grid[0][0][index] = tile;
+        }
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+
+        let check = |session: &Session, lighting: bool| {
+            let environment = session.state.environment.as_ref().unwrap();
+            let document = session.state.active_document().unwrap();
+            let bake = session.active_cache().bake.as_ref().expect("fixture bake");
+            assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
+            for (index, (path, _, native_on)) in fixtures.iter().enumerate() {
+                let id = document.instance_ids_at(Coord::new(index as u32 + 1, 1, 1))[0];
+                let (prefab, _) = document.prefab_instance(id).unwrap();
+                let ty = environment.tree.id_of(&prefab.path).unwrap();
+                let delta = &bake.appearances[&id.get()];
+                let owner = visual::resolve_delta(&environment.tree, ty, prefab, delta);
+                // The game chooses the sheet and state; the test only checks whether it draws a glow.
+                let overlay_icon = environment
+                    .tree
+                    .var_inherited(ty, &"overlay_icon".into())
+                    .and_then(|var| var.value.as_text())
+                    .expect("native fixture overlay sheet");
+                let glowing = delta.overlays.iter().any(|overlay| {
+                    let overlay = visual::resolve_overlay(&environment.tree, &owner, overlay);
+                    overlay.icon.as_deref() == Some(overlay_icon) && overlay.lighting == vm::AppearanceLighting::Normal
+                });
+                assert_eq!(glowing, lighting && *native_on, "{path}, lighting={lighting}");
+                assert_eq!(
+                    delta
+                        .overlays
+                        .iter()
+                        .any(|overlay| overlay.lighting == vm::AppearanceLighting::Emissive),
+                    lighting && *native_on,
+                    "{path}: native emissive glow, lighting={lighting}",
+                );
+            }
+            assert_render_cache_matches_rebuild(session);
+        };
+        check(&session, true);
+        let initial = session.active_cache().bake.as_ref().unwrap().appearances.clone();
+        let frame = session.dm_ui(0, UiFeedback::default());
+        let key = frame
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                UiCommand::Checkbox { key, label, .. } if label == "Lighting" => Some(key.clone()),
+                _ => None,
+            })
+            .expect("Lighting checkbox");
+        for lighting in [false, true, false, true] {
+            let frame = session.dm_ui(
+                0,
+                UiFeedback {
+                    values: HashMap::from([(key.clone(), UiValue::Bool(lighting))]),
+                    interacted: true,
+                    ..Default::default()
+                },
+            );
+            assert!(frame.committed);
+            assert!(frame.rebake.appearance.is_some_and(|group| group != 0));
+            session.dm_ui_rebake(frame.rebake);
+            check(&session, lighting);
+            if lighting {
+                assert_eq!(session.active_cache().bake.as_ref().unwrap().appearances, initial);
+            }
+        }
+    }
+
+    #[test]
     #[ignore = "requires the local target/tgstation checkout"]
     fn a_hidden_layer_manifold_draws_its_connections_above_the_floor() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
