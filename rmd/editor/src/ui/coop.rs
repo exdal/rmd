@@ -770,6 +770,7 @@ pub(super) fn draw_coop_notice(
 pub(super) fn draw_remote_selections(
     ui: &Ui, camera: &Controller, viewport: OverlayRect, coop: &Coop, map: &str, z: u32, tile_size: u32,
 ) {
+    let scale = dpi(ui);
     let draw = ui.get_window_draw_list();
     draw.with_clip_rect(viewport.min, viewport.max, || {
         for peer in coop.peers.values() {
@@ -803,7 +804,7 @@ pub(super) fn draw_remote_selections(
 
             color[3] = REMOTE_SELECTION_OUTLINE;
             for border in iter::once(bounds).chain(inner) {
-                draw.add_rect(border.min, border.max, color).build();
+                draw.add_rect(border.min, border.max, color).thickness(scale).build();
             }
         }
     });
