@@ -841,7 +841,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "editor"
-version = "1.8.2"
+version = "1.9.0"
 dependencies = [
  "arboard",
  "ast",
@@ -3361,7 +3361,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "render"
-version = "1.8.2"
+version = "1.9.0"
 dependencies = [
  "ash",
  "dear-imgui-rs",
