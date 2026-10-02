@@ -1,5 +1,5 @@
 use editor::document::DocumentId;
-use net::{CommentId, Cursor, PeerId, View};
+use net::{CommentId, Cursor, PeerId, Selection, View};
 
 use super::{Coop, Following};
 use crate::session::Session;
@@ -34,6 +34,14 @@ impl Session {
             && let Some(client) = coop.client.as_ref()
         {
             client.send_view(view.filter(|_| coop.can_collaborate()));
+        }
+    }
+
+    pub fn coop_selection(&self, selection: Option<Selection>) {
+        if let Some(coop) = self.coop.as_ref()
+            && let Some(client) = coop.client.as_ref()
+        {
+            client.send_selection(selection.filter(|_| coop.can_collaborate()));
         }
     }
 

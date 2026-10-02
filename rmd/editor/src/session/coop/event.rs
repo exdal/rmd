@@ -90,6 +90,16 @@ impl Coop {
                     });
                 }
             },
+            Event::Selection { from, selection } => {
+                if let Some(peer) = self.peers.get_mut(&from) {
+                    peer.selection = selection.filter(|selection| {
+                        selection.z >= 1
+                            && selection.min.iter().all(|&value| value >= 1)
+                            && selection.min[0] <= selection.max[0]
+                            && selection.min[1] <= selection.max[1]
+                    });
+                }
+            },
             Event::Comment(comment) => {
                 self.comments.insert(comment.id, comment);
             },

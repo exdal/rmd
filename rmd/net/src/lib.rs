@@ -19,6 +19,8 @@ pub use protocol::coop::{
     PasswordHash,
     PeerId,
     PeerInfo,
+    Selection,
+    SelectionMode,
     SeqId,
     Tool,
     View,

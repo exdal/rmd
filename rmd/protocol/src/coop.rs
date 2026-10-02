@@ -187,10 +187,27 @@ pub struct View {
     pub zoom: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SelectionMode {
+    Full,
+    Hollow { line_width: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Selection {
+    /// `_maps/map_files/Station/station.dmm`
+    pub map: String,
+    pub z: u32,
+    pub min: [u32; 2],
+    pub max: [u32; 2],
+    pub mode: SelectionMode,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Datagram {
     Cursor(Option<Cursor>),
     View(Option<View>),
+    Selection(Option<Selection>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -345,6 +362,14 @@ mod tests {
             zoom: 1.5,
         })));
         round_trip(Datagram::View(None));
+        round_trip(Datagram::Selection(Some(Selection {
+            map: cursor.map.clone(),
+            z: 2,
+            min: [3, 4],
+            max: [10, 12],
+            mode: SelectionMode::Hollow { line_width: 2 },
+        })));
+        round_trip(Datagram::Selection(None));
         round_trip(Relayed {
             from: PeerId(7),
             datagram: Datagram::Cursor(Some(cursor)),

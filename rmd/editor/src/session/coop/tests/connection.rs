@@ -363,6 +363,39 @@ fn a_map_someone_shares_does_not_stop_following() {
 }
 
 #[test]
+fn a_broken_selection_is_dropped() {
+    let (dir, mut session, ..) = following("selection-broken");
+    let selection = |z, min, max| Event::Selection {
+        from: OTHER,
+        selection: Some(Selection {
+            map: String::from("_maps/a.dmm"),
+            z,
+            min,
+            max,
+            mode: net::SelectionMode::Full,
+        }),
+    };
+
+    for (z, min, max) in [
+        (0, [1, 1], [2, 2]),
+        (1, [0, 1], [2, 2]),
+        (1, [3, 1], [2, 2]),
+        (1, [1, 3], [2, 2]),
+    ] {
+        deliver(&mut session, &dir, selection(z, min, max));
+        assert!(
+            session.coop().unwrap().peers[&OTHER].selection.is_none(),
+            "z {z} from {min:?} to {max:?}"
+        );
+    }
+
+    deliver(&mut session, &dir, selection(1, [1, 1], [2, 2]));
+    assert!(session.coop().unwrap().peers[&OTHER].selection.is_some());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn a_broken_view_is_dropped() {
     let (dir, mut session, ..) = following("follow-broken");
     for (center, zoom) in [

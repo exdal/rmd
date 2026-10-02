@@ -259,6 +259,24 @@ impl From<net::Tool> for Tool {
     }
 }
 
+impl From<BlockSelectionMode> for net::SelectionMode {
+    fn from(mode: BlockSelectionMode) -> Self {
+        match mode {
+            BlockSelectionMode::Full => Self::Full,
+            BlockSelectionMode::Hollow { line_width } => Self::Hollow { line_width },
+        }
+    }
+}
+
+impl From<net::SelectionMode> for BlockSelectionMode {
+    fn from(mode: net::SelectionMode) -> Self {
+        match mode {
+            net::SelectionMode::Full => Self::Full,
+            net::SelectionMode::Hollow { line_width } => Self::Hollow { line_width },
+        }
+    }
+}
+
 pub fn move_selection(
     document: &mut MapDocument, tree: &ObjectTree, selection: Selection, target_min: Coord,
 ) -> Option<(ToolEdit, Selection)> {
@@ -3061,5 +3079,12 @@ mod tests {
         assert_eq!(location.coord, coord);
         assert_eq!(prefab.path, TreePath::parse("/obj/alarm/directional/east"));
         assert_eq!(prefab.var(&"dir".into()), None);
+    }
+
+    #[test]
+    fn selection_modes_survive_the_protocol() {
+        for mode in [BlockSelectionMode::Full, BlockSelectionMode::Hollow { line_width: 3 }] {
+            assert_eq!(BlockSelectionMode::from(net::SelectionMode::from(mode)), mode);
+        }
     }
 }

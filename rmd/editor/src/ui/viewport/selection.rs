@@ -52,7 +52,7 @@ impl ViewGestures {
         self.rectangle_gesture.is_some() || self.block_placement.is_some() || self.paste.is_some()
     }
 
-    fn displayed(&self, source: Selection) -> (Selection, SelectionRotation) {
+    pub(super) fn displayed(&self, source: Selection) -> (Selection, SelectionRotation) {
         self.block_placement
             .map_or((source, SelectionRotation::Original), |placement| {
                 (placement.target, placement.rotation)
@@ -64,6 +64,8 @@ pub(super) struct BlockActions {
     paste: Option<(PasteAction, PendingPaste)>,
     placement: Option<(BlockPlacementAction, PendingBlockPlacement)>,
 }
+
+pub(super) fn shows_block_selection(tool: Tool) -> bool { matches!(tool, Tool::BlockSelect | Tool::Fill) }
 
 pub(super) fn sync_gestures(session: &Session, gestures: &mut ViewGestures, tool: Tool) -> Option<SelectionMask> {
     if tool != Tool::BlockSelect {
@@ -320,7 +322,7 @@ impl UiState {
 
                 Some((mask.bounds, pending.rotation))
             },
-            _ if matches!(session.tool(), Tool::BlockSelect | Tool::Fill) => session.selection().map(|source| {
+            _ if shows_block_selection(session.tool()) => session.selection().map(|source| {
                 let (displayed, rotation) = frame.gestures.displayed(source);
                 draw_block_outline(ui, session, frame.camera, displayed, session.selection_mode(), viewport);
 

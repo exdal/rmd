@@ -842,6 +842,7 @@ impl UiState {
         self.stop_following_when_moved(session);
         session.coop_cursor(coop.cursor);
         session.coop_view(coop.view);
+        session.coop_selection(coop.selection);
         self.edit_command = None;
 
         (map_views, picking)

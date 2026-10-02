@@ -20,6 +20,7 @@ use net::{
     PasswordHash,
     PeerId,
     PeerInfo,
+    Selection,
     SeqId,
     Server,
     View,
@@ -63,6 +64,7 @@ pub(crate) struct RemotePeer {
     pub cursor: Option<Cursor>,
     pub shown: [f32; 2],
     pub view: Option<View>,
+    pub selection: Option<Selection>,
 }
 
 impl RemotePeer {
@@ -72,6 +74,7 @@ impl RemotePeer {
             cursor: None,
             shown: [0.0; 2],
             view: None,
+            selection: None,
         }
     }
 

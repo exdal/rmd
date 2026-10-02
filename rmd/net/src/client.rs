@@ -26,6 +26,7 @@ use protocol::{
         PeerId,
         PeerInfo,
         Relayed,
+        Selection,
         SeqId,
         ServerMessage,
         Transfer,
@@ -58,6 +59,7 @@ use crate::{
 const CURSOR_INTERVAL: Duration = Duration::from_millis(50);
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 const VIEW_REFRESH: Duration = Duration::from_secs(1);
+const SELECTION_REFRESH: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -80,6 +82,10 @@ pub enum Event {
     View {
         from: PeerId,
         view: Option<View>,
+    },
+    Selection {
+        from: PeerId,
+        selection: Option<Selection>,
     },
     Comment(Comment),
     CommentDeleted(CommentId),
@@ -134,6 +140,7 @@ pub enum Direction {
 struct Presence {
     cursor: watch::Receiver<Option<Cursor>>,
     view: watch::Receiver<Option<View>>,
+    selection: watch::Receiver<Option<Selection>>,
 }
 
 struct Share {
@@ -146,6 +153,7 @@ pub struct Client {
     events: mpsc::Receiver<Event>,
     cursor: watch::Sender<Option<Cursor>>,
     view: watch::Sender<Option<View>>,
+    selection: watch::Sender<Option<Selection>>,
     outbox: channel::UnboundedSender<ClientMessage>,
     shares: channel::UnboundedSender<Share>,
     shutdown: Option<oneshot::Sender<()>>,
@@ -156,9 +164,11 @@ impl Client {
         let (events_tx, events) = mpsc::channel();
         let (cursor, cursor_rx) = watch::channel(None);
         let (view, view_rx) = watch::channel(None);
+        let (selection, selection_rx) = watch::channel(None);
         let presence = Presence {
             cursor: cursor_rx,
             view: view_rx,
+            selection: selection_rx,
         };
         let (outbox, inbox) = channel::unbounded_channel();
         let (shares, shares_rx) = channel::unbounded_channel();
@@ -187,6 +197,7 @@ impl Client {
             events,
             cursor,
             view,
+            selection,
             outbox,
             shares,
             shutdown: Some(shutdown),
@@ -228,6 +239,15 @@ impl Client {
         self.view.send_if_modified(|current| {
             let is_changed = *current != view;
             *current = view;
+
+            is_changed
+        });
+    }
+
+    pub fn send_selection(&self, selection: Option<Selection>) {
+        self.selection.send_if_modified(|current| {
+            let is_changed = *current != selection;
+            *current = selection;
 
             is_changed
         });
@@ -343,6 +363,7 @@ async fn session(
         let mut throttle = time::interval(CURSOR_INTERVAL);
         throttle.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut last_view: Option<Instant> = None;
+        let mut last_selection: Option<Instant> = None;
         loop {
             tokio::select! {
                 message = read_message(&mut recv, &mut reader) => match message? {
@@ -378,6 +399,7 @@ async fn session(
                     match protocol::decode::<Relayed>(&datagram) {
                         Ok(Relayed { from, datagram: Datagram::Cursor(cursor) }) => emit(Event::Cursor { from, cursor }),
                         Ok(Relayed { from, datagram: Datagram::View(view) }) => emit(Event::View { from, view }),
+                        Ok(Relayed { from, datagram: Datagram::Selection(selection) }) => emit(Event::Selection { from, selection }),
                         Err(e) => log::debug!("dropping a datagram: {e}"),
                     }
                 },
@@ -391,6 +413,13 @@ async fn session(
                     if presence.view.has_changed().unwrap_or(false) || is_stale {
                         send_datagram(connection, &Datagram::View(presence.view.borrow_and_update().clone()))?;
                         last_view = Some(Instant::now());
+                    }
+
+                    // repeated even when empty, a lost clear would leave peers drawing a stale selection
+                    let is_stale = last_selection.is_none_or(|last| last.elapsed() >= SELECTION_REFRESH);
+                    if presence.selection.has_changed().unwrap_or(false) || is_stale {
+                        send_datagram(connection, &Datagram::Selection(presence.selection.borrow_and_update().clone()))?;
+                        last_selection = Some(Instant::now());
                     }
                 },
             }

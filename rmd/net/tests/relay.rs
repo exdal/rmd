@@ -15,6 +15,8 @@ use net::{
     Impairment,
     LossyProxy,
     MapEdit,
+    Selection,
+    SelectionMode,
     SeqId,
     Server,
     ServerConfig,
@@ -169,6 +171,42 @@ fn views_reach_the_other_peers_and_repeat() {
 
     // nothing new was sent, so this one is the refresh
     assert_eq!(received(&bob), (alice_id, view));
+}
+
+#[test]
+fn selections_reach_the_other_peers_and_repeat() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    let alice_id = wait_for(&alice, |event| match event {
+        Event::Connected { you, .. } => Some(you),
+        _ => None,
+    });
+
+    let bob = join(&server, PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    let selection = Selection {
+        map: String::from("_maps/test.dmm"),
+        z: 2,
+        min: [3, 4],
+        max: [10, 12],
+        mode: SelectionMode::Full,
+    };
+    alice.send_selection(Some(selection.clone()));
+    let received = |client: &Client| {
+        wait_for(client, |event| match event {
+            Event::Selection {
+                from,
+                selection: Some(selection),
+            } => Some((from, selection)),
+            _ => None,
+        })
+    };
+
+    assert_eq!(received(&bob), (alice_id, selection.clone()));
+
+    // nothing new was sent, so this one is the refresh
+    assert_eq!(received(&bob), (alice_id, selection));
 }
 
 #[test]

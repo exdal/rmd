@@ -1,11 +1,17 @@
 use std::{env, iter};
 
 use dear_imgui_rs::{Condition, Key, PopupQueryFlags, StyleColor, StyleVar, Ui, WindowFlags, sys};
-use editor::{document::DocumentId, icons::materialdesignicons::ICON_CLOSE, tool::Tool};
+use dmm::Coord;
+use editor::{
+    document::{DocumentId, Selection},
+    icons::materialdesignicons::ICON_CLOSE,
+    tool::{BlockSelectionMode, Tool},
+};
 use net::{CodebaseId, Comment, CommentId, MAX_COMMENT_LEN, PeerId};
 
 use super::{
     DIAGNOSTIC_WARNING_COLOR,
+    block::{block_selection_bounds, hollow_selection_inner, ring_regions},
     common::dpi,
     dialog::{DIALOG_FIELD_WIDTH, MODAL_FLAGS, SAVE_ERROR_COLOR},
     overlay::{OVERLAY_BG, OverlayRect},
@@ -51,6 +57,10 @@ const NOTICE_SECONDS: f32 = 4.0;
 const NOTICE_FADE: f32 = 1.0;
 
 const NOTICE_INSET: f32 = 10.0;
+
+const REMOTE_SELECTION_FILL: f32 = 0.08;
+
+const REMOTE_SELECTION_OUTLINE: f32 = 0.7;
 
 pub(super) struct CommentDraft {
     pub(super) document: DocumentId,
@@ -755,6 +765,48 @@ pub(super) fn draw_coop_notice(
     } else {
         CoopNoticeChoice::Retry
     })
+}
+
+pub(super) fn draw_remote_selections(
+    ui: &Ui, camera: &Controller, viewport: OverlayRect, coop: &Coop, map: &str, z: u32, tile_size: u32,
+) {
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(viewport.min, viewport.max, || {
+        for peer in coop.peers.values() {
+            let Some(selection) = peer
+                .selection
+                .as_ref()
+                .filter(|selection| selection.map == map && selection.z == z)
+            else {
+                continue;
+            };
+
+            let mode = BlockSelectionMode::from(selection.mode);
+            let selection = Selection {
+                min: Coord::new(selection.min[0], selection.min[1], z),
+                max: Coord::new(selection.max[0], selection.max[1], z),
+            };
+            let bounds = block_selection_bounds(camera, viewport.min, selection, tile_size);
+            let inner = hollow_selection_inner(selection, mode)
+                .map(|inner| block_selection_bounds(camera, viewport.min, inner, tile_size));
+
+            let mut color = peer_color(peer.info.id);
+            color[3] = REMOTE_SELECTION_FILL;
+            match inner {
+                Some(inner) => {
+                    for region in ring_regions(bounds, inner) {
+                        draw.add_rect(region.min, region.max, color).filled(true).build();
+                    }
+                },
+                None => draw.add_rect(bounds.min, bounds.max, color).filled(true).build(),
+            }
+
+            color[3] = REMOTE_SELECTION_OUTLINE;
+            for border in iter::once(bounds).chain(inner) {
+                draw.add_rect(border.min, border.max, color).build();
+            }
+        }
+    });
 }
 
 pub(super) fn draw_remote_cursors(ui: &Ui, camera: &Controller, viewport: OverlayRect, coop: &Coop, map: &str, z: u32) {

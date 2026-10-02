@@ -1,7 +1,7 @@
 use dear_imgui_rs::{MouseButton, PopupQueryFlags, Ui};
 use editor::document::DocumentId;
 
-use super::ViewFrame;
+use super::{ViewFrame, selection::shows_block_selection};
 use crate::{
     camera::clamp_zoom,
     session::Session,
@@ -14,6 +14,7 @@ use crate::{
             draw_comments,
             draw_receiving,
             draw_remote_cursors,
+            draw_remote_selections,
             draw_tab_out_of_date,
             draw_tab_progress,
         },
@@ -26,6 +27,7 @@ const FOLLOW_SMOOTHING: f32 = 20.0;
 pub(in crate::ui) struct CoopPresence {
     pub(in crate::ui) cursor: Option<net::Cursor>,
     pub(in crate::ui) view: Option<net::View>,
+    pub(in crate::ui) selection: Option<net::Selection>,
 }
 
 // where following left the camera, so a change while drawing means the user moved it
@@ -112,6 +114,19 @@ pub(super) fn share_presence(session: &Session, frame: &ViewFrame<'_>, coop: &mu
         pos: camera.screen_to_map(cursor),
         tool: session.tool().into(),
     });
+    coop.selection = session
+        .selection()
+        .filter(|_| shows_block_selection(session.tool()))
+        .map(|source| {
+            let (selection, _) = frame.gestures.displayed(source);
+            net::Selection {
+                map: map.clone(),
+                z: selection.min.z,
+                min: [selection.min.x, selection.min.y],
+                max: [selection.max.x, selection.max.y],
+                mode: session.selection_mode().into(),
+            }
+        });
     coop.view = Some(net::View {
         map,
         z: session.z(),
@@ -130,6 +145,7 @@ impl UiState {
         {
             let viewport = frame.layout.viewport;
             draw_comments(ui, frame.camera, viewport, coop, &map, z, comment_hit);
+            draw_remote_selections(ui, frame.camera, viewport, coop, &map, z, session.options.tile_size);
             draw_remote_cursors(ui, frame.camera, viewport, coop, &map, z);
         }
 
