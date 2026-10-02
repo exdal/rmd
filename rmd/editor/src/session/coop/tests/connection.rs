@@ -30,8 +30,18 @@ fn a_joined_peer_sees_the_hosts_cursor() {
     poll_until(&mut [&mut host, &mut guest], |sessions| {
         sessions[1]
             .coop()
-            .is_some_and(|coop| coop.peers.values().any(|peer| peer.cursor.as_ref() == Some(&cursor)))
+            .is_some_and(|coop| coop.peers.values().any(|peer| peer.cursor() == Some(&cursor)))
     });
+
+    // a paused host still clears its cursor for the others
+    host.coop.as_mut().unwrap().paused = true;
+    host.coop_cursor(Some(cursor));
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        sessions[1]
+            .coop()
+            .is_some_and(|coop| coop.peers.values().all(|peer| peer.cursor().is_none()))
+    });
+    host.coop.as_mut().unwrap().paused = false;
 
     guest.leave_coop();
     poll_until(&mut [&mut host], |sessions| {
@@ -384,27 +394,55 @@ fn a_broken_selection_is_dropped() {
     ] {
         deliver(&mut session, &dir, selection(z, min, max));
         assert!(
-            session.coop().unwrap().peers[&OTHER].selection.is_none(),
+            session.coop().unwrap().peers[&OTHER].selection().is_none(),
             "z {z} from {min:?} to {max:?}"
         );
     }
 
     deliver(&mut session, &dir, selection(1, [1, 1], [2, 2]));
-    assert!(session.coop().unwrap().peers[&OTHER].selection.is_some());
+    assert!(session.coop().unwrap().peers[&OTHER].selection().is_some());
 
     let _ = fs::remove_dir_all(dir);
 }
 
 #[test]
-fn an_unrefreshed_selection_expires() {
-    let (dir, mut session, ..) = following("selection-expires");
+fn unrefreshed_presence_expires() {
+    let (dir, mut session, ..) = following("presence-expires");
+    let map = String::from("_maps/a.dmm");
+    let first = Instant::now();
+    deliver(
+        &mut session,
+        &dir,
+        Event::Cursor {
+            from: OTHER,
+            cursor: Some(Cursor {
+                map: map.clone(),
+                z: 1,
+                pos: [32.0, 32.0],
+                tool: net::Tool::Place,
+            }),
+        },
+    );
+    deliver(
+        &mut session,
+        &dir,
+        Event::View {
+            from: OTHER,
+            view: Some(View {
+                map: map.clone(),
+                z: 1,
+                center: [32.0, 32.0],
+                zoom: 1.0,
+            }),
+        },
+    );
     deliver(
         &mut session,
         &dir,
         Event::Selection {
             from: OTHER,
             selection: Some(Selection {
-                map: String::from("_maps/a.dmm"),
+                map,
                 z: 1,
                 min: [1, 1],
                 max: [2, 2],
@@ -414,12 +452,11 @@ fn an_unrefreshed_selection_expires() {
     );
 
     let peer = session.coop.as_mut().unwrap().peers.get_mut(&OTHER).unwrap();
-    let received = peer.selection.as_ref().unwrap().received;
-    peer.expire(received + SELECTION_TIMEOUT - Duration::from_millis(1));
-    assert!(peer.selection.is_some());
+    peer.expire(first + PRESENCE_TIMEOUT - Duration::from_millis(1));
+    assert!(peer.cursor().is_some() && peer.view().is_some() && peer.selection().is_some());
 
-    peer.expire(received + SELECTION_TIMEOUT);
-    assert!(peer.selection.is_none());
+    peer.expire(Instant::now() + PRESENCE_TIMEOUT);
+    assert!(peer.cursor().is_none() && peer.view().is_none() && peer.selection().is_none());
 
     let _ = fs::remove_dir_all(dir);
 }
@@ -447,7 +484,7 @@ fn a_broken_view_is_dropped() {
             },
         );
         assert!(
-            session.coop().unwrap().peers[&OTHER].view.is_none(),
+            session.coop().unwrap().peers[&OTHER].view().is_none(),
             "{center:?} at {zoom}"
         );
     }

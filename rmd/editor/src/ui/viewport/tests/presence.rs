@@ -151,7 +151,7 @@ fn following_snaps_the_camera_to_the_peer_and_stops_when_the_user_moves_it() {
     poll_until(&mut [&mut host, &mut guest], &|sessions| {
         sessions[0]
             .coop()
-            .is_some_and(|coop| coop.peers.values().any(|peer| peer.view.is_some()))
+            .is_some_and(|coop| coop.peers.values().any(|peer| peer.view().is_some()))
     });
 
     let mut context = rectangle_context();

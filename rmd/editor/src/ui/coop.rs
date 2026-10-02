@@ -574,7 +574,7 @@ pub(super) fn draw_coop_peers(ui: &Ui, coop: &Coop, following: Option<PeerId>) -
         };
 
         ui.tooltip(|| {
-            match peer.cursor.as_ref() {
+            match peer.cursor() {
                 None => ui.text("not over a shared map"),
                 Some(cursor) if cursor.z > 1 => ui.text(format!("on {} (z {})", cursor.map, cursor.z)),
                 Some(cursor) => ui.text(format!("on {}", cursor.map)),
@@ -775,9 +775,7 @@ pub(super) fn draw_remote_selections(
     draw.with_clip_rect(viewport.min, viewport.max, || {
         for peer in coop.peers.values() {
             let Some(selection) = peer
-                .selection
-                .as_ref()
-                .map(|remote| &remote.selection)
+                .selection()
                 .filter(|selection| selection.map == map && selection.z == z)
             else {
                 continue;
@@ -810,7 +808,7 @@ pub(super) fn draw_remote_cursors(ui: &Ui, camera: &Controller, viewport: Overla
     let draw = ui.get_window_draw_list();
     draw.with_clip_rect(viewport.min, viewport.max, || {
         for peer in coop.peers.values() {
-            let Some(cursor) = peer.cursor.as_ref().filter(|cursor| cursor.map == map && cursor.z == z) else {
+            let Some(cursor) = peer.cursor().filter(|cursor| cursor.map == map && cursor.z == z) else {
                 continue;
             };
 

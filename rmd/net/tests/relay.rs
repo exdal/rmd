@@ -15,7 +15,7 @@ use net::{
     Impairment,
     LossyProxy,
     MapEdit,
-    SELECTION_REFRESH,
+    PRESENCE_REFRESH,
     Selection,
     SelectionMode,
     SeqId,
@@ -211,6 +211,30 @@ fn selections_reach_the_other_peers_and_repeat() {
 }
 
 #[test]
+fn a_parked_cursor_repeats() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
+    let bob = join(&server, PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    alice.send_cursor(Some(cursor(1.0)));
+    let received = |client: &Client| {
+        wait_for(client, |event| match event {
+            Event::Cursor {
+                cursor: Some(cursor), ..
+            } => Some(cursor),
+            _ => None,
+        })
+    };
+
+    assert_eq!(received(&bob), cursor(1.0));
+
+    // nothing new was sent, so this one is the refresh
+    assert_eq!(received(&bob), cursor(1.0));
+}
+
+#[test]
 fn a_cleared_selection_is_sent_once() {
     let server = server();
     let alice = join(&server, PASSWORD, "alice");
@@ -234,7 +258,7 @@ fn a_cleared_selection_is_sent_once() {
         matches!(event, Event::Selection { selection: None, .. }).then_some(())
     });
 
-    thread::sleep(SELECTION_REFRESH * 2);
+    thread::sleep(PRESENCE_REFRESH * 2);
     assert!(!bob.poll().any(|event| matches!(event, Event::Selection { .. })));
 }
 

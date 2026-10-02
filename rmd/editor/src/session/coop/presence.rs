@@ -23,11 +23,7 @@ impl Session {
         }
     }
 
-    pub fn coop_cursor(&self, cursor: Option<Cursor>) {
-        if let Some(client) = self.collaborating_client() {
-            client.send_cursor(cursor);
-        }
-    }
+    pub fn coop_cursor(&self, cursor: Option<Cursor>) { self.send_presence(cursor, Client::send_cursor); }
 
     pub fn coop_view(&self, view: Option<View>) { self.send_presence(view, Client::send_view); }
 
@@ -77,7 +73,7 @@ impl Session {
             return None;
         }
 
-        let view = coop.peers.get(&following.peer)?.view.clone()?;
+        let view = coop.peers.get(&following.peer)?.view()?.clone();
         let id = self.open_coop_map(&view.map)?;
         self.set_level_of(id, view.z);
         if let Some(following) = self.coop.as_mut().and_then(|coop| coop.following.as_mut()) {

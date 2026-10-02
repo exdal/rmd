@@ -17,10 +17,10 @@ use net::{
     Cursor,
     GenerationId,
     MapEdit,
+    PRESENCE_REFRESH,
     PasswordHash,
     PeerId,
     PeerInfo,
-    SELECTION_REFRESH,
     Selection,
     SeqId,
     Server,
@@ -60,19 +60,28 @@ pub(crate) enum Activity {
     },
 }
 
-const SELECTION_TIMEOUT: Duration = Duration::from_secs(3 * SELECTION_REFRESH.as_secs());
+const PRESENCE_TIMEOUT: Duration = Duration::from_secs(3 * PRESENCE_REFRESH.as_secs());
 
-pub(crate) struct RemoteSelection {
-    pub selection: Selection,
-    received: Instant,
+struct Received<T> {
+    value: T,
+    at: Instant,
+}
+
+impl<T> Received<T> {
+    fn now(value: T) -> Self {
+        Self {
+            value,
+            at: Instant::now(),
+        }
+    }
 }
 
 pub(crate) struct RemotePeer {
     pub info: PeerInfo,
-    pub cursor: Option<Cursor>,
+    cursor: Option<Received<Cursor>>,
     pub shown: [f32; 2],
-    pub view: Option<View>,
-    pub selection: Option<RemoteSelection>,
+    view: Option<Received<View>>,
+    selection: Option<Received<Selection>>,
 }
 
 impl RemotePeer {
@@ -86,17 +95,22 @@ impl RemotePeer {
         }
     }
 
+    pub fn cursor(&self) -> Option<&Cursor> { self.cursor.as_ref().map(|cursor| &cursor.value) }
+
+    pub fn view(&self) -> Option<&View> { self.view.as_ref().map(|view| &view.value) }
+
+    pub fn selection(&self) -> Option<&Selection> { self.selection.as_ref().map(|selection| &selection.value) }
+
     fn set_cursor(&mut self, cursor: Option<Cursor>) {
         if let Some(next) = cursor.as_ref()
             && self
-                .cursor
-                .as_ref()
+                .cursor()
                 .is_none_or(|previous| previous.map != next.map || previous.z != next.z)
         {
             self.shown = next.pos;
         }
 
-        self.cursor = cursor;
+        self.cursor = cursor.map(Received::now);
     }
 
     fn follow(&mut self, elapsed: f32) {
@@ -105,19 +119,16 @@ impl RemotePeer {
         };
 
         let blend = 1.0 - (-elapsed * CURSOR_SMOOTHING).exp();
-        for (shown, target) in self.shown.iter_mut().zip(cursor.pos) {
+        for (shown, target) in self.shown.iter_mut().zip(cursor.value.pos) {
             *shown += (target - *shown) * blend;
         }
     }
 
     fn expire(&mut self, now: Instant) {
-        let is_expired = self
-            .selection
-            .as_ref()
-            .is_some_and(|remote| now.duration_since(remote.received) >= SELECTION_TIMEOUT);
-        if is_expired {
-            self.selection = None;
-        }
+        let is_stale = |at: Instant| now.duration_since(at) >= PRESENCE_TIMEOUT;
+        self.cursor.take_if(|cursor| is_stale(cursor.at));
+        self.view.take_if(|view| is_stale(view.at));
+        self.selection.take_if(|selection| is_stale(selection.at));
     }
 }
 

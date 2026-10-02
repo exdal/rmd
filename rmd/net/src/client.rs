@@ -58,8 +58,7 @@ use crate::{
 
 const CURSOR_INTERVAL: Duration = Duration::from_millis(50);
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
-const VIEW_REFRESH: Duration = Duration::from_secs(1);
-pub const SELECTION_REFRESH: Duration = Duration::from_secs(1);
+pub const PRESENCE_REFRESH: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -362,8 +361,9 @@ async fn session(
     let reader = async {
         let mut throttle = time::interval(CURSOR_INTERVAL);
         throttle.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let mut last_view: Option<Instant> = None;
-        let mut last_selection: Option<Instant> = None;
+        let mut last_cursor = None;
+        let mut last_view = None;
+        let mut last_selection = None;
         loop {
             tokio::select! {
                 message = read_message(&mut recv, &mut reader) => match message? {
@@ -404,24 +404,9 @@ async fn session(
                     }
                 },
                 _ = throttle.tick() => {
-                    if presence.cursor.has_changed().unwrap_or(false) {
-                        send_datagram(connection, &Datagram::Cursor(presence.cursor.borrow_and_update().clone()))?;
-                    }
-
-                    let is_stale = presence.view.borrow().is_some()
-                        && last_view.is_none_or(|last| last.elapsed() >= VIEW_REFRESH);
-                    if presence.view.has_changed().unwrap_or(false) || is_stale {
-                        send_datagram(connection, &Datagram::View(presence.view.borrow_and_update().clone()))?;
-                        last_view = Some(Instant::now());
-                    }
-
-                    // peers drop a selection that stops refreshing, so a lost clear heals on its own
-                    let is_stale = presence.selection.borrow().is_some()
-                        && last_selection.is_none_or(|last| last.elapsed() >= SELECTION_REFRESH);
-                    if presence.selection.has_changed().unwrap_or(false) || is_stale {
-                        send_datagram(connection, &Datagram::Selection(presence.selection.borrow_and_update().clone()))?;
-                        last_selection = Some(Instant::now());
-                    }
+                    send_presence(connection, &mut presence.cursor, &mut last_cursor, Datagram::Cursor)?;
+                    send_presence(connection, &mut presence.view, &mut last_view, Datagram::View)?;
+                    send_presence(connection, &mut presence.selection, &mut last_selection, Datagram::Selection)?;
                 },
             }
         }
@@ -431,6 +416,20 @@ async fn session(
         result = writer => result,
         result = reader => result,
     }
+}
+
+// peers drop presence that stops refreshing, so a lost clear heals on its own
+fn send_presence<T: Clone>(
+    connection: &Connection, presence: &mut watch::Receiver<Option<T>>, last: &mut Option<Instant>,
+    datagram: fn(Option<T>) -> Datagram,
+) -> Result<(), Error> {
+    let is_stale = presence.borrow().is_some() && last.is_none_or(|last| last.elapsed() >= PRESENCE_REFRESH);
+    if presence.has_changed().unwrap_or(false) || is_stale {
+        send_datagram(connection, &datagram(presence.borrow_and_update().clone()))?;
+        *last = Some(Instant::now());
+    }
+
+    Ok(())
 }
 
 fn send_datagram(connection: &Connection, datagram: &Datagram) -> Result<(), Error> {
