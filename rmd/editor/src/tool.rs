@@ -13,6 +13,16 @@ use crate::{
     command::Edit,
     document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection},
     frame::HiddenTypes,
+    icons::materialdesignicons::{
+        ICON_COMMENT_TEXT_OUTLINE,
+        ICON_ERASER,
+        ICON_EYEDROPPER,
+        ICON_FIND_REPLACE,
+        ICON_FORMAT_COLOR_FILL,
+        ICON_PENCIL,
+        ICON_SELECT_DRAG,
+        ICON_VECTOR_POLYLINE,
+    },
     visual,
 };
 
@@ -28,6 +38,7 @@ pub enum Tool {
     Delete,
     Replace,
     Fill,
+    Comment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,6 +186,20 @@ impl Tool {
             Tool::Delete => "Delete",
             Tool::Replace => "Replace",
             Tool::Fill => "Fill",
+            Tool::Comment => "Comment",
+        }
+    }
+
+    pub fn icon(self) -> char {
+        match self {
+            Tool::Place => ICON_PENCIL,
+            Tool::Select => ICON_EYEDROPPER,
+            Tool::Node => ICON_VECTOR_POLYLINE,
+            Tool::BlockSelect => ICON_SELECT_DRAG,
+            Tool::Delete => ICON_ERASER,
+            Tool::Replace => ICON_FIND_REPLACE,
+            Tool::Fill => ICON_FORMAT_COLOR_FILL,
+            Tool::Comment => ICON_COMMENT_TEXT_OUTLINE,
         }
     }
 
@@ -182,7 +207,7 @@ impl Tool {
         match self {
             Self::Place => place(context),
             Self::Delete => delete(context),
-            Self::Select | Self::Node | Self::BlockSelect | Self::Replace => None,
+            Self::Select | Self::Node | Self::BlockSelect | Self::Replace | Self::Comment => None,
             Self::Fill => fill(context, Some(MAX_FILL_TILES), None).ok().flatten(),
         }
     }
@@ -200,6 +225,54 @@ impl Tool {
             fill(context, max_tiles, mask)
         } else {
             Ok(self.build_edit(context))
+        }
+    }
+}
+
+impl From<Tool> for net::Tool {
+    fn from(tool: Tool) -> Self {
+        match tool {
+            Tool::Place => Self::Place,
+            Tool::Select => Self::Select,
+            Tool::Node => Self::Node,
+            Tool::BlockSelect => Self::BlockSelect,
+            Tool::Delete => Self::Delete,
+            Tool::Replace => Self::Replace,
+            Tool::Fill => Self::Fill,
+            Tool::Comment => Self::Comment,
+        }
+    }
+}
+
+impl From<net::Tool> for Tool {
+    fn from(tool: net::Tool) -> Self {
+        match tool {
+            net::Tool::Place => Self::Place,
+            net::Tool::Select => Self::Select,
+            net::Tool::Node => Self::Node,
+            net::Tool::BlockSelect => Self::BlockSelect,
+            net::Tool::Delete => Self::Delete,
+            net::Tool::Replace => Self::Replace,
+            net::Tool::Fill => Self::Fill,
+            net::Tool::Comment => Self::Comment,
+        }
+    }
+}
+
+impl From<BlockSelectionMode> for net::SelectionMode {
+    fn from(mode: BlockSelectionMode) -> Self {
+        match mode {
+            BlockSelectionMode::Full => Self::Full,
+            BlockSelectionMode::Hollow { line_width } => Self::Hollow { line_width },
+        }
+    }
+}
+
+impl From<net::SelectionMode> for BlockSelectionMode {
+    fn from(mode: net::SelectionMode) -> Self {
+        match mode {
+            net::SelectionMode::Full => Self::Full,
+            net::SelectionMode::Hollow { line_width } => Self::Hollow { line_width },
         }
     }
 }
@@ -3006,5 +3079,12 @@ mod tests {
         assert_eq!(location.coord, coord);
         assert_eq!(prefab.path, TreePath::parse("/obj/alarm/directional/east"));
         assert_eq!(prefab.var(&"dir".into()), None);
+    }
+
+    #[test]
+    fn selection_modes_survive_the_protocol() {
+        for mode in [BlockSelectionMode::Full, BlockSelectionMode::Hollow { line_width: 3 }] {
+            assert_eq!(BlockSelectionMode::from(net::SelectionMode::from(mode)), mode);
+        }
     }
 }

@@ -305,7 +305,7 @@ impl Session {
         outcome
     }
 
-    fn save_document(&mut self, id: DocumentId) -> std::io::Result<()> { self.write_document(id, None) }
+    pub fn save_document(&mut self, id: DocumentId) -> std::io::Result<()> { self.write_document(id, None) }
 
     pub fn save_map_as(&mut self, path: &Path, format: MapFormat) -> std::io::Result<()> {
         let Some(id) = self.state.active() else {

@@ -1,6 +1,7 @@
 use core::path::TreePath;
 use std::{
     collections::{HashMap, VecDeque},
+    mem,
     path::{Path, PathBuf},
 };
 
@@ -38,6 +39,7 @@ use crate::{
 
 mod blame;
 mod block;
+mod coop;
 mod dialog;
 mod find;
 #[cfg(test)]
@@ -99,7 +101,7 @@ use self::{
     },
     grid::{draw_selected_pixel_grid, draw_tile_grid},
     history::{draw_history_overlay, recent_button_size},
-    load::{DIAGNOSTIC_WARNING_COLOR, DiagnosticsState, draw_load_popup},
+    load::{DIAGNOSTIC_WARNING_COLOR, DiagnosticsState, LoadPopup, draw_load_popup},
     menu::MenuActions,
     node::{NodeOverlayView, NodeRightClick, draw_node_overlay, node_right_click},
     overlay::{
@@ -173,6 +175,7 @@ pub struct VisibleMapView {
     pub connected: Vec<PrefabInstanceId>,
 }
 
+#[derive(Default)]
 pub struct UiOutput {
     pub exit: bool,
     pub map_views: Vec<VisibleMapView>,
@@ -213,6 +216,8 @@ pub enum OpenRequest {
     PickMap,
     Codebase(PathBuf),
     Map(PathBuf),
+    ShareMap(PathBuf),
+    ReloadCoop,
 }
 
 struct StartupPanelFocus {
@@ -270,12 +275,17 @@ pub struct UiState {
     new_level_dialog: Option<NewLevelDialog>,
     resize_map_dialog: Option<ResizeMapDialog>,
     go_to_dialog: Option<GoToDialog>,
+    coop_dialog: Option<coop::CoopDialog>,
+    coop_notice: coop::CoopNotice,
+    comment_draft: Option<coop::CommentDraft>,
+    followed_view: Option<viewport::FollowedView>,
     last_go_to: Option<Coord>,
     tile_fill: Option<TileFillPaths>,
     save_dialog: Option<SaveDialog>,
     close_queue: VecDeque<DocumentId>,
     edit_command: Option<EditCommand>,
     pending_conflict_reload: Option<DocumentId>,
+    save_requested: bool,
     exit_requested: bool,
     show_welcome: bool,
     welcome_map_filter: String,
@@ -340,12 +350,17 @@ impl UiState {
             new_level_dialog: None,
             resize_map_dialog: None,
             go_to_dialog: None,
+            coop_dialog: None,
+            coop_notice: coop::CoopNotice::default(),
+            comment_draft: None,
+            followed_view: None,
             last_go_to: None,
             tile_fill: None,
             save_dialog: None,
             close_queue: VecDeque::new(),
             edit_command: None,
             pending_conflict_reload: None,
+            save_requested: false,
             exit_requested: false,
             show_welcome: true,
             welcome_map_filter: String::new(),
@@ -362,6 +377,8 @@ impl UiState {
     }
 
     pub fn set_open_error(&mut self, error: Option<String>) { self.open_error = error; }
+
+    pub fn reset_coop_notice(&mut self) { self.coop_notice.reset(); }
 
     pub fn reveal_selected_instance(&mut self, session: &Session) {
         self.object_tree.reveal_selected_instance(session);
@@ -390,20 +407,21 @@ impl UiState {
         }
     }
 
-    fn cancel_edit_gestures(&mut self, session: &mut Session, id: Option<DocumentId>) {
+    fn cancel_tool_gestures(&mut self) {
         self.gizmo.cancel();
         self.placement_flash = None;
         self.placement_stroke = None;
         self.pick_stroke = None;
+    }
+
+    fn cancel_edit_gestures(&mut self, session: &mut Session, id: Option<DocumentId>) {
+        self.cancel_tool_gestures();
         session.cancel_node_drag();
 
         if let Some(id) = id
             && let Some(view) = self.map_views.get_mut(&id)
         {
-            restore_rectangle_gesture(session, id, &mut view.rectangle_gesture);
-            view.block_selection_anchor = None;
-            view.block_placement = None;
-            view.paste = None;
+            view.gestures.cancel(session, id);
         }
     }
 
@@ -425,9 +443,94 @@ impl UiState {
             self.update_check.start();
         }
 
+        let root = self.draw_dockspace(ui, session)?;
+
+        if self.keybind_preset_prompt {
+            let keybind_preset = draw_keybind_preset_dialog(ui, &mut self.keybind_preset_prompt);
+            let exit = self.draw_exit_confirmation(ui, session);
+
+            return Ok(UiOutput {
+                exit,
+                keybind_preset,
+                ..UiOutput::default()
+            });
+        }
+
+        let mut menu = self.draw_menu_bar(ui, session, settings, loading);
+        self.reset_layout = menu.reset_layout;
+        settings.mirror_camera ^= menu.toggle_mirror_camera;
+        self.edit_command = menu.edit;
+
+        self.apply_file_actions(ui, session, settings, &mut menu);
+        self.apply_search_actions(ui, session, settings, &mut menu);
+
+        if menu.undo || menu.redo {
+            self.cancel_edit_gestures(session, session.state.active());
+            if menu.undo {
+                session.undo();
+            } else {
+                session.redo();
+            }
+        }
+
+        self.apply_view_toggles(session, settings, &menu);
+
+        if menu.open_save_dialog {
+            self.open_save_dialog(ui, session, None);
+        }
+
+        draw_save_dialog(ui, session, &mut self.save_dialog);
+
+        let reload_profile = self.draw_settings_window(ui, session, settings, load.is_some());
+        self.show_welcome |= menu.show_welcome;
+
+        let open_source = self.draw_panels(ui, session, settings);
+        let load_conflicts = self.draw_reload_conflicts_popup(ui, session);
+
+        let mut welcome = WelcomeOutput::default();
+        self.draw_welcome(ui, session, settings, loading, &mut welcome);
+        match welcome.forget {
+            Some(ForgetRequest::Codebase(path)) => settings.forget_codebase(&path),
+            Some(ForgetRequest::Map(path)) => settings.forget_recent(&path),
+            None => {},
+        }
+
+        let pick_new_map_path = self.draw_new_map(ui, session, welcome.new_map_dialog || menu.new_map);
+        let load_popup = self.draw_load_window(ui, load);
+        let (map_views, picking) = self.draw_open_maps(ui, session, settings, menu.refit);
+        self.dm_ui.draw(ui, session, root.raw());
+        self.draw_map_dialogs(ui, session, &menu);
+        let coop_open = self.draw_coop_dialogs(ui, session, settings, loading, menu.coop_dialog);
+        if let Some(coop) = session.coop() {
+            coop::draw_activity(ui, coop);
+        }
+
+        self.settings_window
+            .finish_keybind_capture(ui, &mut settings.keybindings);
+
+        let exit = self.draw_exit_confirmation(ui, session);
+        self.popup_was_open = ui.is_popup_open_with_flags("", dear_imgui_rs::PopupQueryFlags::ANY_POPUP);
+
+        Ok(UiOutput {
+            exit,
+            map_views,
+            picking,
+            open: coop_open.or(welcome.open).or(menu.open),
+            open_source,
+            pick_new_map_path,
+            screenshot: menu.screenshot,
+            cancel_load: load_popup.cancel,
+            copy_to_clipboard: load_popup.copy.or_else(|| self.copy_to_clipboard.take()),
+            reload_profile,
+            load_conflicts,
+            keybind_preset: None,
+        })
+    }
+
+    fn draw_dockspace(&mut self, ui: &Ui, session: &Session) -> Result<Id, DockspaceError> {
         let root = ui.get_id(DOCKSPACE_ID);
         // map views only exist at runtime, so a reset has to name them to keep them docked
-        let reset = std::mem::take(&mut self.reset_layout).then(|| {
+        let reset = mem::take(&mut self.reset_layout).then(|| {
             let map_views = session
                 .state
                 .document_ids()
@@ -455,123 +558,71 @@ impl UiState {
             .build()?;
         self.dockspace_root = Some(root);
 
-        if self.keybind_preset_prompt {
-            let keybind_preset = draw_keybind_preset_dialog(ui, &mut self.keybind_preset_prompt);
-            let exit = self.draw_exit_confirmation(ui, session);
+        Ok(root)
+    }
 
-            return Ok(UiOutput {
-                exit,
-                map_views: Vec::new(),
-                picking: None,
-                open: None,
-                open_source: None,
-                pick_new_map_path: false,
-                screenshot: None,
-                cancel_load: false,
-                copy_to_clipboard: None,
-                reload_profile: None,
-                load_conflicts: None,
-                keybind_preset,
-            });
-        }
-
-        let mut open_new_map_dialog = false;
-        let mut pick_new_map_path = false;
-        let MenuActions {
-            mut open,
-            show_welcome,
-            mut open_save_dialog,
-            new_map,
-            mut save_all,
-            mut close_map,
-            close_all,
-            edit,
-            mut screenshot,
-            toggle_areas,
-            toggle_area_outlines,
-            toggle_lighting,
-            toggle_tile_grid,
-            toggle_pixel_grid,
-            level_delta,
-            underlay_depth,
-            refit,
-            undo,
-            redo,
-            mut search,
-            mut go_to,
-            resize_map,
-            toggle_mirror_camera,
-            reset_layout,
-        } = self.draw_menu_bar(ui, session, settings, loading);
-        self.reset_layout = reset_layout;
-        settings.mirror_camera ^= toggle_mirror_camera;
-
-        if session.map().is_some()
-            && !open_save_dialog
+    fn map_keys_enabled(&self, ui: &Ui, session: &Session) -> bool {
+        session.map().is_some()
             && self.save_dialog.is_none()
             && !self.settings_window.is_capturing_keybind()
             && !ui.io().want_text_input()
-            && settings.keybindings.get(KeybindAction::Save).is_pressed(ui)
+    }
+
+    fn apply_file_actions(&mut self, ui: &Ui, session: &mut Session, settings: &Settings, menu: &mut MenuActions) {
+        // https://i.redd.it/ggq5w2aliicf1.png
+        let is_save_requested = mem::take(&mut self.save_requested);
+        let is_save_pressed =
+            self.map_keys_enabled(ui, session) && settings.keybindings.get(KeybindAction::Save).is_pressed(ui);
+        if session.map().is_some()
+            && !menu.open_save_dialog
+            && self.save_dialog.is_none()
+            && (is_save_requested || is_save_pressed)
         {
             if session.can_save_map_in_place() {
                 if let Err(error) = session.save_map() {
-                    self.save_dialog = Some(SaveDialog {
-                        path: session
-                            .map_path()
-                            .map(|path| path.display().to_string())
-                            .unwrap_or_default(),
-                        format: session.map_format().unwrap_or_default(),
-                        error: Some(error.to_string()),
-                    });
-                    ui.open_popup(SAVE_MAP_POPUP);
+                    self.open_save_dialog(ui, session, Some(error.to_string()));
                 }
             } else {
-                open_save_dialog = true;
+                menu.open_save_dialog = true;
             }
         }
 
-        let file_keys = session.map().is_some()
-            && self.save_dialog.is_none()
-            && !self.settings_window.is_capturing_keybind()
-            && !ui.io().want_text_input();
-        save_all |= file_keys && settings.keybindings.get(KeybindAction::SaveAll).is_pressed(ui);
-        close_map |= file_keys && settings.keybindings.get(KeybindAction::CloseMap).is_pressed(ui);
-        if save_all {
+        let is_map_keys_enabled = self.map_keys_enabled(ui, session);
+        menu.save_all |= is_map_keys_enabled && settings.keybindings.get(KeybindAction::SaveAll).is_pressed(ui);
+        menu.close_map |= is_map_keys_enabled && settings.keybindings.get(KeybindAction::CloseMap).is_pressed(ui);
+        if menu.save_all {
             let outcome = session.save_all();
             if let Some(error) = outcome.error {
                 self.open_error = Some(error);
             } else if let Some(id) = outcome.needs_path {
                 session.set_active_document(id);
-                open_save_dialog = true;
+                menu.open_save_dialog = true;
             }
         }
-        if close_map && let Some(id) = session.state.active() {
+
+        if menu.close_map
+            && let Some(id) = session.state.active()
+        {
             self.request_close(session, [id]);
         }
-        if close_all {
+
+        if menu.close_all {
             self.request_close(session, session.state.document_ids());
         }
-        self.edit_command = edit;
 
-        if session.map().is_some()
-            && self.save_dialog.is_none()
-            && !self.settings_window.is_capturing_keybind()
-            && !ui.io().want_text_input()
-            && settings.keybindings.get(KeybindAction::Screenshot).is_pressed(ui)
-        {
-            screenshot = Some(ScreenshotRequest {
+        if self.map_keys_enabled(ui, session) && settings.keybindings.get(KeybindAction::Screenshot).is_pressed(ui) {
+            menu.screenshot = Some(ScreenshotRequest {
                 area: ScreenshotArea::Map,
                 copy: false,
             });
         }
+    }
 
-        let search_keys = session.map().is_some()
-            && self.save_dialog.is_none()
-            && !self.settings_window.is_capturing_keybind()
-            && !ui.io().want_text_input();
-        search |= search_keys && settings.keybindings.get(KeybindAction::Find).is_pressed(ui);
-        go_to |= search_keys && settings.keybindings.get(KeybindAction::GoTo).is_pressed(ui);
-        if search {
+    fn apply_search_actions(&mut self, ui: &Ui, session: &mut Session, settings: &Settings, menu: &mut MenuActions) {
+        let is_map_keys_enabled = self.map_keys_enabled(ui, session);
+        menu.search |= is_map_keys_enabled && settings.keybindings.get(KeybindAction::Find).is_pressed(ui);
+        menu.go_to |= is_map_keys_enabled && settings.keybindings.get(KeybindAction::GoTo).is_pressed(ui);
+        if menu.search {
             match session
                 .state
                 .active_document()
@@ -585,82 +636,91 @@ impl UiState {
             }
         }
 
-        if search_keys {
-            let next = settings
-                .keybindings
-                .get(KeybindAction::FindNext)
-                .is_pressed_repeating(ui);
-            let previous = settings
-                .keybindings
-                .get(KeybindAction::FindPrevious)
-                .is_pressed_repeating(ui);
-            if (next || previous)
-                && let Some(target) = self.find.step(session, next)
-            {
-                self.jump_to_instance(session, target);
-            }
+        if !is_map_keys_enabled {
+            return;
         }
 
-        if undo || redo {
-            self.cancel_edit_gestures(session, session.state.active());
-            if undo {
-                session.undo();
-            } else {
-                session.redo();
-            }
+        let next = settings
+            .keybindings
+            .get(KeybindAction::FindNext)
+            .is_pressed_repeating(ui);
+        let previous = settings
+            .keybindings
+            .get(KeybindAction::FindPrevious)
+            .is_pressed_repeating(ui);
+        if (next || previous)
+            && let Some(target) = self.find.step(session, next)
+        {
+            self.jump_to_instance(session, target);
         }
+    }
 
-        if toggle_areas {
+    fn apply_view_toggles(&mut self, session: &mut Session, settings: &mut Settings, menu: &MenuActions) {
+        if menu.toggle_areas {
             session.toggle_areas();
         }
-        if toggle_area_outlines {
+
+        if menu.toggle_area_outlines {
             session.toggle_area_outlines();
         }
-        if toggle_lighting {
+
+        if menu.toggle_lighting {
             session.toggle_lighting();
         }
-        if toggle_tile_grid {
+
+        if menu.toggle_tile_grid {
             settings.show_tile_grid = !settings.show_tile_grid;
         }
-        if toggle_pixel_grid {
+
+        if menu.toggle_pixel_grid {
             settings.show_selected_pixel_grid = !settings.show_selected_pixel_grid;
         }
-        if level_delta != 0 {
-            request_level_change(session, level_delta, &mut self.new_level_dialog);
+
+        if menu.level_delta != 0 {
+            request_level_change(session, menu.level_delta, &mut self.new_level_dialog);
         }
-        if let Some(depth) = underlay_depth {
+
+        if let Some(depth) = menu.underlay_depth {
             session.set_underlay_depth(depth);
         }
+    }
 
-        if open_save_dialog {
-            self.save_dialog = Some(SaveDialog {
-                path: session
-                    .map_path()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_default(),
-                format: session.map_format().unwrap_or_default(),
-                error: None,
-            });
-            ui.open_popup(SAVE_MAP_POPUP);
-        }
-        draw_save_dialog(ui, session, &mut self.save_dialog);
+    fn open_save_dialog(&mut self, ui: &Ui, session: &Session, error: Option<String>) {
+        self.save_dialog = Some(SaveDialog {
+            path: session
+                .map_path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            format: session.map_format().unwrap_or_default(),
+            error,
+        });
+        ui.open_popup(SAVE_MAP_POPUP);
+    }
 
-        let settings_output = self.settings_window.draw(ui, session, settings, load.is_some());
+    fn draw_settings_window(
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, loading: bool,
+    ) -> Option<ProfileReload> {
+        let output = self.settings_window.draw(ui, session, settings, loading);
         session.sync_git_enabled(settings.git_enabled);
         session.set_sanitize_vars_on_save(settings.sanitize_vars_on_save);
-        if settings_output.object_tree_changed {
+        if output.object_tree_changed {
             self.object_tree.invalidate_filter();
         }
-        self.show_welcome |= show_welcome;
 
+        output.reload_profile
+    }
+
+    fn draw_panels(&mut self, ui: &Ui, session: &mut Session, settings: &mut Settings) -> Option<SourceLocation> {
         if session.take_loaded_conflicts().is_some() {
             self.git_panel.request(git::GitTab::Conflicts);
         }
+
         self.panel_focus_requested = self.find.has_focus_request() || self.git_panel.has_focus_request();
         // The Git tab shares the object tree's dock node, a request to show it wins
         if self.git_panel.has_focus_request() {
             self.select_object_tree.cancel();
         }
+
         let object_tree = self
             .object_tree
             .draw(ui, session, settings, self.select_object_tree.requested());
@@ -668,84 +728,90 @@ impl UiState {
         if let Some(path) = &object_tree.find {
             self.find.open_for_path(session, path);
         }
-        let mut open_source = object_tree.open_source;
+
         if self.find.has_focus_request() {
             self.select_inspector.cancel();
         }
+
         let inspector = self
             .inspector
             .draw(ui, session, settings, self.select_inspector.requested());
         self.select_inspector.after_draw(inspector.docked);
         self.copy_to_clipboard = inspector.copy_hash.or(object_tree.copy_path);
-        open_source = inspector.open_source.or(open_source);
         if let Some((document, instance)) = inspector.find_similar {
             self.find
                 .open_for(session, document, instance, find::SimilarMatchKind::Prefab);
         }
+
         if let Some(target) = self.find.draw(ui, session, settings) {
             self.jump_to_instance(session, target);
         }
+
         let git_output = self.git_panel.draw(ui, session, settings);
         if git_output.copy.is_some() {
             self.copy_to_clipboard = git_output.copy;
         }
+
         if let Some((id, coord)) = git_output.center {
             self.center_view_on(session, id, coord);
         }
+
         if let Some(id) = git_output.load_conflicts {
             self.pending_conflict_reload = Some(id);
         }
-        if let Some(id) = self.pending_conflict_reload
-            && session.state.document(id).is_some_and(MapDocument::is_dirty)
-            && !ui.is_popup_open(RELOAD_CONFLICTS_POPUP)
-        {
+
+        inspector.open_source.or(object_tree.open_source)
+    }
+
+    fn draw_reload_conflicts_popup(&mut self, ui: &Ui, session: &Session) -> Option<DocumentId> {
+        let id = self.pending_conflict_reload?;
+        if !session.state.document(id).is_some_and(MapDocument::is_dirty) {
+            self.pending_conflict_reload = None;
+            return Some(id);
+        }
+
+        if !ui.is_popup_open(RELOAD_CONFLICTS_POPUP) {
             ui.open_popup(RELOAD_CONFLICTS_POPUP);
         }
+
+        let _modal = ui
+            .begin_modal_popup_config(RELOAD_CONFLICTS_POPUP)
+            .flags(WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_SAVED_SETTINGS)
+            .begin()?;
+        ui.text("Discard unsaved changes and load conflicts from Git?");
         let mut load_conflicts = None;
-        if let Some(id) = self.pending_conflict_reload {
-            if session.state.document(id).is_some_and(MapDocument::is_dirty) {
-                if let Some(_modal) = ui
-                    .begin_modal_popup_config(RELOAD_CONFLICTS_POPUP)
-                    .flags(WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_SAVED_SETTINGS)
-                    .begin()
-                {
-                    ui.text("Discard unsaved changes and load conflicts from Git?");
-                    if ui.button("Discard and load") {
-                        load_conflicts = Some(id);
-                        self.pending_conflict_reload = None;
-                        ui.close_current_popup();
-                    }
-                    ui.same_line();
-                    if ui.button("Cancel") {
-                        self.pending_conflict_reload = None;
-                        ui.close_current_popup();
-                    }
-                }
-            } else {
-                load_conflicts = Some(id);
-                self.pending_conflict_reload = None;
-            }
+        if ui.button("Discard and load") {
+            load_conflicts = Some(id);
+            self.pending_conflict_reload = None;
+            ui.close_current_popup();
         }
-        let mut welcome = WelcomeOutput::default();
-        self.draw_welcome(ui, session, settings, loading, &mut welcome);
-        open = welcome.open.or(open);
-        open_new_map_dialog |= welcome.new_map_dialog || new_map;
-        match welcome.forget {
-            Some(ForgetRequest::Codebase(path)) => settings.forget_codebase(&path),
-            Some(ForgetRequest::Map(path)) => settings.forget_recent(&path),
-            None => {},
+
+        ui.same_line();
+        if ui.button("Cancel") {
+            self.pending_conflict_reload = None;
+            ui.close_current_popup();
         }
-        if open_new_map_dialog {
+
+        load_conflicts
+    }
+
+    fn draw_new_map(&mut self, ui: &Ui, session: &mut Session, open: bool) -> bool {
+        if open {
             self.new_map_dialog = Some(NewMapDialog::default());
             ui.open_popup(NEW_MAP_POPUP);
         }
+
         let (pick_path, created) = draw_new_map_dialog(ui, session, &mut self.new_map_dialog);
-        pick_new_map_path |= pick_path;
         if created {
             self.show_welcome = false;
             self.request_refit(None);
         }
-        let load_popup = draw_load_popup(
+
+        pick_path
+    }
+
+    fn draw_load_window(&mut self, ui: &Ui, load: Option<&LoadView>) -> LoadPopup {
+        let popup = draw_load_popup(
             ui,
             &self.load_window,
             &mut self.load_window_size,
@@ -753,7 +819,7 @@ impl UiState {
             self.load_notice.as_mut(),
             &self.diagnostics,
         );
-        if load_popup.dismiss {
+        if popup.dismiss {
             if self.load_notice.is_some() {
                 self.load_notice = None;
             } else {
@@ -761,18 +827,33 @@ impl UiState {
             }
         }
 
-        let (map_views, picking) = if session.state.is_empty() {
-            (Vec::new(), None)
+        popup
+    }
+
+    fn draw_open_maps(
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, refit: bool,
+    ) -> (Vec<VisibleMapView>, Option<usize>) {
+        self.follow_coop_peer(ui, session);
+        let (map_views, picking, coop) = if session.state.is_empty() {
+            (Vec::new(), None, viewport::CoopPresence::default())
         } else {
             self.draw_map_views(ui, session, settings, refit)
         };
+        self.stop_following_when_moved(session);
+        session.coop_cursor(coop.cursor);
+        session.coop_view(coop.view);
+        session.coop_selection(coop.selection);
         self.edit_command = None;
 
-        self.dm_ui.draw(ui, session, root.raw());
+        (map_views, picking)
+    }
 
+    fn draw_map_dialogs(&mut self, ui: &Ui, session: &mut Session, menu: &MenuActions) {
         draw_new_level_dialog(ui, session, &mut self.new_level_dialog, &mut self.tile_fill);
 
-        if resize_map && let Some(size) = session.map().map(|map| map.size) {
+        if menu.resize_map
+            && let Some(size) = session.map().map(|map| map.size)
+        {
             self.cancel_edit_gestures(session, session.state.active());
             let fill = TileFillSearch::new(session, self.tile_fill.as_ref());
             self.resize_map_dialog = Some(ResizeMapDialog::new(size, fill));
@@ -783,40 +864,62 @@ impl UiState {
             self.request_refit(session.state.active());
         }
 
-        if go_to && let Some(size) = session.map().map(|map| map.size) {
+        if menu.go_to
+            && let Some(size) = session.map().map(|map| map.size)
+        {
             let (x, y) = self
                 .last_go_to
                 .map_or((size.x.div_ceil(2), size.y.div_ceil(2)), |last| (last.x, last.y));
             self.go_to_dialog = Some(GoToDialog::new(Coord::new(x, y, session.z())));
             ui.open_popup(GO_TO_POPUP);
         }
+
         if let Some(coord) = draw_go_to_dialog(ui, session, &mut self.go_to_dialog)
             && let Some(document) = session.state.active()
         {
             self.last_go_to = Some(coord);
             self.go_to_tile(session, document, coord, ui.time());
         }
+    }
 
-        self.settings_window
-            .finish_keybind_capture(ui, &mut settings.keybindings);
+    fn draw_coop_dialogs(
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, loading: bool,
+        kind: Option<coop::CoopDialogKind>,
+    ) -> Option<OpenRequest> {
+        if let Some(kind) = kind {
+            let dialog = coop::CoopDialog::new(kind, settings);
+            ui.open_popup(dialog.popup());
+            self.coop_dialog = Some(dialog);
+        }
 
-        let exit = self.draw_exit_confirmation(ui, session);
-        self.popup_was_open = ui.is_popup_open_with_flags("", dear_imgui_rs::PopupQueryFlags::ANY_POPUP);
+        coop::draw_coop_dialog(ui, session, settings, &mut self.coop_dialog);
 
-        Ok(UiOutput {
-            exit,
-            map_views,
-            picking,
-            open,
-            open_source,
-            pick_new_map_path,
-            screenshot,
-            cancel_load: load_popup.cancel,
-            copy_to_clipboard: load_popup.copy.or_else(|| self.copy_to_clipboard.take()),
-            reload_profile: settings_output.reload_profile,
-            load_conflicts,
-            keybind_preset: None,
-        })
+        match coop::draw_out_of_date_dialog(ui, session) {
+            Some((id, coop::OutOfDateChoice::SaveMine)) => {
+                session.set_active_document(id);
+                self.save_requested = true;
+            },
+            Some((id, coop::OutOfDateChoice::DiscardMine)) => session.discard_for_coop_map(id),
+            Some((_, coop::OutOfDateChoice::Leave)) => session.leave_coop(),
+            None => {},
+        }
+
+        match coop::draw_coop_notice(ui, session.coop(), loading, &mut self.coop_notice) {
+            Some(coop::CoopNoticeChoice::Retry) => {
+                match session.retry_coop() {
+                    Ok(()) => self.coop_notice.reset(),
+                    Err(error) => self.open_error = Some(error),
+                }
+
+                None
+            },
+            Some(coop::CoopNoticeChoice::ReloadAndRetry) => Some(OpenRequest::ReloadCoop),
+            Some(coop::CoopNoticeChoice::Dismiss) => {
+                session.leave_coop();
+                None
+            },
+            None => None,
+        }
     }
 }
 
@@ -1234,6 +1337,235 @@ mod tests {
     }
 
     #[test]
+    fn an_out_of_date_map_asks_in_a_popup_until_the_user_leaves() {
+        use std::{
+            thread,
+            time::{Duration, Instant},
+        };
+
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme");
+        let open = |width: u32| {
+            let mut session = Session::new();
+            session.load_environment(&entry).unwrap();
+            let path = session.codebase_dir().unwrap().join("_maps/out-of-date.dmm");
+            session.apply_map(crate::loader::LoadedMap {
+                path,
+                map: dmm::Map::new(Size { x: width, y: 1, z: 1 }),
+                z: 1,
+                errors: vec![],
+                repo: None,
+                conflict: None,
+            });
+            let id = session.state.active().unwrap();
+
+            (session, id)
+        };
+        let poll_until = |sessions: &mut [&mut Session], done: &dyn Fn(&[&mut Session]) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !done(sessions) {
+                assert!(Instant::now() < deadline, "co-op never got there");
+                for session in sessions.iter_mut() {
+                    session.poll_coop();
+                }
+
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+
+        let (mut host, _) = open(2);
+        host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+            .unwrap();
+        poll_until(&mut [&mut host], &|sessions| {
+            sessions[0].coop().is_some_and(|coop| coop.is_connected())
+        });
+        host.share_coop_map();
+        poll_until(&mut [&mut host], &|sessions| {
+            sessions[0].coop().is_some_and(|coop| !coop.shared_maps.is_empty())
+        });
+
+        let (mut guest, local) = open(1);
+        guest.state.document_mut(local).unwrap().mark_unsaved();
+        let port = host.coop().and_then(|coop| coop.host()).unwrap().port();
+        guest
+            .join_coop(
+                format!("127.0.0.1:{port}"),
+                net::hash_password("hunter2"),
+                String::from("guest"),
+            )
+            .unwrap();
+        poll_until(&mut [&mut host, &mut guest], &|sessions| {
+            sessions[1].coop_out_of_date(local).is_some()
+        });
+
+        let mut context = rectangle_context();
+        let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
+        context.io_mut().set_config_flags(flags);
+        let mut state = UiState::new(false).unwrap();
+        let mut settings = Settings {
+            check_for_updates: false,
+            ..Settings::default()
+        };
+        let mut frame = |state: &mut UiState, session: &mut Session| {
+            let ui = context.frame();
+            state.draw(ui, session, &mut settings, None).unwrap();
+            let is_open = ui.is_popup_open(super::coop::OUT_OF_DATE_POPUP);
+            assert!(context.render_legacy().valid());
+            is_open
+        };
+        assert!((0..3).map(|_| frame(&mut state, &mut guest)).last().unwrap());
+
+        guest.leave_coop();
+        assert!(!(0..3).map(|_| frame(&mut state, &mut guest)).last().unwrap());
+        let document = guest.state.document(local).unwrap();
+        assert!(document.is_dirty());
+        assert!(!document.is_read_only());
+        assert_eq!(document.map.size.x, 1);
+    }
+
+    #[test]
+    fn the_codebase_dialog_supports_retry_close_and_escape_without_maps() {
+        use dear_imgui_rs::{Key, MouseButton, sys};
+
+        use super::OpenRequest;
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = rectangle_context();
+        let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
+        context.io_mut().set_config_flags(flags);
+        let mut state = UiState::new(false).unwrap();
+        let mut session = Session::new();
+        let original = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme");
+        session.load_environment(&original).unwrap();
+        session
+            .join_coop("not a host".into(), net::hash_password("password"), "guest".into())
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("rmd-codebase-notice-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("game.dme"), "/obj/different").unwrap();
+        session.load_environment(&dir.join("game.dme")).unwrap();
+        assert!(matches!(
+            session.coop().unwrap().status,
+            crate::session::CoopStatus::CodebaseMismatch { .. }
+        ));
+        assert!(session.state.is_empty());
+        let mut settings = Settings {
+            check_for_updates: false,
+            ..Settings::default()
+        };
+        let load = crate::loader::LoadView {
+            title: "Opening codebase",
+            path: "game.dme".into(),
+            snapshot: editor::progress::Progress::new().snapshot(),
+            cancelling: false,
+            cancellable: true,
+        };
+        let frame = |context: &mut dear_imgui_rs::Context,
+                     state: &mut UiState,
+                     session: &mut Session,
+                     settings: &mut Settings,
+                     loading: bool| {
+            let ui = context.frame();
+            let output = state.draw(ui, session, settings, loading.then_some(&load)).unwrap();
+            let is_open = ui.is_popup_open(super::coop::STATUS_POPUP);
+            assert!(context.render_legacy().valid());
+            (output.open, is_open)
+        };
+        for _ in 0..4 {
+            assert_eq!(
+                frame(&mut context, &mut state, &mut session, &mut settings, true),
+                (None, false),
+                "the dialog waits for loading to finish"
+            );
+        }
+
+        let work_pos = context.main_viewport().work_pos();
+        for _ in 0..4 {
+            assert_eq!(
+                frame(&mut context, &mut state, &mut session, &mut settings, false),
+                (None, true)
+            );
+        }
+
+        let (position, size) = unsafe {
+            let window = sys::igFindWindowByName(c"Co-op unavailable##coop-status".as_ptr());
+            assert!(!window.is_null());
+            assert_ne!((*window).Flags & sys::ImGuiWindowFlags_Modal, 0);
+            ([(*window).Pos.x, (*window).Pos.y], [(*window).Size.x, (*window).Size.y])
+        };
+        assert_eq!(
+            context.main_viewport().work_pos(),
+            work_pos,
+            "the modal preserves the dockspace layout"
+        );
+        let padding = context.style().window_padding();
+        let close = [position[0] + padding[0] + 8.0, position[1] + size[1] - padding[1] - 8.0];
+        let retry = [close[0] + 80.0, close[1]];
+        for down in [false, true, false] {
+            context.io_mut().add_mouse_pos_event(retry);
+            context.io_mut().add_mouse_button_event(MouseButton::Left, down);
+            assert_eq!(
+                frame(&mut context, &mut state, &mut session, &mut settings, true),
+                (None, true),
+                "retry is disabled while loading"
+            );
+        }
+
+        let mut requested = None;
+        for down in [false, true, false] {
+            context.io_mut().add_mouse_pos_event(retry);
+            context.io_mut().add_mouse_button_event(MouseButton::Left, down);
+            requested = frame(&mut context, &mut state, &mut session, &mut settings, false)
+                .0
+                .or(requested);
+        }
+
+        assert_eq!(requested, Some(OpenRequest::ReloadCoop));
+        for _ in 0..2 {
+            assert_eq!(
+                frame(&mut context, &mut state, &mut session, &mut settings, false),
+                (None, false),
+                "the previous failure must not reopen during a retry"
+            );
+        }
+
+        state.reset_coop_notice();
+        for _ in 0..3 {
+            assert_eq!(
+                frame(&mut context, &mut state, &mut session, &mut settings, false),
+                (None, true),
+                "a repeated mismatch opens the dialog for the new attempt"
+            );
+        }
+
+        for down in [false, true, false] {
+            context.io_mut().add_mouse_pos_event(close);
+            context.io_mut().add_mouse_button_event(MouseButton::Left, down);
+            frame(&mut context, &mut state, &mut session, &mut settings, false);
+        }
+
+        assert!(session.coop().is_none());
+
+        session
+            .join_coop("not a host".into(), net::hash_password("password"), "guest".into())
+            .unwrap();
+        session.load_environment(&original).unwrap();
+        for _ in 0..3 {
+            assert_eq!(
+                frame(&mut context, &mut state, &mut session, &mut settings, false),
+                (None, true)
+            );
+        }
+
+        context.io_mut().add_key_event(Key::Escape, true);
+        assert_eq!(
+            frame(&mut context, &mut state, &mut session, &mut settings, false),
+            (None, false)
+        );
+        assert!(session.coop().is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn editing_commands_are_bound_to_the_usual_chords() {
         let bindings = KeyBindings::default();
 
@@ -1262,7 +1594,7 @@ mod tests {
             KeyBinding::new(dear_imgui_rs::Key::N)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 55);
+        assert_eq!(KeybindAction::ALL.len(), 56);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));

@@ -6,7 +6,8 @@ use std::{
 
 use codegen::CodegenError;
 use dmi::error::IconError;
-use preprocessor::error::PreprocessError;
+use net::CodebaseHash;
+use preprocessor::{PreludeFile, Preprocessor, SourceCache, error::PreprocessError, prelude_files};
 use sema::error::SemaError;
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +16,7 @@ use crate::{
     LoadError,
     ObjectTree,
     Profiles,
+    fingerprint,
     progress::{Progress, Stage},
 };
 
@@ -179,15 +181,7 @@ pub fn baking_enabled(setting: bool) -> bool { std::env::var_os("DM_BAKE").map_o
 
 pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) -> Result<Compiled, LoadError> {
     let arena = StrArena::new();
-    let editor = compile_view(
-        &arena,
-        entry,
-        false,
-        false,
-        options,
-        preprocessor::SourceCache::default(),
-        progress,
-    )?;
+    let editor = compile_view(&arena, entry, false, false, options, SourceCache::default(), progress)?;
 
     let bake = if options.enabled {
         Some(compile_view(
@@ -288,6 +282,7 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
     };
 
     Ok(Compiled {
+        fingerprint: fingerprint::object_tree(&editor.tree, &editor.builtin_files),
         tree: editor.tree,
         bake_program,
         profiles,
@@ -308,17 +303,17 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
 
 fn compile_view<'a>(
     arena: &'a StrArena, entry: &Path, baking: bool, generate: bool, options: &BakeOptions,
-    source_cache: preprocessor::SourceCache<'a>, progress: &'a Progress,
+    source_cache: SourceCache<'a>, progress: &'a Progress,
 ) -> Result<CompiledView<'a>, LoadError> {
     progress.enter(Stage::Preprocess, 0);
-    let mut prelude = preprocessor::prelude_files();
+    let mut prelude = prelude_files();
     if let Some((name, source)) = options.forced_profile.and_then(BundledProfile::defines) {
-        prelude.push(preprocessor::PreludeFile::Embedded(name, source));
+        prelude.push(PreludeFile::Embedded(name, source));
     }
     let postlude = options
         .forced_profile
-        .map(|profile| preprocessor::PreludeFile::Embedded(profile.source_name(), profile.source()));
-    let preprocessed = preprocessor::Preprocessor::new(arena)
+        .map(|profile| PreludeFile::Embedded(profile.source_name(), profile.source()));
+    let preprocessed = Preprocessor::new(arena)
         .with_source_cache(source_cache)
         .with_prelude(prelude)
         .with_postlude(postlude)
@@ -384,6 +379,7 @@ fn compile_view<'a>(
         root,
         files,
         maps,
+        builtin_files: preprocessed.builtin_files,
         resource_dirs: preprocessed.resource_dirs,
         errors: preprocessed.errors,
         sema_errors,
@@ -393,6 +389,7 @@ fn compile_view<'a>(
 }
 
 pub(crate) struct Compiled {
+    pub fingerprint: CodebaseHash,
     pub tree: ObjectTree,
     pub bake_program: Option<BakeProgram>,
     pub profiles: Option<Profiles>,
@@ -415,12 +412,13 @@ struct CompiledView<'a> {
     module: Option<ir::Module>,
     root: PathBuf,
     files: Vec<PathBuf>,
+    builtin_files: Vec<FileId>,
     maps: Vec<PathBuf>,
     resource_dirs: Vec<PathBuf>,
     errors: Vec<PreprocessError>,
     sema_errors: Vec<SemaError>,
     optimization_timings: ir::opt::OptimizationTimings,
-    source_cache: preprocessor::SourceCache<'a>,
+    source_cache: SourceCache<'a>,
 }
 
 #[cfg(test)]

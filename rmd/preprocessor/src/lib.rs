@@ -157,6 +157,8 @@ pub struct Preprocessed<'a> {
     pub tokens: Vec<Spanned<'a>>,
     pub sources: SourceMap<'a>,
     pub entry: Option<FileId>,
+    /// `<stddef.dm>`
+    pub builtin_files: Vec<FileId>,
     /// `#include "map.dmm"`
     pub resources: Vec<PathBuf>,
     /// `#define FILE_DIR "icons"`
@@ -182,6 +184,7 @@ pub struct Preprocessor<'a> {
     conditionals: Vec<Option<bool>>,
     pragmas: PragmaTable,
     output: Vec<Spanned<'a>>,
+    builtin_files: Vec<FileId>,
     resources: Vec<PathBuf>,
     resource_dirs: Vec<PathBuf>,
     included: HashSet<PathBuf>,
@@ -217,6 +220,7 @@ impl<'a> Preprocessor<'a> {
             conditionals: Vec::new(),
             pragmas: PragmaTable::new(),
             output: Vec::new(),
+            builtin_files: Vec::new(),
             resources: Vec::new(),
             resource_dirs: Vec::new(),
             included: HashSet::new(),
@@ -343,6 +347,7 @@ impl<'a> Preprocessor<'a> {
             entry: self.sources.find(&entry),
             tokens: self.output,
             sources: self.sources,
+            builtin_files: self.builtin_files,
             resources: self.resources,
             resource_dirs: self.resource_dirs,
             defines: self.defines,
@@ -1487,6 +1492,7 @@ impl<'a> Preprocessor<'a> {
     fn open_embedded(&mut self, name: &str, contents: &'static str) {
         let arena = self.arena;
         let file = self.sources.add(arena, name, contents.to_string());
+        self.builtin_files.push(file);
 
         self.push_file(file, Path::new(""));
     }

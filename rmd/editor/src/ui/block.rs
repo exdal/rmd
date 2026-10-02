@@ -2,7 +2,7 @@ use dear_imgui_rs::{DragFlags, DrawListMut, Key, Ui};
 use dmm::{Coord, Size};
 use editor::{
     document::{DocumentId, Selection},
-    icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_MULTIPLICATION},
+    icons::materialdesignicons::ICON_CIRCLE_SMALL,
     tool::{BlockSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
 };
 
@@ -140,6 +140,17 @@ pub(super) fn marching_stripe_offset(ui: &Ui) -> f32 {
     (ui.time() as f32 * BLOCK_STRIPE_SPEED).rem_euclid(BLOCK_STRIPE_LENGTH * 2.0)
 }
 
+pub(super) fn fill_selection(draw: &DrawListMut<'_>, bounds: OverlayRect, inner: Option<OverlayRect>, color: [f32; 4]) {
+    match inner {
+        Some(inner) => {
+            for region in ring_regions(bounds, inner) {
+                draw.add_rect(region.min, region.max, color).filled(true).build();
+            }
+        },
+        None => draw.add_rect(bounds.min, bounds.max, color).filled(true).build(),
+    }
+}
+
 fn draw_marching_border(draw: &DrawListMut<'_>, bounds: OverlayRect, clip: OverlayRect, offset: f32, accent: [f32; 4]) {
     for (start, end, on_accent) in block_border_segments(bounds, clip, offset) {
         draw.add_line(start, end, if on_accent { accent } else { BLOCK_SELECTION_WHITE })
@@ -200,30 +211,7 @@ pub(super) fn draw_block_outline(
     let draw = ui.get_window_draw_list();
     draw.with_clip_rect(viewport.min, viewport.max, || {
         let tint = [0.25, 0.85, 0.5, 0.12];
-        if let Some(inner) = inner_bounds {
-            for region in [
-                OverlayRect {
-                    min: bounds.min,
-                    max: [bounds.max[0], inner.min[1]],
-                },
-                OverlayRect {
-                    min: [bounds.min[0], inner.max[1]],
-                    max: bounds.max,
-                },
-                OverlayRect {
-                    min: [bounds.min[0], inner.min[1]],
-                    max: [inner.min[0], inner.max[1]],
-                },
-                OverlayRect {
-                    min: [inner.max[0], inner.min[1]],
-                    max: [bounds.max[0], inner.max[1]],
-                },
-            ] {
-                draw.add_rect(region.min, region.max, tint).filled(true).build();
-            }
-        } else {
-            draw.add_rect(bounds.min, bounds.max, tint).filled(true).build();
-        }
+        fill_selection(&draw, bounds, inner_bounds, tint);
         draw.add_rect(bounds.min, bounds.max, BLOCK_SELECTION_SHADOW)
             .thickness(4.0)
             .build();
@@ -241,7 +229,7 @@ pub(super) fn draw_block_outline(
             BlockSelectionMode::Hollow { line_width } => format!("Border {line_width}"),
         };
         let label = format!(
-            "{} {ICON_MULTIPLICATION} {} {ICON_CIRCLE_SMALL} {mode_label}",
+            "{} x {} {ICON_CIRCLE_SMALL} {mode_label}",
             displayed.width(),
             displayed.height()
         );
@@ -261,7 +249,28 @@ pub(super) fn draw_block_outline(
     });
 }
 
-fn hollow_selection_inner(selection: Selection, mode: BlockSelectionMode) -> Option<Selection> {
+fn ring_regions(bounds: OverlayRect, inner: OverlayRect) -> [OverlayRect; 4] {
+    [
+        OverlayRect {
+            min: bounds.min,
+            max: [bounds.max[0], inner.min[1]],
+        },
+        OverlayRect {
+            min: [bounds.min[0], inner.max[1]],
+            max: bounds.max,
+        },
+        OverlayRect {
+            min: [bounds.min[0], inner.min[1]],
+            max: [inner.min[0], inner.max[1]],
+        },
+        OverlayRect {
+            min: [inner.max[0], inner.min[1]],
+            max: [bounds.max[0], inner.max[1]],
+        },
+    ]
+}
+
+pub(super) fn hollow_selection_inner(selection: Selection, mode: BlockSelectionMode) -> Option<Selection> {
     let BlockSelectionMode::Hollow { line_width } = mode else {
         return None;
     };
@@ -459,7 +468,7 @@ pub(super) fn draw_block_placement_controls(
     };
     ui.align_text_to_frame_padding();
     ui.text(format!(
-        "{} {ICON_MULTIPLICATION} {} {ICON_CIRCLE_SMALL} {mode_label}",
+        "{} x {} {ICON_CIRCLE_SMALL} {mode_label}",
         placement.target.width(),
         placement.target.height()
     ));
@@ -569,6 +578,7 @@ mod tests {
         block_controls_placement,
         block_selection_bounds,
         hollow_selection_inner,
+        ring_regions,
     };
     use crate::{camera::Controller, ui::OverlayRect};
 
@@ -635,6 +645,35 @@ mod tests {
             hollow_selection_inner(selection, BlockSelectionMode::Hollow { line_width: 3 }),
             None
         );
+    }
+
+    #[test]
+    fn ring_regions_cover_the_bounds_around_the_hole() {
+        let bounds = OverlayRect {
+            min: [0.0, 0.0],
+            max: [10.0, 8.0],
+        };
+        let inner = OverlayRect {
+            min: [2.0, 3.0],
+            max: [7.0, 5.0],
+        };
+        let area = |rect: OverlayRect| (rect.max[0] - rect.min[0]) * (rect.max[1] - rect.min[1]);
+        let regions = ring_regions(bounds, inner);
+
+        assert_eq!(
+            regions.iter().copied().map(area).sum::<f32>(),
+            area(bounds) - area(inner)
+        );
+        for region in regions {
+            assert!(region.min[0] >= bounds.min[0] && region.max[0] <= bounds.max[0]);
+            assert!(region.min[1] >= bounds.min[1] && region.max[1] <= bounds.max[1]);
+            assert!(
+                region.max[0] <= inner.min[0]
+                    || region.min[0] >= inner.max[0]
+                    || region.max[1] <= inner.min[1]
+                    || region.min[1] >= inner.max[1]
+            );
+        }
     }
 
     #[test]

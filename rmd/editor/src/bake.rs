@@ -726,6 +726,55 @@ mod tests {
     }
 
     #[test]
+    fn undo_over_a_remote_edit_leaves_no_ghost_for_smoothing() {
+        let environment = environment(
+            r#"
+/obj/structure/table/proc/smooth_icon()
+    var/junction = 0
+    for(var/direction in list(1, 2, 4, 8))
+        var/turf/neighbor = get_step(src, direction)
+        for(var/obj/structure/table/table in neighbor)
+            junction |= direction
+    icon_state = "table-[junction]"
+
+/datum/demir/test/bake(atom/target)
+    if(istype(target, /obj/structure/table))
+        var/obj/structure/table/table = target
+        table.smooth_icon()
+"#,
+        );
+        let floor = Prefab::new(TreePath::parse("/turf/open/floor"));
+        let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        let mut map = Map::new(Size { x: 2, y: 1, z: 1 });
+        let occupied = map.intern_tile(vec![floor.clone(), table.clone()]);
+        let empty = map.intern_tile(vec![floor.clone()]);
+        map.grid[0][0] = vec![occupied, empty];
+        let mut document = MapDocument::new(map, 1);
+        let left = document.instance_ids_at(Coord::new(1, 1, 1))[1];
+        let mut bake = build(&environment, &document).expect("baking is on");
+
+        let coord = Coord::new(2, 1, 1);
+        let mut after = document.placed_tile(coord).expect("placed floor");
+        after.push(document.instantiate(table.clone()));
+        let mut edit = Edit::new("add table");
+        edit.change(&document, coord, after);
+        let affected = edit.affected_instances();
+        assert!(document.apply(edit));
+        update(&mut bake, &environment, &document, &affected);
+
+        let affected = document.apply_remote(vec![(coord, vec![floor, table])]);
+        update(&mut bake, &environment, &document, &affected);
+        assert_eq!(var(&bake, left, "icon_state"), Some("table-4"));
+
+        let affected = document.undo_with_affected().expect("undo");
+        update(&mut bake, &environment, &document, &affected);
+
+        assert_eq!(var(&bake, left, "icon_state"), Some("table-0"));
+        let fresh = build(&environment, &document).expect("baking is on");
+        assert_eq!(bake.appearances, fresh.appearances);
+    }
+
+    #[test]
     fn a_standalone_bake_runs_the_profile_against_an_empty_one_cell_world() {
         let mut environment = environment(WALLS);
         let prefab = Prefab::new(TreePath::parse("/turf/closed/wall"));

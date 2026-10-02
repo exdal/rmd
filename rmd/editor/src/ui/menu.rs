@@ -6,11 +6,12 @@ use super::{
     ScreenshotArea,
     ScreenshotRequest,
     UiState,
+    coop::{CoopDialogKind, draw_coop_peers, draw_coop_status},
     viewport::EditCommand,
     welcome::codebase_relative,
 };
 use crate::{
-    session::Session,
+    session::{CoopStatus, Session},
     settings::{KeybindAction, Settings},
 };
 
@@ -44,6 +45,7 @@ pub(super) struct MenuActions {
     pub(super) go_to: bool,
     pub(super) resize_map: bool,
     pub(super) reset_layout: bool,
+    pub(super) coop_dialog: Option<CoopDialogKind>,
 }
 
 impl UiState {
@@ -323,11 +325,55 @@ impl UiState {
                     session.refresh_git();
                 }
             });
+            ui.menu("Co-op", || {
+                let is_idle = session.coop().is_none() && session.tree().is_some() && !loading;
+                if ui.menu_item_enabled_selected_no_shortcut("Host...", false, is_idle) {
+                    actions.coop_dialog = Some(CoopDialogKind::Host);
+                }
+
+                if ui.menu_item_enabled_selected_no_shortcut("Join...", false, is_idle) {
+                    actions.coop_dialog = Some(CoopDialogKind::Join);
+                }
+
+                ui.separator();
+                if ui.menu_item_enabled_selected_no_shortcut("Share current map", false, session.can_share_coop_map()) {
+                    session.share_coop_map();
+                }
+
+                if ui.menu_item_enabled_selected_no_shortcut(
+                    "Stop sharing current map",
+                    false,
+                    session.can_stop_sharing_coop_map(),
+                ) {
+                    session.stop_sharing_coop_map();
+                }
+
+                let is_notice_available = session.coop().is_some_and(|coop| {
+                    matches!(coop.status, CoopStatus::Ended(_) | CoopStatus::CodebaseMismatch { .. })
+                });
+                if ui.menu_item_enabled_selected_no_shortcut("Session status...", false, is_notice_available) {
+                    self.coop_notice.request();
+                }
+
+                let is_hosting = session.coop().is_some_and(|coop| coop.is_hosting());
+                let label = if is_hosting { "Stop hosting" } else { "Leave" };
+                if ui.menu_item_enabled_selected_no_shortcut(label, false, session.coop().is_some()) {
+                    session.leave_coop();
+                }
+            });
             ui.menu("Window", || {
                 if ui.menu_item("Reset layout") {
                     actions.reset_layout = true;
                 }
             });
+
+            if let Some(coop) = session.coop() {
+                ui.separator();
+                draw_coop_status(ui, coop);
+                if let Some(peer) = draw_coop_peers(ui, coop, session.coop_following()) {
+                    session.toggle_coop_follow(peer);
+                }
+            }
         });
 
         actions

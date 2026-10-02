@@ -12,7 +12,7 @@ use editor::{
 use super::{DIAGNOSTIC_WARNING_COLOR, MAX_CUSTOM_FILL_SEARCH_RESULTS, UiState, common::dpi, draw_type_path_search};
 use crate::{session::Session, settings::KeybindPreset};
 
-const MODAL_FLAGS: WindowFlags = WindowFlags::ALWAYS_AUTO_RESIZE
+pub(super) const MODAL_FLAGS: WindowFlags = WindowFlags::ALWAYS_AUTO_RESIZE
     .union(WindowFlags::NO_RESIZE)
     .union(WindowFlags::NO_MOVE)
     .union(WindowFlags::NO_COLLAPSE)
@@ -29,7 +29,7 @@ pub(super) const RESIZE_MAP_POPUP: &str = "Resize map##resize-map";
 
 pub(super) const GO_TO_POPUP: &str = "Go to coordinates##go-to";
 
-const DIALOG_FIELD_WIDTH: f32 = 320.0;
+pub(super) const DIALOG_FIELD_WIDTH: f32 = 320.0;
 
 const NEW_MAP_PATH_WIDTH: f32 = 460.0;
 

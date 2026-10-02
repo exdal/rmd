@@ -17,6 +17,7 @@ mod blame;
 mod block;
 mod clipboard;
 mod codebase;
+mod coop;
 mod diff;
 mod direction;
 mod document;
@@ -49,6 +50,7 @@ use self::{
 pub(crate) use self::{
     blame::{BlameState, blame_color},
     codebase::{DiagnosticSeverity, LoadReport, MAX_REPORTED_DIAGNOSTICS, build_textures, discover_maps},
+    coop::{Activity, Coop, CoopStatus, SharedState},
     diff::DiffSide,
     direction::{DirectionState, DirectionalTypes},
     edit::context_placement_group,
@@ -106,6 +108,7 @@ pub struct Session {
     ui_feedback: Option<editor::bake::UiFeedback>,
     node_edit: Option<NodeEditState>,
     identical: Option<instance::IdenticalCache>,
+    coop: Option<Coop>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +151,7 @@ impl Session {
             ui_feedback: None,
             node_edit: None,
             identical: None,
+            coop: None,
         }
     }
 }

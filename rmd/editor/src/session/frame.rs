@@ -301,10 +301,12 @@ impl Session {
     pub(super) fn update_instance(&mut self, selected: PrefabInstanceId) { self.update_instances(&[selected]); }
 
     pub(super) fn update_instances(&mut self, affected: &[PrefabInstanceId]) {
-        let Some(id) = self.state.active() else {
-            return;
-        };
+        if let Some(id) = self.state.active() {
+            self.update_document_instances(id, affected);
+        }
+    }
 
+    pub(super) fn update_document_instances(&mut self, id: DocumentId, affected: &[PrefabInstanceId]) {
         let Self {
             state, caches, baker, ..
         } = self;

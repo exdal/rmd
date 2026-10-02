@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use dear_imgui_rs::{StyleColor, Ui};
-use editor::icons::materialdesignicons::{ICON_ALERT, ICON_ALERT_CIRCLE, ICON_CLOSE_THICK};
+use editor::icons::materialdesignicons::{ICON_ALERT, ICON_ALERT_CIRCLE, ICON_CLOSE_THICK, ICON_WEB};
 
 use super::{
     DIAGNOSTIC_WARNING_COLOR,
@@ -9,6 +9,7 @@ use super::{
     SAVE_ERROR_COLOR,
     UiState,
     common::{dpi, focus_window_on_hover},
+    coop::shared_maps,
 };
 use crate::{
     session::{DiagnosticSeverity, Session},
@@ -50,6 +51,7 @@ pub(super) struct WelcomeOutput {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct RecentEntry {
     open: bool,
+    share: bool,
     forget: bool,
 }
 
@@ -87,40 +89,70 @@ fn draw_welcome_subtitle(ui: &Ui, release: Option<&Release>) {
     ui.text_disabled("A map editor for BYOND");
 }
 
-fn draw_recent_entry(ui: &Ui, label: &str, id: &str) -> RecentEntry {
-    let icon = ICON_CLOSE_THICK.to_string();
-    let icon_width = ui.calc_text_size(&icon)[0];
+fn draw_recent_entry(ui: &Ui, label: &str, id: &str, share: Option<&str>, forget: bool) -> RecentEntry {
     let spacing = ui.clone_style().item_spacing()[0];
+    let mut entry = RecentEntry {
+        open: ui.text_link(format!("{label}##{id}")),
+        ..RecentEntry::default()
+    };
 
-    let open = ui.text_link(format!("{label}##{id}"));
-    let link_hovered = ui.is_item_hovered();
-    let link_max = ui.item_rect_max();
-    // a real item spanning the gap and the icon, so a disabled scope locks it like any widget
-    ui.same_line_with_spacing(0.0, 0.0);
-    let forget = ui.invisible_button(format!("##forget-{id}"), [spacing + icon_width, ui.item_rect_size()[1]]);
-    let icon_hovered = ui.is_item_hovered();
+    let mut hovered = ui.is_item_hovered();
+    let height = ui.item_rect_size()[1];
+    let buttons = [
+        share.map(|tooltip| (ICON_WEB, "share", tooltip, &mut entry.share)),
+        forget.then_some((ICON_CLOSE_THICK, "forget", "Remove from this list", &mut entry.forget)),
+    ];
 
-    if link_hovered || icon_hovered {
-        let color = if icon_hovered {
-            StyleColor::Text
-        } else {
-            StyleColor::TextDisabled
-        };
-        let icon_min = [link_max[0] + spacing, ui.item_rect_min()[1]];
+    let mut icons = Vec::new();
+    for (icon, name, tooltip, clicked) in buttons.into_iter().flatten() {
+        let icon = icon.to_string();
+        // a real item spanning the gap and the icon, so a disabled scope locks it like any widget
+        ui.same_line_with_spacing(0.0, 0.0);
+        *clicked = ui.invisible_button(
+            format!("##{name}-{id}"),
+            [spacing + ui.calc_text_size(&icon)[0], height],
+        );
 
-        ui.get_window_draw_list()
-            .add_text([icon_min[0], icon_min[1] + 2.0], ui.style_color(color), &icon);
+        let icon_hovered = ui.is_item_hovered();
+        if icon_hovered {
+            ui.tooltip_text(tooltip);
+        }
+
+        hovered |= icon_hovered;
+        let min = ui.item_rect_min();
+        icons.push((icon, [min[0] + spacing, min[1] + 2.0], icon_hovered));
     }
 
-    if icon_hovered {
-        ui.tooltip_text("Remove from this list");
+    if hovered {
+        let draw = ui.get_window_draw_list();
+        for (icon, pos, icon_hovered) in icons {
+            let color = if icon_hovered {
+                StyleColor::Text
+            } else {
+                StyleColor::TextDisabled
+            };
+
+            draw.add_text(pos, ui.style_color(color), &icon);
+        }
     }
 
-    RecentEntry { open, forget }
+    entry
 }
 
 fn map_matches(base: &Path, map: &Path, needle: &str) -> bool {
     needle.is_empty() || codebase_relative(base, map).to_ascii_lowercase().contains(needle)
+}
+
+fn share_tooltip(session: &Session, map: &Path) -> Option<&'static str> {
+    if !session.can_share_coop_maps() {
+        return None;
+    }
+
+    Some(if session.is_coop_shared_file(map) {
+        "Open the shared map"
+    } else {
+        "Share in co-op"
+    })
 }
 
 pub(super) fn codebase_relative(base: &Path, path: &Path) -> String {
@@ -211,7 +243,13 @@ impl UiState {
                         ui.text_disabled("No recent codebases");
                     }
                     for (index, recent) in settings.recent_codebases.iter().enumerate() {
-                        let entry = draw_recent_entry(ui, &recent.display().to_string(), &format!("codebase-{index}"));
+                        let entry = draw_recent_entry(
+                            ui,
+                            &recent.display().to_string(),
+                            &format!("codebase-{index}"),
+                            None,
+                            true,
+                        );
                         if entry.open {
                             out.open = Some(OpenRequest::Codebase(recent.clone()));
                         }
@@ -237,11 +275,21 @@ impl UiState {
                     let mut empty = true;
                     for (index, recent) in settings.recent_maps_for(codebase).enumerate() {
                         empty = false;
-                        let label = codebase_relative(base, &recent.map);
-                        let entry = draw_recent_entry(ui, &label, &format!("recent-{index}"));
+                        let entry = draw_recent_entry(
+                            ui,
+                            &codebase_relative(base, &recent.map),
+                            &format!("recent-{index}"),
+                            share_tooltip(session, &recent.map),
+                            true,
+                        );
                         if entry.open {
                             out.open = Some(OpenRequest::Map(recent.map.clone()));
                         }
+
+                        if entry.share {
+                            out.open = Some(OpenRequest::ShareMap(recent.map.clone()));
+                        }
+
                         if entry.forget {
                             out.forget = Some(ForgetRequest::Map(recent.map.clone()));
                         }
@@ -249,6 +297,17 @@ impl UiState {
 
                     if empty {
                         ui.text_disabled("No recent maps in this codebase");
+                    }
+
+                    let shared = session.coop().map(shared_maps).unwrap_or_default();
+                    if !shared.is_empty() {
+                        ui.dummy([0.0, min_indent]);
+                        ui.text("Shared maps");
+                        for (index, (path, note)) in shared.iter().enumerate() {
+                            if ui.text_link(format!("{path} {note}##shared-{index}")) {
+                                out.open = Some(OpenRequest::Map(base.join(path)));
+                            }
+                        }
                     }
 
                     ui.dummy([0.0, min_indent]);
@@ -277,8 +336,19 @@ impl UiState {
                     let mut shown = 0;
                     for (index, map) in matching.clone().take(limit) {
                         shown += 1;
-                        if ui.text_link(format!("{}##map-{index}", codebase_relative(base, map))) {
+                        let entry = draw_recent_entry(
+                            ui,
+                            &codebase_relative(base, map),
+                            &format!("map-{index}"),
+                            share_tooltip(session, map),
+                            false,
+                        );
+                        if entry.open {
                             out.open = Some(OpenRequest::Map(map.clone()));
+                        }
+
+                        if entry.share {
+                            out.open = Some(OpenRequest::ShareMap(map.clone()));
                         }
                     }
 

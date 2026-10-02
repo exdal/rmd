@@ -33,6 +33,11 @@ impl Session {
         if tool == Tool::Node && !self.node_tool_available() {
             return;
         }
+
+        if tool == Tool::Comment && !self.comment_tool_available() {
+            return;
+        }
+
         if self.state.tool == Tool::Node && tool != Tool::Node {
             self.cancel_node_edit();
         }

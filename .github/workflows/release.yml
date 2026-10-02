@@ -33,10 +33,17 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download the release artifacts
+      - name: Download the editor release artifacts
         uses: actions/download-artifact@v5
         with:
           pattern: rmd-${{ needs.ci.outputs.version }}-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download the server release artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: rmd-server-${{ needs.ci.outputs.version }}-*
           path: dist
           merge-multiple: true
 
@@ -49,11 +56,13 @@ jobs:
 
           $expected = @(
             "rmd-$env:VERSION-x86_64-pc-windows-msvc.exe",
-            "rmd-$env:VERSION-x86_64-unknown-linux-gnu"
+            "rmd-$env:VERSION-x86_64-unknown-linux-gnu",
+            "rmd-server-$env:VERSION-x86_64-pc-windows-msvc.exe",
+            "rmd-server-$env:VERSION-x86_64-unknown-linux-gnu"
           ) | Sort-Object
           $actual = @(Get-ChildItem -File -LiteralPath 'dist' | ForEach-Object Name | Sort-Object)
           if (Compare-Object -ReferenceObject $expected -DifferenceObject $actual) {
-            throw "Release assets did not match the expected Windows and Linux files. Found: $($actual -join ', ')"
+            throw "Release assets did not match the expected Windows and Linux editor and server files. Found: $($actual -join ', ')"
           }
 
       - name: Upload assets to the GitHub Release

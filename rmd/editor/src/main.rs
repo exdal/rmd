@@ -26,6 +26,7 @@ mod viewports;
 
 use std::{
     fs,
+    mem,
     path::{Path, PathBuf},
     process::ExitCode,
     sync::Arc,
@@ -33,6 +34,7 @@ use std::{
 
 use dear_imgui_rs::{
     BackendFlags,
+    ClipboardBackend,
     ConfigFlags,
     Context,
     FontSource,
@@ -159,6 +161,8 @@ fn main() -> ExitCode {
         loader,
         pending_map,
         pending_reload: None,
+        pending_share: None,
+        retry_coop_after_load: false,
         deferred_job,
         settings_ready,
         uploaded_texture_revision: None,
@@ -285,6 +289,18 @@ fn take_screenshot(
     }
 }
 
+struct SystemClipboard(arboard::Clipboard);
+
+impl ClipboardBackend for SystemClipboard {
+    fn get(&mut self) -> Option<String> { self.0.get_text().ok() }
+
+    fn set(&mut self, value: &str) {
+        if let Err(e) = self.0.set_text(value) {
+            log::error!("could not copy to the clipboard: {e}");
+        }
+    }
+}
+
 fn copy_image(clipboard: &mut Option<arboard::Clipboard>, image: CapturedImage) {
     let clipboard = match clipboard {
         Some(clipboard) => clipboard,
@@ -349,6 +365,8 @@ struct App {
     loader: Loader,
     pending_map: Option<PendingMap>,
     pending_reload: Option<DocumentId>,
+    pending_share: Option<PathBuf>,
+    retry_coop_after_load: bool,
     deferred_job: Option<Job>,
     settings_ready: bool,
     uploaded_texture_revision: Option<u64>,
@@ -375,6 +393,11 @@ impl App {
         let device = Device::new(window.window_handle()?.as_raw(), window.display_handle()?.as_raw())?;
 
         let mut imgui = Context::create();
+        match arboard::Clipboard::new() {
+            Ok(clipboard) => imgui.set_clipboard_backend(SystemClipboard(clipboard)),
+            Err(e) => log::error!("could not open the clipboard: {e}"),
+        }
+
         let mut alternate_row = imgui.style().color(StyleColor::TableRowBgAlt);
         alternate_row[3] *= TABLE_ROW_ALT_ALPHA_SCALE;
         imgui.style_mut().set_color(StyleColor::TableRowBgAlt, alternate_row);
@@ -603,21 +626,49 @@ impl App {
     }
 
     fn apply_open(&mut self, request: OpenRequest) {
+        if self.loader.is_busy() {
+            return;
+        }
+
+        self.pending_share = None;
         let resolved = match request {
             OpenRequest::PickCodebase => self.pick_file("BYOND environment", "dme").map(Opened::Codebase),
             OpenRequest::PickMap => self.pick_file("BYOND map", "dmm").map(Opened::Map),
             OpenRequest::Codebase(path) => Some(Opened::Codebase(path)),
             OpenRequest::Map(path) => Some(Opened::Map(path)),
+            OpenRequest::ReloadCoop => {
+                let Some(path) = self.session.environment_path().map(PathBuf::from) else {
+                    return;
+                };
+
+                self.retry_coop_after_load = true;
+                Some(Opened::Codebase(path))
+            },
+            OpenRequest::ShareMap(path) => {
+                if self.session.open_coop_file(&path) || self.session.share_coop_file(&path) {
+                    return;
+                }
+
+                self.pending_share = Some(path.clone());
+                Some(Opened::Map(path))
+            },
         };
         let Some(resolved) = resolved else {
             return;
         };
+
+        if let Opened::Map(path) = &resolved
+            && self.session.open_coop_file(path)
+        {
+            return;
+        }
 
         self.ui.set_open_error(None);
         self.ui.set_load_notice(None);
         self.pending_map = None;
         self.loader.start(match resolved {
             Opened::Codebase(path) => {
+                self.session.begin_coop_reload();
                 let bake = bake_options(&self.settings, Some(&path));
 
                 Job::Codebase { path, bake }
@@ -631,6 +682,10 @@ impl App {
     }
 
     fn reload_profile(&mut self, request: ProfileReload) {
+        if self.loader.is_busy() {
+            return;
+        }
+
         let Some(path) = self.session.environment_path().map(PathBuf::from) else {
             return;
         };
@@ -643,6 +698,7 @@ impl App {
             ProfileReload::Force(profile) => bake.forced_profile = profile,
         }
         self.ui.set_load_notice(None);
+        self.session.begin_coop_reload();
         self.loader.start(Job::Codebase { path, bake });
     }
 
@@ -684,6 +740,12 @@ impl App {
                 self.ui.set_open_error(None);
                 self.ui.set_load_notice(None);
                 self.ui.set_codebase_report(report);
+                if mem::take(&mut self.retry_coop_after_load) && self.session.coop().is_some() {
+                    match self.session.retry_coop() {
+                        Ok(()) => self.ui.reset_coop_notice(),
+                        Err(error) => self.ui.set_open_error(Some(error)),
+                    }
+                }
                 self.start_pending_map();
             },
 
@@ -696,6 +758,10 @@ impl App {
                     self.session.apply_map(*loaded);
                     self.ui.request_refit(self.session.state.active());
                 }
+
+                if self.pending_share.take_if(|pending| *pending == path).is_some() {
+                    self.session.share_coop_file(&path);
+                }
                 self.ui.set_open_error(None);
                 self.ui.set_load_notice(None);
                 self.ui
@@ -704,9 +770,12 @@ impl App {
             },
 
             Outcome::Failed { job, error } => {
+                self.retry_coop_after_load = false;
+                self.session.finish_coop_reload();
                 log::error!("{error}");
                 self.pending_map = None;
                 self.pending_reload = None;
+                self.pending_share = None;
                 self.ui.set_open_error(Some(error.clone()));
                 self.ui.set_load_notice(None);
                 match job {
@@ -722,8 +791,11 @@ impl App {
             },
 
             Outcome::Cancelled => {
+                self.retry_coop_after_load = false;
+                self.session.finish_coop_reload();
                 self.pending_map = None;
                 self.pending_reload = None;
+                self.pending_share = None;
                 self.ui.set_load_notice(None);
             },
         }
@@ -1002,6 +1074,7 @@ impl ApplicationHandler for App {
                 }
                 self.session.poll_bake();
                 self.session.poll_git();
+                self.session.poll_coop();
 
                 if redraw.exit {
                     if let Err(e) = self.shutdown() {
