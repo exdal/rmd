@@ -1,5 +1,5 @@
 use editor::document::DocumentId;
-use net::{CommentId, Cursor, PeerId, Selection, View};
+use net::{Client, CommentId, Cursor, PeerId, Selection, View};
 
 use super::{Coop, Following};
 use crate::session::Session;
@@ -29,19 +29,18 @@ impl Session {
         }
     }
 
-    pub fn coop_view(&self, view: Option<View>) {
-        if let Some(coop) = self.coop.as_ref()
-            && let Some(client) = coop.client.as_ref()
-        {
-            client.send_view(view.filter(|_| coop.can_collaborate()));
-        }
-    }
+    pub fn coop_view(&self, view: Option<View>) { self.send_presence(view, Client::send_view); }
 
     pub fn coop_selection(&self, selection: Option<Selection>) {
+        self.send_presence(selection, Client::send_selection);
+    }
+
+    // sent even when collaboration stopped, so peers get the clear
+    fn send_presence<T>(&self, value: Option<T>, send: fn(&Client, Option<T>)) {
         if let Some(coop) = self.coop.as_ref()
             && let Some(client) = coop.client.as_ref()
         {
-            client.send_selection(selection.filter(|_| coop.can_collaborate()));
+            send(client, value.filter(|_| coop.can_collaborate()));
         }
     }
 
