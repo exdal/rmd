@@ -15,6 +15,7 @@ use net::{
     Impairment,
     LossyProxy,
     MapEdit,
+    SELECTION_REFRESH,
     Selection,
     SelectionMode,
     SeqId,
@@ -207,6 +208,34 @@ fn selections_reach_the_other_peers_and_repeat() {
 
     // nothing new was sent, so this one is the refresh
     assert_eq!(received(&bob), (alice_id, selection));
+}
+
+#[test]
+fn a_cleared_selection_is_sent_once() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
+    let bob = join(&server, PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    alice.send_selection(Some(Selection {
+        map: String::from("_maps/test.dmm"),
+        z: 1,
+        min: [1, 1],
+        max: [2, 2],
+        mode: SelectionMode::Full,
+    }));
+    wait_for(&bob, |event| {
+        matches!(event, Event::Selection { selection: Some(_), .. }).then_some(())
+    });
+
+    alice.send_selection(None);
+    wait_for(&bob, |event| {
+        matches!(event, Event::Selection { selection: None, .. }).then_some(())
+    });
+
+    thread::sleep(SELECTION_REFRESH * 2);
+    assert!(!bob.poll().any(|event| matches!(event, Event::Selection { .. })));
 }
 
 #[test]

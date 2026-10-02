@@ -231,6 +231,7 @@ impl Session {
         coop.last_poll = now;
         for peer in coop.peers.values_mut() {
             peer.follow(elapsed);
+            peer.expire(now);
         }
 
         let mut waiting = Vec::new();

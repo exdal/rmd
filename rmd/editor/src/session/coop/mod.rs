@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     sync::mpsc,
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use dmm::{Coord, error::MapError};
@@ -20,6 +20,7 @@ use net::{
     PasswordHash,
     PeerId,
     PeerInfo,
+    SELECTION_REFRESH,
     Selection,
     SeqId,
     Server,
@@ -59,12 +60,19 @@ pub(crate) enum Activity {
     },
 }
 
+const SELECTION_TIMEOUT: Duration = Duration::from_secs(3 * SELECTION_REFRESH.as_secs());
+
+pub(crate) struct RemoteSelection {
+    pub selection: Selection,
+    received: Instant,
+}
+
 pub(crate) struct RemotePeer {
     pub info: PeerInfo,
     pub cursor: Option<Cursor>,
     pub shown: [f32; 2],
     pub view: Option<View>,
-    pub selection: Option<Selection>,
+    pub selection: Option<RemoteSelection>,
 }
 
 impl RemotePeer {
@@ -99,6 +107,16 @@ impl RemotePeer {
         let blend = 1.0 - (-elapsed * CURSOR_SMOOTHING).exp();
         for (shown, target) in self.shown.iter_mut().zip(cursor.pos) {
             *shown += (target - *shown) * blend;
+        }
+    }
+
+    fn expire(&mut self, now: Instant) {
+        let is_expired = self
+            .selection
+            .as_ref()
+            .is_some_and(|remote| now.duration_since(remote.received) >= SELECTION_TIMEOUT);
+        if is_expired {
+            self.selection = None;
         }
     }
 }

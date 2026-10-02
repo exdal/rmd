@@ -777,6 +777,7 @@ pub(super) fn draw_remote_selections(
             let Some(selection) = peer
                 .selection
                 .as_ref()
+                .map(|remote| &remote.selection)
                 .filter(|selection| selection.map == map && selection.z == z)
             else {
                 continue;

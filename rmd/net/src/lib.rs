@@ -29,7 +29,7 @@ pub use protocol::coop::{
 use tokio::runtime::{Builder, Runtime};
 
 pub use crate::{
-    client::{Client, Direction, Event},
+    client::{Client, Direction, Event, SELECTION_REFRESH},
     proxy::{Impairment, LossyProxy},
     server::{Server, ServerConfig, hash_password, random_password},
 };

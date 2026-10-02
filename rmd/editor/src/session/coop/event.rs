@@ -1,9 +1,9 @@
-use std::{fs, mem, path::Path, thread};
+use std::{fs, mem, path::Path, thread, time::Instant};
 
 use dmm::parser;
 use net::{Direction, Event, GenerationId, PeerId};
 
-use super::{Activity, Coop, CoopStatus, Prepared, ReceivedMap, RemotePeer, SharedMap, SharedState};
+use super::{Activity, Coop, CoopStatus, Prepared, ReceivedMap, RemotePeer, RemoteSelection, SharedMap, SharedState};
 
 impl Coop {
     fn receive_map(&mut self, path: String, generation: GenerationId, bytes: Vec<u8>, codebase: Option<&Path>) {
@@ -92,12 +92,17 @@ impl Coop {
             },
             Event::Selection { from, selection } => {
                 if let Some(peer) = self.peers.get_mut(&from) {
-                    peer.selection = selection.filter(|selection| {
-                        selection.z >= 1
-                            && selection.min.iter().all(|&value| value >= 1)
-                            && selection.min[0] <= selection.max[0]
-                            && selection.min[1] <= selection.max[1]
-                    });
+                    peer.selection = selection
+                        .filter(|selection| {
+                            selection.z >= 1
+                                && selection.min.iter().all(|&value| value >= 1)
+                                && selection.min[0] <= selection.max[0]
+                                && selection.min[1] <= selection.max[1]
+                        })
+                        .map(|selection| RemoteSelection {
+                            selection,
+                            received: Instant::now(),
+                        });
                 }
             },
             Event::Comment(comment) => {

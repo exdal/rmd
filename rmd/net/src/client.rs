@@ -59,7 +59,7 @@ use crate::{
 const CURSOR_INTERVAL: Duration = Duration::from_millis(50);
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 const VIEW_REFRESH: Duration = Duration::from_secs(1);
-const SELECTION_REFRESH: Duration = Duration::from_secs(1);
+pub const SELECTION_REFRESH: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -415,8 +415,9 @@ async fn session(
                         last_view = Some(Instant::now());
                     }
 
-                    // repeated even when empty, a lost clear would leave peers drawing a stale selection
-                    let is_stale = last_selection.is_none_or(|last| last.elapsed() >= SELECTION_REFRESH);
+                    // peers drop a selection that stops refreshing, so a lost clear heals on its own
+                    let is_stale = presence.selection.borrow().is_some()
+                        && last_selection.is_none_or(|last| last.elapsed() >= SELECTION_REFRESH);
                     if presence.selection.has_changed().unwrap_or(false) || is_stale {
                         send_datagram(connection, &Datagram::Selection(presence.selection.borrow_and_update().clone()))?;
                         last_selection = Some(Instant::now());

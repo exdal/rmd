@@ -396,6 +396,35 @@ fn a_broken_selection_is_dropped() {
 }
 
 #[test]
+fn an_unrefreshed_selection_expires() {
+    let (dir, mut session, ..) = following("selection-expires");
+    deliver(
+        &mut session,
+        &dir,
+        Event::Selection {
+            from: OTHER,
+            selection: Some(Selection {
+                map: String::from("_maps/a.dmm"),
+                z: 1,
+                min: [1, 1],
+                max: [2, 2],
+                mode: net::SelectionMode::Full,
+            }),
+        },
+    );
+
+    let peer = session.coop.as_mut().unwrap().peers.get_mut(&OTHER).unwrap();
+    let received = peer.selection.as_ref().unwrap().received;
+    peer.expire(received + SELECTION_TIMEOUT - Duration::from_millis(1));
+    assert!(peer.selection.is_some());
+
+    peer.expire(received + SELECTION_TIMEOUT);
+    assert!(peer.selection.is_none());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn a_broken_view_is_dropped() {
     let (dir, mut session, ..) = following("follow-broken");
     for (center, zoom) in [
