@@ -1,5 +1,6 @@
 use core::{arena::StrArena, location::FileId, path::TreePath, source::SourceMap};
 use std::{
+    io::{self, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -9,7 +10,6 @@ use dmi::error::IconError;
 use net::CodebaseHash;
 use preprocessor::{PreludeFile, Preprocessor, SourceCache, error::PreprocessError, prelude_files};
 use sema::error::SemaError;
-use serde::{Deserialize, Serialize};
 
 use crate::{
     BakeProgram,
@@ -70,8 +70,7 @@ pub(crate) fn source_root<'a>(sources: &'a SourceMap<'_>, entry: Option<FileId>,
         .unwrap_or_else(|| Path::new(""))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BundledProfile {
     Cmss13,
     Goonstation,
@@ -102,16 +101,18 @@ impl BundledProfile {
         }
     }
 
-    pub const fn type_path(self) -> &'static str {
+    pub const fn stem(self) -> &'static str {
         match self {
-            Self::Cmss13 => "/datum/demir/cmss13",
-            Self::Goonstation => "/datum/demir/goonstation",
-            Self::Monkestation => "/datum/demir/monkestation",
-            Self::SecondCity => "/datum/demir/secondcity",
-            Self::Tgstation => "/datum/demir/tgstation",
-            Self::Vanderlin => "/datum/demir/vanderlin",
+            Self::Cmss13 => "cmss13",
+            Self::Goonstation => "goonstation",
+            Self::Monkestation => "monkestation",
+            Self::SecondCity => "secondcity",
+            Self::Tgstation => "tgstation",
+            Self::Vanderlin => "vanderlin",
         }
     }
+
+    pub fn from_name(name: &str) -> Option<Self> { Self::ALL.into_iter().find(|profile| profile.stem() == name) }
 
     const fn source_name(self) -> &'static str {
         match self {
@@ -150,7 +151,120 @@ impl BundledProfile {
                 "<bundled-profile-secondcity-defines.dm>",
                 "#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n",
             )),
-            Self::Cmss13 | Self::Monkestation | Self::Vanderlin => None,
+            Self::Monkestation => Some((
+                "<bundled-profile-monkestation-defines.dm>",
+                "#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n",
+            )),
+            Self::Cmss13 | Self::Vanderlin => None,
+        }
+    }
+}
+
+const PROFILE_EXTENSION: &str = ".dm";
+const DEFINES_EXTENSION: &str = ".defines.dm";
+
+pub fn write_missing_profiles(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    for profile in BundledProfile::ALL {
+        write_new(
+            &dir.join(format!("{}{PROFILE_EXTENSION}", profile.stem())),
+            profile.source(),
+        )?;
+        if let Some((_, defines)) = profile.defines() {
+            write_new(&dir.join(format!("{}{DEFINES_EXTENSION}", profile.stem())), defines)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn write_new(path: &Path, contents: &str) -> io::Result<()> {
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(mut file) => file.write_all(contents.as_bytes()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+pub fn scan_profiles(dir: &Path) -> Vec<String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            log::warn!("reading profiles from {}: {error}", dir.display());
+
+            return BundledProfile::ALL.map(|profile| profile.stem().to_owned()).to_vec();
+        },
+    };
+
+    let mut names = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|file| !file.ends_with(DEFINES_EXTENSION))
+        .filter_map(|file| file.strip_suffix(PROFILE_EXTENSION).map(str::to_owned))
+        .collect::<Vec<_>>();
+    names.sort();
+
+    names
+}
+
+pub fn profile_label(name: &str) -> &str {
+    match BundledProfile::from_name(name) {
+        Some(profile) => profile.label(),
+        None => name,
+    }
+}
+
+enum ForcedFile {
+    Disk(PathBuf),
+    Embedded(&'static str, &'static str),
+}
+
+impl ForcedFile {
+    fn prelude(&self) -> PreludeFile {
+        match self {
+            Self::Disk(path) => PreludeFile::Disk(path.clone()),
+            Self::Embedded(name, source) => PreludeFile::Embedded(name, source),
+        }
+    }
+
+    fn path(&self) -> &Path {
+        match self {
+            Self::Disk(path) => path,
+            Self::Embedded(name, _) => Path::new(name),
+        }
+    }
+}
+
+#[derive(Default)]
+struct ForcedSources {
+    defines: Option<ForcedFile>,
+    profile: Option<ForcedFile>,
+}
+
+impl ForcedSources {
+    fn resolve(options: &BakeOptions) -> Self {
+        let Some(name) = options.forced_profile.as_deref() else {
+            return Self::default();
+        };
+        let bundled = BundledProfile::from_name(name);
+        let on_disk = |extension: &str| {
+            options
+                .profile_dir
+                .as_ref()
+                .map(|dir| dir.join(format!("{name}{extension}")))
+                .filter(|path| path.is_file())
+                .map(ForcedFile::Disk)
+        };
+
+        Self {
+            defines: on_disk(DEFINES_EXTENSION).or_else(|| {
+                bundled
+                    .and_then(BundledProfile::defines)
+                    .map(|(name, source)| ForcedFile::Embedded(name, source))
+            }),
+            profile: on_disk(PROFILE_EXTENSION)
+                .or_else(|| bundled.map(|bundled| ForcedFile::Embedded(bundled.source_name(), bundled.source()))),
         }
     }
 }
@@ -160,7 +274,8 @@ pub struct BakeOptions {
     pub enabled: bool,
     pub optimizations_enabled: bool,
     pub profile: Option<TreePath>,
-    pub forced_profile: Option<BundledProfile>,
+    pub forced_profile: Option<String>,
+    pub profile_dir: Option<PathBuf>,
     pub limits: vm::Limits,
 }
 
@@ -171,6 +286,7 @@ impl Default for BakeOptions {
             optimizations_enabled: true,
             profile: None,
             forced_profile: None,
+            profile_dir: None,
             limits: vm::Limits::default(),
         }
     }
@@ -181,7 +297,17 @@ pub fn baking_enabled(setting: bool) -> bool { std::env::var_os("DM_BAKE").map_o
 
 pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) -> Result<Compiled, LoadError> {
     let arena = StrArena::new();
-    let editor = compile_view(&arena, entry, false, false, options, SourceCache::default(), progress)?;
+    let forced = ForcedSources::resolve(options);
+    let editor = compile_view(
+        &arena,
+        entry,
+        false,
+        false,
+        options,
+        &forced,
+        SourceCache::default(),
+        progress,
+    )?;
 
     let bake = if options.enabled {
         Some(compile_view(
@@ -190,6 +316,7 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
             true,
             true,
             options,
+            &forced,
             editor.source_cache.clone(),
             progress,
         )?)
@@ -218,8 +345,14 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
                     .unwrap_or_default()
             };
             let (selection, profile_error) = match options.forced_profile {
-                Some(forced) => match view.tree.id_of(&TreePath::parse(forced.type_path())) {
-                    Some(active) => {
+                Some(_) => match forced
+                    .profile
+                    .as_ref()
+                    .and_then(|profile| files.iter().position(|file| file == profile.path()))
+                    .map_or(Err(vm::bake::ProfileError::Missing), |file| {
+                        vm::bake::profile_in_file(&view.tree, FileId(file as u32))
+                    }) {
+                    Ok(active) => {
                         let active_path = path(active);
                         let profiles = Profiles {
                             available: vec![active_path.clone()],
@@ -229,7 +362,7 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
 
                         (Some((active, profiles)), None)
                     },
-                    None => (None, Some(vm::bake::ProfileError::Missing)),
+                    Err(error) => (None, Some(error)),
                 },
                 None => match vm::bake::profile_catalog(&view.tree) {
                     Ok(catalog) => {
@@ -301,18 +434,15 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_view<'a>(
-    arena: &'a StrArena, entry: &Path, baking: bool, generate: bool, options: &BakeOptions,
+    arena: &'a StrArena, entry: &Path, baking: bool, generate: bool, options: &BakeOptions, forced: &ForcedSources,
     source_cache: SourceCache<'a>, progress: &'a Progress,
 ) -> Result<CompiledView<'a>, LoadError> {
     progress.enter(Stage::Preprocess, 0);
     let mut prelude = prelude_files();
-    if let Some((name, source)) = options.forced_profile.and_then(BundledProfile::defines) {
-        prelude.push(PreludeFile::Embedded(name, source));
-    }
-    let postlude = options
-        .forced_profile
-        .map(|profile| PreludeFile::Embedded(profile.source_name(), profile.source()));
+    prelude.extend(forced.defines.as_ref().map(ForcedFile::prelude));
+    let postlude = forced.profile.as_ref().map(ForcedFile::prelude);
     let preprocessed = Preprocessor::new(arena)
         .with_source_cache(source_cache)
         .with_prelude(prelude)
@@ -573,7 +703,7 @@ mod tests {
 "#,
         );
         let options = BakeOptions {
-            forced_profile: Some(BundledProfile::Cmss13),
+            forced_profile: Some(String::from("cmss13")),
             ..BakeOptions::default()
         };
         let (environment, diagnostics) = Environment::load_with(&entry, options, &Progress::new())
@@ -588,7 +718,7 @@ mod tests {
                 active: String::from("/datum/demir/cmss13"),
             })
         );
-        assert_eq!(environment.bake_options.forced_profile, Some(BundledProfile::Cmss13));
+        assert_eq!(environment.bake_options.forced_profile.as_deref(), Some("cmss13"));
 
         std::fs::remove_dir_all(entry.parent().expect("fixture parent")).expect("remove fixture");
     }
@@ -596,18 +726,23 @@ mod tests {
     #[test]
     fn bundled_profile_metadata_covers_every_embedded_example() {
         assert_eq!(
-            BundledProfile::ALL.map(BundledProfile::type_path),
+            BundledProfile::ALL.map(BundledProfile::stem),
             [
-                "/datum/demir/cmss13",
-                "/datum/demir/goonstation",
-                "/datum/demir/monkestation",
-                "/datum/demir/secondcity",
-                "/datum/demir/tgstation",
-                "/datum/demir/vanderlin",
+                "cmss13",
+                "goonstation",
+                "monkestation",
+                "secondcity",
+                "tgstation",
+                "vanderlin",
             ]
         );
         for profile in BundledProfile::ALL {
-            assert!(profile.source().contains(profile.type_path()));
+            assert_eq!(BundledProfile::from_name(profile.stem()), Some(profile));
+            assert!(
+                profile
+                    .source()
+                    .contains(&format!("/datum/demir/{}\n\tdefault = TRUE", profile.stem()))
+            );
         }
         assert_eq!(
             BundledProfile::Goonstation.defines().map(|(_, source)| source),
@@ -621,5 +756,159 @@ mod tests {
             BundledProfile::SecondCity.defines().map(|(_, source)| source),
             Some("#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n")
         );
+        assert_eq!(
+            BundledProfile::Monkestation.defines().map(|(_, source)| source),
+            Some("#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n")
+        );
+        assert_eq!(profile_label("secondcity"), "SecondCity");
+        assert_eq!(profile_label("mine"), "mine");
+    }
+
+    #[test]
+    fn missing_profiles_are_written_and_edits_are_kept() {
+        let dir = fixture("").with_file_name("profiles");
+        write_missing_profiles(&dir).expect("write profiles");
+        for profile in BundledProfile::ALL {
+            let written = std::fs::read_to_string(dir.join(format!("{}.dm", profile.stem()))).expect("profile");
+            assert_eq!(written, profile.source());
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.join("tgstation.defines.dm")).expect("defines"),
+            "#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n"
+        );
+        assert!(!dir.join("cmss13.defines.dm").exists());
+
+        let edited = dir.join("tgstation.dm");
+        std::fs::write(&edited, "// mine now").expect("edit profile");
+        let deleted = dir.join("vanderlin.dm");
+        std::fs::remove_file(&deleted).expect("delete profile");
+        write_missing_profiles(&dir).expect("write profiles again");
+
+        assert_eq!(std::fs::read_to_string(&edited).expect("edited"), "// mine now");
+        assert_eq!(
+            std::fs::read_to_string(&deleted).expect("restored"),
+            BundledProfile::Vanderlin.source()
+        );
+
+        std::fs::remove_dir_all(dir.parent().expect("fixture parent")).expect("remove fixture");
+    }
+
+    #[test]
+    fn scanning_lists_custom_profiles_but_not_defines() {
+        let dir = fixture("").with_file_name("profiles");
+        write_missing_profiles(&dir).expect("write profiles");
+        std::fs::write(dir.join("mine.dm"), "").expect("custom profile");
+        std::fs::write(dir.join("mine.defines.dm"), "").expect("custom defines");
+        std::fs::write(dir.join("notes.txt"), "").expect("stray file");
+
+        assert_eq!(
+            scan_profiles(&dir),
+            [
+                "cmss13",
+                "goonstation",
+                "mine",
+                "monkestation",
+                "secondcity",
+                "tgstation",
+                "vanderlin",
+            ]
+        );
+
+        std::fs::remove_dir_all(dir.parent().expect("fixture parent")).expect("remove fixture");
+    }
+
+    #[test]
+    fn forcing_a_custom_profile_activates_its_default_and_injects_its_defines() {
+        let entry = fixture(
+            r#"
+#ifdef MINE_DEFINED
+/obj/mine_marker
+#endif
+#ifdef __DEMIR_BAKE__
+/datum/demir/native
+    default = TRUE
+#endif
+"#,
+        );
+        let dir = entry.with_file_name("profiles");
+        std::fs::create_dir_all(&dir).expect("profiles directory");
+        std::fs::write(
+            dir.join("mine.dm"),
+            "#ifdef __DEMIR_BAKE__\n/datum/demir/mine\n    default = TRUE\n/datum/demir/mine/debug\n#endif\n",
+        )
+        .expect("custom profile");
+        std::fs::write(dir.join("mine.defines.dm"), "#define MINE_DEFINED\n").expect("custom defines");
+        let options = BakeOptions {
+            forced_profile: Some(String::from("mine")),
+            profile_dir: Some(dir.clone()),
+            ..BakeOptions::default()
+        };
+        let (environment, diagnostics) = Environment::load_with(&entry, options, &Progress::new()).expect("load");
+
+        assert!(diagnostics.profile.is_none(), "{:?}", diagnostics.profile);
+        assert_eq!(
+            environment.profiles.as_ref().map(|profiles| profiles.active.as_str()),
+            Some("/datum/demir/mine")
+        );
+        assert!(environment.bake_files.contains(&dir.join("mine.dm")));
+        assert!(environment.tree.id_of(&TreePath::parse("/obj/mine_marker")).is_some());
+
+        std::fs::remove_dir_all(entry.parent().expect("fixture parent")).expect("remove fixture");
+    }
+
+    #[test]
+    fn a_disk_copy_replaces_the_embedded_profile_until_it_is_deleted() {
+        let entry = fixture("");
+        let dir = entry.with_file_name("profiles");
+        std::fs::create_dir_all(&dir).expect("profiles directory");
+        let copy = dir.join("cmss13.dm");
+        std::fs::write(
+            &copy,
+            "#ifdef __DEMIR_BAKE__\n/datum/demir/edited\n    default = TRUE\n#endif\n",
+        )
+        .expect("edited profile");
+        let load = || {
+            let options = BakeOptions {
+                forced_profile: Some(String::from("cmss13")),
+                profile_dir: Some(dir.clone()),
+                ..BakeOptions::default()
+            };
+            let (environment, _) = Environment::load_with(&entry, options, &Progress::new()).expect("load");
+
+            environment.profiles.map(|profiles| profiles.active)
+        };
+
+        assert_eq!(load().as_deref(), Some("/datum/demir/edited"));
+        std::fs::remove_file(&copy).expect("delete profile");
+        assert_eq!(load().as_deref(), Some("/datum/demir/cmss13"));
+
+        std::fs::remove_dir_all(entry.parent().expect("fixture parent")).expect("remove fixture");
+    }
+
+    #[test]
+    fn a_custom_profile_with_two_defaults_is_a_diagnostic() {
+        let entry = fixture("");
+        let dir = entry.with_file_name("profiles");
+        std::fs::create_dir_all(&dir).expect("profiles directory");
+        std::fs::write(
+            dir.join("twice.dm"),
+            "#ifdef __DEMIR_BAKE__\n/datum/demir/one\n    default = TRUE\n/datum/demir/two\n    default = \
+             TRUE\n#endif\n",
+        )
+        .expect("custom profile");
+        let options = BakeOptions {
+            forced_profile: Some(String::from("twice")),
+            profile_dir: Some(dir),
+            ..BakeOptions::default()
+        };
+        let (environment, diagnostics) = Environment::load_with(&entry, options, &Progress::new()).expect("load");
+
+        assert!(matches!(
+            diagnostics.profile,
+            Some(vm::bake::ProfileError::MultipleDefaults(_))
+        ));
+        assert!(environment.bake_program.is_none());
+
+        std::fs::remove_dir_all(entry.parent().expect("fixture parent")).expect("remove fixture");
     }
 }

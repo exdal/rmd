@@ -9,7 +9,7 @@ use dear_imgui_rs::{
     WindowKey,
     WindowKeyError,
 };
-use editor::environment::BundledProfile;
+use editor::environment::profile_label;
 
 use super::{
     common::{button_width, dpi, focus_window_on_hover},
@@ -59,6 +59,7 @@ struct SettingsWindowState<'a> {
     measured: &'a mut [f32; 2],
     pending_profile: &'a mut Option<ProfileReload>,
     ui_scale_draft: &'a mut Option<u32>,
+    profiles: &'a [String],
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -173,6 +174,7 @@ pub(super) struct SettingsWindow {
     measured: [f32; 2],
     pending_profile: Option<ProfileReload>,
     ui_scale_draft: Option<u32>,
+    profiles: Vec<String>,
 }
 
 impl SettingsWindow {
@@ -186,10 +188,13 @@ impl SettingsWindow {
             measured: SETTINGS_WINDOW_SIZE,
             pending_profile: None,
             ui_scale_draft: None,
+            profiles: Vec::new(),
         })
     }
 
     pub(super) fn open(&mut self) { self.open = true; }
+
+    pub(super) fn set_profiles(&mut self, profiles: Vec<String>) { self.profiles = profiles; }
 
     pub(super) const fn is_capturing_keybind(&self) -> bool { self.capturing.is_some() }
 
@@ -207,6 +212,7 @@ impl SettingsWindow {
                 measured: &mut self.measured,
                 pending_profile: &mut self.pending_profile,
                 ui_scale_draft: &mut self.ui_scale_draft,
+                profiles: &self.profiles,
             },
             session,
             settings,
@@ -231,6 +237,7 @@ fn draw_settings_window(
         measured,
         pending_profile,
         ui_scale_draft,
+        profiles,
     } = state;
     if !*open {
         *capturing = None;
@@ -284,7 +291,7 @@ fn draw_settings_window(
                         SettingsCategory::General => draw_general_settings(ui, settings, ui_scale_draft),
                         SettingsCategory::Viewport => draw_viewport_settings(ui, session, settings),
                         SettingsCategory::Compiler => {
-                            draw_compiler_settings(ui, session, settings, loading, pending_profile)
+                            draw_compiler_settings(ui, session, settings, loading, profiles, pending_profile)
                         },
                         SettingsCategory::Git => draw_git_settings(ui, settings),
                         SettingsCategory::ObjectTree => {
@@ -464,10 +471,11 @@ fn draw_viewport_settings(ui: &Ui, session: &mut Session, settings: &mut Setting
 }
 
 fn draw_compiler_settings(
-    ui: &Ui, session: &Session, settings: &mut Settings, loading: bool, pending_profile: &mut Option<ProfileReload>,
+    ui: &Ui, session: &Session, settings: &mut Settings, loading: bool, profiles: &[String],
+    pending_profile: &mut Option<ProfileReload>,
 ) {
     draw_section_heading(ui, "Codebase");
-    draw_profile_setting(ui, session, settings, loading, pending_profile);
+    draw_profile_setting(ui, session, settings, loading, profiles, pending_profile);
 
     ui.separator();
     draw_optimization_settings(ui, session, settings);
@@ -558,7 +566,8 @@ fn draw_optimization_settings(ui: &Ui, session: &Session, settings: &mut Setting
 fn format_pass_time(duration: std::time::Duration) -> String { format!("{:.3} ms", duration.as_secs_f64() * 1_000.0) }
 
 fn draw_profile_setting(
-    ui: &Ui, session: &Session, settings: &Settings, loading: bool, pending_profile: &mut Option<ProfileReload>,
+    ui: &Ui, session: &Session, settings: &Settings, loading: bool, profiles: &[String],
+    pending_profile: &mut Option<ProfileReload>,
 ) {
     let Some(environment) = session.state.environment.as_deref() else {
         ui.text_disabled("No codebase loaded");
@@ -571,15 +580,16 @@ fn draw_profile_setting(
         return;
     }
 
-    let forced = environment.bake_options.forced_profile;
-    ui.text("Forced bundled profile");
+    let forced = environment.bake_options.forced_profile.as_deref();
+    ui.text("Forced profile");
+    if let Ok(dir) = crate::settings::profiles_dir() {
+        ui.set_item_tooltip(format!("Profiles are read from {}", dir.display()));
+    }
     {
         let _disabled = ui.begin_disabled_with_cond(loading);
-        let preview = forced
-            .map(BundledProfile::label)
-            .unwrap_or("None - use codebase profile");
+        let preview = forced.map(profile_label).unwrap_or("None - use codebase profile");
         ui.set_next_item_width(-1.0);
-        if let Some(combo) = ui.begin_combo("##forced-bundled-profile", preview) {
+        if let Some(combo) = ui.begin_combo("##forced-profile", preview) {
             if ui
                 .selectable_config("None - use codebase profile")
                 .selected(forced.is_none())
@@ -588,14 +598,15 @@ fn draw_profile_setting(
             {
                 *pending_profile = Some(ProfileReload::Force(None));
             }
-            for profile in BundledProfile::ALL {
+            for profile in profiles {
+                let selected = forced == Some(profile.as_str());
                 if ui
-                    .selectable_config(profile.label())
-                    .selected(forced == Some(profile))
+                    .selectable_config(format!("{}##{profile}", profile_label(profile)))
+                    .selected(selected)
                     .build()
-                    && forced != Some(profile)
+                    && !selected
                 {
-                    *pending_profile = Some(ProfileReload::Force(Some(profile)));
+                    *pending_profile = Some(ProfileReload::Force(Some(profile.clone())));
                 }
             }
             combo.end();
@@ -607,7 +618,7 @@ fn draw_profile_setting(
 
     ui.text("Profile");
     if forced.is_some() {
-        ui.text_disabled("Codebase profile selection is disabled while a bundled profile is forced");
+        ui.text_disabled("Codebase profile selection is disabled while a profile is forced");
 
         return;
     }
@@ -650,9 +661,9 @@ fn draw_profile_reload_dialog(ui: &Ui, pending_profile: &mut Option<ProfileReloa
     let message = match pending_profile.as_ref()? {
         ProfileReload::Select(profile) => format!("Reload the codebase with {profile}?"),
         ProfileReload::Force(Some(profile)) => {
-            format!("Reload the codebase with the bundled {} profile?", profile.label())
+            format!("Reload the codebase with the {} profile?", profile_label(profile))
         },
-        ProfileReload::Force(None) => String::from("Stop forcing a bundled profile and reload the codebase?"),
+        ProfileReload::Force(None) => String::from("Stop forcing a profile and reload the codebase?"),
     };
     if !ui.is_popup_open(PROFILE_RELOAD_POPUP) {
         ui.open_popup(PROFILE_RELOAD_POPUP);
@@ -972,6 +983,7 @@ mod tests {
                     measured: &mut measured,
                     pending_profile: &mut pending_profile,
                     ui_scale_draft: &mut ui_scale_draft,
+                    profiles: &[],
                 },
                 &mut session,
                 &mut settings,
@@ -985,7 +997,7 @@ mod tests {
     #[test]
     fn compiler_settings_render_native_and_forced_profile_states() {
         let _context = IMGUI_CONTEXT.lock().unwrap();
-        for forced_profile in [None, Some(BundledProfile::Tgstation)] {
+        for forced_profile in [None, Some(String::from("tgstation"))] {
             let mut context = dear_imgui_rs::Context::create();
             context
                 .font_atlas()
@@ -1029,6 +1041,7 @@ mod tests {
                     measured: &mut measured,
                     pending_profile: &mut pending_profile,
                     ui_scale_draft: &mut ui_scale_draft,
+                    profiles: &[String::from("tgstation"), String::from("mine")],
                 },
                 &mut session,
                 &mut settings,

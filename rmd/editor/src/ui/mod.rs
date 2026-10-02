@@ -20,7 +20,6 @@ use dear_imgui_rs::{
 use dmm::{Coord, PrefabInstanceId};
 use editor::{
     document::{DocumentId, MapDocument},
-    environment::BundledProfile,
     icons::materialdesignicons::ICON_IMAGE_BROKEN,
     tool::{FillMode, SelectionRotation, SelectionTransform, Tool},
 };
@@ -194,7 +193,7 @@ pub struct UiOutput {
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProfileReload {
     Select(String),
-    Force(Option<BundledProfile>),
+    Force(Option<String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -387,6 +386,8 @@ impl UiState {
     pub fn request_mouse_popup(&mut self) { self.dm_ui.request_mouse_popup(); }
 
     pub fn set_load_notice(&mut self, notice: Option<LoadNotice>) { self.load_notice = notice; }
+
+    pub fn set_profiles(&mut self, profiles: Vec<String>) { self.settings_window.set_profiles(profiles); }
 
     pub fn set_codebase_report(&mut self, report: LoadReport) { self.diagnostics.set_codebase(report); }
 

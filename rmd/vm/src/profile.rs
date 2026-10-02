@@ -1,9 +1,10 @@
 use core::{
+    location::FileId,
     path::TreePath,
     types::{Identifier, ProcId},
 };
 
-use objtree::{ObjectTree, ProcDecl, TypeId};
+use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
 
 pub const BASE_PATH: &str = "/datum/demir";
 pub const DEFAULT_VARIABLE: &str = "default";
@@ -137,6 +138,41 @@ impl ProfileCatalog {
 
 /// every single descendants of [`BASE_PATH`] is also considered profile by default
 pub fn catalog(tree: &ObjectTree) -> Result<ProfileCatalog, ProfileError> {
+    let profiles = profiles(tree)?;
+    if profiles.is_empty() {
+        return Err(ProfileError::Missing);
+    }
+
+    let defaults = profiles
+        .iter()
+        .copied()
+        .filter(|id| default_marker(tree, *id).is_some())
+        .collect::<Vec<_>>();
+    let default = pick_default(tree, &profiles, &defaults)?;
+
+    Ok(ProfileCatalog { profiles, default })
+}
+
+pub fn default_in_file(tree: &ObjectTree, file: FileId) -> Result<TypeId, ProfileError> {
+    let all = profiles(tree)?;
+    let declared = all
+        .iter()
+        .copied()
+        .filter(|id| tree.get(*id).is_some_and(|decl| decl.location.file == file))
+        .collect::<Vec<_>>();
+    let defaults = all
+        .iter()
+        .copied()
+        .filter(|id| default_marker(tree, *id).is_some_and(|variable| variable.location.file == file))
+        .collect::<Vec<_>>();
+    if declared.is_empty() && defaults.is_empty() {
+        return Err(ProfileError::Missing);
+    }
+
+    pick_default(tree, &declared, &defaults)
+}
+
+fn profiles(tree: &ObjectTree) -> Result<Vec<TypeId>, ProfileError> {
     let base = tree.id_of(&TreePath::parse(BASE_PATH)).ok_or(ProfileError::Missing)?;
 
     let mut profiles = tree
@@ -151,33 +187,27 @@ pub fn catalog(tree: &ObjectTree) -> Result<ProfileCatalog, ProfileError> {
         left.cmp(&right)
     });
 
-    if profiles.is_empty() {
-        return Err(ProfileError::Missing);
-    }
+    Ok(profiles)
+}
 
-    let marker = Identifier::from(DEFAULT_VARIABLE);
-    let defaults = profiles
-        .iter()
-        .copied()
-        .filter(|id| {
-            tree.var(*id, &marker)
-                .is_some_and(|variable| variable.initializer.is_none() && variable.value.is_truthy())
-        })
-        .collect::<Vec<_>>();
+fn default_marker(tree: &ObjectTree, id: TypeId) -> Option<&VarDecl> {
+    tree.var(id, &Identifier::from(DEFAULT_VARIABLE))
+        .filter(|variable| variable.initializer.is_none() && variable.value.is_truthy())
+}
 
+fn pick_default(tree: &ObjectTree, profiles: &[TypeId], defaults: &[TypeId]) -> Result<TypeId, ProfileError> {
     let paths = |types: &[TypeId]| {
         types
             .iter()
             .filter_map(|id| tree.get(*id).map(|decl| decl.path.to_string()))
             .collect::<Vec<_>>()
     };
-    let default = match defaults.as_slice() {
-        [] => return Err(ProfileError::MissingDefault(paths(&profiles))),
-        [default] => *default,
-        _ => return Err(ProfileError::MultipleDefaults(paths(&defaults))),
-    };
 
-    Ok(ProfileCatalog { profiles, default })
+    match defaults {
+        [] => Err(ProfileError::MissingDefault(paths(profiles))),
+        [default] => Ok(*default),
+        _ => Err(ProfileError::MultipleDefaults(paths(defaults))),
+    }
 }
 
 pub fn default_type(tree: &ObjectTree) -> Result<TypeId, ProfileError> { Ok(catalog(tree)?.default) }

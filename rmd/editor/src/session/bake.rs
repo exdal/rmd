@@ -193,7 +193,7 @@ mod tests {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
         let entry = root.join("tgstation.dme");
         let options = editor::environment::BakeOptions {
-            forced_profile: Some(editor::environment::BundledProfile::Monkestation),
+            forced_profile: Some(String::from("monkestation")),
             ..Default::default()
         };
         let loaded = crate::loader::load_codebase(&entry, &options, &Progress::new()).expect("Monkestation codebase");
@@ -282,7 +282,7 @@ mod tests {
     fn a_hidden_layer_manifold_draws_its_connections_above_the_floor() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
         let options = editor::environment::BakeOptions {
-            forced_profile: Some(editor::environment::BundledProfile::Tgstation),
+            forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
         let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
@@ -383,7 +383,7 @@ mod tests {
     fn lava_lights_only_where_it_borders_another_turf() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
         let options = editor::environment::BakeOptions {
-            forced_profile: Some(editor::environment::BundledProfile::Tgstation),
+            forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
         let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
@@ -438,7 +438,7 @@ mod tests {
     fn lava_lights_the_level_above_through_openspace() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
         let options = editor::environment::BakeOptions {
-            forced_profile: Some(editor::environment::BundledProfile::Tgstation),
+            forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
         let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
@@ -480,7 +480,7 @@ mod tests {
     fn a_thermomachine_rotates_its_baked_pipe_with_dir() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
         let options = editor::environment::BakeOptions {
-            forced_profile: Some(editor::environment::BundledProfile::Tgstation),
+            forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
         let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
@@ -546,7 +546,7 @@ mod tests {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/SecondCity");
         let entry = root.join("tgstation.dme");
         let options = editor::environment::BakeOptions {
-            forced_profile: Some(editor::environment::BundledProfile::SecondCity),
+            forced_profile: Some(String::from("secondcity")),
             ..Default::default()
         };
         let loaded = crate::loader::load_codebase(&entry, &options, &Progress::new()).expect("SecondCity codebase");
@@ -705,7 +705,7 @@ mod tests {
 
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/SecondCity");
         let options = editor::environment::BakeOptions {
-            forced_profile: Some(editor::environment::BundledProfile::SecondCity),
+            forced_profile: Some(String::from("secondcity")),
             ..Default::default()
         };
         let megabytes = |bytes: usize| bytes as f64 / (1024.0 * 1024.0);

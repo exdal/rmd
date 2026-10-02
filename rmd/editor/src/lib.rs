@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     fn local_bake_settings_do_not_change_the_fingerprint() {
-        use crate::environment::{BakeOptions, BundledProfile};
+        use crate::environment::BakeOptions;
 
         let entry = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme");
         let fingerprint = |options| {
@@ -695,7 +695,7 @@ mod tests {
         assert_eq!(fingerprint(baking.clone()), original);
 
         let forced = BakeOptions {
-            forced_profile: Some(BundledProfile::Tgstation),
+            forced_profile: Some(String::from("tgstation")),
             ..baking
         };
         assert_eq!(fingerprint(forced), original);

@@ -7,7 +7,7 @@ use std::{
 };
 
 use dear_imgui_rs::{Key, Ui};
-use editor::{environment::BundledProfile, frame::FrameOptions};
+use editor::frame::FrameOptions;
 use render::HighlightStyle;
 use serde::{Deserialize, Serialize};
 
@@ -1023,7 +1023,7 @@ pub(crate) struct ProfileSelection {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ForcedProfileSelection {
     pub environment: PathBuf,
-    pub profile: BundledProfile,
+    pub profile: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1172,6 +1172,13 @@ impl Settings {
         if !self.object_tree_search.type_paths && !self.object_tree_search.names {
             self.object_tree_search = ObjectTreeSearchOptions::default();
         }
+
+        // forced profiles used to be stored as an enum
+        for selection in &mut self.forced_profile_selections {
+            if selection.profile == "second_city" {
+                selection.profile = String::from("secondcity");
+            }
+        }
     }
 
     pub fn record_recent(&mut self, environment: Option<&Path>, map: &Path) {
@@ -1254,22 +1261,24 @@ impl Settings {
         }
     }
 
-    pub fn forced_profile_for(&self, environment: &Path) -> Option<BundledProfile> {
+    pub fn forced_profile_for(&self, environment: &Path) -> Option<&str> {
         let environment = absolute(environment);
 
         self.forced_profile_selections
             .iter()
             .find(|selection| selection.environment == environment)
-            .map(|selection| selection.profile)
+            .map(|selection| selection.profile.as_str())
     }
 
-    pub fn set_forced_profile_for(&mut self, environment: &Path, profile: Option<BundledProfile>) {
+    pub fn set_forced_profile_for(&mut self, environment: &Path, profile: Option<&str>) {
         let environment = absolute(environment);
         self.forced_profile_selections
             .retain(|selection| selection.environment != environment);
         if let Some(profile) = profile {
-            self.forced_profile_selections
-                .push(ForcedProfileSelection { environment, profile });
+            self.forced_profile_selections.push(ForcedProfileSelection {
+                environment,
+                profile: profile.to_owned(),
+            });
         }
     }
 
@@ -1317,6 +1326,12 @@ fn settings_path() -> io::Result<PathBuf> {
 pub(crate) fn imgui_ini_path() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("imgui.ini")) }
 
 pub(crate) fn backup_dir() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("backup")) }
+
+pub(crate) fn profiles_dir() -> io::Result<PathBuf> {
+    Ok(settings_path()?
+        .with_file_name("profiles")
+        .join(env!("CARGO_PKG_VERSION")))
+}
 
 #[cfg(target_os = "windows")]
 pub(crate) fn log_path() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("latest.log")) }
@@ -1648,7 +1663,7 @@ mod tests {
             }],
             forced_profile_selections: vec![ForcedProfileSelection {
                 environment: PathBuf::from("/project/colonialmarines.dme"),
-                profile: BundledProfile::Cmss13,
+                profile: String::from("cmss13"),
             }],
             optimizations_enabled: false,
             bake_enabled: true,
@@ -1927,18 +1942,29 @@ mod tests {
         let station = Path::new("station.dme");
         let other = Path::new("other.dme");
 
-        settings.set_forced_profile_for(station, Some(BundledProfile::Tgstation));
-        settings.set_forced_profile_for(other, Some(BundledProfile::Goonstation));
-        assert_eq!(settings.forced_profile_for(station), Some(BundledProfile::Tgstation));
-        assert_eq!(settings.forced_profile_for(other), Some(BundledProfile::Goonstation));
+        settings.set_forced_profile_for(station, Some("tgstation"));
+        settings.set_forced_profile_for(other, Some("goonstation"));
+        assert_eq!(settings.forced_profile_for(station), Some("tgstation"));
+        assert_eq!(settings.forced_profile_for(other), Some("goonstation"));
 
-        settings.set_forced_profile_for(station, Some(BundledProfile::Vanderlin));
-        assert_eq!(settings.forced_profile_for(station), Some(BundledProfile::Vanderlin));
+        settings.set_forced_profile_for(station, Some("vanderlin"));
+        assert_eq!(settings.forced_profile_for(station), Some("vanderlin"));
         assert_eq!(settings.forced_profile_selections.len(), 2);
 
         settings.set_forced_profile_for(station, None);
         assert_eq!(settings.forced_profile_for(station), None);
-        assert_eq!(settings.forced_profile_for(other), Some(BundledProfile::Goonstation));
+        assert_eq!(settings.forced_profile_for(other), Some("goonstation"));
+    }
+
+    #[test]
+    fn forced_profiles_stored_as_the_old_enum_map_to_file_names() {
+        let stored = toml::from_str(
+            "[[forced_profile_selections]]\nenvironment = \"/project/city.dme\"\nprofile = \"second_city\"\n",
+        )
+        .unwrap();
+        let loaded = SettingsLoad::from_file_result(Ok(Some(stored)));
+
+        assert_eq!(loaded.settings.forced_profile_selections[0].profile, "secondcity");
     }
 
     #[test]

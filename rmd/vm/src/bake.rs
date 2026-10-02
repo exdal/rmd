@@ -36,6 +36,7 @@ pub use crate::{
         ProfileError,
         ProfileHook,
         catalog as profile_catalog,
+        default_in_file as profile_in_file,
         default_type as profile_type,
         exists as has_profile,
         selected_type as selected_profile_type,

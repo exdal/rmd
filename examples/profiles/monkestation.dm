@@ -1,6 +1,7 @@
 // rmd embeds this integration for the Forced bundled profile setting. To make the profile part of
 // a Monkestation checkout instead, copy it there and `#include` it from `tgstation.dme`, the guard
-// keeps BYOND compiling it to nothing.
+// keeps BYOND compiling it to nothing. The build tool passes CBT, which MAP_SWITCH needs to pick the
+// runtime rock and wall icons, so also `#define CBT` inside the dme's `__DEMIR_BAKE__` branch.
 //
 // The profile runs the codebase's own smoothing and icon-state code against a map, without
 // starting any subsystem. Calling `Initialize(TRUE)` instead faults on nearly every atom, so each

@@ -61,7 +61,7 @@ use crate::{
     external_editor::SourceLocation,
     loader::{Job, Loader, Outcome},
     session::{LoadReport, Session},
-    settings::{Settings, backup_dir, imgui_ini_path},
+    settings::{Settings, backup_dir, imgui_ini_path, profiles_dir},
     ui::{LoadNotice, OpenRequest, ProfileReload, ScreenshotArea, ScreenshotRequest, UiState},
 };
 
@@ -93,6 +93,7 @@ fn main() -> ExitCode {
     let loaded_settings = Settings::load();
     let settings_ready = !loaded_settings.needs_keybind_preset;
     let settings = loaded_settings.settings;
+    let profiles = install_profiles();
     let mut session = Session::new();
     session.sync_git_enabled(settings.git_enabled);
     settings.apply_to(&mut session.options);
@@ -135,7 +136,7 @@ fn main() -> ExitCode {
         startup_job
     };
 
-    let ui = match UiState::new(!settings_ready) {
+    let mut ui = match UiState::new(!settings_ready) {
         Ok(ui) => ui,
         Err(e) => {
             log::error!("{e}");
@@ -143,6 +144,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         },
     };
+    ui.set_profiles(profiles);
     let event_loop = match EventLoop::new() {
         Ok(event_loop) => event_loop,
         Err(e) => {
@@ -727,7 +729,7 @@ impl App {
     fn apply_outcome(&mut self, outcome: Outcome) {
         match outcome {
             Outcome::Codebase { path, loaded } => {
-                let forced_profile = loaded.environment.bake_options.forced_profile;
+                let forced_profile = loaded.environment.bake_options.forced_profile.as_deref();
                 self.settings.set_forced_profile_for(&path, forced_profile);
                 if forced_profile.is_none()
                     && let Some(profiles) = loaded.environment.profiles.as_ref()
@@ -1099,6 +1101,24 @@ impl Drop for App {
     }
 }
 
+fn install_profiles() -> Vec<String> {
+    let dir = match profiles_dir() {
+        Ok(dir) => dir,
+        Err(error) => {
+            log::warn!("profiles fall back to the embedded copies: {error}");
+
+            return editor::environment::BundledProfile::ALL
+                .map(|profile| profile.stem().to_owned())
+                .to_vec();
+        },
+    };
+    if let Err(error) = editor::environment::write_missing_profiles(&dir) {
+        log::warn!("writing profiles to {}: {error}", dir.display());
+    }
+
+    editor::environment::scan_profiles(&dir)
+}
+
 fn bake_options(settings: &Settings, environment: Option<&std::path::Path>) -> BakeOptions {
     BakeOptions {
         enabled: editor::environment::baking_enabled(settings.bake_enabled),
@@ -1106,7 +1126,10 @@ fn bake_options(settings: &Settings, environment: Option<&std::path::Path>) -> B
         profile: environment
             .and_then(|path| settings.profile_for(path))
             .map(core::path::TreePath::parse),
-        forced_profile: environment.and_then(|path| settings.forced_profile_for(path)),
+        forced_profile: environment
+            .and_then(|path| settings.forced_profile_for(path))
+            .map(str::to_owned),
+        profile_dir: profiles_dir().ok(),
         ..Default::default()
     }
 }
@@ -1202,7 +1225,7 @@ mod tests {
         let mut settings = Settings::default();
         let environment = std::path::Path::new("station.dme");
         settings.set_profile_for(environment, Some("/datum/demir/station/debug"));
-        settings.set_forced_profile_for(environment, Some(editor::environment::BundledProfile::Tgstation));
+        settings.set_forced_profile_for(environment, Some("tgstation"));
 
         let options = bake_options(&settings, Some(environment));
 
@@ -1210,10 +1233,7 @@ mod tests {
             options.profile,
             Some(core::path::TreePath::parse("/datum/demir/station/debug"))
         );
-        assert_eq!(
-            options.forced_profile,
-            Some(editor::environment::BundledProfile::Tgstation)
-        );
+        assert_eq!(options.forced_profile.as_deref(), Some("tgstation"));
         assert!(options.optimizations_enabled);
         settings.optimizations_enabled = false;
         assert!(!bake_options(&settings, Some(environment)).optimizations_enabled);
