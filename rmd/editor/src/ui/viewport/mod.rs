@@ -10,7 +10,7 @@ use editor::{
 use render::{MapViewInteraction, MapViewRect, Renderer};
 
 pub(super) use self::{
-    edit::EditCommand,
+    edit::{EDIT_KEYS, EditCommand},
     presence::{CoopPresence, FollowedView},
     shortcuts::MomentaryTool,
     stroke::{ActivePlacementFlash, PickStroke, PlacementStroke},
@@ -529,7 +529,6 @@ impl UiState {
         &mut self, ui: &Ui, session: &mut Session, settings: &Settings, frame: &mut ViewFrame<'_>,
         node_hit: &NodeOverlayHit, is_blame_capturing: bool,
     ) {
-        self.apply_edit_keys(ui, session, settings, frame);
         self.apply_edit_command(session, frame);
 
         let tool = session.tool();

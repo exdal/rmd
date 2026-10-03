@@ -191,6 +191,31 @@ fn edit_menu_commands_reach_the_active_map_view() {
 }
 
 #[test]
+fn edit_keys_work_while_another_panel_has_focus() {
+    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let mut app = RectangleUiHarness::new();
+    app.settings.focus_windows_on_hover = false;
+    app.focus_other_window = true;
+    app.view.focus = false;
+    let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+    app.session.state.choose_prefab(table.clone());
+    app.session.set_tool(Tool::Place);
+    let coord = Coord::new(5, 8, 1);
+    assert!(app.session.place_at(coord, None).is_some());
+    app.step();
+
+    app.key(Key::ModCtrl, true);
+    app.key(Key::Z, true);
+    app.key(Key::Z, false);
+    assert!(!app.session.map().unwrap().tile_at(coord).unwrap().contains(&table));
+
+    app.key(Key::Y, true);
+    app.key(Key::Y, false);
+    app.key(Key::ModCtrl, false);
+    assert!(app.session.map().unwrap().tile_at(coord).unwrap().contains(&table));
+}
+
+#[test]
 fn a_tapped_tool_key_switches_tools_and_a_held_one_hands_the_old_tool_back() {
     let _guard = IMGUI_CONTEXT.lock().unwrap();
     let mut app = RectangleUiHarness::new();

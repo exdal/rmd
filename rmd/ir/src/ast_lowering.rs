@@ -774,6 +774,7 @@ impl<'a> IrModuleBuilder<'a> {
             Some(Expression::Literal(literal)) => {
                 return self.intern_constant(match literal {
                     Literal::Null => Value::Null,
+                    Literal::Bool(b) => Value::Num(f32::from(*b)),
                     Literal::Num(n) => Value::Num(*n),
                     Literal::String(s) => Value::Text(core::types::decode_string(s)),
                     Literal::Resource(s) => Value::Resource(s.clone()),

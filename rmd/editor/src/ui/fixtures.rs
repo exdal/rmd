@@ -13,6 +13,7 @@ use super::{
     UiState,
     block_placement_controls_layout,
     conflict_controls_layout,
+    menu::MenuActions,
     overlay_padding,
     recent_button_size,
     viewport::MapViewDraw,
@@ -103,6 +104,11 @@ impl RectangleUiHarness {
                 .focused(true)
                 .build(|| ui.text("Other window"));
         }
+        let mut menu = MenuActions::default();
+        self.state.read_edit_keys(ui, &self.session, &self.settings, &mut menu);
+        self.state.edit_command = self.state.edit_command.or(menu.edit);
+        self.state.apply_history_actions(&mut self.session, &menu);
+
         let name = format!("###viewport-{}", self.id.get());
         ui.set_window_pos_by_name(&name, [0.0; 2]);
         ui.set_window_size_by_name(&name, [800.0, 600.0]);

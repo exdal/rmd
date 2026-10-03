@@ -475,6 +475,7 @@ mod tests {
                         initializer: None,
                         declared: true,
                         location: Location::default(),
+                        resolved_type: None,
                     },
                 );
             }

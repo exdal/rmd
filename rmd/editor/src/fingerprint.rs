@@ -28,7 +28,7 @@ pub(crate) fn object_tree(tree: &ObjectTree, builtin_files: &[FileId]) -> Codeba
                 .values()
                 .filter(|var| !is_builtin(&var.location))
                 .collect::<Vec<_>>();
-            if is_builtin(&decl.location) && vars.is_empty() {
+            if is_builtin(&decl.location.get()) && vars.is_empty() {
                 return None;
             }
 

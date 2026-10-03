@@ -675,7 +675,7 @@ fn render_type(
         let location = if id == TypeId::ROOT {
             "<built-in>".to_string()
         } else {
-            format_location(sources, source_root, decl.location)
+            format_location(sources, source_root, decl.location.get())
         };
         let _ = writeln!(
             output,

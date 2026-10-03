@@ -13,6 +13,32 @@ pub struct ObjectTree {
     roots: Roots,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedVarType {
+    pub kinds: Vec<VarTypeKind>,
+    pub nullable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VarTypeKind {
+    Number,
+    Bool,
+    Text,
+    Resource,
+    Path,
+    List,
+    Object(TypeId),
+}
+
+impl ResolvedVarType {
+    pub fn single(&self) -> Option<VarTypeKind> {
+        match self.kinds.as_slice() {
+            [kind] => Some(*kind),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Roots {
     pub datum: Option<TypeId>,
@@ -47,7 +73,23 @@ pub struct TypeDecl {
     pub children: Vec<TypeId>,
     pub vars: SymbolMap<VarDecl>,
     pub procs: SymbolMap<ProcDecl>,
-    pub location: Location,
+    pub location: TypeLocation,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TypeLocation {
+    /// `/obj/machinery/door/proc/open()`
+    Implied(Location),
+    /// `/obj/machinery`
+    Defined(Location),
+}
+
+impl TypeLocation {
+    pub fn get(self) -> Location {
+        match self {
+            Self::Implied(location) | Self::Defined(location) => location,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +102,7 @@ pub struct VarDecl {
     pub initializer: Option<ProcId>,
     pub declared: bool,
     pub location: Location,
+    pub resolved_type: Option<ResolvedVarType>,
 }
 
 #[derive(Debug, Clone)]
@@ -87,7 +130,7 @@ impl ObjectTree {
             children: Vec::new(),
             vars: SymbolMap::default(),
             procs: SymbolMap::default(),
-            location: Location::default(),
+            location: TypeLocation::Implied(Location::default()),
         };
 
         Self {
@@ -138,7 +181,7 @@ impl ObjectTree {
                         children: Vec::new(),
                         vars: SymbolMap::default(),
                         procs: SymbolMap::default(),
-                        location,
+                        location: TypeLocation::Implied(location),
                     });
 
                     if let Some(decl) = self.get_mut(parent) {
@@ -153,6 +196,17 @@ impl ObjectTree {
         }
 
         parent
+    }
+
+    pub fn define(&mut self, path: &TreePath, location: Location) -> TypeId {
+        let id = self.register(path, location);
+        if let Some(decl) = self.get_mut(id)
+            && let TypeLocation::Implied(_) = decl.location
+        {
+            decl.location = TypeLocation::Defined(location);
+        }
+
+        id
     }
 
     fn note_root(&mut self, id: TypeId, segments: &[Identifier]) {
@@ -230,6 +284,10 @@ impl ObjectTree {
 
     pub fn var_inherited(&self, id: TypeId, name: &Identifier) -> Option<&VarDecl> {
         self.var_declaration(id, name).map(|(_, variable)| variable)
+    }
+
+    pub fn resolved_var_type(&self, id: TypeId, name: &Identifier) -> Option<&ResolvedVarType> {
+        self.var_inherited(id, name).and_then(|var| var.resolved_type.as_ref())
     }
 
     pub fn proc_inherited(&self, id: TypeId, name: &Identifier) -> Option<&ProcDecl> {

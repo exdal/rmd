@@ -1,12 +1,13 @@
 use core::{
-    types::{Identifier, Value},
+    path::TreePath,
+    types::{Identifier, ListEntry, Value},
     vars,
 };
 use std::collections::{HashMap, HashSet};
 
 use dear_imgui_rs::{ChildFlags, DragFlags, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError};
 use dmi::metadata::Dir;
-use dmm::{Coord, Prefab, writer::format_value};
+use dmm::{Coord, Prefab, parser::parse_value, writer::format_value};
 use editor::{
     blame::{self, BlameCell},
     command::EditGroupId,
@@ -14,11 +15,12 @@ use editor::{
     icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_PIN, ICON_PIN_OUTLINE},
     visual,
 };
-use objtree::{ObjectTree, TypeId};
+use objtree::{ObjectTree, ResolvedVarType, TypeId, VarTypeKind};
 
 use super::{
     common::{IDENTICAL_EDIT_COLOR, checkbox_width, focus_window_on_hover, text_wrapped_colored},
     git::commit_summary,
+    search::draw_type_path_search,
 };
 use crate::{
     external_editor::SourceLocation,
@@ -110,13 +112,39 @@ struct VariableDraft {
     text: String,
     committed: String,
     error: Option<String>,
+    typed: TypedDraft,
+    path_query: String,
+    raw: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
+struct TypedDraft {
+    value: Value,
+    text: String,
+    entries: Vec<ListEntryDraft>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ListEntryDraft {
+    key: String,
+    value: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 struct InspectorVariable {
     name: Identifier,
     source: String,
     overridden: bool,
+    value: Value,
+    ty: Option<ResolvedVarType>,
+    owner: Option<TypeId>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct VariableGroup {
+    owner: Option<TypeId>,
+    path: String,
+    source: Option<SourceLocation>,
 }
 
 #[derive(Debug, Clone)]
@@ -130,14 +158,12 @@ struct InspectorProperty {
 
 struct InspectorSnapshot {
     selected: PrefabInstanceId,
-    path: String,
-    source: Option<SourceLocation>,
+    groups: Vec<VariableGroup>,
     location: PrefabLocation,
     is_atom: bool,
     is_movable: bool,
     properties: HashMap<Identifier, InspectorProperty>,
-    overrides: Vec<InspectorVariable>,
-    defaults: Vec<InspectorVariable>,
+    variables: Vec<InspectorVariable>,
     icon_states: Vec<(String, u32)>,
     declared_directions: Option<[bool; 8]>,
     directional_types: Option<DirectionalTypes>,
@@ -171,14 +197,6 @@ impl InspectorState {
         };
 
         self.sync(&snapshot);
-        let open_source = match &snapshot.source {
-            Some(source) if ui.text_link(&snapshot.path) => Some(source.clone()),
-            Some(_) => None,
-            None => {
-                ui.text_wrapped(&snapshot.path);
-                None
-            },
-        };
         ui.text_disabled(format!(
             "Tile {}, {}, {}",
             snapshot.location.coord.x, snapshot.location.coord.y, snapshot.location.coord.z
@@ -265,34 +283,56 @@ impl InspectorState {
         self.filter.draw(ui);
 
         let _identical_frames = (self.scope == EditScope::Identical).then(|| identical_frame_colors(ui));
-        let (pinned, overrides, defaults) = split_pinned(&snapshot.overrides, &snapshot.defaults, pins);
-        if !pinned.is_empty() {
-            draw_variable_section(ui, session, self, pins, "inspector-pinned", "Pinned", &pinned);
+        let (pinned, variables) = split_pinned(&snapshot.variables, pins);
+        let is_top_shown = self.shows_properties(&snapshot)
+            || pinned
+                .iter()
+                .any(|variable| self.filter.shows(variable.name.as_str(), variable.overridden));
+        if is_top_shown {
+            property_table(ui, "inspector-properties", |ui| {
+                draw_variable_rows(ui, session, self, pins, &pinned);
+                if snapshot.is_atom {
+                    self.draw_transform(ui, session, &snapshot);
+                    self.draw_display(ui, session, &snapshot);
+                }
+            });
         }
 
-        if snapshot.is_atom {
-            self.draw_transform(ui, session, &snapshot);
-            self.draw_display(ui, session, &snapshot);
+        let mut open_source = None;
+        let mut is_any_shown = is_top_shown;
+        for (index, group) in snapshot.groups.iter().enumerate() {
+            let rows = variables
+                .iter()
+                .copied()
+                .filter(|variable| {
+                    variable.owner == group.owner && self.filter.shows(variable.name.as_str(), variable.overridden)
+                })
+                .collect::<Vec<_>>();
+            if index > 0 && rows.is_empty() {
+                continue;
+            }
+
+            if index > 0 || is_top_shown {
+                ui.separator();
+            }
+
+            match &group.source {
+                Some(source) if ui.text_link(&group.path) => open_source = Some(source.clone()),
+                Some(_) => {},
+                None => ui.text_wrapped(&group.path),
+            }
+
+            if !rows.is_empty() {
+                property_table(ui, "inspector-properties", |ui| {
+                    draw_variable_rows(ui, session, self, pins, &rows);
+                });
+                is_any_shown = true;
+            }
         }
 
-        draw_variable_section(
-            ui,
-            session,
-            self,
-            pins,
-            "inspector-other-overrides",
-            "Other overrides",
-            &overrides,
-        );
-        draw_variable_section(
-            ui,
-            session,
-            self,
-            pins,
-            "inspector-other-defaults",
-            "Other defaults",
-            &defaults,
-        );
+        if !is_any_shown {
+            ui.text_disabled("No matching variables");
+        }
 
         InspectorOutput {
             open_source,
@@ -302,76 +342,61 @@ impl InspectorState {
     }
 
     fn draw_transform(&mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot) {
-        if !snapshot.is_movable {
-            self.transform_mode = TransformMode::Pixel;
-        }
-
         let (x, y) = self.transform_mode.variables();
         if !self.shows_any(snapshot, &[x, y]) {
             return;
         }
 
-        let Some(section) = section(ui, "inspector-transform", "Transform", true) else {
-            return;
-        };
-
         let filtering = self.filter.is_active();
 
-        property_table(ui, "inspector-transform-properties", |ui| {
-            if !filtering {
-                ui.table_next_row();
-                ui.table_next_column();
-                ui.align_text_to_frame_padding();
-                ui.text("Tile");
-                ui.table_next_column();
-                ui.align_text_to_frame_padding();
-                ui.text(format!(
-                    "X {}   Y {}   Z {}",
-                    snapshot.location.coord.x, snapshot.location.coord.y, snapshot.location.coord.z
-                ));
-                ui.table_next_column();
-                ui.text_disabled("read-only");
-            }
-
-            match self.transform_mode {
-                TransformMode::Pixel => {
-                    self.draw_int_property(ui, session, snapshot, vars::PIXEL_X, "Pixel X", None);
-                    self.draw_int_property(ui, session, snapshot, vars::PIXEL_Y, "Pixel Y", None);
-                },
-                TransformMode::Step => {
-                    self.draw_int_property(ui, session, snapshot, vars::STEP_X, "Step X", None);
-                    self.draw_int_property(ui, session, snapshot, vars::STEP_Y, "Step Y", None);
-                },
-            }
-
-            if filtering {
-                return;
-            }
-
+        if !filtering {
             ui.table_next_row();
             ui.table_next_column();
             ui.align_text_to_frame_padding();
-            ui.text("Mode");
+            ui.text("Tile");
             ui.table_next_column();
-            ui.set_next_item_width(-1.0);
-            if let Some(combo) = ui.begin_combo("##transform-mode", self.transform_mode.label()) {
-                for mode in TransformMode::ALL {
-                    if ui
-                        .selectable_config(mode.label())
-                        .selected(self.transform_mode == mode)
-                        .disabled(mode == TransformMode::Step && !snapshot.is_movable)
-                        .build()
-                    {
-                        self.transform_mode = mode;
-                    }
-                }
-                combo.end();
-            }
-            ui.table_next_column();
-            ui.text_disabled("Shift: snap");
-        });
+            ui.align_text_to_frame_padding();
+            ui.text(format!(
+                "X {}   Y {}   Z {}",
+                snapshot.location.coord.x, snapshot.location.coord.y, snapshot.location.coord.z
+            ));
+        }
 
-        section.pop();
+        match self.transform_mode {
+            TransformMode::Pixel => {
+                self.draw_int_property(ui, session, snapshot, vars::PIXEL_X, "Pixel X", None);
+                self.draw_int_property(ui, session, snapshot, vars::PIXEL_Y, "Pixel Y", None);
+            },
+            TransformMode::Step => {
+                self.draw_int_property(ui, session, snapshot, vars::STEP_X, "Step X", None);
+                self.draw_int_property(ui, session, snapshot, vars::STEP_Y, "Step Y", None);
+            },
+        }
+
+        if filtering {
+            return;
+        }
+
+        ui.table_next_row();
+        ui.table_next_column();
+        ui.align_text_to_frame_padding();
+        ui.text("Mode");
+        ui.table_next_column();
+        ui.set_next_item_width(-1.0);
+        if let Some(combo) = ui.begin_combo("##transform-mode", self.transform_mode.label()) {
+            for mode in TransformMode::ALL {
+                if ui
+                    .selectable_config(mode.label())
+                    .selected(self.transform_mode == mode)
+                    .disabled(mode == TransformMode::Step && !snapshot.is_movable)
+                    .build()
+                {
+                    self.transform_mode = mode;
+                }
+            }
+
+            combo.end();
+        }
     }
 
     fn draw_display(&mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot) {
@@ -380,55 +405,41 @@ impl InspectorState {
             return;
         }
 
-        let Some(display_section) = section(ui, "inspector-display", "Display", true) else {
-            return;
-        };
+        self.draw_text_property(ui, session, snapshot, vars::NAME, "Name", TextPropertyKind::Text);
+        self.draw_asset_property(
+            ui,
+            session,
+            snapshot,
+            vars::ICON,
+            "Icon",
+            TextPropertyKind::Resource,
+            (!snapshot.icon_known).then_some("The current DMI is not loaded"),
+        );
+        self.draw_asset_property(
+            ui,
+            session,
+            snapshot,
+            vars::ICON_STATE,
+            "Icon state",
+            TextPropertyKind::Text,
+            (!snapshot.icon_state_known).then_some("The current state is not present in the DMI"),
+        );
+        self.draw_direction_property(ui, session, snapshot);
+        self.draw_float_property(ui, session, snapshot, vars::PLANE, "Plane");
+        self.draw_float_property(ui, session, snapshot, vars::LAYER, "Layer");
+        self.draw_color_property(ui, session, snapshot);
+        self.draw_int_property(ui, session, snapshot, vars::ALPHA, "Alpha", Some((0, 255)));
+        self.draw_int_property(
+            ui,
+            session,
+            snapshot,
+            vars::INVISIBILITY,
+            "Invisibility",
+            Some((0, 101)),
+        );
 
-        property_table(ui, "inspector-display-properties", |ui| {
-            self.draw_text_property(ui, session, snapshot, vars::NAME, "Name", TextPropertyKind::Text);
-            self.draw_asset_property(
-                ui,
-                session,
-                snapshot,
-                vars::ICON,
-                "Icon",
-                TextPropertyKind::Resource,
-                (!snapshot.icon_known).then_some("The current DMI is not loaded"),
-            );
-            self.draw_asset_property(
-                ui,
-                session,
-                snapshot,
-                vars::ICON_STATE,
-                "Icon state",
-                TextPropertyKind::Text,
-                (!snapshot.icon_state_known).then_some("The current state is not present in the DMI"),
-            );
-            self.draw_direction_property(ui, session, snapshot);
-            self.draw_float_property(ui, session, snapshot, vars::PLANE, "Plane");
-            self.draw_float_property(ui, session, snapshot, vars::LAYER, "Layer");
-            self.draw_color_property(ui, session, snapshot);
-            self.draw_int_property(ui, session, snapshot, vars::ALPHA, "Alpha", Some((0, 255)));
-            self.draw_int_property(
-                ui,
-                session,
-                snapshot,
-                vars::INVISIBILITY,
-                "Invisibility",
-                Some((0, 101)),
-            );
-        });
-
-        if advanced_shown && let Some(advanced) = section(ui, "inspector-display-advanced", "Advanced offsets", false) {
-            ui.text_wrapped("Pixel W/Z are map-format axes. In the current top-down view they add to Pixel X/Y.");
-            property_table(ui, "inspector-display-advanced-properties", |ui| {
-                self.draw_int_property(ui, session, snapshot, vars::PIXEL_W, "Pixel W", None);
-                self.draw_int_property(ui, session, snapshot, vars::PIXEL_Z, "Pixel Z", None);
-            });
-            advanced.pop();
-        }
-
-        display_section.pop();
+        self.draw_int_property(ui, session, snapshot, vars::PIXEL_W, "Pixel W", None);
+        self.draw_int_property(ui, session, snapshot, vars::PIXEL_Z, "Pixel Z", None);
     }
 
     fn draw_text_property(
@@ -444,7 +455,7 @@ impl InspectorState {
             return;
         }
 
-        begin_property_row(ui, property, label);
+        begin_property_row(ui, session, self.scope, property, label);
         let _id = ui.push_id(name);
         let Some(draft) = self.drafts.get_mut(&property.name) else {
             return;
@@ -463,7 +474,6 @@ impl InspectorState {
             draft.error = None;
         }
         draw_draft_error(ui, draft);
-        draw_reset(ui, session, self.scope, property);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -480,7 +490,7 @@ impl InspectorState {
             return;
         }
 
-        begin_property_row(ui, property, label);
+        begin_property_row(ui, session, self.scope, property, label);
         let _id = ui.push_id(name);
         let Some(draft) = self.drafts.get_mut(&property.name) else {
             return;
@@ -502,7 +512,6 @@ impl InspectorState {
             ui.text_disabled(warning);
         }
         draw_draft_error(ui, draft);
-        draw_reset(ui, session, self.scope, property);
     }
 
     fn draw_int_property(
@@ -518,7 +527,7 @@ impl InspectorState {
             return;
         };
 
-        begin_property_row(ui, property, label);
+        begin_property_row(ui, session, self.scope, property, label);
         let _id = ui.push_id(name);
         ui.set_next_item_width(-1.0);
         let mut value = number as i32;
@@ -531,13 +540,12 @@ impl InspectorState {
             None => ui.drag_int("##value", &mut value),
         };
         if changed {
-            let group = self.drag_group(&property.name);
+            let group = drag_group(&mut self.active_drag, &property.name);
             commit_int_property(session, self.scope, self.transform_mode, &property.name, value, group);
         }
         if ui.is_item_deactivated_after_edit() {
-            self.end_drag(&property.name);
+            end_drag(&mut self.active_drag, &property.name);
         }
-        draw_reset(ui, session, self.scope, property);
     }
 
     fn draw_float_property(
@@ -552,11 +560,11 @@ impl InspectorState {
             return;
         };
 
-        begin_property_row(ui, property, label);
+        begin_property_row(ui, session, self.scope, property, label);
         let _id = ui.push_id(name);
         ui.set_next_item_width(-1.0);
         if ui.drag_float("##value", &mut value) {
-            let group = self.drag_group(&property.name);
+            let group = drag_group(&mut self.active_drag, &property.name);
             session.edit_instance_vars_in(
                 self.scope,
                 format!("change {}", property.name),
@@ -565,9 +573,8 @@ impl InspectorState {
             );
         }
         if ui.is_item_deactivated_after_edit() {
-            self.end_drag(&property.name);
+            end_drag(&mut self.active_drag, &property.name);
         }
-        draw_reset(ui, session, self.scope, property);
     }
 
     fn draw_direction_property(&mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot) {
@@ -598,7 +605,7 @@ impl InspectorState {
             .map(str::to_string)
             .unwrap_or_else(|| format!("Custom ({number})"));
 
-        begin_property_row(ui, property, "Direction");
+        begin_property_row(ui, session, self.scope, property, "Direction");
         let _id = ui.push_id(vars::DIR);
         ui.set_next_item_width(-1.0);
         if let Some(combo) = ui.begin_combo("##value", &preview) {
@@ -623,7 +630,6 @@ impl InspectorState {
             }
             combo.end();
         }
-        draw_reset(ui, session, self.scope, property);
     }
 
     fn draw_color_property(&mut self, ui: &Ui, session: &mut Session, snapshot: &InspectorSnapshot) {
@@ -640,12 +646,12 @@ impl InspectorState {
             },
         };
 
-        begin_property_row(ui, property, "Color");
+        begin_property_row(ui, session, self.scope, property, "Color");
         let _id = ui.push_id(vars::COLOR);
         if let Some(mut color) = color {
             ui.set_next_item_width(-1.0);
             if ui.color_edit4("##picker", &mut color) {
-                let group = self.drag_group(&property.name);
+                let group = drag_group(&mut self.active_drag, &property.name);
                 session.edit_instance_vars_in(
                     self.scope,
                     "change color",
@@ -657,7 +663,7 @@ impl InspectorState {
                 );
             }
             if ui.is_item_deactivated_after_edit() {
-                self.end_drag(&property.name);
+                end_drag(&mut self.active_drag, &property.name);
             }
         } else {
             ui.text_disabled("Color picker unavailable for this value");
@@ -678,16 +684,14 @@ impl InspectorState {
             }
             draw_draft_error(ui, draft);
         }
-        draw_reset(ui, session, self.scope, property);
     }
 
     fn draw_raw_property(&mut self, ui: &Ui, session: &mut Session, property: &InspectorProperty, label: &str) {
-        begin_property_row(ui, property, label);
+        begin_property_row(ui, session, self.scope, property, label);
         let _id = ui.push_id(property.name.as_str());
         if let Some(draft) = self.drafts.get_mut(&property.name) {
             draw_expression_input(ui, session, self.scope, property.name.clone(), draft);
         }
-        draw_reset(ui, session, self.scope, property);
     }
 
     fn shown<'a>(&self, snapshot: &'a InspectorSnapshot, name: &str) -> Option<&'a InspectorProperty> {
@@ -698,6 +702,15 @@ impl InspectorState {
 
     fn shows_any(&self, snapshot: &InspectorSnapshot, names: &[&str]) -> bool {
         names.iter().any(|name| self.shown(snapshot, name).is_some())
+    }
+
+    fn shows_properties(&self, snapshot: &InspectorSnapshot) -> bool {
+        let (x, y) = self.transform_mode.variables();
+
+        snapshot.is_atom
+            && (self.shows_any(snapshot, &[x, y])
+                || self.shows_any(snapshot, DISPLAY_ROWS)
+                || self.shows_any(snapshot, ADVANCED_OFFSETS))
     }
 
     fn clear(&mut self) {
@@ -713,59 +726,89 @@ impl InspectorState {
             self.selected = Some(snapshot.selected);
         }
 
+        if !snapshot.is_movable {
+            self.transform_mode = TransformMode::Pixel;
+        }
+
         let current = snapshot
             .properties
             .values()
-            .map(|property| (property.name.clone(), property.editor_text.clone()))
+            .map(|property| (&property.name, &property.editor_text, &property.value))
             .chain(
                 snapshot
-                    .overrides
+                    .variables
                     .iter()
-                    .chain(&snapshot.defaults)
-                    .map(|variable| (variable.name.clone(), variable.source.clone())),
-            )
-            .collect::<HashMap<_, _>>();
-        self.drafts.retain(|name, _| current.contains_key(name));
+                    .map(|variable| (&variable.name, &variable.source, &variable.value)),
+            );
+        let names = current.clone().map(|(name, ..)| name).collect::<HashSet<_>>();
+        self.drafts.retain(|name, _| names.contains(name));
 
-        for (name, source) in current {
-            match self.drafts.get_mut(&name) {
-                Some(draft) if draft.committed != source && draft.text == draft.committed => {
-                    draft.text.clone_from(&source);
-                    draft.committed = source;
-                    draft.error = None;
-                },
-                Some(_) => {},
+        for (name, source, value) in current {
+            match self.drafts.get_mut(name) {
+                Some(draft) => draft.sync(source, value),
                 None => {
-                    self.drafts.insert(
-                        name,
-                        VariableDraft {
-                            text: source.clone(),
-                            committed: source,
-                            error: None,
-                        },
-                    );
+                    self.drafts.insert(name.clone(), VariableDraft::new(source, value));
                 },
             }
         }
     }
+}
 
-    fn drag_group(&mut self, name: &Identifier) -> EditGroupId {
-        if let Some((active, group)) = &self.active_drag
-            && active == name
-        {
-            return *group;
+impl VariableDraft {
+    fn new(source: &str, value: &Value) -> Self {
+        Self {
+            text: source.to_string(),
+            committed: source.to_string(),
+            error: None,
+            typed: TypedDraft::new(value),
+            path_query: String::new(),
+            raw: false,
         }
-
-        let group = EditGroupId::new();
-        self.active_drag = Some((name.clone(), group));
-
-        group
     }
 
-    fn end_drag(&mut self, name: &Identifier) {
-        if self.active_drag.as_ref().is_some_and(|(active, _)| active == name) {
-            self.active_drag = None;
+    fn sync(&mut self, source: &str, value: &Value) {
+        if self.committed != source && self.text == self.committed {
+            self.text = source.to_string();
+            self.committed = source.to_string();
+            self.error = None;
         }
+
+        if self.typed.value != *value && !self.typed.is_edited() {
+            self.typed = TypedDraft::new(value);
+        }
+    }
+}
+
+impl TypedDraft {
+    fn new(value: &Value) -> Self {
+        Self {
+            value: value.clone(),
+            text: typed_value_text(value),
+            entries: list_entry_drafts(value),
+        }
+    }
+
+    fn is_edited(&self) -> bool {
+        self.text != typed_value_text(&self.value) || self.entries != list_entry_drafts(&self.value)
+    }
+}
+
+fn drag_group(active_drag: &mut Option<(Identifier, EditGroupId)>, name: &Identifier) -> EditGroupId {
+    if let Some((active, group)) = active_drag
+        && active == name
+    {
+        return *group;
+    }
+
+    let group = EditGroupId::new();
+    *active_drag = Some((name.clone(), group));
+
+    group
+}
+
+fn end_drag(active_drag: &mut Option<(Identifier, EditGroupId)>, name: &Identifier) {
+    if active_drag.as_ref().is_some_and(|(active, _)| active == name) {
+        *active_drag = None;
     }
 }
 
@@ -801,32 +844,19 @@ impl InspectorFilter {
     }
 }
 
-type SplitVariables<'a> = (
-    Vec<&'a InspectorVariable>,
-    Vec<&'a InspectorVariable>,
-    Vec<&'a InspectorVariable>,
-);
+type SplitVariables<'a> = (Vec<&'a InspectorVariable>, Vec<&'a InspectorVariable>);
 
-fn split_pinned<'a>(
-    overrides: &'a [InspectorVariable], defaults: &'a [InspectorVariable], pins: &[String],
-) -> SplitVariables<'a> {
+fn split_pinned<'a>(variables: &'a [InspectorVariable], pins: &[String]) -> SplitVariables<'a> {
     let pinned = pins
         .iter()
-        .filter_map(|pin| {
-            overrides
-                .iter()
-                .chain(defaults)
-                .find(|variable| variable.name.as_str() == pin)
-        })
+        .filter_map(|pin| variables.iter().find(|variable| variable.name.as_str() == pin))
         .collect();
-    let unpinned = |variables: &'a [InspectorVariable]| {
-        variables
-            .iter()
-            .filter(|variable| !pins.iter().any(|pin| pin == variable.name.as_str()))
-            .collect()
-    };
+    let unpinned = variables
+        .iter()
+        .filter(|variable| !pins.iter().any(|pin| pin == variable.name.as_str()))
+        .collect();
 
-    (pinned, unpinned(overrides), unpinned(defaults))
+    (pinned, unpinned)
 }
 
 fn inspector_snapshot(session: &Session) -> Option<InspectorSnapshot> {
@@ -835,7 +865,6 @@ fn inspector_snapshot(session: &Session) -> Option<InspectorSnapshot> {
     let prefab = session.selected_prefab()?;
     let tree = session.tree();
     let type_id = tree.and_then(|tree| tree.id_of(&prefab.path));
-    let source = type_id.and_then(|id| session.type_source(id));
     let is_atom = matches!((tree, type_id), (Some(tree), Some(id)) if tree.roots().atom.is_some_and(|atom| tree.is_subtype_of(id, atom)));
     let is_movable = matches!((tree, type_id), (Some(tree), Some(id)) if tree.roots().movable.is_some_and(|movable| tree.is_subtype_of(id, movable)));
     let mut special = HashSet::new();
@@ -856,7 +885,7 @@ fn inspector_snapshot(session: &Session) -> Option<InspectorSnapshot> {
         }
     }
 
-    let (overrides, defaults) = inspector_variables(tree, prefab, &special);
+    let variables = inspector_variables(tree, prefab, &special);
     let icon = properties
         .get(&Identifier::from(vars::ICON))
         .and_then(|property| property.value.as_text())
@@ -882,14 +911,12 @@ fn inspector_snapshot(session: &Session) -> Option<InspectorSnapshot> {
 
     Some(InspectorSnapshot {
         selected,
-        path: prefab.path.to_string(),
-        source,
+        groups: variable_groups(tree, type_id, &prefab.path, &variables, |id| session.type_source(id)),
         location,
         is_atom,
         is_movable,
         properties,
-        overrides,
-        defaults,
+        variables,
         icon_states,
         declared_directions,
         directional_types,
@@ -967,10 +994,117 @@ fn display_source(value: &Value) -> String {
     }
 }
 
+fn typed_value_text(value: &Value) -> String {
+    match value {
+        Value::Text(text) | Value::Resource(text) => text.clone(),
+        _ => String::new(),
+    }
+}
+
+fn list_entry_drafts(value: &Value) -> Vec<ListEntryDraft> {
+    match value {
+        Value::List(entries) => entries
+            .iter()
+            .map(|entry| ListEntryDraft {
+                key: format_value(&entry.key),
+                value: entry.value.as_ref().map_or_else(String::new, format_value),
+            })
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_list_entries(entries: &[ListEntryDraft]) -> Result<Value, String> {
+    let entries = entries
+        .iter()
+        .map(|entry| {
+            let key = parse_value(&entry.key).map_err(|error| error.kind.to_string())?;
+            let value = (!entry.value.trim().is_empty())
+                .then(|| parse_value(&entry.value).map_err(|error| error.kind.to_string()))
+                .transpose()?;
+            Ok(ListEntry { key, value })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(Value::List(entries))
+}
+
+fn list_is_constant(entries: &[ListEntry]) -> bool {
+    fn constant(value: &Value) -> bool {
+        match value {
+            Value::Unevaluated => false,
+            Value::List(entries) => list_is_constant(entries),
+            _ => true,
+        }
+    }
+
+    entries
+        .iter()
+        .all(|entry| constant(&entry.key) && entry.value.as_ref().is_none_or(constant))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VariableWidget {
+    Number,
+    Boolean,
+    Text,
+    Resource,
+    Path,
+    List,
+    Raw,
+}
+
+fn variable_widget(variable: &InspectorVariable) -> VariableWidget {
+    // `list("a" = newlist(/obj/item))`
+    if matches!(variable.value, Value::List(_)) && variable.source.contains("newlist(") {
+        return VariableWidget::Raw;
+    }
+
+    let Some(ty) = variable.ty.as_ref().filter(|ty| !ty.kinds.is_empty()) else {
+        return match &variable.value {
+            Value::Num(_) => VariableWidget::Number,
+            Value::Text(_) => VariableWidget::Text,
+            Value::Resource(_) => VariableWidget::Resource,
+            Value::Path(_) => VariableWidget::Path,
+            Value::List(entries) if list_is_constant(entries) => VariableWidget::List,
+            Value::List(_) | Value::Null | Value::Unevaluated => VariableWidget::Raw,
+        };
+    };
+
+    let kind = match &variable.value {
+        Value::Num(0.0 | 1.0) if ty.kinds.contains(&VarTypeKind::Bool) => Some(VarTypeKind::Bool),
+        Value::Num(_) => Some(VarTypeKind::Number),
+        Value::Text(_) => Some(VarTypeKind::Text),
+        Value::Resource(_) => Some(VarTypeKind::Resource),
+        Value::Path(_) => ty
+            .kinds
+            .iter()
+            .copied()
+            .find(|kind| matches!(kind, VarTypeKind::Path | VarTypeKind::Object(_))),
+        Value::List(entries) if list_is_constant(entries) => Some(VarTypeKind::List),
+        Value::List(_) => None,
+        Value::Null if ty.nullable => ty.single(),
+        Value::Null | Value::Unevaluated => None,
+    };
+    let Some(kind) = kind.filter(|kind| ty.kinds.contains(kind)) else {
+        return VariableWidget::Raw;
+    };
+
+    match kind {
+        VarTypeKind::Bool if matches!(variable.value, Value::Num(_)) => VariableWidget::Boolean,
+        VarTypeKind::Number if matches!(variable.value, Value::Num(_)) => VariableWidget::Number,
+        VarTypeKind::Text => VariableWidget::Text,
+        VarTypeKind::Resource => VariableWidget::Resource,
+        VarTypeKind::Path | VarTypeKind::Object(_) => VariableWidget::Path,
+        VarTypeKind::List => VariableWidget::List,
+        _ => VariableWidget::Raw,
+    }
+}
+
 fn inspector_variables(
     tree: Option<&ObjectTree>, prefab: &Prefab, excluded: &HashSet<Identifier>,
-) -> (Vec<InspectorVariable>, Vec<InspectorVariable>) {
-    let overrides = prefab
+) -> Vec<InspectorVariable> {
+    let declaration = tree.and_then(|tree| Some((tree, tree.id_of(&prefab.path)?)));
+    let mut variables = prefab
         .vars
         .iter()
         .filter(|(name, _)| !excluded.contains(name))
@@ -980,14 +1114,15 @@ fn inspector_variables(
                 .verbatim()
                 .map_or_else(|| format_value(&variable.value), str::to_string),
             overridden: true,
+            value: variable.value.clone(),
+            ty: declaration.and_then(|(tree, id)| tree.resolved_var_type(id, name).cloned()),
+            owner: declaration.and_then(|(tree, id)| declaring_type(tree, id, name)),
         })
         .collect::<Vec<_>>();
     let overridden = prefab.vars.iter().map(|(name, _)| name.clone()).collect::<HashSet<_>>();
-    let mut defaults = HashMap::<Identifier, Value>::new();
+    let mut defaults = HashMap::<Identifier, (Value, Option<ResolvedVarType>, Option<TypeId>)>::new();
 
-    if let Some(tree) = tree
-        && let Some(id) = tree.id_of(&prefab.path)
-    {
+    if let Some((tree, id)) = declaration {
         for declaration in tree.ancestors(id) {
             for (name, variable) in &declaration.vars {
                 let modifiers = variable.modifiers;
@@ -1001,22 +1136,81 @@ fn inspector_variables(
                     continue;
                 }
 
-                defaults.entry(name.clone()).or_insert_with(|| variable.value.clone());
+                defaults.entry(name.clone()).or_insert_with(|| {
+                    (
+                        variable.value.clone(),
+                        variable.resolved_type.clone(),
+                        declaring_type(tree, id, name),
+                    )
+                });
             }
         }
     }
 
-    let mut defaults = defaults
-        .into_iter()
-        .map(|(name, value)| InspectorVariable {
-            name,
-            source: display_source(&value),
-            overridden: false,
-        })
-        .collect::<Vec<_>>();
-    defaults.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
+    variables.extend(
+        defaults
+            .into_iter()
+            .map(|(name, (value, ty, owner))| InspectorVariable {
+                name,
+                source: display_source(&value),
+                overridden: false,
+                value,
+                ty,
+                owner,
+            }),
+    );
+    variables.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
 
-    (overrides, defaults)
+    variables
+}
+
+fn declaring_type(tree: &ObjectTree, id: TypeId, name: &Identifier) -> Option<TypeId> {
+    let mut farthest = None;
+    for decl in tree.ancestors(id) {
+        let Some(variable) = decl.vars.get(name) else {
+            continue;
+        };
+
+        if variable.declared {
+            return Some(decl.id);
+        }
+
+        farthest = Some(decl.id);
+    }
+
+    farthest
+}
+
+fn variable_groups(
+    tree: Option<&ObjectTree>, type_id: Option<TypeId>, path: &TreePath, variables: &[InspectorVariable],
+    source: impl Fn(TypeId) -> Option<SourceLocation>,
+) -> Vec<VariableGroup> {
+    let mut groups = Vec::new();
+    if let (Some(tree), Some(id)) = (tree, type_id) {
+        groups.extend(
+            tree.ancestors(id)
+                .filter(|decl| decl.id == id || variables.iter().any(|variable| variable.owner == Some(decl.id)))
+                .map(|decl| VariableGroup {
+                    owner: Some(decl.id),
+                    path: decl.path.to_string(),
+                    source: source(decl.id),
+                }),
+        );
+    }
+
+    if groups.is_empty() || variables.iter().any(|variable| variable.owner.is_none()) {
+        groups.push(VariableGroup {
+            owner: None,
+            path: if groups.is_empty() {
+                path.to_string()
+            } else {
+                String::from("Undeclared")
+            },
+            source: None,
+        });
+    }
+
+    groups
 }
 
 fn draw_identical_banner(ui: &Ui, session: &Session) -> bool {
@@ -1074,61 +1268,70 @@ fn identical_frame_colors(ui: &Ui) -> [dear_imgui_rs::ColorStackToken<'_>; 3] {
     [active, hovered, frame]
 }
 
-fn section<'ui>(ui: &'ui Ui, id: &str, title: &str, default_open: bool) -> Option<dear_imgui_rs::TreeNodeToken<'ui>> {
-    ui.tree_node_config(id)
-        .label(title)
-        .default_open(default_open)
-        .framed(true)
-        .frame_padding(true)
-        .span_avail_width(true)
-        .push()
-}
-
 fn property_table(ui: &Ui, id: &str, content: impl FnOnce(&Ui)) {
     ui.table(id)
         .flags(TableFlags::BORDERS_INNER_V | TableFlags::RESIZABLE)
         .sizing_policy(TableSizingPolicy::StretchProp)
         .column("Property")
-        .weight(0.32)
+        .weight(0.4)
         .done()
         .column("Value")
-        .weight(0.53)
-        .done()
-        .column("Override")
-        .weight(0.15)
+        .weight(0.6)
         .done()
         .build(content);
 }
 
-fn begin_property_row(ui: &Ui, property: &InspectorProperty, label: &str) {
+fn draw_changed_text(ui: &Ui, text: &str, is_changed: bool) {
+    let _color = is_changed.then(|| ui.push_style_color(StyleColor::Text, ui.style_color(StyleColor::PlotHistogram)));
+    ui.text(text);
+}
+
+fn begin_property_row(ui: &Ui, session: &mut Session, scope: EditScope, property: &InspectorProperty, label: &str) {
     ui.table_next_row();
     ui.table_next_column();
     ui.align_text_to_frame_padding();
-    if property.overridden {
-        ui.text(format!("{label} *"));
-    } else {
-        ui.text(label);
+    draw_changed_text(ui, label, property.overridden);
+    let tooltip = ADVANCED_OFFSETS
+        .contains(&property.name.as_str())
+        .then_some("Pixel W/Z are map-format axes. In the current top-down view they add to Pixel X/Y.")
+        .into_iter()
+        .chain(property.overridden.then_some("Right-click to reset"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !tooltip.is_empty() {
+        ui.set_item_tooltip(tooltip);
     }
+
+    {
+        let _id = ui.push_id(property.name.as_str());
+        if let Some(_popup) = ui.begin_popup_context_item_with_label(Some("property-menu")) {
+            draw_reset_item(ui, session, scope, &property.name, property.overridden, || {
+                format!(
+                    "Remove the map override and restore {}",
+                    display_source(&property.inherited)
+                )
+            });
+        }
+    }
+
     ui.table_next_column();
 }
 
-fn draw_reset(ui: &Ui, session: &mut Session, scope: EditScope, property: &InspectorProperty) {
-    ui.table_next_column();
-    if property.overridden {
-        if ui.small_button("Reset") {
-            session.edit_instance_vars_in(
-                scope,
-                format!("reset {}", property.name),
-                &[VarMutation::Remove(property.name.clone())],
-                None,
-            );
-        }
-        ui.set_item_tooltip(format!(
-            "Remove the map override and restore {}",
-            display_source(&property.inherited)
-        ));
-    } else {
-        ui.text_disabled("Inherited");
+fn draw_reset_item(
+    ui: &Ui, session: &mut Session, scope: EditScope, name: &Identifier, is_changed: bool,
+    hint: impl FnOnce() -> String,
+) {
+    if ui.menu_item_enabled_selected_no_shortcut("Reset", false, is_changed) {
+        session.edit_instance_vars_in(
+            scope,
+            format!("reset {name}"),
+            &[VarMutation::Remove(name.clone())],
+            None,
+        );
+    }
+
+    if is_changed {
+        ui.set_item_tooltip(hint());
     }
 }
 
@@ -1219,11 +1422,13 @@ fn commit_value(
     session: &mut Session, scope: EditScope, name: Identifier, value: Value, group: Option<EditGroupId>,
     draft: &mut VariableDraft,
 ) {
+    let typed = TypedDraft::new(&value);
     if session
         .edit_instance_vars_in(scope, format!("set {name}"), &[VarMutation::Set(name, value)], group)
         .is_some()
     {
         draft.committed.clone_from(&draft.text);
+        draft.typed = typed;
         draft.error = None;
     } else {
         draft.error = Some(String::from("Selected object is no longer available"));
@@ -1241,7 +1446,7 @@ fn draw_expression_input(
     let commit = enter || ui.is_item_deactivated_after_edit();
 
     if commit && draft.text != draft.committed {
-        match dmm::parser::parse_value(&draft.text) {
+        match parse_value(&draft.text) {
             Ok(value) => {
                 let canonical = format_value(&value);
                 let label = format!("set {name}");
@@ -1315,58 +1520,299 @@ fn format_color(color: [f32; 4]) -> String {
     }
 }
 
-fn draw_variable_section(
-    ui: &Ui, session: &mut Session, state: &mut InspectorState, pins: &mut Vec<String>, id: &str, title: &str,
+fn draw_variable_rows(
+    ui: &Ui, session: &mut Session, state: &mut InspectorState, pins: &mut Vec<String>,
     variables: &[&InspectorVariable],
 ) {
-    let shown = variables
-        .iter()
-        .filter(|variable| state.filter.shows(variable.name.as_str(), variable.overridden))
-        .collect::<Vec<_>>();
-    if shown.is_empty() && state.filter.is_active() {
+    for variable in variables {
+        if !state.filter.shows(variable.name.as_str(), variable.overridden) {
+            continue;
+        }
+
+        let Some(draft) = state.drafts.get_mut(&variable.name) else {
+            continue;
+        };
+
+        let _id = ui.push_id(variable.name.as_str());
+
+        ui.table_next_row();
+        ui.table_next_column();
+        ui.align_text_to_frame_padding();
+        if draw_pin(ui, pins.iter().any(|pin| pin == variable.name.as_str())) {
+            toggle_pin(pins, variable.name.as_str());
+        }
+
+        ui.same_line();
+        draw_changed_text(ui, variable.name.as_str(), variable.overridden);
+        ui.set_item_tooltip(format!(
+            "{}\nRight-click for more",
+            type_label(session.tree(), variable.ty.as_ref())
+        ));
+        draw_variable_menu(ui, session, state.scope, variable, draft);
+        ui.table_next_column();
+        draw_variable_input(ui, session, state.scope, &mut state.active_drag, variable, draft);
+    }
+}
+
+fn draw_variable_input(
+    ui: &Ui, session: &mut Session, scope: EditScope, active_drag: &mut Option<(Identifier, EditGroupId)>,
+    variable: &InspectorVariable, draft: &mut VariableDraft,
+) {
+    let widget = variable_widget(variable);
+    if widget == VariableWidget::Raw || draft.raw {
+        draw_expression_input(ui, session, scope, variable.name.clone(), draft);
         return;
     }
-    let Some(section) = section(ui, id, title, true) else {
+
+    match widget {
+        VariableWidget::Number => {
+            let Value::Num(mut number) = variable.value else {
+                return;
+            };
+
+            ui.set_next_item_width(-1.0);
+            if ui.drag_float("##value", &mut number) {
+                let group = drag_group(active_drag, &variable.name);
+                commit_value(
+                    session,
+                    scope,
+                    variable.name.clone(),
+                    Value::Num(number),
+                    Some(group),
+                    draft,
+                );
+            }
+
+            if ui.is_item_deactivated_after_edit() {
+                end_drag(active_drag, &variable.name);
+            }
+        },
+        VariableWidget::Boolean => {
+            let Value::Num(number) = variable.value else {
+                return;
+            };
+
+            let mut is_checked = number != 0.0;
+            if ui.checkbox("##value", &mut is_checked) {
+                commit_value(
+                    session,
+                    scope,
+                    variable.name.clone(),
+                    Value::Num(f32::from(u8::from(is_checked))),
+                    None,
+                    draft,
+                );
+            }
+        },
+        VariableWidget::Text | VariableWidget::Resource => {
+            ui.set_next_item_width(-1.0);
+            let is_entered = ui
+                .input_text("##value", &mut draft.typed.text)
+                .enter_returns_true(true)
+                .build();
+            if is_entered || ui.is_item_deactivated_after_edit() {
+                let value = match widget {
+                    VariableWidget::Text => Value::Text(draft.typed.text.clone()),
+                    _ => Value::Resource(draft.typed.text.clone()),
+                };
+                if value != variable.value {
+                    commit_value(session, scope, variable.name.clone(), value, None, draft);
+                }
+            }
+        },
+        VariableWidget::Path => {
+            let root = variable.ty.as_ref().and_then(|ty| {
+                ty.kinds.iter().find_map(|kind| match kind {
+                    VarTypeKind::Object(id) => Some(*id),
+                    _ => None,
+                })
+            });
+            if let Value::Path(path) = &variable.value
+                && let Some(root) = root
+                && !session
+                    .tree()
+                    .and_then(|tree| tree.id_of(path).map(|id| tree.is_subtype_of(id, root)))
+                    .unwrap_or(false)
+            {
+                draw_expression_input(ui, session, scope, variable.name.clone(), draft);
+                return;
+            }
+
+            let current = match &variable.value {
+                Value::Path(path) => Some(path.to_string()),
+                _ => None,
+            };
+            ui.set_next_item_width(-1.0);
+            if let Some(combo) = ui.begin_combo("##value", current.as_deref().unwrap_or("<null>")) {
+                if ui.is_window_appearing() {
+                    draft.path_query = current.unwrap_or_default();
+                }
+
+                let picked = draw_type_path_search(
+                    ui,
+                    session.tree(),
+                    &mut draft.path_query,
+                    "##path-search",
+                    50,
+                    |tree, path| {
+                        root.is_none_or(|root| tree.id_of(path).is_some_and(|id| tree.is_subtype_of(id, root)))
+                    },
+                    |_| true,
+                );
+                if let Some(path) = picked
+                    && Value::Path(path.clone()) != variable.value
+                {
+                    commit_value(session, scope, variable.name.clone(), Value::Path(path), None, draft);
+                }
+
+                combo.end();
+            }
+        },
+        VariableWidget::List => draw_list_input(ui, session, scope, variable, draft),
+        VariableWidget::Raw => unreachable!(),
+    }
+
+    draw_draft_error(ui, draft);
+}
+
+fn draw_variable_menu(
+    ui: &Ui, session: &mut Session, scope: EditScope, variable: &InspectorVariable, draft: &mut VariableDraft,
+) {
+    let Some(_popup) = ui.begin_popup_context_item_with_label(Some("variable-menu")) else {
         return;
     };
 
-    if shown.is_empty() {
-        ui.text_disabled("None");
-        section.pop();
-
-        return;
+    if variable_widget(variable) != VariableWidget::Raw {
+        let label = if draft.raw {
+            "Use typed editor"
+        } else {
+            "Edit as expression"
+        };
+        if ui.menu_item(label) {
+            draft.raw = !draft.raw;
+        }
     }
 
-    ui.table(format!("{id}-properties"))
-        .flags(TableFlags::BORDERS_INNER_V | TableFlags::RESIZABLE)
-        .sizing_policy(TableSizingPolicy::StretchProp)
-        .column("Variable")
-        .weight(0.4)
-        .done()
-        .column("Value")
-        .weight(0.6)
-        .done()
-        .build(|ui| {
-            for variable in shown {
-                let Some(draft) = state.drafts.get_mut(&variable.name) else {
-                    continue;
-                };
-                let _id = ui.push_id(variable.name.as_str());
+    let is_nullable = variable.ty.as_ref().is_some_and(|ty| ty.nullable) && !matches!(variable.value, Value::Null);
+    if ui.menu_item_enabled_selected_no_shortcut("Set null", false, is_nullable) {
+        commit_value(session, scope, variable.name.clone(), Value::Null, None, draft);
+    }
 
-                ui.table_next_row();
-                ui.table_next_column();
-                ui.align_text_to_frame_padding();
-                if draw_pin(ui, pins.iter().any(|pin| pin == variable.name.as_str())) {
-                    toggle_pin(pins, variable.name.as_str());
-                }
-                ui.same_line();
-                ui.text(variable.name.as_str());
-                ui.table_next_column();
-                draw_expression_input(ui, session, state.scope, variable.name.clone(), draft);
-            }
+    draw_reset_item(ui, session, scope, &variable.name, variable.overridden, || {
+        String::from("Remove the map override")
+    });
+}
+
+fn type_label(tree: Option<&ObjectTree>, ty: Option<&ResolvedVarType>) -> String {
+    let Some(ty) = ty.filter(|ty| !ty.kinds.is_empty()) else {
+        return String::from("unknown");
+    };
+
+    let mut parts = ty
+        .kinds
+        .iter()
+        .map(|kind| match kind {
+            VarTypeKind::Number => String::from("number"),
+            VarTypeKind::Bool => String::from("bool"),
+            VarTypeKind::Text => String::from("text"),
+            VarTypeKind::Resource => String::from("resource"),
+            VarTypeKind::Path => String::from("path"),
+            VarTypeKind::List => String::from("list"),
+            VarTypeKind::Object(id) => tree
+                .and_then(|tree| tree.get(*id))
+                .map_or_else(|| String::from("object"), |decl| decl.path.to_string()),
+        })
+        .collect::<Vec<_>>();
+    if ty.nullable {
+        parts.push(String::from("null"));
+    }
+
+    parts.join(" | ")
+}
+
+fn draw_list_input(
+    ui: &Ui, session: &mut Session, scope: EditScope, variable: &InspectorVariable, draft: &mut VariableDraft,
+) {
+    let Value::List(entries) = &variable.value else {
+        if ui.small_button("Create list") {
+            commit_value(
+                session,
+                scope,
+                variable.name.clone(),
+                Value::List(Vec::new()),
+                None,
+                draft,
+            );
+        }
+
+        return;
+    };
+
+    let Some(tree) = ui
+        .tree_node_config("##list")
+        .label(format!("List ({} entries)", entries.len()))
+        .push()
+    else {
+        return;
+    };
+
+    let mut is_changed = false;
+    let mut remove = None;
+    for (index, entry) in draft.typed.entries.iter_mut().enumerate() {
+        let _id = ui.push_id(index);
+        ui.set_next_item_width(ui.content_region_avail_width() * 0.5);
+        let is_entered = ui.input_text("##key", &mut entry.key).enter_returns_true(true).build();
+        is_changed |= is_entered || ui.is_item_deactivated_after_edit();
+        if let Some(_popup) = ui.begin_popup_context_item_with_label(Some("entry-menu"))
+            && ui.menu_item("Remove")
+        {
+            remove = Some(index);
+        }
+
+        ui.same_line();
+        ui.set_next_item_width(-1.0);
+        let is_entered = ui
+            .input_text("##entry-value", &mut entry.value)
+            .hint("no value")
+            .enter_returns_true(true)
+            .build();
+        is_changed |= is_entered || ui.is_item_deactivated_after_edit();
+    }
+
+    if let Some(index) = remove {
+        draft.typed.entries.remove(index);
+        is_changed = true;
+    }
+
+    if ui.small_button("Add entry") {
+        draft.typed.entries.push(ListEntryDraft {
+            key: String::from("null"),
+            value: String::new(),
         });
+        is_changed = true;
+    }
 
-    section.pop();
+    ui.same_line();
+    {
+        let _disabled = ui.begin_disabled_with_cond(draft.typed.entries.is_empty());
+        if ui.small_button("Remove entry") {
+            draft.typed.entries.pop();
+            is_changed = true;
+        }
+    }
+
+    if is_changed {
+        match parse_list_entries(&draft.typed.entries) {
+            Ok(value) if value == variable.value => {
+                draft.typed = TypedDraft::new(&variable.value);
+                draft.error = None;
+            },
+            Ok(value) => commit_value(session, scope, variable.name.clone(), value, None, draft),
+            Err(error) => draft.error = Some(error),
+        }
+    }
+
+    tree.pop();
 }
 
 fn draw_pin(ui: &Ui, pinned: bool) -> bool {
@@ -1508,7 +1954,7 @@ mod tests {
     }
 
     #[test]
-    fn a_filtered_panel_with_pins_draws_every_section_state() {
+    fn a_filtered_panel_with_pins_draws_every_filter_state() {
         let _guard = crate::ui::IMGUI_CONTEXT.lock().unwrap();
         let mut context = crate::ui::fixtures::rectangle_context();
         let (mut session, _) = two_tables();
@@ -1613,6 +2059,15 @@ mod tests {
         );
         add_var(&mut tree, child, "inherited", Value::Num(2.0), VarModifiers::default());
         add_var(&mut tree, child, "closest", Value::Num(2.0), VarModifiers::default());
+        for name in ["inherited", "closest"] {
+            tree.get_mut(child)
+                .unwrap()
+                .vars
+                .get_mut(&Identifier::from(name))
+                .unwrap()
+                .declared = false;
+        }
+
         add_var(&mut tree, child, "runtime", Value::Unevaluated, VarModifiers::default());
         add_var(
             &mut tree,
@@ -1629,35 +2084,121 @@ mod tests {
         prefab.set_var("color".into(), Value::Text("#ff0000".into()));
         prefab.set_var("inherited".into(), Value::Num(4.0));
         let excluded = HashSet::from([Identifier::from("color")]);
-        let (overrides, defaults) = inspector_variables(Some(&tree), &prefab, &excluded);
+        let variables = inspector_variables(Some(&tree), &prefab, &excluded);
 
         assert_eq!(
-            overrides,
-            [InspectorVariable {
-                name: "inherited".into(),
-                source: String::from("4"),
-                overridden: true,
-            }],
-        );
-        assert_eq!(
-            defaults,
+            variables,
             [
                 InspectorVariable {
                     name: "closest".into(),
                     source: String::from("2"),
                     overridden: false,
+                    value: Value::Num(2.0),
+                    ty: None,
+                    owner: Some(parent),
+                },
+                InspectorVariable {
+                    name: "inherited".into(),
+                    source: String::from("4"),
+                    overridden: true,
+                    value: Value::Num(4.0),
+                    ty: None,
+                    owner: Some(parent),
                 },
                 InspectorVariable {
                     name: "parent_only".into(),
                     source: String::from("\"parent\""),
                     overridden: false,
+                    value: Value::Text("parent".into()),
+                    ty: None,
+                    owner: Some(parent),
                 },
                 InspectorVariable {
                     name: "runtime".into(),
                     source: String::from("<runtime>"),
                     overridden: false,
+                    value: Value::Unevaluated,
+                    ty: None,
+                    owner: Some(child),
                 },
             ],
+        );
+    }
+
+    #[test]
+    fn variables_group_under_their_declaring_types_from_child_to_parent() {
+        let mut tree = ObjectTree::new();
+        let parent = tree.register(&TreePath::parse("/obj"), Location::default());
+        let child = tree.register(&TreePath::parse("/obj/item"), Location::default());
+        let selected = tree.register(&TreePath::parse("/obj/item/sub"), Location::default());
+        add_var(&mut tree, parent, "density", Value::Num(1.0), VarModifiers::default());
+        add_var(&mut tree, selected, "density", Value::Num(0.0), VarModifiers::default());
+        tree.get_mut(selected)
+            .unwrap()
+            .vars
+            .get_mut(&Identifier::from("density"))
+            .unwrap()
+            .declared = false;
+
+        let mut prefab = Prefab::new(TreePath::parse("/obj/item/sub"));
+        prefab.set_var("missing".into(), Value::Num(1.0));
+        let variables = inspector_variables(Some(&tree), &prefab, &HashSet::new());
+        let owner = |name: &str| {
+            variables
+                .iter()
+                .find(|variable| variable.name.as_str() == name)
+                .unwrap()
+                .owner
+        };
+        assert_eq!(owner("density"), Some(parent));
+        assert_eq!(owner("missing"), None);
+
+        let groups = variable_groups(Some(&tree), Some(selected), &prefab.path, &variables, |_| None);
+        let summary = groups
+            .iter()
+            .map(|group| (group.owner, group.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            [
+                (Some(selected), "/obj/item/sub"),
+                (Some(parent), "/obj"),
+                (None, "Undeclared"),
+            ]
+        );
+        assert!(!summary.iter().any(|(owner, _)| *owner == Some(child)));
+
+        let groups = variable_groups(None, None, &prefab.path, &[], |_| None);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].path, "/obj/item/sub");
+    }
+
+    #[test]
+    fn editing_a_default_does_not_move_its_row() {
+        let mut tree = ObjectTree::new();
+        let id = tree.register(&TreePath::parse("/obj/item"), Location::default());
+        for name in ["alpha_var", "beta_var", "gamma_var"] {
+            add_var(&mut tree, id, name, Value::Num(1.0), VarModifiers::default());
+        }
+
+        let mut prefab = Prefab::new(TreePath::parse("/obj/item"));
+        let names = |variables: Vec<InspectorVariable>| {
+            variables
+                .into_iter()
+                .map(|variable| variable.name.as_str().to_string())
+                .collect::<Vec<_>>()
+        };
+        let before = names(inspector_variables(Some(&tree), &prefab, &HashSet::new()));
+
+        prefab.set_var("gamma_var".into(), Value::Num(9.0));
+        let edited = inspector_variables(Some(&tree), &prefab, &HashSet::new());
+        assert!(edited.iter().any(|variable| variable.overridden));
+        assert_eq!(names(edited), before);
+
+        prefab.set_var("alpha_var".into(), Value::Num(9.0));
+        assert_eq!(
+            names(inspector_variables(Some(&tree), &prefab, &HashSet::new())),
+            before
         );
     }
 
@@ -1680,21 +2221,28 @@ mod tests {
     }
 
     #[test]
-    fn pinned_variables_leave_their_sections_in_pin_order() {
+    fn pinned_variables_leave_the_list_in_pin_order() {
         let variable = |name: &str, overridden| InspectorVariable {
             name: name.into(),
             source: String::new(),
             overridden,
+            value: Value::Null,
+            ty: None,
+            owner: None,
         };
-        let overrides = [variable("req_access", true), variable("dir", true)];
-        let defaults = [variable("anchored", false), variable("density", false)];
+        let variables = [
+            variable("anchored", false),
+            variable("density", false),
+            variable("dir", true),
+            variable("req_access", true),
+        ];
         let pins = [
             String::from("density"),
             String::from("missing"),
             String::from("req_access"),
         ];
 
-        let (pinned, overrides, defaults) = split_pinned(&overrides, &defaults, &pins);
+        let (pinned, rest) = split_pinned(&variables, &pins);
         let names = |variables: Vec<&InspectorVariable>| {
             variables
                 .into_iter()
@@ -1703,8 +2251,7 @@ mod tests {
         };
 
         assert_eq!(names(pinned), ["density", "req_access"]);
-        assert_eq!(names(overrides), ["dir"]);
-        assert_eq!(names(defaults), ["anchored"]);
+        assert_eq!(names(rest), ["anchored", "dir"]);
     }
 
     #[test]
@@ -1728,6 +2275,141 @@ mod tests {
         assert_eq!(format_color([0.0, 1.0, 0.0, 0.5]), "#00FF0080");
     }
 
+    #[test]
+    fn ordinary_variable_widgets_follow_types_and_preserve_incompatible_values() {
+        let variable = |name: &str, value, kind| InspectorVariable {
+            name: name.into(),
+            source: String::new(),
+            overridden: true,
+            value,
+            ty: Some(ResolvedVarType {
+                kinds: vec![kind],
+                nullable: true,
+            }),
+            owner: None,
+        };
+        assert_eq!(
+            variable_widget(&variable("density", Value::Num(1.0), VarTypeKind::Bool)),
+            VariableWidget::Boolean
+        );
+        assert_eq!(
+            variable_widget(&variable("density", Value::Num(2.0), VarTypeKind::Bool)),
+            VariableWidget::Raw
+        );
+        assert_eq!(
+            variable_widget(&variable("density", Value::Num(1.0), VarTypeKind::Number)),
+            VariableWidget::Number
+        );
+        assert_eq!(
+            variable_widget(&variable("damage", Value::Num(1.0), VarTypeKind::Number)),
+            VariableWidget::Number
+        );
+        assert_eq!(
+            variable_widget(&variable("title", Value::Null, VarTypeKind::Text)),
+            VariableWidget::Text
+        );
+        assert_eq!(
+            variable_widget(&variable("title", Value::Num(5.0), VarTypeKind::Text)),
+            VariableWidget::Raw
+        );
+        assert_eq!(
+            variable_widget(&variable("items", Value::List(Vec::new()), VarTypeKind::List)),
+            VariableWidget::List
+        );
+        let mut newlist = variable("items", Value::List(Vec::new()), VarTypeKind::List);
+        newlist.source = String::from("newlist(/obj/item)");
+        assert_eq!(variable_widget(&newlist), VariableWidget::Raw);
+        newlist.source = String::from("list(\"a\" = newlist(/obj/item))");
+        assert_eq!(variable_widget(&newlist), VariableWidget::Raw);
+        assert_eq!(
+            variable_widget(&variable("locked", Value::Null, VarTypeKind::Bool)),
+            VariableWidget::Raw
+        );
+    }
+
+    #[test]
+    fn typed_drafts_follow_outside_edits_unless_they_are_being_edited() {
+        let mut draft = VariableDraft::new("\"old\"", &Value::Text("old".into()));
+        draft.text = String::from("\"unsent\"");
+        draft.sync("\"undo\"", &Value::Text("undo".into()));
+        assert_eq!(draft.typed.text, "undo");
+        assert_eq!(draft.text, "\"unsent\"");
+
+        draft.typed.text = String::from("typing");
+        draft.sync("\"remote\"", &Value::Text("remote".into()));
+        assert_eq!(draft.typed.text, "typing");
+    }
+
+    #[test]
+    fn unknown_variable_widgets_follow_the_value() {
+        let variable = |value, ty| InspectorVariable {
+            name: "custom_materials".into(),
+            source: String::new(),
+            overridden: true,
+            value,
+            ty,
+            owner: None,
+        };
+        let unknown = || {
+            Some(ResolvedVarType {
+                kinds: Vec::new(),
+                nullable: true,
+            })
+        };
+        let list = Value::List(vec![ListEntry {
+            key: Value::Path(TreePath::parse("/datum/material/plasma")),
+            value: Some(Value::Num(100000.0)),
+        }]);
+        let runtime_list = Value::List(vec![ListEntry {
+            key: Value::Unevaluated,
+            value: None,
+        }]);
+
+        assert_eq!(variable_widget(&variable(list.clone(), None)), VariableWidget::List);
+        assert_eq!(variable_widget(&variable(list, unknown())), VariableWidget::List);
+        assert_eq!(
+            variable_widget(&variable(Value::Num(1.0), None)),
+            VariableWidget::Number
+        );
+        assert_eq!(
+            variable_widget(&variable(Value::Text("a".into()), unknown())),
+            VariableWidget::Text
+        );
+        assert_eq!(variable_widget(&variable(Value::Null, unknown())), VariableWidget::Raw);
+        assert_eq!(variable_widget(&variable(runtime_list, None)), VariableWidget::Raw);
+    }
+
+    #[test]
+    fn list_entry_edits_keep_optional_keys_and_nested_values() {
+        let entries = [
+            ListEntryDraft {
+                key: String::from("1"),
+                value: String::new(),
+            },
+            ListEntryDraft {
+                key: String::from("\"key\""),
+                value: String::from("list(2)"),
+            },
+        ];
+        let value = parse_list_entries(&entries).unwrap();
+        assert_eq!(parse_value(&format_value(&value)).unwrap(), value);
+        let drafts = list_entry_drafts(&value);
+        assert_eq!(drafts[0].value, "");
+        assert_eq!(drafts[1].value, "list(2)");
+    }
+
+    #[test]
+    fn type_labels_join_kinds_and_nullability() {
+        let ty = |kinds, nullable| ResolvedVarType { kinds, nullable };
+        assert_eq!(type_label(None, None), "unknown");
+        assert_eq!(type_label(None, Some(&ty(Vec::new(), true))), "unknown");
+        assert_eq!(
+            type_label(None, Some(&ty(vec![VarTypeKind::Number, VarTypeKind::Text], true))),
+            "number | text | null"
+        );
+        assert_eq!(type_label(None, Some(&ty(vec![VarTypeKind::List], false))), "list");
+    }
+
     fn add_var(tree: &mut ObjectTree, id: TypeId, name: &str, value: Value, modifiers: VarModifiers) {
         let name = Identifier::from(name);
         tree.get_mut(id).unwrap().vars.insert(
@@ -1740,6 +2422,7 @@ mod tests {
                 initializer: None,
                 declared: true,
                 location: Location::default(),
+                resolved_type: None,
             },
         );
     }

@@ -345,10 +345,15 @@ impl<'a> Parser<'a, '_> {
 
                 Some(f32::from(u8::from((self.context.file_exists)(path))))
             },
-            Token::Null => {
+            Token::Null | Token::False => {
                 self.advance();
 
                 Some(0.0)
+            },
+            Token::True => {
+                self.advance();
+
+                Some(1.0)
             },
             Token::IntegerLiteral(text) | Token::FloatingPointLiteral(text) => {
                 self.advance();

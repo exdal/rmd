@@ -360,6 +360,7 @@ pub enum Builtin {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Literal {
     Null,
+    Bool(bool),
     Num(f32),
     String(String),
     Resource(String),

@@ -9,7 +9,7 @@ use std::{
 };
 
 use defines::{EAST, NORTH, NORTHEAST, SOUTH, SOUTHWEST, WEST};
-use objtree::{ObjectTree, TypeId};
+use objtree::{ObjectTree, ResolvedVarType, TypeId, VarTypeKind};
 
 use crate::{
     FaultKind,
@@ -141,6 +141,23 @@ fn baked_state(bake: &Bake, id: u64) -> Option<&str> {
         .find(|(name, _)| name.as_str() == "icon_state")?
         .1
         .as_text()
+}
+
+#[test]
+fn prelude_flags_resolve_to_booleans_through_the_whole_pipeline() {
+    let (tree, _) = analyze_fixture(fixture!(
+        "programs/prelude_flags_resolve_to_booleans_through_the_whole_pipeline.dm"
+    ));
+    let crate_id = tree.id_of(&TreePath::parse("/obj/crate")).expect("crate type");
+    let kind = |name: &str| {
+        tree.resolved_var_type(crate_id, &name.into())
+            .and_then(ResolvedVarType::single)
+    };
+
+    assert_eq!(kind("density"), Some(VarTypeKind::Bool));
+    assert_eq!(kind("opacity"), Some(VarTypeKind::Bool));
+    assert_eq!(kind("anchored"), Some(VarTypeKind::Bool));
+    assert_eq!(kind("weight"), Some(VarTypeKind::Number));
 }
 
 #[test]

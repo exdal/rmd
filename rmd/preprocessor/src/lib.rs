@@ -683,6 +683,15 @@ impl<'a> Preprocessor<'a> {
         }
 
         let body = self.read_macro_body();
+        let body = match (name, body.as_slice()) {
+            ("TRUE", [BodyPart::Token(Token::IntegerLiteral("1"))]) if params.is_none() => {
+                vec![BodyPart::Token(Token::True)]
+            },
+            ("FALSE", [BodyPart::Token(Token::IntegerLiteral("0"))]) if params.is_none() => {
+                vec![BodyPart::Token(Token::False)]
+            },
+            _ => body,
+        };
         self.defines.define(Define {
             name: Identifier::from(name),
             params,
@@ -1675,6 +1684,26 @@ mod tests {
             .into_iter()
             .filter(|error| error.contains("inconsistent indentation"))
             .collect()
+    }
+
+    #[test]
+    fn stddef_true_and_false_survive_as_tokens() {
+        let source = fixture!("programs/stddef_true_and_false_survive_as_tokens.dm");
+        let (rendered, errors) = pp_with_errors(&[("a.dm", source)]);
+
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(rendered.contains("yes"), "{rendered}");
+        assert!(!rendered.contains("no"), "{rendered}");
+        assert!(rendered.contains("defined"), "{rendered}");
+        assert!(rendered.contains("x = TRUE"), "{rendered}");
+    }
+
+    #[test]
+    fn a_codebase_can_still_define_its_own_true() {
+        let source = fixture!("programs/a_codebase_can_still_define_its_own_true.dm");
+        let (rendered, _) = pp_with_errors(&[("a.dm", source)]);
+
+        assert!(rendered.contains("x = 2"), "{rendered}");
     }
 
     #[test]

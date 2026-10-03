@@ -158,7 +158,7 @@ pub fn default_in_file(tree: &ObjectTree, file: FileId) -> Result<TypeId, Profil
     let declared = all
         .iter()
         .copied()
-        .filter(|id| tree.get(*id).is_some_and(|decl| decl.location.file == file))
+        .filter(|id| tree.get(*id).is_some_and(|decl| decl.location.get().file == file))
         .collect::<Vec<_>>();
     let defaults = all
         .iter()

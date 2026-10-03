@@ -1794,6 +1794,8 @@ impl<'a, 't> Parser<'a, 't> {
         let (token, location) = self.advance()?;
         match token {
             Token::Null => Ok(self.make_expr(Expression::Literal(Literal::Null))),
+            Token::True => Ok(self.make_expr(Expression::Literal(Literal::Bool(true)))),
+            Token::False => Ok(self.make_expr(Expression::Literal(Literal::Bool(false)))),
             Token::IntegerLiteral(text) | Token::FloatingPointLiteral(text) => {
                 let value = match text.split_once('#') {
                     Some((_, "INF")) => f32::INFINITY,

@@ -38,7 +38,7 @@
 	var/mouse_opacity = 1
 	var/infra_luminosity = 0
 	var/luminosity = 0
-	var/opacity = 0
+	var/opacity = FALSE
 	var/matrix/transform = matrix()
 	var/blend_mode = 0
 
@@ -186,7 +186,7 @@
 	var/blend_mode = 0
 	var/color = null
 	var/list/contents
-	var/density = 0
+	var/density = FALSE
 	var/desc = null
 	var/gender = NEUTER
 	var/glide_size = 0
@@ -203,10 +203,10 @@
 	var/mouse_over_pointer = 0
 	var/mouse_drag_pointer = 0
 	var/mouse_drop_pointer = 1
-	var/mouse_drop_zone = 0
+	var/mouse_drop_zone = FALSE
 	var/mouse_opacity = 1
 	var/name = "image"
-	var/opacity = 0
+	var/opacity = FALSE
 	var/list/overlays = null
 	var/override = 0
 	var/pixel_step_size = 0

@@ -268,7 +268,7 @@ impl Session {
 
     pub(crate) fn type_source(&self, id: TypeId) -> Option<SourceLocation> {
         let environment = self.state.environment.as_ref()?;
-        let location = environment.tree.get(id)?.location;
+        let location = environment.tree.get(id)?.location.get();
         if location.begin.line == 0 || location.begin.col == 0 {
             return None;
         }

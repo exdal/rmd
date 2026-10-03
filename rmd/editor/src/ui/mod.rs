@@ -119,7 +119,15 @@ use self::{
     search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search},
     toolbar::{DEFAULT_CUSTOM_FILL_BOUNDARY, TopOverlayState, draw_top_overlay, request_level_change},
     tooltip::{draw_conflict_tooltip, draw_diff_tooltip},
-    viewport::{ActivePlacementFlash, EditCommand, MapViewState, MomentaryTool, PickStroke, PlacementStroke},
+    viewport::{
+        ActivePlacementFlash,
+        EDIT_KEYS,
+        EditCommand,
+        MapViewState,
+        MomentaryTool,
+        PickStroke,
+        PlacementStroke,
+    },
     welcome::{ForgetRequest, WelcomeOutput},
 };
 pub(crate) use self::{common::dpi, load::LoadNotice};
@@ -458,6 +466,7 @@ impl UiState {
         }
 
         let mut menu = self.draw_menu_bar(ui, session, settings, loading);
+        self.read_edit_keys(ui, session, settings, &mut menu);
         self.reset_layout = menu.reset_layout;
         settings.mirror_camera ^= menu.toggle_mirror_camera;
         self.edit_command = menu.edit;
@@ -465,15 +474,7 @@ impl UiState {
         self.apply_file_actions(ui, session, settings, &mut menu);
         self.apply_search_actions(ui, session, settings, &mut menu);
 
-        if menu.undo || menu.redo {
-            self.cancel_edit_gestures(session, session.state.active());
-            if menu.undo {
-                session.undo();
-            } else {
-                session.redo();
-            }
-        }
-
+        self.apply_history_actions(session, &menu);
         self.apply_view_toggles(session, settings, &menu);
 
         if menu.open_save_dialog {
@@ -567,6 +568,34 @@ impl UiState {
             && self.save_dialog.is_none()
             && !self.settings_window.is_capturing_keybind()
             && !ui.io().want_text_input()
+    }
+
+    fn apply_history_actions(&mut self, session: &mut Session, menu: &MenuActions) {
+        if !menu.undo && !menu.redo {
+            return;
+        }
+
+        self.cancel_edit_gestures(session, session.state.active());
+        if menu.undo {
+            session.undo();
+        } else {
+            session.redo();
+        }
+    }
+
+    fn read_edit_keys(&self, ui: &Ui, session: &Session, settings: &Settings, menu: &mut MenuActions) {
+        if !self.map_keys_enabled(ui, session) {
+            return;
+        }
+
+        menu.undo |= settings.keybindings.get(KeybindAction::Undo).is_pressed_repeating(ui);
+        menu.redo |= settings.keybindings.get(KeybindAction::Redo).is_pressed_repeating(ui);
+        if menu.edit.is_none() {
+            menu.edit = EDIT_KEYS
+                .into_iter()
+                .find(|(action, _)| settings.keybindings.get(*action).is_pressed(ui))
+                .map(|(_, command)| command);
+        }
     }
 
     fn apply_file_actions(&mut self, ui: &Ui, session: &mut Session, settings: &Settings, menu: &mut MenuActions) {

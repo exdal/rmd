@@ -942,6 +942,7 @@ mod tests {
                     initializer: None,
                     declared: true,
                     location: Default::default(),
+                    resolved_type: None,
                 },
             );
         }

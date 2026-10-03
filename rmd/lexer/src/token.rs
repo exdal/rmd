@@ -192,6 +192,8 @@ pub enum Token<'a> {
     Concat,             // ##
     Repeat,             // ###
 
+    True,
+    False,
     IntegerLiteral(&'a str),
     FloatingPointLiteral(&'a str),
     HexLiteral(&'a str),
@@ -280,6 +282,8 @@ impl<'a> Token<'a> {
             Token::To => "to",
             Token::Try => "try",
             Token::While => "while",
+            Token::True => "TRUE",
+            Token::False => "FALSE",
             _ => return None,
         })
     }
@@ -472,6 +476,8 @@ impl std::fmt::Display for Token<'_> {
             Token::Concat => write!(f, "##"),
             Token::Repeat => write!(f, "###"),
 
+            Token::True => write!(f, "TRUE"),
+            Token::False => write!(f, "FALSE"),
             Token::IntegerLiteral(s) | Token::FloatingPointLiteral(s) | Token::HexLiteral(s) => write!(f, "{s}"),
             Token::StringLiteral(s) => write!(f, "\"{s}\""),
             Token::RawStringLiteral(s) => write!(f, "@\"{s}\""),

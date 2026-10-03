@@ -3,12 +3,13 @@ pub mod error;
 
 use core::{
     path::{PathFlags, TreePath},
-    types::{Identifier, Value},
+    types::{Identifier, InputType, TypeSpec, Value},
     vars,
 };
+use std::collections::HashMap;
 
-use ast::{AST, Declaration, Expression, Literal, SettingMode, Statement};
-use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
+use ast::{AST, Declaration, Expression, ExpressionId, Literal, SettingMode, Statement};
+use objtree::{ObjectTree, ProcDecl, ResolvedVarType, TypeId, VarDecl, VarTypeKind};
 use prelude::Intrinsic;
 
 use crate::{
@@ -22,6 +23,15 @@ pub struct Analyzer<'a> {
     tree: ObjectTree,
     module: ir::IrModuleBuilder<'a>,
     errors: Vec<SemaError>,
+    var_facts: HashMap<(TypeId, Identifier), VarFacts>,
+}
+
+#[derive(Default)]
+struct VarFacts {
+    /// `var/x = null as text|null`
+    annotation: Option<TypeSpec>,
+    /// `var/x = TRUE`
+    initializer_type: Option<VarTypeKind>,
 }
 
 impl<'a> Analyzer<'a> {
@@ -31,6 +41,7 @@ impl<'a> Analyzer<'a> {
             tree: ObjectTree::new(),
             module: ir::IrModuleBuilder::new(ast),
             errors: Vec::new(),
+            var_facts: HashMap::new(),
         }
     }
 
@@ -54,6 +65,7 @@ impl<'a> Analyzer<'a> {
         mut self, enabled: bool,
     ) -> (ObjectTree, ir::Module, Vec<SemaError>, ir::opt::OptimizationTimings) {
         self.tree.resolve_parent_types();
+        self.resolve_var_types();
         self.resolve_new_types();
         let (module, timings) = self.module.finish_with_optimizations(enabled);
 
@@ -78,11 +90,30 @@ impl<'a> Analyzer<'a> {
             .and_then(|var| var.declared_type.clone())
     }
 
+    fn resolve_var_types(&mut self) {
+        let resolved = self
+            .tree
+            .iter()
+            .flat_map(|decl| {
+                decl.vars.keys().map(|name| {
+                    let ty = resolve_var_type(&self.tree, &self.var_facts, decl.id, name);
+                    (decl.id, name.clone(), ty)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for (id, name, ty) in resolved {
+            if let Some(var) = self.tree.get_mut(id).and_then(|decl| decl.vars.get_mut(&name)) {
+                var.resolved_type = Some(ty);
+            }
+        }
+    }
+
     fn walk(&mut self, declaration: &Declaration, prefix: &TreePath) {
         match declaration {
             Declaration::Type { path, body, location } => {
                 let full = prefix.concat(path);
-                self.tree.register(&full, *location);
+                self.tree.define(&full, *location);
 
                 for child in body {
                     self.walk(child, &full);
@@ -92,6 +123,7 @@ impl<'a> Analyzer<'a> {
             Declaration::Var {
                 path,
                 var_type,
+                as_type,
                 modifiers,
                 dimensions,
                 initializer,
@@ -147,7 +179,21 @@ impl<'a> Analyzer<'a> {
                         .push(SemaError::new(SemaErrorKind::DuplicateVar(name.clone()), *location));
                 }
 
-                let already_declared = decl.vars.get(&name).is_some_and(|var| var.declared);
+                let is_already_declared = decl.vars.get(&name).is_some_and(|var| var.declared);
+                let key = (id, name.clone());
+                let annotation = match as_type {
+                    Some(spec) => Some(spec.clone()),
+                    None if declares => None,
+                    None => self.var_facts.get(&key).and_then(|facts| facts.annotation.clone()),
+                };
+                let initializer_type = initializer.and_then(|expr| initializer_type(self.ast, expr, &value));
+                self.var_facts.insert(
+                    key,
+                    VarFacts {
+                        annotation,
+                        initializer_type,
+                    },
+                );
 
                 decl.vars.insert(
                     name.clone(),
@@ -157,8 +203,9 @@ impl<'a> Analyzer<'a> {
                         modifiers,
                         value,
                         initializer: runtime_initializer,
-                        declared: declares || already_declared,
+                        declared: declares || is_already_declared,
                         location: *location,
+                        resolved_type: None,
                     },
                 );
             },
@@ -255,7 +302,9 @@ impl<'a> Analyzer<'a> {
                     return;
                 };
 
-                let already_declared = decl.vars.get(name).is_some_and(|var| var.declared);
+                let is_already_declared = decl.vars.get(name).is_some_and(|var| var.declared);
+                let initializer_type = initializer_type(self.ast, *value, &folded);
+                self.var_facts.entry((id, name.clone())).or_default().initializer_type = initializer_type;
 
                 decl.vars.insert(
                     name.clone(),
@@ -265,8 +314,9 @@ impl<'a> Analyzer<'a> {
                         modifiers,
                         value: folded,
                         initializer: runtime_initializer,
-                        declared: already_declared,
+                        declared: is_already_declared,
                         location: *location,
+                        resolved_type: None,
                     },
                 );
             },
@@ -340,6 +390,159 @@ pub fn check_undeclared_overrides(tree: &ObjectTree) -> Vec<SemaError> {
     errors
 }
 
+fn resolve_var_type(
+    tree: &ObjectTree, facts: &HashMap<(TypeId, Identifier), VarFacts>, id: TypeId, name: &Identifier,
+) -> ResolvedVarType {
+    let chain = tree
+        .ancestors(id)
+        .filter_map(|decl| {
+            let var = decl.vars.get(name)?;
+            Some((var, facts.get(&(decl.id, name.clone()))))
+        })
+        .collect::<Vec<_>>();
+    for (var, facts) in &chain {
+        if let Some(spec) = facts.and_then(|facts| facts.annotation.as_ref()) {
+            let mut resolved = resolve_spec(tree, spec);
+            if resolved.kinds.is_empty()
+                && spec.flags == InputType::NULL
+                && spec.path.is_none()
+                && let Some(path) = &var.declared_type
+            {
+                resolved.kinds = resolve_path(tree, path).kinds;
+            }
+
+            return resolved;
+        }
+
+        if var.declared
+            && let Some(path) = &var.declared_type
+        {
+            return resolve_path(tree, path);
+        }
+    }
+
+    let initializer_type = |facts: Option<&VarFacts>| facts.and_then(|facts| facts.initializer_type);
+    let is_boolean = chain
+        .iter()
+        .any(|(_, facts)| initializer_type(*facts) == Some(VarTypeKind::Bool))
+        && chain
+            .iter()
+            .all(|(var, _)| matches!(var.value, Value::Null | Value::Unevaluated | Value::Num(0.0 | 1.0)));
+    let mut kind = None;
+    let mut is_nullable = false;
+    for (var, facts) in chain {
+        if var.value == Value::Null {
+            is_nullable = true;
+        }
+
+        let current = match initializer_type(facts) {
+            Some(VarTypeKind::Bool | VarTypeKind::Number) if is_boolean => VarTypeKind::Bool,
+            Some(VarTypeKind::Bool) => VarTypeKind::Number,
+            Some(current) => current,
+            None => continue,
+        };
+        if kind.is_some_and(|previous| previous != current) {
+            return ResolvedVarType {
+                kinds: Vec::new(),
+                nullable: is_nullable,
+            };
+        }
+
+        kind = Some(current);
+    }
+
+    ResolvedVarType {
+        kinds: kind.into_iter().collect(),
+        nullable: is_nullable,
+    }
+}
+
+fn initializer_type(ast: &AST, expr: ExpressionId, value: &Value) -> Option<VarTypeKind> {
+    if is_boolean_literal(ast, expr) {
+        return Some(VarTypeKind::Bool);
+    }
+
+    value_kind(value)
+}
+
+fn is_boolean_literal(ast: &AST, expr: ExpressionId) -> bool {
+    match ast.get_expr(expr) {
+        Some(Expression::Literal(Literal::Bool(_))) => true,
+        Some(Expression::Grouped(inner)) => is_boolean_literal(ast, *inner),
+        _ => false,
+    }
+}
+
+fn value_kind(value: &Value) -> Option<VarTypeKind> {
+    match value {
+        Value::Num(_) => Some(VarTypeKind::Number),
+        Value::Text(_) => Some(VarTypeKind::Text),
+        Value::Resource(_) => Some(VarTypeKind::Resource),
+        Value::Path(_) => Some(VarTypeKind::Path),
+        Value::List(_) => Some(VarTypeKind::List),
+        Value::Null | Value::Unevaluated => None,
+    }
+}
+
+fn resolve_path(tree: &ObjectTree, path: &TreePath) -> ResolvedVarType {
+    let kinds = match path.segments.as_slice() {
+        [root, ..] if root.as_str() == "list" => vec![VarTypeKind::List],
+        _ => tree.id_of(path).map(VarTypeKind::Object).into_iter().collect(),
+    };
+    ResolvedVarType { kinds, nullable: true }
+}
+
+fn resolve_spec(tree: &ObjectTree, spec: &TypeSpec) -> ResolvedVarType {
+    if spec.flags.contains(InputType::ANYTHING) {
+        return ResolvedVarType {
+            kinds: Vec::new(),
+            nullable: true,
+        };
+    }
+
+    let mut kinds = spec
+        .path
+        .as_ref()
+        .map(|path| resolve_path(tree, path).kinds)
+        .unwrap_or_default();
+    let mut add = |flag, kind| {
+        if spec.flags.contains(flag) && !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    };
+    add(InputType::NUM, VarTypeKind::Number);
+    add(InputType::TEXT, VarTypeKind::Text);
+    add(InputType::MESSAGE, VarTypeKind::Text);
+    add(InputType::COLOR, VarTypeKind::Text);
+    add(InputType::COMMAND_TEXT, VarTypeKind::Text);
+    add(InputType::KEY, VarTypeKind::Text);
+    add(InputType::PASSWORD, VarTypeKind::Text);
+    add(InputType::ICON, VarTypeKind::Resource);
+    add(InputType::FILE, VarTypeKind::Resource);
+    add(InputType::SOUND, VarTypeKind::Resource);
+    add(InputType::PATH, VarTypeKind::Path);
+    for (flag, root) in [
+        (InputType::AREA, tree.roots().area),
+        (InputType::MOB, tree.roots().mob),
+        (InputType::OBJ, tree.roots().obj),
+        (InputType::TURF, tree.roots().turf),
+    ] {
+        if spec.flags.contains(flag)
+            && let Some(id) = root
+        {
+            let kind = VarTypeKind::Object(id);
+            if !kinds.contains(&kind) {
+                kinds.push(kind);
+            }
+        }
+    }
+
+    ResolvedVarType {
+        kinds,
+        nullable: spec.flags.contains(InputType::NULL),
+    }
+}
+
 pub fn analyze(ast: &AST, optimize: bool) -> (ObjectTree, ir::Module, Vec<SemaError>) {
     let mut analyzer = Analyzer::new(ast);
     analyzer.add();
@@ -370,14 +573,63 @@ mod tests {
         };
     }
 
+    use lexer::token::Token;
+    use objtree::TypeLocation;
+
     use super::*;
 
     fn analyze_source(source: &str) -> (ObjectTree, ir::Module, Vec<SemaError>) {
         let (tokens, lexer_errors) = lexer::tokenize(source);
         assert!(lexer_errors.is_empty(), "{lexer_errors:?}");
+        let tokens = tokens
+            .into_iter()
+            .map(|(token, location)| match token {
+                Token::Identifier("TRUE") => (Token::True, location),
+                Token::Identifier("FALSE") => (Token::False, location),
+                token => (token, location),
+            })
+            .collect::<Vec<_>>();
         let ast = ast::parse(&tokens).expect("fixture should parse");
 
         analyze(&ast, true)
+    }
+
+    #[test]
+    fn a_type_is_located_at_its_first_block_not_its_first_mention() {
+        let (tree, _, errors) = analyze_source(fixture!(
+            "programs/a_type_is_located_at_its_first_block_not_its_first_mention.dm"
+        ));
+        assert!(errors.is_empty(), "{errors:?}");
+        let location = |path: &str| tree.get_by_path(&TreePath::parse(path)).unwrap().location;
+
+        assert!(matches!(location("/obj/machinery"), TypeLocation::Defined(at) if at.begin.line == 3));
+        assert!(matches!(location("/obj/machinery/door"), TypeLocation::Implied(at) if at.begin.line == 1));
+    }
+
+    #[test]
+    fn resolves_variable_types_after_inheritance_and_forward_declarations() {
+        let (tree, _, errors) = analyze_source(fixture!(
+            "programs/resolves_variable_types_after_inheritance_and_forward_declarations.dm"
+        ));
+        assert!(errors.is_empty(), "{errors:?}");
+        let child = tree.id_of(&TreePath::parse("/datum/child")).unwrap();
+        let mob = tree.id_of(&TreePath::parse("/mob")).unwrap();
+        let kind = |name: &str| tree.resolved_var_type(child, &name.into()).unwrap().clone();
+
+        assert_eq!(kind("target").single(), Some(VarTypeKind::Object(mob)));
+        assert_eq!(kind("items").single(), Some(VarTypeKind::List));
+        assert_eq!(kind("materials").single(), Some(VarTypeKind::List));
+        assert_eq!(kind("title").single(), Some(VarTypeKind::Text));
+        assert!(kind("title").nullable);
+        assert_eq!(kind("choice").kinds, [VarTypeKind::Number, VarTypeKind::Text]);
+        assert_eq!(kind("nullable_target").single(), Some(VarTypeKind::Object(mob)));
+        assert_eq!(kind("health").single(), Some(VarTypeKind::Number));
+        assert!(kind("mixed").kinds.is_empty());
+        assert_eq!(kind("path_value").single(), Some(VarTypeKind::Path));
+        assert_eq!(kind("flag").single(), Some(VarTypeKind::Bool));
+        assert_eq!(kind("mixed_flag").single(), Some(VarTypeKind::Bool));
+        assert_eq!(kind("loose_flag").single(), Some(VarTypeKind::Number));
+        assert_eq!(kind("counted").single(), Some(VarTypeKind::Number));
     }
 
     #[test]
@@ -558,8 +810,7 @@ mod tests {
         // An inherited object var, reachable only after `parent_type` is resolved.
         assert_eq!(
             new_type_of(
-                "/datum/tracy\n/datum/base\n\tvar/datum/tracy/inherited\n/datum/holder\n\tparent_type = \
-                 /datum/base\n\tproc/go()\n\t\tinherited = new\n",
+                fixture!("programs/untyped_new_resolves_against_the_finished_tree-4.dm"),
                 "/datum/holder",
                 "go",
             ),

@@ -11,6 +11,7 @@ pub fn fold(ast: &AST, expr_id: ExpressionId) -> Value {
     match expr {
         Expression::Literal(literal) => match literal {
             Literal::Null => Value::Null,
+            Literal::Bool(v) => Value::Num(f32::from(*v)),
             Literal::Num(v) => Value::Num(*v),
             Literal::String(s) => Value::Text(core::types::decode_string(s)),
             Literal::Resource(s) => Value::Resource(s.clone()),

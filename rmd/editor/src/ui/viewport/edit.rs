@@ -15,7 +15,7 @@ use crate::{
     },
 };
 
-const EDIT_KEYS: [(KeybindAction, EditCommand); 5] = [
+pub(in crate::ui) const EDIT_KEYS: [(KeybindAction, EditCommand); 5] = [
     (KeybindAction::Copy, EditCommand::Copy),
     (KeybindAction::Cut, EditCommand::Cut),
     (KeybindAction::Delete, EditCommand::Delete),
@@ -33,33 +33,6 @@ pub(in crate::ui) enum EditCommand {
 }
 
 impl UiState {
-    pub(super) fn apply_edit_keys(
-        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, frame: &mut ViewFrame<'_>,
-    ) {
-        if !frame.is_focused || ui.io().want_text_input() {
-            return;
-        }
-
-        let is_undo = settings.keybindings.get(KeybindAction::Undo).is_pressed_repeating(ui);
-        let is_redo = settings.keybindings.get(KeybindAction::Redo).is_pressed_repeating(ui);
-        if is_undo || is_redo {
-            self.cancel_view_edits(session, frame);
-
-            if is_undo {
-                session.undo();
-            } else {
-                session.redo();
-            }
-        }
-
-        if let Some((_, command)) = EDIT_KEYS
-            .into_iter()
-            .find(|(action, _)| settings.keybindings.get(*action).is_pressed(ui))
-        {
-            self.edit_command = Some(command);
-        }
-    }
-
     pub(super) fn apply_edit_command(&mut self, session: &mut Session, frame: &mut ViewFrame<'_>) {
         match self.edit_command.take() {
             Some(EditCommand::Copy) => {
