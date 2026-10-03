@@ -27,6 +27,7 @@ pub(super) fn rectangle_context() -> dear_imgui_rs::Context {
     context.io_mut().set_display_size([800.0, 600.0]);
     context.io_mut().set_delta_time(1.0 / 60.0);
     context.io_mut().set_config_input_trickle_event_queue(false);
+    context.io_mut().set_config_macosx_behaviors(false);
     context
 }
 
