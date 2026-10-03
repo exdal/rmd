@@ -22,7 +22,7 @@ pub struct Device {
 
 impl Device {
     pub fn new(window: RawWindowHandle, display: RawDisplayHandle) -> Result<Self, GpuError> {
-        let entry = unsafe { ash::Entry::load() }.map_err(|e| GpuError::Loader(e.to_string()))?;
+        let entry = load_entry()?;
         let instance = create_instance(&entry, window)?;
         let (
             physical_device,
@@ -143,6 +143,34 @@ impl Device {
 
         Ok(())
     }
+}
+
+fn load_entry() -> Result<ash::Entry, GpuError> { unsafe { ash::Entry::load() }.or_else(load_fallback) }
+
+#[cfg(not(target_os = "macos"))]
+fn load_fallback(error: ash::LoadingError) -> Result<ash::Entry, GpuError> { Err(GpuError::Loader(error.to_string())) }
+
+#[cfg(target_os = "macos")]
+fn load_fallback(error: ash::LoadingError) -> Result<ash::Entry, GpuError> {
+    use std::{
+        env,
+        path::{Path, PathBuf},
+    };
+
+    // dyld only searches DYLD_LIBRARY_PATH and /usr/lib for a bare library name.
+    let sdk = env::var_os("VULKAN_SDK").map(|sdk| Path::new(&sdk).join("lib/libvulkan.dylib"));
+    let paths = sdk
+        .into_iter()
+        .chain(["/usr/local/lib/libvulkan.dylib", "/opt/homebrew/lib/libvulkan.dylib"].map(PathBuf::from));
+    for path in paths {
+        if let Ok(entry) = unsafe { ash::Entry::load_from(&path) } {
+            return Ok(entry);
+        }
+    }
+
+    Err(GpuError::Loader(format!(
+        "{error}; install the Vulkan SDK with KosmicKrisp and source its setup-env.sh"
+    )))
 }
 
 fn create_instance(entry: &ash::Entry, window: RawWindowHandle) -> Result<ash::Instance, GpuError> {
