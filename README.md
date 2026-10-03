@@ -15,7 +15,17 @@ Rapid Mapping Device (rmd) is a map editor for Space Station 13 that can run DM 
 
 ## Start editing
 
-Download the editor for Windows or Linux from [Releases](https://github.com/exdal/rmd/releases). Start it, open your `.dme` from the welcome page, and then open a `.dmm` map.
+Download the editor for Windows, Linux, or macOS (Apple Silicon) from [Releases](https://github.com/exdal/rmd/releases). Start it, open your `.dme` from the welcome page, and then open a `.dmm` map.
+
+On macOS, the editor renders through KosmicKrisp, which ships with the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) 1.4.341 or later. Install the SDK, then point the Vulkan loader at KosmicKrisp before you start the editor:
+
+```sh
+source ~/VulkanSDK/<version>/setup-env.sh
+export VK_DRIVER_FILES="$VULKAN_SDK/share/vulkan/icd.d/libkosmickrisp_icd.json"
+xattr -d com.apple.quarantine rmd-*-aarch64-apple-darwin
+chmod +x rmd-*-aarch64-apple-darwin
+./rmd-*-aarch64-apple-darwin
+```
 
 From a source checkout with the build dependencies installed, you can open both files directly:
 
@@ -23,7 +33,7 @@ From a source checkout with the build dependencies installed, you can open both 
 cargo run --release --bin rmde -- path/to/codebase.dme path/to/map.dmm
 ```
 
-The repository pins its Rust toolchain in [`rust-toolchain.toml`](rust-toolchain.toml). On Linux, [`shell.nix`](shell.nix) provides a development shell with the native build dependencies.
+The repository pins its Rust toolchain in [`rust-toolchain.toml`](rust-toolchain.toml). On Linux, [`shell.nix`](shell.nix) provides a development shell with the native build dependencies. On macOS, the Vulkan SDK also provides Slang, which the build finds through `VULKAN_SDK`.
 
 ## Work with Git
 

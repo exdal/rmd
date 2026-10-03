@@ -325,6 +325,7 @@ fn surface_extension(handle: RawWindowHandle) -> Result<&'static CStr, GpuError>
         RawWindowHandle::Wayland(_) => Ok(khr::wayland_surface::NAME),
         RawWindowHandle::Xlib(_) => Ok(khr::xlib_surface::NAME),
         RawWindowHandle::Xcb(_) => Ok(khr::xcb_surface::NAME),
+        RawWindowHandle::AppKit(_) => Ok(ext::metal_surface::NAME),
         _ => Err(GpuError::UnsupportedWindow),
     }
 }
@@ -365,6 +366,15 @@ fn create_surface(
                     &vk::XcbSurfaceCreateInfoKHR::default()
                         .connection(display.connection.map_or(std::ptr::null_mut(), |c| c.as_ptr()))
                         .window(window.window.get()),
+                    None,
+                )?
+            },
+
+            #[cfg(target_os = "macos")]
+            (RawWindowHandle::AppKit(window), _) => {
+                let layer = raw_window_metal::Layer::from_ns_view(window.ns_view);
+                ext::metal_surface::Instance::new(entry, instance).create_metal_surface(
+                    &vk::MetalSurfaceCreateInfoEXT::default().layer(layer.as_ptr().as_ptr()),
                     None,
                 )?
             },

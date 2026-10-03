@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('windows-x86_64', 'linux-x86_64')]
+    [ValidateSet('windows-x86_64', 'linux-x86_64', 'macos-aarch64')]
     [string] $Platform
 )
 
@@ -17,6 +17,10 @@ $archives = @{
     'linux-x86_64' = @{
         Name = "slang-$version-linux-x86_64-glibc-2.27.tar.gz"
         Sha256 = 'f6db08763e38c398086d2b1d785ab7fc190bad27f29992e1be6ca3cc187884d0'
+    }
+    'macos-aarch64' = @{
+        Name = "slang-$version-macos-aarch64.tar.gz"
+        Sha256 = 'cf58b42ba87f66f58e0de297da57f4a5c92d00b7e7f38a708d2a4244abd8d003'
     }
 }
 
@@ -53,7 +57,11 @@ if ($archive.Name.EndsWith('.zip', [StringComparison]::Ordinal)) {
 }
 
 $headerPath = Join-Path $installRoot 'include/slang.h'
-$libraryName = if ($Platform -eq 'windows-x86_64') { 'slang.lib' } else { 'libslang.so' }
+$libraryName = switch ($Platform) {
+    'windows-x86_64' { 'slang.lib' }
+    'linux-x86_64' { 'libslang.so' }
+    'macos-aarch64' { 'libslang.dylib' }
+}
 $libraryPath = Join-Path $installRoot "lib/$libraryName"
 if (-not (Test-Path -LiteralPath $headerPath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $libraryPath -PathType Leaf)) {
@@ -80,6 +88,14 @@ if ($Platform -eq 'linux-x86_64') {
         $libraryDirectory
     }
     $variables.LD_LIBRARY_PATH = $libraryPath
+}
+if ($Platform -eq 'macos-aarch64') {
+    $libraryPath = if ($env:DYLD_LIBRARY_PATH) {
+        "$libraryDirectory$([IO.Path]::PathSeparator)$env:DYLD_LIBRARY_PATH"
+    } else {
+        $libraryDirectory
+    }
+    $variables.DYLD_LIBRARY_PATH = $libraryPath
 }
 
 foreach ($entry in $variables.GetEnumerator()) {

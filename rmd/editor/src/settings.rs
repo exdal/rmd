@@ -170,20 +170,6 @@ impl KeyBinding {
         }
     }
 
-    const fn with_primary(key: Key) -> Self {
-        if cfg!(target_os = "macos") {
-            Self {
-                key,
-                ctrl: false,
-                shift: false,
-                alt: false,
-                super_key: true,
-            }
-        } else {
-            Self::with_ctrl(key)
-        }
-    }
-
     const fn with_ctrl_shift(key: Key) -> Self {
         Self {
             key,
@@ -191,16 +177,6 @@ impl KeyBinding {
             shift: true,
             alt: false,
             super_key: false,
-        }
-    }
-
-    const fn with_primary_shift(key: Key) -> Self {
-        Self {
-            key,
-            ctrl: !cfg!(target_os = "macos"),
-            shift: true,
-            alt: false,
-            super_key: cfg!(target_os = "macos"),
         }
     }
 
@@ -267,7 +243,7 @@ impl KeyBinding {
     pub fn label(self, ui: &Ui) -> String {
         let mut label = String::new();
         for (enabled, name) in [
-            (self.ctrl, "Ctrl"),
+            (self.ctrl, CTRL_NAME),
             (self.shift, "Shift"),
             (self.alt, "Alt"),
             (self.super_key, SUPER_NAME),
@@ -284,7 +260,7 @@ impl KeyBinding {
         }
 
         label.push_str(match self.key {
-            Key::ModCtrl => "Ctrl",
+            Key::ModCtrl => CTRL_NAME,
             Key::ModShift => "Shift",
             Key::ModAlt => "Alt",
             Key::ModSuper => SUPER_NAME,
@@ -295,7 +271,9 @@ impl KeyBinding {
     }
 }
 
-const SUPER_NAME: &str = if cfg!(target_os = "macos") { "Cmd" } else { "Super" };
+// ImGui swaps Cmd and Ctrl on macOS, so `ctrl` holds Cmd there.
+const CTRL_NAME: &str = if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" };
+const SUPER_NAME: &str = if cfg!(target_os = "macos") { "Ctrl" } else { "Super" };
 
 const fn is_false(value: &bool) -> bool { !*value }
 
@@ -698,21 +676,21 @@ impl Default for KeyBindings {
 impl KeyBindings {
     fn strong_dmm() -> Self {
         Self {
-            save: KeyBinding::with_primary(Key::S),
-            save_all: KeyBinding::with_primary_shift(Key::S),
-            close_map: KeyBinding::with_primary(Key::W),
-            undo: KeyBinding::with_primary(Key::Z),
-            redo: KeyBinding::with_primary_shift(Key::Z),
-            toggle_area_layer: KeyBinding::with_primary(Key::Key1),
-            toggle_turf_layer: KeyBinding::with_primary(Key::Key2),
-            toggle_obj_layer: KeyBinding::with_primary(Key::Key3),
-            toggle_mob_layer: KeyBinding::with_primary(Key::Key4),
-            show_all_layers: KeyBinding::with_primary(Key::Key0),
+            save: KeyBinding::with_ctrl(Key::S),
+            save_all: KeyBinding::with_ctrl_shift(Key::S),
+            close_map: KeyBinding::with_ctrl(Key::W),
+            undo: KeyBinding::with_ctrl(Key::Z),
+            redo: KeyBinding::with_ctrl_shift(Key::Z),
+            toggle_area_layer: KeyBinding::with_ctrl(Key::Key1),
+            toggle_turf_layer: KeyBinding::with_ctrl(Key::Key2),
+            toggle_obj_layer: KeyBinding::with_ctrl(Key::Key3),
+            toggle_mob_layer: KeyBinding::with_ctrl(Key::Key4),
+            show_all_layers: KeyBinding::with_ctrl(Key::Key0),
             show_areas: KeyBinding::new(Key::A),
             show_area_outlines: KeyBinding::with_shift(Key::O),
             show_lighting: KeyBinding::new(Key::L),
-            level_up: KeyBinding::with_primary(Key::UpArrow),
-            level_down: KeyBinding::with_primary(Key::DownArrow),
+            level_up: KeyBinding::with_ctrl(Key::UpArrow),
+            level_down: KeyBinding::with_ctrl(Key::DownArrow),
             refit: KeyBinding::new(Key::Home),
             place_tool: KeyBinding::new(Key::Key1),
             select_tool: KeyBinding::new(Key::S),
@@ -724,15 +702,15 @@ impl KeyBindings {
             comment_tool: KeyBinding::with_shift(Key::T),
             rotate: KeyBinding::with_shift(Key::R),
             tool_alternate: KeyBinding::new(Key::ModAlt),
-            copy: KeyBinding::with_primary(Key::C),
-            cut: KeyBinding::with_primary(Key::X),
+            copy: KeyBinding::with_ctrl(Key::C),
+            cut: KeyBinding::with_ctrl(Key::X),
             delete: KeyBinding::new(Key::Delete),
-            paste: KeyBinding::with_primary(Key::V),
-            deselect: KeyBinding::with_primary(Key::D),
-            find: KeyBinding::with_primary(Key::F),
+            paste: KeyBinding::with_ctrl(Key::V),
+            deselect: KeyBinding::with_ctrl(Key::D),
+            find: KeyBinding::with_ctrl(Key::F),
             find_next: KeyBinding::new(Key::F3),
             find_previous: KeyBinding::with_shift(Key::F3),
-            go_to: KeyBinding::with_primary(Key::G),
+            go_to: KeyBinding::with_ctrl(Key::G),
             recent_1: KeyBinding::new(Key::Q),
             recent_2: KeyBinding::new(Key::W),
             recent_3: KeyBinding::new(Key::E),
@@ -1446,15 +1424,15 @@ mod tests {
     fn strong_dmm_keybindings_match_the_selected_shortcuts() {
         let bindings = KeybindPreset::StrongDmm.bindings();
         let expected = [
-            (KeybindAction::Save, KeyBinding::with_primary(Key::S)),
-            (KeybindAction::Undo, KeyBinding::with_primary(Key::Z)),
-            (KeybindAction::Redo, KeyBinding::with_primary_shift(Key::Z)),
-            (KeybindAction::ToggleAreaLayer, KeyBinding::with_primary(Key::Key1)),
-            (KeybindAction::ToggleMobLayer, KeyBinding::with_primary(Key::Key4)),
+            (KeybindAction::Save, KeyBinding::with_ctrl(Key::S)),
+            (KeybindAction::Undo, KeyBinding::with_ctrl(Key::Z)),
+            (KeybindAction::Redo, KeyBinding::with_ctrl_shift(Key::Z)),
+            (KeybindAction::ToggleAreaLayer, KeyBinding::with_ctrl(Key::Key1)),
+            (KeybindAction::ToggleMobLayer, KeyBinding::with_ctrl(Key::Key4)),
             (KeybindAction::ShowAreas, KeyBinding::new(Key::A)),
             (KeybindAction::ShowAreaOutlines, KeyBinding::with_shift(Key::O)),
-            (KeybindAction::LevelUp, KeyBinding::with_primary(Key::UpArrow)),
-            (KeybindAction::LevelDown, KeyBinding::with_primary(Key::DownArrow)),
+            (KeybindAction::LevelUp, KeyBinding::with_ctrl(Key::UpArrow)),
+            (KeybindAction::LevelDown, KeyBinding::with_ctrl(Key::DownArrow)),
             (KeybindAction::Refit, KeyBinding::new(Key::Home)),
             (KeybindAction::PlaceTool, KeyBinding::new(Key::Key1)),
             (KeybindAction::SelectTool, KeyBinding::new(Key::S)),
@@ -1464,13 +1442,13 @@ mod tests {
             (KeybindAction::ReplaceTool, KeyBinding::new(Key::Key4)),
             (KeybindAction::FillTool, KeyBinding::new(Key::Key2)),
             (KeybindAction::Rotate, KeyBinding::with_shift(Key::R)),
-            (KeybindAction::Copy, KeyBinding::with_primary(Key::C)),
-            (KeybindAction::Cut, KeyBinding::with_primary(Key::X)),
+            (KeybindAction::Copy, KeyBinding::with_ctrl(Key::C)),
+            (KeybindAction::Cut, KeyBinding::with_ctrl(Key::X)),
             (KeybindAction::Delete, KeyBinding::new(Key::Delete)),
-            (KeybindAction::Paste, KeyBinding::with_primary(Key::V)),
-            (KeybindAction::Find, KeyBinding::with_primary(Key::F)),
+            (KeybindAction::Paste, KeyBinding::with_ctrl(Key::V)),
+            (KeybindAction::Find, KeyBinding::with_ctrl(Key::F)),
             (KeybindAction::FindNext, KeyBinding::new(Key::F3)),
-            (KeybindAction::GoTo, KeyBinding::with_primary(Key::G)),
+            (KeybindAction::GoTo, KeyBinding::with_ctrl(Key::G)),
             (KeybindAction::ShowTileGrid, KeyBinding::new(Key::G)),
             (KeybindAction::ShowPixelGrid, KeyBinding::with_shift(Key::G)),
         ];
@@ -1501,7 +1479,7 @@ mod tests {
     #[test]
     fn a_new_default_that_clashes_with_a_saved_binding_moves_the_later_action() {
         let mut saved = KeybindPreset::StrongDmm.bindings();
-        saved.show_areas = KeyBinding::with_primary(Key::Key1);
+        saved.show_areas = KeyBinding::with_ctrl(Key::Key1);
         saved.toggle_area_layer = KeyBindings::default().toggle_area_layer;
         saved.resolve_duplicates();
 
