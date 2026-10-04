@@ -106,9 +106,13 @@ impl ScaledStyle {
     }
 }
 
-// `scale_all_sizes` truncates, so a 1px line scaled below 1.0 disappears
 fn keep_thin_lines(style: &mut Style, base: &Style) {
     let keep = |scaled: f32, base: f32| scaled.max(base.min(1.0));
+    style.set_window_min_size([0, 1].map(|axis| keep(style.window_min_size()[axis], base.window_min_size()[axis])));
+    style.set_window_border_hover_padding(keep(
+        style.window_border_hover_padding(),
+        base.window_border_hover_padding(),
+    ));
     style.set_window_border_size(keep(style.window_border_size(), base.window_border_size()));
     style.set_child_border_size(keep(style.child_border_size(), base.child_border_size()));
     style.set_popup_border_size(keep(style.popup_border_size(), base.popup_border_size()));
@@ -246,5 +250,20 @@ mod tests {
         assert_eq!(style.separator_size(), base.separator_size().min(1.0));
         assert_eq!(style.input_text_cursor_size(), base.input_text_cursor_size().min(1.0));
         assert_eq!(style.tree_lines_size(), base.tree_lines_size().min(1.0));
+    }
+
+    #[test]
+    fn scaling_down_keeps_the_sizes_imgui_asserts_on() {
+        let _context = crate::ui::IMGUI_CONTEXT.lock().unwrap();
+        let mut context = Context::create();
+        let mut base = context.style().clone();
+        base.set_window_min_size([1.0, 1.5]);
+        base.set_window_border_hover_padding(1.0);
+        let mut scaled = ScaledStyle::new(&mut context, false);
+
+        scaled.apply(&mut context, &base, 1.5, Some(50));
+        let style = context.style();
+        assert_eq!(style.window_min_size(), [1.0, 1.0]);
+        assert_eq!(style.window_border_hover_padding(), 1.0);
     }
 }

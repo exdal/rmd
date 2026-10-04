@@ -15,6 +15,7 @@ const LIGHT_THEME: &str = "imgui_light";
 const TABLE_ROW_ALT_ALPHA_SCALE: f32 = 0.4;
 
 const UNIT: RangeInclusive<f32> = 0.0..=1.0;
+const ALPHA: RangeInclusive<f32> = 0.2..=1.0;
 const SIZE: RangeInclusive<f32> = 0.0..=128.0;
 const MIN_SIZE: RangeInclusive<f32> = 1.0..=512.0;
 const POSITIVE: RangeInclusive<f32> = 0.01..=16.0;
@@ -97,7 +98,7 @@ const fn direction(
 }
 
 pub(crate) const STYLE_FIELDS: &[StyleField] = &[
-    float("Alpha", Style::alpha, Style::set_alpha, UNIT),
+    float("Alpha", Style::alpha, Style::set_alpha, ALPHA),
     float("DisabledAlpha", Style::disabled_alpha, Style::set_disabled_alpha, UNIT),
     vec2("WindowPadding", Style::window_padding, Style::set_window_padding, SIZE),
     float(
@@ -521,8 +522,10 @@ pub(crate) fn tree_lines_name(mode: TreeLineMode) -> &'static str {
         .map_or("None", |(_, name)| name)
 }
 
+fn color_byte(channel: f32) -> u8 { (channel.clamp(0.0, 1.0) * 255.0).round() as u8 }
+
 pub(crate) fn hex_color(rgba: [f32; 4]) -> String {
-    let [r, g, b, a] = rgba.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8);
+    let [r, g, b, a] = rgba.map(color_byte);
 
     format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
 }
@@ -614,6 +617,16 @@ pub(crate) struct Theme {
 }
 
 impl Theme {
+    pub fn web_url(&self) -> Option<&str> {
+        let url = self.url.trim();
+        let is_web = ["https://", "http://"].iter().any(|scheme| {
+            url.get(..scheme.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(scheme))
+        });
+
+        is_web.then_some(url)
+    }
+
     fn parse(id: &str, source: &str, base: &Style) -> Result<Self, toml::de::Error> {
         let file: ThemeFile = toml::from_str(source)?;
         let mut style = base.clone();
@@ -679,6 +692,10 @@ fn builtin_themes(default_style: &Style) -> [(&'static str, Theme); 2] {
         let mut alternate_row = style.color(StyleColor::TableRowBgAlt);
         alternate_row[3] *= TABLE_ROW_ALT_ALPHA_SCALE;
         style.set_color(StyleColor::TableRowBgAlt, alternate_row);
+        for (color, _) in STYLE_COLORS {
+            let rgba = style.color(color).map(|channel| f32::from(color_byte(channel)) / 255.0);
+            style.set_color(color, rgba);
+        }
 
         Theme {
             name: name.to_owned(),
@@ -719,14 +736,13 @@ pub(crate) struct Themes {
 impl Themes {
     pub fn load(dir: Option<PathBuf>, default_style: &Style, selected: &str) -> Self {
         let builtins = builtin_themes(default_style);
-        let base = &builtins[0].1.style;
         let mut entries = Vec::new();
         if let Some(dir) = &dir {
             if let Err(error) = write_missing(dir, &builtins) {
                 log::error!("writing built-in themes: {error}");
             }
 
-            entries = read_themes(dir, base);
+            entries = read_themes(dir, &builtins);
         }
 
         for (id, theme) in &builtins {
@@ -872,7 +888,7 @@ fn write_missing(dir: &Path, builtins: &[(&str, Theme)]) -> Result<(), Box<dyn E
     Ok(())
 }
 
-fn read_themes(dir: &Path, base: &Style) -> Vec<ThemeEntry> {
+fn read_themes(dir: &Path, builtins: &[(&str, Theme)]) -> Vec<ThemeEntry> {
     let read_dir = match fs::read_dir(dir) {
         Ok(read_dir) => read_dir,
         Err(error) => {
@@ -892,6 +908,10 @@ fn read_themes(dir: &Path, base: &Style) -> Vec<ThemeEntry> {
             continue;
         };
 
+        let base = builtins
+            .iter()
+            .find(|(builtin, _)| *builtin == id)
+            .map_or(&builtins[0].1.style, |(_, theme)| &theme.style);
         let theme = fs::read_to_string(&path)
             .map_err(Box::<dyn Error>::from)
             .and_then(|source| Ok(Theme::parse(id, &source, base)?));
@@ -927,6 +947,38 @@ mod tests {
     }
 
     #[test]
+    fn only_web_urls_can_be_opened() {
+        let theme = |url: &str| Theme {
+            name: String::new(),
+            url: url.to_owned(),
+            style: default_style(),
+        };
+        let _context = crate::ui::IMGUI_CONTEXT.lock().unwrap();
+
+        assert_eq!(
+            theme(" https://github.com/a/b ").web_url(),
+            Some("https://github.com/a/b")
+        );
+        assert_eq!(theme("HTTP://example.com").web_url(), Some("HTTP://example.com"));
+        assert_eq!(theme("file:///tmp/payload").web_url(), None);
+        assert_eq!(theme("\\\\server\\share").web_url(), None);
+        assert_eq!(theme("").web_url(), None);
+    }
+
+    #[test]
+    fn builtin_files_fill_missing_keys_from_their_own_preset() {
+        let _context = crate::ui::IMGUI_CONTEXT.lock().unwrap();
+        let dir = scratch_dir("preset-base");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("imgui_light.toml"), "name = \"ImGui Light\"\n").unwrap();
+
+        let themes = Themes::load(Some(dir.clone()), &default_style(), LIGHT_THEME);
+        assert!(themes.is_active_default());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn hex_colors_round_trip() {
         assert_eq!(hex_color([1.0, 0.0, 0.5, 0.94]), "#FF0080F0");
         assert_eq!(
@@ -945,8 +997,7 @@ mod tests {
         for (id, theme) in builtin_themes(&default_style) {
             let written = theme.to_toml().unwrap();
             let read = Theme::parse(id, &written, &default_style).unwrap();
-            assert_eq!(read.to_toml().unwrap(), written);
-            assert_eq!(read.name, theme.name);
+            assert_eq!(read, theme);
         }
     }
 
@@ -1025,6 +1076,9 @@ mod tests {
 
         let mut themes = Themes::load(Some(dir.clone()), &default_style(), DEFAULT_THEME);
         assert!(themes.is_active_builtin());
+        assert!(themes.select(LIGHT_THEME));
+        assert!(themes.is_active_default());
+        assert!(themes.select(DEFAULT_THEME));
         assert!(!themes.is_active_default());
         themes.reset_active();
         assert!(themes.is_active_default());

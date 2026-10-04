@@ -19,7 +19,7 @@ use editor::environment::profile_label;
 
 use super::{
     common::{button_width, dpi, focus_window_on_hover},
-    dialog::{SAVE_ERROR_COLOR, draw_keybind_preset_dialog},
+    dialog::{MODAL_FLAGS, SAVE_ERROR_COLOR, draw_keybind_preset_dialog},
 };
 use crate::{
     fonts::{BUNDLED_FONT_NAME, SystemFonts},
@@ -81,9 +81,20 @@ struct SettingsWindowState<'a> {
     measured: &'a mut [f32; 2],
     pending_profile: &'a mut Option<ProfileReload>,
     ui_scale_draft: &'a mut Option<u32>,
-    new_theme_name: &'a mut Option<String>,
+    theme_editor: &'a mut ThemeEditor,
     font_picker: &'a mut FontPicker,
     profiles: &'a [String],
+}
+
+#[derive(Default)]
+struct ThemeEditor {
+    new_theme: Option<NewTheme>,
+    save_error: Option<String>,
+}
+
+struct NewTheme {
+    name: String,
+    error: Option<String>,
 }
 
 #[derive(Default)]
@@ -208,7 +219,7 @@ pub(super) struct SettingsWindow {
     measured: [f32; 2],
     pending_profile: Option<ProfileReload>,
     ui_scale_draft: Option<u32>,
-    new_theme_name: Option<String>,
+    theme_editor: ThemeEditor,
     font_picker: FontPicker,
     profiles: Vec<String>,
 }
@@ -224,7 +235,7 @@ impl SettingsWindow {
             measured: SETTINGS_WINDOW_SIZE,
             pending_profile: None,
             ui_scale_draft: None,
-            new_theme_name: None,
+            theme_editor: ThemeEditor::default(),
             font_picker: FontPicker::default(),
             profiles: Vec::new(),
         })
@@ -250,7 +261,7 @@ impl SettingsWindow {
                 measured: &mut self.measured,
                 pending_profile: &mut self.pending_profile,
                 ui_scale_draft: &mut self.ui_scale_draft,
-                new_theme_name: &mut self.new_theme_name,
+                theme_editor: &mut self.theme_editor,
                 font_picker: &mut self.font_picker,
                 profiles: &self.profiles,
             },
@@ -278,7 +289,7 @@ fn draw_settings_window(
         measured,
         pending_profile,
         ui_scale_draft,
-        new_theme_name,
+        theme_editor,
         font_picker,
         profiles,
     } = state;
@@ -334,7 +345,7 @@ fn draw_settings_window(
                     match category {
                         SettingsCategory::General => draw_general_settings(ui, settings),
                         SettingsCategory::Appearance => {
-                            draw_appearance_settings(ui, settings, themes, ui_scale_draft, new_theme_name, font_picker)
+                            draw_appearance_settings(ui, settings, themes, ui_scale_draft, theme_editor, font_picker)
                         },
                         SettingsCategory::Viewport => draw_viewport_settings(ui, session, settings),
                         SettingsCategory::Compiler => {
@@ -409,7 +420,7 @@ fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
 
 fn draw_appearance_settings(
     ui: &Ui, settings: &mut Settings, themes: &mut Themes, ui_scale_draft: &mut Option<u32>,
-    new_theme_name: &mut Option<String>, font_picker: &mut FontPicker,
+    theme_editor: &mut ThemeEditor, font_picker: &mut FontPicker,
 ) {
     draw_section_heading(ui, "UI scale");
     draw_ui_scale_setting(ui, settings, ui_scale_draft);
@@ -420,7 +431,7 @@ fn draw_appearance_settings(
 
     ui.separator();
     draw_section_heading(ui, "Theme");
-    draw_theme_settings(ui, settings, themes, new_theme_name);
+    draw_theme_settings(ui, settings, themes, theme_editor);
 }
 
 fn draw_ui_scale_setting(ui: &Ui, settings: &mut Settings, ui_scale_draft: &mut Option<u32>) {
@@ -587,7 +598,7 @@ fn drag_u32(ui: &Ui, label: &str, range: &RangeInclusive<u32>, value: &mut u32) 
     }
 }
 
-fn draw_theme_settings(ui: &Ui, settings: &mut Settings, themes: &mut Themes, new_theme_name: &mut Option<String>) {
+fn draw_theme_settings(ui: &Ui, settings: &mut Settings, themes: &mut Themes, editor: &mut ThemeEditor) {
     let mut selected = None;
     ui.set_next_item_width(260.0 * dpi(ui));
     if let Some(_combo) = ui.begin_combo("##theme", &themes.active_theme().name) {
@@ -606,27 +617,33 @@ fn draw_theme_settings(ui: &Ui, settings: &mut Settings, themes: &mut Themes, ne
         && themes.select(&id)
     {
         settings.theme = id;
+        editor.save_error = None;
     }
 
     let is_dirty = themes.is_dirty();
     {
         let _disabled = ui.begin_disabled_with_cond(!is_dirty);
         ui.same_line();
-        if ui.button("Save")
-            && let Err(error) = themes.save_active()
-        {
-            log::error!("saving theme {}: {error}", themes.active_id());
+        if ui.button("Save") {
+            editor.save_error = themes
+                .save_active()
+                .err()
+                .map(|error| format!("Could not save the theme: {error}"));
         }
 
         ui.same_line();
         if ui.button("Revert") {
             themes.revert_active();
+            editor.save_error = None;
         }
     }
 
     ui.same_line();
     if ui.button("New...") {
-        *new_theme_name = Some(format!("{} copy", themes.active_theme().name));
+        editor.new_theme = Some(NewTheme {
+            name: format!("{} copy", themes.active_theme().name),
+            error: None,
+        });
         ui.open_popup(NEW_THEME_POPUP);
     }
 
@@ -641,8 +658,13 @@ fn draw_theme_settings(ui: &Ui, settings: &mut Settings, themes: &mut Themes, ne
         ui.set_item_tooltip("Restore the built-in values. Save keeps them");
     }
 
-    if let Some(id) = draw_new_theme_dialog(ui, themes, new_theme_name) {
+    if let Some(id) = draw_new_theme_dialog(ui, themes, &mut editor.new_theme) {
         settings.theme = id;
+        editor.save_error = None;
+    }
+
+    if let Some(error) = &editor.save_error {
+        ui.text_colored(SAVE_ERROR_COLOR, error);
     }
 
     let theme = themes.active_theme_mut();
@@ -652,9 +674,9 @@ fn draw_theme_settings(ui: &Ui, settings: &mut Settings, themes: &mut Themes, ne
     ui.input_text("URL", &mut theme.url)
         .hint("https://github.com/...")
         .build();
-    if !theme.url.is_empty() {
+    if let Some(url) = theme.web_url() {
         ui.same_line();
-        ui.text_link_open_url("Open##theme-url", &theme.url);
+        ui.text_link_open_url("Open##theme-url", url);
     }
 
     ui.table("theme-colors")
@@ -700,24 +722,28 @@ fn draw_theme_settings(ui: &Ui, settings: &mut Settings, themes: &mut Themes, ne
         });
 }
 
-fn draw_new_theme_dialog(ui: &Ui, themes: &mut Themes, new_theme_name: &mut Option<String>) -> Option<String> {
-    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
-        | WindowFlags::NO_RESIZE
-        | WindowFlags::NO_MOVE
-        | WindowFlags::NO_COLLAPSE
-        | WindowFlags::NO_SAVED_SETTINGS
-        | WindowFlags::NO_DOCKING;
-    let _modal = ui.begin_modal_popup_config(NEW_THEME_POPUP).flags(flags).begin()?;
-    let name = new_theme_name.get_or_insert_default();
+fn draw_new_theme_dialog(ui: &Ui, themes: &mut Themes, new_theme: &mut Option<NewTheme>) -> Option<String> {
+    let _modal = ui
+        .begin_modal_popup_config(NEW_THEME_POPUP)
+        .flags(MODAL_FLAGS)
+        .begin()?;
+    let NewTheme { name, error } = new_theme.get_or_insert_with(|| NewTheme {
+        name: String::new(),
+        error: None,
+    });
     if ui.is_window_appearing() {
         ui.set_keyboard_focus_here();
     }
 
     ui.set_next_item_width(260.0 * dpi(ui));
     let is_entered = ui.input_text("Name", name).enter_returns_true(true).build();
+    if let Some(error) = error {
+        ui.text_colored(SAVE_ERROR_COLOR, error);
+    }
+
     ui.separator();
     if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
-        *new_theme_name = None;
+        *new_theme = None;
         ui.close_current_popup();
 
         return None;
@@ -730,18 +756,20 @@ fn draw_new_theme_dialog(ui: &Ui, themes: &mut Themes, new_theme_name: &mut Opti
         return None;
     }
 
-    let created = match themes.create(name) {
-        Ok(id) => Some(id.to_owned()),
-        Err(error) => {
-            log::error!("creating theme {name}: {error}");
+    match themes.create(name) {
+        Ok(id) => {
+            let id = id.to_owned();
+            *new_theme = None;
+            ui.close_current_popup();
+
+            Some(id)
+        },
+        Err(cause) => {
+            *error = Some(format!("Could not create the theme: {cause}"));
 
             None
         },
-    };
-    *new_theme_name = None;
-    ui.close_current_popup();
-
-    created
+    }
 }
 
 fn draw_theme_row(ui: &Ui, key: &str) {
@@ -1410,7 +1438,7 @@ mod tests {
                     measured: &mut measured,
                     pending_profile: &mut pending_profile,
                     ui_scale_draft: &mut ui_scale_draft,
-                    new_theme_name: &mut None,
+                    theme_editor: &mut ThemeEditor::default(),
                     font_picker: &mut FontPicker::default(),
                     profiles: &[],
                 },
@@ -1472,7 +1500,7 @@ mod tests {
                     measured: &mut measured,
                     pending_profile: &mut pending_profile,
                     ui_scale_draft: &mut ui_scale_draft,
-                    new_theme_name: &mut None,
+                    theme_editor: &mut ThemeEditor::default(),
                     font_picker: &mut FontPicker::default(),
                     profiles: &[String::from("tgstation"), String::from("mine")],
                 },
