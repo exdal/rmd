@@ -13,12 +13,14 @@ mod backup;
 mod baker;
 mod camera;
 mod external_editor;
+mod fonts;
 mod git_worker;
 mod gizmo;
 mod loader;
 mod logging;
 mod session;
 mod settings;
+mod theme;
 mod transform;
 mod ui;
 mod update;
@@ -32,16 +34,7 @@ use std::{
     sync::Arc,
 };
 
-use dear_imgui_rs::{
-    BackendFlags,
-    ClipboardBackend,
-    ConfigFlags,
-    Context,
-    FontSource,
-    StbTrueTypeFontData,
-    StyleColor,
-    render::SynchronousRendererConsumer,
-};
+use dear_imgui_rs::{BackendFlags, ClipboardBackend, ConfigFlags, Context, Style, render::SynchronousRendererConsumer};
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
 use editor::{
     document::{DocumentId, Selection},
@@ -59,15 +52,20 @@ use winit::{
 
 use crate::{
     external_editor::SourceLocation,
+    fonts::UiFont,
     loader::{Job, Loader, Outcome},
     session::{LoadReport, Session},
-    settings::{Settings, backup_dir, imgui_ini_path, profiles_dir},
+    settings::{Settings, backup_dir, imgui_ini_path, profiles_dir, themes_dir},
+    theme::Themes,
     ui::{LoadNotice, OpenRequest, ProfileReload, ScreenshotArea, ScreenshotRequest, UiState},
 };
 
-const FONT_DATA: &[u8] = include_bytes!("../assets/FiraMono-Regular.ttf");
-const MDI_FONT_DATA: &[u8] = include_bytes!("../assets/materialdesignicons-webfont.ttf");
-const TABLE_ROW_ALT_ALPHA_SCALE: f32 = 0.4;
+fn style_base(themes: &Themes, settings: &Settings) -> Style {
+    let mut style = themes.active_style().clone();
+    style.set_font_size_base(settings.font.size as f32);
+
+    style
+}
 
 fn usage() -> ExitCode {
     log::error!(
@@ -177,6 +175,8 @@ fn main() -> ExitCode {
         platform: None,
         imgui: None,
         scaled_style: None,
+        themes: None,
+        ui_font: None,
         window: None,
     };
 
@@ -381,6 +381,8 @@ struct App {
     platform: Option<WinitPlatform>,
     imgui: Option<Context>,
     scaled_style: Option<viewports::ScaledStyle>,
+    themes: Option<Themes>,
+    ui_font: Option<UiFont>,
     window: Option<Arc<Window>>,
 }
 
@@ -400,15 +402,11 @@ impl App {
             Err(e) => log::error!("could not open the clipboard: {e}"),
         }
 
-        let mut alternate_row = imgui.style().color(StyleColor::TableRowBgAlt);
-        alternate_row[3] *= TABLE_ROW_ALT_ALPHA_SCALE;
-        imgui.style_mut().set_color(StyleColor::TableRowBgAlt, alternate_row);
-        let text_font = StbTrueTypeFontData::from_slice(FONT_DATA)?;
-        let mdi_font = StbTrueTypeFontData::from_slice(MDI_FONT_DATA)?;
-        imgui.font_atlas().add_font(&[
-            FontSource::stb_truetype_with_size(text_font, 16.0),
-            FontSource::stb_truetype_with_size(mdi_font, 16.0),
-        ]);
+        let themes_dir = themes_dir()
+            .inspect_err(|e| log::error!("could not find the themes folder: {e}"))
+            .ok();
+        let themes = Themes::load(themes_dir, imgui.style(), &self.settings.theme);
+        let ui_font = UiFont::new(imgui.font_atlas(), &mut self.settings.font)?;
 
         let ini_filename = imgui_ini_path()?;
         if let Some(parent) = ini_filename.parent() {
@@ -441,6 +439,7 @@ impl App {
         let mut scaled_style = viewports::ScaledStyle::new(&mut imgui, viewports_enabled && !cfg!(target_os = "macos"));
         scaled_style.apply(
             &mut imgui,
+            &style_base(&themes, &self.settings),
             window.scale_factor() as f32,
             self.settings.ui_scale_override_percent,
         );
@@ -454,6 +453,8 @@ impl App {
         self.platform = Some(platform);
         self.imgui = Some(imgui);
         self.scaled_style = Some(scaled_style);
+        self.themes = Some(themes);
+        self.ui_font = Some(ui_font);
         self.window = Some(window);
 
         Ok(())
@@ -476,14 +477,18 @@ impl App {
             platform,
             imgui,
             scaled_style,
+            themes,
+            ui_font,
             window,
             ..
         } = self;
-        let (Some(consumer), Some(renderer), Some(platform), Some(imgui), Some(window)) = (
+        let (Some(consumer), Some(renderer), Some(platform), Some(imgui), Some(themes), Some(ui_font), Some(window)) = (
             consumer.as_ref(),
             renderer.as_mut(),
             platform.as_mut(),
             imgui.as_mut(),
+            themes.as_mut(),
+            ui_font.as_mut(),
             window.as_ref(),
         ) else {
             return Ok(Redraw {
@@ -513,14 +518,20 @@ impl App {
             }
         }
 
+        ui_font.sync(imgui.font_atlas(), &mut settings.font);
         if let Some(scaled_style) = scaled_style.as_mut() {
-            scaled_style.apply(imgui, window.scale_factor() as f32, settings.ui_scale_override_percent);
+            scaled_style.apply(
+                imgui,
+                &style_base(themes, settings),
+                window.scale_factor() as f32,
+                settings.ui_scale_override_percent,
+            );
         }
 
         platform.prepare_frame(imgui, window)?;
         let frame = imgui.try_begin_frame()?;
         let load = loader.view().or_else(|| session.bake_view());
-        let output = ui.draw(frame.ui(), session, settings, load.as_ref())?;
+        let output = ui.draw(frame.ui(), session, settings, themes, load.as_ref())?;
         if let Some(preset) = output.keybind_preset {
             settings.keybindings = preset.bindings();
             settings.save();

@@ -41,3 +41,4 @@ ureq = { version = "3", features = ["json"] }
 gix = { version = "0.87.1", default-features = false, features = ["attributes", "index", "revision", "max-performance-safe", "sha1"] }
 jiff = "0.2"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
+fontdb = "0.24.0"

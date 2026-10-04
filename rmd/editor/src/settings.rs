@@ -11,10 +11,14 @@ use editor::frame::FrameOptions;
 use render::HighlightStyle;
 use serde::{Deserialize, Serialize};
 
+use crate::theme::DEFAULT_THEME;
+
 const MAX_RECENT: usize = 10;
 const DEFAULT_PREFERRED_EDITOR: &str = "code --goto {file}:{line}:{column}";
 pub(crate) const DEFAULT_COOP_PORT: u16 = 3131;
 pub const UI_SCALE_PERCENT: std::ops::RangeInclusive<u32> = 50..=200;
+pub const FONT_SIZE: std::ops::RangeInclusive<u32> = 8..=40;
+pub const FONT_BRIGHTNESS_PERCENT: std::ops::RangeInclusive<u32> = 50..=200;
 
 pub(crate) const BINDABLE_KEYS: &[Key] = &[
     Key::Tab,
@@ -974,6 +978,27 @@ impl Default for CoopSettings {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct FontSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    pub size: u32,
+    pub brightness_percent: u32,
+    pub pixel_snap: bool,
+}
+
+impl Default for FontSettings {
+    fn default() -> Self {
+        Self {
+            path: None,
+            size: 16,
+            brightness_percent: 100,
+            pixel_snap: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct ObjectTreeFilterOptions {
@@ -1016,6 +1041,8 @@ pub(crate) struct Settings {
     pub focus_windows_on_hover: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_scale_override_percent: Option<u32>,
+    pub theme: String,
+    pub font: FontSettings,
     pub tile_place_flash: bool,
     pub selection_guide_line: bool,
     pub show_tile_grid: bool,
@@ -1087,6 +1114,8 @@ impl Default for Settings {
             minimum_light_brightness_percent: 0,
             focus_windows_on_hover: true,
             ui_scale_override_percent: None,
+            theme: String::from(DEFAULT_THEME),
+            font: FontSettings::default(),
             tile_place_flash: true,
             selection_guide_line: true,
             show_tile_grid: true,
@@ -1147,6 +1176,11 @@ impl Settings {
             .ui_scale_override_percent
             .map(|scale| scale.clamp(*UI_SCALE_PERCENT.start(), *UI_SCALE_PERCENT.end()));
         self.blame_depth = self.blame_depth.clamp(1, 10_000);
+        self.font.size = self.font.size.clamp(*FONT_SIZE.start(), *FONT_SIZE.end());
+        self.font.brightness_percent = self
+            .font
+            .brightness_percent
+            .clamp(*FONT_BRIGHTNESS_PERCENT.start(), *FONT_BRIGHTNESS_PERCENT.end());
         if !self.object_tree_search.type_paths && !self.object_tree_search.names {
             self.object_tree_search = ObjectTreeSearchOptions::default();
         }
@@ -1305,6 +1339,8 @@ pub(crate) fn imgui_ini_path() -> io::Result<PathBuf> { Ok(settings_path()?.with
 
 pub(crate) fn backup_dir() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("backup")) }
 
+pub(crate) fn themes_dir() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("themes")) }
+
 pub(crate) fn profiles_dir() -> io::Result<PathBuf> {
     Ok(settings_path()?
         .with_file_name("profiles")
@@ -1339,6 +1375,8 @@ mod tests {
                 minimum_light_brightness_percent: 0,
                 focus_windows_on_hover: true,
                 ui_scale_override_percent: None,
+                theme: String::from(DEFAULT_THEME),
+                font: FontSettings::default(),
                 tile_place_flash: true,
                 selection_guide_line: true,
                 show_tile_grid: true,
@@ -1609,6 +1647,8 @@ mod tests {
             minimum_light_brightness_percent: 35,
             focus_windows_on_hover: false,
             ui_scale_override_percent: Some(150),
+            theme: String::from("custom"),
+            font: FontSettings::default(),
             tile_place_flash: false,
             selection_guide_line: false,
             show_tile_grid: false,
@@ -1705,6 +1745,8 @@ mod tests {
             minimum_light_brightness_percent: 35,
             focus_windows_on_hover: true,
             ui_scale_override_percent: None,
+            theme: String::from("custom"),
+            font: FontSettings::default(),
             tile_place_flash: false,
             selection_guide_line: false,
             show_tile_grid: true,
@@ -1751,6 +1793,7 @@ mod tests {
             Settings {
                 maximized: true,
                 preferred_editor: String::from("editor {file}"),
+                theme: String::from("custom"),
                 tile_place_flash: false,
                 selection_guide_line: false,
                 selection_highlight: SelectionHighlight::Tint,

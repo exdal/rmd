@@ -73,10 +73,16 @@ impl ScaledStyle {
         }
     }
 
-    pub fn apply(&mut self, context: &mut Context, dpi_scale: f32, override_percent: Option<u32>) {
+    pub fn apply(&mut self, context: &mut Context, base: &Style, dpi_scale: f32, override_percent: Option<u32>) {
         if !dpi_scale.is_finite() || dpi_scale <= 0.0 {
             return;
         }
+
+        let is_base_changed = self.base != *base;
+        if is_base_changed {
+            self.base = base.clone();
+        }
+
         let absolute_scale = override_percent.map_or(dpi_scale, |percent| percent as f32 / 100.0);
         let font_scale = absolute_scale / dpi_scale;
         let scale = if self.physical_pixels {
@@ -84,7 +90,8 @@ impl ScaledStyle {
         } else {
             font_scale
         };
-        if (scale == self.scale && font_scale == self.font_scale) || !scale.is_finite() || scale <= 0.0 {
+        let is_scale_unchanged = scale == self.scale && font_scale == self.font_scale;
+        if (is_scale_unchanged && !is_base_changed) || !scale.is_finite() || scale <= 0.0 {
             return;
         }
 
@@ -187,19 +194,20 @@ mod tests {
     fn absolute_ui_scale_replaces_os_scale_without_compounding() {
         let _context = crate::ui::IMGUI_CONTEXT.lock().unwrap();
         let mut context = Context::create();
-        let base_padding = context.style().window_padding();
-        let base_font_scale = context.style().font_scale_main();
+        let base = context.style().clone();
+        let base_padding = base.window_padding();
+        let base_font_scale = base.font_scale_main();
         let mut scaled = ScaledStyle::new(&mut context, true);
 
-        scaled.apply(&mut context, 1.5, None);
+        scaled.apply(&mut context, &base, 1.5, None);
         assert_eq!(context.style().font_scale_main(), base_font_scale);
         assert_eq!(context.style().window_padding()[0], (base_padding[0] * 1.5).floor());
 
-        scaled.apply(&mut context, 1.5, Some(100));
+        scaled.apply(&mut context, &base, 1.5, Some(100));
         assert_eq!(context.style().font_scale_main(), base_font_scale / 1.5);
         assert_eq!(context.style().window_padding()[0], base_padding[0]);
 
-        scaled.apply(&mut context, 1.5, Some(200));
+        scaled.apply(&mut context, &base, 1.5, Some(200));
         assert_eq!(context.style().font_scale_main(), base_font_scale * (2.0 / 1.5));
         assert_eq!(context.style().window_padding()[0], (base_padding[0] * 2.0).floor());
     }
@@ -208,14 +216,15 @@ mod tests {
     fn single_window_mode_keeps_os_scale_as_the_default() {
         let _context = crate::ui::IMGUI_CONTEXT.lock().unwrap();
         let mut context = Context::create();
-        let base_padding = context.style().window_padding();
+        let base = context.style().clone();
+        let base_padding = base.window_padding();
         let mut scaled = ScaledStyle::new(&mut context, false);
 
-        scaled.apply(&mut context, 1.5, None);
+        scaled.apply(&mut context, &base, 1.5, None);
         assert_eq!(context.style().window_padding()[0], base_padding[0]);
         assert_eq!(context.style().font_scale_main(), 1.0);
 
-        scaled.apply(&mut context, 1.5, Some(200));
+        scaled.apply(&mut context, &base, 1.5, Some(200));
         assert_eq!(
             context.style().window_padding()[0],
             (base_padding[0] * (2.0 / 1.5)).floor()
@@ -230,7 +239,7 @@ mod tests {
         let base = context.style().clone();
         let mut scaled = ScaledStyle::new(&mut context, false);
 
-        scaled.apply(&mut context, 1.5, Some(50));
+        scaled.apply(&mut context, &base, 1.5, Some(50));
         let style = context.style();
         assert_eq!(style.child_border_size(), base.child_border_size().min(1.0));
         assert_eq!(style.frame_border_size(), base.frame_border_size().min(1.0));

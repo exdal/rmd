@@ -33,6 +33,7 @@ use crate::{
     loader::LoadView,
     session::{LoadReport, Session, TypeLayer},
     settings::{KeybindAction, KeybindPreset, Settings},
+    theme::Themes,
     update::UpdateCheck,
 };
 
@@ -444,7 +445,8 @@ impl UiState {
     }
 
     pub fn draw(
-        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, load: Option<&LoadView>,
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, themes: &mut Themes,
+        load: Option<&LoadView>,
     ) -> Result<UiOutput, DockspaceError> {
         let loading = load.is_some() || self.load_notice.is_some();
 
@@ -483,7 +485,7 @@ impl UiState {
 
         draw_save_dialog(ui, session, &mut self.save_dialog);
 
-        let reload_profile = self.draw_settings_window(ui, session, settings, load.is_some());
+        let reload_profile = self.draw_settings_window(ui, session, settings, themes, load.is_some());
         self.show_welcome |= menu.show_welcome;
 
         let open_source = self.draw_panels(ui, session, settings);
@@ -728,9 +730,9 @@ impl UiState {
     }
 
     fn draw_settings_window(
-        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, loading: bool,
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, themes: &mut Themes, loading: bool,
     ) -> Option<ProfileReload> {
-        let output = self.settings_window.draw(ui, session, settings, loading);
+        let output = self.settings_window.draw(ui, session, settings, themes, loading);
         session.sync_git_enabled(settings.git_enabled);
         session.set_sanitize_vars_on_save(settings.sanitize_vars_on_save);
         if output.object_tree_changed {
@@ -973,6 +975,7 @@ mod tests {
     use crate::{
         session::{DiagnosticSeverity, Session, fixtures::install_diff},
         settings::{KeyBinding, KeyBindings, KeybindAction, Settings},
+        theme::{DEFAULT_THEME, Themes},
     };
 
     #[test]
@@ -1050,10 +1053,11 @@ mod tests {
         context.io_mut().set_config_flags(flags);
         let mut state = UiState::new(false).unwrap();
         let mut session = Session::new();
+        let mut themes = Themes::load(None, context.style(), DEFAULT_THEME);
         let mut settings = Settings::default();
         let mut frame = |state: &mut UiState| {
             let ui = context.frame();
-            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            state.draw(ui, &mut session, &mut settings, &mut themes, None).unwrap();
             assert!(context.render_legacy().valid());
         };
 
@@ -1084,10 +1088,11 @@ mod tests {
                 context.io_mut().set_config_flags(flags);
                 let mut state = UiState::new(false).unwrap();
                 let mut session = Session::new();
+                let mut themes = Themes::load(None, context.style(), DEFAULT_THEME);
                 let mut settings = Settings::default();
                 for _ in 0..4 {
                     let ui = context.frame();
-                    state.draw(ui, &mut session, &mut settings, None).unwrap();
+                    state.draw(ui, &mut session, &mut settings, &mut themes, None).unwrap();
                     assert!(context.render_legacy().valid());
                 }
                 let mut ini = String::new();
@@ -1114,13 +1119,14 @@ mod tests {
             context.load_ini_settings(&saved);
             let mut state = UiState::new(false).unwrap();
             let mut session = Session::new();
+            let mut themes = Themes::load(None, context.style(), DEFAULT_THEME);
             let mut settings = Settings {
                 focus_windows_on_hover: false,
                 ..Settings::default()
             };
             for _ in 0..4 {
                 let ui = context.frame();
-                state.draw(ui, &mut session, &mut settings, None).unwrap();
+                state.draw(ui, &mut session, &mut settings, &mut themes, None).unwrap();
                 assert!(context.render_legacy().valid());
             }
             let name = std::ffi::CString::new(format!("###{panel}")).unwrap();
@@ -1136,12 +1142,12 @@ mod tests {
             assert!(!focus_pending, "{panel} still requests focus after restoring floating");
 
             let ui = context.frame();
-            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            state.draw(ui, &mut session, &mut settings, &mut themes, None).unwrap();
             ui.window("focus-sentinel").focused(true).build(|| {});
             assert!(context.render_legacy().valid());
 
             let ui = context.frame();
-            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            state.draw(ui, &mut session, &mut settings, &mut themes, None).unwrap();
             let mut retained_focus = false;
             ui.window("focus-sentinel").build(|| {
                 retained_focus = ui.is_window_focused();
@@ -1160,6 +1166,7 @@ mod tests {
         let mut state = UiState::new(false).unwrap();
         state.show_welcome = false;
         let mut session = Session::new();
+        let mut themes = Themes::load(None, context.style(), DEFAULT_THEME);
         session.apply_map(crate::loader::LoadedMap {
             path: PathBuf::from("reset-layout-test.dmm"),
             map: dmm::Map::new(dmm::Size { x: 10, y: 10, z: 1 }),
@@ -1171,7 +1178,7 @@ mod tests {
         let mut settings = Settings::default();
         let mut frame = |state: &mut UiState| {
             let ui = context.frame();
-            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            state.draw(ui, &mut session, &mut settings, &mut themes, None).unwrap();
             assert!(context.render_legacy().valid());
         };
 
@@ -1216,10 +1223,11 @@ mod tests {
         context.io_mut().set_config_flags(flags);
         let mut state = UiState::new(false).unwrap();
         let mut session = Session::new();
+        let mut themes = Themes::load(None, context.style(), DEFAULT_THEME);
         let mut settings = Settings::default();
         for _ in 0..3 {
             let ui = context.frame();
-            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            state.draw(ui, &mut session, &mut settings, &mut themes, None).unwrap();
             assert!(context.render_legacy().valid());
         }
 
@@ -1241,7 +1249,7 @@ mod tests {
         ));
         for _ in 0..4 {
             let ui = context.frame();
-            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            state.draw(ui, &mut session, &mut settings, &mut themes, None).unwrap();
             assert!(context.render_legacy().valid());
         }
 
@@ -1259,6 +1267,7 @@ mod tests {
         context.io_mut().set_config_flags(flags);
         let mut state = UiState::new(false).unwrap();
         let mut session = Session::new();
+        let mut themes = Themes::load(None, context.style(), DEFAULT_THEME);
         session.apply_map(crate::loader::LoadedMap {
             path: PathBuf::from("search-focus-test.dmm"),
             map: dmm::Map::new(dmm::Size { x: 10, y: 10, z: 1 }),
@@ -1272,7 +1281,7 @@ mod tests {
         let mut frame = |state: &mut UiState| {
             context.io_mut().add_mouse_pos_event([400.0, 300.0]);
             let ui = context.frame();
-            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            state.draw(ui, &mut session, &mut settings, &mut themes, None).unwrap();
             assert!(context.render_legacy().valid());
         };
 
@@ -1296,10 +1305,11 @@ mod tests {
         context.io_mut().set_config_flags(flags);
         let mut state = UiState::new(false).unwrap();
         let mut session = Session::new();
+        let mut themes = Themes::load(None, context.style(), DEFAULT_THEME);
         let mut settings = Settings::default();
         let mut frame = |state: &mut UiState| {
             let ui = context.frame();
-            state.draw(ui, &mut session, &mut settings, None).unwrap();
+            state.draw(ui, &mut session, &mut settings, &mut themes, None).unwrap();
             assert!(context.render_legacy().valid());
         };
 
@@ -1349,7 +1359,8 @@ mod tests {
         install_diff(&mut session, id);
         let mut frame = |state: &mut UiState, session: &mut Session| {
             let ui = context.frame();
-            state.draw(ui, session, &mut settings, None).unwrap();
+            let mut themes = Themes::load(None, &ui.clone_style(), DEFAULT_THEME);
+            state.draw(ui, session, &mut settings, &mut themes, None).unwrap();
             assert!(context.render_legacy().valid());
         };
 
@@ -1438,7 +1449,8 @@ mod tests {
         };
         let mut frame = |state: &mut UiState, session: &mut Session| {
             let ui = context.frame();
-            state.draw(ui, session, &mut settings, None).unwrap();
+            let mut themes = Themes::load(None, &ui.clone_style(), DEFAULT_THEME);
+            state.draw(ui, session, &mut settings, &mut themes, None).unwrap();
             let is_open = ui.is_popup_open(super::coop::OUT_OF_DATE_POPUP);
             assert!(context.render_legacy().valid());
             is_open
@@ -1495,7 +1507,10 @@ mod tests {
                      settings: &mut Settings,
                      loading: bool| {
             let ui = context.frame();
-            let output = state.draw(ui, session, settings, loading.then_some(&load)).unwrap();
+            let mut themes = Themes::load(None, &ui.clone_style(), DEFAULT_THEME);
+            let output = state
+                .draw(ui, session, settings, &mut themes, loading.then_some(&load))
+                .unwrap();
             let is_open = ui.is_popup_open(super::coop::STATUS_POPUP);
             assert!(context.render_legacy().valid());
             (output.open, is_open)

@@ -1,7 +1,13 @@
+use std::ops::RangeInclusive;
+
 use dear_imgui_rs::{
+    ColorDisplayMode,
+    ColorEditFlags,
     Condition,
     DragFlags,
     Key,
+    StbTrueTypeFontData,
+    Style,
     TableFlags,
     TableSizingPolicy,
     Ui,
@@ -13,12 +19,16 @@ use editor::environment::profile_label;
 
 use super::{
     common::{button_width, dpi, focus_window_on_hover},
-    dialog::draw_keybind_preset_dialog,
+    dialog::{SAVE_ERROR_COLOR, draw_keybind_preset_dialog},
 };
 use crate::{
+    fonts::{BUNDLED_FONT_NAME, SystemFonts},
     session::Session,
     settings::{
         BINDABLE_KEYS,
+        FONT_BRIGHTNESS_PERCENT,
+        FONT_SIZE,
+        FontSettings,
         KeyBinding,
         KeyBindings,
         KeybindAction,
@@ -30,6 +40,16 @@ use crate::{
         UI_SCALE_PERCENT,
         backup_dir,
     },
+    theme::{
+        FieldKind,
+        STYLE_COLORS,
+        STYLE_FIELDS,
+        StyleField,
+        TREE_LINE_MODES,
+        Themes,
+        direction_name,
+        tree_lines_name,
+    },
     ui::ProfileReload,
 };
 
@@ -37,6 +57,7 @@ const SETTINGS_WINDOW_SIZE: [f32; 2] = [760.0, 560.0];
 const SETTINGS_WINDOW_MIN_SIZE: [f32; 2] = [620.0, 420.0];
 const SETTINGS_CATEGORY_WIDTH: f32 = 160.0;
 const PROFILE_RELOAD_POPUP: &str = "Reload codebase profile?";
+const NEW_THEME_POPUP: &str = "New theme";
 const SETTINGS_TITLE_SCALE: f32 = 1.4;
 const SETTINGS_SECTION_SCALE: f32 = 1.2;
 
@@ -44,6 +65,7 @@ const SETTINGS_SECTION_SCALE: f32 = 1.2;
 enum SettingsCategory {
     #[default]
     General,
+    Appearance,
     Viewport,
     Compiler,
     Git,
@@ -59,7 +81,17 @@ struct SettingsWindowState<'a> {
     measured: &'a mut [f32; 2],
     pending_profile: &'a mut Option<ProfileReload>,
     ui_scale_draft: &'a mut Option<u32>,
+    new_theme_name: &'a mut Option<String>,
+    font_picker: &'a mut FontPicker,
     profiles: &'a [String],
+}
+
+#[derive(Default)]
+struct FontPicker {
+    system: SystemFonts,
+    filter: String,
+    error: Option<String>,
+    size_draft: Option<u32>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -69,8 +101,9 @@ pub(super) struct SettingsWindowOutput {
 }
 
 impl SettingsCategory {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::General,
+        Self::Appearance,
         Self::Viewport,
         Self::Compiler,
         Self::Git,
@@ -81,6 +114,7 @@ impl SettingsCategory {
     const fn label(self) -> &'static str {
         match self {
             Self::General => "General",
+            Self::Appearance => "Appearance",
             Self::Viewport => "Viewport",
             Self::Compiler => "Compiler",
             Self::Git => "Git",
@@ -174,6 +208,8 @@ pub(super) struct SettingsWindow {
     measured: [f32; 2],
     pending_profile: Option<ProfileReload>,
     ui_scale_draft: Option<u32>,
+    new_theme_name: Option<String>,
+    font_picker: FontPicker,
     profiles: Vec<String>,
 }
 
@@ -188,6 +224,8 @@ impl SettingsWindow {
             measured: SETTINGS_WINDOW_SIZE,
             pending_profile: None,
             ui_scale_draft: None,
+            new_theme_name: None,
+            font_picker: FontPicker::default(),
             profiles: Vec::new(),
         })
     }
@@ -199,7 +237,7 @@ impl SettingsWindow {
     pub(super) const fn is_capturing_keybind(&self) -> bool { self.capturing.is_some() }
 
     pub(super) fn draw(
-        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, loading: bool,
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, themes: &mut Themes, loading: bool,
     ) -> SettingsWindowOutput {
         draw_settings_window(
             ui,
@@ -212,10 +250,13 @@ impl SettingsWindow {
                 measured: &mut self.measured,
                 pending_profile: &mut self.pending_profile,
                 ui_scale_draft: &mut self.ui_scale_draft,
+                new_theme_name: &mut self.new_theme_name,
+                font_picker: &mut self.font_picker,
                 profiles: &self.profiles,
             },
             session,
             settings,
+            themes,
             loading,
         )
     }
@@ -227,7 +268,7 @@ impl SettingsWindow {
 
 fn draw_settings_window(
     ui: &Ui, window: &WindowKey, state: SettingsWindowState<'_>, session: &mut Session, settings: &mut Settings,
-    loading: bool,
+    themes: &mut Themes, loading: bool,
 ) -> SettingsWindowOutput {
     let SettingsWindowState {
         open,
@@ -237,11 +278,14 @@ fn draw_settings_window(
         measured,
         pending_profile,
         ui_scale_draft,
+        new_theme_name,
+        font_picker,
         profiles,
     } = state;
     if !*open {
         *capturing = None;
         *ui_scale_draft = None;
+        font_picker.size_draft = None;
 
         return SettingsWindowOutput::default();
     }
@@ -288,7 +332,10 @@ fn draw_settings_window(
                     ui.separator();
 
                     match category {
-                        SettingsCategory::General => draw_general_settings(ui, settings, ui_scale_draft),
+                        SettingsCategory::General => draw_general_settings(ui, settings),
+                        SettingsCategory::Appearance => {
+                            draw_appearance_settings(ui, settings, themes, ui_scale_draft, new_theme_name, font_picker)
+                        },
                         SettingsCategory::Viewport => draw_viewport_settings(ui, session, settings),
                         SettingsCategory::Compiler => {
                             draw_compiler_settings(ui, session, settings, loading, profiles, pending_profile)
@@ -309,6 +356,7 @@ fn draw_settings_window(
     if !*open {
         *capturing = None;
         *ui_scale_draft = None;
+        font_picker.size_draft = None;
     }
     if let Some(preset) = draw_keybind_preset_dialog(ui, resetting_keybinds) {
         settings.keybindings = preset.bindings();
@@ -334,7 +382,7 @@ fn draw_git_settings(ui: &Ui, settings: &mut Settings) {
     ui.text_disabled("Tile history follows the first parent of HEAD and does not follow renames.");
 }
 
-fn draw_general_settings(ui: &Ui, settings: &mut Settings, ui_scale_draft: &mut Option<u32>) {
+fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
     draw_section_heading(ui, "External editor");
     ui.text("Command");
     ui.set_next_item_width(-1.0);
@@ -357,9 +405,25 @@ fn draw_general_settings(ui: &Ui, settings: &mut Settings, ui_scale_draft: &mut 
     ui.separator();
     draw_section_heading(ui, "Updates");
     ui.checkbox("Check for new releases on startup", &mut settings.check_for_updates);
+}
+
+fn draw_appearance_settings(
+    ui: &Ui, settings: &mut Settings, themes: &mut Themes, ui_scale_draft: &mut Option<u32>,
+    new_theme_name: &mut Option<String>, font_picker: &mut FontPicker,
+) {
+    draw_section_heading(ui, "UI scale");
+    draw_ui_scale_setting(ui, settings, ui_scale_draft);
 
     ui.separator();
-    draw_section_heading(ui, "Appearance");
+    draw_section_heading(ui, "Font");
+    draw_font_settings(ui, &mut settings.font, font_picker);
+
+    ui.separator();
+    draw_section_heading(ui, "Theme");
+    draw_theme_settings(ui, settings, themes, new_theme_name);
+}
+
+fn draw_ui_scale_setting(ui: &Ui, settings: &mut Settings, ui_scale_draft: &mut Option<u32>) {
     let os_scale_percent = os_scale_percent(ui);
     ui.text(format!("UI scale (%) (OS: {os_scale_percent}%)"));
     let active_percent = settings.ui_scale_override_percent.unwrap_or(os_scale_percent);
@@ -391,6 +455,359 @@ fn draw_general_settings(ui: &Ui, settings: &mut Settings, ui_scale_draft: &mut 
         *draft = os_scale_percent;
     }
     ui.set_item_tooltip(format!("Use the OS scale ({os_scale_percent}%)"));
+}
+
+fn draw_font_settings(ui: &Ui, font: &mut FontSettings, picker: &mut FontPicker) {
+    let FontPicker {
+        system,
+        filter,
+        error,
+        size_draft,
+    } = picker;
+    let faces = system.faces();
+    let bundled = format!("{BUNDLED_FONT_NAME} (bundled)");
+    let current = match &font.path {
+        None => bundled.clone(),
+        Some(path) => faces
+            .and_then(|faces| faces.iter().find(|face| face.path == *path))
+            .map_or_else(|| path.display().to_string(), |face| face.label.clone()),
+    };
+
+    let mut picked = None;
+    ui.set_next_item_width(260.0 * dpi(ui));
+    if let Some(_combo) = ui.begin_combo("##font", &current) {
+        if ui.is_window_appearing() {
+            ui.set_keyboard_focus_here();
+        }
+
+        ui.set_next_item_width(-1.0);
+        ui.input_text("##font-filter", filter).hint("Search").build();
+        if ui.selectable_config(&bundled).selected(font.path.is_none()).build() {
+            picked = Some(None);
+        }
+
+        match faces {
+            Some(faces) => {
+                let needle = filter.to_lowercase();
+                for face in faces.iter().filter(|face| face.label.to_lowercase().contains(&needle)) {
+                    let is_selected = font.path.as_ref() == Some(&face.path);
+                    if ui
+                        .selectable_config(format!("{}##{}", face.label, face.path.display()))
+                        .selected(is_selected)
+                        .build()
+                    {
+                        picked = Some(Some(face.path.clone()));
+                    }
+
+                    if ui.is_item_hovered() {
+                        ui.set_tooltip(face.path.display().to_string());
+                    }
+                }
+            },
+            None => ui.text_disabled("Loading system fonts..."),
+        }
+    }
+
+    if let Some(path) = picked {
+        let validation = path
+            .as_deref()
+            .map_or(Ok(()), |path| StbTrueTypeFontData::from_file(path).map(drop));
+        match validation {
+            Ok(()) => {
+                font.path = path;
+                *error = None;
+            },
+            Err(cause) => *error = Some(format!("This font can't be used: {cause}")),
+        }
+    }
+
+    ui.same_line();
+    if ui.button("Reset##font") {
+        *font = FontSettings::default();
+        *error = None;
+        *size_draft = None;
+    }
+
+    ui.set_item_tooltip(format!("Use {BUNDLED_FONT_NAME} at the default size"));
+    if let Some(error) = error {
+        ui.text_colored(SAVE_ERROR_COLOR, error);
+    }
+
+    draw_font_size_setting(ui, font, size_draft);
+    ui.set_next_item_width(120.0 * dpi(ui));
+    drag_u32(
+        ui,
+        "Brightness (%)",
+        &FONT_BRIGHTNESS_PERCENT,
+        &mut font.brightness_percent,
+    );
+    ui.set_item_tooltip("Scales glyph coverage. Above 100% makes thin fonts bolder");
+    ui.checkbox("Pixel snap", &mut font.pixel_snap);
+    ui.set_item_tooltip("Align glyphs to whole pixels horizontally");
+}
+
+fn draw_font_size_setting(ui: &Ui, font: &mut FontSettings, size_draft: &mut Option<u32>) {
+    let default_size = FontSettings::default().size;
+    let draft = size_draft.get_or_insert(font.size);
+    ui.set_next_item_width(120.0 * dpi(ui));
+    drag_u32(ui, "##font-size", &FONT_SIZE, draft);
+    ui.same_line();
+    {
+        let _disabled = ui.begin_disabled_with_cond(*draft == font.size);
+        if ui.button("Apply##font-size") {
+            font.size = *draft;
+        }
+    }
+
+    ui.same_line();
+    {
+        let _disabled = ui.begin_disabled_with_cond(font.size == default_size && *draft == default_size);
+        if ui.button("Reset##font-size") {
+            font.size = default_size;
+            *draft = default_size;
+        }
+
+        ui.set_item_tooltip(format!("Use the default size ({default_size} px)"));
+    }
+
+    ui.same_line();
+    ui.text("Size (px)");
+}
+
+fn drag_u32(ui: &Ui, label: &str, range: &RangeInclusive<u32>, value: &mut u32) {
+    let (min, max) = (*range.start() as i32, *range.end() as i32);
+    let mut current = *value as i32;
+    if ui
+        .drag_int_config(label)
+        .range(min, max)
+        .flags(DragFlags::ALWAYS_CLAMP)
+        .build(ui, &mut current)
+    {
+        *value = current.clamp(min, max) as u32;
+    }
+}
+
+fn draw_theme_settings(ui: &Ui, settings: &mut Settings, themes: &mut Themes, new_theme_name: &mut Option<String>) {
+    let mut selected = None;
+    ui.set_next_item_width(260.0 * dpi(ui));
+    if let Some(_combo) = ui.begin_combo("##theme", &themes.active_theme().name) {
+        for (id, theme) in themes.iter() {
+            if ui
+                .selectable_config(format!("{}##{id}", theme.name))
+                .selected(id == themes.active_id())
+                .build()
+            {
+                selected = Some(id.to_owned());
+            }
+        }
+    }
+
+    if let Some(id) = selected
+        && themes.select(&id)
+    {
+        settings.theme = id;
+    }
+
+    let is_dirty = themes.is_dirty();
+    {
+        let _disabled = ui.begin_disabled_with_cond(!is_dirty);
+        ui.same_line();
+        if ui.button("Save")
+            && let Err(error) = themes.save_active()
+        {
+            log::error!("saving theme {}: {error}", themes.active_id());
+        }
+
+        ui.same_line();
+        if ui.button("Revert") {
+            themes.revert_active();
+        }
+    }
+
+    ui.same_line();
+    if ui.button("New...") {
+        *new_theme_name = Some(format!("{} copy", themes.active_theme().name));
+        ui.open_popup(NEW_THEME_POPUP);
+    }
+
+    ui.set_item_tooltip("Copy the current theme into a new file");
+    if themes.is_active_builtin() {
+        let _disabled = ui.begin_disabled_with_cond(themes.is_active_default());
+        ui.same_line();
+        if ui.button("Reset to default") {
+            themes.reset_active();
+        }
+
+        ui.set_item_tooltip("Restore the built-in values. Save keeps them");
+    }
+
+    if let Some(id) = draw_new_theme_dialog(ui, themes, new_theme_name) {
+        settings.theme = id;
+    }
+
+    let theme = themes.active_theme_mut();
+    ui.set_next_item_width(260.0 * dpi(ui));
+    ui.input_text("Name", &mut theme.name).build();
+    ui.set_next_item_width(260.0 * dpi(ui));
+    ui.input_text("URL", &mut theme.url)
+        .hint("https://github.com/...")
+        .build();
+    if !theme.url.is_empty() {
+        ui.same_line();
+        ui.text_link_open_url("Open##theme-url", &theme.url);
+    }
+
+    ui.table("theme-colors")
+        .flags(TableFlags::BORDERS_INNER_V | TableFlags::ROW_BG)
+        .sizing_policy(TableSizingPolicy::StretchProp)
+        .headers(true)
+        .column("Color")
+        .weight(1.0)
+        .done()
+        .column("Value")
+        .weight(1.0)
+        .done()
+        .build(|ui| {
+            for (color, name) in STYLE_COLORS {
+                draw_theme_row(ui, name);
+                let mut rgba = theme.style.color(color);
+                if ui
+                    .color_edit4_config(format!("##{name}"), &mut rgba)
+                    .flags(ColorEditFlags::ALPHA_BAR | ColorEditFlags::ALPHA_PREVIEW_HALF)
+                    .display_mode(ColorDisplayMode::Hex)
+                    .build()
+                {
+                    theme.style.set_color(color, rgba);
+                }
+            }
+        });
+
+    ui.table("theme-style")
+        .flags(TableFlags::BORDERS_INNER_V | TableFlags::ROW_BG)
+        .sizing_policy(TableSizingPolicy::StretchProp)
+        .headers(true)
+        .column("Style")
+        .weight(1.0)
+        .done()
+        .column("Value")
+        .weight(1.0)
+        .done()
+        .build(|ui| {
+            for field in STYLE_FIELDS {
+                draw_theme_row(ui, field.key);
+                draw_style_field(ui, &mut theme.style, field);
+            }
+        });
+}
+
+fn draw_new_theme_dialog(ui: &Ui, themes: &mut Themes, new_theme_name: &mut Option<String>) -> Option<String> {
+    let flags = WindowFlags::ALWAYS_AUTO_RESIZE
+        | WindowFlags::NO_RESIZE
+        | WindowFlags::NO_MOVE
+        | WindowFlags::NO_COLLAPSE
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::NO_DOCKING;
+    let _modal = ui.begin_modal_popup_config(NEW_THEME_POPUP).flags(flags).begin()?;
+    let name = new_theme_name.get_or_insert_default();
+    if ui.is_window_appearing() {
+        ui.set_keyboard_focus_here();
+    }
+
+    ui.set_next_item_width(260.0 * dpi(ui));
+    let is_entered = ui.input_text("Name", name).enter_returns_true(true).build();
+    ui.separator();
+    if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+        *new_theme_name = None;
+        ui.close_current_popup();
+
+        return None;
+    }
+
+    ui.same_line();
+    let is_valid = !name.trim().is_empty();
+    let _disabled = ui.begin_disabled_with_cond(!is_valid);
+    if !(ui.button("Create") || is_entered) || !is_valid {
+        return None;
+    }
+
+    let created = match themes.create(name) {
+        Ok(id) => Some(id.to_owned()),
+        Err(error) => {
+            log::error!("creating theme {name}: {error}");
+
+            None
+        },
+    };
+    *new_theme_name = None;
+    ui.close_current_popup();
+
+    created
+}
+
+fn draw_theme_row(ui: &Ui, key: &str) {
+    ui.table_next_row();
+    ui.table_next_column();
+    ui.align_text_to_frame_padding();
+    ui.text(key);
+    ui.table_next_column();
+    ui.set_next_item_width(-1.0);
+}
+
+fn draw_style_field(ui: &Ui, style: &mut Style, field: &StyleField) {
+    let id = format!("##{}", field.key);
+    match &field.kind {
+        FieldKind::Float { get, set, range } => {
+            let mut value = get(style);
+            if style_drag(ui, &id, range).build(ui, &mut value) {
+                set(style, value);
+            }
+        },
+        FieldKind::Vec2 { get, set, range } => {
+            let mut value = get(style);
+            if style_drag(ui, &id, range).build_array(ui, &mut value) {
+                set(style, value);
+            }
+        },
+        FieldKind::Bool { get, set } => {
+            let mut value = get(style);
+            if ui.checkbox(&id, &mut value) {
+                set(style, value);
+            }
+        },
+        FieldKind::Direction { get, set, options } => {
+            let current = get(style);
+            if let Some(_combo) = ui.begin_combo(&id, direction_name(current)) {
+                for &option in *options {
+                    if ui
+                        .selectable_config(direction_name(option))
+                        .selected(option == current)
+                        .build()
+                    {
+                        set(style, option);
+                    }
+                }
+            }
+        },
+        FieldKind::TreeLines { get, set } => {
+            let current = get(style);
+            if let Some(_combo) = ui.begin_combo(&id, tree_lines_name(current)) {
+                for (mode, name) in TREE_LINE_MODES {
+                    if ui.selectable_config(name).selected(mode == current).build() {
+                        set(style, mode);
+                    }
+                }
+            }
+        },
+    }
+}
+
+fn style_drag<'a>(ui: &Ui, id: &'a str, range: &RangeInclusive<f32>) -> dear_imgui_rs::Drag<f32, &'a str> {
+    let (min, max) = (*range.start(), *range.end());
+
+    ui.drag_config(id)
+        .range(min, max)
+        .speed((max - min) * 0.005)
+        .flags(DragFlags::ALWAYS_CLAMP)
 }
 
 fn os_scale_percent(ui: &Ui) -> u32 {
@@ -830,6 +1247,7 @@ mod tests {
     use dear_imgui_rs::MouseButton;
 
     use super::{super::IMGUI_CONTEXT, *};
+    use crate::theme::DEFAULT_THEME;
 
     #[test]
     fn ui_scale_changes_only_when_apply_is_clicked() {
@@ -845,7 +1263,7 @@ mod tests {
                 .position([20.0, 20.0], Condition::Always)
                 .size([650.0, 500.0], Condition::Always)
                 .build(|| {
-                    draw_general_settings(ui, settings, draft);
+                    draw_ui_scale_setting(ui, settings, draft);
                     let min = ui.item_rect_min();
                     let max = ui.item_rect_max();
                     let y = (min[1] + max[1]) * 0.5;
@@ -931,7 +1349,15 @@ mod tests {
         assert_eq!(SettingsCategory::default(), SettingsCategory::General);
         assert_eq!(
             SettingsCategory::ALL.map(SettingsCategory::label),
-            ["General", "Viewport", "Compiler", "Git", "Object Tree", "Keybindings"]
+            [
+                "General",
+                "Appearance",
+                "Viewport",
+                "Compiler",
+                "Git",
+                "Object Tree",
+                "Keybindings"
+            ]
         );
     }
 
@@ -971,6 +1397,7 @@ mod tests {
             let mut ui_scale_draft = None;
             let mut session = Session::new();
             let mut settings = Settings::default();
+            let mut themes = Themes::load(None, &ui.clone_style(), DEFAULT_THEME);
 
             draw_settings_window(
                 ui,
@@ -983,10 +1410,13 @@ mod tests {
                     measured: &mut measured,
                     pending_profile: &mut pending_profile,
                     ui_scale_draft: &mut ui_scale_draft,
+                    new_theme_name: &mut None,
+                    font_picker: &mut FontPicker::default(),
                     profiles: &[],
                 },
                 &mut session,
                 &mut settings,
+                &mut themes,
                 false,
             );
 
@@ -1029,6 +1459,7 @@ mod tests {
             });
             session.state.environment = Some(std::sync::Arc::new(environment));
             let mut settings = Settings::default();
+            let mut themes = Themes::load(None, &ui.clone_style(), DEFAULT_THEME);
 
             let output = draw_settings_window(
                 ui,
@@ -1041,10 +1472,13 @@ mod tests {
                     measured: &mut measured,
                     pending_profile: &mut pending_profile,
                     ui_scale_draft: &mut ui_scale_draft,
+                    new_theme_name: &mut None,
+                    font_picker: &mut FontPicker::default(),
                     profiles: &[String::from("tgstation"), String::from("mine")],
                 },
                 &mut session,
                 &mut settings,
+                &mut themes,
                 false,
             );
 
