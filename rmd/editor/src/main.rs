@@ -868,8 +868,8 @@ impl App {
         };
         let selection = match request.area {
             ScreenshotArea::Map => None,
-            ScreenshotArea::Selection => match document.selection {
-                Some(selection) => Some(selection),
+            ScreenshotArea::Selection => match document.selection() {
+                Some(selection) => Some(*selection),
                 None => return,
             },
         };

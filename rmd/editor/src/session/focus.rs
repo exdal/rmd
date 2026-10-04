@@ -81,7 +81,7 @@ impl Session {
 
     pub(super) fn revalidate_focus(&mut self) {
         let Some(seed) = self.state.active_document().and_then(|document| {
-            let focus = document.focus()?;
+            let focus = document.focus_on_any_level()?;
 
             Some((focus.seed(), focus.prefab().clone()))
         }) else {

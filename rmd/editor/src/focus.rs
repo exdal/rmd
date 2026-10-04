@@ -28,7 +28,7 @@ impl AreaFocus {
 
     pub fn component(&self) -> PrefabInstanceId { self.component }
 
-    pub fn allows(&self, coord: Coord) -> bool { self.tiles.contains(&coord) }
+    pub fn allows(&self, coord: Coord) -> bool { coord.z != self.seed.z || self.tiles.contains(&coord) }
 
     pub fn allows_edit(&self, edit: &Edit) -> bool { edit.changes.iter().all(|change| self.allows(change.coord)) }
 }
@@ -74,7 +74,7 @@ mod tests {
 
         assert!(focus.allows(inside));
         assert!(!focus.allows(outside));
-        assert!(!focus.allows(Coord::new(1, 1, 2)));
+        assert!(focus.allows(Coord::new(4, 1, 2)));
 
         assert!(focus.allows_edit(&edit(&[inside, neighbor])));
         assert!(!focus.allows_edit(&edit(&[inside, outside])));

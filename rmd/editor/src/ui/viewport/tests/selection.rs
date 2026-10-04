@@ -444,4 +444,7 @@ fn cancelling_rectangle_gestures_restores_only_the_originating_document_and_leve
     session.set_level(2);
     restore_rectangle_gesture(&mut session, id, &mut gesture);
     assert_eq!(session.selection_mask(), None);
+
+    session.set_level(1);
+    assert_eq!(session.selection_mask(), Some(start));
 }

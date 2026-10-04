@@ -20,11 +20,7 @@ use editor::{
 use super::Session;
 
 impl Session {
-    pub fn selection(&self) -> Option<Selection> {
-        let document = self.state.active_document()?;
-
-        document.selection.filter(|selection| selection.min.z == document.z)
-    }
+    pub fn selection(&self) -> Option<Selection> { self.selection_mask().map(|mask| mask.bounds) }
 
     pub fn selection_mask(&self) -> Option<SelectionMask> { self.state.active_document()?.selection_mask() }
 
@@ -52,7 +48,7 @@ impl Session {
         self.select_block_with_mode(selection, BlockSelectionMode::Full)
     }
 
-    pub fn select_block_with_mode(&mut self, selection: Option<Selection>, mode: BlockSelectionMode) -> bool {
+    pub fn select_block_with_mode(&mut self, selection: Option<Selection>, selection_mode: BlockSelectionMode) -> bool {
         let Some(document) = self.state.active_document_mut() else {
             return false;
         };
@@ -62,10 +58,11 @@ impl Session {
                 && selection.min.z == document.z
                 && selection.max.x <= document.map.size.x
                 && selection.max.y <= document.map.size.y
-                && mode.tiles(*selection).all(|coord| document.allows_edit_at(coord))
+                && selection_mode
+                    .tiles(*selection)
+                    .all(|coord| document.allows_edit_at(coord))
         });
-        document.selection = selection;
-        document.selection_mode = mode;
+        document.set_selection(selection, selection_mode);
         document.select_instance(None);
 
         selection.is_some()
@@ -73,9 +70,9 @@ impl Session {
 
     pub fn place_selected_block_with_mode(
         &mut self, target_min: Coord, rotation: SelectionRotation, placement: SelectionPlacement,
-        mode: BlockSelectionMode,
+        selection_mode: BlockSelectionMode,
     ) -> bool {
-        if !self.can_place_selected_block_with_mode(target_min, rotation, placement, mode) {
+        if !self.can_place_selected_block_with_mode(target_min, rotation, placement, selection_mode) {
             return false;
         }
 
@@ -83,18 +80,18 @@ impl Session {
             let Some((environment, document)) = self.state.active_pair_mut() else {
                 return false;
             };
-            let Some(selection) = document.selection else {
+            let Some(selection) = document.selection() else {
                 return false;
             };
 
             build_selection_placement(
                 document,
                 &environment.tree,
-                selection,
+                *selection,
                 target_min,
                 rotation,
                 placement,
-                mode,
+                selection_mode,
             )
         };
 
@@ -107,8 +104,7 @@ impl Session {
         }
 
         if let Some(document) = self.state.active_document_mut() {
-            document.selection = Some(selection);
-            document.selection_mode = mode;
+            document.set_selection(Some(selection), selection_mode);
             document.select_instance(None);
         }
 
@@ -157,9 +153,9 @@ impl Session {
     }
 
     pub fn fill_selected_block(
-        &mut self, target_min: Coord, rotation: SelectionRotation, mode: BlockSelectionMode,
+        &mut self, target_min: Coord, rotation: SelectionRotation, selection_mode: BlockSelectionMode,
     ) -> bool {
-        if !self.can_fill_selected_block(target_min, rotation, mode) {
+        if !self.can_fill_selected_block(target_min, rotation, selection_mode) {
             return false;
         }
 
@@ -170,14 +166,15 @@ impl Session {
             let Some((environment, document)) = self.state.active_pair_mut() else {
                 return false;
             };
-            let Some(selection) = document.selection else {
+            let Some(selection) = document.selection().copied() else {
                 return false;
             };
             let Some(target) = rotated_selection_at(selection, target_min, rotation) else {
                 return false;
             };
 
-            build_selection_fill(document, &environment.tree, target, &prefab, mode).map(|action| (action, target))
+            build_selection_fill(document, &environment.tree, target, &prefab, selection_mode)
+                .map(|action| (action, target))
         };
 
         let Some((action, target)) = built else {
@@ -189,8 +186,7 @@ impl Session {
         }
 
         if let Some(document) = self.state.active_document_mut() {
-            document.selection = Some(target);
-            document.selection_mode = mode;
+            document.set_selection(Some(target), selection_mode);
             document.select_instance(None);
         }
         self.state.choose_prefab(prefab);
@@ -236,9 +232,9 @@ impl Session {
     }
 
     pub fn transform_selected_block_with_mode(
-        &mut self, transform: SelectionTransform, mode: BlockSelectionMode,
+        &mut self, transform: SelectionTransform, selection_mode: BlockSelectionMode,
     ) -> bool {
-        if self.tool() != Tool::BlockSelect || !self.can_transform_selected_block_with_mode(transform, mode) {
+        if self.tool() != Tool::BlockSelect || !self.can_transform_selected_block_with_mode(transform, selection_mode) {
             return false;
         }
 
@@ -246,11 +242,11 @@ impl Session {
             let Some((environment, document)) = self.state.active_pair_mut() else {
                 return false;
             };
-            let Some(selection) = document.selection else {
+            let Some(selection) = document.selection().copied() else {
                 return false;
             };
 
-            build_selection_transform(document, &environment.tree, selection, transform, mode)
+            build_selection_transform(document, &environment.tree, selection, transform, selection_mode)
         };
 
         let Some((action, selection)) = built else {
@@ -262,8 +258,7 @@ impl Session {
         }
 
         if let Some(document) = self.state.active_document_mut() {
-            document.selection = Some(selection);
-            document.selection_mode = mode;
+            document.set_selection(Some(selection), selection_mode);
             document.select_instance(None);
         }
 

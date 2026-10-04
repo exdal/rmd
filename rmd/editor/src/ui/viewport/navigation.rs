@@ -93,7 +93,6 @@ impl UiState {
         self.center_view_on(session, target.document, location.coord);
         if let Some(document) = session.state.active_document_mut() {
             document.set_focus(None);
-            document.selection = None;
         }
 
         session.select_instance(Some(target.instance));

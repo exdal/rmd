@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_deleted_outside_the_focused_area() {
+    fn nothing_is_deleted_outside_the_focused_area_on_its_level() {
         let (map, target) = map();
         let mut document = MapDocument::new(map, 1);
         let matches = find_instances(
@@ -289,6 +289,6 @@ mod tests {
         document.set_focus(Some(AreaFocus::new(seed, target, matches[0], [seed].into())));
 
         let action = delete_instances(&document, &matches).unwrap();
-        assert_eq!(action.affected, [matches[0]]);
+        assert_eq!(action.affected, [matches[0], matches[2]]);
     }
 }

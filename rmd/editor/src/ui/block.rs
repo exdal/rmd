@@ -80,10 +80,10 @@ pub(super) struct RectangleGesture {
 pub(super) fn restore_rectangle_gesture(session: &mut Session, id: DocumentId, gesture: &mut Option<RectangleGesture>) {
     if let Some(gesture) = gesture.take()
         && let Some(document) = session.state.document_mut(id)
-        && document.z == gesture.z
     {
-        document.selection = gesture.start.map(|mask| mask.bounds);
-        document.selection_mode = gesture.start.map_or(BlockSelectionMode::Full, |mask| mask.mode);
+        let selection = gesture.start.map(|mask| mask.bounds);
+        let selection_mode = gesture.start.map_or(BlockSelectionMode::Full, |mask| mask.mode);
+        document.set_selection(selection, selection_mode);
     }
 }
 

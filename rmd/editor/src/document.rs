@@ -60,14 +60,14 @@ pub struct MapDocument {
     pub map: Map,
     pub history: History,
     pub z: u32,
-    pub selection: Option<Selection>,
-    pub selection_mode: BlockSelectionMode,
     needs_initial_save: bool,
     /// Contents differ from the file on disk without any history, like a merge result
     pending_write: bool,
     selected_instance: Option<PrefabInstanceId>,
     instances: PrefabInstances,
     key_usage: HashMap<Key, usize>,
+    selection: Option<Selection>,
+    selection_mode: BlockSelectionMode,
     focus: Option<AreaFocus>,
     saved_level_count: u32,
     retained_level_count: u32,
@@ -289,13 +289,13 @@ impl MapDocument {
             map,
             history: History::new(),
             z,
-            selection: None,
-            selection_mode: BlockSelectionMode::Full,
             needs_initial_save: false,
             pending_write: false,
             selected_instance: None,
             instances,
             key_usage,
+            selection: None,
+            selection_mode: BlockSelectionMode::Full,
             focus: None,
             saved_level_count: level_count,
             retained_level_count: level_count,
@@ -652,9 +652,18 @@ impl MapDocument {
         self.apply(edit)
     }
 
+    pub fn set_selection(&mut self, selection: Option<Selection>, selection_mode: BlockSelectionMode) {
+        self.selection = selection;
+        self.selection_mode = selection_mode;
+    }
+
+    pub fn selection(&self) -> Option<&Selection> { self.selection.as_ref() }
+
     pub fn set_focus(&mut self, focus: Option<AreaFocus>) { self.focus = focus; }
 
-    pub fn focus(&self) -> Option<&AreaFocus> { self.focus.as_ref() }
+    pub fn focus(&self) -> Option<&AreaFocus> { self.focus.as_ref().filter(|focus| focus.seed().z == self.z) }
+
+    pub fn focus_on_any_level(&self) -> Option<&AreaFocus> { self.focus.as_ref() }
 
     pub fn allows_edit_at(&self, coord: Coord) -> bool {
         !self.read_only && self.focus.as_ref().is_none_or(|focus| focus.allows(coord))
@@ -855,9 +864,16 @@ impl MapDocument {
         self.generation += 1;
         if self.z > level_count {
             self.z = level_count.max(1);
+        }
+
+        if self.selection.is_some_and(|selection| selection.min.z > level_count) {
             self.selection = None;
+        }
+
+        if self.focus.as_ref().is_some_and(|focus| focus.seed().z > level_count) {
             self.focus = None;
         }
+
         self.clear_stale_instance_selection();
 
         self.key_usage.clear();
@@ -883,10 +899,11 @@ mod tests {
 
     use dmm::{Map, Prefab, Size, writer::MapWriter};
 
-    use super::{Coord, MapDocument, VarMutation, sanitize_vars};
+    use super::{Coord, MapDocument, Selection, VarMutation, sanitize_vars};
     use crate::{
         command::{Edit, EditGroupId},
         focus::AreaFocus,
+        tool::BlockSelectionMode,
     };
 
     #[test]
@@ -1630,6 +1647,29 @@ mod tests {
         assert_eq!(document.instance_ids_at(Coord::new(1, 1, 2)), retained_ids);
         assert!(document.instance_ids_at(Coord::new(1, 1, 3)).is_empty());
         assert!(!document.is_dirty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_clears_a_selection_on_a_removed_level() {
+        let dir = std::env::temp_dir().join(format!("rmd-prune-selection-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let target = dir.join("map.dmm");
+        let mut document = MapDocument::new(shared_tile_map(), 2);
+        let fill = [Prefab::new(TreePath::parse("/turf"))];
+        assert_eq!(document.append_level(&fill), Some(3));
+        document.set_selection(
+            Some(Selection::from_drag(Coord::new(1, 1, 3), Coord::new(1, 1, 3))),
+            BlockSelectionMode::Full,
+        );
+        document.z = 1;
+
+        document.save_as(&target, dmm::MapFormat::Standard).expect("save");
+
+        assert_eq!(document.map.size.z, 2);
+        assert_eq!(document.z, 1);
+        assert_eq!(document.selection(), None);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

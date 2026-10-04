@@ -53,8 +53,6 @@ impl Session {
         };
 
         document.z = z;
-        document.set_focus(None);
-        document.selection = None;
     }
 
     pub fn can_change_level(&self, delta: i32) -> bool {
@@ -104,8 +102,6 @@ impl Session {
                 return LevelChange::Unchanged;
             };
             document.z = next;
-            document.set_focus(None);
-            document.selection = None;
 
             LevelChange::Changed
         } else {
@@ -133,7 +129,6 @@ impl Session {
             .ok_or_else(|| String::from("could not allocate another Z level"))?;
         document.z = z;
         document.set_focus(None);
-        document.selection = None;
         self.set_active_document(id);
         self.rebake(id);
 
@@ -294,13 +289,15 @@ mod tests {
     }
 
     #[test]
-    fn changing_levels_clears_focus() {
+    fn changing_levels_keeps_focus_and_selection_on_their_level() {
         let mut session = focus_session();
         session.toggle_focus_at(Some(Coord::new(1, 1, 1)));
         session.set_tool(Tool::BlockSelect);
-        assert!(session.select_block(Some(Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 1, 1),))));
-        assert!(session.focused_area().is_some());
-        assert!(session.selection().is_some());
+        let selection = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 1, 1));
+        assert!(session.select_block(Some(selection)));
+        let focus = session.focused_area();
+        assert!(focus.is_some());
+        assert!(!session.can_edit_at(Coord::new(4, 1, 1)));
 
         session.change_level(1);
 
@@ -308,6 +305,28 @@ mod tests {
         assert_eq!(session.focused_area(), None);
         assert_eq!(session.selection(), None);
         assert!(session.can_edit_at(Coord::new(4, 1, 2)));
+
+        session.change_level(-1);
+
+        assert_eq!(session.focused_area(), focus);
+        assert_eq!(session.selection(), Some(selection));
+        assert!(!session.can_edit_at(Coord::new(4, 1, 1)));
+    }
+
+    #[test]
+    fn creating_a_level_clears_focus() {
+        let mut session = focus_session();
+        let id = session.state.active().unwrap();
+        session.set_level(5);
+        session.toggle_focus_at(Some(Coord::new(1, 1, 5)));
+        assert!(session.focused_area().is_some());
+
+        let fill = session.tile_fill("/turf", "/area").unwrap();
+        assert_eq!(session.create_level(id, &fill), Ok(6));
+        session.set_level(5);
+
+        assert_eq!(session.focused_area(), None);
+        assert!(session.can_edit_at(Coord::new(4, 1, 5)));
     }
 
     #[test]

@@ -148,7 +148,7 @@ impl Session {
                 .map(|built| (built, block.selection_mode()))
         };
 
-        let Some(((action, target), mode)) = built else {
+        let Some(((action, target), selection_mode)) = built else {
             return false;
         };
 
@@ -157,8 +157,7 @@ impl Session {
         }
 
         if let Some(document) = self.state.active_document_mut() {
-            document.selection = Some(target);
-            document.selection_mode = mode;
+            document.set_selection(Some(target), selection_mode);
             document.select_instance(None);
         }
 
