@@ -8,3 +8,4 @@ path = "src/lib.rs"
 
 [dependencies]
 bitflags = "2"
+rustc-hash = "2"

@@ -8,7 +8,7 @@ use std::{
 use codegen::CodegenError;
 use dmi::error::IconError;
 use net::CodebaseHash;
-use preprocessor::{PreludeFile, Preprocessor, SourceCache, error::PreprocessError, prelude_files};
+use preprocessor::{PreludeFile, Preprocessor, SourceCache, Spanned, error::PreprocessError, prelude_files};
 use sema::error::SemaError;
 
 use crate::{
@@ -306,6 +306,7 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
         options,
         &forced,
         SourceCache::default(),
+        Vec::new(),
         progress,
     )?;
 
@@ -318,6 +319,7 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
             options,
             &forced,
             editor.source_cache.clone(),
+            editor.tokens,
             progress,
         )?)
     } else {
@@ -437,7 +439,7 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
 #[allow(clippy::too_many_arguments)]
 fn compile_view<'a>(
     arena: &'a StrArena, entry: &Path, baking: bool, generate: bool, options: &BakeOptions, forced: &ForcedSources,
-    source_cache: SourceCache<'a>, progress: &'a Progress,
+    source_cache: SourceCache<'a>, tokens: Vec<Spanned<'a>>, progress: &'a Progress,
 ) -> Result<CompiledView<'a>, LoadError> {
     progress.enter(Stage::Preprocess, 0);
     let mut prelude = prelude_files();
@@ -445,6 +447,7 @@ fn compile_view<'a>(
     let postlude = forced.profile.as_ref().map(ForcedFile::prelude);
     let preprocessed = Preprocessor::new(arena)
         .with_source_cache(source_cache)
+        .with_output(tokens)
         .with_prelude(prelude)
         .with_postlude(postlude)
         .with_baking(baking)
@@ -465,7 +468,8 @@ fn compile_view<'a>(
     progress.set_detail(&format!("{} tokens", preprocessed.tokens.len()));
     let ast = ast::parse(&preprocessed.tokens)
         .map_err(|error| LoadError::parse(error, &preprocessed.sources, preprocessed.entry, entry))?;
-    drop(preprocessed.tokens);
+    let mut tokens = preprocessed.tokens;
+    tokens.clear();
     drop(preprocessed.defines);
     if progress.is_cancelled() {
         return Err(LoadError::Cancelled);
@@ -515,6 +519,7 @@ fn compile_view<'a>(
         sema_errors,
         optimization_timings,
         source_cache: preprocessed.source_cache,
+        tokens,
     })
 }
 
@@ -549,6 +554,7 @@ struct CompiledView<'a> {
     sema_errors: Vec<SemaError>,
     optimization_timings: ir::opt::OptimizationTimings,
     source_cache: SourceCache<'a>,
+    tokens: Vec<Spanned<'a>>,
 }
 
 #[cfg(test)]

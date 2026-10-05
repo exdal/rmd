@@ -275,8 +275,8 @@ impl Session {
 
         Some(SourceLocation {
             path: environment.file(location.file)?.to_path_buf(),
-            line: location.begin.line,
-            column: location.begin.col,
+            line: location.begin.line as usize,
+            column: location.begin.col as usize,
         })
     }
 

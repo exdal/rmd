@@ -1,7 +1,8 @@
-use core::{location::Location, types::Identifier};
-use std::{collections::HashMap, rc::Rc};
+use core::location::Location;
+use std::rc::Rc;
 
 use lexer::token::Token;
+use rustc_hash::FxHashMap;
 
 /// `#define M(x) foo##x`, `#define M(x) foo x`
 #[derive(Clone, Debug)]
@@ -15,8 +16,8 @@ pub enum BodyPart<'a> {
 }
 
 #[derive(Clone, Debug)]
-pub struct Parameter {
-    pub name: Identifier,
+pub struct Parameter<'a> {
+    pub name: &'a str,
     /// `#define LOG(args...)`
     pub variadic: bool,
 }
@@ -31,15 +32,15 @@ pub enum Builtin {
 /// `#define FOO`, `#define FOO()`
 #[derive(Clone, Debug)]
 pub struct Define<'a> {
-    pub name: Identifier,
-    pub params: Option<Vec<Parameter>>,
+    pub name: &'a str,
+    pub params: Option<Vec<Parameter<'a>>>,
     pub body: Vec<BodyPart<'a>>,
     pub location: Location,
     pub builtin: Option<Builtin>,
 }
 
 impl<'a> Define<'a> {
-    pub fn object_like(name: Identifier, body: Vec<BodyPart<'a>>, location: Location) -> Self {
+    pub fn object_like(name: &'a str, body: Vec<BodyPart<'a>>, location: Location) -> Self {
         Self {
             name,
             params: None,
@@ -49,9 +50,9 @@ impl<'a> Define<'a> {
         }
     }
 
-    pub fn builtin(name: &str, builtin: Builtin) -> Self {
+    pub fn builtin(name: &'static str, builtin: Builtin) -> Self {
         Self {
-            name: Identifier::from(name),
+            name,
             params: None,
             body: Vec::new(),
             location: Location::default(),
@@ -66,14 +67,11 @@ impl<'a> Define<'a> {
     pub fn lookup(&self, name: &str) -> Option<Slot> {
         let params = self.params.as_ref()?;
 
-        if let Some(index) = params.iter().position(|p| !p.variadic && p.name.as_str() == name) {
+        if let Some(index) = params.iter().position(|p| !p.variadic && p.name == name) {
             return Some(Slot::Positional(index));
         }
 
-        params
-            .iter()
-            .position(|p| p.variadic && p.name.as_str() == name)
-            .map(Slot::Rest)
+        params.iter().position(|p| p.variadic && p.name == name).map(Slot::Rest)
     }
 }
 
@@ -84,9 +82,14 @@ pub enum Slot {
     Rest(usize),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NameId(u32);
+
 #[derive(Default)]
 pub struct DefineTable<'a> {
-    defines: HashMap<Identifier, Rc<Define<'a>>>,
+    names: FxHashMap<&'a str, NameId>,
+    defines: Vec<Option<Rc<Define<'a>>>>,
+    len: usize,
 }
 
 impl<'a> DefineTable<'a> {
@@ -100,19 +103,51 @@ impl<'a> DefineTable<'a> {
         table
     }
 
-    pub fn define(&mut self, define: Define<'a>) -> Option<Rc<Define<'a>>> {
-        self.defines.insert(define.name.clone(), Rc::new(define))
+    pub fn name_id(&mut self, name: &'a str) -> NameId {
+        let next = NameId(self.defines.len() as u32);
+        let id = *self.names.entry(name).or_insert(next);
+        if id == next {
+            self.defines.push(None);
+        }
+
+        id
     }
 
-    pub fn undef(&mut self, name: &Identifier) -> Option<Rc<Define<'a>>> { self.defines.remove(name) }
+    pub fn find(&self, name: &str) -> Option<NameId> { self.names.get(name).copied() }
 
-    pub fn get(&self, name: &str) -> Option<&Define<'a>> { self.defines.get(&Identifier::from(name)).map(Rc::as_ref) }
+    pub fn define(&mut self, define: Define<'a>) -> Option<Rc<Define<'a>>> {
+        let id = self.name_id(define.name);
+        let previous = self.defines[id.0 as usize].replace(Rc::new(define));
+        if previous.is_none() {
+            self.len += 1;
+        }
 
-    pub fn lookup(&self, name: &str) -> Option<Rc<Define<'a>>> { self.defines.get(&Identifier::from(name)).cloned() }
+        previous
+    }
 
-    pub fn is_defined(&self, name: &str) -> bool { self.defines.contains_key(&Identifier::from(name)) }
+    pub fn undef(&mut self, name: &str) -> Option<Rc<Define<'a>>> {
+        let id = self.find(name)?;
+        let previous = self.defines[id.0 as usize].take();
+        if previous.is_some() {
+            self.len -= 1;
+        }
 
-    pub fn len(&self) -> usize { self.defines.len() }
+        previous
+    }
 
-    pub fn is_empty(&self) -> bool { self.defines.is_empty() }
+    pub fn get(&self, name: &str) -> Option<&Define<'a>> { self.lookup_id(self.find(name)?).map(Rc::as_ref) }
+
+    pub fn lookup(&self, name: &str) -> Option<(NameId, Rc<Define<'a>>)> {
+        let id = self.find(name)?;
+
+        self.lookup_id(id).map(|define| (id, define.clone()))
+    }
+
+    fn lookup_id(&self, id: NameId) -> Option<&Rc<Define<'a>>> { self.defines[id.0 as usize].as_ref() }
+
+    pub fn is_defined(&self, name: &str) -> bool { self.get(name).is_some() }
+
+    pub fn len(&self) -> usize { self.len }
+
+    pub fn is_empty(&self) -> bool { self.len == 0 }
 }

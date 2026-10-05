@@ -7,18 +7,19 @@ use core::{
     arena::StrArena,
     location::{FileId, Location},
     source::SourceMap,
-    types::Identifier,
 };
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
+    fmt::Write,
+    ops::Range,
     path::{Component, Path, PathBuf},
-    rc::Rc,
 };
 
 use lexer::{IndentState, Lexer, token::Token};
+use rustc_hash::FxHashMap;
 
 use crate::{
-    define::{BodyPart, Builtin, Define, DefineTable, Parameter, Slot},
+    define::{BodyPart, Builtin, Define, DefineTable, NameId, Parameter, Slot},
     diagnostic::{Code, Level, PragmaTable},
     error::PreprocessError,
 };
@@ -46,52 +47,69 @@ enum Spacing {
     Separated,
 }
 
-#[derive(Clone, Default)]
-struct HideSet(Option<Rc<HiddenMacro>>);
+/// Index into [`HideSets`], `0` being the empty set.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+struct HideSet(u32);
 
 struct HiddenMacro {
-    name: Identifier,
+    name: NameId,
     previous: HideSet,
 }
 
-impl HideSet {
-    fn contains(&self, name: &str) -> bool {
-        let mut current = self.0.as_deref();
+#[derive(Default)]
+struct HideSets {
+    nodes: Vec<HiddenMacro>,
+    extended: FxHashMap<(HideSet, NameId), HideSet>,
+}
+
+impl HideSets {
+    fn node(&self, set: HideSet) -> Option<&HiddenMacro> {
+        set.0.checked_sub(1).map(|index| &self.nodes[index as usize])
+    }
+
+    fn contains(&self, set: HideSet, name: NameId) -> bool {
+        let mut current = self.node(set);
         while let Some(hidden) = current {
-            if hidden.name.as_str() == name {
+            if hidden.name == name {
                 return true;
             }
 
-            current = hidden.previous.0.as_deref();
+            current = self.node(hidden.previous);
         }
 
         false
     }
 
-    fn with(&self, name: &Identifier) -> Self {
-        if self.contains(name.as_str()) {
-            return self.clone();
+    fn with(&mut self, set: HideSet, name: NameId) -> HideSet {
+        if let Some(extended) = self.extended.get(&(set, name)) {
+            return *extended;
         }
 
-        Self(Some(Rc::new(HiddenMacro {
-            name: name.clone(),
-            previous: self.clone(),
-        })))
+        let extended = if self.contains(set, name) {
+            set
+        } else {
+            self.nodes.push(HiddenMacro { name, previous: set });
+            HideSet(self.nodes.len() as u32)
+        };
+        self.extended.insert((set, name), extended);
+
+        extended
     }
 
-    fn union(&self, other: &Self) -> Self {
-        let mut merged = self.clone();
-        let mut current = other.0.as_deref();
-        while let Some(hidden) = current {
-            merged = merged.with(&hidden.name);
-            current = hidden.previous.0.as_deref();
+    fn union(&mut self, set: HideSet, other: HideSet) -> HideSet {
+        let mut merged = set;
+        let mut current = other;
+        while let Some(hidden) = self.node(current) {
+            let (name, previous) = (hidden.name, hidden.previous);
+            merged = self.with(merged, name);
+            current = previous;
         }
 
         merged
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct RawToken<'a> {
     token: Token<'a>,
     location: Location,
@@ -149,8 +167,31 @@ struct IncludeState<'a> {
     peeked: Option<Spanned<'a>>,
 }
 
-struct Expansion<'a> {
-    tokens: VecDeque<RawToken<'a>>,
+/// `M(a, b)`
+#[derive(Default)]
+struct Arguments<'a> {
+    tokens: Vec<RawToken<'a>>,
+    bounds: Vec<Range<usize>>,
+}
+
+impl<'a> Arguments<'a> {
+    fn clear(&mut self) {
+        self.tokens.clear();
+        self.bounds.clear();
+    }
+
+    fn finish_argument(&mut self) {
+        let start = self.bounds.last().map_or(0, |bound| bound.end);
+        self.bounds.push(start..self.tokens.len());
+    }
+
+    fn get(&self, index: usize) -> Option<&[RawToken<'a>]> {
+        self.bounds.get(index).map(|bound| &self.tokens[bound.clone()])
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &[RawToken<'a>]> {
+        self.bounds.iter().map(|bound| &self.tokens[bound.clone()])
+    }
 }
 
 pub struct Preprocessed<'a> {
@@ -179,7 +220,14 @@ pub struct Preprocessor<'a> {
     sources: SourceMap<'a>,
     defines: DefineTable<'a>,
     include_stack: Vec<IncludeState<'a>>,
-    expansions: Vec<Expansion<'a>>,
+    // expanded tokens still to be read, last one first
+    pending: Vec<RawToken<'a>>,
+    // where each expansion starts in `pending`
+    expansions: Vec<usize>,
+    hide_sets: HideSets,
+    arguments: Arguments<'a>,
+    condition: Vec<Spanned<'a>>,
+    stringified: String,
     /// `#if`, `#elif`, `#else`, `#endif`
     conditionals: Vec<Option<bool>>,
     pragmas: PragmaTable,
@@ -198,7 +246,7 @@ pub struct Preprocessor<'a> {
     line_has_content: bool,
     can_use_directive: bool,
     /// Last token read from a file
-    last_file_line: Option<(FileId, usize)>,
+    last_file_line: Option<(FileId, u32)>,
     last_if: Location,
 
     include_core: bool,
@@ -216,7 +264,12 @@ impl<'a> Preprocessor<'a> {
             sources: SourceMap::new(),
             defines: DefineTable::with_builtins(),
             include_stack: Vec::new(),
+            pending: Vec::new(),
             expansions: Vec::new(),
+            hide_sets: HideSets::default(),
+            arguments: Arguments::default(),
+            condition: Vec::new(),
+            stringified: String::new(),
             conditionals: Vec::new(),
             pragmas: PragmaTable::new(),
             output: Vec::new(),
@@ -243,6 +296,14 @@ impl<'a> Preprocessor<'a> {
 
     pub fn with_source_cache(mut self, cache: SourceCache<'a>) -> Self {
         self.source_cache = cache;
+
+        self
+    }
+
+    /// reuse earlier pass's token buffer, so a second configuration skips growing it again
+    pub fn with_output(mut self, mut output: Vec<Spanned<'a>>) -> Self {
+        output.clear();
+        self.output = output;
 
         self
     }
@@ -439,10 +500,7 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn emit(&mut self, token: Token<'a>, location: Location) {
-        let mut carried = std::mem::take(&mut self.carried_layout);
-        self.output.append(&mut carried);
-        let mut line = std::mem::take(&mut self.line_layout);
-        self.output.append(&mut line);
+        self.flush_layout();
 
         self.line_has_content = true;
         self.can_use_directive = token == Token::Semicolon;
@@ -450,17 +508,15 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn flush_layout(&mut self) {
-        let mut carried = std::mem::take(&mut self.carried_layout);
-        self.output.append(&mut carried);
-        let mut line = std::mem::take(&mut self.line_layout);
-        self.output.append(&mut line);
+        self.output.append(&mut self.carried_layout);
+        self.output.append(&mut self.line_layout);
     }
 
     fn next_raw(&mut self) -> Option<RawToken<'a>> {
         loop {
-            while let Some(expansion) = self.expansions.last_mut() {
-                if let Some(token) = expansion.tokens.pop_front() {
-                    return Some(token);
+            while let Some(&start) = self.expansions.last() {
+                if self.pending.len() > start {
+                    return self.pending.pop();
                 }
 
                 self.expansions.pop();
@@ -471,8 +527,7 @@ impl<'a> Preprocessor<'a> {
             if state.peeked.is_none() && state.lexer.at_line_start() {
                 let indent = state.lexer.indent_state();
                 self.line_indent = Some((depth, indent));
-                let mut line = std::mem::take(&mut self.line_layout);
-                self.carried_layout.append(&mut line);
+                self.carried_layout.append(&mut self.line_layout);
             }
 
             let state = self.include_stack.last_mut()?;
@@ -519,9 +574,8 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn push_back(&mut self, raw: RawToken<'a>) {
-        self.expansions.push(Expansion {
-            tokens: VecDeque::from([raw]),
-        });
+        self.expansions.push(self.pending.len());
+        self.pending.push(raw);
     }
 
     fn check(&mut self, expected: Token<'a>) -> bool {
@@ -568,7 +622,7 @@ impl<'a> Preprocessor<'a> {
 
         match text {
             Some(text) => (
-                Token::from_identifier(self.arena.alloc(text)),
+                Token::from_identifier(self.arena.alloc_str(&text)),
                 Location::in_file(location.file, location.begin, end.end),
             ),
             None => (token, location),
@@ -693,7 +747,7 @@ impl<'a> Preprocessor<'a> {
             _ => body,
         };
         self.defines.define(Define {
-            name: Identifier::from(name),
+            name,
             params,
             body,
             location,
@@ -730,8 +784,8 @@ impl<'a> Preprocessor<'a> {
         self.skip_rest_of_line();
     }
 
-    fn read_parameters(&mut self, open: Location) -> Vec<Parameter> {
-        let mut params: Vec<Parameter> = Vec::new();
+    fn read_parameters(&mut self, open: Location) -> Vec<Parameter<'a>> {
+        let mut params: Vec<Parameter<'a>> = Vec::new();
         let mut can_consume_comma = false;
         let mut found_variadic = false;
 
@@ -765,7 +819,7 @@ impl<'a> Preprocessor<'a> {
                     }
 
                     params.push(Parameter {
-                        name: Identifier::from("..."),
+                        name: "...",
                         variadic: true,
                     });
                     found_variadic = true;
@@ -783,17 +837,14 @@ impl<'a> Preprocessor<'a> {
 
                     let variadic = self.check(Token::Ellipsis);
                     found_variadic |= variadic;
-                    params.push(Parameter {
-                        name: Identifier::from(name),
-                        variadic,
-                    });
+                    params.push(Parameter { name, variadic });
                 },
             }
         }
     }
 
     /// `#define M(rest..., value)`
-    fn reject_late_variadic(&mut self, params: &[Parameter], location: Location, found: &mut bool) -> bool {
+    fn reject_late_variadic(&mut self, params: &[Parameter<'a>], location: Location, found: &mut bool) -> bool {
         if !*found {
             return false;
         }
@@ -882,7 +933,7 @@ impl<'a> Preprocessor<'a> {
             return;
         };
 
-        if self.defines.undef(&Identifier::from(name)).is_none() {
+        if self.defines.undef(name).is_none() {
             self.diagnose(
                 Code::UndefineMissingDirective,
                 token_location,
@@ -914,8 +965,10 @@ impl<'a> Preprocessor<'a> {
     fn directive_if(&mut self, location: Location) {
         self.last_if = location;
 
-        let tokens = self.read_condition();
+        let mut tokens = std::mem::take(&mut self.condition);
+        self.read_condition(&mut tokens);
         if tokens.is_empty() {
+            self.condition = tokens;
             self.diagnose(Code::BadDirective, location, "expression expected for #if");
             self.conditionals.push(Some(false));
             self.skip_if_body(false);
@@ -923,7 +976,7 @@ impl<'a> Preprocessor<'a> {
         }
 
         let is_defined = |name: &str| self.defines.is_defined(name);
-        let base = self.include_stack.last().map(|s| s.dir.clone()).unwrap_or_default();
+        let base = self.include_stack.last().map_or(Path::new(""), |s| s.dir.as_path());
         let file_exists = |path: &str| base.join(path.replace('\\', "/")).is_file();
 
         let (value, complaints) = eval::evaluate(
@@ -933,6 +986,8 @@ impl<'a> Preprocessor<'a> {
                 file_exists: &file_exists,
             },
         );
+
+        self.condition = tokens;
 
         for complaint in complaints {
             self.diagnose(Code::BadDirective, complaint.location, complaint.message);
@@ -954,8 +1009,8 @@ impl<'a> Preprocessor<'a> {
     }
 
     /// `#if defined(X) && fexists("x")`
-    fn read_condition(&mut self) -> Vec<Spanned<'a>> {
-        let mut tokens = Vec::new();
+    fn read_condition(&mut self, tokens: &mut Vec<Spanned<'a>>) {
+        tokens.clear();
         let mut expand = true;
 
         while let Some(raw) = self.next_raw() {
@@ -981,8 +1036,6 @@ impl<'a> Preprocessor<'a> {
 
             tokens.push((token, location));
         }
-
-        tokens
     }
 
     fn directive_ifdef(&mut self, location: Location, negated: bool) {
@@ -1192,39 +1245,40 @@ impl<'a> Preprocessor<'a> {
 
     /// `#define M(x) x`
     fn try_macro(&mut self, name: &str, invocation: RawToken<'a>) -> bool {
-        if invocation.hidden.contains(name) {
+        let Some((id, define)) = self.defines.lookup(name) else {
+            return false;
+        };
+
+        if self.hide_sets.contains(invocation.hidden, id) {
             return false;
         }
 
-        let Some(define) = self.defines.lookup(name) else {
+        let mut arguments = std::mem::take(&mut self.arguments);
+        arguments.clear();
+
+        let is_called = define.is_function_like();
+        if is_called && !self.collect_arguments(&mut arguments) {
+            self.arguments = arguments;
             return false;
-        };
+        }
 
-        let arguments = if define.is_function_like() {
-            match self.collect_arguments() {
-                Some(arguments) => Some(arguments),
-                None => return false,
-            }
-        } else {
-            None
-        };
-
-        let tokens = self.expand(&define, arguments.as_deref(), invocation);
-        self.expansions.push(Expansion { tokens });
+        self.expand(&define, id, is_called.then_some(&arguments), invocation);
+        self.arguments = arguments;
 
         true
     }
 
     /// `M(a, b)`
-    fn collect_arguments(&mut self) -> Option<Vec<Vec<RawToken<'a>>>> {
-        let open = self.next_significant()?;
+    fn collect_arguments(&mut self, arguments: &mut Arguments<'a>) -> bool {
+        let Some(open) = self.next_significant() else {
+            return false;
+        };
+
         if open.token != Token::ParenLeft {
             self.push_back(open);
-            return None;
+            return false;
         }
 
-        let mut arguments = Vec::new();
-        let mut current: Vec<RawToken<'a>> = Vec::new();
         let mut depth = 1usize;
 
         loop {
@@ -1235,43 +1289,46 @@ impl<'a> Preprocessor<'a> {
             let token = raw.token;
 
             match token {
-                Token::Comma if depth == 1 => arguments.push(std::mem::take(&mut current)),
+                Token::Comma if depth == 1 => arguments.finish_argument(),
                 Token::ParenRight => {
                     depth -= 1;
                     if depth == 0 {
                         break;
                     }
 
-                    current.push(raw);
+                    arguments.tokens.push(raw);
                 },
                 Token::ParenLeft => {
                     depth += 1;
-                    current.push(raw);
+                    arguments.tokens.push(raw);
                 },
                 Token::Newline | Token::SuppressedNewline => {},
                 token if token.is_comment() => {},
-                _ => current.push(raw),
+                _ => arguments.tokens.push(raw),
             }
         }
 
-        arguments.push(current);
+        arguments.finish_argument();
 
-        Some(arguments)
+        true
     }
 
-    fn expand(
-        &mut self, define: &Define<'a>, arguments: Option<&[Vec<RawToken<'a>>]>, invocation: RawToken<'a>,
-    ) -> VecDeque<RawToken<'a>> {
-        let fixed_hidden = invocation.hidden.with(&define.name);
+    /// Builds the expansion forwards on top of `pending`, then flips it so it pops in order.
+    fn expand(&mut self, define: &Define<'a>, id: NameId, arguments: Option<&Arguments<'a>>, invocation: RawToken<'a>) {
+        let start = self.pending.len();
+        self.expansions.push(start);
+
+        let fixed_hidden = self.hide_sets.with(invocation.hidden, id);
         if let Some(builtin) = define.builtin {
-            return VecDeque::from([RawToken {
+            self.pending.push(RawToken {
                 token: self.expand_builtin(builtin, invocation.location),
                 hidden: fixed_hidden,
                 ..invocation
-            }]);
+            });
+            return;
         }
 
-        let mut out: Vec<(Token<'a>, bool, HideSet)> = Vec::new();
+        let location = invocation.location;
         // `foo##x`, `foo x`
         let mut separated = true;
 
@@ -1280,30 +1337,33 @@ impl<'a> Preprocessor<'a> {
                 BodyPart::Space => separated = true,
                 BodyPart::Stringify(name) => {
                     let text = match arguments.zip(define.lookup(name)) {
-                        Some((arguments, slot)) => {
-                            self.render_slot(slot, arguments).unwrap_or_else(|| name.to_string())
-                        },
-                        None => name.to_string(),
+                        Some((arguments, slot)) => self.render_slot(slot, arguments).unwrap_or(name),
+                        None => name,
                     };
 
-                    out.push((
-                        Token::RawStringLiteral(self.arena.alloc(text)),
+                    self.pending.push(RawToken::expanded(
+                        Token::RawStringLiteral(text),
+                        location,
                         separated,
-                        fixed_hidden.clone(),
+                        fixed_hidden,
                     ));
                     separated = false;
                 },
                 BodyPart::Paste(name) => {
-                    let tokens = Self::slot_tokens(arguments, define, name)
-                        .unwrap_or_else(|| vec![(Token::from_identifier(name), false, fixed_hidden.clone())]);
-                    self.splice(&mut out, &tokens, false);
+                    if !self.splice_slot(start, location, arguments, define, name, false) {
+                        let token = Token::from_identifier(name);
+                        self.splice(start, location, token, false, fixed_hidden);
+                    }
 
                     separated = false;
                 },
                 BodyPart::Token(token) => {
-                    match token.word().and_then(|word| Self::slot_tokens(arguments, define, word)) {
-                        Some(tokens) => self.splice(&mut out, &tokens, separated),
-                        None => out.push((*token, separated, fixed_hidden.clone())),
+                    let is_slot = token
+                        .word()
+                        .is_some_and(|word| self.splice_slot(start, location, arguments, define, word, separated));
+                    if !is_slot {
+                        self.pending
+                            .push(RawToken::expanded(*token, location, separated, fixed_hidden));
                     }
 
                     separated = false;
@@ -1311,20 +1371,11 @@ impl<'a> Preprocessor<'a> {
             }
         }
 
-        out.into_iter()
-            .enumerate()
-            .map(|(index, (token, separated, hidden))| {
-                if index == 0 {
-                    RawToken {
-                        token,
-                        hidden,
-                        ..invocation.clone()
-                    }
-                } else {
-                    RawToken::expanded(token, invocation.location, separated, hidden)
-                }
-            })
-            .collect()
+        if let Some(first) = self.pending.get_mut(start) {
+            first.spacing = invocation.spacing;
+        }
+
+        self.pending[start..].reverse();
     }
 
     fn expand_builtin(&self, builtin: Builtin, location: Location) -> Token<'a> {
@@ -1343,62 +1394,81 @@ impl<'a> Preprocessor<'a> {
     }
 
     /// `#define M(a, rest...)`
-    fn slot_tokens(
-        arguments: Option<&[Vec<RawToken<'a>>]>, define: &Define<'a>, name: &str,
-    ) -> Option<Vec<(Token<'a>, bool, HideSet)>> {
-        let (arguments, slot) = arguments.zip(define.lookup(name))?;
-        let mut out = Vec::new();
+    fn splice_slot(
+        &mut self, start: usize, location: Location, arguments: Option<&Arguments<'a>>, define: &Define<'a>,
+        name: &str, separated: bool,
+    ) -> bool {
+        let Some((arguments, slot)) = arguments.zip(define.lookup(name)) else {
+            return false;
+        };
+
+        let mut is_first = true;
+        let mut splice = |this: &mut Self, token: Token<'a>, token_separated: bool, hidden: HideSet| {
+            let separated = if is_first { separated } else { token_separated };
+            is_first = false;
+            this.splice(start, location, token, separated, hidden);
+        };
 
         match slot {
             Slot::Positional(index) => {
-                let argument = arguments.get(index)?;
-                push_argument(&mut out, argument, false);
+                let Some(argument) = arguments.get(index) else {
+                    return false;
+                };
+
+                for_argument(argument, false, |token, separated, hidden| {
+                    splice(self, token, separated, hidden);
+                });
             },
             Slot::Rest(index) => {
                 for (offset, argument) in arguments.iter().skip(index).enumerate() {
                     if offset > 0 {
-                        out.push((Token::Comma, true, HideSet::default()));
+                        splice(self, Token::Comma, true, HideSet::default());
                     }
 
-                    push_argument(&mut out, argument, offset > 0);
+                    for_argument(argument, offset > 0, |token, separated, hidden| {
+                        splice(self, token, separated, hidden);
+                    });
                 }
             },
         }
 
-        Some(out)
+        true
     }
 
     /// `foo##x`
-    fn splice(
-        &self, out: &mut Vec<(Token<'a>, bool, HideSet)>, tokens: &[(Token<'a>, bool, HideSet)], mut separated: bool,
-    ) {
-        for (index, (token, token_separated, hidden)) in tokens.iter().enumerate() {
-            if index > 0 {
-                separated = *token_separated;
-            }
+    fn splice(&mut self, start: usize, location: Location, token: Token<'a>, separated: bool, hidden: HideSet) {
+        let last = self.pending.len().checked_sub(1).filter(|last| *last >= start);
+        let pasted = (!separated)
+            .then(|| pastable(&token).zip(last.and_then(|last| self.pending[last].token.word())))
+            .flatten();
 
-            let pasted = (!separated)
-                .then(|| pastable(token).zip(out.last().and_then(|(token, ..)| token.word())))
-                .flatten();
-
-            match pasted.zip(out.last_mut()) {
-                Some(((right, left), last)) => {
-                    let joined = self.arena.alloc(format!("{left}{right}"));
-                    last.0 = Token::from_identifier(joined);
-                    last.2 = last.2.union(hidden);
-                },
-                None => out.push((*token, separated, hidden.clone())),
-            }
+        match pasted.zip(last) {
+            Some(((right, left), last)) => {
+                let joined = self.arena.alloc_concat(&[left, right]);
+                let merged = self.hide_sets.union(self.pending[last].hidden, hidden);
+                let last = &mut self.pending[last];
+                last.token = Token::from_identifier(joined);
+                last.hidden = merged;
+            },
+            None => self
+                .pending
+                .push(RawToken::expanded(token, location, separated, hidden)),
         }
     }
 
-    fn render_slot(&self, slot: Slot, arguments: &[Vec<RawToken<'a>>]) -> Option<String> {
-        let mut text = String::new();
+    fn render_slot(&mut self, slot: Slot, arguments: &Arguments<'a>) -> Option<&'a str> {
+        let mut text = std::mem::take(&mut self.stringified);
+        text.clear();
 
         match slot {
             Slot::Positional(index) => {
-                for raw in arguments.get(index)? {
-                    text.push_str(&raw.token.to_string());
+                let Some(argument) = arguments.get(index) else {
+                    self.stringified = text;
+                    return None;
+                };
+
+                for raw in argument {
+                    let _ = write!(text, "{}", raw.token);
                 }
             },
             Slot::Rest(index) => {
@@ -1408,25 +1478,29 @@ impl<'a> Preprocessor<'a> {
                     }
 
                     for raw in argument {
-                        text.push_str(&raw.token.to_string());
+                        let _ = write!(text, "{}", raw.token);
                     }
                 }
             },
         }
 
-        Some(text)
+        let rendered = self.arena.alloc_str(&text);
+        self.stringified = text;
+
+        Some(rendered)
     }
 
     /// `#include "dir\\file.dm"`
     fn resolve_include(&self, raw: &str) -> PathBuf {
-        let normalized = raw.replace('\\', "/");
         let base = self
             .include_stack
             .last()
-            .map(|state| state.dir.clone())
-            .unwrap_or_default();
+            .map_or(Path::new(""), |state| state.dir.as_path());
+        if raw.contains('\\') {
+            return base.join(raw.replace('\\', "/"));
+        }
 
-        base.join(normalized)
+        base.join(raw)
     }
 
     fn include_file(&mut self, path: &Path, location: Location) {
@@ -1441,41 +1515,36 @@ impl<'a> Preprocessor<'a> {
             return;
         }
 
-        if !path.is_file() {
-            self.diagnose(
-                Code::MissingIncludedFile,
-                location,
-                format!("could not find included file \"{}\"", path.display()),
-            );
-            return;
-        }
-
-        self.included.insert(path.clone());
-
-        let extension = path
+        let is_resource = path
             .extension()
             .and_then(|e| e.to_str())
-            .map(str::to_ascii_lowercase)
-            .unwrap_or_default();
+            .is_some_and(|e| ["dmm", "dmp", "dmf", "dmi"].iter().any(|r| e.eq_ignore_ascii_case(r)));
 
-        if matches!(extension.as_str(), "dmm" | "dmp" | "dmf" | "dmi") {
+        if is_resource {
+            if !path.is_file() {
+                self.diagnose_missing(&path, location);
+                return;
+            }
+
+            self.included.insert(path.clone());
             self.resources.push(path);
             return;
         }
 
-        self.open(&path, location);
-    }
-
-    fn open(&mut self, path: &Path, location: Location) {
-        let contents = match self.source_cache.files.get(path).copied() {
+        let contents = match self.source_cache.files.get(&path).copied() {
             Some(contents) => contents,
-            None => match std::fs::read_to_string(path) {
+            None => match std::fs::read_to_string(&path) {
                 Ok(contents) => {
                     let contents = self.arena.alloc(contents);
-                    self.source_cache.files.insert(path.to_path_buf(), contents);
+                    self.source_cache.files.insert(path.clone(), contents);
                     contents
                 },
+                Err(_) if !path.is_file() => {
+                    self.diagnose_missing(&path, location);
+                    return;
+                },
                 Err(error) => {
+                    self.included.insert(path.clone());
                     self.diagnose(
                         Code::MissingIncludedFile,
                         location,
@@ -1485,17 +1554,27 @@ impl<'a> Preprocessor<'a> {
                 },
             },
         };
-        let file = self.sources.add_borrowed(path, contents);
+
+        self.included.insert(path.clone());
+        let file = self.sources.add_borrowed(&path, contents);
 
         if let Some(progress) = self.progress.as_mut()
-            && !progress(path)
+            && !progress(&path)
         {
             self.aborted = true;
 
             return;
         }
 
-        self.push_file(file, path);
+        self.push_file(file, &path);
+    }
+
+    fn diagnose_missing(&mut self, path: &Path, location: Location) {
+        self.diagnose(
+            Code::MissingIncludedFile,
+            location,
+            format!("could not find included file \"{}\"", path.display()),
+        );
     }
 
     fn open_embedded(&mut self, name: &str, contents: &'static str) {
@@ -1531,7 +1610,7 @@ impl<'a> Preprocessor<'a> {
     }
 }
 
-fn push_argument<'a>(out: &mut Vec<(Token<'a>, bool, HideSet)>, argument: &[RawToken<'a>], mut separated: bool) {
+fn for_argument<'a>(argument: &[RawToken<'a>], mut separated: bool, mut each: impl FnMut(Token<'a>, bool, HideSet)) {
     let mut previous: Option<Location> = None;
 
     for raw in argument {
@@ -1539,7 +1618,7 @@ fn push_argument<'a>(out: &mut Vec<(Token<'a>, bool, HideSet)>, argument: &[RawT
             separated = raw.separated_from(previous);
         }
 
-        out.push((raw.token, separated, raw.hidden.clone()));
+        each(raw.token, separated, raw.hidden);
         previous = Some(raw.location);
     }
 }
@@ -1552,7 +1631,7 @@ fn normalize(path: &Path) -> PathBuf {
         std::env::current_dir().unwrap_or_default().join(path)
     };
 
-    let mut out = PathBuf::new();
+    let mut out = PathBuf::with_capacity(absolute.as_os_str().len());
     for component in absolute.components() {
         match component {
             Component::CurDir => {},

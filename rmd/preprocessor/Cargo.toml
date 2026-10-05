@@ -10,3 +10,4 @@ path = "src/lib.rs"
 core = { path = "../core" }
 lexer = { path = "../lexer" }
 prelude = { path = "../../prelude" }
+rustc-hash = "2"

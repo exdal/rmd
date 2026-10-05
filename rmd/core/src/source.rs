@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 
 use crate::{
     arena::StrArena,
@@ -8,36 +11,40 @@ use crate::{
 pub struct SourceFile<'a> {
     pub path: PathBuf,
     pub contents: &'a str,
-    /// Byte offset of the start of every line, for turning offsets back into positions.
-    line_starts: Vec<usize>,
+    line_starts: OnceLock<Vec<usize>>,
 }
 
 impl<'a> SourceFile<'a> {
     fn new(path: PathBuf, contents: &'a str) -> Self {
-        let mut line_starts = vec![0];
-        line_starts.extend(contents.match_indices('\n').map(|(i, _)| i + 1));
-
         Self {
             path,
             contents,
-            line_starts,
+            line_starts: OnceLock::new(),
         }
     }
 
+    fn line_starts(&self) -> &[usize] {
+        self.line_starts.get_or_init(|| {
+            let mut line_starts = vec![0];
+            line_starts.extend(self.contents.match_indices('\n').map(|(i, _)| i + 1));
+
+            line_starts
+        })
+    }
+
     pub fn position_of(&self, offset: usize) -> Position {
-        let line = self
-            .line_starts
-            .partition_point(|&start| start <= offset)
-            .saturating_sub(1);
-        let col = offset - self.line_starts[line];
+        let line_starts = self.line_starts();
+        let line = line_starts.partition_point(|&start| start <= offset).saturating_sub(1);
+        let col = offset - line_starts[line];
 
         Position::new(line + 1, col + 1)
     }
 
     /// One-based, to match [`Position::line`].
     pub fn line(&self, line: usize) -> Option<&'a str> {
-        let start = *self.line_starts.get(line.checked_sub(1)?)?;
-        let end = self.line_starts.get(line).copied().unwrap_or(self.contents.len());
+        let line_starts = self.line_starts();
+        let start = *line_starts.get(line.checked_sub(1)?)?;
+        let end = line_starts.get(line).copied().unwrap_or(self.contents.len());
 
         Some(self.contents[start..end].trim_end_matches(['\r', '\n']))
     }

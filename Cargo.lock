@@ -483,6 +483,7 @@ name = "core"
 version = "1.7.1"
 dependencies = [
  "bitflags 2.13.1",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -3134,6 +3135,7 @@ dependencies = [
  "core",
  "lexer",
  "prelude",
+ "rustc-hash",
 ]
 
 [[package]]

@@ -79,7 +79,7 @@ pub struct Diagnostic {
 #[derive(Debug, Default)]
 pub struct Diagnostics {
     pub entries: Vec<Diagnostic>,
-    index: HashMap<(Option<ProcId>, u32, usize, usize, FaultKind), usize>,
+    index: HashMap<(Option<ProcId>, u32, u32, u32, FaultKind), usize>,
 }
 
 impl Diagnostics {

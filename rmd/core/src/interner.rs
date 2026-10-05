@@ -1,7 +1,7 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    hash::{Hash, Hasher},
+    hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash, Hasher},
     sync::{Arc, Weak},
 };
 
@@ -64,7 +64,7 @@ impl Hasher for SymbolHasher {
     }
 }
 
-pub type SymbolMap<V> = HashMap<Symbol, V, std::hash::BuildHasherDefault<SymbolHasher>>;
+pub type SymbolMap<V> = HashMap<Symbol, V, BuildHasherDefault<SymbolHasher>>;
 
 thread_local! { static IDENTIFIERS: RefCell<Interner> = RefCell::new(Interner::new()); }
 
@@ -78,48 +78,57 @@ impl From<String> for Symbol {
 
 #[derive(Debug, Default)]
 pub struct Interner {
-    buckets: HashMap<u64, Vec<Weak<Interned>>>,
+    buckets: HashMap<u64, Vec<Weak<Interned>>, BuildHasherDefault<SymbolHasher>>,
     allocations: usize,
+    sweep_at: usize,
 }
 
 impl Interner {
     pub fn new() -> Self { Self::default() }
 
     fn hash(s: &str) -> u64 {
-        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        let mut hash = DefaultHasher::new();
         s.hash(&mut hash);
 
         hash.finish()
     }
 
+    fn bucket(s: &str) -> u64 { rustc_hash::FxBuildHasher.hash_one(s) }
+
     pub fn intern(&mut self, s: &str) -> Symbol {
-        if let Some(symbol) = self.get(s) {
+        let bucket = Self::bucket(s);
+        if let Some(symbol) = self.find(bucket, s) {
             return symbol;
         }
 
-        self.allocations = self.allocations.wrapping_add(1);
+        self.allocations += 1;
 
-        if self.allocations.is_multiple_of(1024) {
+        if self.allocations >= self.sweep_at {
             self.buckets.retain(|_, bucket| {
                 bucket.retain(|s| s.strong_count() > 0);
 
                 !bucket.is_empty()
             });
+
+            let live = self.buckets.values().map(Vec::len).sum::<usize>();
+            self.allocations = 0;
+            self.sweep_at = live.max(1024);
         }
 
-        let hash = Self::hash(s);
         let value = Arc::new(Interned {
             text: s.to_string(),
-            hash,
+            hash: Self::hash(s),
         });
-        self.buckets.entry(hash).or_default().push(Arc::downgrade(&value));
+        self.buckets.entry(bucket).or_default().push(Arc::downgrade(&value));
 
         Symbol(value)
     }
 
-    pub fn get(&self, s: &str) -> Option<Symbol> {
+    pub fn get(&self, s: &str) -> Option<Symbol> { self.find(Self::bucket(s), s) }
+
+    fn find(&self, bucket: u64, s: &str) -> Option<Symbol> {
         self.buckets
-            .get(&Self::hash(s))?
+            .get(&bucket)?
             .iter()
             .filter_map(Weak::upgrade)
             .find(|v| v.text == s)

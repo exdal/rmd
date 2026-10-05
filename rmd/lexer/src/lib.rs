@@ -16,9 +16,62 @@ enum BraceKind {
     Interpolation { multiline: bool },
 }
 
+const INLINE_INDENTS: usize = 32;
+
+#[derive(Clone, Debug)]
+enum IndentStack {
+    Inline { len: usize, widths: [u32; INLINE_INDENTS] },
+    Spilled(Vec<u32>),
+}
+
+impl IndentStack {
+    fn new() -> Self {
+        Self::Inline {
+            len: 1,
+            widths: [0; INLINE_INDENTS],
+        }
+    }
+
+    fn as_slice(&self) -> &[u32] {
+        match self {
+            Self::Inline { len, widths } => &widths[..*len],
+            Self::Spilled(widths) => widths,
+        }
+    }
+
+    fn len(&self) -> usize { self.as_slice().len() }
+
+    fn last(&self) -> Option<usize> { self.as_slice().last().map(|width| *width as usize) }
+
+    fn push(&mut self, width: usize) {
+        let width = width as u32;
+        match self {
+            Self::Inline { len, widths } if *len < INLINE_INDENTS => {
+                widths[*len] = width;
+                *len += 1;
+            },
+            Self::Inline { widths, .. } => {
+                let mut spilled = widths.to_vec();
+                spilled.push(width);
+                *self = Self::Spilled(spilled);
+            },
+            Self::Spilled(widths) => widths.push(width),
+        }
+    }
+
+    fn pop(&mut self) {
+        match self {
+            Self::Inline { len, .. } => *len = len.saturating_sub(1),
+            Self::Spilled(widths) => {
+                widths.pop();
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct IndentState {
-    stack: Vec<usize>,
+    stack: IndentStack,
     pending_dedents: usize,
     errors: Option<usize>,
 }
@@ -44,7 +97,7 @@ pub struct Lexer<'a> {
     line: usize,
     line_offset: usize,
 
-    indent_stack: Vec<usize>,
+    indent_stack: IndentStack,
     pending_dedents: usize,
     at_line_start: bool,
     close_indents_at_eof: bool,
@@ -67,7 +120,7 @@ impl<'a> Lexer<'a> {
             offset: 0,
             line: 0,
             line_offset: 0,
-            indent_stack: vec![0],
+            indent_stack: IndentStack::new(),
             pending_dedents: 0,
             at_line_start: true,
             close_indents_at_eof: true,
@@ -254,7 +307,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn apply_indent(&mut self, width: usize) -> Option<Token<'a>> {
-        let current = self.indent_stack.last().copied().unwrap_or(0);
+        let current = self.indent_stack.last().unwrap_or(0);
 
         if width > current {
             self.indent_stack.push(width);
@@ -263,12 +316,12 @@ impl<'a> Lexer<'a> {
 
         if width < current {
             let mut dedents = 0usize;
-            while self.indent_stack.last().is_some_and(|level| *level > width) {
+            while self.indent_stack.last().is_some_and(|level| level > width) {
                 self.indent_stack.pop();
                 dedents += 1;
             }
 
-            if self.indent_stack.last().copied().unwrap_or(0) != width {
+            if self.indent_stack.last().unwrap_or(0) != width {
                 self.error(LexErrorKind::InconsistentIndent);
                 self.indent_stack.push(width);
             }

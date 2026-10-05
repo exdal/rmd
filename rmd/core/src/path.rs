@@ -95,7 +95,7 @@ impl TreePath {
                 "const" if keyword_offset.is_some() => flags |= PathFlags::IS_CONST,
                 "final" if keyword_offset.is_some() => flags |= PathFlags::IS_FINAL,
                 "tmp" if keyword_offset.is_some() => flags |= PathFlags::IS_TMP,
-                _ => segments.push(Identifier::from(part.to_string())),
+                _ => segments.push(Identifier::from(part)),
             }
         }
 

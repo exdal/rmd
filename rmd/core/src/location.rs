@@ -5,12 +5,17 @@ pub struct FileId(pub u32);
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Position {
-    pub line: usize,
-    pub col: usize,
+    pub line: u32,
+    pub col: u32,
 }
 
 impl Position {
-    pub fn new(line: usize, col: usize) -> Self { Self { line, col } }
+    pub fn new(line: usize, col: usize) -> Self {
+        Self {
+            line: line as u32,
+            col: col as u32,
+        }
+    }
 }
 
 impl std::fmt::Display for Position {
