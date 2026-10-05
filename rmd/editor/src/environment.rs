@@ -484,8 +484,17 @@ fn compile_view<'a>(
     progress.set_detail(&format!("{} tokens", preprocessed.tokens.len()));
     let ast = ast::parse(&preprocessed.tokens)
         .map_err(|error| LoadError::parse(error, &preprocessed.sources, preprocessed.entry, entry))?;
-    let mut tokens = preprocessed.tokens;
-    tokens.clear();
+
+    // nothing preprocesses after the bake view, so only the editor view's buffer is kept for reuse
+    let tokens = if baking {
+        drop(preprocessed.tokens);
+        Vec::new()
+    } else {
+        let mut tokens = preprocessed.tokens;
+        tokens.clear();
+        tokens
+    };
+
     drop(preprocessed.defines);
     if progress.is_cancelled() {
         return Err(LoadError::Cancelled);
