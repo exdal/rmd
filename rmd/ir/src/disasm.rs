@@ -1,5 +1,7 @@
 use core::types::{IrNodeId, ProcId, Value};
-use std::{collections::HashSet, fmt::Write};
+use std::fmt::Write;
+
+use rustc_hash::FxHashSet;
 
 use crate::{AccessKind, Argument, IrNode, Module, OutputTarget};
 
@@ -7,11 +9,11 @@ pub fn dump(module: &Module) -> String { dump_with(module, false) }
 
 pub fn dump_with(module: &Module, syntax_highlighting: bool) -> String { dump_impl(module, None, syntax_highlighting) }
 
-pub fn dump_selected_with(module: &Module, procedures: &HashSet<ProcId>, syntax_highlighting: bool) -> String {
+pub fn dump_selected_with(module: &Module, procedures: &FxHashSet<ProcId>, syntax_highlighting: bool) -> String {
     dump_impl(module, Some(procedures), syntax_highlighting)
 }
 
-fn dump_impl(module: &Module, procedures: Option<&HashSet<ProcId>>, syntax_highlighting: bool) -> String {
+fn dump_impl(module: &Module, procedures: Option<&FxHashSet<ProcId>>, syntax_highlighting: bool) -> String {
     let referenced = procedures.map(|procedures| selected_nodes(module, procedures));
     let included = |id: IrNodeId| referenced.as_ref().is_none_or(|nodes| nodes.contains(&id));
     let displayed_blocks = module
@@ -32,12 +34,12 @@ fn dump_impl(module: &Module, procedures: Option<&HashSet<ProcId>>, syntax_highl
         .flatten()
         .map(|(reachable, unreachable)| reachable.len() + unreachable.len())
         .sum::<usize>();
-    let node_count = referenced.as_ref().map_or(module.nodes.len(), HashSet::len);
+    let node_count = referenced.as_ref().map_or(module.nodes.len(), FxHashSet::len);
     let width = IrNodeId(module.nodes.len().saturating_sub(1) as u32).to_string().len();
 
     let mut out = String::new();
     let mut printed = vec![false; module.nodes.len()];
-    let mut printed_missing = HashSet::new();
+    let mut printed_missing = FxHashSet::default();
     let _ = writeln!(
         out,
         "; ir module: {} nodes, {} constants, {} external functions, {} functions, {blocks} blocks",
@@ -118,8 +120,8 @@ fn dump_impl(module: &Module, procedures: Option<&HashSet<ProcId>>, syntax_highl
     }
 }
 
-fn selected_nodes(module: &Module, procedures: &HashSet<ProcId>) -> HashSet<IrNodeId> {
-    let mut selected = HashSet::new();
+fn selected_nodes(module: &Module, procedures: &FxHashSet<ProcId>) -> FxHashSet<IrNodeId> {
+    let mut selected = FxHashSet::default();
     let mut pending = Vec::new();
 
     for proc_id in procedures {
@@ -184,12 +186,12 @@ fn procedure_blocks(module: &Module, index: usize) -> (Vec<IrNodeId>, Vec<IrNode
         .enumerate()
         .filter_map(|(offset, node)| matches!(node, IrNode::Label(_)).then_some(IrNodeId((start + offset) as u32)))
         .collect::<Vec<_>>();
-    let owned_set = owned.iter().copied().collect::<HashSet<_>>();
+    let owned_set = owned.iter().copied().collect::<FxHashSet<_>>();
     let reachable = reachable(module, procedure.body)
         .into_iter()
         .filter(|block| owned_set.contains(block))
         .collect::<Vec<_>>();
-    let reachable_set = reachable.iter().copied().collect::<HashSet<_>>();
+    let reachable_set = reachable.iter().copied().collect::<FxHashSet<_>>();
     let unreachable = owned
         .into_iter()
         .filter(|block| !reachable_set.contains(block))
@@ -200,7 +202,7 @@ fn procedure_blocks(module: &Module, index: usize) -> (Vec<IrNodeId>, Vec<IrNode
 
 fn dump_block(
     module: &Module, block: IrNodeId, width: usize, out: &mut String, printed: &mut [bool],
-    printed_missing: &mut HashSet<IrNodeId>,
+    printed_missing: &mut FxHashSet<IrNodeId>,
 ) {
     let Some(IrNode::Label(instructions)) = module.node(block) else {
         return;
@@ -230,18 +232,18 @@ fn mark_printed(printed: &mut [bool], id: IrNodeId) {
     }
 }
 
-fn mark(id: IrNodeId, selected: &mut HashSet<IrNodeId>, pending: &mut Vec<IrNodeId>) {
+fn mark(id: IrNodeId, selected: &mut FxHashSet<IrNodeId>, pending: &mut Vec<IrNodeId>) {
     if selected.insert(id) {
         pending.push(id);
     }
 }
 
 fn dump_referenced_nodes(
-    module: &Module, procedures: Option<&HashSet<ProcId>>, width: usize, printed: &[bool],
-    printed_missing: &HashSet<IrNodeId>, out: &mut String,
+    module: &Module, procedures: Option<&FxHashSet<ProcId>>, width: usize, printed: &[bool],
+    printed_missing: &FxHashSet<IrNodeId>, out: &mut String,
 ) {
     let mut referenced = vec![false; module.nodes.len()];
-    let mut missing = HashSet::new();
+    let mut missing = FxHashSet::default();
     let mut pending = Vec::new();
 
     for (index, was_printed) in printed.iter().copied().enumerate() {
@@ -317,7 +319,7 @@ fn dump_referenced_nodes(
 
 fn reachable(module: &Module, entry: IrNodeId) -> Vec<IrNodeId> {
     let mut order = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     let mut queue = vec![entry];
 
     while let Some(block) = queue.pop() {
@@ -847,7 +849,7 @@ mod tests {
         let module = lower(fixture!(
             "programs/selected_disassembly_omits_unreachable_procedures_and_constants.dm"
         ));
-        let output = dump_selected_with(&module, &HashSet::from([ProcId(0)]), false);
+        let output = dump_selected_with(&module, &FxHashSet::from_iter([ProcId(0)]), false);
 
         assert!(output.contains("1 functions"), "{output}");
         assert!(output.contains("::live"), "{output}");

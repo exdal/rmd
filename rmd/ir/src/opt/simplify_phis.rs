@@ -1,5 +1,7 @@
 use core::types::{IrNodeId, Value};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{Argument, IrNode, Module, OutputTarget};
 
@@ -11,7 +13,7 @@ pub fn simplify_phis(module: &mut Module) {
         .filter_map(|(index, node)| matches!(node, IrNode::Phi { .. }).then_some(IrNodeId(index as u32)))
         .collect::<Vec<_>>();
 
-    let mut users = HashMap::<IrNodeId, HashSet<IrNodeId>>::new();
+    let mut users = FxHashMap::<IrNodeId, FxHashSet<IrNodeId>>::default();
     for phi in &phis {
         let Some(IrNode::Phi { operands }) = module.node(*phi) else {
             continue;
@@ -22,9 +24,9 @@ pub fn simplify_phis(module: &mut Module) {
         }
     }
 
-    let mut replacements = HashMap::<IrNodeId, IrNodeId>::new();
+    let mut replacements = FxHashMap::<IrNodeId, IrNodeId>::default();
     let mut pending = VecDeque::from(phis);
-    let mut queued = pending.iter().copied().collect::<HashSet<_>>();
+    let mut queued = pending.iter().copied().collect::<FxHashSet<_>>();
 
     'pending: while let Some(phi) = pending.pop_front() {
         queued.remove(&phi);
@@ -84,7 +86,7 @@ pub fn simplify_phis(module: &mut Module) {
     }
 }
 
-fn resolve(replacements: &HashMap<IrNodeId, IrNodeId>, mut value: IrNodeId) -> IrNodeId {
+fn resolve(replacements: &FxHashMap<IrNodeId, IrNodeId>, mut value: IrNodeId) -> IrNodeId {
     while let Some(replacement) = replacements.get(&value) {
         value = *replacement;
     }
@@ -109,15 +111,15 @@ fn intern_null(module: &mut Module) -> IrNodeId {
     id
 }
 
-fn replace_id(id: &mut IrNodeId, replacements: &HashMap<IrNodeId, IrNodeId>) { *id = resolve(replacements, *id); }
+fn replace_id(id: &mut IrNodeId, replacements: &FxHashMap<IrNodeId, IrNodeId>) { *id = resolve(replacements, *id); }
 
-fn replace_optional(id: &mut Option<IrNodeId>, replacements: &HashMap<IrNodeId, IrNodeId>) {
+fn replace_optional(id: &mut Option<IrNodeId>, replacements: &FxHashMap<IrNodeId, IrNodeId>) {
     if let Some(id) = id {
         replace_id(id, replacements);
     }
 }
 
-pub(super) fn replace_all_uses(module: &mut Module, replacements: &HashMap<IrNodeId, IrNodeId>) {
+pub(super) fn replace_all_uses(module: &mut Module, replacements: &FxHashMap<IrNodeId, IrNodeId>) {
     for node in &mut module.nodes {
         replace_operands(node, replacements);
     }
@@ -125,7 +127,7 @@ pub(super) fn replace_all_uses(module: &mut Module, replacements: &HashMap<IrNod
     replace_metadata_uses(module, replacements);
 }
 
-pub(super) fn replace_metadata_uses(module: &mut Module, replacements: &HashMap<IrNodeId, IrNodeId>) {
+pub(super) fn replace_metadata_uses(module: &mut Module, replacements: &FxHashMap<IrNodeId, IrNodeId>) {
     for proc in &mut module.procs {
         for param in &mut proc.params {
             replace_optional(&mut param.default, replacements);
@@ -143,14 +145,14 @@ pub(super) fn replace_metadata_uses(module: &mut Module, replacements: &HashMap<
     }
 }
 
-fn replace_arguments(args: &mut [Argument], replacements: &HashMap<IrNodeId, IrNodeId>) {
+fn replace_arguments(args: &mut [Argument], replacements: &FxHashMap<IrNodeId, IrNodeId>) {
     for arg in args {
         replace_optional(&mut arg.key, replacements);
         replace_optional(&mut arg.value, replacements);
     }
 }
 
-pub(super) fn replace_operands(node: &mut IrNode, replacements: &HashMap<IrNodeId, IrNodeId>) {
+pub(super) fn replace_operands(node: &mut IrNode, replacements: &FxHashMap<IrNodeId, IrNodeId>) {
     match node {
         IrNode::Phi { operands } => {
             for operand in operands {

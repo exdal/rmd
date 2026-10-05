@@ -6,11 +6,11 @@ use core::{
     types::{Identifier, InputType, TypeSpec, Value},
     vars,
 };
-use std::collections::HashMap;
 
 use ast::{AST, Declaration, Expression, ExpressionId, Literal, SettingMode, Statement};
 use objtree::{ObjectTree, ProcDecl, ResolvedVarType, TypeId, VarDecl, VarTypeKind};
 use prelude::Intrinsic;
+use rustc_hash::FxHashMap;
 
 use crate::{
     constant::fold,
@@ -23,7 +23,7 @@ pub struct Analyzer<'a> {
     tree: ObjectTree,
     module: ir::IrModuleBuilder<'a>,
     errors: Vec<SemaError>,
-    var_facts: HashMap<(TypeId, Identifier), VarFacts>,
+    var_facts: FxHashMap<(TypeId, Identifier), VarFacts>,
 }
 
 #[derive(Default)]
@@ -41,7 +41,7 @@ impl<'a> Analyzer<'a> {
             tree: ObjectTree::new(),
             module: ir::IrModuleBuilder::new(ast),
             errors: Vec::new(),
-            var_facts: HashMap::new(),
+            var_facts: FxHashMap::default(),
         }
     }
 
@@ -391,7 +391,7 @@ pub fn check_undeclared_overrides(tree: &ObjectTree) -> Vec<SemaError> {
 }
 
 fn resolve_var_type(
-    tree: &ObjectTree, facts: &HashMap<(TypeId, Identifier), VarFacts>, id: TypeId, name: &Identifier,
+    tree: &ObjectTree, facts: &FxHashMap<(TypeId, Identifier), VarFacts>, id: TypeId, name: &Identifier,
 ) -> ResolvedVarType {
     let chain = tree
         .ancestors(id)

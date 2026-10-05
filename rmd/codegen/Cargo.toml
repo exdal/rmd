@@ -4,6 +4,7 @@ version = "1.0.2"
 edition = "2024"
 
 [dependencies]
+rustc-hash = "2"
 core = { path = "../core" }
 ir = { path = "../ir" }
 objtree = { path = "../objtree" }

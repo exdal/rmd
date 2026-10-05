@@ -1,5 +1,6 @@
 use core::types::IrNodeId;
-use std::collections::{HashMap, HashSet};
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{IrNode, Module};
 
@@ -29,9 +30,9 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
         .enumerate()
         .filter_map(|(index, node)| matches!(node, IrNode::Label(_)).then_some(IrNodeId(index as u32)))
         .collect::<Vec<_>>();
-    let block_set = blocks.iter().copied().collect::<HashSet<_>>();
-    let mut instruction_blocks = HashMap::<IrNodeId, IrNodeId>::new();
-    let mut predecessors = HashMap::<IrNodeId, Vec<IrNodeId>>::new();
+    let block_set = blocks.iter().copied().collect::<FxHashSet<_>>();
+    let mut instruction_blocks = FxHashMap::<IrNodeId, IrNodeId>::default();
+    let mut predecessors = FxHashMap::<IrNodeId, Vec<IrNodeId>>::default();
 
     for (index, proc) in module.procs.iter().enumerate() {
         if !matches!(module.node(proc.function), Some(IrNode::Function(id)) if id.0 as usize == index) {
@@ -212,7 +213,7 @@ fn verify_reference(module: &Module, node: IrNodeId, context: &str) -> Result<()
     }
 }
 
-fn require_block(blocks: &HashSet<IrNodeId>, block: IrNodeId, context: &str) -> Result<(), VerifyError> {
+fn require_block(blocks: &FxHashSet<IrNodeId>, block: IrNodeId, context: &str) -> Result<(), VerifyError> {
     if blocks.contains(&block) {
         Ok(())
     } else {
@@ -221,7 +222,7 @@ fn require_block(blocks: &HashSet<IrNodeId>, block: IrNodeId, context: &str) -> 
 }
 
 fn verify_targets(
-    node: &IrNode, blocks: &HashSet<IrNodeId>, instruction: IrNodeId, block: IrNodeId,
+    node: &IrNode, blocks: &FxHashSet<IrNodeId>, instruction: IrNodeId, block: IrNodeId,
 ) -> Result<(), VerifyError> {
     let targets = match node {
         IrNode::SelectionMerge { merge_block } => vec![*merge_block],

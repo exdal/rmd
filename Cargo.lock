@@ -427,6 +427,7 @@ dependencies = [
  "lexer",
  "objtree",
  "prelude",
+ "rustc-hash",
  "sema",
 ]
 
@@ -2163,6 +2164,7 @@ dependencies = [
  "core",
  "lexer",
  "prelude",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -3641,6 +3643,7 @@ dependencies = [
  "lexer",
  "objtree",
  "prelude",
+ "rustc-hash",
 ]
 
 [[package]]

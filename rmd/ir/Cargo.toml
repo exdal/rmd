@@ -4,6 +4,7 @@ version = "1.0.1"
 edition = "2024"
 
 [dependencies]
+rustc-hash = "2"
 core = { path = "../core" }
 ast = { path = "../ast" }
 prelude = { path = "../../prelude" }

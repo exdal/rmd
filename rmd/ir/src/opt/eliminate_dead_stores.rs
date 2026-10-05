@@ -1,5 +1,6 @@
 use core::{types::IrNodeId, vars};
-use std::collections::{HashMap, HashSet};
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{IrNode, Module, Procedure};
 
@@ -11,7 +12,7 @@ enum Storage {
 }
 
 pub fn eliminate_dead_stores(module: &mut Module) {
-    let mut removed = HashSet::new();
+    let mut removed = FxHashSet::default();
 
     for proc in &module.procs {
         analyze_procedure(module, proc, &mut removed);
@@ -31,16 +32,16 @@ pub fn eliminate_dead_stores(module: &mut Module) {
     }
 }
 
-fn analyze_procedure(module: &Module, proc: &Procedure, removed: &mut HashSet<IrNodeId>) {
+fn analyze_procedure(module: &Module, proc: &Procedure, removed: &mut FxHashSet<IrNodeId>) {
     let blocks = reachable_blocks(module, proc.body);
-    let block_set = blocks.iter().copied().collect::<HashSet<_>>();
+    let block_set = blocks.iter().copied().collect::<FxHashSet<_>>();
     let successors = blocks
         .iter()
         .copied()
         .map(|block| (block, block_successors(module, block, &block_set)))
-        .collect::<HashMap<_, _>>();
+        .collect::<FxHashMap<_, _>>();
 
-    let mut external = HashSet::new();
+    let mut external = FxHashSet::default();
     for block in &blocks {
         for instruction in module.block(*block).unwrap_or_default() {
             let Some(node) = module.node(*instruction) else {
@@ -61,15 +62,15 @@ fn analyze_procedure(module: &Module, proc: &Procedure, removed: &mut HashSet<Ir
     let mut live_in = blocks
         .iter()
         .copied()
-        .map(|block| (block, HashSet::new()))
-        .collect::<HashMap<_, _>>();
+        .map(|block| (block, FxHashSet::default()))
+        .collect::<FxHashMap<_, _>>();
     let mut live_out = live_in.clone();
 
     loop {
         let mut changed = false;
         for block in blocks.iter().rev().copied() {
             let block_successors = successors.get(&block).map(Vec::as_slice).unwrap_or_default();
-            let mut output = HashSet::new();
+            let mut output = FxHashSet::default();
             for successor in block_successors {
                 output.extend(live_in.get(successor).into_iter().flatten().copied());
             }
@@ -82,7 +83,7 @@ fn analyze_procedure(module: &Module, proc: &Procedure, removed: &mut HashSet<Ir
                 .into_iter()
                 .flatten()
                 .flat_map(|catch| live_in.get(catch).into_iter().flatten().copied())
-                .collect::<HashSet<_>>();
+                .collect::<FxHashSet<_>>();
             let input = transfer_block(module, block, output.clone(), &exceptional, &external, None);
 
             if live_out.get(&block) != Some(&output) {
@@ -105,16 +106,16 @@ fn analyze_procedure(module: &Module, proc: &Procedure, removed: &mut HashSet<Ir
             .into_iter()
             .flatten()
             .flat_map(|catch| live_in.get(catch).into_iter().flatten().copied())
-            .collect::<HashSet<_>>();
+            .collect::<FxHashSet<_>>();
         let output = live_out.remove(&block).unwrap_or_default();
         transfer_block(module, block, output, &exceptional, &external, Some(removed));
     }
 }
 
 fn transfer_block(
-    module: &Module, block: IrNodeId, mut live: HashSet<IrNodeId>, exceptional: &HashSet<IrNodeId>,
-    external: &HashSet<IrNodeId>, mut removed: Option<&mut HashSet<IrNodeId>>,
-) -> HashSet<IrNodeId> {
+    module: &Module, block: IrNodeId, mut live: FxHashSet<IrNodeId>, exceptional: &FxHashSet<IrNodeId>,
+    external: &FxHashSet<IrNodeId>, mut removed: Option<&mut FxHashSet<IrNodeId>>,
+) -> FxHashSet<IrNodeId> {
     for instruction in module.block(block).unwrap_or_default().iter().rev().copied() {
         live.extend(exceptional.iter().copied());
 
@@ -224,7 +225,7 @@ fn observes_external_state(node: &IrNode) -> bool {
 
 fn reachable_blocks(module: &Module, entry: IrNodeId) -> Vec<IrNodeId> {
     let mut blocks = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     let mut pending = vec![entry];
 
     while let Some(block) = pending.pop() {
@@ -243,7 +244,7 @@ fn reachable_blocks(module: &Module, entry: IrNodeId) -> Vec<IrNodeId> {
     blocks
 }
 
-fn block_successors(module: &Module, block: IrNodeId, blocks: &HashSet<IrNodeId>) -> Vec<IrNodeId> {
+fn block_successors(module: &Module, block: IrNodeId, blocks: &FxHashSet<IrNodeId>) -> Vec<IrNodeId> {
     let mut successors = Vec::new();
     for instruction in module.block(block).unwrap_or_default() {
         append_successors(module.node(*instruction), &mut successors);
@@ -274,8 +275,8 @@ fn append_successors(node: Option<&IrNode>, successors: &mut Vec<IrNodeId>) {
     }
 }
 
-fn protected_catches(module: &Module, blocks: &[IrNodeId]) -> HashMap<IrNodeId, Vec<IrNodeId>> {
-    let mut protected = HashMap::<IrNodeId, Vec<IrNodeId>>::new();
+fn protected_catches(module: &Module, blocks: &[IrNodeId]) -> FxHashMap<IrNodeId, Vec<IrNodeId>> {
+    let mut protected = FxHashMap::<IrNodeId, Vec<IrNodeId>>::default();
 
     for block in blocks {
         for instruction in module.block(*block).unwrap_or_default() {
@@ -293,7 +294,7 @@ fn protected_catches(module: &Module, blocks: &[IrNodeId]) -> HashMap<IrNodeId, 
 
 fn region_blocks(module: &Module, entry: IrNodeId, stop: IrNodeId) -> Vec<IrNodeId> {
     let mut blocks = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     let mut pending = vec![entry];
 
     while let Some(block) = pending.pop() {

@@ -5,7 +5,9 @@ use core::{
     path::{PathFlags, TreePath},
     types::{IrNodeId, Value},
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::simplify_phis::{replace_metadata_uses, replace_operands};
 use crate::{BinaryOp, IrNode, Module, PhiOperand, UnaryOp};
@@ -16,7 +18,7 @@ pub fn sparse_constant_propagation(module: &mut Module) {
     let removed_edges = rewrite_constant_branches(module, &analysis);
 
     let mut constant_ids = scalar_constant_ids(module);
-    let mut replacements = HashMap::new();
+    let mut replacements = FxHashMap::default();
     for id in analysis.uses.candidates() {
         let Some(Lattice::Constant(value)) = analysis.values.get(id.0 as usize) else {
             continue;
@@ -46,7 +48,7 @@ pub fn sparse_constant_propagation(module: &mut Module) {
             .filter_map(|instruction| analysis.instruction_blocks.get(instruction.0 as usize))
             .copied()
             .filter(|block| block.is_valid())
-            .collect::<HashSet<_>>();
+            .collect::<FxHashSet<_>>();
         for block in affected_blocks {
             if let Some(IrNode::Label(instructions)) = module.nodes.get_mut(block.0 as usize) {
                 instructions.retain(|instruction| !replacements.contains_key(instruction));
@@ -96,7 +98,7 @@ struct Solver<'a> {
     instruction_blocks: Vec<IrNodeId>,
     executable_blocks: Vec<bool>,
     executable_block_ids: Vec<IrNodeId>,
-    executable_edges: HashSet<u64>,
+    executable_edges: FxHashSet<u64>,
     pending_blocks: VecDeque<IrNodeId>,
     pending_instructions: VecDeque<IrNodeId>,
     queued_instructions: Vec<bool>,
@@ -144,7 +146,7 @@ impl<'a> Solver<'a> {
             instruction_blocks,
             executable_blocks: vec![false; node_count],
             executable_block_ids: Vec::with_capacity(block_count),
-            executable_edges: HashSet::with_capacity(block_count),
+            executable_edges: FxHashSet::with_capacity_and_hasher(block_count, Default::default()),
             pending_blocks: VecDeque::with_capacity(module.procs.len()),
             pending_instructions: VecDeque::with_capacity(candidate_count),
             queued_instructions: vec![false; node_count],
@@ -563,7 +565,7 @@ impl ScalarKey {
     }
 }
 
-fn scalar_constant_ids(module: &Module) -> HashMap<ScalarKey, IrNodeId> {
+fn scalar_constant_ids(module: &Module) -> FxHashMap<ScalarKey, IrNodeId> {
     module
         .constants
         .iter()
@@ -571,7 +573,7 @@ fn scalar_constant_ids(module: &Module) -> HashMap<ScalarKey, IrNodeId> {
             Some(IrNode::Constant(value)) => ScalarKey::new(value).map(|key| (key, *id)),
             _ => None,
         })
-        .collect::<HashMap<_, _>>()
+        .collect::<FxHashMap<_, _>>()
 }
 
 fn remove_phi_edge(module: &mut Module, predecessor: IrNodeId, target: IrNodeId, affected: &mut Vec<IrNodeId>) {
@@ -595,11 +597,11 @@ fn remove_phi_edge(module: &mut Module, predecessor: IrNodeId, target: IrNodeId,
 }
 
 fn simplify_affected_phis(
-    module: &mut Module, phis: Vec<IrNodeId>, analysis: &Analysis, constant_ids: &mut HashMap<ScalarKey, IrNodeId>,
+    module: &mut Module, phis: Vec<IrNodeId>, analysis: &Analysis, constant_ids: &mut FxHashMap<ScalarKey, IrNodeId>,
 ) {
-    let mut replacements = HashMap::<IrNodeId, IrNodeId>::new();
+    let mut replacements = FxHashMap::<IrNodeId, IrNodeId>::default();
     let mut pending = VecDeque::from(phis);
-    let mut queued = pending.iter().copied().collect::<HashSet<_>>();
+    let mut queued = pending.iter().copied().collect::<FxHashSet<_>>();
 
     'pending: while let Some(phi) = pending.pop_front() {
         queued.remove(&phi);
@@ -653,7 +655,7 @@ fn simplify_affected_phis(
         .filter_map(|instruction| analysis.instruction_blocks.get(instruction.0 as usize))
         .copied()
         .filter(|block| block.is_valid())
-        .collect::<HashSet<_>>();
+        .collect::<FxHashSet<_>>();
     for block in affected_blocks {
         if let Some(IrNode::Label(instructions)) = module.nodes.get_mut(block.0 as usize) {
             instructions.retain(|instruction| !replacements.contains_key(instruction));
@@ -664,7 +666,7 @@ fn simplify_affected_phis(
     }
 }
 
-fn resolve_replacement(replacements: &HashMap<IrNodeId, IrNodeId>, mut value: IrNodeId) -> IrNodeId {
+fn resolve_replacement(replacements: &FxHashMap<IrNodeId, IrNodeId>, mut value: IrNodeId) -> IrNodeId {
     while let Some(replacement) = replacements.get(&value) {
         value = *replacement;
     }
@@ -776,7 +778,7 @@ fn equal(lhs: &Value, rhs: &Value) -> bool {
     }
 }
 
-fn intern_constant(module: &mut Module, constant_ids: &mut HashMap<ScalarKey, IrNodeId>, value: Value) -> IrNodeId {
+fn intern_constant(module: &mut Module, constant_ids: &mut FxHashMap<ScalarKey, IrNodeId>, value: Value) -> IrNodeId {
     let key = ScalarKey::new(&value).expect("SCCP only folds scalar values");
     if let Some(id) = constant_ids.get(&key) {
         return *id;

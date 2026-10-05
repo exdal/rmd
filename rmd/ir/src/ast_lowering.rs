@@ -3,9 +3,9 @@ use core::{
     path::TreePath,
     types::{Identifier, ListEntry, Value, VarModifiers, VarSpec},
 };
-use std::collections::{HashMap, HashSet};
 
 use ast::{AST, Expression, ExpressionId, ForLoop, Literal, Statement};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::*;
 
@@ -20,21 +20,21 @@ pub struct IrModuleBuilder<'a> {
     ast: &'a AST,
     pub module: Module,
     unresolved_new: Vec<UnresolvedNew>,
-    constants: HashMap<ConstantKey, IrNodeId>,
-    external_functions: HashMap<Identifier, IrNodeId>,
-    named_variables: HashMap<Identifier, IrNodeId>,
-    scopes: Vec<HashMap<Identifier, BindingId>>,
+    constants: FxHashMap<ConstantKey, IrNodeId>,
+    external_functions: FxHashMap<Identifier, IrNodeId>,
+    named_variables: FxHashMap<Identifier, IrNodeId>,
+    scopes: Vec<FxHashMap<Identifier, BindingId>>,
     vars: Vec<VarSpec<IrNodeId>>,
     parameters: Vec<BindingId>,
-    current_def: HashMap<(BindingId, IrNodeId), IrNodeId>,
-    stored_bindings: HashMap<BindingId, IrNodeId>,
-    incomplete_phis: HashMap<IrNodeId, HashMap<BindingId, IrNodeId>>,
-    phi_block: HashMap<IrNodeId, IrNodeId>,
-    preds: HashMap<IrNodeId, Vec<IrNodeId>>,
-    sealed: HashSet<IrNodeId>,
+    current_def: FxHashMap<(BindingId, IrNodeId), IrNodeId>,
+    stored_bindings: FxHashMap<BindingId, IrNodeId>,
+    incomplete_phis: FxHashMap<IrNodeId, FxHashMap<BindingId, IrNodeId>>,
+    phi_block: FxHashMap<IrNodeId, IrNodeId>,
+    preds: FxHashMap<IrNodeId, Vec<IrNodeId>>,
+    sealed: FxHashSet<IrNodeId>,
     blocks: Vec<IrNodeId>,
-    named_blocks: HashMap<Identifier, IrNodeId>,
-    defined_named_blocks: HashSet<IrNodeId>,
+    named_blocks: FxHashMap<Identifier, IrNodeId>,
+    defined_named_blocks: FxHashSet<IrNodeId>,
     controls: Vec<ControlTarget>,
     current_block: Option<IrNodeId>,
     entry: IrNodeId,
@@ -81,21 +81,21 @@ impl<'a> IrModuleBuilder<'a> {
             ast,
             module: Module::default(),
             unresolved_new: Vec::new(),
-            constants: HashMap::new(),
-            external_functions: HashMap::new(),
-            named_variables: HashMap::new(),
+            constants: FxHashMap::default(),
+            external_functions: FxHashMap::default(),
+            named_variables: FxHashMap::default(),
             scopes: Vec::new(),
             vars: Vec::new(),
             parameters: Vec::new(),
-            current_def: HashMap::new(),
-            stored_bindings: HashMap::new(),
-            incomplete_phis: HashMap::new(),
-            phi_block: HashMap::new(),
-            preds: HashMap::new(),
-            sealed: HashSet::new(),
+            current_def: FxHashMap::default(),
+            stored_bindings: FxHashMap::default(),
+            incomplete_phis: FxHashMap::default(),
+            phi_block: FxHashMap::default(),
+            preds: FxHashMap::default(),
+            sealed: FxHashSet::default(),
             blocks: Vec::new(),
-            named_blocks: HashMap::new(),
-            defined_named_blocks: HashSet::new(),
+            named_blocks: FxHashMap::default(),
+            defined_named_blocks: FxHashSet::default(),
             controls: Vec::new(),
             current_block: None,
             entry: IrNodeId(0),
@@ -254,7 +254,7 @@ impl<'a> IrModuleBuilder<'a> {
             .values()
             .copied()
             .chain(self.defined_named_blocks.iter().copied())
-            .collect::<HashSet<_>>();
+            .collect::<FxHashSet<_>>();
         for block in named_blocks {
             self.seal_block(block);
         }
@@ -281,7 +281,7 @@ impl<'a> IrModuleBuilder<'a> {
 
     fn reset_proc(&mut self) {
         self.scopes.clear();
-        self.scopes.push(HashMap::new());
+        self.scopes.push(FxHashMap::default());
         self.named_variables.clear();
         self.vars.clear();
         self.parameters.clear();
@@ -361,14 +361,14 @@ impl<'a> IrModuleBuilder<'a> {
             .iter()
             .filter(|proc| proc.owner == TreePath::default())
             .map(|proc| (proc.name.clone(), proc.function))
-            .collect::<HashMap<_, _>>();
+            .collect::<FxHashMap<_, _>>();
         let shadowed = self
             .module
             .procs
             .iter()
             .filter(|proc| proc.owner != TreePath::default())
             .map(|proc| proc.name.clone())
-            .collect::<HashSet<_>>();
+            .collect::<FxHashSet<_>>();
         let mut direct_calls = Vec::new();
 
         for (index, proc) in self.module.procs.iter().enumerate() {
@@ -407,17 +407,17 @@ impl<'a> IrModuleBuilder<'a> {
         let candidates = direct_calls
             .iter()
             .map(|(_, external, ..)| *external)
-            .collect::<HashSet<_>>();
+            .collect::<FxHashSet<_>>();
         let referenced = self
             .module
             .nodes
             .iter()
             .flat_map(IrNode::operands)
-            .collect::<HashSet<_>>();
+            .collect::<FxHashSet<_>>();
         let removed = candidates
             .into_iter()
             .filter(|external| !referenced.contains(external))
-            .collect::<HashSet<_>>();
+            .collect::<FxHashSet<_>>();
         self.module
             .external_functions
             .retain(|external| !removed.contains(external));
@@ -1243,7 +1243,7 @@ impl<'a> IrModuleBuilder<'a> {
         }
 
         self.depth += 1;
-        self.scopes.push(HashMap::new());
+        self.scopes.push(FxHashMap::default());
         for statement in body {
             if self.current_block.is_none() && !matches!(statement, Statement::Label { .. }) {
                 continue;
@@ -1383,7 +1383,7 @@ impl<'a> IrModuleBuilder<'a> {
                 self.resume(exit);
             },
             Statement::For(header) => {
-                self.scopes.push(HashMap::new());
+                self.scopes.push(FxHashMap::default());
                 match header.as_ref() {
                     ForLoop::Standard {
                         init,
@@ -1445,7 +1445,7 @@ impl<'a> IrModuleBuilder<'a> {
                 let merge = self.make_block();
                 let body = self.block_branching_to(try_body, merge);
 
-                self.scopes.push(HashMap::new());
+                self.scopes.push(FxHashMap::default());
                 let catch_binding = catch_param.as_ref().map(|s| {
                     let spec = self.spec(s);
                     self.declare_var(spec)
@@ -1952,8 +1952,8 @@ mod tests {
             .collect()
     }
 
-    fn predecessors(module: &Module) -> HashMap<IrNodeId, Vec<IrNodeId>> {
-        let mut preds: HashMap<IrNodeId, Vec<IrNodeId>> = HashMap::new();
+    fn predecessors(module: &Module) -> FxHashMap<IrNodeId, Vec<IrNodeId>> {
+        let mut preds: FxHashMap<IrNodeId, Vec<IrNodeId>> = FxHashMap::default();
 
         for (block, instructions) in blocks(module) {
             for instruction in instructions {
@@ -2056,7 +2056,7 @@ mod tests {
                         .iter()
                         .map(|operand| operand.value)
                         .filter(|value| *value != instruction)
-                        .collect::<HashSet<_>>();
+                        .collect::<FxHashSet<_>>();
 
                     assert!(distinct.len() > 1, "trivial φ {instruction} in {block} of `{source}`");
                 }

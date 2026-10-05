@@ -1,21 +1,21 @@
 use core::types::IrNodeId;
-use std::collections::{HashMap, HashSet};
 
 use ir::{IrNode, Procedure, SideEffect};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{CodegenError, produces_value};
 
 pub(super) struct Stackify {
-    schedules: HashMap<IrNodeId, Vec<IrNodeId>>,
-    stacked: HashSet<IrNodeId>,
-    uses: HashMap<IrNodeId, u32>,
-    users: HashMap<IrNodeId, IrNodeId>,
+    schedules: FxHashMap<IrNodeId, Vec<IrNodeId>>,
+    stacked: FxHashSet<IrNodeId>,
+    uses: FxHashMap<IrNodeId, u32>,
+    users: FxHashMap<IrNodeId, IrNodeId>,
 }
 
 impl Stackify {
     pub(super) fn analyze(module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId]) -> Result<Self, CodegenError> {
-        let mut uses = HashMap::<IrNodeId, u32>::new();
-        let mut users = HashMap::new();
+        let mut uses = FxHashMap::<IrNodeId, u32>::default();
+        let mut users = FxHashMap::default();
 
         for block in blocks {
             for instruction in module.block(*block).ok_or(CodegenError::ExpectedBlock(*block))? {
@@ -36,14 +36,14 @@ impl Stackify {
             }
         }
 
-        let mut schedules = HashMap::new();
+        let mut schedules = FxHashMap::default();
         for block in blocks {
             let instructions = module.block(*block).ok_or(CodegenError::ExpectedBlock(*block))?;
 
             schedules.insert(*block, reorder_pure_runs(module, instructions, &uses, &users));
         }
 
-        let mut stacked = HashSet::new();
+        let mut stacked = FxHashSet::default();
         for schedule in schedules.values() {
             for index in (0..schedule.len()).rev() {
                 let instruction = schedule[index];
@@ -145,7 +145,8 @@ impl Stackify {
 }
 
 fn reorder_pure_runs(
-    module: &ir::Module, instructions: &[IrNodeId], uses: &HashMap<IrNodeId, u32>, users: &HashMap<IrNodeId, IrNodeId>,
+    module: &ir::Module, instructions: &[IrNodeId], uses: &FxHashMap<IrNodeId, u32>,
+    users: &FxHashMap<IrNodeId, IrNodeId>,
 ) -> Vec<IrNodeId> {
     let mut schedule = Vec::with_capacity(instructions.len());
     let mut start = 0;
@@ -170,8 +171,8 @@ fn reorder_pure_runs(
         }
 
         let run = &instructions[start..end];
-        let run_set = run.iter().copied().collect::<HashSet<_>>();
-        let mut emitted = HashSet::new();
+        let run_set = run.iter().copied().collect::<FxHashSet<_>>();
+        let mut emitted = FxHashSet::default();
         for instruction in run {
             let is_child = uses.get(instruction).copied() == Some(1)
                 && users.get(instruction).is_some_and(|user| run_set.contains(user));
@@ -190,8 +191,8 @@ fn reorder_pure_runs(
 }
 
 fn emit_tree(
-    module: &ir::Module, instruction: IrNodeId, run: &HashSet<IrNodeId>, uses: &HashMap<IrNodeId, u32>,
-    users: &HashMap<IrNodeId, IrNodeId>, emitted: &mut HashSet<IrNodeId>, schedule: &mut Vec<IrNodeId>,
+    module: &ir::Module, instruction: IrNodeId, run: &FxHashSet<IrNodeId>, uses: &FxHashMap<IrNodeId, u32>,
+    users: &FxHashMap<IrNodeId, IrNodeId>, emitted: &mut FxHashSet<IrNodeId>, schedule: &mut Vec<IrNodeId>,
 ) {
     if !emitted.insert(instruction) {
         return;
@@ -213,7 +214,7 @@ fn emit_tree(
 
 fn match_operands(
     module: &ir::Module, schedule: &[IrNodeId], instruction: IrNodeId, cursor: &mut usize,
-    uses: &HashMap<IrNodeId, u32>, stacked: &mut HashSet<IrNodeId>,
+    uses: &FxHashMap<IrNodeId, u32>, stacked: &mut FxHashSet<IrNodeId>,
 ) {
     let Some(node) = module.node(instruction) else {
         return;
@@ -261,9 +262,9 @@ fn emits_code(node: &IrNode) -> bool {
 #[cfg(test)]
 mod tests {
     use core::types::IrNodeId;
-    use std::collections::HashMap;
 
     use ir::{BinaryOp, IrNode, Module, UnaryOp};
+    use rustc_hash::FxHashMap;
 
     use super::reorder_pure_runs;
 
@@ -294,8 +295,8 @@ mod tests {
             ],
             ..Module::default()
         };
-        let uses = HashMap::from([(IrNodeId(0), 1), (IrNodeId(1), 1), (IrNodeId(2), 1), (IrNodeId(3), 1)]);
-        let users = HashMap::from([
+        let uses = FxHashMap::from_iter([(IrNodeId(0), 1), (IrNodeId(1), 1), (IrNodeId(2), 1), (IrNodeId(3), 1)]);
+        let users = FxHashMap::from_iter([
             (IrNodeId(0), IrNodeId(2)),
             (IrNodeId(1), IrNodeId(3)),
             (IrNodeId(2), IrNodeId(4)),

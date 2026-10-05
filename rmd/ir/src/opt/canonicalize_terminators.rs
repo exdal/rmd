@@ -1,7 +1,8 @@
 // https://sunfishcode.github.io/blog/2018/10/22/Canonicalization.html
 
 use core::types::IrNodeId;
-use std::collections::{HashMap, HashSet};
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{IrNode, Module};
 
@@ -48,7 +49,7 @@ pub fn canonicalize_terminators(module: &mut Module) {
         }
     }
 
-    let removed = removed.into_iter().collect::<HashSet<_>>();
+    let removed = removed.into_iter().collect::<FxHashSet<_>>();
     for instruction in &removed {
         if let Some(node) = module.nodes.get_mut(instruction.0 as usize) {
             *node = IrNode::Noop;
@@ -100,8 +101,8 @@ pub fn canonicalize_terminators(module: &mut Module) {
     }
 }
 
-fn predecessors(module: &Module, blocks: &[IrNodeId]) -> HashMap<IrNodeId, Vec<IrNodeId>> {
-    let mut predecessors = HashMap::<IrNodeId, Vec<IrNodeId>>::new();
+fn predecessors(module: &Module, blocks: &[IrNodeId]) -> FxHashMap<IrNodeId, Vec<IrNodeId>> {
+    let mut predecessors = FxHashMap::<IrNodeId, Vec<IrNodeId>>::default();
 
     for block in blocks {
         let Some(terminator) = module
@@ -129,8 +130,8 @@ fn predecessors(module: &Module, blocks: &[IrNodeId]) -> HashMap<IrNodeId, Vec<I
     predecessors
 }
 
-fn counts(values: &[IrNodeId]) -> HashMap<IrNodeId, usize> {
-    let mut counts = HashMap::new();
+fn counts(values: &[IrNodeId]) -> FxHashMap<IrNodeId, usize> {
+    let mut counts = FxHashMap::default();
     for value in values {
         *counts.entry(*value).or_default() += 1;
     }
@@ -138,7 +139,7 @@ fn counts(values: &[IrNodeId]) -> HashMap<IrNodeId, usize> {
     counts
 }
 
-fn clear_removed(node: &mut Option<IrNodeId>, removed: &HashSet<IrNodeId>) {
+fn clear_removed(node: &mut Option<IrNodeId>, removed: &FxHashSet<IrNodeId>) {
     if node.is_some_and(|node| removed.contains(&node)) {
         *node = None;
     }

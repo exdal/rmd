@@ -1,5 +1,6 @@
 use core::types::IrNodeId;
-use std::collections::HashSet;
+
+use rustc_hash::FxHashSet;
 
 use crate::{IrNode, Module};
 
@@ -83,7 +84,7 @@ pub fn eliminate_unreachable_blocks(module: &mut Module) {
         }
     }
 
-    let removed = removed.into_iter().collect::<HashSet<_>>();
+    let removed = removed.into_iter().collect::<FxHashSet<_>>();
     for proc in &mut module.procs {
         for parameter in &mut proc.params {
             clear_removed(&mut parameter.default, &removed);
@@ -102,7 +103,7 @@ pub fn eliminate_unreachable_blocks(module: &mut Module) {
     }
 }
 
-fn clear_removed(node: &mut Option<IrNodeId>, removed: &HashSet<IrNodeId>) {
+fn clear_removed(node: &mut Option<IrNodeId>, removed: &FxHashSet<IrNodeId>) {
     if node.is_some_and(|node| removed.contains(&node)) {
         *node = None;
     }

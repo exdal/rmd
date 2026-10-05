@@ -3,11 +3,12 @@ use core::{
     types::{Identifier, IrNodeId, ProcId, Value},
     vars,
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 
 use ir::{Argument, Builtin, IrNode};
 use objtree::{ObjectTree, TypeId};
 use prelude::Intrinsic;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{CodegenError, ProcedureReachability, reachable_blocks};
 
@@ -20,10 +21,10 @@ pub(super) fn reachable_procedures(
 struct Reachability<'a> {
     module: &'a ir::Module,
     tree: &'a ObjectTree,
-    by_name: HashMap<Identifier, Vec<ProcId>>,
-    reachable: HashSet<ProcId>,
+    by_name: FxHashMap<Identifier, Vec<ProcId>>,
+    reachable: FxHashSet<ProcId>,
     pending: VecDeque<ProcId>,
-    address_taken: HashSet<ProcId>,
+    address_taken: FxHashSet<ProcId>,
     opaque_callable: bool,
     synthesizes_proc_paths: bool,
     retain_all: bool,
@@ -46,7 +47,7 @@ impl DynamicCallTarget {
 
 impl<'a> Reachability<'a> {
     fn new(module: &'a ir::Module, tree: &'a ObjectTree) -> Self {
-        let mut by_name = HashMap::<Identifier, Vec<ProcId>>::new();
+        let mut by_name = FxHashMap::<Identifier, Vec<ProcId>>::default();
         for declaration in tree.iter() {
             for procedure in declaration.procs.values() {
                 if let Some(body) = procedure.body {
@@ -59,9 +60,9 @@ impl<'a> Reachability<'a> {
             module,
             tree,
             by_name,
-            reachable: HashSet::new(),
+            reachable: FxHashSet::default(),
             pending: VecDeque::new(),
-            address_taken: HashSet::new(),
+            address_taken: FxHashSet::default(),
             opaque_callable: false,
             synthesizes_proc_paths: false,
             retain_all: false,
@@ -154,7 +155,7 @@ impl<'a> Reachability<'a> {
                 }
             },
             IrNode::Call { callee, .. } => {
-                let mut seen = HashSet::new();
+                let mut seen = FxHashSet::default();
                 if !self.retain_callable(*callee, current, &mut seen) {
                     self.retain_opaque_callable();
                 }
@@ -174,7 +175,7 @@ impl<'a> Reachability<'a> {
             IrNode::Initial { object: None, name } => self.retain_variable_initializer(current, name),
             IrNode::Super { .. } => self.retain_super(current),
             IrNode::New { ty: Some(ty), .. } => {
-                let mut seen = HashSet::new();
+                let mut seen = FxHashSet::default();
                 match self.type_paths(*ty, &mut seen) {
                     Some(paths) => {
                         for path in paths {
@@ -218,7 +219,7 @@ impl<'a> Reachability<'a> {
             );
         }
 
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         while let Some(id) = pending.pop() {
             if !seen.insert(id) {
                 continue;
@@ -280,7 +281,7 @@ impl<'a> Reachability<'a> {
     }
 
     fn retain_field_initializers(&mut self, object: IrNodeId, current: ProcId, name: &Identifier) {
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         let Some(types) = self.receiver_types(object, current, &mut seen) else {
             if name.as_str() == vars::VARS {
                 self.retain_every_initializer();
@@ -346,7 +347,7 @@ impl<'a> Reachability<'a> {
     }
 
     /// returns true when every value reaching `node` has a bounded call target or cannot call
-    fn retain_callable(&mut self, node: IrNodeId, current: ProcId, seen: &mut HashSet<IrNodeId>) -> bool {
+    fn retain_callable(&mut self, node: IrNodeId, current: ProcId, seen: &mut FxHashSet<IrNodeId>) -> bool {
         if !seen.insert(node) {
             return true;
         }
@@ -363,7 +364,7 @@ impl<'a> Reachability<'a> {
                 true
             },
             Some(IrNode::AccessField { object, name, .. }) => {
-                let mut seen = HashSet::new();
+                let mut seen = FxHashSet::default();
                 match self.receiver_types(object, current, &mut seen) {
                     Some(types) => {
                         for (ty, includes_descendants) in types {
@@ -416,7 +417,7 @@ impl<'a> Reachability<'a> {
         };
 
         if args.len() == 1 {
-            let mut seen = HashSet::new();
+            let mut seen = FxHashSet::default();
             let Some(values) = self.constant_values(first, &mut seen) else {
                 return false;
             };
@@ -432,7 +433,7 @@ impl<'a> Reachability<'a> {
             return true;
         }
 
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         let target = self.dynamic_call_target(first, &mut seen);
 
         if target.unknown {
@@ -450,7 +451,7 @@ impl<'a> Reachability<'a> {
         let Some(second) = args.get(1).and_then(|argument| argument.value) else {
             return true;
         };
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         let Some(names) = self.constant_values(second, &mut seen) else {
             return false;
         };
@@ -464,7 +465,7 @@ impl<'a> Reachability<'a> {
         true
     }
 
-    fn dynamic_call_target(&self, node: IrNodeId, seen: &mut HashSet<IrNodeId>) -> DynamicCallTarget {
+    fn dynamic_call_target(&self, node: IrNodeId, seen: &mut FxHashSet<IrNodeId>) -> DynamicCallTarget {
         if !seen.insert(node) {
             return DynamicCallTarget::default();
         }
@@ -506,7 +507,7 @@ impl<'a> Reachability<'a> {
     /// resolve receiver types for a field call, `bool` is true when any subtype can reach the
     /// value, as with a typed parameter or iterator, and false for an exact `new` expression
     fn receiver_types(
-        &self, node: IrNodeId, current: ProcId, seen: &mut HashSet<IrNodeId>,
+        &self, node: IrNodeId, current: ProcId, seen: &mut FxHashSet<IrNodeId>,
     ) -> Option<Vec<(TypeId, bool)>> {
         if !seen.insert(node) {
             return Some(Vec::new());
@@ -554,7 +555,7 @@ impl<'a> Reachability<'a> {
                 Some(vec![(self.tree.id_of(path)?, true)])
             },
             IrNode::New { ty: Some(ty), .. } => {
-                let mut paths_seen = HashSet::new();
+                let mut paths_seen = FxHashSet::default();
                 let paths = self.type_paths(*ty, &mut paths_seen)?;
                 Some(
                     paths
@@ -581,7 +582,7 @@ impl<'a> Reachability<'a> {
         }
     }
 
-    fn type_paths(&self, node: IrNodeId, seen: &mut HashSet<IrNodeId>) -> Option<Vec<TreePath>> {
+    fn type_paths(&self, node: IrNodeId, seen: &mut FxHashSet<IrNodeId>) -> Option<Vec<TreePath>> {
         if !seen.insert(node) {
             return Some(Vec::new());
         }
@@ -607,7 +608,7 @@ impl<'a> Reachability<'a> {
         }
     }
 
-    fn constant_values(&self, node: IrNodeId, seen: &mut HashSet<IrNodeId>) -> Option<Vec<Value>> {
+    fn constant_values(&self, node: IrNodeId, seen: &mut FxHashSet<IrNodeId>) -> Option<Vec<Value>> {
         if !seen.insert(node) {
             return Some(Vec::new());
         }
@@ -633,7 +634,7 @@ impl<'a> Reachability<'a> {
         }
     }
 
-    fn iterated_values(&self, iterator: IrNodeId, seen: &mut HashSet<IrNodeId>) -> Option<Vec<Value>> {
+    fn iterated_values(&self, iterator: IrNodeId, seen: &mut FxHashSet<IrNodeId>) -> Option<Vec<Value>> {
         if !seen.insert(iterator) {
             return Some(Vec::new());
         }

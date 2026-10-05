@@ -9,13 +9,14 @@ use core::{
     path::TreePath,
     types::{Identifier, IrNodeId, ProcId, Value},
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 
 pub use error::CodegenError;
 use ir::{Argument, IrNode, OutputTarget, Procedure};
 use objtree::ObjectTree;
 use opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, OutputTargetKind, Unary};
 use prelude::Intrinsic;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 macro_rules! id_type {
     ($name:ident, $prefix:literal) => {
@@ -147,7 +148,7 @@ pub struct CompiledFunction {
 #[derive(Debug, Clone)]
 pub enum ProcedureReachability {
     All,
-    Selected(HashSet<ProcId>),
+    Selected(FxHashSet<ProcId>),
 }
 
 pub fn generate(module: &ir::Module) -> Result<Module, CodegenError> { Generator::new().generate(module, None) }
@@ -196,8 +197,8 @@ struct EdgeStub {
 
 struct FunctionState {
     blocks: Vec<IrNodeId>,
-    locals: HashMap<IrNodeId, LocalId>,
-    parameter_defaults: HashMap<IrNodeId, LocalId>,
+    locals: FxHashMap<IrNodeId, LocalId>,
+    parameter_defaults: FxHashMap<IrNodeId, LocalId>,
     next_local: u32,
     stackify: stackify::Stackify,
 }
@@ -231,43 +232,43 @@ impl FunctionState {
 
 struct Generator {
     constants: Vec<Value>,
-    constant_ids: HashMap<IrNodeId, ConstantId>,
+    constant_ids: FxHashMap<IrNodeId, ConstantId>,
     strings: Vec<String>,
-    string_ids: HashMap<String, StringId>,
+    string_ids: FxHashMap<String, StringId>,
     paths: Vec<TreePath>,
-    path_ids: HashMap<TreePath, PathId>,
+    path_ids: FxHashMap<TreePath, PathId>,
     functions: Vec<CompiledFunction>,
-    function_ids: HashMap<IrNodeId, FunctionId>,
-    labels: HashMap<Label, usize>,
+    function_ids: FxHashMap<IrNodeId, FunctionId>,
+    labels: FxHashMap<Label, usize>,
     addresses: Vec<AddressPatch>,
     jumps: Vec<JumpPatch>,
     next_label: usize,
     code: Vec<u8>,
     /// `a.b()` looks `b` up as a proc first, and plain `a.b` as a var first
-    callees: HashSet<IrNodeId>,
+    callees: FxHashSet<IrNodeId>,
 }
 
 impl Generator {
     fn new() -> Self {
         Self {
             constants: Vec::new(),
-            constant_ids: HashMap::new(),
+            constant_ids: FxHashMap::default(),
             strings: Vec::new(),
-            string_ids: HashMap::new(),
+            string_ids: FxHashMap::default(),
             paths: Vec::new(),
-            path_ids: HashMap::new(),
+            path_ids: FxHashMap::default(),
             functions: Vec::new(),
-            function_ids: HashMap::new(),
-            labels: HashMap::new(),
+            function_ids: FxHashMap::default(),
+            labels: FxHashMap::default(),
             addresses: Vec::new(),
             jumps: Vec::new(),
             next_label: 0,
             code: Vec::new(),
-            callees: HashSet::new(),
+            callees: FxHashSet::default(),
         }
     }
 
-    fn generate(mut self, module: &ir::Module, procedures: Option<&HashSet<ProcId>>) -> Result<Module, CodegenError> {
+    fn generate(mut self, module: &ir::Module, procedures: Option<&FxHashSet<ProcId>>) -> Result<Module, CodegenError> {
         self.callees = module
             .nodes
             .iter()
@@ -308,7 +309,7 @@ impl Generator {
     }
 
     fn register_constants(
-        &mut self, module: &ir::Module, referenced: Option<&HashSet<IrNodeId>>,
+        &mut self, module: &ir::Module, referenced: Option<&FxHashSet<IrNodeId>>,
     ) -> Result<(), CodegenError> {
         for node in &module.constants {
             if referenced.is_some_and(|referenced| !referenced.contains(node)) {
@@ -327,7 +328,8 @@ impl Generator {
     }
 
     fn register_functions(
-        &mut self, module: &ir::Module, procedures: Option<&HashSet<ProcId>>, referenced: Option<&HashSet<IrNodeId>>,
+        &mut self, module: &ir::Module, procedures: Option<&FxHashSet<ProcId>>,
+        referenced: Option<&FxHashSet<IrNodeId>>,
     ) -> Result<(), CodegenError> {
         for (index, proc) in module.procs.iter().enumerate() {
             let proc_id = ProcId(index as u32);
@@ -400,8 +402,8 @@ impl Generator {
         let stackify = stackify::Stackify::analyze(module, proc, &blocks)?;
         let mut state = FunctionState {
             blocks,
-            locals: HashMap::new(),
-            parameter_defaults: HashMap::new(),
+            locals: FxHashMap::default(),
+            parameter_defaults: FxHashMap::default(),
             next_local: 0,
             stackify,
         };
@@ -1121,13 +1123,13 @@ impl Generator {
         let labels = std::mem::take(&mut self.labels)
             .into_iter()
             .map(|(label, offset)| (label, compact_offset(offset, &self.jumps, &removed)))
-            .collect::<HashMap<_, _>>();
+            .collect::<FxHashMap<_, _>>();
         let removed_addresses = self
             .jumps
             .iter()
             .enumerate()
             .filter_map(|(index, jump)| removed[index].then_some(jump.address))
-            .collect::<HashSet<_>>();
+            .collect::<FxHashSet<_>>();
         let addresses = std::mem::take(&mut self.addresses);
         for (index, address) in addresses.into_iter().enumerate() {
             if removed_addresses.contains(&index) {
@@ -1148,12 +1150,12 @@ impl Generator {
             .iter()
             .filter(|jump| jump.op == Op::Jump)
             .map(|jump| (jump.instruction, jump.address))
-            .collect::<HashMap<_, _>>();
+            .collect::<FxHashMap<_, _>>();
 
         for jump in &self.jumps {
             let original = self.addresses[jump.address].target;
             let mut target = original;
-            let mut seen = HashSet::new();
+            let mut seen = FxHashSet::default();
             let resolved = loop {
                 if !seen.insert(target) {
                     break original;
@@ -1181,7 +1183,7 @@ fn compact_offset(offset: usize, jumps: &[JumpPatch], removed: &[bool]) -> usize
     offset - removed_bytes
 }
 
-fn label_offset(labels: &HashMap<Label, usize>, label: Label) -> Result<usize, CodegenError> {
+fn label_offset(labels: &FxHashMap<Label, usize>, label: Label) -> Result<usize, CodegenError> {
     match labels.get(&label).copied() {
         Some(offset) => Ok(offset),
         None => match label {
@@ -1282,8 +1284,8 @@ fn has_phi_copies(
 }
 
 fn block_layout(module: &ir::Module, entry: IrNodeId, reachable: &[IrNodeId]) -> Result<Vec<IrNodeId>, CodegenError> {
-    let reachable_set = reachable.iter().copied().collect::<HashSet<_>>();
-    let mut placed = HashSet::new();
+    let reachable_set = reachable.iter().copied().collect::<FxHashSet<_>>();
+    let mut placed = FxHashSet::default();
     let mut layout = Vec::with_capacity(reachable.len());
 
     for seed in std::iter::once(entry).chain(reachable.iter().copied()) {
@@ -1305,8 +1307,8 @@ fn block_layout(module: &ir::Module, entry: IrNodeId, reachable: &[IrNodeId]) ->
     Ok(layout)
 }
 
-fn referenced_nodes(module: &ir::Module, procedures: &HashSet<ProcId>) -> Result<HashSet<IrNodeId>, CodegenError> {
-    let mut referenced = HashSet::new();
+fn referenced_nodes(module: &ir::Module, procedures: &FxHashSet<ProcId>) -> Result<FxHashSet<IrNodeId>, CodegenError> {
+    let mut referenced = FxHashSet::default();
 
     for proc_id in procedures {
         let Some(proc) = module.proc(*proc_id) else {
@@ -1335,7 +1337,7 @@ fn referenced_nodes(module: &ir::Module, procedures: &HashSet<ProcId>) -> Result
 
 pub(crate) fn reachable_blocks(module: &ir::Module, entry: IrNodeId) -> Result<Vec<IrNodeId>, CodegenError> {
     let mut blocks = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     let mut pending = VecDeque::from([entry]);
 
     while let Some(block) = pending.pop_front() {

@@ -1,5 +1,6 @@
 use core::types::{IrNodeId, Value};
-use std::collections::HashMap;
+
+use rustc_hash::FxHashMap;
 
 use super::{
     simplify_phis::{replace_all_uses, replace_operands},
@@ -9,7 +10,7 @@ use crate::{BinaryOp, IrNode, Module, UnaryOp};
 
 pub fn peephole(module: &mut Module) {
     let facts = ValueFacts::analyze(module);
-    let mut replacements = HashMap::<IrNodeId, IrNodeId>::new();
+    let mut replacements = FxHashMap::<IrNodeId, IrNodeId>::default();
 
     for index in 0..module.nodes.len() {
         let id = IrNodeId(index as u32);
@@ -202,7 +203,7 @@ fn boolean_constant(module: &Module, id: IrNodeId) -> Option<bool> {
     }
 }
 
-fn resolve(replacements: &HashMap<IrNodeId, IrNodeId>, mut value: IrNodeId) -> IrNodeId {
+fn resolve(replacements: &FxHashMap<IrNodeId, IrNodeId>, mut value: IrNodeId) -> IrNodeId {
     while let Some(replacement) = replacements.get(&value) {
         value = *replacement;
     }
