@@ -1,4 +1,5 @@
-//! Frontend driver. The editor is a library; this is how the compiler gets exercised without one.
+//! Frontend driver. This is mostly used by Clankers to run tests. (TODO: we should add more e2e tests, vir supports
+//! llvmpipe)
 //!
 //! ```text
 //! rmdc tokens <file.dm>     dump the token stream, layout tokens included
