@@ -10,9 +10,8 @@ pub struct StrArena {
 
 #[derive(Default)]
 struct Bump {
-    full: Vec<Box<[u8]>>,
-    current: Box<[u8]>,
-    used: usize,
+    full: Vec<Vec<u8>>,
+    current: Vec<u8>,
 }
 
 impl StrArena {
@@ -37,22 +36,20 @@ impl StrArena {
         }
 
         let bump = &mut *self.bump.borrow_mut();
-        if bump.current.len() - bump.used < len {
-            let full = std::mem::replace(&mut bump.current, vec![0; BUMP_CHUNK].into_boxed_slice());
+        if bump.current.capacity() - bump.current.len() < len {
+            let full = std::mem::replace(&mut bump.current, Vec::with_capacity(BUMP_CHUNK));
             bump.full.push(full);
-            bump.used = 0;
         }
 
-        let start = bump.used;
+        let start = bump.current.len();
         for part in parts {
-            let end = bump.used + part.len();
-            bump.current[bump.used..end].copy_from_slice(part.as_bytes());
-            bump.used = end;
+            bump.current.extend_from_slice(part.as_bytes());
         }
 
-        let ptr = bump.current[start..start + len].as_ptr();
-
-        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) }
+        unsafe {
+            let bytes = std::slice::from_raw_parts(bump.current.as_ptr().add(start), len);
+            std::str::from_utf8_unchecked(bytes)
+        }
     }
 
     pub fn len(&self) -> usize { self.chunks.borrow().len() }
