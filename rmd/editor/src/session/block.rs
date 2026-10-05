@@ -310,12 +310,22 @@ mod tests {
 
     use dmm::{Coord, Prefab};
     use editor::{
-        document::Selection,
-        tool::{BlockSelectionMode, FillMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
+        document::{PrefabInstanceId, Selection},
+        tool::{
+            BlockSelectionMode,
+            FillMode,
+            SelectionMask,
+            SelectionPlacement,
+            SelectionRotation,
+            SelectionTransform,
+            Tool,
+        },
     };
 
     use crate::session::{
+        BlockPreviewSource,
         FillOutcome,
+        Session,
         fixtures::{assert_render_cache_matches_rebuild, flat_session, focus_session},
     };
 
@@ -598,5 +608,105 @@ mod tests {
         assert!(!full.is_empty());
         assert_eq!(full.len() % 25, 0);
         assert_eq!(hollow.len(), full.len() / 25 * 16);
+    }
+
+    fn created_level_session() -> (Session, PrefabInstanceId) {
+        let mut session = flat_session(4, 4);
+        let id = session.state.active().unwrap();
+        let fill = session.tile_fill("/turf/open/floor", "/area/station").unwrap();
+        assert_eq!(session.create_level(id, &fill), Ok(2));
+        let table = session
+            .tree()
+            .unwrap()
+            .id_of(&TreePath::parse("/obj/structure/table"))
+            .unwrap();
+        assert!(session.choose_type(table));
+        session.set_tool(Tool::Place);
+        let placed = session.place_at(Coord::new(1, 1, 2), None).unwrap();
+        session.set_tool(Tool::BlockSelect);
+
+        (session, placed)
+    }
+
+    #[test]
+    fn a_block_on_a_created_level_previews_its_ghost() {
+        let (mut session, _) = created_level_session();
+        let id = session.state.active().unwrap();
+        let selection = Selection::from_drag(Coord::new(1, 1, 2), Coord::new(2, 2, 2));
+        assert!(session.select_block(Some(selection)));
+
+        session.prepare_block_preview(
+            id,
+            BlockPreviewSource::Selection(SelectionMask {
+                bounds: selection,
+                mode: BlockSelectionMode::Full,
+            }),
+            Coord::new(3, 3, 2),
+            SelectionRotation::Clockwise,
+        );
+
+        let preview = session.active_cache().preview.as_ref().unwrap();
+        assert!(!preview.sprites.is_empty());
+        assert_eq!(preview.destination, Coord::new(3, 3, 2));
+    }
+
+    #[test]
+    fn a_block_on_a_lower_level_of_a_loaded_map_previews_its_ghost() {
+        let mut session = focus_session();
+        let id = session.state.active().unwrap();
+        session.set_level(3);
+        session.set_tool(Tool::BlockSelect);
+        let selection = Selection::from_drag(Coord::new(1, 1, 3), Coord::new(2, 1, 3));
+        assert!(session.select_block(Some(selection)));
+
+        session.prepare_block_preview(
+            id,
+            BlockPreviewSource::Selection(SelectionMask {
+                bounds: selection,
+                mode: BlockSelectionMode::Full,
+            }),
+            Coord::new(3, 1, 3),
+            SelectionRotation::Original,
+        );
+
+        assert!(!session.active_cache().preview.as_ref().unwrap().sprites.is_empty());
+    }
+
+    #[test]
+    fn a_block_on_a_created_level_moves_rotates_and_cuts() {
+        let (mut session, table) = created_level_session();
+        let location = |session: &Session| {
+            session
+                .state
+                .active_document()
+                .unwrap()
+                .instance_location(table)
+                .map(|location| location.coord)
+        };
+        assert!(session.select_block(Some(Selection::from_drag(
+            Coord::new(1, 1, 2),
+            Coord::new(2, 1, 2)
+        ))));
+
+        assert!(session.place_selected_block_with_mode(
+            Coord::new(2, 2, 2),
+            SelectionRotation::Original,
+            SelectionPlacement::Move,
+            BlockSelectionMode::Full,
+        ));
+        assert_eq!(location(&session), Some(Coord::new(2, 2, 2)));
+        assert_render_cache_matches_rebuild(&session);
+
+        assert!(session.transform_selected_block_with_mode(
+            SelectionTransform::RotateClockwise,
+            BlockSelectionMode::Full
+        ));
+        assert_eq!(location(&session).map(|coord| coord.z), Some(2));
+        assert_render_cache_matches_rebuild(&session);
+
+        assert!(session.cut_selection());
+        assert_eq!(location(&session), None);
+        assert!(session.clipboard().is_some());
+        assert_render_cache_matches_rebuild(&session);
     }
 }

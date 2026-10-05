@@ -448,3 +448,74 @@ fn cancelling_rectangle_gestures_restores_only_the_originating_document_and_leve
     session.set_level(1);
     assert_eq!(session.selection_mask(), Some(start));
 }
+
+#[test]
+fn rectangle_ui_moves_and_cuts_on_a_created_level() {
+    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    for created in [false, true] {
+        let mut app = RectangleUiHarness::new();
+        let z = if created {
+            let fill = app.session.tile_fill("/turf/open/floor", "/area/station").unwrap();
+            assert_eq!(app.session.create_level(app.id, &fill), Ok(2));
+            app.step();
+            2
+        } else {
+            1
+        };
+        app.session
+            .state
+            .choose_prefab(Prefab::new(TreePath::parse("/obj/structure/table")));
+        app.session.set_tool(Tool::Place);
+        let table = app.session.place_at(Coord::new(5, 8, z), None).unwrap();
+        app.session.set_tool(Tool::BlockSelect);
+        app.step();
+
+        app.pointer(app.tile(5, 8), false);
+        app.pointer(app.tile(5, 8), true);
+        app.pointer(app.tile(6, 9), true);
+        app.pointer(app.tile(6, 9), false);
+        let selection = Selection::from_drag(Coord::new(5, 8, z), Coord::new(6, 9, z));
+        assert_eq!(app.session.selection(), Some(selection), "created: {created}");
+
+        let center = [
+            (app.tile(5, 8)[0] + app.tile(6, 9)[0]) * 0.5,
+            (app.tile(5, 8)[1] + app.tile(6, 9)[1]) * 0.5,
+        ];
+        app.pointer(center, false);
+        app.pointer(center, true);
+        app.pointer([center[0] + 64.0, center[1]], true);
+        app.pointer([center[0] + 64.0, center[1]], false);
+        let pending = app.view.gestures.block_placement.map(|placement| placement.target);
+        assert_eq!(
+            pending,
+            Some(Selection::from_drag(Coord::new(7, 8, z), Coord::new(8, 9, z))),
+            "created: {created}"
+        );
+        assert!(
+            app.session
+                .map_view_frame(app.id, Default::default(), Default::default(), Default::default(), &[], &[])
+                .and_then(|frame| frame.preview)
+                .is_some_and(|preview| !preview.sprites.is_empty()),
+            "created: {created}"
+        );
+
+        app.key(Key::Enter, true);
+        app.key(Key::Enter, false);
+        let location = |app: &RectangleUiHarness| {
+            app.session
+                .state
+                .active_document()
+                .unwrap()
+                .instance_location(table)
+                .map(|location| location.coord)
+        };
+        assert_eq!(location(&app), Some(Coord::new(7, 8, z)), "created: {created}");
+
+        app.key(Key::ModCtrl, true);
+        app.key(Key::X, true);
+        app.key(Key::X, false);
+        app.key(Key::ModCtrl, false);
+        assert_eq!(location(&app), None, "created: {created}");
+        assert!(app.session.clipboard().is_some(), "created: {created}");
+    }
+}

@@ -88,7 +88,7 @@ impl Session {
         };
 
         if cache.preview.as_ref().is_none_or(|preview| preview.key != key) {
-            let origin = Coord::new(1, 1, 1);
+            let origin = Coord::new(1, 1, destination.z);
             let sprites = match source {
                 BlockPreviewSource::Selection(mask) => rotated_selection_at(mask.bounds, origin, rotation)
                     .map_or_else(Vec::new, |target| {
