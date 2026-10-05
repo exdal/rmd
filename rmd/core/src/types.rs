@@ -151,6 +151,73 @@ pub fn decode_string(source: &str) -> String {
     out
 }
 
+const SILENT_TEXT_MACROS: [&str; 24] = [
+    "improper", "himself", "herself", "proper", "Roman", "roman", "icon", "hers", "The", "the", "She", "she", "His",
+    "his", "him", "ref", "An", "an", "He", "he", "th", "A", "a", "s",
+];
+
+pub fn display_text(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+
+    while let Some(index) = rest.find('\\') {
+        out.push_str(&rest[..index]);
+        rest = &rest[index + 1..];
+
+        if let Some(after) = rest.strip_prefix("...") {
+            rest = after;
+        } else if let Some((ch, after)) = unicode_escape(rest) {
+            out.push(ch);
+            rest = after;
+        } else if let Some(after) = rest.strip_prefix('\n') {
+            rest = after.trim_start_matches([' ', '\t']);
+        } else if let Some(after) = rest.strip_prefix(' ') {
+            rest = after;
+        } else if let Some(macro_name) = SILENT_TEXT_MACROS.into_iter().find(|name| rest.starts_with(name)) {
+            rest = &rest[macro_name.len()..];
+            if out.is_empty() || out.ends_with(' ') {
+                rest = rest.strip_prefix(' ').unwrap_or(rest);
+            }
+        } else if let Some(ch) = rest.chars().next() {
+            match ch {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                '<' | '>' | '"' | '\\' | '[' | ']' => out.push(ch),
+                _ => {
+                    out.push('\\');
+                    out.push(ch);
+                },
+            }
+
+            rest = &rest[ch.len_utf8()..];
+        } else {
+            out.push('\\');
+        }
+    }
+
+    out.push_str(rest);
+
+    out
+}
+
+/// `xNN`, `uNNNN` and `UNNNNNN` after a backslash
+fn unicode_escape(text: &str) -> Option<(char, &str)> {
+    let digits = match text.chars().next()? {
+        'x' => 2,
+        'u' => 4,
+        'U' => 6,
+        _ => return None,
+    };
+    let hex = text.get(1..1 + digits)?;
+    if !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+
+    let ch = char::from_u32(u32::from_str_radix(hex, 16).ok()?)?;
+
+    Some((ch, &text[1 + digits..]))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcKind {
     Proc,
@@ -245,7 +312,7 @@ impl std::ops::BitOrAssign for InputType {
 }
 #[cfg(test)]
 mod tests {
-    use super::{InputType, IrNodeId, ProcId, decode_string};
+    use super::{InputType, IrNodeId, ProcId, decode_string, display_text};
 
     /// The disassembly form comes off `Display`, so `Debug` on a container prints it too.
     #[test]
@@ -308,5 +375,37 @@ mod tests {
     fn passes_through_text_with_no_escapes() {
         assert_eq!(decode_string(""), "");
         assert_eq!(decode_string("icon_state"), "icon_state");
+    }
+
+    #[test]
+    fn noun_macros_and_their_space_are_dropped() {
+        assert_eq!(display_text(r"\improper AI Satellite"), "AI Satellite");
+        assert_eq!(display_text(r"\proper the arena"), "the arena");
+        assert_eq!(display_text(r"an \improper thing"), "an thing");
+        assert_eq!(display_text(r"\The station"), "station");
+    }
+
+    #[test]
+    fn the_longest_macro_name_wins() {
+        assert_eq!(display_text(r"\the"), "");
+        assert_eq!(display_text(r"5\th"), "5");
+        assert_eq!(display_text(r"\herself"), "");
+        assert_eq!(display_text(r"\nfoo"), "\nfoo");
+    }
+
+    #[test]
+    fn character_macros_become_their_character() {
+        assert_eq!(display_text(r"a \< b \> c"), "a < b > c");
+        assert_eq!(display_text(r"\x41é\U01F600"), "Aé😀");
+        assert_eq!(display_text(r"one\ two"), "onetwo");
+        assert_eq!(display_text("line\\\n   next"), "linenext");
+        assert_eq!(display_text(r"done\..."), "done");
+    }
+
+    #[test]
+    fn unknown_escapes_stay_as_written() {
+        assert_eq!(display_text(r"\q and \x4"), r"\q and \x4");
+        assert_eq!(display_text(r"trailing \"), r"trailing \");
+        assert_eq!(display_text("plain"), "plain");
     }
 }

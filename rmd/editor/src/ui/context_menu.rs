@@ -1,4 +1,8 @@
-use core::{path::TreePath, types::Identifier, vars};
+use core::{
+    path::TreePath,
+    types::{Identifier, display_text},
+    vars,
+};
 
 use dear_imgui_rs::{MouseButton, Ui, WindowHoveredFlags};
 use dmm::{Coord, Prefab, PrefabInstanceId};
@@ -394,8 +398,8 @@ fn display_name(tree: Option<&ObjectTree>, prefab: &Prefab) -> String {
             })
         })
         .and_then(|value| value.as_text())
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
+        .map(display_text)
+        .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| prefab.path.to_string().rsplit('/').next().unwrap_or("atom").to_owned())
 }
 
