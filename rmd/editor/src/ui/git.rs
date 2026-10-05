@@ -210,7 +210,7 @@ impl GitPanel {
     #[cfg(test)]
     pub fn visible(&self) -> bool { self.visible }
 
-    pub fn draw(&mut self, ui: &Ui, session: &mut Session, settings: &Settings) -> GitPanelOutput {
+    pub fn draw(&mut self, ui: &Ui, session: &mut Session, settings: &Settings, open: &mut bool) -> GitPanelOutput {
         let mut output = GitPanelOutput::default();
         let mut actions = Vec::new();
         let active = session.state.active();
@@ -230,7 +230,11 @@ impl GitPanel {
         let window = self.window.clone();
 
         self.visible = false;
-        ui.window(window.label(title)).focused(focus).build(|| {
+        if !*open {
+            return output;
+        }
+
+        ui.window(window.label(title)).opened(open).focused(focus).build(|| {
             self.visible = true;
             if settings.focus_windows_on_hover {
                 focus_window_on_hover(ui);

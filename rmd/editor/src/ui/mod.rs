@@ -32,7 +32,7 @@ use crate::{
     gizmo::GizmoState,
     loader::LoadView,
     session::{LoadReport, Session, TypeLayer},
-    settings::{KeybindAction, KeybindPreset, Settings},
+    settings::{KeybindAction, KeybindPreset, OpenPanels, Panel, Settings},
     theme::Themes,
     update::UpdateCheck,
 };
@@ -469,7 +469,7 @@ impl UiState {
 
         let mut menu = self.draw_menu_bar(ui, session, settings, loading);
         self.read_edit_keys(ui, session, settings, &mut menu);
-        self.reset_layout = menu.reset_layout;
+        self.apply_window_actions(settings, &menu);
         settings.mirror_camera ^= menu.toggle_mirror_camera;
         self.edit_command = menu.edit;
 
@@ -502,7 +502,12 @@ impl UiState {
         let pick_new_map_path = self.draw_new_map(ui, session, welcome.new_map_dialog || menu.new_map);
         let load_popup = self.draw_load_window(ui, load);
         let (map_views, picking) = self.draw_open_maps(ui, session, settings, menu.refit);
-        self.dm_ui.draw(ui, session, root.raw());
+        if settings.show_dm_ui {
+            self.dm_ui.draw(ui, session, root.raw());
+        } else {
+            self.dm_ui.skip();
+        }
+
         self.draw_map_dialogs(ui, session, &menu);
         let coop_open = self.draw_coop_dialogs(ui, session, settings, loading, menu.coop_dialog);
         if let Some(coop) = session.coop() {
@@ -529,6 +534,31 @@ impl UiState {
             load_conflicts,
             keybind_preset: None,
         })
+    }
+
+    fn apply_window_actions(&mut self, settings: &mut Settings, menu: &MenuActions) {
+        settings.show_dm_ui ^= menu.toggle_dm_ui;
+        self.reset_layout = menu.reset_layout;
+        if menu.reset_layout {
+            settings.panels = OpenPanels::default();
+        }
+
+        let Some(panel) = menu.toggle_panel else {
+            return;
+        };
+
+        let open = settings.panels.get_mut(panel);
+        *open = !*open;
+        if !*open {
+            return;
+        }
+
+        match panel {
+            Panel::ObjectTree => self.select_object_tree = StartupPanelFocus::new(),
+            Panel::Git => self.git_panel.focus(),
+            Panel::Inspector => self.select_inspector = StartupPanelFocus::new(),
+            Panel::Search => self.find.request(),
+        }
     }
 
     fn draw_dockspace(&mut self, ui: &Ui, session: &Session) -> Result<Id, DockspaceError> {
@@ -748,26 +778,36 @@ impl UiState {
         }
 
         self.panel_focus_requested = self.find.has_focus_request() || self.git_panel.has_focus_request();
+        let mut panels = settings.panels;
+        panels.git |= self.git_panel.has_focus_request();
         // The Git tab shares the object tree's dock node, a request to show it wins
-        if self.git_panel.has_focus_request() {
+        if self.git_panel.has_focus_request() || !panels.object_tree {
             self.select_object_tree.cancel();
         }
 
-        let object_tree = self
-            .object_tree
-            .draw(ui, session, settings, self.select_object_tree.requested());
+        let object_tree = self.object_tree.draw(
+            ui,
+            session,
+            settings,
+            self.select_object_tree.requested(),
+            &mut panels.object_tree,
+        );
         self.select_object_tree.after_draw(object_tree.docked);
         if let Some(path) = &object_tree.find {
             self.find.open_for_path(session, path);
         }
 
-        if self.find.has_focus_request() {
+        if self.find.has_focus_request() || !panels.inspector {
             self.select_inspector.cancel();
         }
 
-        let inspector = self
-            .inspector
-            .draw(ui, session, settings, self.select_inspector.requested());
+        let inspector = self.inspector.draw(
+            ui,
+            session,
+            settings,
+            self.select_inspector.requested(),
+            &mut panels.inspector,
+        );
         self.select_inspector.after_draw(inspector.docked);
         self.copy_to_clipboard = inspector.copy_hash.or(object_tree.copy_path);
         if let Some((document, instance)) = inspector.find_similar {
@@ -775,11 +815,13 @@ impl UiState {
                 .open_for(session, document, instance, find::SimilarMatchKind::Prefab);
         }
 
-        if let Some(target) = self.find.draw(ui, session, settings) {
+        panels.search |= self.find.has_focus_request();
+        if let Some(target) = self.find.draw(ui, session, settings, &mut panels.search) {
             self.jump_to_instance(session, target);
         }
 
-        let git_output = self.git_panel.draw(ui, session, settings);
+        let git_output = self.git_panel.draw(ui, session, settings, &mut panels.git);
+        settings.panels = panels;
         if git_output.copy.is_some() {
             self.copy_to_clipboard = git_output.copy;
         }
@@ -971,10 +1013,11 @@ mod tests {
         UiState,
         fixtures::rectangle_context,
         git,
+        menu::MenuActions,
     };
     use crate::{
         session::{DiagnosticSeverity, Session, fixtures::install_diff},
-        settings::{KeyBinding, KeyBindings, KeybindAction, Settings},
+        settings::{KeyBinding, KeyBindings, KeybindAction, OpenPanels, Panel, Settings},
         theme::{DEFAULT_THEME, Themes},
     };
 
@@ -1075,6 +1118,125 @@ mod tests {
             frame(&mut state);
         }
         assert!(state.find.visible(), "a request brings the Search tab forward");
+    }
+
+    fn draw_frames(context: &mut dear_imgui_rs::Context, state: &mut UiState, settings: &mut Settings, frames: usize) {
+        let mut session = Session::new();
+        let mut themes = Themes::load(None, context.style(), DEFAULT_THEME);
+        for _ in 0..frames {
+            let ui = context.frame();
+            state.draw(ui, &mut session, settings, &mut themes, None).unwrap();
+            assert!(context.render_legacy().valid());
+        }
+    }
+
+    fn docking_context() -> dear_imgui_rs::Context {
+        let mut context = rectangle_context();
+        let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
+        context.io_mut().set_config_flags(flags);
+        context
+    }
+
+    /// Whether ImGui drew the window last frame, and whether it sits in a dock node.
+    fn window_status(key: &dear_imgui_rs::WindowKey) -> (bool, bool) {
+        let name = std::ffi::CString::new(format!("###{}", key.stable_id())).unwrap();
+        // SAFETY: the test's context is current between frames, and the name is NUL-terminated.
+        unsafe {
+            let window = dear_imgui_rs::sys::igFindWindowByID(dear_imgui_rs::sys::igImHashStr(name.as_ptr(), 0, 0));
+            if window.is_null() {
+                return (false, false);
+            }
+
+            let node = dear_imgui_rs::sys::igDockBuilderGetNode((*window).DockId);
+
+            ((*window).Active, !node.is_null())
+        }
+    }
+
+    fn toggle(panel: Panel) -> MenuActions {
+        MenuActions {
+            toggle_panel: Some(panel),
+            ..MenuActions::default()
+        }
+    }
+
+    #[test]
+    fn a_closed_panel_reopens_from_the_window_menu_in_its_dock() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = docking_context();
+        let mut state = UiState::new(false).unwrap();
+        let mut settings = Settings::default();
+        draw_frames(&mut context, &mut state, &mut settings, 4);
+        assert_eq!(window_status(state.inspector.window()), (true, true));
+
+        state.apply_window_actions(&mut settings, &toggle(Panel::Inspector));
+        state.apply_window_actions(&mut settings, &toggle(Panel::Search));
+        draw_frames(&mut context, &mut state, &mut settings, 2);
+        assert!(!settings.panels.inspector && !settings.panels.search);
+        assert!(
+            !window_status(state.inspector.window()).0,
+            "a closed inspector is not drawn"
+        );
+        assert!(!state.find.visible());
+
+        state.apply_window_actions(&mut settings, &toggle(Panel::Inspector));
+        draw_frames(&mut context, &mut state, &mut settings, 4);
+        assert!(settings.panels.inspector);
+        assert_eq!(
+            window_status(state.inspector.window()),
+            (true, true),
+            "the inspector comes back docked"
+        );
+        assert!(!state.select_inspector.requested());
+    }
+
+    #[test]
+    fn a_closed_panel_releases_startup_focus() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = docking_context();
+        let mut state = UiState::new(false).unwrap();
+        let mut settings = Settings::default();
+        settings.panels.object_tree = false;
+        settings.panels.inspector = false;
+        draw_frames(&mut context, &mut state, &mut settings, 1);
+
+        assert!(!state.select_object_tree.requested());
+        assert!(!state.select_inspector.requested());
+    }
+
+    #[test]
+    fn a_search_request_reopens_the_search_panel() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = docking_context();
+        let mut state = UiState::new(false).unwrap();
+        let mut settings = Settings::default();
+        settings.panels.search = false;
+        draw_frames(&mut context, &mut state, &mut settings, 4);
+        assert!(!state.find.visible());
+
+        state.find.request();
+        draw_frames(&mut context, &mut state, &mut settings, 2);
+        assert!(settings.panels.search);
+        assert!(state.find.visible());
+    }
+
+    #[test]
+    fn resetting_the_layout_reopens_every_panel() {
+        let mut state = UiState::new(false).unwrap();
+        let mut settings = Settings::default();
+        for panel in Panel::ALL {
+            state.apply_window_actions(&mut settings, &toggle(panel));
+        }
+        assert!(Panel::ALL.into_iter().all(|panel| !settings.panels.is_open(panel)));
+
+        let reset = MenuActions {
+            reset_layout: true,
+            ..MenuActions::default()
+        };
+        state.apply_window_actions(&mut settings, &reset);
+
+        assert_eq!(settings.panels, OpenPanels::default());
+        assert!(state.reset_layout);
     }
 
     #[test]

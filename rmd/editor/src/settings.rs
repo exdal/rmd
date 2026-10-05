@@ -978,6 +978,58 @@ impl Default for CoopSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Panel {
+    ObjectTree,
+    Git,
+    Inspector,
+    Search,
+}
+
+impl Panel {
+    pub const ALL: [Self; 4] = [Self::ObjectTree, Self::Git, Self::Inspector, Self::Search];
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct OpenPanels {
+    pub object_tree: bool,
+    pub git: bool,
+    pub inspector: bool,
+    pub search: bool,
+}
+
+impl OpenPanels {
+    pub const fn is_open(&self, panel: Panel) -> bool {
+        match panel {
+            Panel::ObjectTree => self.object_tree,
+            Panel::Git => self.git,
+            Panel::Inspector => self.inspector,
+            Panel::Search => self.search,
+        }
+    }
+
+    pub const fn get_mut(&mut self, panel: Panel) -> &mut bool {
+        match panel {
+            Panel::ObjectTree => &mut self.object_tree,
+            Panel::Git => &mut self.git,
+            Panel::Inspector => &mut self.inspector,
+            Panel::Search => &mut self.search,
+        }
+    }
+}
+
+impl Default for OpenPanels {
+    fn default() -> Self {
+        Self {
+            object_tree: true,
+            git: true,
+            inspector: true,
+            search: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct FontSettings {
@@ -1069,6 +1121,8 @@ pub(crate) struct Settings {
     pub sanitize_vars_on_save: bool,
     pub pinned_vars: Vec<String>,
     pub coop: CoopSettings,
+    pub panels: OpenPanels,
+    pub show_dm_ui: bool,
 }
 
 pub(crate) struct SettingsLoad {
@@ -1142,6 +1196,8 @@ impl Default for Settings {
             sanitize_vars_on_save: false,
             pinned_vars: Vec::new(),
             coop: CoopSettings::default(),
+            panels: OpenPanels::default(),
+            show_dm_ui: true,
         }
     }
 }
@@ -1403,6 +1459,8 @@ mod tests {
                 sanitize_vars_on_save: false,
                 pinned_vars: Vec::new(),
                 coop: CoopSettings::default(),
+                panels: OpenPanels::default(),
+                show_dm_ui: true,
             }
         );
     }
@@ -1691,6 +1749,8 @@ mod tests {
             sanitize_vars_on_save: true,
             pinned_vars: vec![String::from("req_access")],
             coop: CoopSettings::default(),
+            panels: OpenPanels::default(),
+            show_dm_ui: true,
         };
         settings.keybindings.rebind(
             KeybindAction::ShowAreas,
@@ -1776,6 +1836,8 @@ mod tests {
             sanitize_vars_on_save: false,
             pinned_vars: Vec::new(),
             coop: CoopSettings::default(),
+            panels: OpenPanels::default(),
+            show_dm_ui: true,
         };
         let mut options = FrameOptions::default();
 

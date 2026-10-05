@@ -1864,11 +1864,15 @@ impl InspectorPanel {
     pub(super) fn edits_identical(&self) -> bool { self.state.scope == EditScope::Identical }
 
     pub(super) fn draw(
-        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, focus: bool,
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, focus: bool, open: &mut bool,
     ) -> InspectorPanelOutput {
+        if !*open {
+            return InspectorPanelOutput::default();
+        }
+
         let mut output = InspectorOutput::default();
         let mut docked = false;
-        ui.window(&self.window).focused(focus).build(|| {
+        ui.window(&self.window).opened(open).focused(focus).build(|| {
             docked = ui.is_window_docked();
             if settings.focus_windows_on_hover {
                 focus_window_on_hover(ui);
@@ -1945,7 +1949,7 @@ mod tests {
 
         for _ in 0..2 {
             let ui = context.frame();
-            panel.draw(ui, &mut session, &mut settings, false);
+            panel.draw(ui, &mut session, &mut settings, false, &mut true);
             assert!(context.render_legacy().valid());
         }
 
@@ -1968,7 +1972,7 @@ mod tests {
             panel.state.filter.query = String::from(query);
             panel.state.filter.modified_only = modified_only;
             let ui = context.frame();
-            panel.draw(ui, &mut session, &mut settings, false);
+            panel.draw(ui, &mut session, &mut settings, false, &mut true);
             assert!(context.render_legacy().valid());
         }
 

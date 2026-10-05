@@ -181,7 +181,9 @@ impl FindPanel {
         })
     }
 
-    pub(super) fn draw(&mut self, ui: &Ui, session: &mut Session, settings: &Settings) -> Option<JumpTarget> {
+    pub(super) fn draw(
+        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, open: &mut bool,
+    ) -> Option<JumpTarget> {
         if self
             .search
             .as_ref()
@@ -193,6 +195,10 @@ impl FindPanel {
         let mut action = None;
         let focus = std::mem::take(&mut self.focus);
         self.visible = false;
+        if !*open {
+            return None;
+        }
+
         let Self {
             window,
             path,
@@ -205,6 +211,7 @@ impl FindPanel {
         } = self;
 
         ui.window(&*window)
+            .opened(open)
             .size(SEARCH_WINDOW_SIZE.map(|size| size * dpi(ui)), Condition::FirstUseEver)
             .focused(focus)
             .build(|| {

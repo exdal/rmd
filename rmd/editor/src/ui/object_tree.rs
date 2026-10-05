@@ -201,10 +201,14 @@ impl ObjectTreePanel {
     pub(super) fn invalidate_filter(&mut self) { self.filter_revision = u64::MAX; }
 
     pub(super) fn draw(
-        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, focus: bool,
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, focus: bool, open: &mut bool,
     ) -> ObjectTreePanelOutput {
         let mut panel = ObjectTreePanelOutput::default();
-        ui.window(&self.window).focused(focus).build(|| {
+        if !*open {
+            return panel;
+        }
+
+        ui.window(&self.window).opened(open).focused(focus).build(|| {
             panel.docked = ui.is_window_docked();
             if settings.focus_windows_on_hover {
                 focus_window_on_hover(ui);
@@ -1139,7 +1143,7 @@ mod tests {
         state.filter_revision = u64::MAX;
         let mut settings = Settings::default();
 
-        state.draw(ui, &mut session, &mut settings, false);
+        state.draw(ui, &mut session, &mut settings, false, &mut true);
 
         assert!(context.render_legacy().valid());
     }

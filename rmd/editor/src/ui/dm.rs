@@ -17,6 +17,8 @@ pub(crate) struct DmUi {
 impl DmUi {
     pub(crate) fn request_mouse_popup(&mut self) { self.mouse_popup_requested = true; }
 
+    pub(crate) fn skip(&mut self) { self.mouse_popup_requested = false; }
+
     pub(crate) fn draw(&mut self, ui: &Ui, session: &mut Session, dockspace: u32) {
         let feedback = UiFeedback {
             values: self.feedback.values.clone(),

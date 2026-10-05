@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     session::{CoopStatus, Session},
-    settings::{KeybindAction, Settings},
+    settings::{KeybindAction, Panel, Settings},
 };
 
 /// How far down the "Blur below" menu goes. The option itself takes any depth.
@@ -45,6 +45,8 @@ pub(super) struct MenuActions {
     pub(super) go_to: bool,
     pub(super) resize_map: bool,
     pub(super) reset_layout: bool,
+    pub(super) toggle_panel: Option<Panel>,
+    pub(super) toggle_dm_ui: bool,
     pub(super) coop_dialog: Option<CoopDialogKind>,
 }
 
@@ -362,6 +364,25 @@ impl UiState {
                 }
             });
             ui.menu("Window", || {
+                for panel in Panel::ALL {
+                    let label = match panel {
+                        Panel::ObjectTree => "Object tree",
+                        Panel::Git => "Git",
+                        Panel::Inspector => "Inspector",
+                        Panel::Search => "Search",
+                    };
+                    if ui.menu_item_enabled_selected_no_shortcut(label, settings.panels.is_open(panel), true) {
+                        actions.toggle_panel = Some(panel);
+                    }
+                }
+
+                ui.separator();
+                if ui.menu_item_enabled_selected_no_shortcut("DM UI", settings.show_dm_ui, true) {
+                    actions.toggle_dm_ui = true;
+                }
+                ui.set_item_tooltip("Draw the windows from the profile's ui() proc");
+
+                ui.separator();
                 if ui.menu_item("Reset layout") {
                     actions.reset_layout = true;
                 }
