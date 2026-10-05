@@ -14,6 +14,7 @@ pub mod git;
 pub mod icons;
 pub mod node;
 pub mod patch;
+pub mod plan;
 pub mod process;
 pub mod progress;
 pub mod search;
