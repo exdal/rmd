@@ -154,7 +154,7 @@ mod tests {
         let mut module = Module {
             nodes: vec![
                 IrNode::Function(ProcId(0)),
-                IrNode::Constant(Value::Num(0.0)),
+                IrNode::Constant(Box::new(Value::Num(0.0))),
                 IrNode::Label(vec![IrNodeId(3), IrNodeId(4), IrNodeId(5), IrNodeId(6)]),
                 IrNode::Builtin(Builtin::Src),
                 IrNode::Unary {
@@ -196,8 +196,8 @@ mod tests {
         let mut module = Module {
             nodes: vec![
                 IrNode::Function(ProcId(0)),
-                IrNode::Constant(Value::Num(1.0)),
-                IrNode::Constant(Value::Num(0.0)),
+                IrNode::Constant(Box::new(Value::Num(1.0))),
+                IrNode::Constant(Box::new(Value::Num(0.0))),
                 IrNode::Label(vec![IrNodeId(4), IrNodeId(5)]),
                 IrNode::Binary {
                     op: BinaryOp::Div,

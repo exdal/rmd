@@ -12,7 +12,7 @@ use core::{
 use std::collections::VecDeque;
 
 pub use error::CodegenError;
-use ir::{Argument, IrNode, OutputTarget, Procedure};
+use ir::{Argument, Interpolation, IrNode, OutputTarget, Procedure};
 use objtree::ObjectTree;
 use opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, OutputTargetKind, Unary};
 use prelude::Intrinsic;
@@ -321,7 +321,7 @@ impl Generator {
             let id =
                 ConstantId(u32::try_from(self.constants.len()).map_err(|_| CodegenError::PoolTooLarge("constant"))?);
             self.constant_ids.insert(*node, id);
-            self.constants.push(value.clone());
+            self.constants.push(Value::clone(value));
         }
 
         Ok(())
@@ -562,7 +562,8 @@ impl Generator {
                 self.emit_u8(builtin_code(*builtin) as u8);
                 self.store_result(state, id)?;
             },
-            IrNode::Interpolate { chunks, values } => {
+            IrNode::Interpolate(interpolation) => {
+                let Interpolation { chunks, values } = &**interpolation;
                 for value in values {
                     self.emit_value(module, state, *value)?;
                 }
@@ -680,7 +681,7 @@ impl Generator {
                 for (_, value) in overrides {
                     self.emit_value(module, state, *value)?;
                 }
-                let path = self.intern_path(path.clone())?;
+                let path = self.intern_path(TreePath::clone(path))?;
                 let names = overrides
                     .iter()
                     .map(|(name, _)| self.intern_identifier(name))
@@ -747,7 +748,7 @@ impl Generator {
                 value_is_associated,
             } => {
                 self.emit_value(module, state, *list)?;
-                let ty = ty.clone().map(|ty| self.intern_path(ty)).transpose()?;
+                let ty = ty.as_deref().cloned().map(|ty| self.intern_path(ty)).transpose()?;
                 self.emit_op(Op::IterInit);
                 self.emit_optional_path(ty);
                 self.emit_bool(*value_is_associated);
@@ -1381,7 +1382,7 @@ fn produces_value(node: &IrNode) -> bool {
             | IrNode::Phi { .. }
             | IrNode::Load { .. }
             | IrNode::Builtin(_)
-            | IrNode::Interpolate { .. }
+            | IrNode::Interpolate(_)
             | IrNode::Unary { .. }
             | IrNode::Binary { .. }
             | IrNode::CompoundBinary { .. }

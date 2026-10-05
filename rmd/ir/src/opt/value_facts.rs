@@ -1,6 +1,7 @@
 use core::types::{IrNodeId, Value};
 use std::collections::VecDeque;
 
+use super::Adjacency;
 use crate::{BinaryOp, IrNode, Module, UnaryOp};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -29,16 +30,7 @@ pub(super) struct ValueFacts {
 impl ValueFacts {
     pub(super) fn analyze(module: &Module) -> Self {
         let mut kinds = vec![ValueKinds::default(); module.nodes.len()];
-        let mut users = vec![Vec::new(); module.nodes.len()];
-
-        for (index, node) in module.nodes.iter().enumerate() {
-            let user = IrNodeId(index as u32);
-            node.for_each_operand(|operand| {
-                if let Some(users) = users.get_mut(operand.0 as usize) {
-                    users.push(user);
-                }
-            });
-        }
+        let users = Adjacency::users(module);
 
         let mut pending = (0..module.nodes.len())
             .map(|index| IrNodeId(index as u32))
@@ -55,7 +47,7 @@ impl ValueFacts {
             }
 
             kinds[index] = joined;
-            for user in &users[index] {
+            for user in users.of(id.0) {
                 let user = user.0 as usize;
                 if !queued[user] {
                     queued[user] = true;
@@ -157,7 +149,7 @@ mod tests {
     fn propagates_refinements_through_phi_cycles() {
         let module = Module {
             nodes: vec![
-                IrNode::Constant(Value::Num(2.0)),
+                IrNode::Constant(Box::new(Value::Num(2.0))),
                 IrNode::Phi {
                     operands: vec![
                         PhiOperand {
@@ -212,7 +204,7 @@ mod tests {
     #[test]
     fn preserves_negative_zero_as_a_general_number() {
         let module = Module {
-            nodes: vec![IrNode::Constant(Value::Num(-0.0))],
+            nodes: vec![IrNode::Constant(Box::new(Value::Num(-0.0)))],
             ..Module::default()
         };
 

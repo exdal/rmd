@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use rustc_hash::FxHashSet;
 
-use crate::{AccessKind, Argument, IrNode, Module, OutputTarget};
+use crate::{AccessKind, Argument, Interpolation, IrNode, Module, OutputTarget};
 
 pub fn dump(module: &Module) -> String { dump_with(module, false) }
 
@@ -410,7 +410,8 @@ fn format_node(node: &IrNode) -> String {
         IrNode::Variable(name) => format!("variable {name}"),
         IrNode::Load { pointer } => format!("load {pointer}"),
         IrNode::Builtin(builtin) => format!("builtin {}", snake_case(builtin)),
-        IrNode::Interpolate { chunks, values } => {
+        IrNode::Interpolate(interpolation) => {
+            let Interpolation { chunks, values } = &**interpolation;
             format!("interpolate chunks={} values={}", chunks.len(), list(values))
         },
         IrNode::Unary { op, operand } => format!("unary {} {operand}", snake_case(op)),

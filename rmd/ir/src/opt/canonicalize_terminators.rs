@@ -2,8 +2,9 @@
 
 use core::types::IrNodeId;
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 
+use super::Adjacency;
 use crate::{IrNode, Module};
 
 pub fn canonicalize_terminators(module: &mut Module) {
@@ -16,32 +17,31 @@ pub fn canonicalize_terminators(module: &mut Module) {
     let mut removed = Vec::new();
 
     for block in &blocks {
-        let Some(instructions) = module.block(*block).map(<[IrNodeId]>::to_vec) else {
+        let Some(IrNode::Label(instructions)) = module.nodes.get_mut(block.0 as usize) else {
             continue;
         };
-        let end = instructions
+        let mut retained = std::mem::take(instructions);
+        let end = retained
             .iter()
             .position(|instruction| module.node(*instruction).is_some_and(IrNode::is_terminator))
-            .map_or(instructions.len(), |index| index + 1);
+            .map_or(retained.len(), |index| index + 1);
 
         // retained instructions after a terminator
-        let mut retained = instructions[..end].to_vec();
-        removed.extend_from_slice(&instructions[end..]);
+        removed.extend_from_slice(&retained[end..]);
+        retained.truncate(end);
 
         let supports_merge = retained
             .last()
             .and_then(|instruction| module.node(*instruction))
             .is_some_and(|node| matches!(node, IrNode::Branch(_) | IrNode::ConditionalBranch { .. }));
         if !supports_merge {
-            let mut discarded_merges = Vec::new();
             retained.retain(|instruction| {
                 let keep = !module.node(*instruction).is_some_and(IrNode::is_merge);
                 if !keep {
-                    discarded_merges.push(*instruction);
+                    removed.push(*instruction);
                 }
                 keep
             });
-            removed.extend(discarded_merges);
         }
 
         if let Some(IrNode::Label(instructions)) = module.nodes.get_mut(block.0 as usize) {
@@ -71,24 +71,40 @@ pub fn canonicalize_terminators(module: &mut Module) {
         }
     }
 
-    let predecessors = predecessors(module, &blocks);
+    let predecessors = Adjacency::new(module.nodes.len(), |edge| {
+        for block in &blocks {
+            for target in successors(module, *block).into_iter().flatten() {
+                edge(target.0, *block);
+            }
+        }
+    });
+    let mut expected = Vec::new();
+    let mut remaining = Vec::new();
     for block in blocks {
-        let expected = predecessors.get(&block).cloned().unwrap_or_default();
-        let phis = module
-            .block(block)
-            .unwrap_or_default()
+        let Some(instructions) = module.block(block) else {
+            continue;
+        };
+        let phi_count = instructions
             .iter()
-            .copied()
-            .take_while(|instruction| matches!(module.node(*instruction), Some(IrNode::Phi { .. })))
-            .collect::<Vec<_>>();
+            .take_while(|instruction| matches!(module.node(**instruction), Some(IrNode::Phi { .. })))
+            .count();
+        if phi_count == 0 {
+            continue;
+        }
 
-        for phi in phis {
-            let mut remaining = counts(&expected);
+        counts(predecessors.of(block.0), &mut expected);
+        for index in 0..phi_count {
+            let Some(IrNode::Label(instructions)) = module.nodes.get(block.0 as usize) else {
+                break;
+            };
+            let phi = instructions[index];
+            remaining.clone_from(&expected);
             if let Some(IrNode::Phi { operands }) = module.nodes.get_mut(phi.0 as usize) {
                 operands.retain(|operand| {
-                    let Some(count) = remaining.get_mut(&operand.block) else {
+                    let Ok(slot) = remaining.binary_search_by_key(&operand.block.0, |(block, _)| block.0) else {
                         return false;
                     };
+                    let count = &mut remaining[slot].1;
                     if *count == 0 {
                         return false;
                     }
@@ -101,42 +117,35 @@ pub fn canonicalize_terminators(module: &mut Module) {
     }
 }
 
-fn predecessors(module: &Module, blocks: &[IrNodeId]) -> FxHashMap<IrNodeId, Vec<IrNodeId>> {
-    let mut predecessors = FxHashMap::<IrNodeId, Vec<IrNodeId>>::default();
-
-    for block in blocks {
-        let Some(terminator) = module
-            .block(*block)
-            .and_then(<[IrNodeId]>::last)
-            .and_then(|id| module.node(*id))
-        else {
-            continue;
-        };
-
-        match terminator {
-            IrNode::Branch(target) => predecessors.entry(*target).or_default().push(*block),
-            IrNode::ConditionalBranch {
-                true_block,
-                false_block,
-                ..
-            } => {
-                predecessors.entry(*true_block).or_default().push(*block);
-                predecessors.entry(*false_block).or_default().push(*block);
-            },
-            _ => {},
-        }
+fn successors(module: &Module, block: IrNodeId) -> [Option<IrNodeId>; 2] {
+    let terminator = module
+        .block(block)
+        .and_then(<[IrNodeId]>::last)
+        .and_then(|id| module.node(*id));
+    match terminator {
+        Some(IrNode::Branch(target)) => [Some(*target), None],
+        Some(IrNode::ConditionalBranch {
+            true_block,
+            false_block,
+            ..
+        }) => [Some(*true_block), Some(*false_block)],
+        _ => [None, None],
     }
-
-    predecessors
 }
 
-fn counts(values: &[IrNodeId]) -> FxHashMap<IrNodeId, usize> {
-    let mut counts = FxHashMap::default();
-    for value in values {
-        *counts.entry(*value).or_default() += 1;
-    }
+/// `values` as sorted `(value, occurrences)` pairs
+fn counts(values: &[IrNodeId], counts: &mut Vec<(IrNodeId, usize)>) {
+    counts.clear();
+    counts.extend(values.iter().map(|value| (*value, 1)));
+    counts.sort_unstable_by_key(|(value, _)| value.0);
+    counts.dedup_by(|(value, count), (kept, kept_count)| {
+        let is_same = value == kept;
+        if is_same {
+            *kept_count += *count;
+        }
 
-    counts
+        is_same
+    });
 }
 
 fn clear_removed(node: &mut Option<IrNodeId>, removed: &FxHashSet<IrNodeId>) {
@@ -156,7 +165,7 @@ mod tests {
     fn removes_instructions_and_phi_edges_after_throw() {
         let mut module = Module {
             nodes: vec![
-                IrNode::Constant(Value::Num(1.0)),
+                IrNode::Constant(Box::new(Value::Num(1.0))),
                 IrNode::Label(vec![core::types::IrNodeId(2), core::types::IrNodeId(3)]),
                 IrNode::Throw(core::types::IrNodeId(0)),
                 IrNode::Branch(core::types::IrNodeId(4)),

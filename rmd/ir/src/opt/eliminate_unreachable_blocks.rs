@@ -6,19 +6,35 @@ use crate::{IrNode, Module};
 
 pub fn eliminate_unreachable_blocks(module: &mut Module) {
     let reachable = reachable_blocks(module);
-    let mut obsolete_merges = vec![false; module.nodes.len()];
     let mut removed = Vec::new();
 
-    for (index, node) in module.nodes.iter().enumerate() {
-        if !reachable[index] {
-            continue;
-        }
-        let IrNode::Label(instructions) = node else {
+    for (index, is_block_reachable) in reachable.iter().copied().enumerate() {
+        let Some(IrNode::Label(instructions)) = module.nodes.get_mut(index) else {
             continue;
         };
 
-        for instruction in instructions {
-            let obsolete = match module.node(*instruction) {
+        let mut instructions = std::mem::take(instructions);
+        if !is_block_reachable {
+            module.nodes[index] = IrNode::Noop;
+            for instruction in instructions {
+                module.nodes[instruction.0 as usize] = IrNode::Noop;
+                removed.push(instruction);
+            }
+
+            continue;
+        }
+
+        for instruction in &instructions {
+            let Some(IrNode::Phi { operands }) = module.nodes.get_mut(instruction.0 as usize) else {
+                break;
+            };
+
+            operands.retain(|operand| is_reachable(&reachable, operand.block));
+        }
+
+        let mut obsolete_merges = Vec::new();
+        instructions.retain(|instruction| {
+            let is_obsolete = match module.node(*instruction) {
                 Some(IrNode::SelectionMerge { merge_block }) => !is_reachable(&reachable, *merge_block),
                 Some(IrNode::LoopMerge {
                     merge_block,
@@ -26,62 +42,18 @@ pub fn eliminate_unreachable_blocks(module: &mut Module) {
                 }) => !is_reachable(&reachable, *merge_block) || !is_reachable(&reachable, *continue_block),
                 _ => false,
             };
-            if obsolete {
-                obsolete_merges[instruction.0 as usize] = true;
+            if is_obsolete {
+                obsolete_merges.push(*instruction);
             }
-        }
-    }
 
-    let surviving_phis = module
-        .nodes
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| reachable[*index])
-        .filter_map(|(_, node)| match node {
-            IrNode::Label(instructions) => Some(
-                instructions
-                    .iter()
-                    .copied()
-                    .take_while(|instruction| matches!(module.node(*instruction), Some(IrNode::Phi { .. }))),
-            ),
-            _ => None,
-        })
-        .flatten()
-        .collect::<Vec<_>>();
+            !is_obsolete
+        });
 
-    for phi in surviving_phis {
-        if let Some(IrNode::Phi { operands }) = module.nodes.get_mut(phi.0 as usize) {
-            operands.retain(|operand| is_reachable(&reachable, operand.block));
-        }
-    }
-
-    for (index, node) in module.nodes.iter_mut().enumerate() {
-        if let IrNode::Label(instructions) = node
-            && reachable[index]
-        {
-            instructions.retain(|instruction| !obsolete_merges[instruction.0 as usize]);
-        }
-    }
-
-    for (index, obsolete) in obsolete_merges.into_iter().enumerate() {
-        if obsolete {
-            module.nodes[index] = IrNode::Noop;
-        }
-    }
-
-    for (index, block_reachable) in reachable.iter().copied().enumerate() {
-        if block_reachable || !matches!(module.nodes[index], IrNode::Label(_)) {
-            continue;
+        for merge in obsolete_merges {
+            module.nodes[merge.0 as usize] = IrNode::Noop;
         }
 
-        let IrNode::Label(instructions) = std::mem::replace(&mut module.nodes[index], IrNode::Noop) else {
-            unreachable!();
-        };
-
-        for instruction in instructions {
-            module.nodes[instruction.0 as usize] = IrNode::Noop;
-            removed.push(instruction);
-        }
+        module.nodes[index] = IrNode::Label(instructions);
     }
 
     let removed = removed.into_iter().collect::<FxHashSet<_>>();
@@ -189,8 +161,8 @@ mod tests {
         let mut module = Module {
             nodes: vec![
                 IrNode::Function(ProcId(0)),
-                IrNode::Constant(Value::Num(10.0)),
-                IrNode::Constant(Value::Num(20.0)),
+                IrNode::Constant(Box::new(Value::Num(10.0))),
+                IrNode::Constant(Box::new(Value::Num(20.0))),
                 IrNode::Label(vec![IrNodeId(4)]),
                 IrNode::Branch(IrNodeId(7)),
                 IrNode::Label(vec![IrNodeId(6)]),

@@ -331,7 +331,7 @@ impl<'a> IrModuleBuilder<'a> {
             return *id;
         }
 
-        let id = self.make_node(IrNode::Constant(value));
+        let id = self.make_node(IrNode::Constant(Box::new(value)));
         self.constants.insert(key, id);
         self.module.constants.push(id);
 
@@ -408,26 +408,27 @@ impl<'a> IrModuleBuilder<'a> {
             }
         }
 
-        for (call, _, function, args) in &direct_calls {
-            self.module.nodes[call.0 as usize] = IrNode::FunctionCall {
-                function: *function,
-                args: args.clone(),
-            };
+        let mut is_candidate = vec![false; self.module.nodes.len()];
+        for (call, external, function, args) in direct_calls {
+            is_candidate[external.0 as usize] = true;
+            self.module.nodes[call.0 as usize] = IrNode::FunctionCall { function, args };
         }
 
-        let candidates = direct_calls
+        let mut is_referenced = vec![false; self.module.nodes.len()];
+        for node in &self.module.nodes {
+            node.for_each_operand(|operand| {
+                if let Some(is_referenced) = is_referenced.get_mut(operand.0 as usize) {
+                    *is_referenced = true;
+                }
+            });
+        }
+
+        let removed = is_candidate
             .iter()
-            .map(|(_, external, ..)| *external)
-            .collect::<FxHashSet<_>>();
-        let referenced = self
-            .module
-            .nodes
-            .iter()
-            .flat_map(IrNode::operands)
-            .collect::<FxHashSet<_>>();
-        let removed = candidates
-            .into_iter()
-            .filter(|external| !referenced.contains(external))
+            .zip(&is_referenced)
+            .enumerate()
+            .filter(|(_, (is_candidate, is_referenced))| **is_candidate && !**is_referenced)
+            .map(|(index, _)| IrNodeId(index as u32))
             .collect::<FxHashSet<_>>();
         self.module
             .external_functions
@@ -758,7 +759,7 @@ impl<'a> IrModuleBuilder<'a> {
                 key: None,
                 value: Some(dimension.unwrap_or(null)),
             })
-            .collect::<Vec<_>>();
+            .collect();
 
         self.emit_instr(IrNode::New { ty: Some(ty), args })
     }
@@ -813,7 +814,7 @@ impl<'a> IrModuleBuilder<'a> {
                     })
                     .collect();
 
-                IrNode::Interpolate { chunks, values }
+                IrNode::Interpolate(Box::new(Interpolation { chunks, values }))
             },
             Some(Expression::Unary { op, operand }) => {
                 if matches!(
@@ -978,10 +979,10 @@ impl<'a> IrModuleBuilder<'a> {
             },
             Some(Expression::New { type_expr, args }) => IrNode::New {
                 ty: type_expr.map(|e| self.lower_expr(e)),
-                args: self.args(args),
+                args: self.args(args).into_boxed_slice(),
             },
             Some(Expression::ModifiedType { path, overrides }) => IrNode::ModifiedType {
-                path: path.clone(),
+                path: Box::new(path.clone()),
                 overrides: overrides
                     .iter()
                     .map(|(n, e)| (n.clone(), self.lower_expr(*e)))
@@ -1683,7 +1684,7 @@ impl<'a> IrModuleBuilder<'a> {
         let ty = value.spec.var_type.clone();
         let iterator = self.emit_instr(IrNode::IterInit {
             list,
-            ty,
+            ty: ty.map(Box::new),
             value_is_associated: key.is_some(),
         });
 
@@ -2145,7 +2146,7 @@ mod tests {
             matches!(
                 node,
                 IrNode::Return(Some(value))
-                    if matches!(module.node(*value), Some(IrNode::Constant(Value::Num(3.0))))
+                    if matches!(module.node(*value), Some(IrNode::Constant(value)) if matches!(**value, Value::Num(3.0)))
             )
         }));
         crate::verify(&module).expect("canonicalized module should verify");
@@ -2175,7 +2176,7 @@ mod tests {
 
         assert_eq!(module.constants.len(), 1, "{:?}", nodes(&module));
         let constant = module.constants[0];
-        assert!(matches!(module.node(constant), Some(IrNode::Constant(Value::Num(1.0)))));
+        assert!(matches!(module.node(constant), Some(IrNode::Constant(value)) if matches!(**value, Value::Num(1.0))));
         assert!(
             blocks(&module)
                 .iter()
@@ -2391,7 +2392,7 @@ mod tests {
             .and_then(|value| module.node(value));
 
         assert_ne!(first_entry, second_entry);
-        assert!(matches!(second_return, Some(IrNode::Constant(Value::Num(2.0)))));
+        assert!(matches!(second_return, Some(IrNode::Constant(value)) if matches!(**value, Value::Num(2.0))));
     }
 
     #[test]
@@ -2432,7 +2433,7 @@ mod tests {
         ));
 
         assert!(!module.nodes.iter().any(|node| {
-            matches!(node, IrNode::Return(Some(value)) if matches!(module.node(*value), Some(IrNode::Constant(Value::Num(1.0)))))
+            matches!(node, IrNode::Return(Some(value)) if matches!(module.node(*value), Some(IrNode::Constant(value)) if matches!(**value, Value::Num(1.0))))
         }));
     }
 

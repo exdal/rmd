@@ -214,7 +214,7 @@ mod tests {
         let mut module = Module {
             nodes: vec![
                 IrNode::Function(ProcId(0)),
-                IrNode::Constant(Value::Num(1.0)),
+                IrNode::Constant(Box::new(Value::Num(1.0))),
                 IrNode::Label(vec![IrNodeId(3)]),
                 IrNode::Branch(IrNodeId(4)),
                 IrNode::Label(vec![IrNodeId(5), IrNodeId(6)]),

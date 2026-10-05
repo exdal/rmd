@@ -847,7 +847,7 @@ mod tests {
             })
             .expect("fixture should lower a new")
             .and_then(|ty| match module.node(ty) {
-                Some(ir::IrNode::Constant(Value::Path(path))) => Some(path.to_string()),
+                Some(ir::IrNode::Constant(value)) if let Value::Path(path) = &**value => Some(path.to_string()),
                 _ => None,
             })
     }

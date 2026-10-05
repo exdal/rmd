@@ -101,20 +101,15 @@ impl<'a> Reachability<'a> {
         let body = proc.body;
         self.collect_proc_references(proc_id)?;
 
-        for block in reachable_blocks(self.module, body)? {
-            let instructions = self
-                .module
-                .block(block)
-                .ok_or(CodegenError::ExpectedBlock(block))?
-                .to_vec();
+        let module = self.module;
+        for block in reachable_blocks(module, body)? {
+            let instructions = module.block(block).ok_or(CodegenError::ExpectedBlock(block))?;
 
             for instruction in instructions {
-                let node = self
-                    .module
-                    .node(instruction)
-                    .cloned()
-                    .ok_or(CodegenError::MissingNode(instruction))?;
-                self.visit_instruction(proc_id, &node);
+                let node = module
+                    .node(*instruction)
+                    .ok_or(CodegenError::MissingNode(*instruction))?;
+                self.visit_instruction(proc_id, node);
 
                 if self.retain_all {
                     return Ok(());
@@ -128,11 +123,12 @@ impl<'a> Reachability<'a> {
     fn visit_instruction(&mut self, current: ProcId, node: &IrNode) {
         match node {
             IrNode::FunctionCall { function, args } => {
-                let target = self.module.node(*function).cloned();
-                match target {
+                let module = self.module;
+                match module.node(*function) {
                     Some(IrNode::Function(proc)) => {
+                        let proc = *proc;
                         self.retain(proc);
-                        if let Some(intrinsic) = self.module.proc(proc).and_then(|procedure| procedure.intrinsic) {
+                        if let Some(intrinsic) = module.proc(proc).and_then(|procedure| procedure.intrinsic) {
                             if matches!(intrinsic, Intrinsic::Call | Intrinsic::CallExt)
                                 && !self.retain_dynamic_call(args)
                             {
@@ -150,7 +146,7 @@ impl<'a> Reachability<'a> {
                             }
                         }
                     },
-                    Some(IrNode::ExternalFunction(name)) if name.as_str() != "initial" => self.retain_name(&name),
+                    Some(IrNode::ExternalFunction(name)) if name.as_str() != "initial" => self.retain_name(name),
                     _ => {},
                 }
             },
@@ -219,13 +215,14 @@ impl<'a> Reachability<'a> {
             );
         }
 
+        let module = self.module;
         let mut seen = FxHashSet::default();
         while let Some(id) = pending.pop() {
             if !seen.insert(id) {
                 continue;
             }
-            let node = self.module.node(id).cloned().ok_or(CodegenError::MissingNode(id))?;
-            if let IrNode::Constant(value) = &node {
+            let node = module.node(id).ok_or(CodegenError::MissingNode(id))?;
+            if let IrNode::Constant(value) = node {
                 self.note_value(value);
             }
             node.for_each_operand(|operand| pending.push(operand));
@@ -236,8 +233,8 @@ impl<'a> Reachability<'a> {
 
     fn retain_opaque_callable(&mut self) {
         self.opaque_callable = true;
-        for proc in self.address_taken.clone() {
-            self.retain(proc);
+        for proc in &self.address_taken {
+            retain(self.module, &mut self.reachable, &mut self.pending, *proc);
         }
         if self.synthesizes_proc_paths {
             self.retain_all = true;
@@ -308,41 +305,26 @@ impl<'a> Reachability<'a> {
     }
 
     fn retain_initializers_named(&mut self, name: &Identifier) {
-        let variables = self
-            .tree
-            .iter()
-            .filter_map(|declaration| declaration.vars.get(name))
-            .map(|variable| (variable.initializer, variable.value.clone()))
-            .collect::<Vec<_>>();
-        for (initializer, value) in variables {
-            self.retain(initializer.unwrap_or(ProcId::INVALID));
-            self.note_value(&value);
+        let tree = self.tree;
+        for variable in tree.iter().filter_map(|declaration| declaration.vars.get(name)) {
+            self.retain(variable.initializer.unwrap_or(ProcId::INVALID));
+            self.note_value(&variable.value);
         }
     }
 
     fn retain_all_initializers_for_type(&mut self, ty: TypeId) {
-        let variables = self
-            .tree
-            .ancestors(ty)
-            .flat_map(|declaration| declaration.vars.values())
-            .map(|variable| (variable.initializer, variable.value.clone()))
-            .collect::<Vec<_>>();
-        for (initializer, value) in variables {
-            self.retain(initializer.unwrap_or(ProcId::INVALID));
-            self.note_value(&value);
+        let tree = self.tree;
+        for variable in tree.ancestors(ty).flat_map(|declaration| declaration.vars.values()) {
+            self.retain(variable.initializer.unwrap_or(ProcId::INVALID));
+            self.note_value(&variable.value);
         }
     }
 
     fn retain_every_initializer(&mut self) {
-        let variables = self
-            .tree
-            .iter()
-            .flat_map(|declaration| declaration.vars.values())
-            .map(|variable| (variable.initializer, variable.value.clone()))
-            .collect::<Vec<_>>();
-        for (initializer, value) in variables {
-            self.retain(initializer.unwrap_or(ProcId::INVALID));
-            self.note_value(&value);
+        let tree = self.tree;
+        for variable in tree.iter().flat_map(|declaration| declaration.vars.values()) {
+            self.retain(variable.initializer.unwrap_or(ProcId::INVALID));
+            self.note_value(&variable.value);
         }
     }
 
@@ -352,37 +334,38 @@ impl<'a> Reachability<'a> {
             return true;
         }
 
-        match self.module.node(node).cloned() {
+        let module = self.module;
+        match module.node(node) {
             Some(IrNode::Function(proc)) => {
-                self.retain(proc);
+                self.retain(*proc);
                 true
             },
             Some(IrNode::ExternalFunction(name)) => {
                 if name.as_str() != "initial" {
-                    self.retain_name(&name);
+                    self.retain_name(name);
                 }
                 true
             },
             Some(IrNode::AccessField { object, name, .. }) => {
                 let mut seen = FxHashSet::default();
-                match self.receiver_types(object, current, &mut seen) {
+                match self.receiver_types(*object, current, &mut seen) {
                     Some(types) => {
                         for (ty, includes_descendants) in types {
                             if includes_descendants {
                                 for candidate in self.tree.descendants(ty) {
-                                    self.retain_inherited(candidate, &name);
+                                    self.retain_inherited(candidate, name);
                                 }
                             } else {
-                                self.retain_inherited(ty, &name);
+                                self.retain_inherited(ty, name);
                             }
                         }
                     },
-                    None => self.retain_name(&name),
+                    None => self.retain_name(name),
                 }
                 true
             },
-            Some(IrNode::Constant(Value::Path(path))) => {
-                self.retain_proc_path(&path);
+            Some(IrNode::Constant(value)) if let Value::Path(path) = &**value => {
+                self.retain_proc_path(path);
                 true
             },
             Some(IrNode::Constant(_)) | Some(IrNode::ModifiedType { .. }) => true,
@@ -391,20 +374,20 @@ impl<'a> Reachability<'a> {
                 true
             },
             Some(IrNode::Phi { operands }) => operands
-                .into_iter()
+                .iter()
                 .all(|operand| self.retain_callable(operand.value, current, seen)),
             Some(IrNode::Pick(choices)) => choices
-                .into_iter()
-                .all(|(_, value)| self.retain_callable(value, current, seen)),
+                .iter()
+                .all(|(_, value)| self.retain_callable(*value, current, seen)),
             Some(IrNode::FunctionCall { function, args }) => {
-                let Some(IrNode::Function(proc)) = self.module.node(function) else {
+                let Some(IrNode::Function(proc)) = module.node(*function) else {
                     return false;
                 };
-                self.module
+                module
                     .proc(*proc)
                     .and_then(|procedure| procedure.intrinsic)
                     .filter(|intrinsic| matches!(intrinsic, Intrinsic::Call | Intrinsic::CallExt))
-                    .is_some_and(|_| self.retain_dynamic_call(&args))
+                    .is_some_and(|_| self.retain_dynamic_call(args))
             },
             _ => false,
         }
@@ -471,16 +454,19 @@ impl<'a> Reachability<'a> {
         }
 
         match self.module.node(node) {
-            Some(IrNode::Constant(Value::Path(path))) => DynamicCallTarget {
+            Some(IrNode::Constant(value)) if let Value::Path(path) = &**value => DynamicCallTarget {
                 paths: vec![path.clone()],
                 ..DynamicCallTarget::default()
             },
-            Some(IrNode::Constant(Value::List(_)))
-            | Some(IrNode::Builtin(Builtin::Src | Builtin::Args))
-            | Some(IrNode::New { .. })
-            | Some(IrNode::List(_)) => DynamicCallTarget {
+            Some(IrNode::Constant(value)) if matches!(**value, Value::List(_)) => DynamicCallTarget {
                 accepts_name: true,
                 ..DynamicCallTarget::default()
+            },
+            Some(IrNode::Builtin(Builtin::Src | Builtin::Args)) | Some(IrNode::New { .. }) | Some(IrNode::List(_)) => {
+                DynamicCallTarget {
+                    accepts_name: true,
+                    ..DynamicCallTarget::default()
+                }
             },
             Some(IrNode::Constant(_)) | Some(IrNode::ModifiedType { .. }) => DynamicCallTarget::default(),
             Some(IrNode::Phi { operands }) => {
@@ -520,10 +506,11 @@ impl<'a> Reachability<'a> {
             },
             IrNode::Builtin(Builtin::Global) => Some(vec![(TypeId::ROOT, false)]),
             IrNode::Builtin(Builtin::World) => Some(vec![(self.tree.id_of(&TreePath::parse("/world"))?, false)]),
-            IrNode::Builtin(Builtin::Args) | IrNode::List(_) | IrNode::Constant(Value::List(_)) => {
+            IrNode::Builtin(Builtin::Args) | IrNode::List(_) => Some(vec![(self.tree.roots().list?, false)]),
+            IrNode::Constant(value) if matches!(**value, Value::List(_)) => {
                 Some(vec![(self.tree.roots().list?, false)])
             },
-            IrNode::Constant(Value::Path(path)) => Some(vec![(self.tree.id_of(path)?, false)]),
+            IrNode::Constant(value) if let Value::Path(path) = &**value => Some(vec![(self.tree.id_of(path)?, false)]),
             IrNode::Load { pointer } => {
                 let IrNode::Variable(name) = self.module.node(*pointer)? else {
                     return None;
@@ -588,7 +575,8 @@ impl<'a> Reachability<'a> {
         }
 
         match self.module.node(node)? {
-            IrNode::Constant(Value::Path(path)) | IrNode::ModifiedType { path, .. } => Some(vec![path.clone()]),
+            IrNode::Constant(value) if let Value::Path(path) = &**value => Some(vec![path.clone()]),
+            IrNode::ModifiedType { path, .. } => Some(vec![TreePath::clone(path)]),
             IrNode::Constant(_) => Some(Vec::new()),
             IrNode::Phi { operands } => {
                 let mut paths = Vec::new();
@@ -614,7 +602,7 @@ impl<'a> Reachability<'a> {
         }
 
         match self.module.node(node)? {
-            IrNode::Constant(value) => Some(vec![value.clone()]),
+            IrNode::Constant(value) => Some(vec![Value::clone(value)]),
             IrNode::IterValue(iterator) => self.iterated_values(*iterator, seen),
             IrNode::Phi { operands } => {
                 let mut values = Vec::new();
@@ -676,16 +664,11 @@ impl<'a> Reachability<'a> {
         Some(values)
     }
 
-    fn retain(&mut self, proc: ProcId) {
-        if self.module.proc(proc).is_some() && self.reachable.insert(proc) {
-            self.pending.push_back(proc);
-        }
-    }
+    fn retain(&mut self, proc: ProcId) { retain(self.module, &mut self.reachable, &mut self.pending, proc); }
 
     fn retain_name(&mut self, name: &Identifier) {
-        let candidates = self.by_name.get(name).cloned().unwrap_or_default();
-        for candidate in candidates {
-            self.retain(candidate);
+        for candidate in self.by_name.get(name).into_iter().flatten() {
+            retain(self.module, &mut self.reachable, &mut self.pending, *candidate);
         }
     }
 
@@ -734,5 +717,12 @@ impl<'a> Reachability<'a> {
             let name = procedure.name.clone();
             self.retain_inherited(parent, &name);
         }
+    }
+}
+
+/// [`Reachability::retain`] over just the fields it touches, so callers can iterate other fields
+fn retain(module: &ir::Module, reachable: &mut FxHashSet<ProcId>, pending: &mut VecDeque<ProcId>, proc: ProcId) {
+    if module.proc(proc).is_some() && reachable.insert(proc) {
+        pending.push_back(proc);
     }
 }

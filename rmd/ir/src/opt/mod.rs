@@ -9,6 +9,7 @@ mod simplify_phis;
 mod sparse_constant_propagation;
 mod value_facts;
 
+use core::types::IrNodeId;
 use std::time::{Duration, Instant};
 
 pub use canonicalize_terminators::canonicalize_terminators;
@@ -145,6 +146,54 @@ pub fn run_optimizations(module: &mut Module, enabled: bool) -> OptimizationTimi
     });
 
     timings
+}
+
+pub(crate) struct Adjacency {
+    offsets: Vec<u32>,
+    targets: Vec<IrNodeId>,
+}
+
+impl Adjacency {
+    pub(crate) fn new(len: usize, edges: impl Fn(&mut dyn FnMut(u32, IrNodeId))) -> Self {
+        let mut offsets = vec![0u32; len + 1];
+        edges(&mut |key, _| {
+            if (key as usize) < len {
+                offsets[key as usize + 1] += 1;
+            }
+        });
+
+        for index in 1..offsets.len() {
+            offsets[index] += offsets[index - 1];
+        }
+
+        let mut next = offsets.clone();
+        let mut targets = vec![IrNodeId::INVALID; offsets[len] as usize];
+        edges(&mut |key, target| {
+            if (key as usize) < len {
+                let slot = &mut next[key as usize];
+                targets[*slot as usize] = target;
+                *slot += 1;
+            }
+        });
+
+        Self { offsets, targets }
+    }
+
+    pub(crate) fn users(module: &Module) -> Self {
+        Self::new(module.nodes.len(), |edge| {
+            for (index, node) in module.nodes.iter().enumerate() {
+                node.for_each_operand(|operand| edge(operand.0, IrNodeId(index as u32)));
+            }
+        })
+    }
+
+    pub(crate) fn of(&self, key: u32) -> &[IrNodeId] {
+        let key = key as usize;
+        match (self.offsets.get(key), self.offsets.get(key + 1)) {
+            (Some(start), Some(end)) => &self.targets[*start as usize..*end as usize],
+            _ => &[],
+        }
+    }
 }
 
 #[cfg(test)]

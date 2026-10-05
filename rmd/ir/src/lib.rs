@@ -47,6 +47,12 @@ pub enum OutputTarget {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct Interpolation {
+    pub chunks: Vec<String>,
+    pub values: Vec<IrNodeId>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct PhiOperand {
     pub block: IrNodeId,
@@ -57,7 +63,7 @@ pub struct PhiOperand {
 pub enum IrNode {
     Function(ProcId),
     ExternalFunction(Identifier),
-    Constant(Value),
+    Constant(Box<Value>),
     FunctionParameter(u32),
     Phi {
         operands: Vec<PhiOperand>,
@@ -67,10 +73,7 @@ pub enum IrNode {
         pointer: IrNodeId,
     },
     Builtin(Builtin),
-    Interpolate {
-        chunks: Vec<String>,
-        values: Vec<IrNodeId>,
-    },
+    Interpolate(Box<Interpolation>),
     Unary {
         op: UnaryOp,
         operand: IrNodeId,
@@ -113,11 +116,11 @@ pub enum IrNode {
     },
     New {
         ty: Option<IrNodeId>,
-        args: Vec<Argument>,
+        args: Box<[Argument]>,
     },
     ModifiedType {
-        path: TreePath,
-        overrides: Vec<(Identifier, IrNodeId)>,
+        path: Box<TreePath>,
+        overrides: Box<[(Identifier, IrNodeId)]>,
     },
     List(Vec<Argument>),
     Pick(Vec<(Option<IrNodeId>, IrNodeId)>),
@@ -135,7 +138,7 @@ pub enum IrNode {
     /// `for(var/mob/M in world)`, with `ty` the filter
     IterInit {
         list: IrNodeId,
-        ty: Option<TreePath>,
+        ty: Option<Box<TreePath>>,
         value_is_associated: bool,
     },
     /// advances and reports whether a value is now available
@@ -210,6 +213,9 @@ pub enum IrNode {
     },
 }
 
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(size_of::<IrNode>() == 32);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SideEffect {
     /// Evaluation has no observable behavior and cannot fault.
@@ -244,7 +250,7 @@ impl IrNode {
             }
             | Self::ModifiedType { .. } => SideEffect::Pure,
 
-            Self::Interpolate { .. }
+            Self::Interpolate(_)
             | Self::Unary { .. }
             | Self::Binary { .. }
             | Self::CompoundBinary { .. }
@@ -361,7 +367,7 @@ impl IrNode {
                 weight.iter().copied().for_each(&mut visit);
                 visit(*value);
             }),
-            Self::Interpolate { values, .. } => values.iter().copied().for_each(&mut visit),
+            Self::Interpolate(interpolation) => interpolation.values.iter().copied().for_each(&mut visit),
             Self::InRange {
                 value,
                 start,

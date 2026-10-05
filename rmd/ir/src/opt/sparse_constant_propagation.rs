@@ -9,7 +9,10 @@ use std::collections::VecDeque;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::simplify_phis::{replace_metadata_uses, replace_operands};
+use super::{
+    Adjacency,
+    simplify_phis::{replace_metadata_uses, replace_operands},
+};
 use crate::{BinaryOp, IrNode, Module, PhiOperand, UnaryOp};
 
 pub fn sparse_constant_propagation(module: &mut Module) {
@@ -26,9 +29,11 @@ pub fn sparse_constant_propagation(module: &mut Module) {
 
         let constant = match value {
             ConstantRef::Module(id) => *id,
-            ConstantRef::Folded(index) => {
-                intern_constant(module, &mut constant_ids, analysis.folded_values[*index].clone())
-            },
+            ConstantRef::Folded(index) => intern_constant(
+                module,
+                &mut constant_ids,
+                analysis.folded_values[*index as usize].clone(),
+            ),
         };
         replacements.insert(*id, constant);
     }
@@ -72,7 +77,7 @@ pub fn sparse_constant_propagation(module: &mut Module) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConstantRef {
     Module(IrNodeId),
-    Folded(usize),
+    Folded(u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,13 +123,12 @@ impl<'a> Solver<'a> {
                 _ => Lattice::Overdefined,
             })
             .collect::<Vec<_>>();
-        let mut uses = CandidateUses::new(module);
+        let uses = CandidateUses::new(module);
         let mut instruction_blocks = vec![IrNodeId::INVALID; module.nodes.len()];
         let mut block_count = 0;
 
         for (index, node) in module.nodes.iter().enumerate() {
             let user = IrNodeId(index as u32);
-            node.for_each_operand(|operand| uses.add(operand, user));
             if let IrNode::Label(instructions) = node {
                 block_count += 1;
                 for instruction in instructions {
@@ -193,7 +197,8 @@ impl<'a> Solver<'a> {
         if !self.is_executable(block) {
             return;
         }
-        let Some(node) = self.module.node(instruction).map(SolverInstruction::from) else {
+        let module = self.module;
+        let Some(node) = module.node(instruction).map(SolverInstruction::from) else {
             return;
         };
 
@@ -276,7 +281,7 @@ impl<'a> Solver<'a> {
                 Some(IrNode::Constant(value)) => Some(value),
                 _ => None,
             },
-            ConstantRef::Folded(index) => self.folded_values.get(index),
+            ConstantRef::Folded(index) => self.folded_values.get(index as usize),
         }
     }
 
@@ -284,7 +289,7 @@ impl<'a> Solver<'a> {
         let Some(value) = value else {
             return Lattice::Overdefined;
         };
-        let index = self.folded_values.len();
+        let index = self.folded_values.len() as u32;
         self.folded_values.push(value);
         Lattice::Constant(ConstantRef::Folded(index))
     }
@@ -337,16 +342,14 @@ impl<'a> Solver<'a> {
         let was_executable = self.is_executable(to);
         self.mark_block(to);
         if was_executable {
-            let phis = self
-                .module
+            let module = self.module;
+            let phis = module
                 .block(to)
                 .unwrap_or_default()
                 .iter()
-                .take_while(|instruction| matches!(self.module.node(**instruction), Some(IrNode::Phi { .. })))
-                .copied()
-                .collect::<Vec<_>>();
+                .take_while(|instruction| matches!(module.node(**instruction), Some(IrNode::Phi { .. })));
             for instruction in phis {
-                self.queue_instruction(instruction);
+                self.queue_instruction(*instruction);
             }
         }
     }
@@ -369,21 +372,30 @@ fn edge_key(from: IrNodeId, to: IrNodeId) -> u64 { (u64::from(from.0) << 32) | u
 struct CandidateUses {
     slots: Vec<u32>,
     candidates: Vec<IrNodeId>,
-    users: Vec<Vec<IrNodeId>>,
+    users: Adjacency,
 }
 
 impl CandidateUses {
     fn new(module: &Module) -> Self {
         let mut slots = vec![u32::MAX; module.nodes.len()];
         let mut candidates = Vec::new();
-        let mut users = Vec::new();
         for (index, node) in module.nodes.iter().enumerate() {
             if matches!(node, IrNode::Phi { .. } | IrNode::Unary { .. } | IrNode::Binary { .. }) {
-                slots[index] = users.len() as u32;
+                slots[index] = candidates.len() as u32;
                 candidates.push(IrNodeId(index as u32));
-                users.push(Vec::new());
             }
         }
+
+        let users = Adjacency::new(candidates.len(), |edge| {
+            for (index, node) in module.nodes.iter().enumerate() {
+                node.for_each_operand(|operand| {
+                    if let Some(slot) = slots.get(operand.0 as usize).copied() {
+                        edge(slot, IrNodeId(index as u32));
+                    }
+                });
+            }
+        });
+
         Self {
             slots,
             candidates,
@@ -391,30 +403,17 @@ impl CandidateUses {
         }
     }
 
-    fn add(&mut self, value: IrNodeId, user: IrNodeId) {
-        let Some(slot) = self.slots.get(value.0 as usize).copied() else {
-            return;
-        };
-        if slot != u32::MAX {
-            self.users[slot as usize].push(user);
-        }
-    }
-
     fn get(&self, value: IrNodeId) -> &[IrNodeId] {
-        let Some(slot) = self.slots.get(value.0 as usize).copied() else {
-            return &[];
-        };
-        if slot == u32::MAX {
-            &[]
-        } else {
-            &self.users[slot as usize]
+        match self.slots.get(value.0 as usize) {
+            Some(slot) => self.users.of(*slot),
+            None => &[],
         }
     }
 
     fn candidates(&self) -> &[IrNodeId] { &self.candidates }
 }
 
-enum SolverInstruction {
+enum SolverInstruction<'a> {
     Branch(IrNodeId),
     ConditionalBranch {
         condition: IrNodeId,
@@ -425,7 +424,7 @@ enum SolverInstruction {
         body: IrNodeId,
         catch: IrNodeId,
     },
-    Phi(Vec<PhiOperand>),
+    Phi(&'a [PhiOperand]),
     Unary {
         op: UnaryOp,
         operand: IrNodeId,
@@ -438,8 +437,8 @@ enum SolverInstruction {
     Other,
 }
 
-impl From<&IrNode> for SolverInstruction {
-    fn from(node: &IrNode) -> Self {
+impl<'a> From<&'a IrNode> for SolverInstruction<'a> {
+    fn from(node: &'a IrNode) -> Self {
         match node {
             IrNode::Branch(target) => Self::Branch(*target),
             IrNode::ConditionalBranch {
@@ -455,7 +454,7 @@ impl From<&IrNode> for SolverInstruction {
                 body: *body,
                 catch: *catch,
             },
-            IrNode::Phi { operands } => Self::Phi(operands.clone()),
+            IrNode::Phi { operands } => Self::Phi(operands),
             IrNode::Unary { op, operand } => Self::Unary {
                 op: *op,
                 operand: *operand,
@@ -489,7 +488,7 @@ impl Analysis {
                 Some(IrNode::Constant(value)) => Some(value),
                 _ => None,
             },
-            ConstantRef::Folded(index) => self.folded_values.get(index),
+            ConstantRef::Folded(index) => self.folded_values.get(index as usize),
         }
     }
 }
@@ -785,7 +784,7 @@ fn intern_constant(module: &mut Module, constant_ids: &mut FxHashMap<ScalarKey, 
     }
 
     let id = IrNodeId(module.nodes.len() as u32);
-    module.nodes.push(IrNode::Constant(value));
+    module.nodes.push(IrNode::Constant(Box::new(value)));
     module.constants.push(id);
     constant_ids.insert(key, id);
     id
@@ -832,7 +831,7 @@ mod tests {
             let Some(IrNode::Constant(value)) = module.node(*value) else {
                 return None;
             };
-            Some(value)
+            Some(&**value)
         })
     }
 

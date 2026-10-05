@@ -1,5 +1,6 @@
 use core::{types::IrNodeId, vars};
 
+use fixedbitset::FixedBitSet;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{IrNode, Module, Procedure};
@@ -12,153 +13,277 @@ enum Storage {
 }
 
 pub fn eliminate_dead_stores(module: &mut Module) {
-    let mut removed = FxHashSet::default();
+    let mut removed = vec![false; module.nodes.len()];
+    let mut is_any_removed = false;
+    let mut scratch = Scratch::default();
 
     for proc in &module.procs {
-        analyze_procedure(module, proc, &mut removed);
+        is_any_removed |= analyze_procedure(module, proc, &mut scratch, &mut removed);
     }
 
-    if removed.is_empty() {
+    if !is_any_removed {
         return;
     }
 
     for node in &mut module.nodes {
         if let IrNode::Label(instructions) = node {
-            instructions.retain(|instruction| !removed.contains(instruction));
+            instructions.retain(|instruction| !removed[instruction.0 as usize]);
         }
     }
-    for instruction in removed {
-        module.nodes[instruction.0 as usize] = IrNode::Noop;
+
+    for (index, is_removed) in removed.into_iter().enumerate() {
+        if is_removed {
+            module.nodes[index] = IrNode::Noop;
+        }
     }
 }
 
-fn analyze_procedure(module: &Module, proc: &Procedure, removed: &mut FxHashSet<IrNodeId>) {
-    let blocks = reachable_blocks(module, proc.body);
-    let block_set = blocks.iter().copied().collect::<FxHashSet<_>>();
-    let successors = blocks
-        .iter()
-        .copied()
-        .map(|block| (block, block_successors(module, block, &block_set)))
-        .collect::<FxHashMap<_, _>>();
+/// what an instruction does to the set of live pointers, with pointers already turned into slots
+#[derive(Clone, Copy)]
+enum Op {
+    Other,
+    Load(u32),
+    /// dead when its slot is not live afterwards
+    Overwrite(u32),
+    ObserveExternal,
+    /// `Initialize` of external storage
+    ObserveExternalThenLoad(u32),
+}
 
-    let mut external = FxHashSet::default();
+/// per proc buffers, these cleared but never deallocated. kind of using themn like bump allocator
+#[derive(Default)]
+struct Scratch {
+    block_index: FxHashMap<IrNodeId, usize>,
+    slots: FxHashMap<IrNodeId, u32>,
+    ops: Vec<(Op, IrNodeId)>,
+    op_ranges: Vec<std::ops::Range<usize>>,
+    successors: Vec<Vec<usize>>,
+    catches: Vec<Vec<usize>>,
+    live_in: Vec<FixedBitSet>,
+    live_out: Vec<FixedBitSet>,
+    external: FixedBitSet,
+    output: FixedBitSet,
+    exceptional: FixedBitSet,
+}
+
+fn analyze_procedure(module: &Module, proc: &Procedure, scratch: &mut Scratch, removed: &mut [bool]) -> bool {
+    let blocks = reachable_blocks(module, proc.body);
+
+    scratch.block_index.clear();
+    scratch
+        .block_index
+        .extend(blocks.iter().enumerate().map(|(index, block)| (*block, index)));
+
+    scratch.slots.clear();
+    scratch.ops.clear();
+    scratch.op_ranges.clear();
+    let mut external_slots = Vec::new();
+    for block in &blocks {
+        let start = scratch.ops.len();
+        for instruction in module.block(*block).unwrap_or_default() {
+            let op = classify(module, *instruction, &mut scratch.slots, &mut external_slots);
+            scratch.ops.push((op, *instruction));
+        }
+
+        scratch.op_ranges.push(start..scratch.ops.len());
+    }
+
+    let empty = FixedBitSet::with_capacity(scratch.slots.len());
+    scratch.external.clone_from(&empty);
+    for slot in external_slots {
+        scratch.external.insert(slot as usize);
+    }
+
+    resize_lists(&mut scratch.successors, blocks.len());
+    for (index, block) in blocks.iter().enumerate() {
+        let successors = &mut scratch.successors[index];
+        for instruction in module.block(*block).unwrap_or_default() {
+            append_successors(module.node(*instruction), &mut |successor| {
+                if let Some(successor) = scratch.block_index.get(&successor) {
+                    successors.push(*successor);
+                }
+            });
+        }
+
+        successors.sort_unstable();
+        successors.dedup();
+    }
+
+    resize_lists(&mut scratch.catches, blocks.len());
     for block in &blocks {
         for instruction in module.block(*block).unwrap_or_default() {
-            let Some(node) = module.node(*instruction) else {
+            let Some(IrNode::TryCatch { body, catch, merge }) = module.node(*instruction) else {
                 continue;
             };
-            match node {
-                IrNode::Load { pointer } | IrNode::Store { pointer, .. } | IrNode::Initialize { pointer, .. }
-                    if storage(module, *pointer) == Some(Storage::External) =>
-                {
-                    external.insert(*pointer);
-                },
-                _ => {},
+
+            let Some(catch) = scratch.block_index.get(catch).copied() else {
+                continue;
+            };
+
+            for protected in region_blocks(module, *body, *merge) {
+                if let Some(protected) = scratch.block_index.get(&protected) {
+                    scratch.catches[*protected].push(catch);
+                }
             }
         }
     }
 
-    let protected = protected_catches(module, &blocks);
-    let mut live_in = blocks
-        .iter()
-        .copied()
-        .map(|block| (block, FxHashSet::default()))
-        .collect::<FxHashMap<_, _>>();
-    let mut live_out = live_in.clone();
+    reset_sets(&mut scratch.live_in, blocks.len(), &empty);
+    reset_sets(&mut scratch.live_out, blocks.len(), &empty);
+
+    let Scratch {
+        ops,
+        op_ranges,
+        successors,
+        catches,
+        live_in,
+        live_out,
+        external,
+        output,
+        exceptional,
+        ..
+    } = scratch;
 
     loop {
-        let mut changed = false;
-        for block in blocks.iter().rev().copied() {
-            let block_successors = successors.get(&block).map(Vec::as_slice).unwrap_or_default();
-            let mut output = FxHashSet::default();
-            for successor in block_successors {
-                output.extend(live_in.get(successor).into_iter().flatten().copied());
-            }
-            if block_successors.is_empty() {
-                output.extend(external.iter().copied());
+        let mut is_changed = false;
+        for block in (0..blocks.len()).rev() {
+            output.clone_from(&empty);
+            for successor in &successors[block] {
+                output.union_with(&live_in[*successor]);
             }
 
-            let exceptional = protected
-                .get(&block)
-                .into_iter()
-                .flatten()
-                .flat_map(|catch| live_in.get(catch).into_iter().flatten().copied())
-                .collect::<FxHashSet<_>>();
-            let input = transfer_block(module, block, output.clone(), &exceptional, &external, None);
-
-            if live_out.get(&block) != Some(&output) {
-                live_out.insert(block, output);
-                changed = true;
+            if successors[block].is_empty() {
+                output.union_with(external);
             }
-            if live_in.get(&block) != Some(&input) {
-                live_in.insert(block, input);
-                changed = true;
+
+            gather_exceptional(exceptional, &catches[block], live_in, &empty);
+
+            if live_out[block] != *output {
+                live_out[block].clone_from(output);
+                is_changed = true;
+            }
+
+            transfer(&ops[op_ranges[block].clone()], output, exceptional, external, None);
+
+            if live_in[block] != *output {
+                live_in[block].clone_from(output);
+                is_changed = true;
             }
         }
-        if !changed {
+
+        if !is_changed {
             break;
         }
     }
 
-    for block in blocks {
-        let exceptional = protected
-            .get(&block)
-            .into_iter()
-            .flatten()
-            .flat_map(|catch| live_in.get(catch).into_iter().flatten().copied())
-            .collect::<FxHashSet<_>>();
-        let output = live_out.remove(&block).unwrap_or_default();
-        transfer_block(module, block, output, &exceptional, &external, Some(removed));
+    let mut is_any_removed = false;
+    for block in 0..blocks.len() {
+        gather_exceptional(exceptional, &catches[block], live_in, &empty);
+        output.clone_from(&live_out[block]);
+        transfer(
+            &ops[op_ranges[block].clone()],
+            output,
+            exceptional,
+            external,
+            Some((removed, &mut is_any_removed)),
+        );
+    }
+
+    is_any_removed
+}
+
+fn classify(
+    module: &Module, instruction: IrNodeId, slots: &mut FxHashMap<IrNodeId, u32>, external_slots: &mut Vec<u32>,
+) -> Op {
+    let Some(node) = module.node(instruction) else {
+        return Op::Other;
+    };
+
+    let mut slot = |pointer: IrNodeId, storage: Storage| {
+        let next = slots.len() as u32;
+        let slot = *slots.entry(pointer).or_insert(next);
+        if storage == Storage::External {
+            external_slots.push(slot);
+        }
+
+        slot
+    };
+
+    match node {
+        IrNode::Load { pointer } => match storage(module, *pointer) {
+            Some(storage @ (Storage::Frame | Storage::External)) => Op::Load(slot(*pointer, storage)),
+            _ => Op::Other,
+        },
+        IrNode::Store { pointer, .. } => match storage(module, *pointer) {
+            Some(storage @ (Storage::Frame | Storage::External)) => Op::Overwrite(slot(*pointer, storage)),
+            Some(Storage::Observable) | None => Op::ObserveExternal,
+        },
+        IrNode::Initialize { pointer, .. } => match storage(module, *pointer) {
+            Some(Storage::Frame) => Op::Overwrite(slot(*pointer, Storage::Frame)),
+            Some(Storage::External) => Op::ObserveExternalThenLoad(slot(*pointer, Storage::External)),
+            Some(Storage::Observable) | None => Op::ObserveExternal,
+        },
+        _ if observes_external_state(node) => Op::ObserveExternal,
+        _ => Op::Other,
     }
 }
 
-fn transfer_block(
-    module: &Module, block: IrNodeId, mut live: FxHashSet<IrNodeId>, exceptional: &FxHashSet<IrNodeId>,
-    external: &FxHashSet<IrNodeId>, mut removed: Option<&mut FxHashSet<IrNodeId>>,
-) -> FxHashSet<IrNodeId> {
-    for instruction in module.block(block).unwrap_or_default().iter().rev().copied() {
-        live.extend(exceptional.iter().copied());
+fn transfer(
+    ops: &[(Op, IrNodeId)], live: &mut FixedBitSet, exceptional: &FixedBitSet, external: &FixedBitSet,
+    mut removed: Option<(&mut [bool], &mut bool)>,
+) {
+    let is_protected = !exceptional.is_clear();
 
-        let Some(node) = module.node(instruction) else {
-            continue;
-        };
-        match node {
-            IrNode::Load { pointer } if tracked_storage(module, *pointer) => {
-                live.insert(*pointer);
+    for (op, instruction) in ops.iter().rev() {
+        if is_protected {
+            live.union_with(exceptional);
+        }
+
+        match *op {
+            Op::Other => {},
+            Op::Load(slot) => live.insert(slot as usize),
+            Op::Overwrite(slot) => {
+                if !live.contains(slot as usize)
+                    && let Some((removed, is_any_removed)) = removed.as_mut()
+                {
+                    removed[instruction.0 as usize] = true;
+                    **is_any_removed = true;
+                }
+
+                live.remove(slot as usize);
             },
-            IrNode::Store { pointer, .. } => match storage(module, *pointer) {
-                Some(Storage::Frame | Storage::External) => {
-                    if !live.contains(pointer)
-                        && let Some(removed) = removed.as_deref_mut()
-                    {
-                        removed.insert(instruction);
-                    }
-                    live.remove(pointer);
-                },
-                Some(Storage::Observable) | None => live.extend(external.iter().copied()),
+            Op::ObserveExternal => live.union_with(external),
+            Op::ObserveExternalThenLoad(slot) => {
+                live.union_with(external);
+                live.insert(slot as usize);
             },
-            IrNode::Initialize { pointer, .. } => match storage(module, *pointer) {
-                Some(Storage::Frame) => {
-                    if !live.contains(pointer)
-                        && let Some(removed) = removed.as_deref_mut()
-                    {
-                        removed.insert(instruction);
-                    }
-                    live.remove(pointer);
-                },
-                Some(Storage::External | Storage::Observable) | None => {
-                    live.extend(external.iter().copied());
-                    if tracked_storage(module, *pointer) {
-                        live.insert(*pointer);
-                    }
-                },
-            },
-            _ if observes_external_state(node) => live.extend(external.iter().copied()),
-            _ => {},
         }
     }
+}
 
-    live
+fn gather_exceptional(exceptional: &mut FixedBitSet, catches: &[usize], live_in: &[FixedBitSet], empty: &FixedBitSet) {
+    exceptional.clone_from(empty);
+    for catch in catches {
+        exceptional.union_with(&live_in[*catch]);
+    }
+}
+
+fn reset_sets(sets: &mut Vec<FixedBitSet>, len: usize, empty: &FixedBitSet) {
+    if sets.len() < len {
+        sets.resize_with(len, FixedBitSet::new);
+    }
+
+    for set in &mut sets[..len] {
+        set.clone_from(empty);
+    }
+}
+
+fn resize_lists(lists: &mut Vec<Vec<usize>>, len: usize) {
+    for list in lists.iter_mut() {
+        list.clear();
+    }
+
+    lists.resize_with(len.max(lists.len()), Vec::new);
 }
 
 fn storage(module: &Module, pointer: IrNodeId) -> Option<Storage> {
@@ -173,10 +298,6 @@ fn storage(module: &Module, pointer: IrNodeId) -> Option<Storage> {
     } else {
         Some(Storage::External)
     }
-}
-
-fn tracked_storage(module: &Module, pointer: IrNodeId) -> bool {
-    matches!(storage(module, pointer), Some(Storage::Frame | Storage::External))
 }
 
 fn is_observable_name(name: &str) -> bool {
@@ -237,59 +358,31 @@ fn reachable_blocks(module: &Module, entry: IrNodeId) -> Vec<IrNodeId> {
         };
         blocks.push(block);
         for instruction in instructions {
-            append_successors(module.node(*instruction), &mut pending);
+            append_successors(module.node(*instruction), &mut |block| pending.push(block));
         }
     }
 
     blocks
 }
 
-fn block_successors(module: &Module, block: IrNodeId, blocks: &FxHashSet<IrNodeId>) -> Vec<IrNodeId> {
-    let mut successors = Vec::new();
-    for instruction in module.block(block).unwrap_or_default() {
-        append_successors(module.node(*instruction), &mut successors);
-    }
-    successors.retain(|successor| blocks.contains(successor));
-    successors.sort_by_key(|successor| successor.0);
-    successors.dedup();
-    successors
-}
-
-fn append_successors(node: Option<&IrNode>, successors: &mut Vec<IrNodeId>) {
+fn append_successors(node: Option<&IrNode>, push: &mut impl FnMut(IrNodeId)) {
     match node {
-        Some(IrNode::Branch(target)) => successors.push(*target),
+        Some(IrNode::Branch(target)) => push(*target),
         Some(IrNode::ConditionalBranch {
             true_block,
             false_block,
             ..
         }) => {
-            successors.push(*true_block);
-            successors.push(*false_block);
+            push(*true_block);
+            push(*false_block);
         },
         Some(IrNode::TryCatch { body, catch, merge }) => {
-            successors.push(*body);
-            successors.push(*catch);
-            successors.push(*merge);
+            push(*body);
+            push(*catch);
+            push(*merge);
         },
         _ => {},
     }
-}
-
-fn protected_catches(module: &Module, blocks: &[IrNodeId]) -> FxHashMap<IrNodeId, Vec<IrNodeId>> {
-    let mut protected = FxHashMap::<IrNodeId, Vec<IrNodeId>>::default();
-
-    for block in blocks {
-        for instruction in module.block(*block).unwrap_or_default() {
-            let Some(IrNode::TryCatch { body, catch, merge }) = module.node(*instruction) else {
-                continue;
-            };
-            for protected_block in region_blocks(module, *body, *merge) {
-                protected.entry(protected_block).or_default().push(*catch);
-            }
-        }
-    }
-
-    protected
 }
 
 fn region_blocks(module: &Module, entry: IrNodeId, stop: IrNodeId) -> Vec<IrNodeId> {
@@ -306,7 +399,7 @@ fn region_blocks(module: &Module, entry: IrNodeId, stop: IrNodeId) -> Vec<IrNode
         };
         blocks.push(block);
         for instruction in instructions {
-            append_successors(module.node(*instruction), &mut pending);
+            append_successors(module.node(*instruction), &mut |block| pending.push(block));
         }
     }
 
@@ -346,8 +439,8 @@ mod tests {
             nodes: vec![
                 IrNode::Function(ProcId(0)),
                 IrNode::Variable("value".into()),
-                IrNode::Constant(Value::Num(1.0)),
-                IrNode::Constant(Value::Num(2.0)),
+                IrNode::Constant(Box::new(Value::Num(1.0))),
+                IrNode::Constant(Box::new(Value::Num(2.0))),
                 IrNode::Label(vec![IrNodeId(1), IrNodeId(5), IrNodeId(6), IrNodeId(7), IrNodeId(8)]),
                 IrNode::Store {
                     pointer: IrNodeId(1),
@@ -380,8 +473,8 @@ mod tests {
             nodes: vec![
                 IrNode::Function(ProcId(0)),
                 IrNode::Variable("value".into()),
-                IrNode::Constant(Value::Num(1.0)),
-                IrNode::Constant(Value::Num(2.0)),
+                IrNode::Constant(Box::new(Value::Num(1.0))),
+                IrNode::Constant(Box::new(Value::Num(2.0))),
                 IrNode::Label(vec![IrNodeId(1), IrNodeId(5), IrNodeId(6), IrNodeId(7), IrNodeId(8)]),
                 IrNode::Store {
                     pointer: IrNodeId(1),
@@ -414,7 +507,7 @@ mod tests {
             nodes: vec![
                 IrNode::Function(ProcId(0)),
                 IrNode::Variable("__dmed_frame_local_0_0".into()),
-                IrNode::Constant(Value::Num(1.0)),
+                IrNode::Constant(Box::new(Value::Num(1.0))),
                 IrNode::Label(vec![IrNodeId(1), IrNodeId(4), IrNodeId(5)]),
                 IrNode::Initialize {
                     pointer: IrNodeId(1),
@@ -440,7 +533,7 @@ mod tests {
                 IrNode::Function(ProcId(0)),
                 IrNode::Variable("value".into()),
                 IrNode::Variable("loc".into()),
-                IrNode::Constant(Value::Num(1.0)),
+                IrNode::Constant(Box::new(Value::Num(1.0))),
                 IrNode::Label(vec![IrNodeId(1), IrNodeId(2), IrNodeId(5), IrNodeId(6), IrNodeId(7)]),
                 IrNode::Initialize {
                     pointer: IrNodeId(1),

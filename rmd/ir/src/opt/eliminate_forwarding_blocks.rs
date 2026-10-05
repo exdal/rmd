@@ -277,7 +277,7 @@ mod tests {
         let mut module = Module {
             nodes: vec![
                 IrNode::Function(ProcId(0)),
-                IrNode::Constant(Value::Num(1.0)),
+                IrNode::Constant(Box::new(Value::Num(1.0))),
                 IrNode::Label(vec![IrNodeId(3)]),
                 IrNode::ConditionalBranch {
                     condition: IrNodeId(1),
@@ -354,9 +354,9 @@ mod tests {
         let mut module = Module {
             nodes: vec![
                 IrNode::Function(ProcId(0)),
-                IrNode::Constant(Value::Num(1.0)),
-                IrNode::Constant(Value::Num(2.0)),
-                IrNode::Constant(Value::Num(3.0)),
+                IrNode::Constant(Box::new(Value::Num(1.0))),
+                IrNode::Constant(Box::new(Value::Num(2.0))),
+                IrNode::Constant(Box::new(Value::Num(3.0))),
                 IrNode::Label(vec![IrNodeId(5)]),
                 IrNode::ConditionalBranch {
                     condition: IrNodeId(1),

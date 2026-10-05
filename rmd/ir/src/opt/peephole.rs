@@ -1,32 +1,30 @@
-use core::types::{IrNodeId, Value};
-
-use rustc_hash::FxHashMap;
+use core::types::IrNodeId;
 
 use super::{
-    simplify_phis::{replace_all_uses, replace_operands},
+    simplify_phis::{Replacements, replace_all_uses, replace_operands, resolve},
     value_facts::ValueFacts,
 };
 use crate::{BinaryOp, IrNode, Module, UnaryOp};
 
 pub fn peephole(module: &mut Module) {
     let facts = ValueFacts::analyze(module);
-    let mut replacements = FxHashMap::<IrNodeId, IrNodeId>::default();
+    let mut replacements = Replacements::new(module.nodes.len());
 
     for index in 0..module.nodes.len() {
         let id = IrNodeId(index as u32);
-        let mut node = module.nodes[index].clone();
-        replace_operands(&mut node, &replacements);
+        if !replacements.is_empty() {
+            replace_operands(&mut module.nodes[index], &replacements);
+        }
 
-        match rewrite(module, &facts, &node) {
+        match rewrite(module, &facts, &module.nodes[index]) {
             Some(Rewrite::Replace(replacement)) => {
                 let replacement = resolve(&replacements, replacement);
                 if replacement != id {
                     replacements.insert(id, replacement);
                 }
-                module.nodes[index] = node;
             },
             Some(Rewrite::Node(replacement)) => module.nodes[index] = replacement,
-            None => module.nodes[index] = node,
+            None => {},
         }
     }
 
@@ -38,7 +36,7 @@ pub fn peephole(module: &mut Module) {
 
     for node in &mut module.nodes {
         if let IrNode::Label(instructions) = node {
-            instructions.retain(|instruction| !replacements.contains_key(instruction));
+            instructions.retain(|instruction| !replacements.contains(*instruction));
         }
     }
 
@@ -179,7 +177,7 @@ fn invert_equality(op: BinaryOp) -> Option<BinaryOp> {
 
 fn number(module: &Module, id: IrNodeId) -> Option<f32> {
     match module.node(id) {
-        Some(IrNode::Constant(Value::Num(value))) => Some(*value),
+        Some(IrNode::Constant(value)) => value.as_num(),
         _ => None,
     }
 }
@@ -201,13 +199,6 @@ fn boolean_constant(module: &Module, id: IrNodeId) -> Option<bool> {
     } else {
         None
     }
-}
-
-fn resolve(replacements: &FxHashMap<IrNodeId, IrNodeId>, mut value: IrNodeId) -> IrNodeId {
-    while let Some(replacement) = replacements.get(&value) {
-        value = *replacement;
-    }
-    value
 }
 
 #[cfg(test)]
@@ -383,8 +374,8 @@ mod tests {
                 IrNode::Return(Some(IrNodeId(9))),
                 IrNode::Label(vec![IrNodeId(8)]),
                 IrNode::Return(Some(IrNodeId(10))),
-                IrNode::Constant(Value::Num(1.0)),
-                IrNode::Constant(Value::Num(2.0)),
+                IrNode::Constant(Box::new(Value::Num(1.0))),
+                IrNode::Constant(Box::new(Value::Num(2.0))),
             ],
             constants: vec![IrNodeId(9), IrNodeId(10)],
             procs: vec![procedure(IrNodeId(2), vec![IrNodeId(1)])],
