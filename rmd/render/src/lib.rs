@@ -195,7 +195,8 @@ pub struct MapViewFrame<'a> {
     pub active_z: u32,
     pub level_count: u32,
     pub revision: u64,
-    pub pending_update: Option<FrameUpdate>,
+    /// updates since earlier revisions, oldest first, each starting where the one before it ended
+    pub pending_updates: &'a [FrameUpdate],
     pub lighting: Option<LightingFrame<'a>>,
     pub guide_lines: &'a [GuideLine],
     pub connected: &'a [PrefabInstanceId],
@@ -216,7 +217,7 @@ pub struct LightingFrame<'a> {
     /// Minimum displayed light luminance, normalized to 0..=1.
     pub minimum_brightness: f32,
     pub revision: u64,
-    pub pending_update: Option<LightingUpdate>,
+    pub pending_updates: &'a [LightingUpdate],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

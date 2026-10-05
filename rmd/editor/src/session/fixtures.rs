@@ -102,7 +102,7 @@ impl Session {
 
     pub(super) fn revision(&self) -> u64 { self.active_cache().revision }
 
-    pub(super) fn frame_update(&self) -> Option<FrameUpdate> { self.active_cache().frame_update.clone() }
+    pub(super) fn frame_update(&self) -> Option<FrameUpdate> { self.active_cache().frame_updates.last().cloned() }
 }
 
 pub(super) fn conflicted_session() -> Session {

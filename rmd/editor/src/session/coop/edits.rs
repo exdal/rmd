@@ -1,4 +1,6 @@
-use dmm::Coord;
+use std::collections::BTreeMap;
+
+use dmm::{Coord, Prefab};
 use editor::patch;
 use net::MapEdit;
 
@@ -26,6 +28,7 @@ impl Session {
             }
         }
 
+        let mut batches = BTreeMap::<String, BTreeMap<Coord, Vec<Prefab>>>::new();
         for (path, by, edit) in incoming {
             let tiles = match patch::decode(&edit.patch, edit.coords.len()) {
                 Ok(tiles) => tiles,
@@ -42,10 +45,10 @@ impl Session {
 
             // a tile we have in flight keeps our version until the server echoes it back,
             // anything else applies, including our own edits replayed after a resync
-            let mut applied = Vec::new();
+            let applied = batches.entry(path).or_default();
             for (coord, tile) in coords.zip(tiles) {
                 let Some(count) = shared_map.in_flight.get_mut(&coord) else {
-                    applied.push((coord, tile));
+                    applied.insert(coord, tile);
                     continue;
                 };
 
@@ -57,7 +60,10 @@ impl Session {
                     }
                 }
             }
+        }
 
+        // one apply per map, the last edit to a tile wins like it would one edit at a time
+        for (path, applied) in batches {
             let Some(id) = self.shared_document(&path).filter(|_| !applied.is_empty()) else {
                 continue;
             };
@@ -66,7 +72,7 @@ impl Session {
                 continue;
             };
 
-            let affected = document.apply_remote(applied);
+            let affected = document.apply_remote(applied.into_iter().collect());
             self.update_document_instances(id, &affected);
             if let Some(cache) = self.caches.get_mut(&id) {
                 cache.map_revision = cache.map_revision.wrapping_add(1);

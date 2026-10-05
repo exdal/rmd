@@ -2480,34 +2480,43 @@ impl Renderer {
         let (Some(view), Some(uploaded)) = (frame.map_views.first(), self.uploaded_lighting.first()) else {
             return Ok(false);
         };
-        let (Some(lighting), Some(update), Some(buffer)) = (
-            view.lighting,
-            view.lighting.and_then(|lighting| lighting.pending_update),
-            self.lights.as_mut(),
-        ) else {
+        let (Some(lighting), Some(revision), Some(buffer)) = (view.lighting, uploaded.revision, self.lights.as_mut())
+        else {
+            return Ok(false);
+        };
+        let Some(updates) = updates_since(lighting.pending_updates, revision, |update| update.previous_revision) else {
             return Ok(false);
         };
 
-        let range = update.tiles;
+        let ranges = merged_ranges(updates.iter().map(|update| update.tiles));
         if uploaded.base != 0
-            || uploaded.revision != Some(update.previous_revision)
             || uploaded.size != lighting.size
             || uploaded.count != lighting.tiles.len()
             || lighting.tiles.len() > self.light_capacity
-            || range.start > range.end
-            || range.end > lighting.tiles.len()
+            || !ranges
+                .iter()
+                .all(|range| valid_update_range(Some(*range), lighting.tiles.len()))
         {
             return Ok(false);
         }
 
-        let payload = lighting.tiles[range.start..range.end]
+        let payloads = ranges
             .iter()
-            .enumerate()
-            .map(|(offset, tile)| gpu_light_tile(range.start + offset, tile))
+            .map(|range| {
+                lighting.tiles[range.start..range.end]
+                    .iter()
+                    .enumerate()
+                    .map(|(offset, tile)| gpu_light_tile(range.start + offset, tile))
+                    .collect::<Result<Vec<_>, _>>()
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        if !payload.is_empty() {
+        if payloads.iter().any(|payload| !payload.is_empty()) {
             self.graph.wait()?;
-            buffer.write(gpu_light_offset(range.start)?, &payload)?;
+        }
+        for (range, payload) in ranges.iter().zip(&payloads) {
+            if !payload.is_empty() {
+                buffer.write(gpu_light_offset(range.start)?, payload)?;
+            }
         }
 
         let Some(uploaded) = self.uploaded_lighting.first_mut() else {
@@ -2663,17 +2672,18 @@ impl Renderer {
         let (Some(view), Some(uploaded)) = (frame.map_views.first(), self.uploaded.first()) else {
             return Ok(false);
         };
-        let Some(update) = view.pending_update.as_ref() else {
+        let Some(updates) = updates_since(view.pending_updates, uploaded.revision, |update| {
+            update.previous_revision
+        }) else {
             return Ok(false);
         };
+        let ranges = merged_ranges(updates.iter().flat_map(|update| update.sprites.iter().copied()));
         if uploaded.base != 0
-            || uploaded.revision != update.previous_revision
             || view.sprite_instances.len() > self.sprite_capacity
-            || !update
-                .sprites
+            || !ranges
                 .iter()
                 .all(|range| valid_update_range(Some(*range), view.sprite_instances.len()))
-            || (uploaded.count != view.sprite_instances.len() && update.sprites.is_empty())
+            || (uploaded.count != view.sprite_instances.len() && ranges.is_empty())
         {
             return Ok(false);
         }
@@ -2681,8 +2691,7 @@ impl Renderer {
             return Ok(false);
         };
 
-        let sprite_payloads = update
-            .sprites
+        let sprite_payloads = ranges
             .iter()
             .map(|range| gpu_sprite_range(view.sprite_instances, *range))
             .collect::<Result<Vec<_>, _>>()?;
@@ -2690,13 +2699,13 @@ impl Renderer {
             self.graph.wait()?;
         }
         if let Some(buffer) = self.sprites.as_mut() {
-            for (range, payload) in update.sprites.iter().zip(&sprite_payloads) {
+            for (range, payload) in ranges.iter().zip(&sprite_payloads) {
                 if !payload.is_empty() {
                     buffer.write(gpu_sprite_offset(range.start)?, payload)?;
                 }
             }
         }
-        for range in &update.sprites {
+        for range in &ranges {
             self.color_area_outlines(sprites, *range)?;
         }
 
@@ -2882,6 +2891,29 @@ impl Renderer {
 
         Ok(textures)
     }
+}
+
+fn updates_since<T>(updates: &[T], uploaded: u64, previous_revision: impl Fn(&T) -> u64) -> Option<&[T]> {
+    let start = updates
+        .iter()
+        .position(|update| previous_revision(update) == uploaded)?;
+
+    Some(&updates[start..])
+}
+
+fn merged_ranges(ranges: impl Iterator<Item = crate::UpdateRange>) -> Vec<crate::UpdateRange> {
+    let mut ranges = ranges.collect::<Vec<_>>();
+    ranges.sort_unstable_by_key(|range| range.start);
+    ranges.dedup_by(|next, kept| {
+        let is_joined = next.start <= kept.end;
+        if is_joined {
+            kept.end = kept.end.max(next.end);
+        }
+
+        is_joined
+    });
+
+    ranges
 }
 
 fn valid_update_range(range: Option<crate::UpdateRange>, len: usize) -> bool {
@@ -3472,6 +3504,7 @@ mod tests {
         gpu_light_tile,
         gpu_sprite,
         level_ranges,
+        merged_ranges,
         meshopt_dequantize_half,
         meshopt_dequantize_unorm,
         meshopt_quantize_half,
@@ -3479,6 +3512,7 @@ mod tests {
         project_guide_line,
         spec,
         split_owner,
+        updates_since,
         valid_update_range,
         visible_range,
     };
@@ -3533,7 +3567,7 @@ mod tests {
             active_z: 1,
             level_count: 1,
             revision: 1,
-            pending_update: None,
+            pending_updates: &[],
             lighting: None,
             guide_lines: &[],
             connected: &[],
@@ -3673,7 +3707,7 @@ mod tests {
             tile_size: 32,
             minimum_brightness: 0.0,
             revision: 1,
-            pending_update: None,
+            pending_updates: &[],
         });
         assert_ne!(base, graph_state(target, true, &[lit]));
     }
@@ -4058,6 +4092,41 @@ mod tests {
                 center: [50.0, 20.0],
             }]
         );
+    }
+
+    #[test]
+    fn pending_updates_resume_from_the_uploaded_revision() {
+        let chain = [(10, 'a'), (11, 'b'), (12, 'c')];
+        let previous_revision = |update: &(u64, char)| update.0;
+
+        assert_eq!(updates_since(&chain, 11, previous_revision), Some(&chain[1..]));
+        assert_eq!(updates_since(&chain, 10, previous_revision), Some(&chain[..]));
+        assert_eq!(
+            updates_since(&chain, 9, previous_revision),
+            None,
+            "the chain no longer reaches back to what the renderer has"
+        );
+        assert_eq!(updates_since(&[], 10, previous_revision), None);
+    }
+
+    #[test]
+    fn update_ranges_merge_where_they_overlap_or_touch() {
+        let range = |start, end| UpdateRange { start, end };
+
+        assert_eq!(
+            merged_ranges(
+                [
+                    range(512, 768),
+                    range(0, 256),
+                    range(256, 512),
+                    range(1024, 1280),
+                    range(600, 700)
+                ]
+                .into_iter()
+            ),
+            [range(0, 768), range(1024, 1280)]
+        );
+        assert!(merged_ranges(std::iter::empty()).is_empty());
     }
 
     #[test]

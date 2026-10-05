@@ -332,14 +332,16 @@ impl MapDocument {
             let mut added = Vec::new();
             let placed = tile
                 .into_iter()
-                .map(|prefab| match unclaimed.iter().position(|placed| *placed.prefab() == prefab) {
-                    Some(index) => unclaimed.remove(index),
-                    None => {
-                        let placed = self.instantiate(prefab);
-                        added.push(placed.id());
-                        placed
+                .map(
+                    |prefab| match unclaimed.iter().position(|placed| *placed.prefab() == prefab) {
+                        Some(index) => unclaimed.remove(index),
+                        None => {
+                            let placed = self.instantiate(prefab);
+                            added.push(placed.id());
+                            placed
+                        },
                     },
-                })
+                )
                 .collect::<PlacedTile>();
             if placed == current {
                 continue;
@@ -994,7 +996,11 @@ mod tests {
 
         let affected = document.apply_remote(vec![(to, vec![table, floor.clone(), chair_prefab])]);
         assert_eq!(document.instance_ids_at(to), [to_table, to_floor, chair]);
-        assert_eq!(affected, [to_floor, to_table, chair], "a reorder repaints the whole tile");
+        assert_eq!(
+            affected,
+            [to_floor, to_table, chair],
+            "a reorder repaints the whole tile"
+        );
     }
 
     #[test]

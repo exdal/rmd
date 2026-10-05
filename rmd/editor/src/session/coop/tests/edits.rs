@@ -227,3 +227,90 @@ fn edits_converge_through_a_lossy_link() {
         let _ = fs::remove_dir_all(dir);
     }
 }
+
+#[test]
+fn edits_queued_for_one_poll_apply_as_one_remote_edit() {
+    let (dir, mut session) = hosting("batched-edits");
+    let path = "_maps/a.dmm";
+    let file = dir.join(path);
+    incoming(&mut session, &dir);
+    let coop = session.coop.as_mut().unwrap();
+    coop.apply(
+        Event::MapSnapshot {
+            path: String::from(path),
+            generation: GenerationId(1),
+            bytes: b"\"a\" = (/turf,/area)\n\n(1,1,1) = {\"\naaa\n\"}\n".to_vec(),
+        },
+        Some(&dir),
+    );
+    coop.apply(
+        Event::MapShared {
+            path: String::from(path),
+            by: OTHER,
+            generation: GenerationId(1),
+        },
+        Some(&dir),
+    );
+    poll_until(&mut [&mut session], |sessions| {
+        sessions[0].coop().unwrap().shared_maps[path].is_ready() && sessions[0].state.document_for_path(&file).is_some()
+    });
+
+    let (first, second, third) = (Coord::new(1, 1, 1), Coord::new(2, 1, 1), Coord::new(3, 1, 1));
+    let you = session.coop().unwrap().you.unwrap();
+    let coop = session.coop.as_mut().unwrap();
+    coop.shared_maps.get_mut(path).unwrap().in_flight.insert(third, 1);
+    let edit = |tiles: &[(Coord, &str)]| {
+        let mut patch = dmm::Map::new(dmm::Size {
+            x: tiles.len() as u32,
+            y: 1,
+            z: 1,
+        });
+        for (index, (_, top)) in tiles.iter().enumerate() {
+            patch.grid[0][0][index] = patch.intern_tile(vec![
+                Prefab::new(TreePath::parse(top)),
+                Prefab::new(TreePath::parse("/turf")),
+                Prefab::new(TreePath::parse("/area")),
+            ]);
+        }
+
+        net::MapEdit {
+            path: String::from(path),
+            generation: GenerationId(1),
+            coords: tiles.iter().map(|(coord, _)| [coord.x, coord.y, coord.z]).collect(),
+            patch: dmm::writer::write(&patch),
+        }
+    };
+    for (seq, by, tiles) in [
+        (0, OTHER, vec![(first, "/obj/first"), (third, "/obj/other")]),
+        (1, OTHER, vec![(first, "/obj/second"), (second, "/obj/two")]),
+        (2, you, vec![(third, "/obj/mine")]),
+    ] {
+        coop.apply(
+            Event::Edit {
+                by,
+                seq: net::SeqId(seq),
+                edit: edit(&tiles),
+            },
+            Some(&dir),
+        );
+    }
+    let generation = |session: &Session| {
+        let id = session.state.document_for_path(&file).unwrap();
+        session.state.document(id).unwrap().generation()
+    };
+    let before = generation(&session);
+
+    session.poll_coop();
+
+    assert_eq!(generation(&session), before + 1);
+    assert_eq!(top(&session, &file, first).as_deref(), Some("/obj/second"));
+    assert_eq!(top(&session, &file, second).as_deref(), Some("/obj/two"));
+    assert_eq!(
+        top(&session, &file, third).as_deref(),
+        Some("/turf"),
+        "our tile in flight keeps our version"
+    );
+    assert!(session.coop().unwrap().shared_maps[path].in_flight.is_empty());
+
+    let _ = fs::remove_dir_all(dir);
+}

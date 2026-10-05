@@ -683,10 +683,7 @@ mod tests {
                 .instance_location(table)
                 .map(|location| location.coord)
         };
-        assert!(session.select_block(Some(Selection::from_drag(
-            Coord::new(1, 1, 2),
-            Coord::new(2, 1, 2)
-        ))));
+        assert!(session.select_block(Some(Selection::from_drag(Coord::new(1, 1, 2), Coord::new(2, 1, 2)))));
 
         assert!(session.place_selected_block_with_mode(
             Coord::new(2, 2, 2),
@@ -697,10 +694,9 @@ mod tests {
         assert_eq!(location(&session), Some(Coord::new(2, 2, 2)));
         assert_render_cache_matches_rebuild(&session);
 
-        assert!(session.transform_selected_block_with_mode(
-            SelectionTransform::RotateClockwise,
-            BlockSelectionMode::Full
-        ));
+        assert!(
+            session.transform_selected_block_with_mode(SelectionTransform::RotateClockwise, BlockSelectionMode::Full)
+        );
         assert_eq!(location(&session).map(|coord| coord.z), Some(2));
         assert_render_cache_matches_rebuild(&session);
 

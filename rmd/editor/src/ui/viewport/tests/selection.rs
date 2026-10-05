@@ -493,7 +493,14 @@ fn rectangle_ui_moves_and_cuts_on_a_created_level() {
         );
         assert!(
             app.session
-                .map_view_frame(app.id, Default::default(), Default::default(), Default::default(), &[], &[])
+                .map_view_frame(
+                    app.id,
+                    Default::default(),
+                    Default::default(),
+                    Default::default(),
+                    &[],
+                    &[]
+                )
                 .and_then(|frame| frame.preview)
                 .is_some_and(|preview| !preview.sprites.is_empty()),
             "created: {created}"

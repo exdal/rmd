@@ -68,9 +68,9 @@ pub(crate) use self::{
 struct DocumentCache {
     instances: FrameInstances,
     revision: u64,
-    frame_update: Option<FrameUpdate>,
+    frame_updates: Vec<FrameUpdate>,
     lighting_revision: u64,
-    lighting_update: Option<render::LightingUpdate>,
+    lighting_updates: Vec<render::LightingUpdate>,
     preview: Option<BlockPreviewCache>,
     bake: Option<editor::bake::Bake>,
     always_highlights: Vec<PrefabInstanceId>,

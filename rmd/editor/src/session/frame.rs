@@ -129,7 +129,7 @@ impl Session {
             active_z: document.z,
             level_count: document.map.size.z.max(1),
             revision: cache.revision,
-            pending_update: cache.frame_update.clone(),
+            pending_updates: &cache.frame_updates,
             lighting: (self.options.show_lighting && !cache.instances.light_tiles.is_empty()).then_some(
                 render::LightingFrame {
                     size: cache.instances.lighting_size,
@@ -137,7 +137,7 @@ impl Session {
                     tile_size: self.options.tile_size,
                     minimum_brightness: self.options.minimum_light_brightness_percent.min(100) as f32 / 100.0,
                     revision: cache.lighting_revision,
-                    pending_update: cache.lighting_update,
+                    pending_updates: &cache.lighting_updates,
                 },
             ),
             guide_lines,
@@ -237,9 +237,9 @@ impl Session {
         let cache = self.caches.entry(id).or_default();
         cache.instances = instances;
         cache.revision = revision;
-        cache.frame_update = None;
+        cache.frame_updates.clear();
         cache.lighting_revision = revision;
-        cache.lighting_update = None;
+        cache.lighting_updates.clear();
         self.revalidate_focus();
     }
 
@@ -345,6 +345,7 @@ mod tests {
     use crate::session::{
         Session,
         TypeLayer,
+        bake::MAX_PENDING_UPDATES,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, settle_bake},
     };
 
@@ -401,6 +402,28 @@ mod tests {
 
         assert_eq!(affected.len(), 4, "the moved table and the repainted area, old and new");
         assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    fn edits_between_frames_chain_their_updates_up_to_a_cap() {
+        let mut session = flat_session(12, 1);
+        session.set_tool(Tool::Place);
+        session
+            .state
+            .choose_prefab(Prefab::new(TreePath::parse("/obj/structure/table")));
+        let before = session.active_cache().revision;
+
+        session.place_at(Coord::new(1, 1, 1), None).unwrap();
+        session.place_at(Coord::new(2, 1, 1), None).unwrap();
+
+        let updates = &session.active_cache().frame_updates;
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].previous_revision, before);
+
+        for x in 3..=12 {
+            session.place_at(Coord::new(x, 1, 1), None).unwrap();
+        }
+        assert_eq!(session.active_cache().frame_updates.len(), MAX_PENDING_UPDATES);
     }
 
     #[test]
@@ -501,8 +524,8 @@ mod tests {
         assert_eq!(
             session
                 .active_cache()
-                .frame_update
-                .as_ref()
+                .frame_updates
+                .last()
                 .map(|update| update.previous_revision),
             Some(revision),
             "the renderer patches the pages it touched instead of uploading a rebuilt cache"

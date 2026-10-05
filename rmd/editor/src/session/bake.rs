@@ -7,6 +7,17 @@ use render::FrameUpdate;
 use super::{Session, always_highlighted};
 use crate::baker::{self};
 
+// updates the renderer may not have drawn yet, so a frame that missed some can still catch up
+pub(super) const MAX_PENDING_UPDATES: usize = 8;
+
+fn push_pending<T>(updates: &mut Vec<T>, update: T) {
+    if updates.len() == MAX_PENDING_UPDATES {
+        updates.remove(0);
+    }
+
+    updates.push(update);
+}
+
 pub(super) fn report_bake_output(bake: &mut editor::bake::Bake) {
     for line in bake.take_output() {
         log::info!("DM: {line}");
@@ -145,13 +156,16 @@ impl Session {
             let previous_revision = cache.lighting_revision;
             cache.lighting_revision = *next_revision;
             *next_revision = next_revision.wrapping_add(1).max(1);
-            cache.lighting_update = Some(render::LightingUpdate {
-                previous_revision,
-                tiles: render::UpdateRange {
-                    start: range.start,
-                    end: range.end,
+            push_pending(
+                &mut cache.lighting_updates,
+                render::LightingUpdate {
+                    previous_revision,
+                    tiles: render::UpdateRange {
+                        start: range.start,
+                        end: range.end,
+                    },
                 },
-            });
+            );
         }
 
         self.publish_frame_update(id, update);
@@ -164,10 +178,13 @@ impl Session {
             PrefabUpdate::Buffers { sprites } => {
                 let revision = self.bump_revision();
                 let cache = self.caches.entry(id).or_default();
-                cache.frame_update = Some(FrameUpdate {
-                    previous_revision: std::mem::replace(&mut cache.revision, revision),
-                    sprites,
-                });
+                push_pending(
+                    &mut cache.frame_updates,
+                    FrameUpdate {
+                        previous_revision: std::mem::replace(&mut cache.revision, revision),
+                        sprites,
+                    },
+                );
             },
             PrefabUpdate::Rebuild => self.rebuild_instances(id),
         }
@@ -1123,7 +1140,8 @@ mod tests {
             let frame = clock.elapsed();
             let cache = session.active_cache();
             let uploaded = cache
-                .frame_update
+                .frame_updates
+                .last()
                 .iter()
                 .flat_map(|update| &update.sprites)
                 .map(|range| range.end - range.start)
