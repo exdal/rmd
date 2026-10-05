@@ -76,6 +76,7 @@ impl Session {
             return false;
         }
 
+        let hidden = self.hidden_types();
         let built = {
             let Some((environment, document)) = self.state.active_pair_mut() else {
                 return false;
@@ -92,6 +93,7 @@ impl Session {
                 rotation,
                 placement,
                 selection_mode,
+                &hidden,
             )
         };
 
@@ -238,6 +240,7 @@ impl Session {
             return false;
         }
 
+        let hidden = self.hidden_types();
         let built = {
             let Some((environment, document)) = self.state.active_pair_mut() else {
                 return false;
@@ -246,7 +249,14 @@ impl Session {
                 return false;
             };
 
-            build_selection_transform(document, &environment.tree, selection, transform, selection_mode)
+            build_selection_transform(
+                document,
+                &environment.tree,
+                selection,
+                transform,
+                selection_mode,
+                &hidden,
+            )
         };
 
         let Some((action, selection)) = built else {
@@ -328,6 +338,54 @@ mod tests {
         Session,
         fixtures::{assert_render_cache_matches_rebuild, flat_session, focus_session},
     };
+
+    #[test]
+    fn a_block_move_leaves_areas_while_they_are_not_shown() {
+        let mut session = flat_session(3, 1);
+        let source = Coord::new(1, 1, 1);
+        let destination = Coord::new(3, 1, 1);
+        let mut engineering = Prefab::new(TreePath::parse("/area/station"));
+        engineering.set_var("name".into(), Value::Text("Engineering".into()));
+        for (prefab, coord) in [
+            (Prefab::new(TreePath::parse("/obj/structure/table")), source),
+            (engineering.clone(), destination),
+        ] {
+            session.state.choose_prefab(prefab);
+            session.set_tool(Tool::Place);
+            assert!(session.place_at(coord, None).is_some());
+        }
+        let area_at = |session: &Session, coord| {
+            session
+                .state
+                .active_document()
+                .unwrap()
+                .placed_tile(coord)
+                .unwrap()
+                .last()
+                .cloned()
+                .unwrap()
+        };
+        let source_area = area_at(&session, source);
+        let destination_area = area_at(&session, destination);
+
+        session.set_tool(Tool::BlockSelect);
+        assert!(session.select_block(Some(Selection::from_drag(source, source))));
+        assert!(session.place_selected_block_with_mode(
+            destination,
+            SelectionRotation::Original,
+            SelectionPlacement::Move,
+            BlockSelectionMode::Full,
+        ));
+
+        assert_eq!(area_at(&session, source), source_area);
+        assert_eq!(area_at(&session, destination), destination_area);
+        assert_eq!(destination_area.prefab(), &engineering);
+        assert_eq!(
+            session.map().unwrap().tile_at(destination).unwrap()[0].path,
+            TreePath::parse("/obj/structure/table")
+        );
+        assert_render_cache_matches_rebuild(&session);
+    }
 
     #[test]
     fn block_selection_clears_object_selection_and_respects_focus() {

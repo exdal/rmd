@@ -10,6 +10,7 @@ use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
 
 use crate::{
+    clipboard::{has_kind, merge_pasted},
     command::Edit,
     document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection},
     frame::HiddenTypes,
@@ -351,12 +352,14 @@ pub fn place_selection(
         rotation,
         placement,
         BlockSelectionMode::Full,
+        &HiddenTypes::default(),
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn place_selection_with_mode(
     document: &mut MapDocument, tree: &ObjectTree, selection: Selection, target_min: Coord,
-    rotation: SelectionRotation, placement: SelectionPlacement, mode: BlockSelectionMode,
+    rotation: SelectionRotation, placement: SelectionPlacement, mode: BlockSelectionMode, hidden: &HiddenTypes,
 ) -> Option<(ToolEdit, Selection)> {
     let target = rotated_selection_at(selection, target_min, rotation)?;
     if target == selection && rotation == SelectionRotation::Original {
@@ -378,18 +381,26 @@ pub fn place_selection_with_mode(
             mode,
             label,
         },
+        hidden,
     )
 }
 
 pub fn transform_selection(
     document: &mut MapDocument, tree: &ObjectTree, selection: Selection, transform: SelectionTransform,
 ) -> Option<(ToolEdit, Selection)> {
-    transform_selection_with_mode(document, tree, selection, transform, BlockSelectionMode::Full)
+    transform_selection_with_mode(
+        document,
+        tree,
+        selection,
+        transform,
+        BlockSelectionMode::Full,
+        &HiddenTypes::default(),
+    )
 }
 
 pub fn transform_selection_with_mode(
     document: &mut MapDocument, tree: &ObjectTree, selection: Selection, transform: SelectionTransform,
-    mode: BlockSelectionMode,
+    mode: BlockSelectionMode, hidden: &HiddenTypes,
 ) -> Option<(ToolEdit, Selection)> {
     if !selection.is_well_formed() {
         return None;
@@ -413,6 +424,7 @@ pub fn transform_selection_with_mode(
             mode,
             label,
         },
+        hidden,
     )
 }
 
@@ -502,7 +514,7 @@ impl SelectionEditRequest<'_> {
 }
 
 fn build_selection_edit(
-    document: &mut MapDocument, tree: &ObjectTree, request: SelectionEditRequest<'_>,
+    document: &mut MapDocument, tree: &ObjectTree, request: SelectionEditRequest<'_>, hidden: &HiddenTypes,
 ) -> Option<(ToolEdit, Selection)> {
     let size = document.map.size;
     let touched = request.touched_tiles().collect::<HashSet<_>>();
@@ -521,7 +533,11 @@ fn build_selection_edit(
     let mut payload = Vec::with_capacity(touched.len());
     for coord in request.source_tiles() {
         let destination = request.destination_of(coord);
-        let mut tile = document.placed_tile(coord)?;
+        let mut tile = document
+            .placed_tile(coord)?
+            .into_iter()
+            .filter(|placed| !hidden.hides(placed.prefab()))
+            .collect::<PlacedTile>();
         if request.placement == SelectionPlacement::Copy {
             tile = tile
                 .into_iter()
@@ -539,17 +555,30 @@ fn build_selection_edit(
     let mut staged = HashMap::<Coord, PlacedTile>::new();
     if let Some((default_turf, default_area)) = defaults {
         for coord in request.source_tiles() {
-            staged.insert(
-                coord,
-                vec![
-                    document.instantiate(Prefab::new(default_turf.clone())),
-                    document.instantiate(Prefab::new(default_area.clone())),
-                ],
-            );
+            let mut left = document
+                .placed_tile(coord)?
+                .into_iter()
+                .filter(|placed| hidden.hides(placed.prefab()))
+                .collect::<PlacedTile>();
+            for (kind, path) in [
+                (PlacementKind::Turf, &default_turf),
+                (PlacementKind::Area, &default_area),
+            ] {
+                if !has_kind(tree, &left, kind) {
+                    let placed = document.instantiate(Prefab::new(path.clone()));
+                    left.insert(insertion_index(tree, &left, kind), placed);
+                }
+            }
+
+            staged.insert(coord, left);
         }
     }
     for (coord, incoming) in payload {
-        staged.insert(coord, incoming);
+        let before = match staged.remove(&coord) {
+            Some(before) => before,
+            None => document.placed_tile(coord)?,
+        };
+        staged.insert(coord, merge_pasted(tree, &before, incoming, hidden));
     }
 
     let mut coords = staged.keys().copied().collect::<Vec<_>>();
@@ -2328,6 +2357,7 @@ mod tests {
             SelectionRotation::Original,
             SelectionPlacement::Move,
             border,
+            &HiddenTypes::default(),
         )
         .unwrap();
         assert_eq!(selected, target);
@@ -2387,6 +2417,7 @@ mod tests {
             SelectionRotation::Original,
             SelectionPlacement::Move,
             border,
+            &HiddenTypes::default(),
         )
         .unwrap();
         assert_eq!(selected, target);
@@ -2456,6 +2487,7 @@ mod tests {
             SelectionRotation::Clockwise,
             SelectionPlacement::Move,
             border,
+            &HiddenTypes::default(),
         )
         .unwrap();
         // the 5x4 source rotates into a 4x5 destination
@@ -2478,6 +2510,119 @@ mod tests {
                 ["/obj/table", "/turf/floor", "/area/station"]
             );
         }
+    }
+
+    fn hidden_areas() -> HiddenTypes {
+        ["/area", "/area/station", "/area/space"]
+            .into_iter()
+            .map(TreePath::parse)
+            .collect()
+    }
+
+    fn rooms_document() -> MapDocument {
+        grid_document(4, 1, |coord| {
+            prefabs(if coord.x <= 2 {
+                &["/obj/table", "/turf/floor", "/area/station"]
+            } else {
+                &["/obj/chair", "/turf/wall", "/area/space"]
+            })
+        })
+    }
+
+    #[test]
+    fn a_block_move_leaves_hidden_areas_where_they_were() {
+        let tree = tree();
+        let mut document = rooms_document();
+        let areas = (1..=4)
+            .map(|x| document.placed_tile(Coord::new(x, 1, 1)).unwrap()[2].clone())
+            .collect::<Vec<_>>();
+        let source = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 1, 1));
+
+        let (action, _) = place_selection_with_mode(
+            &mut document,
+            &tree,
+            source,
+            Coord::new(2, 1, 1),
+            SelectionRotation::Original,
+            SelectionPlacement::Move,
+            BlockSelectionMode::Full,
+            &hidden_areas(),
+        )
+        .unwrap();
+        document.apply(action.edit);
+
+        assert_eq!(tile_paths(&document, Coord::new(1, 1, 1)), ["/turf", "/area/station"]);
+        assert_eq!(
+            tile_paths(&document, Coord::new(2, 1, 1)),
+            ["/obj/table", "/turf/floor", "/area/station"]
+        );
+        assert_eq!(
+            tile_paths(&document, Coord::new(3, 1, 1)),
+            ["/obj/table", "/turf/floor", "/area/space"]
+        );
+        for (x, area) in (1..=4).zip(areas) {
+            let tile = document.placed_tile(Coord::new(x, 1, 1)).unwrap();
+            assert_eq!(tile.last(), Some(&area), "the area at x={x} keeps its placement");
+        }
+    }
+
+    #[test]
+    fn a_block_copy_leaves_hidden_destination_areas() {
+        let tree = tree();
+        let mut document = rooms_document();
+        let areas = (1..=4)
+            .map(|x| document.placed_tile(Coord::new(x, 1, 1)).unwrap()[2].clone())
+            .collect::<Vec<_>>();
+        let source = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 1, 1));
+
+        let (action, _) = place_selection_with_mode(
+            &mut document,
+            &tree,
+            source,
+            Coord::new(2, 1, 1),
+            SelectionRotation::Original,
+            SelectionPlacement::Copy,
+            BlockSelectionMode::Full,
+            &hidden_areas(),
+        )
+        .unwrap();
+        document.apply(action.edit);
+
+        assert_eq!(
+            tile_paths(&document, Coord::new(3, 1, 1)),
+            ["/obj/table", "/turf/floor", "/area/space"]
+        );
+        for (x, area) in (1..=4).zip(areas) {
+            let tile = document.placed_tile(Coord::new(x, 1, 1)).unwrap();
+            assert_eq!(tile.last(), Some(&area), "the area at x={x} keeps its placement");
+        }
+    }
+
+    #[test]
+    fn a_block_transform_leaves_hidden_areas_where_they_were() {
+        let tree = tree();
+        let mut document = rooms_document();
+        let selection = Selection::from_drag(Coord::new(2, 1, 1), Coord::new(3, 1, 1));
+
+        let (action, _) = transform_selection_with_mode(
+            &mut document,
+            &tree,
+            selection,
+            SelectionTransform::MirrorHorizontal,
+            BlockSelectionMode::Full,
+            &hidden_areas(),
+        )
+        .unwrap();
+        document.apply(action.edit);
+
+        assert_eq!(
+            tile_paths(&document, Coord::new(2, 1, 1)),
+            ["/obj/chair", "/turf/wall", "/area/station"]
+        );
+        assert_eq!(
+            tile_paths(&document, Coord::new(3, 1, 1)),
+            ["/obj/table", "/turf/floor", "/area/space"]
+        );
     }
 
     #[test]
@@ -2503,6 +2648,7 @@ mod tests {
             selection,
             SelectionTransform::MirrorHorizontal,
             border,
+            &HiddenTypes::default(),
         )
         .unwrap();
         assert_eq!(mirrored, selection);

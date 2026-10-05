@@ -192,7 +192,9 @@ pub fn paste_block(
     ))
 }
 
-fn merge_pasted(tree: &ObjectTree, before: &PlacedTile, pasted: PlacedTile, hidden: &HiddenTypes) -> PlacedTile {
+pub(crate) fn merge_pasted(
+    tree: &ObjectTree, before: &PlacedTile, pasted: PlacedTile, hidden: &HiddenTypes,
+) -> PlacedTile {
     if hidden.is_empty() {
         return pasted;
     }
@@ -297,7 +299,7 @@ fn kind_of(tree: &ObjectTree, prefab: &Prefab) -> PlacementKind {
     placement_kind(tree, prefab).unwrap_or(PlacementKind::Atom)
 }
 
-fn has_kind(tree: &ObjectTree, tile: &[PlacedPrefab], kind: PlacementKind) -> bool {
+pub(crate) fn has_kind(tree: &ObjectTree, tile: &[PlacedPrefab], kind: PlacementKind) -> bool {
     tile.iter().any(|placed| kind_of(tree, placed.prefab()) == kind)
 }
 

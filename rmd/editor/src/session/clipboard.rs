@@ -11,9 +11,18 @@ use super::Session;
 
 impl Session {
     pub(super) fn hidden_types(&self) -> HiddenTypes {
-        self.tree()
-            .map(|tree| self.type_visibility.hidden_types(tree))
-            .unwrap_or_default()
+        let Some(tree) = self.tree() else {
+            return HiddenTypes::default();
+        };
+
+        let mut visibility = self.type_visibility.clone();
+        if !self.options.show_areas
+            && let Some(area) = tree.roots().area
+        {
+            visibility.set_subtree(tree, area, false);
+        }
+
+        visibility.hidden_types(tree)
     }
 
     pub fn copy_selection(&mut self, mode: BlockSelectionMode) -> bool {
@@ -296,6 +305,7 @@ mod tests {
                 SelectionRotation::CounterClockwise,
             ] {
                 let mut session = flat_session(9, 11);
+                session.options.show_areas = true;
                 let first = session.state.active().unwrap();
                 let source = Selection::from_drag(Coord::new(2, 2, 1), Coord::new(6, 8, 1));
                 let mut red = Prefab::new(TreePath::parse("/turf/open/floor"));
@@ -394,6 +404,32 @@ mod tests {
     }
 
     #[test]
+    fn a_copy_takes_areas_only_while_they_are_shown() {
+        let mut session = flat_session(2, 1);
+        let source = Coord::new(1, 1, 1);
+        place(
+            &mut session,
+            Prefab::new(TreePath::parse("/obj/structure/table")),
+            source,
+        );
+
+        assert!(session.copy_tile(source));
+        let copied = session.clipboard().unwrap().tile(0, 0).unwrap();
+        assert!(
+            copied
+                .iter()
+                .all(|prefab| !prefab.path.to_string().starts_with("/area"))
+        );
+
+        session.options.show_areas = true;
+        assert!(session.copy_tile(source));
+        assert_eq!(
+            session.clipboard().unwrap().tile(0, 0).unwrap().last().unwrap().path,
+            TreePath::parse("/area/station")
+        );
+    }
+
+    #[test]
     fn a_block_cut_and_paste_leaves_hidden_areas_where_they_were() {
         let mut session = flat_session(4, 4);
         let source = Coord::new(1, 1, 1);
@@ -453,6 +489,7 @@ mod tests {
     #[test]
     fn a_filtered_paste_never_leaves_a_tile_without_a_turf() {
         let mut session = flat_session(4, 1);
+        session.options.show_areas = true;
         let source = Coord::new(1, 1, 1);
         let destination = Coord::new(3, 1, 1);
         place(
@@ -496,6 +533,7 @@ mod tests {
     #[test]
     fn context_tile_cut_paste_and_delete_are_undoable() {
         let mut session = flat_session(4, 4);
+        session.options.show_areas = true;
         let source = Coord::new(2, 2, 1);
         let destination = Coord::new(3, 2, 1);
         let table = TreePath::parse("/obj/structure/table");
