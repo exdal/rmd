@@ -1,9 +1,10 @@
 use core::{
     location::FileId,
     path::TreePath,
-    types::{Identifier, ProcId},
+    types::{Identifier, ProcId, Value},
 };
 
+use codegen::ProcIndex;
 use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
 
 pub const BASE_PATH: &str = "/datum/demir";
@@ -61,11 +62,8 @@ impl Default for ProfileDefinition {
 }
 
 impl ProfileDefinition {
-    pub fn resolve(tree: &ObjectTree, ty: TypeId) -> Self {
-        let procedures = ProfileHook::ALL.map(|hook| {
-            tree.proc_inherited(ty, &Identifier::from(hook.name()))
-                .and_then(|procedure| procedure.body)
-        });
+    pub fn resolve(tree: &ObjectTree, index: &ProcIndex, ty: TypeId) -> Self {
+        let procedures = ProfileHook::ALL.map(|hook| index.inherited_body(tree, ty, &Identifier::from(hook.name())));
 
         Self { ty, procedures }
     }
@@ -192,7 +190,7 @@ fn profiles(tree: &ObjectTree) -> Result<Vec<TypeId>, ProfileError> {
 
 fn default_marker(tree: &ObjectTree, id: TypeId) -> Option<&VarDecl> {
     tree.var(id, &Identifier::from(DEFAULT_VARIABLE))
-        .filter(|variable| variable.initializer.is_none() && variable.value.is_truthy())
+        .filter(|variable| variable.value != Value::Unevaluated && variable.value.is_truthy())
 }
 
 fn pick_default(tree: &ObjectTree, profiles: &[TypeId], defaults: &[TypeId]) -> Result<TypeId, ProfileError> {

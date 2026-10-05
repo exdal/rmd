@@ -2164,8 +2164,10 @@ dependencies = [
  "core",
  "fixedbitset",
  "lexer",
+ "objtree",
  "prelude",
  "rustc-hash",
+ "sema",
 ]
 
 [[package]]
@@ -3640,7 +3642,6 @@ version = "1.7.1"
 dependencies = [
  "ast",
  "core",
- "ir",
  "lexer",
  "objtree",
  "prelude",

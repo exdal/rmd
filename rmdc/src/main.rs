@@ -28,6 +28,7 @@ use std::{
 };
 
 use dmi::{IconFile, metadata::IconState};
+use ir::ProcIndex;
 use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
 
 fn usage() -> ExitCode {
@@ -184,7 +185,7 @@ fn dump_tree(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("{} top level declarations", ast.declarations.len());
 
     println!("=== TREE ===");
-    let (tree, errors) = sema::analyze_tree(&ast);
+    let (tree, errors) = sema::analyze(&ast);
     print!("{}", render_tree(&tree, &preprocessed.sources, source_root));
 
     for error in &errors {
@@ -205,12 +206,13 @@ fn dump_ir(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn std::er
     }
 
     let ast = ast::parse(&preprocessed.tokens)?;
-    let (tree, module, _) = sema::analyze(&ast, false);
+    let (tree, _) = sema::analyze(&ast);
+    let (module, _) = ir::lower(&ast, &tree, false);
     let color = std::env::var("DM_COLOR").is_ok();
     let output = match selection {
         EntrySelection::All => ir::disasm::dump_with(&module, color),
         selection => {
-            let entry = resolve_entry(&tree, &selection)?;
+            let entry = resolve_entry(&tree, &module.index, &selection)?;
             match codegen::reachable_procedures(&module, &tree, &[entry.proc], &[])? {
                 codegen::ProcedureReachability::All => ir::disasm::dump_with(&module, color),
                 codegen::ProcedureReachability::Selected(procedures) => {
@@ -232,11 +234,12 @@ fn dump_bytecode(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn s
     }
 
     let ast = ast::parse(&preprocessed.tokens)?;
-    let (tree, module, _) = sema::analyze(&ast, true);
+    let (tree, _) = sema::analyze(&ast);
+    let (module, _) = ir::lower(&ast, &tree, true);
     let module = match selection {
         EntrySelection::All => codegen::generate(&module)?,
         selection => {
-            let entry = resolve_entry(&tree, &selection)?;
+            let entry = resolve_entry(&tree, &module.index, &selection)?;
             codegen::generate_reachable(&module, &tree, &[entry.proc], &[])?
         },
     };
@@ -245,21 +248,17 @@ fn dump_bytecode(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn s
     Ok(())
 }
 
-fn resolve_entry(tree: &ObjectTree, selection: &EntrySelection) -> Result<ResolvedEntry, Box<dyn std::error::Error>> {
+fn resolve_entry(
+    tree: &ObjectTree, index: &ProcIndex, selection: &EntrySelection,
+) -> Result<ResolvedEntry, Box<dyn std::error::Error>> {
     match selection {
         EntrySelection::Auto => {
-            if let Some(proc) = tree
-                .proc_inherited(TypeId::ROOT, &"main".into())
-                .and_then(|procedure| procedure.body)
-            {
+            if let Some(proc) = index.inherited_body(tree, TypeId::ROOT, &"main".into()) {
                 return Ok(ResolvedEntry { proc, world: false });
             }
 
             let world = tree.id_of(&TreePath::parse("/world"));
-            if let Some(proc) = world
-                .and_then(|world| tree.proc_inherited(world, &"New".into()))
-                .and_then(|procedure| procedure.body)
-            {
+            if let Some(proc) = world.and_then(|world| index.inherited_body(tree, world, &"New".into())) {
                 return Ok(ResolvedEntry { proc, world: true });
             }
 
@@ -274,7 +273,7 @@ fn resolve_entry(tree: &ObjectTree, selection: &EntrySelection) -> Result<Resolv
             let Some(owner) = tree.id_of(&owner_path) else {
                 return Err(std::io::Error::other(format!("entry owner {owner_path} does not exist")).into());
             };
-            let Some(proc) = tree.proc_inherited(owner, name).and_then(|procedure| procedure.body) else {
+            let Some(proc) = index.inherited_body(tree, owner, name) else {
                 return Err(std::io::Error::other(format!("entry procedure {text} does not exist")).into());
             };
             let world = tree.id_of(&TreePath::parse("/world")) == Some(owner) && name.as_str() == "New";
@@ -307,7 +306,8 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
             entry,
         ))
     })?;
-    let (tree, ir_module, errors) = sema::analyze(&ast, true);
+    let (tree, errors) = sema::analyze(&ast);
+    let (ir_module, _) = ir::lower(&ast, &tree, true);
     for error in &errors {
         eprintln!(
             "{}",
@@ -320,7 +320,7 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
 
     let profile = vm::bake::profile_type(&tree).map_err(|error| error.to_string())?;
 
-    let definition = vm::profile::ProfileDefinition::resolve(&tree, profile);
+    let definition = vm::profile::ProfileDefinition::resolve(&tree, &ir_module.index, profile);
     let roots = definition.entry_points();
     let module = codegen::generate_reachable(&ir_module, &tree, &roots, &vm::bake::host_reads())?;
     drop(ast);
@@ -603,7 +603,8 @@ fn evaluate_file_with(path: &Path, selection: EntrySelection) -> Result<Vec<Stri
             path,
         ))
     })?;
-    let (tree, module, errors) = sema::analyze(&ast, true);
+    let (tree, errors) = sema::analyze(&ast);
+    let (module, _) = ir::lower(&ast, &tree, true);
     for error in &errors {
         eprintln!(
             "{}",
@@ -614,7 +615,7 @@ fn evaluate_file_with(path: &Path, selection: EntrySelection) -> Result<Vec<Stri
         return Err("semantic analysis failed".into());
     }
 
-    let entry = resolve_entry(&tree, &selection)?;
+    let entry = resolve_entry(&tree, &module.index, &selection)?;
     let module = codegen::generate_reachable(&module, &tree, &[entry.proc], &[])?;
     let mut runtime = vm::Runtime::default();
     let result = if entry.world {
@@ -755,7 +756,7 @@ fn format_proc(proc: &ProcDecl) -> String {
         if index != 0 {
             output.push_str(", ");
         }
-        output.push_str(param.spec.name.as_str());
+        output.push_str(param.name.as_str());
     }
     output.push(')');
 
@@ -1043,7 +1044,7 @@ mod tests {
         let (tokens, errors) = lexer::tokenize(source);
         assert!(errors.is_empty());
         let ast = ast::parse(&tokens).expect("fixture should parse");
-        let (tree, errors) = sema::analyze_tree(&ast);
+        let (tree, errors) = sema::analyze(&ast);
         assert!(errors.is_empty());
 
         let source_root = source_root(&sources, Some(entry), Path::new("/project/game/entry.dm"));

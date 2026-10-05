@@ -332,7 +332,6 @@ mod tests {
                 declared_type: None,
                 modifiers: VarModifiers::default(),
                 value: Value::Num(2.0),
-                initializer: None,
                 declared: true,
                 location: Location::default(),
                 resolved_type: None,

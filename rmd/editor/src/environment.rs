@@ -347,7 +347,7 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
             let profiles = selection.as_ref().map(|(_, profiles)| profiles.clone());
             let (program, codegen_error) = match (view.module, selection) {
                 (Some(module), Some((profile, _))) => {
-                    let definition = vm::profile::ProfileDefinition::resolve(&view.tree, profile);
+                    let definition = vm::profile::ProfileDefinition::resolve(&view.tree, &module.index, profile);
                     let roots = definition.entry_points();
                     match codegen::generate_reachable(&module, &view.tree, &roots, &vm::bake::host_reads()) {
                         Ok(module) => (
@@ -502,19 +502,15 @@ fn compile_view<'a>(
         })
         .collect::<Vec<_>>();
 
-    // a view without a profile to bake never reaches codegen, so its IR is not worth finishing
-    let mut profile = None;
-    let (tree, module, sema_errors, optimization_timings) = if generate {
-        sema::analyze_if(&ast, options.optimizations_enabled, |tree| {
-            let selection = select_profile(tree, &files, options, forced);
-            let is_selected = selection.chosen.is_some();
-            profile = Some(selection);
-
-            is_selected
-        })
-    } else {
-        let (tree, errors) = sema::analyze_tree(&ast);
-        (tree, None, errors, ir::opt::OptimizationTimings::default())
+    let (tree, sema_errors) = sema::analyze(&ast);
+    // a view without a profile to bake never reaches codegen, so its IR is not worth lowering
+    let profile = generate.then(|| select_profile(&tree, &files, options, forced));
+    let (module, optimization_timings) = match &profile {
+        Some(ProfileSelection { chosen: Some(_), .. }) => {
+            let (module, timings) = ir::lower(&ast, &tree, options.optimizations_enabled);
+            (Some(module), timings)
+        },
+        _ => (None, ir::opt::OptimizationTimings::default()),
     };
     if progress.is_cancelled() {
         return Err(LoadError::Cancelled);
@@ -648,16 +644,18 @@ mod tests {
             .tree
             .id_of(&TreePath::parse("/datum/demir/main"))
             .expect("main profile");
-        let main_bake = vm::profile::ProfileDefinition::resolve(&default_program.tree, main)
-            .procedure(vm::profile::ProfileHook::Bake)
-            .expect("main bake body");
+        let main_bake =
+            vm::profile::ProfileDefinition::resolve(&default_program.tree, &default_program.module.index, main)
+                .procedure(vm::profile::ProfileHook::Bake)
+                .expect("main bake body");
         let debug = default_program
             .tree
             .id_of(&TreePath::parse("/datum/demir/main/debug"))
             .expect("debug profile");
-        let debug_bake = vm::profile::ProfileDefinition::resolve(&default_program.tree, debug)
-            .procedure(vm::profile::ProfileHook::Bake)
-            .expect("debug bake body");
+        let debug_bake =
+            vm::profile::ProfileDefinition::resolve(&default_program.tree, &default_program.module.index, debug)
+                .procedure(vm::profile::ProfileHook::Bake)
+                .expect("debug bake body");
         assert!(default_program.module.function_for_proc(main_bake).is_some());
         assert!(default_program.module.function_for_proc(debug_bake).is_none());
 
@@ -680,16 +678,17 @@ mod tests {
             .tree
             .id_of(&TreePath::parse("/datum/demir/main"))
             .expect("main profile");
-        let main_bake = vm::profile::ProfileDefinition::resolve(&debug_program.tree, main)
+        let main_bake = vm::profile::ProfileDefinition::resolve(&debug_program.tree, &debug_program.module.index, main)
             .procedure(vm::profile::ProfileHook::Bake)
             .expect("main bake body");
         let debug = debug_program
             .tree
             .id_of(&TreePath::parse("/datum/demir/main/debug"))
             .expect("debug profile");
-        let debug_bake = vm::profile::ProfileDefinition::resolve(&debug_program.tree, debug)
-            .procedure(vm::profile::ProfileHook::Bake)
-            .expect("debug bake body");
+        let debug_bake =
+            vm::profile::ProfileDefinition::resolve(&debug_program.tree, &debug_program.module.index, debug)
+                .procedure(vm::profile::ProfileHook::Bake)
+                .expect("debug bake body");
         assert!(debug_program.module.function_for_proc(main_bake).is_none());
         assert!(debug_program.module.function_for_proc(debug_bake).is_some());
 

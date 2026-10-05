@@ -2419,7 +2419,6 @@ mod tests {
                 declared_type: None,
                 modifiers,
                 value,
-                initializer: None,
                 declared: true,
                 location: Location::default(),
                 resolved_type: None,

@@ -1,4 +1,3 @@
-pub mod constant;
 pub mod error;
 
 use core::{
@@ -7,21 +6,25 @@ use core::{
     vars,
 };
 
-use ast::{AST, Declaration, Expression, ExpressionId, Literal, SettingMode, Statement};
-use objtree::{ObjectTree, ProcDecl, ResolvedVarType, TypeId, VarDecl, VarTypeKind};
+use ast::{
+    AST,
+    Declaration,
+    Expression,
+    ExpressionId,
+    Literal,
+    Statement,
+    constant::fold,
+    intrinsic::{IntrinsicMarkerError, intrinsic_marker},
+};
+use objtree::{ObjectTree, ParamDecl, ProcDecl, ResolvedVarType, TypeId, VarDecl, VarTypeKind};
 use prelude::Intrinsic;
 use rustc_hash::FxHashMap;
 
-use crate::{
-    constant::fold,
-    error::{SemaError, SemaErrorKind},
-};
+use crate::error::{SemaError, SemaErrorKind};
 
-/// `AST` to `ObjectTree` and executable IR.
 pub struct Analyzer<'a> {
     ast: &'a AST,
     tree: ObjectTree,
-    module: ir::IrModuleBuilder<'a>,
     errors: Vec<SemaError>,
     var_facts: FxHashMap<(TypeId, Identifier), VarFacts>,
 }
@@ -39,16 +42,8 @@ impl<'a> Analyzer<'a> {
         Self {
             ast,
             tree: ObjectTree::new(),
-            module: ir::IrModuleBuilder::new(ast),
             errors: Vec::new(),
             var_facts: FxHashMap::default(),
-        }
-    }
-
-    pub fn tree_only(ast: &'a AST) -> Self {
-        Self {
-            module: ir::IrModuleBuilder::new(ast).skipping_bodies(),
-            ..Self::new(ast)
         }
     }
 
@@ -62,73 +57,11 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    pub fn finish_tree(mut self) -> (ObjectTree, Vec<SemaError>) {
-        self.resolve_tree();
-
-        (self.tree, self.errors)
-    }
-
-    pub fn finish_if(
-        mut self, optimize: bool, wants_module: impl FnOnce(&ObjectTree) -> bool,
-    ) -> (
-        ObjectTree,
-        Option<ir::Module>,
-        Vec<SemaError>,
-        ir::opt::OptimizationTimings,
-    ) {
-        self.resolve_tree();
-        if !wants_module(&self.tree) {
-            return (self.tree, None, self.errors, ir::opt::OptimizationTimings::default());
-        }
-
-        let (tree, module, errors, timings) = self.finish_module(optimize);
-
-        (tree, Some(module), errors, timings)
-    }
-
-    pub fn finish(self, optimize: bool) -> (ObjectTree, ir::Module, Vec<SemaError>) {
-        let (tree, module, errors, _) = self.finish_with_optimizations(optimize);
-
-        (tree, module, errors)
-    }
-
-    pub fn finish_with_optimizations(
-        mut self, enabled: bool,
-    ) -> (ObjectTree, ir::Module, Vec<SemaError>, ir::opt::OptimizationTimings) {
-        self.resolve_tree();
-        self.finish_module(enabled)
-    }
-
-    fn resolve_tree(&mut self) {
+    pub fn finish(mut self) -> (ObjectTree, Vec<SemaError>) {
         self.tree.resolve_parent_types();
         self.resolve_var_types();
-    }
 
-    fn finish_module(
-        mut self, enabled: bool,
-    ) -> (ObjectTree, ir::Module, Vec<SemaError>, ir::opt::OptimizationTimings) {
-        self.resolve_new_types();
-        let (module, timings) = self.module.finish_with_optimizations(enabled);
-
-        (self.tree, module, self.errors, timings)
-    }
-
-    fn resolve_new_types(&mut self) {
-        for pending in self.module.unresolved_new().to_vec() {
-            let Some(ty) = self.declared_type(&pending.owner, &pending.name) else {
-                continue;
-            };
-
-            self.module.resolve_new(pending.node, ty);
-        }
-    }
-
-    fn declared_type(&self, owner: &TreePath, name: &Identifier) -> Option<TreePath> {
-        self.tree
-            .id_of(owner)
-            .and_then(|id| self.tree.var_inherited(id, name))
-            .or_else(|| self.tree.var_inherited(TypeId::ROOT, name))
-            .and_then(|var| var.declared_type.clone())
+        (self.tree, self.errors)
     }
 
     fn resolve_var_types(&mut self) {
@@ -196,21 +129,6 @@ impl<'a> Analyzer<'a> {
                     None if sized => Value::Unevaluated,
                     None => Value::Null,
                 };
-                let runtime_initializer = match *initializer {
-                    Some(expr) => (value == Value::Unevaluated).then(|| {
-                        self.module.lower_initializer(
-                            owner.clone(),
-                            name.clone(),
-                            declared_type.clone(),
-                            expr,
-                            *location,
-                        )
-                    }),
-                    None => sized.then(|| {
-                        self.module
-                            .lower_sized_initializer(owner.clone(), name.clone(), dimensions, *location)
-                    }),
-                };
                 let Some(decl) = self.tree.get_mut(id) else {
                     return;
                 };
@@ -243,7 +161,6 @@ impl<'a> Analyzer<'a> {
                         declared_type,
                         modifiers,
                         value,
-                        initializer: runtime_initializer,
                         declared: declares || is_already_declared,
                         location: *location,
                         resolved_type: None,
@@ -266,33 +183,16 @@ impl<'a> Analyzer<'a> {
                 let Some(name) = path.name().cloned() else {
                     return;
                 };
-                let body_statements = body.as_deref().unwrap_or_default();
-                let intrinsic = self.intrinsic(body_statements, *location);
+                self.check_intrinsic(body.as_deref().unwrap_or_default(), *location);
 
-                let proc_id = self.module.lower_proc_with_intrinsic(
-                    owner,
-                    name.clone(),
-                    params,
-                    *variadic,
-                    body_statements,
-                    intrinsic,
-                    *location,
-                );
-                if let Some(previous) = self
-                    .tree
-                    .get(id)
-                    .and_then(|decl| decl.procs.get(&name))
-                    .and_then(|proc| proc.body)
-                    && let Some(proc) = self.module.module.procs.get_mut(proc_id.0 as usize)
-                {
-                    proc.previous = Some(previous);
-                }
-                let lowered_params = self
-                    .module
-                    .module
-                    .proc(proc_id)
-                    .map(|proc| proc.params.clone())
-                    .unwrap_or_default();
+                let params = params
+                    .iter()
+                    .map(|param| ParamDecl {
+                        name: param.spec.name.clone(),
+                        var_type: param.spec.var_type.clone(),
+                        as_type: param.spec.as_type.clone(),
+                    })
+                    .collect();
                 let Some(decl) = self.tree.get_mut(id) else {
                     return;
                 };
@@ -301,8 +201,7 @@ impl<'a> Analyzer<'a> {
                     name.clone(),
                     ProcDecl {
                         name,
-                        params: lowered_params,
-                        body: body.as_ref().map(|_| proc_id),
+                        params,
                         kind: *kind,
                         variadic: *variadic,
                         return_type: return_type.clone(),
@@ -330,15 +229,6 @@ impl<'a> Analyzer<'a> {
                 let declared_type = inherited.as_ref().and_then(|var| var.declared_type.clone());
                 let modifiers = inherited.as_ref().map(|var| var.modifiers).unwrap_or_default();
 
-                let runtime_initializer = (folded == Value::Unevaluated).then(|| {
-                    self.module.lower_initializer(
-                        prefix.clone(),
-                        name.clone(),
-                        declared_type.clone(),
-                        *value,
-                        *location,
-                    )
-                });
                 let Some(decl) = self.tree.get_mut(id) else {
                     return;
                 };
@@ -354,7 +244,6 @@ impl<'a> Analyzer<'a> {
                         declared_type,
                         modifiers,
                         value: folded,
-                        initializer: runtime_initializer,
                         declared: is_already_declared,
                         location: *location,
                         resolved_type: None,
@@ -364,49 +253,15 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn intrinsic(&mut self, body: &[Statement], location: core::location::Location) -> Option<Intrinsic> {
-        let markers = body
-            .iter()
-            .filter_map(|statement| match statement {
-                Statement::Setting { name, mode, value } if name.as_str() == "__demir_intrin" => Some((*mode, *value)),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-
-        if markers.len() > 1 {
-            self.errors
-                .push(SemaError::new(SemaErrorKind::DuplicateIntrinsic, location));
-            return None;
-        }
-
-        let Some((SettingMode::Assign, id)) = markers.first() else {
-            if !markers.is_empty() {
-                self.errors
-                    .push(SemaError::new(SemaErrorKind::InvalidIntrinsic, location));
-            }
-            return None;
+    fn check_intrinsic(&mut self, body: &[Statement], location: core::location::Location) {
+        let kind = match intrinsic_marker(self.ast, body) {
+            Ok(Some(id)) if Intrinsic::try_from(id).is_err() => SemaErrorKind::UnknownIntrinsic(id),
+            Ok(_) => return,
+            Err(IntrinsicMarkerError::Duplicate) => SemaErrorKind::DuplicateIntrinsic,
+            Err(IntrinsicMarkerError::Invalid) => SemaErrorKind::InvalidIntrinsic,
         };
-        let expression = self.ast.get_expr(*id)?;
-        let Expression::Literal(Literal::Num(number)) = expression else {
-            self.errors
-                .push(SemaError::new(SemaErrorKind::InvalidIntrinsic, location));
-            return None;
-        };
-        if !number.is_finite() || *number < 0.0 || number.fract() != 0.0 || *number > u16::MAX as f32 {
-            self.errors
-                .push(SemaError::new(SemaErrorKind::InvalidIntrinsic, location));
-            return None;
-        }
 
-        let id = *number as u16;
-        match Intrinsic::try_from(id) {
-            Ok(intrinsic) => Some(intrinsic),
-            Err(_) => {
-                self.errors
-                    .push(SemaError::new(SemaErrorKind::UnknownIntrinsic(id), location));
-                None
-            },
-        }
+        self.errors.push(SemaError::new(kind, location));
     }
 }
 
@@ -584,41 +439,11 @@ fn resolve_spec(tree: &ObjectTree, spec: &TypeSpec) -> ResolvedVarType {
     }
 }
 
-pub fn analyze(ast: &AST, optimize: bool) -> (ObjectTree, ir::Module, Vec<SemaError>) {
+pub fn analyze(ast: &AST) -> (ObjectTree, Vec<SemaError>) {
     let mut analyzer = Analyzer::new(ast);
     analyzer.add();
 
-    analyzer.finish(optimize)
-}
-
-pub fn analyze_if(
-    ast: &AST, optimize: bool, wants_module: impl FnOnce(&ObjectTree) -> bool,
-) -> (
-    ObjectTree,
-    Option<ir::Module>,
-    Vec<SemaError>,
-    ir::opt::OptimizationTimings,
-) {
-    let mut analyzer = Analyzer::new(ast);
-    analyzer.add();
-
-    analyzer.finish_if(optimize, wants_module)
-}
-
-pub fn analyze_tree(ast: &AST) -> (ObjectTree, Vec<SemaError>) {
-    let mut analyzer = Analyzer::tree_only(ast);
-    analyzer.add();
-
-    analyzer.finish_tree()
-}
-
-pub fn analyze_with_optimizations(
-    ast: &AST, enabled: bool,
-) -> (ObjectTree, ir::Module, Vec<SemaError>, ir::opt::OptimizationTimings) {
-    let mut analyzer = Analyzer::new(ast);
-    analyzer.add();
-
-    analyzer.finish_with_optimizations(enabled)
+    analyzer.finish()
 }
 
 pub fn lookup_var<'a>(tree: &'a ObjectTree, path: &TreePath, name: &Identifier) -> Option<&'a Value> {
@@ -640,7 +465,7 @@ mod tests {
 
     use super::*;
 
-    fn analyze_source(source: &str) -> (ObjectTree, ir::Module, Vec<SemaError>) {
+    fn analyze_source(source: &str) -> (ObjectTree, Vec<SemaError>) {
         let (tokens, lexer_errors) = lexer::tokenize(source);
         assert!(lexer_errors.is_empty(), "{lexer_errors:?}");
         let tokens = tokens
@@ -653,12 +478,12 @@ mod tests {
             .collect::<Vec<_>>();
         let ast = ast::parse(&tokens).expect("fixture should parse");
 
-        analyze(&ast, true)
+        analyze(&ast)
     }
 
     #[test]
     fn a_type_is_located_at_its_first_block_not_its_first_mention() {
-        let (tree, _, errors) = analyze_source(fixture!(
+        let (tree, errors) = analyze_source(fixture!(
             "programs/a_type_is_located_at_its_first_block_not_its_first_mention.dm"
         ));
         assert!(errors.is_empty(), "{errors:?}");
@@ -670,7 +495,7 @@ mod tests {
 
     #[test]
     fn resolves_variable_types_after_inheritance_and_forward_declarations() {
-        let (tree, _, errors) = analyze_source(fixture!(
+        let (tree, errors) = analyze_source(fixture!(
             "programs/resolves_variable_types_after_inheritance_and_forward_declarations.dm"
         ));
         assert!(errors.is_empty(), "{errors:?}");
@@ -695,35 +520,9 @@ mod tests {
     }
 
     #[test]
-    fn retains_override_chains_and_runtime_initializers() {
-        let source = fixture!("programs/retains_override_chains_and_runtime_initializers.dm");
-        let (tree, module, sema_errors) = analyze_source(source);
-        assert!(sema_errors.is_empty());
-        let object = tree.id_of(&TreePath::parse("/obj")).expect("/obj type");
-        let initializer = tree
-            .var(object, &"result".into())
-            .and_then(|var| var.initializer)
-            .expect("runtime initializer");
-        let latest = tree
-            .proc_inherited(object, &"source".into())
-            .and_then(|proc| proc.body)
-            .expect("latest proc body");
-        let previous = module
-            .proc(latest)
-            .and_then(|proc| proc.previous)
-            .expect("previous proc body");
-
-        assert!(module.proc(initializer).is_some());
-        assert_eq!(
-            module.proc(previous).map(|proc| &proc.name),
-            module.proc(latest).map(|proc| &proc.name)
-        );
-    }
-
-    #[test]
     fn absolute_var_assignment_overrides_an_existing_declaration() {
         let source = fixture!("programs/absolute-var-assignment-overrides-an-existing-declaration.dm");
-        let (tree, _, errors) = analyze_source(source);
+        let (tree, errors) = analyze_source(source);
         assert!(errors.is_empty(), "{errors:?}");
         let client = tree.id_of(&TreePath::parse("/client")).expect("/client type");
         let script = tree.var(client, &"script".into()).expect("script var");
@@ -734,7 +533,7 @@ mod tests {
     #[test]
     fn repeated_var_declarations_remain_an_error() {
         let source = fixture!("programs/repeated-var-declarations-remain-an-error.dm");
-        let (_, _, errors) = analyze_source(source);
+        let (_, errors) = analyze_source(source);
 
         assert!(matches!(
             errors.as_slice(),
@@ -748,7 +547,7 @@ mod tests {
     #[test]
     fn undeclared_overrides_are_reported() {
         let source = fixture!("programs/undeclared_overrides_are_reported.dm");
-        let (tree, _, errors) = analyze_source(source);
+        let (tree, errors) = analyze_source(source);
         assert!(errors.is_empty(), "{errors:?}");
 
         let errors = check_undeclared_overrides(&tree);
@@ -765,21 +564,8 @@ mod tests {
     }
 
     #[test]
-    fn intrinsic_markers_become_typed_ir_metadata() {
-        let (tree, module, errors) = analyze_source(fixture!("programs/intrinsic_markers_become_typed_ir_metadata.dm"));
-        assert!(errors.is_empty(), "{errors:?}");
-        let proc = tree
-            .proc_inherited(TypeId::ROOT, &"test".into())
-            .and_then(|proc| proc.body)
-            .and_then(|proc| module.proc(proc))
-            .expect("test proc");
-
-        assert_eq!(proc.intrinsic, Some(Intrinsic::ListAdd));
-    }
-
-    #[test]
     fn intrinsic_markers_reject_malformed_unknown_and_duplicate_ids() {
-        let (_, _, malformed) = analyze_source(fixture!(
+        let (_, malformed) = analyze_source(fixture!(
             "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_ids.dm"
         ));
         assert!(matches!(
@@ -790,7 +576,7 @@ mod tests {
             }]
         ));
 
-        let (_, _, wrong_mode) = analyze_source(fixture!(
+        let (_, wrong_mode) = analyze_source(fixture!(
             "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_ids-2.dm"
         ));
         assert!(matches!(
@@ -801,7 +587,7 @@ mod tests {
             }]
         ));
 
-        let (_, _, unknown) = analyze_source(fixture!(
+        let (_, unknown) = analyze_source(fixture!(
             "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_ids-3.dm"
         ));
         assert!(matches!(
@@ -812,7 +598,7 @@ mod tests {
             }]
         ));
 
-        let (_, _, duplicate) = analyze_source(fixture!(
+        let (_, duplicate) = analyze_source(fixture!(
             "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_ids-4.dm"
         ));
         assert!(matches!(
@@ -822,104 +608,5 @@ mod tests {
                 ..
             }]
         ));
-    }
-
-    fn new_type_of(source: &str, owner: &str, proc_name: &str) -> Option<String> {
-        let (tokens, errors) = lexer::tokenize(source);
-        assert!(errors.is_empty(), "{errors:?}");
-        let ast = ast::parse(&tokens).expect("fixture should parse");
-        let (tree, module, _) = analyze(&ast, true);
-
-        let body = tree
-            .id_of(&TreePath::parse(owner))
-            .and_then(|id| tree.proc_inherited(id, &proc_name.into()))
-            .and_then(|proc| proc.body)
-            .expect("fixture proc should exist");
-        let blocks = module.proc(body).map(|proc| proc.body).expect("proc body");
-
-        module
-            .block(blocks)
-            .expect("entry block")
-            .iter()
-            .find_map(|id| match module.node(*id) {
-                Some(ir::IrNode::New { ty, .. }) => Some(*ty),
-                _ => None,
-            })
-            .expect("fixture should lower a new")
-            .and_then(|ty| match module.node(ty) {
-                Some(ir::IrNode::Constant(value)) if let Value::Path(path) = &**value => Some(path.to_string()),
-                _ => None,
-            })
-    }
-
-    /// `x = new` reads its type off `x`, which for an object var or a global is only knowable once
-    /// every file has reopened every type.
-    #[test]
-    fn untyped_new_resolves_against_the_finished_tree() {
-        // `TreePath::parse` would carry `IS_DATUM`, and the tree keys on segments alone.
-        let tracy = String::from("/datum/tracy");
-
-        // An object var, declared after the proc that assigns it.
-        assert_eq!(
-            new_type_of(
-                fixture!("programs/untyped_new_resolves_against_the_finished_tree.dm"),
-                "/datum/holder",
-                "go",
-            ),
-            Some(tracy.clone())
-        );
-
-        // An inherited object var, reachable only after `parent_type` is resolved.
-        assert_eq!(
-            new_type_of(
-                fixture!("programs/untyped_new_resolves_against_the_finished_tree-4.dm"),
-                "/datum/holder",
-                "go",
-            ),
-            Some(tracy.clone())
-        );
-
-        // A file-scope global.
-        assert_eq!(
-            new_type_of(
-                fixture!("programs/untyped_new_resolves_against_the_finished_tree-2.dm"),
-                "/datum/holder",
-                "go",
-            ),
-            Some(tracy.clone())
-        );
-
-        // `src.x`, whose type lives on the owner the same way a bare name's does.
-        assert_eq!(
-            new_type_of(
-                fixture!("programs/untyped_new_resolves_against_the_finished_tree-3.dm"),
-                "/datum/holder",
-                "go",
-            ),
-            Some(tracy)
-        );
-    }
-
-    /// A local still resolves during lowering, and a name that is no var at all stays untyped rather
-    /// than picking up someone else's type.
-    #[test]
-    fn untyped_new_leaves_unresolvable_targets_alone() {
-        assert_eq!(
-            new_type_of(
-                fixture!("programs/untyped_new_leaves_unresolvable_targets_alone.dm"),
-                "/datum/holder",
-                "go",
-            ),
-            Some(String::from("/datum/tracy"))
-        );
-
-        assert_eq!(
-            new_type_of(
-                fixture!("programs/untyped_new_leaves_unresolvable_targets_alone-2.dm"),
-                "/datum/holder",
-                "go"
-            ),
-            None
-        );
     }
 }

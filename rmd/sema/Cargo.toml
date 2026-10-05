@@ -11,7 +11,6 @@ rustc-hash = "2"
 core = { path = "../core" }
 ast = { path = "../ast" }
 objtree = { path = "../objtree" }
-ir = { path = "../ir" }
 prelude = { path = "../../prelude" }
 
 [dev-dependencies]

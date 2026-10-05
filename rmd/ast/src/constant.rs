@@ -1,8 +1,7 @@
 use core::types::{ListEntry, Value};
 
-use ast::{AST, BinaryOp, Expression, ExpressionId, Literal, UnaryOp};
+use crate::{AST, BinaryOp, Expression, ExpressionId, Literal, UnaryOp};
 
-/// `1 + 2`
 pub fn fold(ast: &AST, expr_id: ExpressionId) -> Value {
     let Some(expr) = ast.get_expr(expr_id) else {
         return Value::Unevaluated;
@@ -92,13 +91,12 @@ fn bool_to_num(v: bool) -> f32 { if v { 1.0 } else { 0.0 } }
 mod tests {
     use core::types::{ListEntry, Value};
 
-    use ast::{Argument, Expression, ExpressionId, Literal};
-
     use super::fold;
+    use crate::{AST, Argument, Expression, ExpressionId, Literal};
 
     #[test]
     fn folds_grouped_associative_and_omitted_list_entries() {
-        let ast = ast::AST::new(
+        let ast = AST::new(
             Vec::new(),
             vec![
                 Expression::Literal(Literal::Num(1.0)),
@@ -141,7 +139,7 @@ mod tests {
     /// `name = "Joe\'s bar\n"` reaches the object tree decoded, not as raw source.
     #[test]
     fn folds_a_string_literal_with_its_escapes_decoded() {
-        let ast = ast::AST::new(
+        let ast = AST::new(
             Vec::new(),
             vec![Expression::Literal(Literal::String(String::from(r"Joe\'s bar\n")))],
         );

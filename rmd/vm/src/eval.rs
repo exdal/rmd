@@ -394,11 +394,13 @@ impl<'a> Evaluator<'a> {
     }
 
     pub fn find_proc(&self, ty: TypeId, name: &Identifier) -> Option<ProcId> {
-        self.tree
+        let declaration = self
+            .tree
             .ancestors(ty)
             .take_while(|declaration| ty == TypeId::ROOT || declaration.id != TypeId::ROOT)
-            .find_map(|declaration| declaration.procs.get(name))
-            .and_then(|proc| proc.body)
+            .find(|declaration| declaration.procs.contains_key(name))?;
+
+        self.module.index.body(declaration.id, name)
     }
 
     pub fn call(
@@ -1561,11 +1563,7 @@ impl Evaluator<'_> {
                     _ => {},
                 }
 
-                if let Some(initializer) = self
-                    .tree
-                    .var_inherited(ty, name)
-                    .and_then(|variable| variable.initializer)
-                {
+                if let Some(initializer) = self.module.index.inherited_initializer(self.tree, ty, name) {
                     self.reserve(1)?;
                     let dummy = self
                         .runtime
@@ -1691,8 +1689,9 @@ impl Evaluator<'_> {
                     return Ok(value.clone());
                 }
 
+                let initializer = declaration.and_then(|(owner, _)| self.module.index.initializer(owner.id, name));
                 let declaration = declaration.map(|(_, variable)| variable);
-                if let Some(initializer) = declaration.and_then(|variable| variable.initializer) {
+                if let Some(initializer) = initializer {
                     let value = self.call(initializer, Some(id), Vec::new())?;
                     let (storage, key) = if let Some(shared) = shared {
                         (

@@ -211,8 +211,9 @@ mod tests {
             assert!(preprocessed.is_ok(), "{:?}", preprocessed.errors);
 
             let ast = ast::parse(&preprocessed.tokens).expect("parse");
-            let (tree, module, errors) = sema::analyze(&ast, baking);
+            let (tree, errors) = sema::analyze(&ast);
             assert!(errors.is_empty(), "{errors:?}");
+            let (module, _) = ir::lower(&ast, &tree, baking);
 
             (tree, module)
         };

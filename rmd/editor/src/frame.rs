@@ -1384,7 +1384,6 @@ mod tests {
                         declared_type: None,
                         modifiers: VarModifiers::default(),
                         value,
-                        initializer: None,
                         declared: true,
                         location: Location::default(),
                         resolved_type: None,

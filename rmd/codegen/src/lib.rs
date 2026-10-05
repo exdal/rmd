@@ -12,6 +12,7 @@ use core::{
 use std::collections::VecDeque;
 
 pub use error::CodegenError;
+pub use ir::ProcIndex;
 use ir::{Argument, Interpolation, IrNode, OutputTarget, Procedure};
 use objtree::ObjectTree;
 use opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, OutputTargetKind, Unary};
@@ -91,6 +92,7 @@ pub struct Module {
     pub functions: Vec<CompiledFunction>,
     pub code: Vec<u8>,
     proc_functions: Vec<FunctionId>,
+    pub index: ProcIndex,
 }
 
 impl Module {
@@ -305,6 +307,7 @@ impl Generator {
             proc_functions: Module::index_procs(&self.functions),
             functions: self.functions,
             code: self.code,
+            index: module.index.clone(),
         })
     }
 
@@ -1528,16 +1531,16 @@ mod tests {
         let (tokens, errors) = lexer::tokenize(source);
         assert!(errors.is_empty(), "{errors:?}");
         let ast = ast::parse(&tokens).expect("fixture should parse");
-        let (tree, module, errors) = sema::analyze(&ast, true);
+        let (tree, errors) = sema::analyze(&ast);
         assert!(errors.is_empty(), "{errors:?}");
+        let (module, _) = ir::lower(&ast, &tree, true);
 
         (tree, module)
     }
 
-    fn proc_id(tree: &ObjectTree, owner: &str, name: &str) -> ProcId {
+    fn proc_id(tree: &ObjectTree, module: &ir::Module, owner: &str, name: &str) -> ProcId {
         tree.id_of(&TreePath::parse(owner))
-            .and_then(|owner| tree.proc_inherited(owner, &name.into()))
-            .and_then(|procedure| procedure.body)
+            .and_then(|owner| module.index.inherited_body(tree, owner, &name.into()))
             .expect("fixture procedure should exist")
     }
 
@@ -1897,6 +1900,7 @@ mod tests {
                 intrinsic: None,
                 location: Location::default(),
             }],
+            index: ir::ProcIndex::default(),
         };
         let module = generate(&module).expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
@@ -1922,11 +1926,11 @@ mod tests {
         let (tree, ir_module) = analyze(fixture!(
             "programs/reachable_codegen_keeps_named_dispatch_candidates_and_stable_proc_ids.dm"
         ));
-        let entry = proc_id(&tree, "/", "entry");
-        let base_live = proc_id(&tree, "/datum/base", "live");
-        let child_live = proc_id(&tree, "/datum/base/child", "live");
-        let dead = proc_id(&tree, "/datum/base", "dead");
-        let unused = proc_id(&tree, "/", "unused");
+        let entry = proc_id(&tree, &ir_module, "/", "entry");
+        let base_live = proc_id(&tree, &ir_module, "/datum/base", "live");
+        let child_live = proc_id(&tree, &ir_module, "/datum/base/child", "live");
+        let dead = proc_id(&tree, &ir_module, "/datum/base", "dead");
+        let unused = proc_id(&tree, &ir_module, "/", "unused");
 
         let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
@@ -1948,8 +1952,8 @@ mod tests {
         let (tree, ir_module) = analyze(fixture!(
             "programs/reachable_codegen_does_not_treat_field_reads_as_method_calls.dm"
         ));
-        let entry = proc_id(&tree, "/", "entry");
-        let status = proc_id(&tree, "/datum/base", "status");
+        let entry = proc_id(&tree, &ir_module, "/", "entry");
+        let status = proc_id(&tree, &ir_module, "/datum/base", "status");
 
         let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
@@ -1962,10 +1966,10 @@ mod tests {
         let (tree, ir_module) = analyze(fixture!(
             "programs/reachable_codegen_limits_typed_receiver_dispatch_to_its_type_family.dm"
         ));
-        let entry = proc_id(&tree, "/", "entry");
-        let wanted = proc_id(&tree, "/datum/wanted", "Initialize");
-        let child = proc_id(&tree, "/datum/wanted/child", "Initialize");
-        let unrelated = proc_id(&tree, "/datum/unrelated", "Initialize");
+        let entry = proc_id(&tree, &ir_module, "/", "entry");
+        let wanted = proc_id(&tree, &ir_module, "/datum/wanted", "Initialize");
+        let child = proc_id(&tree, &ir_module, "/datum/wanted/child", "Initialize");
+        let unrelated = proc_id(&tree, &ir_module, "/datum/unrelated", "Initialize");
 
         let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
@@ -1983,20 +1987,19 @@ mod tests {
         let (tree, ir_module) = analyze(fixture!(
             "programs/reachable_codegen_follows_super_and_roots_lazy_initializers.dm"
         ));
-        let entry = proc_id(&tree, "/", "entry");
-        let latest = proc_id(&tree, "/datum/base/child", "step");
+        let entry = proc_id(&tree, &ir_module, "/", "entry");
+        let latest = proc_id(&tree, &ir_module, "/datum/base/child", "step");
         let previous = ir_module
             .proc(latest)
             .and_then(|procedure| procedure.previous)
             .expect("same-type previous");
-        let inherited = proc_id(&tree, "/datum/base", "step");
+        let inherited = proc_id(&tree, &ir_module, "/datum/base", "step");
         let initializer = tree
             .id_of(&TreePath::parse("/datum/holder"))
-            .and_then(|holder| tree.var_inherited(holder, &"value".into()))
-            .and_then(|variable| variable.initializer)
+            .and_then(|holder| ir_module.index.inherited_initializer(&tree, holder, &"value".into()))
             .expect("runtime initializer");
-        let initialize = proc_id(&tree, "/", "initialize");
-        let unused = proc_id(&tree, "/", "unused");
+        let initialize = proc_id(&tree, &ir_module, "/", "initialize");
+        let unused = proc_id(&tree, &ir_module, "/", "unused");
 
         let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
@@ -2012,12 +2015,11 @@ mod tests {
     #[test]
     fn reachable_codegen_omits_unread_lazy_initializers() {
         let (tree, ir_module) = analyze(fixture!("programs/reachable_codegen_omits_unread_lazy_initializers.dm"));
-        let entry = proc_id(&tree, "/", "entry");
-        let initialize = proc_id(&tree, "/", "initialize");
+        let entry = proc_id(&tree, &ir_module, "/", "entry");
+        let initialize = proc_id(&tree, &ir_module, "/", "initialize");
         let initializer = tree
             .id_of(&TreePath::parse("/datum/holder"))
-            .and_then(|holder| tree.var_inherited(holder, &"value".into()))
-            .and_then(|variable| variable.initializer)
+            .and_then(|holder| ir_module.index.inherited_initializer(&tree, holder, &"value".into()))
             .expect("runtime initializer");
 
         let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
@@ -2032,11 +2034,11 @@ mod tests {
         let (tree, ir_module) = analyze(fixture!(
             "programs/reachable_codegen_bounds_opaque_calls_to_reachable_proc_paths.dm"
         ));
-        let entry = proc_id(&tree, "/", "entry");
-        let invoke = proc_id(&tree, "/", "invoke");
-        let call = proc_id(&tree, "/", "call");
-        let live = proc_id(&tree, "/", "live");
-        let dead = proc_id(&tree, "/", "dead");
+        let entry = proc_id(&tree, &ir_module, "/", "entry");
+        let invoke = proc_id(&tree, &ir_module, "/", "invoke");
+        let call = proc_id(&tree, &ir_module, "/", "call");
+        let live = proc_id(&tree, &ir_module, "/", "live");
+        let dead = proc_id(&tree, &ir_module, "/", "dead");
 
         let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
@@ -2052,10 +2054,10 @@ mod tests {
     #[test]
     fn reachable_codegen_resolves_static_call_names() {
         let (tree, ir_module) = analyze(fixture!("programs/reachable_codegen_resolves_static_call_names.dm"));
-        let entry = proc_id(&tree, "/", "entry");
-        let call = proc_id(&tree, "/", "call");
-        let live = proc_id(&tree, "/datum/base", "live");
-        let dead = proc_id(&tree, "/datum/base", "dead");
+        let entry = proc_id(&tree, &ir_module, "/", "entry");
+        let call = proc_id(&tree, &ir_module, "/", "call");
+        let live = proc_id(&tree, &ir_module, "/datum/base", "live");
+        let dead = proc_id(&tree, &ir_module, "/datum/base", "dead");
 
         let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
@@ -2073,11 +2075,11 @@ mod tests {
         let (tree, ir_module) = analyze(fixture!(
             "programs/reachable_codegen_keeps_only_exact_constructor_targets.dm"
         ));
-        let entry = proc_id(&tree, "/", "entry");
-        let live_new = proc_id(&tree, "/datum/live", "New");
-        let dead_new = proc_id(&tree, "/datum/dead", "New");
-        let live_helper = proc_id(&tree, "/", "live_helper");
-        let dead_helper = proc_id(&tree, "/", "dead_helper");
+        let entry = proc_id(&tree, &ir_module, "/", "entry");
+        let live_new = proc_id(&tree, &ir_module, "/datum/live", "New");
+        let dead_new = proc_id(&tree, &ir_module, "/datum/dead", "New");
+        let live_helper = proc_id(&tree, &ir_module, "/", "live_helper");
+        let dead_helper = proc_id(&tree, &ir_module, "/", "dead_helper");
 
         let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
@@ -2096,10 +2098,10 @@ mod tests {
         let (tree, ir_module) = analyze(fixture!(
             "programs/reachable_codegen_keeps_every_constructor_for_a_computed_type.dm"
         ));
-        let entry = proc_id(&tree, "/", "entry");
-        let live_new = proc_id(&tree, "/datum/live", "New");
-        let dead_new = proc_id(&tree, "/datum/dead", "New");
-        let unrelated = proc_id(&tree, "/", "unrelated");
+        let entry = proc_id(&tree, &ir_module, "/", "entry");
+        let live_new = proc_id(&tree, &ir_module, "/datum/live", "New");
+        let dead_new = proc_id(&tree, &ir_module, "/datum/dead", "New");
+        let unrelated = proc_id(&tree, &ir_module, "/", "unrelated");
 
         let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
@@ -2117,7 +2119,7 @@ mod tests {
         let (tree, ir_module) = analyze(fixture!(
             "programs/reachable_codegen_falls_back_when_call_target_might_be_a_proc_path.dm"
         ));
-        let entry = proc_id(&tree, "/", "entry");
+        let entry = proc_id(&tree, &ir_module, "/", "entry");
 
         let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 
@@ -2136,10 +2138,10 @@ mod tests {
         let (tree, ir_module) = analyze(fixture!(
             "programs/reachable_codegen_resolves_dynamic_values_from_typesof_iteration.dm"
         ));
-        let initialize = proc_id(&tree, "/datum/controller/global_vars", "Initialize");
-        let call = proc_id(&tree, "/", "call");
-        let typesof = proc_id(&tree, "/", "typesof");
-        let unrelated = proc_id(&tree, "/", "unrelated");
+        let initialize = proc_id(&tree, &ir_module, "/datum/controller/global_vars", "Initialize");
+        let call = proc_id(&tree, &ir_module, "/", "call");
+        let typesof = proc_id(&tree, &ir_module, "/", "typesof");
+        let unrelated = proc_id(&tree, &ir_module, "/", "unrelated");
 
         let module = generate_reachable(&ir_module, &tree, &[initialize], &[]).expect("generate selected procedures");
 
@@ -2157,8 +2159,8 @@ mod tests {
         let (tree, ir_module) = analyze(fixture!(
             "programs/reachable_codegen_falls_back_to_every_proc_for_an_opaque_callable.dm"
         ));
-        let entry = proc_id(&tree, "/", "entry");
-        let otherwise = proc_id(&tree, "/", "otherwise");
+        let entry = proc_id(&tree, &ir_module, "/", "entry");
+        let otherwise = proc_id(&tree, &ir_module, "/", "otherwise");
 
         let module = generate_reachable(&ir_module, &tree, &[entry], &[]).expect("generate selected procedures");
 

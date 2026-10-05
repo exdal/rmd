@@ -8,7 +8,9 @@ rustc-hash = "2"
 fixedbitset = "0.5"
 core = { path = "../core" }
 ast = { path = "../ast" }
+objtree = { path = "../objtree" }
 prelude = { path = "../../prelude" }
 
 [dev-dependencies]
 lexer = { path = "../lexer" }
+sema = { path = "../sema" }

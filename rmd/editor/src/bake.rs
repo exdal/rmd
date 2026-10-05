@@ -237,8 +237,9 @@ mod tests {
             assert!(preprocessed.is_ok(), "{:?}", preprocessed.errors);
 
             let ast = ast::parse(&preprocessed.tokens).expect("parse");
-            let (tree, module, errors) = sema::analyze(&ast, baking);
+            let (tree, errors) = sema::analyze(&ast);
             assert!(errors.is_empty(), "{errors:?}");
+            let (module, _) = ir::lower(&ast, &tree, baking);
 
             (tree, module)
         };
@@ -358,7 +359,7 @@ mod tests {
         let helper_id = environment.tree.id_of(&helper.path).expect("editor helper");
         let program = environment.bake_program.as_ref().expect("bake program");
         let profile = vm::bake::profile_type(&program.tree).expect("bake profile");
-        let definition = vm::profile::ProfileDefinition::resolve(&program.tree, profile);
+        let definition = vm::profile::ProfileDefinition::resolve(&program.tree, &program.module.index, profile);
         let hook = definition
             .declaration(&program.tree, vm::profile::ProfileHook::Bake)
             .expect("bake hook");

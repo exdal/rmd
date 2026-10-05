@@ -50,7 +50,7 @@ impl<'a> Reachability<'a> {
         let mut by_name = FxHashMap::<Identifier, Vec<ProcId>>::default();
         for declaration in tree.iter() {
             for procedure in declaration.procs.values() {
-                if let Some(body) = procedure.body {
+                if let Some(body) = module.index.body(declaration.id, &procedure.name) {
                     by_name.entry(procedure.name.clone()).or_default().push(body);
                 }
             }
@@ -271,8 +271,8 @@ impl<'a> Reachability<'a> {
         let declaration = owner
             .and_then(|owner| self.tree.var_declaration(owner, name))
             .or_else(|| self.tree.var_declaration(TypeId::ROOT, name));
-        if let Some((_, variable)) = declaration {
-            self.retain(variable.initializer.unwrap_or(ProcId::INVALID));
+        if let Some((declaration, variable)) = declaration {
+            self.retain(self.initializer(declaration.id, name));
             self.note_value(&variable.value);
         }
     }
@@ -296,35 +296,45 @@ impl<'a> Reachability<'a> {
             for candidate in candidates {
                 if name.as_str() == vars::VARS {
                     self.retain_all_initializers_for_type(candidate);
-                } else if let Some((_, variable)) = self.tree.var_declaration(candidate, name) {
-                    self.retain(variable.initializer.unwrap_or(ProcId::INVALID));
+                } else if let Some((declaration, variable)) = self.tree.var_declaration(candidate, name) {
+                    self.retain(self.initializer(declaration.id, name));
                     self.note_value(&variable.value);
                 }
             }
         }
     }
 
+    fn initializer(&self, ty: TypeId, name: &Identifier) -> ProcId {
+        self.module.index.initializer(ty, name).unwrap_or(ProcId::INVALID)
+    }
+
     fn retain_initializers_named(&mut self, name: &Identifier) {
         let tree = self.tree;
-        for variable in tree.iter().filter_map(|declaration| declaration.vars.get(name)) {
-            self.retain(variable.initializer.unwrap_or(ProcId::INVALID));
-            self.note_value(&variable.value);
+        for declaration in tree.iter() {
+            if let Some(variable) = declaration.vars.get(name) {
+                self.retain(self.initializer(declaration.id, name));
+                self.note_value(&variable.value);
+            }
         }
     }
 
     fn retain_all_initializers_for_type(&mut self, ty: TypeId) {
         let tree = self.tree;
-        for variable in tree.ancestors(ty).flat_map(|declaration| declaration.vars.values()) {
-            self.retain(variable.initializer.unwrap_or(ProcId::INVALID));
-            self.note_value(&variable.value);
+        for declaration in tree.ancestors(ty) {
+            for variable in declaration.vars.values() {
+                self.retain(self.initializer(declaration.id, &variable.name));
+                self.note_value(&variable.value);
+            }
         }
     }
 
     fn retain_every_initializer(&mut self) {
         let tree = self.tree;
-        for variable in tree.iter().flat_map(|declaration| declaration.vars.values()) {
-            self.retain(variable.initializer.unwrap_or(ProcId::INVALID));
-            self.note_value(&variable.value);
+        for declaration in tree.iter() {
+            for variable in declaration.vars.values() {
+                self.retain(self.initializer(declaration.id, &variable.name));
+                self.note_value(&variable.value);
+            }
         }
     }
 
@@ -673,7 +683,7 @@ impl<'a> Reachability<'a> {
     }
 
     fn retain_inherited(&mut self, ty: TypeId, name: &Identifier) {
-        if let Some(proc) = self.tree.proc_inherited(ty, name).and_then(|procedure| procedure.body) {
+        if let Some(proc) = self.module.index.inherited_body(self.tree, ty, name) {
             self.retain(proc);
         }
     }
@@ -695,8 +705,7 @@ impl<'a> Reachability<'a> {
         let owner = TreePath::new(path.declaration_owner().to_vec(), true);
         self.tree
             .id_of(&owner)
-            .and_then(|ty| self.tree.proc_inherited(ty, name))
-            .and_then(|procedure| procedure.body)
+            .and_then(|ty| self.module.index.inherited_body(self.tree, ty, name))
     }
 
     fn retain_super(&mut self, current: ProcId) {

@@ -6,7 +6,9 @@ use core::{
 
 use crate::parser::{ParseResult, Parser};
 
+pub mod constant;
 pub mod error;
+pub mod intrinsic;
 pub mod parser;
 pub mod precedence;
 

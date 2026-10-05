@@ -342,7 +342,7 @@ impl Bake {
         tree: &ObjectTree, module: &Module, profile: TypeId, atoms: Vec<Atom>, size: [i32; 3], limits: Limits,
         icons: IconStates, mut progress: impl FnMut(Stage, usize, usize),
     ) -> Self {
-        let definition = ProfileDefinition::resolve(tree, profile);
+        let definition = ProfileDefinition::resolve(tree, &module.index, profile);
         let mut bake = Self {
             limits,
             profile: definition,

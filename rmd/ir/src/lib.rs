@@ -1,5 +1,6 @@
 pub use core::types::{IrNodeId, ProcId, ProcKind, ProcParam};
 use core::{
+    interner::SymbolMap,
     location::Location,
     path::TreePath,
     types::{Identifier, Value, VarSpec},
@@ -9,9 +10,12 @@ pub use ast::{AccessKind, BinaryOp, Builtin, UnaryOp};
 
 pub mod ast_lowering;
 pub mod disasm;
+mod lower;
 pub mod opt;
 pub mod verify;
-pub use ast_lowering::{IrModuleBuilder, UnresolvedNew};
+pub use ast_lowering::IrModuleBuilder;
+pub use lower::lower;
+use objtree::{ObjectTree, TypeId};
 pub use prelude::Intrinsic;
 pub use verify::{VerifyError, verify};
 
@@ -449,6 +453,61 @@ pub struct Module {
     /// Module-scope declarations for bare proc names defined outside this module.
     pub external_functions: Vec<IrNodeId>,
     pub procs: Vec<Procedure>,
+    pub index: ProcIndex,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProcIndex {
+    bodies: Vec<SymbolMap<ProcId>>,
+    initializers: Vec<SymbolMap<ProcId>>,
+}
+
+impl ProcIndex {
+    pub fn body(&self, ty: TypeId, name: &Identifier) -> Option<ProcId> { lookup(&self.bodies, ty, name) }
+
+    pub fn initializer(&self, ty: TypeId, name: &Identifier) -> Option<ProcId> { lookup(&self.initializers, ty, name) }
+
+    pub fn inherited_body(&self, tree: &ObjectTree, ty: TypeId, name: &Identifier) -> Option<ProcId> {
+        let declaration = tree
+            .ancestors(ty)
+            .find(|declaration| declaration.procs.contains_key(name))?;
+
+        self.body(declaration.id, name)
+    }
+
+    pub fn inherited_initializer(&self, tree: &ObjectTree, ty: TypeId, name: &Identifier) -> Option<ProcId> {
+        let (declaration, _) = tree.var_declaration(ty, name)?;
+
+        self.initializer(declaration.id, name)
+    }
+
+    fn set_body(&mut self, ty: TypeId, name: Identifier, body: Option<ProcId>) {
+        set(&mut self.bodies, ty, name, body);
+    }
+
+    fn set_initializer(&mut self, ty: TypeId, name: Identifier, initializer: Option<ProcId>) {
+        set(&mut self.initializers, ty, name, initializer);
+    }
+}
+
+fn lookup(maps: &[SymbolMap<ProcId>], ty: TypeId, name: &Identifier) -> Option<ProcId> {
+    maps.get(ty.0 as usize)?.get(name).copied()
+}
+
+fn set(maps: &mut Vec<SymbolMap<ProcId>>, ty: TypeId, name: Identifier, proc: Option<ProcId>) {
+    let index = ty.0 as usize;
+    if maps.len() <= index {
+        maps.resize_with(index + 1, SymbolMap::default);
+    }
+
+    match proc {
+        Some(proc) => {
+            maps[index].insert(name, proc);
+        },
+        None => {
+            maps[index].remove(&name);
+        },
+    }
 }
 
 impl Module {

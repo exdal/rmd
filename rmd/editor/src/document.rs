@@ -956,7 +956,6 @@ mod tests {
                     declared_type: None,
                     modifiers: Default::default(),
                     value,
-                    initializer: None,
                     declared: true,
                     location: Default::default(),
                     resolved_type: None,

@@ -2,7 +2,7 @@ use core::{
     interner::SymbolMap,
     location::Location,
     path::TreePath,
-    types::{Identifier, IrNodeId, ProcId, ProcKind, ProcParam, TypeSpec, Value, VarModifiers},
+    types::{Identifier, ProcKind, TypeSpec, Value, VarModifiers},
 };
 use std::collections::{HashMap, HashSet};
 
@@ -99,7 +99,6 @@ pub struct VarDecl {
     pub declared_type: Option<TreePath>,
     pub modifiers: VarModifiers,
     pub value: Value,
-    pub initializer: Option<ProcId>,
     pub declared: bool,
     pub location: Location,
     pub resolved_type: Option<ResolvedVarType>,
@@ -108,12 +107,18 @@ pub struct VarDecl {
 #[derive(Debug, Clone)]
 pub struct ProcDecl {
     pub name: Identifier,
-    pub params: Vec<ProcParam<IrNodeId>>,
-    pub body: Option<ProcId>,
+    pub params: Vec<ParamDecl>,
     pub kind: ProcKind,
     pub variadic: bool,
     pub return_type: Option<TypeSpec>,
     pub location: Location,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParamDecl {
+    pub name: Identifier,
+    pub var_type: Option<TreePath>,
+    pub as_type: Option<TypeSpec>,
 }
 
 impl Default for ObjectTree {

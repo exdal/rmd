@@ -10,7 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::*;
 
 #[derive(Debug, Clone)]
-pub struct UnresolvedNew {
+pub(crate) struct UnresolvedNew {
     pub owner: TreePath,
     pub name: Identifier,
     pub node: IrNodeId,
@@ -41,7 +41,6 @@ pub struct IrModuleBuilder<'a> {
     current_owner: TreePath,
     locals_in_memory: bool,
     depth: usize,
-    is_skipping_bodies: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -103,7 +102,6 @@ impl<'a> IrModuleBuilder<'a> {
             current_owner: TreePath::default(),
             locals_in_memory: false,
             depth: 0,
-            is_skipping_bodies: false,
         }
     }
 
@@ -139,12 +137,6 @@ impl<'a> IrModuleBuilder<'a> {
         id
     }
 
-    pub fn skipping_bodies(mut self) -> Self {
-        self.is_skipping_bodies = true;
-
-        self
-    }
-
     pub fn finish(self) -> Module { self.finish_with_optimizations(true).0 }
 
     pub fn finish_with_optimizations(mut self, enabled: bool) -> (Module, opt::OptimizationTimings) {
@@ -165,9 +157,9 @@ impl<'a> IrModuleBuilder<'a> {
         (self.module, timings)
     }
 
-    pub fn unresolved_new(&self) -> &[UnresolvedNew] { &self.unresolved_new }
+    pub(crate) fn unresolved_new(&self) -> &[UnresolvedNew] { &self.unresolved_new }
 
-    pub fn resolve_new(&mut self, node: IrNodeId, ty: TreePath) { self.set_new_type(node, Some(ty)); }
+    pub(crate) fn resolve_new(&mut self, node: IrNodeId, ty: TreePath) { self.set_new_type(node, Some(ty)); }
 
     #[allow(clippy::too_many_arguments)]
     pub fn lower_proc(
@@ -254,10 +246,7 @@ impl<'a> IrModuleBuilder<'a> {
             self.locals_in_memory = true;
         }
 
-        if !self.is_skipping_bodies {
-            body(self);
-        }
-
+        body(self);
         self.terminate_current_block(IrNode::Return(None));
 
         let named_blocks = self

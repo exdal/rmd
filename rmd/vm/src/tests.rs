@@ -8,6 +8,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+use codegen::ProcIndex;
 use defines::{EAST, NORTH, NORTHEAST, SOUTH, SOUTHWEST, WEST};
 use objtree::{ObjectTree, ResolvedVarType, TypeId, VarTypeKind};
 
@@ -62,8 +63,9 @@ fn analyze_fixture(source: &str) -> (ObjectTree, ir::Module) {
     let _ = std::fs::remove_file(path);
     assert!(preprocessed.errors.is_empty(), "{:?}", preprocessed.errors);
     let ast = ast::parse(&preprocessed.tokens).expect("fixture should parse");
-    let (tree, module, errors) = sema::analyze(&ast, true);
+    let (tree, errors) = sema::analyze(&ast);
     assert!(errors.is_empty(), "{errors:?}");
+    let (module, _) = ir::lower(&ast, &tree, true);
 
     (tree, module)
 }
@@ -74,15 +76,15 @@ fn compile(source: &str) -> (ObjectTree, codegen::Module) {
     (tree, module)
 }
 
-fn proc(tree: &ObjectTree, name: &str) -> core::types::ProcId {
-    tree.proc_inherited(TypeId::ROOT, &name.into())
-        .and_then(|proc| proc.body)
+fn proc(tree: &ObjectTree, index: &ProcIndex, name: &str) -> core::types::ProcId {
+    index
+        .inherited_body(tree, TypeId::ROOT, &name.into())
         .expect("fixture proc should exist")
 }
 
-fn hook(tree: &ObjectTree, hook: ProfileHook) -> core::types::ProcId {
+fn hook(tree: &ObjectTree, index: &ProcIndex, hook: ProfileHook) -> core::types::ProcId {
     let profile = profile_type(tree).expect("fixture should declare one profile");
-    ProfileDefinition::resolve(tree, profile)
+    ProfileDefinition::resolve(tree, index, profile)
         .procedure(hook)
         .expect("fixture hook should exist")
 }
@@ -93,7 +95,7 @@ fn run(source: &str, name: &str) -> GenericValue {
         .run(
             &tree,
             &module,
-            proc(&tree, name),
+            proc(&tree, &module.index, name),
             None,
             None,
             Vec::new(),
@@ -176,11 +178,11 @@ fn only_a_demir_subtype_makes_a_profile() {
 
 #[test]
 fn profile_definition_resolves_the_complete_hook_abi() {
-    let (tree, _) = analyze_fixture(fixture!(
+    let (tree, module) = analyze_fixture(fixture!(
         "programs/profile_definition_resolves_the_complete_hook_abi.dm"
     ));
     let profile = profile_type(&tree).expect("default profile");
-    let definition = ProfileDefinition::resolve(&tree, profile);
+    let definition = ProfileDefinition::resolve(&tree, &module.index, profile);
     let resolved = ProfileHook::ALL
         .into_iter()
         .filter(|hook| definition.declaration(&tree, *hook).is_some())
@@ -638,7 +640,7 @@ fn imgui_procs_are_blocked_outside_the_ui_hook() {
         .run(
             &tree,
             &module,
-            hook(&tree, ProfileHook::Bake),
+            hook(&tree, &module.index, ProfileHook::Bake),
             None,
             None,
             Vec::new(),
@@ -926,7 +928,7 @@ fn defining_a_rebake_group_outside_initialize_is_blocked() {
         .run(
             &tree,
             &module,
-            hook(&tree, ProfileHook::Bake),
+            hook(&tree, &module.index, ProfileHook::Bake),
             None,
             None,
             Vec::new(),
@@ -1050,7 +1052,7 @@ fn defining_a_node_group_outside_initialize_is_blocked() {
         .run(
             &tree,
             &module,
-            hook(&tree, ProfileHook::Bake),
+            hook(&tree, &module.index, ProfileHook::Bake),
             None,
             None,
             Vec::new(),
@@ -1097,7 +1099,7 @@ fn declaring_a_rotation_outside_initialize_is_blocked() {
         .run(
             &tree,
             &module,
-            hook(&tree, ProfileHook::Bake),
+            hook(&tree, &module.index, ProfileHook::Bake),
             None,
             None,
             Vec::new(),
@@ -1704,7 +1706,7 @@ fn baking_exports_transforms_the_compat_view_cannot_evaluate() {
         "programs/baking_exports_transforms_the_compat_view_cannot_evaluate.dm"
     ));
     let profile = profile_type(&tree).expect("fixture profile");
-    let roots = ProfileDefinition::resolve(&tree, profile).entry_points();
+    let roots = ProfileDefinition::resolve(&tree, &module.index, profile).entry_points();
     let module = codegen::generate_reachable(&module, &tree, &roots, &host_reads()).expect("fixture should compile");
     let atoms = ["/obj/moved", "/obj/turned", "/obj/plain"]
         .into_iter()
@@ -1759,7 +1761,7 @@ fn baking_exports_appearance_vars_set_by_runtime_initializers() {
         "programs/baking_exports_appearance_vars_set_by_runtime_initializers.dm"
     ));
     let profile = profile_type(&tree).expect("fixture profile");
-    let roots = ProfileDefinition::resolve(&tree, profile).entry_points();
+    let roots = ProfileDefinition::resolve(&tree, &module.index, profile).entry_points();
     let module = codegen::generate_reachable(&module, &tree, &roots, &host_reads()).expect("fixture should compile");
     let atom = Atom {
         instance: 1,
@@ -2175,7 +2177,7 @@ fn sandbox_faults_are_not_catchable() {
         .run(
             &tree,
             &module,
-            proc(&tree, "test"),
+            proc(&tree, &module.index, "test"),
             None,
             None,
             Vec::new(),
@@ -2193,7 +2195,7 @@ fn world_log_output_uses_a_field_reference() {
         .run(
             &tree,
             &module,
-            proc(&tree, "test"),
+            proc(&tree, &module.index, "test"),
             None,
             None,
             Vec::new(),
@@ -2252,7 +2254,7 @@ fn icon_states_answer_from_the_host_table() {
         .run(
             &tree,
             &module,
-            proc(&tree, "test"),
+            proc(&tree, &module.index, "test"),
             None,
             None,
             Vec::new(),
@@ -2270,7 +2272,7 @@ fn unsupported_output_targets_are_blocked() {
         .run(
             &tree,
             &module,
-            proc(&tree, "test"),
+            proc(&tree, &module.index, "test"),
             None,
             None,
             Vec::new(),
@@ -2288,7 +2290,7 @@ fn instruction_budget_stops_infinite_control_flow() {
         .run(
             &tree,
             &module,
-            proc(&tree, "test"),
+            proc(&tree, &module.index, "test"),
             None,
             None,
             Vec::new(),
@@ -2365,7 +2367,7 @@ fn static_state_is_shared_and_dynamic_dm_calls_work() {
 fn reachable_codegen_executes_like_full_codegen() {
     let source = fixture!("programs/reachable_codegen_executes_like_full_codegen.dm");
     let (tree, ir_module) = analyze_fixture(source);
-    let entry = proc(&tree, "entry");
+    let entry = proc(&tree, &ir_module.index, "entry");
     let full = codegen::generate(&ir_module).expect("full codegen");
     let selected = codegen::generate_reachable(&ir_module, &tree, &[entry], &[]).expect("reachable codegen");
 
@@ -2378,7 +2380,7 @@ fn reachable_codegen_executes_like_full_codegen() {
     };
 
     assert_eq!(execute(&selected), execute(&full));
-    let unreachable = proc(&tree, "unreachable");
+    let unreachable = proc(&tree, &ir_module.index, "unreachable");
     assert!(selected.function_for_proc(unreachable).is_none());
 }
 
@@ -2568,7 +2570,7 @@ fn call_depth_stops_recursive_functions() {
         .run(
             &tree,
             &module,
-            proc(&tree, "test"),
+            proc(&tree, &module.index, "test"),
             None,
             None,
             Vec::new(),
@@ -2595,7 +2597,7 @@ fn an_instruction_fault_rolls_back_heap_changes() {
         .run(
             &tree,
             &module,
-            proc(&tree, "test"),
+            proc(&tree, &module.index, "test"),
             None,
             None,
             vec![GenericValue::Object(object)],
@@ -2633,7 +2635,7 @@ fn evaluation_reports_randomness_and_nonlocal_world_reads() {
     );
     let mut evaluator = Evaluator::new(&mut runtime, &tree, &module, Limits::default(), None);
     evaluator
-        .call(proc(&tree, "test"), None, Vec::new())
+        .call(proc(&tree, &module.index, "test"), None, Vec::new())
         .expect("fixture should execute");
     assert!(evaluator.position_sensitive);
     assert!(!evaluator.memo_safe);
@@ -2656,7 +2658,7 @@ fn intrinsic_procs_run_in_rust_instead_of_their_body() {
         .run(
             &tree,
             &module,
-            proc(&tree, "lines"),
+            proc(&tree, &module.index, "lines"),
             None,
             None,
             Vec::new(),
@@ -2681,7 +2683,7 @@ fn intrinsic_procs_run_in_rust_instead_of_their_body() {
             .run(
                 &tree,
                 &module,
-                proc(&tree, "banned"),
+                proc(&tree, &module.index, "banned"),
                 None,
                 None,
                 Vec::new(),
@@ -2695,7 +2697,7 @@ fn intrinsic_procs_run_in_rust_instead_of_their_body() {
         .run(
             &tree,
             &module,
-            proc(&tree, "reboot"),
+            proc(&tree, &module.index, "reboot"),
             None,
             None,
             Vec::new(),
@@ -2716,7 +2718,7 @@ fn file2list_without_a_root_is_blocked() {
         .run(
             &tree,
             &module,
-            proc(&tree, "lines"),
+            proc(&tree, &module.index, "lines"),
             None,
             None,
             Vec::new(),

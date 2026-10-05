@@ -741,7 +741,6 @@ mod tests {
                 declared_type: None,
                 modifiers: VarModifiers::default(),
                 value: Value::Text(value.to_owned()),
-                initializer: None,
                 declared: true,
                 location: Location::default(),
                 resolved_type: None,
