@@ -184,7 +184,7 @@ fn dump_tree(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("{} top level declarations", ast.declarations.len());
 
     println!("=== TREE ===");
-    let (tree, _module, errors) = sema::analyze(&ast, false);
+    let (tree, errors) = sema::analyze_tree(&ast);
     print!("{}", render_tree(&tree, &preprocessed.sources, source_root));
 
     for error in &errors {
@@ -1043,7 +1043,7 @@ mod tests {
         let (tokens, errors) = lexer::tokenize(source);
         assert!(errors.is_empty());
         let ast = ast::parse(&tokens).expect("fixture should parse");
-        let (tree, _module, errors) = sema::analyze(&ast, false);
+        let (tree, errors) = sema::analyze_tree(&ast);
         assert!(errors.is_empty());
 
         let source_root = source_root(&sources, Some(entry), Path::new("/project/game/entry.dm"));

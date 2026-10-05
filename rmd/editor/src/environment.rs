@@ -8,6 +8,7 @@ use std::{
 use codegen::CodegenError;
 use dmi::error::IconError;
 use net::CodebaseHash;
+use objtree::TypeId;
 use preprocessor::{PreludeFile, Preprocessor, SourceCache, Spanned, error::PreprocessError, prelude_files};
 use sema::error::SemaError;
 
@@ -326,10 +327,9 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
         None
     };
 
-    let mut optimization_timings = editor.optimization_timings;
+    let optimization_timings = bake.as_ref().map(|view| view.optimization_timings).unwrap_or_default();
     let mut resource_dirs = editor.resource_dirs;
     if let Some(view) = &bake {
-        optimization_timings.merge(view.optimization_timings);
         for path in &view.resource_dirs {
             if !resource_dirs.contains(path) {
                 resource_dirs.push(path.clone());
@@ -340,47 +340,10 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
     let (bake_program, profiles, profile_error, bake_files, bake_errors, bake_sema_errors, codegen_error) = match bake {
         Some(view) => {
             let files: Arc<[PathBuf]> = Arc::from(view.files);
-            let path = |id| {
-                view.tree
-                    .get(id)
-                    .map(|declaration| declaration.path.to_string())
-                    .unwrap_or_default()
-            };
-            let (selection, profile_error) = match options.forced_profile {
-                Some(_) => match forced
-                    .profile
-                    .as_ref()
-                    .and_then(|profile| files.iter().position(|file| file == profile.path()))
-                    .map_or(Err(vm::bake::ProfileError::Missing), |file| {
-                        vm::bake::profile_in_file(&view.tree, FileId(file as u32))
-                    }) {
-                    Ok(active) => {
-                        let active_path = path(active);
-                        let profiles = Profiles {
-                            available: vec![active_path.clone()],
-                            default: active_path.clone(),
-                            active: active_path,
-                        };
-
-                        (Some((active, profiles)), None)
-                    },
-                    Err(error) => (None, Some(error)),
-                },
-                None => match vm::bake::profile_catalog(&view.tree) {
-                    Ok(catalog) => {
-                        let active = catalog.select(&view.tree, options.profile.as_ref());
-                        let profiles = Profiles {
-                            available: catalog.profiles.iter().copied().map(path).collect::<Vec<_>>(),
-                            default: path(catalog.default),
-                            active: path(active),
-                        };
-
-                        (Some((active, profiles)), None)
-                    },
-                    Err(vm::bake::ProfileError::Missing) => (None, None),
-                    Err(error) => (None, Some(error)),
-                },
-            };
+            let ProfileSelection {
+                chosen: selection,
+                error: profile_error,
+            } = view.profile.unwrap_or_default();
             let profiles = selection.as_ref().map(|(_, profiles)| profiles.clone());
             let (program, codegen_error) = match (view.module, selection) {
                 (Some(module), Some((profile, _))) => {
@@ -436,6 +399,59 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
     })
 }
 
+#[derive(Default)]
+struct ProfileSelection {
+    chosen: Option<(TypeId, Profiles)>,
+    error: Option<vm::bake::ProfileError>,
+}
+
+fn select_profile(
+    tree: &ObjectTree, files: &[PathBuf], options: &BakeOptions, forced: &ForcedSources,
+) -> ProfileSelection {
+    let path = |id| {
+        tree.get(id)
+            .map(|declaration| declaration.path.to_string())
+            .unwrap_or_default()
+    };
+    let (chosen, error) = match options.forced_profile {
+        Some(_) => match forced
+            .profile
+            .as_ref()
+            .and_then(|profile| files.iter().position(|file| file == profile.path()))
+            .map_or(Err(vm::bake::ProfileError::Missing), |file| {
+                vm::bake::profile_in_file(tree, FileId(file as u32))
+            }) {
+            Ok(active) => {
+                let active_path = path(active);
+                let profiles = Profiles {
+                    available: vec![active_path.clone()],
+                    default: active_path.clone(),
+                    active: active_path,
+                };
+
+                (Some((active, profiles)), None)
+            },
+            Err(error) => (None, Some(error)),
+        },
+        None => match vm::bake::profile_catalog(tree) {
+            Ok(catalog) => {
+                let active = catalog.select(tree, options.profile.as_ref());
+                let profiles = Profiles {
+                    available: catalog.profiles.iter().copied().map(path).collect::<Vec<_>>(),
+                    default: path(catalog.default),
+                    active: path(active),
+                };
+
+                (Some((active, profiles)), None)
+            },
+            Err(vm::bake::ProfileError::Missing) => (None, None),
+            Err(error) => (None, Some(error)),
+        },
+    };
+
+    ProfileSelection { chosen, error }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compile_view<'a>(
     arena: &'a StrArena, entry: &Path, baking: bool, generate: bool, options: &BakeOptions, forced: &ForcedSources,
@@ -476,20 +492,6 @@ fn compile_view<'a>(
     }
 
     progress.enter(Stage::Analyze, 0);
-    let (tree, module, sema_errors, optimization_timings) =
-        sema::analyze_with_optimizations(&ast, options.optimizations_enabled);
-    if progress.is_cancelled() {
-        return Err(LoadError::Cancelled);
-    }
-
-    let module = generate.then_some(module);
-
-    let root = preprocessed
-        .entry
-        .and_then(|id| preprocessed.sources.path(id))
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| entry.to_path_buf());
-
     let files = (0..preprocessed.sources.len())
         .map(|i| {
             preprocessed
@@ -498,7 +500,31 @@ fn compile_view<'a>(
                 .map(Path::to_path_buf)
                 .unwrap_or_default()
         })
-        .collect();
+        .collect::<Vec<_>>();
+
+    // a view without a profile to bake never reaches codegen, so its IR is not worth finishing
+    let mut profile = None;
+    let (tree, module, sema_errors, optimization_timings) = if generate {
+        sema::analyze_if(&ast, options.optimizations_enabled, |tree| {
+            let selection = select_profile(tree, &files, options, forced);
+            let is_selected = selection.chosen.is_some();
+            profile = Some(selection);
+
+            is_selected
+        })
+    } else {
+        let (tree, errors) = sema::analyze_tree(&ast);
+        (tree, None, errors, ir::opt::OptimizationTimings::default())
+    };
+    if progress.is_cancelled() {
+        return Err(LoadError::Cancelled);
+    }
+
+    let root = preprocessed
+        .entry
+        .and_then(|id| preprocessed.sources.path(id))
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| entry.to_path_buf());
 
     let maps = preprocessed
         .resources
@@ -520,6 +546,7 @@ fn compile_view<'a>(
         optimization_timings,
         source_cache: preprocessed.source_cache,
         tokens,
+        profile,
     })
 }
 
@@ -555,6 +582,7 @@ struct CompiledView<'a> {
     optimization_timings: ir::opt::OptimizationTimings,
     source_cache: SourceCache<'a>,
     tokens: Vec<Spanned<'a>>,
+    profile: Option<ProfileSelection>,
 }
 
 #[cfg(test)]
@@ -603,7 +631,7 @@ mod tests {
         };
         let (default, diagnostics) = load(None);
         assert!(diagnostics.profile.is_none());
-        assert_eq!(default.optimization_timings.samples(), 2);
+        assert_eq!(default.optimization_timings.samples(), 1);
         assert_eq!(
             default.profiles,
             Some(Profiles {

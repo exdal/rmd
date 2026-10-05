@@ -45,6 +45,13 @@ impl<'a> Analyzer<'a> {
         }
     }
 
+    pub fn tree_only(ast: &'a AST) -> Self {
+        Self {
+            module: ir::IrModuleBuilder::new(ast).skipping_bodies(),
+            ..Self::new(ast)
+        }
+    }
+
     pub fn errors(&self) -> &[SemaError] { &self.errors }
 
     pub fn add(&mut self) {
@@ -53,6 +60,30 @@ impl<'a> Analyzer<'a> {
         for declaration in &ast.declarations {
             self.walk(declaration, &root);
         }
+    }
+
+    pub fn finish_tree(mut self) -> (ObjectTree, Vec<SemaError>) {
+        self.resolve_tree();
+
+        (self.tree, self.errors)
+    }
+
+    pub fn finish_if(
+        mut self, optimize: bool, wants_module: impl FnOnce(&ObjectTree) -> bool,
+    ) -> (
+        ObjectTree,
+        Option<ir::Module>,
+        Vec<SemaError>,
+        ir::opt::OptimizationTimings,
+    ) {
+        self.resolve_tree();
+        if !wants_module(&self.tree) {
+            return (self.tree, None, self.errors, ir::opt::OptimizationTimings::default());
+        }
+
+        let (tree, module, errors, timings) = self.finish_module(optimize);
+
+        (tree, Some(module), errors, timings)
     }
 
     pub fn finish(self, optimize: bool) -> (ObjectTree, ir::Module, Vec<SemaError>) {
@@ -64,8 +95,18 @@ impl<'a> Analyzer<'a> {
     pub fn finish_with_optimizations(
         mut self, enabled: bool,
     ) -> (ObjectTree, ir::Module, Vec<SemaError>, ir::opt::OptimizationTimings) {
+        self.resolve_tree();
+        self.finish_module(enabled)
+    }
+
+    fn resolve_tree(&mut self) {
         self.tree.resolve_parent_types();
         self.resolve_var_types();
+    }
+
+    fn finish_module(
+        mut self, enabled: bool,
+    ) -> (ObjectTree, ir::Module, Vec<SemaError>, ir::opt::OptimizationTimings) {
         self.resolve_new_types();
         let (module, timings) = self.module.finish_with_optimizations(enabled);
 
@@ -548,6 +589,27 @@ pub fn analyze(ast: &AST, optimize: bool) -> (ObjectTree, ir::Module, Vec<SemaEr
     analyzer.add();
 
     analyzer.finish(optimize)
+}
+
+pub fn analyze_if(
+    ast: &AST, optimize: bool, wants_module: impl FnOnce(&ObjectTree) -> bool,
+) -> (
+    ObjectTree,
+    Option<ir::Module>,
+    Vec<SemaError>,
+    ir::opt::OptimizationTimings,
+) {
+    let mut analyzer = Analyzer::new(ast);
+    analyzer.add();
+
+    analyzer.finish_if(optimize, wants_module)
+}
+
+pub fn analyze_tree(ast: &AST) -> (ObjectTree, Vec<SemaError>) {
+    let mut analyzer = Analyzer::tree_only(ast);
+    analyzer.add();
+
+    analyzer.finish_tree()
 }
 
 pub fn analyze_with_optimizations(

@@ -41,6 +41,7 @@ pub struct IrModuleBuilder<'a> {
     current_owner: TreePath,
     locals_in_memory: bool,
     depth: usize,
+    is_skipping_bodies: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -102,6 +103,7 @@ impl<'a> IrModuleBuilder<'a> {
             current_owner: TreePath::default(),
             locals_in_memory: false,
             depth: 0,
+            is_skipping_bodies: false,
         }
     }
 
@@ -135,6 +137,12 @@ impl<'a> IrModuleBuilder<'a> {
         }
 
         id
+    }
+
+    pub fn skipping_bodies(mut self) -> Self {
+        self.is_skipping_bodies = true;
+
+        self
     }
 
     pub fn finish(self) -> Module { self.finish_with_optimizations(true).0 }
@@ -246,7 +254,10 @@ impl<'a> IrModuleBuilder<'a> {
             self.locals_in_memory = true;
         }
 
-        body(self);
+        if !self.is_skipping_bodies {
+            body(self);
+        }
+
         self.terminate_current_block(IrNode::Return(None));
 
         let named_blocks = self
