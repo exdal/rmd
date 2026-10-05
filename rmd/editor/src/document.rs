@@ -321,17 +321,44 @@ impl MapDocument {
 
     pub fn apply_remote(&mut self, tiles: Vec<(Coord, Vec<Prefab>)>) -> Vec<PrefabInstanceId> {
         let mut edit = Edit::new("remote edit");
+        let mut affected = Vec::new();
         for (coord, tile) in tiles {
-            if self.map.tile_at(coord).is_none() {
+            let Some(current) = self.placed_tile(coord) else {
+                continue;
+            };
+
+            // unchanged prefabs keep their ids, a new id on an area would repaint its whole region
+            let mut unclaimed = current.clone();
+            let mut added = Vec::new();
+            let placed = tile
+                .into_iter()
+                .map(|prefab| match unclaimed.iter().position(|placed| *placed.prefab() == prefab) {
+                    Some(index) => unclaimed.remove(index),
+                    None => {
+                        let placed = self.instantiate(prefab);
+                        added.push(placed.id());
+                        placed
+                    },
+                })
+                .collect::<PlacedTile>();
+            if placed == current {
                 continue;
             }
 
+            let is_reordered = added.is_empty() && unclaimed.is_empty();
+            if is_reordered {
+                affected.extend(placed.iter().map(PlacedPrefab::id));
+            } else {
+                affected.extend(added);
+                affected.extend(unclaimed.iter().map(PlacedPrefab::id));
+            }
+
             self.retained_level_count = self.retained_level_count.max(coord.z);
-            let placed = tile.into_iter().map(|prefab| self.instantiate(prefab)).collect();
             edit.change(self, coord, placed);
         }
 
-        let affected = edit.affected_instances();
+        affected.sort_unstable();
+        affected.dedup();
         // these edits come from remote, not from us: dont do command recording stuff
         command::apply_unrecorded(&mut self.map, &mut self.instances, &mut self.key_usage, &edit);
         self.generation += 1;
@@ -922,7 +949,8 @@ mod tests {
         edit.change(&document, coord, placed);
         assert!(document.apply(edit));
 
-        document.apply_remote(vec![(coord, vec![wall.clone()])]);
+        let marker = Prefab::new(TreePath::parse("/obj/remote"));
+        document.apply_remote(vec![(coord, vec![wall.clone(), marker.clone()])]);
         let remote = document.instance_ids_at(coord).to_vec();
 
         let affected = document.undo_with_affected().unwrap();
@@ -931,7 +959,7 @@ mod tests {
         }
 
         let restored = document.instance_ids_at(coord).to_vec();
-        document.apply_remote(vec![(coord, vec![floor])]);
+        document.apply_remote(vec![(coord, vec![floor, marker])]);
         let remote = document.instance_ids_at(coord).to_vec();
         assert_ne!(remote, restored);
 
@@ -939,6 +967,34 @@ mod tests {
         for id in &remote {
             assert!(affected.contains(id), "redo left {id:?} behind for the baker");
         }
+    }
+
+    #[test]
+    fn a_remote_edit_keeps_the_ids_of_unchanged_prefabs_and_reports_only_the_rest() {
+        let mut document = MapDocument::new(shared_tile_map(), 1);
+        let (from, to) = (Coord::new(1, 1, 1), Coord::new(2, 1, 1));
+        let floor = Prefab::new(TreePath::parse("/turf/floor"));
+        let table = Prefab::new(TreePath::parse("/obj/table"));
+        let chair_prefab = Prefab::new(TreePath::parse("/obj/chair"));
+        let [from_floor, from_table] = document.instance_ids_at(from).try_into().unwrap();
+        let [to_floor, to_table] = document.instance_ids_at(to).try_into().unwrap();
+
+        let affected = document.apply_remote(vec![
+            (from, vec![floor.clone()]),
+            (to, vec![floor.clone(), table.clone(), chair_prefab.clone()]),
+        ]);
+
+        assert_eq!(document.instance_ids_at(from), [from_floor]);
+        assert_eq!(&document.instance_ids_at(to)[..2], [to_floor, to_table]);
+        let chair = document.instance_ids_at(to)[2];
+        assert_eq!(affected, [from_table, chair]);
+
+        assert!(document.apply_remote(vec![(from, vec![floor.clone()])]).is_empty());
+        assert_eq!(document.instance_ids_at(from), [from_floor]);
+
+        let affected = document.apply_remote(vec![(to, vec![table, floor.clone(), chair_prefab])]);
+        assert_eq!(document.instance_ids_at(to), [to_table, to_floor, chair]);
+        assert_eq!(affected, [to_floor, to_table, chair], "a reorder repaints the whole tile");
     }
 
     #[test]

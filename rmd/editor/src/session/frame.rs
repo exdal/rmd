@@ -334,15 +334,18 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
+    use core::{path::TreePath, types::Value};
 
-    use dmm::{Coord, Map, Size};
-    use editor::document::{MapDocument, Selection};
+    use dmm::{Coord, Map, Prefab, Size};
+    use editor::{
+        document::{MapDocument, Selection},
+        tool::Tool,
+    };
 
     use crate::session::{
         Session,
         TypeLayer,
-        fixtures::{examples, flat_session, settle_bake},
+        fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, settle_bake},
     };
 
     #[test]
@@ -367,6 +370,37 @@ mod tests {
             Some(([2 * tile, tile], [2 * tile, 2 * tile]))
         );
         assert_eq!(session.capture_region(id, block((5, 1), (6, 1))), None);
+    }
+
+    #[test]
+    fn remote_edits_update_the_render_cache_like_a_rebuild() {
+        let mut session = flat_session(3, 1);
+        let id = session.state.active().unwrap();
+        let (from, to) = (Coord::new(1, 1, 1), Coord::new(2, 1, 1));
+        session.set_tool(Tool::Place);
+        session
+            .state
+            .choose_prefab(Prefab::new(TreePath::parse("/obj/structure/table")));
+        session.place_at(from, None).unwrap();
+
+        let tile = |session: &Session, coord| session.map().unwrap().tile_at(coord).unwrap().clone();
+        let mut source = tile(&session, from);
+        let table = source.remove(source.len() - 1);
+        let mut destination = tile(&session, to);
+        destination.push(table);
+        let mut repainted = tile(&session, Coord::new(3, 1, 1));
+        let mut engineering = Prefab::new(TreePath::parse("/area/station"));
+        engineering.set_var("name".into(), Value::Text(String::from("Engineering")));
+        *repainted.last_mut().unwrap() = engineering;
+        let affected = session.state.document_mut(id).unwrap().apply_remote(vec![
+            (from, source),
+            (to, destination),
+            (Coord::new(3, 1, 1), repainted),
+        ]);
+        session.update_document_instances(id, &affected);
+
+        assert_eq!(affected.len(), 4, "the moved table and the repainted area, old and new");
+        assert_render_cache_matches_rebuild(&session);
     }
 
     #[test]
