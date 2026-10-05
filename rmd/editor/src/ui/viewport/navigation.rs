@@ -6,6 +6,7 @@ use editor::document::DocumentId;
 
 use super::{MapViewState, ViewFrame, stroke::ActivePlacementFlash};
 use crate::{
+    camera::Controller,
     session::Session,
     settings::{KeybindAction, Settings},
     ui::{UiState, common::dpi, find::JumpTarget},
@@ -21,47 +22,57 @@ const PAN_KEYS: [(KeybindAction, [f32; 2]); 4] = [
     (KeybindAction::PanDown, [0.0, -1.0]),
 ];
 
+pub(in crate::ui) fn navigate(
+    ui: &Ui, settings: &Settings, camera: &mut Controller, viewport_min: [f32; 2], center: [f32; 2],
+    is_drag_panning: bool, is_locked: bool,
+) {
+    let io = ui.io();
+    if !is_locked && (ui.is_mouse_down(MouseButton::Middle) || is_drag_panning && ui.is_mouse_down(MouseButton::Left)) {
+        camera.pan_by(io.mouse_delta());
+    }
+
+    let wheel = io.mouse_wheel();
+    if !is_locked && wheel != 0.0 {
+        let mouse = io.mouse_pos();
+        camera.zoom_by(wheel, [mouse[0] - viewport_min[0], mouse[1] - viewport_min[1]]);
+    }
+
+    let faster = settings.keybindings.get(KeybindAction::PanFaster);
+    let speed = KEY_PAN_SPEED * dpi(ui) * io.delta_time() * if faster.is_held(ui) { KEY_PAN_FASTER } else { 1.0 };
+    let pan = PAN_KEYS
+        .into_iter()
+        .filter(|(action, _)| settings.keybindings.get(*action).is_down_with(ui, faster))
+        .fold([0.0; 2], |pan, (_, direction)| {
+            [pan[0] + direction[0] * speed, pan[1] + direction[1] * speed]
+        });
+    if pan != [0.0; 2] {
+        camera.pan_by(pan);
+    }
+
+    if settings.keybindings.get(KeybindAction::ZoomIn).is_pressed_repeating(ui) {
+        camera.zoom_by(1.0, center);
+    }
+
+    if settings
+        .keybindings
+        .get(KeybindAction::ZoomOut)
+        .is_pressed_repeating(ui)
+    {
+        camera.zoom_by(-1.0, center);
+    }
+}
+
 impl UiState {
     pub(super) fn pan_and_zoom(&self, ui: &Ui, settings: &Settings, frame: &mut ViewFrame<'_>, is_drag_panning: bool) {
-        let io = ui.io();
-        let camera = &mut *frame.camera;
-        if !self.gizmo.is_interacting()
-            && (ui.is_mouse_down(MouseButton::Middle) || is_drag_panning && ui.is_mouse_down(MouseButton::Left))
-        {
-            camera.pan_by(io.mouse_delta());
-        }
-
-        let wheel = io.mouse_wheel();
-        if !self.gizmo.is_interacting() && wheel != 0.0 {
-            let mouse = io.mouse_pos();
-            let min = frame.layout.viewport.min;
-            camera.zoom_by(wheel, [mouse[0] - min[0], mouse[1] - min[1]]);
-        }
-
-        let faster = settings.keybindings.get(KeybindAction::PanFaster);
-        let speed = KEY_PAN_SPEED * dpi(ui) * io.delta_time() * if faster.is_held(ui) { KEY_PAN_FASTER } else { 1.0 };
-        let pan = PAN_KEYS
-            .into_iter()
-            .filter(|(action, _)| settings.keybindings.get(*action).is_down_with(ui, faster))
-            .fold([0.0; 2], |pan, (_, direction)| {
-                [pan[0] + direction[0] * speed, pan[1] + direction[1] * speed]
-            });
-        if pan != [0.0; 2] {
-            camera.pan_by(pan);
-        }
-
-        let center = frame.layout.center();
-        if settings.keybindings.get(KeybindAction::ZoomIn).is_pressed_repeating(ui) {
-            camera.zoom_by(1.0, center);
-        }
-
-        if settings
-            .keybindings
-            .get(KeybindAction::ZoomOut)
-            .is_pressed_repeating(ui)
-        {
-            camera.zoom_by(-1.0, center);
-        }
+        navigate(
+            ui,
+            settings,
+            frame.camera,
+            frame.layout.viewport.min,
+            frame.layout.center(),
+            is_drag_panning,
+            self.gizmo.is_interacting(),
+        );
     }
 
     pub(super) fn mirror_active_camera(&mut self, session: &mut Session) {
