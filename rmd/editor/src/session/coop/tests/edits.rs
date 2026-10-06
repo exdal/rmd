@@ -488,3 +488,41 @@ fn a_second_level_waits_for_the_first_to_come_back() {
         let _ = fs::remove_dir_all(dir);
     }
 }
+
+#[test]
+fn a_level_created_right_after_a_resize_reaches_peers() {
+    let (host_dir, mut host, guest_dir, mut guest, host_id, guest_id) = shared_pair("level-after-resize");
+
+    host.resize_map(3, 1, &plain_fill()).unwrap();
+    assert_eq!(host.create_level(host_id, &plain_fill()), Ok(2));
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        settled(sessions) && sessions[1].state.document(guest_id).unwrap().map.size().x == 3
+    });
+
+    assert_eq!(host.state.document(host_id).unwrap().map.size().z, 2);
+    assert_eq!(guest.state.document(guest_id).unwrap().map.size().z, 2);
+
+    for dir in [host_dir, guest_dir] {
+        let _ = fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn a_level_created_while_a_reshare_uploads_reaches_peers() {
+    let (host_dir, mut host, guest_dir, mut guest, host_id, guest_id) = shared_pair("level-during-reshare");
+
+    host.resize_map(3, 1, &plain_fill()).unwrap();
+    host.poll_coop();
+    assert!(!host.coop().unwrap().shared_maps["_maps/a.dmm"].is_ready());
+    assert_eq!(host.create_level(host_id, &plain_fill()), Ok(2));
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        settled(sessions) && sessions[1].state.document(guest_id).unwrap().map.size().x == 3
+    });
+
+    assert_eq!(host.state.document(host_id).unwrap().map.size().z, 2);
+    assert_eq!(guest.state.document(guest_id).unwrap().map.size().z, 2);
+
+    for dir in [host_dir, guest_dir] {
+        let _ = fs::remove_dir_all(dir);
+    }
+}

@@ -254,7 +254,13 @@ impl SharedMap {
     fn renumber(&mut self, generation: GenerationId) {
         if self.generation != Some(generation) {
             self.generation = Some(generation);
+            // an unsent level still applies, every peer checks its z against their own map
+            let queued = self
+                .level_request
+                .take()
+                .filter(|request| matches!(request, LevelRequest::Queued(_)));
             self.forget_edits();
+            self.level_request = queued;
         }
     }
 
