@@ -2,9 +2,10 @@ use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use dmm::{Coord, Map, Tile};
 use editor::{
-    diff::{self, ChangeKind, DiffSource, MapDiff},
+    diff::{self, ChangeKind, DiffSource, MapDiff, Version},
     document::DocumentId,
     git::CommitInfo,
+    grid::Grid,
     tool::ToolEdit,
 };
 
@@ -37,11 +38,11 @@ impl DiffSide {
         }
     }
 
-    fn map<'a>(&'a self, working: &'a Map) -> Option<&'a Map> {
+    fn version<'a>(&'a self, working: &'a Grid) -> Option<Version<'a>> {
         if self.is_working() {
-            Some(working)
+            Some(Version::Working(working))
         } else {
-            self.map.as_ref()
+            self.map.as_ref().map(Version::File)
         }
     }
 }
@@ -71,7 +72,7 @@ impl DiffState {
     /// Whether tiles can be restored from `from` onto the map
     pub fn restorable(&self) -> bool { self.to.is_working() && !self.from.is_working() }
 
-    fn with_view<R>(&self, map_revision: u64, working: &Map, read: impl FnOnce(&mut DiffView) -> R) -> R {
+    fn with_view<R>(&self, map_revision: u64, working: &Grid, read: impl FnOnce(&mut DiffView) -> R) -> R {
         let key = if self.from.is_working() || self.to.is_working() {
             map_revision
         } else {
@@ -84,7 +85,7 @@ impl DiffState {
 
         let view = view.get_or_insert_with(|| DiffView {
             key,
-            diff: Arc::new(diff::diff(self.from.map(working), self.to.map(working))),
+            diff: Arc::new(diff::diff(self.from.version(working), self.to.version(working))),
             highlights: HashMap::new(),
         });
 
@@ -160,8 +161,14 @@ impl Session {
         let kind = self.with_diff_view(id, |view| view.diff.at(coord))??;
         let document = self.state.document(id)?;
         let diff = self.git_state(id)?.diff.as_ref()?;
-        let from = diff.from.map(&document.map).and_then(|map| map.tile_at(coord));
-        let to = diff.to.map(&document.map).and_then(|map| map.tile_at(coord));
+        let from = diff
+            .from
+            .version(&document.map)
+            .and_then(|version| version.tile_at(coord));
+        let to = diff
+            .to
+            .version(&document.map)
+            .and_then(|version| version.tile_at(coord));
 
         Some((kind, from, to))
     }

@@ -30,7 +30,7 @@ fn a_different_codebase_is_rejected_without_touching_unsaved_maps_then_can_retry
     guest.share_coop_map();
     assert!(guest.coop().unwrap().shared_maps.is_empty());
     let document = guest.state.document(local).unwrap();
-    assert_eq!(document.map.size.x, 1);
+    assert_eq!(document.map.size().x, 1);
     assert!(document.is_dirty());
     assert!(!document.is_read_only());
     assert_eq!(width_on_disk(&file), 1);
@@ -106,7 +106,7 @@ fn an_incompatible_reload_drops_waiting_snapshots_and_late_workers() {
     assert!(guest.coop().unwrap().shared_maps.is_empty());
     assert!(guest.state.document(local).unwrap().is_dirty());
     assert!(!guest.state.document(local).unwrap().is_read_only());
-    assert_eq!(guest.state.document(local).unwrap().map.size.x, 1);
+    assert_eq!(guest.state.document(local).unwrap().map.size().x, 1);
     assert!(
         stale_worker
             .send(Prepared::Unreadable {
@@ -125,7 +125,7 @@ fn an_incompatible_reload_drops_waiting_snapshots_and_late_workers() {
         },
     );
     assert!(guest.coop().unwrap().shared_maps.is_empty());
-    assert_eq!(guest.state.document(local).unwrap().map.size.x, 1);
+    assert_eq!(guest.state.document(local).unwrap().map.size().x, 1);
     assert_eq!(width_on_disk(&file), 1);
     poll_until(&mut [&mut host], |sessions| {
         sessions[0].coop().unwrap().peers.is_empty()

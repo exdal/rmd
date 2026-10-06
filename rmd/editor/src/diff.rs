@@ -1,9 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use dmm::{
     Coord,
     Map,
     Prefab,
+    Size,
     Tile,
     key::Key,
     merge::{prefabs_equal, tiles_equal},
@@ -14,18 +18,16 @@ use crate::{
     command::Edit,
     conflict::{connected_regions, describe_prefab, set_tile},
     document::MapDocument,
+    grid::Grid,
 };
 
 pub const ADDED_COLOR: [f32; 3] = [0.3, 0.85, 0.4];
 pub const REMOVED_COLOR: [f32; 3] = [1.0, 0.3, 0.3];
 pub const MODIFIED_COLOR: [f32; 3] = [1.0, 0.75, 0.2];
 
-/// One side of a comparison
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffSource {
-    /// The map open in the editor, unsaved edits included
     Working,
-    /// Anything `git rev-parse` understands: `HEAD~3`, a branch, a tag or a hash
     Revision(String),
 }
 
@@ -35,9 +37,7 @@ impl DiffSource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeKind {
-    /// The newer tile keeps everything the older one had and adds to it
     Added,
-    /// The newer tile lost objects and gained none
     Removed,
     Modified,
 }
@@ -122,12 +122,49 @@ impl MapDiff {
 
 static EMPTY: Tile = Vec::new();
 
-/// `None` outside the map
-fn cell(map: Option<&Map>, coord: Coord) -> Option<(Key, &Tile)> {
-    let map = map?;
-    let key = map.key_at(coord)?;
+#[derive(Debug, Clone, Copy)]
+pub enum Version<'a> {
+    File(&'a Map),
+    Working(&'a Grid),
+}
 
-    Some((key, map.dictionary.get(&key).unwrap_or(&EMPTY)))
+/// Tiles with the same identity hold the same prefabs
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Identity {
+    Key(Key),
+    Shared(*const Tile),
+}
+
+impl<'a> Version<'a> {
+    pub fn size(self) -> Size {
+        match self {
+            Self::File(map) => map.size,
+            Self::Working(grid) => grid.size(),
+        }
+    }
+
+    pub fn tile_at(self, coord: Coord) -> Option<&'a Tile> {
+        match self {
+            Self::File(map) => map.tile_at(coord),
+            Self::Working(grid) => grid.tile_at(coord),
+        }
+    }
+
+    /// `None` outside the map
+    fn cell(self, coord: Coord) -> Option<(Identity, &'a Tile)> {
+        match self {
+            Self::File(map) => {
+                let key = map.key_at(coord)?;
+
+                Some((Identity::Key(key), map.dictionary.get(&key).unwrap_or(&EMPTY)))
+            },
+            Self::Working(grid) => {
+                let tile = grid.shared_tile_at(coord)?;
+
+                Some((Identity::Shared(Arc::as_ptr(tile)), tile.as_ref()))
+            },
+        }
+    }
 }
 
 /// Whether `whole` holds every prefab of `part`, duplicates counted
@@ -160,18 +197,18 @@ fn classify(from: Option<&Tile>, to: Option<&Tile>) -> Option<ChangeKind> {
 }
 
 /// Compares two versions of a map, `None` for a version where the file doesn't exist
-pub fn diff(from: Option<&Map>, to: Option<&Map>) -> MapDiff {
-    let size = |map: Option<&Map>| map.map_or(Default::default(), |map| map.size);
+pub fn diff(from: Option<Version>, to: Option<Version>) -> MapDiff {
+    let size = |version: Option<Version>| version.map_or(Default::default(), Version::size);
     let (from_size, to_size) = (size(from), size(to));
     let mut kinds = HashMap::new();
-    // one comparison per pair of dictionary entries, not per tile
-    let mut compared: HashMap<(Option<Key>, Option<Key>), Option<ChangeKind>> = HashMap::new();
+    // one comparison per pair of distinct tiles, not per coordinate
+    let mut compared: HashMap<(Option<Identity>, Option<Identity>), Option<ChangeKind>> = HashMap::new();
 
     for z in 1..=from_size.z.max(to_size.z) {
         for y in (1..=from_size.y.max(to_size.y)).rev() {
             for x in 1..=from_size.x.max(to_size.x) {
                 let coord = Coord::new(x, y, z);
-                let (before, after) = (cell(from, coord), cell(to, coord));
+                let (before, after) = (from.and_then(|from| from.cell(coord)), to.and_then(|to| to.cell(coord)));
                 let kind = *compared
                     .entry((before.map(|(key, _)| key), after.map(|(key, _)| key)))
                     .or_insert_with(|| classify(before.map(|(_, tile)| tile), after.map(|(_, tile)| tile)));
@@ -350,7 +387,7 @@ pub fn restore_edit(document: &mut MapDocument, from: Option<&Map>, coords: &[Co
     let mut edit = Edit::new(label);
 
     for coord in coords {
-        if document.map.key_at(*coord).is_none() {
+        if document.map.tile_at(*coord).is_none() {
             continue;
         }
 
@@ -367,7 +404,7 @@ mod tests {
 
     use dmm::{Coord, Map, Prefab, Size, Tile};
 
-    use super::{ChangeKind, LineKind, VarChange, diff, restore_edit, tile_lines};
+    use super::{ChangeKind, LineKind, VarChange, Version, diff, restore_edit, tile_lines};
     use crate::document::MapDocument;
 
     fn tile(paths: &[&str]) -> Tile { paths.iter().map(|path| Prefab::new(TreePath::parse(path))).collect() }
@@ -392,7 +429,7 @@ mod tests {
         map
     }
 
-    fn kinds(from: Option<&Map>, to: Option<&Map>) -> Vec<(u32, u32, ChangeKind)> {
+    fn kinds(from: Option<Version>, to: Option<Version>) -> Vec<(u32, u32, ChangeKind)> {
         diff(from, to)
             .changes()
             .iter()
@@ -404,7 +441,7 @@ mod tests {
     fn identical_maps_have_no_changes() {
         let old = map((4, 4), &[((2, 2), &["/turf/floor", "/obj/table"])]);
 
-        assert!(diff(Some(&old), Some(&old.clone())).is_empty());
+        assert!(diff(Some(Version::File(&old)), Some(Version::File(&old.clone()))).is_empty());
     }
 
     #[test]
@@ -418,7 +455,7 @@ mod tests {
                 ((4, 4), &["/turf/wall"]),
             ],
         );
-        let result = diff(Some(&old), Some(&new));
+        let result = diff(Some(Version::File(&old)), Some(Version::File(&new)));
 
         assert_eq!(result.at(Coord::new(1, 1, 1)), Some(ChangeKind::Added));
         assert_eq!(result.at(Coord::new(3, 3, 1)), Some(ChangeKind::Removed));
@@ -433,9 +470,15 @@ mod tests {
         let small = map((2, 1), &[]);
         let large = map((3, 1), &[]);
 
-        assert_eq!(kinds(Some(&small), Some(&large)), [(3, 1, ChangeKind::Added)]);
-        assert_eq!(kinds(Some(&large), Some(&small)), [(3, 1, ChangeKind::Removed)]);
-        assert_eq!(kinds(None, Some(&small)).len(), 2);
+        assert_eq!(
+            kinds(Some(Version::File(&small)), Some(Version::File(&large))),
+            [(3, 1, ChangeKind::Added)]
+        );
+        assert_eq!(
+            kinds(Some(Version::File(&large)), Some(Version::File(&small))),
+            [(3, 1, ChangeKind::Removed)]
+        );
+        assert_eq!(kinds(None, Some(Version::File(&small))).len(), 2);
     }
 
     #[test]
@@ -449,7 +492,7 @@ mod tests {
                 ((5, 5), &["/turf/wall"]),
             ],
         );
-        let regions = diff(Some(&old), Some(&new))
+        let regions = diff(Some(Version::File(&old)), Some(Version::File(&new)))
             .changes()
             .iter()
             .map(|change| (change.coord.x, change.region))
@@ -546,10 +589,13 @@ mod tests {
         let edit = restore_edit(&mut document, Some(&old), &[coord, Coord::new(9, 9, 1)], "Restore").unwrap();
 
         assert!(document.apply_grouped(edit, None));
-        assert!(diff(Some(&old), Some(&document.map)).is_empty());
+        assert!(diff(Some(Version::File(&old)), Some(Version::Working(&document.map))).is_empty());
         assert!(restore_edit(&mut document, Some(&old), &[coord], "Restore").is_none());
 
         assert!(document.undo());
-        assert_eq!(kinds(Some(&old), Some(&document.map)), [(2, 2, ChangeKind::Removed)]);
+        assert_eq!(
+            kinds(Some(Version::File(&old)), Some(Version::Working(&document.map))),
+            [(2, 2, ChangeKind::Removed)]
+        );
     }
 }

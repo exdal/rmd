@@ -104,11 +104,11 @@ pub fn atoms(environment: &Environment, document: &MapDocument) -> Vec<vm::bake:
 }
 
 pub fn atoms_from_level(environment: &Environment, document: &MapDocument, first: u32) -> Vec<vm::bake::Atom> {
-    let map = &document.map;
+    let size = document.map.size();
     let mut atoms = Vec::new();
-    for z in first..=map.size.z {
-        for y in 1..=map.size.y {
-            for x in 1..=map.size.x {
+    for z in first..=size.z {
+        for y in 1..=size.y {
+            for x in 1..=size.x {
                 for id in document.instance_ids_at(Coord::new(x, y, z)) {
                     if let Some(atom) = placed(environment, document, *id) {
                         atoms.push(atom);
@@ -122,7 +122,7 @@ pub fn atoms_from_level(environment: &Environment, document: &MapDocument, first
 }
 
 pub fn size(document: &MapDocument) -> [i32; 3] {
-    let size = document.map.size;
+    let size = document.map.size();
 
     [size.x as i32, size.y as i32, size.z as i32]
 }
@@ -646,7 +646,7 @@ mod tests {
         let key = map.intern_tile(vec![Prefab::new(TreePath::parse("/turf/closed/wall"))]);
         map.grid[0] = vec![vec![key; 3]; 3];
         let mut document = MapDocument::new(map, 1);
-        let bytes = dmm::writer::MapWriter::new(&document.map).write();
+        let bytes = dmm::writer::MapWriter::new(&document.to_map()).write();
 
         let mut bake = build(&environment, &document).expect("baking is on");
         let before = bake.appearances.clone();
@@ -654,7 +654,7 @@ mod tests {
         let south = document.instance_ids_at(Coord::new(2, 1, 1))[0];
 
         assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
-        assert_eq!(dmm::writer::MapWriter::new(&document.map).write(), bytes);
+        assert_eq!(dmm::writer::MapWriter::new(&document.to_map()).write(), bytes);
 
         let (prefab, _) = document.prefab_instance(center).expect("center wall");
         let ty = environment.tree.id_of(&prefab.path).expect("wall type");

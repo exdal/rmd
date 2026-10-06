@@ -54,13 +54,13 @@ impl UiState {
                 let (width, height) = (block.width(), block.height());
                 restore_rectangle_gesture(session, frame.id, &mut frame.gestures.rectangle_gesture);
                 let anchor = frame.coord.or_else(|| {
-                    let size = session.map()?.size;
+                    let size = session.map()?.size();
 
                     frame
                         .camera
                         .screen_to_tile(frame.layout.center(), size, session.options.tile_size, session.z())
                 });
-                if let (Some(anchor), Some(size)) = (anchor, session.map().map(|map| map.size)) {
+                if let (Some(anchor), Some(size)) = (anchor, session.map().map(|map| map.size())) {
                     session.set_tool(Tool::BlockSelect);
                     self.gizmo.cancel();
                     frame.gestures.block_placement = None;

@@ -76,7 +76,7 @@ mod tests {
         for x in 1..=3 {
             assert!(session.place_at(Coord::new(x, 1, 1), None).is_some());
         }
-        let grid = session.map().unwrap().grid.clone();
+        let grid = session.map().unwrap().clone();
         let query = SearchQuery::Type {
             path: TreePath::parse("/obj"),
             subtypes: true,
@@ -94,7 +94,7 @@ mod tests {
         assert_render_cache_matches_rebuild(&session);
 
         assert!(session.undo());
-        assert_eq!(session.map().unwrap().grid, grid);
+        assert_eq!(*session.map().unwrap(), grid);
     }
 
     #[test]

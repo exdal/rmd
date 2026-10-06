@@ -67,7 +67,7 @@ fn a_failed_reshare_resyncs_the_map_from_the_server() {
         settled(sessions)
             && document
                 .and_then(|id| sessions[0].state.document(id))
-                .is_some_and(|document| document.map.size.x == 2)
+                .is_some_and(|document| document.map.size().x == 2)
     });
 
     let _ = fs::remove_dir_all(dir);
@@ -106,7 +106,7 @@ fn a_newer_snapshot_replaces_one_still_loading() {
             && shared_map.generation == Some(GenerationId(2))
             && document
                 .and_then(|id| sessions[0].state.document(id))
-                .is_some_and(|document| document.map.size.x == 3)
+                .is_some_and(|document| document.map.size().x == 3)
     });
 
     let _ = fs::remove_dir_all(dir);
@@ -211,7 +211,7 @@ fn a_shared_map_waits_for_unsaved_work_then_replaces_the_local_copy() {
         .state
         .document(guest.state.document_for_path(&file).unwrap())
         .unwrap();
-    assert_eq!(received.map.size.x, 2);
+    assert_eq!(received.map.size().x, 2);
     assert!(received.is_dirty());
     assert!(guest.coop().unwrap().shared_maps["_maps/a.dmm"].is_ready());
 
@@ -234,7 +234,7 @@ fn an_out_of_date_copy_is_read_only_until_discarded() {
             .state
             .document_for_path(&file)
             .and_then(|id| sessions[1].state.document(id))
-            .is_some_and(|document| document.map.size.x == 2)
+            .is_some_and(|document| document.map.size().x == 2)
     });
 
     let id = guest.state.document_for_path(&file).unwrap();
@@ -256,7 +256,7 @@ fn leaving_keeps_an_out_of_date_copy() {
     let document = guest.state.document(local).unwrap();
     assert!(document.is_dirty());
     assert!(!document.is_read_only());
-    assert_eq!(document.map.size.x, 1);
+    assert_eq!(document.map.size().x, 1);
     assert_eq!(width_on_disk(&guest_dir.join("_maps/a.dmm")), 1);
 
     let _ = fs::remove_dir_all(host_dir);
@@ -275,7 +275,7 @@ fn saving_an_out_of_date_copy_loads_the_shared_one() {
             .state
             .document_for_path(&file)
             .and_then(|id| sessions[1].state.document(id))
-            .is_some_and(|document| document.map.size.x == 2)
+            .is_some_and(|document| document.map.size().x == 2)
     });
 
     let id = guest.state.document_for_path(&file).unwrap();
@@ -450,7 +450,7 @@ fn stopping_a_share_keeps_an_out_of_date_copy() {
     let document = guest.state.document(local).unwrap();
     assert!(document.is_dirty());
     assert!(!document.is_read_only());
-    assert_eq!(document.map.size.x, 1);
+    assert_eq!(document.map.size().x, 1);
     assert_eq!(guest.coop_out_of_date(local), None);
 
     let _ = fs::remove_dir_all(host_dir);

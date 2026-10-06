@@ -127,7 +127,7 @@ impl Session {
             sprite_instances: &cache.instances.sprites,
             focused_area: document.focus().map(AreaFocus::component),
             active_z: document.z,
-            level_count: document.map.size.z.max(1),
+            level_count: document.map.size().z.max(1),
             revision: cache.revision,
             pending_updates: &cache.frame_updates,
             lighting: (self.options.show_lighting && !cache.instances.light_tiles.is_empty()).then_some(
@@ -183,7 +183,7 @@ impl Session {
     pub fn capture_region(&self, id: DocumentId, selection: Option<Selection>) -> Option<([u32; 2], [u32; 2])> {
         // bottom left origin
 
-        let size = self.state.document(id)?.map.size;
+        let size = self.state.document(id)?.map.size();
         let tile = self.options.tile_size.max(1);
         let (min_x, min_y) = selection.map_or((1, 1), |selection| (selection.min.x, selection.min.y));
         let (max_x, max_y) = selection.map_or((size.x, size.y), |selection| {
@@ -200,7 +200,7 @@ impl Session {
     }
 
     pub fn extent_px_of(&self, id: DocumentId) -> (f32, f32) {
-        self.tile_extent(self.state.document(id).map(|document| document.map.size))
+        self.tile_extent(self.state.document(id).map(|document| document.map.size()))
     }
 
     fn tile_extent(&self, size: Option<Size>) -> (f32, f32) {

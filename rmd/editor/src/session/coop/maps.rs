@@ -288,7 +288,7 @@ impl Session {
         // hold back new edits until the server numbers this share
         shared_map.state = SharedState::Sending { done: 0, total: 0 };
 
-        let map = document.map.clone();
+        let map = document.to_map();
         let prepared = coop.prepared.0.clone();
         thread::spawn(move || {
             let bytes = writer::write(&map).into_bytes();

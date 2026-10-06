@@ -76,7 +76,7 @@ impl Session {
                 return;
             }
 
-            let level_count = document.map.size.z;
+            let level_count = document.map.size().z;
             let behind = self
                 .caches
                 .get_mut(&id)
@@ -118,7 +118,7 @@ impl Session {
             return;
         }
 
-        let Some(level_count) = self.state.document(id).map(|document| document.map.size.z) else {
+        let Some(level_count) = self.state.document(id).map(|document| document.map.size().z) else {
             return;
         };
 
@@ -969,7 +969,7 @@ mod tests {
         assert_render_cache_matches_rebuild(&session);
 
         let mut whole = load();
-        whole.activate_document(MapDocument::new(session.map().unwrap().clone(), 1));
+        whole.activate_document(MapDocument::new(session.state.active_document().unwrap().to_map(), 1));
         settle_bake(&mut whole);
         let bake = session.active_cache().bake.as_ref().unwrap();
         let expected = whole.active_cache().bake.as_ref().unwrap();
@@ -1263,7 +1263,7 @@ mod tests {
         let id = session.state.active().expect("active map");
         let open_floors = {
             let document = session.state.active_document().unwrap();
-            let size = document.map.size;
+            let size = document.map.size();
             (1..=size.z)
                 .flat_map(|z| (1..=size.y).flat_map(move |y| (1..=size.x).map(move |x| Coord::new(x, y, z))))
                 .filter(|coord| {

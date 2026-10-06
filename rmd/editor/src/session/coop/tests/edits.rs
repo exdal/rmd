@@ -75,7 +75,7 @@ fn edits_sync_both_ways_converge_and_replay_for_late_joiners() {
         let document = sessions[1]
             .state
             .document(sessions[1].state.document_for_path(&guest_file).unwrap());
-        document.is_some_and(|document| document.map.size.x == 3) && settled(sessions)
+        document.is_some_and(|document| document.map.size().x == 3) && settled(sessions)
     });
 
     let corner = Coord::new(3, 1, 1);
@@ -340,7 +340,7 @@ fn a_new_level_reaches_every_peer_without_a_reshare() {
         sessions[1].state.document_for_path(&guest_file).is_some() && settled(sessions)
     });
     let guest_id = guest.state.document_for_path(&guest_file).unwrap();
-    let levels = |session: &Session, id| session.state.document(id).unwrap().map.size.z;
+    let levels = |session: &Session, id| session.state.document(id).unwrap().map.size().z;
     let tile = |paths: &[&str]| {
         paths
             .iter()
@@ -446,7 +446,7 @@ fn a_level_created_before_the_first_share_is_numbered_reaches_peers() {
         sessions[1].state.document_for_path(&guest_file).is_some() && settled(sessions)
     });
     let guest_id = guest.state.document_for_path(&guest_file).unwrap();
-    assert_eq!(guest.state.document(guest_id).unwrap().map.size.z, 2);
+    assert_eq!(guest.state.document(guest_id).unwrap().map.size().z, 2);
 
     for dir in [host_dir, guest_dir] {
         let _ = fs::remove_dir_all(dir);
@@ -462,8 +462,8 @@ fn a_paused_map_cannot_ask_for_a_level() {
     assert!(guest.create_level(guest_id, &plain_fill()).is_err());
     guest.finish_coop_reload();
     poll_until(&mut [&mut host, &mut guest], settled);
-    assert_eq!(host.state.document(host_id).unwrap().map.size.z, 1);
-    assert_eq!(guest.state.document(guest_id).unwrap().map.size.z, 1);
+    assert_eq!(host.state.document(host_id).unwrap().map.size().z, 1);
+    assert_eq!(guest.state.document(guest_id).unwrap().map.size().z, 1);
 
     for dir in [host_dir, guest_dir] {
         let _ = fs::remove_dir_all(dir);
@@ -480,9 +480,9 @@ fn a_second_level_waits_for_the_first_to_come_back() {
         "a second request for the same level would be dropped"
     );
     poll_until(&mut [&mut host, &mut guest], |sessions| {
-        settled(sessions) && sessions[0].state.document(host_id).unwrap().map.size.z == 2
+        settled(sessions) && sessions[0].state.document(host_id).unwrap().map.size().z == 2
     });
-    assert_eq!(guest.state.document(guest_id).unwrap().map.size.z, 2);
+    assert_eq!(guest.state.document(guest_id).unwrap().map.size().z, 2);
 
     for dir in [host_dir, guest_dir] {
         let _ = fs::remove_dir_all(dir);

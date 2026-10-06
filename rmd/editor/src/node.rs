@@ -108,7 +108,7 @@ pub fn component(document: &MapDocument, tree: &ObjectTree, group: &ResolvedGrou
     let mut segments = Vec::new();
     for coord in &tiles {
         for direction in [Direction::East, Direction::North] {
-            if let Some(neighbor) = step(*coord, direction, document.map.size.x, document.map.size.y)
+            if let Some(neighbor) = step(*coord, direction, document.map.size().x, document.map.size().y)
                 && tiles.contains(&neighbor)
                 && connected(document, tree, group, *coord, neighbor)
             {
@@ -235,7 +235,7 @@ pub fn route_with_context(
     document: &MapDocument, tree: &ObjectTree, group: &ResolvedGroup, start: Coord, target: Coord,
     transient: &HashSet<Coord>,
 ) -> Option<Vec<Coord>> {
-    let size = document.map.size;
+    let size = document.map.size();
     if start.z != target.z
         || start.x == 0
         || start.y == 0
@@ -373,7 +373,7 @@ fn component_tiles(
             continue;
         }
 
-        for neighbor in neighbors(coord, document.map.size.x, document.map.size.y) {
+        for neighbor in neighbors(coord, document.map.size().x, document.map.size().y) {
             if !tiles.contains(&neighbor)
                 && occupied(document, tree, group, neighbor)
                 && connected(document, tree, group, coord, neighbor)
@@ -516,7 +516,7 @@ pub fn oriented_route_directions(
         if let Some(prefab) = existing {
             let old_ports = ports(tree, group, prefab);
             for direction in [Direction::North, Direction::South, Direction::East, Direction::West] {
-                let Some(neighbor) = step(coord, direction, document.map.size.x, document.map.size.y) else {
+                let Some(neighbor) = step(coord, direction, document.map.size().x, document.map.size().y) else {
                     continue;
                 };
                 if let Some(other) = group_prefab_at(document, tree, group, neighbor, Some(original))

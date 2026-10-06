@@ -1,10 +1,12 @@
 use dmm::{Coord, Map, Prefab, Size, parser, writer};
 
+use crate::grid::Grid;
+
 // I kinda dont like this patch sending business, but for now its okay
 // if I was bikeshedding I would be sending delta compressed binary
 // this can stay for now, until it becomes problematic
 
-pub fn encode(map: &Map, coords: impl IntoIterator<Item = Coord>) -> Option<(Vec<Coord>, String)> {
+pub fn encode(map: &Grid, coords: impl IntoIterator<Item = Coord>) -> Option<(Vec<Coord>, String)> {
     let tiles = coords
         .into_iter()
         .filter_map(|coord| map.tile_at(coord).map(|tile| (coord, tile)))
@@ -77,7 +79,7 @@ ba
         assert!(errors.is_empty());
 
         let (coords, patch) = encode(
-            &map,
+            &Grid::from_map(&map),
             [
                 Coord::new(2, 1, 1),
                 Coord::new(1, 1, 1),
@@ -93,7 +95,7 @@ ba
             assert_eq!(Some(tile), map.tile_at(*coord), "{coord:?}");
         }
 
-        assert!(encode(&map, [Coord::new(9, 9, 9)]).is_none());
+        assert!(encode(&Grid::from_map(&map), [Coord::new(9, 9, 9)]).is_none());
     }
 
     #[test]
@@ -102,7 +104,7 @@ ba
         let empty = map.intern_tile(Vec::new());
         map.grid[0][0][0] = empty;
 
-        let (coords, patch) = encode(&map, [Coord::new(1, 2, 1), Coord::new(2, 2, 1)]).unwrap();
+        let (coords, patch) = encode(&Grid::from_map(&map), [Coord::new(1, 2, 1), Coord::new(2, 2, 1)]).unwrap();
         assert_eq!(coords, [Coord::new(1, 2, 1), Coord::new(2, 2, 1)]);
 
         let tiles = decode(&patch, coords.len()).unwrap();
@@ -113,7 +115,7 @@ ba
     #[test]
     fn a_patch_of_the_wrong_shape_is_refused() {
         let (map, _) = parser::parse(MAP);
-        let (_, patch) = encode(&map, [Coord::new(1, 1, 1)]).unwrap();
+        let (_, patch) = encode(&Grid::from_map(&map), [Coord::new(1, 1, 1)]).unwrap();
 
         assert!(decode(&patch, 2).is_err());
         assert!(decode("not a map", 1).is_err());

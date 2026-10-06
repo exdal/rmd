@@ -372,7 +372,7 @@ pub(super) fn draw_resize_map_dialog(
     if let Some(state) = dialog.as_mut()
         && let Some(_modal) = ui.begin_modal_popup_config(RESIZE_MAP_POPUP).flags(MODAL_FLAGS).begin()
     {
-        let Some(size) = session.map().map(|map| map.size) else {
+        let Some(size) = session.map().map(|map| map.size()) else {
             *dialog = None;
             ui.close_current_popup();
             return false;
@@ -461,7 +461,7 @@ pub(super) fn draw_go_to_dialog(ui: &Ui, session: &Session, dialog: &mut Option<
     if let Some(state) = dialog.as_mut()
         && let Some(_modal) = ui.begin_modal_popup_config(GO_TO_POPUP).flags(MODAL_FLAGS).begin()
     {
-        let Some(size) = session.map().map(|map| map.size) else {
+        let Some(size) = session.map().map(|map| map.size()) else {
             *dialog = None;
             ui.close_current_popup();
             return None;
@@ -518,7 +518,7 @@ pub(super) fn draw_new_level_dialog(
         && let Some(_modal) = ui.begin_modal_popup_config(NEW_LEVEL_POPUP).flags(MODAL_FLAGS).begin()
     {
         if let Some(document) = session.state.document(state.document) {
-            ui.text(format!("Create Z level {}", document.map.size.z.saturating_add(1)));
+            ui.text(format!("Create Z level {}", document.map.size().z.saturating_add(1)));
         }
         let fill = draw_tile_fill_search(ui, session, &mut state.fill);
         if let Some(error) = state.error.as_deref() {
@@ -1184,7 +1184,7 @@ mod tests {
             .map(|(width, height, _, losses)| (width, height, losses));
         assert_eq!(losses, Some((1, 1, 2)));
         assert_eq!(
-            session.map().unwrap().size.x,
+            session.map().unwrap().size().x,
             3,
             "nothing changes until Resize is pressed"
         );

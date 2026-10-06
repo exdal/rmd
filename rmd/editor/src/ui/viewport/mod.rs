@@ -187,7 +187,7 @@ impl ViewFrame<'_> {
             .then_some(self.mouse)
             .and_then(|point| self.layout.local(point));
         self.coord = self.cursor.and_then(|cursor| {
-            let size = session.map()?.size;
+            let size = session.map()?.size();
 
             self.camera
                 .screen_to_tile(cursor, size, session.options.tile_size, session.z())

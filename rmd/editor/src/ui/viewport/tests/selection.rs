@@ -192,7 +192,7 @@ fn rectangle_ui_copies_a_border_to_another_map_and_keeps_it_hollow_after_paste()
     app.key(Key::ModCtrl, false);
     let clipboard = app.session.clipboard().unwrap().clone();
     assert_eq!(clipboard.filled().count(), source.mode.tiles(source.bounds).count());
-    let source_grid = app.session.map().unwrap().grid.clone();
+    let source_grid = app.session.map().unwrap().clone();
 
     let mut destination = dmm::Map::new(Size { x: 20, y: 20, z: 1 });
     let blue = Prefab::new(TreePath::parse("/turf/open/floor"));
@@ -200,7 +200,6 @@ fn rectangle_ui_copies_a_border_to_another_map_and_keeps_it_hollow_after_paste()
     for row in &mut destination.grid[0] {
         row.fill(key);
     }
-    let destination_grid = destination.grid.clone();
     app.session.apply_map(crate::loader::LoadedMap {
         path: PathBuf::from("rectangle-ui-destination.dmm"),
         map: destination,
@@ -209,6 +208,7 @@ fn rectangle_ui_copies_a_border_to_another_map_and_keeps_it_hollow_after_paste()
         repo: None,
         conflict: None,
     });
+    let destination_grid = app.session.map().unwrap().clone();
     app.id = app.session.state.active().unwrap();
     let mut destination_view = MapViewState::new(app.id).unwrap();
     destination_view.refit = false;
@@ -245,11 +245,7 @@ fn rectangle_ui_copies_a_border_to_another_map_and_keeps_it_hollow_after_paste()
             .len(),
         clipboard.filled().count()
     );
-    assert_eq!(
-        app.session.map().unwrap().grid,
-        destination_grid,
-        "preview does not paint"
-    );
+    assert_eq!(*app.session.map().unwrap(), destination_grid, "preview does not paint");
     app.key(Key::Enter, true);
     app.key(Key::Enter, false);
     assert!(app.view.gestures.paste.is_none());
@@ -259,13 +255,13 @@ fn rectangle_ui_copies_a_border_to_another_map_and_keeps_it_hollow_after_paste()
         assert_eq!(tile.contains(&red), target.includes(coord));
         assert_eq!(tile.contains(&blue), !target.includes(coord));
     }
-    assert_eq!(app.session.state.document(source_id).unwrap().map.grid, source_grid);
+    assert_eq!(app.session.state.document(source_id).unwrap().map, source_grid);
     app.key(Key::ModCtrl, true);
     app.key(Key::Z, true);
     app.key(Key::Z, false);
     app.key(Key::ModCtrl, false);
-    assert_eq!(app.session.map().unwrap().grid, destination_grid);
-    assert_eq!(app.session.state.document(source_id).unwrap().map.grid, source_grid);
+    assert_eq!(*app.session.map().unwrap(), destination_grid);
+    assert_eq!(app.session.state.document(source_id).unwrap().map, source_grid);
     app.key(Key::ModCtrl, true);
     app.key(Key::Y, true);
     app.key(Key::Y, false);

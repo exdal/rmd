@@ -340,7 +340,7 @@ impl GizmoState {
             {
                 let size = session
                     .map()
-                    .map_or((1, 1), |map| (map.size.x.max(1), map.size.y.max(1)));
+                    .map_or((1, 1), |map| (map.size().x.max(1), map.size().y.max(1)));
                 let shift_snap = ui.io().key_shift();
                 let ctrl_reanchor = ui.io().key_ctrl();
                 let (coord, next) = anchored_values(drag, mouse, shift_snap, ctrl_reanchor, size);

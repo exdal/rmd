@@ -458,7 +458,7 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            dmm::writer::write(&session.state.document(id).unwrap().map)
+            dmm::writer::write(&session.state.document(id).unwrap().to_map())
         );
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -179,7 +179,7 @@ impl UiState {
         paste_target: Option<Selection>, gizmo_view: GizmoMapView,
     ) -> bool {
         let gestures = &mut *frame.gestures;
-        let map_size = session.map().map(|map| map.size);
+        let map_size = session.map().map(|map| map.size());
         if let (Some(pending), Some(target), Some(size)) = (gestures.paste, paste_target, map_size) {
             let response = self.gizmo.draw_block(
                 ui,
@@ -285,7 +285,7 @@ impl UiState {
 
     pub(super) fn drag_rectangle(&self, ui: &Ui, session: &mut Session, frame: &mut ViewFrame<'_>, is_left_down: bool) {
         if let Some(anchor) = frame.gestures.block_selection_anchor
-            && let Some(size) = session.map().map(|map| map.size)
+            && let Some(size) = session.map().map(|map| map.size())
             && let Some(coord) = rectangle_drag_coord(
                 frame.camera,
                 frame.mouse,
@@ -334,7 +334,7 @@ impl UiState {
         if let Some((displayed, rotation)) = block_overlay
             && tool == Tool::BlockSelect
             && frame.gestures.block_selection_anchor.is_none()
-            && let Some(map_size) = session.map().map(|map| map.size)
+            && let Some(map_size) = session.map().map(|map| map.size())
         {
             self.gizmo.draw_block_overlay(
                 ui,

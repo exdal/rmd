@@ -14,6 +14,7 @@ use crate::{
     command::Edit,
     document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection},
     frame::HiddenTypes,
+    grid::Grid,
     icons::materialdesignicons::{
         ICON_COMMENT_TEXT_OUTLINE,
         ICON_ERASER,
@@ -308,8 +309,8 @@ pub fn fill_selection(
     document: &mut MapDocument, tree: &ObjectTree, selection: Selection, prefab: &Prefab, mode: BlockSelectionMode,
 ) -> Option<ToolEdit> {
     if !selection.is_well_formed()
-        || !coord_in_bounds(selection.min, document.map.size)
-        || !coord_in_bounds(selection.max, document.map.size)
+        || !coord_in_bounds(selection.min, document.map.size())
+        || !coord_in_bounds(selection.max, document.map.size())
         || mode.tiles(selection).any(|coord| !document.allows_edit_at(coord))
     {
         return None;
@@ -516,7 +517,7 @@ impl SelectionEditRequest<'_> {
 fn build_selection_edit(
     document: &mut MapDocument, tree: &ObjectTree, request: SelectionEditRequest<'_>, hidden: &HiddenTypes,
 ) -> Option<(ToolEdit, Selection)> {
-    let size = document.map.size;
+    let size = document.map.size();
     let touched = request.touched_tiles().collect::<HashSet<_>>();
     if touched
         .iter()
@@ -935,7 +936,7 @@ fn delete(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
 fn fill(
     context: &mut ToolContext<'_>, max_tiles: Option<usize>, mask: Option<SelectionMask>,
 ) -> Result<Option<ToolEdit>, FillError> {
-    if !coord_in_bounds(context.coord, context.document.map.size)
+    if !coord_in_bounds(context.coord, context.document.map.size())
         || !context.document.allows_edit_at(context.coord)
         || mask.is_some_and(|mask| !mask.includes(context.coord))
     {
@@ -1052,7 +1053,7 @@ fn boundary_region(context: &ToolContext<'_>, boundaries: &[TypeId], mask: Optio
         }
 
         region.push(coord);
-        for neighbor in cardinal_neighbors(coord, context.document.map.size) {
+        for neighbor in cardinal_neighbors(coord, context.document.map.size()) {
             if visited.insert(neighbor) {
                 pending.push_back(neighbor);
             }
@@ -1085,7 +1086,7 @@ fn area_region(context: &ToolContext<'_>, mask: Option<SelectionMask>) -> Vec<Co
         }
 
         region.push(coord);
-        for neighbor in cardinal_neighbors(coord, context.document.map.size) {
+        for neighbor in cardinal_neighbors(coord, context.document.map.size()) {
             if visited.insert(neighbor) {
                 pending.push_back(neighbor);
             }
@@ -1119,7 +1120,7 @@ fn tile_has_any_subtype(tree: &ObjectTree, document: &MapDocument, coord: Coord,
     })
 }
 
-fn prefab_of_subtype<'a>(tree: &ObjectTree, map: &'a dmm::Map, coord: Coord, ancestor: TypeId) -> Option<&'a Prefab> {
+fn prefab_of_subtype<'a>(tree: &ObjectTree, map: &'a Grid, coord: Coord, ancestor: TypeId) -> Option<&'a Prefab> {
     map.tile_at(coord)?.iter().find(|prefab| {
         tree.id_of(&prefab.path)
             .is_some_and(|id| tree.is_subtype_of(id, ancestor))

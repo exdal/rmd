@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 use defines::{FLOAT_LAYER, KEEP_APART, KEEP_TOGETHER};
 use dmi::metadata::{Dir, Metadata};
-use dmm::{Coord, Map, Prefab};
+use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
 use render::{
     AREA_EDGE_EAST,
@@ -22,6 +22,7 @@ use vm::{
 
 use crate::{
     document::{MapDocument, PrefabInstanceId},
+    grid::Grid,
     visual::{self, Appearance},
 };
 
@@ -35,6 +36,8 @@ use pages::{OwnerKeys, SpritePage, replace_owner_sprites};
 /// - 3: placement order, counted by level (top row left to right)
 /// - 4: sprite index within its placement, order goes like this: underlays, self, overlays
 type SpriteKey = (u32, i32, i32, usize, usize);
+
+const AREA_PLANE: f32 = f32::INFINITY;
 
 #[derive(Debug, Clone, Copy)]
 struct CachedPlacement {
@@ -71,7 +74,7 @@ struct RenderContext<'a> {
     tree: &'a ObjectTree,
     icons: &'a HashMap<String, Metadata>,
     textures: &'a TextureCatalog,
-    map: &'a Map,
+    map: &'a Grid,
     area: Option<TypeId>,
     visibility: &'a TypeVisibility,
     tile_size: u32,
@@ -381,9 +384,9 @@ pub fn build_with_options(
         tile_size: options.tile_size,
     };
 
-    for z in 1..=map.size.z.max(1) {
-        for y in (1..=map.size.y).rev() {
-            for x in 1..=map.size.x {
+    for z in 1..=map.size().z.max(1) {
+        for y in (1..=map.size().y).rev() {
+            for x in 1..=map.size().x {
                 let Some(tile) = map.tile_at(Coord::new(x, y, z)) else {
                     continue;
                 };
@@ -444,7 +447,7 @@ pub fn build_with_options(
         owner_keys,
         ..Default::default()
     };
-    instances.lay_out(keyed_sprites, map.size.z.max(1));
+    instances.lay_out(keyed_sprites, map.size().z.max(1));
 
     instances
 }
@@ -780,7 +783,7 @@ impl RenderContext<'_> {
             Vec::new()
         } else {
             vec![SpriteGroup {
-                plane: appearance.plane,
+                plane: if is_area { AREA_PLANE } else { appearance.plane },
                 layer: appearance.layer,
                 float: FLOAT_LAYER,
                 keep_apart: false,
@@ -860,18 +863,18 @@ fn area_outline(
     outline
 }
 
-fn add_area_neighborhood(coords: &mut HashSet<Coord>, coord: Coord, map: &Map) {
+fn add_area_neighborhood(coords: &mut HashSet<Coord>, coord: Coord, map: &Grid) {
     coords.insert(coord);
     if coord.x > 1 {
         coords.insert(Coord::new(coord.x - 1, coord.y, coord.z));
     }
-    if coord.x < map.size.x {
+    if coord.x < map.size().x {
         coords.insert(Coord::new(coord.x + 1, coord.y, coord.z));
     }
     if coord.y > 1 {
         coords.insert(Coord::new(coord.x, coord.y - 1, coord.z));
     }
-    if coord.y < map.size.y {
+    if coord.y < map.size().y {
         coords.insert(Coord::new(coord.x, coord.y + 1, coord.z));
     }
 }
@@ -1002,9 +1005,9 @@ fn build_area_components(tree: &ObjectTree, document: &MapDocument) -> HashMap<C
     let map = &document.map;
     let mut visited = HashSet::new();
 
-    for z in 1..=map.size.z.max(1) {
-        for y in 1..=map.size.y {
-            for x in 1..=map.size.x {
+    for z in 1..=map.size().z.max(1) {
+        for y in 1..=map.size().y {
+            for x in 1..=map.size().x {
                 let seed = Coord::new(x, y, z);
                 if visited.contains(&seed) {
                     continue;
@@ -1064,25 +1067,25 @@ fn area_instance_at<'a>(
         })
 }
 
-fn cardinal_neighbors(coord: Coord, map: &Map) -> impl Iterator<Item = Coord> {
+fn cardinal_neighbors(coord: Coord, map: &Grid) -> impl Iterator<Item = Coord> {
     [
         (coord.x > 1).then(|| Coord::new(coord.x - 1, coord.y, coord.z)),
-        (coord.x < map.size.x).then(|| Coord::new(coord.x + 1, coord.y, coord.z)),
+        (coord.x < map.size().x).then(|| Coord::new(coord.x + 1, coord.y, coord.z)),
         (coord.y > 1).then(|| Coord::new(coord.x, coord.y - 1, coord.z)),
-        (coord.y < map.size.y).then(|| Coord::new(coord.x, coord.y + 1, coord.z)),
+        (coord.y < map.size().y).then(|| Coord::new(coord.x, coord.y + 1, coord.z)),
     ]
     .into_iter()
     .flatten()
 }
 
-fn area_edges(tree: &ObjectTree, area: TypeId, map: &Map, prefab: &Prefab, coord: Coord) -> u32 {
+fn area_edges(tree: &ObjectTree, area: TypeId, map: &Grid, prefab: &Prefab, coord: Coord) -> u32 {
     let matches = |coord| area_prefab_at(tree, area, map, coord).is_some_and(|other| same_area(prefab, other));
     let mut edges = 0;
 
-    if coord.y >= map.size.y || !matches(Coord::new(coord.x, coord.y + 1, coord.z)) {
+    if coord.y >= map.size().y || !matches(Coord::new(coord.x, coord.y + 1, coord.z)) {
         edges |= AREA_EDGE_NORTH;
     }
-    if coord.x >= map.size.x || !matches(Coord::new(coord.x + 1, coord.y, coord.z)) {
+    if coord.x >= map.size().x || !matches(Coord::new(coord.x + 1, coord.y, coord.z)) {
         edges |= AREA_EDGE_EAST;
     }
     if coord.y <= 1 || !matches(Coord::new(coord.x, coord.y - 1, coord.z)) {
@@ -1095,7 +1098,7 @@ fn area_edges(tree: &ObjectTree, area: TypeId, map: &Map, prefab: &Prefab, coord
     edges
 }
 
-fn area_prefab_at<'a>(tree: &ObjectTree, area: TypeId, map: &'a Map, coord: Coord) -> Option<&'a Prefab> {
+fn area_prefab_at<'a>(tree: &ObjectTree, area: TypeId, map: &'a Grid, coord: Coord) -> Option<&'a Prefab> {
     map.tile_at(coord)?.iter().find(|prefab| {
         tree.id_of(&prefab.path)
             .is_some_and(|candidate| tree.is_subtype_of(candidate, area))
@@ -1492,6 +1495,28 @@ mod tests {
         );
         assert!(without_areas.live_sprites().any(|sprite| sprite.owner == object_owner));
         assert!(without_areas.live_sprites().all(|sprite| sprite.owner != area_owner));
+    }
+
+    #[test]
+    fn a_shown_area_draws_above_emissive_blockers() {
+        let tree = tree(&[("/obj/door", "table", 3.0), ("/area/station", "floor", 1.0)]);
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        let mut door = Prefab::new(TreePath::parse("/obj/door"));
+        door.set_var(Identifier::from("plane"), Value::Num(13.0));
+        map.grid[0][0][0] = map.intern_tile(vec![door, Prefab::new(TreePath::parse("/area/station"))]);
+        let document = document(map);
+        let owners = document.instance_ids_at(Coord::new(1, 1, 1));
+        let icons = icons(&["floor", "table"]);
+        let textures = textures(&["floor", "table"]);
+
+        let instances = build(&tree, &icons, &textures, &document, 32);
+        let drawn = instances
+            .live_sprites()
+            .filter(|sprite| sprite.area_edges == 0)
+            .map(|sprite| sprite.owner)
+            .collect::<Vec<_>>();
+
+        assert_eq!(drawn, [owners[0], owners[1]]);
     }
 
     #[test]
@@ -2246,8 +2271,9 @@ mod tests {
         assert_eq!(area.texture, textures.lookup(ICON, 0).unwrap());
         assert_eq!(outline.area_edges, AREA_EDGES_ALL);
         assert_eq!((outline.width, outline.height), (32.0, 32.0));
-        assert_eq!((sprites[0].is_area, sprites[0].area_edges), (true, 0));
-        assert_eq!((sprites[1].is_area, sprites[1].area_edges), (true, AREA_EDGES_ALL));
+        assert_eq!((sprites[0].is_area, sprites[0].area_edges), (false, 0));
+        assert_eq!((sprites[1].is_area, sprites[1].area_edges), (true, 0));
+        assert_eq!((sprites[2].is_area, sprites[2].area_edges), (true, AREA_EDGES_ALL));
         assert_eq!(instances.sprite(area_owner).unwrap().area_edges, 0);
 
         document

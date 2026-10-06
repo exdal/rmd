@@ -132,7 +132,7 @@ pub fn can_paste(document: &MapDocument, block: &TileBlock, min: Coord, rotation
     let Some(target) = block.footprint(min, rotation) else {
         return false;
     };
-    let size = document.map.size;
+    let size = document.map.size();
 
     block
         .destinations(target, rotation)
@@ -228,8 +228,8 @@ pub fn clear_block(
     hidden: &HiddenTypes, label: &str,
 ) -> Option<ToolEdit> {
     if !selection.is_well_formed()
-        || !coord_in_bounds(selection.min, document.map.size)
-        || !coord_in_bounds(selection.max, document.map.size)
+        || !coord_in_bounds(selection.min, document.map.size())
+        || !coord_in_bounds(selection.max, document.map.size())
         || mode.tiles(selection).any(|coord| !document.allows_edit_at(coord))
     {
         return None;

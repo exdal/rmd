@@ -34,8 +34,8 @@ impl Session {
         self.state.active_document().is_some_and(|document| {
             mask.bounds.is_well_formed()
                 && mask.bounds.min.z == document.z
-                && mask.bounds.max.x <= document.map.size.x
-                && mask.bounds.max.y <= document.map.size.y
+                && mask.bounds.max.x <= document.map.size().x
+                && mask.bounds.max.y <= document.map.size().y
                 && mask.mode.tiles(mask.bounds).all(|coord| document.allows_edit_at(coord))
         })
     }
@@ -56,8 +56,8 @@ impl Session {
         let selection = selection.filter(|selection| {
             selection.is_well_formed()
                 && selection.min.z == document.z
-                && selection.max.x <= document.map.size.x
-                && selection.max.y <= document.map.size.y
+                && selection.max.x <= document.map.size().x
+                && selection.max.y <= document.map.size().y
                 && selection_mode
                     .tiles(*selection)
                     .all(|coord| document.allows_edit_at(coord))
@@ -146,8 +146,8 @@ impl Session {
             return false;
         }
 
-        target.max.x <= document.map.size.x
-            && target.max.y <= document.map.size.y
+        target.max.x <= document.map.size().x
+            && target.max.y <= document.map.size().y
             && mode
                 .tiles(selection)
                 .chain(mode.tiles(target))
@@ -228,8 +228,8 @@ impl Session {
         };
 
         target.is_well_formed()
-            && target.max.x <= document.map.size.x
-            && target.max.y <= document.map.size.y
+            && target.max.x <= document.map.size().x
+            && target.max.y <= document.map.size().y
             && mode.tiles(target).all(|coord| document.allows_edit_at(coord))
     }
 
@@ -305,8 +305,8 @@ impl Session {
             return false;
         };
 
-        target.max.x <= document.map.size.x
-            && target.max.y <= document.map.size.y
+        target.max.x <= document.map.size().x
+            && target.max.y <= document.map.size().y
             && mode
                 .tiles(selection)
                 .chain(mode.tiles(target))
@@ -419,7 +419,7 @@ mod tests {
         assert!(session.try_select_block(mask));
         session.toggle_focus_at(Some(mask.bounds.min));
         let revision = session.revision();
-        let tiles = session.map().unwrap().grid.clone();
+        let tiles = session.map().unwrap().clone();
         let expanded = SelectionMask {
             bounds: Selection::from_drag(mask.bounds.min, Coord::new(2, 1, 1)),
             ..mask
@@ -431,7 +431,7 @@ mod tests {
         }));
         assert_eq!(session.selection_mask(), Some(expanded));
         assert_eq!(session.revision(), revision);
-        assert_eq!(session.map().unwrap().grid, tiles);
+        assert_eq!(*session.map().unwrap(), tiles);
         assert!(!session.undo());
     }
 

@@ -114,7 +114,7 @@ impl Session {
         if self
             .state
             .document(id)
-            .is_none_or(|document| document.map.size.z + 1 != new_level.z)
+            .is_none_or(|document| document.map.size().z + 1 != new_level.z)
         {
             return;
         }

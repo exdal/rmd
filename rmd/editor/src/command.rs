@@ -1,11 +1,14 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::Entry},
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use dmm::{Coord, Map, Tile, key::Key};
+use dmm::Coord;
 
-use crate::document::{MapDocument, PlacedTile, PrefabInstances};
+use crate::{
+    document::{MapDocument, PlacedTile},
+    grid::Grid,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TileChange {
@@ -118,15 +121,12 @@ impl Default for History {
 impl History {
     pub fn new() -> Self { Self::default() }
 
-    pub(crate) fn apply_grouped(
-        &mut self, map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>, edit: Edit,
-        group: Option<EditGroupId>,
-    ) {
+    pub(crate) fn apply_grouped(&mut self, grid: &mut Grid, edit: Edit, group: Option<EditGroupId>) {
         if edit.is_empty() && !edit.record_empty {
             return;
         }
 
-        apply_edit(map, instances, key_usage, &edit, ChangeSide::After);
+        apply_edit(grid, &edit, ChangeSide::After);
 
         let undo_len = self.undo_stack.len();
         if group.is_some()
@@ -149,22 +149,18 @@ impl History {
         self.undo_stack.push(HistoryEntry { edit, group });
     }
 
-    pub(crate) fn undo(
-        &mut self, map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>,
-    ) -> Option<&Edit> {
+    pub(crate) fn undo(&mut self, grid: &mut Grid) -> Option<&Edit> {
         let entry = self.undo_stack.pop()?;
-        apply_edit(map, instances, key_usage, &entry.edit, ChangeSide::Before);
+        apply_edit(grid, &entry.edit, ChangeSide::Before);
 
         self.redo_stack.push(entry);
 
         self.redo_stack.last().map(|entry| &entry.edit)
     }
 
-    pub(crate) fn redo(
-        &mut self, map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>,
-    ) -> Option<&Edit> {
+    pub(crate) fn redo(&mut self, grid: &mut Grid) -> Option<&Edit> {
         let entry = self.redo_stack.pop()?;
-        apply_edit(map, instances, key_usage, &entry.edit, ChangeSide::After);
+        apply_edit(grid, &entry.edit, ChangeSide::After);
 
         self.undo_stack.push(entry);
 
@@ -222,102 +218,54 @@ enum ChangeSide {
     After,
 }
 
-pub(crate) fn apply_unrecorded(
-    map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>, edit: &Edit,
-) {
-    apply_edit(map, instances, key_usage, edit, ChangeSide::After);
-}
+pub(crate) fn apply_unrecorded(grid: &mut Grid, edit: &Edit) { apply_edit(grid, edit, ChangeSide::After); }
 
-fn apply_edit(
-    map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>, edit: &Edit, side: ChangeSide,
-) {
+fn apply_edit(grid: &mut Grid, edit: &Edit, side: ChangeSide) {
     let size = edit.resize.map(|resize| match side {
         ChangeSide::Before => resize.before,
         ChangeSide::After => resize.after,
     });
     if let Some((width, height)) = size {
-        resize_grid(map, key_usage, width.max(map.size.x), height.max(map.size.y));
+        let current = grid.size();
+        grid.resize(width.max(current.x), height.max(current.y));
     }
-    apply_changes(map, instances, key_usage, &edit.changes, side);
+
+    apply_changes(grid, &edit.changes, side);
     if let Some((width, height)) = size {
-        resize_grid(map, key_usage, width, height);
+        grid.resize(width, height);
     }
 }
 
-fn resize_grid(map: &mut Map, key_usage: &mut HashMap<Key, usize>, width: u32, height: u32) {
-    if (map.size.x, map.size.y) == (width, height) {
-        return;
-    }
-    let empty = map.intern_tile(Vec::new());
-    map.resize(width, height, empty);
-
-    key_usage.clear();
-    for key in map.grid.iter().flatten().flatten() {
-        *key_usage.entry(*key).or_insert(0) += 1;
-    }
-    map.dictionary.retain(|key, _| key_usage.contains_key(key));
-}
-
-fn apply_changes(
-    map: &mut Map, instances: &mut PrefabInstances, key_usage: &mut HashMap<Key, usize>, changes: &[TileChange],
-    side: ChangeSide,
-) {
-    for change in changes {
-        instances.remove(change.coord);
-    }
-
+// a tile changed twice by one edit ends up as its last `after`, and goes back to its first `before`
+fn apply_changes(grid: &mut Grid, changes: &[TileChange], side: ChangeSide) {
+    let mut tiles = Vec::new();
+    let mut slots = HashMap::new();
     for change in changes {
         let placed = match side {
             ChangeSide::Before => &change.before,
             ChangeSide::After => &change.after,
         };
-        let tile = placed.iter().map(|entry| entry.prefab().clone()).collect();
-        let ids = placed.iter().map(|entry| entry.id()).collect();
 
-        set_tile(map, key_usage, change.coord, tile);
-        instances.insert(change.coord, ids);
-    }
-}
-
-fn set_tile(map: &mut Map, key_usage: &mut HashMap<Key, usize>, coord: Coord, tile: Tile) {
-    let Some(z) = coord.z.checked_sub(1).map(|z| z as usize) else {
-        return;
-    };
-
-    let Some(row_index) = map.size.y.checked_sub(coord.y).map(|y| y as usize) else {
-        return;
-    };
-
-    let Some(column) = coord.x.checked_sub(1).map(|x| x as usize) else {
-        return;
-    };
-
-    let Some(previous) = map
-        .grid
-        .get(z)
-        .and_then(|level| level.get(row_index))
-        .and_then(|row| row.get(column))
-        .copied()
-    else {
-        return;
-    };
-
-    let remove_previous = match key_usage.get_mut(&previous) {
-        Some(count) if *count > 1 => {
-            *count -= 1;
-            false
-        },
-        Some(_) => true,
-        None => false,
-    };
-    if remove_previous {
-        key_usage.remove(&previous);
-        map.dictionary.remove(&previous);
+        match slots.entry(change.coord) {
+            Entry::Vacant(slot) => {
+                slot.insert(tiles.len());
+                tiles.push((change.coord, placed));
+            },
+            Entry::Occupied(slot) => {
+                if matches!(side, ChangeSide::After) {
+                    tiles[*slot.get()].1 = placed;
+                }
+            },
+        }
     }
 
-    let key = map.intern_tile(tile);
-    *key_usage.entry(key).or_insert(0) += 1;
-    map.grid[z][row_index][column] = key;
+    for (coord, _) in &tiles {
+        grid.clear(*coord);
+    }
+
+    for (coord, placed) in tiles {
+        grid.place(coord, placed);
+    }
 }
 
 #[cfg(test)]
@@ -481,5 +429,28 @@ mod tests {
         assert!(!document.history.is_applied(group));
         assert!(document.redo());
         assert!(document.history.is_applied(group));
+    }
+
+    #[test]
+    fn the_last_change_to_a_tile_wins_and_undo_restores_the_first_before() {
+        let mut document = document();
+        let coord = Coord::new(1, 1, 1);
+        let before = document.placed_tile(coord).unwrap();
+        let table = document.instantiate(Prefab::new(TreePath::parse("/obj/table")));
+        let id = table.id();
+
+        let mut edit = Edit::new("twice");
+        edit.change(&document, coord, vec![table]);
+        edit.change(&document, coord, Vec::new());
+        assert!(document.apply(edit));
+
+        assert_eq!(document.placed_tile(coord).unwrap(), Vec::new());
+        assert_eq!(document.instance_location(id), None);
+
+        assert!(document.undo());
+        assert_eq!(document.placed_tile(coord).unwrap(), before);
+
+        assert!(document.redo());
+        assert_eq!(document.placed_tile(coord).unwrap(), Vec::new());
     }
 }

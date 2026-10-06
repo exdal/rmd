@@ -926,7 +926,7 @@ impl UiState {
         draw_new_level_dialog(ui, session, &mut self.new_level_dialog, &mut self.tile_fill);
 
         if menu.resize_map
-            && let Some(size) = session.map().map(|map| map.size)
+            && let Some(size) = session.map().map(|map| map.size())
         {
             self.cancel_edit_gestures(session, session.state.active());
             let fill = TileFillSearch::new(session, self.tile_fill.as_ref());
@@ -939,7 +939,7 @@ impl UiState {
         }
 
         if menu.go_to
-            && let Some(size) = session.map().map(|map| map.size)
+            && let Some(size) = session.map().map(|map| map.size())
         {
             let (x, y) = self
                 .last_go_to
@@ -1624,7 +1624,7 @@ mod tests {
         let document = guest.state.document(local).unwrap();
         assert!(document.is_dirty());
         assert!(!document.is_read_only());
-        assert_eq!(document.map.size.x, 1);
+        assert_eq!(document.map.size().x, 1);
     }
 
     #[test]

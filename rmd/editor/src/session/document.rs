@@ -4,6 +4,7 @@ use dmm::{Map, MapFormat, Prefab, Size};
 use editor::{
     conflict::ConflictState,
     document::{DocumentId, MapDocument},
+    grid::Grid,
     tool::{Tool, default_tile_paths},
 };
 
@@ -188,7 +189,7 @@ impl Session {
             .cloned()
     }
 
-    pub fn map(&self) -> Option<&Map> { self.state.active_document().map(|document| &document.map) }
+    pub fn map(&self) -> Option<&Grid> { self.state.active_document().map(|document| &document.map) }
 
     pub fn map_path(&self) -> Option<&Path> {
         self.state
@@ -196,7 +197,7 @@ impl Session {
             .and_then(|document| document.path.as_deref())
     }
 
-    pub fn map_format(&self) -> Option<MapFormat> { self.map().map(|map| map.format) }
+    pub fn map_format(&self) -> Option<MapFormat> { self.state.active_document().map(MapDocument::format) }
 
     pub fn undo_label(&self) -> Option<&str> { self.state.active_document()?.undo_label() }
 
@@ -318,7 +319,7 @@ impl Session {
     fn write_document(&mut self, id: DocumentId, target: Option<(&Path, MapFormat)>) -> std::io::Result<()> {
         let environment = self.state.environment.clone().filter(|_| self.sanitize_vars_on_save);
         let sanitize = environment.as_deref().map(|environment| &environment.tree);
-        let levels = self.state.document(id).map_or(0, |document| document.map.size.z);
+        let levels = self.state.document(id).map_or(0, |document| document.map.size().z);
         let document = self
             .state
             .document_mut(id)
@@ -332,7 +333,7 @@ impl Session {
             && self
                 .state
                 .document(id)
-                .is_some_and(|document| document.map.size.z != levels)
+                .is_some_and(|document| document.map.size().z != levels)
         {
             self.rebake(id);
         }
@@ -509,11 +510,11 @@ mod tests {
 
         let document = session.state.active_document().unwrap();
         assert_eq!(document.path.as_deref(), Some(path.as_path()));
-        assert_eq!(document.map.size, Size { x: 3, y: 2, z: 2 });
-        assert_eq!(document.map.format, MapFormat::Tgm);
+        assert_eq!(document.map.size(), Size { x: 3, y: 2, z: 2 });
+        assert_eq!(document.format(), MapFormat::Tgm);
         assert_eq!(document.z, 1);
         assert!(document.is_dirty());
-        assert_eq!(document.map.dictionary.len(), 1);
+        assert_eq!(document.to_map().dictionary.len(), 1);
         for coord in [Coord::new(1, 1, 1), Coord::new(3, 2, 2)] {
             assert_eq!(
                 document
@@ -656,7 +657,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let exported = dir.join("exported.dmm");
 
-        let before = session.map().cloned().unwrap();
+        let before = session.state.active_document().unwrap().to_map();
         session.save_map_as(&exported, dmm::MapFormat::Tgm).expect("export");
 
         assert_eq!(session.map_path(), Some(exported.as_path()));

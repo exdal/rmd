@@ -205,7 +205,7 @@ impl Session {
         let Some(git) = cache.git.as_ref() else { return };
 
         self.git_worker
-            .blame(id, git.repo.clone(), document.map.clone(), cache.map_revision, depth);
+            .blame(id, git.repo.clone(), document.to_map(), cache.map_revision, depth);
     }
 
     pub(crate) fn blame_progress(&self, id: DocumentId) -> Option<usize> { self.git_worker.blame_progress(id) }

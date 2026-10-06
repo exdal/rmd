@@ -31,7 +31,7 @@ impl Session {
     pub fn level_count(&self) -> u32 {
         self.state
             .active_document()
-            .map_or(1, |document| document.map.size.z.max(1))
+            .map_or(1, |document| document.map.size().z.max(1))
     }
 
     pub fn set_level(&mut self, z: u32) {
@@ -44,7 +44,7 @@ impl Session {
         if self
             .state
             .document(id)
-            .is_none_or(|document| z == document.z || !(1..=document.map.size.z.max(1)).contains(&z))
+            .is_none_or(|document| z == document.z || !(1..=document.map.size().z.max(1)).contains(&z))
         {
             return;
         }
@@ -71,7 +71,7 @@ impl Session {
             return false;
         }
 
-        let levels = document.map.size.z.max(1);
+        let levels = document.map.size().z.max(1);
         document.z < levels || (levels < MAX_MAP_DIMENSION && self.tree().is_some())
     }
 
@@ -88,7 +88,7 @@ impl Session {
         };
 
         let current = document.z;
-        let levels = document.map.size.z.max(1);
+        let levels = document.map.size().z.max(1);
         let target = if delta < 0 {
             current.saturating_sub(delta.unsigned_abs()).max(1)
         } else {
@@ -120,7 +120,7 @@ impl Session {
             .state
             .document_mut(id)
             .ok_or_else(|| String::from("the map is no longer open"))?;
-        let levels = document.map.size.z.max(1);
+        let levels = document.map.size().z.max(1);
         if document.z != levels {
             return Err(String::from("the map is no longer on its highest Z level"));
         }
@@ -163,7 +163,7 @@ impl Session {
     ) -> Option<u32> {
         let document = self.state.document_mut(id)?;
         let z = append(document, fill)?;
-        let size = document.map.size;
+        let size = document.map.size();
         let ids = (1..=size.y)
             .flat_map(|y| (1..=size.x).map(move |x| Coord::new(x, y, z)))
             .flat_map(|coord| document.instance_ids_at(coord).to_vec())
@@ -213,7 +213,7 @@ impl Session {
         let Some(document) = self.state.active_document() else {
             return 0;
         };
-        let size = document.map.size;
+        let size = document.map.size();
         let mut losses = 0;
         for z in 1..=size.z {
             for y in 1..=size.y {
@@ -287,19 +287,19 @@ mod tests {
         let tile = session.options.tile_size as f32;
 
         assert_eq!(session.resize_map(5, 4, &fill), Ok(()));
-        let size = session.map().unwrap().size;
+        let size = session.map().unwrap().size();
         assert_eq!((size.x, size.y), (5, 4));
         assert_eq!(session.map().unwrap().tile_at(Coord::new(5, 4, 1)), Some(&fill));
         assert_eq!(session.extent_px(), (5.0 * tile, 4.0 * tile));
         assert_render_cache_matches_rebuild(&session);
 
         assert!(session.undo());
-        let size = session.map().unwrap().size;
+        let size = session.map().unwrap().size();
         assert_eq!((size.x, size.y), (3, 2));
         assert_render_cache_matches_rebuild(&session);
 
         assert!(session.redo());
-        assert_eq!(session.map().unwrap().size.x, 5);
+        assert_eq!(session.map().unwrap().size().x, 5);
         assert_render_cache_matches_rebuild(&session);
     }
 
@@ -375,13 +375,13 @@ mod tests {
     fn assert_bake_matches_the_whole_map(session: &Session) {
         let mut whole = Session::new();
         whole.load_environment(&examples().join("test.dme")).expect("codebase");
-        whole.activate_document(MapDocument::new(session.map().unwrap().clone(), 1));
+        whole.activate_document(MapDocument::new(session.state.active_document().unwrap().to_map(), 1));
         settle_bake(&mut whole);
 
         let baked = |session: &Session| {
             let document = session.state.active_document().unwrap();
             let bake = session.active_cache().bake.as_ref().expect("a bake");
-            let size = document.map.size;
+            let size = document.map.size();
             let tiles = (1..=size.z)
                 .flat_map(|z| (1..=size.y).flat_map(move |y| (1..=size.x).map(move |x| Coord::new(x, y, z))))
                 .map(|coord| {
@@ -486,7 +486,7 @@ mod tests {
         assert_eq!(session.create_level(id, &fill), Ok(2));
 
         let document = session.state.active_document().expect("active document");
-        assert_eq!(document.map.size.z, 2);
+        assert_eq!(document.map.size().z, 2);
         assert_eq!(document.z, 2);
         assert!(document.is_dirty());
         for x in 1..=2 {

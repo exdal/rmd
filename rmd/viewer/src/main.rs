@@ -70,7 +70,7 @@ fn main() -> ExitCode {
     println!(
         "{} sprite instances across {} z level(s)",
         session.sprite_count(),
-        session.map().map_or(0, |map| map.size.z)
+        session.map().map_or(0, |map| map.size().z)
     );
     println!(
         "{} cells mapped across {} DMI sheets ({:.1} MiB decoded during upload)",

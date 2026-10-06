@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use dmi::IconFile;
-use dmm::Map;
 use editor::{
     Environment,
     document::MapDocument,
     frame::{self, FrameOptions},
+    grid::Grid,
 };
 use render::{
     Frame,
@@ -129,7 +129,7 @@ impl Session {
             .cloned()
     }
 
-    pub fn map(&self) -> Option<&Map> { self.document.as_ref().map(|document| &document.map) }
+    pub fn map(&self) -> Option<&Grid> { self.document.as_ref().map(|document| &document.map) }
 
     pub fn z(&self) -> u32 { self.document.as_ref().map_or(1, |document| document.z) }
 
@@ -138,7 +138,7 @@ impl Session {
             return;
         };
 
-        let levels = document.map.size.z.max(1);
+        let levels = document.map.size().z.max(1);
         let next = (document.z as i32 + delta).clamp(1, levels as i32) as u32;
 
         if next != document.z {
@@ -164,7 +164,10 @@ impl Session {
             sprite_instances: &self.sprite_instances,
             focused_area: None,
             active_z: self.z(),
-            level_count: self.document.as_ref().map_or(1, |document| document.map.size.z.max(1)),
+            level_count: self
+                .document
+                .as_ref()
+                .map_or(1, |document| document.map.size().z.max(1)),
             revision: self.revision,
             pending_updates: &[],
             lighting: (self.options.show_lighting && !self.light_tiles.is_empty()).then_some(LightingFrame {
@@ -204,7 +207,7 @@ impl Session {
         let tile = self.options.tile_size.max(1) as f32;
 
         self.map().map_or((tile, tile), |map| {
-            (map.size.x.max(1) as f32 * tile, map.size.y.max(1) as f32 * tile)
+            (map.size().x.max(1) as f32 * tile, map.size().y.max(1) as f32 * tile)
         })
     }
 }

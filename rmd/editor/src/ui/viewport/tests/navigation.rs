@@ -169,11 +169,11 @@ fn arrow_keys_pan_shift_pans_faster_and_space_drags_the_map_without_placing() {
     assert_ne!(app.view.camera.camera.x, camera.x, "space and drag pans");
     assert!(
         !app.session
-            .map()
+            .state
+            .active_document()
             .unwrap()
-            .dictionary
-            .values()
-            .any(|tile| tile.contains(&table)),
+            .prefab_instances()
+            .any(|(_, prefab, _)| *prefab == table),
         "the drag never reaches the place tool"
     );
 }

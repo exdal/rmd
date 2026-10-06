@@ -1387,9 +1387,9 @@ fn commit_int_property(
             transform.sprite.y
         };
         let (origin, limit) = if axis == 0 {
-            (location.coord.x, session.map().map_or(1, |map| map.size.x.max(1)))
+            (location.coord.x, session.map().map_or(1, |map| map.size().x.max(1)))
         } else {
-            (location.coord.y, session.map().map_or(1, |map| map.size.y.max(1)))
+            (location.coord.y, session.map().map_or(1, |map| map.size().y.max(1)))
         };
         let (target, adjust) = anchor_axis(
             anchor + (value - current) as f32,

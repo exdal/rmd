@@ -160,7 +160,7 @@ fn guest_out_of_date(name: &str) -> (PathBuf, Session, PathBuf, Session, Documen
             .and_then(|coop| coop.shared_maps.get("_maps/a.dmm"))
             .is_some_and(|shared_map| matches!(shared_map.state, SharedState::Waiting(_)))
     });
-    assert_eq!(guest.state.document(local).unwrap().map.size.x, 1);
+    assert_eq!(guest.state.document(local).unwrap().map.size().x, 1);
 
     (host_dir, host, guest_dir, guest, local)
 }

@@ -316,7 +316,7 @@ mod tests {
                 assert!(session.fill_selected_block(source.min, SelectionRotation::Original, mode));
                 assert!(session.copy_selection(session.selection_mode()));
                 let copied = session.clipboard().unwrap().clone();
-                let source_grid = session.map().unwrap().grid.clone();
+                let source_grid = session.map().unwrap().clone();
                 let source_revision = session.caches[&first].revision;
 
                 let mut map = Map::new(Size { x: 15, y: 15, z: 2 });
@@ -328,7 +328,7 @@ mod tests {
                     row.fill(base);
                 }
                 let second = session.activate_document(MapDocument::new(map, 2));
-                let destination_grid = session.map().unwrap().grid.clone();
+                let destination_grid = session.map().unwrap().clone();
                 let min = Coord::new(4, 4, 2);
                 let target = session.clipboard_footprint(min, rotation).unwrap();
                 let before = target
@@ -375,11 +375,11 @@ mod tests {
                 assert_eq!(session.selection_mask(), Some(SelectionMask { bounds: target, mode }));
                 assert_render_cache_matches_rebuild(&session);
                 assert!(session.undo());
-                assert_eq!(session.map().unwrap().grid, destination_grid);
+                assert_eq!(*session.map().unwrap(), destination_grid);
                 assert!(!session.undo());
                 assert!(session.redo());
                 assert_render_cache_matches_rebuild(&session);
-                assert_eq!(session.state.document(first).unwrap().map.grid, source_grid);
+                assert_eq!(session.state.document(first).unwrap().map, source_grid);
                 assert_eq!(session.caches[&first].revision, source_revision);
                 assert_eq!(session.state.active(), Some(second));
             }

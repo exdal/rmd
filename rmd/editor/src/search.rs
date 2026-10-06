@@ -261,7 +261,7 @@ mod tests {
     fn deleting_every_match_is_one_undo() {
         let (map, target) = map();
         let mut document = MapDocument::new(map, 1);
-        let grid = document.map.grid.clone();
+        let grid = document.map.clone();
         let matches = find_instances(&document, &ObjectTree::default(), &SearchQuery::Prefab(target), None);
 
         let action = delete_instances(&document, &matches).unwrap();
@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(document.instance_ids_at(Coord::new(1, 1, 1)).len(), 1);
 
         assert!(document.undo());
-        assert_eq!(document.map.grid, grid);
+        assert_eq!(document.map, grid);
         assert_eq!(resolve_instances(&document, &matches).len(), 3);
     }
 

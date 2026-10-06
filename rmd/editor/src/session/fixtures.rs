@@ -141,7 +141,7 @@ pub(super) fn conflicted_session() -> Session {
 /// Compares the working map with a `HEAD` that had a wall at 2, 1, 1, listed as the only
 /// commit in the history. The map needs to be at least two tiles wide.
 pub(crate) fn install_diff(session: &mut Session, id: DocumentId) {
-    let mut old = session.state.document(id).unwrap().map.clone();
+    let mut old = session.state.document(id).unwrap().to_map();
     let wall = old.intern_tile(vec![Prefab::new(TreePath::parse("/turf/wall"))]);
     let row = old.grid[0].len() - 1;
     old.grid[0][row][1] = wall;
@@ -164,7 +164,7 @@ pub(crate) fn install_diff(session: &mut Session, id: DocumentId) {
 }
 
 pub(crate) fn install_blame(session: &mut Session, id: DocumentId, result: BlameResult) {
-    let snapshot = session.state.document(id).unwrap().map.clone();
+    let snapshot = session.state.document(id).unwrap().to_map();
     let cache = session.caches.get_mut(&id).unwrap();
     let git = cache.git.as_mut().unwrap();
     git.blame = Some(BlameState::new(result, snapshot, cache.map_revision));
