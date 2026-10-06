@@ -86,7 +86,7 @@ fn draw_welcome_subtitle(ui: &Ui, release: Option<&Release>) {
     ui.same_line();
     ui.text_disabled("\u{2022}");
     ui.same_line();
-    ui.text_disabled("A map editor for BYOND");
+    ui.text_disabled("A map editor for Space Station 13");
 }
 
 fn draw_recent_entry(ui: &Ui, label: &str, id: &str, share: Option<&str>, forget: bool) -> RecentEntry {
