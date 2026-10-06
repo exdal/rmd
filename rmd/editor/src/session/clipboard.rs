@@ -11,18 +11,16 @@ use super::Session;
 
 impl Session {
     pub(super) fn hidden_types(&self) -> HiddenTypes {
-        let Some(tree) = self.tree() else {
+        let Some(environment) = self.state.environment.as_ref() else {
             return HiddenTypes::default();
         };
 
-        let mut visibility = self.type_visibility.clone();
-        if !self.options.show_areas
-            && let Some(area) = tree.roots().area
-        {
-            visibility.set_subtree(tree, area, false);
+        let hidden = self.type_visibility.hidden_types(&environment.tree);
+        if self.options.show_areas {
+            return hidden;
         }
 
-        visibility.hidden_types(tree)
+        hidden.with_areas(environment.area_paths())
     }
 
     pub fn copy_selection(&mut self, mode: BlockSelectionMode) -> bool {

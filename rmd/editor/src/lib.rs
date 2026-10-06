@@ -21,11 +21,11 @@ pub mod search;
 pub mod tool;
 pub mod visual;
 
-use core::types::Value;
+use core::types::{Identifier, Value};
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use dmi::{IconFile, IconInfo, error::IconError, metadata::Metadata};
@@ -78,6 +78,7 @@ pub struct Environment {
     /// `#define FILE_DIR "icons"`
     pub resource_dirs: Vec<PathBuf>,
     fingerprint: Option<CodebaseHash>,
+    area_paths: OnceLock<Arc<HashSet<Vec<Identifier>>>>,
 }
 
 impl Environment {
@@ -97,7 +98,23 @@ impl Environment {
             files: Vec::new(),
             resource_dirs: Vec::new(),
             fingerprint: None,
+            area_paths: OnceLock::new(),
         }
+    }
+
+    pub fn area_paths(&self) -> Arc<HashSet<Vec<Identifier>>> {
+        Arc::clone(self.area_paths.get_or_init(|| {
+            let paths = self.tree.roots().area.map(|area| {
+                self.tree
+                    .descendants(area)
+                    .into_iter()
+                    .filter_map(|id| self.tree.get(id))
+                    .map(|decl| decl.path.segments.clone())
+                    .collect()
+            });
+
+            Arc::new(paths.unwrap_or_default())
+        }))
     }
 
     pub fn load(entry: impl AsRef<Path>) -> Result<(Self, LoadDiagnostics), LoadError> {
@@ -125,6 +142,7 @@ impl Environment {
             files: compiled.files,
             resource_dirs: compiled.resource_dirs,
             fingerprint: Some(compiled.fingerprint),
+            area_paths: OnceLock::new(),
         };
 
         let search_dirs = environment.resource_dirs.clone();
@@ -452,12 +470,31 @@ mod tests {
         path::TreePath,
         types::{Identifier, ListEntry, Value, VarModifiers},
     };
-    use std::{collections::BTreeSet, path::Path};
+    use std::{collections::BTreeSet, path::Path, sync::Arc};
 
     use net::CodebaseHash;
     use objtree::{ObjectTree, VarDecl};
 
     use crate::{EditorState, Environment, RECENT_PREFAB_CAPACITY, progress::Progress};
+
+    /// `/obj/fake_area { parent_type = /area }`
+    #[test]
+    fn area_paths_follow_parent_types_and_are_built_once() {
+        let mut tree = ObjectTree::new();
+        tree.register(&TreePath::parse("/area/station"), Location::default());
+        tree.register(&TreePath::parse("/obj/table"), Location::default());
+        let fake = tree.register(&TreePath::parse("/obj/fake_area"), Location::default());
+        tree.get_mut(fake).unwrap().parent_type = Some(TreePath::parse("/area"));
+        tree.resolve_parent_types();
+        let environment = Environment::new(".", tree);
+
+        let paths = environment.area_paths();
+        for path in ["/area", "/area/station", "/obj/fake_area"] {
+            assert!(paths.contains(&TreePath::parse(path).segments), "{path}");
+        }
+        assert!(!paths.contains(&TreePath::parse("/obj/table").segments));
+        assert!(Arc::ptr_eq(&paths, &environment.area_paths()));
+    }
 
     fn tree_with_vars(vars: &[(&str, Value)]) -> ObjectTree {
         let mut tree = ObjectTree::new();

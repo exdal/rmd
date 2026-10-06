@@ -1,5 +1,8 @@
 use core::{path::TreePath, types::Identifier, vars};
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use defines::{FLOAT_LAYER, KEEP_APART, KEEP_TOGETHER};
 use dmi::metadata::{Dir, Metadata};
@@ -229,29 +232,50 @@ impl TypeVisibility {
     pub fn hides_any(&self) -> bool { !self.hidden.is_empty() }
 
     pub fn hidden_types(&self, tree: &ObjectTree) -> HiddenTypes {
-        HiddenTypes(
-            self.hidden
+        HiddenTypes {
+            paths: self
+                .hidden
                 .iter()
                 .filter_map(|id| tree.get(*id))
                 .map(|decl| decl.path.segments.clone())
                 .collect(),
-        )
+            areas: None,
+        }
     }
 }
 
 // this needs to have path as key, it needs to outlive map reloads
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct HiddenTypes(HashSet<Vec<Identifier>>);
+pub struct HiddenTypes {
+    paths: HashSet<Vec<Identifier>>,
+    areas: Option<Arc<HashSet<Vec<Identifier>>>>,
+}
 
 impl HiddenTypes {
-    pub fn is_empty(&self) -> bool { self.0.is_empty() }
+    pub fn with_areas(self, areas: Arc<HashSet<Vec<Identifier>>>) -> Self {
+        Self {
+            areas: Some(areas),
+            ..self
+        }
+    }
 
-    pub fn hides(&self, prefab: &Prefab) -> bool { self.0.contains(&prefab.path.segments) }
+    pub fn is_empty(&self) -> bool { self.paths.is_empty() && self.areas.as_ref().is_none_or(|areas| areas.is_empty()) }
+
+    pub fn hides(&self, prefab: &Prefab) -> bool {
+        self.paths.contains(&prefab.path.segments)
+            || self
+                .areas
+                .as_ref()
+                .is_some_and(|areas| areas.contains(&prefab.path.segments))
+    }
 }
 
 impl FromIterator<TreePath> for HiddenTypes {
     fn from_iter<I: IntoIterator<Item = TreePath>>(paths: I) -> Self {
-        Self(paths.into_iter().map(|path| path.segments).collect())
+        Self {
+            paths: paths.into_iter().map(|path| path.segments).collect(),
+            areas: None,
+        }
     }
 }
 
