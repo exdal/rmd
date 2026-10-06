@@ -103,6 +103,16 @@ pub struct MapEdit {
     pub coords: Vec<[u32; 3]>,
     /// the changed tiles as a one row map, in `coords` order
     pub patch: String,
+    /// appended before `coords` apply
+    pub new_level: Option<NewLevel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewLevel {
+    /// peers ignore it unless it is one above their top level, so the first of two racing appends wins
+    pub z: u32,
+    /// the tile that fills the level, as a one tile map
+    pub fill: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -346,6 +356,7 @@ mod tests {
             generation: GenerationId(2),
             coords: vec![[1, 2, 1], [3, 4, 1]],
             patch: String::from("\"a\" = (/turf,/area)\n"),
+            new_level: None,
         };
         round_trip(ClientMessage::Edit(edit.clone()));
         round_trip(ServerMessage::Edit {

@@ -83,6 +83,21 @@ impl LightingMap {
         map
     }
 
+    pub(crate) fn append_level(&mut self) {
+        let plane = self.plane();
+        let corners = (self.width() + 1) * (self.height() + 1);
+        let buckets = self.width().div_ceil(BUCKET) * self.height().div_ceil(BUCKET);
+
+        self.size[2] += 1;
+        self.tiles.resize(self.tiles.len() + plane, LightTile::default());
+        self.cells.resize(self.cells.len() + plane, Cell::default());
+        self.points.resize(self.points.len() + corners, [0.0; 3]);
+        self.buckets.resize(self.buckets.len() + buckets, Vec::new());
+        self.transparent.resize(self.transparent.len() + buckets, 0);
+        self.reach.push(0);
+        self.dirty.push(Vec::new());
+    }
+
     pub fn level_range(&self, z: u32) -> Option<Range<usize>> {
         if z == 0 || z > self.size[2] {
             return None;
@@ -1283,6 +1298,22 @@ mod tests {
         assert_edit_matches_full_solve(&mut map, &mut atoms, wall, Some(blocker(Position::new(11, 11, 2))));
         assert_edit_matches_full_solve(&mut map, &mut atoms, glass, None);
         assert_edit_matches_full_solve(&mut map, &mut atoms, upstairs, None);
+    }
+
+    #[test]
+    fn an_appended_level_lights_like_a_full_solve() {
+        let below = [source(Position::new(2, 2, 1)), blocker(Position::new(3, 3, 1))];
+        let above = [transparent(Position::new(2, 2, 2)), source(Position::new(1, 3, 2))];
+        let mut map = solved([3, 3, 1], &below);
+
+        map.append_level();
+        for (id, atom) in (below.len() as u64..).zip(above) {
+            map.set(id, Some(atom));
+        }
+        map.solve_dirty();
+
+        assert_eq!(map, solved([3, 3, 2], &[below, above].concat()));
+        assert!(map.tile(Position::new(2, 2, 2)).unwrap().corners[0][0] > 0.0);
     }
 
     #[test]

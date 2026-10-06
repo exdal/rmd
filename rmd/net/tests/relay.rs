@@ -339,6 +339,7 @@ fn a_different_codebase_receives_only_a_rejection_even_with_cached_data() {
         generation,
         coords: vec![[1, 1, 1]],
         patch: "edit".into(),
+        new_level: None,
     });
     wait_for(&alice, |event| matches!(event, Event::Edit { .. }).then_some(()));
 
@@ -606,6 +607,7 @@ fn edits_reach_everyone_and_replay_for_late_joiners_until_the_map_is_shared_agai
         generation,
         coords: vec![[1, 1, 1]],
         patch: String::from(patch),
+        new_level: None,
     };
     bob.send_edit(edit(GenerationId(0), "stale"));
     bob.send_edit(edit(GenerationId(1), "fresh"));
@@ -679,6 +681,7 @@ fn anyone_can_stop_sharing_a_map_for_everyone() {
         generation: GenerationId(1),
         coords: vec![[1, 1, 1]],
         patch: String::from("late"),
+        new_level: None,
     });
     bob.send_comment(String::from("_maps/other.dmm"), 1, [0.0, 0.0], String::from("marker"));
     let events = collect_until(&alice, |event| matches!(event, Event::Comment(_)));
@@ -725,6 +728,7 @@ fn a_new_share_carries_the_edits_its_snapshot_missed() {
         generation,
         coords: vec![[1, 1, 1]],
         patch: String::from(patch),
+        new_level: None,
     };
     let next_edit = |client: &Client| {
         wait_for(client, |event| match event {
@@ -780,6 +784,7 @@ fn heavy_traffic_both_ways_does_not_stall_the_session() {
             generation: GenerationId(1),
             coords: vec![[1, 1, 1]],
             patch: "a".repeat(512 * 1024),
+            new_level: None,
         });
     }
 
@@ -809,6 +814,7 @@ fn a_resync_sends_the_snapshot_and_the_numbered_log_again() {
         generation: GenerationId(1),
         coords: vec![[1, 1, 1]],
         patch: String::from(patch),
+        new_level: None,
     };
     bob.send_edit(edit("first"));
     bob.send_edit(edit("second"));
@@ -873,6 +879,7 @@ fn edits_and_snapshots_survive_a_lossy_link() {
             generation: GenerationId(1),
             coords: vec![[1, 1, 1]],
             patch: patch.to_string(),
+            new_level: None,
         });
     }
 

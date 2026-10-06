@@ -17,6 +17,7 @@ use net::{
     Cursor,
     GenerationId,
     MapEdit,
+    NewLevel,
     PRESENCE_REFRESH,
     PasswordHash,
     PeerId,
@@ -213,6 +214,13 @@ pub(crate) struct SharedMap {
     next_seq: SeqId,
     // tiles we edited whose edits the server hasn't sent back yet, counted per tile
     in_flight: HashMap<Coord, u32>,
+    // a level we asked for, it appears for everyone once the server sends it back
+    level_request: Option<LevelRequest>,
+}
+
+enum LevelRequest {
+    Queued(NewLevel),
+    Sent,
 }
 
 impl SharedMap {
@@ -226,6 +234,7 @@ impl SharedMap {
             inbox: BTreeMap::new(),
             next_seq: SeqId(0),
             in_flight: HashMap::new(),
+            level_request: None,
         }
     }
 
@@ -253,6 +262,22 @@ impl SharedMap {
         self.inbox.clear();
         self.next_seq = SeqId(0);
         self.in_flight.clear();
+        self.level_request = None;
+    }
+
+    fn send_level_request(&mut self) -> Option<NewLevel> {
+        match self.level_request.take()? {
+            LevelRequest::Queued(new_level) => {
+                self.level_request = Some(LevelRequest::Sent);
+
+                Some(new_level)
+            },
+            LevelRequest::Sent => {
+                self.level_request = Some(LevelRequest::Sent);
+
+                None
+            },
+        }
     }
 }
 

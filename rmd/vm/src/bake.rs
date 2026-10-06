@@ -446,6 +446,14 @@ impl Bake {
         bake
     }
 
+    // the new level's atoms go in through `update`
+    pub fn append_level(&mut self) {
+        self.runtime.world.size[2] += 1;
+        if let Some(lighting) = self.lighting.as_mut() {
+            lighting.append_level();
+        }
+    }
+
     pub fn position(&self, id: u64) -> Option<Position> { self.atoms.get(&id).map(|atom| atom.position) }
 
     pub fn object(&self, id: u64) -> Option<ObjectId> { self.objects.get(&id).copied() }
@@ -1077,6 +1085,13 @@ impl Bake {
     pub fn update(
         &mut self, tree: &ObjectTree, module: &Module, replacements: Vec<Atom>, removed: &[u64],
     ) -> BakeUpdate {
+        self.update_with_progress(tree, module, replacements, removed, |_, _, _| {})
+    }
+
+    pub fn update_with_progress(
+        &mut self, tree: &ObjectTree, module: &Module, replacements: Vec<Atom>, removed: &[u64],
+        mut progress: impl FnMut(Stage, usize, usize),
+    ) -> BakeUpdate {
         self.epoch = self.epoch.wrapping_add(1);
         let mut replacements_by_id = HashMap::new();
         for atom in replacements {
@@ -1148,7 +1163,12 @@ impl Bake {
             self.remove_contribution(*id);
         }
 
-        for atom in replacements {
+        let total = replacements.len();
+        for (index, atom) in replacements.into_iter().enumerate() {
+            if index.is_multiple_of(4096) {
+                progress(Stage::Instantiate, index, total);
+            }
+
             dirty.insert(atom.position);
             inserted.push(atom.instance);
             self.insert(tree, atom);
@@ -1157,7 +1177,11 @@ impl Bake {
             self.link_cell(tree, *position);
         }
         if self.initialized {
-            for id in &inserted {
+            for (index, id) in inserted.iter().enumerate() {
+                if index.is_multiple_of(4096) {
+                    progress(Stage::Prepare, index, total);
+                }
+
                 self.prepare(tree, module, *id);
                 self.connect(tree, module, *id);
                 self.highlight(tree, module, *id);
@@ -1203,13 +1227,17 @@ impl Bake {
                 .copied()
                 .filter(|id| !inserted.contains(id))
                 .collect::<Vec<_>>();
+            progress(Stage::Light, 0, 1);
             self.relight(tree, module, &neighbors);
         }
 
         let lighting = self.lighting.as_mut().and_then(LightingMap::solve_dirty);
 
         if self.initialized {
-            for id in &affected {
+            for (index, id) in affected.iter().enumerate() {
+                if index.is_multiple_of(4096) {
+                    progress(Stage::Smooth, index, affected.len());
+                }
                 self.bake_atom(tree, module, *id);
             }
         }

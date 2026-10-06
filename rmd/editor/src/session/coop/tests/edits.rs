@@ -278,6 +278,7 @@ fn edits_queued_for_one_poll_apply_as_one_remote_edit() {
             generation: GenerationId(1),
             coords: tiles.iter().map(|(coord, _)| [coord.x, coord.y, coord.z]).collect(),
             patch: dmm::writer::write(&patch),
+            new_level: None,
         }
     };
     for (seq, by, tiles) in [
@@ -313,4 +314,177 @@ fn edits_queued_for_one_poll_apply_as_one_remote_edit() {
     assert!(session.coop().unwrap().shared_maps[path].in_flight.is_empty());
 
     let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_new_level_reaches_every_peer_without_a_reshare() {
+    let (host_dir, mut host) = codebase_with_map("level-host", "aa");
+    let (guest_dir, mut guest) = codebase_with_map("level-guest", "aa");
+    let host_file = host_dir.join("_maps/a.dmm");
+    let guest_file = guest_dir.join("_maps/a.dmm");
+    let host_id = open_local(&mut host, host_file.clone());
+
+    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+        .unwrap();
+    poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
+    host.share_coop_map();
+    let port = host.coop().and_then(Coop::host).unwrap().port();
+    guest
+        .join_coop(
+            format!("127.0.0.1:{port}"),
+            net::hash_password("hunter2"),
+            String::from("guest"),
+        )
+        .unwrap();
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        sessions[1].state.document_for_path(&guest_file).is_some() && settled(sessions)
+    });
+    let guest_id = guest.state.document_for_path(&guest_file).unwrap();
+    let levels = |session: &Session, id| session.state.document(id).unwrap().map.size.z;
+    let tile = |paths: &[&str]| {
+        paths
+            .iter()
+            .map(|path| Prefab::new(TreePath::parse(path)))
+            .collect::<Vec<_>>()
+    };
+
+    let fill = tile(&["/obj/guest", "/turf", "/area"]);
+    assert_eq!(guest.create_level(guest_id, &fill), Ok(2));
+    assert_eq!(levels(&guest, guest_id), 1, "the level waits for the server");
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        settled(sessions) && levels(sessions[0], host_id) == 2 && levels(sessions[1], guest_id) == 2
+    });
+
+    let corner = Coord::new(2, 1, 2);
+    assert_eq!(top(&host, &host_file, corner).as_deref(), Some("/obj/guest"));
+    assert_eq!(top(&guest, &guest_file, corner).as_deref(), Some("/obj/guest"));
+    assert_eq!(guest.state.document(guest_id).unwrap().z, 2);
+    assert_eq!(host.state.document(host_id).unwrap().z, 1);
+    for session in [&host, &guest] {
+        assert_eq!(
+            session.coop().unwrap().shared_maps["_maps/a.dmm"].generation,
+            Some(GenerationId(1))
+        );
+    }
+
+    // both ask for the third level at once, the server's order picks one for everybody
+    host.set_level(2);
+    assert_eq!(
+        host.create_level(host_id, &tile(&["/obj/host", "/turf", "/area"])),
+        Ok(3)
+    );
+    assert_eq!(guest.create_level(guest_id, &fill), Ok(3));
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        settled(sessions) && levels(sessions[0], host_id) == 3 && levels(sessions[1], guest_id) == 3
+    });
+    let corner = Coord::new(1, 1, 3);
+    assert_eq!(top(&host, &host_file, corner), top(&guest, &guest_file, corner));
+    assert_eq!(levels(&host, host_id), 3);
+
+    for dir in [host_dir, guest_dir] {
+        let _ = fs::remove_dir_all(dir);
+    }
+}
+
+fn shared_pair(name: &str) -> (PathBuf, Session, PathBuf, Session, DocumentId, DocumentId) {
+    let (host_dir, mut host) = codebase_with_map(&format!("{name}-host"), "aa");
+    let (guest_dir, mut guest) = codebase_with_map(&format!("{name}-guest"), "aa");
+    let host_id = open_local(&mut host, host_dir.join("_maps/a.dmm"));
+
+    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+        .unwrap();
+    poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
+    host.share_coop_map();
+    let port = host.coop().and_then(Coop::host).unwrap().port();
+    guest
+        .join_coop(
+            format!("127.0.0.1:{port}"),
+            net::hash_password("hunter2"),
+            String::from("guest"),
+        )
+        .unwrap();
+    let guest_file = guest_dir.join("_maps/a.dmm");
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        sessions[1].state.document_for_path(&guest_file).is_some() && settled(sessions)
+    });
+    let guest_id = guest.state.document_for_path(&guest_file).unwrap();
+
+    (host_dir, host, guest_dir, guest, host_id, guest_id)
+}
+
+fn plain_fill() -> Vec<Prefab> {
+    vec![
+        Prefab::new(TreePath::parse("/turf")),
+        Prefab::new(TreePath::parse("/area")),
+    ]
+}
+
+#[test]
+fn a_level_created_before_the_first_share_is_numbered_reaches_peers() {
+    let (host_dir, mut host) = codebase_with_map("level-unnumbered-host", "aa");
+    let (guest_dir, mut guest) = codebase_with_map("level-unnumbered-guest", "aa");
+    let host_id = open_local(&mut host, host_dir.join("_maps/a.dmm"));
+    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+        .unwrap();
+    poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
+
+    host.share_coop_map();
+    assert_eq!(host.coop().unwrap().shared_maps["_maps/a.dmm"].generation, None);
+    assert_eq!(host.create_level(host_id, &plain_fill()), Ok(2));
+    poll_until(&mut [&mut host], settled);
+
+    let port = host.coop().and_then(Coop::host).unwrap().port();
+    guest
+        .join_coop(
+            format!("127.0.0.1:{port}"),
+            net::hash_password("hunter2"),
+            String::from("guest"),
+        )
+        .unwrap();
+    let guest_file = guest_dir.join("_maps/a.dmm");
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        sessions[1].state.document_for_path(&guest_file).is_some() && settled(sessions)
+    });
+    let guest_id = guest.state.document_for_path(&guest_file).unwrap();
+    assert_eq!(guest.state.document(guest_id).unwrap().map.size.z, 2);
+
+    for dir in [host_dir, guest_dir] {
+        let _ = fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn a_paused_map_cannot_ask_for_a_level() {
+    let (host_dir, mut host, guest_dir, mut guest, host_id, guest_id) = shared_pair("level-paused");
+
+    guest.begin_coop_reload();
+    assert!(guest.state.document(guest_id).unwrap().is_read_only());
+    assert!(guest.create_level(guest_id, &plain_fill()).is_err());
+    guest.finish_coop_reload();
+    poll_until(&mut [&mut host, &mut guest], settled);
+    assert_eq!(host.state.document(host_id).unwrap().map.size.z, 1);
+    assert_eq!(guest.state.document(guest_id).unwrap().map.size.z, 1);
+
+    for dir in [host_dir, guest_dir] {
+        let _ = fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn a_second_level_waits_for_the_first_to_come_back() {
+    let (host_dir, mut host, guest_dir, mut guest, host_id, guest_id) = shared_pair("level-twice");
+
+    assert_eq!(guest.create_level(guest_id, &plain_fill()), Ok(2));
+    assert!(
+        guest.create_level(guest_id, &plain_fill()).is_err(),
+        "a second request for the same level would be dropped"
+    );
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        settled(sessions) && sessions[0].state.document(host_id).unwrap().map.size.z == 2
+    });
+    assert_eq!(guest.state.document(guest_id).unwrap().map.size.z, 2);
+
+    for dir in [host_dir, guest_dir] {
+        let _ = fs::remove_dir_all(dir);
+    }
 }

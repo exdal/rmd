@@ -14,20 +14,26 @@ pub fn encode(map: &Map, coords: impl IntoIterator<Item = Coord>) -> Option<(Vec
         return None;
     }
 
+    let patch = write_row(tiles.iter().map(|(_, tile)| tile.as_slice()));
+
+    Some((tiles.into_iter().map(|(coord, _)| coord).collect(), patch))
+}
+
+pub fn encode_tile(tile: &[Prefab]) -> String { write_row([tile]) }
+
+fn write_row<'a>(tiles: impl IntoIterator<Item = &'a [Prefab]>) -> String {
+    let tiles = tiles.into_iter().collect::<Vec<_>>();
     let mut patch = Map::new(Size {
         x: tiles.len() as u32,
         y: 1,
         z: 1,
     });
 
-    for (index, (_, tile)) in tiles.iter().enumerate() {
-        patch.grid[0][0][index] = patch.intern_tile((*tile).clone());
+    for (index, tile) in tiles.into_iter().enumerate() {
+        patch.grid[0][0][index] = patch.intern_tile(tile.to_vec());
     }
 
-    Some((
-        tiles.into_iter().map(|(coord, _)| coord).collect(),
-        writer::write(&patch),
-    ))
+    writer::write(&patch)
 }
 
 pub fn decode(patch: &str, count: usize) -> Result<Vec<Vec<Prefab>>, String> {

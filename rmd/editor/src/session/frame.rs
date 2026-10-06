@@ -313,13 +313,25 @@ impl Session {
         let cache = caches.entry(id).or_default();
         let bake_update = match (cache.bake.as_mut(), state.environment.as_ref(), state.document(id)) {
             (Some(bake), Some(environment), Some(document)) => {
-                let update = editor::bake::update(bake, environment, document, affected);
+                // a level the bake doesn't have yet is baked whole by its extension
+                let levels = editor::bake::levels(bake);
+                let (baked, later) = affected.iter().copied().partition::<Vec<_>, _>(|instance| {
+                    document
+                        .prefab_instance(*instance)
+                        .is_none_or(|(_, location)| location.coord.z <= levels)
+                });
+                let mut update = editor::bake::update(bake, environment, document, &baked);
                 report_bake_output(bake);
+                update.appearances.extend(later);
 
                 update
             },
             _ => {
-                baker.invalidate(id);
+                if baker.extending(id) {
+                    cache.unbaked.extend_from_slice(affected);
+                } else {
+                    baker.invalidate(id);
+                }
 
                 editor::bake::BakeUpdate {
                     appearances: affected.to_vec(),

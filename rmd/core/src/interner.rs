@@ -119,7 +119,11 @@ impl Interner {
             text: s.to_string(),
             hash: Self::hash(s),
         });
-        self.buckets.entry(bucket).or_default().push(Arc::downgrade(&value));
+        // a string interned and dropped over and over would pile dead entries up here until the next sweep, and
+        // every lookup walks them
+        let entries = self.buckets.entry(bucket).or_default();
+        entries.retain(|s| s.strong_count() > 0);
+        entries.push(Arc::downgrade(&value));
 
         Symbol(value)
     }
@@ -156,5 +160,20 @@ mod tests {
 
         assert_eq!(a, b);
         assert_eq!(a.as_str(), "icon_state");
+    }
+
+    #[test]
+    fn a_string_interned_and_dropped_again_and_again_keeps_one_entry() {
+        let mut pool = Interner::new();
+        let live = (0..4096)
+            .map(|index| pool.intern(&format!("var_{index}")))
+            .collect::<Vec<_>>();
+
+        for _ in 0..10_000 {
+            drop(pool.intern("light_power"));
+        }
+
+        assert_eq!(pool.buckets[&Interner::bucket("light_power")].len(), 1);
+        assert_eq!(pool.len(), live.len());
     }
 }

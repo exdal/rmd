@@ -17,6 +17,7 @@ pub use protocol::coop::{
     GenerationId,
     MAX_COMMENT_LEN,
     MapEdit,
+    NewLevel,
     PasswordHash,
     PeerId,
     PeerInfo,

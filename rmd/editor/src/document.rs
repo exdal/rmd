@@ -790,6 +790,24 @@ impl MapDocument {
             return None;
         }
 
+        // peers only learn of a level appended outside a level request from a new snapshot
+        if let Some(journal) = self.journal.as_mut() {
+            journal.reshaped = true;
+        }
+
+        self.push_level(tile)
+    }
+
+    // a level a peer created stays on save like their tile edits do, even before anyone draws on it
+    pub fn append_remote_level(&mut self, tile: &[Prefab]) -> Option<u32> {
+        let z = self.push_level(tile)?;
+        self.retained_level_count = z;
+        self.pending_write = true;
+
+        Some(z)
+    }
+
+    fn push_level(&mut self, tile: &[Prefab]) -> Option<u32> {
         let z = self.map.size.z.checked_add(1)?;
         let key = self.map.intern_tile(tile.to_vec());
         let width = self.map.size.x as usize;
@@ -797,10 +815,6 @@ impl MapDocument {
 
         self.map.grid.push(vec![vec![key; width]; height]);
         self.map.size.z = z;
-        if let Some(journal) = self.journal.as_mut() {
-            journal.reshaped = true;
-        }
-
         self.generation += 1;
         *self.key_usage.entry(key).or_insert(0) += width.saturating_mul(height);
         self.instances.append_level();

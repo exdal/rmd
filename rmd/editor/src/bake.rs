@@ -100,9 +100,13 @@ impl Standalone {
 }
 
 pub fn atoms(environment: &Environment, document: &MapDocument) -> Vec<vm::bake::Atom> {
+    atoms_from_level(environment, document, 1)
+}
+
+pub fn atoms_from_level(environment: &Environment, document: &MapDocument, first: u32) -> Vec<vm::bake::Atom> {
     let map = &document.map;
     let mut atoms = Vec::new();
-    for z in 1..=map.size.z {
+    for z in first..=map.size.z {
         for y in 1..=map.size.y {
             for x in 1..=map.size.x {
                 for id in document.instance_ids_at(Coord::new(x, y, z)) {
@@ -137,15 +141,59 @@ pub fn build_atoms(
         size,
         environment.bake_options.limits,
         program.icon_states.clone(),
-        |stage, done, total| {
-            if current != Some(stage) {
-                current = Some(stage);
-                progress.enter(Stage::from_bake(stage), total);
-            }
-
-            progress.set_done(done);
-        },
+        report(progress, &mut current),
     ))
+}
+
+fn report(progress: &Progress, current: &mut Option<vm::bake::Stage>) -> impl FnMut(vm::bake::Stage, usize, usize) {
+    move |stage, done, total| {
+        if *current != Some(stage) {
+            *current = Some(stage);
+            progress.enter(Stage::from_bake(stage), total);
+        }
+
+        progress.set_done(done);
+    }
+}
+
+pub fn levels(bake: &Bake) -> u32 { u32::try_from(bake.runtime.world.size[2]).unwrap_or(0) }
+
+// `atoms` are everything on the levels the bake doesn't have yet
+pub fn extend(
+    bake: &mut Bake, environment: &Environment, level_count: u32, atoms: Vec<vm::bake::Atom>, progress: &Progress,
+) -> BakeUpdate {
+    while levels(bake) < level_count {
+        bake.append_level();
+    }
+
+    let ids = atoms
+        .iter()
+        .filter_map(|atom| PrefabInstanceId::from_raw(atom.instance))
+        .collect::<Vec<_>>();
+    let Some(program) = environment.bake_program.as_ref() else {
+        return BakeUpdate {
+            appearances: ids,
+            lighting: None,
+        };
+    };
+
+    let mut current = None;
+    let update = bake.update_with_progress(
+        &program.tree,
+        &program.module,
+        atoms,
+        &[],
+        report(progress, &mut current),
+    );
+
+    BakeUpdate {
+        appearances: update
+            .appearances
+            .into_iter()
+            .filter_map(PrefabInstanceId::from_raw)
+            .collect(),
+        lighting: update.lighting,
+    }
 }
 
 pub fn build(environment: &Environment, document: &MapDocument) -> Option<Bake> {

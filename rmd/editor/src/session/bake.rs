@@ -1,11 +1,12 @@
 use editor::{
+    bake::BakeUpdate,
     document::DocumentId,
     frame::{self, FrameRenderOptions, PrefabUpdate},
 };
 use render::FrameUpdate;
 
 use super::{Session, always_highlighted};
-use crate::baker::{self};
+use crate::baker::{self, Baked, Job};
 
 // updates the renderer may not have drawn yet, so a frame that missed some can still catch up
 pub(super) const MAX_PENDING_UPDATES: usize = 8;
@@ -43,7 +44,11 @@ impl Session {
     }
 
     pub(super) fn rebake(&mut self, id: DocumentId) {
-        self.caches.entry(id).or_default().bake = None;
+        // an extension in flight carries the old bake back, which this replaces
+        self.baker.invalidate(id);
+        let cache = self.caches.entry(id).or_default();
+        cache.bake = None;
+        cache.unbaked.clear();
         self.collect_bake_diagnostics();
         self.rebuild_instances(id);
 
@@ -71,6 +76,23 @@ impl Session {
                 return;
             }
 
+            let level_count = document.map.size.z;
+            let behind = self
+                .caches
+                .get_mut(&id)
+                .and_then(|cache| cache.bake.take_if(|bake| editor::bake::levels(bake) < level_count));
+            let job = match behind {
+                Some(bake) => Job::Extend {
+                    atoms: editor::bake::atoms_from_level(&environment, document, editor::bake::levels(&bake) + 1),
+                    bake: Box::new(bake),
+                    level_count,
+                },
+                None => Job::Build {
+                    atoms: editor::bake::atoms(&environment, document),
+                    size: editor::bake::size(document),
+                },
+            };
+
             self.baker.start(baker::Request {
                 document: id,
                 path: document
@@ -78,41 +100,143 @@ impl Session {
                     .as_ref()
                     .map(|path| path.display().to_string())
                     .unwrap_or_default(),
-                atoms: editor::bake::atoms(&environment, document),
-                size: editor::bake::size(document),
                 environment,
+                job,
             });
         }
     }
 
+    // a level the bake doesn't have yet bakes on its own, the rest of the map keeps its bake
+    pub(super) fn bake_new_levels(&mut self, id: DocumentId) {
+        if self.baker.extending(id) {
+            return;
+        }
+
+        // a full bake of the smaller map is on its way
+        if self.baker.baking(id) {
+            self.baker.invalidate(id);
+            return;
+        }
+
+        let Some(level_count) = self.state.document(id).map(|document| document.map.size.z) else {
+            return;
+        };
+
+        let is_behind = self
+            .caches
+            .get(&id)
+            .and_then(|cache| cache.bake.as_ref())
+            .is_some_and(|bake| editor::bake::levels(bake) < level_count);
+        if !is_behind {
+            return;
+        }
+
+        if !self.queued_bakes.contains(&id) {
+            self.queued_bakes.push(id);
+        }
+
+        self.start_next_bake();
+    }
+
     pub fn poll_bake(&mut self) {
-        if let Some((id, mut bake, outdated)) = self.baker.poll() {
+        if let Some((id, baked, outdated)) = self.baker.poll() {
             let open = self.state.document(id).is_some();
             if outdated && open {
                 self.rebake(id);
             } else if open {
-                if let Some(bake) = bake.as_mut() {
-                    report_bake_output(bake);
+                match baked {
+                    Baked::Build(bake) => self.land_bake(id, bake.map(|bake| *bake)),
+                    Baked::Extend(bake, update) => self.land_extension(id, *bake, update),
                 }
-
-                let cache = self.caches.entry(id).or_default();
-                cache.bake = bake;
-                cache.pending_rebake = editor::bake::UiRebake::default();
-                // a bake starts from the profile's own defaults, so it has to be told what the
-                // panel already asked for before it is first shown
-                if let Some(feedback) = self.ui_feedback.clone() {
-                    self.replay_ui(id, &feedback);
-                }
-
-                let cache = self.caches.entry(id).or_default();
-                cache.always_highlights = always_highlighted(cache.bake.as_ref());
-                self.collect_bake_diagnostics();
-                self.rebuild_instances(id);
-                self.flush_pending_rebake(id);
             }
         }
 
         self.start_next_bake();
+    }
+
+    fn land_extension(&mut self, id: DocumentId, mut bake: editor::bake::Bake, mut update: BakeUpdate) {
+        report_bake_output(&mut bake);
+        let levels = editor::bake::levels(&bake);
+        let cache = self.caches.entry(id).or_default();
+        let unbaked = std::mem::take(&mut cache.unbaked);
+        cache.bake = Some(bake);
+
+        if let (Some(environment), Some(document), Some(bake)) = (
+            self.state.environment.as_ref(),
+            self.state.document(id),
+            cache.bake.as_mut(),
+        ) {
+            // levels added since it left get their own extension
+            let (replayed, later) = unbaked.into_iter().partition::<Vec<_>, _>(|instance| {
+                document
+                    .prefab_instance(*instance)
+                    .is_none_or(|(_, location)| location.coord.z <= levels)
+            });
+            let edits = editor::bake::update(bake, environment, document, &replayed);
+            report_bake_output(bake);
+            update.appearances.extend(edits.appearances);
+            update.appearances.extend(later);
+            update.appearances.sort_unstable();
+            update.appearances.dedup();
+            update.lighting = match (update.lighting, edits.lighting) {
+                (Some(left), Some(right)) => Some(left.start.min(right.start)..left.end.max(right.end)),
+                (left, right) => left.or(right),
+            };
+        }
+
+        if let Some(feedback) = self.ui_feedback.clone() {
+            self.replay_ui(id, &feedback);
+        }
+
+        self.collect_bake_diagnostics();
+        self.apply_bake_update(id, update);
+        self.resize_lighting(id);
+        self.flush_pending_rebake(id);
+        self.bake_new_levels(id);
+    }
+
+    // a level with no light in it leaves the lightmap untouched, but it still grew
+    fn resize_lighting(&mut self, id: DocumentId) {
+        let Some(cache) = self.caches.get(&id) else {
+            return;
+        };
+
+        let is_stale = cache
+            .bake
+            .as_ref()
+            .and_then(|bake| bake.lighting.as_ref())
+            .is_some_and(|lighting| lighting.size != cache.instances.lighting_size);
+        if !is_stale {
+            return;
+        }
+
+        let revision = self.bump_revision();
+        let cache = self.caches.entry(id).or_default();
+        let lighting = cache.bake.as_ref().and_then(|bake| bake.lighting.as_ref());
+        cache.instances.update_lighting(lighting, None);
+        cache.lighting_revision = revision;
+        cache.lighting_updates.clear();
+    }
+
+    fn land_bake(&mut self, id: DocumentId, mut bake: Option<editor::bake::Bake>) {
+        if let Some(bake) = bake.as_mut() {
+            report_bake_output(bake);
+        }
+
+        let cache = self.caches.entry(id).or_default();
+        cache.bake = bake;
+        cache.pending_rebake = editor::bake::UiRebake::default();
+        // a bake starts from the profile's own defaults, so it has to be told what the
+        // panel already asked for before it is first shown
+        if let Some(feedback) = self.ui_feedback.clone() {
+            self.replay_ui(id, &feedback);
+        }
+
+        let cache = self.caches.entry(id).or_default();
+        cache.always_highlights = always_highlighted(cache.bake.as_ref());
+        self.collect_bake_diagnostics();
+        self.rebuild_instances(id);
+        self.flush_pending_rebake(id);
     }
 
     pub fn bake_view(&self) -> Option<crate::loader::LoadView> { self.baker.view() }
@@ -810,6 +934,62 @@ mod tests {
         );
         let corner = lighting.tile(vm::world::Position::new(1, 1, 2)).expect("floor tile");
         assert_eq!(corner.corners[0], [0.0; 3], "light rose past the openspace tile");
+    }
+
+    #[test]
+    #[ignore = "requires the local target/tgstation checkout"]
+    fn an_openspace_level_added_above_lava_lights_like_a_full_bake() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(String::from("tgstation")),
+            ..Default::default()
+        };
+        let load = || {
+            let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+                .expect("tgstation codebase");
+            let mut session = Session::new();
+            session.apply_codebase(loaded);
+            session
+        };
+        let mut session = load();
+
+        // lava with only lava around it stays dark until the level above opens up
+        let area = "/area/station/engineering/main";
+        let tile = |turf: &str| vec![Prefab::new(TreePath::parse(turf)), Prefab::new(TreePath::parse(area))];
+        let mut map = Map::new(Size { x: 3, y: 3, z: 1 });
+        let lava = map.intern_tile(tile("/turf/open/lava/plasma"));
+        map.grid[0] = vec![vec![lava; 3]; 3];
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+        let id = session.state.active().unwrap();
+
+        assert_eq!(session.create_level(id, &tile("/turf/open/openspace")), Ok(2));
+        assert!(session.baker.extending(id));
+        settle_bake(&mut session);
+        assert_render_cache_matches_rebuild(&session);
+
+        let mut whole = load();
+        whole.activate_document(MapDocument::new(session.map().unwrap().clone(), 1));
+        settle_bake(&mut whole);
+        let bake = session.active_cache().bake.as_ref().unwrap();
+        let expected = whole.active_cache().bake.as_ref().unwrap();
+        assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
+        let lighting = bake.lighting.as_ref().expect("lightmap");
+        assert!(
+            lighting == expected.lighting.as_ref().unwrap(),
+            "the lightmap diverged from a full bake"
+        );
+        assert!(
+            bake.appearances == expected.appearances,
+            "appearances diverged from a full bake"
+        );
+        let hole = lighting
+            .tile(vm::world::Position::new(2, 2, 2))
+            .expect("openspace tile");
+        assert!(
+            hole.corners.iter().all(|corner| corner.iter().sum::<f32>() > 0.0),
+            "{hole:?}"
+        );
     }
 
     #[test]

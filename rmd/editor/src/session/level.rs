@@ -1,7 +1,11 @@
 use core::path::TreePath;
 
 use dmm::{Coord, Prefab};
-use editor::{document::DocumentId, tool::default_tile_paths};
+use editor::{
+    bake::BakeUpdate,
+    document::{DocumentId, MapDocument},
+    tool::default_tile_paths,
+};
 use objtree::{ObjectTree, TypeId};
 
 use super::{LevelChange, Session};
@@ -124,15 +128,60 @@ impl Session {
             return Err(format!("maps cannot exceed {MAX_MAP_DIMENSION} Z levels"));
         }
 
-        let z = document
-            .append_level(fill)
+        if document.is_read_only() {
+            return Err(String::from("the map is read-only"));
+        }
+
+        if self.is_coop_level_requested(id) {
+            return Err(String::from("the last new level has not arrived yet"));
+        }
+
+        if self.request_coop_level(id, levels + 1, fill) {
+            return Ok(levels + 1);
+        }
+
+        let z = self
+            .append_document_level(id, fill, MapDocument::append_level)
             .ok_or_else(|| String::from("could not allocate another Z level"))?;
+        self.show_level(id, z);
+
+        Ok(z)
+    }
+
+    pub(super) fn show_level(&mut self, id: DocumentId, z: u32) {
+        let Some(document) = self.state.document_mut(id) else {
+            return;
+        };
+
         document.z = z;
         document.set_focus(None);
         self.set_active_document(id);
-        self.rebake(id);
+    }
 
-        Ok(z)
+    pub(super) fn append_document_level(
+        &mut self, id: DocumentId, fill: &[Prefab], append: fn(&mut MapDocument, &[Prefab]) -> Option<u32>,
+    ) -> Option<u32> {
+        let document = self.state.document_mut(id)?;
+        let z = append(document, fill)?;
+        let size = document.map.size;
+        let ids = (1..=size.y)
+            .flat_map(|y| (1..=size.x).map(move |x| Coord::new(x, y, z)))
+            .flat_map(|coord| document.instance_ids_at(coord).to_vec())
+            .collect::<Vec<_>>();
+
+        let cache = self.caches.entry(id).or_default();
+        cache.map_revision = cache.map_revision.wrapping_add(1);
+        self.bake_new_levels(id);
+        // drawn unbaked until the bake comes back, like a freshly opened map
+        self.apply_bake_update(
+            id,
+            BakeUpdate {
+                appearances: ids,
+                lighting: None,
+            },
+        );
+
+        Some(z)
     }
 }
 
@@ -228,7 +277,7 @@ mod tests {
     use crate::session::{
         LevelChange,
         Session,
-        fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session},
+        fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session, settle_bake},
     };
 
     #[test]
@@ -311,6 +360,90 @@ mod tests {
         assert_eq!(session.focused_area(), focus);
         assert_eq!(session.selection(), Some(selection));
         assert!(!session.can_edit_at(Coord::new(4, 1, 1)));
+    }
+
+    fn baked_session(root: &std::path::Path) -> Session {
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).expect("codebase");
+        session.open_map(&root.join("test.dmm"), 1).expect("map");
+        settle_bake(&mut session);
+
+        session
+    }
+
+    // by tile, a fresh bake numbers its instances anew
+    fn assert_bake_matches_the_whole_map(session: &Session) {
+        let mut whole = Session::new();
+        whole.load_environment(&examples().join("test.dme")).expect("codebase");
+        whole.activate_document(MapDocument::new(session.map().unwrap().clone(), 1));
+        settle_bake(&mut whole);
+
+        let baked = |session: &Session| {
+            let document = session.state.active_document().unwrap();
+            let bake = session.active_cache().bake.as_ref().expect("a bake");
+            let size = document.map.size;
+            let tiles = (1..=size.z)
+                .flat_map(|z| (1..=size.y).flat_map(move |y| (1..=size.x).map(move |x| Coord::new(x, y, z))))
+                .map(|coord| {
+                    document
+                        .instance_ids_at(coord)
+                        .iter()
+                        .map(|id| (bake.position(id.get()), bake.appearances.get(&id.get()).cloned()))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+
+            (tiles, bake.lighting.clone(), bake.runtime.world.size)
+        };
+        assert!(
+            baked(session) == baked(&whole),
+            "the bake diverged from baking the whole map"
+        );
+    }
+
+    #[test]
+    fn a_new_level_bakes_in_the_background_like_the_whole_map_would() {
+        let mut session = baked_session(&examples());
+        let id = session.state.active().unwrap();
+        let levels = session.level_count();
+        session.set_level(levels);
+        let fill = session.default_fill().unwrap();
+
+        assert_eq!(session.create_level(id, &fill), Ok(levels + 1));
+
+        assert!(session.baker.extending(id));
+        assert_eq!(session.bake_view().map(|view| view.title), Some("Baking new level"));
+        settle_bake(&mut session);
+        assert!(session.bake_view().is_none());
+        assert_render_cache_matches_rebuild(&session);
+        assert_bake_matches_the_whole_map(&session);
+    }
+
+    #[test]
+    fn edits_made_while_a_new_level_bakes_are_baked_when_it_lands() {
+        let mut session = baked_session(&examples());
+        let id = session.state.active().unwrap();
+        let levels = session.level_count();
+        session.set_level(levels);
+        let fill = session.default_fill().unwrap();
+        assert_eq!(session.create_level(id, &fill), Ok(levels + 1));
+        assert!(session.baker.extending(id));
+
+        session
+            .state
+            .choose_prefab(Prefab::new(TreePath::parse("/obj/structure/table")));
+        session.set_tool(Tool::Place);
+        assert!(session.place_at(Coord::new(2, 2, levels + 1), None).is_some());
+        session.set_level(levels);
+        assert!(session.place_at(Coord::new(2, 2, levels), None).is_some());
+
+        assert!(
+            !session.baker.invalidated(id),
+            "an edit sent the map back for a full bake"
+        );
+        settle_bake(&mut session);
+        assert_render_cache_matches_rebuild(&session);
+        assert_bake_matches_the_whole_map(&session);
     }
 
     #[test]

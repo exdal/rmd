@@ -193,6 +193,7 @@ fn settled(sessions: &[&mut Session]) -> bool {
                     && shared_map.pending_document.is_none()
                     && shared_map.in_flight.is_empty()
                     && shared_map.inbox.is_empty()
+                    && shared_map.level_request.is_none()
             })
         })
     })

@@ -73,6 +73,8 @@ struct DocumentCache {
     lighting_updates: Vec<render::LightingUpdate>,
     preview: Option<BlockPreviewCache>,
     bake: Option<editor::bake::Bake>,
+    // edited while the bake was off growing by a level, replayed when it comes back
+    unbaked: Vec<PrefabInstanceId>,
     always_highlights: Vec<PrefabInstanceId>,
     /// What a replayed panel frame asked this document to re-derive, held until it is active.
     pending_rebake: editor::bake::UiRebake,
