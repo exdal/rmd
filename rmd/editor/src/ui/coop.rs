@@ -591,7 +591,7 @@ pub(super) fn draw_coop_peers(ui: &Ui, coop: &Coop, following: Option<PeerId>) -
     clicked
 }
 
-pub(super) fn draw_activity(ui: &Ui, coop: &Coop) {
+pub(super) fn draw_activity(ui: &Ui, coop: &Coop) -> bool {
     let recent = coop
         .activity
         .iter()
@@ -599,7 +599,7 @@ pub(super) fn draw_activity(ui: &Ui, coop: &Coop) {
         .filter(|(age, _)| *age < NOTICE_SECONDS)
         .collect::<Vec<_>>();
     let Some((newest, _)) = recent.last() else {
-        return;
+        return false;
     };
 
     let viewport = ui.main_viewport();
@@ -657,6 +657,8 @@ pub(super) fn draw_activity(ui: &Ui, coop: &Coop) {
             }
         }
     });
+
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -802,15 +804,20 @@ pub(super) fn draw_remote_selections(
     });
 }
 
-pub(super) fn draw_remote_cursors(ui: &Ui, camera: &Controller, viewport: OverlayRect, coop: &Coop, map: &str, z: u32) {
+pub(super) fn draw_remote_cursors(
+    ui: &Ui, camera: &Controller, viewport: OverlayRect, coop: &Coop, map: &str, z: u32,
+) -> bool {
     let scale = dpi(ui);
     let viewport_min = viewport.min;
     let draw = ui.get_window_draw_list();
+    let mut is_easing = false;
     draw.with_clip_rect(viewport.min, viewport.max, || {
         for peer in coop.peers.values() {
             let Some(cursor) = peer.cursor().filter(|cursor| cursor.map == map && cursor.z == z) else {
                 continue;
             };
+
+            is_easing |= peer.is_cursor_easing();
 
             let local = camera.map_to_screen(peer.shown);
             if !local.iter().all(|value| value.is_finite()) {
@@ -833,6 +840,8 @@ pub(super) fn draw_remote_cursors(ui: &Ui, camera: &Controller, viewport: Overla
             draw.add_text([min[0] + 3.0, min[1] + 2.0], color, &label);
         }
     });
+
+    is_easing
 }
 
 pub(super) fn draw_comment_composer(ui: &Ui, session: &Session, draft: &mut Option<CommentDraft>) {

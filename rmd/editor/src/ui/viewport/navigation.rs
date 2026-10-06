@@ -6,6 +6,7 @@ use editor::document::DocumentId;
 
 use super::{MapViewState, ViewFrame, stroke::ActivePlacementFlash};
 use crate::{
+    pacing::FrameDemand,
     session::Session,
     settings::{KeybindAction, Settings},
     ui::{UiState, common::dpi, find::JumpTarget},
@@ -48,6 +49,7 @@ impl UiState {
             });
         if pan != [0.0; 2] {
             camera.pan_by(pan);
+            self.raise_demand(FrameDemand::Full);
         }
 
         let center = frame.layout.center();

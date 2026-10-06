@@ -156,4 +156,8 @@ impl Session {
             coop: None,
         }
     }
+
+    pub fn has_background_work(&self) -> bool {
+        self.baker.is_busy() || self.git_worker.is_busy() || self.coop.is_some()
+    }
 }

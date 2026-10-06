@@ -78,6 +78,7 @@ pub struct GitWorker {
     generations: HashMap<(DocumentId, u8), u64>,
     cancels: HashMap<DocumentId, Arc<AtomicBool>>,
     progress: HashMap<DocumentId, Arc<AtomicUsize>>,
+    in_flight: usize,
 }
 
 impl Default for GitWorker {
@@ -89,6 +90,7 @@ impl Default for GitWorker {
             generations: HashMap::new(),
             cancels: HashMap::new(),
             progress: HashMap::new(),
+            in_flight: 0,
         }
     }
 }
@@ -97,8 +99,11 @@ impl GitWorker {
     fn next(&mut self, document: DocumentId, kind: u8) -> (u64, Sender<Finished>) {
         let generation = self.generations.entry((document, kind)).or_default();
         *generation = generation.wrapping_add(1);
+        self.in_flight += 1;
         (*generation, self.sender.clone())
     }
+
+    pub fn is_busy(&self) -> bool { self.in_flight > 0 }
 
     pub fn status(&mut self, document: DocumentId, path: RepoPath) {
         let (generation, sender) = self.next(document, 0);
@@ -217,6 +222,7 @@ impl GitWorker {
     pub fn poll(&mut self) -> Vec<Finished> {
         let mut finished = Vec::new();
         while let Ok(result) = self.receiver.try_recv() {
+            self.in_flight = self.in_flight.saturating_sub(1);
             if self.generations.get(&(result.document, result.kind)) == Some(&result.generation) {
                 if result.kind == 1 {
                     self.progress.remove(&result.document);

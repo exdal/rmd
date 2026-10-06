@@ -1,5 +1,6 @@
 use core::path::TreePath;
 use std::{
+    cell::Cell,
     collections::{HashMap, VecDeque},
     mem,
     path::{Path, PathBuf},
@@ -31,6 +32,7 @@ use crate::{
     external_editor::SourceLocation,
     gizmo::GizmoState,
     loader::LoadView,
+    pacing::FrameDemand,
     session::{LoadReport, Session, TypeLayer},
     settings::{KeybindAction, KeybindPreset, OpenPanels, Panel, Settings},
     theme::Themes,
@@ -197,6 +199,7 @@ pub struct UiOutput {
     pub reload_profile: Option<ProfileReload>,
     pub load_conflicts: Option<DocumentId>,
     pub(crate) keybind_preset: Option<KeybindPreset>,
+    pub demand: FrameDemand,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -306,6 +309,7 @@ pub struct UiState {
     keybind_preset_prompt: bool,
     copy_to_clipboard: Option<String>,
     update_check: UpdateCheck,
+    demand: Cell<FrameDemand>,
 }
 
 #[cfg(test)]
@@ -381,7 +385,16 @@ impl UiState {
             keybind_preset_prompt,
             copy_to_clipboard: None,
             update_check: UpdateCheck::default(),
+            demand: Cell::new(FrameDemand::Idle),
         })
+    }
+
+    pub fn is_checking_for_updates(&self) -> bool { self.update_check.is_checking() }
+
+    fn raise_demand(&self, demand: FrameDemand) {
+        let mut raised = self.demand.get();
+        raised.raise(demand);
+        self.demand.set(raised);
     }
 
     pub fn set_open_error(&mut self, error: Option<String>) { self.open_error = error; }
@@ -449,6 +462,10 @@ impl UiState {
         load: Option<&LoadView>,
     ) -> Result<UiOutput, DockspaceError> {
         let loading = load.is_some() || self.load_notice.is_some();
+        self.demand.set(FrameDemand::Idle);
+        if load.is_some() {
+            self.raise_demand(FrameDemand::Full);
+        }
 
         if settings.check_for_updates {
             self.update_check.start();
@@ -510,8 +527,10 @@ impl UiState {
 
         self.draw_map_dialogs(ui, session, &menu);
         let coop_open = self.draw_coop_dialogs(ui, session, settings, loading, menu.coop_dialog);
-        if let Some(coop) = session.coop() {
-            coop::draw_activity(ui, coop);
+        if let Some(coop) = session.coop()
+            && coop::draw_activity(ui, coop)
+        {
+            self.raise_demand(FrameDemand::Full);
         }
 
         self.settings_window
@@ -533,6 +552,7 @@ impl UiState {
             reload_profile,
             load_conflicts,
             keybind_preset: None,
+            demand: self.demand.get(),
         })
     }
 

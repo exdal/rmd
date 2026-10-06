@@ -3583,6 +3583,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn marching_stripes_animate_the_frame_unless_the_highlight_is_tinted() {
+        let rect = MapViewRect {
+            x: 0,
+            y: 0,
+            width: 640,
+            height: 480,
+        };
+        assert!(!map_view(rect).is_animated());
+
+        let mut hovered = map_view(rect);
+        hovered.interaction.cursor = Some([10, 10]);
+        assert!(hovered.is_animated());
+
+        let mut outside = map_view(rect);
+        outside.interaction.cursor = Some([640, 10]);
+        assert!(!outside.is_animated());
+
+        let mut selected = map_view(rect);
+        selected.interaction.selected = Some(owner());
+        assert!(selected.is_animated());
+
+        selected.interaction.highlight = HighlightStyle::Tint;
+        assert!(!selected.is_animated());
+
+        let guides = [GuideLine {
+            origin: [0.0; 2],
+            target: [32.0, 0.0],
+        }];
+        let guided = MapViewFrame {
+            guide_lines: &guides,
+            interaction: selected.interaction,
+            ..map_view(rect)
+        };
+        assert!(guided.is_animated(), "guide lines march in either highlight style");
+    }
+
     fn graph_state(target: vk::Extent2D, with_imgui: bool, map_views: &[MapViewFrame<'_>]) -> FrameGraphState {
         FrameGraphState::new(
             target,

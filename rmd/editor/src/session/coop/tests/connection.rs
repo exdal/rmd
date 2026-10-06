@@ -124,13 +124,16 @@ fn remote_cursors_glide_but_jump_across_maps_and_levels() {
 
     peer.set_cursor(Some(cursor("a.dmm", 1, 100.0)));
     assert_eq!(peer.shown, [100.0, 0.0]);
+    assert!(!peer.is_cursor_easing());
 
     peer.set_cursor(Some(cursor("a.dmm", 1, 200.0)));
     peer.follow(0.02);
     assert!(peer.shown[0] > 100.0 && peer.shown[0] < 200.0);
+    assert!(peer.is_cursor_easing());
 
     peer.follow(1.0);
     assert!((peer.shown[0] - 200.0).abs() < 0.01);
+    assert!(!peer.is_cursor_easing());
 
     peer.set_cursor(Some(cursor("a.dmm", 2, 900.0)));
     assert_eq!(peer.shown, [900.0, 0.0]);

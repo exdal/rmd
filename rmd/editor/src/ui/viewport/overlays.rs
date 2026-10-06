@@ -4,6 +4,7 @@ use editor::tool::Tool;
 
 use super::{ViewFrame, stroke::active_placement_flash};
 use crate::{
+    pacing::FrameDemand,
     session::{GuideBadge, Session},
     settings::Settings,
     ui::{
@@ -92,6 +93,9 @@ impl UiState {
             let highlights = session.highlights(frame.id, previous_hover);
             let highlights = highlights.iter().collect::<Vec<_>>();
             draw_highlights(ui, frame.camera, viewport, &highlights, session.options.tile_size);
+            if !highlights.is_empty() {
+                self.raise_demand(FrameDemand::Throttled);
+            }
         }
 
         draw_guide_badges(ui, frame.camera, viewport.min, viewport.max, guide_badges);
@@ -105,19 +109,23 @@ impl UiState {
             .flatten();
         let active_flash = active_placement_flash(&mut self.placement_flash, ui.time(), settings.tile_place_flash);
         frame.interaction.placement_flash = active_flash.map(|(_, flash)| flash);
+        if active_flash.is_some() {
+            self.raise_demand(FrameDemand::Full);
+        }
 
         if let Some(coord) = preview_coord
             && session.can_edit_at(coord)
             && active_flash.is_none_or(|(flash_coord, _)| flash_coord != coord)
-        {
-            draw_placement_preview(
+            && draw_placement_preview(
                 ui,
                 session,
                 frame.camera,
                 coord,
                 frame.layout.viewport.min,
                 frame.layout.viewport.max,
-            );
+            )
+        {
+            self.raise_demand(FrameDemand::Throttled);
         }
     }
 

@@ -4,6 +4,7 @@ use editor::document::DocumentId;
 use super::{ViewFrame, selection::shows_block_selection};
 use crate::{
     camera::clamp_zoom,
+    pacing::FrameDemand,
     session::Session,
     ui::{
         UiState,
@@ -22,6 +23,9 @@ use crate::{
 };
 
 const FOLLOW_SMOOTHING: f32 = 20.0;
+// close enough to the followed camera to stop drawing at full rate
+const FOLLOW_SETTLED_PIXELS: f32 = 0.5;
+const FOLLOW_SETTLED_ZOOM: f32 = 0.001;
 
 #[derive(Default)]
 pub(in crate::ui) struct CoopPresence {
@@ -146,7 +150,9 @@ impl UiState {
             let viewport = frame.layout.viewport;
             draw_remote_selections(ui, frame.camera, viewport, coop, &map, z, session.options.tile_size);
             draw_comments(ui, frame.camera, viewport, coop, &map, z, comment_hit);
-            draw_remote_cursors(ui, frame.camera, viewport, coop, &map, z);
+            if draw_remote_cursors(ui, frame.camera, viewport, coop, &map, z) {
+                self.raise_demand(FrameDemand::Full);
+            }
         }
 
         if self
@@ -195,12 +201,19 @@ impl UiState {
 
         view.refit = false;
 
+        let is_settled = (target.center[0] - camera.x).abs() < FOLLOW_SETTLED_PIXELS
+            && (target.center[1] - camera.y).abs() < FOLLOW_SETTLED_PIXELS
+            && (zoom.ln() - camera.zoom.ln()).abs() < FOLLOW_SETTLED_ZOOM;
         let camera = [camera.x, camera.y, camera.zoom];
         self.followed_view = session.state.document(document).map(|followed| FollowedView {
             document,
             camera,
             z: followed.z,
         });
+
+        if !is_settled {
+            self.raise_demand(FrameDemand::Full);
+        }
     }
 
     pub(in crate::ui) fn stop_following_when_moved(&mut self, session: &mut Session) {

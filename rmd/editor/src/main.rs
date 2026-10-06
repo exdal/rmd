@@ -18,6 +18,7 @@ mod git_worker;
 mod gizmo;
 mod loader;
 mod logging;
+mod pacing;
 mod session;
 mod settings;
 mod theme;
@@ -32,6 +33,7 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
     sync::Arc,
+    time::Instant,
 };
 
 use dear_imgui_rs::{BackendFlags, ClipboardBackend, ConfigFlags, Context, Style, render::SynchronousRendererConsumer};
@@ -45,7 +47,7 @@ use render::{CapturedImage, Device, PickRequest, PickResult, Renderer};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    event::{Event, WindowEvent},
+    event::{Event, StartCause, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
 };
@@ -54,6 +56,7 @@ use crate::{
     external_editor::SourceLocation,
     fonts::UiFont,
     loader::{Job, Loader, Outcome},
+    pacing::{FrameDemand, FramePacer, NextFrame, Status},
     session::{LoadReport, Session},
     settings::{Settings, backup_dir, imgui_ini_path, profiles_dir, themes_dir},
     theme::Themes,
@@ -151,7 +154,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         },
     };
-    event_loop.set_control_flow(ControlFlow::Poll);
+    event_loop.set_control_flow(ControlFlow::Wait);
 
     let title = window_title(&session);
     let mut app = App {
@@ -178,6 +181,8 @@ fn main() -> ExitCode {
         themes: None,
         ui_font: None,
         window: None,
+        pacer: FramePacer::default(),
+        is_occluded: false,
     };
 
     let result = event_loop.run_app(&mut app);
@@ -338,6 +343,7 @@ fn write_png(path: &Path, image: &CapturedImage) -> Result<(), png::EncodingErro
     writer.finish()
 }
 
+#[derive(Default)]
 struct Redraw {
     exit: bool,
     open: Option<OpenRequest>,
@@ -348,6 +354,7 @@ struct Redraw {
     copy_to_clipboard: Option<String>,
     reload_profile: Option<ProfileReload>,
     load_conflicts: Option<DocumentId>,
+    demand: FrameDemand,
 }
 
 enum Opened {
@@ -384,6 +391,8 @@ struct App {
     themes: Option<Themes>,
     ui_font: Option<UiFont>,
     window: Option<Arc<Window>>,
+    pacer: FramePacer,
+    is_occluded: bool,
 }
 
 impl App {
@@ -416,6 +425,7 @@ impl App {
         imgui.set_renderer_name(Some("rmd vir"))?;
         let config = imgui.io().config_flags() | ConfigFlags::DOCKING_ENABLE;
         imgui.io_mut().set_config_flags(config);
+        imgui.io_mut().set_config_input_text_cursor_blink(false);
 
         let mut platform = WinitPlatform::new(&mut imgui)?;
         platform.attach_window(Arc::clone(&window), HiDpiMode::Default, &mut imgui)?;
@@ -491,17 +501,7 @@ impl App {
             ui_font.as_mut(),
             window.as_ref(),
         ) else {
-            return Ok(Redraw {
-                exit: false,
-                open: None,
-                open_source: None,
-                pick_new_map_path: false,
-                screenshot: None,
-                cancel_load: false,
-                copy_to_clipboard: None,
-                reload_profile: None,
-                load_conflicts: None,
-            });
+            return Ok(Redraw::default());
         };
 
         let current = window_title(session);
@@ -561,6 +561,11 @@ impl App {
             drawn.push(view.document);
             map_views.push(frame);
         }
+        let mut demand = output.demand;
+        if map_views.iter().any(|view| view.is_animated()) {
+            demand.raise(FrameDemand::Throttled);
+        }
+
         let scene = session.frame(&map_views, picking);
         let pending = frame.try_render(consumer)?;
         window.pre_present_notify();
@@ -635,6 +640,7 @@ impl App {
             copy_to_clipboard: output.copy_to_clipboard,
             reload_profile: output.reload_profile,
             load_conflicts: output.load_conflicts,
+            demand,
         })
     }
 
@@ -974,6 +980,46 @@ impl App {
             self.settings.maximized = window.is_maximized();
         }
     }
+
+    fn is_busy(&self) -> bool {
+        self.loader.is_busy() || self.session.has_background_work() || self.ui.is_checking_for_updates()
+    }
+
+    fn schedule_frame(&self, event_loop: &ActiveEventLoop, frame_start: Instant, demand: FrameDemand, status: Status) {
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+
+        match self.pacer.next(Instant::now(), frame_start, demand, status) {
+            NextFrame::Now => {
+                event_loop.set_control_flow(ControlFlow::Wait);
+                window.request_redraw();
+            },
+            NextFrame::At(at) => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
+            NextFrame::OnEvent => event_loop.set_control_flow(ControlFlow::Wait),
+        }
+    }
+}
+
+fn is_input(event: &WindowEvent) -> bool {
+    matches!(
+        event,
+        WindowEvent::CursorMoved { .. }
+            | WindowEvent::CursorEntered { .. }
+            | WindowEvent::CursorLeft { .. }
+            | WindowEvent::MouseInput { .. }
+            | WindowEvent::MouseWheel { .. }
+            | WindowEvent::KeyboardInput { .. }
+            | WindowEvent::ModifiersChanged(_)
+            | WindowEvent::Ime(_)
+            | WindowEvent::Focused(_)
+            | WindowEvent::Resized(_)
+            | WindowEvent::ScaleFactorChanged { .. }
+            | WindowEvent::DroppedFile(_)
+            | WindowEvent::HoveredFile(_)
+            | WindowEvent::HoveredFileCancelled
+            | WindowEvent::Occluded(false)
+    )
 }
 
 impl ApplicationHandler for App {
@@ -994,7 +1040,22 @@ impl ApplicationHandler for App {
         }
     }
 
+    fn new_events(&mut self, _: &ActiveEventLoop, cause: StartCause) {
+        if let StartCause::ResumeTimeReached { .. } = cause
+            && let Some(window) = self.window.as_ref()
+        {
+            window.request_redraw();
+        }
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if is_input(&event) {
+            self.pacer.input(Instant::now());
+            if let Some(window) = self.window.as_ref() {
+                window.request_redraw();
+            }
+        }
+
         let is_main_window = self.window.as_ref().is_some_and(|window| window.id() == id);
         if !is_main_window {
             if let (Some(platform), Some(imgui), Some(window)) =
@@ -1032,29 +1093,36 @@ impl ApplicationHandler for App {
                 self.session.refresh_git();
             },
 
+            WindowEvent::Occluded(is_occluded) => {
+                self.is_occluded = is_occluded;
+            },
+
             WindowEvent::RedrawRequested => {
-                let redraw = match self.redraw(event_loop) {
-                    Ok(redraw) => redraw,
-                    Err(e) => {
-                        log::error!("{e}");
+                let frame_start = Instant::now();
+                let was_busy = self.is_busy();
+                let is_hidden = self.is_occluded
+                    || self
+                        .window
+                        .as_ref()
+                        .is_some_and(|window| window.is_minimized() == Some(true));
+                let redraw = if is_hidden {
+                    Redraw::default()
+                } else {
+                    let redraw = match self.redraw(event_loop) {
+                        Ok(redraw) => redraw,
+                        Err(e) => {
+                            log::error!("{e}");
 
-                        Redraw {
-                            exit: false,
-                            open: None,
-                            open_source: None,
-                            pick_new_map_path: false,
-                            screenshot: None,
-                            cancel_load: false,
-                            copy_to_clipboard: None,
-                            reload_profile: None,
-                            load_conflicts: None,
-                        }
-                    },
+                            Redraw::default()
+                        },
+                    };
+
+                    if let (Some(platform), Some(imgui)) = (self.platform.as_ref(), self.imgui.as_mut()) {
+                        viewports::finish_frame(platform, imgui, event_loop);
+                    }
+
+                    redraw
                 };
-
-                if let (Some(platform), Some(imgui)) = (self.platform.as_ref(), self.imgui.as_mut()) {
-                    viewports::finish_frame(platform, imgui, event_loop);
-                }
 
                 if let (Some(text), Some(imgui)) = (redraw.copy_to_clipboard, self.imgui.as_ref()) {
                     imgui.set_clipboard_text(text);
@@ -1094,8 +1162,13 @@ impl ApplicationHandler for App {
                         log::error!("{e}");
                     }
                     event_loop.exit();
-                } else if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
+                } else {
+                    // a job that finished during this frame still needs one more frame to show
+                    let status = Status {
+                        is_busy: was_busy || self.is_busy(),
+                        is_hidden,
+                    };
+                    self.schedule_frame(event_loop, frame_start, redraw.demand, status);
                 }
             },
 

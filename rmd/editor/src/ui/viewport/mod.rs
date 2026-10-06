@@ -45,6 +45,7 @@ use super::{
 use crate::{
     camera::Controller,
     gizmo::GizmoMapView,
+    pacing::FrameDemand,
     session::{GuideBadge, Session},
     settings::{KeybindAction, Settings},
 };
@@ -416,6 +417,10 @@ impl UiState {
             self.activate_on_focus(ui, session, settings, id, gestures);
 
             let is_receiving = draw_coop_status(ui, session, id, &name, is_out_of_date);
+            if is_receiving || session.coop_transfer(id).is_some() {
+                self.raise_demand(FrameDemand::Full);
+            }
+
             if is_receiving {
                 return;
             }

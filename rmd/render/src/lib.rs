@@ -204,6 +204,19 @@ pub struct MapViewFrame<'a> {
     pub preview: Option<SpritePreview<'a>>,
 }
 
+impl MapViewFrame<'_> {
+    pub fn is_animated(&self) -> bool {
+        let is_cursor_inside = self
+            .interaction
+            .cursor
+            .is_some_and(|cursor| cursor[0] < self.rect.width && cursor[1] < self.rect.height);
+        let is_outlined =
+            !self.interaction.highlight.is_tint() && (self.interaction.selected.is_some() || is_cursor_inside);
+
+        is_outlined || !self.guide_lines.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LightTile {
     pub corners: [[f32; 3]; 4],

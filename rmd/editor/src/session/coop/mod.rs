@@ -40,6 +40,8 @@ mod tests;
 
 // how fast a remote cursor closes the gap to its latest position, per second
 const CURSOR_SMOOTHING: f32 = 20.0;
+// map pixels, close enough to the received position to stop drawing at full rate
+const CURSOR_SETTLED: f32 = 0.1;
 
 const MAX_ACTIVITY: usize = 8;
 
@@ -101,6 +103,16 @@ impl RemotePeer {
     pub fn view(&self) -> Option<&View> { self.view.as_ref().map(|view| &view.value) }
 
     pub fn selection(&self) -> Option<&Selection> { self.selection.as_ref().map(|selection| &selection.value) }
+
+    pub fn is_cursor_easing(&self) -> bool {
+        self.cursor().is_some_and(|cursor| {
+            cursor
+                .pos
+                .iter()
+                .zip(self.shown)
+                .any(|(target, shown)| (target - shown).abs() > CURSOR_SETTLED)
+        })
+    }
 
     fn set_cursor(&mut self, cursor: Option<Cursor>) {
         if let Some(next) = cursor.as_ref()

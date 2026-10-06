@@ -283,9 +283,9 @@ impl OverlayRect {
 
 pub(super) fn draw_placement_preview(
     ui: &Ui, session: &mut Session, camera: &Controller, coord: Coord, viewport_min: [f32; 2], viewport_max: [f32; 2],
-) {
+) -> bool {
     let Some(preview) = session.placement_preview() else {
-        return;
+        return false;
     };
     let bounds = placement_preview_bounds(camera, viewport_min, coord, session.options.tile_size, preview);
     let mut tint = preview.thumbnail.tint;
@@ -302,6 +302,8 @@ pub(super) fn draw_placement_preview(
             tint,
         );
     });
+
+    true
 }
 
 fn placement_preview_bounds(

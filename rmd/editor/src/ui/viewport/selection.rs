@@ -9,6 +9,7 @@ use editor::{
 use super::ViewFrame;
 use crate::{
     gizmo::{BlockGizmoKind, BlockGizmoTarget, GizmoMapView},
+    pacing::FrameDemand,
     session::{BlockPreviewSource, Session},
     settings::Settings,
     ui::{
@@ -330,6 +331,10 @@ impl UiState {
             }),
             _ => None,
         };
+
+        if block_overlay.is_some() {
+            self.raise_demand(FrameDemand::Throttled);
+        }
 
         if let Some((displayed, rotation)) = block_overlay
             && tool == Tool::BlockSelect
