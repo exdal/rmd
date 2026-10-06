@@ -90,12 +90,10 @@ impl Session {
             return;
         };
 
-        let Some(document) = self.state.document_mut(id) else {
+        if !self.apply_remote_tiles(id, applied.into_iter().collect()) {
             return;
-        };
+        }
 
-        let affected = document.apply_remote(applied.into_iter().collect());
-        self.update_document_instances(id, &affected);
         if let Some(cache) = self.caches.get_mut(&id) {
             cache.map_revision = cache.map_revision.wrapping_add(1);
         }

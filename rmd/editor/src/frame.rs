@@ -123,21 +123,24 @@ impl FrameInstances {
         freed("everything else");
     }
 
-    pub fn reorder_placements(&mut self, ids: &[PrefabInstanceId]) {
+    pub fn reorder_placements(&mut self, ids: &[PrefabInstanceId]) -> bool {
         let mut orders = ids
             .iter()
             .filter_map(|id| self.placement_orders.get(id).copied())
             .collect::<Vec<_>>();
 
         if orders.len() != ids.len() {
-            return;
+            return false;
         }
 
         orders.sort_unstable();
 
+        let mut is_changed = false;
         for (id, order) in ids.iter().zip(orders) {
-            self.placement_orders.insert(*id, order);
+            is_changed |= self.placement_orders.insert(*id, order) != Some(order);
         }
+
+        is_changed
     }
 
     pub fn sprite(&self, owner: PrefabInstanceId) -> Option<&SpriteInstance> {

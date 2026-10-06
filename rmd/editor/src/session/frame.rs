@@ -1,4 +1,4 @@
-use dmm::{Coord, Size};
+use dmm::{Coord, Prefab, Size};
 use editor::{
     document::{DocumentId, PrefabInstanceId, Selection},
     focus::AreaFocus,
@@ -266,23 +266,8 @@ impl Session {
             return;
         };
 
-        let ordered = {
-            let Some(document) = self.state.document(id) else {
-                return;
-            };
-            let Some(tree) = self.tree() else {
-                return;
-            };
-            document
-                .instance_ids_at(coord)
-                .iter()
-                .copied()
-                .filter(|owner| {
-                    document
-                        .prefab_instance(*owner)
-                        .is_some_and(|(prefab, _)| context_placement_group(tree, &prefab.path) == Some(0))
-                })
-                .collect::<Vec<_>>()
+        let Some(ordered) = self.placement_group_at(id, coord) else {
+            return;
         };
 
         if let Some(cache) = self.caches.get_mut(&id) {
@@ -296,6 +281,63 @@ impl Session {
                 lighting: None,
             },
         );
+    }
+
+    pub(super) fn apply_remote_tiles(&mut self, id: DocumentId, tiles: Vec<(Coord, Vec<Prefab>)>) -> bool {
+        let Some(document) = self.state.document_mut(id) else {
+            return false;
+        };
+
+        let coords = tiles.iter().map(|(coord, _)| *coord).collect::<Vec<_>>();
+        let affected = document.apply_remote(tiles);
+        self.update_document_instances(id, &affected);
+        self.refresh_remote_order(id, &coords);
+
+        true
+    }
+
+    // remote edits keep unchanged ids, so their placement orders still follow the old tile
+    fn refresh_remote_order(&mut self, id: DocumentId, coords: &[Coord]) {
+        let mut reordered = Vec::new();
+        for coord in coords {
+            let Some(ordered) = self.placement_group_at(id, *coord) else {
+                continue;
+            };
+
+            if let Some(cache) = self.caches.get_mut(&id)
+                && cache.instances.reorder_placements(&ordered)
+            {
+                reordered.extend(ordered);
+            }
+        }
+
+        if !reordered.is_empty() {
+            self.apply_bake_update(
+                id,
+                editor::bake::BakeUpdate {
+                    appearances: reordered,
+                    lighting: None,
+                },
+            );
+        }
+    }
+
+    fn placement_group_at(&self, id: DocumentId, coord: Coord) -> Option<Vec<PrefabInstanceId>> {
+        let document = self.state.document(id)?;
+        let tree = self.tree()?;
+
+        Some(
+            document
+                .instance_ids_at(coord)
+                .iter()
+                .copied()
+                .filter(|owner| {
+                    document
+                        .prefab_instance(*owner)
+                        .is_some_and(|(prefab, _)| context_placement_group(tree, &prefab.path) == Some(0))
+                })
+                .collect(),
+        )
     }
 
     pub(super) fn update_instance(&mut self, selected: PrefabInstanceId) { self.update_instances(&[selected]); }
@@ -413,6 +455,73 @@ mod tests {
         session.update_document_instances(id, &affected);
 
         assert_eq!(affected.len(), 4, "the moved table and the repainted area, old and new");
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    fn named_table(name: &str) -> Prefab {
+        let mut table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        table.set_var("name".into(), Value::Text(name.into()));
+
+        table
+    }
+
+    fn tables_session(names: &[&str]) -> Session {
+        let mut session = flat_session(1, 1);
+        session.set_tool(Tool::Place);
+        for name in names {
+            session.state.choose_prefab(named_table(name));
+            session.place_at(Coord::new(1, 1, 1), None).unwrap();
+        }
+
+        session
+    }
+
+    fn drawn_tables(session: &Session) -> Vec<String> {
+        let document = session.state.active_document().unwrap();
+        session
+            .instances()
+            .unwrap()
+            .sprites
+            .iter()
+            .filter_map(|sprite| document.prefab_instance(sprite.owner))
+            .filter(|(prefab, _)| prefab.path == TreePath::parse("/obj/structure/table"))
+            .map(|(prefab, _)| match prefab.var(&"name".into()) {
+                Some(Value::Text(name)) => name.clone(),
+                _ => String::new(),
+            })
+            .collect()
+    }
+
+    fn apply_remote_tile(session: &mut Session, tile: Vec<Prefab>) {
+        let id = session.state.active().unwrap();
+        assert!(session.apply_remote_tiles(id, vec![(Coord::new(1, 1, 1), tile)]));
+    }
+
+    #[test]
+    fn a_remote_reorder_changes_equal_layer_draw_order() {
+        let mut session = tables_session(&["a", "b"]);
+        assert_eq!(drawn_tables(&session), ["a", "b"]);
+        let mut tile = session.map().unwrap().tile_at(Coord::new(1, 1, 1)).unwrap().clone();
+        let a = tile.iter().position(|prefab| *prefab == named_table("a")).unwrap();
+        let b = tile.iter().position(|prefab| *prefab == named_table("b")).unwrap();
+        tile.swap(a, b);
+
+        apply_remote_tile(&mut session, tile);
+
+        assert_eq!(drawn_tables(&session), ["b", "a"]);
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    fn a_remote_insert_between_equal_layers_draws_between_them() {
+        let mut session = tables_session(&["a", "b"]);
+        let mut tile = session.map().unwrap().tile_at(Coord::new(1, 1, 1)).unwrap().clone();
+        let b = tile.iter().position(|prefab| *prefab == named_table("b")).unwrap();
+        tile.insert(b, named_table("c"));
+
+        apply_remote_tile(&mut session, tile);
+
+        assert_eq!(drawn_tables(&session), ["a", "c", "b"]);
         assert_render_cache_matches_rebuild(&session);
     }
 
