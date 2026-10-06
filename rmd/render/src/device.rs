@@ -316,11 +316,7 @@ fn create_device(instance: &ash::Instance, physical_device: vk::PhysicalDevice) 
         .variable_pointers_storage_buffer(true)
         .shader_draw_parameters(true);
     let mut features = vk::PhysicalDeviceFeatures2::default()
-        .features(
-            vk::PhysicalDeviceFeatures::default()
-                .fill_mode_non_solid(true)
-                .independent_blend(true),
-        )
+        .features(vk::PhysicalDeviceFeatures::default().independent_blend(true))
         .push_next(&mut vk11)
         .push_next(&mut vk12)
         .push_next(&mut vk13);
