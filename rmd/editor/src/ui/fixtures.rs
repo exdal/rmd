@@ -42,6 +42,7 @@ pub(super) struct RectangleUiHarness {
     pub(super) mode_buttons: Option<([f32; 2], [f32; 2])>,
     pub(super) conflict_button: Option<[f32; 2]>,
     pub(super) focus_other_window: bool,
+    pub(super) is_modal_open: bool,
 }
 
 impl RectangleUiHarness {
@@ -89,6 +90,7 @@ impl RectangleUiHarness {
             mode_buttons: None,
             conflict_button: None,
             focus_other_window: false,
+            is_modal_open: false,
         };
         for _ in 0..3 {
             harness.step();
@@ -109,6 +111,15 @@ impl RectangleUiHarness {
         self.state.read_edit_keys(ui, &self.session, &self.settings, &mut menu);
         self.state.edit_command = self.state.edit_command.or(menu.edit);
         self.state.apply_history_actions(&mut self.session, &menu);
+        if self.is_modal_open {
+            if !ui.is_popup_open("test-modal") {
+                ui.open_popup("test-modal");
+            }
+
+            if let Some(_modal) = ui.begin_modal_popup("test-modal") {
+                ui.text("Modal");
+            }
+        }
 
         let name = format!("###viewport-{}", self.id.get());
         ui.set_window_pos_by_name(&name, [0.0; 2]);

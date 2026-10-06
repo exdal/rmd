@@ -620,6 +620,10 @@ impl UiState {
             return;
         }
 
+        if !unsafe { dear_imgui_rs::sys::igGetTopMostPopupModal() }.is_null() {
+            return;
+        }
+
         menu.undo |= settings.keybindings.get(KeybindAction::Undo).is_pressed_repeating(ui);
         menu.redo |= settings.keybindings.get(KeybindAction::Redo).is_pressed_repeating(ui);
         if menu.edit.is_none() {

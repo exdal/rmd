@@ -216,6 +216,32 @@ fn edit_keys_work_while_another_panel_has_focus() {
 }
 
 #[test]
+fn edit_keys_leave_the_map_alone_while_a_modal_is_open() {
+    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let mut app = RectangleUiHarness::new();
+    let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+    app.session.state.choose_prefab(table.clone());
+    app.session.set_tool(Tool::Place);
+    let coord = Coord::new(5, 8, 1);
+    assert!(app.session.place_at(coord, None).is_some());
+    app.is_modal_open = true;
+    app.step();
+    app.step();
+
+    app.key(Key::ModCtrl, true);
+    app.key(Key::Z, true);
+    app.key(Key::Z, false);
+    app.key(Key::ModCtrl, false);
+    assert!(app.session.map().unwrap().tile_at(coord).unwrap().contains(&table));
+
+    app.session.set_tool(Tool::BlockSelect);
+    assert!(app.session.select_block(Some(Selection::from_drag(coord, coord))));
+    app.key(Key::Delete, true);
+    app.key(Key::Delete, false);
+    assert!(app.session.map().unwrap().tile_at(coord).unwrap().contains(&table));
+}
+
+#[test]
 fn a_tapped_tool_key_switches_tools_and_a_held_one_hands_the_old_tool_back() {
     let _guard = IMGUI_CONTEXT.lock().unwrap();
     let mut app = RectangleUiHarness::new();
