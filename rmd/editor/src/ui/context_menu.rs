@@ -240,10 +240,13 @@ pub(super) fn draw_popup(
                 path_width.max(ui.calc_text_size(format!("[{}]", prefab.path))[0]),
             )
         });
-    let icon_width = ui.calc_text_size("    ")[0];
+    let icon_extent = ui.text_line_height();
+    let icon_width = icon_extent + ui.clone_style().item_inner_spacing()[0];
     let path_column = icon_width + name_width + 20.0;
     let label_width = path_column + path_width + 36.0;
-    let space_width = ui.calc_text_size(" ")[0].max(1.0);
+    let cursor = ui.cursor_pos();
+    ui.dummy([label_width, 0.0]);
+    ui.set_cursor_pos(cursor);
     for instance in target.atoms.iter().copied() {
         let Some((prefab, location)) = session
             .state
@@ -258,49 +261,15 @@ pub(super) fn draw_popup(
         let prefab = prefab.clone();
         let name = display_name(session.tree(), &prefab);
         let path_text = format!("[{}]", prefab.path);
-        let visible = format!("    {name}");
-        let padding = ((label_width - ui.calc_text_size(&visible)[0]) / space_width).ceil() as usize;
-        let label = format!("{visible}{}##atom-{}", " ".repeat(padding), instance.get());
+        let label = format!("##atom-{}", instance.get());
         let thumbnail = session.prefab_thumbnail(&prefab);
         let editable = session.can_edit_instance(instance);
         let reorderable = editable
             && session
                 .tree()
                 .is_some_and(|tree| context_placement_group(tree, &prefab.path) == Some(0));
-        let draw = ui.get_window_draw_list();
+        let origin = ui.cursor_screen_pos();
         let submenu = ui.begin_menu(&label);
-        let row_min = ui.item_rect_min();
-        let row_max = ui.item_rect_max();
-        let extent = ui.text_line_height().min(row_max[1] - row_min[1]);
-        if let Some(thumbnail) = thumbnail {
-            let size = fit_icon(thumbnail.texture.width, thumbnail.texture.height, extent);
-            let min = [
-                row_min[0] + (extent - size[0]) * 0.5,
-                row_min[1] + (extent - size[1]) * 0.5,
-            ];
-            draw.add_image(
-                super::Renderer::sprite_texture(thumbnail.texture.index),
-                min,
-                [min[0] + size[0], min[1] + size[1]],
-                thumbnail.uv0,
-                thumbnail.uv1,
-                thumbnail.tint,
-            );
-        } else {
-            draw.add_text(
-                row_min,
-                ui.style_color(dear_imgui_rs::StyleColor::TextDisabled),
-                super::ICON_IMAGE_BROKEN.to_string(),
-            );
-        }
-        draw.add_text(
-            [
-                row_min[0] + path_column,
-                row_min[1] + (row_max[1] - row_min[1] - ui.text_line_height()) * 0.5,
-            ],
-            ui.style_color(dear_imgui_rs::StyleColor::Text),
-            path_text,
-        );
         if let Some(_menu) = submenu {
             if ui.menu_item_enabled_selected_no_shortcut("Move to Top", false, reorderable) {
                 action = Some(Action::Reorder(instance, true));
@@ -362,6 +331,36 @@ pub(super) fn draw_popup(
                 action = Some(Action::Search(instance, SimilarMatchKind::Prefab));
             }
         }
+        let draw = ui.get_window_draw_list();
+        if let Some(thumbnail) = thumbnail {
+            let size = fit_icon(thumbnail.texture.width, thumbnail.texture.height, icon_extent);
+            let min = [
+                origin[0] + (icon_extent - size[0]) * 0.5,
+                origin[1] + (icon_extent - size[1]) * 0.5,
+            ];
+            draw.add_image(
+                super::Renderer::sprite_texture(thumbnail.texture.index),
+                min,
+                [min[0] + size[0], min[1] + size[1]],
+                thumbnail.uv0,
+                thumbnail.uv1,
+                thumbnail.tint,
+            );
+        } else {
+            let icon = super::ICON_IMAGE_BROKEN.to_string();
+            let size = ui.calc_text_size(&icon);
+            draw.add_text(
+                [
+                    origin[0] + (icon_extent - size[0]) * 0.5,
+                    origin[1] + (icon_extent - size[1]) * 0.5,
+                ],
+                ui.style_color(dear_imgui_rs::StyleColor::TextDisabled),
+                icon,
+            );
+        }
+        let text_color = ui.style_color(dear_imgui_rs::StyleColor::Text);
+        draw.add_text([origin[0] + icon_width, origin[1]], text_color, name);
+        draw.add_text([origin[0] + path_column, origin[1]], text_color, path_text);
     }
     if target.block_selected {
         ui.separator();
@@ -401,11 +400,154 @@ fn display_name(tree: Option<&ObjectTree>, prefab: &Prefab) -> String {
 
 #[cfg(test)]
 mod tests {
-    use core::{location::Location, path::TreePath};
+    use core::{location::Location, path::TreePath, types::Value};
+    use std::path::PathBuf;
 
+    use dear_imgui_rs::{Condition, sys};
+    use dmm::{Coord, Map, Prefab, Size};
     use objtree::ObjectTree;
 
-    use crate::{session::context_placement_group, ui::search::matching_type_paths_up_to_filtered};
+    use super::{POPUP, Target, draw_popup};
+    use crate::{
+        loader::LoadedMap,
+        session::{Session, context_placement_group},
+        settings::Settings,
+        ui::{IMGUI_CONTEXT, fixtures::rectangle_context, search::matching_type_paths_up_to_filtered},
+    };
+
+    #[test]
+    fn hovering_atom_rows_opens_submenus_without_truncating_names_or_hit_areas() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        // With the test font, these table names previously padded the menu labels
+        // to 123, 124 and 125 bytes. At 124 bytes ImGui's window name ended in ###.
+        let cases = [
+            ("/obj/structure/table", "x".repeat(81)),
+            ("/obj/structure/table", "x".repeat(82)),
+            ("/obj/structure/table", "x".repeat(83)),
+            ("/obj/structure/table", "阀门 café ###名前 ".repeat(10)),
+            ("/area/station", "Atmospherics pumping room ".repeat(6)),
+        ];
+        for (path, name, scale) in cases
+            .into_iter()
+            .flat_map(|(path, name)| [1.0, 1.5, 2.0].map(|scale| (path, name.clone(), scale)))
+        {
+            let mut context = rectangle_context();
+            context.io_mut().set_display_size([4800.0, 2400.0]);
+            context.style_mut().scale_all_sizes(scale);
+            context.style_mut().set_font_scale_main(scale);
+            let mut session = Session::new();
+            session
+                .load_environment(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme"))
+                .unwrap();
+            let mut prefab = Prefab::new(TreePath::parse(path));
+            prefab.set_var("name".into(), Value::Text(name.clone()));
+            let thumbnail_texture = session
+                .prefab_thumbnail(&prefab)
+                .map(|thumbnail| render::Renderer::sprite_texture(thumbnail.texture.index));
+            let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+            let key = map.intern_tile(vec![prefab]);
+            map.grid[0][0][0] = key;
+            session.apply_map(LoadedMap {
+                path: PathBuf::from("context-menu-test.dmm"),
+                map,
+                z: 1,
+                errors: vec![],
+                repo: None,
+                conflict: None,
+            });
+            let coord = Coord::new(1, 1, 1);
+            let document = session.state.active().unwrap();
+            let mut target = Target {
+                document,
+                coord,
+                atoms: session.state.active_document().unwrap().instance_ids_at(coord).to_vec(),
+                node: None,
+                block_selected: false,
+                replace_for: None,
+                replace_query: String::new(),
+            };
+            let mut pointer = [30.0, 30.0];
+            let mut opened = [false; 2];
+            let mut has_thumbnail = false;
+            let settings = Settings::default();
+            for frame in 0..20 {
+                let mut icon_center = [0.0; 2];
+                context.io_mut().add_mouse_pos_event(pointer);
+                let ui = context.frame();
+                ui.window("context-menu-test")
+                    .position([0.0, 0.0], Condition::Always)
+                    .size([4750.0, 2350.0], Condition::Always)
+                    .build(|| {
+                        if frame == 0 {
+                            ui.open_popup(POPUP);
+                        }
+                        assert!(draw_popup(ui, &mut session, &settings, &mut target).is_none());
+                        // SAFETY: the current frame owns the open popup and its live window.
+                        unsafe {
+                            let raw = &*sys::igGetCurrentContext();
+                            assert!(raw.OpenPopupStack.Size > 0);
+                            let popup = &*(*raw.OpenPopupStack.Data).Window;
+                            icon_center = [
+                                popup.WorkRect.Min.x + ui.text_line_height() * 0.5,
+                                popup.DC.CursorPosPrevLine.y + ui.text_line_height() * 0.5,
+                            ];
+                            if frame >= 2 {
+                                let text_width =
+                                    ui.calc_text_size(&name)[0] + ui.calc_text_size(format!("[{path}]"))[0];
+                                assert!(popup.WorkRect.Max.x - popup.WorkRect.Min.x >= text_width);
+                                // Hover near the path/arrow, then near the icon: the whole row is a menu.
+                                pointer = [
+                                    if frame < 10 {
+                                        popup.WorkRect.Max.x - 20.0
+                                    } else {
+                                        popup.WorkRect.Min.x + 8.0
+                                    },
+                                    popup.DC.CursorPosPrevLine.y + ui.text_line_height() * 0.5,
+                                ];
+                            }
+                            let menu = sys::igFindWindowByName(c"Menu_00".as_ptr());
+                            if !menu.is_null() && (*menu).Active {
+                                assert_ne!((*menu).ID, 0);
+                                assert_eq!((*menu).ParentWindow, std::ptr::from_ref(popup).cast_mut());
+                                opened[usize::from(frame >= 10)] = true;
+                            }
+                        }
+                    });
+                let data = context.render_legacy();
+                assert!(data.valid());
+                for list in data.draw_lists() {
+                    for command in list.commands() {
+                        if let dear_imgui_rs::render::DrawCmd::Elements { count, cmd_params } = command
+                            && Some(cmd_params.texture_id) == thumbnail_texture
+                        {
+                            has_thumbnail = true;
+                            let indices = &list.idx_buffer()[cmd_params.idx_offset..cmd_params.idx_offset + count];
+                            let (min, max) = indices
+                                .iter()
+                                .map(|&index| list.vtx_buffer()[index as usize + cmd_params.vtx_offset].pos)
+                                .fold(([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]), |(min, max), pos| {
+                                    (
+                                        std::array::from_fn(|axis| min[axis].min(pos[axis])),
+                                        std::array::from_fn(|axis| max[axis].max(pos[axis])),
+                                    )
+                                });
+                            for axis in 0..2 {
+                                assert!(
+                                    ((min[axis] + max[axis]) * 0.5 - icon_center[axis]).abs() < 0.01,
+                                    "thumbnail {min:?}..{max:?} is not centered at {icon_center:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(
+                opened.into_iter().all(|opened| opened),
+                "hover did not open both ends of the row for {path}"
+            );
+            assert_eq!(has_thumbnail, path.starts_with("/obj"));
+        }
+    }
 
     #[test]
     fn replacement_search_matches_object_types_only() {
