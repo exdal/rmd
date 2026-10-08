@@ -318,14 +318,11 @@ impl MapDocument {
     }
 
     pub fn title(&self) -> String {
-        let name = self
-            .path
+        self.path
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "untitled".to_string());
-
-        if self.is_dirty() { format!("{name} *") } else { name }
+            .unwrap_or_else(|| "untitled".to_string())
     }
 
     pub fn is_dirty(&self) -> bool {

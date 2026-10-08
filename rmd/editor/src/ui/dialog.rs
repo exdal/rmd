@@ -87,9 +87,21 @@ impl FillWarningContext {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SaveDialog {
+    pub(super) document: DocumentId,
+    pub(super) close_after_save: bool,
     pub(super) path: String,
     pub(super) format: MapFormat,
     pub(super) error: Option<String>,
+}
+
+pub(super) enum SaveDialogOutcome {
+    Saved {
+        document: DocumentId,
+        close_after_save: bool,
+    },
+    Cancelled {
+        close_after_save: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -644,8 +656,13 @@ fn resolve_new_map_path(codebase_dir: &Path, input: &str) -> Result<PathBuf, Str
     Ok(path)
 }
 
-pub(super) fn draw_save_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<SaveDialog>) {
-    let mut close = false;
+pub(super) fn draw_save_dialog(
+    ui: &Ui, session: &mut Session, dialog: &mut Option<SaveDialog>,
+) -> Option<SaveDialogOutcome> {
+    let mut outcome = None;
+    if dialog.is_some() && !ui.is_popup_open(SAVE_MAP_POPUP) {
+        ui.open_popup(SAVE_MAP_POPUP);
+    }
 
     if let Some(state) = dialog.as_mut()
         && let Some(_modal) = ui.begin_modal_popup_config(SAVE_MAP_POPUP).flags(MODAL_FLAGS).begin()
@@ -672,7 +689,9 @@ pub(super) fn draw_save_dialog(ui: &Ui, session: &mut Session, dialog: &mut Opti
         ui.separator();
 
         if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
-            close = true;
+            outcome = Some(SaveDialogOutcome::Cancelled {
+                close_after_save: state.close_after_save,
+            });
             ui.close_current_popup();
         }
         ui.same_line();
@@ -685,10 +704,21 @@ pub(super) fn draw_save_dialog(ui: &Ui, session: &mut Session, dialog: &mut Opti
             ui.button("Save")
         };
 
-        if can_save && (clicked || submitted) {
-            match session.save_map_as(Path::new(path), state.format) {
+        if outcome.is_none() && can_save && (clicked || submitted) {
+            let result = if session.set_active_document(state.document) {
+                session.save_map_as(Path::new(path), state.format)
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "This map is no longer open.",
+                ))
+            };
+            match result {
                 Ok(()) => {
-                    close = true;
+                    outcome = Some(SaveDialogOutcome::Saved {
+                        document: state.document,
+                        close_after_save: state.close_after_save,
+                    });
                     ui.close_current_popup();
                 },
                 Err(error) => state.error = Some(error.to_string()),
@@ -696,9 +726,11 @@ pub(super) fn draw_save_dialog(ui: &Ui, session: &mut Session, dialog: &mut Opti
         }
     }
 
-    if close {
+    if outcome.is_some() {
         *dialog = None;
     }
+
+    outcome
 }
 
 pub(super) fn draw_fill_limit_warning(
@@ -755,6 +787,19 @@ impl PendingFillWarning {
 }
 
 impl UiState {
+    pub(super) fn close_map_view(&mut self, session: &mut Session, id: DocumentId) {
+        let was_active = session.state.active() == Some(id);
+        if session.close_map(id) && was_active {
+            self.close_focus = Some(match session.state.active() {
+                Some(id) => super::CloseFocus::Map(id),
+                None => {
+                    self.show_welcome = true;
+                    super::CloseFocus::Welcome
+                },
+            });
+        }
+    }
+
     pub(super) fn draw_exit_confirmation(&mut self, ui: &Ui, session: &Session) -> bool {
         if !self.exit_requested {
             return false;
@@ -807,7 +852,7 @@ impl UiState {
     pub(super) fn request_close(&mut self, session: &mut Session, ids: impl IntoIterator<Item = DocumentId>) {
         for id in ids {
             if !session.state.document(id).is_some_and(MapDocument::is_dirty) {
-                session.close_map(id);
+                self.close_map_view(session, id);
             } else if !self.close_queue.contains(&id) {
                 self.close_queue.push_back(id);
             }
@@ -815,11 +860,15 @@ impl UiState {
     }
 
     pub(super) fn draw_close_confirmation(&mut self, ui: &Ui, session: &mut Session) {
+        if self.save_dialog.as_ref().is_some_and(|dialog| dialog.close_after_save) {
+            return;
+        }
+
         while let Some(id) = self.close_queue.front().copied()
             && session.state.document(id).is_none_or(|document| !document.is_dirty())
         {
             self.close_queue.pop_front();
-            session.close_map(id);
+            self.close_map_view(session, id);
         }
         let Some(id) = self.close_queue.front().copied() else {
             return;
@@ -828,6 +877,9 @@ impl UiState {
             return;
         };
         if !ui.is_popup_open(CLOSE_MAP_POPUP) {
+            session.set_active_document(id);
+            self.close_focus = None;
+            ui.set_window_focus(Some(&format!("###viewport-{}", id.get())));
             ui.open_popup(CLOSE_MAP_POPUP);
         }
 
@@ -839,7 +891,7 @@ impl UiState {
             .document(id)
             .is_some_and(|document| document.path.is_some() && !document.needs_initial_save());
 
-        ui.text(format!("{} has unsaved changes.", title.trim_end_matches(" *")));
+        ui.text(format!("{title} has unsaved changes."));
         if self.close_queue.len() > 1 {
             ui.text_disabled(format!(
                 "{} more map(s) with unsaved changes are waiting to close.",
@@ -855,7 +907,7 @@ impl UiState {
                     let format = session.map_format().unwrap_or_default();
                     match session.save_map_as(&path, format) {
                         Ok(()) => {
-                            session.close_map(id);
+                            self.close_map_view(session, id);
                             self.close_queue.pop_front();
                             ui.close_current_popup();
                         },
@@ -864,6 +916,8 @@ impl UiState {
                 },
                 None => {
                     self.save_dialog = Some(SaveDialog {
+                        document: id,
+                        close_after_save: true,
                         path: session
                             .map_path()
                             .map(|path| path.display().to_string())
@@ -871,15 +925,13 @@ impl UiState {
                         format: session.map_format().unwrap_or_default(),
                         error: None,
                     });
-                    self.close_queue.clear();
                     ui.close_current_popup();
-                    ui.open_popup(SAVE_MAP_POPUP);
                 },
             }
         }
         ui.same_line();
         if ui.button("Discard") {
-            session.close_map(id);
+            self.close_map_view(session, id);
             self.close_queue.pop_front();
             ui.close_current_popup();
         }
@@ -894,10 +946,16 @@ impl UiState {
 #[cfg(test)]
 mod tests {
     use core::path::TreePath;
+    use std::{
+        ffi::{CStr, CString},
+        fs,
+        path::{Path, PathBuf},
+    };
 
-    use dmm::{Coord, MapFormat, Prefab, Size};
+    use dear_imgui_rs::{ConfigFlags, Context, Key, MouseButton, Ui, sys};
+    use dmm::{Coord, Map, MapFormat, Prefab, Size};
     use editor::{
-        document::{MapDocument, Selection},
+        document::{DocumentId, MapDocument, Selection},
         tool::{BlockSelectionMode, FillMode, SelectionMask, Tool},
     };
 
@@ -921,8 +979,402 @@ mod tests {
     };
     use crate::{
         session::Session,
-        ui::{IMGUI_CONTEXT, UiState},
+        settings::Settings,
+        theme::{DEFAULT_THEME, Themes},
+        ui::{IMGUI_CONTEXT, UiState, fixtures::rectangle_context},
     };
+
+    struct CloseUi {
+        context: Context,
+        state: UiState,
+        session: Session,
+        settings: Settings,
+        themes: Themes,
+        close_buttons: Vec<[f32; 2]>,
+        save_buttons: Vec<[f32; 2]>,
+        close_open: bool,
+        save_open: bool,
+    }
+
+    impl CloseUi {
+        fn new() -> Self {
+            let mut context = rectangle_context();
+            context.io_mut().set_display_size([1280.0, 720.0]);
+            context.io_mut().set_config_flags(ConfigFlags::DOCKING_ENABLE);
+            let themes = Themes::load(None, context.style(), DEFAULT_THEME);
+            Self {
+                context,
+                state: UiState::new(false).unwrap(),
+                session: Session::new(),
+                settings: Settings {
+                    check_for_updates: false,
+                    focus_windows_on_hover: true,
+                    ..Settings::default()
+                },
+                themes,
+                close_buttons: Vec::new(),
+                save_buttons: Vec::new(),
+                close_open: false,
+                save_open: false,
+            }
+        }
+
+        fn add_map(&mut self, path: impl AsRef<Path>, dirty: bool, needs_path: bool) -> DocumentId {
+            let path = path.as_ref().to_path_buf();
+            let map = Map::new(Size { x: 4, y: 4, z: 1 });
+            let mut document = if needs_path {
+                MapDocument::create(path, map, 1)
+            } else {
+                MapDocument::open(path, map, 1)
+            };
+            if dirty {
+                document.mark_unsaved();
+            }
+            self.session.state.open_document(document)
+        }
+
+        fn step(&mut self) {
+            let ui = self.context.frame();
+            self.state
+                .draw(ui, &mut self.session, &mut self.settings, &mut self.themes, None)
+                .unwrap();
+            self.close_open = ui.is_popup_open("Unsaved changes##close-map");
+            self.save_open = ui.is_popup_open("Save map##save-map");
+            self.close_buttons = button_centers(ui, c"Unsaved changes##close-map", &["Save", "Discard", "Cancel"]);
+            self.save_buttons = button_centers(ui, c"Save map##save-map", &["Cancel", "Save"]);
+            assert!(self.context.render_legacy().valid());
+        }
+
+        fn settle(&mut self) {
+            for _ in 0..4 {
+                self.step();
+            }
+        }
+
+        fn select(&mut self, id: DocumentId) {
+            self.settle();
+            self.session.set_active_document(id);
+            self.state.map_views.get_mut(&id).unwrap().focus = true;
+            self.settle();
+            self.assert_selected_map(id);
+        }
+
+        fn click(&mut self, point: [f32; 2]) {
+            for down in [false, true, false] {
+                self.context.io_mut().add_mouse_pos_event(point);
+                self.context.io_mut().add_mouse_button_event(MouseButton::Left, down);
+                self.step();
+            }
+            self.settle();
+        }
+
+        fn close_tab(&mut self, id: DocumentId) {
+            let keep_selected =
+                self.session.state.active() == Some(id) && self.session.state.document(id).unwrap().is_dirty();
+            let name = CString::new(format!("###viewport-{}", id.get())).unwrap();
+            // SAFETY: this test owns the current context while holding IMGUI_CONTEXT.
+            let point = unsafe {
+                let window = &*sys::igFindWindowByName(name.as_ptr());
+                let rect = window.DC.DockTabItemRect;
+                let font_size = (*self.context.as_raw()).FontSize;
+                [
+                    rect.Max.x - self.context.style().frame_padding()[0] - font_size / 2.0,
+                    (rect.Min.y + rect.Max.y) / 2.0,
+                ]
+            };
+            for down in [false, true, false] {
+                self.context.io_mut().add_mouse_pos_event(point);
+                self.context.io_mut().add_mouse_button_event(MouseButton::Left, down);
+                self.step();
+                if keep_selected && self.state.close_queue.contains(&id) {
+                    self.assert_selected_map(id);
+                }
+            }
+            self.settle();
+        }
+
+        fn escape(&mut self) {
+            self.context.io_mut().add_key_event(Key::Escape, true);
+            self.step();
+            self.context.io_mut().add_key_event(Key::Escape, false);
+            self.settle();
+        }
+
+        fn assert_selected_map(&self, id: DocumentId) {
+            assert_eq!(self.session.state.active(), Some(id));
+            let name = CString::new(format!("###viewport-{}", id.get())).unwrap();
+            self.assert_selected(&name);
+        }
+
+        fn assert_selected(&self, name: &CStr) {
+            // SAFETY: the test owns the current context and its rendered docked windows.
+            unsafe {
+                let window = sys::igFindWindowByName(name.as_ptr());
+                assert!(!window.is_null());
+                let dock = (*window).DockNode;
+                assert!(!dock.is_null(), "the tested window must be docked");
+                assert!(
+                    (*window).DockTabIsVisible(),
+                    "the requested tab should be selected and visible"
+                );
+            }
+        }
+    }
+
+    fn button_centers(ui: &Ui, name: &CStr, labels: &[&str]) -> Vec<[f32; 2]> {
+        // SAFETY: this function runs during the test's current frame with IMGUI_CONTEXT held.
+        let Some(window) = (unsafe { sys::igFindWindowByName(name.as_ptr()).as_ref() }) else {
+            return Vec::new();
+        };
+        if !window.Active {
+            return Vec::new();
+        }
+        let style = ui.clone_style();
+        let mut x = window.Pos.x + style.window_padding()[0];
+        let y = window.Pos.y + window.Size.y - style.window_padding()[1] - ui.frame_height() / 2.0;
+        labels
+            .iter()
+            .map(|label| {
+                let width = ui.calc_text_size(label)[0] + 2.0 * style.frame_padding()[0];
+                let center = [x + width / 2.0, y];
+                x += width + style.item_spacing()[0];
+                center
+            })
+            .collect::<Vec<_>>()
+    }
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("rmd-close-{name}-{}", std::process::id()));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    }
+
+    #[test]
+    fn dirty_tab_close_keeps_the_map_selected_until_cancel_or_escape() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut app = CloseUi::new();
+        let id = app.add_map("dirty.dmm", true, false);
+        app.select(id);
+        for escape in [false, true] {
+            app.close_tab(id);
+            assert!(app.close_open);
+            app.assert_selected_map(id);
+            // SAFETY: this test owns the context and its active confirmation modal.
+            unsafe {
+                let focused = (*app.context.as_raw()).NavWindow;
+                assert!(!focused.is_null());
+                assert_ne!((*focused).Flags & sys::ImGuiWindowFlags_Modal, 0);
+            }
+            if escape {
+                app.escape();
+            } else {
+                app.click(app.close_buttons[2]);
+            }
+            assert!(!app.close_open);
+            assert!(app.state.close_queue.is_empty());
+            assert!(app.session.state.document(id).unwrap().is_dirty());
+            app.assert_selected_map(id);
+        }
+    }
+
+    #[test]
+    fn closing_an_inactive_dirty_tab_selects_that_map_for_confirmation() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut app = CloseUi::new();
+        let dirty = app.add_map("dirty.dmm", true, false);
+        let active = app.add_map("active.dmm", false, false);
+        app.select(active);
+        app.close_tab(dirty);
+        assert!(app.close_open);
+        app.assert_selected_map(dirty);
+        app.escape();
+        app.assert_selected_map(dirty);
+        assert!(app.session.state.document(active).is_some());
+    }
+
+    #[test]
+    fn clean_active_tab_closes_select_the_next_map_then_previous_then_welcome() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut app = CloseUi::new();
+        let first = app.add_map("first.dmm", false, false);
+        let second = app.add_map("second.dmm", false, false);
+        let third = app.add_map("third.dmm", false, false);
+        app.select(second);
+        for (closing, remaining) in [(second, Some(third)), (third, Some(first)), (first, None)] {
+            app.close_tab(closing);
+            assert!(!app.close_open);
+            assert!(app.session.state.document(closing).is_none());
+            if let Some(id) = remaining {
+                app.assert_selected_map(id);
+            } else {
+                app.assert_selected(c"###welcome");
+            }
+        }
+    }
+
+    #[test]
+    fn discard_selects_the_next_map_then_the_previous_map_then_welcome() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut app = CloseUi::new();
+        let first = app.add_map("first.dmm", true, false);
+        let second = app.add_map("second.dmm", true, false);
+        let third = app.add_map("third.dmm", true, false);
+        app.select(second);
+        for (closing, remaining) in [(second, Some(third)), (third, Some(first)), (first, None)] {
+            app.close_tab(closing);
+            assert!(app.close_open);
+            app.assert_selected_map(closing);
+            app.click(app.close_buttons[1]);
+            assert!(app.session.state.document(closing).is_none());
+            if let Some(id) = remaining {
+                app.assert_selected_map(id);
+            } else {
+                app.assert_selected(c"###welcome");
+            }
+        }
+    }
+
+    #[test]
+    fn closing_the_last_map_reopens_welcome_and_clean_background_closes_keep_focus() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut app = CloseUi::new();
+        let background = app.add_map("background.dmm", false, false);
+        let id = app.add_map("last.dmm", true, false);
+        app.select(id);
+        app.close_tab(background);
+        assert!(app.session.state.document(background).is_none());
+        app.assert_selected_map(id);
+        app.state.show_welcome = false;
+        app.settle();
+        app.close_tab(id);
+        app.assert_selected_map(id);
+        app.click(app.close_buttons[1]);
+        assert!(app.state.show_welcome);
+        app.assert_selected(c"###welcome");
+    }
+
+    #[test]
+    fn successful_save_closes_the_map_and_focuses_its_neighbor() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let dir = TestDirectory::new("save");
+        let file = dir.0.join("saved.dmm");
+        let mut app = CloseUi::new();
+        let id = app.add_map(&file, true, false);
+        let next = app.add_map("next.dmm", false, false);
+        app.select(id);
+        app.close_tab(id);
+        app.assert_selected_map(id);
+        app.click(app.close_buttons[0]);
+        assert!(file.is_file());
+        assert!(app.session.state.document(id).is_none());
+        assert!(!app.close_open);
+        app.assert_selected_map(next);
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_confirmation_and_map_open() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let dir = TestDirectory::new("save-failure");
+        let mut app = CloseUi::new();
+        let id = app.add_map(&dir.0, true, false);
+        app.select(id);
+        app.close_tab(id);
+        app.click(app.close_buttons[0]);
+        assert!(app.close_open);
+        assert!(app.state.open_error.is_some());
+        assert!(app.session.state.document(id).unwrap().is_dirty());
+        app.assert_selected_map(id);
+        app.escape();
+    }
+
+    #[test]
+    fn save_as_keeps_the_pending_close_until_it_succeeds() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let dir = TestDirectory::new("save-as");
+        let file = dir.0.join("saved.dmm");
+        let mut app = CloseUi::new();
+        let id = app.add_map(&file, true, true);
+        let next = app.add_map("next.dmm", false, false);
+        app.select(id);
+        app.close_tab(id);
+        app.click(app.close_buttons[0]);
+        assert!(app.save_open && !app.close_open);
+        assert_eq!(app.state.close_queue.front(), Some(&id));
+        assert!(app.state.save_dialog.as_ref().unwrap().close_after_save);
+        app.assert_selected_map(id);
+
+        app.state.save_dialog.as_mut().unwrap().path = dir.0.display().to_string();
+        app.settle();
+        app.click(app.save_buttons[1]);
+        assert!(app.save_open);
+        assert!(app.state.save_dialog.as_ref().unwrap().error.is_some());
+        app.assert_selected_map(id);
+
+        app.state.save_dialog.as_mut().unwrap().path = file.display().to_string();
+        app.settle();
+        // Save As must save its requesting document even if session activation changes.
+        app.session.set_active_document(next);
+        app.click(app.save_buttons[1]);
+        assert!(file.is_file());
+        assert!(app.session.state.document(id).is_none());
+        assert!(app.state.close_queue.is_empty());
+        assert!(app.state.save_dialog.is_none());
+        app.assert_selected_map(next);
+    }
+
+    #[test]
+    fn cancelling_save_as_cancels_the_close_batch_and_keeps_maps_open() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut app = CloseUi::new();
+        let first = app.add_map("first.dmm", true, true);
+        let second = app.add_map("second.dmm", true, true);
+        app.select(first);
+        app.state.request_close(&mut app.session, [first, second]);
+        app.settle();
+        assert_eq!(
+            app.state.close_queue.iter().copied().collect::<Vec<_>>(),
+            [first, second]
+        );
+        app.click(app.close_buttons[0]);
+        assert!(app.save_open && !app.close_open);
+        app.click(app.save_buttons[0]);
+        assert!(!app.save_open && !app.close_open);
+        assert!(app.state.close_queue.is_empty());
+        for id in [first, second] {
+            assert!(app.session.state.document(id).unwrap().is_dirty());
+        }
+        app.assert_selected_map(first);
+    }
+
+    #[test]
+    fn save_as_success_advances_the_close_batch_to_the_next_dirty_map() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let dir = TestDirectory::new("save-as-batch");
+        let file = dir.0.join("first.dmm");
+        let mut app = CloseUi::new();
+        let first = app.add_map(&file, true, true);
+        let second = app.add_map("second.dmm", true, true);
+        app.select(first);
+        app.state.request_close(&mut app.session, [first, second]);
+        app.settle();
+        app.click(app.close_buttons[0]);
+        app.click(app.save_buttons[1]);
+        assert!(file.is_file());
+        assert!(app.session.state.document(first).is_none());
+        assert!(app.close_open && !app.save_open);
+        assert_eq!(app.state.close_queue.front(), Some(&second));
+        app.assert_selected_map(second);
+        app.escape();
+        assert!(app.session.state.document(second).unwrap().is_dirty());
+    }
 
     #[test]
     fn pending_fill_is_invalidated_when_the_mask_document_or_palette_changes() {

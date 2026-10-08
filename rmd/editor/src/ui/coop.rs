@@ -361,10 +361,7 @@ pub(super) fn draw_out_of_date_dialog(ui: &Ui, session: &Session) -> Option<(Doc
     };
 
     let nick = coop.nick_of(by).unwrap_or(NICK_PLACEHOLDER);
-    ui.text(format!(
-        "{nick} shared a newer {}.",
-        document.title().trim_end_matches(" *")
-    ));
+    ui.text(format!("{nick} shared a newer {}.", document.title()));
     ui.text("Your copy has unsaved changes and is read only until you choose.");
     ui.text_disabled("Leaving co-op keeps your copy as it is.");
     ui.dummy([0.0, ui.frame_height() * 0.25]);

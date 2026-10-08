@@ -1,9 +1,9 @@
 use std::mem;
 
-use dear_imgui_rs::{Condition, Ui, WindowKey, WindowKeyError};
+use dear_imgui_rs::{Condition, Ui, WindowFlags, WindowKey, WindowKeyError};
 use dmm::Coord;
 use editor::{
-    document::{DocumentId, MapDocument},
+    document::DocumentId,
     icons::materialdesignicons::{ICON_ALERT, ICON_WEB},
     tool::Tool,
 };
@@ -31,6 +31,7 @@ use self::{
 };
 use super::{
     BlamePopup,
+    CloseFocus,
     OverlayRect,
     UiState,
     VisibleMapView,
@@ -296,6 +297,11 @@ impl UiState {
                 },
             };
 
+            if self.close_focus == Some(CloseFocus::Map(id)) {
+                self.close_focus = None;
+                view.focus = true;
+            }
+
             let refit = refit_active && session.state.active() == Some(id);
             let mut keep_open = true;
             let active = session.state.active() == Some(id);
@@ -377,8 +383,14 @@ impl UiState {
             coop,
         } = draw;
         session.hide_block_preview(id);
-        let Some(name) = session.state.document(id).map(MapDocument::title) else {
+        let Some(document) = session.state.document(id) else {
             return;
+        };
+        let name = document.title();
+        let flags = if document.is_dirty() {
+            WindowFlags::UNSAVED_DOCUMENT
+        } else {
+            WindowFlags::empty()
         };
 
         let is_out_of_date = session.coop_out_of_date(id).is_some();
@@ -410,6 +422,7 @@ impl UiState {
 
         let map_window = ui
             .window(window.label(title.as_str()))
+            .flags(flags)
             .opened(keep_open)
             .focused(mem::take(focus));
         map_window.build(|| {

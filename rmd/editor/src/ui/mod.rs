@@ -91,6 +91,7 @@ use self::{
         SAVE_ERROR_COLOR,
         SAVE_MAP_POPUP,
         SaveDialog,
+        SaveDialogOutcome,
         TileFillPaths,
         TileFillSearch,
         draw_fill_limit_warning,
@@ -251,6 +252,12 @@ impl StartupPanelFocus {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CloseFocus {
+    Map(DocumentId),
+    Welcome,
+}
+
 pub struct UiState {
     object_tree: ObjectTreePanel,
     map_views: HashMap<DocumentId, MapViewState>,
@@ -294,6 +301,7 @@ pub struct UiState {
     tile_fill: Option<TileFillPaths>,
     save_dialog: Option<SaveDialog>,
     close_queue: VecDeque<DocumentId>,
+    close_focus: Option<CloseFocus>,
     edit_command: Option<EditCommand>,
     pending_conflict_reload: Option<DocumentId>,
     save_requested: bool,
@@ -370,6 +378,7 @@ impl UiState {
             tile_fill: None,
             save_dialog: None,
             close_queue: VecDeque::new(),
+            close_focus: None,
             edit_command: None,
             pending_conflict_reload: None,
             save_requested: false,
@@ -500,7 +509,17 @@ impl UiState {
             self.open_save_dialog(ui, session, None);
         }
 
-        draw_save_dialog(ui, session, &mut self.save_dialog);
+        match draw_save_dialog(ui, session, &mut self.save_dialog) {
+            Some(SaveDialogOutcome::Saved {
+                document,
+                close_after_save: true,
+            }) => {
+                self.close_map_view(session, document);
+                self.close_queue.pop_front();
+            },
+            Some(SaveDialogOutcome::Cancelled { close_after_save: true }) => self.close_queue.clear(),
+            _ => {},
+        }
 
         let reload_profile = self.draw_settings_window(ui, session, settings, themes, load.is_some());
         self.show_welcome |= menu.show_welcome;
@@ -772,7 +791,10 @@ impl UiState {
     }
 
     fn open_save_dialog(&mut self, ui: &Ui, session: &Session, error: Option<String>) {
+        let Some(document) = session.state.active() else { return };
         self.save_dialog = Some(SaveDialog {
+            document,
+            close_after_save: false,
             path: session
                 .map_path()
                 .map(|path| path.display().to_string())
@@ -801,7 +823,8 @@ impl UiState {
             self.git_panel.request(git::GitTab::Conflicts);
         }
 
-        self.panel_focus_requested = self.find.has_focus_request() || self.git_panel.has_focus_request();
+        self.panel_focus_requested =
+            self.find.has_focus_request() || self.git_panel.has_focus_request() || self.close_focus.is_some();
         let mut panels = settings.panels;
         panels.git |= self.git_panel.has_focus_request();
         // The Git tab shares the object tree's dock node, a request to show it wins

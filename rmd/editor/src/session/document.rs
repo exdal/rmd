@@ -297,9 +297,7 @@ impl Session {
             }
             let title = document.title();
             if let Err(error) = self.save_document(id) {
-                outcome
-                    .error
-                    .get_or_insert_with(|| format!("{}: {error}", title.trim_end_matches(" *")));
+                outcome.error.get_or_insert_with(|| format!("{title}: {error}"));
             }
         }
 

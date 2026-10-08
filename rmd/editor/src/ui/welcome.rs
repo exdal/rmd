@@ -4,6 +4,7 @@ use dear_imgui_rs::{StyleColor, Ui};
 use editor::icons::materialdesignicons::{ICON_ALERT, ICON_ALERT_CIRCLE, ICON_CLOSE_THICK, ICON_WEB};
 
 use super::{
+    CloseFocus,
     DIAGNOSTIC_WARNING_COLOR,
     OpenRequest,
     SAVE_ERROR_COLOR,
@@ -167,6 +168,11 @@ impl UiState {
             return;
         }
 
+        let focus = self.close_focus == Some(CloseFocus::Welcome);
+        if focus {
+            self.close_focus = None;
+        }
+        let focus_requested = self.panel_focus_requested;
         let show_welcome = &mut self.show_welcome;
         let central_node = &mut self.central_node;
         let map_filter = &mut self.welcome_map_filter;
@@ -178,8 +184,9 @@ impl UiState {
         } else {
             None
         };
-        ui.window(&self.welcome_window).opened(show_welcome).build(|| {
-            if settings.focus_windows_on_hover {
+        let window = ui.window(&self.welcome_window).opened(show_welcome).focused(focus);
+        window.build(|| {
+            if settings.focus_windows_on_hover && !focus_requested {
                 focus_window_on_hover(ui);
             }
             let dock = ui.get_window_dock_id();
