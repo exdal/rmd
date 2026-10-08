@@ -313,7 +313,6 @@ pub struct UiState {
     load_window: WindowKey,
     load_notice: Option<LoadNotice>,
     diagnostics: DiagnosticsState,
-    load_window_size: [f32; 2],
     keybind_preset_prompt: bool,
     copy_to_clipboard: Option<String>,
     update_check: UpdateCheck,
@@ -390,7 +389,6 @@ impl UiState {
             load_window,
             load_notice: None,
             diagnostics: DiagnosticsState::default(),
-            load_window_size: [0.0, 0.0],
             keybind_preset_prompt,
             copy_to_clipboard: None,
             update_check: UpdateCheck::default(),
@@ -895,10 +893,11 @@ impl UiState {
             ui.open_popup(RELOAD_CONFLICTS_POPUP);
         }
 
-        let _modal = ui
-            .begin_modal_popup_config(RELOAD_CONFLICTS_POPUP)
-            .flags(WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_SAVED_SETTINGS)
-            .begin()?;
+        let _modal = common::begin_centered_modal(
+            ui,
+            RELOAD_CONFLICTS_POPUP,
+            WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_SAVED_SETTINGS,
+        )?;
         ui.text("Discard unsaved changes and load conflicts from Git?");
         let mut load_conflicts = None;
         if ui.button("Discard and load") {
@@ -935,7 +934,6 @@ impl UiState {
         let popup = draw_load_popup(
             ui,
             &self.load_window,
-            &mut self.load_window_size,
             load,
             self.load_notice.as_mut(),
             &self.diagnostics,

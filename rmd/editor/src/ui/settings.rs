@@ -18,7 +18,7 @@ use dear_imgui_rs::{
 use editor::environment::profile_label;
 
 use super::{
-    common::{button_width, dpi, focus_window_on_hover},
+    common::{begin_centered_modal, button_width, center_next_window, dpi, focus_window_on_hover},
     dialog::{MODAL_FLAGS, SAVE_ERROR_COLOR, draw_keybind_preset_dialog},
 };
 use crate::{
@@ -78,7 +78,6 @@ struct SettingsWindowState<'a> {
     category: &'a mut SettingsCategory,
     capturing: &'a mut Option<KeybindAction>,
     resetting_keybinds: &'a mut bool,
-    measured: &'a mut [f32; 2],
     pending_profile: &'a mut Option<ProfileReload>,
     ui_scale_draft: &'a mut Option<u32>,
     theme_editor: &'a mut ThemeEditor,
@@ -216,7 +215,6 @@ pub(super) struct SettingsWindow {
     category: SettingsCategory,
     capturing: Option<KeybindAction>,
     resetting_keybinds: bool,
-    measured: [f32; 2],
     pending_profile: Option<ProfileReload>,
     ui_scale_draft: Option<u32>,
     theme_editor: ThemeEditor,
@@ -232,7 +230,6 @@ impl SettingsWindow {
             category: SettingsCategory::default(),
             capturing: None,
             resetting_keybinds: false,
-            measured: SETTINGS_WINDOW_SIZE,
             pending_profile: None,
             ui_scale_draft: None,
             theme_editor: ThemeEditor::default(),
@@ -258,7 +255,6 @@ impl SettingsWindow {
                 category: &mut self.category,
                 capturing: &mut self.capturing,
                 resetting_keybinds: &mut self.resetting_keybinds,
-                measured: &mut self.measured,
                 pending_profile: &mut self.pending_profile,
                 ui_scale_draft: &mut self.ui_scale_draft,
                 theme_editor: &mut self.theme_editor,
@@ -286,7 +282,6 @@ fn draw_settings_window(
         category,
         capturing,
         resetting_keybinds,
-        measured,
         pending_profile,
         ui_scale_draft,
         theme_editor,
@@ -301,14 +296,12 @@ fn draw_settings_window(
         return SettingsWindowOutput::default();
     }
 
-    let center = ui.main_viewport().work_center();
-    let position = [center[0] - measured[0] / 2.0, center[1] - measured[1] / 2.0];
+    center_next_window(ui, Condition::Appearing);
     let flags = WindowFlags::NO_COLLAPSE | WindowFlags::NO_DOCKING;
     let mut object_tree_changed = false;
     let scale = dpi(ui);
     ui.window(window)
         .opened(open)
-        .position(position, Condition::Appearing)
         .size(SETTINGS_WINDOW_SIZE.map(|size| size * scale), Condition::FirstUseEver)
         .size_constraints(SETTINGS_WINDOW_MIN_SIZE.map(|size| size * scale), [f32::MAX, f32::MAX])
         .flags(flags)
@@ -360,8 +353,6 @@ fn draw_settings_window(
                         },
                     }
                 });
-
-            *measured = ui.window_size();
         });
 
     if !*open {
@@ -723,10 +714,7 @@ fn draw_theme_settings(ui: &Ui, settings: &mut Settings, themes: &mut Themes, ed
 }
 
 fn draw_new_theme_dialog(ui: &Ui, themes: &mut Themes, new_theme: &mut Option<NewTheme>) -> Option<String> {
-    let _modal = ui
-        .begin_modal_popup_config(NEW_THEME_POPUP)
-        .flags(MODAL_FLAGS)
-        .begin()?;
+    let _modal = begin_centered_modal(ui, NEW_THEME_POPUP, MODAL_FLAGS)?;
     let NewTheme { name, error } = new_theme.get_or_insert_with(|| NewTheme {
         name: String::new(),
         error: None,
@@ -1119,7 +1107,7 @@ fn draw_profile_reload_dialog(ui: &Ui, pending_profile: &mut Option<ProfileReloa
         | WindowFlags::NO_COLLAPSE
         | WindowFlags::NO_SAVED_SETTINGS
         | WindowFlags::NO_DOCKING;
-    let _modal = ui.begin_modal_popup_config(PROFILE_RELOAD_POPUP).flags(flags).begin()?;
+    let _modal = begin_centered_modal(ui, PROFILE_RELOAD_POPUP, flags)?;
 
     ui.text_wrapped(message);
     ui.text("Open maps and unsaved changes will be preserved.");
@@ -1275,7 +1263,71 @@ mod tests {
     use dear_imgui_rs::MouseButton;
 
     use super::{super::IMGUI_CONTEXT, *};
-    use crate::theme::DEFAULT_THEME;
+    use crate::{
+        theme::DEFAULT_THEME,
+        ui::fixtures::{assert_window_centered, finish_frame, popup_context, set_desktop_geometry},
+    };
+
+    #[test]
+    fn settings_reopens_centered_after_resize_and_stays_draggable() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        for desktop in [false, true] {
+            let mut context = popup_context(desktop);
+            let mut window = SettingsWindow::new().unwrap();
+            let mut session = Session::new();
+            let mut settings = Settings {
+                focus_windows_on_hover: false,
+                ..Settings::default()
+            };
+            let mut themes = Themes::load(None, context.style(), DEFAULT_THEME);
+            let mut draw = |context: &mut dear_imgui_rs::Context, window: &mut SettingsWindow| {
+                window.draw(context.frame(), &mut session, &mut settings, &mut themes, false);
+                finish_frame(context);
+            };
+
+            set_desktop_geometry(&mut context, [0.0, 0.0], [1920.0, 1080.0]);
+            window.open();
+            for _ in 0..4 {
+                draw(&mut context, &mut window);
+            }
+            assert_window_centered(&mut context, c"###settings-v2");
+            // SAFETY: the test owns the context and the rendered Settings window.
+            let original = unsafe {
+                let window = &*dear_imgui_rs::sys::igFindWindowByName(c"###settings-v2".as_ptr());
+                [window.Pos.x, window.Pos.y]
+            };
+            let grab = [original[0] + 60.0, original[1] + 8.0];
+            for down in [false, true] {
+                context.io_mut().add_mouse_pos_event(grab);
+                context.io_mut().add_mouse_button_event(MouseButton::Left, down);
+                draw(&mut context, &mut window);
+            }
+            context.io_mut().add_mouse_pos_event([grab[0] - 150.0, grab[1] - 130.0]);
+            draw(&mut context, &mut window);
+            context.io_mut().add_mouse_button_event(MouseButton::Left, false);
+            for _ in 0..3 {
+                draw(&mut context, &mut window);
+            }
+            // SAFETY: the Settings window remains live in the test's current context.
+            unsafe {
+                let moved = &*dear_imgui_rs::sys::igFindWindowByName(c"###settings-v2".as_ptr());
+                assert!((moved.Pos.x - (original[0] - 150.0)).abs() <= 1.0);
+                assert!((moved.Pos.y - (original[1] - 130.0)).abs() <= 1.0);
+            }
+
+            window.open = false;
+            draw(&mut context, &mut window);
+            let position = if desktop { [180.0, 90.0] } else { [0.0, 0.0] };
+            set_desktop_geometry(&mut context, position, [960.0, 640.0]);
+            window.open();
+            for _ in 0..4 {
+                draw(&mut context, &mut window);
+            }
+            assert_eq!(context.main_viewport().pos(), position);
+            assert_eq!(context.main_viewport().size(), [960.0, 640.0]);
+            assert_window_centered(&mut context, c"###settings-v2");
+        }
+    }
 
     #[test]
     fn ui_scale_changes_only_when_apply_is_clicked() {
@@ -1420,7 +1472,6 @@ mod tests {
             let mut open = true;
             let mut capturing = None;
             let mut resetting_keybinds = false;
-            let mut measured = SETTINGS_WINDOW_SIZE;
             let mut pending_profile = None;
             let mut ui_scale_draft = None;
             let mut session = Session::new();
@@ -1435,7 +1486,6 @@ mod tests {
                     category: &mut category,
                     capturing: &mut capturing,
                     resetting_keybinds: &mut resetting_keybinds,
-                    measured: &mut measured,
                     pending_profile: &mut pending_profile,
                     ui_scale_draft: &mut ui_scale_draft,
                     theme_editor: &mut ThemeEditor::default(),
@@ -1471,7 +1521,6 @@ mod tests {
             let mut category = SettingsCategory::Compiler;
             let mut capturing = None;
             let mut resetting_keybinds = false;
-            let mut measured = SETTINGS_WINDOW_SIZE;
             let mut pending_profile = None;
             let mut ui_scale_draft = None;
             let mut session = Session::new();
@@ -1497,7 +1546,6 @@ mod tests {
                     category: &mut category,
                     capturing: &mut capturing,
                     resetting_keybinds: &mut resetting_keybinds,
-                    measured: &mut measured,
                     pending_profile: &mut pending_profile,
                     ui_scale_draft: &mut ui_scale_draft,
                     theme_editor: &mut ThemeEditor::default(),

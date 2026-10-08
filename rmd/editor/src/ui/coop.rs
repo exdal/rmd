@@ -12,7 +12,7 @@ use net::{CodebaseId, Comment, CommentId, MAX_COMMENT_LEN, PeerId};
 use super::{
     DIAGNOSTIC_WARNING_COLOR,
     block::{block_selection_bounds, fill_selection, hollow_selection_inner},
-    common::dpi,
+    common::{begin_centered_modal, dpi},
     dialog::{DIALOG_FIELD_WIDTH, MODAL_FLAGS, SAVE_ERROR_COLOR},
     overlay::{OVERLAY_BG, OverlayRect},
 };
@@ -125,7 +125,7 @@ pub(super) fn draw_coop_dialog(
     let mut close = false;
 
     if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = ui.begin_modal_popup_config(state.popup()).flags(MODAL_FLAGS).begin()
+        && let Some(_modal) = begin_centered_modal(ui, state.popup(), MODAL_FLAGS)
     {
         let width = DIALOG_FIELD_WIDTH * dpi(ui);
         let mut submitted = false;
@@ -350,10 +350,7 @@ pub(super) fn draw_out_of_date_dialog(ui: &Ui, session: &Session) -> Option<(Doc
         ui.open_popup(OUT_OF_DATE_POPUP);
     }
 
-    let _modal = ui
-        .begin_modal_popup_config(OUT_OF_DATE_POPUP)
-        .flags(MODAL_FLAGS)
-        .begin()?;
+    let _modal = begin_centered_modal(ui, OUT_OF_DATE_POPUP, MODAL_FLAGS)?;
     let found = out_of_date.and_then(|(id, by)| Some((id, by, session.coop()?, session.state.document(id)?)));
     let Some((id, by, coop, document)) = found else {
         ui.close_current_popup();
@@ -709,7 +706,7 @@ pub(super) fn draw_coop_notice(
         notice.requested = false;
     }
 
-    let _modal = ui.begin_modal_popup_config(STATUS_POPUP).flags(MODAL_FLAGS).begin()?;
+    let _modal = begin_centered_modal(ui, STATUS_POPUP, MODAL_FLAGS)?;
     // a host's own codebase is the session's, so hosting again needs no reload
     let is_mismatch = matches!(coop.status, CoopStatus::CodebaseMismatch { .. }) && !coop.was_hosting();
     {

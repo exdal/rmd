@@ -1029,6 +1029,7 @@ fn is_input(event: &WindowEvent) -> bool {
             | WindowEvent::ModifiersChanged(_)
             | WindowEvent::Ime(_)
             | WindowEvent::Focused(_)
+            | WindowEvent::Moved(_)
             | WindowEvent::Resized(_)
             | WindowEvent::ScaleFactorChanged { .. }
             | WindowEvent::DroppedFile(_)
@@ -1385,6 +1386,21 @@ mod tests {
             NextFrame::OnEvent
         );
         assert_error_popup_is_visible_and_centered(&mut app);
+
+        let resized = settled + Duration::from_secs(2);
+        assert!(is_input(&WindowEvent::Moved(winit::dpi::PhysicalPosition::new(
+            180, 90
+        ))));
+        app.imgui.as_mut().unwrap().io_mut().set_display_size([960.0, 640.0]);
+        app.pacer.activity(resized);
+        assert_eq!(headless_frame(&mut app, resized, None), NextFrame::Now);
+        let settled = settle_headless_editor(&mut app, resized + Duration::from_millis(16));
+        assert_eq!(app.imgui.as_mut().unwrap().main_viewport().size(), [960.0, 640.0]);
+        assert_error_popup_is_visible_and_centered(&mut app);
+        assert_eq!(
+            headless_frame(&mut app, settled + Duration::from_secs(1), None),
+            NextFrame::OnEvent
+        );
     }
 
     #[test]

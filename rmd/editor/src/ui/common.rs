@@ -1,9 +1,36 @@
-use dear_imgui_rs::{StyleColor, TableFlags, Ui, WindowHoveredFlags};
+use dear_imgui_rs::{Condition, ModalPopupToken, StyleColor, TableFlags, Ui, WindowFlags, WindowHoveredFlags, sys};
 
 const MIN_STRETCH_WIDTH: f32 = 40.0;
 
 /// Marks everything an identical scope edit reaches, in the inspector and on the map
 pub(super) const IDENTICAL_EDIT_COLOR: [f32; 4] = [1.0, 0.7, 0.15, 1.0];
+
+pub(super) fn center_next_window(ui: &Ui, condition: Condition) {
+    let center = ui.main_viewport().work_center();
+    ui.with_bound_context(|| unsafe {
+        sys::igSetNextWindowPos(
+            sys::ImVec2 {
+                x: center[0],
+                y: center[1],
+            },
+            condition as i32,
+            sys::ImVec2 { x: 0.5, y: 0.5 },
+        );
+    });
+}
+
+pub(super) fn begin_centered_modal<'ui>(
+    ui: &'ui Ui, name: &'ui str, flags: WindowFlags,
+) -> Option<ModalPopupToken<'ui>> {
+    let condition = if flags.contains(WindowFlags::NO_MOVE) {
+        ui.set_next_window_viewport(ui.main_viewport().id());
+        Condition::Always
+    } else {
+        Condition::Appearing
+    };
+    center_next_window(ui, condition);
+    ui.begin_modal_popup_config(name).flags(flags).begin()
+}
 
 /// Continues the line when the next item fits, wraps it onto a new line otherwise
 pub(super) fn same_line_if_fits(ui: &Ui, width: f32) {
@@ -94,10 +121,66 @@ pub(super) fn fit_icon(width: u32, height: u32, extent: f32) -> [f32; 2] {
 
 #[cfg(test)]
 mod tests {
-    use dear_imgui_rs::{Condition, Ui};
+    use dear_imgui_rs::{Condition, Ui, WindowFlags, sys};
 
-    use super::focus_window_on_hover;
-    use crate::ui::{IMGUI_CONTEXT, fixtures::rectangle_context};
+    use super::{begin_centered_modal, focus_window_on_hover};
+    use crate::ui::{
+        IMGUI_CONTEXT,
+        fixtures::{
+            PopupContext,
+            assert_window_centered,
+            finish_frame,
+            popup_context,
+            rectangle_context,
+            set_desktop_geometry,
+        },
+    };
+
+    #[test]
+    fn movable_modals_keep_their_position_until_reopened() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = popup_context(true);
+        let name = "Movable modal";
+        let flags = WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_SAVED_SETTINGS;
+        let draw = |context: &mut PopupContext, open: bool, close: bool, position: Option<[f32; 2]>| {
+            let ui = context.frame();
+            if open {
+                ui.open_popup(name);
+            }
+            if let Some(_modal) = begin_centered_modal(ui, name, flags) {
+                ui.text("A movable confirmation dialog");
+                if let Some(position) = position {
+                    ui.set_window_pos(position);
+                }
+                if close {
+                    ui.close_current_popup();
+                }
+            }
+            finish_frame(context);
+        };
+
+        set_desktop_geometry(&mut context, [0.0, 0.0], [1920.0, 1080.0]);
+        for frame in 0..4 {
+            draw(&mut context, frame == 0, false, None);
+        }
+        assert_window_centered(&mut context, c"Movable modal");
+        draw(&mut context, false, false, Some([40.0, 80.0]));
+        for _ in 0..3 {
+            draw(&mut context, false, false, None);
+        }
+        // SAFETY: the test owns the current context and its live modal.
+        unsafe {
+            let window = &*sys::igFindWindowByName(c"Movable modal".as_ptr());
+            assert_eq!([window.Pos.x, window.Pos.y], [40.0, 80.0]);
+        }
+        draw(&mut context, false, true, None);
+        draw(&mut context, false, false, None);
+        set_desktop_geometry(&mut context, [180.0, 90.0], [960.0, 640.0]);
+        for frame in 0..4 {
+            draw(&mut context, frame == 0, false, None);
+        }
+        assert_window_centered(&mut context, c"Movable modal");
+    }
 
     fn draw_hover_focus_test_window(ui: &Ui, open_popup: bool) -> (bool, bool) {
         let mut focused = false;

@@ -6,7 +6,10 @@ use std::{
 use dear_imgui_rs::{Condition, InputTextMultilineFlags, Key, StyleColor, Ui, WindowFlags, WindowKey};
 use editor::progress::{Snapshot, Stage};
 
-use super::{SAVE_ERROR_COLOR, common::dpi};
+use super::{
+    SAVE_ERROR_COLOR,
+    common::{center_next_window, dpi},
+};
 use crate::{
     loader::LoadView,
     session::{DiagnosticSeverity, LoadReport, MAX_REPORTED_DIAGNOSTICS},
@@ -128,7 +131,7 @@ pub(super) struct LoadPopup {
 }
 
 pub(super) fn draw_load_popup(
-    ui: &Ui, window: &WindowKey, measured: &mut [f32; 2], load: Option<&LoadView>, notice: Option<&mut LoadNotice>,
+    ui: &Ui, window: &WindowKey, load: Option<&LoadView>, notice: Option<&mut LoadNotice>,
     diagnostics: &DiagnosticsState,
 ) -> LoadPopup {
     let mut popup = LoadPopup::default();
@@ -136,8 +139,8 @@ pub(super) fn draw_load_popup(
         return popup;
     }
 
-    let center = ui.main_viewport().work_center();
-    let position = [center[0] - measured[0] / 2.0, center[1] - measured[1] / 2.0];
+    ui.set_next_window_viewport(ui.main_viewport().id());
+    center_next_window(ui, Condition::Always);
     let flags = WindowFlags::ALWAYS_AUTO_RESIZE
         | WindowFlags::NO_TITLE_BAR
         | WindowFlags::NO_RESIZE
@@ -148,15 +151,14 @@ pub(super) fn draw_load_popup(
 
     ui.window(window)
         .flags(flags)
-        .position(position, Condition::Always)
-        .build(|| draw_load_body(ui, measured, load, notice, diagnostics, &mut popup));
+        .build(|| draw_load_body(ui, load, notice, diagnostics, &mut popup));
 
     popup
 }
 
 fn draw_load_body(
-    ui: &Ui, measured: &mut [f32; 2], load: Option<&LoadView>, notice: Option<&mut LoadNotice>,
-    diagnostics: &DiagnosticsState, popup: &mut LoadPopup,
+    ui: &Ui, load: Option<&LoadView>, notice: Option<&mut LoadNotice>, diagnostics: &DiagnosticsState,
+    popup: &mut LoadPopup,
 ) {
     let escape = ui.is_key_pressed(Key::Escape);
     match (load, notice) {
@@ -220,8 +222,6 @@ fn draw_load_body(
             }
         },
     }
-
-    *measured = ui.window_size();
 }
 
 fn draw_selectable_text(ui: &Ui, id: &str, text: &mut String, lines: usize, color: Option<[f32; 4]>) {
@@ -302,8 +302,70 @@ fn grouped(value: usize) -> String {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{DiagnosticsState, LoadNotice, grouped, shorten_path};
-    use crate::session::{DiagnosticSeverity, LoadReport};
+    use dear_imgui_rs::{Context, WindowKey};
+
+    use super::{DiagnosticsState, LoadNotice, draw_load_popup, grouped, shorten_path};
+    use crate::{
+        loader::LoadView,
+        session::{DiagnosticSeverity, LoadReport},
+        ui::{
+            IMGUI_CONTEXT,
+            fixtures::{assert_window_centered, finish_frame, popup_context, set_desktop_geometry},
+        },
+    };
+
+    #[test]
+    fn load_popups_follow_window_resize_and_content_changes() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        for desktop in [false, true] {
+            let mut context = popup_context(desktop);
+            let window = WindowKey::new("load-resize-test", "Load").unwrap();
+            let diagnostics = DiagnosticsState::default();
+            let progress = LoadView {
+                title: "Opening map",
+                path: String::from("missing.dmm"),
+                snapshot: editor::progress::Progress::new().snapshot(),
+                cancelling: false,
+                cancellable: true,
+            };
+            let mut notice = LoadNotice::failed("Opening map", Path::new("missing.dmm"), "No such file or directory.");
+            let draw = |context: &mut Context, load: Option<&LoadView>, notice: Option<&mut LoadNotice>| {
+                draw_load_popup(context.frame(), &window, load, notice, &diagnostics);
+                finish_frame(context);
+            };
+
+            set_desktop_geometry(&mut context, [0.0, 0.0], [1920.0, 1080.0]);
+            for _ in 0..4 {
+                draw(&mut context, Some(&progress), None);
+            }
+            assert_window_centered(&mut context, c"###load-resize-test");
+
+            let position = if desktop { [230.0, 120.0] } else { [0.0, 0.0] };
+            set_desktop_geometry(&mut context, position, [960.0, 640.0]);
+            for _ in 0..4 {
+                draw(&mut context, Some(&progress), None);
+            }
+            assert_eq!(context.main_viewport().pos(), position);
+            assert_eq!(context.main_viewport().size(), [960.0, 640.0]);
+            assert_window_centered(&mut context, c"###load-resize-test");
+
+            for _ in 0..4 {
+                draw(&mut context, None, Some(&mut notice));
+            }
+            assert_window_centered(&mut context, c"###load-resize-test");
+            draw(&mut context, None, None);
+
+            let position = if desktop { [320.0, 200.0] } else { [0.0, 0.0] };
+            set_desktop_geometry(&mut context, position, [900.0, 600.0]);
+            context.style_mut().set_font_scale_main(1.25);
+            for _ in 0..4 {
+                draw(&mut context, None, Some(&mut notice));
+            }
+            assert_eq!(context.main_viewport().pos(), position);
+            assert_eq!(context.main_viewport().size(), [900.0, 600.0]);
+            assert_window_centered(&mut context, c"###load-resize-test");
+        }
+    }
 
     #[test]
     fn a_short_path_is_left_alone_and_a_long_one_keeps_its_tail() {

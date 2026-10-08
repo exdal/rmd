@@ -9,7 +9,13 @@ use editor::{
     tool::{FillMode, SelectionMask, Tool},
 };
 
-use super::{DIAGNOSTIC_WARNING_COLOR, MAX_CUSTOM_FILL_SEARCH_RESULTS, UiState, common::dpi, draw_type_path_search};
+use super::{
+    DIAGNOSTIC_WARNING_COLOR,
+    MAX_CUSTOM_FILL_SEARCH_RESULTS,
+    UiState,
+    common::{begin_centered_modal, dpi},
+    draw_type_path_search,
+};
 use crate::{session::Session, settings::KeybindPreset};
 
 pub(super) const MODAL_FLAGS: WindowFlags = WindowFlags::ALWAYS_AUTO_RESIZE
@@ -246,10 +252,7 @@ pub(super) fn draw_keybind_preset_dialog(ui: &Ui, open: &mut bool) -> Option<Key
         ui.open_popup(KEYBIND_PRESET_POPUP);
     }
 
-    let _modal = ui
-        .begin_modal_popup_config(KEYBIND_PRESET_POPUP)
-        .flags(MODAL_FLAGS)
-        .begin()?;
+    let _modal = begin_centered_modal(ui, KEYBIND_PRESET_POPUP, MODAL_FLAGS)?;
 
     ui.text("Which keybinding preset would you prefer?");
     ui.text_disabled("You can customize individual bindings later in Settings.");
@@ -276,7 +279,7 @@ pub(super) fn draw_new_map_dialog(ui: &Ui, session: &mut Session, dialog: &mut O
     let mut created = false;
 
     if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = ui.begin_modal_popup_config(NEW_MAP_POPUP).flags(MODAL_FLAGS).begin()
+        && let Some(_modal) = begin_centered_modal(ui, NEW_MAP_POPUP, MODAL_FLAGS)
     {
         ui.text("Path");
         let button_size = ui.frame_height();
@@ -382,7 +385,7 @@ pub(super) fn draw_resize_map_dialog(
     let mut resized = false;
 
     if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = ui.begin_modal_popup_config(RESIZE_MAP_POPUP).flags(MODAL_FLAGS).begin()
+        && let Some(_modal) = begin_centered_modal(ui, RESIZE_MAP_POPUP, MODAL_FLAGS)
     {
         let Some(size) = session.map().map(|map| map.size()) else {
             *dialog = None;
@@ -471,7 +474,7 @@ pub(super) fn draw_go_to_dialog(ui: &Ui, session: &Session, dialog: &mut Option<
     let mut target = None;
 
     if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = ui.begin_modal_popup_config(GO_TO_POPUP).flags(MODAL_FLAGS).begin()
+        && let Some(_modal) = begin_centered_modal(ui, GO_TO_POPUP, MODAL_FLAGS)
     {
         let Some(size) = session.map().map(|map| map.size()) else {
             *dialog = None;
@@ -527,7 +530,7 @@ pub(super) fn draw_new_level_dialog(
     }
 
     if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = ui.begin_modal_popup_config(NEW_LEVEL_POPUP).flags(MODAL_FLAGS).begin()
+        && let Some(_modal) = begin_centered_modal(ui, NEW_LEVEL_POPUP, MODAL_FLAGS)
     {
         if let Some(document) = session.state.document(state.document) {
             ui.text(format!("Create Z level {}", document.map.size().z.saturating_add(1)));
@@ -665,7 +668,7 @@ pub(super) fn draw_save_dialog(
     }
 
     if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = ui.begin_modal_popup_config(SAVE_MAP_POPUP).flags(MODAL_FLAGS).begin()
+        && let Some(_modal) = begin_centered_modal(ui, SAVE_MAP_POPUP, MODAL_FLAGS)
     {
         ui.text("Path");
         ui.set_next_item_width(SAVE_MAP_PATH_WIDTH * dpi(ui));
@@ -741,10 +744,7 @@ pub(super) fn draw_fill_limit_warning(
     let mut dismiss = false;
 
     if let Some(warning) = pending.as_ref()
-        && let Some(_modal) = ui
-            .begin_modal_popup_config(FILL_LIMIT_WARNING_POPUP)
-            .flags(MODAL_FLAGS)
-            .begin()
+        && let Some(_modal) = begin_centered_modal(ui, FILL_LIMIT_WARNING_POPUP, MODAL_FLAGS)
     {
         if !warning.matches(session, fill_mode, boundaries) {
             ui.close_current_popup();
@@ -820,7 +820,7 @@ impl UiState {
         if !ui.is_popup_open(EXIT_POPUP) {
             ui.open_popup(EXIT_POPUP);
         }
-        let Some(_modal) = ui.begin_modal_popup_config(EXIT_POPUP).flags(MODAL_FLAGS).begin() else {
+        let Some(_modal) = begin_centered_modal(ui, EXIT_POPUP, MODAL_FLAGS) else {
             return false;
         };
 
@@ -883,7 +883,7 @@ impl UiState {
             ui.open_popup(CLOSE_MAP_POPUP);
         }
 
-        let Some(_modal) = ui.begin_modal_popup_config(CLOSE_MAP_POPUP).flags(MODAL_FLAGS).begin() else {
+        let Some(_modal) = begin_centered_modal(ui, CLOSE_MAP_POPUP, MODAL_FLAGS) else {
             return;
         };
         let writable = session
@@ -952,7 +952,7 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use dear_imgui_rs::{ConfigFlags, Context, Key, MouseButton, Ui, sys};
+    use dear_imgui_rs::{ConfigFlags, Key, MouseButton, Ui, sys};
     use dmm::{Coord, Map, MapFormat, Prefab, Size};
     use editor::{
         document::{DocumentId, MapDocument, Selection},
@@ -981,11 +981,15 @@ mod tests {
         session::Session,
         settings::Settings,
         theme::{DEFAULT_THEME, Themes},
-        ui::{IMGUI_CONTEXT, UiState, fixtures::rectangle_context},
+        ui::{
+            IMGUI_CONTEXT,
+            UiState,
+            fixtures::{PopupContext, assert_window_centered, finish_frame, popup_context, set_desktop_geometry},
+        },
     };
 
     struct CloseUi {
-        context: Context,
+        context: PopupContext,
         state: UiState,
         session: Session,
         settings: Settings,
@@ -998,9 +1002,14 @@ mod tests {
 
     impl CloseUi {
         fn new() -> Self {
-            let mut context = rectangle_context();
+            let mut context = popup_context(false);
             context.io_mut().set_display_size([1280.0, 720.0]);
-            context.io_mut().set_config_flags(ConfigFlags::DOCKING_ENABLE);
+            Self::with_context(context)
+        }
+
+        fn with_context(mut context: PopupContext) -> Self {
+            let flags = context.io().config_flags() | ConfigFlags::DOCKING_ENABLE;
+            context.io_mut().set_config_flags(flags);
             let themes = Themes::load(None, context.style(), DEFAULT_THEME);
             Self {
                 context,
@@ -1042,7 +1051,7 @@ mod tests {
             self.save_open = ui.is_popup_open("Save map##save-map");
             self.close_buttons = button_centers(ui, c"Unsaved changes##close-map", &["Save", "Discard", "Cancel"]);
             self.save_buttons = button_centers(ui, c"Save map##save-map", &["Cancel", "Save"]);
-            assert!(self.context.render_legacy().valid());
+            finish_frame(&mut self.context);
         }
 
         fn settle(&mut self) {
@@ -1155,6 +1164,40 @@ mod tests {
 
     impl Drop for TestDirectory {
         fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    }
+
+    #[test]
+    fn dirty_close_popup_recenters_after_leaving_fullscreen() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        for desktop in [false, true] {
+            let context = popup_context(desktop);
+            let mut app = CloseUi::with_context(context);
+            set_desktop_geometry(&mut app.context, [0.0, 0.0], [1920.0, 1080.0]);
+            let id = app.add_map("dirty.dmm", true, true);
+            app.select(id);
+            app.state.request_close(&mut app.session, [id]);
+            app.settle();
+            assert!(app.close_open);
+            assert_window_centered(&mut app.context, c"Unsaved changes##close-map");
+            app.escape();
+
+            let position = if desktop { [180.0, 90.0] } else { [0.0, 0.0] };
+            set_desktop_geometry(&mut app.context, position, [960.0, 640.0]);
+            app.settle();
+            app.state.request_close(&mut app.session, [id]);
+            app.settle();
+            assert!(app.close_open);
+            assert_eq!(app.context.main_viewport().size(), [960.0, 640.0]);
+            assert_eq!(app.context.main_viewport().pos(), position);
+            assert_window_centered(&mut app.context, c"Unsaved changes##close-map");
+
+            set_desktop_geometry(&mut app.context, position, [900.0, 600.0]);
+            app.settle();
+            assert_window_centered(&mut app.context, c"Unsaved changes##close-map");
+            app.click(app.close_buttons[0]);
+            assert!(app.save_open && !app.close_open);
+            assert_window_centered(&mut app.context, c"Save map##save-map");
+        }
     }
 
     #[test]
