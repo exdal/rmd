@@ -1484,7 +1484,7 @@ impl Renderer {
             [overlay_lightmap, lit_level, _, _] = module
                 .begin_rendering([
                     (overlay_lightmap, Access::ColorRW),
-                    (level_depth, Access::DepthStencilRead),
+                    (level_depth, Access::DepthStencilRW),
                     (draw_commands, Access::IndirectRead),
                     (visible_indices, Access::VertexRead),
                 ])
