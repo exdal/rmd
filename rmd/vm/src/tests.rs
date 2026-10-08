@@ -1789,6 +1789,87 @@ fn baking_exports_appearance_vars_set_by_runtime_initializers() {
 }
 
 #[test]
+fn baking_preserves_prepared_scalar_appearance() {
+    let (tree, module) = compile(fixture!("programs/baking_preserves_prepared_scalar_appearance.dm"));
+    let atoms = [
+        ("/obj/prepared", Vec::new()),
+        ("/obj/prepared/changed_state", Vec::new()),
+        ("/obj/prepared/changed_sheet", Vec::new()),
+        (
+            "/obj/prepared",
+            vec![
+                ("dir".into(), Value::Num(WEST as f32)),
+                ("alpha".into(), Value::Num(64.0)),
+                ("pixel_x".into(), Value::Num(-8.0)),
+            ],
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (path, vars))| Atom {
+        instance: index as u64 + 1,
+        ty: tree.id_of(&TreePath::parse(path)).expect("prepared type"),
+        position: Position::new(index as i32 + 1, 1, 1),
+        vars,
+    })
+    .collect::<Vec<_>>();
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        atoms.clone(),
+        [4, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    for (id, icon, state, dir) in [
+        (1, "mapping.dmi", "prepared", NORTH),
+        (2, "mapping.dmi", "baked", NORTH),
+        (3, "prepared.dmi", "map", NORTH),
+        (4, "mapping.dmi", "prepared", EAST),
+    ] {
+        let appearance = &bake.appearances[&id];
+        for (name, expected) in [
+            ("icon", Value::Resource(icon.into())),
+            ("icon_state", Value::Text(state.into())),
+            ("dir", Value::Num(dir as f32)),
+            ("alpha", Value::Num(128.0)),
+            ("pixel_x", Value::Num(4.0)),
+            ("pixel_y", Value::Num(-3.0)),
+            ("color", Value::Null),
+        ] {
+            assert!(
+                appearance.vars.contains(&(name.into(), expected)),
+                "placement {id} lost {name}: {appearance:?}"
+            );
+        }
+        let object = bake.runtime.heap.object(bake.object(id).unwrap()).unwrap();
+        assert_eq!(object.vars.get(&"bookkeeping".into()), None);
+        assert_eq!(
+            object.vars.get(&"dir".into()),
+            Some(&GenericValue::Num(dir as f32)),
+            "preparation persists while bake mutations roll back"
+        );
+    }
+    let object = bake.runtime.heap.object(bake.object(2).unwrap()).unwrap();
+    assert_eq!(
+        object.vars.get(&"icon_state".into()).and_then(GenericValue::text),
+        Some("prepared"),
+        "the preview's icon state must roll back"
+    );
+
+    let initial = bake.appearances.clone();
+    bake.update(&tree, &module, Vec::new(), &[4]);
+    bake.update(&tree, &module, vec![atoms[3].clone()], &[]);
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    assert_eq!(
+        bake.appearances, initial,
+        "recreating a placement preserves prepared appearance"
+    );
+}
+
+#[test]
 fn baking_exports_sprite_lighting_roles() {
     let (tree, module) = compile(fixture!("programs/baking_exports_sprite_lighting_roles.dm"));
     let light = tree.id_of(&TreePath::parse("/obj/light")).expect("light type");

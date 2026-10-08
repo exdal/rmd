@@ -740,6 +740,94 @@ mod tests {
 
     #[test]
     #[ignore = "requires the local target/tgstation checkout"]
+    fn tramstation_waste_release_draws_its_prepared_valve_direction() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
+        let (tramstation, errors) =
+            dmm::parser::load(root.join("_maps/map_files/tramstation/tramstation.dmm")).expect("Tramstation map");
+        assert!(errors.is_empty(), "{errors:?}");
+        // Keep the valve's neighboring connections and wall smoothing context around (129, 76, 1).
+        let mut map = Map::new(Size { x: 5, y: 5, z: 1 });
+        for y in 1..=5 {
+            for x in 1..=5 {
+                let tile = tramstation.tile_at(Coord::new(x + 126, y + 73, 1)).unwrap().clone();
+                let key = map.intern_tile(tile);
+                map.grid[0][(5 - y) as usize][(x - 1) as usize] = key;
+            }
+        }
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(String::from("tgstation")),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+            .expect("tgstation codebase");
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+
+        let cache = session.active_cache();
+        let bake = cache.bake.as_ref().expect("valve bake");
+        assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
+        let environment = session.state.environment.as_ref().unwrap();
+        let document = session.state.active_document().unwrap();
+        let instance = *document
+            .instance_ids_at(Coord::new(3, 3, 1))
+            .iter()
+            .find(|id| {
+                document
+                    .prefab_instance(**id)
+                    .unwrap()
+                    .0
+                    .var(&"name".into())
+                    .and_then(Value::as_text)
+                    == Some("Waste Release")
+            })
+            .expect("Waste Release placement");
+        let (prefab, _) = document.prefab_instance(instance).unwrap();
+        let ty = environment.tree.id_of(&prefab.path).unwrap();
+        let delta = &bake.appearances[&instance.get()];
+        let appearance = editor::visual::resolve_delta(&environment.tree, ty, prefab, delta);
+        assert_eq!(appearance.dir, defines::NORTH);
+        assert_eq!(appearance.icon_state.as_deref(), Some("dvalve_off-1"));
+
+        let mut underlays = delta
+            .underlays
+            .iter()
+            .filter_map(|underlay| editor::visual::resolve_overlay(&environment.tree, &appearance, underlay).icon_state)
+            .collect::<Vec<_>>();
+        underlays.sort();
+        assert_eq!(underlays, ["intact_1_3", "intact_2_3"]);
+
+        let icon = appearance.icon.as_deref().unwrap();
+        let file = dmi::IconFile::load(&environment.icon_info[icon].path).expect("valve DMI");
+        let state = file.metadata.find("dvalve_off-1").unwrap();
+        let (x, y, width, height) = file
+            .metadata
+            .sprite_rect(state.sprite_index(dmi::metadata::Dir::North, 0), file.sheet_width);
+        let texture = session
+            .textures
+            .lookup(icon, state.sprite_index(dmi::metadata::Dir::North, 0))
+            .expect("valve body texture");
+        assert!(
+            cache.instances.sprites.iter().any(|sprite| {
+                sprite.owner == instance
+                    && sprite.texture == texture
+                    && sprite.lighting == render::SpriteLighting::Normal
+                    && !sprite.hidden
+            }),
+            "the prepared valve frame did not reach the renderer"
+        );
+        assert!(
+            (y..y + height).any(|row| (x..x + width)
+                .any(|column| { file.pixels[((row * file.sheet_width + column) * 4 + 3) as usize] != 0 })),
+            "the valve module frame is transparent"
+        );
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    #[ignore = "requires the local target/tgstation checkout"]
     fn a_hidden_layer_manifold_draws_its_connections_above_the_floor() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
         let options = editor::environment::BakeOptions {

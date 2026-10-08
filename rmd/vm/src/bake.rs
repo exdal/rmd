@@ -1763,13 +1763,22 @@ impl Runtime {
                                         .map(|variable| variable.value.clone())
                                 })
                         };
-                        let icon_pair_changed = appearance.vars.iter().any(|(name, value)| {
-                            (name == &icon || name == &icon_state) && before_value(name).as_ref() != Some(value)
-                        });
-                        appearance.vars.retain(|(name, value)| {
-                            (target && name == &transform)
-                                || (icon_pair_changed && (name == &icon || name == &icon_state))
+                        let retain_value = |name: &Identifier, value: &Value| {
+                            (target
+                                && (name == &transform
+                                    || evaluator
+                                        .runtime
+                                        .heap
+                                        .object(id)
+                                        .is_some_and(|object| object.vars.contains_key(name))))
                                 || before_value(name).as_ref() != Some(value)
+                        };
+                        let icon_pair_retained = appearance
+                            .vars
+                            .iter()
+                            .any(|(name, value)| (name == &icon || name == &icon_state) && retain_value(name, value));
+                        appearance.vars.retain(|(name, value)| {
+                            retain_value(name, value) || (icon_pair_retained && (name == &icon || name == &icon_state))
                         });
                         for (name, extra) in [
                             (&overlays, &mut appearance.overlays),
