@@ -1,3 +1,6 @@
+// Next available intrinsic indices: datum 1005, list 1110.
+// PLEASE UPDATE THIS WHEN YOU ADD NERW ID!!!
+
 // Root datum
 
 /datum

@@ -1,3 +1,6 @@
+// Next available intrinsic index: 728 (shared by demir.dm and imgui.dm).
+// PLEASE UPDATE THIS WHEN YOU ADD NERW ID!!!
+
 // Return the editor dockspace for imgui_set_next_window_dock().
 /proc/imgui_dockspace()
 	set __demir_intrin = 700

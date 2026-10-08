@@ -192,6 +192,176 @@ fn profile_definition_resolves_the_complete_hook_abi() {
 }
 
 #[test]
+fn modular_loader_uses_the_selected_profiles_declaration() {
+    let (tree, module) = compile(fixture!(
+        "programs/modular_loader_uses_the_selected_profiles_declaration.dm"
+    ));
+    let base = tree.id_of(&TreePath::parse("/datum/demir")).expect("base profile");
+    let variable_type = tree
+        .resolved_var_type(base, &"modular_loader".into())
+        .expect("modular loader type");
+    assert_eq!(variable_type.single(), Some(VarTypeKind::Text));
+    assert!(variable_type.nullable);
+    assert_eq!(Runtime::default().modular_loader(), None);
+
+    for (path, expected) in [
+        ("/datum/demir/loader", Some("tgstation")),
+        ("/datum/demir/loader/inherited", Some("tgstation")),
+        ("/datum/demir/loader/disabled", None),
+        ("/datum/demir/loader/custom", Some("custom-loader")),
+        ("/datum/demir/loader/empty", Some("")),
+        ("/datum/demir/no_loader", None),
+        ("/datum/demir/loader/constructor_enabled", Some("tgstation")),
+        ("/datum/demir/loader/constructor_disabled", None),
+    ] {
+        let profile = tree.id_of(&TreePath::parse(path)).expect("selected profile");
+        let bake = Bake::new_with_profile(
+            &tree,
+            &module,
+            profile,
+            Vec::new(),
+            [1, 1, 1],
+            Limits::default(),
+            IconStates::default(),
+        );
+
+        assert_eq!(bake.diagnostics.count(), 0, "{path}: {:?}", bake.diagnostics);
+        assert_eq!(bake.modular_loader(), expected, "{path}");
+        assert_eq!(bake.runtime.modular_loader(), expected, "{path}");
+    }
+}
+
+#[test]
+fn modular_loader_captures_constructor_overrides_and_ignores_hooks() {
+    let (tree, module) = compile(fixture!(
+        "programs/modular_loader_captures_constructor_overrides_and_ignores_hooks.dm"
+    ));
+    let limits = Limits::default();
+    let mut bake = Bake::new(&tree, &module, Vec::new(), [1, 1, 1], limits, IconStates::default());
+    let profile = bake.runtime.profile.expect("profile instance");
+    let name = Identifier::from("modular_loader");
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    assert_eq!(bake.modular_loader(), Some("constructor"));
+    assert_eq!(bake.runtime.modular_loader(), Some("constructor"));
+    assert_eq!(
+        Evaluator::new(&mut bake.runtime, &tree, &module, limits, None)
+            .read_field(GenericValue::Object(profile), &name)
+            .expect("constructor value"),
+        GenericValue::Text("constructor".into())
+    );
+
+    bake.runtime
+        .run(
+            &tree,
+            &module,
+            hook(&tree, &module.index, ProfileHook::Prepare),
+            Some(profile),
+            None,
+            vec![GenericValue::Null],
+            limits,
+        )
+        .expect("hook writes should commit");
+
+    assert_eq!(
+        Evaluator::new(&mut bake.runtime, &tree, &module, limits, None)
+            .read_field(GenericValue::Object(profile), &name)
+            .expect("hook value"),
+        GenericValue::Null
+    );
+    assert_eq!(bake.runtime.modular_loader(), Some("constructor"));
+    assert_eq!(bake.modular_loader(), Some("constructor"));
+}
+
+#[test]
+fn modular_loader_rejects_invalid_declarations() {
+    let (tree, module) = compile(fixture!("programs/modular_loader_rejects_invalid_declarations.dm"));
+    for path in [
+        "/datum/demir/invalid",
+        "/datum/demir/invalid/list",
+        "/datum/demir/invalid/nonconstant",
+    ] {
+        let profile = tree.id_of(&TreePath::parse(path)).expect("invalid profile");
+        let bake = Bake::new_with_profile(
+            &tree,
+            &module,
+            profile,
+            Vec::new(),
+            [1, 1, 1],
+            Limits::default(),
+            IconStates::default(),
+        );
+
+        assert_eq!(bake.diagnostics.count(), 1, "{path}");
+        let fault = &bake.diagnostics.entries[0].fault;
+        assert_eq!(
+            fault.kind,
+            FaultKind::Unsupported("profile modular_loader must be a constant string or null".into()),
+            "{path}"
+        );
+        let location = tree
+            .var_inherited(profile, &"modular_loader".into())
+            .expect("invalid declaration")
+            .location;
+        assert_eq!(
+            (fault.location.file, fault.location.begin, fault.location.end),
+            (location.file, location.begin, location.end),
+            "{path}"
+        );
+        assert_eq!(bake.modular_loader(), None, "{path}");
+        assert_eq!(bake.runtime.modular_loader(), None, "{path}");
+        assert!(bake.runtime.output().is_empty(), "{path}: New() must not run");
+    }
+}
+
+#[test]
+fn modular_loader_is_unavailable_when_profile_construction_fails() {
+    let (tree, module) = compile(fixture!("programs/modular_loader_rejects_invalid_declarations.dm"));
+    let profile = tree
+        .id_of(&TreePath::parse("/datum/demir/invalid/constructor_failure"))
+        .expect("failing constructor profile");
+    let bake = Bake::new_with_profile(
+        &tree,
+        &module,
+        profile,
+        Vec::new(),
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.diagnostics.count(), 1);
+    assert_eq!(bake.diagnostics.entries[0].fault.kind, FaultKind::Thrown);
+    assert_eq!(bake.modular_loader(), None);
+    assert_eq!(bake.runtime.modular_loader(), None);
+}
+
+#[test]
+fn modular_loader_rejects_invalid_constructor_overrides() {
+    let (tree, module) = compile(fixture!("programs/modular_loader_rejects_invalid_declarations.dm"));
+    let profile = tree
+        .id_of(&TreePath::parse("/datum/demir/invalid/constructor_invalid"))
+        .expect("invalid constructor profile");
+    let bake = Bake::new_with_profile(
+        &tree,
+        &module,
+        profile,
+        Vec::new(),
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.diagnostics.count(), 1);
+    assert_eq!(
+        bake.diagnostics.entries[0].fault.kind,
+        FaultKind::Unsupported("profile modular_loader must be a string or null".into())
+    );
+    assert_eq!(bake.modular_loader(), None);
+    assert_eq!(bake.runtime.modular_loader(), None);
+}
+
+#[test]
 fn an_explicit_default_is_not_inherited_by_its_variants() {
     let (tree, _) = compile(fixture!(
         "programs/an_explicit_default_is_not_inherited_by_its_variants.dm"

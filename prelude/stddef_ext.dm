@@ -1,3 +1,10 @@
+// Next available intrinsic indices by range:
+// World: 123, global procedures: 404.
+// Native hooks: icon 614, database 621, generator 631.
+// Types: atom/image 1026, movable 1032, mob 1042, client 1077,
+//        savefile 1086, geometry 1097.
+// PLEASE UPDATE THIS WHEN YOU ADD NERW ID!!!
+
 // Atom types
 
 /atom

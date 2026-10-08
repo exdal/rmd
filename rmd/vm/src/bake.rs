@@ -328,6 +328,14 @@ impl Bake {
 
     pub fn rotations(&self) -> &[Rotation] { if self.initialized { &self.runtime.rotations } else { &[] } }
 
+    pub fn modular_loader(&self) -> Option<&str> {
+        if self.initialized {
+            self.runtime.modular_loader()
+        } else {
+            None
+        }
+    }
+
     pub fn with_progress(
         tree: &ObjectTree, module: &Module, atoms: Vec<Atom>, size: [i32; 3], limits: Limits, icons: IconStates,
         progress: impl FnMut(Stage, usize, usize),

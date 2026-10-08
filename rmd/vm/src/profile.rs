@@ -1,5 +1,5 @@
 use core::{
-    location::FileId,
+    location::{FileId, Location},
     path::TreePath,
     types::{Identifier, ProcId, Value},
 };
@@ -7,8 +7,100 @@ use core::{
 use codegen::ProcIndex;
 use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
 
+use crate::{Fault, FaultKind, GenericValue, eval::Evaluator, heap::ObjectId};
+
 pub const BASE_PATH: &str = "/datum/demir";
 pub const DEFAULT_VARIABLE: &str = "default";
+
+#[derive(Debug, Default)]
+pub(crate) struct ProfileConfig {
+    modular_loader: Option<String>,
+}
+
+impl ProfileConfig {
+    const FIELDS: [ProfileField; 1] = [Self::MODULAR_LOADER];
+    const MODULAR_LOADER: ProfileField = ProfileField {
+        name: "modular_loader",
+        kind: ProfileFieldKind::NullableText,
+    };
+
+    pub(crate) fn modular_loader(&self) -> Option<&str> { self.modular_loader.as_deref() }
+
+    pub(crate) fn validate_declarations(tree: &ObjectTree, ty: TypeId) -> Result<(), Fault> {
+        for field in Self::FIELDS {
+            field.validate_declaration(tree, ty)?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn capture(
+        evaluator: &mut Evaluator<'_>, tree: &ObjectTree, ty: TypeId, object: ObjectId,
+    ) -> Result<Self, Fault> {
+        Ok(Self {
+            modular_loader: Self::MODULAR_LOADER.optional_text(evaluator, tree, ty, object)?,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ProfileField {
+    name: &'static str,
+    kind: ProfileFieldKind,
+}
+
+#[derive(Clone, Copy)]
+enum ProfileFieldKind {
+    NullableText,
+}
+
+impl ProfileField {
+    fn declaration<'tree>(&self, tree: &'tree ObjectTree, ty: TypeId) -> Option<&'tree VarDecl> {
+        tree.var_inherited(ty, &Identifier::from(self.name))
+    }
+
+    fn validate_declaration(&self, tree: &ObjectTree, ty: TypeId) -> Result<(), Fault> {
+        let Some(variable) = self.declaration(tree, ty) else {
+            return Ok(());
+        };
+        let (valid, expected) = match self.kind {
+            ProfileFieldKind::NullableText => (
+                matches!(variable.value, Value::Text(_) | Value::Null),
+                "a constant string or null",
+            ),
+        };
+        if !valid {
+            return Err(self.fault(variable.location, expected));
+        }
+
+        Ok(())
+    }
+
+    // TODO: replace it when we have num in the future
+    fn optional_text(
+        &self, evaluator: &mut Evaluator<'_>, tree: &ObjectTree, ty: TypeId, object: ObjectId,
+    ) -> Result<Option<String>, Fault> {
+        let Some(variable) = self.declaration(tree, ty) else {
+            return Ok(None);
+        };
+        let value = evaluator.read_field(GenericValue::Object(object), &Identifier::from(self.name))?;
+        match value {
+            GenericValue::Text(text) => Ok(Some(text.to_string())),
+            GenericValue::Null => Ok(None),
+            _ => Err(self.fault(variable.location, "a string or null")),
+        }
+    }
+
+    fn fault(&self, location: Location, expected: &str) -> Fault {
+        Fault {
+            location,
+            ..Fault::detached(FaultKind::Unsupported(format!(
+                "profile {} must be {expected}",
+                self.name
+            )))
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(usize)]

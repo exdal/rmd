@@ -347,6 +347,7 @@
 
 /datum/demir/tgstation
 	default = TRUE
+	modular_loader = DEMIR_MODULAR_LOADER_TG
 	var/smooth = TRUE
 	var/lighting = TRUE
 	var/show_cables = TRUE

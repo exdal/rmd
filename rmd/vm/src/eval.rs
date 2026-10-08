@@ -27,6 +27,7 @@ use crate::{
     GenericValue,
     Limits,
     heap::{Heap, Object, ObjectId},
+    profile::ProfileConfig,
     value::{IteratorId, ListData, ListId, ModifiedType, ProcRef, RangeValue, Receiver},
     world::World,
 };
@@ -44,6 +45,7 @@ pub struct Runtime {
     pub(crate) rotations: Vec<crate::bake::Rotation>,
     pub(crate) defining_groups: bool,
     output: Vec<String>,
+    profile_config: ProfileConfig,
     pub(crate) global: Option<ObjectId>,
     pub(crate) world_object: Option<ObjectId>,
     pub(crate) profile: Option<ObjectId>,
@@ -53,6 +55,8 @@ impl Runtime {
     pub fn output(&self) -> &[String] { &self.output }
 
     pub fn take_output(&mut self) -> Vec<String> { std::mem::take(&mut self.output) }
+
+    pub fn modular_loader(&self) -> Option<&str> { self.profile_config.modular_loader() }
 
     /// `seed` is the atom a hook was called about, which is what its randomness and its memo safety
     /// are measured against. It is not `src`: a hook's `src` is the profile, which has no position.
@@ -131,6 +135,9 @@ impl Runtime {
     pub(crate) fn create_profile(
         &mut self, tree: &ObjectTree, module: &Module, ty: TypeId, constructor: Option<ProcId>, limits: Limits,
     ) -> Result<ObjectId> {
+        self.profile_config = ProfileConfig::default();
+        ProfileConfig::validate_declarations(tree, ty)?;
+
         self.ensure_global()?;
         self.ensure_world(tree)?;
 
@@ -149,7 +156,11 @@ impl Runtime {
         };
         self.defining_groups = false;
 
-        result.map(|()| id)
+        result?;
+        self.profile_config =
+            ProfileConfig::capture(&mut Evaluator::new(self, tree, module, limits, None), tree, ty, id)?;
+
+        Ok(id)
     }
 
     pub fn constant(&mut self, value: &Value, limits: Limits) -> std::result::Result<GenericValue, FaultKind> {

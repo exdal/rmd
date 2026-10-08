@@ -12,6 +12,7 @@ pub mod heap;
 mod intrinsic;
 pub mod json;
 mod lighting;
+pub mod maploader;
 pub mod matrix;
 pub mod profile;
 pub mod ui;
@@ -20,6 +21,7 @@ pub mod world;
 
 pub use error::{Fault, FaultKind};
 pub use eval::Runtime;
+pub use maploader::MapLoader;
 pub use prelude::Intrinsic;
 pub use value::{AppearanceDelta, AppearanceLighting, GenericValue};
 
