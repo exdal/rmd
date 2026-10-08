@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-// long enough for ImGui hover delays, tooltips and popups to settle after the last input
+// long enough for ImGui hover delays, tooltips and popups to settle after the last activity
 const SETTLE: Duration = Duration::from_millis(600);
 const THROTTLED_INTERVAL: Duration = Duration::from_millis(33);
 // matches the co-op cursor interval, so peer cursors stay smooth
@@ -33,16 +33,16 @@ pub struct Status {
 
 #[derive(Debug, Default)]
 pub struct FramePacer {
-    last_input: Option<Instant>,
+    last_activity: Option<Instant>,
 }
 
 impl FramePacer {
-    pub fn input(&mut self, now: Instant) { self.last_input = Some(now); }
+    pub fn activity(&mut self, now: Instant) { self.last_activity = Some(now); }
 
     pub fn next(&self, now: Instant, frame_start: Instant, demand: FrameDemand, status: Status) -> NextFrame {
         // a hidden window presents nothing, so nothing would hold a frame back to the display rate
         let demand = if status.is_hidden { FrameDemand::Idle } else { demand };
-        let is_settling = !status.is_hidden && self.last_input.is_some_and(|at| now.duration_since(at) < SETTLE);
+        let is_settling = !status.is_hidden && self.last_activity.is_some_and(|at| now.duration_since(at) < SETTLE);
         if is_settling || demand == FrameDemand::Full {
             return NextFrame::Now;
         }
@@ -69,17 +69,17 @@ mod tests {
         is_hidden: false,
     };
 
-    fn pacer_with_input_at(at: Instant) -> FramePacer {
+    fn pacer_with_activity_at(at: Instant) -> FramePacer {
         let mut pacer = FramePacer::default();
-        pacer.input(at);
+        pacer.activity(at);
 
         pacer
     }
 
     #[test]
-    fn input_draws_at_full_rate_until_it_settles() {
+    fn activity_draws_at_full_rate_until_it_settles() {
         let start = Instant::now();
-        let pacer = pacer_with_input_at(start);
+        let pacer = pacer_with_activity_at(start);
 
         assert_eq!(
             pacer.next(start + Duration::from_millis(100), start, FrameDemand::Idle, IDLE),
@@ -87,6 +87,36 @@ mod tests {
         );
         assert_eq!(
             pacer.next(start + SETTLE, start, FrameDemand::Idle, IDLE),
+            NextFrame::OnEvent
+        );
+    }
+
+    #[test]
+    fn background_activity_restarts_settling_without_input() {
+        let start = Instant::now();
+        let mut pacer = pacer_with_activity_at(start);
+        let completed = start + SETTLE * 2;
+
+        assert_eq!(
+            pacer.next(completed, completed, FrameDemand::Idle, BUSY),
+            NextFrame::At(completed + BUSY_INTERVAL)
+        );
+        pacer.activity(completed);
+        assert_eq!(
+            pacer.next(completed, completed, FrameDemand::Idle, IDLE),
+            NextFrame::Now
+        );
+        assert_eq!(
+            pacer.next(
+                completed + SETTLE - Duration::from_millis(1),
+                completed,
+                FrameDemand::Idle,
+                IDLE
+            ),
+            NextFrame::Now
+        );
+        assert_eq!(
+            pacer.next(completed + SETTLE, completed, FrameDemand::Idle, IDLE),
             NextFrame::OnEvent
         );
     }
@@ -139,7 +169,7 @@ mod tests {
     #[test]
     fn a_hidden_window_only_polls_background_work() {
         let start = Instant::now();
-        let pacer = pacer_with_input_at(start);
+        let pacer = pacer_with_activity_at(start);
         let hidden = |is_busy| Status {
             is_busy,
             is_hidden: true,

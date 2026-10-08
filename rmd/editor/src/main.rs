@@ -490,6 +490,7 @@ impl App {
             themes,
             ui_font,
             window,
+            pacer,
             ..
         } = self;
         let (Some(consumer), Some(renderer), Some(platform), Some(imgui), Some(themes), Some(ui_font), Some(window)) = (
@@ -583,6 +584,7 @@ impl App {
 
             collected.unwrap_or_default()
         })?;
+        settle_appearing_windows(imgui, pacer, Instant::now());
         if let Some(pending) = pending_screenshot.take() {
             take_screenshot(renderer, session, &scene, &drawn, pending, clipboard);
         }
@@ -818,6 +820,7 @@ impl App {
                 self.ui.set_load_notice(None);
             },
         }
+        self.pacer.activity(Instant::now());
     }
 
     fn start_pending_map(&mut self) {
@@ -1001,6 +1004,19 @@ impl App {
     }
 }
 
+fn settle_appearing_windows(imgui: &Context, pacer: &mut FramePacer, now: Instant) {
+    let is_appearing = unsafe {
+        let windows = &(*imgui.as_raw()).Windows;
+        (0..windows.Size).any(|index| {
+            let window = &**windows.Data.add(index as usize);
+            window.Active && window.Appearing
+        })
+    };
+    if is_appearing {
+        pacer.activity(now);
+    }
+}
+
 fn is_input(event: &WindowEvent) -> bool {
     matches!(
         event,
@@ -1050,7 +1066,7 @@ impl ApplicationHandler for App {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         if is_input(&event) {
-            self.pacer.input(Instant::now());
+            self.pacer.activity(Instant::now());
             if let Some(window) = self.window.as_ref() {
                 window.request_redraw();
             }
@@ -1156,6 +1172,10 @@ impl ApplicationHandler for App {
                 self.session.poll_bake();
                 self.session.poll_git();
                 self.session.poll_coop();
+                let is_busy = self.is_busy();
+                if was_busy && !is_busy {
+                    self.pacer.activity(Instant::now());
+                }
 
                 if redraw.exit {
                     if let Err(e) = self.shutdown() {
@@ -1165,7 +1185,7 @@ impl ApplicationHandler for App {
                 } else {
                     // a job that finished during this frame still needs one more frame to show
                     let status = Status {
-                        is_busy: was_busy || self.is_busy(),
+                        is_busy: was_busy || is_busy,
                         is_hidden,
                     };
                     self.schedule_frame(event_loop, frame_start, redraw.demand, status);
@@ -1220,7 +1240,215 @@ fn bake_options(settings: &Settings, environment: Option<&std::path::Path>) -> B
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use dear_imgui_rs::sys;
+
     use super::*;
+
+    fn headless_editor() -> App {
+        let mut imgui = Context::create();
+        imgui.set_ini_filename(None::<PathBuf>).unwrap();
+        imgui.font_atlas().try_claim_legacy_renderer().unwrap().build();
+        imgui.io_mut().set_display_size([1280.0, 720.0]);
+        imgui.io_mut().set_delta_time(1.0 / 60.0);
+        imgui.io_mut().set_config_flags(ConfigFlags::DOCKING_ENABLE);
+        let themes = Themes::load(None, imgui.style(), theme::DEFAULT_THEME);
+
+        App {
+            session: Session::new(),
+            settings: Settings {
+                check_for_updates: false,
+                ..Settings::default()
+            },
+            ui: UiState::new(false).unwrap(),
+            loader: Loader::new(),
+            pending_map: None,
+            pending_reload: None,
+            pending_share: None,
+            retry_coop_after_load: false,
+            deferred_job: None,
+            settings_ready: true,
+            uploaded_texture_revision: None,
+            pending_screenshot: None,
+            screenshot_dir: None,
+            clipboard: None,
+            title: String::new(),
+            consumer: None,
+            renderer: None,
+            platform: None,
+            imgui: Some(imgui),
+            scaled_style: None,
+            themes: Some(themes),
+            ui_font: None,
+            window: None,
+            pacer: FramePacer::default(),
+            is_occluded: false,
+        }
+    }
+
+    fn headless_frame(app: &mut App, now: Instant, load: Option<&loader::LoadView>) -> NextFrame {
+        let imgui = app.imgui.as_mut().unwrap();
+        let output = app
+            .ui
+            .draw(
+                imgui.frame(),
+                &mut app.session,
+                &mut app.settings,
+                app.themes.as_mut().unwrap(),
+                load,
+            )
+            .unwrap();
+        assert!(imgui.render_legacy().valid());
+        settle_appearing_windows(imgui, &mut app.pacer, now);
+
+        app.pacer.next(
+            now,
+            now,
+            output.demand,
+            Status {
+                is_busy: load.is_some() || app.is_busy(),
+                is_hidden: false,
+            },
+        )
+    }
+
+    fn settle_headless_editor(app: &mut App, start: Instant) -> Instant {
+        for frame in 0..100 {
+            let now = start + Duration::from_millis(16) * frame;
+            match headless_frame(app, now, None) {
+                NextFrame::Now => {},
+                NextFrame::OnEvent => return now,
+                NextFrame::At(_) => panic!("static UI should not need background polling or animation"),
+            }
+        }
+        panic!("static UI did not settle");
+    }
+
+    struct PopupGeometry {
+        id: u32,
+        position: [f32; 2],
+        size: [f32; 2],
+        appearing: bool,
+        visible: bool,
+    }
+
+    fn load_popup_geometry() -> PopupGeometry {
+        // SAFETY: the test holds IMGUI_CONTEXT and inspects its live window after rendering.
+        unsafe {
+            let window = sys::igFindWindowByName(c"###load".as_ptr());
+            assert!(!window.is_null(), "the load popup should exist");
+            let window = &*window;
+            let lists = &(*window.Viewport).DrawDataP.CmdLists;
+            let rendered = (0..lists.Size).any(|index| *lists.Data.add(index as usize) == window.DrawList);
+
+            PopupGeometry {
+                id: window.ID,
+                position: [window.Pos.x, window.Pos.y],
+                size: [window.Size.x, window.Size.y],
+                appearing: window.Appearing,
+                visible: window.Active && !window.Hidden && rendered,
+            }
+        }
+    }
+
+    fn assert_error_popup_is_visible_and_centered(app: &mut App) {
+        let popup = load_popup_geometry();
+        let imgui = app.imgui.as_mut().unwrap();
+        assert!(popup.visible, "the popup should be included in the rendered draw data");
+        assert!(!popup.appearing, "the open popup should have finished appearing");
+        let expected_width = 620.0 + imgui.style().window_padding()[0] * 2.0;
+        assert!((popup.size[0] - expected_width).abs() <= 1.0, "{:#?}", popup.size);
+        assert!(popup.size[1] > 100.0 && popup.size[1] < 720.0);
+        let center = imgui.main_viewport().work_center();
+        for (axis, center) in center.into_iter().enumerate() {
+            assert!((popup.position[axis] + popup.size[axis] / 2.0 - center).abs() <= 1.0);
+        }
+    }
+
+    #[test]
+    fn an_incoming_load_notice_appears_and_settles_without_input() {
+        let _guard = ui::IMGUI_CONTEXT.lock().unwrap();
+        let mut app = headless_editor();
+        let idle = settle_headless_editor(&mut app, Instant::now());
+
+        app.ui.set_load_notice(Some(LoadNotice::failed(
+            "Opening map",
+            Path::new("missing.dmm"),
+            "The map could not be opened.\nNo such file or directory.",
+        )));
+        assert_eq!(headless_frame(&mut app, idle, None), NextFrame::Now);
+        let settled = settle_headless_editor(&mut app, idle + Duration::from_millis(16));
+        assert_error_popup_is_visible_and_centered(&mut app);
+        assert_eq!(
+            headless_frame(&mut app, settled + Duration::from_secs(1), None),
+            NextFrame::OnEvent
+        );
+        assert_error_popup_is_visible_and_centered(&mut app);
+    }
+
+    #[test]
+    fn a_load_result_settles_when_error_replaces_progress_in_the_same_window() {
+        let _guard = ui::IMGUI_CONTEXT.lock().unwrap();
+        let mut app = headless_editor();
+        // Keep simulated frames in the past: applying a loader result records real time.
+        let idle = settle_headless_editor(&mut app, Instant::now() - Duration::from_secs(5));
+        let progress = loader::LoadView {
+            title: "Opening map",
+            path: String::from("missing.dmm"),
+            snapshot: editor::progress::Progress::new().snapshot(),
+            cancelling: false,
+            cancellable: true,
+        };
+        for frame in 0..5 {
+            assert_eq!(
+                headless_frame(&mut app, idle + Duration::from_millis(16) * frame, Some(&progress)),
+                NextFrame::Now
+            );
+        }
+        let progress_geometry = load_popup_geometry();
+        assert!(progress_geometry.visible && !progress_geometry.appearing);
+        // Let the appearance activity expire while background loading keeps frames running.
+        let completed = idle + Duration::from_secs(1);
+        assert_eq!(headless_frame(&mut app, completed, Some(&progress)), NextFrame::Now);
+        let completed = Instant::now();
+        assert_eq!(
+            app.pacer
+                .next(completed, completed, FrameDemand::Idle, Status::default()),
+            NextFrame::OnEvent
+        );
+
+        app.apply_outcome(Outcome::Failed {
+            job: Job::Map {
+                path: PathBuf::from("missing.dmm"),
+                z: 1,
+                git_enabled: false,
+            },
+            error: String::from("The map could not be opened.\nNo such file or directory."),
+        });
+        let completed = Instant::now();
+        assert_eq!(
+            app.pacer
+                .next(completed, completed, FrameDemand::Idle, Status::default()),
+            NextFrame::Now
+        );
+        assert_eq!(headless_frame(&mut app, completed, None), NextFrame::Now);
+        let error_geometry = load_popup_geometry();
+        assert_eq!(error_geometry.id, progress_geometry.id);
+        assert!(
+            !error_geometry.appearing,
+            "the existing window does not appear again for an error"
+        );
+        let settled = settle_headless_editor(&mut app, completed + Duration::from_millis(16));
+        assert_error_popup_is_visible_and_centered(&mut app);
+        let error_geometry = load_popup_geometry();
+        assert!(error_geometry.size[0] > progress_geometry.size[0]);
+        assert!(error_geometry.size[1] > progress_geometry.size[1]);
+        assert_eq!(
+            headless_frame(&mut app, settled + Duration::from_secs(1), None),
+            NextFrame::OnEvent
+        );
+    }
 
     fn parse(arguments: &[&str]) -> Result<Arguments, String> {
         let arguments = arguments.iter().map(PathBuf::from).collect::<Vec<_>>();
