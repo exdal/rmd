@@ -13,6 +13,7 @@ pub mod frame;
 pub mod git;
 pub mod grid;
 pub mod icons;
+pub mod maploader;
 pub mod node;
 pub mod patch;
 pub mod process;
