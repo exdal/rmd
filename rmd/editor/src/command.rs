@@ -3,11 +3,11 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use dmm::Coord;
+use dmm::{Coord, PrefabInstanceId};
 
 use crate::{
     document::{MapDocument, PlacedTile},
-    grid::Grid,
+    grid::{Grid, LevelCells},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,11 +25,32 @@ pub struct Resize {
 }
 
 #[derive(Debug, Clone)]
+pub enum LevelEdit {
+    Insert { z: u32, cells: LevelCells },
+    Delete { z: u32, cells: LevelCells },
+}
+
+impl LevelEdit {
+    pub fn z(&self) -> u32 {
+        match self {
+            Self::Insert { z, .. } | Self::Delete { z, .. } => *z,
+        }
+    }
+
+    fn cells(&self) -> &LevelCells {
+        match self {
+            Self::Insert { cells, .. } | Self::Delete { cells, .. } => cells,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Edit {
     pub label: String,
     pub changes: Vec<TileChange>,
     record_empty: bool,
     resize: Option<Resize>,
+    level: Option<LevelEdit>,
 }
 
 impl Edit {
@@ -39,6 +60,7 @@ impl Edit {
             changes: Vec::new(),
             record_empty: false,
             resize: None,
+            level: None,
         }
     }
 
@@ -51,6 +73,15 @@ impl Edit {
 
     pub fn resize(&self) -> Option<Resize> { self.resize }
 
+    pub(crate) fn changing_level(mut self, level: LevelEdit) -> Self {
+        self.level = Some(level);
+        self
+    }
+
+    pub fn level(&self) -> Option<&LevelEdit> { self.level.as_ref() }
+
+    pub fn is_structural(&self) -> bool { self.resize.is_some() || self.level.is_some() }
+
     pub fn recorded_when_empty(mut self) -> Self {
         self.record_empty = true;
 
@@ -62,14 +93,15 @@ impl Edit {
         self.changes.push(TileChange { coord, before, after });
     }
 
-    pub fn is_empty(&self) -> bool { self.changes.is_empty() }
+    pub fn is_empty(&self) -> bool { self.changes.is_empty() && self.level.is_none() }
 
-    pub fn affected_instances(&self) -> Vec<dmm::PrefabInstanceId> {
+    pub fn affected_instances(&self) -> Vec<PrefabInstanceId> {
         let mut affected = self
             .changes
             .iter()
             .flat_map(|change| change.before.iter().chain(&change.after))
             .map(|placed| placed.id())
+            .chain(self.level.iter().flat_map(|level| level.cells().ids()))
             .collect::<Vec<_>>();
         affected.sort_unstable();
         affected.dedup();
@@ -121,37 +153,48 @@ impl Default for History {
 impl History {
     pub fn new() -> Self { Self::default() }
 
-    pub(crate) fn apply_grouped(&mut self, grid: &mut Grid, edit: Edit, group: Option<EditGroupId>) {
+    pub(crate) fn apply_grouped(&mut self, grid: &mut Grid, edit: Edit, group: Option<EditGroupId>) -> bool {
         if edit.is_empty() && !edit.record_empty {
-            return;
+            return true;
         }
 
-        apply_edit(grid, &edit, ChangeSide::After);
+        if !apply_edit(grid, &edit, ChangeSide::After) {
+            return false;
+        }
 
         let undo_len = self.undo_stack.len();
         if group.is_some()
+            && !edit.is_structural()
             && let Some(previous) = self.undo_stack.last_mut()
             && previous.group == group
+            && !previous.edit.is_structural()
         {
             if self.saved_at == Some(undo_len) {
                 self.saved_at = None;
             }
+
             merge_changes(&mut previous.edit.changes, edit.changes);
+
             if previous.edit.changes.is_empty() {
                 self.undo_stack.pop();
             }
+
             self.discard_redo();
 
-            return;
+            return true;
         }
 
         self.discard_redo();
         self.undo_stack.push(HistoryEntry { edit, group });
+        true
     }
 
     pub(crate) fn undo(&mut self, grid: &mut Grid) -> Option<&Edit> {
+        if !apply_edit(grid, &self.undo_stack.last()?.edit, ChangeSide::Before) {
+            return None;
+        }
+
         let entry = self.undo_stack.pop()?;
-        apply_edit(grid, &entry.edit, ChangeSide::Before);
 
         self.redo_stack.push(entry);
 
@@ -159,8 +202,11 @@ impl History {
     }
 
     pub(crate) fn redo(&mut self, grid: &mut Grid) -> Option<&Edit> {
+        if !apply_edit(grid, &self.redo_stack.last()?.edit, ChangeSide::After) {
+            return None;
+        }
+
         let entry = self.redo_stack.pop()?;
-        apply_edit(grid, &entry.edit, ChangeSide::After);
 
         self.undo_stack.push(entry);
 
@@ -218,13 +264,27 @@ enum ChangeSide {
     After,
 }
 
-pub(crate) fn apply_unrecorded(grid: &mut Grid, edit: &Edit) { apply_edit(grid, edit, ChangeSide::After); }
+pub(crate) fn apply_unrecorded(grid: &mut Grid, edit: &Edit) -> bool { apply_edit(grid, edit, ChangeSide::After) }
 
-fn apply_edit(grid: &mut Grid, edit: &Edit, side: ChangeSide) {
+fn apply_edit(grid: &mut Grid, edit: &Edit, side: ChangeSide) -> bool {
+    if let Some(level) = &edit.level {
+        let is_inserting = matches!(
+            (level, side),
+            (LevelEdit::Insert { .. }, ChangeSide::After) | (LevelEdit::Delete { .. }, ChangeSide::Before)
+        );
+
+        return if is_inserting {
+            grid.insert_level(level.z(), level.cells())
+        } else {
+            grid.delete_level(level.z())
+        };
+    }
+
     let size = edit.resize.map(|resize| match side {
         ChangeSide::Before => resize.before,
         ChangeSide::After => resize.after,
     });
+
     if let Some((width, height)) = size {
         let current = grid.size();
         grid.resize(width.max(current.x), height.max(current.y));
@@ -234,6 +294,8 @@ fn apply_edit(grid: &mut Grid, edit: &Edit, side: ChangeSide) {
     if let Some((width, height)) = size {
         grid.resize(width, height);
     }
+
+    true
 }
 
 // a tile changed twice by one edit ends up as its last `after`, and goes back to its first `before`

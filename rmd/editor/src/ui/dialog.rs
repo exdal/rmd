@@ -30,6 +30,7 @@ pub(super) const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warnin
 pub(super) const NEW_MAP_POPUP: &str = "New map##new-map";
 
 const NEW_LEVEL_POPUP: &str = "Create Z level##new-z-level";
+const DELETE_LEVEL_POPUP: &str = "Delete Z level##delete-z-level";
 
 pub(super) const RESIZE_MAP_POPUP: &str = "Resize map##resize-map";
 
@@ -193,6 +194,27 @@ impl NewLevelDialog {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DeleteLevelDialog {
+    pub(super) document: DocumentId,
+    z: u32,
+    generation: u64,
+    pub(super) open: bool,
+    error: Option<String>,
+}
+
+impl DeleteLevelDialog {
+    pub(super) fn new(document: &MapDocument) -> Self {
+        Self {
+            document: document.id(),
+            z: document.z,
+            generation: document.generation(),
+            open: true,
+            error: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ResizeMapDialog {
     width: i32,
@@ -274,99 +296,107 @@ pub(super) fn draw_keybind_preset_dialog(ui: &Ui, open: &mut bool) -> Option<Key
 }
 
 pub(super) fn draw_new_map_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<NewMapDialog>) -> (bool, bool) {
+    let Some(state) = dialog.as_mut() else {
+        return (false, false);
+    };
+
+    let Some(_modal) = begin_centered_modal(ui, NEW_MAP_POPUP, MODAL_FLAGS) else {
+        return (false, false);
+    };
+
     let mut close = false;
     let mut pick_path = false;
     let mut created = false;
 
-    if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = begin_centered_modal(ui, NEW_MAP_POPUP, MODAL_FLAGS)
-    {
-        ui.text("Path");
-        let button_size = ui.frame_height();
-        let spacing = ui.clone_style().item_spacing()[0];
-        ui.set_next_item_width(NEW_MAP_PATH_WIDTH * dpi(ui) - button_size - spacing);
-        let submitted = ui
-            .input_text("##new-map-path", &mut state.path)
-            .enter_returns_true(true)
-            .build();
-        ui.same_line();
-        if ui.button_with_size(
-            format!("{ICON_DOTS_HORIZONTAL}##new-map-path-picker"),
-            [button_size, button_size],
-        ) {
-            pick_path = true;
-        }
-        ui.set_item_tooltip("Choose a map path");
+    ui.text("Path");
+    let button_size = ui.frame_height();
+    let spacing = ui.clone_style().item_spacing()[0];
+    ui.set_next_item_width(NEW_MAP_PATH_WIDTH * dpi(ui) - button_size - spacing);
+    let submitted = ui
+        .input_text("##new-map-path", &mut state.path)
+        .enter_returns_true(true)
+        .build();
+    ui.same_line();
+    if ui.button_with_size(
+        format!("{ICON_DOTS_HORIZONTAL}##new-map-path-picker"),
+        [button_size, button_size],
+    ) {
+        pick_path = true;
+    }
 
-        ui.text("Format");
-        if ui.radio_button("DMM", state.format == MapFormat::Standard) {
-            state.format = MapFormat::Standard;
-        }
-        ui.same_line();
-        if ui.radio_button("TGM", state.format == MapFormat::Tgm) {
-            state.format = MapFormat::Tgm;
-        }
+    ui.set_item_tooltip("Choose a map path");
 
-        for (label, id, value) in [
-            ("Width", "##new-map-width", &mut state.width),
-            ("Height", "##new-map-height", &mut state.height),
-            ("Z levels", "##new-map-levels", &mut state.levels),
-        ] {
-            ui.text(label);
-            ui.set_next_item_width(NEW_MAP_PATH_WIDTH * dpi(ui));
-            ui.drag_int_config(id)
-                .range(1, NEW_MAP_MAX_DIMENSION)
-                .flags(DragFlags::ALWAYS_CLAMP)
-                .build(ui, value);
-        }
+    ui.text("Format");
+    if ui.radio_button("DMM", state.format == MapFormat::Standard) {
+        state.format = MapFormat::Standard;
+    }
 
-        if let Some(error) = state.error.as_deref() {
-            ui.text_colored(SAVE_ERROR_COLOR, error);
-        }
-        ui.separator();
+    ui.same_line();
+    if ui.radio_button("TGM", state.format == MapFormat::Tgm) {
+        state.format = MapFormat::Tgm;
+    }
 
-        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
-            close = true;
-            ui.close_current_popup();
-        }
-        ui.same_line();
+    for (label, id, value) in [
+        ("Width", "##new-map-width", &mut state.width),
+        ("Height", "##new-map-height", &mut state.height),
+        ("Z levels", "##new-map-levels", &mut state.levels),
+    ] {
+        ui.text(label);
+        ui.set_next_item_width(NEW_MAP_PATH_WIDTH * dpi(ui));
+        ui.drag_int_config(id)
+            .range(1, NEW_MAP_MAX_DIMENSION)
+            .flags(DragFlags::ALWAYS_CLAMP)
+            .build(ui, value);
+    }
 
-        let valid_dimensions = [state.width, state.height, state.levels]
-            .into_iter()
-            .all(|dimension| (1..=NEW_MAP_MAX_DIMENSION).contains(&dimension));
-        let can_create = !state.path.trim().is_empty() && valid_dimensions;
-        let clicked = {
-            let _disabled = ui.begin_disabled_with_cond(!can_create);
+    if let Some(error) = state.error.as_deref() {
+        ui.text_colored(SAVE_ERROR_COLOR, error);
+    }
 
-            ui.button("Create")
-        };
+    ui.separator();
 
-        if can_create && (clicked || submitted) {
-            let result = session
-                .codebase_dir()
-                .ok_or_else(|| String::from("no codebase is loaded"))
-                .and_then(|base| resolve_new_map_path(base, &state.path))
-                .and_then(|path| {
-                    session
-                        .create_map(
-                            &path,
-                            Size {
-                                x: state.width as u32,
-                                y: state.height as u32,
-                                z: state.levels as u32,
-                            },
-                            state.format,
-                        )
-                        .map_err(|error| error.to_string())
-                });
-            match result {
-                Ok(()) => {
-                    created = true;
-                    close = true;
-                    ui.close_current_popup();
-                },
-                Err(error) => state.error = Some(error),
-            }
+    if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+        close = true;
+        ui.close_current_popup();
+    }
+
+    ui.same_line();
+
+    let valid_dimensions = [state.width, state.height, state.levels]
+        .into_iter()
+        .all(|dimension| (1..=NEW_MAP_MAX_DIMENSION).contains(&dimension));
+    let can_create = !state.path.trim().is_empty() && valid_dimensions;
+    let clicked = {
+        let _disabled = ui.begin_disabled_with_cond(!can_create);
+
+        ui.button("Create")
+    };
+
+    if can_create && (clicked || submitted) {
+        let result = session
+            .codebase_dir()
+            .ok_or_else(|| String::from("no codebase is loaded"))
+            .and_then(|base| resolve_new_map_path(base, &state.path))
+            .and_then(|path| {
+                session
+                    .create_map(
+                        &path,
+                        Size {
+                            x: state.width as u32,
+                            y: state.height as u32,
+                            z: state.levels as u32,
+                        },
+                        state.format,
+                    )
+                    .map_err(|error| error.to_string())
+            });
+        match result {
+            Ok(()) => {
+                created = true;
+                close = true;
+                ui.close_current_popup();
+            },
+            Err(error) => state.error = Some(error),
         }
     }
 
@@ -377,88 +407,97 @@ pub(super) fn draw_new_map_dialog(ui: &Ui, session: &mut Session, dialog: &mut O
     (pick_path, created)
 }
 
-/// Returns whether the map was resized
 pub(super) fn draw_resize_map_dialog(
     ui: &Ui, session: &mut Session, dialog: &mut Option<ResizeMapDialog>, remembered_fill: &mut Option<TileFillPaths>,
 ) -> bool {
+    let Some(state) = dialog.as_mut() else {
+        return false;
+    };
+
+    let Some(_modal) = begin_centered_modal(ui, RESIZE_MAP_POPUP, MODAL_FLAGS) else {
+        return false;
+    };
+
     let mut close = false;
     let mut resized = false;
 
-    if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = begin_centered_modal(ui, RESIZE_MAP_POPUP, MODAL_FLAGS)
-    {
-        let Some(size) = session.map().map(|map| map.size()) else {
-            *dialog = None;
-            ui.close_current_popup();
-            return false;
-        };
-        ui.text(format!("Currently {}x{} on {} Z level(s)", size.x, size.y, size.z));
-        for (label, id, value) in [
-            ("Width", "##resize-map-width", &mut state.width),
-            ("Height", "##resize-map-height", &mut state.height),
-        ] {
-            ui.text(label);
-            ui.set_next_item_width(DIALOG_FIELD_WIDTH * dpi(ui));
-            ui.drag_int_config(id)
-                .range(1, NEW_MAP_MAX_DIMENSION)
-                .flags(DragFlags::ALWAYS_CLAMP)
-                .build(ui, value);
-        }
+    let Some(size) = session.map().map(|map| map.size()) else {
+        *dialog = None;
+        ui.close_current_popup();
+        return false;
+    };
 
-        let fill = draw_tile_fill_search(ui, session, &mut state.fill);
-        let wrap = ui.push_text_wrap_pos(ui.cursor_pos()[0] + DIALOG_FIELD_WIDTH * dpi(ui));
-        let (width, height) = (state.width, state.height);
-        let losses = match (&state.losses, &fill) {
-            (_, None) => 0,
-            (Some((cached_width, cached_height, cached_fill, losses)), Some(fill))
-                if (*cached_width, *cached_height, cached_fill) == (width, height, fill) =>
-            {
-                *losses
-            },
-            (_, Some(fill)) => {
-                let losses = session.resize_losses(width as u32, height as u32, fill);
-                state.losses = Some((width, height, fill.clone(), losses));
-                losses
-            },
-        };
-        if losses > 0 {
-            let noun = if losses == 1 { "tile" } else { "tiles" };
-            ui.text_colored(
-                DIAGNOSTIC_WARNING_COLOR,
-                format!("{losses} {noun} will be deleted! You can revert this operation with undo."),
-            );
-        }
-        if let Some(error) = state.error.as_deref() {
-            ui.text_colored(SAVE_ERROR_COLOR, error);
-        }
-        wrap.end();
-        ui.separator();
+    ui.text(format!("Currently {}x{} on {} Z level(s)", size.x, size.y, size.z));
+    for (label, id, value) in [
+        ("Width", "##resize-map-width", &mut state.width),
+        ("Height", "##resize-map-height", &mut state.height),
+    ] {
+        ui.text(label);
+        ui.set_next_item_width(DIALOG_FIELD_WIDTH * dpi(ui));
+        ui.drag_int_config(id)
+            .range(1, NEW_MAP_MAX_DIMENSION)
+            .flags(DragFlags::ALWAYS_CLAMP)
+            .build(ui, value);
+    }
 
-        let shortcuts = !state.fill.captures_keys();
-        if ui.button("Cancel") || (shortcuts && ui.is_key_pressed(Key::Escape)) {
-            close = true;
-            ui.close_current_popup();
-        }
-        ui.same_line();
-        let changed = (width as u32, height as u32) != (size.x, size.y);
-        let clicked = {
-            let _disabled = ui.begin_disabled_with_cond(!changed || fill.is_none());
-
-            ui.button("Resize")
-        };
-        if changed
-            && clicked
-            && let Some(fill) = fill
+    let fill = draw_tile_fill_search(ui, session, &mut state.fill);
+    let wrap = ui.push_text_wrap_pos(ui.cursor_pos()[0] + DIALOG_FIELD_WIDTH * dpi(ui));
+    let (width, height) = (state.width, state.height);
+    let losses = match (&state.losses, &fill) {
+        (_, None) => 0,
+        (Some((cached_width, cached_height, cached_fill, losses)), Some(fill))
+            if (*cached_width, *cached_height, cached_fill) == (width, height, fill) =>
         {
-            match session.resize_map(width as u32, height as u32, &fill) {
-                Ok(()) => {
-                    state.fill.remember(session, remembered_fill);
-                    resized = true;
-                    close = true;
-                    ui.close_current_popup();
-                },
-                Err(error) => state.error = Some(error),
-            }
+            *losses
+        },
+        (_, Some(fill)) => {
+            let losses = session.resize_losses(width as u32, height as u32, fill);
+            state.losses = Some((width, height, fill.clone(), losses));
+            losses
+        },
+    };
+
+    if losses > 0 {
+        let noun = if losses == 1 { "tile" } else { "tiles" };
+        ui.text_colored(
+            DIAGNOSTIC_WARNING_COLOR,
+            format!("{losses} {noun} will be deleted! You can revert this operation with undo."),
+        );
+    }
+
+    if let Some(error) = state.error.as_deref() {
+        ui.text_colored(SAVE_ERROR_COLOR, error);
+    }
+
+    wrap.end();
+    ui.separator();
+
+    let shortcuts = !state.fill.captures_keys();
+    if ui.button("Cancel") || (shortcuts && ui.is_key_pressed(Key::Escape)) {
+        close = true;
+        ui.close_current_popup();
+    }
+
+    ui.same_line();
+    let changed = (width as u32, height as u32) != (size.x, size.y);
+    let clicked = {
+        let _disabled = ui.begin_disabled_with_cond(!changed || fill.is_none());
+
+        ui.button("Resize")
+    };
+
+    if changed
+        && clicked
+        && let Some(fill) = fill
+    {
+        match session.resize_map(width as u32, height as u32, &fill) {
+            Ok(()) => {
+                state.fill.remember(session, remembered_fill);
+                resized = true;
+                close = true;
+                ui.close_current_popup();
+            },
+            Err(error) => state.error = Some(error),
         }
     }
 
@@ -470,43 +509,45 @@ pub(super) fn draw_resize_map_dialog(
 }
 
 pub(super) fn draw_go_to_dialog(ui: &Ui, session: &Session, dialog: &mut Option<GoToDialog>) -> Option<Coord> {
+    let state = dialog.as_mut()?;
+    let _modal = begin_centered_modal(ui, GO_TO_POPUP, MODAL_FLAGS)?;
+
     let mut close = false;
     let mut target = None;
 
-    if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = begin_centered_modal(ui, GO_TO_POPUP, MODAL_FLAGS)
-    {
-        let Some(size) = session.map().map(|map| map.size()) else {
-            *dialog = None;
-            ui.close_current_popup();
-            return None;
-        };
-        ui.text(format!("Map is {}x{} on {} Z level(s)", size.x, size.y, size.z));
-        for (label, id, value, max) in [
-            ("X", "##go-to-x", &mut state.x, size.x),
-            ("Y", "##go-to-y", &mut state.y, size.y),
-            ("Z", "##go-to-z", &mut state.z, size.z),
-        ] {
-            ui.text(label);
-            ui.set_next_item_width(DIALOG_FIELD_WIDTH * dpi(ui));
-            if label == "X" && ui.is_window_appearing() {
-                ui.set_keyboard_focus_here();
-            }
-            ui.input_int(id, value);
-            *value = (*value).clamp(1, max.max(1) as i32);
-        }
-        ui.separator();
+    let Some(size) = session.map().map(|map| map.size()) else {
+        *dialog = None;
+        ui.close_current_popup();
+        return None;
+    };
 
-        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
-            close = true;
-            ui.close_current_popup();
+    ui.text(format!("Map is {}x{} on {} Z level(s)", size.x, size.y, size.z));
+    for (label, id, value, max) in [
+        ("X", "##go-to-x", &mut state.x, size.x),
+        ("Y", "##go-to-y", &mut state.y, size.y),
+        ("Z", "##go-to-z", &mut state.z, size.z),
+    ] {
+        ui.text(label);
+        ui.set_next_item_width(DIALOG_FIELD_WIDTH * dpi(ui));
+        if label == "X" && ui.is_window_appearing() {
+            ui.set_keyboard_focus_here();
         }
-        ui.same_line();
-        if ui.button("Go") || ui.is_key_pressed(Key::Enter) || ui.is_key_pressed(Key::KeypadEnter) {
-            target = Some(Coord::new(state.x as u32, state.y as u32, state.z as u32));
-            close = true;
-            ui.close_current_popup();
-        }
+        ui.input_int(id, value);
+        *value = (*value).clamp(1, max.max(1) as i32);
+    }
+
+    ui.separator();
+
+    if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+        close = true;
+        ui.close_current_popup();
+    }
+
+    ui.same_line();
+    if ui.button("Go") || ui.is_key_pressed(Key::Enter) || ui.is_key_pressed(Key::KeypadEnter) {
+        target = Some(Coord::new(state.x as u32, state.y as u32, state.z as u32));
+        close = true;
+        ui.close_current_popup();
     }
 
     if close {
@@ -519,51 +560,119 @@ pub(super) fn draw_go_to_dialog(ui: &Ui, session: &Session, dialog: &mut Option<
 pub(super) fn draw_new_level_dialog(
     ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDialog>, remembered_fill: &mut Option<TileFillPaths>,
 ) {
-    let mut close = false;
+    let Some(state) = dialog.as_mut() else {
+        return;
+    };
 
-    if let Some(state) = dialog.as_mut()
-        && state.open
-    {
+    if state.open {
         ui.open_popup(NEW_LEVEL_POPUP);
         state.fill = TileFillSearch::new(session, remembered_fill.as_ref());
         state.open = false;
     }
 
-    if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = begin_centered_modal(ui, NEW_LEVEL_POPUP, MODAL_FLAGS)
+    let Some(_modal) = begin_centered_modal(ui, NEW_LEVEL_POPUP, MODAL_FLAGS) else {
+        return;
+    };
+
+    let mut close = false;
+    if let Some(document) = session.state.document(state.document) {
+        ui.text(format!("Create Z level {}", document.map.size().z.saturating_add(1)));
+    }
+
+    let fill = draw_tile_fill_search(ui, session, &mut state.fill);
+    if let Some(error) = state.error.as_deref() {
+        ui.text_colored(SAVE_ERROR_COLOR, error);
+    }
+
+    ui.separator();
+
+    let shortcuts = !state.fill.captures_keys();
+    if ui.button("Cancel") || (shortcuts && ui.is_key_pressed(Key::Escape)) {
+        close = true;
+        ui.close_current_popup();
+    }
+
+    ui.same_line();
+    let clicked = {
+        let _disabled = ui.begin_disabled_with_cond(fill.is_none());
+
+        ui.button("Create")
+    };
+
+    let submitted = shortcuts && (ui.is_key_pressed(Key::Enter) || ui.is_key_pressed(Key::KeypadEnter));
+    if (clicked || submitted)
+        && let Some(fill) = fill
     {
-        if let Some(document) = session.state.document(state.document) {
-            ui.text(format!("Create Z level {}", document.map.size().z.saturating_add(1)));
+        match session.create_level(state.document, &fill) {
+            Ok(_) => {
+                state.fill.remember(session, remembered_fill);
+                close = true;
+                ui.close_current_popup();
+            },
+            Err(error) => state.error = Some(error),
         }
-        let fill = draw_tile_fill_search(ui, session, &mut state.fill);
-        if let Some(error) = state.error.as_deref() {
-            ui.text_colored(SAVE_ERROR_COLOR, error);
-        }
-        ui.separator();
+    }
 
-        let shortcuts = !state.fill.captures_keys();
-        if ui.button("Cancel") || (shortcuts && ui.is_key_pressed(Key::Escape)) {
-            close = true;
-            ui.close_current_popup();
-        }
-        ui.same_line();
-        let clicked = {
-            let _disabled = ui.begin_disabled_with_cond(fill.is_none());
+    if close {
+        *dialog = None;
+    }
+}
 
-            ui.button("Create")
-        };
-        let submitted = shortcuts && (ui.is_key_pressed(Key::Enter) || ui.is_key_pressed(Key::KeypadEnter));
-        if (clicked || submitted)
-            && let Some(fill) = fill
-        {
-            match session.create_level(state.document, &fill) {
-                Ok(_) => {
-                    state.fill.remember(session, remembered_fill);
-                    close = true;
-                    ui.close_current_popup();
-                },
-                Err(error) => state.error = Some(error),
-            }
+pub(super) fn draw_delete_level_dialog(ui: &Ui, session: &mut Session, dialog: &mut Option<DeleteLevelDialog>) {
+    let Some(state) = dialog.as_mut() else {
+        return;
+    };
+
+    if state.open {
+        ui.open_popup(DELETE_LEVEL_POPUP);
+        state.open = false;
+    }
+
+    let Some(_modal) = begin_centered_modal(ui, DELETE_LEVEL_POPUP, MODAL_FLAGS) else {
+        return;
+    };
+
+    let mut close = false;
+    let is_valid = session.state.active() == Some(state.document)
+        && session.can_delete_level(state.document)
+        && session
+            .state
+            .document(state.document)
+            .is_some_and(|document| document.generation() == state.generation && document.z == state.z);
+    ui.text(format!("Delete Z level {} and all its contents?", state.z));
+    ui.text_disabled("Higher levels will shift down. You can undo this deletion.");
+
+    if !is_valid {
+        ui.text_colored(
+            SAVE_ERROR_COLOR,
+            "The map changed or the level cannot be deleted. Cancel and try again.",
+        );
+    }
+
+    if let Some(error) = &state.error {
+        ui.text_colored(SAVE_ERROR_COLOR, error);
+    }
+
+    ui.separator();
+    if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+        close = true;
+        ui.close_current_popup();
+    }
+
+    ui.same_line();
+
+    let clicked = {
+        let _disabled = ui.begin_disabled_with_cond(!is_valid);
+        ui.button("Delete")
+    };
+
+    if !close && is_valid && (clicked || ui.is_key_pressed(Key::Enter) || ui.is_key_pressed(Key::KeypadEnter)) {
+        match session.delete_level(state.document, state.z) {
+            Ok(()) => {
+                close = true;
+                ui.close_current_popup();
+            },
+            Err(error) => state.error = Some(error),
         }
     }
 
@@ -662,70 +771,73 @@ fn resolve_new_map_path(codebase_dir: &Path, input: &str) -> Result<PathBuf, Str
 pub(super) fn draw_save_dialog(
     ui: &Ui, session: &mut Session, dialog: &mut Option<SaveDialog>,
 ) -> Option<SaveDialogOutcome> {
-    let mut outcome = None;
-    if dialog.is_some() && !ui.is_popup_open(SAVE_MAP_POPUP) {
+    let state = dialog.as_mut()?;
+    if !ui.is_popup_open(SAVE_MAP_POPUP) {
         ui.open_popup(SAVE_MAP_POPUP);
     }
 
-    if let Some(state) = dialog.as_mut()
-        && let Some(_modal) = begin_centered_modal(ui, SAVE_MAP_POPUP, MODAL_FLAGS)
-    {
-        ui.text("Path");
-        ui.set_next_item_width(SAVE_MAP_PATH_WIDTH * dpi(ui));
-        let submitted = ui
-            .input_text("##save-map-path", &mut state.path)
-            .enter_returns_true(true)
-            .build();
+    let _modal = begin_centered_modal(ui, SAVE_MAP_POPUP, MODAL_FLAGS)?;
 
-        ui.text("Format");
-        if ui.radio_button("DMM", state.format == MapFormat::Standard) {
-            state.format = MapFormat::Standard;
-        }
-        ui.same_line();
-        if ui.radio_button("TGM", state.format == MapFormat::Tgm) {
-            state.format = MapFormat::Tgm;
-        }
+    let mut outcome = None;
+    ui.text("Path");
+    ui.set_next_item_width(SAVE_MAP_PATH_WIDTH * dpi(ui));
+    let submitted = ui
+        .input_text("##save-map-path", &mut state.path)
+        .enter_returns_true(true)
+        .build();
 
-        if let Some(error) = state.error.as_deref() {
-            ui.text_colored(SAVE_ERROR_COLOR, error);
-        }
-        ui.separator();
+    ui.text("Format");
+    if ui.radio_button("DMM", state.format == MapFormat::Standard) {
+        state.format = MapFormat::Standard;
+    }
 
-        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
-            outcome = Some(SaveDialogOutcome::Cancelled {
-                close_after_save: state.close_after_save,
-            });
-            ui.close_current_popup();
-        }
-        ui.same_line();
+    ui.same_line();
+    if ui.radio_button("TGM", state.format == MapFormat::Tgm) {
+        state.format = MapFormat::Tgm;
+    }
 
-        let path = state.path.trim();
-        let can_save = !path.is_empty();
-        let clicked = {
-            let _disabled = ui.begin_disabled_with_cond(!can_save);
+    if let Some(error) = state.error.as_deref() {
+        ui.text_colored(SAVE_ERROR_COLOR, error);
+    }
 
-            ui.button("Save")
+    ui.separator();
+
+    if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+        outcome = Some(SaveDialogOutcome::Cancelled {
+            close_after_save: state.close_after_save,
+        });
+        ui.close_current_popup();
+    }
+
+    ui.same_line();
+
+    let path = state.path.trim();
+    let can_save = !path.is_empty();
+    let clicked = {
+        let _disabled = ui.begin_disabled_with_cond(!can_save);
+
+        ui.button("Save")
+    };
+
+    if outcome.is_none() && can_save && (clicked || submitted) {
+        let result = if session.set_active_document(state.document) {
+            session.save_map_as(Path::new(path), state.format)
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "This map is no longer open.",
+            ))
         };
 
-        if outcome.is_none() && can_save && (clicked || submitted) {
-            let result = if session.set_active_document(state.document) {
-                session.save_map_as(Path::new(path), state.format)
-            } else {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "This map is no longer open.",
-                ))
-            };
-            match result {
-                Ok(()) => {
-                    outcome = Some(SaveDialogOutcome::Saved {
-                        document: state.document,
-                        close_after_save: state.close_after_save,
-                    });
-                    ui.close_current_popup();
-                },
-                Err(error) => state.error = Some(error.to_string()),
-            }
+        match result {
+            Ok(()) => {
+                outcome = Some(SaveDialogOutcome::Saved {
+                    document: state.document,
+                    close_after_save: state.close_after_save,
+                });
+                ui.close_current_popup();
+            },
+            Err(error) => state.error = Some(error.to_string()),
         }
     }
 
@@ -740,32 +852,38 @@ pub(super) fn draw_fill_limit_warning(
     ui: &Ui, session: &mut Session, pending: &mut Option<PendingFillWarning>, fill_mode: FillMode,
     boundaries: &[TreePath],
 ) {
+    let Some(warning) = pending.as_ref() else {
+        return;
+    };
+
+    let Some(_modal) = begin_centered_modal(ui, FILL_LIMIT_WARNING_POPUP, MODAL_FLAGS) else {
+        return;
+    };
+
     let mut fill_anyway = false;
     let mut dismiss = false;
 
-    if let Some(warning) = pending.as_ref()
-        && let Some(_modal) = begin_centered_modal(ui, FILL_LIMIT_WARNING_POPUP, MODAL_FLAGS)
-    {
-        if !warning.matches(session, fill_mode, boundaries) {
-            ui.close_current_popup();
-            *pending = None;
-            return;
-        }
-        ui.text(format!("This fill would change more than {} tiles.", warning.limit));
-        ui.text("The operation may make the editor unresponsive.");
-        ui.text("Do you want to fill it anyway?");
-        ui.separator();
+    if !warning.matches(session, fill_mode, boundaries) {
+        ui.close_current_popup();
+        *pending = None;
+        return;
+    }
 
-        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
-            dismiss = true;
-            ui.close_current_popup();
-        }
-        ui.same_line();
-        if ui.button("Fill Anyway") {
-            fill_anyway = true;
-            dismiss = true;
-            ui.close_current_popup();
-        }
+    ui.text(format!("This fill would change more than {} tiles.", warning.limit));
+    ui.text("The operation may make the editor unresponsive.");
+    ui.text("Do you want to fill it anyway?");
+    ui.separator();
+
+    if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+        dismiss = true;
+        ui.close_current_popup();
+    }
+
+    ui.same_line();
+    if ui.button("Fill Anyway") {
+        fill_anyway = true;
+        dismiss = true;
+        ui.close_current_popup();
     }
 
     if dismiss
@@ -947,6 +1065,7 @@ impl UiState {
 mod tests {
     use core::path::TreePath;
     use std::{
+        error::Error,
         ffi::{CStr, CString},
         fs,
         path::{Path, PathBuf},
@@ -960,6 +1079,7 @@ mod tests {
     };
 
     use super::{
+        DeleteLevelDialog,
         FillWarningContext,
         GO_TO_POPUP,
         GoToDialog,
@@ -971,6 +1091,7 @@ mod tests {
         ResizeMapDialog,
         TileFillPaths,
         TileFillSearch,
+        draw_delete_level_dialog,
         draw_go_to_dialog,
         draw_keybind_preset_dialog,
         draw_new_level_dialog,
@@ -984,7 +1105,14 @@ mod tests {
         ui::{
             IMGUI_CONTEXT,
             UiState,
-            fixtures::{PopupContext, assert_window_centered, finish_frame, popup_context, set_desktop_geometry},
+            fixtures::{
+                PopupContext,
+                assert_window_centered,
+                finish_frame,
+                popup_context,
+                rectangle_context,
+                set_desktop_geometry,
+            },
         },
     };
 
@@ -1751,5 +1879,109 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn confirming_deletion_removes_the_selected_level_and_can_be_undone() -> Result<(), Box<dyn Error>> {
+        let _guard = IMGUI_CONTEXT.lock().map_err(|_| "UI context lock is poisoned")?;
+        let mut context = rectangle_context();
+        let mut session = Session::new();
+        let id = session
+            .state
+            .open_document(MapDocument::new(Map::new(Size { x: 2, y: 1, z: 3 }), 2));
+        let mut dialog = Some(DeleteLevelDialog::new(
+            session.state.document(id).ok_or("document is missing")?,
+        ));
+        draw_delete_level_dialog(context.frame(), &mut session, &mut dialog);
+        assert!(context.render_legacy().valid());
+        assert_eq!(session.level_count(), 3);
+        context.io_mut().add_key_event(Key::Enter, true);
+        draw_delete_level_dialog(context.frame(), &mut session, &mut dialog);
+        assert!(context.render_legacy().valid());
+        assert!(dialog.is_none());
+        assert_eq!(session.level_count(), 2);
+        assert_eq!(session.z(), 2);
+        assert!(session.undo());
+        assert_eq!(session.level_count(), 3);
+        assert!(session.redo());
+        assert_eq!(session.level_count(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn cancellation_or_a_changed_document_does_not_delete_a_level() -> Result<(), Box<dyn Error>> {
+        let _guard = IMGUI_CONTEXT.lock().map_err(|_| "UI context lock is poisoned")?;
+        for stale in [false, true] {
+            let mut context = rectangle_context();
+            let mut session = Session::new();
+            let id = session
+                .state
+                .open_document(MapDocument::new(Map::new(Size { x: 1, y: 1, z: 2 }), 2));
+            let mut dialog = Some(DeleteLevelDialog::new(
+                session.state.document(id).ok_or("document is missing")?,
+            ));
+            draw_delete_level_dialog(context.frame(), &mut session, &mut dialog);
+            assert!(context.render_legacy().valid());
+            if stale {
+                session
+                    .state
+                    .document_mut(id)
+                    .ok_or("document is missing")?
+                    .append_remote_level(&[])
+                    .ok_or("could not append remote level")?;
+            }
+
+            context
+                .io_mut()
+                .add_key_event(if stale { Key::Enter } else { Key::Escape }, true);
+            draw_delete_level_dialog(context.frame(), &mut session, &mut dialog);
+            assert!(context.render_legacy().valid());
+            assert_eq!(session.level_count(), if stale { 3 } else { 2 });
+            assert_eq!(dialog.is_some(), stale);
+            assert!(
+                !session
+                    .state
+                    .document(id)
+                    .ok_or("document is missing")?
+                    .history
+                    .can_undo()
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn read_only_and_last_level_restrictions_apply_at_confirmation() -> Result<(), Box<dyn Error>> {
+        let _guard = IMGUI_CONTEXT.lock().map_err(|_| "UI context lock is poisoned")?;
+        for levels in [1, 2] {
+            let mut context = rectangle_context();
+            let mut session = Session::new();
+            let id = session
+                .state
+                .open_document(MapDocument::new(Map::new(Size { x: 1, y: 1, z: levels }), levels));
+            let mut dialog = Some(DeleteLevelDialog::new(
+                session.state.document(id).ok_or("document is missing")?,
+            ));
+            draw_delete_level_dialog(context.frame(), &mut session, &mut dialog);
+            assert!(context.render_legacy().valid());
+            if levels == 2 {
+                session
+                    .state
+                    .document_mut(id)
+                    .ok_or("document is missing")?
+                    .set_read_only(true);
+            }
+
+            context.io_mut().add_key_event(Key::Enter, true);
+            draw_delete_level_dialog(context.frame(), &mut session, &mut dialog);
+            assert!(context.render_legacy().valid());
+            assert!(dialog.is_some());
+            assert!(!session.can_delete_level(id));
+            assert!(session.delete_level(id, levels).is_err());
+            assert_eq!(session.level_count(), levels);
+        }
+
+        Ok(())
     }
 }

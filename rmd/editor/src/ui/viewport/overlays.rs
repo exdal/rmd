@@ -145,6 +145,7 @@ impl UiState {
                 custom_fill_boundaries: &mut self.custom_fill_boundaries,
                 custom_fill_search: &mut self.custom_fill_search,
                 new_level_dialog: &mut self.new_level_dialog,
+                delete_level_dialog: &mut self.delete_level_dialog,
             },
         );
 

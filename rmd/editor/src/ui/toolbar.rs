@@ -2,12 +2,13 @@ use core::path::TreePath;
 
 use dear_imgui_rs::{StyleColor, StyleVar, Ui};
 use editor::{
-    icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_MENU_DOWN},
+    icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_DELETE, ICON_MENU_DOWN},
     tool::{FillMode, Tool},
 };
 
 use super::{
     BlockSelectionOptions,
+    DeleteLevelDialog,
     MAX_CUSTOM_FILL_SEARCH_RESULTS,
     NewLevelDialog,
     OverlayRect,
@@ -34,7 +35,9 @@ pub(super) fn request_level_change(session: &mut Session, delta: i32, dialog: &m
     *dialog = Some(NewLevelDialog::new(document));
 }
 
-fn draw_z_levels(ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDialog>) {
+fn draw_z_levels(
+    ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDialog>, deletion: &mut Option<DeleteLevelDialog>,
+) {
     let current = session.z();
     let button_size = ui.frame_height();
     ui.align_text_to_frame_padding();
@@ -56,6 +59,22 @@ fn draw_z_levels(ui: &Ui, session: &mut Session, dialog: &mut Option<NewLevelDia
         ui.button_with_size(">##z-level-up", [button_size, button_size])
     };
 
+    ui.same_line();
+
+    let is_delete_clicked = {
+        let _disabled =
+            ui.begin_disabled_with_cond(session.state.active().is_none_or(|id| !session.can_delete_level(id)));
+        let frame_padding = ui.clone_style().frame_padding();
+        let _padding = ui.push_style_var(StyleVar::FramePadding([0.0, frame_padding[1]]));
+        let _alignment = ui.push_style_var(StyleVar::ButtonTextAlign([0.5, 0.5]));
+        ui.button_with_size(format!("{ICON_DELETE}##z-level-delete"), [button_size, button_size])
+    };
+
+    ui.set_item_tooltip("Delete current Z level");
+    if is_delete_clicked && let Some(document) = session.state.active_document() {
+        *deletion = Some(DeleteLevelDialog::new(document));
+    }
+
     if down {
         request_level_change(session, -1, dialog);
     } else if up {
@@ -71,6 +90,7 @@ pub(super) struct TopOverlayState<'a> {
     pub(super) custom_fill_boundaries: &'a mut Vec<TreePath>,
     pub(super) custom_fill_search: &'a mut String,
     pub(super) new_level_dialog: &'a mut Option<NewLevelDialog>,
+    pub(super) delete_level_dialog: &'a mut Option<DeleteLevelDialog>,
 }
 
 pub(super) fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect, state: TopOverlayState<'_>) {
@@ -82,6 +102,7 @@ pub(super) fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRe
         custom_fill_boundaries,
         custom_fill_search,
         new_level_dialog,
+        delete_level_dialog,
     } = state;
     draw_overlay_underlay(ui, bounds);
 
@@ -119,7 +140,7 @@ pub(super) fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRe
     let levels_width = z_level_width(ui, session.level_count());
     let levels_x = (bounds.max[0] - padding - levels_width).max(tools_end + padding);
     ui.set_cursor_screen_pos([levels_x, bounds.min[1] + padding]);
-    draw_z_levels(ui, session, new_level_dialog);
+    draw_z_levels(ui, session, new_level_dialog, delete_level_dialog);
 }
 
 fn draw_block_select_tool_button(
@@ -363,5 +384,5 @@ fn z_level_width(ui: &Ui, levels: u32) -> f32 {
     let label = ui.calc_text_size("Z:")[0];
     let level = ui.calc_text_size(levels.to_string())[0];
 
-    label + item_spacing * 3.0 + button * 2.0 + level
+    label + item_spacing * 4.0 + button * 3.0 + level
 }

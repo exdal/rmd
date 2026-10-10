@@ -1,5 +1,9 @@
 use core::path::TreePath;
-use std::{collections::HashMap, mem, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    mem,
+    sync::Arc,
+};
 
 use dmm::{Coord, Map, MapFormat, Prefab, PrefabInstanceId, Size, Tile, key::Key, merge::tiles_equal};
 
@@ -9,6 +13,17 @@ use crate::document::{PlacedPrefab, PrefabInstance, PrefabLocation};
 struct Cell {
     tile: Arc<Tile>,
     ids: Vec<PrefabInstanceId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LevelCells {
+    cells: Vec<Cell>,
+}
+
+impl LevelCells {
+    pub fn ids(&self) -> impl Iterator<Item = PrefabInstanceId> + '_ {
+        self.cells.iter().flat_map(|cell| cell.ids.iter().copied())
+    }
 }
 
 /// `cells` run x, then y from the bottom, then z
@@ -226,50 +241,96 @@ impl Grid {
         self.cells = cells;
     }
 
-    pub(crate) fn push_level(&mut self, tile: &[Prefab]) -> Option<u32> {
-        let z = self.size.z.checked_add(1)?;
+    // every cell shares the one tile
+    pub(crate) fn filled_level(&mut self, tile: &[Prefab]) -> LevelCells {
         let shared = Arc::new(tile.to_vec());
-        self.size.z = z;
+        let cells = (0..cell_count(Size { z: 1, ..self.size }))
+            .map(|_| Cell {
+                tile: Arc::clone(&shared),
+                ids: tile.iter().map(|_| self.allocate()).collect(),
+            })
+            .collect();
 
-        for y in 1..=self.size.y {
-            for x in 1..=self.size.x {
-                let coord = Coord::new(x, y, z);
-                let ids = tile.iter().map(|_| self.allocate()).collect::<Vec<_>>();
-                for (prefab_index, id) in ids.iter().enumerate() {
-                    self.locations.insert(*id, PrefabLocation { coord, prefab_index });
-                }
+        LevelCells { cells }
+    }
 
-                self.cells.push(Cell {
-                    tile: Arc::clone(&shared),
-                    ids,
-                });
+    pub(crate) fn level(&self, z: u32) -> Option<LevelCells> {
+        if z == 0 || z > self.size.z {
+            return None;
+        }
+
+        let plane = cell_count(Size { z: 1, ..self.size });
+        let start = (z as usize - 1) * plane;
+
+        Some(LevelCells {
+            cells: self.cells[start..start + plane].to_vec(),
+        })
+    }
+
+    pub(crate) fn insert_level(&mut self, z: u32, level: &LevelCells) -> bool {
+        let Some(levels) = self.size.z.checked_add(1) else {
+            return false;
+        };
+
+        let plane = cell_count(Size { z: 1, ..self.size });
+        if z == 0 || z > levels || level.cells.len() != plane {
+            return false;
+        }
+
+        let mut ids = HashSet::new();
+        if level
+            .ids()
+            .any(|id| self.locations.contains_key(&id) || !ids.insert(id))
+        {
+            return false;
+        }
+
+        let start_offset = (z as usize - 1) * plane;
+        // construct cells to start offset, this also pushes higher offsets upwards
+        self.cells
+            .splice(start_offset..start_offset, level.cells.iter().cloned());
+        self.size.z = levels;
+
+        // we treat z levels as a stack and if we insert one in between, push the levels up
+        for location in self.locations.values_mut().filter(|location| location.coord.z >= z) {
+            location.coord.z += 1;
+        }
+
+        for (index, cell) in level.cells.iter().enumerate() {
+            let coord = Coord::new(index as u32 % self.size.x + 1, index as u32 / self.size.x + 1, z);
+            for (prefab_index, id) in cell.ids.iter().enumerate() {
+                self.locations.insert(*id, PrefabLocation { coord, prefab_index });
             }
         }
 
-        Some(z)
+        true
     }
 
-    pub(crate) fn truncate_levels(&mut self, level_count: u32) {
-        let level_count = level_count.min(self.size.z);
-        let keep = cell_count(Size {
-            z: level_count,
-            ..self.size
-        });
+    pub(crate) fn delete_level(&mut self, z: u32) -> bool {
+        if self.size.z <= 1 || z == 0 || z > self.size.z {
+            return false;
+        }
 
-        for cell in self.cells.drain(keep..) {
+        let plane = cell_count(Size { z: 1, ..self.size });
+        let start = (z as usize - 1) * plane;
+        for cell in self.cells.drain(start..start + plane) {
             for id in cell.ids {
                 self.locations.remove(&id);
             }
         }
 
-        self.size.z = level_count;
+        self.size.z -= 1;
+
+        // dito
+        for location in self.locations.values_mut().filter(|location| location.coord.z > z) {
+            location.coord.z -= 1;
+        }
+
+        true
     }
 
-    pub fn to_map(&self, baseline: &Map, levels: u32, format: MapFormat) -> Map {
-        let size = Size {
-            z: levels.min(self.size.z),
-            ..self.size
-        };
+    pub fn to_map(&self, baseline: &Map, format: MapFormat) -> Map {
+        let size = self.size;
         let mut map = Map::new(size);
         map.key_length = baseline.key_length.max(1);
         map.format = format;
@@ -408,10 +469,7 @@ bza
         let map = map();
         let grid = Grid::from_map(&map);
 
-        assert_eq!(
-            writer::write(&grid.to_map(&map, map.size.z, map.format)),
-            writer::write(&map)
-        );
+        assert_eq!(writer::write(&grid.to_map(&map, map.format)), writer::write(&map));
     }
 
     #[test]

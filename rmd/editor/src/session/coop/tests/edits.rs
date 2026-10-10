@@ -1,3 +1,5 @@
+use std::error::Error;
+
 use super::*;
 
 #[test]
@@ -525,4 +527,82 @@ fn a_level_created_while_a_reshare_uploads_reaches_peers() {
     for dir in [host_dir, guest_dir] {
         let _ = fs::remove_dir_all(dir);
     }
+}
+
+#[test]
+fn shared_levels_keep_coordinates_and_allow_tile_history() -> Result<(), Box<dyn Error>> {
+    let (host_dir, mut host, guest_dir, mut guest, host_id, guest_id) = shared_pair("level-history");
+    guest.create_level(guest_id, &plain_fill())?;
+    assert!(!guest.can_delete_level(guest_id));
+    assert!(guest.delete_level(guest_id, 1).is_err());
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        settled(sessions) && sessions.iter().all(|session| session.level_count() == 2)
+    });
+    assert_eq!(
+        guest
+            .state
+            .document(guest_id)
+            .ok_or("guest document is missing")?
+            .history
+            .undo_depth(),
+        1
+    );
+    assert_eq!(
+        host.state
+            .document(host_id)
+            .ok_or("host document is missing")?
+            .history
+            .undo_depth(),
+        0
+    );
+    assert_eq!(guest.undo_label(), None);
+    assert!(!guest.undo());
+    assert!(!host.can_delete_level(host_id));
+    assert!(host.delete_level(host_id, 1).is_err());
+    let corner = Coord::new(1, 1, 2);
+    let host_file = host_dir.join("_maps/a.dmm");
+    let guest_file = guest_dir.join("_maps/a.dmm");
+    paint(&mut host, &host_file, corner, "/obj/host");
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        settled(sessions) && top(sessions[1], &guest_file, corner).as_deref() == Some("/obj/host")
+    });
+    assert!(host.undo());
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        settled(sessions) && top(sessions[1], &guest_file, corner).as_deref() == Some("/turf")
+    });
+    assert!(host.redo());
+    poll_until(&mut [&mut host, &mut guest], |sessions| {
+        settled(sessions) && top(sessions[1], &guest_file, corner).as_deref() == Some("/obj/host")
+    });
+    assert_eq!(host.level_count(), 2);
+    assert_eq!(guest.level_count(), 2);
+    fs::remove_dir_all(host_dir)?;
+    fs::remove_dir_all(guest_dir)?;
+    Ok(())
+}
+
+#[test]
+fn shared_level_redo_stays_blocked_when_the_shared_entry_is_closed() -> Result<(), Box<dyn Error>> {
+    let (host_dir, mut host, guest_dir, guest, host_id, _) = shared_pair("level-redo-guard");
+    // Prepare history from before sharing, without changing the shared snapshot.
+    let document = host.state.document_mut(host_id).unwrap();
+    assert_eq!(document.append_level(&plain_fill()), Some(2));
+    assert!(document.undo());
+    assert_eq!(host.redo_label(), None);
+    assert!(!host.redo());
+    host.coop
+        .as_mut()
+        .unwrap()
+        .shared_maps
+        .get_mut("_maps/a.dmm")
+        .unwrap()
+        .state = SharedState::Closed;
+    assert_eq!(host.redo_label(), None);
+    assert!(!host.redo());
+    assert_eq!(host.level_count(), 1);
+    drop(guest);
+    drop(host);
+    fs::remove_dir_all(host_dir)?;
+    fs::remove_dir_all(guest_dir)?;
+    Ok(())
 }

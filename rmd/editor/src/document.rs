@@ -11,7 +11,7 @@ use dmm::{Coord, Map, MapFormat, Prefab, writer};
 use objtree::ObjectTree;
 
 use crate::{
-    command::{self, Edit, EditGroupId, History, Resize},
+    command::{self, Edit, EditGroupId, History, LevelEdit, Resize},
     focus::AreaFocus,
     grid::Grid,
     tool::{BlockSelectionMode, SelectionMask},
@@ -70,8 +70,6 @@ pub struct MapDocument {
     selection: Option<Selection>,
     selection_mode: BlockSelectionMode,
     focus: Option<AreaFocus>,
-    saved_level_count: u32,
-    retained_level_count: u32,
     generation: u64,
     journal: Option<Journal>,
     read_only: bool,
@@ -86,7 +84,12 @@ pub struct Journal {
 impl Journal {
     fn record(&mut self, edit: &Edit) {
         self.coords.extend(edit.changes.iter().map(|change| change.coord));
-        self.reshaped |= edit.resize().is_some();
+        self.reshaped |= edit.is_structural();
+    }
+
+    fn extend(&mut self, other: Journal) {
+        self.coords.extend(other.coords);
+        self.reshaped |= other.reshaped;
     }
 
     pub fn is_empty(&self) -> bool { self.coords.is_empty() && !self.reshaped }
@@ -192,8 +195,6 @@ impl Selection {
 
 impl MapDocument {
     pub fn new(map: Map, z: u32) -> Self {
-        let level_count = map.size.z;
-
         Self {
             id: DocumentId::new(),
             path: None,
@@ -208,8 +209,6 @@ impl MapDocument {
             selection: None,
             selection_mode: BlockSelectionMode::Full,
             focus: None,
-            saved_level_count: level_count,
-            retained_level_count: level_count,
             generation: 0,
             journal: None,
             read_only: false,
@@ -266,7 +265,6 @@ impl MapDocument {
                 affected.extend(unclaimed.iter().map(PlacedPrefab::id));
             }
 
-            self.retained_level_count = self.retained_level_count.max(coord.z);
             edit.change(self, coord, placed);
         }
 
@@ -340,12 +338,7 @@ impl MapDocument {
             .unwrap_or_else(|| "untitled".to_string())
     }
 
-    pub fn is_dirty(&self) -> bool {
-        self.needs_initial_save
-            || self.pending_write
-            || self.history.is_dirty()
-            || self.map.size().z != self.saved_level_count
-    }
+    pub fn is_dirty(&self) -> bool { self.needs_initial_save || self.pending_write || self.history.is_dirty() }
 
     pub fn needs_initial_save(&self) -> bool { self.needs_initial_save }
 
@@ -353,7 +346,7 @@ impl MapDocument {
 
     pub fn format(&self) -> MapFormat { self.format }
 
-    pub fn to_map(&self) -> Map { self.map.to_map(&self.baseline, self.map.size().z, self.format) }
+    pub fn to_map(&self) -> Map { self.map.to_map(&self.baseline, self.format) }
 
     pub fn instance_ids_at(&self, coord: Coord) -> &[PrefabInstanceId] { self.map.ids_at(coord) }
 
@@ -554,26 +547,39 @@ impl MapDocument {
 
     pub fn focus_on_any_level(&self) -> Option<&AreaFocus> { self.focus.as_ref() }
 
-    pub fn allows_edit_at(&self, coord: Coord) -> bool {
-        !self.read_only && self.focus.as_ref().is_none_or(|focus| focus.allows(coord))
-    }
+    pub fn allows_edit_at(&self, coord: Coord) -> bool { !self.read_only && self.is_within_focus(coord) }
+
+    pub fn is_within_focus(&self, coord: Coord) -> bool { self.focus.as_ref().is_none_or(|focus| focus.allows(coord)) }
 
     pub fn apply(&mut self, edit: Edit) -> bool { self.apply_grouped(edit, None) }
 
     pub fn apply_grouped(&mut self, edit: Edit, group: Option<EditGroupId>) -> bool {
-        if self.read_only || self.focus.as_ref().is_some_and(|focus| !focus.allows_edit(&edit)) {
+        if self.read_only
+            || (!edit.is_structural() && edit.changes.iter().any(|change| !self.is_within_focus(change.coord)))
+        {
             return false;
         }
 
-        if let Some(z) = edit.changes.iter().map(|change| change.coord.z).max() {
-            self.retained_level_count = self.retained_level_count.max(z);
+        // kept until the edit lands, a rejected level change would share the whole map again
+        let recorded = self.journal.as_ref().map(|_| {
+            let mut recorded = Journal::default();
+            recorded.record(&edit);
+
+            recorded
+        });
+        let level = edit.level().map(LevelEdit::z);
+        if !self.history.apply_grouped(&mut self.map, edit, group) {
+            return false;
         }
 
-        if let Some(journal) = self.journal.as_mut() {
-            journal.record(&edit);
+        if let (Some(journal), Some(recorded)) = (self.journal.as_mut(), recorded) {
+            journal.extend(recorded);
         }
 
-        self.history.apply_grouped(&mut self.map, edit, group);
+        if let Some(z) = level {
+            self.level_changed(z);
+        }
+
         self.generation += 1;
         self.clear_stale_instance_selection();
 
@@ -597,7 +603,13 @@ impl MapDocument {
             journal.record(edit);
         }
 
-        let affected = edit.map(|edit| with_replaced(edit, replaced));
+        let edit = edit?;
+        let level = edit.level().map(LevelEdit::z);
+        let affected = Some(with_replaced(edit, replaced));
+        if let Some(z) = level {
+            self.level_changed(z);
+        }
+
         self.generation += 1;
         self.clear_stale_instance_selection();
 
@@ -621,7 +633,13 @@ impl MapDocument {
             journal.record(edit);
         }
 
-        let affected = edit.map(|edit| with_replaced(edit, replaced));
+        let edit = edit?;
+        let level = edit.level().map(LevelEdit::z);
+        let affected = Some(with_replaced(edit, replaced));
+        if let Some(z) = level {
+            self.level_changed(z);
+        }
+
         self.generation += 1;
         self.clear_stale_instance_selection();
 
@@ -645,28 +663,61 @@ impl MapDocument {
             return None;
         }
 
-        // peers only learn of a level appended outside a level request from a new snapshot
-        if let Some(journal) = self.journal.as_mut() {
-            journal.reshaped = true;
+        let edit = self.new_level_edit(tile)?;
+        let z = edit.level()?.z();
+        self.apply(edit).then_some(z)
+    }
+
+    pub fn append_requested_level(&mut self, tile: &[Prefab]) -> Option<u32> {
+        let edit = self.new_level_edit(tile)?;
+        let z = edit.level()?.z();
+        if !self.history.apply_grouped(&mut self.map, edit, None) {
+            return None;
         }
 
-        self.push_level(tile)
-    }
-
-    // a level a peer created stays on save like their tile edits do, even before anyone draws on it
-    pub fn append_remote_level(&mut self, tile: &[Prefab]) -> Option<u32> {
-        let z = self.push_level(tile)?;
-        self.retained_level_count = z;
-        self.pending_write = true;
-
-        Some(z)
-    }
-
-    fn push_level(&mut self, tile: &[Prefab]) -> Option<u32> {
-        let z = self.map.push_level(tile)?;
+        self.level_changed(z);
         self.generation += 1;
 
         Some(z)
+    }
+
+    pub fn append_remote_level(&mut self, tile: &[Prefab]) -> Option<u32> {
+        let edit = self.new_level_edit(tile)?;
+        let z = edit.level()?.z();
+        if !command::apply_unrecorded(&mut self.map, &edit) {
+            return None;
+        }
+
+        self.pending_write = true;
+        self.generation += 1;
+
+        Some(z)
+    }
+
+    fn new_level_edit(&mut self, tile: &[Prefab]) -> Option<Edit> {
+        let z = self.map.size().z.checked_add(1)?;
+        let cells = self.map.filled_level(tile);
+
+        Some(Edit::new(format!("create Z level {z}")).changing_level(LevelEdit::Insert { z, cells }))
+    }
+
+    pub fn delete_level(&mut self, z: u32) -> bool {
+        if self.read_only || self.map.size().z <= 1 {
+            return false;
+        }
+
+        let Some(cells) = self.map.level(z) else {
+            return false;
+        };
+
+        self.apply(Edit::new(format!("delete Z level {z}")).changing_level(LevelEdit::Delete { z, cells }))
+    }
+
+    fn level_changed(&mut self, z: u32) {
+        self.z = z.min(self.map.size().z).max(1);
+        self.selection = None;
+        self.selected_instance = None;
+        self.focus = None;
     }
 
     pub fn save(&mut self) -> std::io::Result<()> { self.save_with(None) }
@@ -688,8 +739,7 @@ impl MapDocument {
         &mut self, path: impl Into<PathBuf>, format: MapFormat, sanitize: Option<&ObjectTree>,
     ) -> std::io::Result<()> {
         let path = path.into();
-        let retained_level_count = self.retained_level_count.min(self.map.size().z);
-        let exported = self.map.to_map(&self.baseline, retained_level_count, format);
+        let exported = self.map.to_map(&self.baseline, format);
         let sanitized = sanitize.map(|tree| {
             let mut sanitized = exported.clone();
             sanitize_vars(&mut sanitized, tree);
@@ -707,18 +757,12 @@ impl MapDocument {
             std::fs::write(&path, contents)?;
         }
 
-        if retained_level_count < self.map.size().z {
-            self.truncate_levels(retained_level_count);
-        }
-
         // unsanitized, so the next save compares against what the tiles hold
         self.baseline = exported;
         self.format = format;
         self.path = Some(path);
         self.needs_initial_save = false;
         self.pending_write = false;
-        self.saved_level_count = self.map.size().z;
-        self.retained_level_count = self.map.size().z;
         self.history.mark_saved();
 
         Ok(())
@@ -737,28 +781,6 @@ impl MapDocument {
             self.selected_instance = None;
         }
     }
-
-    fn truncate_levels(&mut self, level_count: u32) {
-        self.map.truncate_levels(level_count);
-        if let Some(journal) = self.journal.as_mut() {
-            journal.reshaped = true;
-        }
-
-        self.generation += 1;
-        if self.z > level_count {
-            self.z = level_count.max(1);
-        }
-
-        if self.selection.is_some_and(|selection| selection.min.z > level_count) {
-            self.selection = None;
-        }
-
-        if self.focus.as_ref().is_some_and(|focus| focus.seed().z > level_count) {
-            self.focus = None;
-        }
-
-        self.clear_stale_instance_selection();
-    }
 }
 
 fn with_replaced(edit: &Edit, replaced: Vec<PrefabInstanceId>) -> Vec<PrefabInstanceId> {
@@ -773,9 +795,9 @@ fn with_replaced(edit: &Edit, replaced: Vec<PrefabInstanceId>) -> Vec<PrefabInst
 #[cfg(test)]
 mod tests {
     use core::{path::TreePath, types::Value};
-    use std::{collections::HashSet, ptr};
+    use std::{collections::HashSet, env, error::Error, fs, process, ptr};
 
-    use dmm::{Map, Prefab, Size, writer::MapWriter};
+    use dmm::{Map, MapFormat, Prefab, Size, parser, writer::MapWriter};
 
     use super::{Coord, MapDocument, Selection, VarMutation, sanitize_vars};
     use crate::{
@@ -1588,107 +1610,6 @@ mod tests {
     }
 
     #[test]
-    fn save_removes_untouched_appended_levels() {
-        let dir = std::env::temp_dir().join(format!("rmd-prune-levels-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let target = dir.join("map.dmm");
-        let mut document = MapDocument::new(shared_tile_map(), 2);
-        let retained_ids = document.instance_ids_at(Coord::new(1, 1, 2)).to_vec();
-        let fill = [Prefab::new(TreePath::parse("/turf"))];
-
-        assert_eq!(document.append_level(&fill), Some(3));
-        document.z = 3;
-        assert_eq!(document.map.size().z, 3);
-        assert!(document.is_dirty());
-        assert_eq!(document.instance_ids_at(Coord::new(1, 1, 3)).len(), 1);
-
-        document.save_as(&target, dmm::MapFormat::Standard).expect("save");
-
-        let (written, errors) = dmm::parser::parse(&std::fs::read_to_string(&target).expect("written map"));
-        assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(written.size.z, 2);
-        assert_eq!(document.map.size().z, 2);
-        assert_eq!(document.z, 2);
-        assert_eq!(document.instance_ids_at(Coord::new(1, 1, 2)), retained_ids);
-        assert!(document.instance_ids_at(Coord::new(1, 1, 3)).is_empty());
-        assert!(!document.is_dirty());
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn save_clears_a_selection_on_a_removed_level() {
-        let dir = std::env::temp_dir().join(format!("rmd-prune-selection-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let target = dir.join("map.dmm");
-        let mut document = MapDocument::new(shared_tile_map(), 2);
-        let fill = [Prefab::new(TreePath::parse("/turf"))];
-        assert_eq!(document.append_level(&fill), Some(3));
-        document.set_selection(
-            Some(Selection::from_drag(Coord::new(1, 1, 3), Coord::new(1, 1, 3))),
-            BlockSelectionMode::Full,
-        );
-        document.z = 1;
-
-        document.save_as(&target, dmm::MapFormat::Standard).expect("save");
-
-        assert_eq!(document.map.size().z, 2);
-        assert_eq!(document.z, 1);
-        assert_eq!(document.selection(), None);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn save_retains_the_highest_appended_level_that_received_an_edit() {
-        let dir = std::env::temp_dir().join(format!("rmd-retain-levels-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let target = dir.join("map.dmm");
-        let mut document = MapDocument::new(shared_tile_map(), 2);
-        let fill = [Prefab::new(TreePath::parse("/turf"))];
-        assert_eq!(document.append_level(&fill), Some(3));
-        assert_eq!(document.append_level(&fill), Some(4));
-
-        let coord = Coord::new(1, 1, 3);
-        let mut after = document.placed_tile(coord).expect("appended tile");
-        after.push(document.instantiate(Prefab::new(TreePath::parse("/obj/marker"))));
-        let mut edit = Edit::new("touch appended level");
-        edit.change(&document, coord, after);
-        assert!(document.apply(edit));
-        assert!(document.undo(), "undo still leaves the level marked as touched");
-        document.z = 4;
-
-        document.save_as(&target, dmm::MapFormat::Standard).expect("save");
-
-        let (written, errors) = dmm::parser::parse(&std::fs::read_to_string(&target).expect("written map"));
-        assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(written.size.z, 3);
-        assert_eq!(document.map.size().z, 3);
-        assert_eq!(document.z, 3);
-        assert!(!document.is_dirty());
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn removing_appended_levels_on_save_reshapes_the_journal() {
-        let dir = std::env::temp_dir().join(format!("rmd-journal-levels-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let target = dir.join("map.dmm");
-        let mut document = MapDocument::new(shared_tile_map(), 2);
-        let fill = [Prefab::new(TreePath::parse("/turf"))];
-        assert_eq!(document.append_level(&fill), Some(3));
-        document.start_journal();
-
-        document.save_as(&target, dmm::MapFormat::Standard).expect("save");
-
-        assert_eq!(document.map.size().z, 2);
-        assert!(document.take_journal().is_some_and(|journal| journal.reshaped));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn starting_the_journal_again_forgets_earlier_edits() {
         let mut document = MapDocument::new(shared_tile_map(), 2);
         document.start_journal();
@@ -1766,5 +1687,159 @@ mod tests {
         assert_ne!(std::fs::read_to_string(&target).unwrap(), "replace me");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn level_document() -> MapDocument {
+        let mut map = Map::new(Size { x: 2, y: 2, z: 3 });
+        for z in 1..=3 {
+            let tile = map.intern_tile(vec![Prefab::new(TreePath::parse(&format!("/obj/level{z}")))]);
+            for row in &mut map.grid[z - 1] {
+                row.fill(tile);
+            }
+        }
+
+        MapDocument::new(map, 1)
+    }
+
+    #[test]
+    fn deletion_shifts_levels_and_undo_restores_every_instance() -> Result<(), Box<dyn Error>> {
+        for z in 1..=3 {
+            let mut document = level_document();
+            let original = document.map.clone();
+            let generation = document.generation();
+            document.start_journal();
+            assert!(document.delete_level(z));
+            assert_eq!(document.map.size().z, 2);
+            assert_eq!(document.z, z.min(2));
+            assert!(document.is_dirty());
+            assert!(document.generation() > generation);
+            assert!(document.take_journal().is_some_and(|journal| journal.reshaped));
+            for instance in original.prefab_instances() {
+                let location = instance.location;
+                if location.coord.z == z {
+                    assert!(document.map.prefab_instance(instance.id).is_none());
+                } else {
+                    let now = document
+                        .map
+                        .prefab_instance(instance.id)
+                        .ok_or("surviving instance is missing")?;
+                    assert_eq!(now.prefab(), instance.prefab());
+                    assert_eq!(
+                        now.location.coord,
+                        Coord::new(
+                            location.coord.x,
+                            location.coord.y,
+                            location.coord.z - u32::from(location.coord.z > z)
+                        )
+                    );
+                }
+            }
+
+            assert!(document.undo());
+            assert_eq!(document.map, original);
+            assert!(!document.is_dirty());
+            assert_eq!(document.z, z);
+            assert!(document.take_journal().is_some_and(|journal| journal.reshaped));
+            assert!(document.redo());
+            assert_eq!(document.map.size().z, 2);
+            assert!(document.undo());
+            assert_eq!(document.map, original);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn creation_is_one_undo_step_and_ids_are_never_reused() {
+        let mut document = level_document();
+        let original = document.map.clone();
+        let tile = [Prefab::new(TreePath::parse("/turf/floor"))];
+        assert_eq!(document.append_level(&tile), Some(4));
+        let created = document.map.clone();
+        let ids = document.instance_ids_at(Coord::new(1, 1, 4)).to_vec();
+        assert_eq!(document.history.undo_depth(), 1);
+        assert!(document.undo());
+        assert_eq!(document.map, original);
+        assert!(!document.is_dirty());
+        assert!(document.redo());
+        assert_eq!(document.map, created);
+        assert!(document.undo());
+        assert_eq!(document.append_level(&tile), Some(4));
+        assert_ne!(document.instance_ids_at(Coord::new(1, 1, 4)), ids);
+        assert!(!document.redo());
+    }
+
+    #[test]
+    fn invalid_or_read_only_deletions_leave_history_and_state_unchanged() {
+        let mut document = level_document();
+        let original = document.map.clone();
+        for z in [0, 4] {
+            assert!(!document.delete_level(z));
+        }
+
+        document.set_read_only(true);
+        assert!(!document.delete_level(2));
+        assert!(document.append_level(&[]).is_none());
+        assert!(!document.undo());
+        assert_eq!(document.map, original);
+        assert_eq!(document.history.undo_depth(), 0);
+        document.set_read_only(false);
+        assert!(document.delete_level(3));
+        assert!(document.delete_level(2));
+        assert!(!document.delete_level(1));
+        assert_eq!(document.map.size().z, 1);
+    }
+
+    #[test]
+    fn structural_edits_clear_selection_and_save_preserves_all_levels() -> Result<(), Box<dyn Error>> {
+        for format in [MapFormat::Standard, MapFormat::Tgm] {
+            let mut document = level_document();
+            assert_eq!(document.append_level(&[]), Some(4));
+            let selected = Selection::from_drag(Coord::new(1, 1, 4), Coord::new(2, 2, 4));
+            document.set_selection(Some(selected), BlockSelectionMode::Full);
+            let original = document.map.clone();
+            let path = env::temp_dir().join(format!("rmd-explicit-levels-{}-{format:?}.dmm", process::id()));
+            document.start_journal();
+            document.save_as(&path, format)?;
+            document.save()?;
+            assert_eq!(document.map, original);
+            assert_eq!(document.z, 4);
+            assert_eq!(document.selection(), Some(&selected));
+            assert!(!document.is_dirty());
+            assert!(document.take_journal().is_none());
+            let (written, errors) = parser::parse(&fs::read_to_string(&path)?);
+            assert!(errors.is_empty());
+            assert_eq!(written.size.z, 4);
+            assert!(document.delete_level(2));
+            assert_eq!(document.selection(), None);
+            document.save()?;
+            assert!(!document.is_dirty());
+            assert!(document.undo());
+            assert!(document.is_dirty());
+            assert_eq!(document.map, original);
+            assert!(document.redo());
+            assert!(!document.is_dirty());
+            fs::remove_file(path)?;
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn acknowledged_creation_records_only_the_authors_history_and_does_not_echo() {
+        let mut author = level_document();
+        let mut peer = level_document();
+        author.start_journal();
+        peer.start_journal();
+        assert_eq!(author.append_requested_level(&[]), Some(4));
+        assert_eq!(peer.append_remote_level(&[]), Some(4));
+        assert_eq!(author.history.undo_depth(), 1);
+        assert_eq!(peer.history.undo_depth(), 0);
+        assert!(author.take_journal().is_none());
+        assert!(peer.take_journal().is_none());
+        assert!(author.is_dirty());
+        assert!(peer.is_dirty());
+        assert!(author.undo());
+        assert!(author.take_journal().is_some_and(|journal| journal.reshaped));
     }
 }

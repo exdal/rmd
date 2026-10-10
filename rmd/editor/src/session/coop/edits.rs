@@ -125,12 +125,21 @@ impl Session {
             },
         };
 
-        let Some(z) = self.append_document_level(id, &fill, MapDocument::append_remote_level) else {
+        if is_ours {
+            self.cancel_node_edit();
+        }
+
+        let append = if is_ours {
+            MapDocument::append_requested_level
+        } else {
+            MapDocument::append_remote_level
+        };
+
+        let Some(z) = self.append_document_level(id, &fill, append) else {
             return;
         };
 
         if is_ours {
-            self.cancel_node_edit();
             self.show_level(id, z);
         }
     }
@@ -220,5 +229,52 @@ impl Session {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::fixtures::{node_map, node_session};
+
+    #[test]
+    fn acknowledged_level_cancels_the_original_level_node_route_before_recording() {
+        let start = Coord::new(1, 2, 1);
+        let end = Coord::new(4, 2, 1);
+        let (mut session, target) = node_session(node_map(4, 2, &[(start, vec!["/obj/cable"])]), start);
+        let id = session.state.active().unwrap();
+        let root = session.codebase_dir().unwrap().to_path_buf();
+        session.state.document_mut(id).unwrap().path = Some(root.join("route.dmm"));
+        let original = session.map().unwrap().clone();
+        assert!(session.begin_node_edit(target));
+        assert!(session.start_node_drag(start));
+        assert!(session.update_node_drag(end));
+        assert_ne!(session.map().unwrap(), &original);
+        session.append_coop_level(
+            "route.dmm",
+            true,
+            &NewLevel {
+                z: 2,
+                fill: patch::encode_tile(&[Prefab::new(core::path::TreePath::parse("/turf"))]),
+            },
+        );
+        assert_eq!(session.z(), 2);
+        assert!(session.node_edit.is_none());
+        let document = session.state.document(id).unwrap();
+        assert_eq!(
+            document.history.undo_depth(),
+            1,
+            "only the appended level remains in history"
+        );
+        for y in 1..=2 {
+            for x in 1..=4 {
+                let coord = Coord::new(x, y, 1);
+                assert_eq!(document.map.tile_at(coord), original.tile_at(coord));
+            }
+        }
+
+        assert!(session.undo());
+        assert_eq!(session.map().unwrap(), &original);
+        assert!(!session.undo());
     }
 }

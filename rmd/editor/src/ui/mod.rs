@@ -78,6 +78,7 @@ use self::{
         restore_rectangle_gesture,
     },
     dialog::{
+        DeleteLevelDialog,
         FILL_LIMIT_WARNING_POPUP,
         FillWarningContext,
         GO_TO_POPUP,
@@ -94,6 +95,7 @@ use self::{
         SaveDialogOutcome,
         TileFillPaths,
         TileFillSearch,
+        draw_delete_level_dialog,
         draw_fill_limit_warning,
         draw_go_to_dialog,
         draw_keybind_preset_dialog,
@@ -291,6 +293,7 @@ pub struct UiState {
     popup_was_open: bool,
     new_map_dialog: Option<NewMapDialog>,
     new_level_dialog: Option<NewLevelDialog>,
+    delete_level_dialog: Option<DeleteLevelDialog>,
     resize_map_dialog: Option<ResizeMapDialog>,
     go_to_dialog: Option<GoToDialog>,
     coop_dialog: Option<coop::CoopDialog>,
@@ -367,6 +370,7 @@ impl UiState {
             popup_was_open: false,
             new_map_dialog: None,
             new_level_dialog: None,
+            delete_level_dialog: None,
             resize_map_dialog: None,
             go_to_dialog: None,
             coop_dialog: None,
@@ -969,6 +973,13 @@ impl UiState {
 
     fn draw_map_dialogs(&mut self, ui: &Ui, session: &mut Session, menu: &MenuActions) {
         draw_new_level_dialog(ui, session, &mut self.new_level_dialog, &mut self.tile_fill);
+        if let Some(state) = &self.delete_level_dialog
+            && state.open
+        {
+            self.cancel_edit_gestures(session, Some(state.document));
+        }
+
+        draw_delete_level_dialog(ui, session, &mut self.delete_level_dialog);
 
         if menu.resize_map
             && let Some(size) = session.map().map(|map| map.size())

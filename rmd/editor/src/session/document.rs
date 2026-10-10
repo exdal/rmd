@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
 use dmm::{Map, MapFormat, Prefab, Size};
 use editor::{
@@ -199,12 +202,42 @@ impl Session {
 
     pub fn map_format(&self) -> Option<MapFormat> { self.state.active_document().map(MapDocument::format) }
 
-    pub fn undo_label(&self) -> Option<&str> { self.state.active_document()?.undo_label() }
+    pub fn undo_label(&self) -> Option<&str> {
+        let id = self.state.active()?;
+        let document = self.state.document(id)?;
+        if document.history.next_undo()?.level().is_some() && self.level_history_locked(id) {
+            return None;
+        }
 
-    pub fn redo_label(&self) -> Option<&str> { self.state.active_document()?.redo_label() }
+        document.undo_label()
+    }
+
+    pub fn redo_label(&self) -> Option<&str> {
+        let id = self.state.active()?;
+        let document = self.state.document(id)?;
+        if document.history.next_redo()?.level().is_some() && self.level_history_locked(id) {
+            return None;
+        }
+
+        document.redo_label()
+    }
 
     pub fn undo(&mut self) -> bool {
         let reordered = self.undo_label().is_some_and(is_reorder_label);
+        let is_level_edit = self
+            .state
+            .active_document()
+            .and_then(|document| document.history.next_undo())
+            .is_some_and(|edit| edit.level().is_some());
+
+        if is_level_edit {
+            if self.state.active().is_some_and(|id| self.level_history_locked(id)) {
+                return false;
+            }
+
+            self.cancel_node_edit();
+        }
+
         let resized = self
             .state
             .active_document()
@@ -218,7 +251,11 @@ impl Session {
             return false;
         };
 
-        if resized {
+        if is_level_edit {
+            if let Some(id) = self.state.active() {
+                self.rebake_levels(id);
+            }
+        } else if resized {
             if let Some(id) = self.state.active() {
                 self.rebake(id);
             }
@@ -239,6 +276,20 @@ impl Session {
 
     pub fn redo(&mut self) -> bool {
         let reordered = self.redo_label().is_some_and(is_reorder_label);
+        let is_level_edit = self
+            .state
+            .active_document()
+            .and_then(|document| document.history.next_redo())
+            .is_some_and(|edit| edit.level().is_some());
+
+        if is_level_edit {
+            if self.state.active().is_some_and(|id| self.level_history_locked(id)) {
+                return false;
+            }
+
+            self.cancel_node_edit();
+        }
+
         let resized = self
             .state
             .active_document()
@@ -252,7 +303,11 @@ impl Session {
             return false;
         };
 
-        if resized {
+        if is_level_edit {
+            if let Some(id) = self.state.active() {
+                self.rebake_levels(id);
+            }
+        } else if resized {
             if let Some(id) = self.state.active() {
                 self.rebake(id);
             }
@@ -314,29 +369,22 @@ impl Session {
         self.write_document(id, Some((path, format)))
     }
 
-    fn write_document(&mut self, id: DocumentId, target: Option<(&Path, MapFormat)>) -> std::io::Result<()> {
-        let environment = self.state.environment.clone().filter(|_| self.sanitize_vars_on_save);
-        let sanitize = environment.as_deref().map(|environment| &environment.tree);
-        let levels = self.state.document(id).map_or(0, |document| document.map.size().z);
+    fn write_document(&mut self, id: DocumentId, target: Option<(&Path, MapFormat)>) -> io::Result<()> {
+        let environment = self.state.environment.clone();
+        let sanitized = environment
+            .as_deref()
+            .filter(|_| self.sanitize_vars_on_save)
+            .map(|environment| &environment.tree);
+
         let document = self
             .state
             .document_mut(id)
-            .ok_or_else(|| std::io::Error::other("no map is open"))?;
-        let result = match target {
-            Some((path, format)) => document.save_as_with(path, format, sanitize),
-            None => document.save_with(sanitize),
-        };
+            .ok_or_else(|| io::Error::other("no map is open"))?;
 
-        if result.is_ok()
-            && self
-                .state
-                .document(id)
-                .is_some_and(|document| document.map.size().z != levels)
-        {
-            self.rebake(id);
+        match target {
+            Some((path, format)) => document.save_as_with(path, format, sanitized),
+            None => document.save_with(sanitized),
         }
-
-        result
     }
 
     pub fn set_sanitize_vars_on_save(&mut self, enabled: bool) { self.sanitize_vars_on_save = enabled; }

@@ -148,6 +148,52 @@ impl Session {
         Ok(z)
     }
 
+    pub(super) fn level_history_locked(&self, id: DocumentId) -> bool {
+        self.coop_map_path(id).is_some_and(|path| {
+            self.coop
+                .as_ref()
+                .is_some_and(|coop| coop.shared_maps.contains_key(&path))
+        }) || self
+            .caches
+            .get(&id)
+            .and_then(|cache| cache.git.as_ref())
+            .is_some_and(|git| git.conflicts.is_some())
+    }
+
+    pub fn can_delete_level(&self, id: DocumentId) -> bool {
+        self.state
+            .document(id)
+            .is_some_and(|document| !document.is_read_only() && document.map.size().z > 1)
+            && !self.level_history_locked(id)
+    }
+
+    pub fn delete_level(&mut self, id: DocumentId, z: u32) -> Result<(), String> {
+        if !self.can_delete_level(id) {
+            return Err(String::from(
+                "the level cannot be deleted: the map must be writable, have another level, and have no sharing, \
+                 loaded merge conflicts, or pending level request",
+            ));
+        }
+
+        self.cancel_node_edit();
+
+        let document = self.state.document_mut(id).ok_or("the map is no longer open")?;
+        if !document.delete_level(z) {
+            return Err(String::from("the level is no longer available"));
+        }
+
+        // do a full rebake, multiz lighting needs this
+        self.rebake_levels(id);
+
+        Ok(())
+    }
+
+    pub(super) fn rebake_levels(&mut self, id: DocumentId) {
+        let cache = self.caches.entry(id).or_default();
+        cache.map_revision = cache.map_revision.wrapping_add(1);
+        self.rebake(id);
+    }
+
     pub(super) fn show_level(&mut self, id: DocumentId, z: u32) {
         let Some(document) = self.state.document_mut(id) else {
             return;
@@ -399,6 +445,115 @@ mod tests {
             baked(session) == baked(&whole),
             "the bake diverged from baking the whole map"
         );
+    }
+
+    fn baked_levels() -> Session {
+        let mut session = Session::new();
+        session
+            .load_environment(&examples().join("test.dme"))
+            .expect("codebase");
+        let mut map = Map::new(Size { x: 2, y: 1, z: 3 });
+        let fill = session.default_fill().expect("fill types");
+        for z in 1..=3 {
+            let mut tile = fill.clone();
+            let mut table = Prefab::new(TreePath::parse("/obj/structure/table"));
+            table.set_var("name".into(), core::types::Value::Text(format!("level {z}")));
+            tile.insert(0, table);
+            let key = map.intern_tile(tile);
+            map.grid[z - 1][0].fill(key);
+        }
+
+        session.activate_document(MapDocument::new(map, 3));
+        settle_bake(&mut session);
+        session
+    }
+
+    #[test]
+    fn loaded_conflicts_block_level_deletion_and_history_even_when_hidden() {
+        let mut session = crate::session::fixtures::conflicted_session();
+        let id = session.state.active().unwrap();
+        let fill = session.map().unwrap().tile_at(Coord::new(1, 1, 1)).unwrap().clone();
+        session.create_level(id, &fill).unwrap();
+        session.git_enabled = false;
+        assert!(!session.can_delete_level(id));
+        assert!(session.delete_level(id, 1).is_err());
+        assert_eq!(session.undo_label(), None);
+        assert!(!session.undo());
+        let conflicts = session
+            .caches
+            .get_mut(&id)
+            .unwrap()
+            .git
+            .as_mut()
+            .unwrap()
+            .conflicts
+            .take();
+        assert!(session.undo());
+        session.caches.get_mut(&id).unwrap().git.as_mut().unwrap().conflicts = conflicts;
+        assert_eq!(session.redo_label(), None);
+        assert!(!session.redo());
+        assert_eq!(session.level_count(), 1);
+    }
+
+    #[test]
+    fn deleting_levels_rebuilds_the_bake_and_history_restores_source_ids() {
+        for z in 1..=3 {
+            let mut session = baked_levels();
+            let id = session.state.active().expect("document");
+            let original = session.state.document(id).expect("document").map.clone();
+            session.set_level(z);
+            session.delete_level(id, z).expect("delete level");
+            settle_bake(&mut session);
+            assert_eq!(session.level_count(), 2);
+            assert_eq!(session.z(), z.min(2));
+            assert_render_cache_matches_rebuild(&session);
+            assert_bake_matches_the_whole_map(&session);
+
+            assert!(session.undo());
+            settle_bake(&mut session);
+            assert_eq!(session.state.document(id).expect("document").map, original);
+            assert_render_cache_matches_rebuild(&session);
+            assert_bake_matches_the_whole_map(&session);
+
+            assert!(session.redo());
+            settle_bake(&mut session);
+            assert_eq!(session.level_count(), 2);
+            assert_render_cache_matches_rebuild(&session);
+            assert_bake_matches_the_whole_map(&session);
+        }
+    }
+
+    #[test]
+    fn level_deletion_and_history_discard_in_flight_builds_and_extensions() {
+        for initial in [false, true] {
+            let mut session = baked_levels();
+            let id = session.state.active().expect("document");
+            let original = session.state.document(id).expect("document").map.clone();
+            let fill = session.default_fill().expect("fill types");
+            assert_eq!(session.create_level(id, &fill), Ok(4));
+            assert!(session.baker.extending(id));
+            if initial {
+                settle_bake(&mut session);
+                session.rebake(id);
+            }
+
+            session.delete_level(id, 1).expect("delete level");
+            assert!(session.baker.invalidated(id));
+            assert!(session.undo());
+            assert!(session.redo());
+            assert!(session.undo());
+            assert!(session.undo(), "undo level creation before the stale bake arrives");
+            settle_bake(&mut session);
+            assert_eq!(session.state.document(id).expect("document").map, original);
+            assert_render_cache_matches_rebuild(&session);
+            assert_bake_matches_the_whole_map(&session);
+
+            assert!(session.redo());
+            settle_bake(&mut session);
+            assert_eq!(session.level_count(), 4);
+            assert_render_cache_matches_rebuild(&session);
+            assert_bake_matches_the_whole_map(&session);
+        }
     }
 
     #[test]
