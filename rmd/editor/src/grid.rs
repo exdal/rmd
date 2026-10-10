@@ -3,7 +3,7 @@ use std::{collections::HashMap, mem, sync::Arc};
 
 use dmm::{Coord, Map, MapFormat, Prefab, PrefabInstanceId, Size, Tile, key::Key, merge::tiles_equal};
 
-use crate::document::{PlacedPrefab, PrefabLocation};
+use crate::document::{PlacedPrefab, PrefabInstance, PrefabLocation};
 
 #[derive(Debug, Clone, PartialEq)]
 struct Cell {
@@ -72,18 +72,18 @@ impl Grid {
 
     pub fn location(&self, id: PrefabInstanceId) -> Option<PrefabLocation> { self.locations.get(&id).copied() }
 
-    pub fn prefab(&self, id: PrefabInstanceId) -> Option<(&Prefab, PrefabLocation)> {
+    pub fn prefab_instance(&self, id: PrefabInstanceId) -> Option<PrefabInstance<'_>> {
         let location = self.location(id)?;
         let prefab = self.tile_at(location.coord)?.get(location.prefab_index)?;
 
-        Some((prefab, location))
+        Some(PrefabInstance::new(id, prefab, location))
     }
 
-    pub fn prefabs(&self) -> impl Iterator<Item = (PrefabInstanceId, &Prefab, PrefabLocation)> {
+    pub fn prefab_instances(&self) -> impl Iterator<Item = PrefabInstance<'_>> {
         self.locations.iter().filter_map(|(id, location)| {
             let prefab = self.tile_at(location.coord)?.get(location.prefab_index)?;
 
-            Some((*id, prefab, *location))
+            Some(PrefabInstance::new(*id, prefab, *location))
         })
     }
 

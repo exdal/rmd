@@ -67,7 +67,7 @@ impl Session {
 
     fn resolve_focus(&self, seed: Coord) -> Option<AreaFocus> {
         let owner = self.area_at(self.state.active()?, seed)?;
-        let prefab = self.state.active_document()?.prefab_instance(owner)?.0.clone();
+        let prefab = self.state.active_document()?.prefab_instance(owner)?.prefab().clone();
         let instances = self.instances()?;
         let component = instances.area_component_at(seed)?;
 

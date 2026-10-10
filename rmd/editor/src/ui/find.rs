@@ -87,13 +87,14 @@ impl FindPanel {
     pub(super) fn open_for(
         &mut self, session: &Session, document: DocumentId, instance: PrefabInstanceId, kind: SimilarMatchKind,
     ) {
-        let Some((prefab, _)) = session
+        let Some(instance) = session
             .state
             .document(document)
             .and_then(|document| document.prefab_instance(instance))
         else {
             return;
         };
+        let prefab = instance.prefab();
         let query = match kind {
             SimilarMatchKind::Prefab => SearchQuery::Prefab(prefab.clone()),
             SimilarMatchKind::Type => SearchQuery::Type {

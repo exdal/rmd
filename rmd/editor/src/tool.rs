@@ -1540,7 +1540,7 @@ mod tests {
     }
 
     #[test]
-    fn objects_append_before_turf_and_area_with_exact_overrides() {
+    fn objects_append_before_turf_and_area_with_exact_overrides() -> Result<(), &'static str> {
         let tree = tree();
         let mut document = map_document(&["/obj/table", "/turf/floor", "/area/station"]);
         let mut chair = Prefab::new(TreePath::parse("/obj/chair"));
@@ -1558,9 +1558,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(paths, ["/obj/table", "/obj/chair", "/turf/floor", "/area/station"]);
         assert_eq!(
-            document.prefab_instance(selected).unwrap().0.var(&"name".into()),
+            document
+                .prefab_instance(selected)
+                .ok_or("prefab instance is missing")?
+                .prefab()
+                .var(&"name".into()),
             Some(&Value::Text("custom".into()))
         );
+        Ok(())
     }
 
     #[test]
@@ -2917,7 +2922,7 @@ mod tests {
     }
 
     #[test]
-    fn rotated_block_moves_relocate_and_rotate_every_object_in_one_edit() {
+    fn rotated_block_moves_relocate_and_rotate_every_object_in_one_edit() -> Result<(), &'static str> {
         let tree = tree();
         let mut document = grid_document(6, 4, |coord| {
             let mut tile = Vec::new();
@@ -2956,7 +2961,9 @@ mod tests {
         for (coord, object) in objects {
             let relative = (coord.x - source.min.x, coord.y - source.min.y);
             let (x, y) = rotate_point(relative, source.width(), source.height(), SelectionRotation::Clockwise);
-            let (prefab, location) = document.prefab_instance(object).unwrap();
+            let instance = document.prefab_instance(object).ok_or("prefab instance is missing")?;
+            let prefab = instance.prefab();
+            let location = instance.location;
             assert_eq!(location.coord, Coord::new(target.min.x + x, target.min.y + y, 1));
             assert_eq!(prefab.var(&"dir".into()), Some(&Value::Num(Dir::East.to_bits() as f32)));
         }
@@ -2972,6 +2979,7 @@ mod tests {
             assert_eq!(document.placed_tile(coord).unwrap(), tile);
         }
         assert!(!document.undo());
+        Ok(())
     }
 
     #[test]
@@ -3002,7 +3010,7 @@ mod tests {
     }
 
     #[test]
-    fn block_rotation_swaps_dimensions_positions_and_atom_appearance() {
+    fn block_rotation_swaps_dimensions_positions_and_atom_appearance() -> Result<(), &'static str> {
         let tree = tree();
         let mut document = grid_document(4, 4, |coord| {
             let mut object = Prefab::new(TreePath::parse(if coord == Coord::new(1, 1, 1) {
@@ -3075,13 +3083,22 @@ mod tests {
             assert_eq!(table.var(&name.into()), Some(&Value::Num(value)), "{name}");
         }
         assert_eq!(
-            document.prefab_instance(invalid_numeric).unwrap().0.var(&"dir".into()),
+            document
+                .prefab_instance(invalid_numeric)
+                .ok_or("prefab instance is missing")?
+                .prefab()
+                .var(&"dir".into()),
             Some(&Value::Num(3.0))
         );
         assert_eq!(
-            document.prefab_instance(invalid_text).unwrap().0.var(&"dir".into()),
+            document
+                .prefab_instance(invalid_text)
+                .ok_or("prefab instance is missing")?
+                .prefab()
+                .var(&"dir".into()),
             Some(&Value::Text(String::from("sideways")))
         );
+        Ok(())
     }
 
     #[test]
@@ -3208,7 +3225,7 @@ mod tests {
     }
 
     #[test]
-    fn block_rotation_prefers_directional_sibling_paths_and_preserves_ids() {
+    fn block_rotation_prefers_directional_sibling_paths_and_preserves_ids() -> Result<(), &'static str> {
         let mut tree = tree();
         tree.register(&TreePath::parse("/obj/alarm/directional/north"), Location::default());
         tree.register(&TreePath::parse("/obj/alarm/directional/east"), Location::default());
@@ -3222,10 +3239,13 @@ mod tests {
             transform_selection(&mut document, &tree, selection, SelectionTransform::RotateClockwise).unwrap();
         document.apply(action.edit);
 
-        let (prefab, location) = document.prefab_instance(object).unwrap();
+        let instance = document.prefab_instance(object).ok_or("prefab instance is missing")?;
+        let prefab = instance.prefab();
+        let location = instance.location;
         assert_eq!(location.coord, coord);
         assert_eq!(prefab.path, TreePath::parse("/obj/alarm/directional/east"));
         assert_eq!(prefab.var(&"dir".into()), None);
+        Ok(())
     }
 
     #[test]

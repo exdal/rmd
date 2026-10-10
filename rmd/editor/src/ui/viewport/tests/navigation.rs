@@ -173,7 +173,7 @@ fn arrow_keys_pan_shift_pans_faster_and_space_drags_the_map_without_placing() {
             .active_document()
             .unwrap()
             .prefab_instances()
-            .any(|(_, prefab, _)| *prefab == table),
+            .any(|instance| *instance.prefab() == table),
         "the drag never reaches the place tool"
     );
 }

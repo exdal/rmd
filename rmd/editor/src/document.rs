@@ -98,6 +98,21 @@ pub struct PrefabLocation {
     pub prefab_index: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PrefabInstance<'a> {
+    pub id: PrefabInstanceId,
+    pub location: PrefabLocation,
+    prefab: &'a Prefab,
+}
+
+impl<'a> PrefabInstance<'a> {
+    pub(crate) fn new(id: PrefabInstanceId, prefab: &'a Prefab, location: PrefabLocation) -> Self {
+        Self { id, location, prefab }
+    }
+
+    pub fn prefab(&self) -> &'a Prefab { self.prefab }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlacedPrefab {
     id: PrefabInstanceId,
@@ -344,11 +359,9 @@ impl MapDocument {
 
     pub fn instance_location(&self, id: PrefabInstanceId) -> Option<PrefabLocation> { self.map.location(id) }
 
-    pub fn prefab_instance(&self, id: PrefabInstanceId) -> Option<(&Prefab, PrefabLocation)> { self.map.prefab(id) }
+    pub fn prefab_instance(&self, id: PrefabInstanceId) -> Option<PrefabInstance<'_>> { self.map.prefab_instance(id) }
 
-    pub fn prefab_instances(&self) -> impl Iterator<Item = (PrefabInstanceId, &Prefab, PrefabLocation)> {
-        self.map.prefabs()
-    }
+    pub fn prefab_instances(&self) -> impl Iterator<Item = PrefabInstance<'_>> { self.map.prefab_instances() }
 
     pub fn selected_instance(&self) -> Option<PrefabInstanceId> {
         self.selected_instance
@@ -760,7 +773,7 @@ fn with_replaced(edit: &Edit, replaced: Vec<PrefabInstanceId>) -> Vec<PrefabInst
 #[cfg(test)]
 mod tests {
     use core::{path::TreePath, types::Value};
-    use std::collections::HashSet;
+    use std::{collections::HashSet, ptr};
 
     use dmm::{Map, Prefab, Size, writer::MapWriter};
 
@@ -917,7 +930,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_dictionary_prefabs_receive_unique_placement_ids() {
+    fn shared_dictionary_prefabs_receive_unique_placement_ids() -> Result<(), &'static str> {
         let document = MapDocument::new(shared_tile_map(), 1);
         let mut ids = Vec::new();
 
@@ -929,6 +942,22 @@ mod tests {
 
         assert_eq!(ids.len(), 8);
         assert_eq!(ids.iter().copied().collect::<HashSet<_>>().len(), ids.len());
+        let first = document.prefab_instance(ids[0]).ok_or("first instance is missing")?;
+        let next_tile = document
+            .prefab_instance(ids[2])
+            .ok_or("next tile instance is missing")?;
+        assert_ne!(first.id, next_tile.id);
+        assert_ne!(first.location.coord, next_tile.location.coord);
+        assert!(
+            ptr::eq(first.prefab(), next_tile.prefab()),
+            "equal tiles share prefab storage"
+        );
+        for instance in document.prefab_instances() {
+            assert_eq!(document.prefab_instance(instance.id), Some(instance));
+            assert_eq!(document.instance_location(instance.id), Some(instance.location));
+        }
+
+        Ok(())
     }
 
     #[test]
@@ -1095,13 +1124,13 @@ mod tests {
         assert_eq!(
             document
                 .prefab_instance(id)
-                .and_then(|(prefab, _)| prefab.var(&"name".into())),
+                .and_then(|instance| instance.prefab().var(&"name".into())),
             Some(&core::types::Value::Text("selected".into())),
         );
         assert_eq!(
             document
                 .prefab_instance(untouched_id)
-                .and_then(|(prefab, _)| prefab.var(&"name".into())),
+                .and_then(|instance| instance.prefab().var(&"name".into())),
             None,
         );
         assert!(document.is_dirty());
@@ -1120,7 +1149,7 @@ mod tests {
         assert_eq!(
             document
                 .prefab_instance(id)
-                .and_then(|(prefab, _)| prefab.var(&"name".into())),
+                .and_then(|instance| instance.prefab().var(&"name".into())),
             None
         );
         assert_eq!(document.selected_instance(), Some(id));
@@ -1129,7 +1158,7 @@ mod tests {
         assert_eq!(
             document
                 .prefab_instance(id)
-                .and_then(|(prefab, _)| prefab.var(&"name".into())),
+                .and_then(|instance| instance.prefab().var(&"name".into())),
             Some(&core::types::Value::Text("selected".into())),
         );
     }
@@ -1142,7 +1171,7 @@ mod tests {
         let top = |document: &MapDocument| {
             document
                 .prefab_instance(document.instance_ids_at(coord)[0])
-                .map(|(prefab, _)| prefab.path.to_string())
+                .map(|instance| instance.prefab().path.to_string())
         };
         assert_eq!(
             document.set_instance_var(id, "name".into(), core::types::Value::Text("before".into())),
@@ -1193,14 +1222,14 @@ mod tests {
         assert_eq!(
             document
                 .prefab_instance(id)
-                .and_then(|(prefab, _)| prefab.var(&"pixel_x".into())),
+                .and_then(|instance| instance.prefab().var(&"pixel_x".into())),
             Some(&core::types::Value::Num(1_000.0)),
         );
         assert!(document.undo());
         assert_eq!(
             document
                 .prefab_instance(id)
-                .and_then(|(prefab, _)| prefab.var(&"pixel_x".into())),
+                .and_then(|instance| instance.prefab().var(&"pixel_x".into())),
             None,
         );
         assert!(!document.undo());
@@ -1208,13 +1237,13 @@ mod tests {
         assert_eq!(
             document
                 .prefab_instance(id)
-                .and_then(|(prefab, _)| prefab.var(&"pixel_x".into())),
+                .and_then(|instance| instance.prefab().var(&"pixel_x".into())),
             Some(&core::types::Value::Num(1_000.0)),
         );
     }
 
     #[test]
-    fn moving_an_instance_applies_mutations_and_undo_restores_both() {
+    fn moving_an_instance_applies_mutations_and_undo_restores_both() -> Result<(), &'static str> {
         let mut document = MapDocument::new(shared_tile_map(), 1);
         let source = Coord::new(1, 1, 1);
         let destination = Coord::new(2, 1, 1);
@@ -1234,7 +1263,11 @@ mod tests {
         );
         assert_eq!(document.instance_location(id).unwrap().coord, destination);
         assert_eq!(
-            document.prefab_instance(id).unwrap().0.var(&"pixel_x".into()),
+            document
+                .prefab_instance(id)
+                .ok_or("prefab instance is missing")?
+                .prefab()
+                .var(&"pixel_x".into()),
             Some(&core::types::Value::Num(-32.0)),
         );
         assert_eq!(
@@ -1253,13 +1286,21 @@ mod tests {
         assert!(document.undo());
         assert_eq!(document.instance_location(id).unwrap().coord, source);
         assert_eq!(document.instance_location(id).unwrap().prefab_index, 1);
-        assert_eq!(document.prefab_instance(id).unwrap().0.var(&"pixel_x".into()), None);
+        assert_eq!(
+            document
+                .prefab_instance(id)
+                .ok_or("prefab instance is missing")?
+                .prefab()
+                .var(&"pixel_x".into()),
+            None
+        );
         assert_eq!(document.placed_tile(source).unwrap(), source_before);
         assert_eq!(document.placed_tile(destination).unwrap(), destination_before);
+        Ok(())
     }
 
     #[test]
-    fn moving_onto_the_same_or_out_of_bounds_tile_only_edits_variables() {
+    fn moving_onto_the_same_or_out_of_bounds_tile_only_edits_variables() -> Result<(), &'static str> {
         let mut document = MapDocument::new(shared_tile_map(), 1);
         let source = Coord::new(1, 1, 1);
         let id = document.instance_ids_at(source)[1];
@@ -1280,13 +1321,18 @@ mod tests {
         );
         assert_eq!(document.instance_location(id).unwrap().coord, source);
         assert_eq!(
-            document.prefab_instance(id).unwrap().0.var(&"pixel_x".into()),
+            document
+                .prefab_instance(id)
+                .ok_or("prefab instance is missing")?
+                .prefab()
+                .var(&"pixel_x".into()),
             Some(&core::types::Value::Num(4.0)),
         );
+        Ok(())
     }
 
     #[test]
-    fn replacing_an_instance_path_preserves_its_id_variables_and_undo_history() {
+    fn replacing_an_instance_path_preserves_its_id_variables_and_undo_history() -> Result<(), &'static str> {
         let mut document = MapDocument::new(shared_tile_map(), 1);
         let coord = Coord::new(1, 1, 1);
         let id = document.instance_ids_at(coord)[1];
@@ -1308,7 +1354,9 @@ mod tests {
             ),
             Some(true)
         );
-        let (prefab, location) = document.prefab_instance(id).unwrap();
+        let instance = document.prefab_instance(id).ok_or("prefab instance is missing")?;
+        let prefab = instance.prefab();
+        let location = instance.location;
         assert_eq!(location.coord, coord);
         assert_eq!(prefab.path, replacement);
         assert_eq!(
@@ -1318,7 +1366,10 @@ mod tests {
         assert_eq!(prefab.var(&"dir".into()), None);
 
         assert!(document.undo());
-        let prefab = document.prefab_instance(id).unwrap().0;
+        let prefab = document
+            .prefab_instance(id)
+            .ok_or("prefab instance is missing")?
+            .prefab();
         assert_eq!(prefab.path, TreePath::parse("/obj/table"));
         assert_eq!(
             prefab.var(&"name".into()),
@@ -1326,11 +1377,19 @@ mod tests {
         );
         assert_eq!(prefab.var(&"dir".into()), Some(&core::types::Value::Num(8.0)));
         assert!(document.redo());
-        assert_eq!(document.prefab_instance(id).unwrap().0.path, replacement);
+        assert_eq!(
+            document
+                .prefab_instance(id)
+                .ok_or("prefab instance is missing")?
+                .prefab()
+                .path,
+            replacement
+        );
+        Ok(())
     }
 
     #[test]
-    fn grouped_instance_path_replacements_are_one_undo_step() {
+    fn grouped_instance_path_replacements_are_one_undo_step() -> Result<(), &'static str> {
         let mut document = MapDocument::new(shared_tile_map(), 1);
         let id = document.instance_ids_at(Coord::new(1, 1, 1))[1];
         let group = EditGroupId::new();
@@ -1358,10 +1417,15 @@ mod tests {
 
         assert!(document.undo());
         assert_eq!(
-            document.prefab_instance(id).unwrap().0.path,
+            document
+                .prefab_instance(id)
+                .ok_or("prefab instance is missing")?
+                .prefab()
+                .path,
             TreePath::parse("/obj/table")
         );
         assert!(!document.undo());
+        Ok(())
     }
 
     #[test]
@@ -1387,7 +1451,7 @@ mod tests {
     }
 
     #[test]
-    fn variable_mutations_can_set_and_reset_a_pair_atomically() {
+    fn variable_mutations_can_set_and_reset_a_pair_atomically() -> Result<(), &'static str> {
         let mut document = MapDocument::new(shared_tile_map(), 1);
         let id = document.instance_ids_at(Coord::new(1, 1, 1))[1];
 
@@ -1416,9 +1480,13 @@ mod tests {
             Some(true),
         );
 
-        let prefab = document.prefab_instance(id).unwrap().0;
+        let prefab = document
+            .prefab_instance(id)
+            .ok_or("prefab instance is missing")?
+            .prefab();
         assert_eq!(prefab.var(&"pixel_x".into()), None);
         assert_eq!(prefab.var(&"pixel_y".into()), None);
+        Ok(())
     }
     #[test]
     fn a_focused_area_confines_every_edit_without_blocking_undo() {
@@ -1479,7 +1547,7 @@ mod tests {
         assert_eq!(
             document
                 .prefab_instance(table)
-                .map(|(prefab, _)| prefab.var(&"name".into())),
+                .map(|instance| instance.prefab().var(&"name".into())),
             Some(None),
         );
     }

@@ -49,7 +49,7 @@ impl Session {
         let document = self.state.active_document()?;
         let selected = document.selected_instance()?;
 
-        document.prefab_instance(selected).map(|(prefab, _)| prefab)
+        document.prefab_instance(selected).map(|instance| instance.prefab())
     }
 
     pub fn selected_location(&self) -> Option<PrefabLocation> {
@@ -71,7 +71,7 @@ impl Session {
         let environment = self.state.environment.as_ref()?;
         let document = self.state.active_document()?;
         let selected = document.selected_instance()?;
-        let (prefab, _) = document.prefab_instance(selected)?;
+        let prefab = document.prefab_instance(selected)?.prefab();
         let id = environment.tree.id_of(&prefab.path)?;
         let atom = environment.tree.roots().atom?;
         if !environment.tree.is_subtype_of(id, atom) {
@@ -103,7 +103,9 @@ impl Session {
         let prefab = self.state.active_document().and_then(|document| {
             let selected = selected?;
 
-            document.prefab_instance(selected).map(|(prefab, _)| prefab.clone())
+            document
+                .prefab_instance(selected)
+                .map(|instance| instance.prefab().clone())
         });
         if let Some(document) = self.state.active_document_mut() {
             document.select_instance(selected);
@@ -213,13 +215,14 @@ impl Session {
             self.identical = None;
             return;
         };
-        let Some((prefab, _)) = document
+        let Some(instance) = document
             .selected_instance()
             .and_then(|selected| document.prefab_instance(selected))
         else {
             self.identical = None;
             return;
         };
+        let prefab = instance.prefab();
         let stale = self.identical.as_ref().is_none_or(|cache| {
             cache.document != document.id()
                 || cache.generation != document.generation()
@@ -297,7 +300,8 @@ mod tests {
         let document = session.state.active_document().unwrap();
 
         ids.iter()
-            .map(|id| document.prefab_instance(*id).unwrap().0.var(&"name".into()).cloned())
+            .filter_map(|id| document.prefab_instance(*id))
+            .map(|instance| instance.prefab().var(&"name".into()).cloned())
             .collect()
     }
 

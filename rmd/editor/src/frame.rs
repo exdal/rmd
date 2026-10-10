@@ -608,7 +608,9 @@ pub fn update_prefabs_with_options(
     let rendered = affected
         .into_iter()
         .map(|affected_owner| {
-            let rendered = document.prefab_instance(affected_owner).and_then(|(prefab, location)| {
+            let rendered = document.prefab_instance(affected_owner).and_then(|instance| {
+                let prefab = instance.prefab();
+                let location = instance.location;
                 let id = tree.id_of(&prefab.path)?;
                 let order = instances.placement_orders.get(&affected_owner).copied()?;
 
@@ -641,7 +643,9 @@ pub fn update_prefabs_with_options(
 }
 
 fn current_placement(tree: &ObjectTree, document: &MapDocument, owner: PrefabInstanceId) -> Option<CurrentPlacement> {
-    let (prefab, location) = document.prefab_instance(owner)?;
+    let instance = document.prefab_instance(owner)?;
+    let prefab = instance.prefab();
+    let location = instance.location;
     let id = tree.id_of(&prefab.path)?;
     let is_area = tree.roots().area.is_some_and(|area| tree.is_subtype_of(id, area));
 

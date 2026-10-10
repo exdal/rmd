@@ -307,7 +307,7 @@ pub(super) fn node_session_with_environment(
         .find(|instance| {
             document
                 .prefab_instance(*instance)
-                .is_some_and(|(prefab, _)| prefab.path.to_string().starts_with(target_path))
+                .is_some_and(|instance| instance.prefab().path.to_string().starts_with(target_path))
         })
         .expect("seed node");
     let bake = editor::bake::build(&environment, &document).expect("node profile bakes");

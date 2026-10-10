@@ -40,20 +40,22 @@ pub fn find_instances(
     let matches = query.matcher(tree);
     let mut found = document
         .prefab_instances()
-        .filter(|(_, prefab, location)| bounds.is_none_or(|bounds| bounds.contains(location.coord)) && matches(prefab))
-        .map(|(instance, _, location)| (instance, location))
+        .filter(|instance| {
+            bounds.is_none_or(|bounds| bounds.contains(instance.location.coord)) && matches(instance.prefab())
+        })
         .collect::<Vec<_>>();
-    found.sort_unstable_by_key(|(instance, location)| {
+    found.sort_unstable_by_key(|instance| {
+        let location = instance.location;
         (
             location.coord.z,
             location.coord.y,
             location.coord.x,
             location.prefab_index,
-            instance.get(),
+            instance.id.get(),
         )
     });
 
-    found.into_iter().map(|(instance, _)| instance).collect()
+    found.into_iter().map(|instance| instance.id).collect::<Vec<_>>()
 }
 
 /// Drops the ones that no longer exist, and follows the ones that moved
@@ -73,7 +75,7 @@ pub fn resolve_instances(
 pub fn delete_instances(document: &MapDocument, instances: &[PrefabInstanceId]) -> Option<ToolEdit> {
     let by_tile = editable_by_tile(document, instances);
     let mut edit = Edit::new(match instances {
-        [instance] => format!("delete {}", document.prefab_instance(*instance)?.0.path),
+        [instance] => format!("delete {}", document.prefab_instance(*instance)?.prefab().path),
         _ => format!("delete {} instances", by_tile.values().map(Vec::len).sum::<usize>()),
     });
     let mut affected = Vec::new();
@@ -114,10 +116,10 @@ pub fn replace_instances(
 }
 
 pub fn can_replace(document: &MapDocument, tree: &ObjectTree, instance: PrefabInstanceId, prefab: &Prefab) -> bool {
-    document.prefab_instance(instance).is_some_and(|(placed, location)| {
-        document.allows_edit_at(location.coord)
-            && placed != prefab
-            && placement_kind(tree, placed).is_some_and(|kind| placement_kind(tree, prefab) == Some(kind))
+    document.prefab_instance(instance).is_some_and(|instance| {
+        document.allows_edit_at(instance.location.coord)
+            && instance.prefab() != prefab
+            && placement_kind(tree, instance.prefab()).is_some_and(|kind| placement_kind(tree, prefab) == Some(kind))
     })
 }
 

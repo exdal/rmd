@@ -170,7 +170,7 @@ impl Session {
             let (replayed, later) = unbaked.into_iter().partition::<Vec<_>, _>(|instance| {
                 document
                     .prefab_instance(*instance)
-                    .is_none_or(|(_, location)| location.coord.z <= levels)
+                    .is_none_or(|instance| instance.location.coord.z <= levels)
             });
             let edits = editor::bake::update(bake, environment, document, &replayed);
             report_bake_output(bake);
@@ -318,10 +318,10 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use core::{path::TreePath, types::Value};
-    use std::path::PathBuf;
+    use std::{mem, path::PathBuf};
 
     use dmm::{Coord, Map, Prefab, Size};
-    use editor::{document::MapDocument, progress::Progress, tool::Tool};
+    use editor::{bake, document::MapDocument, progress::Progress, tool::Tool};
 
     use crate::session::{
         Session,
@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires the local target/MonkeStation2.0 checkout"]
-    fn monkestation_windows_take_department_colors_and_sills() {
+    fn monkestation_windows_take_department_colors_and_sills() -> Result<(), &'static str> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
         let options = editor::environment::BakeOptions {
             forced_profile: Some(String::from("monkestation")),
@@ -513,9 +513,16 @@ mod tests {
             let instance = *document
                 .instance_ids_at(Coord::new(x, 1, 1))
                 .iter()
-                .find(|id| document.prefab_instance(**id).unwrap().0.path.to_string() == path)
+                .find(|id| {
+                    document
+                        .prefab_instance(**id)
+                        .is_some_and(|instance| instance.prefab().path.to_string() == path)
+                })
                 .unwrap();
-            let (prefab, _) = document.prefab_instance(instance).unwrap();
+            let prefab = document
+                .prefab_instance(instance)
+                .ok_or("prefab instance is missing")?
+                .prefab();
             let ty = environment.tree.id_of(&prefab.path).unwrap();
             let delta = bake.appearances.get(&instance.get()).expect("baked appearance");
             let owner = editor::visual::resolve_delta(&environment.tree, ty, prefab, delta);
@@ -524,7 +531,7 @@ mod tests {
                 .iter()
                 .map(|overlay| editor::visual::resolve_overlay(&environment.tree, &owner, overlay))
                 .collect::<Vec<_>>();
-            (owner, overlays)
+            Ok::<_, &str>((owner, overlays))
         };
         // Overlay colors carry an alpha byte.
         let color = |appearance: &editor::visual::Appearance| {
@@ -543,11 +550,11 @@ mod tests {
         };
 
         // SSstation_coloring paints science purple.
-        let (owner, overlays) = baked(1, window);
+        let (owner, overlays) = baked(1, window)?;
         assert_eq!(color(&owner).as_deref(), Some("#d381c9"));
         assert!(has_sill(&overlays), "{overlays:#?}");
 
-        let (_, overlays) = baked(3, spawner);
+        let (_, overlays) = baked(3, spawner)?;
         assert!(
             overlays
                 .iter()
@@ -556,17 +563,18 @@ mod tests {
         assert!(has_sill(&overlays), "{overlays:#?}");
 
         // Outside a department, the window keeps get_default_color().
-        let (owner, _) = baked(4, window);
+        let (owner, _) = baked(4, window)?;
         assert!(
             ["#1a356e", "#305a6d", "#164f41"].contains(&color(&owner).as_deref().unwrap_or_default()),
             "{:?}",
             owner.color
         );
+        Ok(())
     }
 
     #[test]
     #[ignore = "requires the local target/MonkeStation2.0 checkout"]
-    fn monkestation_computers_draw_their_powered_overlays() {
+    fn monkestation_computers_draw_their_powered_overlays() -> Result<(), &'static str> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
         let options = editor::environment::BakeOptions {
             forced_profile: Some(String::from("monkestation")),
@@ -596,9 +604,16 @@ mod tests {
         let instance = *document
             .instance_ids_at(Coord::new(1, 1, 1))
             .iter()
-            .find(|id| document.prefab_instance(**id).unwrap().0.path.to_string() == computer)
+            .find(|id| {
+                document
+                    .prefab_instance(**id)
+                    .is_some_and(|instance| instance.prefab().path.to_string() == computer)
+            })
             .unwrap();
-        let (prefab, _) = document.prefab_instance(instance).unwrap();
+        let prefab = document
+            .prefab_instance(instance)
+            .ok_or("prefab instance is missing")?
+            .prefab();
         let ty = environment.tree.id_of(&prefab.path).unwrap();
         let delta = bake.appearances.get(&instance.get()).expect("baked computer");
         let owner = editor::visual::resolve_delta(&environment.tree, ty, prefab, delta);
@@ -621,11 +636,12 @@ mod tests {
                 .any(|overlay| overlay.lighting == vm::AppearanceLighting::Emissive),
             "{overlays:#?}"
         );
+        Ok(())
     }
 
     #[test]
     #[ignore = "requires the local target/tgstation checkout"]
-    fn tgstation_fixture_glows_follow_the_lighting_toggle() {
+    fn tgstation_fixture_glows_follow_the_lighting_toggle() -> Result<(), &'static str> {
         use std::collections::HashMap;
 
         use editor::{
@@ -675,14 +691,17 @@ mod tests {
         session.activate_document(MapDocument::new(map, 1));
         settle_bake(&mut session);
 
-        let check = |session: &Session, lighting: bool| {
+        let check = |session: &Session, lighting: bool| -> Result<(), &str> {
             let environment = session.state.environment.as_ref().unwrap();
             let document = session.state.active_document().unwrap();
             let bake = session.active_cache().bake.as_ref().expect("fixture bake");
             assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
             for (index, (path, _, native_on)) in fixtures.iter().enumerate() {
                 let id = document.instance_ids_at(Coord::new(index as u32 + 1, 1, 1))[0];
-                let (prefab, _) = document.prefab_instance(id).unwrap();
+                let prefab = document
+                    .prefab_instance(id)
+                    .ok_or("prefab instance is missing")?
+                    .prefab();
                 let ty = environment.tree.id_of(&prefab.path).unwrap();
                 let delta = &bake.appearances[&id.get()];
                 let owner = visual::resolve_delta(&environment.tree, ty, prefab, delta);
@@ -707,8 +726,9 @@ mod tests {
                 );
             }
             assert_render_cache_matches_rebuild(session);
+            Ok(())
         };
-        check(&session, true);
+        check(&session, true)?;
         let initial = session.active_cache().bake.as_ref().unwrap().appearances.clone();
         let frame = session.dm_ui(0, UiFeedback::default());
         let key = frame
@@ -731,16 +751,17 @@ mod tests {
             assert!(frame.committed);
             assert!(frame.rebake.appearance.is_some_and(|group| group != 0));
             session.dm_ui_rebake(frame.rebake);
-            check(&session, lighting);
+            check(&session, lighting)?;
             if lighting {
                 assert_eq!(session.active_cache().bake.as_ref().unwrap().appearances, initial);
             }
         }
+        Ok(())
     }
 
     #[test]
     #[ignore = "requires the local target/tgstation checkout"]
-    fn tramstation_waste_release_draws_its_prepared_valve_direction() {
+    fn tramstation_waste_release_draws_its_prepared_valve_direction() -> Result<(), &'static str> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
         let (tramstation, errors) =
             dmm::parser::load(root.join("_maps/map_files/tramstation/tramstation.dmm")).expect("Tramstation map");
@@ -777,14 +798,15 @@ mod tests {
             .find(|id| {
                 document
                     .prefab_instance(**id)
-                    .unwrap()
-                    .0
-                    .var(&"name".into())
+                    .and_then(|instance| instance.prefab().var(&"name".into()))
                     .and_then(Value::as_text)
                     == Some("Waste Release")
             })
             .expect("Waste Release placement");
-        let (prefab, _) = document.prefab_instance(instance).unwrap();
+        let prefab = document
+            .prefab_instance(instance)
+            .ok_or("prefab instance is missing")?
+            .prefab();
         let ty = environment.tree.id_of(&prefab.path).unwrap();
         let delta = &bake.appearances[&instance.get()];
         let appearance = editor::visual::resolve_delta(&environment.tree, ty, prefab, delta);
@@ -824,11 +846,12 @@ mod tests {
             "the valve module frame is transparent"
         );
         assert_render_cache_matches_rebuild(&session);
+        Ok(())
     }
 
     #[test]
     #[ignore = "requires the local target/tgstation checkout"]
-    fn a_hidden_layer_manifold_draws_its_connections_above_the_floor() {
+    fn a_hidden_layer_manifold_draws_its_connections_above_the_floor() -> Result<(), &'static str> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
         let options = editor::environment::BakeOptions {
             forced_profile: Some(String::from("tgstation")),
@@ -882,14 +905,17 @@ mod tests {
         let environment = session.state.environment.as_ref().unwrap();
         let document = session.state.active_document().unwrap();
         let resolved = |instance: editor::document::PrefabInstanceId| {
-            let (prefab, _) = document.prefab_instance(instance).unwrap();
+            let prefab = document
+                .prefab_instance(instance)
+                .ok_or("prefab instance is missing")?
+                .prefab();
             let ty = environment.tree.id_of(&prefab.path).unwrap();
             let delta = bake.appearances.get(&instance.get());
             let appearance = delta.map_or_else(
                 || editor::visual::resolve_id(&environment.tree, ty, prefab),
                 |delta| editor::visual::resolve_delta(&environment.tree, ty, prefab, delta),
             );
-            (prefab.path.to_string(), appearance, delta)
+            Ok::<_, &str>((prefab.path.to_string(), appearance, delta))
         };
         let depth = |appearance: &editor::visual::Appearance| appearance.plane * 1000.0 + appearance.layer;
 
@@ -901,7 +927,7 @@ mod tests {
                 .instance_ids_at(coord)
                 .iter()
                 .map(|id| resolved(*id))
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>, _>>()?;
             let (_, owner, delta) = placed.iter().find(|(path, ..)| path == manifold).unwrap();
             let (_, turf, _) = placed.iter().find(|(path, ..)| path.starts_with("/turf/")).unwrap();
             let mut states = Vec::new();
@@ -925,6 +951,7 @@ mod tests {
             states.sort();
             assert_eq!(states, expected, "{coord:?}");
         }
+        Ok(())
     }
 
     #[test]
@@ -1117,7 +1144,7 @@ mod tests {
             assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
             let environment = session.state.environment.as_ref().unwrap();
             let document = session.state.active_document().unwrap();
-            let (prefab, _) = document.prefab_instance(instance).unwrap();
+            let prefab = document.prefab_instance(instance)?.prefab();
             let ty = environment.tree.id_of(&prefab.path).unwrap();
             let delta = &bake.appearances[&instance.get()];
             let owner = editor::visual::resolve_delta(&environment.tree, ty, prefab, delta);
@@ -1392,7 +1419,7 @@ mod tests {
             let update = {
                 let Session { state, caches, .. } = &mut *session;
                 let bake = caches.get_mut(&id).and_then(|cache| cache.bake.as_mut()).expect("bake");
-                editor::bake::update(
+                bake::update(
                     bake,
                     state.environment.as_ref().unwrap(),
                     state.document(id).unwrap(),
@@ -1458,7 +1485,7 @@ mod tests {
             last = now;
         };
         let cache = session.caches.get_mut(&id).expect("map cache");
-        let instances = std::mem::take(&mut cache.instances);
+        let instances = mem::take(&mut cache.instances);
         let bake = cache.bake.take().expect("bake");
         eprintln!("frame cache:");
         instances.release_in_stages(&mut freed);

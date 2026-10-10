@@ -24,7 +24,9 @@ impl Session {
         let environment = self.state.environment.as_ref()?;
         let document = self.state.active_document()?;
         let selected = document.selected_instance()?;
-        let (prefab, location) = document.prefab_instance(selected)?;
+        let instance = document.prefab_instance(selected)?;
+        let prefab = instance.prefab();
+        let location = instance.location;
         if location.coord.z != document.z {
             return None;
         }
@@ -72,7 +74,7 @@ impl Session {
         let Some(selected) = document.selected_instance() else {
             return guides;
         };
-        let Some((_, selected_location)) = document.prefab_instance(selected) else {
+        let Some(selected_location) = document.instance_location(selected) else {
             return guides;
         };
 
@@ -103,7 +105,7 @@ impl Session {
             let Some(connected) = PrefabInstanceId::from_raw(connected) else {
                 continue;
             };
-            let Some((_, location)) = document.prefab_instance(connected) else {
+            let Some(location) = document.instance_location(connected) else {
                 continue;
             };
             let target = center(connected, location.coord);
@@ -278,7 +280,7 @@ mod tests {
                 .find(|id| {
                     document
                         .prefab_instance(*id)
-                        .is_some_and(|(prefab, _)| prefab.path == TreePath::parse(path))
+                        .is_some_and(|instance| instance.prefab().path == TreePath::parse(path))
                 })
                 .expect("fixture endpoint")
         };

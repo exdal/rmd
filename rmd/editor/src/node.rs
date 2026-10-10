@@ -96,7 +96,7 @@ pub fn eligible_instance_at(
     document: &MapDocument, tree: &ObjectTree, group: &ResolvedGroup, coord: Coord,
 ) -> Option<PrefabInstanceId> {
     document.instance_ids_at(coord).iter().rev().find_map(|id| {
-        let (prefab, _) = document.prefab_instance(*id)?;
+        let prefab = document.prefab_instance(*id)?.prefab();
 
         group.matches(tree, prefab).then_some(*id)
     })
@@ -331,7 +331,7 @@ pub fn instance_matches(
 ) -> bool {
     document
         .prefab_instance(id)
-        .is_some_and(|(prefab, _)| group.matches(tree, prefab))
+        .is_some_and(|instance| group.matches(tree, instance.prefab()))
 }
 
 fn traversable(
@@ -399,7 +399,7 @@ fn group_prefab_at<'a>(
 
     let id = eligible_instance_at(document, tree, group, coord)?;
 
-    document.prefab_instance(id).map(|(prefab, _)| prefab)
+    document.prefab_instance(id).map(|instance| instance.prefab())
 }
 
 fn connected(document: &MapDocument, tree: &ObjectTree, group: &ResolvedGroup, from: Coord, to: Coord) -> bool {
@@ -835,7 +835,7 @@ mod tests {
                 .find(|id| {
                     document
                         .prefab_instance(*id)
-                        .is_some_and(|(prefab, _)| prefab.path.to_string() == *path)
+                        .is_some_and(|instance| instance.prefab().path.to_string() == *path)
                 })
                 .unwrap();
             document.set_instance_var(id, "dir".into(), Value::Num(dir.bits() as f32));
@@ -844,7 +844,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_components_follow_facing_ports_including_junctions_and_endpoints() {
+    fn configured_components_follow_facing_ports_including_junctions_and_endpoints() -> Result<(), &'static str> {
         let tree = tree();
         let group = configured_group(&tree);
         let junction = Coord::new(2, 2, 1);
@@ -865,19 +865,22 @@ mod tests {
             HashSet::from([west])
         );
         let brush = document
-            .prefab_instance(eligible_instance_at(&document, &tree, &group, west).unwrap())
-            .unwrap()
-            .0;
+            .prefab_instance(
+                eligible_instance_at(&document, &tree, &group, west).ok_or("eligible instance is missing")?,
+            )
+            .ok_or("prefab instance is missing")?
+            .prefab();
         assert!(
             oriented_route_directions(&document, &tree, &group, brush, &[west, junction], &HashMap::new()).is_none()
         );
         assert!(
             oriented_route_directions(&document, &tree, &group, brush, &[east, junction], &HashMap::new()).is_some()
         );
+        Ok(())
     }
 
     #[test]
-    fn configured_route_orients_straights_bends_and_rejects_a_third_port() {
+    fn configured_route_orients_straights_bends_and_rejects_a_third_port() -> Result<(), &'static str> {
         let tree = tree();
         let group = configured_group(&tree);
         let start = Coord::new(1, 1, 1);
@@ -885,9 +888,11 @@ mod tests {
         let end = Coord::new(2, 2, 1);
         let document = configured_document(&[(start, "/obj/link/segment", NodePorts::NORTH)]);
         let brush = document
-            .prefab_instance(eligible_instance_at(&document, &tree, &group, start).unwrap())
-            .unwrap()
-            .0;
+            .prefab_instance(
+                eligible_instance_at(&document, &tree, &group, start).ok_or("eligible instance is missing")?,
+            )
+            .ok_or("prefab instance is missing")?
+            .prefab();
         let dirs =
             oriented_route_directions(&document, &tree, &group, brush, &[start, middle, end], &HashMap::new()).unwrap();
         assert_eq!(dirs[&start], NodePorts::EAST.bits());
@@ -905,10 +910,13 @@ mod tests {
             (west, "/obj/link/segment", NodePorts::EAST),
         ]);
         let brush = document
-            .prefab_instance(eligible_instance_at(&document, &tree, &group, west).unwrap())
-            .unwrap()
-            .0;
+            .prefab_instance(
+                eligible_instance_at(&document, &tree, &group, west).ok_or("eligible instance is missing")?,
+            )
+            .ok_or("prefab instance is missing")?
+            .prefab();
         assert!(oriented_route_directions(&document, &tree, &group, brush, &[west, center], &HashMap::new()).is_none());
+        Ok(())
     }
 
     #[test]

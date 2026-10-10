@@ -72,8 +72,9 @@ impl Session {
         let groups = self.caches.get(&id)?.bake.as_ref()?.node_groups();
         let document = self.state.document(id)?;
         if let Some(picked) = picked
-            && let Some((prefab, _)) = document.prefab_instance(picked)
+            && let Some(instance) = document.prefab_instance(picked)
         {
+            let prefab = instance.prefab();
             if node::group_for_prefab(tree, groups, prefab).is_some() {
                 return Some(picked);
             }
@@ -88,7 +89,7 @@ impl Session {
         }
 
         document.instance_ids_at(coord).iter().rev().find_map(|instance| {
-            let (prefab, _) = document.prefab_instance(*instance)?;
+            let prefab = document.prefab_instance(*instance)?.prefab();
 
             node::group_for_prefab(tree, groups, prefab)
                 .is_some()
@@ -110,9 +111,11 @@ impl Session {
         let Some(document) = self.state.document(document_id) else {
             return false;
         };
-        let Some((prefab, location)) = document.prefab_instance(target) else {
+        let Some(instance) = document.prefab_instance(target) else {
             return false;
         };
+        let prefab = instance.prefab();
+        let location = instance.location;
         if location.coord.z != document.z {
             return false;
         }
@@ -359,13 +362,13 @@ impl Session {
         let tree = &environment.bake_program.as_ref()?.tree;
         let document = self.state.document(state.document)?;
         if let Some(picked) = picked
-            && let Some((prefab, location)) = document.prefab_instance(picked)
+            && let Some(instance) = document.prefab_instance(picked)
         {
             if node::instance_matches(document, tree, &state.group, picked) {
-                return self.node_connection_at(location.coord);
+                return self.node_connection_at(instance.location.coord);
             }
 
-            let ty = tree.id_of(&prefab.path)?;
+            let ty = tree.id_of(&instance.prefab().path)?;
             let roots = tree.roots();
             let floor_or_area = roots.turf.is_some_and(|root| tree.is_subtype_of(ty, root))
                 || roots.area.is_some_and(|root| tree.is_subtype_of(ty, root));
@@ -723,7 +726,7 @@ mod tests {
             .instance_ids_at(coord)
             .iter()
             .filter_map(|id| {
-                let (prefab, _) = document.prefab_instance(*id)?;
+                let prefab = document.prefab_instance(*id)?.prefab();
 
                 [&floor_path, &area_path, &supply_path, &scrubbers_path, &other_path]
                     .contains(&&prefab.path)
@@ -791,7 +794,7 @@ mod tests {
             .find(|instance| {
                 document
                     .prefab_instance(*instance)
-                    .is_some_and(|(prefab, _)| prefab.path == seed.path)
+                    .is_some_and(|instance| instance.prefab().path == seed.path)
             })
             .expect("seed cable");
         let bake = editor::bake::build(&environment, &document).expect("node profile bakes");
@@ -988,7 +991,7 @@ mod tests {
                     .active_document()
                     .unwrap()
                     .prefab_instance(*id)
-                    .is_some_and(|(prefab, _)| prefab.path == TreePath::parse("/obj/link/segment"))
+                    .is_some_and(|instance| instance.prefab().path == TreePath::parse("/obj/link/segment"))
             })
             .unwrap();
         assert!(session.begin_node_edit(seed));
@@ -1248,7 +1251,7 @@ mod tests {
                     .active_document()
                     .unwrap()
                     .prefab_instance(*id)
-                    .is_some_and(|(prefab, _)| prefab.path.to_string().starts_with("/obj/cable"))
+                    .is_some_and(|instance| instance.prefab().path.to_string().starts_with("/obj/cable"))
             })
             .unwrap();
         assert_eq!(
@@ -1385,7 +1388,7 @@ mod tests {
                     .active_document()
                     .unwrap()
                     .prefab_instance(*id)
-                    .is_some_and(|(prefab, _)| prefab.path == TreePath::parse("/area/station"))
+                    .is_some_and(|instance| instance.prefab().path == TreePath::parse("/area/station"))
             })
             .unwrap();
         session
@@ -1446,7 +1449,7 @@ mod tests {
             .find(|instance| {
                 document
                     .prefab_instance(*instance)
-                    .is_some_and(|(prefab, _)| prefab.path == seed.path)
+                    .is_some_and(|instance| instance.prefab().path == seed.path)
             })
             .expect("seed cable");
         let bake = editor::bake::build(&environment, &document).expect("node profile bakes");
@@ -1517,7 +1520,7 @@ mod tests {
             .find(|instance| {
                 document
                     .prefab_instance(*instance)
-                    .is_some_and(|(prefab, _)| prefab.path == seed.path)
+                    .is_some_and(|instance| instance.prefab().path == seed.path)
             })
             .expect("seed cable");
         let bake = editor::bake::build(&environment, &document).expect("node profile bakes");

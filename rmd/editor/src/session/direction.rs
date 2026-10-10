@@ -135,7 +135,7 @@ impl Session {
         let environment = self.state.environment.as_ref()?;
         let document = self.state.active_document()?;
         let selected = document.selected_instance()?;
-        let (prefab, _) = document.prefab_instance(selected)?;
+        let prefab = document.prefab_instance(selected)?.prefab();
         let id = environment.tree.id_of(&prefab.path)?;
 
         directional_types_for(&environment.tree, id)
@@ -170,7 +170,7 @@ impl Session {
         let path = {
             let environment = self.state.environment.as_ref()?;
             let document = self.state.active_document()?;
-            let (prefab, _) = document.prefab_instance(selected)?;
+            let prefab = document.prefab_instance(selected)?.prefab();
             let id = environment.tree.id_of(&prefab.path)?;
 
             directional_type_target(&environment.tree, id, direction)?

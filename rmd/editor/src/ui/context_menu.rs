@@ -232,8 +232,9 @@ pub(super) fn draw_popup(
         .iter()
         .copied()
         .filter_map(|instance| session.state.active_document()?.prefab_instance(instance))
-        .filter(|(_, location)| location.coord == coord)
-        .fold((0.0_f32, 0.0_f32), |(name_width, path_width), (prefab, _)| {
+        .filter(|instance| instance.location.coord == coord)
+        .fold((0.0_f32, 0.0_f32), |(name_width, path_width), instance| {
+            let prefab = instance.prefab();
             let name = display_name(session.tree(), prefab);
             (
                 name_width.max(ui.calc_text_size(&name)[0]),
@@ -248,17 +249,19 @@ pub(super) fn draw_popup(
     ui.dummy([label_width, 0.0]);
     ui.set_cursor_pos(cursor);
     for instance in target.atoms.iter().copied() {
-        let Some((prefab, location)) = session
+        let Some(placed) = session
             .state
             .active_document()
             .and_then(|document| document.prefab_instance(instance))
         else {
             continue;
         };
-        if location.coord != coord {
+
+        if placed.location.coord != coord {
             continue;
         }
-        let prefab = prefab.clone();
+
+        let prefab = placed.prefab().clone();
         let name = display_name(session.tree(), &prefab);
         let path_text = format!("[{}]", prefab.path);
         let label = format!("##atom-{}", instance.get());

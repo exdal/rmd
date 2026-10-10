@@ -245,11 +245,12 @@ impl Session {
             return false;
         };
 
-        let Some((prefab, _)) = document.prefab_instance(target) else {
+        let Some(instance) = document.prefab_instance(target) else {
             return false;
         };
 
-        let mutations = prefab
+        let mutations = instance
+            .prefab()
             .vars
             .iter()
             .map(|(name, _)| VarMutation::Remove(name.clone()))
@@ -275,9 +276,10 @@ impl Session {
         let Some(document) = self.state.active_document() else {
             return false;
         };
-        let Some((prefab, _)) = document.prefab_instance(target) else {
+        let Some(instance) = document.prefab_instance(target) else {
             return false;
         };
+        let prefab = instance.prefab();
         let kind = context_placement_group(&environment.tree, &prefab.path);
         if kind.is_none() || kind != context_placement_group(&environment.tree, &path) {
             return false;
@@ -352,7 +354,7 @@ mod tests {
     };
 
     #[test]
-    fn the_replace_tool_swaps_a_picked_atom_for_a_brush_of_the_same_kind() {
+    fn the_replace_tool_swaps_a_picked_atom_for_a_brush_of_the_same_kind() -> Result<(), &'static str> {
         let mut session = flat_session(2, 1);
         let document = session.state.active().unwrap();
         let coord = Coord::new(1, 1, 1);
@@ -371,8 +373,15 @@ mod tests {
         session.set_tool(Tool::Replace);
         assert!(!session.replace_instance(session.turf_at(document, coord).unwrap()));
         assert!(session.replace_instance(table));
-        let (prefab, _) = session.state.active_document().unwrap().prefab_instance(table).unwrap();
+        let prefab = session
+            .state
+            .active_document()
+            .ok_or("active document is missing")?
+            .prefab_instance(table)
+            .ok_or("prefab instance is missing")?
+            .prefab();
         assert_eq!(prefab, &light, "the placement keeps its id");
+        Ok(())
     }
 
     #[test]
@@ -613,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn context_atom_actions_preserve_ids_and_undo() {
+    fn context_atom_actions_preserve_ids_and_undo() -> Result<(), &'static str> {
         let mut session = flat_session(4, 4);
         let coord = Coord::new(2, 2, 1);
         let table = TreePath::parse("/obj/structure/table");
@@ -652,8 +661,8 @@ mod tests {
                 .active_document()
                 .unwrap()
                 .prefab_instance(first)
-                .unwrap()
-                .0
+                .ok_or("prefab instance is missing")?
+                .prefab()
                 .vars
                 .is_empty()
         );
@@ -664,13 +673,19 @@ mod tests {
                 .active_document()
                 .unwrap()
                 .prefab_instance(first)
-                .unwrap()
-                .0
+                .ok_or("prefab instance is missing")?
+                .prefab()
                 .var(&"name".into()),
             Some(&Value::Text("custom table".into()))
         );
         assert!(session.replace_context_instance(first, light.clone()));
-        let (prefab, _) = session.state.active_document().unwrap().prefab_instance(first).unwrap();
+        let prefab = session
+            .state
+            .active_document()
+            .ok_or("active document is missing")?
+            .prefab_instance(first)
+            .ok_or("prefab instance is missing")?
+            .prefab();
         assert_eq!(prefab.path, light);
         assert!(prefab.vars.is_empty());
         assert!(!session.replace_context_instance(first, TreePath::parse("/turf/open/floor")));
@@ -681,8 +696,8 @@ mod tests {
                 .active_document()
                 .unwrap()
                 .prefab_instance(first)
-                .unwrap()
-                .0
+                .ok_or("prefab instance is missing")?
+                .prefab()
                 .path,
             table
         );
@@ -704,6 +719,7 @@ mod tests {
                 .instance_location(first)
                 .is_some()
         );
+        Ok(())
     }
 
     #[test]

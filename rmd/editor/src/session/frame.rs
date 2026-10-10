@@ -334,7 +334,7 @@ impl Session {
                 .filter(|owner| {
                     document
                         .prefab_instance(*owner)
-                        .is_some_and(|(prefab, _)| context_placement_group(tree, &prefab.path) == Some(0))
+                        .is_some_and(|instance| context_placement_group(tree, &instance.prefab().path) == Some(0))
                 })
                 .collect(),
         )
@@ -360,7 +360,7 @@ impl Session {
                 let (baked, later) = affected.iter().copied().partition::<Vec<_>, _>(|instance| {
                     document
                         .prefab_instance(*instance)
-                        .is_none_or(|(_, location)| location.coord.z <= levels)
+                        .is_none_or(|instance| instance.location.coord.z <= levels)
                 });
                 let mut update = editor::bake::update(bake, environment, document, &baked);
                 report_bake_output(bake);
@@ -484,8 +484,8 @@ mod tests {
             .sprites
             .iter()
             .filter_map(|sprite| document.prefab_instance(sprite.owner))
-            .filter(|(prefab, _)| prefab.path == TreePath::parse("/obj/structure/table"))
-            .map(|(prefab, _)| match prefab.var(&"name".into()) {
+            .filter(|instance| instance.prefab().path == TreePath::parse("/obj/structure/table"))
+            .map(|instance| match instance.prefab().var(&"name".into()) {
                 Some(Value::Text(name)) => name.clone(),
                 _ => String::new(),
             })

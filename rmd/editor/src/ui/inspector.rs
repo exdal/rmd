@@ -1932,10 +1932,12 @@ mod tests {
         (session, tables)
     }
 
-    fn pixel_and_tile(session: &Session, id: PrefabInstanceId) -> (Option<Value>, Coord) {
-        let (prefab, location) = session.state.active_document().unwrap().prefab_instance(id).unwrap();
+    fn pixel_and_tile(session: &Session, id: PrefabInstanceId) -> Option<(Option<Value>, Coord)> {
+        let instance = session.state.active_document()?.prefab_instance(id)?;
+        let prefab = instance.prefab();
+        let location = instance.location;
 
-        (prefab.var(&"pixel_x".into()).cloned(), location.coord)
+        Some((prefab.var(&"pixel_x".into()).cloned(), location.coord))
     }
 
     #[test]
@@ -1996,8 +1998,8 @@ mod tests {
         assert_eq!(
             tables.map(|id| pixel_and_tile(&session, id)),
             [
-                (Some(Value::Num(40.0)), Coord::new(1, 1, 1)),
-                (Some(Value::Num(40.0)), Coord::new(2, 1, 1))
+                Some((Some(Value::Num(40.0)), Coord::new(1, 1, 1))),
+                Some((Some(Value::Num(40.0)), Coord::new(2, 1, 1)))
             ]
         );
 
@@ -2012,10 +2014,10 @@ mod tests {
         );
         assert_eq!(
             pixel_and_tile(&session, tables[0]),
-            (Some(Value::Num(8.0)), Coord::new(2, 1, 1)),
+            Some((Some(Value::Num(8.0)), Coord::new(2, 1, 1))),
             "a single object is re-anchored onto the tile it was dragged over"
         );
-        assert_eq!(pixel_and_tile(&session, tables[1]), (None, Coord::new(2, 1, 1)));
+        assert_eq!(pixel_and_tile(&session, tables[1]), Some((None, Coord::new(2, 1, 1))));
     }
 
     #[test]

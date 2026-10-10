@@ -49,9 +49,9 @@ fn atom(program: &BakeProgram, prefab: &Prefab, instance: u64, coord: Coord) -> 
 
 fn placed(environment: &Environment, document: &MapDocument, id: PrefabInstanceId) -> Option<vm::bake::Atom> {
     let program = environment.bake_program.as_ref()?;
-    let (prefab, location) = document.prefab_instance(id)?;
+    let instance = document.prefab_instance(id)?;
 
-    atom(program, prefab, id.get(), location.coord)
+    atom(program, instance.prefab(), instance.id.get(), instance.location.coord)
 }
 
 #[derive(Default)]
@@ -535,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn overlays_follow_the_owner_dir_and_sort_by_layer() {
+    fn overlays_follow_the_owner_dir_and_sort_by_layer() -> Result<(), &'static str> {
         let environment = environment(
             r#"
 /datum/demir/test/bake(atom/target)
@@ -560,7 +560,10 @@ mod tests {
         assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
 
         let table = document.instance_ids_at(Coord::new(1, 1, 1))[0];
-        let (prefab, _) = document.prefab_instance(table).expect("table");
+        let prefab = document
+            .prefab_instance(table)
+            .ok_or("prefab instance is missing")?
+            .prefab();
         let ty = environment.tree.id_of(&prefab.path).expect("table type");
         let delta = &bake.appearances[&table.get()];
         let owner = visual::resolve_delta(&environment.tree, ty, prefab, delta);
@@ -587,6 +590,7 @@ mod tests {
         let depths = instances.live_sprites().map(|sprite| sprite.depth).collect::<Vec<_>>();
 
         assert_eq!(depths, [1.0, owner.layer, owner.layer]);
+        Ok(())
     }
 
     #[test]
@@ -640,7 +644,7 @@ mod tests {
     }
 
     #[test]
-    fn derived_sprites_follow_edits_and_history_without_changing_map_bytes() {
+    fn derived_sprites_follow_edits_and_history_without_changing_map_bytes() -> Result<(), &'static str> {
         let environment = environment(WALLS);
         let mut map = Map::new(Size { x: 3, y: 3, z: 1 });
         let key = map.intern_tile(vec![Prefab::new(TreePath::parse("/turf/closed/wall"))]);
@@ -656,7 +660,10 @@ mod tests {
         assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
         assert_eq!(dmm::writer::MapWriter::new(&document.to_map()).write(), bytes);
 
-        let (prefab, _) = document.prefab_instance(center).expect("center wall");
+        let prefab = document
+            .prefab_instance(center)
+            .ok_or("prefab instance is missing")?
+            .prefab();
         let ty = environment.tree.id_of(&prefab.path).expect("wall type");
         let appearance = visual::resolve_delta(&environment.tree, ty, prefab, &bake.appearances[&center.get()]);
 
@@ -716,6 +723,7 @@ mod tests {
         update(&mut bake, &environment, &document, &affected);
 
         assert!(!bake.appearances.contains_key(&center.get()));
+        Ok(())
     }
 
     #[test]
