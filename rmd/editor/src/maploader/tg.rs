@@ -311,6 +311,8 @@ mod tests {
 
         fn map(&self, path: &str, map: &Map) { self.write(path, &dmm::writer::write(map)); }
 
+        fn path(&self, path: &str) -> PathBuf { resolved_path(&self.directory.join(path)) }
+
         fn discover(&self, map: &Map) -> map_module::Discovery {
             discover(
                 &self.directory,
@@ -530,7 +532,7 @@ mod tests {
         assert_eq!(result.roots[0].location.key.as_deref(), Some("override"));
         assert_eq!(
             result.roots[0].location.config_file,
-            Some(fixture.directory.join("override.toml"))
+            Some(fixture.path("override.toml"))
         );
         assert!(only_module(&result.roots[0]).roots.is_empty());
     }
@@ -689,15 +691,15 @@ mod tests {
         assert_eq!(result.diagnostics.len(), 4);
         let diagnostic = failures[0];
         let location = diagnostic.root.as_ref().unwrap();
-        assert_eq!(location.source_map, fixture.directory.join("maps/outer.dmm"));
+        assert_eq!(location.source_map, fixture.path("maps/outer.dmm"));
         assert_eq!(location.coord, Coord::new(1, 1, 1));
         assert_eq!(location.prefab_index, 3);
-        assert_eq!(location.config_file, Some(fixture.directory.join("config.toml")));
+        assert_eq!(location.config_file, Some(fixture.path("config.toml")));
         assert_eq!(location.key.as_deref(), Some("child"));
-        assert_eq!(diagnostic.module_file, Some(fixture.directory.join("maps/missing.dmm")));
+        assert_eq!(diagnostic.module_file, Some(fixture.path("maps/missing.dmm")));
         assert_eq!(
             diagnostic.chain,
-            ["main.dmm", "maps/outer.dmm", "maps/missing.dmm"].map(|path| fixture.directory.join(path))
+            ["main.dmm", "maps/outer.dmm", "maps/missing.dmm"].map(|path| fixture.path(path))
         );
         let displayed = diagnostic.to_string();
         assert!(displayed.contains("outer.dmm") && displayed.contains("child") && displayed.contains("missing.dmm"));
