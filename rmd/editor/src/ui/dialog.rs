@@ -198,7 +198,8 @@ impl NewLevelDialog {
 pub(super) struct DeleteLevelDialog {
     pub(super) document: DocumentId,
     z: u32,
-    generation: u64,
+    // peers' tile edits don't matter, a level change does
+    levels: u32,
     pub(super) open: bool,
     error: Option<String>,
 }
@@ -208,7 +209,7 @@ impl DeleteLevelDialog {
         Self {
             document: document.id(),
             z: document.z,
-            generation: document.generation(),
+            levels: document.map.size().z,
             open: true,
             error: None,
         }
@@ -638,7 +639,7 @@ pub(super) fn draw_delete_level_dialog(ui: &Ui, session: &mut Session, dialog: &
         && session
             .state
             .document(state.document)
-            .is_some_and(|document| document.generation() == state.generation && document.z == state.z);
+            .is_some_and(|document| document.map.size().z == state.levels && document.z == state.z);
     ui.text(format!("Delete Z level {} and all its contents?", state.z));
     ui.text_disabled("Higher levels will shift down. You can undo this deletion.");
 
@@ -1075,8 +1076,10 @@ mod tests {
     use dmm::{Coord, Map, MapFormat, Prefab, Size};
     use editor::{
         document::{DocumentId, MapDocument, Selection},
+        patch,
         tool::{BlockSelectionMode, FillMode, SelectionMask, Tool},
     };
+    use net::LevelContents;
 
     use super::{
         DeleteLevelDialog,
@@ -1923,12 +1926,9 @@ mod tests {
             draw_delete_level_dialog(context.frame(), &mut session, &mut dialog);
             assert!(context.render_legacy().valid());
             if stale {
-                session
-                    .state
-                    .document_mut(id)
-                    .ok_or("document is missing")?
-                    .append_remote_level(&[])
-                    .ok_or("could not append remote level")?;
+                let document = session.state.document_mut(id).ok_or("document is missing")?;
+                let cells = document.level_cells(&LevelContents::Fill(patch::encode_tile(&[])));
+                assert!(document.insert_remote_level(3, cells));
             }
 
             context

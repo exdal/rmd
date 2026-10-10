@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 pub use crate::frame::{FrameReader, MAX_FRAME_LEN, encode_frame, split_frame, write_frame};
 
 pub const MAGIC: [u8; 4] = *b"RMD\0";
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Service {

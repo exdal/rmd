@@ -16,8 +16,11 @@ use net::{
     CommentId,
     Cursor,
     GenerationId,
+    InsertAt,
+    InsertLevel,
+    LevelLog,
+    LevelOp,
     MapEdit,
-    NewLevel,
     PRESENCE_REFRESH,
     PasswordHash,
     PeerId,
@@ -226,13 +229,30 @@ pub(crate) struct SharedMap {
     next_seq: SeqId,
     // tiles we edited whose edits the server hasn't sent back yet, counted per tile
     in_flight: HashMap<Coord, u32>,
-    // a level we asked for, it appears for everyone once the server sends it back
+    // a level change we asked for, it happens for everyone once the server sends it back
     level_request: Option<LevelRequest>,
+    level_log: LevelLog,
 }
 
 enum LevelRequest {
-    Queued(NewLevel),
-    Sent,
+    Queued(LevelOp, LevelStep),
+    Sent(LevelStep),
+}
+
+impl LevelRequest {
+    fn step(&self) -> LevelStep {
+        match self {
+            Self::Queued(_, step) | Self::Sent(step) => *step,
+        }
+    }
+}
+
+// how our own level change lands in history once the server sends it back
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::session) enum LevelStep {
+    Change,
+    Undo,
+    Redo,
 }
 
 impl SharedMap {
@@ -247,6 +267,7 @@ impl SharedMap {
             next_seq: SeqId(0),
             in_flight: HashMap::new(),
             level_request: None,
+            level_log: LevelLog::default(),
         }
     }
 
@@ -266,11 +287,17 @@ impl SharedMap {
     fn renumber(&mut self, generation: GenerationId) {
         if self.generation != Some(generation) {
             self.generation = Some(generation);
-            // an unsent level still applies, every peer checks its z against their own map
-            let queued = self
-                .level_request
-                .take()
-                .filter(|request| matches!(request, LevelRequest::Queued(_)));
+            // an unsent append still applies, it lands on top of any map,
+            // but other level changes picked their z on the old snapshot
+            let queued = self.level_request.take().filter(|request| {
+                matches!(
+                    request,
+                    LevelRequest::Queued(
+                        LevelOp::Insert(InsertLevel { at: InsertAt::Top, .. }),
+                        LevelStep::Change
+                    )
+                )
+            });
             self.forget_edits();
             self.level_request = queued;
         }
@@ -281,17 +308,18 @@ impl SharedMap {
         self.next_seq = SeqId(0);
         self.in_flight.clear();
         self.level_request = None;
+        self.level_log = LevelLog::default();
     }
 
-    fn send_level_request(&mut self) -> Option<NewLevel> {
+    fn send_level_request(&mut self) -> Option<LevelOp> {
         match self.level_request.take()? {
-            LevelRequest::Queued(new_level) => {
-                self.level_request = Some(LevelRequest::Sent);
+            LevelRequest::Queued(op, step) => {
+                self.level_request = Some(LevelRequest::Sent(step));
 
-                Some(new_level)
+                Some(op)
             },
-            LevelRequest::Sent => {
-                self.level_request = Some(LevelRequest::Sent);
+            LevelRequest::Sent(step) => {
+                self.level_request = Some(LevelRequest::Sent(step));
 
                 None
             },
@@ -303,6 +331,7 @@ enum Prepared {
     Upload {
         path: String,
         base: Option<(GenerationId, SeqId)>,
+        levels: u32,
         bytes: Vec<u8>,
     },
     Snapshot(ReceivedMap),

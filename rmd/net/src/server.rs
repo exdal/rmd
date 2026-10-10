@@ -23,7 +23,13 @@ use protocol::{
         Comment,
         CommentId,
         Datagram,
+        DeleteLevel,
         GenerationId,
+        InsertAt,
+        InsertLevel,
+        LevelChange,
+        LevelLog,
+        LevelOp,
         MAX_COMMENT_LEN,
         MAX_MAP_LEN,
         MAX_NICK_LEN,
@@ -246,8 +252,12 @@ impl State {
 struct SharedMap {
     by: PeerId,
     bytes: Bytes,
+    snapshot_levels: u32,
+    // the snapshot's levels moved on by the edits since
+    levels: u32,
+    level_log: LevelLog,
     generation: GenerationId,
-    replaced: Option<GenerationId>,
+    replaced: Option<Replaced>,
     edits: Vec<(PeerId, MapEdit)>,
     pushes: Vec<AbortHandle>,
 }
@@ -258,6 +268,147 @@ impl SharedMap {
             push.abort();
         }
     }
+
+    // peers kept editing while the snapshot was on its way, and the sharer's own tiles are already in it
+    fn carry(&mut self, previous: &SharedMap, base: GenerationId, next_seq: SeqId) {
+        let is_followed = previous.generation == base;
+        let mut replaced = Replaced {
+            generation: previous.generation,
+            base: if is_followed { next_seq } else { SeqId(0) },
+            changes: previous.level_log.changes().collect(),
+            carried_from: Vec::new(),
+        };
+
+        if is_followed {
+            let sharer = self.by;
+            for (old, (author, edit)) in previous.edits.iter().enumerate().skip(next_seq.0 as usize) {
+                // its level changes only happen once echoed, so the snapshot lacks them
+                let edit = if *author == sharer {
+                    if edit.level.is_none() {
+                        continue;
+                    }
+
+                    MapEdit {
+                        coords: Vec::new(),
+                        patch: String::new(),
+                        ..edit.clone()
+                    }
+                } else {
+                    edit.clone()
+                };
+
+                let Some(edit) = replaced.rebase(edit) else {
+                    continue;
+                };
+
+                replaced.carried_from.push(SeqId(old as u32));
+                self.push_edit(
+                    *author,
+                    MapEdit {
+                        generation: self.generation,
+                        ..edit
+                    },
+                );
+            }
+        }
+
+        self.replaced = Some(replaced);
+    }
+
+    fn push_edit(&mut self, by: PeerId, edit: MapEdit) -> (SeqId, Option<LevelChange>) {
+        let seq = SeqId(self.edits.len() as u32);
+        let applied = edit
+            .level
+            .as_ref()
+            .and_then(|op| self.level_log.sequence(self.levels, seq, edit.seen, op));
+        match applied {
+            Some(LevelChange::Appended(_) | LevelChange::Inserted(_)) => self.levels += 1,
+            Some(LevelChange::Deleted(_)) => self.levels -= 1,
+            None => {},
+        }
+
+        self.edits.push((by, edit));
+
+        (seq, applied)
+    }
+}
+
+// the generation a share replaced, edits made against it carry over into the new one
+struct Replaced {
+    generation: GenerationId,
+    // the first edit the snapshot lacks
+    base: SeqId,
+    changes: Vec<(SeqId, LevelChange)>,
+    // the old seq of each carried edit, in new seq order
+    carried_from: Vec<SeqId>,
+}
+
+impl Replaced {
+    // level changes the snapshot has without the author knowing are rebased here, the carried changes it didn't
+    // know of come after its new `seen` so every copy rebases past those, none when nothing is left of the edit
+    fn rebase(&self, mut edit: MapEdit) -> Option<MapEdit> {
+        let baked = self
+            .changes
+            .iter()
+            .filter(|(seq, _)| (edit.seen..self.base).contains(seq))
+            .map(|(_, change)| *change)
+            .collect::<Vec<_>>();
+        let level = |z| baked.iter().try_fold(z, |z, change| change.level(z));
+
+        match edit.coords.iter().map(|&[x, y, z]| Some([x, y, level(z)?])).collect() {
+            Some(coords) => edit.coords = coords,
+            // a patch can't lose single tiles without parsing it
+            None => {
+                edit.coords.clear();
+                edit.patch.clear();
+            },
+        }
+
+        edit.level = edit.level.and_then(|op| match op {
+            LevelOp::Insert(InsertLevel { at: InsertAt::Top, .. })
+                if baked.iter().any(|change| matches!(change, LevelChange::Appended(_))) =>
+            {
+                None
+            },
+            LevelOp::Insert(InsertLevel {
+                at: InsertAt::Z(z),
+                contents,
+            }) => Some(LevelOp::Insert(InsertLevel {
+                at: InsertAt::Z(baked.iter().fold(z, |z, change| change.slot(z))),
+                contents,
+            })),
+            LevelOp::Insert(insert) => Some(LevelOp::Insert(insert)),
+            LevelOp::Delete(DeleteLevel { z }) => Some(LevelOp::Delete(DeleteLevel { z: level(z)? })),
+        });
+        edit.seen = SeqId(self.carried_from.partition_point(|old| *old < edit.seen) as u32);
+
+        (!edit.coords.is_empty() || edit.level.is_some()).then_some(edit)
+    }
+}
+
+// comments follow their level, or go with it
+fn shift_comments(comments: &mut Vec<Comment>, peers: &HashMap<PeerId, Peer>, path: &str, change: LevelChange) {
+    comments.retain_mut(|comment| {
+        if comment.map != path {
+            return true;
+        }
+
+        let message = match change.level(comment.z) {
+            None => ServerMessage::CommentDeleted(comment.id),
+            Some(z) if z != comment.z => {
+                comment.z = z;
+                ServerMessage::Comment(comment.clone())
+            },
+            Some(_) => return true,
+        };
+
+        let is_kept = !matches!(message, ServerMessage::CommentDeleted(_));
+        for peer in peers.values() {
+            let _ = peer.outbox.send(message.clone());
+        }
+
+        is_kept
+    });
 }
 
 struct Peer {
@@ -363,7 +514,7 @@ impl Shared {
         );
     }
 
-    fn share_map(&self, by: PeerId, path: String, base: GenerationId, next_seq: SeqId, bytes: Bytes) {
+    fn share_map(&self, by: PeerId, path: String, base: GenerationId, next_seq: SeqId, levels: u32, bytes: Bytes) {
         let mut state = self.state.lock().unwrap();
         if state.uploads.get(&path).is_some_and(|(uploader, _)| *uploader == by) {
             state.uploads.remove(&path);
@@ -378,35 +529,24 @@ impl Shared {
         let previous = maps.remove(&path);
         *last_generation = last_generation.next();
         let generation = *last_generation;
-        // peers kept editing while the snapshot was on its way, and the sharer's own edits are already in it
-        let edits = previous
-            .as_ref()
-            .filter(|map| map.generation == base)
-            .map(|map| {
-                map.edits
-                    .iter()
-                    .skip(next_seq.0 as usize)
-                    .filter(|(author, _)| *author != by)
-                    .map(|(author, edit)| {
-                        (
-                            *author,
-                            MapEdit {
-                                generation,
-                                ..edit.clone()
-                            },
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let mut map = SharedMap {
+            by,
+            bytes,
+            snapshot_levels: levels,
+            levels,
+            level_log: LevelLog::default(),
+            generation,
+            replaced: None,
+            edits: Vec::new(),
+            pushes: Vec::new(),
+        };
 
-        let replaced = previous.as_ref().map(|map| map.generation);
-        // peers drop an older generation anyway
         if let Some(previous) = &previous {
+            // peers drop an older generation anyway
             previous.abort_pushes();
+            map.carry(previous, base, next_seq);
         }
 
-        let mut map_pushes = Vec::new();
         for (id, peer) in peers.iter_mut() {
             let _ = peer.outbox.send(ServerMessage::MapShared {
                 path: path.clone(),
@@ -416,16 +556,14 @@ impl Shared {
             if *id != by {
                 push(
                     &mut peer.pushes,
-                    &mut map_pushes,
+                    &mut map,
                     self.meter.clone(),
                     peer.connection.clone(),
                     path.clone(),
-                    generation,
-                    bytes.clone(),
                 );
             }
 
-            for (seq, (author, edit)) in edits.iter().enumerate() {
+            for (seq, (author, edit)) in map.edits.iter().enumerate() {
                 let _ = peer.outbox.send(ServerMessage::Edit {
                     by: *author,
                     seq: SeqId(seq as u32),
@@ -434,36 +572,40 @@ impl Shared {
             }
         }
 
-        maps.insert(
-            path,
-            SharedMap {
-                by,
-                bytes,
-                generation,
-                replaced,
-                edits,
-                pushes: map_pushes,
-            },
-        );
+        maps.insert(path, map);
     }
 
     fn edit(&self, by: PeerId, mut edit: MapEdit) {
         let mut state = self.state.lock().unwrap();
-        let State { peers, maps, .. } = &mut *state;
+        let State {
+            peers, maps, comments, ..
+        } = &mut *state;
         let Some(map) = maps.get_mut(&edit.path) else {
             return;
         };
 
         // sent before the peer heard of the new share, which doesn't have it
-        if map.replaced == Some(edit.generation) && by != map.by {
-            edit.generation = map.generation;
+        if let Some(replaced) = map
+            .replaced
+            .as_ref()
+            .filter(|replaced| replaced.generation == edit.generation && by != map.by)
+        {
+            let Some(rebased) = replaced.rebase(edit) else {
+                return;
+            };
+
+            edit = MapEdit {
+                generation: map.generation,
+                ..rebased
+            };
         }
 
         if map.generation != edit.generation {
             return;
         }
 
-        let seq = SeqId(map.edits.len() as u32);
+        let path = edit.path.clone();
+        let (seq, applied) = map.push_edit(by, edit.clone());
         for peer in peers.values() {
             let _ = peer.outbox.send(ServerMessage::Edit {
                 by,
@@ -472,7 +614,9 @@ impl Shared {
             });
         }
 
-        map.edits.push((by, edit));
+        if let Some(change) = applied {
+            shift_comments(comments, peers, &path, change);
+        }
     }
 
     // echoed even for a map we don't have, so a peer that still shows it can drop it
@@ -509,15 +653,7 @@ fn replay(
     outbox: &mpsc::UnboundedSender<ServerMessage>, connection: &Connection, path: &str, map: &mut SharedMap,
     pushes: &mut JoinSet<()>, meter: &Arc<Meter>,
 ) {
-    push(
-        pushes,
-        &mut map.pushes,
-        meter.clone(),
-        connection.clone(),
-        path.to_owned(),
-        map.generation,
-        map.bytes.clone(),
-    );
+    push(pushes, map, meter.clone(), connection.clone(), path.to_owned());
     for (seq, (by, edit)) in map.edits.iter().enumerate() {
         let _ = outbox.send(ServerMessage::Edit {
             by: *by,
@@ -527,20 +663,27 @@ fn replay(
     }
 }
 
-fn push(
-    pushes: &mut JoinSet<()>, map_pushes: &mut Vec<AbortHandle>, meter: Arc<Meter>, connection: Connection,
-    path: String, generation: GenerationId, bytes: Bytes,
-) {
+fn push(pushes: &mut JoinSet<()>, map: &mut SharedMap, meter: Arc<Meter>, connection: Connection, path: String) {
     while pushes.try_join_next().is_some() {}
-    map_pushes.retain(|push| !push.is_finished());
-    map_pushes.push(pushes.spawn(push_map(meter, connection, path, generation, bytes)));
+    map.pushes.retain(|push| !push.is_finished());
+    map.pushes.push(pushes.spawn(push_map(
+        meter,
+        connection,
+        path,
+        map.generation,
+        map.snapshot_levels,
+        map.bytes.clone(),
+    )));
 }
 
-async fn push_map(meter: Arc<Meter>, connection: Connection, path: String, generation: GenerationId, bytes: Bytes) {
+async fn push_map(
+    meter: Arc<Meter>, connection: Connection, path: String, generation: GenerationId, levels: u32, bytes: Bytes,
+) {
     let header = Transfer::Map {
         path,
         generation,
         next_seq: SeqId(0),
+        levels,
         len: bytes.len() as u64,
     };
 
@@ -551,13 +694,14 @@ async fn push_map(meter: Arc<Meter>, connection: Connection, path: String, gener
 }
 
 async fn upload(shared: Arc<Shared>, from: PeerId, mut stream: quinn::RecvStream) {
-    let (path, base, next_seq, len) = match read_transfer_header(&mut stream).await {
+    let (path, base, next_seq, levels, len) = match read_transfer_header(&mut stream).await {
         Ok(Transfer::Map {
             path,
             generation,
             next_seq,
+            levels,
             len,
-        }) if is_map_path(&path) => (path, generation, next_seq, len),
+        }) if is_map_path(&path) => (path, generation, next_seq, levels, len),
         Ok(Transfer::Map { path, .. }) => {
             log::info!("{from:?} tried to share {path}, which is not a map path");
             return;
@@ -577,7 +721,7 @@ async fn upload(shared: Arc<Shared>, from: PeerId, mut stream: quinn::RecvStream
     match read_payload(&mut stream, len, |_| {}).await {
         Ok(bytes) => {
             shared.meter.received("map", bytes.len());
-            shared.share_map(from, path, base, next_seq, Bytes::from(bytes));
+            shared.share_map(from, path, base, next_seq, levels, Bytes::from(bytes));
         },
         Err(e) => {
             log::info!("dropping an upload of {path} from {from:?}: {e}");

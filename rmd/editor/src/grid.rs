@@ -24,6 +24,17 @@ impl LevelCells {
     pub fn ids(&self) -> impl Iterator<Item = PrefabInstanceId> + '_ {
         self.cells.iter().flat_map(|cell| cell.ids.iter().copied())
     }
+
+    pub fn tiles(&self) -> impl Iterator<Item = &Tile> + '_ { self.cells.iter().map(|cell| cell.tile.as_ref()) }
+
+    // the one tile every cell shares, like a level from `filled_level`
+    pub fn fill(&self) -> Option<&Tile> {
+        let (first, rest) = self.cells.split_first()?;
+
+        rest.iter()
+            .all(|cell| Arc::ptr_eq(&cell.tile, &first.tile))
+            .then_some(&first.tile)
+    }
 }
 
 /// `cells` run x, then y from the bottom, then z
@@ -250,6 +261,21 @@ impl Grid {
                 ids: tile.iter().map(|_| self.allocate()).collect(),
             })
             .collect();
+
+        LevelCells { cells }
+    }
+
+    // equal tiles side by side share one, like `equal_neighbor` does
+    pub(crate) fn level_from_tiles(&mut self, tiles: Vec<Tile>) -> LevelCells {
+        let mut cells = Vec::<Cell>::with_capacity(tiles.len());
+        for tile in tiles {
+            let tile = match cells.last() {
+                Some(previous) if *previous.tile == tile => Arc::clone(&previous.tile),
+                _ => Arc::new(tile),
+            };
+            let ids = tile.iter().map(|_| self.allocate()).collect();
+            cells.push(Cell { tile, ids });
+        }
 
         LevelCells { cells }
     }

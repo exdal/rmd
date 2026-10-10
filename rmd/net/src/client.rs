@@ -145,6 +145,7 @@ struct Presence {
 struct Share {
     path: String,
     base: Option<(GenerationId, SeqId)>,
+    levels: u32,
     bytes: Vec<u8>,
 }
 
@@ -213,8 +214,13 @@ impl Client {
 
     // `base` is the generation our copy tracks and the next edit of it the snapshot lacks,
     // so the server can carry peers' later edits into the new generation
-    pub fn share_map(&self, path: String, base: Option<(GenerationId, SeqId)>, bytes: Vec<u8>) {
-        let _ = self.shares.send(Share { path, base, bytes });
+    pub fn share_map(&self, path: String, base: Option<(GenerationId, SeqId)>, levels: u32, bytes: Vec<u8>) {
+        let _ = self.shares.send(Share {
+            path,
+            base,
+            levels,
+            bytes,
+        });
     }
 
     pub fn send_edit(&self, edit: MapEdit) { self.send(ClientMessage::Edit(edit)); }
@@ -520,12 +526,21 @@ impl Throttle {
     }
 }
 
-async fn upload(connection: Connection, Share { path, base, bytes }: Share, events: mpsc::Sender<Event>) {
+async fn upload(
+    connection: Connection, Share {
+        path,
+        base,
+        levels,
+        bytes,
+    }: Share,
+    events: mpsc::Sender<Event>,
+) {
     let (generation, next_seq) = base.unwrap_or((GenerationId(0), SeqId(0)));
     let header = Transfer::Map {
         path: path.clone(),
         generation,
         next_seq,
+        levels,
         len: bytes.len() as u64,
     };
 

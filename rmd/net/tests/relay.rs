@@ -9,10 +9,15 @@ use net::{
     CodebaseHash,
     CodebaseId,
     Cursor,
+    DeleteLevel,
     Direction,
     Event,
     GenerationId,
     Impairment,
+    InsertAt,
+    InsertLevel,
+    LevelContents,
+    LevelOp,
     LossyProxy,
     MapEdit,
     PRESENCE_REFRESH,
@@ -329,7 +334,7 @@ fn a_different_codebase_receives_only_a_rejection_even_with_cached_data() {
         "private to this codebase".into(),
     );
     wait_for(&alice, |event| matches!(event, Event::Comment(_)).then_some(()));
-    alice.share_map("_maps/test.dmm".into(), None, b"map".to_vec());
+    alice.share_map("_maps/test.dmm".into(), None, 1, b"map".to_vec());
     let generation = wait_for(&alice, |event| match event {
         Event::MapShared { generation, .. } => Some(generation),
         _ => None,
@@ -339,12 +344,13 @@ fn a_different_codebase_receives_only_a_rejection_even_with_cached_data() {
         generation,
         coords: vec![[1, 1, 1]],
         patch: "edit".into(),
-        new_level: None,
+        level: None,
+        seen: SeqId(0),
     });
     wait_for(&alice, |event| matches!(event, Event::Edit { .. }).then_some(()));
 
     let wrong = join_codebase(&server, 8, "main");
-    wrong.share_map("_maps/wrong.dmm".into(), None, b"wrong codebase".to_vec());
+    wrong.share_map("_maps/wrong.dmm".into(), None, 1, b"wrong codebase".to_vec());
     let expected = wait_for(&wrong, |event| match event {
         Event::CodebaseMismatch { expected } => Some(expected),
         other => panic!("mismatched client received {other:?}"),
@@ -557,8 +563,8 @@ fn shared_maps_reach_everyone_else_and_late_joiners() {
     wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
 
     let map = b"\"aa\" = (/turf/open/floor)\n".repeat(50_000);
-    alice.share_map(String::from("../outside.dmm"), None, b"nope".to_vec());
-    alice.share_map(String::from("_maps/test.dmm"), None, map.clone());
+    alice.share_map(String::from("../outside.dmm"), None, 1, b"nope".to_vec());
+    alice.share_map(String::from("_maps/test.dmm"), None, 1, map.clone());
 
     for client in [&alice, &bob] {
         let shared = wait_for(client, |event| match event {
@@ -595,7 +601,7 @@ fn edits_reach_everyone_and_replay_for_late_joiners_until_the_map_is_shared_agai
         _ => None,
     });
 
-    alice.share_map(String::from("_maps/test.dmm"), None, b"map".to_vec());
+    alice.share_map(String::from("_maps/test.dmm"), None, 1, b"map".to_vec());
     let generation = wait_for(&bob, |event| match event {
         Event::MapShared { generation, .. } => Some(generation),
         _ => None,
@@ -607,7 +613,8 @@ fn edits_reach_everyone_and_replay_for_late_joiners_until_the_map_is_shared_agai
         generation,
         coords: vec![[1, 1, 1]],
         patch: String::from(patch),
-        new_level: None,
+        level: None,
+        seen: SeqId(0),
     };
     bob.send_edit(edit(GenerationId(0), "stale"));
     bob.send_edit(edit(GenerationId(1), "fresh"));
@@ -628,7 +635,7 @@ fn edits_reach_everyone_and_replay_for_late_joiners_until_the_map_is_shared_agai
     });
     assert_eq!(replayed, edit(GenerationId(1), "fresh"));
 
-    alice.share_map(String::from("_maps/test.dmm"), None, b"map again".to_vec());
+    alice.share_map(String::from("_maps/test.dmm"), None, 1, b"map again".to_vec());
     let generation = wait_for(&carol, |event| match event {
         Event::MapShared { generation, .. } => Some(generation),
         _ => None,
@@ -654,8 +661,8 @@ fn anyone_can_stop_sharing_a_map_for_everyone() {
         _ => None,
     });
 
-    alice.share_map(String::from("_maps/test.dmm"), None, b"map".to_vec());
-    alice.share_map(String::from("_maps/other.dmm"), None, b"other".to_vec());
+    alice.share_map(String::from("_maps/test.dmm"), None, 1, b"map".to_vec());
+    alice.share_map(String::from("_maps/other.dmm"), None, 1, b"other".to_vec());
     alice.send_comment(String::from("_maps/test.dmm"), 1, [0.0, 0.0], String::from("gone"));
     alice.send_comment(String::from("_maps/other.dmm"), 1, [0.0, 0.0], String::from("kept"));
     let mut pending = 4;
@@ -681,7 +688,8 @@ fn anyone_can_stop_sharing_a_map_for_everyone() {
         generation: GenerationId(1),
         coords: vec![[1, 1, 1]],
         patch: String::from("late"),
-        new_level: None,
+        level: None,
+        seen: SeqId(0),
     });
     bob.send_comment(String::from("_maps/other.dmm"), 1, [0.0, 0.0], String::from("marker"));
     let events = collect_until(&alice, |event| matches!(event, Event::Comment(_)));
@@ -728,7 +736,8 @@ fn a_new_share_carries_the_edits_its_snapshot_missed() {
         generation,
         coords: vec![[1, 1, 1]],
         patch: String::from(patch),
-        new_level: None,
+        level: None,
+        seen: SeqId(0),
     };
     let next_edit = |client: &Client| {
         wait_for(client, |event| match event {
@@ -742,7 +751,7 @@ fn a_new_share_carries_the_edits_its_snapshot_missed() {
         });
     };
 
-    alice.share_map(path.clone(), None, b"map".to_vec());
+    alice.share_map(path.clone(), None, 1, b"map".to_vec());
     shared(&bob, GenerationId(1));
 
     bob.send_edit(edit(GenerationId(1), "seen"));
@@ -753,7 +762,12 @@ fn a_new_share_carries_the_edits_its_snapshot_missed() {
     assert_eq!(next_edit(&alice).1, SeqId(2));
 
     // the snapshot has the first edit, and alice's own edit is in it too
-    alice.share_map(path.clone(), Some((GenerationId(1), SeqId(1))), b"map again".to_vec());
+    alice.share_map(
+        path.clone(),
+        Some((GenerationId(1), SeqId(1))),
+        1,
+        b"map again".to_vec(),
+    );
     shared(&bob, GenerationId(2));
     assert_eq!(next_edit(&bob), (bob_id, SeqId(0), edit(GenerationId(2), "missed")));
 
@@ -766,6 +780,241 @@ fn a_new_share_carries_the_edits_its_snapshot_missed() {
 }
 
 #[test]
+fn a_new_share_rebases_carried_edits_past_level_deletions() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    let alice_id = wait_for(&alice, |event| match event {
+        Event::Connected { you, .. } => Some(you),
+        _ => None,
+    });
+    let bob = join(&server, PASSWORD, "bob");
+    let bob_id = wait_for(&bob, |event| match event {
+        Event::Connected { you, .. } => Some(you),
+        _ => None,
+    });
+
+    let path = String::from("_maps/test.dmm");
+    let edit = |generation, seen, z, patch: &str| MapEdit {
+        path: path.clone(),
+        generation,
+        coords: vec![[1, 1, z]],
+        patch: String::from(patch),
+        level: None,
+        seen: SeqId(seen),
+    };
+    let delete = |edit: MapEdit, z| MapEdit {
+        level: Some(LevelOp::Delete(DeleteLevel { z })),
+        ..edit
+    };
+    let next_edit = |client: &Client| {
+        wait_for(client, |event| match event {
+            Event::Edit { by, seq, edit } => Some((by, seq, edit)),
+            _ => None,
+        })
+    };
+
+    alice.share_map(path.clone(), None, 3, b"map".to_vec());
+    wait_for(&bob, |event| matches!(event, Event::MapShared { .. }).then_some(()));
+    bob.send_edit(delete(edit(GenerationId(1), 0, 1, "delete"), 1));
+    bob.send_edit(edit(GenerationId(1), 0, 1, "on the deleted level"));
+    bob.send_edit(edit(GenerationId(1), 0, 3, "above"));
+    for seq in 0..3 {
+        assert_eq!(next_edit(&alice).1, SeqId(seq));
+    }
+
+    alice.send_edit(delete(edit(GenerationId(1), 1, 1, "alice"), 1));
+    assert_eq!(next_edit(&alice).1, SeqId(3));
+    bob.send_edit(edit(GenerationId(1), 4, 1, "after"));
+    assert_eq!(next_edit(&alice).1, SeqId(4));
+
+    // the snapshot has the first deletion, but not alice's own, which only happens once echoed
+    alice.share_map(
+        path.clone(),
+        Some((GenerationId(1), SeqId(1))),
+        2,
+        b"map again".to_vec(),
+    );
+    wait_for(&bob, |event| {
+        matches!(event, Event::MapShared { generation, .. } if generation == GenerationId(2)).then_some(())
+    });
+    assert_eq!(
+        next_edit(&bob),
+        (bob_id, SeqId(0), edit(GenerationId(2), 0, 2, "above"))
+    );
+    assert_eq!(
+        next_edit(&bob),
+        (
+            alice_id,
+            SeqId(1),
+            MapEdit {
+                coords: Vec::new(),
+                patch: String::new(),
+                ..delete(edit(GenerationId(2), 0, 1, ""), 1)
+            }
+        )
+    );
+    assert_eq!(
+        next_edit(&bob),
+        (bob_id, SeqId(2), edit(GenerationId(2), 2, 1, "after"))
+    );
+
+    bob.send_edit(edit(GenerationId(1), 0, 1, "stale"));
+    bob.send_edit(edit(GenerationId(1), 5, 1, "late"));
+    assert_eq!(next_edit(&bob), (bob_id, SeqId(3), edit(GenerationId(2), 3, 1, "late")));
+}
+
+#[test]
+fn a_new_share_rebases_carried_edits_past_level_insertions() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
+    let bob = join(&server, PASSWORD, "bob");
+    let bob_id = wait_for(&bob, |event| match event {
+        Event::Connected { you, .. } => Some(you),
+        _ => None,
+    });
+
+    let path = String::from("_maps/test.dmm");
+    let edit = |generation, seen, coords: Vec<[u32; 3]>, level| MapEdit {
+        path: path.clone(),
+        generation,
+        coords,
+        patch: String::from("tiles"),
+        level,
+        seen: SeqId(seen),
+    };
+    let insert = |at| {
+        Some(LevelOp::Insert(InsertLevel {
+            at,
+            contents: LevelContents::Fill(String::new()),
+        }))
+    };
+    let next_edit = |client: &Client| {
+        wait_for(client, |event| match event {
+            Event::Edit { by, seq, edit } => Some((by, seq, edit)),
+            _ => None,
+        })
+    };
+
+    alice.share_map(path.clone(), None, 2, b"map".to_vec());
+    wait_for(&bob, |event| matches!(event, Event::MapShared { .. }).then_some(()));
+    for (seen, coords, level) in [
+        (0, Vec::new(), insert(InsertAt::Top)),
+        (1, Vec::new(), insert(InsertAt::Z(1))),
+        (0, vec![[1, 1, 1]], None),
+        (0, Vec::new(), insert(InsertAt::Top)),
+    ] {
+        bob.send_edit(edit(GenerationId(1), seen, coords, level));
+    }
+
+    for seq in 0..4 {
+        assert_eq!(next_edit(&alice).1, SeqId(seq));
+    }
+
+    // the snapshot has both insertions, the second append lost to the first
+    alice.share_map(
+        path.clone(),
+        Some((GenerationId(1), SeqId(2))),
+        4,
+        b"map again".to_vec(),
+    );
+    wait_for(&bob, |event| {
+        matches!(event, Event::MapShared { generation, .. } if generation == GenerationId(2)).then_some(())
+    });
+    assert_eq!(
+        next_edit(&bob),
+        (bob_id, SeqId(0), edit(GenerationId(2), 0, vec![[1, 1, 2]], None))
+    );
+
+    bob.send_edit(edit(GenerationId(1), 0, Vec::new(), insert(InsertAt::Top)));
+    bob.send_edit(edit(GenerationId(1), 2, vec![[1, 1, 2]], None));
+    assert_eq!(
+        next_edit(&bob),
+        (bob_id, SeqId(1), edit(GenerationId(2), 0, vec![[1, 1, 2]], None))
+    );
+}
+
+#[test]
+fn level_changes_take_comments_with_their_levels() {
+    let server = server();
+    let alice = join(&server, PASSWORD, "alice");
+    wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
+    let bob = join(&server, PASSWORD, "bob");
+    wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
+
+    let path = String::from("_maps/test.dmm");
+    alice.share_map(path.clone(), None, 3, b"map".to_vec());
+    wait_for(&bob, |event| matches!(event, Event::MapShared { .. }).then_some(()));
+    for z in 1..=3 {
+        alice.send_comment(path.clone(), z, [0.0, 0.0], format!("on {z}"));
+        alice.send_comment(
+            String::from("_maps/other.dmm"),
+            z,
+            [0.0, 0.0],
+            format!("elsewhere on {z}"),
+        );
+    }
+
+    for client in [&alice, &bob] {
+        for _ in 0..6 {
+            wait_for(client, |event| matches!(event, Event::Comment(_)).then_some(()));
+        }
+    }
+
+    bob.send_edit(MapEdit {
+        path: path.clone(),
+        generation: GenerationId(1),
+        coords: Vec::new(),
+        patch: String::new(),
+        level: Some(LevelOp::Delete(DeleteLevel { z: 2 })),
+        seen: SeqId(0),
+    });
+    let moved = wait_for(&alice, |event| match event {
+        Event::Comment(comment) => Some(comment),
+        _ => None,
+    });
+    assert_eq!((moved.text.as_str(), moved.z), ("on 3", 2));
+
+    bob.send_edit(MapEdit {
+        path: path.clone(),
+        generation: GenerationId(1),
+        coords: Vec::new(),
+        patch: String::new(),
+        level: Some(LevelOp::Insert(InsertLevel {
+            at: InsertAt::Z(1),
+            contents: LevelContents::Fill(String::new()),
+        })),
+        seen: SeqId(1),
+    });
+    for expected in [("on 1", 2), ("on 3", 3)] {
+        let moved = wait_for(&alice, |event| match event {
+            Event::Comment(comment) => Some(comment),
+            _ => None,
+        });
+        assert_eq!((moved.text.as_str(), moved.z), expected);
+    }
+
+    let carol = join(&server, PASSWORD, "carol");
+    let comments = wait_for(&carol, |event| match event {
+        Event::Connected { comments, .. } => Some(comments),
+        _ => None,
+    });
+    assert_eq!(
+        comments
+            .iter()
+            .map(|comment| (comment.text.as_str(), comment.z))
+            .collect::<Vec<_>>(),
+        [
+            ("on 1", 2),
+            ("elsewhere on 1", 1),
+            ("elsewhere on 2", 2),
+            ("on 3", 3),
+            ("elsewhere on 3", 3)
+        ]
+    );
+}
+
+#[test]
 fn heavy_traffic_both_ways_does_not_stall_the_session() {
     const EDITS: u32 = 20;
 
@@ -774,7 +1023,7 @@ fn heavy_traffic_both_ways_does_not_stall_the_session() {
     wait_for(&alice, |event| matches!(event, Event::Connected { .. }).then_some(()));
 
     let path = String::from("_maps/test.dmm");
-    alice.share_map(path.clone(), None, b"map".to_vec());
+    alice.share_map(path.clone(), None, 1, b"map".to_vec());
     wait_for(&alice, |event| matches!(event, Event::MapShared { .. }).then_some(()));
 
     // every edit is echoed back, so both ends write far more than a stream window at once
@@ -784,7 +1033,8 @@ fn heavy_traffic_both_ways_does_not_stall_the_session() {
             generation: GenerationId(1),
             coords: vec![[1, 1, 1]],
             patch: "a".repeat(512 * 1024),
-            new_level: None,
+            level: None,
+            seen: SeqId(0),
         });
     }
 
@@ -806,7 +1056,7 @@ fn a_resync_sends_the_snapshot_and_the_numbered_log_again() {
     wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
 
     let path = String::from("_maps/test.dmm");
-    alice.share_map(path.clone(), None, b"map".to_vec());
+    alice.share_map(path.clone(), None, 1, b"map".to_vec());
     wait_for(&bob, |event| matches!(event, Event::MapSnapshot { .. }).then_some(()));
 
     let edit = |patch: &str| MapEdit {
@@ -814,7 +1064,8 @@ fn a_resync_sends_the_snapshot_and_the_numbered_log_again() {
         generation: GenerationId(1),
         coords: vec![[1, 1, 1]],
         patch: String::from(patch),
-        new_level: None,
+        level: None,
+        seen: SeqId(0),
     };
     bob.send_edit(edit("first"));
     bob.send_edit(edit("second"));
@@ -866,7 +1117,7 @@ fn edits_and_snapshots_survive_a_lossy_link() {
 
     let path = String::from("_maps/test.dmm");
     let map = (0..200_000).map(|i| b'a' + (i % 26) as u8).collect::<Vec<_>>();
-    alice.share_map(path.clone(), None, map.clone());
+    alice.share_map(path.clone(), None, 1, map.clone());
     let received = wait_for(&bob, |event| match event {
         Event::MapSnapshot { bytes, .. } => Some(bytes),
         _ => None,
@@ -879,7 +1130,8 @@ fn edits_and_snapshots_survive_a_lossy_link() {
             generation: GenerationId(1),
             coords: vec![[1, 1, 1]],
             patch: patch.to_string(),
-            new_level: None,
+            level: None,
+            seen: SeqId(0),
         });
     }
 
@@ -916,7 +1168,7 @@ fn peers_see_an_upload_before_it_lands() {
     let path = String::from("_maps/test.dmm");
     let map = vec![b'a'; 1_300_000];
     let len = map.len() as u64;
-    alice.share_map(path.clone(), None, map);
+    alice.share_map(path.clone(), None, 1, map);
 
     let sent = collect_until(&alice, |event| matches!(event, Event::MapShared { .. }));
     let sending = sent
@@ -991,7 +1243,7 @@ fn a_dropped_upload_is_cancelled() {
     wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
 
     let path = String::from("_maps/test.dmm");
-    alice.share_map(path.clone(), None, vec![b'a'; 32 * 1024 * 1024]);
+    alice.share_map(path.clone(), None, 1, vec![b'a'; 32 * 1024 * 1024]);
     wait_for(&bob, |event| matches!(event, Event::MapIncoming { .. }).then_some(()));
     drop(alice);
 
@@ -1029,7 +1281,7 @@ fn start_slow_download(server: &Server) -> (Client, LossyProxy, Client) {
     let bob = join_at(proxy.local_addr(), PASSWORD, "bob");
     wait_for(&bob, |event| matches!(event, Event::Connected { .. }).then_some(()));
 
-    alice.share_map(String::from(SLOW_MAP), None, vec![b'a'; 8_000_000]);
+    alice.share_map(String::from(SLOW_MAP), None, 1, vec![b'a'; 8_000_000]);
     wait_for(&bob, |event| match event {
         Event::Progress {
             path,
@@ -1078,7 +1330,7 @@ fn sharing_a_map_again_replaces_its_download_in_flight() {
     let server = server();
     let (alice, proxy, bob) = start_slow_download(&server);
 
-    alice.share_map(String::from(SLOW_MAP), None, b"replacement".to_vec());
+    alice.share_map(String::from(SLOW_MAP), None, 1, b"replacement".to_vec());
     wait_for(&bob, |event| match event {
         Event::TransferFailed { path, reason, .. } if path == SLOW_MAP => {
             panic!("the replaced download reported a failure: {reason}")
@@ -1129,13 +1381,13 @@ fn sharing_a_map_again_after_unsharing_gets_a_newer_generation() {
         })
     };
 
-    alice.share_map(path.clone(), None, b"first".to_vec());
+    alice.share_map(path.clone(), None, 1, b"first".to_vec());
     let (first, _) = snapshot(&bob);
 
     alice.unshare_map(path.clone());
     wait_for(&bob, |event| matches!(event, Event::MapUnshared { .. }).then_some(()));
 
-    alice.share_map(path, None, b"second".to_vec());
+    alice.share_map(path, None, 1, b"second".to_vec());
     let (second, bytes) = snapshot(&bob);
     assert!(second > first, "{second:?} must be newer than {first:?}");
     assert_eq!(bytes, b"second");

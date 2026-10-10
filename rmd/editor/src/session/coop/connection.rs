@@ -252,9 +252,14 @@ impl Session {
 
         for prepared in prepared {
             match prepared {
-                Prepared::Upload { path, base, bytes } => {
+                Prepared::Upload {
+                    path,
+                    base,
+                    levels,
+                    bytes,
+                } => {
                     if let Some(client) = self.collaborating_client() {
-                        client.share_map(path, base, bytes);
+                        client.share_map(path, base, levels, bytes);
                     }
                 },
                 Prepared::Snapshot(received) => self.open_shared_map(received),

@@ -11,7 +11,7 @@ use editor::{
     tool::{Tool, default_tile_paths},
 };
 
-use super::{GitDocState, MAX_MAP_DIMENSION, Session, is_reorder_label};
+use super::{GitDocState, MAX_MAP_DIMENSION, Session, coop::LevelStep, is_reorder_label};
 use crate::loader::LoadedMap;
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -202,10 +202,14 @@ impl Session {
 
     pub fn map_format(&self) -> Option<MapFormat> { self.state.active_document().map(MapDocument::format) }
 
+    fn is_level_history_blocked(&self, id: DocumentId) -> bool {
+        self.has_loaded_conflicts(id) || !self.can_step_coop_level(id)
+    }
+
     pub fn undo_label(&self) -> Option<&str> {
         let id = self.state.active()?;
         let document = self.state.document(id)?;
-        if document.history.next_undo()?.level().is_some() && self.level_history_locked(id) {
+        if document.history.next_undo()?.level().is_some() && self.is_level_history_blocked(id) {
             return None;
         }
 
@@ -215,7 +219,7 @@ impl Session {
     pub fn redo_label(&self) -> Option<&str> {
         let id = self.state.active()?;
         let document = self.state.document(id)?;
-        if document.history.next_redo()?.level().is_some() && self.level_history_locked(id) {
+        if document.history.next_redo()?.level().is_some() && self.is_level_history_blocked(id) {
             return None;
         }
 
@@ -231,8 +235,17 @@ impl Session {
             .is_some_and(|edit| edit.level().is_some());
 
         if is_level_edit {
-            if self.state.active().is_some_and(|id| self.level_history_locked(id)) {
+            let Some(id) = self.state.active() else {
                 return false;
+            };
+
+            if self.is_level_history_blocked(id) {
+                return false;
+            }
+
+            // a shared map's level edits go through the server like they were made
+            if let Some(is_requested) = self.request_coop_level_step(id, LevelStep::Undo) {
+                return is_requested;
             }
 
             self.cancel_node_edit();
@@ -283,8 +296,17 @@ impl Session {
             .is_some_and(|edit| edit.level().is_some());
 
         if is_level_edit {
-            if self.state.active().is_some_and(|id| self.level_history_locked(id)) {
+            let Some(id) = self.state.active() else {
                 return false;
+            };
+
+            if self.is_level_history_blocked(id) {
+                return false;
+            }
+
+            // a shared map's level edits go through the server like they were made
+            if let Some(is_requested) = self.request_coop_level_step(id, LevelStep::Redo) {
+                return is_requested;
             }
 
             self.cancel_node_edit();

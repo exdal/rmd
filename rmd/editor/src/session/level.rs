@@ -1,11 +1,8 @@
 use core::path::TreePath;
 
 use dmm::{Coord, Prefab};
-use editor::{
-    bake::BakeUpdate,
-    document::{DocumentId, MapDocument},
-    tool::default_tile_paths,
-};
+use editor::{bake::BakeUpdate, document::DocumentId, patch, tool::default_tile_paths};
+use net::{DeleteLevel, InsertAt, InsertLevel, LevelContents, LevelOp};
 use objtree::{ObjectTree, TypeId};
 
 use super::{LevelChange, Session};
@@ -133,28 +130,30 @@ impl Session {
         }
 
         if self.is_coop_level_requested(id) {
-            return Err(String::from("the last new level has not arrived yet"));
+            return Err(String::from("the last level change has not arrived yet"));
         }
 
-        if self.request_coop_level(id, levels + 1, fill) {
+        let new_level = LevelOp::Insert(InsertLevel {
+            at: InsertAt::Top,
+            contents: LevelContents::Fill(patch::encode_tile(fill)),
+        });
+        if self.request_coop_level(id, new_level) {
             return Ok(levels + 1);
         }
 
         let z = self
-            .append_document_level(id, fill, MapDocument::append_level)
+            .state
+            .document_mut(id)
+            .and_then(|document| document.append_level(fill))
             .ok_or_else(|| String::from("could not allocate another Z level"))?;
+        self.bake_appended_level(id, z);
         self.show_level(id, z);
 
         Ok(z)
     }
 
-    pub(super) fn level_history_locked(&self, id: DocumentId) -> bool {
-        self.coop_map_path(id).is_some_and(|path| {
-            self.coop
-                .as_ref()
-                .is_some_and(|coop| coop.shared_maps.contains_key(&path))
-        }) || self
-            .caches
+    pub(super) fn has_loaded_conflicts(&self, id: DocumentId) -> bool {
+        self.caches
             .get(&id)
             .and_then(|cache| cache.git.as_ref())
             .is_some_and(|git| git.conflicts.is_some())
@@ -164,15 +163,25 @@ impl Session {
         self.state
             .document(id)
             .is_some_and(|document| !document.is_read_only() && document.map.size().z > 1)
-            && !self.level_history_locked(id)
+            && !self.has_loaded_conflicts(id)
+            && !self.is_coop_level_requested(id)
     }
 
     pub fn delete_level(&mut self, id: DocumentId, z: u32) -> Result<(), String> {
         if !self.can_delete_level(id) {
             return Err(String::from(
-                "the level cannot be deleted: the map must be writable, have another level, and have no sharing, \
-                 loaded merge conflicts, or pending level request",
+                "the level cannot be deleted: the map must be writable, have another level, and have no loaded merge \
+                 conflicts or pending level change",
             ));
+        }
+
+        let levels = self.state.document(id).map_or(0, |document| document.map.size().z);
+        if !(1..=levels).contains(&z) {
+            return Err(String::from("the level is no longer available"));
+        }
+
+        if self.request_coop_level(id, LevelOp::Delete(DeleteLevel { z })) {
+            return Ok(());
         }
 
         self.cancel_node_edit();
@@ -204,11 +213,11 @@ impl Session {
         self.set_active_document(id);
     }
 
-    pub(super) fn append_document_level(
-        &mut self, id: DocumentId, fill: &[Prefab], append: fn(&mut MapDocument, &[Prefab]) -> Option<u32>,
-    ) -> Option<u32> {
-        let document = self.state.document_mut(id)?;
-        let z = append(document, fill)?;
+    pub(super) fn bake_appended_level(&mut self, id: DocumentId, z: u32) {
+        let Some(document) = self.state.document(id) else {
+            return;
+        };
+
         let size = document.map.size();
         let ids = (1..=size.y)
             .flat_map(|y| (1..=size.x).map(move |x| Coord::new(x, y, z)))
@@ -226,8 +235,6 @@ impl Session {
                 lighting: None,
             },
         );
-
-        Some(z)
     }
 }
 

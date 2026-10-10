@@ -2,18 +2,21 @@ use core::types::{Identifier, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Write,
+    mem,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 pub use dmm::PrefabInstanceId;
 use dmm::{Coord, Map, MapFormat, Prefab, writer};
+use net::{LevelChange, LevelContents};
 use objtree::ObjectTree;
 
 use crate::{
     command::{self, Edit, EditGroupId, History, LevelEdit, Resize},
     focus::AreaFocus,
-    grid::Grid,
+    grid::{Grid, LevelCells},
+    patch,
     tool::{BlockSelectionMode, SelectionMask},
 };
 
@@ -93,6 +96,13 @@ impl Journal {
     }
 
     pub fn is_empty(&self) -> bool { self.coords.is_empty() && !self.reshaped }
+
+    fn shift(&mut self, change: LevelChange) {
+        self.coords = mem::take(&mut self.coords)
+            .into_iter()
+            .filter_map(|coord| change.level(coord.z).map(|z| Coord { z, ..coord }))
+            .collect();
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -668,30 +678,86 @@ impl MapDocument {
         self.apply(edit).then_some(z)
     }
 
-    pub fn append_requested_level(&mut self, tile: &[Prefab]) -> Option<u32> {
-        let edit = self.new_level_edit(tile)?;
-        let z = edit.level()?.z();
+    // in this map's instance ids
+    pub fn level_cells(&mut self, contents: &LevelContents) -> LevelCells {
+        patch::decode_level(&mut self.map, contents)
+    }
+
+    pub fn insert_requested_level(&mut self, z: u32, cells: LevelCells) -> bool {
+        let edit = Edit::new(format!("create Z level {z}")).changing_level(LevelEdit::Insert { z, cells });
         if !self.history.apply_grouped(&mut self.map, edit, None) {
-            return None;
+            return false;
         }
 
+        self.shift_journal(LevelChange::Inserted(z));
         self.level_changed(z);
         self.generation += 1;
 
-        Some(z)
+        true
     }
 
-    pub fn append_remote_level(&mut self, tile: &[Prefab]) -> Option<u32> {
-        let edit = self.new_level_edit(tile)?;
-        let z = edit.level()?.z();
+    pub fn insert_remote_level(&mut self, z: u32, cells: LevelCells) -> bool {
+        let is_appended = z > self.map.size().z;
+        let edit = Edit::new(format!("create Z level {z}")).changing_level(LevelEdit::Insert { z, cells });
         if !command::apply_unrecorded(&mut self.map, &edit) {
-            return None;
+            return false;
+        }
+
+        // a level on top renumbers nothing, one in between moves the levels our history points at
+        if !is_appended {
+            let change = LevelChange::Inserted(z);
+            self.history.clear();
+            self.shift_journal(change);
+            self.level_changed(change.level(self.z).unwrap_or(z));
         }
 
         self.pending_write = true;
         self.generation += 1;
 
-        Some(z)
+        true
+    }
+
+    // our own level undo, back from the server like a peer's change would be
+    pub fn undo_requested_level(&mut self, change: LevelChange) -> bool {
+        if self
+            .history
+            .next_undo()
+            .and_then(Edit::level)
+            .map(LevelEdit::undo_change)
+            != Some(change)
+            || self.history.undo(&mut self.map).is_none()
+        {
+            return false;
+        }
+
+        self.requested_level_changed(change);
+
+        true
+    }
+
+    pub fn redo_requested_level(&mut self, change: LevelChange) -> bool {
+        if self.history.next_redo().and_then(Edit::level).map(LevelEdit::change) != Some(change)
+            || self.history.redo(&mut self.map).is_none()
+        {
+            return false;
+        }
+
+        self.requested_level_changed(change);
+
+        true
+    }
+
+    fn requested_level_changed(&mut self, change: LevelChange) {
+        self.shift_journal(change);
+        let (LevelChange::Appended(z) | LevelChange::Inserted(z) | LevelChange::Deleted(z)) = change;
+        self.level_changed(z);
+        self.generation += 1;
+    }
+
+    fn shift_journal(&mut self, change: LevelChange) {
+        if let Some(journal) = self.journal.as_mut() {
+            journal.shift(change);
+        }
     }
 
     fn new_level_edit(&mut self, tile: &[Prefab]) -> Option<Edit> {
@@ -701,16 +767,58 @@ impl MapDocument {
         Some(Edit::new(format!("create Z level {z}")).changing_level(LevelEdit::Insert { z, cells }))
     }
 
+    fn delete_level_edit(&self, z: u32) -> Option<Edit> {
+        if self.map.size().z <= 1 {
+            return None;
+        }
+
+        let cells = self.map.level(z)?;
+
+        Some(Edit::new(format!("delete Z level {z}")).changing_level(LevelEdit::Delete { z, cells }))
+    }
+
     pub fn delete_level(&mut self, z: u32) -> bool {
-        if self.read_only || self.map.size().z <= 1 {
+        if self.read_only {
             return false;
         }
 
-        let Some(cells) = self.map.level(z) else {
+        self.delete_level_edit(z).is_some_and(|edit| self.apply(edit))
+    }
+
+    pub fn delete_requested_level(&mut self, z: u32) -> bool {
+        let Some(edit) = self.delete_level_edit(z) else {
             return false;
         };
 
-        self.apply(Edit::new(format!("delete Z level {z}")).changing_level(LevelEdit::Delete { z, cells }))
+        if !self.history.apply_grouped(&mut self.map, edit, None) {
+            return false;
+        }
+
+        self.shift_journal(LevelChange::Deleted(z));
+        self.level_changed(z);
+        self.generation += 1;
+
+        true
+    }
+
+    pub fn delete_remote_level(&mut self, z: u32) -> bool {
+        let Some(edit) = self.delete_level_edit(z) else {
+            return false;
+        };
+
+        if !command::apply_unrecorded(&mut self.map, &edit) {
+            return false;
+        }
+
+        // every entry points at levels by their old numbers
+        let change = LevelChange::Deleted(z);
+        self.history.clear();
+        self.shift_journal(change);
+        self.level_changed(change.level(self.z).unwrap_or(z));
+        self.pending_write = true;
+        self.generation += 1;
+
+        true
     }
 
     fn level_changed(&mut self, z: u32) {
@@ -798,11 +906,13 @@ mod tests {
     use std::{collections::HashSet, env, error::Error, fs, process, ptr};
 
     use dmm::{Map, MapFormat, Prefab, Size, parser, writer::MapWriter};
+    use net::LevelContents;
 
     use super::{Coord, MapDocument, Selection, VarMutation, sanitize_vars};
     use crate::{
         command::{Edit, EditGroupId},
         focus::AreaFocus,
+        patch,
         tool::BlockSelectionMode,
     };
 
@@ -1831,8 +1941,11 @@ mod tests {
         let mut peer = level_document();
         author.start_journal();
         peer.start_journal();
-        assert_eq!(author.append_requested_level(&[]), Some(4));
-        assert_eq!(peer.append_remote_level(&[]), Some(4));
+        let empty = LevelContents::Fill(patch::encode_tile(&[]));
+        let cells = author.level_cells(&empty);
+        assert!(author.insert_requested_level(4, cells));
+        let cells = peer.level_cells(&empty);
+        assert!(peer.insert_remote_level(4, cells));
         assert_eq!(author.history.undo_depth(), 1);
         assert_eq!(peer.history.undo_depth(), 0);
         assert!(author.take_journal().is_none());

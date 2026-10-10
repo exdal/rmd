@@ -1,6 +1,7 @@
-use dmm::{Coord, Map, Prefab, Size, parser, writer};
+use dmm::{Coord, Map, Prefab, Size, Tile, parser, writer};
+use net::LevelContents;
 
-use crate::grid::Grid;
+use crate::grid::{Grid, LevelCells};
 
 // I kinda dont like this patch sending business, but for now its okay
 // if I was bikeshedding I would be sending delta compressed binary
@@ -22,6 +23,28 @@ pub fn encode(map: &Grid, coords: impl IntoIterator<Item = Coord>) -> Option<(Ve
 }
 
 pub fn encode_tile(tile: &[Prefab]) -> String { write_row([tile]) }
+
+pub fn encode_level(level: &LevelCells) -> LevelContents {
+    match level.fill() {
+        Some(tile) => LevelContents::Fill(encode_tile(tile)),
+        None => LevelContents::Tiles(write_row(level.tiles().map(Vec::as_slice))),
+    }
+}
+
+// contents that don't parse make an empty level, so every copy still numbers its levels alike
+pub fn decode_level(map: &mut Grid, contents: &LevelContents) -> LevelCells {
+    let size = map.size();
+    let count = (size.x * size.y) as usize;
+    let decoded = match contents {
+        LevelContents::Fill(fill) => decode(fill, 1).map(|mut tiles| map.filled_level(&tiles.remove(0))),
+        LevelContents::Tiles(tiles) => decode(tiles, count).map(|tiles| map.level_from_tiles(tiles)),
+    };
+
+    decoded.unwrap_or_else(|e| {
+        log::warn!("dropping level contents that do not parse: {e}");
+        map.level_from_tiles(vec![Tile::new(); count])
+    })
+}
 
 fn write_row<'a>(tiles: impl IntoIterator<Item = &'a [Prefab]>) -> String {
     let tiles = tiles.into_iter().collect::<Vec<_>>();

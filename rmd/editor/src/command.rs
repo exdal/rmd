@@ -4,6 +4,7 @@ use std::{
 };
 
 use dmm::{Coord, PrefabInstanceId};
+use net::LevelChange;
 
 use crate::{
     document::{MapDocument, PlacedTile},
@@ -37,9 +38,23 @@ impl LevelEdit {
         }
     }
 
-    fn cells(&self) -> &LevelCells {
+    pub fn cells(&self) -> &LevelCells {
         match self {
             Self::Insert { cells, .. } | Self::Delete { cells, .. } => cells,
+        }
+    }
+
+    pub fn change(&self) -> LevelChange {
+        match *self {
+            Self::Insert { z, .. } => LevelChange::Inserted(z),
+            Self::Delete { z, .. } => LevelChange::Deleted(z),
+        }
+    }
+
+    pub fn undo_change(&self) -> LevelChange {
+        match *self {
+            Self::Insert { z, .. } => LevelChange::Deleted(z),
+            Self::Delete { z, .. } => LevelChange::Inserted(z),
         }
     }
 }
@@ -214,6 +229,12 @@ impl History {
     }
 
     pub fn mark_saved(&mut self) { self.saved_at = Some(self.undo_stack.len()); }
+
+    pub fn clear(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.saved_at = None;
+    }
 
     pub fn is_dirty(&self) -> bool { self.saved_at != Some(self.undo_stack.len()) }
 

@@ -1,13 +1,10 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, mem};
 
 use dmm::{Coord, Prefab};
-use editor::{
-    document::{DocumentId, MapDocument},
-    patch,
-};
-use net::{MapEdit, NewLevel};
+use editor::{document::DocumentId, patch};
+use net::{DeleteLevel, InsertAt, InsertLevel, LevelChange, LevelOp, MapEdit};
 
-use super::LevelRequest;
+use super::{LevelRequest, LevelStep};
 use crate::session::Session;
 
 impl Session {
@@ -27,61 +24,101 @@ impl Session {
             .filter(|(_, shared_map)| shared_map.is_ready())
         {
             while let Some((by, edit)) = shared_map.inbox.remove(&shared_map.next_seq) {
+                incoming.push((path.clone(), shared_map.next_seq, by, edit));
                 shared_map.next_seq = shared_map.next_seq.next();
-                incoming.push((path.clone(), by, edit));
             }
         }
 
         let mut batches = BTreeMap::<String, BTreeMap<Coord, Vec<Prefab>>>::new();
-        for (path, by, edit) in incoming {
-            if let Some(new_level) = &edit.new_level {
-                // tiles before the append go in first, like they arrived
-                if let Some(applied) = batches.remove(&path) {
-                    self.apply_coop_tiles(&path, applied);
-                }
+        for (path, seq, by, edit) in incoming {
+            let is_ours = Some(by) == you;
+            self.batch_coop_tiles(&mut batches, &path, is_ours, &edit);
 
-                self.append_coop_level(&path, Some(by) == you, new_level);
-            }
-
-            if edit.coords.is_empty() {
+            let Some(op) = edit.level.as_ref() else {
                 continue;
-            }
-
-            let tiles = match patch::decode(&edit.patch, edit.coords.len()) {
-                Ok(tiles) => tiles,
-                Err(e) => {
-                    log::warn!("{path}: dropping an edit that does not parse: {e}");
-                    continue;
-                },
             };
 
-            let coords = edit.coords.iter().map(|&[x, y, z]| Coord::new(x, y, z));
+            let levels = self
+                .shared_document(&path)
+                .and_then(|id| self.state.document(id))
+                .map_or(0, |document| document.map.size().z);
             let Some(shared_map) = self.coop.as_mut().and_then(|coop| coop.shared_maps.get_mut(&path)) else {
                 continue;
             };
 
-            // a tile we have in flight keeps our version until the server echoes it back,
-            // anything else applies, including our own edits replayed after a resync
-            let applied = batches.entry(path).or_default();
-            for (coord, tile) in coords.zip(tiles) {
-                let Some(count) = shared_map.in_flight.get_mut(&coord) else {
-                    applied.insert(coord, tile);
-                    continue;
-                };
+            // answered even when it lost a race, a carried one after a new share has no request left
+            let step = is_ours.then(|| {
+                shared_map
+                    .level_request
+                    .take()
+                    .map_or(LevelStep::Change, |request| request.step())
+            });
 
-                // bookkeeping
-                if Some(by) == you {
-                    *count -= 1;
-                    if *count == 0 {
-                        shared_map.in_flight.remove(&coord);
-                    }
-                }
+            // the second of two peers asking for the same append gets nothing, on every copy
+            let Some(change) = shared_map.level_log.sequence(levels, seq, edit.seen, op) else {
+                continue;
+            };
+
+            // tiles before the level change go in first, like they arrived
+            if let Some(applied) = batches.remove(&path) {
+                self.apply_coop_tiles(&path, applied);
             }
+
+            self.apply_coop_level(&path, change, step, op);
         }
 
         // one apply per map, the last edit to a tile wins like it would one edit at a time
         for (path, applied) in batches {
             self.apply_coop_tiles(&path, applied);
+        }
+    }
+
+    fn batch_coop_tiles(
+        &mut self, batches: &mut BTreeMap<String, BTreeMap<Coord, Vec<Prefab>>>, path: &str, is_ours: bool,
+        edit: &MapEdit,
+    ) {
+        if edit.coords.is_empty() {
+            return;
+        }
+
+        let tiles = match patch::decode(&edit.patch, edit.coords.len()) {
+            Ok(tiles) => tiles,
+            Err(e) => {
+                log::warn!("{path}: dropping an edit that does not parse: {e}");
+                return;
+            },
+        };
+
+        let Some(shared_map) = self.coop.as_mut().and_then(|coop| coop.shared_maps.get_mut(path)) else {
+            return;
+        };
+
+        // the author didn't have the levels deleted since `seen`, its tiles there are gone
+        let coords = edit
+            .coords
+            .iter()
+            .map(|&[x, y, z]| shared_map.level_log.rebase(edit.seen, z).map(|z| Coord::new(x, y, z)));
+
+        // a tile we have in flight keeps our version until the server echoes it back,
+        // anything else applies, including our own edits replayed after a resync
+        let applied = batches.entry(path.to_owned()).or_default();
+        for (coord, tile) in coords.zip(tiles) {
+            let Some(coord) = coord else {
+                continue;
+            };
+
+            let Some(count) = shared_map.in_flight.get_mut(&coord) else {
+                applied.insert(coord, tile);
+                continue;
+            };
+
+            // bookkeeping
+            if is_ours {
+                *count -= 1;
+                if *count == 0 {
+                    shared_map.in_flight.remove(&coord);
+                }
+            }
         }
     }
 
@@ -99,52 +136,116 @@ impl Session {
         }
     }
 
-    fn append_coop_level(&mut self, path: &str, is_ours: bool, new_level: &NewLevel) {
-        if is_ours && let Some(shared_map) = self.coop.as_mut().and_then(|coop| coop.shared_maps.get_mut(path)) {
-            shared_map.level_request = None;
-        }
-
+    // `step` is none for a peer's change
+    fn apply_coop_level(&mut self, path: &str, change: LevelChange, step: Option<LevelStep>, op: &LevelOp) {
         let Some(id) = self.shared_document(path) else {
             return;
         };
 
-        // the second of two peers asking for the same level gets nothing, on every copy
-        if self
-            .state
-            .document(id)
-            .is_none_or(|document| document.map.size().z + 1 != new_level.z)
-        {
-            return;
+        // our tiles waiting on an echo follow their level, or go with it
+        if let Some(shared_map) = self.coop.as_mut().and_then(|coop| coop.shared_maps.get_mut(path)) {
+            shared_map.in_flight = mem::take(&mut shared_map.in_flight)
+                .into_iter()
+                .filter_map(|(coord, count)| {
+                    let z = change.level(coord.z)?;
+
+                    Some((Coord { z, ..coord }, count))
+                })
+                .collect();
         }
 
-        let fill = match patch::decode(&new_level.fill, 1) {
-            Ok(mut tiles) => tiles.remove(0),
-            Err(e) => {
-                log::warn!("{path}: dropping a new level that does not parse: {e}");
-                return;
-            },
-        };
-
-        if is_ours {
+        if self.node_edit.as_ref().is_some_and(|edit| edit.document == id) {
             self.cancel_node_edit();
         }
 
-        let append = if is_ours {
-            MapDocument::append_requested_level
-        } else {
-            MapDocument::append_remote_level
-        };
-
-        let Some(z) = self.append_document_level(id, &fill, append) else {
+        let Some(document) = self.state.document_mut(id) else {
             return;
         };
 
-        if is_ours {
-            self.show_level(id, z);
+        // a peer's level change in between cleared the history this was meant for
+        let is_history_step = match step {
+            Some(LevelStep::Undo) => document.undo_requested_level(change),
+            Some(LevelStep::Redo) => document.redo_requested_level(change),
+            _ => false,
+        };
+        let is_recorded = step == Some(LevelStep::Change);
+        let is_applied = is_history_step
+            || match (change, op) {
+                (LevelChange::Appended(z) | LevelChange::Inserted(z), LevelOp::Insert(insert)) => {
+                    let cells = document.level_cells(&insert.contents);
+                    if is_recorded {
+                        document.insert_requested_level(z, cells)
+                    } else {
+                        document.insert_remote_level(z, cells)
+                    }
+                },
+                (LevelChange::Deleted(z), _) if is_recorded => document.delete_requested_level(z),
+                (LevelChange::Deleted(z), _) => document.delete_remote_level(z),
+                _ => false,
+            };
+
+        if !is_applied {
+            return;
+        }
+
+        match change {
+            LevelChange::Appended(z) if !is_history_step => {
+                self.bake_appended_level(id, z);
+                if is_recorded {
+                    self.show_level(id, z);
+                }
+            },
+            // do a full rebake, multiz lighting needs this
+            _ => self.rebake_levels(id),
         }
     }
 
-    pub(in crate::session) fn request_coop_level(&mut self, id: DocumentId, z: u32, fill: &[Prefab]) -> bool {
+    pub(in crate::session) fn request_coop_level(&mut self, id: DocumentId, op: LevelOp) -> bool {
+        self.queue_coop_level(id, op, LevelStep::Change)
+    }
+
+    // a shared map steps through level history one server round trip at a time
+    pub(in crate::session) fn can_step_coop_level(&self, id: DocumentId) -> bool {
+        self.coop_map_path(id)
+            .and_then(|path| self.coop.as_ref()?.shared_maps.get(&path))
+            .is_none_or(|shared_map| shared_map.is_ready() && shared_map.level_request.is_none())
+    }
+
+    // none for a map that isn't shared, its history steps stay local
+    pub(in crate::session) fn request_coop_level_step(&mut self, id: DocumentId, step: LevelStep) -> Option<bool> {
+        let path = self.coop_map_path(id)?;
+        let shared_map = self.coop.as_ref()?.shared_maps.get(&path)?;
+        if !shared_map.is_ready() || shared_map.level_request.is_some() {
+            return Some(false);
+        }
+
+        let history = &self.state.document(id)?.history;
+        let edit = match step {
+            LevelStep::Undo => history.next_undo(),
+            LevelStep::Redo => history.next_redo(),
+            LevelStep::Change => None,
+        };
+        let Some(level) = edit.and_then(|edit| edit.level()) else {
+            return Some(false);
+        };
+
+        let change = if step == LevelStep::Undo {
+            level.undo_change()
+        } else {
+            level.change()
+        };
+        let op = match change {
+            LevelChange::Deleted(z) => LevelOp::Delete(DeleteLevel { z }),
+            LevelChange::Appended(z) | LevelChange::Inserted(z) => LevelOp::Insert(InsertLevel {
+                at: InsertAt::Z(z),
+                contents: patch::encode_level(level.cells()),
+            }),
+        };
+
+        Some(self.queue_coop_level(id, op, step))
+    }
+
+    fn queue_coop_level(&mut self, id: DocumentId, op: LevelOp, step: LevelStep) -> bool {
         let Some(path) = self.coop_map_path(id) else {
             return false;
         };
@@ -158,10 +259,7 @@ impl Session {
             return false;
         };
 
-        shared_map.level_request = Some(LevelRequest::Queued(NewLevel {
-            z,
-            fill: patch::encode_tile(fill),
-        }));
+        shared_map.level_request = Some(LevelRequest::Queued(op, step));
 
         true
     }
@@ -209,8 +307,8 @@ impl Session {
                 continue;
             };
 
-            let new_level = shared_map.send_level_request();
-            if tiles.is_none() && new_level.is_none() {
+            let level = shared_map.send_level_request();
+            if tiles.is_none() && level.is_none() {
                 continue;
             }
 
@@ -225,7 +323,8 @@ impl Session {
                     generation,
                     coords: coords.iter().map(|coord| [coord.x, coord.y, coord.z]).collect(),
                     patch,
-                    new_level,
+                    level,
+                    seen: shared_map.next_seq,
                 });
             }
         }
@@ -234,6 +333,8 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use net::LevelContents;
+
     use super::*;
     use crate::session::fixtures::{node_map, node_session};
 
@@ -250,13 +351,14 @@ mod tests {
         assert!(session.start_node_drag(start));
         assert!(session.update_node_drag(end));
         assert_ne!(session.map().unwrap(), &original);
-        session.append_coop_level(
+        session.apply_coop_level(
             "route.dmm",
-            true,
-            &NewLevel {
-                z: 2,
-                fill: patch::encode_tile(&[Prefab::new(core::path::TreePath::parse("/turf"))]),
-            },
+            LevelChange::Appended(2),
+            Some(LevelStep::Change),
+            &LevelOp::Insert(InsertLevel {
+                at: InsertAt::Top,
+                contents: LevelContents::Fill(patch::encode_tile(&[Prefab::new(core::path::TreePath::parse("/turf"))])),
+            }),
         );
         assert_eq!(session.z(), 2);
         assert!(session.node_edit.is_none());

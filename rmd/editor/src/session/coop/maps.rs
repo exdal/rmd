@@ -289,10 +289,16 @@ impl Session {
         shared_map.state = SharedState::Sending { done: 0, total: 0 };
 
         let map = document.to_map();
+        let levels = map.size.z;
         let prepared = coop.prepared.0.clone();
         thread::spawn(move || {
             let bytes = writer::write(&map).into_bytes();
-            let _ = prepared.send(Prepared::Upload { path, base, bytes });
+            let _ = prepared.send(Prepared::Upload {
+                path,
+                base,
+                levels,
+                bytes,
+            });
         });
     }
 
