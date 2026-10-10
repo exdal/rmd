@@ -114,7 +114,13 @@ struct VariableDraft {
     error: Option<String>,
     typed: TypedDraft,
     path_query: String,
-    raw: bool,
+    mode: Option<EditorMode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditorMode {
+    Typed,
+    Expression,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -762,7 +768,7 @@ impl VariableDraft {
             error: None,
             typed: TypedDraft::new(value),
             path_query: String::new(),
-            raw: false,
+            mode: None,
         }
     }
 
@@ -1051,6 +1057,17 @@ enum VariableWidget {
     Path,
     List,
     Raw,
+}
+
+fn editor_mode(widget: VariableWidget, value: &Value, draft: &VariableDraft) -> EditorMode {
+    if widget == VariableWidget::Raw {
+        return EditorMode::Expression;
+    }
+
+    draft.mode.unwrap_or(match (widget, value) {
+        (VariableWidget::Text, _) | (_, Value::Null) => EditorMode::Expression,
+        _ => EditorMode::Typed,
+    })
 }
 
 fn variable_widget(variable: &InspectorVariable) -> VariableWidget {
@@ -1559,7 +1576,7 @@ fn draw_variable_input(
     variable: &InspectorVariable, draft: &mut VariableDraft,
 ) {
     let widget = variable_widget(variable);
-    if widget == VariableWidget::Raw || draft.raw {
+    if editor_mode(widget, &variable.value, draft) == EditorMode::Expression {
         draw_expression_input(ui, session, scope, variable.name.clone(), draft);
         return;
     }
@@ -1682,14 +1699,14 @@ fn draw_variable_menu(
         return;
     };
 
-    if variable_widget(variable) != VariableWidget::Raw {
-        let label = if draft.raw {
-            "Use typed editor"
-        } else {
-            "Edit as expression"
+    let widget = variable_widget(variable);
+    if widget != VariableWidget::Raw {
+        let (label, toggled) = match editor_mode(widget, &variable.value, draft) {
+            EditorMode::Expression => ("Use typed editor", EditorMode::Typed),
+            EditorMode::Typed => ("Edit as expression", EditorMode::Expression),
         };
         if ui.menu_item(label) {
-            draft.raw = !draft.raw;
+            draft.mode = Some(toggled);
         }
     }
 
@@ -2334,6 +2351,28 @@ mod tests {
     }
 
     #[test]
+    fn text_and_null_values_open_as_expressions() {
+        let mut draft = VariableDraft::new("", &Value::Null);
+        let text = Value::Text("pod".into());
+        assert_eq!(editor_mode(VariableWidget::Text, &text, &draft), EditorMode::Expression);
+        assert_eq!(
+            editor_mode(VariableWidget::Number, &Value::Null, &draft),
+            EditorMode::Expression
+        );
+        assert_eq!(
+            editor_mode(VariableWidget::Number, &Value::Num(1.0), &draft),
+            EditorMode::Typed
+        );
+
+        draft.mode = Some(EditorMode::Typed);
+        assert_eq!(editor_mode(VariableWidget::Text, &text, &draft), EditorMode::Typed);
+        assert_eq!(
+            editor_mode(VariableWidget::Raw, &Value::Null, &draft),
+            EditorMode::Expression
+        );
+    }
+
+    #[test]
     fn typed_drafts_follow_outside_edits_unless_they_are_being_edited() {
         let mut draft = VariableDraft::new("\"old\"", &Value::Text("old".into()));
         draft.text = String::from("\"unsent\"");
@@ -2402,6 +2441,15 @@ mod tests {
         let drafts = list_entry_drafts(&value);
         assert_eq!(drafts[0].value, "");
         assert_eq!(drafts[1].value, "list(2)");
+    }
+
+    #[test]
+    fn list_entry_edits_reject_bare_word_values() {
+        let entries = [ListEntryDraft {
+            key: String::from("\"key\""),
+            value: String::from("weirdpodthing1"),
+        }];
+        assert!(parse_list_entries(&entries).is_err());
     }
 
     #[test]

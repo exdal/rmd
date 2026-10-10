@@ -17,6 +17,7 @@ pub enum MapErrorKind {
     InconsistentKeyLength { expected: usize, found: usize },
     MalformedGridHeader,
     MalformedValue(String),
+    BareWord(String),
     OverlappingBlocks(Coord),
     IncompleteGrid(Coord),
 }
@@ -39,6 +40,7 @@ impl std::fmt::Display for MapErrorKind {
             },
             Self::MalformedGridHeader => write!(f, "malformed grid block header"),
             Self::MalformedValue(s) => write!(f, "malformed value '{s}'"),
+            Self::BareWord(s) => write!(f, "'{s}' is not a value, quote it for text: \"{s}\""),
             Self::OverlappingBlocks(c) => write!(f, "two grid blocks cover ({},{},{})", c.x, c.y, c.z),
             Self::IncompleteGrid(c) => write!(f, "no grid block covers ({},{},{})", c.x, c.y, c.z),
         }

@@ -645,10 +645,26 @@ pub fn parse_value(source: &str) -> MapResult<Value> {
     let value = parser.parse_value()?;
     parser.skip_trivia();
 
-    if parser.is_eof() {
-        Ok(value)
-    } else {
-        Err(parser.error(MapErrorKind::MalformedValue(source.to_string())))
+    if !parser.is_eof() {
+        return Err(parser.error(MapErrorKind::MalformedValue(source.to_string())));
+    }
+
+    if let Some(word) = bare_word(&value) {
+        return Err(parser.error(MapErrorKind::BareWord(word.to_string())));
+    }
+
+    Ok(value)
+}
+
+// `list(ACCEPTING = "DONATIONS")` is the only place DM reads a bare word as text
+fn bare_word(value: &Value) -> Option<&TreePath> {
+    match value {
+        Value::Path(path) if !path.absolute => Some(path),
+        Value::List(entries) => entries
+            .iter()
+            .filter_map(|entry| entry.value.as_ref())
+            .find_map(bare_word),
+        _ => None,
     }
 }
 
@@ -819,6 +835,26 @@ mod tests {
         assert!(parse_value("\"unterminated").is_err());
         assert!(parse_value("list(1,)").is_err());
         assert!(parse_value("").is_err());
+    }
+
+    #[test]
+    fn standalone_value_parser_rejects_bare_words_outside_list_keys() {
+        let is_bare =
+            |source| matches!(parse_value(source), Err(error) if matches!(error.kind, MapErrorKind::BareWord(_)));
+        assert!(is_bare("weirdpodthing1"));
+        assert!(is_bare("list(\"a\" = foo)"));
+        assert!(is_bare("list(1 = list(2 = foo))"));
+        assert!(parse_value("list(key = /obj/item)").is_ok());
+    }
+
+    #[test]
+    fn loader_keeps_bare_words_so_broken_maps_still_open() {
+        let vars = prefab_vars(concat!(
+            "\"a\" = (/obj{id = weirdpodthing1},/area)\n",
+            "\n(1,1,1) = {\"\na\n\"}\n",
+        ));
+
+        assert!(matches!(&vars[0].1.value, Value::Path(path) if !path.absolute));
     }
 
     #[test]
