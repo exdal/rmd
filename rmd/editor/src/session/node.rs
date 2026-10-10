@@ -130,7 +130,7 @@ impl Session {
         let Some(group_index) = node::group_for_prefab(&program.tree, groups, prefab) else {
             return false;
         };
-        let Some(group) = node::resolve_group(&program.tree, groups, group_index) else {
+        let Some(group) = node::resolve_group(&program.tree, groups, group_index, prefab) else {
             return false;
         };
         let coord = location.coord;
@@ -139,7 +139,7 @@ impl Session {
         if let Some(previous) = self.node_edit.as_ref()
             && previous.document == document_id
             && previous.z == document.z
-            && previous.group.subtype() == group.subtype()
+            && previous.group == group
             && let Some(component) = node::component(document, &program.tree, &group, coord)
             && component.tiles.contains(&previous.seed)
         {
@@ -697,6 +697,7 @@ mod tests {
         DocumentCache,
         Session,
         fixtures::{
+            layered_node_session,
             node_environment,
             node_map,
             node_session,
@@ -1099,6 +1100,146 @@ mod tests {
         assert!(session.redo());
         assert!(!session.redo());
         assert!(session.node_overlay().is_none());
+    }
+
+    fn pipes_at(session: &Session, coord: Coord, path: &str) -> usize {
+        session
+            .map()
+            .unwrap()
+            .tile_at(coord)
+            .unwrap()
+            .iter()
+            .filter(|prefab| prefab.path == TreePath::parse(path))
+            .count()
+    }
+
+    #[test]
+    fn node_drag_lays_its_own_layer_over_a_pipe_on_another_layer() {
+        let start = Coord::new(1, 2, 1);
+        let crossed = Coord::new(3, 2, 1);
+        let end = Coord::new(5, 2, 1);
+        let map = node_map(
+            5,
+            3,
+            &[(start, vec!["/obj/pipe/layer2"]), (crossed, vec!["/obj/pipe/layer4"])],
+        );
+        let (mut session, target) = layered_node_session(map, start);
+
+        assert!(session.begin_node_edit(target));
+        assert_eq!(session.node_overlay().unwrap().nodes, vec![start]);
+        assert!(session.start_node_drag(start));
+        assert!(session.update_node_drag(end));
+        assert!(session.finish_node_drag(true));
+
+        for x in 1..=5 {
+            assert_eq!(
+                pipes_at(&session, Coord::new(x, 2, 1), "/obj/pipe/layer2"),
+                1,
+                "one layer 2 pipe at x={x}"
+            );
+        }
+        assert_eq!(pipes_at(&session, crossed, "/obj/pipe/layer4"), 1);
+    }
+
+    #[test]
+    fn node_connection_deletion_keeps_a_stacked_pipe_on_another_layer() {
+        let start = Coord::new(1, 2, 1);
+        let stacked = Coord::new(2, 2, 1);
+        let end = Coord::new(3, 2, 1);
+        let map = node_map(
+            3,
+            3,
+            &[
+                (start, vec!["/obj/pipe/layer2"]),
+                (stacked, vec!["/obj/pipe/layer2", "/obj/pipe/layer4"]),
+                (end, vec!["/obj/pipe/layer2"]),
+            ],
+        );
+        let (mut session, target) = layered_node_session(map, start);
+
+        assert!(session.begin_node_edit(target));
+        let overlay = session.node_overlay().unwrap();
+        assert_eq!(overlay.nodes, vec![start, end]);
+        assert_eq!(overlay.connections.len(), 1);
+
+        assert!(session.delete_node_connection(&overlay.connections[0]));
+        for x in 1..=3 {
+            assert_eq!(pipes_at(&session, Coord::new(x, 2, 1), "/obj/pipe/layer2"), 0);
+        }
+        assert_eq!(pipes_at(&session, stacked, "/obj/pipe/layer4"), 1);
+    }
+
+    #[test]
+    #[ignore = "requires the local target/tgstation checkout"]
+    fn tgstation_pipes_connect_only_on_the_same_layer_and_color() {
+        use std::path::PathBuf;
+
+        use editor::progress::Progress;
+
+        use crate::session::fixtures::settle_bake;
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(String::from("tgstation")),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+            .expect("tgstation codebase");
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+
+        let scrubbers = "/obj/machinery/atmospherics/pipe/smart/manifold4w/scrubbers";
+        let layer2 = format!("{scrubbers}/hidden/layer2");
+        let visible_layer2 = format!("{scrubbers}/visible/layer2");
+        let simple_layer2 = "/obj/machinery/atmospherics/pipe/smart/simple/scrubbers/hidden/layer2";
+        let supply_layer2 = "/obj/machinery/atmospherics/pipe/smart/manifold4w/supply/hidden/layer2";
+        let layer4 = format!("{scrubbers}/hidden/layer4");
+        let layer3 = format!("{scrubbers}/hidden");
+        let tiles = (1..=5).map(|x| Coord::new(x, 1, 1)).collect::<Vec<_>>();
+        let map = node_map(
+            5,
+            1,
+            &[
+                (tiles[0], vec![layer2.as_str()]),
+                (tiles[1], vec![visible_layer2.as_str(), supply_layer2]),
+                (tiles[2], vec![simple_layer2, layer4.as_str()]),
+                (tiles[3], vec![layer4.as_str()]),
+                (tiles[4], vec![layer3.as_str()]),
+            ],
+        );
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+
+        let instance_at = |session: &Session, coord: Coord, path: &str| {
+            let document = session.state.document(session.state.active().unwrap()).unwrap();
+            document
+                .instance_ids_at(coord)
+                .iter()
+                .copied()
+                .find(|id| {
+                    document
+                        .prefab_instance(*id)
+                        .is_some_and(|instance| instance.prefab().path == TreePath::parse(path))
+                })
+                .unwrap()
+        };
+
+        let target = instance_at(&session, tiles[0], &layer2);
+        assert!(session.begin_node_edit(target));
+        assert_eq!(
+            session.node_overlay().unwrap().segments,
+            vec![(tiles[0], tiles[1]), (tiles[1], tiles[2])],
+            "hidden, visible and simple scrubbers on layer 2 join; supply and layer 4 stay out"
+        );
+
+        let target = instance_at(&session, tiles[3], &layer4);
+        assert!(session.begin_node_edit(target));
+        assert_eq!(
+            session.node_overlay().unwrap().segments,
+            vec![(tiles[2], tiles[3])],
+            "layer 4 ignores layer 3 next to it"
+        );
     }
 
     #[test]

@@ -956,6 +956,80 @@ mod tests {
 
     #[test]
     #[ignore = "requires the local target/tgstation checkout"]
+    fn a_hidden_pipe_in_a_wall_draws_above_the_wall() -> Result<(), &'static str> {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(String::from("tgstation")),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+            .expect("tgstation codebase");
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+
+        let pipe = "/obj/machinery/atmospherics/pipe/smart/manifold4w/scrubbers/hidden";
+        let tile = |turf: &str| {
+            vec![
+                Prefab::new(TreePath::parse(pipe)),
+                Prefab::new(TreePath::parse(turf)),
+                Prefab::new(TreePath::parse("/area/station/engineering/break_room")),
+            ]
+        };
+        let mut map = Map::new(Size { x: 2, y: 1, z: 1 });
+        let wall = map.intern_tile(tile("/turf/closed/wall/r_wall"));
+        let floor = map.intern_tile(tile("/turf/open/floor/iron"));
+        map.grid[0][0] = vec![wall, floor];
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+
+        let bake = session.active_cache().bake.as_ref().expect("pipe bake");
+        assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
+        let environment = session.state.environment.as_ref().unwrap();
+        let document = session.state.active_document().unwrap();
+        let appearance_at = |coord: Coord, path: &str| {
+            let id = document
+                .instance_ids_at(coord)
+                .iter()
+                .copied()
+                .find(|id| {
+                    document
+                        .prefab_instance(*id)
+                        .is_some_and(|instance| instance.prefab().path.to_string().starts_with(path))
+                })
+                .ok_or("placement is missing")?;
+            let prefab = document
+                .prefab_instance(id)
+                .ok_or("prefab instance is missing")?
+                .prefab();
+            let ty = environment.tree.id_of(&prefab.path).unwrap();
+
+            Ok::<_, &str>(bake.appearances.get(&id.get()).map_or_else(
+                || editor::visual::resolve_id(&environment.tree, ty, prefab),
+                |delta| editor::visual::resolve_delta(&environment.tree, ty, prefab, delta),
+            ))
+        };
+        let depth = |appearance: &editor::visual::Appearance| (appearance.plane, appearance.layer);
+
+        let in_wall = appearance_at(Coord::new(1, 1, 1), pipe)?;
+        let wall = appearance_at(Coord::new(1, 1, 1), "/turf/")?;
+        assert!(depth(&in_wall) > depth(&wall), "{in_wall:?} draws under {wall:?}");
+
+        let under_floor = appearance_at(Coord::new(2, 1, 1), pipe)?;
+        let floor = appearance_at(Coord::new(2, 1, 1), "/turf/")?;
+        assert!(
+            depth(&under_floor) > depth(&floor),
+            "{under_floor:?} draws under {floor:?}"
+        );
+        assert!(
+            under_floor.plane < in_wall.plane,
+            "a pipe under a floor tile still sinks onto the floor plane"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires the local target/tgstation checkout"]
     fn lava_lights_only_where_it_borders_another_turf() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
         let options = editor::environment::BakeOptions {

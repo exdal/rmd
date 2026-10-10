@@ -105,6 +105,7 @@ pub struct NodeGroup {
     pub blockers: Vec<TypeId>,
     pub orientable_subtype: Option<TypeId>,
     pub orientations: Vec<NodeOrientation>,
+    pub matching: Vec<Identifier>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -224,6 +224,10 @@ pub(super) fn oriented_node_environment() -> Environment {
     node_environment_with_profile(PROFILE)
 }
 
+pub(super) fn layered_node_environment() -> Environment {
+    node_environment_with_profile(include_str!("../../tests/fixtures/programs/layered_node_profile.dm"))
+}
+
 pub(super) fn node_environment_with_profile(profile: &'static str) -> Environment {
     let root = examples();
     let compile = |baking| {
@@ -294,6 +298,10 @@ pub(crate) fn node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId)
 
 pub(super) fn oriented_node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId) {
     node_session_with_environment(map, seed, oriented_node_environment(), "/obj/link/segment")
+}
+
+pub(super) fn layered_node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId) {
+    node_session_with_environment(map, seed, layered_node_environment(), "/obj/pipe/layer2")
 }
 
 pub(super) fn node_session_with_environment(

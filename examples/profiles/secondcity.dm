@@ -327,7 +327,8 @@
 	// there. Without it a pipe covers the machines standing on its own tile; with the guard a cable
 	// keeps the per-cable-layer offsets it draws its ordering from. Assigned rather than
 	// SET_PLANE_IMPLICIT because the multi-z plane offsets that consults mean nothing to a bake.
-	if(plane != FLOOR_PLANE)
+	// A wall's plane covers the floor plane, so a pipe running through one keeps its own plane.
+	if(plane != FLOOR_PLANE && !isclosedturf(our_turf))
 		plane = FLOOR_PLANE
 		layer = BELOW_CATWALK_LAYER
 
@@ -423,18 +424,11 @@
 		demir_define_group(DEMIR_GROUP_FRILLS, /turf/closed/wall/vampwall)
 
 		// The node tool copies the seeded map prefab along a cardinal route and keeps
-		// every route out of closed turfs. Each pipe color and piping layer the mapping
-		// helpers declare is its own group, so adjacent supply, scrubber and stacked pipes
-		// never merge.
-		demir_node_group(/obj/structure/cable, /turf/closed)
-		for(var/pipe_path in typesof(/obj/machinery/atmospherics/pipe/smart/simple))
-			var/obj/machinery/atmospherics/pipe/pipe = pipe_path
-			var/obj/machinery/atmospherics/pipe/parent = initial(pipe.parent_type)
-			if(initial(pipe.color) != initial(parent.color) || initial(pipe.piping_layer) != initial(parent.piping_layer))
-				demir_node_group(pipe_path, DEMIR_NODE_BLOCKERS)
-		demir_node_group(/obj/machinery/atmospherics/pipe/smart/manifold4w/supply, DEMIR_NODE_BLOCKERS)
-		demir_node_group(/obj/machinery/atmospherics/pipe/smart/manifold4w/scrubbers, DEMIR_NODE_BLOCKERS)
-		demir_node_group(/obj/machinery/duct, DEMIR_NODE_BLOCKERS)
+		// every route out of closed turfs. Placements connect only on the same layer and
+		// color, so adjacent supply, scrubber and stacked pipes never merge.
+		demir_node_group(/obj/structure/cable, /turf/closed, null, "cable_layer")
+		demir_node_group(/obj/machinery/atmospherics/pipe/smart, DEMIR_NODE_BLOCKERS, null, list("piping_layer", "pipe_color"))
+		demir_node_group(/obj/machinery/duct, DEMIR_NODE_BLOCKERS, null, list("duct_layer", "duct_color"))
 		demir_node_group(/obj/structure/disposalpipe, DEMIR_NODE_BLOCKERS, /obj/structure/disposalpipe/segment)
 		demir_node_group(/obj/structure/disposalconstruct, DEMIR_NODE_BLOCKERS)
 		register_disposal_node_orientations()

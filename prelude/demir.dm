@@ -147,9 +147,11 @@
 // types. The router cannot cross those types or their descendants. Pass null when no blocker is
 // required. `orientable_subtype` names the descendant subtree whose `dir` may change to fit a
 // route. Register each participating type's directional openings with demir_node_orientation().
-// Call this procedure only from the profile's New(). Repeat a subtype to add blockers.
+// `matching` names one var or a list of vars. Two placements connect only when each named var
+// resolves to the same value, instance edits included.
+// Call this procedure only from the profile's New(). Repeat a subtype to add blockers or vars.
 // A conflicting non-null orientable subtype leaves that registration unchanged.
-/proc/demir_node_group(subtype, blocker, orientable_subtype = null)
+/proc/demir_node_group(subtype, blocker, orientable_subtype = null, matching = null)
 	set __demir_intrin = 721
 
 // Map one icon `dir` of `subtype` to its cardinal opening mask (NORTH | SOUTH | EAST | WEST).

@@ -1,4 +1,7 @@
-use core::{types::Identifier, vars};
+use core::{
+    types::{Identifier, Value},
+    vars,
+};
 use std::{
     cmp::Ordering,
     collections::{BinaryHeap, HashMap, HashSet, VecDeque},
@@ -39,15 +42,14 @@ pub struct Component {
 
 pub type Connection = Vec<Coord>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedGroup {
     definition: NodeGroup,
     members: HashSet<TypeId>,
+    key: Vec<(Identifier, Option<Value>)>,
 }
 
 impl ResolvedGroup {
-    pub fn subtype(&self) -> TypeId { self.definition.subtype }
-
     pub fn shapes(&self, tree: &ObjectTree, prefab: &Prefab) -> bool {
         self.definition
             .orientable_subtype
@@ -55,7 +57,13 @@ impl ResolvedGroup {
     }
 
     pub fn matches(&self, tree: &ObjectTree, prefab: &Prefab) -> bool {
-        tree.id_of(&prefab.path).is_some_and(|ty| self.members.contains(&ty))
+        tree.id_of(&prefab.path).is_some_and(|ty| {
+            self.members.contains(&ty)
+                && self
+                    .key
+                    .iter()
+                    .all(|(name, value)| resolved_var(tree, ty, prefab, name) == value.as_ref())
+        })
     }
 }
 
@@ -81,15 +89,29 @@ fn group_for_type(tree: &ObjectTree, groups: &[NodeGroup], ty: TypeId) -> Option
     selected
 }
 
-pub fn resolve_group(tree: &ObjectTree, groups: &[NodeGroup], index: usize) -> Option<ResolvedGroup> {
+pub fn resolve_group(tree: &ObjectTree, groups: &[NodeGroup], index: usize, seed: &Prefab) -> Option<ResolvedGroup> {
     let definition = groups.get(index)?.clone();
     let members = tree
         .descendants(definition.subtype)
         .into_iter()
         .filter(|ty| group_for_type(tree, groups, *ty) == Some(index))
         .collect();
+    let seed_ty = tree.id_of(&seed.path)?;
+    let key = definition
+        .matching
+        .iter()
+        .map(|name| (name.clone(), resolved_var(tree, seed_ty, seed, name).cloned()))
+        .collect();
 
-    Some(ResolvedGroup { definition, members })
+    Some(ResolvedGroup {
+        definition,
+        members,
+        key,
+    })
+}
+
+fn resolved_var<'a>(tree: &'a ObjectTree, ty: TypeId, prefab: &'a Prefab, name: &Identifier) -> Option<&'a Value> {
+    visual::resolve_value(tree, ty, prefab, name).map(|resolved| resolved.value)
 }
 
 pub fn eligible_instance_at(
@@ -774,10 +796,19 @@ mod tests {
             blockers: vec![tree.id_of(&TreePath::parse("/turf/closed")).unwrap()],
             orientable_subtype: None,
             orientations: Vec::new(),
+            matching: Vec::new(),
         }
     }
 
-    fn group(tree: &ObjectTree) -> ResolvedGroup { resolve_group(tree, &[group_definition(tree)], 0).unwrap() }
+    fn group(tree: &ObjectTree) -> ResolvedGroup {
+        resolve_group(
+            tree,
+            &[group_definition(tree)],
+            0,
+            &Prefab::new(TreePath::parse("/obj/cable")),
+        )
+        .unwrap()
+    }
 
     fn configured_group(tree: &ObjectTree) -> ResolvedGroup {
         let root = tree.id_of(&TreePath::parse("/obj/link")).unwrap();
@@ -815,8 +846,10 @@ mod tests {
                 blockers: Vec::new(),
                 orientable_subtype: Some(segment),
                 orientations,
+                matching: Vec::new(),
             }],
             0,
+            &Prefab::new(TreePath::parse("/obj/link/segment")),
         )
         .unwrap()
     }
@@ -841,6 +874,96 @@ mod tests {
             document.set_instance_var(id, "dir".into(), Value::Num(dir.bits() as f32));
         }
         document
+    }
+
+    fn layered_group(tree: &ObjectTree, seed: &Prefab) -> ResolvedGroup {
+        resolve_group(
+            tree,
+            &[NodeGroup {
+                subtype: tree.id_of(&TreePath::parse("/obj/pipe")).unwrap(),
+                blockers: vec![tree.id_of(&TreePath::parse("/turf/closed")).unwrap()],
+                orientable_subtype: None,
+                orientations: Vec::new(),
+                matching: vec![Identifier::from("piping_layer")],
+            }],
+            0,
+            seed,
+        )
+        .unwrap()
+    }
+
+    fn layered_document(width: u32, height: u32, pipes: &[(Coord, &[u32])]) -> MapDocument {
+        let paths = pipes
+            .iter()
+            .flat_map(|(coord, layers)| layers.iter().map(|_| (*coord, "/obj/pipe")))
+            .collect::<Vec<_>>();
+        let mut document = document(width, height, &paths);
+        for (coord, layers) in pipes {
+            let ids = document
+                .instance_ids_at(*coord)
+                .iter()
+                .copied()
+                .filter(|id| {
+                    document
+                        .prefab_instance(*id)
+                        .is_some_and(|instance| instance.prefab().path.to_string() == "/obj/pipe")
+                })
+                .collect::<Vec<_>>();
+            for (id, layer) in ids.into_iter().zip(layers.iter()) {
+                document.set_instance_var(id, "piping_layer".into(), Value::Num(*layer as f32));
+            }
+        }
+
+        document
+    }
+
+    fn layer_of(document: &MapDocument, id: PrefabInstanceId) -> Option<Value> {
+        document
+            .prefab_instance(id)?
+            .prefab()
+            .var(&Identifier::from("piping_layer"))
+            .cloned()
+    }
+
+    #[test]
+    fn matching_vars_split_adjacent_and_stacked_pipes_by_layer() {
+        let tree = tree();
+        let west = Coord::new(1, 1, 1);
+        let stacked = Coord::new(2, 1, 1);
+        let east = Coord::new(3, 1, 1);
+        let north = Coord::new(1, 2, 1);
+        let document = layered_document(3, 2, &[(west, &[2]), (stacked, &[2, 4]), (east, &[4]), (north, &[4])]);
+        let layer2 = layered_group(&tree, document.placed_tile(west).unwrap().last().unwrap().prefab());
+        let layer4 = layered_group(&tree, document.placed_tile(east).unwrap().last().unwrap().prefab());
+
+        assert_eq!(
+            component(&document, &tree, &layer2, west).unwrap().tiles,
+            HashSet::from([west, stacked])
+        );
+        assert_eq!(
+            component(&document, &tree, &layer4, east).unwrap().tiles,
+            HashSet::from([stacked, east])
+        );
+        assert_eq!(
+            component(&document, &tree, &layer4, north).unwrap().tiles,
+            HashSet::from([north]),
+            "an adjacent pipe on another layer is a separate network"
+        );
+        assert!(!occupied(&document, &tree, &layer2, east));
+        assert_eq!(
+            layer_of(
+                &document,
+                eligible_instance_at(&document, &tree, &layer2, stacked).unwrap()
+            ),
+            Some(Value::Num(2.0))
+        );
+        assert_eq!(
+            layer_of(
+                &document,
+                eligible_instance_at(&document, &tree, &layer4, stacked).unwrap()
+            ),
+            Some(Value::Num(4.0))
+        );
     }
 
     #[test]
@@ -986,6 +1109,7 @@ mod tests {
                 blockers: Vec::new(),
                 orientable_subtype: None,
                 orientations: Vec::new(),
+                matching: Vec::new(),
             },
             group_definition(&tree),
         ];
@@ -1003,11 +1127,12 @@ mod tests {
                 blockers: Vec::new(),
                 orientable_subtype: None,
                 orientations: Vec::new(),
+                matching: Vec::new(),
             },
             group_definition(&tree),
         ];
-        let broad = resolve_group(&tree, &groups, 0).unwrap();
-        let cable = resolve_group(&tree, &groups, 1).unwrap();
+        let broad = resolve_group(&tree, &groups, 0, &Prefab::new(TreePath::parse("/obj/pipe"))).unwrap();
+        let cable = resolve_group(&tree, &groups, 1, &Prefab::new(TreePath::parse("/obj/cable/heavy"))).unwrap();
         let pipe_coord = Coord::new(1, 1, 1);
         let cable_coord = Coord::new(2, 1, 1);
         let document = document(3, 1, &[(pipe_coord, "/obj/pipe"), (cable_coord, "/obj/cable/heavy")]);

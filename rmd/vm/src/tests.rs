@@ -1154,6 +1154,43 @@ fn node_groups_accept_blocker_lists_merge_and_allow_an_unblocked_group() {
 }
 
 #[test]
+fn node_groups_accept_matching_vars_and_reject_non_text_names_atomically() {
+    let (tree, module) = compile(fixture!("programs/node_groups_accept_matching_vars.dm"));
+    let bake = Bake::new(
+        &tree,
+        &module,
+        Vec::new(),
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    let matching = |path: &str| {
+        let ty = tree.id_of(&TreePath::parse(path)).unwrap();
+        bake.node_groups()
+            .iter()
+            .find(|group| group.subtype == ty)
+            .unwrap()
+            .matching
+            .clone()
+    };
+
+    assert_eq!(matching("/obj/cable"), vec![Identifier::from("cable_layer")]);
+    assert_eq!(
+        matching("/obj/pipe"),
+        vec![
+            Identifier::from("piping_layer"),
+            Identifier::from("pipe_color"),
+            Identifier::from("hidden"),
+        ]
+    );
+    assert_eq!(
+        matching("/obj/bad"),
+        vec![Identifier::from("piping_layer")],
+        "an invalid name list does not partially update an existing group"
+    );
+}
+
+#[test]
 fn node_groups_keep_valid_orientable_subtypes_and_reject_conflicts_atomically() {
     let (tree, module) = compile(fixture!("programs/node_groups_accept_orientable_subtypes.dm"));
     let bake = Bake::new(

@@ -253,6 +253,22 @@ impl Evaluator<'_> {
                     },
                 };
 
+                // which objects with same values/fields
+                let matching_values = match arg(3) {
+                    GenericValue::Null => Vec::new(),
+                    value @ (GenericValue::List(_) | GenericValue::ArgList(_)) => {
+                        self.iter_values(value)?.into_iter().map(|(value, _)| value).collect()
+                    },
+                    value => vec![value],
+                };
+                let Some(matching) = matching_values
+                    .iter()
+                    .map(|value| value.text().map(Identifier::from))
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return Ok(GenericValue::Null);
+                };
+
                 if let Some(group) = self
                     .runtime
                     .node_groups
@@ -272,6 +288,12 @@ impl Evaluator<'_> {
                             group.blockers.push(blocker);
                         }
                     }
+
+                    for name in matching {
+                        if !group.matching.contains(&name) {
+                            group.matching.push(name);
+                        }
+                    }
                 } else {
                     // new group
                     self.runtime.node_groups.push(NodeGroup {
@@ -281,6 +303,13 @@ impl Evaluator<'_> {
                         blockers: blockers.into_iter().fold(Vec::new(), |mut unique, blocker| {
                             if !unique.contains(&blocker) {
                                 unique.push(blocker);
+                            }
+
+                            unique
+                        }),
+                        matching: matching.into_iter().fold(Vec::new(), |mut unique, name| {
+                            if !unique.contains(&name) {
+                                unique.push(name);
                             }
 
                             unique
