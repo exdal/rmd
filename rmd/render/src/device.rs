@@ -16,8 +16,28 @@ pub struct Device {
     pub max_bindless_textures: u32,
     pub max_compute_work_group_count_x: u32,
     pub max_image_dimension_2d: u32,
+    pub info: DeviceInfo,
+    has_memory_budget: bool,
     graphics_family: u32,
     entry: ash::Entry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceInfo {
+    pub name: String,
+    pub driver: String,
+    pub device_type: vk::PhysicalDeviceType,
+    pub api_version: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeapUsage {
+    pub size: u64,
+    /// `None` without VK_EXT_memory_budget
+    pub budget: Option<u64>,
+    pub usage: Option<u64>,
+    pub is_device_local: bool,
+    pub is_host_visible: bool,
 }
 
 impl Device {
@@ -31,7 +51,12 @@ impl Device {
             max_compute_work_group_count_x,
             max_image_dimension_2d,
         ) = select_physical_device(&instance)?;
-        let device = create_device(&instance, physical_device)?;
+        let has_memory_budget = has_extension(
+            &unsafe { instance.enumerate_device_extension_properties(physical_device) }?,
+            ext::memory_budget::NAME,
+        );
+        let info = device_info(&instance, physical_device);
+        let device = create_device(&instance, physical_device, has_memory_budget)?;
 
         let mut context = Context::new(device, physical_device, instance, &entry)?;
         let graphics = first_queue(&queue_families, vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
@@ -51,8 +76,43 @@ impl Device {
             max_bindless_textures,
             max_compute_work_group_count_x,
             max_image_dimension_2d,
+            info,
+            has_memory_budget,
             graphics_family: graphics,
         })
+    }
+
+    pub fn memory_heaps(&self) -> Vec<HeapUsage> {
+        let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+        let mut properties = vk::PhysicalDeviceMemoryProperties2::default();
+        if self.has_memory_budget {
+            properties = properties.push_next(&mut budget);
+        }
+
+        unsafe {
+            self.context
+                .instance()
+                .get_physical_device_memory_properties2(self.physical_device, &mut properties)
+        };
+        let memory = properties.memory_properties;
+
+        memory
+            .memory_heaps_as_slice()
+            .iter()
+            .enumerate()
+            .map(|(index, heap)| HeapUsage {
+                size: heap.size,
+                budget: self.has_memory_budget.then(|| budget.heap_budget[index]),
+                usage: self.has_memory_budget.then(|| budget.heap_usage[index]),
+                is_device_local: heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL),
+                is_host_visible: memory.memory_types_as_slice().iter().any(|memory_type| {
+                    memory_type.heap_index as usize == index
+                        && memory_type
+                            .property_flags
+                            .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+                }),
+            })
+            .collect()
     }
 
     pub fn create_surface(
@@ -284,7 +344,28 @@ fn select_physical_device(
     ))
 }
 
-fn create_device(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Result<ash::Device, GpuError> {
+fn device_info(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> DeviceInfo {
+    let mut driver = vk::PhysicalDeviceDriverProperties::default();
+    let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut driver);
+    unsafe { instance.get_physical_device_properties2(physical_device, &mut properties) };
+    let properties = properties.properties;
+    let text = |name: Result<&CStr, _>| name.map_or_else(|_| String::new(), |name| name.to_string_lossy().into_owned());
+
+    DeviceInfo {
+        name: text(properties.device_name_as_c_str()),
+        driver: format!(
+            "{} {}",
+            text(driver.driver_name_as_c_str()),
+            text(driver.driver_info_as_c_str())
+        ),
+        device_type: properties.device_type,
+        api_version: properties.api_version,
+    }
+}
+
+fn create_device(
+    instance: &ash::Instance, physical_device: vk::PhysicalDevice, has_memory_budget: bool,
+) -> Result<ash::Device, GpuError> {
     let families = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
     let priorities = [1.0_f32];
     let queues = (0..families.len() as u32)
@@ -299,6 +380,10 @@ fn create_device(instance: &ash::Instance, physical_device: vk::PhysicalDevice) 
     let available = unsafe { instance.enumerate_device_extension_properties(physical_device) }?;
     if has_extension(&available, khr::push_descriptor::NAME) {
         extensions.push(khr::push_descriptor::NAME.as_ptr());
+    }
+
+    if has_memory_budget {
+        extensions.push(ext::memory_budget::NAME.as_ptr());
     }
 
     let mut vk13 = vk::PhysicalDeviceVulkan13Features::default()

@@ -25,7 +25,7 @@ use editor::{
     tool::{FillMode, SelectionRotation, SelectionTransform, Tool},
 };
 pub(crate) use inspector::TransformMode;
-use render::{Camera, GuideLine, MapViewInteraction, MapViewRect, Renderer};
+use render::{Camera, GuideLine, MapViewInteraction, MapViewRect, Renderer, stats::RendererInfo};
 
 use self::{inspector::InspectorPanel, object_tree::ObjectTreePanel, settings::SettingsWindow};
 use crate::{
@@ -33,6 +33,7 @@ use crate::{
     gizmo::GizmoState,
     loader::LoadView,
     pacing::FrameDemand,
+    profiler::FrameHistory,
     session::{LoadReport, Session, TypeLayer},
     settings::{KeybindAction, KeybindPreset, OpenPanels, Panel, Settings},
     theme::Themes,
@@ -53,6 +54,7 @@ mod menu;
 mod node;
 mod overlay;
 mod paste;
+mod performance;
 mod search;
 mod toolbar;
 mod tooltip;
@@ -270,6 +272,8 @@ pub struct UiState {
     inspector: InspectorPanel,
     find: find::FindPanel,
     git_panel: git::GitPanel,
+    performance: performance::PerformancePanel,
+    show_performance: bool,
     /// Keeps the object tree in front of the Git tab while its saved layout settles
     select_object_tree: StartupPanelFocus,
     /// Keeps the inspector in front of the Search tab while its saved layout settles
@@ -350,6 +354,8 @@ impl UiState {
             inspector,
             find,
             git_panel,
+            performance: performance::PerformancePanel::new()?,
+            show_performance: false,
             select_object_tree: StartupPanelFocus::new(),
             select_inspector: StartupPanelFocus::new(),
             panel_focus_requested: false,
@@ -579,6 +585,7 @@ impl UiState {
 
     fn apply_window_actions(&mut self, settings: &mut Settings, menu: &MenuActions) {
         settings.show_dm_ui ^= menu.toggle_dm_ui;
+        self.show_performance ^= menu.toggle_performance;
         self.reset_layout = menu.reset_layout;
         if menu.reset_layout {
             settings.panels = OpenPanels::default();
@@ -600,6 +607,21 @@ impl UiState {
             Panel::Inspector => self.select_inspector = StartupPanelFocus::new(),
             Panel::Search => self.find.request(),
         }
+    }
+
+    /// Drawn after [`Self::draw`] in the same frame; returns the report to copy.
+    pub fn draw_performance(
+        &mut self, ui: &Ui, session: &Session, history: &FrameHistory, info: impl FnOnce() -> RendererInfo,
+    ) -> Option<String> {
+        if !self.show_performance {
+            return None;
+        }
+
+        let context = performance::ReportContext::new(session);
+        let info = info();
+
+        self.performance
+            .draw(ui, history, &info, &context, &mut self.show_performance)
     }
 
     fn draw_dockspace(&mut self, ui: &Ui, session: &Session) -> Result<Id, DockspaceError> {

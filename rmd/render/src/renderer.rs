@@ -52,6 +52,7 @@ use crate::{
     imgui::{ImGuiFrame, ImGuiPass, ImGuiSlots},
     read_spirv,
     spec,
+    stats::{BufferPlacement, Placement, RenderSpan, RenderStats, RendererInfo, Upload, ViewSprites},
     texture::TextureCatalog,
     viewport::{SecondaryViewport, ViewportTarget, sync_targets},
 };
@@ -782,6 +783,9 @@ pub struct Renderer {
     highlight_started_at: Instant,
     extent: vk::Extent2D,
     stale: bool,
+    stats: RenderStats,
+    has_timestamps: bool,
+    texture_bytes: u64,
     device: Device,
 }
 
@@ -1005,6 +1009,9 @@ impl Renderer {
                 height: height.max(1),
             },
             stale: true,
+            stats: RenderStats::default(),
+            has_timestamps: false,
+            texture_bytes: 0,
             device,
         };
 
@@ -1041,6 +1048,36 @@ impl Renderer {
 
     pub fn extent(&self) -> vk::Extent2D { self.extent }
 
+    /// CPU spans, GPU passes and uploads of the last drawn frame; GPU passes lag a few frames behind.
+    pub fn stats(&self) -> &RenderStats { &self.stats }
+
+    pub fn info(&self) -> RendererInfo {
+        let placement = |buffer: Option<&Buffer>| {
+            buffer.map(|buffer| BufferPlacement {
+                bytes: buffer.size(),
+                placement: self
+                    .device
+                    .allocator
+                    .memory_properties(buffer)
+                    .map(Placement::from_flags),
+            })
+        };
+
+        RendererInfo {
+            device: self.device.info.clone(),
+            swapchain_images: self
+                .swapchain
+                .as_ref()
+                .map_or(0, |swapchain| swapchain.attachments.len()),
+            has_timestamps: self.has_timestamps,
+            texture_count: self.textures.len(),
+            texture_bytes: self.texture_bytes,
+            sprites: placement(self.sprites.as_ref()),
+            lights: placement(self.lights.as_ref()),
+            heaps: self.device.memory_heaps(),
+        }
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
             return;
@@ -1070,6 +1107,7 @@ impl Renderer {
 
         self.recorded = None;
         self.uploaded.clear();
+        self.texture_bytes = catalog.decoded_bytes() as u64;
         let old = std::mem::replace(&mut self.textures, textures);
         destroy_images(&mut self.device, old);
 
@@ -1300,7 +1338,7 @@ impl Renderer {
     }
 
     fn recreate_swapchain(&mut self) -> Result<(), GpuError> {
-        self.device.wait_idle()?;
+        self.stats.measure(RenderSpan::Stall, || self.device.wait_idle())?;
         self.recorded = None;
 
         let (swapchain, extent, _) = self.device.create_swapchain(
@@ -1309,11 +1347,15 @@ impl Renderer {
             self.extent.height,
             self.swapchain.as_ref(),
         )?;
-        self.frames = Some(
-            self.device
-                .context
-                .create_super_frame_allocator(swapchain.attachments.len()),
-        );
+        let mut frames = self
+            .device
+            .context
+            .create_super_frame_allocator(swapchain.attachments.len());
+        self.has_timestamps = frames
+            .enable_timestamps(&self.device.context)
+            .inspect_err(|error| log::warn!("gpu pass timing is off: {error}"))
+            .unwrap_or(false);
+        self.frames = Some(frames);
 
         if let Some(old) = self.swapchain.replace(swapchain) {
             self.device.destroy_swapchain(old);
@@ -1958,6 +2000,7 @@ impl Renderer {
         &mut self, frame: &Frame<'_>, viewport: Option<vk::Extent2D>,
         imgui: Option<(PendingFrame<'_>, PlatformWindows<'_>)>,
     ) -> Result<Option<(usize, PickRequest, PickResult)>, GpuError> {
+        self.stats.reset();
         if self.stale {
             self.recreate_swapchain()?;
         }
@@ -2007,12 +2050,15 @@ impl Renderer {
         &mut self, frames: &mut SuperFrameAllocator, frame: &Frame<'_>, viewport: Option<vk::Extent2D>,
         imgui: Option<(PendingFrame<'_>, PlatformWindows<'_>)>,
     ) -> Result<Option<(usize, PickRequest, PickResult)>, GpuError> {
-        let next = frames.get_next_frame()?;
+        let next = self.stats.measure(RenderSpan::Stall, || frames.get_next_frame())?;
+        self.stats.gpu.extend_from_slice(next.completed_timings());
         let with_imgui = imgui.is_some();
+        let clock = Instant::now();
         let ui_frames = match imgui {
             Some((pending, platform_windows)) => Some(self.prepare_ui(next, pending, platform_windows)?),
             None => None,
         };
+        self.stats.add(RenderSpan::PrepareUi, clock);
 
         let viewport = viewport.unwrap_or(self.extent);
         let mut graph_state = FrameGraphState::new(viewport, with_imgui, frame);
@@ -2022,13 +2068,26 @@ impl Renderer {
             .as_ref()
             .is_none_or(|recorded| recorded.state != graph_state)
         {
+            let clock = Instant::now();
             self.record(graph_state)?;
+            self.stats.add(RenderSpan::Record, clock);
+            self.stats.is_recorded = true;
         }
 
+        let clock = Instant::now();
         self.prepare_sprites(frame)?;
+        self.stats.add(RenderSpan::UploadSprites, clock);
+        let clock = Instant::now();
         self.prepare_lighting(frame)?;
+        self.stats.add(RenderSpan::UploadLighting, clock);
+        let clock = Instant::now();
         self.prepare_cull_buffers(frame)?;
+        self.stats.add(RenderSpan::CullBuffers, clock);
+        let clock = Instant::now();
         self.prepare_previews(frame)?;
+        self.stats.add(RenderSpan::Previews, clock);
+
+        let bind_clock = Instant::now();
         let stripe_offset =
             (self.highlight_started_at.elapsed().as_secs_f32() * HIGHLIGHT_STRIPE_SPEED) % HIGHLIGHT_STRIPE_PERIOD;
 
@@ -2086,6 +2145,12 @@ impl Renderer {
         if plans.len() != recorded.map_views.len() || visible.len() != recorded.map_views.len() {
             return Err(vk::Result::ERROR_INITIALIZATION_FAILED.into());
         }
+
+        self.stats.sprite_count = frame.map_views.iter().map(|view| view.sprite_instances.len()).sum();
+        self.stats.views.extend(plans.iter().map(|plan| ViewSprites {
+            underlay: plan.visible.underlay_count,
+            active: plan.visible.count - plan.visible.underlay_count,
+        }));
 
         let picking = frame
             .picking
@@ -2271,6 +2336,8 @@ impl Renderer {
             }
         }
 
+        self.stats.add(RenderSpan::Bind, bind_clock);
+        let clock = Instant::now();
         let executed =
             match self
                 .graph
@@ -2286,6 +2353,7 @@ impl Renderer {
                 },
                 Err(error) => return Err(error.into()),
             };
+        self.stats.add(RenderSpan::Execute, clock);
 
         let (Some(index), Some(request), true) = (picking, pick, cursor.is_some()) else {
             return Ok(None);
@@ -2294,7 +2362,8 @@ impl Renderer {
             return Ok(None);
         }
 
-        self.graph.wait()?;
+        let clock = Instant::now();
+        self.stats.measure(RenderSpan::Stall, || self.graph.wait())?;
         let bytes = self
             .pick_readback
             .as_mut()
@@ -2308,6 +2377,7 @@ impl Renderer {
             .and_then(|sprite| sprite.checked_sub(base))
             .and_then(|sprite| frame.map_views.get(index)?.sprite_instances.get(sprite))
             .map_or(PickResult::Miss, |sprite| PickResult::Hit(sprite.owner));
+        self.stats.add(RenderSpan::PickReadback, clock);
 
         Ok(Some((index, request, picked)))
     }
@@ -2349,8 +2419,11 @@ impl Renderer {
             });
         }
 
-        self.device.wait_idle()?;
+        self.stats.measure(RenderSpan::Stall, || self.device.wait_idle())?;
         self.uploaded.clear();
+        self.stats.sprite_upload = Upload::Full {
+            bytes: payload_bytes(&payload).len() as u64,
+        };
 
         if self.sprites.is_none() || self.sprite_capacity < total {
             let capacity = total
@@ -2441,7 +2514,10 @@ impl Renderer {
             });
         }
 
-        self.device.wait_idle()?;
+        self.stats.measure(RenderSpan::Stall, || self.device.wait_idle())?;
+        self.stats.lighting_upload = Upload::Full {
+            bytes: payload_bytes(&payload).len() as u64,
+        };
         if total > 0 && (self.lights.is_none() || self.light_capacity < total) {
             let capacity = total
                 .max(1024)
@@ -2511,13 +2587,16 @@ impl Renderer {
             })
             .collect::<Result<Vec<_>, _>>()?;
         if payloads.iter().any(|payload| !payload.is_empty()) {
-            self.graph.wait()?;
+            self.stats.measure(RenderSpan::Stall, || self.graph.wait())?;
         }
         for (range, payload) in ranges.iter().zip(&payloads) {
             if !payload.is_empty() {
                 buffer.write(gpu_light_offset(range.start)?, payload)?;
             }
         }
+        self.stats.lighting_upload = Upload::Incremental {
+            bytes: payloads.iter().map(|payload| payload_bytes(payload).len() as u64).sum(),
+        };
 
         let Some(uploaded) = self.uploaded_lighting.first_mut() else {
             return Ok(false);
@@ -2586,7 +2665,7 @@ impl Renderer {
             return Ok(());
         }
 
-        self.graph.wait()?;
+        self.stats.measure(RenderSpan::Stall, || self.graph.wait())?;
         for preview in self.previews.drain(wanted.len().min(self.previews.len())..).flatten() {
             preview.destroy(&mut self.device);
         }
@@ -2638,7 +2717,7 @@ impl Renderer {
             return Ok(());
         }
 
-        self.device.wait_idle()?;
+        self.stats.measure(RenderSpan::Stall, || self.device.wait_idle())?;
 
         while self.cull.len() > wanted.len() {
             if let Some(buffers) = self.cull.pop() {
@@ -2696,8 +2775,14 @@ impl Renderer {
             .map(|range| gpu_sprite_range(view.sprite_instances, *range))
             .collect::<Result<Vec<_>, _>>()?;
         if sprite_payloads.iter().any(|payload| !payload.is_empty()) {
-            self.graph.wait()?;
+            self.stats.measure(RenderSpan::Stall, || self.graph.wait())?;
         }
+        self.stats.sprite_upload = Upload::Incremental {
+            bytes: sprite_payloads
+                .iter()
+                .map(|payload| payload_bytes(payload).len() as u64)
+                .sum(),
+        };
         if let Some(buffer) = self.sprites.as_mut() {
             for (range, payload) in ranges.iter().zip(&sprite_payloads) {
                 if !payload.is_empty() {
@@ -2740,11 +2825,13 @@ impl Renderer {
             },
         );
         self.area_colors.program.set(self.area_colors.groups, group_count);
-        self.graph.execute_blocking(
-            &self.device.context,
-            &self.area_colors.program,
-            &mut AllocatorKind::Persistent(&mut self.device.allocator),
-        )?;
+        self.stats.measure(RenderSpan::Stall, || {
+            self.graph.execute_blocking(
+                &self.device.context,
+                &self.area_colors.program,
+                &mut AllocatorKind::Persistent(&mut self.device.allocator),
+            )
+        })?;
 
         Ok(())
     }

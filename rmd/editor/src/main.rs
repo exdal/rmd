@@ -19,6 +19,7 @@ mod gizmo;
 mod loader;
 mod logging;
 mod pacing;
+mod profiler;
 mod session;
 mod settings;
 mod theme;
@@ -57,6 +58,7 @@ use crate::{
     fonts::UiFont,
     loader::{Job, Loader, Outcome},
     pacing::{FrameDemand, FramePacer, NextFrame, Status},
+    profiler::{EditorSpan, FrameHistory},
     session::{LoadReport, Session},
     settings::{Settings, backup_dir, imgui_ini_path, profiles_dir, themes_dir},
     theme::Themes,
@@ -182,6 +184,7 @@ fn main() -> ExitCode {
         ui_font: None,
         window: None,
         pacer: FramePacer::default(),
+        profiler: FrameHistory::default(),
         is_occluded: false,
     };
 
@@ -392,6 +395,7 @@ struct App {
     ui_font: Option<UiFont>,
     window: Option<Arc<Window>>,
     pacer: FramePacer,
+    profiler: FrameHistory,
     is_occluded: bool,
 }
 
@@ -491,6 +495,7 @@ impl App {
             ui_font,
             window,
             pacer,
+            profiler,
             ..
         } = self;
         let (Some(consumer), Some(renderer), Some(platform), Some(imgui), Some(themes), Some(ui_font), Some(window)) = (
@@ -529,10 +534,13 @@ impl App {
             );
         }
 
-        platform.prepare_frame(imgui, window)?;
+        profiler.measure(EditorSpan::PrepareFrame, || platform.prepare_frame(imgui, window))?;
         let frame = imgui.try_begin_frame()?;
         let load = loader.view().or_else(|| session.bake_view());
+        let clock = Instant::now();
         let output = ui.draw(frame.ui(), session, settings, themes, load.as_ref())?;
+        let report = ui.draw_performance(frame.ui(), session, profiler, || renderer.info());
+        profiler.add(EditorSpan::Ui, clock);
         if let Some(preset) = output.keybind_preset {
             settings.keybindings = preset.bindings();
             settings.save();
@@ -542,6 +550,7 @@ impl App {
             }
         }
         platform.prepare_render(frame.ui(), window)?;
+        let clock = Instant::now();
         let mut drawn = Vec::with_capacity(output.map_views.len());
         let mut map_views = Vec::with_capacity(output.map_views.len());
         let mut picking = None;
@@ -562,14 +571,16 @@ impl App {
             drawn.push(view.document);
             map_views.push(frame);
         }
+        profiler.add(EditorSpan::MapViewFrames, clock);
         let mut demand = output.demand;
         if map_views.iter().any(|view| view.is_animated()) {
             demand.raise(FrameDemand::Throttled);
         }
 
         let scene = session.frame(&map_views, picking);
-        let pending = frame.try_render(consumer)?;
+        let pending = profiler.measure(EditorSpan::ImGuiRender, || frame.try_render(consumer))?;
         window.pre_present_notify();
+        let clock = Instant::now();
         let picked = renderer.draw_imgui(&scene, pending, |reconciled| {
             if !platform.viewports_enabled() {
                 return Vec::new();
@@ -584,6 +595,8 @@ impl App {
 
             collected.unwrap_or_default()
         })?;
+        profiler.add(EditorSpan::Renderer, clock);
+        profiler.record_renderer(renderer.stats());
         settle_appearing_windows(imgui, pacer, Instant::now());
         if let Some(pending) = pending_screenshot.take() {
             take_screenshot(renderer, session, &scene, &drawn, pending, clipboard);
@@ -639,7 +652,7 @@ impl App {
             pick_new_map_path: output.pick_new_map_path,
             screenshot: output.screenshot,
             cancel_load: output.cancel_load,
-            copy_to_clipboard: output.copy_to_clipboard,
+            copy_to_clipboard: output.copy_to_clipboard.or(report),
             reload_profile: output.reload_profile,
             load_conflicts: output.load_conflicts,
             demand,
@@ -1116,6 +1129,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::RedrawRequested => {
                 let frame_start = Instant::now();
+                self.profiler.begin_frame(frame_start);
                 let was_busy = self.is_busy();
                 let is_hidden = self.is_occluded
                     || self
@@ -1167,12 +1181,19 @@ impl ApplicationHandler for App {
                     self.open_source(source);
                 }
 
+                let clock = Instant::now();
                 if let Some(outcome) = self.loader.poll() {
                     self.apply_outcome(outcome);
                 }
                 self.session.poll_bake();
                 self.session.poll_git();
                 self.session.poll_coop();
+                self.profiler.add(EditorSpan::Polls, clock);
+                if !is_hidden {
+                    self.profiler.add(EditorSpan::Frame, frame_start);
+                    self.profiler.finish_frame();
+                }
+
                 let is_busy = self.is_busy();
                 if was_busy && !is_busy {
                     self.pacer.activity(Instant::now());
@@ -1284,6 +1305,7 @@ mod tests {
             ui_font: None,
             window: None,
             pacer: FramePacer::default(),
+            profiler: FrameHistory::default(),
             is_occluded: false,
         }
     }

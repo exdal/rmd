@@ -4,6 +4,7 @@ pub mod error;
 pub mod imgui;
 pub mod renderer;
 mod spec;
+pub mod stats;
 pub mod texture;
 pub mod viewport;
 

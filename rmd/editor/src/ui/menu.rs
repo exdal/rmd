@@ -47,6 +47,7 @@ pub(super) struct MenuActions {
     pub(super) reset_layout: bool,
     pub(super) toggle_panel: Option<Panel>,
     pub(super) toggle_dm_ui: bool,
+    pub(super) toggle_performance: bool,
     pub(super) coop_dialog: Option<CoopDialogKind>,
 }
 
@@ -55,6 +56,7 @@ impl UiState {
         &mut self, ui: &Ui, session: &mut Session, settings: &Settings, loading: bool,
     ) -> MenuActions {
         let mut actions = MenuActions::default();
+        let show_performance = self.show_performance;
         ui.main_menu_bar(|| {
             ui.menu("File", || {
                 if ui.menu_item_enabled_selected_no_shortcut(
@@ -381,6 +383,10 @@ impl UiState {
                     actions.toggle_dm_ui = true;
                 }
                 ui.set_item_tooltip("Draw the windows from the profile's ui() proc");
+                if ui.menu_item_enabled_selected_no_shortcut("Performance", show_performance, true) {
+                    actions.toggle_performance = true;
+                }
+                ui.set_item_tooltip("Frame timings, GPU passes and memory, with a report to copy");
 
                 ui.separator();
                 if ui.menu_item("Reset layout") {
