@@ -270,10 +270,7 @@ impl Session {
             return;
         };
 
-        if let Some(cache) = self.caches.get_mut(&id) {
-            cache.instances.reorder_placements(&ordered);
-        }
-
+        // drawn in their new tile order once the render cache takes their indices again
         self.apply_bake_update(
             id,
             editor::bake::BakeUpdate {
@@ -288,38 +285,10 @@ impl Session {
             return false;
         };
 
-        let coords = tiles.iter().map(|(coord, _)| *coord).collect::<Vec<_>>();
         let affected = document.apply_remote(tiles);
         self.update_document_instances(id, &affected);
-        self.refresh_remote_order(id, &coords);
 
         true
-    }
-
-    // remote edits keep unchanged ids, so their placement orders still follow the old tile
-    fn refresh_remote_order(&mut self, id: DocumentId, coords: &[Coord]) {
-        let mut reordered = Vec::new();
-        for coord in coords {
-            let Some(ordered) = self.placement_group_at(id, *coord) else {
-                continue;
-            };
-
-            if let Some(cache) = self.caches.get_mut(&id)
-                && cache.instances.reorder_placements(&ordered)
-            {
-                reordered.extend(ordered);
-            }
-        }
-
-        if !reordered.is_empty() {
-            self.apply_bake_update(
-                id,
-                editor::bake::BakeUpdate {
-                    appearances: reordered,
-                    lighting: None,
-                },
-            );
-        }
     }
 
     fn placement_group_at(&self, id: DocumentId, coord: Coord) -> Option<Vec<PrefabInstanceId>> {

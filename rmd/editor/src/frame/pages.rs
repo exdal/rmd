@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 use render::{SpriteInstance, SpriteTexture, UpdateRange};
 
-use super::{FrameInstances, PrefabUpdate, RenderedPrefab, SpriteKey, TypeVisibility};
+use super::{FIRST_PLACEMENT, FrameInstances, PrefabUpdate, RenderedPrefab, SpriteKey, TypeVisibility};
 use crate::document::PrefabInstanceId;
 
 const PAGE_CAPACITY: usize = 256;
@@ -118,7 +118,7 @@ impl FrameInstances {
             for (index, chunk) in chunks.into_iter().enumerate() {
                 let lower = match chunk.first() {
                     Some((key, _)) if index > 0 => *key,
-                    _ => (z, i32::MIN, i32::MIN, 0, 0),
+                    _ => (z, i32::MIN, i32::MIN, FIRST_PLACEMENT, 0),
                 };
 
                 let start_offset = sprites.len();

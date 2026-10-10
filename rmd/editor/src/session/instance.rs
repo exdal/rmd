@@ -576,4 +576,43 @@ mod tests {
         );
         assert_render_cache_matches_rebuild(&session);
     }
+
+    fn tables_north_and_south() -> (Session, PrefabInstanceId, Prefab) {
+        let mut session = flat_session(1, 2);
+        let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        session.set_tool(Tool::Place);
+        session.state.choose_prefab(table.clone());
+        let north = session.place_at(Coord::new(1, 2, 1), None).unwrap();
+        session.place_at(Coord::new(1, 1, 1), None).unwrap();
+
+        (session, north, table)
+    }
+
+    #[test]
+    fn a_moved_placement_draws_in_the_order_of_its_new_tile() {
+        let (mut session, north, _) = tables_north_and_south();
+        session.select_instance(Some(north));
+
+        assert_eq!(
+            session.move_selected_instance(Coord::new(1, 1, 1), "move", &[], None),
+            Some(true)
+        );
+
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    fn a_peers_nudge_draws_in_the_order_of_a_clean_build() {
+        let (mut session, _, table) = tables_north_and_south();
+        let id = session.state.active().unwrap();
+        let north = Coord::new(1, 2, 1);
+        let mut north_tile = session.map().unwrap().tile_at(north).unwrap().clone();
+        // its instance comes back new, and must still draw under the south table
+        let nudged = north_tile.iter_mut().find(|prefab| **prefab == table).unwrap();
+        nudged.set_var("pixel_y".into(), Value::Num(-16.0));
+
+        assert!(session.apply_remote_tiles(id, vec![(north, north_tile)]));
+
+        assert_render_cache_matches_rebuild(&session);
+    }
 }

@@ -462,4 +462,8 @@ pub(super) fn assert_render_cache_matches_rebuild(session: &Session) {
     );
 
     assert_same_sprites(&session.instances().unwrap().sprites, &expected.sprites);
+    assert!(
+        session.instances().unwrap().live_sprites().eq(expected.live_sprites()),
+        "drawn in the order of a clean build"
+    );
 }

@@ -1,5 +1,6 @@
 use core::{path::TreePath, types::Identifier, vars};
 use std::{
+    cmp::Reverse,
     collections::{HashMap, HashSet},
     sync::Arc,
 };
@@ -36,9 +37,16 @@ use pages::{OwnerKeys, SpritePage, replace_owner_sprites};
 /// - 0: z level
 /// - 1: plane encoded with `visual::sort_component`
 /// - 2: layer encoded the same way as above
-/// - 3: placement order, counted by level (top row left to right)
+/// - 3: placement order, see `PlacementOrder`
 /// - 4: sprite index within its placement, order goes like this: underlays, self, overlays
-type SpriteKey = (u32, i32, i32, usize, usize);
+type SpriteKey = (u32, i32, i32, PlacementOrder, usize);
+
+/// rows from the top, left to right, then the prefab's index in its tile, it follows where a placement is now
+type PlacementOrder = (Reverse<u32>, u32, usize);
+
+const FIRST_PLACEMENT: PlacementOrder = (Reverse(u32::MAX), 0, 0);
+
+fn placement_order(coord: Coord, prefab_index: usize) -> PlacementOrder { (Reverse(coord.y), coord.x, prefab_index) }
 
 const AREA_PLANE: f32 = f32::INFINITY;
 
@@ -95,8 +103,6 @@ pub struct FrameInstances {
     owner_keys: HashMap<PrefabInstanceId, OwnerKeys>,
     /// only primaries that are not among their owner's sprites, the rest are found through `owner_keys`
     primary_sprites: HashMap<PrefabInstanceId, SpriteInstance>,
-    placement_orders: HashMap<PrefabInstanceId, usize>,
-    next_placement_order: usize,
     placements: HashMap<PrefabInstanceId, CachedPlacement>,
     area_owners_by_coord: HashMap<Coord, Vec<PrefabInstanceId>>,
 }
@@ -116,34 +122,13 @@ impl FrameInstances {
         drop(std::mem::take(&mut self.primary_sprites));
         freed("primary sprites");
         drop(std::mem::take(&mut self.placements));
-        drop(std::mem::take(&mut self.placement_orders));
-        freed("placements and orders");
+        freed("placements");
         drop(std::mem::take(&mut self.area_components));
         drop(std::mem::take(&mut self.area_component_tiles));
         drop(std::mem::take(&mut self.area_owners_by_coord));
         freed("area components");
         drop(self);
         freed("everything else");
-    }
-
-    pub fn reorder_placements(&mut self, ids: &[PrefabInstanceId]) -> bool {
-        let mut orders = ids
-            .iter()
-            .filter_map(|id| self.placement_orders.get(id).copied())
-            .collect::<Vec<_>>();
-
-        if orders.len() != ids.len() {
-            return false;
-        }
-
-        orders.sort_unstable();
-
-        let mut is_changed = false;
-        for (id, order) in ids.iter().zip(orders) {
-            is_changed |= self.placement_orders.insert(*id, order) != Some(order);
-        }
-
-        is_changed
     }
 
     pub fn sprite(&self, owner: PrefabInstanceId) -> Option<&SpriteInstance> {
@@ -392,14 +377,12 @@ pub fn build_with_options(
     let mut keyed_sprites = Vec::new();
     let mut primary_sprites = HashMap::new();
     let mut owner_keys = HashMap::new();
-    let mut placement_orders = HashMap::new();
     let mut placements = HashMap::new();
     let mut area_owners_by_coord = HashMap::<Coord, Vec<PrefabInstanceId>>::new();
     let area = tree.roots().area;
     let map = &document.map;
     let area_components = build_area_components(tree, document);
     let area_component_tiles = index_area_component_tiles(&area_components);
-    let mut order = 0usize;
     let render = RenderContext {
         appearances: options.appearances,
         tree,
@@ -426,10 +409,9 @@ pub fn build_with_options(
                         continue;
                     };
 
-                    order = order.saturating_add(1);
                     let coord = Coord::new(x, y, z);
+                    let order = placement_order(coord, prefab_index);
                     let rendered = render.prefab(owner, prefab, id, coord, order, area_components.get(&coord).copied());
-                    placement_orders.insert(owner, order);
                     placements.insert(
                         owner,
                         CachedPlacement {
@@ -467,8 +449,6 @@ pub fn build_with_options(
         area_components,
         area_component_tiles,
         primary_sprites,
-        placement_orders,
-        next_placement_order: order.saturating_add(1),
         placements,
         area_owners_by_coord,
         owner_keys,
@@ -532,14 +512,6 @@ pub fn update_prefabs_with_options(
         return PrefabUpdate::Unchanged;
     }
 
-    for (owner, old, current) in &changes {
-        if old.is_none() && current.is_some() {
-            let order = instances.next_placement_order;
-            instances.next_placement_order = instances.next_placement_order.saturating_add(1);
-            instances.placement_orders.insert(*owner, order);
-        }
-    }
-
     let map = &document.map;
     let mut topology_coords = HashSet::new();
     let mut dirty_coords = HashSet::new();
@@ -555,6 +527,21 @@ pub fn update_prefabs_with_options(
     }
 
     let mut affected = owners.into_iter().collect::<HashSet<_>>();
+    // a changed tile moves the prefab indices the rest of its placements are ordered by, areas draw on a plane of
+    // their own one to a tile, so theirs never matter
+    for coord in changes.iter().flat_map(|(_, old, current)| {
+        old.map(|old| old.coord)
+            .into_iter()
+            .chain(current.map(|current| current.coord))
+    }) {
+        affected.extend(document.instance_ids_at(coord).iter().copied().filter(|owner| {
+            instances
+                .placements
+                .get(owner)
+                .is_some_and(|placement| !placement.is_area)
+        }));
+    }
+
     for coord in &dirty_coords {
         if let Some(owners) = instances.area_owners_by_coord.get(coord) {
             affected.extend(owners.iter().copied());
@@ -612,14 +599,13 @@ pub fn update_prefabs_with_options(
                 let prefab = instance.prefab();
                 let location = instance.location;
                 let id = tree.id_of(&prefab.path)?;
-                let order = instances.placement_orders.get(&affected_owner).copied()?;
 
                 Some(render.prefab(
                     affected_owner,
                     prefab,
                     id,
                     location.coord,
-                    order,
+                    placement_order(location.coord, location.prefab_index),
                     instances.area_component_at(location.coord),
                 ))
             });
@@ -628,12 +614,6 @@ pub fn update_prefabs_with_options(
         })
         .collect::<Vec<_>>();
     let sprite_update = replace_owner_sprites(instances, &rendered);
-
-    for (owner, _, current) in changes {
-        if current.is_none() {
-            instances.placement_orders.remove(&owner);
-        }
-    }
 
     if sprite_update.is_empty() {
         return PrefabUpdate::Unchanged;
@@ -768,7 +748,7 @@ impl RenderContext<'_> {
     }
 
     fn prefab(
-        &self, owner: PrefabInstanceId, prefab: &Prefab, id: TypeId, coord: Coord, order: usize,
+        &self, owner: PrefabInstanceId, prefab: &Prefab, id: TypeId, coord: Coord, order: PlacementOrder,
         area_owner: Option<PrefabInstanceId>,
     ) -> RenderedPrefab {
         let is_area = self.area.is_some_and(|area| self.tree.is_subtype_of(id, area));
@@ -1656,17 +1636,7 @@ mod tests {
     fn drawn(instances: &FrameInstances) -> Vec<SpriteInstance> { instances.live_sprites().copied().collect() }
 
     pub(super) fn assert_render_data_matches(actual: &FrameInstances, expected: &FrameInstances) {
-        // placements made after the build take later orders than a fresh build gives them, so
-        // equal layers may draw in another order, which assert_pages_hold checks is sorted
-        let mut remaining = drawn(expected);
-        for sprite in actual.live_sprites() {
-            let index = remaining
-                .iter()
-                .position(|expected| expected == sprite)
-                .expect("every sprite must match a clean build");
-            remaining.swap_remove(index);
-        }
-        assert!(remaining.is_empty(), "{} sprites missing", remaining.len());
+        assert_eq!(drawn(actual), drawn(expected), "drawn in the order of a clean build");
         assert_pages_hold(actual);
         assert_eq!(actual.area_components, expected.area_components);
         assert_eq!(actual.area_component_tiles, expected.area_component_tiles);
