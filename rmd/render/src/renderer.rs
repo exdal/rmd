@@ -8,6 +8,7 @@ use vir::{
     AllocatorKind,
     BlendPreset,
     Buffer,
+    BufferCopy,
     BufferImageCopy,
     BufferInfo,
     ClearValue,
@@ -678,7 +679,7 @@ fn upload_frame_buffer(allocator: &mut FrameAllocator, payload: &[u8], name: &st
 }
 
 impl UploadedPreview {
-    fn allocate(device: &mut Device, preview: SpritePreview<'_>) -> Result<Self, GpuError> {
+    fn allocate(device: &mut Device, graph: &mut RenderGraph, preview: SpritePreview<'_>) -> Result<Self, GpuError> {
         let payload = gpu_sprite_range(
             preview.sprites,
             crate::UpdateRange {
@@ -695,20 +696,20 @@ impl UploadedPreview {
             cull.destroy(device);
             return Err(GpuError::SpriteUploadTooLarge);
         };
-        let mut sprites = match device.allocator.allocate_buffer(
-            &BufferInfo::new(size, vk::BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::CpuToGpu)
-                .with_name("block preview sprites"),
-        ) {
+        let sprites = match device
+            .allocator
+            .allocate_buffer(&device_buffer_info(size, "block preview sprites"))
+        {
             Ok(buffer) => buffer,
             Err(error) => {
                 cull.destroy(device);
                 return Err(error.into());
             },
         };
-        if let Err(error) = sprites.write(0, &payload) {
+        if let Err(error) = upload_buffer(device, graph, sprites, &[(0, payload_bytes(&payload))]) {
             device.allocator.deallocate_buffer(sprites);
             cull.destroy(device);
-            return Err(error.into());
+            return Err(error);
         }
         Ok(Self {
             revision: preview.revision,
@@ -2434,14 +2435,22 @@ impl Renderer {
                 .checked_mul(size_of::<GpuSprite>())
                 .ok_or(GpuError::SpriteUploadTooLarge)?;
             let size = u64::try_from(size).map_err(|_| GpuError::SpriteUploadTooLarge)?;
-            let mut buffer = self.device.allocator.allocate_buffer(
-                &BufferInfo::new(size, vk::BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::CpuToGpu)
-                    .with_name("sprites"),
-            )?;
-            if let Err(error) = buffer.write(0, &payload) {
+            let buffer = self
+                .device
+                .allocator
+                .allocate_buffer(&device_buffer_info(size, "sprites"))?;
+            let uploaded = self.stats.measure(RenderSpan::Stall, || {
+                upload_buffer(
+                    &mut self.device,
+                    &mut self.graph,
+                    buffer,
+                    &[(0, payload_bytes(&payload))],
+                )
+            });
+            if let Err(error) = uploaded {
                 self.device.allocator.deallocate_buffer(buffer);
 
-                return Err(error.into());
+                return Err(error);
             }
 
             if let Some(old) = self.sprites.replace(buffer) {
@@ -2449,8 +2458,15 @@ impl Renderer {
             }
 
             self.sprite_capacity = capacity;
-        } else if let Some(buffer) = self.sprites.as_mut() {
-            buffer.write(0, &payload)?;
+        } else if let Some(buffer) = self.sprites {
+            self.stats.measure(RenderSpan::Stall, || {
+                upload_buffer(
+                    &mut self.device,
+                    &mut self.graph,
+                    buffer,
+                    &[(0, payload_bytes(&payload))],
+                )
+            })?;
         }
 
         let sprites = *self.sprites.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
@@ -2527,14 +2543,21 @@ impl Renderer {
                 .checked_mul(size_of::<GpuLightTile>())
                 .and_then(|size| u64::try_from(size).ok())
                 .ok_or(GpuError::SpriteUploadTooLarge)?;
-            let mut buffer = self.device.allocator.allocate_buffer(
-                &BufferInfo::new(size, vk::BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::CpuToGpu)
-                    .with_name("static light tiles"),
-            )?;
-
-            if let Err(error) = buffer.write(0, &payload) {
+            let buffer = self
+                .device
+                .allocator
+                .allocate_buffer(&device_buffer_info(size, "static light tiles"))?;
+            let uploaded = self.stats.measure(RenderSpan::Stall, || {
+                upload_buffer(
+                    &mut self.device,
+                    &mut self.graph,
+                    buffer,
+                    &[(0, payload_bytes(&payload))],
+                )
+            });
+            if let Err(error) = uploaded {
                 self.device.allocator.deallocate_buffer(buffer);
-                return Err(error.into());
+                return Err(error);
             }
 
             if let Some(old) = self.lights.replace(buffer) {
@@ -2543,9 +2566,16 @@ impl Renderer {
 
             self.light_capacity = capacity;
         } else if total > 0
-            && let Some(buffer) = self.lights.as_mut()
+            && let Some(buffer) = self.lights
         {
-            buffer.write(0, &payload)?;
+            self.stats.measure(RenderSpan::Stall, || {
+                upload_buffer(
+                    &mut self.device,
+                    &mut self.graph,
+                    buffer,
+                    &[(0, payload_bytes(&payload))],
+                )
+            })?;
         }
         self.uploaded_lighting = uploaded;
 
@@ -2556,8 +2586,7 @@ impl Renderer {
         let (Some(view), Some(uploaded)) = (frame.map_views.first(), self.uploaded_lighting.first()) else {
             return Ok(false);
         };
-        let (Some(lighting), Some(revision), Some(buffer)) = (view.lighting, uploaded.revision, self.lights.as_mut())
-        else {
+        let (Some(lighting), Some(revision), Some(buffer)) = (view.lighting, uploaded.revision, self.lights) else {
             return Ok(false);
         };
         let Some(updates) = updates_since(lighting.pending_updates, revision, |update| update.previous_revision) else {
@@ -2589,11 +2618,14 @@ impl Renderer {
         if payloads.iter().any(|payload| !payload.is_empty()) {
             self.stats.measure(RenderSpan::Stall, || self.graph.wait())?;
         }
-        for (range, payload) in ranges.iter().zip(&payloads) {
-            if !payload.is_empty() {
-                buffer.write(gpu_light_offset(range.start)?, payload)?;
-            }
-        }
+        let writes = ranges
+            .iter()
+            .zip(&payloads)
+            .map(|(range, payload)| Ok((gpu_light_offset(range.start)?, payload_bytes(payload))))
+            .collect::<Result<Vec<_>, GpuError>>()?;
+        self.stats.measure(RenderSpan::Stall, || {
+            upload_buffer(&mut self.device, &mut self.graph, buffer, &writes)
+        })?;
         self.stats.lighting_upload = Upload::Incremental {
             bytes: payloads.iter().map(|payload| payload_bytes(payload).len() as u64).sum(),
         };
@@ -2689,10 +2721,15 @@ impl Renderer {
                         end: preview.sprites.len(),
                     },
                 )?;
-                uploaded.sprites.write(0, &payload)?;
+                upload_buffer(
+                    &mut self.device,
+                    &mut self.graph,
+                    uploaded.sprites,
+                    &[(0, payload_bytes(&payload))],
+                )?;
                 uploaded.revision = preview.revision;
             } else {
-                let uploaded = UploadedPreview::allocate(&mut self.device, preview)?;
+                let uploaded = UploadedPreview::allocate(&mut self.device, &mut self.graph, preview)?;
                 if let Some(previous) = slot.replace(uploaded) {
                     previous.destroy(&mut self.device);
                 }
@@ -2783,13 +2820,14 @@ impl Renderer {
                 .map(|payload| payload_bytes(payload).len() as u64)
                 .sum(),
         };
-        if let Some(buffer) = self.sprites.as_mut() {
-            for (range, payload) in ranges.iter().zip(&sprite_payloads) {
-                if !payload.is_empty() {
-                    buffer.write(gpu_sprite_offset(range.start)?, payload)?;
-                }
-            }
-        }
+        let writes = ranges
+            .iter()
+            .zip(&sprite_payloads)
+            .map(|(range, payload)| Ok((gpu_sprite_offset(range.start)?, payload_bytes(payload))))
+            .collect::<Result<Vec<_>, GpuError>>()?;
+        self.stats.measure(RenderSpan::Stall, || {
+            upload_buffer(&mut self.device, &mut self.graph, sprites, &writes)
+        })?;
         for range in &ranges {
             self.color_area_outlines(sprites, *range)?;
         }
@@ -3426,6 +3464,67 @@ impl BindlessDescriptorSet {
             .image_info(infos);
         unsafe { vk_device.update_descriptor_sets(std::slice::from_ref(&write), &[]) }
     }
+}
+
+fn device_buffer_info(size: u64, name: &str) -> BufferInfo {
+    BufferInfo::new(
+        size,
+        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+        MemoryLocation::GpuOnly,
+    )
+    .with_name(name)
+}
+
+/// The caller makes sure the GPU no longer reads `target`; this returns once the copy landed.
+fn upload_buffer(
+    device: &mut Device, graph: &mut RenderGraph, target: Buffer, writes: &[(u64, &[u8])],
+) -> Result<(), GpuError> {
+    let total = writes.iter().map(|(_, bytes)| bytes.len() as u64).sum::<u64>();
+    if total == 0 {
+        return Ok(());
+    }
+
+    let mut staging = device
+        .allocator
+        .allocate_buffer(&BufferInfo::staging(total).with_name("buffer upload staging"))?;
+    let result = (|| {
+        let mut regions = Vec::with_capacity(writes.len());
+        let mut src_offset = 0;
+        for (dst_offset, bytes) in writes {
+            staging.write(src_offset, bytes)?;
+            regions.push(BufferCopy {
+                src_offset,
+                dst_offset: *dst_offset,
+                size: bytes.len() as u64,
+            });
+            src_offset += bytes.len() as u64;
+        }
+
+        let mut module = Module::default();
+        let source = module.import_buffer(&staging, Access::HostWrite);
+        let destination = module.import_buffer(&target, Access::None);
+        let copied = module.copy_buffer(source, destination, &regions);
+        let exported = module.export(
+            copied,
+            Access::ComputeRead | Access::VertexRead | Access::FragmentRead,
+            DomainFlag::Graphics,
+        );
+        let program = module.compile(&*graph, exported)?;
+        graph.execute_blocking(
+            &device.context,
+            &program,
+            &mut AllocatorKind::Persistent(&mut device.allocator),
+        )?;
+
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = device.wait_idle();
+    }
+
+    device.allocator.deallocate_buffer(staging);
+    result
 }
 
 fn upload_batch(
