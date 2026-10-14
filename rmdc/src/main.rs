@@ -16,6 +16,7 @@
 
 use core::{
     arena::StrArena,
+    file_path,
     location::{FileId, Location},
     path::TreePath,
     source::SourceMap,
@@ -416,6 +417,7 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
         [map.size.x as i32, map.size.y as i32, map.size.z as i32],
         vm::Limits::default(),
         icons,
+        entry.parent().map(Path::to_path_buf),
     );
     let bake_seconds = bake_started.elapsed().as_secs_f64();
     report_bake_output(&mut bake);
@@ -539,10 +541,10 @@ fn icon_states(tree: &ObjectTree, module: &codegen::Module, roots: &[PathBuf]) -
         .collect::<BTreeSet<_>>();
 
     vm::IconStates::new(names.into_iter().filter_map(|name| {
-        let relative = name.replace('\\', "/");
+        let relative = file_path::forward_slashes(name);
         let path = roots
             .iter()
-            .map(|root| root.join(&relative))
+            .map(|root| root.join(relative.as_ref()))
             .find(|path| path.is_file())?;
         let metadata = IconFile::load_metadata(path).ok()?;
 
@@ -622,6 +624,7 @@ fn evaluate_file_with(path: &Path, selection: EntrySelection) -> Result<Vec<Stri
     let entry = resolve_entry(&tree, &module.index, &selection)?;
     let module = codegen::generate_reachable(&module, &tree, &[entry.proc], &[])?;
     let mut runtime = vm::Runtime::default();
+    runtime.world.root = path.parent().map(Path::to_path_buf);
     let result = if entry.world {
         runtime.run_world(&tree, &module, entry.proc, Vec::new(), vm::Limits::default())
     } else {

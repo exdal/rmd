@@ -22,6 +22,7 @@ pub enum Stage {
     Highlights,
     Light,
     Smooth,
+    Modules,
 }
 
 impl Stage {
@@ -44,6 +45,7 @@ impl Stage {
             Self::Highlights => "Collecting highlights",
             Self::Light => "Collecting lights",
             Self::Smooth => "Baking appearances",
+            Self::Modules => "Loading modules",
         }
     }
 
@@ -78,6 +80,7 @@ impl Stage {
             Self::Highlights => 15,
             Self::Light => 13,
             Self::Smooth => 14,
+            Self::Modules => 17,
         }
     }
 
@@ -99,6 +102,7 @@ impl Stage {
             15 => Self::Highlights,
             13 => Self::Light,
             14 => Self::Smooth,
+            17 => Self::Modules,
             _ => Self::Preprocess,
         }
     }
@@ -188,6 +192,7 @@ mod tests {
             Stage::Connections,
             Stage::Light,
             Stage::Smooth,
+            Stage::Modules,
         ] {
             let progress = Progress::new();
             progress.enter(stage, 0);

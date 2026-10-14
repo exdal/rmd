@@ -4345,6 +4345,7 @@ dependencies = [
  "sema",
  "serde",
  "simd-json",
+ "toml",
 ]
 
 [[package]]

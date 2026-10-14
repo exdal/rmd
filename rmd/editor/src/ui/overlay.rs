@@ -306,7 +306,7 @@ pub(super) fn draw_placement_preview(
     true
 }
 
-fn placement_preview_bounds(
+pub(super) fn placement_preview_bounds(
     camera: &Controller, viewport_min: [f32; 2], coord: Coord, tile_size: u32, preview: PlacementPreview,
 ) -> OverlayRect {
     let tile_size = tile_size.max(1);

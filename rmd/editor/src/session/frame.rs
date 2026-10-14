@@ -7,7 +7,7 @@ use editor::{
 use objtree::{Roots, TypeId};
 use render::{Frame, GuideLine, MapViewFrame, MapViewInteraction, MapViewRect, SpritePreview};
 
-use super::{Session, context_placement_group, report_bake_output};
+use super::{Session, context_placement_group};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeLayer {
@@ -217,12 +217,12 @@ impl Session {
         }
 
         let bake = self.caches.get(&id).and_then(|cache| cache.bake.as_ref());
-        let instances = match (self.state.environment.as_ref(), self.state.document(id)) {
-            (Some(environment), Some(document)) => frame::build_with_options(
+        let instances = match (self.state.environment.as_ref(), self.effective_grid(id)) {
+            (Some(environment), Some(grid)) => frame::build_view_with_options(
                 &environment.tree,
                 &environment.icons,
                 &self.textures,
-                document,
+                grid,
                 FrameRenderOptions {
                     visibility: &self.type_visibility,
                     tile_size: self.options.tile_size,
@@ -266,6 +266,15 @@ impl Session {
             return;
         };
 
+        let sources = self
+            .state
+            .document(id)
+            .map(|document| document.instance_ids_at(coord).to_vec())
+            .unwrap_or_default();
+        if let Some(changed) = self.sync_module_source(id, &sources) {
+            self.settle_modules(id, changed);
+        }
+
         let Some(ordered) = self.placement_group_at(id, coord) else {
             return;
         };
@@ -292,17 +301,15 @@ impl Session {
     }
 
     fn placement_group_at(&self, id: DocumentId, coord: Coord) -> Option<Vec<PrefabInstanceId>> {
-        let document = self.state.document(id)?;
+        let grid = self.effective_grid(id)?;
         let tree = self.tree()?;
 
         Some(
-            document
-                .instance_ids_at(coord)
+            grid.ids_at(coord)
                 .iter()
                 .copied()
                 .filter(|owner| {
-                    document
-                        .prefab_instance(*owner)
+                    grid.prefab_instance(*owner)
                         .is_some_and(|instance| context_placement_group(tree, &instance.prefab().path) == Some(0))
                 })
                 .collect(),
@@ -318,40 +325,10 @@ impl Session {
     }
 
     pub(super) fn update_document_instances(&mut self, id: DocumentId, affected: &[PrefabInstanceId]) {
-        let Self {
-            state, caches, baker, ..
-        } = self;
-        let cache = caches.entry(id).or_default();
-        let bake_update = match (cache.bake.as_mut(), state.environment.as_ref(), state.document(id)) {
-            (Some(bake), Some(environment), Some(document)) => {
-                // a level the bake doesn't have yet is baked whole by its extension
-                let levels = editor::bake::levels(bake);
-                let (baked, later) = affected.iter().copied().partition::<Vec<_>, _>(|instance| {
-                    document
-                        .prefab_instance(*instance)
-                        .is_none_or(|instance| instance.location.coord.z <= levels)
-                });
-                let mut update = editor::bake::update(bake, environment, document, &baked);
-                report_bake_output(bake);
-                update.appearances.extend(later);
-
-                update
-            },
-            _ => {
-                if baker.extending(id) {
-                    cache.unbaked.extend_from_slice(affected);
-                } else {
-                    baker.invalidate(id);
-                }
-
-                editor::bake::BakeUpdate {
-                    appearances: affected.to_vec(),
-                    lighting: None,
-                }
-            },
-        };
-
-        self.apply_bake_update(id, bake_update);
+        let changed = self
+            .sync_module_source(id, affected)
+            .unwrap_or_else(|| affected.to_vec());
+        self.settle_edited_modules(id, affected, changed);
     }
 }
 

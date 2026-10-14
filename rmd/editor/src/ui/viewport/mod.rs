@@ -47,6 +47,7 @@ use crate::{
 
 mod edit;
 mod hover;
+pub(super) mod modules;
 mod navigation;
 mod overlays;
 mod presence;
@@ -263,6 +264,10 @@ impl UiState {
         let mut coop = CoopPresence::default();
 
         for (&id, view) in &mut self.map_views {
+            if session.state.active() != Some(id) {
+                view.gestures.module_popup = None;
+            }
+
             if view.gestures.rectangle_gesture.is_some_and(|gesture| {
                 session.state.active() != Some(id)
                     || session.tool() != Tool::BlockSelect
@@ -564,10 +569,23 @@ impl UiState {
 
         sync_gestures(session, frame.gestures, tool);
         let conflict_regions = session.conflict_regions(frame.id, Some(session.z()));
+        let is_gizmo_hot = tool == Tool::Select
+            && self.gizmo.is_handle_hovered(
+                ui,
+                session,
+                frame.camera,
+                self.inspector.transform_mode(),
+                GizmoMapView {
+                    min: frame.layout.viewport.min,
+                    max: frame.layout.viewport.max,
+                    hovered: frame.is_hovered && !ui.io().want_text_input(),
+                },
+            );
+        let is_module_capturing = modules::draw(ui, session, frame, is_escape, is_gizmo_hot);
         let capture = MouseCapture {
             is_conflict_controls: conflict_controls_contain(ui, session, frame, &conflict_regions),
             is_banner: banner_contains(ui, session, frame),
-            is_blame_popup: is_blame_capturing,
+            is_blame_popup: is_blame_capturing || is_module_capturing,
             is_escape,
         };
         let gizmo_view = GizmoMapView {
@@ -576,6 +594,8 @@ impl UiState {
             hovered: frame.is_hovered && !capture.is_any() && !ui.io().want_text_input(),
         };
         let is_gizmo_capturing = self.draw_tool_gizmo(ui, session, settings, frame, tool, gizmo_view);
+        session.set_module_bake_deferred(self.gizmo.is_interacting());
+
         if tool == Tool::BlockSelect
             && gizmo_view.hovered
             && !frame.gestures.is_busy()
@@ -587,13 +607,20 @@ impl UiState {
         let clicks = Clicks::read(ui);
         if clicks.is_right_clicked
             && !is_blame_capturing
+            && !is_module_capturing
             && let Some(coord) = frame.coord
         {
             apply_right_click(ui, session, frame, node_hit, coord);
         }
 
         if session.tool() == Tool::Node {
-            drive_node_tool(session, frame, node_hit, clicks, is_blame_capturing);
+            drive_node_tool(
+                session,
+                frame,
+                node_hit,
+                clicks,
+                is_blame_capturing || is_module_capturing,
+            );
         }
 
         self.end_strokes(session, clicks, is_gizmo_capturing);

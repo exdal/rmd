@@ -101,6 +101,7 @@ pub struct Feedback {
     pub open_popups: HashSet<PopupId>,
     /// A successful selection pick asked the mouse popup to open on this frame.
     pub mouse_popup_requested: bool,
+    pub modular_preview: bool,
     pub interacted: bool,
 }
 
@@ -153,6 +154,7 @@ pub struct Frame {
     /// Whether the frame kept its heap writes, and so whether the map has to be re-derived.
     pub committed: bool,
     pub rebake: Rebake,
+    pub modular_preview: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,6 +175,7 @@ pub struct Panel {
     next_dock: Option<u32>,
     next_size: Option<[f32; 2]>,
     rebake: Rebake,
+    modular_preview: Option<bool>,
 }
 
 impl Panel {
@@ -183,12 +186,15 @@ impl Panel {
         self.next_dock = None;
         self.next_size = None;
         self.rebake = Rebake::default();
+        self.modular_preview = None;
         self.dockspace = dockspace;
         self.feedback = feedback;
         self.active = true;
     }
 
-    pub(crate) fn end_frame(&mut self) -> (Vec<Command>, Rebake) {
+    pub(crate) fn has_modular_preview_request(&self) -> bool { self.modular_preview.is_some() }
+
+    pub(crate) fn end_frame(&mut self) -> (Vec<Command>, Rebake, Option<bool>) {
         self.active = false;
         self.feedback = Feedback::default();
         // A profile that returns early leaves its windows and nodes open. Close them here so a
@@ -202,7 +208,11 @@ impl Panel {
         }
         self.seen.clear();
 
-        (std::mem::take(&mut self.commands), std::mem::take(&mut self.rebake))
+        (
+            std::mem::take(&mut self.commands),
+            std::mem::take(&mut self.rebake),
+            self.modular_preview.take(),
+        )
     }
 
     /// Widget identity is the path of enclosing labels, so the same label under two nodes stays two
@@ -255,6 +265,12 @@ impl Evaluator<'_> {
                     if value >= 0.0 { value as u32 } else { 0 }
                 };
                 self.runtime.ui.rebake.request(mask(0), mask(1));
+
+                Ok(GenericValue::Null)
+            },
+            Intrinsic::DemirModularPreview => Ok(self.runtime.ui.feedback.modular_preview.into()),
+            Intrinsic::DemirSetModularPreview => {
+                self.runtime.ui.modular_preview = Some(arg(0).truthy());
 
                 Ok(GenericValue::Null)
             },

@@ -1,4 +1,5 @@
 use std::{
+    path::PathBuf,
     sync::{
         Arc,
         mpsc::{Receiver, TryRecvError, channel},
@@ -10,6 +11,8 @@ use editor::{
     Environment,
     bake::{Bake, BakeUpdate},
     document::DocumentId,
+    grid::Grid,
+    maploader::preview::ModulePreviewState,
     progress::Progress,
 };
 
@@ -24,8 +27,9 @@ pub struct Request {
 
 pub enum Job {
     Build {
-        atoms: Vec<vm::bake::Atom>,
-        size: [i32; 3],
+        source: Grid,
+        path: Option<PathBuf>,
+        modules: Box<ModulePreviewState>,
     },
     // grows a finished bake by the levels added since, without baking the rest again
     Extend {
@@ -36,8 +40,13 @@ pub enum Job {
 }
 
 pub enum Baked {
-    Build(Option<Box<Bake>>),
+    Build(Option<Box<BakedMap>>),
     Extend(Box<Bake>, BakeUpdate),
+}
+
+pub struct BakedMap {
+    pub bake: Bake,
+    pub modules: ModulePreviewState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,9 +117,10 @@ impl Baker {
 
         thread::spawn(move || {
             let baked = match job {
-                Job::Build { atoms, size } => {
-                    Baked::Build(editor::bake::build_atoms(&environment, atoms, size, &worker).map(Box::new))
-                },
+                Job::Build { source, path, modules } => Baked::Build(
+                    editor::bake::build_map(&environment, source, path, *modules, &worker)
+                        .map(|(bake, modules)| Box::new(BakedMap { bake, modules })),
+                ),
                 Job::Extend {
                     mut bake,
                     level_count,

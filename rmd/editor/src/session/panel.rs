@@ -37,13 +37,21 @@ impl Session {
                 }
 
                 if frame.committed {
+                    if let Some(is_enabled) = frame.modular_preview {
+                        self.set_modules_enabled(is_enabled);
+                    }
+
+                    let mut settled = vec![id];
                     for other in self.state.document_ids() {
-                        if other != id {
-                            self.replay_ui(other, &replayed);
+                        if other != id && self.replay_ui(other, &replayed) {
+                            settled.push(other);
                         }
                     }
 
                     self.ui_feedback = Some(replayed);
+                    for document in settled {
+                        self.settle_modules(document, Vec::new());
+                    }
                 }
 
                 frame
@@ -65,12 +73,12 @@ impl Session {
         frame
     }
 
-    pub(super) fn replay_ui(&mut self, id: DocumentId, feedback: &editor::bake::UiFeedback) {
+    pub(super) fn replay_ui(&mut self, id: DocumentId, feedback: &editor::bake::UiFeedback) -> bool {
         let Some(environment) = self.state.environment.clone() else {
-            return;
+            return false;
         };
         let Some(program) = environment.bake_program.as_ref() else {
-            return;
+            return false;
         };
         let target = self
             .state
@@ -78,20 +86,24 @@ impl Session {
             .and_then(|document| document.selected_instance())
             .map(PrefabInstanceId::get);
         let Some(cache) = self.caches.get_mut(&id) else {
-            return;
+            return false;
         };
 
         // a bake still on the baker thread is caught up by poll_bake instead
         let Some(bake) = cache.bake.as_mut() else {
-            return;
+            return false;
         };
 
         let drawn = bake.ui(&program.tree, &program.module, target, 0, feedback.clone());
         report_bake_output(bake);
 
-        if let Ok(frame) = drawn {
-            cache.pending_rebake.merge(frame.rebake);
-        }
+        let Ok(frame) = drawn else {
+            return false;
+        };
+
+        cache.pending_rebake.merge(frame.rebake);
+
+        frame.committed
     }
 
     pub(super) fn flush_pending_rebake(&mut self, id: DocumentId) {
@@ -148,6 +160,7 @@ impl Session {
                 lighting: update.lighting,
             },
         );
+        self.settle_modules(id, Vec::new());
     }
 }
 

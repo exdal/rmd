@@ -20,7 +20,7 @@ pub enum FaultKind {
     Null(String),
     InvalidOperation(String),
     Trap(String),
-    Thrown,
+    Thrown(String),
 }
 
 impl std::fmt::Display for FaultKind {
@@ -37,7 +37,8 @@ impl std::fmt::Display for FaultKind {
             Self::Null(access) => write!(formatter, "cannot {access}"),
             Self::InvalidOperation(what) => write!(formatter, "invalid operation: {what}"),
             Self::Trap(reason) => write!(formatter, "trap: {reason}"),
-            Self::Thrown => formatter.write_str("uncaught exception"),
+            Self::Thrown(what) if what.is_empty() => formatter.write_str("uncaught exception"),
+            Self::Thrown(what) => write!(formatter, "uncaught exception: {what}"),
         }
     }
 }

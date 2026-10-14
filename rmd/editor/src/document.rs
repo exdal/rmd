@@ -1,6 +1,6 @@
 use core::types::{Identifier, Value};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     io::Write,
     mem,
     path::PathBuf,
@@ -76,6 +76,8 @@ pub struct MapDocument {
     generation: u64,
     journal: Option<Journal>,
     read_only: bool,
+    preview_covered: HashSet<Coord>,
+    preview_exempt: HashSet<PrefabInstanceId>,
 }
 
 #[derive(Debug, Default)]
@@ -222,6 +224,8 @@ impl MapDocument {
             generation: 0,
             journal: None,
             read_only: false,
+            preview_covered: HashSet::new(),
+            preview_exempt: HashSet::new(),
         }
     }
 
@@ -565,7 +569,24 @@ impl MapDocument {
 
     pub fn focus_on_any_level(&self) -> Option<&AreaFocus> { self.focus.as_ref() }
 
-    pub fn allows_edit_at(&self, coord: Coord) -> bool { !self.read_only && self.is_within_focus(coord) }
+    pub fn allows_edit_at(&self, coord: Coord) -> bool {
+        !self.read_only && self.is_within_focus(coord) && !self.preview_covered.contains(&coord)
+    }
+
+    pub fn allows_edit_instance(&self, id: PrefabInstanceId) -> bool {
+        let Some(location) = self.instance_location(id) else {
+            return false;
+        };
+
+        !self.read_only
+            && self.is_within_focus(location.coord)
+            && (self.preview_exempt.contains(&id) || !self.preview_covered.contains(&location.coord))
+    }
+
+    pub fn set_preview_covered(&mut self, covered: HashSet<Coord>, exempt: HashSet<PrefabInstanceId>) {
+        self.preview_covered = covered;
+        self.preview_exempt = exempt;
+    }
 
     pub fn is_within_focus(&self, coord: Coord) -> bool { self.focus.as_ref().is_none_or(|focus| focus.allows(coord)) }
 

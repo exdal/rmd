@@ -219,6 +219,51 @@ inspector and the rotation gizmo then offer those directions and write `dir`. `d
 direction or a list of them. The most specific registered subtype wins, and `/directional/<dir>`
 subtypes still take priority.
 
+### Modular maps
+
+Some codebases load other `.dmm` files at runtime from a root atom, like tgstation's
+`/obj/modular_map_root`. A profile describes those files instead of the editor knowing the codebase.
+Call `demir_modular_root(type)` from `New()` to mark `type` and its descendants as modular roots,
+then define `process_modular_root(list/roots)`. It runs once per pass with every root of that pass.
+A pass covers all roots during the first bake, or only the inserted roots after an edit. Read shared
+data there, like a config file, work out what each root places, and submit everything with
+`demir_place_modular(list/placements)`. The call may repeat and its entries accumulate. The runtime
+applies them after the task returns and discards heap writes made during the pass.
+
+The editor shows module previews over the map and blocks editing under them. A profile's `ui()`
+toggles them with `demir_modular_preview()` and `demir_set_modular_preview(enabled)`. The request
+applies only on a frame the editor keeps, one the user interacted with. A profile without a
+checkbox leaves previews on.
+
+Each entry is an associative list, and its keys decide its kind:
+
+- `list("root" = atom, "maps" = list(...), "anchor" = type, "skip" = type or list of types)` loads
+  the codebase-relative `.dmm` paths in `maps`, in load order, at `root`. `anchor` is a type whose
+  module tile lands on the root's tile. Without it, module tile (1, 1, 1) lands on the root. Module
+  prefabs of exactly a `skip` type leave the destination untouched.
+- `list("root" = atom, "error" = text)` shows `text` as the root's error in the variant popup. Use
+  it for content problems, like a config without the root's room. It is not a profile diagnostic.
+
+Inside `process_modular_root`, `root` must be one of the atoms the task received, and a root can
+have only one entry per pass. A root without an entry places nothing. Any invalid entry is a runtime
+error at the `demir_place_modular` call. That fails the task, so every root of the pass shows the
+fault.
+
+Any other hook can call `demir_place_modular` too, for an atom placed on the map that is not a
+modular root. That includes `New()`, `prepare`, `light`, `connections`, `highlights`, `bake`, `ui`
+and the procedures they call. A later entry for the same atom replaces the earlier one, and the
+entry lasts until that atom is removed or inserted again. The runtime keeps a hook's placements only
+when it keeps the hook's heap writes. `New`, `prepare` and `light` keep them, a `ui` frame keeps
+them when the user interacted with it, since a placement counts as a write, and `connections`,
+`highlights` and `bake` discard them. A root that is not placed on the map is a runtime error.
+
+`demir_toml_decode(text)` parses TOML like `json_decode` parses JSON. Tables become associative
+lists, arrays become lists, booleans become 1 or 0, and dates become text. Invalid TOML throws an
+`/exception` whose `name` holds the parse error, so a task can `catch` it and submit an `"error"`
+entry for the roots that use that file. `file2text`, `fexists`, `flist` and `file2list` read files
+under the codebase directory, which is the directory of the `.dme`. Paths that are absolute or climb
+above that directory are blocked.
+
 The prelude is the complete DM interface. It defines every hook, helper, flag, lighting field, and
 UI procedure. The editor embeds the example integrations so they can be forced without changing a
 codebase. The files remain usable as templates for codebase-owned profiles:
@@ -281,9 +326,10 @@ A UI frame allows 4,096 commands and 16 nested windows or nodes. Labels can cont
 Text values can contain 1,024 characters. One atom can declare 16 highlights. One highlight can
 contain 16,384 tiles and a 64-character label.
 
-The VM blocks file access, native libraries, networking, sleep, timers, and interactive input. A
-bake is a snapshot taken before deferred work runs, so a `spawn` evaluates its delay and skips its
-body. `catch` can handle DM throws. It cannot consume sandbox or resource faults.
+The VM blocks native libraries, networking, sleep, timers, and interactive input. A bake is a
+snapshot taken before deferred work runs, so a `spawn` evaluates its delay and skips its body. File
+reads reach only files under the codebase directory. `catch` can handle DM throws and the
+`/exception` that `demir_toml_decode` throws. It cannot consume sandbox or resource faults.
 
 Random values use a seed based on the target atom's type and coordinates. Repeating a bake for the
 same atom gives the same random sequence. World time and tick usage are deterministic.

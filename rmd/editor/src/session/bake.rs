@@ -6,8 +6,8 @@ use editor::{
 use render::FrameUpdate;
 use vm::profile::ProfileHook;
 
-use super::{Session, always_highlighted};
-use crate::baker::{self, Baked, Job};
+use super::{ModuleBake, Session, always_highlighted};
+use crate::baker::{self, Baked, BakedMap, Job};
 
 // updates the renderer may not have drawn yet, so a frame that missed some can still catch up
 pub(super) const MAX_PENDING_UPDATES: usize = 8;
@@ -133,7 +133,10 @@ impl Session {
         self.baker.invalidate(id);
         let cache = self.caches.entry(id).or_default();
         cache.bake = None;
+        cache.module_bake = ModuleBake::Live;
         cache.unbaked.clear();
+        cache.modules.reset();
+        self.sync_module_guard(id);
         self.collect_bake_diagnostics();
         self.rebuild_instances(id);
 
@@ -162,19 +165,22 @@ impl Session {
             }
 
             let level_count = document.map.size().z;
-            let behind = self
-                .caches
-                .get_mut(&id)
-                .and_then(|cache| cache.bake.take_if(|bake| editor::bake::levels(bake) < level_count));
+            let cache = self.caches.entry(id).or_default();
+            let behind = cache.bake.take_if(|bake| editor::bake::levels(bake) < level_count);
             let job = match behind {
                 Some(bake) => Job::Extend {
-                    atoms: editor::bake::atoms_from_level(&environment, document, editor::bake::levels(&bake) + 1),
+                    atoms: editor::bake::atoms_from_view(
+                        &environment,
+                        cache.modules.view(&document.map),
+                        editor::bake::levels(&bake) + 1,
+                    ),
                     bake: Box::new(bake),
                     level_count,
                 },
                 None => Job::Build {
-                    atoms: editor::bake::atoms(&environment, document),
-                    size: editor::bake::size(document),
+                    source: document.map.clone(),
+                    path: document.path.clone(),
+                    modules: Box::new(cache.modules.fresh()),
                 },
             };
 
@@ -230,7 +236,7 @@ impl Session {
                 self.rebake(id);
             } else if open {
                 match baked {
-                    Baked::Build(bake) => self.land_bake(id, bake.map(|bake| *bake)),
+                    Baked::Build(built) => self.land_bake(id, built.map(|built| *built)),
                     Baked::Extend(bake, update) => self.land_extension(id, *bake, update),
                 }
             }
@@ -241,7 +247,6 @@ impl Session {
 
     fn land_extension(&mut self, id: DocumentId, mut bake: editor::bake::Bake, mut update: BakeUpdate) {
         report_bake_output(&mut bake);
-        let levels = editor::bake::levels(&bake);
         let cache = self.caches.entry(id).or_default();
         let unbaked = std::mem::take(&mut cache.unbaked);
         cache.bake = Some(bake);
@@ -252,22 +257,20 @@ impl Session {
             cache.bake.as_mut(),
         ) {
             // levels added since it left get their own extension
-            let (replayed, later) = unbaked.into_iter().partition::<Vec<_>, _>(|instance| {
-                document
-                    .prefab_instance(*instance)
-                    .is_none_or(|instance| instance.location.coord.z <= levels)
-            });
-            let edits = editor::bake::update(bake, environment, document, &replayed);
+            let edits =
+                editor::bake::update_known_levels(bake, environment, cache.modules.view(&document.map), &unbaked);
+            update.merge(edits);
+            update.merge(editor::bake::settle_modules(
+                bake,
+                environment,
+                &document.map,
+                document.path.as_deref(),
+                &mut cache.modules,
+            ));
             report_bake_output(bake);
-            update.appearances.extend(edits.appearances);
-            update.appearances.extend(later);
-            update.appearances.sort_unstable();
-            update.appearances.dedup();
-            update.lighting = match (update.lighting, edits.lighting) {
-                (Some(left), Some(right)) => Some(left.start.min(right.start)..left.end.max(right.end)),
-                (left, right) => left.or(right),
-            };
         }
+
+        self.sync_module_guard(id);
 
         if let Some(feedback) = self.ui_feedback.clone() {
             self.replay_ui(id, &feedback);
@@ -276,6 +279,7 @@ impl Session {
         self.collect_bake_diagnostics();
         self.apply_bake_update(id, update);
         self.resize_lighting(id);
+        self.settle_modules(id, Vec::new());
         self.flush_pending_rebake(id);
         self.bake_new_levels(id);
     }
@@ -303,13 +307,28 @@ impl Session {
         cache.lighting_updates.clear();
     }
 
-    fn land_bake(&mut self, id: DocumentId, mut bake: Option<editor::bake::Bake>) {
-        if let Some(bake) = bake.as_mut() {
-            report_bake_output(bake);
+    fn land_bake(&mut self, id: DocumentId, built: Option<BakedMap>) {
+        let Self { state, caches, .. } = self;
+        let cache = caches.entry(id).or_default();
+        cache.module_bake = ModuleBake::Live;
+        if let Some(BakedMap { mut bake, modules }) = built {
+            report_bake_output(&mut bake);
+            let is_enabled = cache.modules.enabled;
+            cache.modules = modules;
+            // previews switched while the bake ran
+            if let (Some(environment), Some(document)) = (state.environment.as_ref(), state.document(id)) {
+                let changed = cache.modules.set_enabled(&document.map, is_enabled);
+                editor::bake::update_known_levels(&mut bake, environment, cache.modules.view(&document.map), &changed);
+                report_bake_output(&mut bake);
+            }
+
+            cache.bake = Some(bake);
+        } else {
+            cache.bake = None;
         }
 
+        self.sync_module_guard(id);
         let cache = self.caches.entry(id).or_default();
-        cache.bake = bake;
         cache.pending_rebake = editor::bake::UiRebake::default();
         // a bake starts from the profile's own defaults, so it has to be told what the
         // panel already asked for before it is first shown
@@ -321,6 +340,7 @@ impl Session {
         cache.always_highlights = always_highlighted(cache.bake.as_ref());
         self.collect_bake_diagnostics();
         self.rebuild_instances(id);
+        self.settle_modules(id, Vec::new());
         self.flush_pending_rebake(id);
     }
 
@@ -365,12 +385,12 @@ impl Session {
         cache.always_highlights = always_highlighted(cache.bake.as_ref());
         let affected = bake_update.appearances;
         let update = match (state.environment.as_ref(), state.document(id)) {
-            (Some(environment), Some(document)) => frame::update_prefabs_with_options(
+            (Some(environment), Some(document)) => frame::update_view_prefabs_with_options(
                 &mut cache.instances,
                 &environment.tree,
                 &environment.icons,
                 textures,
-                document,
+                cache.modules.view(&document.map),
                 &affected,
                 FrameRenderOptions {
                     visibility: type_visibility,

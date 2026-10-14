@@ -28,7 +28,10 @@ use crate::{
         HIGHLIGHT_EDGE_WEST,
         HIGHLIGHT_SELECTED,
         HighlightTile,
+        ModuleRoot,
+        PendingBake,
         ProfileError,
+        Stage,
         has_profile,
         host_reads,
         profile_catalog,
@@ -192,176 +195,6 @@ fn profile_definition_resolves_the_complete_hook_abi() {
 }
 
 #[test]
-fn modular_loader_uses_the_selected_profiles_declaration() {
-    let (tree, module) = compile(fixture!(
-        "programs/modular_loader_uses_the_selected_profiles_declaration.dm"
-    ));
-    let base = tree.id_of(&TreePath::parse("/datum/demir")).expect("base profile");
-    let variable_type = tree
-        .resolved_var_type(base, &"modular_loader".into())
-        .expect("modular loader type");
-    assert_eq!(variable_type.single(), Some(VarTypeKind::Text));
-    assert!(variable_type.nullable);
-    assert_eq!(Runtime::default().modular_loader(), None);
-
-    for (path, expected) in [
-        ("/datum/demir/loader", Some("tgstation")),
-        ("/datum/demir/loader/inherited", Some("tgstation")),
-        ("/datum/demir/loader/disabled", None),
-        ("/datum/demir/loader/custom", Some("custom-loader")),
-        ("/datum/demir/loader/empty", Some("")),
-        ("/datum/demir/no_loader", None),
-        ("/datum/demir/loader/constructor_enabled", Some("tgstation")),
-        ("/datum/demir/loader/constructor_disabled", None),
-    ] {
-        let profile = tree.id_of(&TreePath::parse(path)).expect("selected profile");
-        let bake = Bake::new_with_profile(
-            &tree,
-            &module,
-            profile,
-            Vec::new(),
-            [1, 1, 1],
-            Limits::default(),
-            IconStates::default(),
-        );
-
-        assert_eq!(bake.diagnostics.count(), 0, "{path}: {:?}", bake.diagnostics);
-        assert_eq!(bake.modular_loader(), expected, "{path}");
-        assert_eq!(bake.runtime.modular_loader(), expected, "{path}");
-    }
-}
-
-#[test]
-fn modular_loader_captures_constructor_overrides_and_ignores_hooks() {
-    let (tree, module) = compile(fixture!(
-        "programs/modular_loader_captures_constructor_overrides_and_ignores_hooks.dm"
-    ));
-    let limits = Limits::default();
-    let mut bake = Bake::new(&tree, &module, Vec::new(), [1, 1, 1], limits, IconStates::default());
-    let profile = bake.runtime.profile.expect("profile instance");
-    let name = Identifier::from("modular_loader");
-
-    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
-    assert_eq!(bake.modular_loader(), Some("constructor"));
-    assert_eq!(bake.runtime.modular_loader(), Some("constructor"));
-    assert_eq!(
-        Evaluator::new(&mut bake.runtime, &tree, &module, limits, None)
-            .read_field(GenericValue::Object(profile), &name)
-            .expect("constructor value"),
-        GenericValue::Text("constructor".into())
-    );
-
-    bake.runtime
-        .run(
-            &tree,
-            &module,
-            hook(&tree, &module.index, ProfileHook::Prepare),
-            Some(profile),
-            None,
-            vec![GenericValue::Null],
-            limits,
-        )
-        .expect("hook writes should commit");
-
-    assert_eq!(
-        Evaluator::new(&mut bake.runtime, &tree, &module, limits, None)
-            .read_field(GenericValue::Object(profile), &name)
-            .expect("hook value"),
-        GenericValue::Null
-    );
-    assert_eq!(bake.runtime.modular_loader(), Some("constructor"));
-    assert_eq!(bake.modular_loader(), Some("constructor"));
-}
-
-#[test]
-fn modular_loader_rejects_invalid_declarations() {
-    let (tree, module) = compile(fixture!("programs/modular_loader_rejects_invalid_declarations.dm"));
-    for path in [
-        "/datum/demir/invalid",
-        "/datum/demir/invalid/list",
-        "/datum/demir/invalid/nonconstant",
-    ] {
-        let profile = tree.id_of(&TreePath::parse(path)).expect("invalid profile");
-        let bake = Bake::new_with_profile(
-            &tree,
-            &module,
-            profile,
-            Vec::new(),
-            [1, 1, 1],
-            Limits::default(),
-            IconStates::default(),
-        );
-
-        assert_eq!(bake.diagnostics.count(), 1, "{path}");
-        let fault = &bake.diagnostics.entries[0].fault;
-        assert_eq!(
-            fault.kind,
-            FaultKind::Unsupported("profile modular_loader must be a constant string or null".into()),
-            "{path}"
-        );
-        let location = tree
-            .var_inherited(profile, &"modular_loader".into())
-            .expect("invalid declaration")
-            .location;
-        assert_eq!(
-            (fault.location.file, fault.location.begin, fault.location.end),
-            (location.file, location.begin, location.end),
-            "{path}"
-        );
-        assert_eq!(bake.modular_loader(), None, "{path}");
-        assert_eq!(bake.runtime.modular_loader(), None, "{path}");
-        assert!(bake.runtime.output().is_empty(), "{path}: New() must not run");
-    }
-}
-
-#[test]
-fn modular_loader_is_unavailable_when_profile_construction_fails() {
-    let (tree, module) = compile(fixture!("programs/modular_loader_rejects_invalid_declarations.dm"));
-    let profile = tree
-        .id_of(&TreePath::parse("/datum/demir/invalid/constructor_failure"))
-        .expect("failing constructor profile");
-    let bake = Bake::new_with_profile(
-        &tree,
-        &module,
-        profile,
-        Vec::new(),
-        [1, 1, 1],
-        Limits::default(),
-        IconStates::default(),
-    );
-
-    assert_eq!(bake.diagnostics.count(), 1);
-    assert_eq!(bake.diagnostics.entries[0].fault.kind, FaultKind::Thrown);
-    assert_eq!(bake.modular_loader(), None);
-    assert_eq!(bake.runtime.modular_loader(), None);
-}
-
-#[test]
-fn modular_loader_rejects_invalid_constructor_overrides() {
-    let (tree, module) = compile(fixture!("programs/modular_loader_rejects_invalid_declarations.dm"));
-    let profile = tree
-        .id_of(&TreePath::parse("/datum/demir/invalid/constructor_invalid"))
-        .expect("invalid constructor profile");
-    let bake = Bake::new_with_profile(
-        &tree,
-        &module,
-        profile,
-        Vec::new(),
-        [1, 1, 1],
-        Limits::default(),
-        IconStates::default(),
-    );
-
-    assert_eq!(bake.diagnostics.count(), 1);
-    assert_eq!(
-        bake.diagnostics.entries[0].fault.kind,
-        FaultKind::Unsupported("profile modular_loader must be a string or null".into())
-    );
-    assert_eq!(bake.modular_loader(), None);
-    assert_eq!(bake.runtime.modular_loader(), None);
-}
-
-#[test]
 fn an_explicit_default_is_not_inherited_by_its_variants() {
     let (tree, _) = compile(fixture!(
         "programs/an_explicit_default_is_not_inherited_by_its_variants.dm"
@@ -432,6 +265,7 @@ fn a_profile_hook_chains_to_its_parent() {
         [1, 1, 1],
         Limits::default(),
         IconStates::default(),
+        None,
     );
 
     assert_eq!(baked_state(&bake, 1), Some("base-debug"));
@@ -824,6 +658,126 @@ fn imgui_procs_are_blocked_outside_the_ui_hook() {
 }
 
 #[test]
+fn the_modular_preview_request_is_kept_only_with_an_interacted_frame() {
+    let (tree, module) = compile(fixture!(
+        "programs/demir_modular_preview_is_read_and_requested_from_ui.dm"
+    ));
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        Vec::new(),
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    let clicked = |is_shown: bool, is_interacted: bool| Feedback {
+        values: HashMap::from([(String::from("Panel/Flip"), UiValue::Bool(true))]),
+        modular_preview: is_shown,
+        interacted: is_interacted,
+        ..Default::default()
+    };
+
+    let quiet = bake
+        .ui(
+            &tree,
+            &module,
+            None,
+            0,
+            Feedback {
+                modular_preview: true,
+                ..Default::default()
+            },
+        )
+        .expect("a frame without a request draws");
+    assert_eq!(quiet.modular_preview, None);
+    assert!(!quiet.committed);
+
+    let untouched = bake
+        .ui(&tree, &module, None, 0, clicked(true, false))
+        .expect("an untouched frame draws");
+    assert_eq!(untouched.modular_preview, None, "a rolled-back frame requests nothing");
+    assert!(!untouched.committed);
+
+    let hidden = bake
+        .ui(&tree, &module, None, 0, clicked(true, true))
+        .expect("the interaction frame draws");
+    assert!(hidden.committed, "the request alone counts as a write");
+    assert_eq!(hidden.modular_preview, Some(false), "the last call in the frame wins");
+
+    let after = bake
+        .ui(
+            &tree,
+            &module,
+            None,
+            0,
+            Feedback {
+                interacted: true,
+                ..Default::default()
+            },
+        )
+        .expect("a frame draws");
+    assert_eq!(after.modular_preview, None, "the request does not carry over");
+}
+
+#[test]
+fn the_modular_preview_read_returns_the_editor_state() {
+    let (tree, module) = compile(fixture!(
+        "programs/demir_modular_preview_is_read_and_requested_from_ui.dm"
+    ));
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        Vec::new(),
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    for (is_shown, requested) in [(true, false), (false, true)] {
+        let frame = bake
+            .ui(
+                &tree,
+                &module,
+                None,
+                0,
+                Feedback {
+                    values: HashMap::from([(String::from("Panel/Flip"), UiValue::Bool(true))]),
+                    modular_preview: is_shown,
+                    interacted: true,
+                    ..Default::default()
+                },
+            )
+            .expect("the frame draws");
+        assert_eq!(frame.modular_preview, Some(requested));
+    }
+}
+
+#[test]
+fn the_modular_preview_procs_are_blocked_outside_the_ui_hook() {
+    for name in [
+        fixture!("programs/demir_modular_preview_outside_ui_is_blocked.dm"),
+        fixture!("programs/demir_set_modular_preview_outside_ui_is_blocked.dm"),
+    ] {
+        let (tree, module) = compile(name);
+        let fault = Runtime::default()
+            .run(
+                &tree,
+                &module,
+                hook(&tree, &module.index, ProfileHook::Bake),
+                None,
+                None,
+                Vec::new(),
+                Limits::default(),
+            )
+            .expect_err("the procs only run inside ui()");
+        assert!(
+            matches!(&fault.kind, FaultKind::Blocked(message) if message.contains("outside ui()")),
+            "{fault:?}",
+        );
+    }
+}
+
+#[test]
 fn profile_ui_state_survives_on_the_profile_and_a_committed_frame_rebakes() {
     let (tree, module) = compile(fixture!(
         "programs/profile_ui_state_survives_on_the_profile_and_a_committed_frame_rebakes.dm"
@@ -1205,6 +1159,7 @@ fn node_groups_reject_invalid_arguments() {
             [1, 1, 1],
             Limits::default(),
             IconStates::default(),
+            None,
         );
 
         assert_eq!(bake.diagnostics.count(), 1, "{path}");
@@ -3526,4 +3481,556 @@ fn alists_inherit_list_intrinsics_through_proc_dispatch() {
 #[test]
 fn a_runtime_value_stays_three_words() {
     assert!(size_of::<GenericValue>() <= 24, "{} bytes", size_of::<GenericValue>());
+}
+
+fn root_atom(tree: &ObjectTree, instance: u64, path: &str, x: i32, key: &str) -> Atom {
+    Atom {
+        instance,
+        ty: tree.id_of(&TreePath::parse(path)).expect("fixture type"),
+        position: Position::new(x, 1, 1),
+        vars: vec![("key".into(), Value::Text(key.into()))],
+    }
+}
+
+fn profile_at(tree: &ObjectTree, path: &str) -> TypeId { tree.id_of(&TreePath::parse(path)).expect("profile type") }
+
+fn pending<'a>(
+    tree: &'a ObjectTree, module: &'a codegen::Module, profile: TypeId, atoms: Vec<Atom>,
+) -> PendingBake<'a> {
+    let size = [atoms.len() as i32 + 8, 1, 1];
+
+    Bake::initialize_with_profile_and_progress(
+        tree,
+        module,
+        profile,
+        atoms,
+        size,
+        Limits::default(),
+        IconStates::default(),
+        None,
+        |_, _, _| {},
+    )
+}
+
+fn module_files<'a>(modules: impl Iterator<Item = (u64, &'a ModuleRoot)>) -> Vec<(u64, Vec<&'a str>)> {
+    let mut files = modules
+        .map(|(id, root)| (id, root.files.iter().map(String::as_str).collect()))
+        .collect::<Vec<_>>();
+    files.sort();
+
+    files
+}
+
+fn profile_var(bake: &mut Bake, tree: &ObjectTree, module: &codegen::Module, name: &str) -> GenericValue {
+    let profile = bake.runtime.profile.expect("profile instance");
+
+    Evaluator::new(&mut bake.runtime, tree, module, Limits::default(), None)
+        .read_field(GenericValue::Object(profile), &name.into())
+        .expect("profile var")
+}
+
+#[test]
+fn process_modular_root_runs_once_per_pass_over_the_roots_only() {
+    let (tree, module) = compile(fixture!("programs/process_modular_root_runs_once_per_pass.dm"));
+    let atoms = vec![
+        root_atom(&tree, 1, "/obj/root", 1, "a"),
+        root_atom(&tree, 2, "/obj/root/child", 2, "b"),
+        root_atom(&tree, 3, "/obj/plain", 3, "c"),
+    ];
+
+    let pending = pending(&tree, &module, profile_at(&tree, "/datum/demir/test"), atoms);
+    assert_eq!(
+        module_files(pending.modules()),
+        [(1, vec!["a:2:1"]), (2, vec!["b:2:1"])]
+    );
+    assert!(pending.module_fault(1).is_none());
+
+    let mut bake = pending.finish_with_progress(|_, _, _| {});
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    assert_eq!(bake.modules().count(), 2);
+    assert_eq!(profile_var(&mut bake, &tree, &module, "task_calls"), 0.into());
+}
+
+#[test]
+fn one_batched_call_and_several_calls_place_the_same_roots() {
+    let (tree, module) = compile(fixture!("programs/process_modular_root_runs_once_per_pass.dm"));
+    let atoms = vec![
+        root_atom(&tree, 1, "/obj/root", 1, "a"),
+        root_atom(&tree, 2, "/obj/root", 2, "b"),
+    ];
+
+    let batched = pending(&tree, &module, profile_at(&tree, "/datum/demir/batched"), atoms);
+    assert_eq!(module_files(batched.modules()), [(1, vec!["a:2"]), (2, vec!["b:2"])]);
+}
+
+#[test]
+fn a_profile_without_a_process_modular_root_places_nothing() {
+    let (tree, module) = compile(fixture!("programs/process_modular_root_runs_once_per_pass.dm"));
+    let atoms = vec![root_atom(&tree, 1, "/obj/root", 1, "a")];
+
+    let bake =
+        pending(&tree, &module, profile_at(&tree, "/datum/demir/no_task"), atoms).finish_with_progress(|_, _, _| {});
+    assert_eq!(bake.modules().count(), 0);
+    assert_eq!(bake.module_errors().count(), 0);
+    assert_eq!(bake.module_faults().count(), 0);
+    assert_eq!(bake.diagnostics.count(), 0);
+}
+
+#[test]
+fn a_process_modular_root_fault_reaches_every_root_of_its_pass() {
+    let (tree, module) = compile(fixture!("programs/process_modular_root_runs_once_per_pass.dm"));
+    let atoms = vec![
+        root_atom(&tree, 1, "/obj/root", 1, "a"),
+        root_atom(&tree, 2, "/obj/root", 2, "b"),
+    ];
+
+    let mut bake =
+        pending(&tree, &module, profile_at(&tree, "/datum/demir/crashing"), atoms).finish_with_progress(|_, _, _| {});
+    assert_eq!(bake.modules().count(), 0, "entries of a failed task are dropped");
+    for id in [1, 2] {
+        assert_eq!(
+            bake.module_fault(id).map(|fault| fault.kind.clone()),
+            Some(FaultKind::InvalidOperation("task failure".into())),
+            "{id}"
+        );
+    }
+    assert_eq!(bake.diagnostics.count(), 1);
+
+    bake.update(&tree, &module, Vec::new(), &[1]);
+    assert!(bake.module_fault(1).is_none());
+    assert!(bake.module_fault(2).is_some());
+    assert_eq!(bake.diagnostics.count(), 1);
+
+    bake.update(&tree, &module, Vec::new(), &[2]);
+    assert_eq!(bake.diagnostics.count(), 0);
+}
+
+#[test]
+fn placement_entries_become_module_roots_and_errors() {
+    let (tree, module) = compile(fixture!("programs/placement_entries_become_module_roots.dm"));
+    let keys = ["none", "empty", "full", "single_skip", "error"];
+    let atoms = keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| root_atom(&tree, index as u64 + 1, "/obj/root", index as i32 + 1, key))
+        .collect();
+    let bake = pending(&tree, &module, profile_type(&tree).expect("default profile"), atoms)
+        .finish_with_progress(|_, _, _| {});
+    let id = |key: &str| keys.iter().position(|current| *current == key).expect("key") as u64 + 1;
+    let ty = |path: &str| tree.id_of(&TreePath::parse(path)).expect("type");
+    let modules = bake.modules().collect::<HashMap<_, _>>();
+
+    assert!(!modules.contains_key(&id("none")));
+    assert!(bake.module_fault(id("none")).is_none());
+    assert_eq!(
+        modules.get(&id("empty")),
+        Some(&&ModuleRoot {
+            files: Vec::new(),
+            anchor: None,
+            skip: Vec::new(),
+        })
+    );
+    assert_eq!(
+        modules.get(&id("full")),
+        Some(&&ModuleRoot {
+            files: vec!["a.dmm".into(), "b.dmm".into(), "a.dmm".into()],
+            anchor: Some(ty("/obj/connector")),
+            skip: vec![ty("/turf/hole"), ty("/area/hole")],
+        })
+    );
+    assert_eq!(
+        modules.get(&id("single_skip")).map(|root| root.skip.clone()),
+        Some(vec![ty("/turf/hole")])
+    );
+
+    assert!(!modules.contains_key(&id("error")));
+    assert_eq!(
+        bake.module_errors().collect::<Vec<_>>(),
+        [(id("error"), "no room in config")]
+    );
+    assert_eq!(bake.module_faults().count(), 0);
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+}
+
+#[test]
+fn invalid_placement_entries_fault_the_task_for_every_root() {
+    let (tree, module) = compile(fixture!("programs/placement_entries_are_validated.dm"));
+    let profile = profile_type(&tree).expect("default profile");
+
+    for (key, message) in [
+        ("foreign", "demir_place_modular() root is not an atom of this pass"),
+        ("no_root", "demir_place_modular() entry needs a \"root\" atom"),
+        (
+            "duplicate_in_call",
+            "demir_place_modular() root already has an entry in this pass",
+        ),
+        (
+            "duplicate_across_calls",
+            "demir_place_modular() root already has an entry in this pass",
+        ),
+        (
+            "bad_entry",
+            "each demir_place_modular() entry must be an associative list",
+        ),
+        ("bad_maps", "demir_place_modular() maps must be a list of text"),
+        ("bad_map_entry", "each demir_place_modular() map must be text"),
+        ("bad_anchor", "demir_place_modular() anchor must be a type"),
+        (
+            "undefined_anchor",
+            "demir_place_modular() anchor must be a defined type",
+        ),
+        (
+            "bad_skip",
+            "demir_place_modular() skip must be a type or a list of types",
+        ),
+        ("bad_error", "demir_place_modular() error must be text"),
+        (
+            "unknown_kind",
+            "demir_place_modular() entry needs \"maps\" or \"error\"",
+        ),
+    ] {
+        let atoms = vec![
+            root_atom(&tree, 1, "/obj/root", 1, key),
+            root_atom(&tree, 2, "/obj/root", 2, key),
+            root_atom(&tree, 3, "/obj/plain", 3, key),
+        ];
+        let bake = pending(&tree, &module, profile, atoms).finish_with_progress(|_, _, _| {});
+
+        assert_eq!(bake.modules().count(), 0, "{key}");
+        assert_eq!(bake.module_errors().count(), 0, "{key}");
+        assert_eq!(bake.diagnostics.count(), 1, "{key}: {:?}", bake.diagnostics);
+        for id in [1, 2] {
+            assert_eq!(
+                bake.module_fault(id).map(|fault| fault.kind.clone()),
+                Some(FaultKind::InvalidOperation(message.into())),
+                "{key} {id}"
+            );
+        }
+    }
+}
+
+fn place_from_hook(profile: &str) -> (ObjectTree, codegen::Module, TypeId) {
+    let (tree, module) = compile(fixture!("programs/demir_place_from_any_hook.dm"));
+    let profile = profile_at(&tree, profile);
+
+    (tree, module, profile)
+}
+
+#[test]
+fn demir_place_from_new_is_kept_before_the_first_pass() {
+    let (tree, module, profile) = place_from_hook("/datum/demir/from_new");
+    let atoms = vec![root_atom(&tree, 1, "/obj/thing", 1, "a")];
+
+    let pending = pending(&tree, &module, profile, atoms);
+    assert_eq!(module_files(pending.modules()), [(1, vec!["new.dmm"])]);
+
+    let bake = pending.finish_with_progress(|_, _, _| {});
+    assert_eq!(module_files(bake.modules()), [(1, vec!["new.dmm"])]);
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+}
+
+#[test]
+fn demir_place_from_prepare_is_kept_after_the_bake() {
+    let (tree, module, profile) = place_from_hook("/datum/demir/from_prepare");
+    let atoms = vec![root_atom(&tree, 1, "/obj/thing", 1, "a")];
+
+    let pending = pending(&tree, &module, profile, atoms);
+    assert_eq!(pending.modules().count(), 0);
+
+    let mut bake = pending.finish_with_progress(|_, _, _| {});
+    assert_eq!(module_files(bake.modules()), [(1, vec!["prepare.dmm"])]);
+
+    bake.update(&tree, &module, vec![root_atom(&tree, 2, "/obj/thing", 2, "b")], &[1]);
+    assert_eq!(module_files(bake.modules()), [(2, vec!["prepare.dmm"])]);
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+}
+
+#[test]
+fn demir_place_from_bake_and_highlights_is_discarded() {
+    for name in ["from_bake", "from_highlights"] {
+        let (tree, module, profile) = place_from_hook(&format!("/datum/demir/{name}"));
+        let atoms = vec![root_atom(&tree, 1, "/obj/thing", 1, "a")];
+
+        let bake = pending(&tree, &module, profile, atoms).finish_with_progress(|_, _, _| {});
+        assert_eq!(bake.modules().count(), 0, "{name}");
+        assert_eq!(bake.module_errors().count(), 0, "{name}");
+        assert_eq!(bake.diagnostics.count(), 0, "{name}: {:?}", bake.diagnostics);
+    }
+}
+
+#[test]
+fn a_later_demir_place_replaces_an_earlier_one_for_the_same_atom() {
+    let (tree, module, profile) = place_from_hook("/datum/demir/replacing");
+    let atoms = vec![root_atom(&tree, 1, "/obj/thing", 1, "a")];
+
+    let pending = pending(&tree, &module, profile, atoms);
+    assert_eq!(pending.modules().count(), 0, "the error entry replaced the maps");
+    assert_eq!(pending.module_errors().collect::<Vec<_>>(), [(1, "second")]);
+
+    let bake = pending.finish_with_progress(|_, _, _| {});
+    assert_eq!(module_files(bake.modules()), [(1, vec!["third.dmm"])]);
+    assert_eq!(bake.module_errors().count(), 0);
+}
+
+#[test]
+fn demir_place_on_an_atom_that_is_not_placed_faults() {
+    let (tree, module, profile) = place_from_hook("/datum/demir/unplaced");
+    let atoms = vec![root_atom(&tree, 1, "/obj/thing", 1, "a")];
+
+    let bake = pending(&tree, &module, profile, atoms).finish_with_progress(|_, _, _| {});
+    assert_eq!(bake.modules().count(), 0);
+    assert_eq!(bake.diagnostics.count(), 1, "{:?}", bake.diagnostics);
+    assert_eq!(
+        bake.diagnostics.entries[0].fault.kind,
+        FaultKind::InvalidOperation("demir_place_modular() root must be an atom placed on the map".into())
+    );
+}
+
+#[test]
+fn demir_place_from_ui_is_kept_only_on_a_committed_frame() {
+    let (tree, module, profile) = place_from_hook("/datum/demir/from_ui");
+    let feedback = |is_interaction: bool| Feedback {
+        clicks: HashSet::from([String::from("Panel/Place")]),
+        interacted: is_interaction,
+        ..Default::default()
+    };
+    let atoms = || vec![root_atom(&tree, 1, "/obj/thing", 1, "a")];
+
+    let mut bake = pending(&tree, &module, profile, atoms()).finish_with_progress(|_, _, _| {});
+    let frame = bake
+        .ui(&tree, &module, Some(1), 0, feedback(false))
+        .expect("idle frame");
+    assert!(!frame.committed);
+    assert_eq!(bake.modules().count(), 0);
+
+    let frame = bake
+        .ui(&tree, &module, Some(1), 0, feedback(true))
+        .expect("committed frame");
+    assert!(frame.committed);
+    assert_eq!(module_files(bake.modules()), [(1, vec!["ui.dmm"])]);
+
+    let mut bake = pending(&tree, &module, profile, atoms()).finish_with_progress(|_, _, _| {});
+    bake.ui(&tree, &module, Some(1), 0, feedback(true)).expect("frame");
+    bake.update(&tree, &module, Vec::new(), &[1]);
+    assert_eq!(bake.modules().count(), 0, "removing the atom drops its entry");
+}
+
+#[test]
+fn demir_modular_root_outside_new_faults() {
+    let (tree, module) = compile(fixture!("programs/demir_modular_root_outside_new_faults.dm"));
+    let atoms = vec![root_atom(&tree, 1, "/obj/root", 1, "a")];
+    let bake = pending(&tree, &module, profile_type(&tree).expect("default profile"), atoms)
+        .finish_with_progress(|_, _, _| {});
+
+    assert_eq!(bake.diagnostics.count(), 1, "{:?}", bake.diagnostics);
+    assert!(matches!(
+        bake.diagnostics.entries[0].fault.kind,
+        FaultKind::Blocked(ref message) if message.contains("outside a profile's New()")
+    ));
+}
+
+#[test]
+fn a_pending_bake_runs_a_second_module_pass_for_inserted_roots_only() {
+    let (tree, module) = compile(fixture!("programs/process_modular_root_runs_once_per_pass.dm"));
+    let atoms = vec![
+        root_atom(&tree, 1, "/obj/root", 1, "a"),
+        root_atom(&tree, 2, "/obj/root", 2, "b"),
+    ];
+    let mut pending = pending(&tree, &module, profile_at(&tree, "/datum/demir/test"), atoms);
+
+    pending.replace_atoms(
+        vec![
+            root_atom(&tree, 4, "/obj/root", 4, "c"),
+            root_atom(&tree, 5, "/obj/plain", 5, "p"),
+        ],
+        &[],
+        |_, _, _| {},
+    );
+    assert_eq!(
+        module_files(pending.modules()),
+        [(1, vec!["a:2:1"]), (2, vec!["b:2:1"]), (4, vec!["c:1:1"])]
+    );
+
+    pending.replace_atoms(Vec::new(), &[1], |_, _, _| {});
+    assert_eq!(
+        module_files(pending.modules()),
+        [(2, vec!["b:2:1"]), (4, vec!["c:1:1"])]
+    );
+
+    pending.replace_atoms(vec![root_atom(&tree, 4, "/obj/root", 4, "d")], &[], |_, _, _| {});
+    assert_eq!(
+        module_files(pending.modules()),
+        [(2, vec!["b:2:1"]), (4, vec!["d:1:1"])]
+    );
+}
+
+#[test]
+fn update_runs_module_passes_for_inserted_roots_and_drops_removed_ones() {
+    let (tree, module) = compile(fixture!("programs/process_modular_root_runs_once_per_pass.dm"));
+    let atoms = vec![
+        root_atom(&tree, 1, "/obj/root", 1, "a"),
+        root_atom(&tree, 2, "/obj/root", 2, "b"),
+    ];
+    let mut bake =
+        pending(&tree, &module, profile_at(&tree, "/datum/demir/test"), atoms).finish_with_progress(|_, _, _| {});
+
+    bake.update(
+        &tree,
+        &module,
+        vec![
+            root_atom(&tree, 3, "/obj/root", 3, "c"),
+            root_atom(&tree, 4, "/obj/plain", 4, "p"),
+        ],
+        &[2],
+    );
+    assert_eq!(module_files(bake.modules()), [(1, vec!["a:2:1"]), (3, vec!["c:1:1"])]);
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+}
+
+#[test]
+fn demir_toml_decode_converts_to_dm_values() {
+    let source = fixture!("programs/demir_toml_decode_converts_to_dm_values.dm");
+
+    assert_eq!(run(source, "scalars").display(), "x|1|0|3|0.5",);
+    assert_eq!(run(source, "nested").display(), "3|2|b.dmm");
+
+    let (tree, module) = compile(source);
+    let fault = Runtime::default()
+        .run(
+            &tree,
+            &module,
+            proc(&tree, &module.index, "invalid"),
+            None,
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
+        .expect_err("uncaught invalid TOML should fault");
+    assert!(
+        matches!(&fault.kind, FaultKind::Thrown(message) if !message.is_empty()),
+        "{:?}",
+        fault.kind
+    );
+    assert_eq!(run(source, "caught").display(), "caught: 1|1");
+}
+
+#[test]
+fn file_reads_cannot_leave_the_codebase_root() {
+    let (tree, module) = compile(fixture!("programs/filesystem_reads_stay_inside_the_root.dm"));
+    let root = std::env::temp_dir().join(format!("rmd-sandbox-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("sub")).expect("temp dir");
+    std::fs::write(root.join("tips.txt"), "inside").expect("fixture file");
+    std::fs::write(root.join("sub/inner.txt"), "inner").expect("fixture file");
+
+    let mut runtime = Runtime::default();
+    runtime.world.root = Some(root.clone());
+    let mut call = |name: &str| {
+        runtime.run(
+            &tree,
+            &module,
+            proc(&tree, &module.index, name),
+            None,
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
+    };
+
+    assert_eq!(call("inside").expect("inside").display(), "inside");
+    assert_eq!(call("dotted").expect("dotted").display(), "inside");
+    assert_eq!(call("backslash").expect("backslash").display(), "inner");
+    for name in ["escaping", "deep_escaping", "absolute"] {
+        let fault = call(name).expect_err(name);
+        assert_eq!(fault.kind, FaultKind::Blocked("filesystem".into()), "{name}");
+    }
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn modules_are_inserted_before_atom_hooks() {
+    let (tree, module) = compile(fixture!("programs/modules_are_inserted_before_atom_hooks.dm"));
+    let atom = |instance, path, x| Atom {
+        instance,
+        ty: tree.id_of(&TreePath::parse(path)).unwrap(),
+        position: Position::new(x, 1, 1),
+        vars: Vec::new(),
+    };
+    let source = vec![
+        atom(1, "/turf/staged_floor", 1),
+        atom(2, "/turf/staged_floor", 2),
+        atom(3, "/obj/staged_root", 2),
+        atom(4, "/obj/staged_kept", 1),
+        atom(5, "/area/staged_source", 1),
+        atom(6, "/area/staged_source", 2),
+    ];
+    let mut progress = Vec::new();
+    let mut pending = Bake::initialize_with_profile_and_progress(
+        &tree,
+        &module,
+        profile_type(&tree).unwrap(),
+        source,
+        [2, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+        None,
+        |stage, done, total| progress.push((stage, done, total)),
+    );
+    assert_eq!(module_files(pending.modules()), [(3, vec!["staged.dmm"])]);
+    pending.replace_atoms(
+        vec![
+            atom(7, "/turf/staged_wall", 2),
+            atom(8, "/obj/staged_module", 2),
+            atom(9, "/area/staged_module", 2),
+        ],
+        &[2, 3, 6],
+        |stage, done, total| progress.push((stage, done, total)),
+    );
+    assert!(
+        progress
+            .iter()
+            .all(|(stage, ..)| matches!(stage, Stage::Instantiate | Stage::Initialize))
+    );
+    assert_eq!(pending.modules().count(), 0);
+    let mut bake = pending.finish_with_progress(|stage, done, total| progress.push((stage, done, total)));
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    assert_eq!(bake.modules().count(), 0);
+    assert_eq!(
+        bake.take_output(),
+        [
+            "constructor",
+            "prepare:/turf/staged_floor",
+            "prepare:/obj/staged_kept",
+            "prepare:/area/staged_source",
+            "prepare:/turf/staged_wall",
+            "prepare:/obj/staged_module",
+            "prepare:/area/staged_module",
+        ]
+    );
+    assert_eq!(baked_state(&bake, 4), Some("1-1-constructor:prepared-1"));
+    for id in [2, 3, 6] {
+        assert!(bake.object(id).is_none());
+        assert!(!bake.appearances.contains_key(&id));
+    }
+    assert_eq!(bake.runtime.world.turf_at(Position::new(2, 1, 1)), bake.object(7));
+    assert_eq!(
+        bake.runtime.world.area_of(&bake.runtime.heap, bake.object(8).unwrap()),
+        bake.object(9)
+    );
+    let profile = bake.runtime.heap.object(bake.runtime.profile.unwrap()).unwrap();
+    assert_eq!(
+        profile.vars.get(&"original_turf".into()),
+        Some(&GenericValue::Object(bake.object(1).unwrap()))
+    );
+    for stage in [Stage::Initialize, Stage::Prepare, Stage::Light, Stage::Smooth] {
+        assert_eq!(
+            progress
+                .iter()
+                .filter(|(current, done, _)| *current == stage && *done == 0)
+                .count(),
+            1,
+            "{stage:?}"
+        );
+    }
+    assert_eq!(progress.last(), Some(&(Stage::Smooth, 6, 6)));
 }

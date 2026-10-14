@@ -26,6 +26,7 @@ impl DmUi {
             open_popups: self.feedback.open_popups.clone(),
             clicks: std::mem::take(&mut self.clicks),
             mouse_popup_requested: std::mem::take(&mut self.mouse_popup_requested),
+            modular_preview: session.modules_enabled(),
             interacted: std::mem::take(&mut self.pending),
         };
 

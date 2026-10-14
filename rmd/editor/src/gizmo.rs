@@ -219,6 +219,23 @@ impl GizmoState {
         self.drag.is_some() || self.direction.is_some() || self.block_drag.is_some()
     }
 
+    pub(crate) fn is_handle_hovered(
+        &self, ui: &Ui, session: &Session, camera: &Controller, mode: TransformMode, map_view: GizmoMapView,
+    ) -> bool {
+        if self.is_interacting() {
+            return true;
+        }
+
+        let Some(target) = session.gizmo_transform() else {
+            return false;
+        };
+        let origin = gizmo_origin(camera, map_view.min, target.sprite);
+
+        map_view.hovered
+            && transform_values(target, mode).is_some()
+            && handle_at(ui.io().mouse_pos(), origin, map_view.min, map_view.max, dpi(ui)).is_some()
+    }
+
     pub(crate) fn cancel(&mut self) {
         self.drag = None;
         self.direction = None;

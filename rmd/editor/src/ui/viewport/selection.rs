@@ -3,6 +3,7 @@ use dmm::Coord;
 use editor::{
     conflict::{Region, Side},
     document::{DocumentId, Selection},
+    maploader::preview::ModuleRootKey,
     tool::{SelectionMask, SelectionPlacement, SelectionRotation, Tool},
 };
 
@@ -25,6 +26,7 @@ use crate::{
 
 #[derive(Debug, Default)]
 pub(in crate::ui) struct ViewGestures {
+    pub(in crate::ui) module_popup: Option<(ModuleRootKey, Coord)>,
     pub(super) block_selection_anchor: Option<Coord>,
     pub(super) rectangle_gesture: Option<RectangleGesture>,
     pub(super) block_placement: Option<PendingBlockPlacement>,
@@ -34,6 +36,7 @@ pub(in crate::ui) struct ViewGestures {
 impl ViewGestures {
     pub(in crate::ui) fn cancel(&mut self, session: &mut Session, id: DocumentId) {
         restore_rectangle_gesture(session, id, &mut self.rectangle_gesture);
+        self.module_popup = None;
         self.block_selection_anchor = None;
         self.block_placement = None;
         self.fill_anchor = None;

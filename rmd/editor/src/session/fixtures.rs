@@ -102,6 +102,26 @@ impl Session {
 
     pub(super) fn revision(&self) -> u64 { self.active_cache().revision }
 
+    pub(crate) fn is_module_bake_deferred(&self) -> bool {
+        matches!(self.active_cache().module_bake, super::ModuleBake::Deferred { .. })
+    }
+
+    pub(crate) fn baked_preview_positions(&self) -> Vec<(u64, Option<vm::world::Position>)> {
+        let id = self.state.active().expect("a document is open");
+        let grid = self.effective_grid(id).expect("a document is open");
+        let bake = self.active_cache().bake.as_ref();
+        let size = grid.size();
+        let mut positions = (1..=size.x)
+            .flat_map(|x| (1..=size.y).flat_map(move |y| (1..=size.z).map(move |z| dmm::Coord::new(x, y, z))))
+            .flat_map(|coord| grid.ids_at(coord).to_vec())
+            .filter(|id| id.get() >= editor::maploader::preview::PREVIEW_ID_START)
+            .map(|id| (id.get(), bake.and_then(|bake| bake.position(id.get()))))
+            .collect::<Vec<_>>();
+        positions.sort_unstable_by_key(|(id, _)| *id);
+
+        positions
+    }
+
     pub(super) fn frame_update(&self) -> Option<FrameUpdate> { self.active_cache().frame_updates.last().cloned() }
 }
 
@@ -486,14 +506,18 @@ pub(super) fn settle_bake(session: &mut Session) {
     }
 }
 
+pub(crate) fn module_viewport_session() -> Result<(impl Sized, Session), Box<dyn std::error::Error>> {
+    super::modules::tests::viewport_session()
+}
+
 pub(super) fn assert_render_cache_matches_rebuild(session: &Session) {
     let environment = session.state.environment.as_ref().unwrap();
-    let document = session.state.active_document().unwrap();
-    let expected = editor::frame::build_with_options(
+    let document_id = session.state.active().unwrap();
+    let expected = editor::frame::build_view_with_options(
         &environment.tree,
         &environment.icons,
         &session.textures,
-        document,
+        session.effective_grid(document_id).unwrap(),
         editor::frame::FrameRenderOptions {
             visibility: &session.type_visibility,
             tile_size: session.options.tile_size,

@@ -5,6 +5,7 @@ pub mod eval;
 
 use core::{
     arena::StrArena,
+    file_path,
     location::{FileId, Location},
     source::SourceMap,
 };
@@ -768,7 +769,9 @@ impl<'a> Preprocessor<'a> {
         let token_location = raw.location;
 
         let directory = match token {
-            Token::StringLiteral(text) | Token::RawStringLiteral(text) => Some(text.replace('\\', "/")),
+            Token::StringLiteral(text) | Token::RawStringLiteral(text) => {
+                Some(file_path::forward_slashes(text).into_owned())
+            },
             Token::Dot => Some(".".to_string()),
             _ => None,
         };
@@ -981,7 +984,7 @@ impl<'a> Preprocessor<'a> {
 
         let is_defined = |name: &str| self.defines.is_defined(name);
         let base = self.include_stack.last().map_or(Path::new(""), |s| s.dir.as_path());
-        let file_exists = |path: &str| base.join(path.replace('\\', "/")).is_file();
+        let file_exists = |path: &str| base.join(file_path::forward_slashes(path).as_ref()).is_file();
 
         let (value, complaints) = eval::evaluate(
             &tokens,
@@ -1503,11 +1506,7 @@ impl<'a> Preprocessor<'a> {
             .include_stack
             .last()
             .map_or(Path::new(""), |state| state.dir.as_path());
-        if raw.contains('\\') {
-            return base.join(raw.replace('\\', "/"));
-        }
-
-        base.join(raw)
+        base.join(file_path::forward_slashes(raw).as_ref())
     }
 
     fn include_file(&mut self, path: &Path, location: Location) {

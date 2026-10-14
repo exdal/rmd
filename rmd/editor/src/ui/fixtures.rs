@@ -18,7 +18,7 @@ use super::{
     menu::MenuActions,
     overlay_padding,
     recent_button_size,
-    viewport::MapViewDraw,
+    viewport::{MapViewDraw, modules::controls_layout as module_controls_layout},
 };
 use crate::{session::Session, settings::Settings};
 
@@ -149,6 +149,7 @@ pub(super) struct RectangleUiHarness {
     pub(super) settings: Settings,
     pub(super) view: MapViewState,
     pub(super) id: DocumentId,
+    pub(super) module_buttons: Option<[[f32; 2]; 3]>,
     pub(super) conflict_button: Option<[f32; 2]>,
     pub(super) focus_other_window: bool,
     pub(super) is_modal_open: bool,
@@ -195,6 +196,7 @@ impl RectangleUiHarness {
             settings: Settings::default(),
             view,
             id,
+            module_buttons: None,
             conflict_button: None,
             focus_other_window: false,
             is_modal_open: false,
@@ -248,6 +250,34 @@ impl RectangleUiHarness {
             },
         );
 
+        self.module_buttons = self.view.gestures.module_popup.as_ref().map(|(key, coord)| {
+            let min = [self.view.rect.x as f32, self.view.rect.y as f32];
+            let max = [
+                min[0] + self.view.rect.width as f32,
+                min[1] + self.view.rect.height as f32,
+            ];
+            let controls = OverlayRect {
+                min: [min[0], min[1] + ui.frame_height() + 2.0 * overlay_padding(ui)],
+                max: [max[0], max[1] - recent_button_size(ui) - 2.0 * overlay_padding(ui)],
+            };
+            let (position, width, _) = module_controls_layout(
+                ui,
+                &self.view.camera,
+                *coord,
+                self.session.options.tile_size,
+                min,
+                controls,
+                !key.ancestry.is_empty(),
+            );
+            let button = ui.frame_height();
+            let spacing = ui.clone_style().item_spacing()[0];
+
+            [
+                [position[0] + 30.0, position[1] + button / 2.0],
+                [position[0] + width - 1.5 * button - spacing, position[1] + button / 2.0],
+                [position[0] + width - button / 2.0, position[1] + button / 2.0],
+            ]
+        });
         self.conflict_button = None;
         if let Some(region) = self.session.conflict_regions(self.id, Some(self.session.z())).first() {
             let min = [self.view.rect.x as f32, self.view.rect.y as f32];

@@ -1,3 +1,4 @@
+use core::file_path;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -11,16 +12,15 @@ pub mod heap;
 mod intrinsic;
 pub mod json;
 mod lighting;
-pub mod maploader;
 pub mod matrix;
 pub mod profile;
+mod toml_value;
 pub mod ui;
 pub mod value;
 pub mod world;
 
 pub use error::{Fault, FaultKey, FaultKind, StackFrame, proc_name};
 pub use eval::Runtime;
-pub use maploader::MapLoader;
 pub use prelude::Intrinsic;
 pub use value::{AppearanceDelta, AppearanceLighting, GenericValue};
 
@@ -80,7 +80,7 @@ impl IconStates {
 }
 
 /// BYOND resolves resource paths case-insensitively and accepts either slash.
-fn icon_key(path: &str) -> String { path.replace('\\', "/").to_ascii_lowercase() }
+fn icon_key(path: &str) -> String { file_path::forward_slashes(path).to_ascii_lowercase() }
 
 #[derive(Debug, Clone)]
 pub struct Diagnostic {

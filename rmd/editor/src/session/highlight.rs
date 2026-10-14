@@ -66,8 +66,9 @@ impl Session {
 
         if let Some(hovered) = hovered {
             sources.extend(
-                document
-                    .instance_ids_at(hovered)
+                self.effective_grid(id)
+                    .unwrap_or_else(|| (&document.map).into())
+                    .ids_at(hovered)
                     .iter()
                     .map(|owner| (*owner, editor::bake::HIGHLIGHT_HOVERED)),
             );

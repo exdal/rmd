@@ -366,6 +366,50 @@
 /datum/demir/tgstation/highlights(atom/target)
 	return target.demir_highlights()
 
+/datum/demir/tgstation/process_modular_root(list/roots)
+	var/list/configs = list()
+	var/list/placements = list()
+	for(var/obj/modular_map_root/root as anything in roots)
+		if(!root.config_file || !root.key)
+			continue
+
+		var/path = root.config_file
+		if(!(path in configs))
+			configs[path] = read_module_config(path)
+
+		var/list/config = configs[path]
+		if(istext(config))
+			placements += list(list("root" = root, "error" = config))
+			continue
+
+		var/list/rooms = config["rooms"]
+		var/list/room = rooms && rooms[root.key]
+		if(!room)
+			placements += list(list("root" = root, "error" = "no room [root.key] in [path]"))
+			continue
+
+		var/list/files = list()
+		for(var/file in room["modules"])
+			files += config["directory"] + file
+
+		placements += list(list(
+			"root" = root,
+			"maps" = files,
+			"anchor" = /obj/modular_map_connector,
+			"skip" = list(/turf/template_noop, /area/template_noop),
+		))
+	demir_place_modular(placements)
+
+/datum/demir/tgstation/proc/read_module_config(path)
+	var/text = file2text(path)
+	if(!text)
+		return "cannot read [path]"
+
+	try
+		return demir_toml_decode(text)
+	catch(var/exception/error)
+		return "invalid [path]: [error.name]"
+
 // The DISP_DIR_* rule is inline in the pipe's Initialize().
 /datum/demir/tgstation/proc/register_disposal_node_orientations()
 	for(var/type_path in typesof(/obj/structure/disposalpipe))
@@ -400,6 +444,8 @@
 		..()
 		if(!GLOB)
 			GLOB = new /datum/controller/global_vars/demir_preview
+
+		demir_modular_root(/obj/modular_map_root)
 
 		// A group is a type and everything under it, so the /visible atmos pipes join
 		// DEMIR_GROUP_PIPES too. Re-deriving one that was never hidden costs a preview and
@@ -483,6 +529,11 @@
 		src.power_all = powered_all
 		demir_rebake(DEMIR_BAKE_LIGHT, DEMIR_GROUP_POWER)
 		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_POWER)
+
+	imgui_separator("Modular maps")
+	var/previewed = imgui_checkbox("Preview modules", demir_modular_preview())
+	if(previewed != demir_modular_preview())
+		demir_set_modular_preview(previewed)
 
 	imgui_end()
 

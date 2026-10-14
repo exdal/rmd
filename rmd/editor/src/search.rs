@@ -116,10 +116,11 @@ pub fn replace_instances(
 }
 
 pub fn can_replace(document: &MapDocument, tree: &ObjectTree, instance: PrefabInstanceId, prefab: &Prefab) -> bool {
-    document.prefab_instance(instance).is_some_and(|instance| {
-        document.allows_edit_at(instance.location.coord)
-            && instance.prefab() != prefab
-            && placement_kind(tree, instance.prefab()).is_some_and(|kind| placement_kind(tree, prefab) == Some(kind))
+    document.prefab_instance(instance).is_some_and(|prefab_instance| {
+        document.allows_edit_instance(instance)
+            && prefab_instance.prefab() != prefab
+            && placement_kind(tree, prefab_instance.prefab())
+                .is_some_and(|kind| placement_kind(tree, prefab) == Some(kind))
     })
 }
 
@@ -127,7 +128,7 @@ fn editable_by_tile(document: &MapDocument, instances: &[PrefabInstanceId]) -> B
     let mut by_tile = BTreeMap::<Coord, Vec<PrefabInstanceId>>::new();
     for instance in instances {
         if let Some(location) = document.instance_location(*instance)
-            && document.allows_edit_at(location.coord)
+            && document.allows_edit_instance(*instance)
         {
             by_tile.entry(location.coord).or_default().push(*instance);
         }

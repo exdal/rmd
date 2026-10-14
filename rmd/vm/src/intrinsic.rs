@@ -1,5 +1,8 @@
-use core::{path::TreePath, types::Identifier, vars};
-use std::{collections::HashSet, path::PathBuf};
+use core::{file_path, path::TreePath, types::Identifier, vars};
+use std::{
+    collections::{HashSet, hash_map::Entry},
+    path::PathBuf,
+};
 
 use defines::{EAST, NORTH, NORTHEAST, NORTHWEST, SOUTH, SOUTHEAST, SOUTHWEST, WEST};
 
@@ -7,11 +10,12 @@ use crate::{
     FaultKind,
     GenericValue,
     Intrinsic,
-    bake::{NodeGroup, Rotation},
+    bake::{NodeGroup, PlacementState, Rotation, placement_entry},
     builtins::index_arg,
     eval::Evaluator,
     heap::ObjectId,
     matrix::Matrix,
+    toml_value,
     value::{ListData, Receiver},
     world::Position,
 };
@@ -449,6 +453,83 @@ impl Evaluator<'_> {
                 Ok(GenericValue::Null)
             },
 
+            Intrinsic::DemirModularRoot => {
+                if !self.runtime.defining_groups {
+                    return Err(self.fault(FaultKind::Blocked(format!("{name} outside a profile's New()"))));
+                }
+
+                let ty = match args.first().map(|(_, value)| value.clone()) {
+                    Some(GenericValue::Path(path)) => self.tree.id_of(&path),
+                    Some(GenericValue::Object(id)) => self.runtime.heap.object(id).map(|object| object.ty),
+                    _ => None,
+                };
+
+                if let Some(ty) = ty
+                    && !self.runtime.modular_roots.contains(&ty)
+                {
+                    self.runtime.modular_roots.push(ty);
+                }
+
+                Ok(GenericValue::Null)
+            },
+
+            Intrinsic::DemirPlaceModular => {
+                for (value, _) in self.iter_values(arg(0))? {
+                    let (root, placement) = placement_entry(self, value)?;
+                    let message = match &mut self.runtime.placement {
+                        PlacementState::Task { roots, entries } => {
+                            if !roots.contains(&root) {
+                                Some("demir_place_modular() root is not an atom of this pass")
+                            } else {
+                                match entries.entry(root) {
+                                    Entry::Occupied(_) => {
+                                        Some("demir_place_modular() root already has an entry in this pass")
+                                    },
+                                    Entry::Vacant(entry) => {
+                                        entry.insert(placement);
+
+                                        None
+                                    },
+                                }
+                            }
+                        },
+                        PlacementState::Idle => {
+                            let is_placed = self
+                                .runtime
+                                .heap
+                                .object(root)
+                                .is_some_and(|object| object.instance.is_some());
+                            if is_placed {
+                                self.runtime.pending_placements.push(root, placement);
+
+                                None
+                            } else {
+                                Some("demir_place_modular() root must be an atom placed on the map")
+                            }
+                        },
+                    };
+                    if let Some(message) = message {
+                        return Err(self.fault(FaultKind::InvalidOperation(message.into())));
+                    }
+                }
+
+                Ok(GenericValue::Null)
+            },
+
+            Intrinsic::DemirTomlDecode => {
+                let value = match toml_value::decode(
+                    text(0),
+                    self.limits.allocations.min(self.instruction_budget_remaining as usize),
+                ) {
+                    Ok(value) => value,
+                    Err(FaultKind::InvalidOperation(message)) => return Err(self.throw_exception(message)),
+                    Err(kind) => return Err(self.fault(kind)),
+                };
+                self.reserve(text(0).len())?;
+
+                self.constant(&value)
+            },
+
             Intrinsic::DemirDefineGroup => {
                 if !self.runtime.defining_groups {
                     return Err(self.fault(FaultKind::Blocked(format!("{name} outside a profile's New()"))));
@@ -471,6 +552,8 @@ impl Evaluator<'_> {
             },
 
             Intrinsic::DemirRebake
+            | Intrinsic::DemirModularPreview
+            | Intrinsic::DemirSetModularPreview
             | Intrinsic::ImguiDockspace
             | Intrinsic::ImguiSetNextWindowDock
             | Intrinsic::ImguiSetNextWindowSize
@@ -1640,11 +1723,9 @@ impl Evaluator<'_> {
             return Err(self.fault(FaultKind::Blocked("filesystem".into())));
         };
 
-        let path = root.join(name);
-        match path.starts_with(&root) {
-            true => Ok(Some(path)),
-            false => Err(self.fault(FaultKind::Blocked("filesystem".into()))),
-        }
+        file_path::within(&root, name)
+            .map(Some)
+            .ok_or_else(|| self.fault(FaultKind::Blocked("filesystem".into())))
     }
 
     fn file2list(&mut self, file: &GenericValue, separator: &GenericValue) -> Result<GenericValue> {

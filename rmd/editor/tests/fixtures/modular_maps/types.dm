@@ -1,18 +1,19 @@
 /obj/modular_map_root
-    var/config_file = null
-    var/key = null
-
-/obj/modular_map_root/fixture
-    config_file = "config.toml"
-
-/obj/modular_map_root/fixture/inherited
-    key = "leaf"
-
-// Verify DM parent_type relationships, rather than path-prefix matching.
-/obj/root_alias
-    parent_type = /obj/modular_map_root/fixture
 
 /obj/modular_map_connector
 
+// Verify DM parent_type relationships, rather than path-prefix matching.
 /obj/connector_alias
     parent_type = /obj/modular_map_connector
+
+/turf/template_noop
+
+/turf/template_noop/sub
+
+/area/template_noop
+
+/obj/turf_alias
+    parent_type = /turf
+
+/obj/area_alias
+    parent_type = /area

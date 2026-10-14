@@ -1,4 +1,4 @@
-// Next available intrinsic index: 728 (shared by demir.dm and imgui.dm).
+// Next available intrinsic index: 733 (shared by demir.dm and imgui.dm).
 // PLEASE UPDATE THIS WHEN YOU ADD NERW ID!!!
 
 #define __DEMIR__
@@ -133,6 +133,13 @@
 	// does not run again.
 	proc/ui(atom/target)
 
+	// Run once per pass over the atoms that demir_modular_root() selected. A pass covers every
+	// root at the first bake, or only the inserted roots after an edit. `roots` lists those atoms.
+	// Read shared data like config files here, work out what each root places and submit
+	// everything with demir_place_modular(). The runtime discards heap writes made during the pass. A
+	// root without an entry places nothing.
+	proc/process_modular_root(list/roots)
+
 // Return the active profile. An ordinary procedure can use it to read profile state. Return null
 // outside a bake.
 /proc/demir_profile()
@@ -163,6 +170,56 @@
 // and repeating a subtype replaces its directions.
 /proc/demir_rotatable(subtype, directions)
 	set __demir_intrin = 727
+
+// Modular maps
+
+// Select `type` and its descendants as modular roots for process_modular_root(). Call this
+// procedure only from the profile's New().
+/proc/demir_modular_root(type)
+	set __demir_intrin = 728
+
+// Parse TOML text into an associative list, like json_decode(). Tables become associative lists,
+// arrays become lists, booleans become 1 or 0 and dates become text. Invalid TOML throws an
+// /exception whose name holds the parse error, so try/catch can handle it.
+/proc/demir_toml_decode(text)
+	set __demir_intrin = 729
+
+// Submit placements. `placements` is a list of associative lists. The keys of an entry decide its
+// kind. Any invalid entry is a runtime error.
+//
+// Inside process_modular_root(), `root` must be an atom the task received and a root can appear in
+// only one entry per pass. Calling this procedure again adds more entries, and the runtime applies
+// all of them after the task returns. A task that fails discards its entries.
+//
+// In any other hook (New(), prepare(), light(), connections(), highlights(), bake(), ui()) and in
+// the procedures they call, `root` must be an atom placed on the map. A later entry for the same
+// atom replaces the earlier one. The entry lasts until that atom is removed or inserted again.
+// The runtime keeps the placements a hook makes only when it keeps that hook's heap writes:
+// New(), prepare() and light() keep them, a ui() frame keeps them when the user interacted with it
+// (a placement counts as a write), and connections(), highlights() and bake() discard them.
+//
+//     list("root" = atom, "maps" = list(...), "anchor" = type, "skip" = type or list of types)
+//         Load the codebase-relative .dmm paths in "maps" at `root`, in order. Duplicates are
+//         allowed. The module tile holding an instance of "anchor" lands on the root's tile.
+//         Default: module tile (1, 1, 1). Module prefabs of exactly the "skip" types leave the
+//         destination untouched. "anchor" and "skip" are optional.
+//     list("root" = atom, "error" = text)
+//         Show `text` as the root's error in the editor.
+/proc/demir_place_modular(list/placements)
+	set __demir_intrin = 730
+
+// Whether the active map shows its modular map previews as 1 or 0. Call this procedure only from
+// ui().
+/proc/demir_modular_preview()
+	set __demir_intrin = 731
+
+// Ask the editor to show previews when `enabled` is true and hide them otherwise. Call this
+// procedure only from ui(). The editor applies the request only when it keeps the frame's writes,
+// so ui() frames the user interacted with, and the request counts as a write like demir_rebake()
+// or a placement. The last call in a frame wins. Previews are per map, and the request affects the
+// active map.
+/proc/demir_set_modular_preview(enabled)
+	set __demir_intrin = 732
 
 // Rebaking
 

@@ -924,7 +924,7 @@ fn place_prefab_into(
 fn delete(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
     let target = context.target?;
     let location = context.document.instance_location(target)?;
-    if !context.document.allows_edit_at(location.coord) {
+    if !context.document.allows_edit_instance(target) {
         return None;
     }
     let mut after = context.document.placed_tile(location.coord)?;

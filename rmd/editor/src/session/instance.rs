@@ -233,11 +233,7 @@ impl Session {
             let instances = document
                 .identical_instances(prefab)
                 .into_iter()
-                .filter(|id| {
-                    document
-                        .instance_location(*id)
-                        .is_some_and(|location| document.allows_edit_at(location.coord))
-                })
+                .filter(|id| document.allows_edit_instance(*id))
                 .collect();
             self.identical = Some(IdenticalCache {
                 document: document.id(),
