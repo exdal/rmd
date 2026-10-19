@@ -48,6 +48,7 @@ mod find;
 mod fixtures;
 mod grid;
 mod history;
+mod issues;
 mod load;
 mod menu;
 mod node;
@@ -151,7 +152,7 @@ mod settings;
 const DOCKSPACE_ID: &str = "rmd-main-dockspace-v4";
 
 fn dock_layout<'a>(
-    left: [&WindowKey; 2], right: [&WindowKey; 2], center: impl IntoIterator<Item = &'a WindowKey>,
+    left: [&WindowKey; 2], right: [&WindowKey; 3], center: impl IntoIterator<Item = &'a WindowKey>,
 ) -> DockLayout {
     DockLayout::split(
         DockSplit::Left,
@@ -266,6 +267,7 @@ pub struct UiState {
     welcome_window: WindowKey,
     inspector: InspectorPanel,
     find: find::FindPanel,
+    issues: issues::IssuesPanel,
     runtimes: runtimes::RuntimesPanel,
     git_panel: git::GitPanel,
     /// Keeps the object tree in front of the Git tab while its saved layout settles
@@ -329,13 +331,14 @@ impl UiState {
         let welcome_window = WindowKey::new("welcome", "Welcome")?;
         let inspector = InspectorPanel::new()?;
         let find = find::FindPanel::new()?;
+        let issues = issues::IssuesPanel::new()?;
         let runtimes = runtimes::RuntimesPanel::new()?;
         let git_panel = git::GitPanel::new()?;
         let settings_window = SettingsWindow::new()?;
         let load_window = WindowKey::new("load", "Loading")?;
         let layout = dock_layout(
             [object_tree.window(), git_panel.window()],
-            [inspector.window(), find.window()],
+            [inspector.window(), find.window(), issues.window()],
             [&welcome_window],
         );
 
@@ -348,6 +351,7 @@ impl UiState {
             welcome_window,
             inspector,
             find,
+            issues,
             runtimes,
             git_panel,
             select_object_tree: StartupPanelFocus::new(),
@@ -401,6 +405,9 @@ impl UiState {
     }
 
     pub fn is_checking_for_updates(&self) -> bool { self.update_check.is_checking() }
+
+    #[cfg(test)]
+    pub(crate) fn map_issues_visible(&self) -> bool { self.issues.visible() }
 
     fn raise_demand(&self, demand: FrameDemand) {
         let mut raised = self.demand.get();
@@ -599,6 +606,7 @@ impl UiState {
             Panel::Git => self.git_panel.focus(),
             Panel::Inspector => self.select_inspector = StartupPanelFocus::new(),
             Panel::Search => self.find.request(),
+            Panel::MapIssues => self.issues.request(None),
             Panel::Runtimes => self.runtimes.request(),
         }
     }
@@ -615,7 +623,7 @@ impl UiState {
                 .map(MapViewState::window);
             dock_layout(
                 [self.object_tree.window(), self.git_panel.window()],
-                [self.inspector.window(), self.find.window()],
+                [self.inspector.window(), self.find.window(), self.issues.window()],
                 std::iter::once(&self.welcome_window).chain(map_views),
             )
         });
@@ -825,9 +833,13 @@ impl UiState {
         if session.take_loaded_conflicts().is_some() {
             self.git_panel.request(git::GitTab::Conflicts);
         }
+        let loaded_issues = session.take_loaded_issues();
 
-        self.panel_focus_requested =
-            self.find.has_focus_request() || self.git_panel.has_focus_request() || self.close_focus.is_some();
+        self.panel_focus_requested = self.find.has_focus_request()
+            || self.issues.has_focus_request()
+            || loaded_issues.is_some()
+            || self.git_panel.has_focus_request()
+            || self.close_focus.is_some();
         let mut panels = settings.panels;
         panels.git |= self.git_panel.has_focus_request();
         // The Git tab shares the object tree's dock node, a request to show it wins
@@ -847,7 +859,11 @@ impl UiState {
             self.find.open_for_path(session, path);
         }
 
-        if self.find.has_focus_request() || !panels.inspector {
+        if self.find.has_focus_request()
+            || self.issues.has_focus_request()
+            || loaded_issues.is_some()
+            || !panels.inspector
+        {
             self.select_inspector.cancel();
         }
 
@@ -868,6 +884,18 @@ impl UiState {
         panels.search |= self.find.has_focus_request();
         if let Some(target) = self.find.draw(ui, session, settings, &mut panels.search) {
             self.jump_to_instance(session, target);
+        }
+
+        panels.map_issues |= self.issues.has_focus_request() || loaded_issues.is_some();
+        let issues = self.issues.draw(ui, session, settings, &mut panels.map_issues);
+        if let Some(id) = loaded_issues {
+            self.issues.request(Some(id));
+        }
+        if let Some(target) = issues.jump {
+            self.jump_to_instance(session, target);
+        }
+        if issues.copy.is_some() {
+            self.copy_to_clipboard = issues.copy;
         }
 
         let runtimes = self.runtimes.draw(ui, session, settings, &mut panels.runtimes);
@@ -917,14 +945,19 @@ impl UiState {
         )?;
         ui.text("Discard unsaved changes and load conflicts from Git?");
         let mut load_conflicts = None;
-        if ui.button("Discard and load") {
+        let pressed = common::dialog_buttons(
+            ui,
+            &[
+                common::DialogButton::cancel("Cancel"),
+                common::DialogButton::destructive("Discard and Load", false),
+            ],
+            true,
+        );
+        if pressed == Some(1) {
             load_conflicts = Some(id);
-            self.pending_conflict_reload = None;
-            ui.close_current_popup();
         }
 
-        ui.same_line();
-        if ui.button("Cancel") {
+        if pressed.is_some() {
             self.pending_conflict_reload = None;
             ui.close_current_popup();
         }
@@ -1069,7 +1102,7 @@ impl UiState {
 #[cfg(test)]
 mod tests {
     use core::path::TreePath;
-    use std::path::PathBuf;
+    use std::{cell::Cell, path::PathBuf};
 
     use dear_imgui_rs::DockLayout;
     use dmm::{Prefab, Size};
@@ -1080,6 +1113,7 @@ mod tests {
         DEFAULT_CUSTOM_FILL_BOUNDARY,
         IMGUI_CONTEXT,
         UiState,
+        common::button_width,
         fixtures::rectangle_context,
         git,
         menu::MenuActions,
@@ -1153,7 +1187,7 @@ mod tests {
 
         assert_eq!(
             first.as_ref(),
-            &DockLayout::tabs([state.inspector.window(), state.find.window()])
+            &DockLayout::tabs([state.inspector.window(), state.find.window(), state.issues.window()])
         );
     }
 
@@ -1733,6 +1767,7 @@ mod tests {
             cancelling: false,
             cancellable: true,
         };
+        let widths = Cell::new([0.0_f32; 3]);
         let frame = |context: &mut dear_imgui_rs::Context,
                      state: &mut UiState,
                      session: &mut Session,
@@ -1743,6 +1778,11 @@ mod tests {
             let output = state
                 .draw(ui, session, settings, &mut themes, loading.then_some(&load))
                 .unwrap();
+            widths.set([
+                button_width(ui, "Reload Codebase and Retry"),
+                button_width(ui, "Close"),
+                ui.clone_style().item_spacing()[0],
+            ]);
             let is_open = ui.is_popup_open(super::coop::STATUS_POPUP);
             assert!(context.render_legacy().valid());
             (output.open, is_open)
@@ -1775,8 +1815,11 @@ mod tests {
             "the modal preserves the dockspace layout"
         );
         let padding = context.style().window_padding();
-        let close = [position[0] + padding[0] + 8.0, position[1] + size[1] - padding[1] - 8.0];
-        let retry = [close[0] + 80.0, close[1]];
+        let [retry_width, close_width, spacing] = widths.get();
+        let y = position[1] + size[1] - padding[1] - 8.0;
+        let right = position[0] + size[0] - padding[0];
+        let retry = [right - retry_width / 2.0, y];
+        let close = [right - retry_width - spacing - close_width / 2.0, y];
         for down in [false, true, false] {
             context.io_mut().add_mouse_pos_event(retry);
             context.io_mut().add_mouse_button_event(MouseButton::Left, down);

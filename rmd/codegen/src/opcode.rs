@@ -72,6 +72,8 @@ byte_enum! {
         CompoundBinary = 0x2a,
         Initial = 0x2b,
         Drop = 0x2c,
+        Spawn = 0x2d,
+        EndSpawn = 0x2e,
     }
 }
 

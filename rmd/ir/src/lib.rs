@@ -210,6 +210,11 @@ pub enum IrNode {
         catch: IrNodeId,
         merge: IrNodeId,
     },
+    Spawn {
+        body: IrNodeId,
+        merge: IrNodeId,
+    },
+    EndSpawn,
     Noop,
     Blocked(&'static str),
     Trap {
@@ -289,6 +294,7 @@ impl IrNode {
             Self::Branch(_)
             | Self::ConditionalBranch { .. }
             | Self::Return(_)
+            | Self::EndSpawn
             | Self::Throw(_)
             | Self::Blocked(_)
             | Self::Trap { .. } => SideEffect::ControlFlow,
@@ -303,6 +309,7 @@ impl IrNode {
             | Self::SelectionMerge { .. }
             | Self::LoopMerge { .. }
             | Self::TryCatch { .. }
+            | Self::Spawn { .. }
             | Self::Noop => SideEffect::Structural,
         }
     }
@@ -313,6 +320,7 @@ impl IrNode {
             Self::Branch(_)
                 | Self::ConditionalBranch { .. }
                 | Self::Return(_)
+                | Self::EndSpawn
                 | Self::Throw(_)
                 | Self::Blocked(_)
                 | Self::Trap { .. }

@@ -112,6 +112,7 @@ struct GpuSprite {
     source_position_size: [u32; 2],
     texture_flags: u32,
     transform: [u32; 2],
+    node_pickable: u32,
 }
 
 #[repr(C)]
@@ -458,6 +459,7 @@ struct MapViewState {
     rect: crate::MapViewRect,
     highlight_tint: bool,
     delete_mode: bool,
+    node_mode: bool,
     preview: bool,
     lighting: bool,
 }
@@ -479,6 +481,7 @@ impl FrameGraphState {
                     rect: view.rect,
                     highlight_tint: view.interaction.highlight.is_tint(),
                     delete_mode: view.interaction.mode.is_delete(),
+                    node_mode: view.interaction.mode.is_node(),
                     preview: view.preview.is_some_and(|preview| !preview.sprites.is_empty()),
                     lighting: view.lighting.is_some_and(|lighting| !lighting.tiles.is_empty()),
                 })
@@ -1712,6 +1715,7 @@ impl Renderer {
                             ])
                             .with_name(format!("map view {index} visibility"))
                             .bind_graphics_pipeline(self.visibility_pipeline)
+                            .specialize_constant(spec::NODE_MODE, view.node_mode)
                             .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
                             .set_viewport(0, Rect2D::framebuffer())
                             .set_scissor(0, Rect2D::framebuffer())
@@ -3084,6 +3088,7 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
         source_position_size: [source_position, source_size],
         texture_flags: sprite.texture.index | (flags << SPRITE_FLAGS_SHIFT),
         transform,
+        node_pickable: u32::from(sprite.node_pickable),
     })
 }
 
@@ -3676,6 +3681,7 @@ mod tests {
             is_area: false,
             hidden: false,
             click_through: false,
+            node_pickable: false,
             area_edges: 0,
             lighting: SpriteLighting::Normal,
             color: [1.0; 4],
@@ -3862,6 +3868,10 @@ mod tests {
         deleting.interaction.mode = InteractionMode::Delete { pick: None };
         assert_ne!(base, graph_state(target, true, &[deleting]));
 
+        let mut nodes = map_view(rect);
+        nodes.interaction.mode = InteractionMode::Node { pick: None };
+        assert_ne!(base, graph_state(target, true, &[nodes]));
+
         let tiles = [LightTile { corners: [[1.0; 3]; 4] }];
         let mut lit = map_view(rect);
         lit.lighting = Some(LightingFrame {
@@ -3987,6 +3997,19 @@ mod tests {
 
         let gpu = gpu_sprite(0, &openspace).expect("pack");
 
+        assert_eq!(gpu.texture_flags & SPRITE_TEXTURE_MASK, SPRITE_TEXTURE_MASK);
+        assert_eq!(gpu.texture_flags >> SPRITE_FLAGS_SHIFT, SPRITE_FLAG_CLICK_THROUGH);
+    }
+
+    #[test]
+    fn node_eligibility_does_not_consume_texture_or_appearance_flags() {
+        let mut node = sprite(1);
+        assert_eq!(gpu_sprite(0, &node).unwrap().node_pickable, 0);
+        node.node_pickable = true;
+        node.texture.index = SPRITE_TEXTURE_MASK;
+        node.click_through = true;
+        let gpu = gpu_sprite(0, &node).unwrap();
+        assert_eq!(gpu.node_pickable, 1);
         assert_eq!(gpu.texture_flags & SPRITE_TEXTURE_MASK, SPRITE_TEXTURE_MASK);
         assert_eq!(gpu.texture_flags >> SPRITE_FLAGS_SHIFT, SPRITE_FLAG_CLICK_THROUGH);
     }
@@ -4392,7 +4415,8 @@ mod tests {
     fn sprite_and_camera_layouts_match_the_shader_scalar_layout() {
         let reflection = shader::reflect(&read_spirv(GEOMETRY_VS_SPV).expect("valid SPIR-V")).expect("shader reflects");
 
-        assert_eq!(size_of::<GpuSprite>(), 56);
+        assert_eq!(size_of::<GpuSprite>(), 60);
+        assert_eq!(std::mem::offset_of!(GpuSprite, node_pickable), 56);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<CameraPush>());
     }
@@ -4724,6 +4748,7 @@ mod tests {
             (GEOMETRY_VS_SPV, spec::SPRITE_INDIRECT),
             (GEOMETRY_VS_SPV, spec::SPRITE_LIST),
             (SPRITE_SHADE_FS_SPV, spec::SPRITE_EDGE_ONLY),
+            (SPRITE_VIS_FS_SPV, spec::NODE_MODE),
             (SPRITE_CULL_CLASSIFY_CS_SPV, spec::SHOW_AREAS),
             (SPRITE_CULL_CLASSIFY_CS_SPV, spec::SHOW_AREA_OUTLINES),
             (SPRITE_CULL_COMPACT_CS_SPV, spec::SHOW_AREAS),

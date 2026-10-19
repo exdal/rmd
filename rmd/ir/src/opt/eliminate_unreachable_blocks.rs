@@ -117,6 +117,7 @@ fn reachable_blocks(module: &Module) -> Vec<bool> {
                     pending.push(*body);
                     pending.push(*catch);
                 },
+                Some(IrNode::Spawn { body, .. }) => pending.push(*body),
                 _ => {},
             }
         }

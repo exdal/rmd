@@ -112,8 +112,10 @@ fn analyze_procedure(module: &Module, proc: &Procedure, scratch: &mut Scratch, r
     resize_lists(&mut scratch.catches, blocks.len());
     for block in &blocks {
         for instruction in module.block(*block).unwrap_or_default() {
-            let Some(IrNode::TryCatch { body, catch, merge }) = module.node(*instruction) else {
-                continue;
+            let (body, catch, merge) = match module.node(*instruction) {
+                Some(IrNode::TryCatch { body, catch, merge }) => (body, catch, merge),
+                Some(IrNode::Spawn { body, merge }) => (body, merge, merge),
+                _ => continue,
             };
 
             let Some(catch) = scratch.block_index.get(catch).copied() else {
@@ -339,6 +341,8 @@ fn observes_external_state(node: &IrNode) -> bool {
             | IrNode::Throw(_)
             | IrNode::Output { .. }
             | IrNode::TryCatch { .. }
+            | IrNode::Spawn { .. }
+            | IrNode::EndSpawn
             | IrNode::Blocked(_)
             | IrNode::Trap { .. }
     )
@@ -379,6 +383,10 @@ fn append_successors(node: Option<&IrNode>, push: &mut impl FnMut(IrNodeId)) {
         Some(IrNode::TryCatch { body, catch, merge }) => {
             push(*body);
             push(*catch);
+            push(*merge);
+        },
+        Some(IrNode::Spawn { body, merge }) => {
+            push(*body);
             push(*merge);
         },
         _ => {},

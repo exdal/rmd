@@ -84,17 +84,25 @@ pub enum BundledProfile {
     Cmss13,
     Goonstation,
     Monkestation,
+    Monkespaw,
+    Novasector,
+    Oculis,
     SecondCity,
+    Tgmc,
     Tgstation,
     Vanderlin,
 }
 
 impl BundledProfile {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 10] = [
         Self::Cmss13,
         Self::Goonstation,
         Self::Monkestation,
+        Self::Monkespaw,
+        Self::Novasector,
+        Self::Oculis,
         Self::SecondCity,
+        Self::Tgmc,
         Self::Tgstation,
         Self::Vanderlin,
     ];
@@ -104,7 +112,11 @@ impl BundledProfile {
             Self::Cmss13 => "CMSS13",
             Self::Goonstation => "Goonstation",
             Self::Monkestation => "Monkestation",
+            Self::Monkespaw => "Monke’s Paw",
+            Self::Novasector => "Nova Sector",
+            Self::Oculis => "Oculis Station",
             Self::SecondCity => "SecondCity",
+            Self::Tgmc => "TGMC",
             Self::Tgstation => "tgstation",
             Self::Vanderlin => "Vanderlin",
         }
@@ -115,7 +127,11 @@ impl BundledProfile {
             Self::Cmss13 => "cmss13",
             Self::Goonstation => "goonstation",
             Self::Monkestation => "monkestation",
+            Self::Monkespaw => "monkespaw",
+            Self::Novasector => "novasector",
+            Self::Oculis => "oculis",
             Self::SecondCity => "secondcity",
+            Self::Tgmc => "tgmc",
             Self::Tgstation => "tgstation",
             Self::Vanderlin => "vanderlin",
         }
@@ -128,7 +144,11 @@ impl BundledProfile {
             Self::Cmss13 => "<bundled-profile-cmss13.dm>",
             Self::Goonstation => "<bundled-profile-goonstation.dm>",
             Self::Monkestation => "<bundled-profile-monkestation.dm>",
+            Self::Monkespaw => "<bundled-profile-monkespaw.dm>",
+            Self::Novasector => "<bundled-profile-novasector.dm>",
+            Self::Oculis => "<bundled-profile-oculis.dm>",
             Self::SecondCity => "<bundled-profile-secondcity.dm>",
+            Self::Tgmc => "<bundled-profile-tgmc.dm>",
             Self::Tgstation => "<bundled-profile-tgstation.dm>",
             Self::Vanderlin => "<bundled-profile-vanderlin.dm>",
         }
@@ -139,7 +159,11 @@ impl BundledProfile {
             Self::Cmss13 => include_str!("../../../examples/profiles/cmss13.dm"),
             Self::Goonstation => include_str!("../../../examples/profiles/goonstation.dm"),
             Self::Monkestation => include_str!("../../../examples/profiles/monkestation.dm"),
+            Self::Monkespaw => include_str!("../../../examples/profiles/monkespaw.dm"),
+            Self::Novasector => include_str!("../../../examples/profiles/novasector.dm"),
+            Self::Oculis => include_str!("../../../examples/profiles/oculis.dm"),
             Self::SecondCity => include_str!("../../../examples/profiles/secondcity.dm"),
+            Self::Tgmc => include_str!("../../../examples/profiles/tgmc.dm"),
             Self::Tgstation => include_str!("../../../examples/profiles/tgstation.dm"),
             Self::Vanderlin => include_str!("../../../examples/profiles/vanderlin.dm"),
         }
@@ -164,7 +188,19 @@ impl BundledProfile {
                 "<bundled-profile-monkestation-defines.dm>",
                 "#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n",
             )),
-            Self::Cmss13 | Self::Vanderlin => None,
+            Self::Monkespaw => Some((
+                "<bundled-profile-monkespaw-defines.dm>",
+                "#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n",
+            )),
+            Self::Novasector => Some((
+                "<bundled-profile-novasector-defines.dm>",
+                "#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n",
+            )),
+            Self::Oculis => Some((
+                "<bundled-profile-oculis-defines.dm>",
+                "#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n",
+            )),
+            Self::Cmss13 | Self::Tgmc | Self::Vanderlin => None,
         }
     }
 }
@@ -396,6 +432,7 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
         bake_files,
         root: editor.root,
         files: editor.files,
+        builtin_files: editor.builtin_files,
         maps: editor.maps,
         resource_dirs,
         errors: editor.errors,
@@ -589,6 +626,7 @@ pub(crate) struct Compiled {
     pub bake_files: Arc<[PathBuf]>,
     pub root: PathBuf,
     pub files: Vec<PathBuf>,
+    pub builtin_files: Vec<FileId>,
     pub maps: Vec<PathBuf>,
     pub resource_dirs: Vec<PathBuf>,
     pub errors: Vec<PreprocessError>,
@@ -798,7 +836,11 @@ mod tests {
                 "cmss13",
                 "goonstation",
                 "monkestation",
+                "monkespaw",
+                "novasector",
+                "oculis",
                 "secondcity",
+                "tgmc",
                 "tgstation",
                 "vanderlin",
             ]
@@ -827,6 +869,20 @@ mod tests {
             BundledProfile::Monkestation.defines().map(|(_, source)| source),
             Some("#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n")
         );
+        for profile in [
+            BundledProfile::Monkespaw,
+            BundledProfile::Novasector,
+            BundledProfile::Oculis,
+        ] {
+            assert_eq!(
+                profile.defines().map(|(_, source)| source),
+                Some("#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n")
+            );
+        }
+        assert_eq!(profile_label("novasector"), "Nova Sector");
+        assert_eq!(profile_label("oculis"), "Oculis Station");
+        assert_eq!(profile_label("monkespaw"), "Monke’s Paw");
+        assert_eq!(profile_label("tgmc"), "TGMC");
         assert_eq!(profile_label("secondcity"), "SecondCity");
         assert_eq!(profile_label("mine"), "mine");
     }
@@ -838,6 +894,11 @@ mod tests {
         for profile in BundledProfile::ALL {
             let written = std::fs::read_to_string(dir.join(format!("{}.dm", profile.stem()))).expect("profile");
             assert_eq!(written, profile.source());
+            if let Some((_, defines)) = profile.defines() {
+                let written = std::fs::read_to_string(dir.join(format!("{}.defines.dm", profile.stem())))
+                    .expect("profile defines");
+                assert_eq!(written, defines);
+            }
         }
         assert_eq!(
             std::fs::read_to_string(dir.join("tgstation.defines.dm")).expect("defines"),
@@ -874,8 +935,12 @@ mod tests {
                 "cmss13",
                 "goonstation",
                 "mine",
+                "monkespaw",
                 "monkestation",
+                "novasector",
+                "oculis",
                 "secondcity",
+                "tgmc",
                 "tgstation",
                 "vanderlin",
             ]

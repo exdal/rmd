@@ -18,7 +18,15 @@ use dear_imgui_rs::{
 use editor::environment::profile_label;
 
 use super::{
-    common::{begin_centered_modal, button_width, center_next_window, dpi, focus_window_on_hover},
+    common::{
+        DialogButton,
+        begin_centered_modal,
+        button_width,
+        center_next_window,
+        dialog_buttons,
+        dpi,
+        focus_window_on_hover,
+    },
     dialog::{MODAL_FLAGS, SAVE_ERROR_COLOR, draw_keybind_preset_dialog},
 };
 use crate::{
@@ -391,7 +399,8 @@ fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
     ui.set_next_item_width(-1.0);
     ui.input_text("##preferred-editor", &mut settings.preferred_editor)
         .build();
-    ui.text_disabled("Placeholders: {file}, {line}, {column}");
+    ui.text_disabled("Placeholders: {file}, {line}, {column}, {root}");
+    ui.text_disabled("{root} is the workspace directory containing the loaded .dme file.");
 
     ui.separator();
     draw_section_heading(ui, "Saving");
@@ -730,18 +739,23 @@ fn draw_new_theme_dialog(ui: &Ui, themes: &mut Themes, new_theme: &mut Option<Ne
         ui.text_colored(SAVE_ERROR_COLOR, error);
     }
 
-    ui.separator();
-    if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+    let is_valid = !name.trim().is_empty();
+    let pressed = dialog_buttons(
+        ui,
+        &[
+            DialogButton::cancel("Cancel"),
+            DialogButton::primary("Create Theme").enabled(is_valid),
+        ],
+        true,
+    );
+    if pressed == Some(0) {
         *new_theme = None;
         ui.close_current_popup();
 
         return None;
     }
 
-    ui.same_line();
-    let is_valid = !name.trim().is_empty();
-    let _disabled = ui.begin_disabled_with_cond(!is_valid);
-    if !(ui.button("Create") || is_entered) || !is_valid {
+    if !(pressed == Some(1) || is_entered) || !is_valid {
         return None;
     }
 
@@ -1100,15 +1114,20 @@ fn draw_profile_reload_dialog(ui: &Ui, pending_profile: &mut Option<ProfileReloa
 
     ui.text_wrapped(message);
     ui.text("Open maps and unsaved changes will be preserved.");
-    ui.separator();
-    if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
+
+    let pressed = dialog_buttons(
+        ui,
+        &[DialogButton::cancel("Cancel"), DialogButton::primary("Reload Codebase")],
+        true,
+    );
+    if pressed == Some(0) {
         *pending_profile = None;
         ui.close_current_popup();
 
         return None;
     }
-    ui.same_line();
-    if ui.button("Reload") {
+
+    if pressed == Some(1) {
         let request = pending_profile.take();
         ui.close_current_popup();
 

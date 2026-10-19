@@ -393,6 +393,7 @@ impl Session {
                 cache.modules.view(&document.map),
                 &affected,
                 FrameRenderOptions {
+                    node_types: Some(&cache.node_types),
                     visibility: type_visibility,
                     tile_size: options.tile_size,
                     appearances: editor::bake::appearances(cache.bake.as_ref()),
@@ -457,6 +458,598 @@ mod tests {
         Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, live_bytes, settle_bake, take_peak_bytes},
     };
+
+    #[test]
+    #[ignore = "requires the local target/TerraGov-Marine-Corps checkout"]
+    fn bundled_tgmc_profile_bakes_maps_and_tools() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/TerraGov-Marine-Corps");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(String::from("tgmc")),
+            ..Default::default()
+        };
+        let loaded =
+            crate::loader::load_codebase(&root.join("tgmc.dme"), &options, &Progress::new()).expect("TGMC codebase");
+        assert!(
+            !loaded.diagnostics.bake_preprocess.iter().any(|error| error.is_fatal()),
+            "{:?}",
+            loaded.diagnostics.bake_preprocess
+        );
+        assert!(
+            loaded.diagnostics.bake_sema.is_empty(),
+            "{:?}",
+            loaded.diagnostics.bake_sema
+        );
+        assert!(loaded.diagnostics.codegen.is_none(), "{:?}", loaded.diagnostics.codegen);
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        assert_eq!(
+            loaded.environment.profiles.as_ref().unwrap().active,
+            "/datum/demir/tgmc"
+        );
+        assert!(loaded.environment.bake_program.is_some());
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+        let floor = "/turf/open/floor/plating";
+        let wall = "/turf/closed/wall";
+        let cable = "/obj/structure/cable";
+        let pipe = "/obj/machinery/atmospherics/pipe/simple";
+        let window = "/obj/structure/window/fulltile";
+        let disposal = "/obj/structure/disposalpipe/segment";
+        let mut map = Map::new(Size { x: 10, y: 4, z: 1 });
+        for y in 1..=4 {
+            for x in 1..=10 {
+                let mut tile = Vec::new();
+                let mut add = |path: &str, vars: &[(&str, Value)]| {
+                    let mut prefab = Prefab::new(TreePath::parse(path));
+                    for (name, value) in vars {
+                        prefab.set_var((*name).into(), value.clone());
+                    }
+                    tile.push(prefab);
+                };
+                match (x, y) {
+                    (1, 1) => add("/obj/machinery/light", &[]),
+                    (2, 1) => add(
+                        "/obj/item/flashlight",
+                        &[("light_on", Value::Num(1.0)), ("light_system", Value::Num(2.0))],
+                    ),
+                    (3 | 4, 1) => add(cable, &[]),
+                    (5, 1) => add(
+                        "/obj/machinery/door_control",
+                        &[("id", Value::Text("preview-door".into()))],
+                    ),
+                    (6, 1) => add(
+                        "/obj/machinery/door/poddoor",
+                        &[("id", Value::Text("preview-door".into()))],
+                    ),
+                    (7 | 8, 1) => add(pipe, &[("dir", Value::Num(defines::EAST as f32))]),
+                    (9, 1) => add(
+                        "/obj/docking_port/stationary",
+                        &[("width", Value::Num(2.0)), ("height", Value::Num(2.0))],
+                    ),
+                    (3 | 4, 2) => add(window, &[]),
+                    (5, 2) => add("/obj/machinery/camera", &[]),
+                    (6 | 7, 2) => add(disposal, &[("dir", Value::Num(defines::EAST as f32))]),
+                    (2, 3) => add(
+                        "/obj/item/flashlight",
+                        &[("light_on", Value::Num(1.0)), ("light_system", Value::Num(3.0))],
+                    ),
+                    _ => {},
+                }
+                add(
+                    if y == 2 && x <= 2 { wall } else { floor },
+                    &[("intact_tile", Value::Num(1.0))],
+                );
+                add("/area", &[]);
+                let key = map.intern_tile(tile);
+                map.grid[0][(4 - y) as usize][(x - 1) as usize] = key;
+            }
+        }
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+        let check_faults = |session: &Session| {
+            let bake = session.active_cache().bake.as_ref().unwrap();
+            let environment = session.state.environment.as_ref().unwrap();
+            let faults = bake
+                .diagnostics
+                .entries
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "{} atoms: {:?} at {}",
+                        entry.count,
+                        entry.fault.kind,
+                        entry
+                            .fault
+                            .location
+                            .display(environment.bake_file(entry.fault.location.file))
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(bake.diagnostics.count(), 0, "{faults:#?}");
+        };
+        check_faults(&session);
+        let bake = session.active_cache().bake.as_ref().unwrap();
+        assert_eq!(bake.node_groups().len(), 3);
+        let source = downstream_instance(&session, 5, 1, "/obj/machinery/door_control");
+        let target = downstream_instance(&session, 6, 1, "/obj/machinery/door/poddoor");
+        assert_eq!(bake.connections(source.get()), vec![target.get()]);
+        let dock = downstream_instance(&session, 9, 1, "/obj/docking_port/stationary");
+        assert_eq!(bake.highlights(dock.get())[0].tiles.len(), 4);
+        let camera = downstream_instance(&session, 5, 2, "/obj/machinery/camera");
+        assert!(!bake.highlights(camera.get())[0].tiles.is_empty());
+        let flashlight = downstream_instance(&session, 2, 1, "/obj/item/flashlight");
+        assert!(
+            bake.appearances[&flashlight.get()]
+                .underlays
+                .iter()
+                .any(|overlay| overlay.lighting == vm::AppearanceLighting::OverlayLight)
+        );
+        assert!(
+            bake.lighting
+                .as_ref()
+                .unwrap()
+                .tile(vm::world::Position::new(1, 1, 1))
+                .unwrap()
+                .corners
+                .iter()
+                .flatten()
+                .any(|channel| *channel > 0.0)
+        );
+        for (x, y, path) in [(3, 1, cable), (7, 1, pipe), (6, 2, disposal)] {
+            let id = downstream_instance(&session, x, y, path);
+            assert!(session.begin_node_edit(id), "{path}");
+            assert_eq!(session.node_overlay().unwrap().segments.len(), 1, "{path}");
+            session.cancel_node_edit();
+        }
+        let smooth = downstream_appearance(&session, 1, 2, wall).icon_state;
+        assert_ne!(smooth.as_deref(), Some("metal-0"));
+        downstream_checkbox(&mut session, "Smooth walls", false);
+        assert_eq!(
+            downstream_appearance(&session, 1, 2, wall).icon_state.as_deref(),
+            Some("metal-0")
+        );
+        downstream_checkbox(&mut session, "Smooth walls", true);
+        assert_eq!(downstream_appearance(&session, 1, 2, wall).icon_state, smooth);
+        for (label, x, y, path) in [
+            ("Cables", 3, 1, cable),
+            ("Pipes", 7, 1, pipe),
+            ("Disposals", 6, 2, disposal),
+        ] {
+            downstream_checkbox(&mut session, label, false);
+            assert_eq!(downstream_appearance(&session, x, y, path).alpha, 0, "{label}: {path}");
+            downstream_checkbox(&mut session, label, true);
+            assert_eq!(
+                downstream_appearance(&session, x, y, path).alpha,
+                255,
+                "{label}: {path}"
+            );
+        }
+        downstream_checkbox(&mut session, "Semitransparent", true);
+        assert_eq!(downstream_appearance(&session, 3, 1, cable).alpha, 128);
+        downstream_checkbox(&mut session, "Semitransparent", false);
+        let fixture = downstream_instance(&session, 1, 1, "/obj/machinery/light");
+        let fixture_on = |session: &Session| {
+            let bake = session.active_cache().bake.as_ref().unwrap();
+            let owner = downstream_appearance(session, 1, 1, "/obj/machinery/light");
+            let environment = session.state.environment.as_ref().unwrap();
+            bake.appearances.get(&fixture.get()).is_some_and(|appearance| {
+                appearance.overlays.iter().any(|overlay| {
+                    editor::visual::resolve_overlay(&environment.tree, &owner, overlay)
+                        .icon_state
+                        .as_deref()
+                        == Some("tube_1")
+                })
+            })
+        };
+        assert!(fixture_on(&session));
+        downstream_checkbox(&mut session, "All areas powered", false);
+        assert!(!fixture_on(&session));
+        downstream_checkbox(&mut session, "All areas powered", true);
+        assert!(fixture_on(&session));
+        downstream_checkbox(&mut session, "Lighting", false);
+        assert!(!fixture_on(&session));
+        assert!(
+            !session.active_cache().bake.as_ref().unwrap().appearances[&flashlight.get()]
+                .underlays
+                .iter()
+                .any(|overlay| overlay.lighting == vm::AppearanceLighting::OverlayLight)
+        );
+        downstream_checkbox(&mut session, "Lighting", true);
+        assert!(fixture_on(&session));
+        assert!(
+            session.active_cache().bake.as_ref().unwrap().appearances[&flashlight.get()]
+                .underlays
+                .iter()
+                .any(|overlay| overlay.lighting == vm::AppearanceLighting::OverlayLight)
+        );
+        downstream_checkbox(&mut session, "Show all ranges", true);
+        downstream_checkbox(&mut session, "Show all ranges", false);
+        let initial = session.active_cache().bake.as_ref().unwrap().appearances.clone();
+        session.state.choose_prefab(Prefab::new(TreePath::parse(floor)));
+        session.set_tool(Tool::Place);
+        assert!(session.place_at(Coord::new(1, 2, 1), None).is_some());
+        settle_bake(&mut session);
+        assert!(session.undo());
+        settle_bake(&mut session);
+        assert_eq!(session.active_cache().bake.as_ref().unwrap().appearances, initial);
+        assert_render_cache_matches_rebuild(&session);
+        for map in ["debugdalus/tgs_debugdalus.dmm", "multiz_debug/multiz_debug.dmm"] {
+            session
+                .open_map(&root.join("_maps/map_files").join(map), 1)
+                .expect("TGMC debug map");
+            settle_bake(&mut session);
+            check_faults(&session);
+            let bake = session.active_cache().bake.as_ref().unwrap();
+            assert!(bake.succeeded > 0);
+            assert!(!bake.appearances.is_empty());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the local target/NovaSector checkout"]
+    fn bundled_novasector_profile_bakes_debug_maps() { check_downstream_profile("NovaSector", "novasector"); }
+
+    #[test]
+    #[ignore = "requires the local target/OculisStation checkout"]
+    fn bundled_oculis_profile_bakes_debug_maps() { check_downstream_profile("OculisStation", "oculis"); }
+
+    #[test]
+    #[ignore = "requires the local target/Monkes-Paw checkout"]
+    fn bundled_monkespaw_profile_bakes_debug_maps() { check_downstream_profile("Monkes-Paw", "monkespaw"); }
+
+    fn check_downstream_profile(checkout: &str, profile: &str) {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target")
+            .join(checkout);
+        let entry = root.join("tgstation.dme");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(String::from(profile)),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&entry, &options, &Progress::new()).expect("codebase");
+        assert!(
+            !loaded.diagnostics.bake_preprocess.iter().any(|error| error.is_fatal()),
+            "{:?}",
+            loaded.diagnostics.bake_preprocess
+        );
+        assert!(
+            loaded.diagnostics.bake_sema.is_empty(),
+            "{:?}",
+            loaded.diagnostics.bake_sema
+        );
+        assert!(loaded.diagnostics.codegen.is_none(), "{:?}", loaded.diagnostics.codegen);
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        assert_eq!(
+            loaded
+                .environment
+                .profiles
+                .as_ref()
+                .map(|profiles| profiles.active.as_str()),
+            Some(format!("/datum/demir/{profile}").as_str())
+        );
+        assert!(loaded.environment.bake_program.is_some());
+
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+        let mut flashlight = Prefab::new(TreePath::parse("/obj/item/flashlight"));
+        flashlight.set_var("start_on".into(), Value::Num(1.0));
+        let mut light_map = Map::new(Size { x: 1, y: 1, z: 1 });
+        let tile = light_map.intern_tile(vec![
+            flashlight,
+            Prefab::new(TreePath::parse("/turf/open/floor/iron")),
+            Prefab::new(TreePath::parse("/area/station/engineering/main")),
+        ]);
+        light_map.grid[0][0][0] = tile;
+        session.activate_document(MapDocument::new(light_map, 1));
+        settle_bake(&mut session);
+        let light_bake = session.active_cache().bake.as_ref().expect("lit flashlight bake");
+        assert_eq!(
+            light_bake.diagnostics.count(),
+            0,
+            "{:?}",
+            light_bake.diagnostics.entries
+        );
+        assert!(
+            light_bake
+                .appearances
+                .values()
+                .flat_map(|appearance| &appearance.underlays)
+                .any(|underlay| underlay.lighting == vm::AppearanceLighting::OverlayLight),
+            "{profile} lighting preview did not emit a light mask"
+        );
+
+        check_downstream_tools(&mut session, profile);
+        check_downstream_windows(&mut session, profile);
+
+        for name in ["runtimestation.dmm", "multiz.dmm"] {
+            session
+                .open_map(&root.join("_maps/map_files/debug").join(name), 1)
+                .expect("debug map");
+            settle_bake(&mut session);
+            let bake = session.active_cache().bake.as_ref().expect("completed map bake");
+            assert!(bake.succeeded > 0, "{name} baked no atoms");
+            assert!(!bake.appearances.is_empty(), "{name} changed no appearances");
+            let faults = bake
+                .diagnostics
+                .entries
+                .iter()
+                .map(|entry| {
+                    let file = session
+                        .state
+                        .environment
+                        .as_ref()
+                        .and_then(|environment| environment.bake_file(entry.fault.location.file));
+                    format!(
+                        "{} atoms: {:?} at {}, stack: {:?}",
+                        entry.count,
+                        entry.fault.kind,
+                        entry.fault.location.display(file),
+                        entry.fault.frames
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(bake.diagnostics.count(), 0, "{name}: {faults:#?}");
+        }
+    }
+
+    fn downstream_instance(session: &Session, x: u32, y: u32, path: &str) -> editor::document::PrefabInstanceId {
+        let document = session.state.active_document().unwrap();
+        document
+            .instance_ids_at(Coord::new(x, y, 1))
+            .iter()
+            .copied()
+            .find(|id| document.prefab_instance(*id).unwrap().prefab().path == TreePath::parse(path))
+            .unwrap_or_else(|| panic!("missing {path} at {x}, {y}"))
+    }
+
+    fn downstream_appearance(session: &Session, x: u32, y: u32, path: &str) -> editor::visual::Appearance {
+        let id = downstream_instance(session, x, y, path);
+        let document = session.state.active_document().unwrap();
+        let prefab = document.prefab_instance(id).unwrap().prefab();
+        let environment = session.state.environment.as_ref().unwrap();
+        let ty = environment.tree.id_of(&prefab.path).unwrap();
+        let bake = session.active_cache().bake.as_ref().unwrap();
+        let delta = bake.appearances.get(&id.get()).cloned().unwrap_or_default();
+        editor::visual::resolve_delta(&environment.tree, ty, prefab, &delta)
+    }
+
+    fn downstream_checkbox(session: &mut Session, label: &str, value: bool) {
+        use editor::bake::{UiCommand, UiFeedback, UiValue};
+
+        let frame = session.dm_ui(0, UiFeedback::default());
+        assert!(session.active_cache().bake.as_ref().unwrap().ui_fault.is_none());
+        let key = frame
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                UiCommand::Checkbox { key, label: text, .. } if text == label => Some(key.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing {label} checkbox"));
+        let frame = session.dm_ui(
+            0,
+            UiFeedback {
+                values: std::collections::HashMap::from([(key, UiValue::Bool(value))]),
+                interacted: true,
+                ..Default::default()
+            },
+        );
+        assert!(frame.committed, "{label}");
+        session.dm_ui_rebake(frame.rebake);
+        settle_bake(session);
+        let bake = session.active_cache().bake.as_ref().unwrap();
+        assert_eq!(bake.diagnostics.count(), 0, "{label}: {:?}", bake.diagnostics.entries);
+    }
+
+    fn check_downstream_tools(session: &mut Session, profile: &str) {
+        let floor = "/turf/open/floor/iron";
+        let wall = "/turf/closed/wall";
+        let cable = "/obj/structure/cable";
+        let pipe = "/obj/machinery/atmospherics/pipe/smart/manifold4w/scrubbers/hidden/layer2";
+        let disposal = "/obj/structure/disposalpipe/segment";
+        let camera = "/obj/machinery/camera";
+        let door = "/obj/machinery/door/poddoor";
+        let button = "/obj/machinery/button/door";
+        let port = "/obj/docking_port/stationary";
+        let mut map = Map::new(Size { x: 9, y: 5, z: 1 });
+        for y in 1..=5 {
+            for x in 1..=9 {
+                let mut tile = vec![];
+                let mut add = |path: &str, vars: &[(&str, Value)]| {
+                    let mut prefab = Prefab::new(TreePath::parse(path));
+                    for (name, value) in vars {
+                        prefab.set_var((*name).into(), value.clone());
+                    }
+                    tile.push(prefab);
+                };
+                match (x, y) {
+                    (2, 2) => add("/obj/machinery/light", &[]),
+                    (2, 3) => add(camera, &[]),
+                    (6 | 7, 2) => add(cable, &[]),
+                    (6 | 7, 3) => add(pipe, &[]),
+                    (6 | 7, 4) => add(disposal, &[("dir", Value::Num(defines::EAST as f32))]),
+                    (8, 2) => add(door, &[("id", Value::Text("preview-door".into()))]),
+                    (8, 3) => add(button, &[("id", Value::Text("preview-door".into()))]),
+                    (8, 4) => add(port, &[("width", Value::Num(2.0)), ("height", Value::Num(2.0))]),
+                    _ => {},
+                }
+                add(if x == 4 { wall } else { floor }, &[]);
+                add("/area/station/engineering/main", &[]);
+                let key = map.intern_tile(tile);
+                map.grid[0][(5 - y) as usize][(x - 1) as usize] = key;
+            }
+        }
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(session);
+        let bake = session.active_cache().bake.as_ref().unwrap();
+        assert_eq!(bake.diagnostics.count(), 0, "{profile}: {:?}", bake.diagnostics.entries);
+        assert_eq!(bake.node_groups().len(), 5);
+        assert!(!bake.rotations().is_empty());
+        let source = downstream_instance(session, 8, 3, button);
+        let target = downstream_instance(session, 8, 2, door);
+        assert_eq!(bake.connections(source.get()), vec![target.get()]);
+        let dock = downstream_instance(session, 8, 4, port);
+        assert_eq!(bake.highlights(dock.get())[0].tiles.len(), 4);
+        let camera_id = downstream_instance(session, 2, 3, camera);
+        let highlights = bake.highlights(camera_id.get());
+        assert!(highlights[0].tiles.iter().any(|tile| tile.position == [2, 3]));
+        assert!(!highlights[0].tiles.iter().any(|tile| tile.position == [6, 3]));
+        assert!(highlights[1].tiles.iter().any(|tile| tile.position == [6, 3]));
+
+        for path in [pipe, disposal] {
+            let y = if path == pipe { 3 } else { 4 };
+            let id = downstream_instance(session, 6, y, path);
+            assert!(session.begin_node_edit(id), "{path}");
+            assert_eq!(session.node_overlay().unwrap().segments.len(), 1, "{path}");
+            session.cancel_node_edit();
+        }
+        let lighting = |session: &Session| {
+            session
+                .active_cache()
+                .bake
+                .as_ref()
+                .unwrap()
+                .lighting
+                .as_ref()
+                .unwrap()
+                .tile(vm::world::Position::new(2, 2, 1))
+                .unwrap()
+                .corners[0][1]
+        };
+        assert!(lighting(session) > 0.0);
+        downstream_checkbox(session, "All areas powered", false);
+        assert_eq!(lighting(session), 0.0);
+        downstream_checkbox(session, "All areas powered", true);
+        assert!(lighting(session) > 0.0);
+        let fixture = downstream_instance(session, 2, 2, "/obj/machinery/light");
+        let environment = session.state.environment.as_ref().unwrap();
+        let fixture_type = environment
+            .tree
+            .id_of(&TreePath::parse("/obj/machinery/light"))
+            .unwrap();
+        let overlay_icon = environment
+            .tree
+            .var_inherited(fixture_type, &"overlay_icon".into())
+            .and_then(|var| var.value.as_text())
+            .unwrap()
+            .to_owned();
+        let glowing = |session: &Session| {
+            let owner = downstream_appearance(session, 2, 2, "/obj/machinery/light");
+            let environment = session.state.environment.as_ref().unwrap();
+            session
+                .active_cache()
+                .bake
+                .as_ref()
+                .unwrap()
+                .appearances
+                .get(&fixture.get())
+                .is_some_and(|appearance| {
+                    appearance.overlays.iter().any(|overlay| {
+                        editor::visual::resolve_overlay(&environment.tree, &owner, overlay)
+                            .icon
+                            .as_deref()
+                            == Some(overlay_icon.as_str())
+                    })
+                })
+        };
+        assert!(glowing(session));
+        downstream_checkbox(session, "Lighting", false);
+        assert_eq!(lighting(session), 1.0);
+        assert!(!glowing(session));
+        downstream_checkbox(session, "Lighting", true);
+        assert!(glowing(session));
+        for (label, path, y) in [("Cables", cable, 2), ("Pipes", pipe, 3), ("Disposals", disposal, 4)] {
+            downstream_checkbox(session, label, false);
+            assert_eq!(downstream_appearance(session, 6, y, path).alpha, 0);
+            downstream_checkbox(session, label, true);
+            assert_eq!(downstream_appearance(session, 6, y, path).alpha, 255);
+        }
+        downstream_checkbox(session, "Semitransparent", true);
+        assert_eq!(downstream_appearance(session, 6, 2, cable).alpha, 128);
+        downstream_checkbox(session, "Semitransparent", false);
+        downstream_checkbox(session, "Show all ranges", true);
+        assert!(
+            session
+                .active_cache()
+                .bake
+                .as_ref()
+                .unwrap()
+                .highlights(camera_id.get())[0]
+                .shown_when(vm::bake::HIGHLIGHT_ALWAYS)
+        );
+        downstream_checkbox(session, "Show all ranges", false);
+        let smoothed = downstream_appearance(session, 4, 3, wall).icon_state;
+        downstream_checkbox(session, "Smooth walls", false);
+        assert_ne!(downstream_appearance(session, 4, 3, wall).icon_state, smoothed);
+        downstream_checkbox(session, "Smooth walls", true);
+        assert_eq!(downstream_appearance(session, 4, 3, wall).icon_state, smoothed);
+
+        let initial = session.active_cache().bake.as_ref().unwrap().appearances.clone();
+        session.state.choose_prefab(Prefab::new(TreePath::parse(floor)));
+        session.set_tool(Tool::Place);
+        assert!(session.place_at(Coord::new(4, 3, 1), None).is_some());
+        settle_bake(session);
+        assert!(session.undo());
+        settle_bake(session);
+        assert_eq!(session.active_cache().bake.as_ref().unwrap().appearances, initial);
+        assert_render_cache_matches_rebuild(session);
+    }
+
+    fn check_downstream_windows(session: &mut Session, profile: &str) {
+        let window = "/obj/structure/window/reinforced/fulltile";
+        let spawner = "/obj/effect/spawner/structure/window/reinforced";
+        let mut map = Map::new(Size { x: 3, y: 1, z: 1 });
+        for (i, path) in [window, window, spawner].iter().enumerate() {
+            let key = map.intern_tile(vec![
+                Prefab::new(TreePath::parse(path)),
+                Prefab::new(TreePath::parse("/turf/open/floor/iron")),
+                Prefab::new(TreePath::parse("/area/station/science/lab")),
+            ]);
+            map.grid[0][0][i] = key;
+        }
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(session);
+        let bake = session.active_cache().bake.as_ref().unwrap();
+        assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
+        let environment = session.state.environment.as_ref().unwrap();
+        for (x, path) in [(1, window), (3, spawner)] {
+            let id = downstream_instance(session, x, 1, path);
+            let owner = downstream_appearance(session, x, 1, path);
+            // Spawners wrap each generated window, including its frame, in a parent overlay.
+            let mut pending = vec![(owner.clone(), bake.appearances[&id.get()].as_ref())];
+            let mut overlays = Vec::new();
+            while let Some((parent, delta)) = pending.pop() {
+                for overlay in &delta.overlays {
+                    let appearance = editor::visual::resolve_overlay(&environment.tree, &parent, overlay);
+                    pending.push((appearance.clone(), overlay));
+                    overlays.push(appearance);
+                }
+            }
+            if profile == "oculis" {
+                assert!(
+                    overlays.iter().any(|overlay| overlay
+                        .icon
+                        .as_deref()
+                        .is_some_and(|icon| icon.ends_with("reinforced_window_edges.dmi"))),
+                    "{overlays:?}"
+                );
+            } else if profile == "monkespaw" {
+                assert!(
+                    overlays.iter().any(|overlay| overlay
+                        .icon
+                        .as_deref()
+                        .is_some_and(|icon| icon.ends_with("window_sill.dmi"))),
+                    "{overlays:?}"
+                );
+                assert!(std::iter::once(&owner).chain(overlays.iter()).any(|appearance| {
+                    appearance.color.as_deref().is_some_and(|color| {
+                        color
+                            .get(..7)
+                            .is_some_and(|color| color.eq_ignore_ascii_case("#d381c9"))
+                    })
+                }));
+            }
+        }
+    }
 
     #[test]
     #[ignore = "requires the local target/MonkeStation2.0 checkout"]

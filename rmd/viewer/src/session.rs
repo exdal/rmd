@@ -98,6 +98,7 @@ impl Session {
                 &self.textures,
                 &document,
                 frame::FrameRenderOptions {
+                    node_types: None,
                     visibility: &frame::TypeVisibility::default(),
                     tile_size: self.options.tile_size,
                     appearances: editor::bake::appearances(bake.as_ref()),

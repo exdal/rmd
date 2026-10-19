@@ -483,6 +483,30 @@ pub(super) fn flat_session(width: u32, height: u32) -> Session {
     session
 }
 
+pub(crate) fn unknown_paths_session() -> Session {
+    let mut session = Session::new();
+    session.load_environment(&examples().join("test.dme")).unwrap();
+    let mut map = Map::new(Size { x: 2, y: 1, z: 2 });
+    let mut first = Prefab::new(TreePath::parse("/obj/removed_table"));
+    first.set_var("name".into(), Value::Text("First table".into()));
+    let mut second = first.clone();
+    second.set_var("name".into(), Value::Text("Second table".into()));
+    let a = map.intern_tile(vec![Prefab::new(TreePath::parse("/turf/open/floor")), first]);
+    let b = map.intern_tile(vec![Prefab::new(TreePath::parse("/turf/removed_floor")), second]);
+    map.intern_tile(vec![Prefab::new(TreePath::parse("/obj/unused_type"))]);
+    map.grid[0][0] = vec![a, b];
+    map.grid[1][0] = vec![b, a];
+    session.apply_map(crate::loader::LoadedMap {
+        path: PathBuf::from("unknown-paths.dmm"),
+        map,
+        z: 1,
+        errors: Vec::new(),
+        repo: None,
+        conflict: None,
+    });
+    session
+}
+
 pub(super) fn assert_same_sprites(actual: &[SpriteInstance], expected: &[SpriteInstance]) {
     let mut remaining = expected.to_vec();
     assert_eq!(actual.len(), remaining.len());
@@ -519,6 +543,7 @@ pub(super) fn assert_render_cache_matches_rebuild(session: &Session) {
         &session.textures,
         session.effective_grid(document_id).unwrap(),
         editor::frame::FrameRenderOptions {
+            node_types: Some(&session.active_cache().node_types),
             visibility: &session.type_visibility,
             tile_size: session.options.tile_size,
             appearances: editor::bake::appearances(session.active_cache().bake.as_ref()),

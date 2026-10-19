@@ -128,10 +128,23 @@ impl std::fmt::Display for Level {
 #[derive(Default)]
 pub struct PragmaTable {
     overrides: HashMap<Code, Level>,
+    stack: Vec<HashMap<Code, Level>>,
 }
 
 impl PragmaTable {
     pub fn new() -> Self { Self::default() }
+
+    pub fn push(&mut self) { self.stack.push(self.overrides.clone()); }
+
+    pub fn pop(&mut self) -> bool {
+        let Some(overrides) = self.stack.pop() else {
+            return false;
+        };
+
+        self.overrides = overrides;
+
+        true
+    }
 
     pub fn level(&self, code: Code) -> Level {
         self.overrides

@@ -611,6 +611,9 @@ impl App {
                         session.replace_instance(owner);
                     }
                 },
+                PickRequest::NodeSelect => {
+                    session.select_node_from_pick(pick);
+                },
                 PickRequest::NodeSeed(coord) => {
                     let picked = match pick {
                         PickResult::Hit(owner) => Some(owner),
@@ -725,7 +728,8 @@ impl App {
     }
 
     fn open_source(&mut self, source: SourceLocation) {
-        if let Err(error) = external_editor::open(&self.settings.preferred_editor, &source) {
+        if let Err(error) = external_editor::open(&self.settings.preferred_editor, &source, self.session.codebase_dir())
+        {
             log::error!(
                 "opening {}:{}:{} in the preferred editor: {error}",
                 source.path.display(),
@@ -773,7 +777,12 @@ impl App {
 
             Outcome::Map(loaded) => {
                 let path = loaded.path.clone();
-                let report = LoadReport::map(&self.diagnostic_path(&path), &loaded.errors);
+                let report = LoadReport::map(
+                    &self.diagnostic_path(&path),
+                    &loaded.map,
+                    self.session.tree(),
+                    &loaded.errors,
+                );
                 if let Some(id) = self.pending_reload.take() {
                     self.session.reload_map(id, *loaded);
                 } else {
@@ -1465,6 +1474,70 @@ mod tests {
             headless_frame(&mut app, settled + Duration::from_secs(1), None),
             NextFrame::OnEvent
         );
+    }
+
+    #[test]
+    fn unknown_map_types_open_the_issues_panel_and_keep_their_overrides_when_saved() {
+        use core::{location::Location, path::TreePath};
+        use std::sync::Arc;
+
+        use dmm::{Coord, MapFormat, writer::MapWriter};
+
+        let _guard = ui::IMGUI_CONTEXT.lock().unwrap();
+        let mut app = headless_editor();
+        let root = std::env::temp_dir().join(format!("rmd-unknown-map-types-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let mut tree = objtree::ObjectTree::new();
+        for path in ["/turf", "/area"] {
+            tree.register(&TreePath::parse(path), Location::default());
+        }
+        app.session.state.environment = Some(Arc::new(editor::Environment::new(root.join("game.dme"), tree)));
+        app.session.set_sanitize_vars_on_save(true);
+        let (map, errors) = dmm::parser::parse(
+            r#"
+"a" = (/obj/missing{name = "old object"; dir = 4},/turf,/area)
+(1,1,1) = {"
+a
+"}
+"#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+
+        for (index, format) in [MapFormat::Standard, MapFormat::Tgm].into_iter().enumerate() {
+            let path = root.join(format!("map-{index}.dmm"));
+            fs::write(&path, MapWriter::new(&map).with_format(format).write()).unwrap();
+            let loaded = loader::load_map(&path, 1, &editor::progress::Progress::new()).unwrap();
+            app.apply_outcome(Outcome::Map(Box::new(loaded)));
+            assert!(!app.session.state.active_document().unwrap().is_dirty());
+            assert_eq!(
+                app.session.map().unwrap().tile_at(Coord::new(1, 1, 1)),
+                map.tile_at(Coord::new(1, 1, 1))
+            );
+            let rendered = Instant::now();
+            for frame in 0..5 {
+                headless_frame(&mut app, rendered + Duration::from_millis(16) * frame, None);
+            }
+            let settled = rendered + Duration::from_secs(1);
+            assert!(matches!(headless_frame(&mut app, settled, None), NextFrame::At(_)));
+            assert!(app.ui.map_issues_visible(), "unknown paths should open Map Issues");
+
+            // A reload uses the same validation and keeps the existing document.
+            let id = app.session.state.active().unwrap();
+            app.pending_reload = Some(id);
+            let loaded = loader::load_map(&path, 1, &editor::progress::Progress::new()).unwrap();
+            app.apply_outcome(Outcome::Map(Box::new(loaded)));
+            assert_eq!(app.session.state.active(), Some(id));
+            assert_eq!(app.session.state.document_ids().len(), index + 1);
+            headless_frame(&mut app, settled + Duration::from_secs(1), None);
+            assert!(app.ui.map_issues_visible());
+
+            app.session.save_map_as(&path, format).unwrap();
+            let (saved, errors) = dmm::parser::parse(&fs::read_to_string(&path).unwrap());
+            assert!(errors.is_empty(), "{errors:?}");
+            assert_eq!(saved.format, format);
+            assert_eq!(saved.tile_at(Coord::new(1, 1, 1)), map.tile_at(Coord::new(1, 1, 1)));
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn parse(arguments: &[&str]) -> Result<Arguments, String> {

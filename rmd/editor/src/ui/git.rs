@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use dear_imgui_rs::{
     ItemHoveredFlags,
     ListClipper,
@@ -42,6 +40,7 @@ use editor::{
 use super::{
     SAVE_ERROR_COLOR,
     common::{
+        RowSelection,
         align_right,
         button_width,
         centered_note,
@@ -103,63 +102,12 @@ enum Action {
     Restore(Vec<Coord>),
 }
 
-/// Selected table rows, keyed by tile
-#[derive(Default)]
-struct RowSelection {
-    tiles: HashSet<Coord>,
-    anchor: Option<Coord>,
-}
-
-impl RowSelection {
-    fn contains(&self, coord: &Coord) -> bool { self.tiles.contains(coord) }
-
-    fn clear(&mut self) {
-        self.tiles.clear();
-        self.anchor = None;
-    }
-
-    /// The selected rows among `order`, in its order
-    fn among(&self, order: impl IntoIterator<Item = Coord>) -> Vec<Coord> {
-        order.into_iter().filter(|coord| self.tiles.contains(coord)).collect()
-    }
-
-    /// Updates the selection like a list view, returns whether the view should follow the row
-    fn click(&mut self, ui: &Ui, order: &[Coord], position: usize) -> bool {
-        let coord = order[position];
-        let io = ui.io();
-        let anchor = self
-            .anchor
-            .and_then(|anchor| order.iter().position(|candidate| *candidate == anchor));
-
-        if io.key_shift()
-            && let Some(anchor) = anchor
-        {
-            if !io.key_ctrl() {
-                self.tiles.clear();
-            }
-            self.tiles.extend(&order[anchor.min(position)..=anchor.max(position)]);
-            false
-        } else if io.key_ctrl() {
-            if !self.tiles.remove(&coord) {
-                self.tiles.insert(coord);
-            }
-            self.anchor = Some(coord);
-            false
-        } else {
-            self.tiles.clear();
-            self.tiles.insert(coord);
-            self.anchor = Some(coord);
-            true
-        }
-    }
-}
-
 pub(super) struct GitPanel {
     window: WindowKey,
     focus_requested: bool,
     select_tab: Option<GitTab>,
-    conflict_rows: RowSelection,
-    diff_rows: RowSelection,
+    conflict_rows: RowSelection<Coord>,
+    diff_rows: RowSelection<Coord>,
     selection_document: Option<DocumentId>,
     unresolved_only: bool,
     current_level_only: bool,

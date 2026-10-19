@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use dear_imgui_rs::{MouseButton, Ui};
 use dmm::Coord;
 use editor::{
@@ -12,8 +14,23 @@ use crate::{
     ui::{BlamePopup, blame_tooltip_position, draw_blame_popup, draw_conflict_tooltip, draw_diff_tooltip},
 };
 
-pub(super) fn draw_git_hover(ui: &Ui, session: &Session, frame: &mut ViewFrame<'_>, is_over_blame_popup: bool) -> bool {
+pub(super) fn draw_tile_hover(
+    ui: &Ui, session: &Session, frame: &mut ViewFrame<'_>, is_over_blame_popup: bool,
+) -> bool {
     let id = frame.id;
+    let unknown_paths = session
+        .tree()
+        .zip(frame.coord)
+        .and_then(|(tree, coord)| {
+            let tile = session.state.document(id)?.map.tile_at(coord)?;
+            Some(
+                tile.iter()
+                    .filter(|prefab| tree.id_of(&prefab.path).is_none())
+                    .map(|prefab| prefab.path.to_string())
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .unwrap_or_default();
     let hovered_conflict = frame.coord.and_then(|coord| {
         session
             .git_state(id)
@@ -22,12 +39,16 @@ pub(super) fn draw_git_hover(ui: &Ui, session: &Session, frame: &mut ViewFrame<'
     });
     let hovered_diff = frame
         .coord
-        .filter(|_| hovered_conflict.is_none() && session.git_state(id).is_some_and(|git| git.show_diff))
+        .filter(|_| {
+            hovered_conflict.is_none()
+                && unknown_paths.is_empty()
+                && session.git_state(id).is_some_and(|git| git.show_diff)
+        })
         .and_then(|coord| session.diff_at(id, coord).map(|change| (coord, change)));
     let show_blame = session.git_state(id).is_some_and(|git| git.show_blame);
     let hovered_blame = frame
         .coord
-        .filter(|_| show_blame && hovered_conflict.is_none() && hovered_diff.is_none())
+        .filter(|_| show_blame && hovered_conflict.is_none() && hovered_diff.is_none() && unknown_paths.is_empty())
         .and_then(|coord| session.blame_at(id, coord).map(|cell| (coord, cell)));
     let hovered_commit = match hovered_blame {
         Some((coord, (BlameCell::Commit(..), false))) => Some(coord),
@@ -37,6 +58,14 @@ pub(super) fn draw_git_hover(ui: &Ui, session: &Session, frame: &mut ViewFrame<'
     if frame.blame_popup.is_none() {
         if let (Some(coord), Some(conflict)) = (frame.coord, hovered_conflict) {
             ui.tooltip(|| draw_conflict_tooltip(ui, coord, conflict));
+        } else if !unknown_paths.is_empty() {
+            ui.tooltip(|| {
+                ui.text("This turf contains unknown paths");
+                ui.separator();
+                for path in &unknown_paths {
+                    ui.text(path);
+                }
+            });
         } else if let Some((coord, (kind, before, after))) = hovered_diff
             && let Some(state) = session.git_state(id).and_then(|git| git.diff.as_ref())
         {

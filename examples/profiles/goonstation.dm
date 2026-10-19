@@ -1,11 +1,10 @@
-// rmd embeds this integration for the Forced bundled profile setting. To make the profile part of a
-// Goonstation checkout instead, copy it there and `#include` it from `goonstation.dme` after
-// `// END_INCLUDE`, the guard keeps BYOND compiling it to nothing.
+// rmd embeds this profile for the Forced bundled profile setting. To keep it in a Goonstation
+// checkout instead, copy it there and `#include` it from `goonstation.dme` after `// END_INCLUDE`.
+// BYOND skips it because of the guard below.
 //
-// Goonstation derives its icons in `UpdateIcon()` and keeps its per-type data in a typeinfo datum,
-// so the profile resolves that datum per atom and lets the codebase pick its own icon state.
-// Mapped atoms never run New(), so the state UpdateIcon() reads and the lights New() attaches are
-// set up here instead.
+// Goonstation picks icons in UpdateIcon() and keeps per-type data in a typeinfo datum, so prepare
+// resolves the typeinfo of each atom. Mapped atoms never run New(), so the state UpdateIcon()
+// reads and the lights New() attaches are set up here.
 #ifdef __DEMIR_BAKE__
 
 #ifndef USE_PERSPECTIVE_EDITOR_WALLS
@@ -175,10 +174,10 @@
 		..()
 		demir_define_group(DEMIR_GROUP_POWER, /obj/machinery)
 
-// ui() rolls its writes back on every frame but the one the viewer touched something on, so the
-// profile's own vars are where panel state belongs.
+// ui() writes are rolled back unless the viewer changed something that frame, so panel state
+// lives in the profile's vars.
 /datum/demir/goonstation/ui(atom/target)
-	if(!imgui_begin("Demir"))
+	if(!imgui_begin("Goonstation"))
 		imgui_end()
 		return
 
@@ -191,7 +190,7 @@
 
 	imgui_end()
 
-// Unchecked shows the map unpowered, as if no APC were charged. Areas that need no power keep it.
+// When unchecked, only areas that need no power are powered.
 /proc/demir_area_powered(area/A, chan)
 	var/datum/demir/goonstation/profile = demir_profile()
 	if(profile.power_all)
@@ -291,7 +290,7 @@
 	if(powered())
 		demir_add_screen_glow('icons/obj/disposal.dmi', "chemlink_screen")
 
-// SimpleLight's vis_contents objects, as images the bake can export.
+// The /obj/overlay/simple_light that add_simple_light() puts in vis_contents, as an image.
 /atom/proc/demir_simple_light(list/rgba)
 	var/image/light = new
 	light.icon = 'icons/effects/overlays/simplelight.dmi'
@@ -321,7 +320,7 @@
 /obj/naval_mine/demir_bake_extras()
 	demir_simple_light(list(255, 102, 102, 40))
 
-// Anything drawn on the lighting plane adds to the light there, and subtracting blends take it away.
+// Images on the lighting plane add light, and subtract blends remove it.
 /image/proc/demir_tag_light()
 	if(plane == PLANE_LIGHTING)
 		if(blend_mode == BLEND_SUBTRACT)
@@ -351,8 +350,9 @@
 	if(findtext(icon_state, "-"))
 		UpdateIcon()
 
-// Preview the cables an auto spawner would place without creating powernets or deleting the
-// spawner. Each preview reads the current neighborhood, so edits update adjacent spawners too.
+// check() and replace() lay real cables, build powernets and delete the spawner. check() also
+// scans only half the directions and relies on its neighbors to set the rest. This works out the
+// same cables from this spawner alone and draws them.
 /obj/cable/auto/demir_bake_icon()
 	var/list/connected = list()
 	for(var/direction in list(NORTH, SOUTH, EAST, WEST, NORTHEAST, NORTHWEST, SOUTHEAST, SOUTHWEST))
@@ -367,7 +367,7 @@
 		if(found)
 			connected += direction
 
-	// Cardinal routes take priority over diagonals in the native spawner.
+	// The spawner drops a diagonal when a cardinal next to it is connected.
 	if((NORTHEAST in connected) && ((NORTH in connected) || (EAST in connected)))
 		connected -= NORTHEAST
 	if((NORTHWEST in connected) && ((NORTH in connected) || (WEST in connected)))
@@ -377,7 +377,7 @@
 	if((SOUTHWEST in connected) && ((SOUTH in connected) || (WEST in connected)))
 		connected -= SOUTHWEST
 
-	// Mapped cables are added after diagonal suppression; the native spawner forces those links.
+	// Mapped cables are added after diagonals are dropped, because the spawner always links to them.
 	for(var/direction in list(NORTH, SOUTH, EAST, WEST, NORTHEAST, NORTHWEST, SOUTHEAST, SOUTHWEST))
 		if(direction in connected)
 			continue
@@ -474,9 +474,8 @@
 /datum/demir/goonstation/highlights(atom/target)
 	return target.demir_highlights()
 
-// RobustLight2 precomputes a point light's radius from its brightness and
-// height. Use that native calculation, then export the attenuation parameters
-// consumed by the editor's static lighting pass.
+// precalc() computes the radius from brightness and height. Export it with the attenuation values
+// the editor's lighting pass uses.
 /datum/light/proc/demir_export(atom/target)
 	target.demir_light_range = radius
 	target.demir_light_power = brightness
@@ -485,8 +484,8 @@
 	target.demir_light_quadratic = brightness * RL_Atten_Quadratic
 	target.demir_light_constant = RL_Atten_Constant
 
-// A preview light has no world position. The native constructor only copies
-// its coordinates and registers a positioned light with its turf.
+// Preview lights have no position. The real New() only stores coordinates and registers the light
+// with its turf.
 /datum/light/point/New()
 	return
 
@@ -500,7 +499,7 @@
 	preview_light.demir_export(src)
 
 // RobustLight2 never starts in the editor, so an attached light only keeps its settings and
-// whether it was enabled.
+// whether it is enabled.
 /atom/proc/demir_attach_light(brightness, red = 1, green = 1, blue = 1, height = 1, enabled = TRUE)
 	var/datum/light/point/light = new
 	light.set_brightness(brightness)
@@ -639,8 +638,8 @@
 	demir_set_light_enabled(light, powered())
 	return ..()
 
-// Areas and turfs can opt out of RobustLight2's darkness independently of
-// point lights. Ambient area colors are already stored in BYOND color form.
+// Areas and turfs can be fullbright whatever their point lights do. Area ambient colors are
+// already BYOND color strings.
 /area/demir_apply_light()
 	demir_fullbright = force_fullbright
 	if(ambient_light)
@@ -651,9 +650,8 @@
 	demir_fullbright = fullbright
 	..()
 
-// The normal world startup calls power_change() before RobustLight2 starts.
-// Reproduce only the state decisions that select mapped, statically powered
-// fixtures; their game machinery and power networks remain stopped.
+// World startup calls power_change() before RobustLight2 starts. These only decide which fixtures
+// are lit. Machinery and power networks stay stopped.
 /obj/machinery/light
 	var/demir_lit = FALSE
 
@@ -673,8 +671,7 @@
 	var/area/light_area = get_area(src)
 	return light_area && switchon && demir_area_powered(light_area, LIGHT)
 
-// These subtypes normally mark themselves broken in New(), which the preview
-// deliberately does not execute for mapped atoms.
+// These subtypes set LIGHT_BROKEN in New(), which mapped atoms never run.
 /obj/machinery/light/small/broken/demir_is_on()
 	return FALSE
 
@@ -690,8 +687,7 @@
 /obj/machinery/light/proc/demir_fixture_color()
 	return list(initial(src.light_type.color_r), initial(src.light_type.color_g), initial(src.light_type.color_b))
 
-// These fixtures replace their light datum's color in New(). Keep those
-// declared constructor effects without running the rest of machinery setup.
+// These fixtures change their light color in New().
 /obj/machinery/light/lamp/green/demir_fixture_color()
 	return list(0.45, 0.85, 0.25)
 
@@ -715,8 +711,12 @@
 	if(icon_state == state_on || icon_state == state_off)
 		icon_state = demir_lit ? state_on : state_off
 
-// Map lights are direct RobustLight2 sources. Their native constructor scales
-// the mapped brightness before enabling the point light.
+/obj/machinery/light/incandescent/demir_bake_icon()
+	autoposition(instant = TRUE)
+	..()
+
+// Map lights are plain RobustLight2 sources. New() scales the mapped brightness before enabling
+// them.
 /obj/map/light/demir_apply_light()
 	demir_apply_point_light(brightness / 5, color_r, color_g, color_b)
 

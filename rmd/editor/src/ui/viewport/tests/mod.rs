@@ -238,27 +238,28 @@ fn tool_interaction_configures_highlights_and_pick_requests() {
     assert_eq!(
         node,
         MapViewInteraction {
-            placement_flash: interaction.placement_flash,
-            highlight: interaction.highlight,
-            mode: InteractionMode::Select { pick: None },
-            ..Default::default()
+            mode: InteractionMode::Node { pick: None },
+            ..interaction
         }
     );
     let coord = Coord::new(3, 4, 1);
     request_pick(&mut node, PickRequest::NodeSeed(coord));
     assert_eq!(
         node.mode,
-        InteractionMode::Select {
+        InteractionMode::Node {
             pick: Some(PickRequest::NodeSeed(coord)),
         }
     );
     request_pick(&mut node, PickRequest::NodeDelete(coord));
     assert_eq!(
         node.mode,
-        InteractionMode::Select {
+        InteractionMode::Node {
             pick: Some(PickRequest::NodeDelete(coord)),
         }
     );
+    configure_tool_interaction(Tool::Node, &mut node);
+    assert_eq!(node.cursor, interaction.cursor);
+    assert_eq!(node.mode.pick(), Some(PickRequest::NodeDelete(coord)));
 
     let mut fill = interaction;
     configure_tool_interaction(Tool::Fill, &mut fill);

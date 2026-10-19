@@ -588,10 +588,11 @@ impl Evaluator<'_> {
             | Intrinsic::Link
             | Intrinsic::Shell
             | Intrinsic::Shutdown
-            | Intrinsic::Sleep
             | Intrinsic::Text2file
             | Intrinsic::Winget
             | Intrinsic::Winset => Err(self.fault(FaultKind::Blocked(name.into()))),
+
+            Intrinsic::Sleep => Err(self.fault(FaultKind::Sleep)),
 
             Intrinsic::Image | Intrinsic::MutableAppearance => self.appearance_object(intrinsic, None, params, args),
             Intrinsic::ImageNew => self.appearance_object(intrinsic, receiver.object(), params, args),

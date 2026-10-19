@@ -16,7 +16,7 @@ pub(super) use self::{
     stroke::{ActivePlacementFlash, PickStroke, PlacementStroke},
 };
 use self::{
-    hover::draw_git_hover,
+    hover::draw_tile_hover,
     overlays::{banner_contains, draw_recent_prefabs},
     presence::{draw_coop_status, draw_tab_menu, hit_comment, share_presence},
     selection::{ViewGestures, conflict_controls_contain, prepare_block_preview, sync_gestures},
@@ -503,7 +503,7 @@ impl UiState {
             *hovered_coord = frame.coord;
             share_presence(session, &frame, coop);
 
-            let is_blame_capturing = draw_git_hover(ui, session, &mut frame, is_over_blame_popup);
+            let is_blame_capturing = draw_tile_hover(ui, session, &mut frame, is_over_blame_popup);
             let node_hit = draw_node_hit(ui, session, &frame);
             configure_tool_interaction(session.tool(), frame.interaction);
             self.toggle_focus_on_key(ui, session, settings, &frame);
@@ -619,7 +619,7 @@ impl UiState {
                 frame,
                 node_hit,
                 clicks,
-                is_blame_capturing || is_module_capturing,
+                capture.is_any() || ui.io().want_text_input(),
             );
         }
 

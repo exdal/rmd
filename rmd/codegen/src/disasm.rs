@@ -126,6 +126,7 @@ impl Cursor<'_> {
             | Op::IterKey
             | Op::RangeTest
             | Op::Return
+            | Op::EndSpawn
             | Op::ReturnValue
             | Op::Del
             | Op::Throw
@@ -303,6 +304,10 @@ impl Cursor<'_> {
                 let catch = CodeOffset(self.u32()?);
                 let merge = CodeOffset(self.u32()?);
                 let _ = write!(output, " body={body} catch={catch} merge={merge}");
+            },
+            Op::Spawn => {
+                let body = CodeOffset(self.u32()?);
+                let _ = write!(output, " body={body}");
             },
             Op::InitializeVariable => {
                 let id = StringId(self.u32()?);

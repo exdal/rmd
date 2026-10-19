@@ -12,7 +12,7 @@ use net::{CodebaseId, Comment, CommentId, MAX_COMMENT_LEN, PeerId};
 use super::{
     DIAGNOSTIC_WARNING_COLOR,
     block::{block_selection_bounds, fill_selection, hollow_selection_inner},
-    common::{begin_centered_modal, dpi},
+    common::{DialogButton, begin_centered_modal, dialog_buttons, dpi},
     dialog::{DIALOG_FIELD_WIDTH, MODAL_FLAGS, SAVE_ERROR_COLOR},
     overlay::{OVERLAY_BG, OverlayRect},
 };
@@ -169,30 +169,32 @@ pub(super) fn draw_coop_dialog(
             ui.text_colored(SAVE_ERROR_COLOR, error);
         }
 
-        ui.separator();
-        if ui.button("Cancel") || ui.is_key_pressed(Key::Escape) {
-            close = true;
-            ui.close_current_popup();
-        }
-
         let nick = state.nick.trim();
         let address = state.address.trim();
         let password = state.password.trim();
         let is_ready =
             !nick.is_empty() && !password.is_empty() && (state.kind == CoopDialogKind::Host || !address.is_empty());
 
-        ui.same_line();
         let label = match state.kind {
-            CoopDialogKind::Host => "Host",
-            CoopDialogKind::Join => "Join",
+            CoopDialogKind::Host => "Host Session",
+            CoopDialogKind::Join => "Join Session",
         };
 
-        let clicked = {
-            let _disabled = ui.begin_disabled_with_cond(!is_ready);
-            ui.button(label)
-        };
+        let pressed = dialog_buttons(
+            ui,
+            &[
+                DialogButton::cancel("Cancel"),
+                DialogButton::primary(label).enabled(is_ready),
+            ],
+            true,
+        );
 
-        if is_ready && (clicked || submitted) {
+        if pressed == Some(0) {
+            close = true;
+            ui.close_current_popup();
+        }
+
+        if is_ready && (pressed == Some(1) || submitted) {
             let result = match state.kind {
                 CoopDialogKind::Host => {
                     session.host_coop(state.port as u16, net::hash_password(password), nick.to_owned())
@@ -361,28 +363,26 @@ pub(super) fn draw_out_of_date_dialog(ui: &Ui, session: &Session) -> Option<(Doc
     ui.text(format!("{nick} shared a newer {}.", document.title()));
     ui.text("Your copy has unsaved changes and is read only until you choose.");
     ui.text_disabled("Leaving co-op keeps your copy as it is.");
-    ui.dummy([0.0, ui.frame_height() * 0.25]);
 
-    let mut choice = None;
-    if ui.button("Save mine, load shared") {
-        choice = Some(OutOfDateChoice::SaveMine);
-    }
-
-    ui.same_line();
-    if ui.button("Discard mine, load shared") {
-        choice = Some(OutOfDateChoice::DiscardMine);
-    }
-
-    ui.same_line();
     let leave = if coop.is_hosting() {
-        "Stop hosting, keep mine"
+        "Stop Hosting, Keep Mine"
     } else {
-        "Leave co-op, keep mine"
+        "Leave Co-op, Keep Mine"
     };
-    if ui.button(leave) {
-        choice = Some(OutOfDateChoice::Leave);
-    }
-    ui.set_item_tooltip("Roach out");
+    let choice = match dialog_buttons(
+        ui,
+        &[
+            DialogButton::secondary(leave).tooltip("Roach out"),
+            DialogButton::destructive("Discard Mine, Load Shared", false),
+            DialogButton::primary("Save Mine, Load Shared"),
+        ],
+        true,
+    ) {
+        Some(0) => Some(OutOfDateChoice::Leave),
+        Some(1) => Some(OutOfDateChoice::DiscardMine),
+        Some(_) => Some(OutOfDateChoice::SaveMine),
+        None => None,
+    };
 
     if choice.is_some() {
         ui.close_current_popup();
@@ -732,26 +732,28 @@ pub(super) fn draw_coop_notice(
         ui.text("Open maps and unsaved changes are preserved.");
     }
 
-    ui.separator();
-    if ui.button("Close") || ui.is_key_pressed(Key::Escape) {
+    let label = match (is_mismatch, coop.was_hosting()) {
+        (true, _) => "Reload Codebase and Retry",
+        (false, true) => "Host Again",
+        (false, false) => "Retry",
+    };
+
+    let pressed = dialog_buttons(
+        ui,
+        &[
+            DialogButton::cancel("Close"),
+            DialogButton::primary(label).enabled(!is_loading && coop.can_retry()),
+        ],
+        true,
+    );
+
+    if pressed == Some(0) {
         notice.reset();
         ui.close_current_popup();
         return Some(CoopNoticeChoice::Dismiss);
     }
 
-    ui.same_line();
-    let label = match (is_mismatch, coop.was_hosting()) {
-        (true, _) => "Reload codebase and retry",
-        (false, true) => "Host again",
-        (false, false) => "Retry",
-    };
-
-    let is_clicked = {
-        let _disabled = ui.begin_disabled_with_cond(is_loading || !coop.can_retry());
-        ui.button(label)
-    };
-
-    if !is_clicked {
+    if pressed != Some(1) {
         return None;
     }
 

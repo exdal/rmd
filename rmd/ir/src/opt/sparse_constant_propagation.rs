@@ -225,6 +225,7 @@ impl<'a> Solver<'a> {
                 self.mark_block(*body);
                 self.mark_block(*catch);
             },
+            SolverInstruction::Spawn { body } => self.mark_block(*body),
             _ => {},
         }
 
@@ -424,6 +425,9 @@ enum SolverInstruction<'a> {
         body: IrNodeId,
         catch: IrNodeId,
     },
+    Spawn {
+        body: IrNodeId,
+    },
     Phi(&'a [PhiOperand]),
     Unary {
         op: UnaryOp,
@@ -454,6 +458,7 @@ impl<'a> From<&'a IrNode> for SolverInstruction<'a> {
                 body: *body,
                 catch: *catch,
             },
+            IrNode::Spawn { body, .. } => Self::Spawn { body: *body },
             IrNode::Phi { operands } => Self::Phi(operands),
             IrNode::Unary { op, operand } => Self::Unary {
                 op: *op,
@@ -475,6 +480,7 @@ fn is_solver_instruction(node: &IrNode) -> bool {
         IrNode::Branch(_)
             | IrNode::ConditionalBranch { .. }
             | IrNode::TryCatch { .. }
+            | IrNode::Spawn { .. }
             | IrNode::Phi { .. }
             | IrNode::Unary { .. }
             | IrNode::Binary { .. }

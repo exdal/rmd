@@ -119,6 +119,30 @@ impl TreePath {
     /// The final segment - the name of the datum, proc or var being declared.
     pub fn name(&self) -> Option<&Identifier> { self.segments.get(self.name_offset) }
 
+    /// `/mob/proc/plain`, `/mob/verb/spoken`, and `/mob/child/plain` for an override
+    pub fn spelled(&self) -> String {
+        let keyword = if self.flags.contains(PathFlags::IS_VERB) {
+            "verb"
+        } else if self.flags.contains(PathFlags::IS_PROC) {
+            "proc"
+        } else {
+            return self.to_string();
+        };
+
+        let mut text = String::new();
+        for (index, segment) in self.segments.iter().enumerate() {
+            if index == self.keyword_offset {
+                text.push('/');
+                text.push_str(keyword);
+            }
+
+            text.push('/');
+            text.push_str(segment.as_str());
+        }
+
+        text
+    }
+
     /// The type that owns this declaration: everything before the `var`/`proc` keyword.
     pub fn owner(&self) -> &[Identifier] { &self.segments[..self.keyword_offset.min(self.segments.len())] }
 

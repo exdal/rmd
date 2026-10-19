@@ -28,6 +28,7 @@ fn spare_sprite(z: u32) -> SpriteInstance {
         is_area: false,
         hidden: false,
         click_through: false,
+        node_pickable: false,
         area_edges: 0,
         lighting: render::SpriteLighting::Normal,
         color: [0.0; 4],
@@ -118,7 +119,7 @@ impl FrameInstances {
             for (index, chunk) in chunks.into_iter().enumerate() {
                 let lower = match chunk.first() {
                     Some((key, _)) if index > 0 => *key,
-                    _ => (z, i32::MIN, i32::MIN, FIRST_PLACEMENT, 0),
+                    _ => (z, i32::MIN, i32::MIN, false, FIRST_PLACEMENT, 0),
                 };
 
                 let start_offset = sprites.len();
@@ -426,7 +427,7 @@ pub(super) mod tests {
 
     #[test]
     fn a_placement_uploads_only_the_pages_it_touches() {
-        let tree = tree(&[("/turf/floor", "floor", 2.0), ("/obj/table", "table", 3.0)]);
+        let tree = tree(&[("/turf/floor", "floor", 2.0), ("/obj/table", "table", 2.0)]);
         let icons = icons(&["floor", "table"]);
         let textures = textures(&["floor", "table"]);
         let mut document = document(floor_map(24, 24, 2));
@@ -446,6 +447,52 @@ pub(super) mod tests {
         assert_eq!(sprites[0].end - sprites[0].start, PAGE_CAPACITY);
         assert_eq!(instances.sprites.len(), slots);
         assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+    }
+
+    #[test]
+    fn equal_layer_turf_priority_follows_moves_type_changes_and_history() {
+        let tree = tree(&[("/turf/floor", "floor", 2.0), ("/obj/table", "table", 2.0)]);
+        let icons = icons(&["floor", "table"]);
+        let textures = textures(&["floor", "table"]);
+        let mut document = document(floor_map(24, 24, 1));
+        let table = place(&mut document, Coord::new(5, 24, 1), "/obj/table");
+        let mut instances = build(&tree, &icons, &textures, &document, 32);
+        assert_eq!(instances.live_sprites().last().unwrap().owner, table);
+
+        assert_eq!(
+            document.move_instance(table, Coord::new(20, 1, 1), "move table", &[], None),
+            Some(true)
+        );
+        update_prefab(&mut instances, &tree, &icons, &textures, &document, table, 32);
+        assert_eq!(instances.live_sprites().last().unwrap().owner, table);
+        assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+
+        assert_eq!(
+            document.edit_instances(
+                &[table],
+                "replace table with turf",
+                Some(&TreePath::parse("/turf/floor")),
+                &[],
+                None,
+            ),
+            Some(true)
+        );
+        update_prefab(&mut instances, &tree, &icons, &textures, &document, table, 32);
+        assert_ne!(instances.live_sprites().last().unwrap().owner, table);
+        assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+
+        for _ in 0..2 {
+            let affected = document.undo_with_affected().expect("undo");
+            update_prefabs(&mut instances, &tree, &icons, &textures, &document, &affected, 32);
+            assert_eq!(instances.live_sprites().last().unwrap().owner, table);
+            assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+        }
+        for _ in 0..2 {
+            let affected = document.redo_with_affected().expect("redo");
+            update_prefabs(&mut instances, &tree, &icons, &textures, &document, &affected, 32);
+            assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+        }
+        assert_ne!(instances.live_sprites().last().unwrap().owner, table);
     }
 
     #[test]
@@ -478,6 +525,7 @@ pub(super) mod tests {
             &textures,
             &document,
             FrameRenderOptions {
+                node_types: None,
                 visibility: &visibility,
                 tile_size: 32,
                 appearances: &std::collections::HashMap::new(),
@@ -500,7 +548,7 @@ pub(super) mod tests {
 
     #[test]
     fn pages_follow_placements_overflow_removals_and_undo() {
-        let tree = tree(&[("/turf/floor", "floor", 2.0), ("/obj/table", "table", 3.0)]);
+        let tree = tree(&[("/turf/floor", "floor", 2.0), ("/obj/table", "table", 2.0)]);
         let icons = icons(&["floor", "table"]);
         let textures = textures(&["floor", "table"]);
         let mut document = document(floor_map(24, 24, 2));

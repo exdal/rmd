@@ -121,6 +121,16 @@ impl Session {
         let document = self.state.document(id)?;
         let cache = self.caches.get(&id)?;
 
+        let mut interaction = interaction;
+        if interaction.mode.is_node() {
+            interaction.selected = interaction.selected.filter(|owner| {
+                cache
+                    .instances
+                    .sprite(*owner)
+                    .is_some_and(|sprite| sprite.node_pickable)
+            });
+        }
+
         Some(MapViewFrame {
             rect,
             camera,
@@ -217,6 +227,7 @@ impl Session {
         }
 
         let bake = self.caches.get(&id).and_then(|cache| cache.bake.as_ref());
+        let node_types = super::node::registered_types(self.state.environment.as_deref(), bake);
         let instances = match (self.state.environment.as_ref(), self.effective_grid(id)) {
             (Some(environment), Some(grid)) => frame::build_view_with_options(
                 &environment.tree,
@@ -224,6 +235,7 @@ impl Session {
                 &self.textures,
                 grid,
                 FrameRenderOptions {
+                    node_types: Some(&node_types),
                     visibility: &self.type_visibility,
                     tile_size: self.options.tile_size,
                     appearances: editor::bake::appearances(bake),
@@ -236,6 +248,7 @@ impl Session {
         let revision = self.bump_revision();
         let cache = self.caches.entry(id).or_default();
         cache.instances = instances;
+        cache.node_types = node_types;
         cache.revision = revision;
         cache.frame_updates.clear();
         cache.lighting_revision = revision;

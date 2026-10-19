@@ -1,9 +1,9 @@
-// rmd embeds this integration for the Forced bundled profile setting. To make the profile part of a
-// Vanderlin checkout instead, copy it there and `#include` it from `vanderlin.dme` after
-// `// END_INCLUDE`, the guard keeps BYOND compiling it to nothing.
+// rmd embeds this profile for the Forced bundled profile setting. To keep it in a Vanderlin
+// checkout instead, copy it there and `#include` it from `vanderlin.dme` after `// END_INCLUDE`.
+// BYOND skips it because of the guard below.
 //
-// Vanderlin needs its globals and overlay subsystem stubbed before anything smooths, and its fluid
-// pipes assemble an icon state from a connection list that normally fills in over two init passes.
+// Smoothing needs the globals and the overlay subsystem stubbed first. Water pipes build their icon
+// state from a connection list that the game fills over two init passes.
 #ifdef __DEMIR_BAKE__
 
 /datum/controller/subsystem/overlays/demir_preview/New()
@@ -21,56 +21,18 @@
 /atom/proc/demir_prepare_smoothing()
 	SETUP_SMOOTHING()
 
-// MOVABLE_LIGHT uses a pre-baked mask in vis_contents. Emit the same mask as a tagged underlay so
-// the editor can composite it after static lighting without starting components or signals.
-/proc/demir_vanderlin_overlay_icon(pixel_bounds)
-	switch(pixel_bounds)
-		if(32)
-			return 'icons/effects/light_overlays/light_32.dmi'
-		if(64)
-			return 'icons/effects/light_overlays/light_64.dmi'
-		if(96)
-			return 'icons/effects/light_overlays/light_96.dmi'
-		if(128)
-			return 'icons/effects/light_overlays/light_128.dmi'
-		if(160)
-			return 'icons/effects/light_overlays/light_160.dmi'
-		if(192)
-			return 'icons/effects/light_overlays/light_192.dmi'
-		if(224)
-			return 'icons/effects/light_overlays/light_224.dmi'
-		if(256)
-			return 'icons/effects/light_overlays/light_256.dmi'
-		if(288)
-			return 'icons/effects/light_overlays/light_288.dmi'
-		if(320)
-			return 'icons/effects/light_overlays/light_320.dmi'
-		if(352)
-			return 'icons/effects/light_overlays/light_352.dmi'
-		if(384)
-			return 'icons/effects/light_overlays/light_384.dmi'
-		if(416)
-			return 'icons/effects/light_overlays/light_416.dmi'
-		if(448)
-			return 'icons/effects/light_overlays/light_448.dmi'
-		if(480)
-			return 'icons/effects/light_overlays/light_480.dmi'
-		if(512)
-			return 'icons/effects/light_overlays/light_512.dmi'
-		if(544)
-			return 'icons/effects/light_overlays/light_544.dmi'
-	return null
-
 /atom/movable/proc/demir_add_overlay_light()
 	if(light_system != MOVABLE_LIGHT || !light_on || !light_outer_range)
 		return
 	demir_add_light_mask(light_outer_range, light_color)
 
+// The mask /datum/component/overlay_lighting draws, as an underlay instead of vis_contents.
 /atom/movable/proc/demir_add_light_mask(outer_range, mask_color)
 	var/rounded_range = clamp(CEILING(outer_range, 0.5), 1, 9)
 	var/pixel_bounds = ((rounded_range - 1) * 64) + 32
+	var/list/light_overlays = /datum/component/overlay_lighting::light_overlays
 	var/image/mask = new
-	mask.icon = demir_vanderlin_overlay_icon(pixel_bounds)
+	mask.icon = light_overlays["[pixel_bounds]"]
 	mask.icon_state = "light2"
 	mask.dir = dir
 	mask.plane = O_LIGHTING_VISUAL_PLANE
@@ -82,16 +44,16 @@
 	mask.demir_overlay_light = 1
 	underlays += mask
 
-// A sconce sparks the torch it spawns in Initialize(), and the torch's light component hangs its
-// mask on the sconce because the torch itself is not on a turf.
+// A sconce lights the torch it spawns in Initialize(). The torch is not on a turf, so its light
+// component puts the mask on the sconce.
 /obj/machinery/light/fueled/torchholder/demir_add_overlay_light()
 	if(!ispath(torchy))
 		return
 	var/obj/item/flashlight/flare/torch/torch = torchy
 	demir_add_light_mask(initial(torch.light_outer_range), initial(torch.light_color))
 
-// Fixtures are STATIC_LIGHT, but their light vars stay at the type defaults until update() copies
-// brightness, bulb_power and bulb_colour over them through set_light().
+// Fixtures keep the default light vars until update() passes brightness, bulb_power and
+// bulb_colour to set_light().
 /obj/machinery/light/demir_prepare_light_state()
 	light_on = on
 	if(!on)
@@ -121,7 +83,7 @@
 	on = TRUE
 	..()
 
-// Flashlights normally derive light_on from their mapped on/icon state during Initialize().
+// Initialize() sets light_on from the mapped on var or icon_state.
 /obj/item/flashlight/demir_prepare_light_state()
 	if(icon_state == "[initial(icon_state)]-on")
 		on = TRUE
@@ -138,11 +100,9 @@
 /obj/item/clothing/head/helmet/leather/shaman_hood/demir_prepare_light_state()
 	light_on = on
 
-// Fluid pipes keep an associative list of connected directions keyed by the
-// direction number, and assemble their icon state from those keys in list
-// order. Each pipe links its neighbors pairwise from Initialize(), and
-// adjacent machines link back from setup_water(). Baking every pipe from its
-// own point of view reaches the same result without a load order.
+// Water pipes build their icon state from the `connected` list, keyed by direction, in list order.
+// In game each pipe links with its neighbors in Initialize() and machines link back in
+// setup_water(). Checking every neighbor from each pipe gives the same result in any order.
 /obj/structure/water_pipe/demir_bake_appearance()
 	for(var/key in connected)
 		connected[key] = 0
@@ -172,9 +132,8 @@
 
 	update_appearance(UPDATE_OVERLAYS)
 
-// `GET_TURF_ABOVE()` reads the mapping subsystem's z level links, which the
-// editor never builds. Adjacent z levels stack instead, the way the viewer
-// draws its underlays.
+// GET_TURF_ABOVE() needs SSmapping's z level links, which the editor does not build. Treat the
+// next z level as the one above, like the viewer does.
 /obj/structure/water_pipe/proc/demir_vertical_turf(offset)
 	var/turf/here = get_turf(src)
 	if(!here)
@@ -209,7 +168,7 @@
 /atom/movable/demir_finish_appearance()
 	demir_add_overlay_light()
 
-// Water pipes bypass both generic smoothing and overlay lighting.
+// Water pipes neither smooth nor light.
 /obj/structure/water_pipe/demir_finish_appearance()
 	return
 
@@ -218,8 +177,8 @@
 	target.demir_finish_appearance()
 
 
-// The day cycle picks one of the daytime tints at random. Noon is what a mapper wants to see, and
-// a fixed choice keeps the view from shimmering between bakes.
+// The day cycle picks a random daytime tint. Use the first one so the color stays the same between
+// bakes.
 /proc/demir_daylight_color()
 	var/datum/time_of_day/daytime/noon = /datum/time_of_day/daytime
 	var/tint = initial(noon.color)
@@ -228,9 +187,8 @@
 		return length(tints) ? tints[1] : COLOR_WHITE
 	return tint || COLOR_WHITE
 
-// `is_sky_visible()` walks the z stack through the mapping subsystem's level links and a
-// transparency trait, neither of which the editor builds. Adjacent z levels stack instead, the way
-// the water pipes above already assume.
+// Same as is_sky_visible(), which needs SSmapping's z level links. Treat the next z level as the
+// one above, like the water pipes.
 /turf/proc/demir_sees_sky()
 	if(pseudo_roof)
 		return FALSE
@@ -261,10 +219,10 @@
 	// LUM_FALLOFF measures flat distance, with no pseudo z term under the root.
 	demir_light_height = 0
 
-// Sunlight spreads GLOBAL_LIGHT_RANGE tiles from every turf that can see the sky, and HARD_SUN is
-// the -0.5 under the root. Corners keep the closest source rather than the sum, so this is a peak
-// source. A lit turf reaches its own corners at full strength, which is what makes the outdoors
-// read as daylight without an explicit border pass.
+// Sunlight reaches GLOBAL_LIGHT_RANGE tiles from every turf that sees the sky, and HARD_SUN is the
+// -0.5 under the root. Corners take the strongest sunlight instead of the sum, so this is a peak
+// source. Each sunlit turf lights its own corners fully, so no separate border pass is needed.
+// outdoor_datum.dm undefines both, so their values are repeated here.
 /turf/demir_apply_light()
 	if(!demir_sees_sky())
 		return ..()

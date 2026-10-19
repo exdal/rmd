@@ -508,6 +508,7 @@ mod tests {
 
     fn options<'a>(visibility: &'a frame::TypeVisibility, bake: &'a Bake) -> frame::FrameRenderOptions<'a> {
         frame::FrameRenderOptions {
+            node_types: None,
             visibility,
             tile_size: 32,
             appearances: appearances(Some(bake)),

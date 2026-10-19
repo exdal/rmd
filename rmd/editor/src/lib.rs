@@ -13,6 +13,7 @@ pub mod frame;
 pub mod git;
 pub mod grid;
 pub mod icons;
+pub mod issues;
 pub mod maploader;
 pub mod node;
 pub mod patch;
@@ -22,7 +23,10 @@ pub mod search;
 pub mod tool;
 pub mod visual;
 
-use core::types::{Identifier, Value};
+use core::{
+    location::FileId,
+    types::{Identifier, Value},
+};
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
@@ -76,6 +80,7 @@ pub struct Environment {
     pub icon_info: HashMap<String, IconInfo>,
     pub maps: Vec<PathBuf>,
     pub files: Vec<PathBuf>,
+    pub builtin_files: Vec<FileId>,
     /// `#define FILE_DIR "icons"`
     pub resource_dirs: Vec<PathBuf>,
     fingerprint: Option<CodebaseHash>,
@@ -97,6 +102,7 @@ impl Environment {
             icon_info: HashMap::new(),
             maps: Vec::new(),
             files: Vec::new(),
+            builtin_files: Vec::new(),
             resource_dirs: Vec::new(),
             fingerprint: None,
             area_paths: OnceLock::new(),
@@ -141,6 +147,7 @@ impl Environment {
             icon_info: HashMap::new(),
             maps: compiled.maps,
             files: compiled.files,
+            builtin_files: compiled.builtin_files,
             resource_dirs: compiled.resource_dirs,
             fingerprint: Some(compiled.fingerprint),
             area_paths: OnceLock::new(),
@@ -168,6 +175,8 @@ impl Environment {
     }
 
     pub fn base_dir(&self) -> &Path { self.root.parent().unwrap_or(Path::new(".")) }
+
+    pub fn is_builtin_file(&self, id: FileId) -> bool { self.builtin_files.contains(&id) }
 
     pub fn file(&self, id: core::location::FileId) -> Option<&Path> {
         self.files.get(id.0 as usize).map(PathBuf::as_path)

@@ -37,9 +37,10 @@ use pages::{OwnerKeys, SpritePage, replace_owner_sprites};
 /// - 0: z level
 /// - 1: plane encoded with `visual::sort_component`
 /// - 2: layer encoded the same way as above
-/// - 3: placement order, see `PlacementOrder`
-/// - 4: sprite index within its placement, order goes like this: underlays, self, overlays
-type SpriteKey = (u32, i32, i32, PlacementOrder, usize);
+/// - 3: whether the owner is not a turf, so equal-plane/layer turfs draw first across tiles
+/// - 4: placement order, see `PlacementOrder`
+/// - 5: sprite index within its placement, order goes like this: underlays, self, overlays
+type SpriteKey = (u32, i32, i32, bool, PlacementOrder, usize);
 
 /// rows from the top, left to right, then the prefab's index in its tile, it follows where a placement is now
 type PlacementOrder = (Reverse<u32>, u32, usize);
@@ -81,6 +82,7 @@ struct SpriteGroup {
 }
 
 struct RenderContext<'a> {
+    node_types: Option<&'a HashSet<TypeId>>,
     appearances: &'a HashMap<u64, SharedAppearance>,
     tree: &'a ObjectTree,
     icons: &'a HashMap<String, Metadata>,
@@ -104,6 +106,7 @@ pub struct FrameInstances {
     /// only primaries that are not among their owner's sprites, the rest are found through `owner_keys`
     primary_sprites: HashMap<PrefabInstanceId, SpriteInstance>,
     placements: HashMap<PrefabInstanceId, CachedPlacement>,
+    unknown_placements: HashMap<PrefabInstanceId, Coord>,
     area_owners_by_coord: HashMap<Coord, Vec<PrefabInstanceId>>,
 }
 
@@ -122,6 +125,7 @@ impl FrameInstances {
         drop(std::mem::take(&mut self.primary_sprites));
         freed("primary sprites");
         drop(std::mem::take(&mut self.placements));
+        drop(std::mem::take(&mut self.unknown_placements));
         freed("placements");
         drop(std::mem::take(&mut self.area_components));
         drop(std::mem::take(&mut self.area_component_tiles));
@@ -144,6 +148,12 @@ impl FrameInstances {
 
     pub fn area_component_tiles(&self, component: PrefabInstanceId) -> HashSet<Coord> {
         self.area_component_tiles.get(&component).cloned().unwrap_or_default()
+    }
+
+    pub fn unknown_type_coords(&self) -> impl Iterator<Item = Coord> + '_ { self.unknown_placements.values().copied() }
+
+    pub fn unknown_type_instances(&self) -> impl Iterator<Item = PrefabInstanceId> + '_ {
+        self.unknown_placements.keys().copied()
     }
 
     pub fn update_lighting(&mut self, lighting: Option<&vm::bake::LightingMap>, range: Option<std::ops::Range<usize>>) {
@@ -266,6 +276,7 @@ impl FromIterator<TreePath> for HiddenTypes {
 
 #[derive(Debug, Clone, Copy)]
 pub struct FrameRenderOptions<'a> {
+    pub node_types: Option<&'a HashSet<TypeId>>,
     pub visibility: &'a TypeVisibility,
     pub tile_size: u32,
     /// What the bake made of each atom, keyed by `vm::bake` atom id, empty when baking is off
@@ -338,6 +349,7 @@ pub fn instance_for(
         is_area,
         hidden: false,
         click_through: false,
+        node_pickable: false,
         area_edges: 0,
         lighting: match appearance.lighting {
             vm::AppearanceLighting::Normal => render::SpriteLighting::Normal,
@@ -362,6 +374,7 @@ pub fn build(
         textures,
         document,
         FrameRenderOptions {
+            node_types: None,
             visibility: &TypeVisibility::default(),
             tile_size,
             appearances: &HashMap::new(),
@@ -385,11 +398,13 @@ pub fn build_view_with_options(
     let mut primary_sprites = HashMap::new();
     let mut owner_keys = HashMap::new();
     let mut placements = HashMap::new();
+    let mut unknown_placements = HashMap::new();
     let mut area_owners_by_coord = HashMap::<Coord, Vec<PrefabInstanceId>>::new();
     let area = tree.roots().area;
     let area_components = build_area_components(tree, map);
     let area_component_tiles = index_area_component_tiles(&area_components);
     let render = RenderContext {
+        node_types: options.node_types,
         appearances: options.appearances,
         tree,
         icons,
@@ -412,6 +427,7 @@ pub fn build_view_with_options(
                         continue;
                     };
                     let Some(id) = tree.id_of(&prefab.path) else {
+                        unknown_placements.insert(owner, Coord::new(x, y, z));
                         continue;
                     };
 
@@ -427,9 +443,11 @@ pub fn build_view_with_options(
                             hidden: !options.visibility.is_visible(id),
                         },
                     );
+
                     if rendered.is_area {
                         area_owners_by_coord.entry(coord).or_default().push(owner);
                     }
+
                     let (keys, unkeyed_primary) = OwnerKeys::of(&rendered);
                     if let Some(keys) = keys {
                         owner_keys.insert(owner, keys);
@@ -456,6 +474,7 @@ pub fn build_view_with_options(
         area_component_tiles,
         primary_sprites,
         placements,
+        unknown_placements,
         area_owners_by_coord,
         owner_keys,
         ..Default::default()
@@ -484,6 +503,7 @@ pub fn update_prefabs(
         document,
         owners,
         FrameRenderOptions {
+            node_types: None,
             visibility: &TypeVisibility::default(),
             tile_size,
             appearances: &HashMap::new(),
@@ -518,6 +538,20 @@ pub fn update_view_prefabs_with_options(
         .into_iter()
         .collect::<Vec<_>>();
     owners.sort_unstable_by_key(|owner| owner.get());
+
+    for owner in &owners {
+        match map
+            .prefab_instance(*owner)
+            .filter(|instance| tree.id_of(&instance.prefab().path).is_none())
+        {
+            Some(instance) => {
+                instances.unknown_placements.insert(*owner, instance.location.coord);
+            },
+            None => {
+                instances.unknown_placements.remove(owner);
+            },
+        }
+    }
 
     let changes = owners
         .iter()
@@ -602,6 +636,7 @@ pub fn update_view_prefabs_with_options(
 
     let render = RenderContext {
         appearances: options.appearances,
+        node_types: options.node_types,
         tree,
         icons,
         textures,
@@ -772,6 +807,11 @@ impl RenderContext<'_> {
         area_owner: Option<PrefabInstanceId>,
     ) -> RenderedPrefab {
         let is_area = self.area.is_some_and(|area| self.tree.is_subtype_of(id, area));
+        let is_turf = self
+            .tree
+            .roots()
+            .turf
+            .is_some_and(|turf| self.tree.is_subtype_of(id, turf));
         let delta = self.appearances.get(&owner.get());
         let appearance = delta
             .map(|delta| visual::resolve_delta(self.tree, id, prefab, delta))
@@ -844,6 +884,7 @@ impl RenderContext<'_> {
                     coord.z,
                     visual::sort_component(group.plane),
                     visual::sort_component(group.layer),
+                    !is_turf,
                     order,
                     local_order,
                 );
@@ -853,12 +894,12 @@ impl RenderContext<'_> {
         }
 
         let mut primary = primary.or_else(|| sprites.first().map(|(_, sprite)| *sprite));
+        let node_pickable = self.node_types.is_some_and(|types| types.contains(&id));
+        for sprite in sprites.iter_mut().map(|(_, sprite)| sprite).chain(&mut primary) {
+            sprite.node_pickable = node_pickable;
+        }
+
         // `mouse_opacity = 0` on objects too would lock out mapped dirt and decals
-        let is_turf = self
-            .tree
-            .roots()
-            .turf
-            .is_some_and(|turf| self.tree.is_subtype_of(id, turf));
         if is_turf && appearance.mouse_opacity == 0 {
             for sprite in sprites.iter_mut().map(|(_, sprite)| sprite).chain(&mut primary) {
                 sprite.click_through = true;
@@ -1173,7 +1214,11 @@ mod tests {
         path::TreePath,
         types::{Identifier, Value, VarModifiers},
     };
-    use std::{collections::HashMap, path::PathBuf, sync::Arc};
+    use std::{
+        collections::{HashMap, HashSet},
+        path::PathBuf,
+        sync::Arc,
+    };
 
     use dmi::{
         IconFile,
@@ -1486,6 +1531,7 @@ mod tests {
             &textures,
             &document,
             FrameRenderOptions {
+                node_types: None,
                 visibility: &visibility,
                 tile_size: 32,
                 appearances: &HashMap::new(),
@@ -1514,6 +1560,7 @@ mod tests {
             &textures,
             &document,
             FrameRenderOptions {
+                node_types: None,
                 visibility: &visibility,
                 tile_size: 32,
                 appearances: &HashMap::new(),
@@ -1658,6 +1705,7 @@ mod tests {
         assert_eq!(actual.area_component_tiles, expected.area_component_tiles);
         assert_eq!(actual.sprite_sort_keys.len(), actual.sprites.len());
         assert_eq!(actual.primary_sprites, expected.primary_sprites);
+        assert_eq!(actual.unknown_placements, expected.unknown_placements);
         for owner in actual.placements.keys().chain(expected.placements.keys()) {
             assert_eq!(actual.sprite(*owner), expected.sprite(*owner));
         }
@@ -1698,6 +1746,139 @@ mod tests {
     }
 
     #[test]
+    fn large_equal_layer_decals_draw_above_surrounding_turfs() {
+        let tree = tree(&[("/turf/floor", "floor", 2.0), ("/obj/decal", "decal", 2.0)]);
+        let mut icons = icons(&["floor", "decal"]);
+        let mut textures = textures(&["floor", "decal"]);
+        let mut decal_icon = icon_file(&["decal"]);
+        decal_icon.metadata.width = 96;
+        decal_icon.metadata.height = 96;
+        decal_icon.sheet_width = 96;
+        decal_icon.sheet_height = 96;
+        decal_icon.pixels = vec![255; 96 * 96 * 4];
+        icons.insert("large.dmi".into(), decal_icon.metadata.clone());
+        textures.insert("large.dmi", &decal_icon).unwrap();
+
+        let mut map = area_map(5, 5, "/turf/floor");
+        let mut decal = Prefab::new(TreePath::parse("/obj/decal"));
+        decal.set_var("icon".into(), Value::Resource("large.dmi".into()));
+        let key = map.intern_tile(vec![decal, Prefab::new(TreePath::parse("/turf/floor"))]);
+        map.grid[0][2][2] = key;
+        let mut document = document(map);
+        let owner = document.instance_ids_at(Coord::new(3, 3, 1))[0];
+        let mut instances = build(&tree, &icons, &textures, &document, 32);
+
+        for (pixel_x, pixel_y) in [(0.0, 0.0), (-7.0, -9.0)] {
+            document
+                .edit_instance_vars(
+                    owner,
+                    "nudge decal",
+                    &[
+                        VarMutation::Set("pixel_x".into(), Value::Num(pixel_x)),
+                        VarMutation::Set("pixel_y".into(), Value::Num(pixel_y)),
+                    ],
+                    None,
+                )
+                .unwrap();
+            update_prefab(&mut instances, &tree, &icons, &textures, &document, owner, 32);
+            assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+            let sprites = drawn(&instances);
+            assert_eq!(sprites.len(), 26);
+            assert_eq!(sprites.last().unwrap().owner, owner, "all floors draw before the decal");
+            assert!(
+                sprites[..25]
+                    .iter()
+                    .all(|sprite| (sprite.width, sprite.height) == (32.0, 32.0))
+            );
+            let decal = instances.sprite(owner).unwrap();
+            assert_eq!((decal.width, decal.height), (96.0, 96.0));
+            assert_eq!((decal.x, decal.y), (64.0 + pixel_x, 64.0 + pixel_y));
+            assert_pages_hold(&instances);
+        }
+    }
+
+    #[test]
+    fn equal_layer_overlays_and_underlays_keep_their_owners_turf_priority() {
+        let tree = tree(&[("/obj/decal", "decal", 2.0), ("/turf/floor", "floor", 2.0)]);
+        let node_types = HashSet::from([tree.id_of(&TreePath::parse("/obj/decal")).unwrap()]);
+        let document = document(one_tile_map(&["/obj/decal", "/turf/floor"]));
+        let owners = document.instance_ids_at(Coord::new(1, 1, 1));
+        let child = |state: &str| AppearanceDelta {
+            vars: vec![("icon_state".into(), Value::Text(state.into()))],
+            ..Default::default()
+        };
+        let appearances = shared(
+            owners
+                .iter()
+                .map(|owner| {
+                    (
+                        owner.get(),
+                        AppearanceDelta {
+                            underlays: vec![child("underlay")],
+                            overlays: vec![child("overlay")],
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect(),
+        );
+        let instances = build_with_options(
+            &tree,
+            &icons(&["floor", "decal", "underlay", "overlay"]),
+            &textures(&["floor", "decal", "underlay", "overlay"]),
+            &document,
+            FrameRenderOptions {
+                node_types: Some(&node_types),
+                visibility: &TypeVisibility::default(),
+                tile_size: 32,
+                appearances: &appearances,
+                lighting: None,
+            },
+        );
+        assert_eq!(
+            drawn(&instances).iter().map(|sprite| sprite.owner).collect::<Vec<_>>(),
+            [owners[1], owners[1], owners[1], owners[0], owners[0], owners[0]]
+        );
+        assert!(
+            instances
+                .live_sprites()
+                .all(|sprite| sprite.node_pickable == (sprite.owner == owners[0]))
+        );
+        assert!(instances.sprite(owners[0]).unwrap().node_pickable);
+        assert!(!instances.sprite(owners[1]).unwrap().node_pickable);
+    }
+
+    #[test]
+    fn explicit_planes_take_priority_over_equal_layer_turf_order() {
+        let tree = tree(&[("/obj/decal", "decal", 2.0), ("/turf/floor", "floor", 2.0)]);
+        let mut document = document(one_tile_map(&["/obj/decal", "/turf/floor"]));
+        let owners = document.instance_ids_at(Coord::new(1, 1, 1)).to_vec();
+        document
+            .set_instance_var(owners[1], "plane".into(), Value::Num(-7.0))
+            .unwrap();
+        for (plane, expected) in [
+            (-8.0, [owners[0], owners[1]]),
+            (-7.0, [owners[1], owners[0]]),
+            (-6.0, [owners[1], owners[0]]),
+        ] {
+            document
+                .set_instance_var(owners[0], "plane".into(), Value::Num(plane))
+                .unwrap();
+            let instances = build(
+                &tree,
+                &icons(&["floor", "decal"]),
+                &textures(&["floor", "decal"]),
+                &document,
+                32,
+            );
+            assert_eq!(
+                drawn(&instances).iter().map(|sprite| sprite.owner).collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn fractional_decal_layers_survive_edits_and_undo() {
         let tree = tree(&[
             ("/obj/decal", "decal", 2.001),
@@ -1723,7 +1904,7 @@ mod tests {
         let before = drawn(&instances);
         assert_eq!(
             before.iter().map(|sprite| sprite.owner).collect::<Vec<_>>(),
-            [owners[2], owners[3], owners[1], owners[0]]
+            [owners[3], owners[2], owners[1], owners[0]]
         );
 
         document
@@ -1772,6 +1953,7 @@ mod tests {
             &textures(&["floor", "decal", "overlay"]),
             &document,
             FrameRenderOptions {
+                node_types: None,
                 visibility: &TypeVisibility::default(),
                 tile_size: 32,
                 appearances: &appearances,
@@ -1817,6 +1999,7 @@ mod tests {
             &textures(&["floor", "table", "light"]),
             &document,
             FrameRenderOptions {
+                node_types: None,
                 visibility: &visibility,
                 tile_size: 32,
                 appearances: &appearances,
@@ -1868,6 +2051,7 @@ mod tests {
             &textures(&["floor", "table", "light"]),
             &document,
             FrameRenderOptions {
+                node_types: None,
                 visibility: &visibility,
                 tile_size: 32,
                 appearances: &appearances,
@@ -1915,6 +2099,7 @@ mod tests {
             &textures(&["floor", "table", "light"]),
             &document,
             FrameRenderOptions {
+                node_types: None,
                 visibility: &visibility,
                 tile_size: 32,
                 appearances: &appearances,
@@ -1984,6 +2169,7 @@ mod tests {
             &textures,
             &document,
             FrameRenderOptions {
+                node_types: None,
                 visibility: &visibility,
                 tile_size: 32,
                 appearances: &HashMap::new(),
@@ -2035,6 +2221,7 @@ mod tests {
             &textures,
             &document,
             FrameRenderOptions {
+                node_types: None,
                 visibility: &TypeVisibility::default(),
                 tile_size: 32,
                 appearances: &appearances,

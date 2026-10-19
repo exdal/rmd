@@ -1,9 +1,11 @@
 use core::{path::TreePath, types::Identifier, vars};
 use std::{
+    collections::{BTreeSet, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
+use dmm::{Map, error::MapError};
 use editor::{
     Environment,
     frame::TypeVisibility,
@@ -127,11 +129,36 @@ impl LoadReport {
         }
     }
 
-    pub fn map(path: &str, errors: &[dmm::error::MapError]) -> Self {
+    pub fn map(path: &str, map: &Map, tree: Option<&ObjectTree>, errors: &[MapError]) -> Self {
         let mut report = Self::default();
         for error in errors {
             report.record(DiagnosticSeverity::Error, format!("{path}: {error}"));
         }
+
+        if let Some(tree) = tree {
+            let used = map.grid.iter().flatten().flatten().copied().collect::<HashSet<_>>();
+            let placed = map
+                .dictionary
+                .iter()
+                .filter(|(key, _)| used.contains(key))
+                .flat_map(|(_, tile)| tile.iter().map(|prefab| &prefab.path))
+                .collect::<HashSet<_>>();
+            let unknown = map
+                .dictionary
+                .values()
+                .flatten()
+                .filter(|prefab| !placed.contains(&prefab.path) && tree.id_of(&prefab.path).is_none())
+                .map(|prefab| prefab.path.to_string())
+                .collect::<BTreeSet<_>>();
+
+            for type_path in unknown {
+                report.record(
+                    DiagnosticSeverity::Warning,
+                    format!("{path}: unknown type path {type_path}"),
+                );
+            }
+        }
+
         report
     }
 
@@ -264,6 +291,13 @@ impl Session {
         self.rebake_all();
         self.clear_runtimes();
 
+        self.loaded_issues = self
+            .state
+            .active()
+            .into_iter()
+            .chain(self.state.document_ids())
+            .find(|id| !self.map_issues(*id).is_empty());
+
         report
     }
 
@@ -272,7 +306,7 @@ impl Session {
     pub(crate) fn type_source(&self, id: TypeId) -> Option<SourceLocation> {
         let environment = self.state.environment.as_ref()?;
         let location = environment.tree.get(id)?.location.get();
-        if location.begin.line == 0 || location.begin.col == 0 {
+        if environment.is_builtin_file(location.file) || location.begin.line == 0 || location.begin.col == 0 {
             return None;
         }
 
@@ -322,7 +356,7 @@ mod tests {
     };
 
     use dmi::IconFile;
-    use dmm::Coord;
+    use dmm::{Coord, Map, MapFormat, Prefab, Size, writer::MapWriter};
     use editor::{Environment, progress::Progress};
     use objtree::ObjectTree;
 
@@ -357,6 +391,27 @@ mod tests {
     }
 
     #[test]
+    fn type_sources_use_builtin_file_ids_instead_of_paths() {
+        let location = Location::in_file(FileId(0), Position::new(42, 7), Position::new(42, 16));
+        let mut tree = ObjectTree::new();
+        let builtin = tree.register(&TreePath::parse("/obj/builtin"), location);
+        let project = tree.register(&TreePath::parse("/obj/project"), location.with_file(FileId(1)));
+        let mut environment = Environment::new("station.dme", tree);
+        environment
+            .files
+            .extend(["code/embedded.dm", "code/stddef_ext.dm"].map(PathBuf::from));
+        environment.builtin_files.push(FileId(0));
+        let mut session = Session::new();
+        session.state.environment = Some(Arc::new(environment));
+
+        assert!(session.type_source(builtin).is_none());
+        let source = session
+            .type_source(project)
+            .expect("project source named like a builtin");
+        assert_eq!(source.path, PathBuf::from("code/stddef_ext.dm"));
+    }
+
+    #[test]
     fn load_report_classifies_preprocessor_levels_and_caps_only_displayed_lines() {
         use preprocessor::diagnostic::Level;
 
@@ -383,9 +438,14 @@ mod tests {
             dmm::error::MapErrorKind::RaggedGrid,
             core::location::Position::new(2, 3),
         );
-        let report = LoadReport::map("maps/level.dmm", &[error]);
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        map.intern_tile(Vec::new());
+        map.intern_tile(vec![Prefab::new(TreePath::parse("/obj/missing"))]);
+        let report = LoadReport::map("maps/level.dmm", &map, Some(&ObjectTree::new()), &[error]);
         assert_eq!(report.errors, 1);
         assert!(report.error_lines[0].starts_with("maps/level.dmm: Map error"));
+        assert_eq!(report.warnings, 1);
+        assert_eq!(report.warning_lines, ["maps/level.dmm: unknown type path /obj/missing"]);
 
         let failed = LoadReport::failure(
             "maps/level.dmm",
@@ -393,6 +453,67 @@ mod tests {
             "C:/game/maps/level.dmm: cannot read",
         );
         assert_eq!(failed.error_lines, ["maps/level.dmm: cannot read"]);
+    }
+
+    #[test]
+    fn map_reports_keep_only_unused_paths_while_placed_issues_belong_to_the_live_panel() {
+        let source = r#"
+"a" = (/obj/known,/obj)
+"b" = (/obj/z_missing{name = "first"},/obj/known/missing,/obj/z_missing{name = "second"})
+"c" = (/obj/a_unused)
+(1,1,1) = {"
+a
+"}
+(1,1,2) = {"
+b
+"}
+"#;
+        let (map, errors) = dmm::parser::parse(source);
+        assert!(errors.is_empty(), "{errors:?}");
+        let mut tree = ObjectTree::new();
+        tree.register(&TreePath::parse("/obj/known"), Location::default());
+        for format in [MapFormat::Standard, MapFormat::Tgm] {
+            let source = MapWriter::new(&map).with_format(format).write();
+            let (map, errors) = dmm::parser::parse(&source);
+            assert!(errors.is_empty(), "{errors:?}");
+            assert_eq!(map.format, format);
+            assert_eq!(map.size.z, 2);
+            let report = LoadReport::map("maps/level.dmm", &map, Some(&tree), &errors);
+            assert_eq!(report.errors, 0);
+            assert_eq!(report.warnings, 1);
+            assert_eq!(
+                report.warning_lines,
+                ["maps/level.dmm: unknown type path /obj/a_unused"]
+            );
+            assert!(LoadReport::map("maps/level.dmm", &map, None, &errors).is_empty());
+        }
+    }
+
+    #[test]
+    fn map_reports_accept_implied_types_and_do_not_validate_paths_in_vars() {
+        let mut tree = ObjectTree::new();
+        tree.register(&TreePath::parse("/obj/known"), Location::default());
+        let mut known = Prefab::new(TreePath::parse("/obj/known"));
+        known.set_var("target".into(), Value::Path(TreePath::parse("/obj/only_in_var")));
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        map.intern_tile(vec![known, Prefab::new(TreePath::parse("/obj"))]);
+
+        assert!(LoadReport::map("maps/level.dmm", &map, Some(&tree), &[]).is_empty());
+    }
+
+    #[test]
+    fn unknown_type_counts_include_paths_beyond_the_display_limit() {
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        map.intern_tile(Vec::new());
+        map.intern_tile(
+            (0..=MAX_REPORTED_DIAGNOSTICS)
+                .map(|index| Prefab::new(TreePath::parse(&format!("/obj/missing_{index:04}"))))
+                .collect::<Vec<_>>(),
+        );
+        let report = LoadReport::map("maps/level.dmm", &map, Some(&ObjectTree::new()), &[]);
+        assert_eq!(report.warnings, MAX_REPORTED_DIAGNOSTICS + 1);
+        assert_eq!(report.warning_lines.len(), MAX_REPORTED_DIAGNOSTICS);
+        assert!(report.warning_lines[0].contains("/obj/missing_0000"));
     }
 
     #[test]

@@ -39,6 +39,10 @@ pub fn eliminate_forwarding_blocks(module: &mut Module) {
                     protect(&mut protected, *catch);
                     protect(&mut protected, *merge);
                 },
+                Some(IrNode::Spawn { body, merge }) => {
+                    protect(&mut protected, *body);
+                    protect(&mut protected, *merge);
+                },
                 _ => {},
             }
         }

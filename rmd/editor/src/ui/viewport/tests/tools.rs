@@ -1,6 +1,60 @@
 use super::*;
 
 #[test]
+fn node_tool_hover_and_single_click_survive_the_full_view_frame() {
+    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let coord = Coord::new(5, 8, 1);
+    let (mut session, seed) = node_session(node_map(20, 20, &[(coord, vec!["/obj/cable"])]), coord);
+    session.set_tool(Tool::Node);
+    let mut app = RectangleUiHarness::with_session(session);
+    let point = app.tile(coord.x, coord.y);
+    app.pointer(point, false);
+    assert!(app.interaction.cursor.is_some());
+    assert_eq!(app.interaction.mode, InteractionMode::Node { pick: None });
+    assert!(app.session.node_overlay().is_none());
+
+    app.pointer(point, true);
+    assert!(app.interaction.cursor.is_some());
+    assert_eq!(app.interaction.mode.pick(), Some(PickRequest::NodeSelect));
+    assert!(!app.session.node_dragging());
+    assert!(app.session.select_node_from_pick(render::PickResult::Hit(seed)));
+    assert_eq!(app.session.selected_instance(), Some(seed));
+    assert!(app.session.node_overlay().is_some());
+}
+
+#[test]
+fn selection_keeps_its_double_click_node_shortcut() {
+    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let coord = Coord::new(5, 8, 1);
+    let (mut session, _) = node_session(node_map(20, 20, &[(coord, vec!["/obj/cable"])]), coord);
+    session.set_tool(Tool::Select);
+    let mut app = RectangleUiHarness::with_session(session);
+    let point = app.tile(coord.x, coord.y);
+    app.pointer(point, false);
+    app.pointer(point, true);
+    assert_eq!(app.interaction.mode.pick(), Some(PickRequest::Select));
+    app.pointer(point, false);
+    app.pointer(point, true);
+    assert_eq!(app.interaction.mode.pick(), Some(PickRequest::NodeSeed(coord)));
+}
+
+#[test]
+fn node_handles_start_a_drag_instead_of_requesting_a_new_pick() {
+    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let coord = Coord::new(5, 8, 1);
+    let (mut session, seed) = node_session(node_map(20, 20, &[(coord, vec!["/obj/cable"])]), coord);
+    assert!(session.begin_node_edit(seed));
+    let mut app = RectangleUiHarness::with_session(session);
+    let point = app.tile(coord.x, coord.y);
+    app.pointer(point, false);
+    app.pointer(point, true);
+    assert!(app.session.node_dragging());
+    assert_eq!(app.interaction.mode.pick(), None);
+    app.pointer(point, false);
+    assert!(!app.session.node_dragging());
+}
+
+#[test]
 fn right_click_captures_the_clicked_tile_in_every_tool() {
     let _guard = IMGUI_CONTEXT.lock().unwrap();
     for tool in [

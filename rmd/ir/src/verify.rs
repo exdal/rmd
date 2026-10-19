@@ -237,6 +237,7 @@ fn verify_targets(
             ..
         } => vec![*true_block, *false_block],
         IrNode::TryCatch { body, catch, merge } => vec![*body, *catch, *merge],
+        IrNode::Spawn { body, merge } => vec![*body, *merge],
         IrNode::Phi { operands } => operands.iter().map(|operand| operand.block).collect::<Vec<_>>(),
         _ => Vec::new(),
     };

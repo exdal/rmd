@@ -7,6 +7,7 @@ Rapid Mapping Device (rmd) is a map editor for Space Station 13 that can run DM 
 ## Features
 
 - **Map editing:** Select and resize regions. Fill, copy, move, rotate, or mirror tiles. Edit individual atoms from the map context menu.
+- **Multiplayer and co-op:** Edit shared maps together. See other users' cursors and selections in real time. Follow their view. Add comments to shared maps.
 - **Appearance previews:** Run a DM profile to draw icon states, overlays, and underlays. RMD updates affected tiles after edits, undo, and redo.
 - **Lighting:** Preview lights and blockers across Z levels. Use the viewport settings to hide lighting or reduce darkness.
 - **Profile tools:** Show connection guides and map highlights. Profiles can add UI panels and enable the Node tool for routing connected objects.
@@ -16,6 +17,9 @@ Rapid Mapping Device (rmd) is a map editor for Space Station 13 that can run DM 
 ## Start editing
 
 Download the editor for Windows, Linux, or macOS (Apple Silicon) from [Releases](https://github.com/exdal/rmd/releases). Start it, open your `.dme` from the welcome page, and then open a `.dmm` map.
+
+<details>
+<summary>macOS setup (Apple Silicon)</summary>
 
 On macOS, the editor renders through KosmicKrisp, which ships with the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) 1.4.341 or later. Install the SDK, then point the Vulkan loader at KosmicKrisp before you start the editor:
 
@@ -27,6 +31,8 @@ chmod +x rmd-*-aarch64-apple-darwin
 ./rmd-*-aarch64-apple-darwin
 ```
 
+</details>
+
 From a source checkout with the build dependencies installed, you can open both files directly:
 
 ```sh
@@ -34,6 +40,20 @@ cargo run --release --bin rmde -- path/to/codebase.dme path/to/map.dmm
 ```
 
 The repository pins its Rust toolchain in [`rust-toolchain.toml`](rust-toolchain.toml). On Linux, [`shell.nix`](shell.nix) provides a development shell with the native build dependencies. On macOS, the Vulkan SDK also provides Slang, which the build finds through `VULKAN_SDK`.
+
+## Multiplayer and co-op
+
+Co-op lets multiple users edit shared maps together. Each user must first open a local `.dme` for the same codebase. The editor checks codebase compatibility when users connect.
+
+1. **Host:** Choose **Co-op > Host...**. Enter your nickname, a password, and a port. The default port is `3131`. Click **Host**.
+2. **Join:** Other users choose **Co-op > Join...**. Enter your nickname, the host address as `host:port`, and the password. Click **Join**.
+3. **Share:** Open a map inside the codebase directory. Choose **Co-op > Share current map**. Any connected user can share maps.
+
+The host must accept __UDP traffic__ on the selected port. For internet sessions, forward that UDP port through the host's router when necessary.
+
+Shared maps show edits, cursors, and selections from other users. Click a user's name in the menu bar to follow their view. Use the **Comment** tool to add comments to shared maps.
+
+Save each map locally to write shared edits to disk. Choose **Co-op > Leave** to leave the session and keep your open maps.
 
 ## Work with Git
 
@@ -47,7 +67,7 @@ To turn off the integration, clear **Settings > Git > Enable Git map integration
 
 ## Integrate your codebase
 
-The editor includes profiles for CMSS13, Goonstation, Monkestation, tgstation, and Vanderlin. To try one, open your `.dme` and choose it under **Settings > Compiler > Forced bundled profile**. The bundled profile runs without changes to your codebase.
+The editor includes profiles for CMSS13, Goonstation, Monkestation, Monke’s Paw, Nova Sector, Oculis Station, SecondCity, TGMC, tgstation, and Vanderlin. To try one, open your `.dme` and choose it under **Settings > Compiler > Forced bundled profile**. The bundled profile runs without changes to your codebase.
 
 To keep a profile in your codebase:
 

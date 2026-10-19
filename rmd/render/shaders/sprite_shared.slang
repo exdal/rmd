@@ -45,6 +45,7 @@ public struct Sprite {
     public u32x2 packed_source_position_size;
     public u32 packed_texture_flags;
     public u32x2 packed_transform;
+    public u32 node_pickable;
 
     public func position_size() -> f32x4 {
         return f32x4(this.position, unpack_half2(this.packed_size));

@@ -1,10 +1,10 @@
-// rmd embeds this integration for the Forced bundled profile setting. To make the profile part of a
-// cmss13 checkout instead, copy it there and `#include` it from `colonialmarines.dme` after
-// `// END_INCLUDE`, the guard keeps BYOND compiling it to nothing.
+// rmd embeds this profile for the Forced bundled profile setting. To keep it in a cmss13 checkout
+// instead, copy it there and `#include` it from `colonialmarines.dme` after `// END_INCLUDE`.
+// BYOND skips it because of the guard below.
 //
 // Walls pick corner states from their neighbors in LateInitialize(), and windows, frames and a
-// few floors pick a junction state through relativewall(). Lights follow TGMC's three systems:
-// static and hybrid lights are corner lights here, and movable lights are masks.
+// few floors pick a junction state in relativewall(). Static and hybrid lights go to the lightmap,
+// and movable lights are drawn as masks.
 #ifdef __DEMIR_BAKE__
 
 #define DEMIR_GROUP_POWER (1<<0)
@@ -27,10 +27,10 @@
 
 		demir_define_group(DEMIR_GROUP_POWER, /obj/structure/machinery)
 
-// ui() rolls its writes back on every frame but the one the viewer touched something on, so panel
-// state lives in the profile's own vars.
+// ui() writes are rolled back unless the viewer changed something that frame, so panel state
+// lives in the profile's vars.
 /datum/demir/cmss13/ui(atom/target)
-	if(!imgui_begin("Demir"))
+	if(!imgui_begin("CMSS13"))
 		imgui_end()
 		return
 
@@ -48,7 +48,7 @@
 	if(profile.power_all)
 		return TRUE
 
-	// Unchecked shows the map as if no APC were charged. Areas that need no power keep it.
+	// When unchecked, only areas that need no power are powered.
 	return A && (!A.requires_power || A.unlimited_power)
 
 /obj/structure/machinery/powered(chan = -1)
@@ -64,8 +64,8 @@
 
 	return demir_area_powered(A, chan)
 
-// Round start has not charged anything, and the native power_change() waits in a spawn() the bake
-// skips. This mirrors it, minus the redraw and the power draw bookkeeping.
+// power_change() would also redraw the machine and change its power usage. This keeps only the
+// NOPOWER flag.
 /obj/structure/machinery/demir_apply_light()
 	if(needs_power && !demir_area_powered(get_area(src), power_channel))
 		stat |= NOPOWER
@@ -74,8 +74,8 @@
 
 	return ..()
 
-// LIGHT_OK is 0, and lightreplacer.dm undefines it before this profile is included. update() would
-// also wear the bulb out at random, so the state is set directly.
+// LIGHT_OK is 0, but lightreplacer.dm undefines it. update() can also burn out the bulb at random,
+// so the state is set directly.
 /obj/structure/machinery/light/demir_apply_light()
 	var/area/fixture_area = get_area(src)
 	if(fixture_area)
@@ -88,8 +88,8 @@
 
 	return ..()
 
-// Walls fill a shared damage overlay cache on first draw. Filling it here keeps it out of every
-// rolled-back preview.
+// Walls fill a shared damage overlay cache on first draw. Fill it in prepare, which is not rolled
+// back like a preview.
 /turf/closed/wall/demir_prepare_state()
 	if(!damage_overlays[1])
 		generate_damage_overlays()
@@ -102,60 +102,31 @@
 /obj/item/device/flashlight/demir_prepare_state()
 	light_on = on
 
-// update_icon() colors the screen by charge state and only lights a closed, working APC.
-// Round start has not charged anything yet. APC_NOT_CHARGING is 0 and apc.dm undefines it.
+// update_icon() colors the light by charge state, and nothing is charging at round start.
+// APC_NOT_CHARGING is 0, but apc.dm undefines it.
 /obj/structure/machinery/power/apc/demir_prepare_state()
 	if(stat & (BROKEN|MAINT) || !cell_type)
 		light_range = 0
 		return
 	light_color = charging == 0 ? LIGHT_COLOR_RED : LIGHT_COLOR_GREEN
 
-// `Initialize()` makes an open poddoor see-through before update_icon() shows it open
+// Same as the poddoor's Initialize().
 /obj/structure/machinery/door/poddoor/demir_prepare_state()
 	opacity = density
 
 /datum/demir/cmss13/prepare(atom/target)
 	target.demir_prepare_state()
 
-/proc/demir_overlay_icon(pixel_bounds)
-	switch(pixel_bounds)
-		if(32)
-			return 'icons/effects/light_overlays/light_32.dmi'
-		if(64)
-			return 'icons/effects/light_overlays/light_64.dmi'
-		if(96)
-			return 'icons/effects/light_overlays/light_96.dmi'
-		if(128)
-			return 'icons/effects/light_overlays/light_128.dmi'
-		if(160)
-			return 'icons/effects/light_overlays/light_160.dmi'
-		if(192)
-			return 'icons/effects/light_overlays/light_192.dmi'
-		if(224)
-			return 'icons/effects/light_overlays/light_224.dmi'
-		if(256)
-			return 'icons/effects/light_overlays/light_256.dmi'
-		if(288)
-			return 'icons/effects/light_overlays/light_288.dmi'
-		if(320)
-			return 'icons/effects/light_overlays/light_320.dmi'
-		if(352)
-			return 'icons/effects/light_overlays/light_352.dmi'
-		if(384)
-			return 'icons/effects/light_overlays/light_384.dmi'
-		if(416)
-			return 'icons/effects/light_overlays/light_416.dmi'
-	return null
-
-// The overlay lighting component's mask and cone, without components, signals or lumcounts.
+// The mask and cone /datum/component/overlay_lighting draws, without its signals or lumcounts.
 /atom/movable/proc/demir_add_overlay_light()
 	if((light_system != MOVABLE_LIGHT && light_system != DIRECTIONAL_LIGHT) || !light_on || !light_range)
 		return
 
 	var/range = clamp(CEILING(light_range, 0.5), 1, 7)
 	var/pixel_bounds = ((range - 1) * 64) + 32
+	var/list/light_overlays = /datum/component/overlay_lighting::light_overlays
 	var/image/mask = new
-	mask.icon = demir_overlay_icon(pixel_bounds)
+	mask.icon = light_overlays["[pixel_bounds]"]
 	mask.icon_state = "light"
 	mask.plane = O_LIGHTING_VISUAL_PLANE
 	mask.appearance_flags = RESET_COLOR | RESET_ALPHA | RESET_TRANSFORM
@@ -213,8 +184,8 @@
 /obj/structure/machinery/demir_bake_icon()
 	update_icon()
 
-// These redraws read the static lighting queue or SShijack, which a bake never sets up, or assign
-// `overlays = 0`, which the VM rejects.
+// These redraws read the static lighting queue or SShijack, which the bake does not set up, or
+// assign `overlays = 0`, which the VM rejects.
 /obj/structure/machinery/power/apc/demir_bake_icon()
 	return
 
@@ -271,8 +242,8 @@
 	target.demir_finish_appearance()
 	target.demir_tag_emissive()
 
-// Initialize() hands every light that is neither movable nor directional to update_light(), which
-// builds a static source or a hybrid mask source. Neither checks light_on.
+// Initialize() passes every light that is not movable or directional to update_light(). Neither
+// the static nor the hybrid source checks light_on.
 /atom/proc/demir_apply_light()
 	if(light_system == MOVABLE_LIGHT || light_system == DIRECTIONAL_LIGHT || !light_range || !light_power)
 		return

@@ -886,6 +886,11 @@ impl Generator {
                 self.emit_address(Label::Block(*catch));
                 self.emit_address(Label::Block(*merge));
             },
+            IrNode::Spawn { body, .. } => {
+                self.emit_op(Op::Spawn);
+                self.emit_address(Label::Block(*body));
+            },
+            IrNode::EndSpawn => self.emit_op(Op::EndSpawn),
             IrNode::Blocked(reason) => {
                 let reason = self.intern_string((*reason).to_owned())?;
                 self.emit_op(Op::Blocked);
@@ -1407,6 +1412,7 @@ pub(crate) fn reachable_blocks(module: &ir::Module, entry: IrNodeId) -> Result<V
                     pending.push_back(*body);
                     pending.push_back(*catch);
                 },
+                IrNode::Spawn { body, .. } => pending.push_back(*body),
                 _ => {},
             }
         }
@@ -2234,6 +2240,8 @@ mod tests {
         assert_eq!(Op::CompoundBinary as u8, 0x2a);
         assert_eq!(Op::Initial as u8, 0x2b);
         assert_eq!(Op::Drop as u8, 0x2c);
+        assert_eq!(Op::Spawn as u8, 0x2d);
+        assert_eq!(Op::EndSpawn as u8, 0x2e);
         assert_eq!(Unary::Dereference as u8, 0x08);
         assert_eq!(Binary::In as u8, 0x17);
         assert_eq!(Builtin::SuperProc as u8, 0x08);

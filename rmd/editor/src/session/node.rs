@@ -15,6 +15,24 @@ use editor::{
 
 use super::Session;
 
+pub(super) fn registered_types(
+    environment: Option<&editor::Environment>, bake: Option<&editor::bake::Bake>,
+) -> HashSet<objtree::TypeId> {
+    let Some((environment, bake)) = environment.zip(bake) else {
+        return HashSet::new();
+    };
+    let Some(program) = environment.bake_program.as_ref() else {
+        return HashSet::new();
+    };
+
+    bake.node_groups()
+        .iter()
+        .filter_map(|group| program.tree.get(group.subtype))
+        .filter_map(|decl| environment.tree.id_of(&decl.path))
+        .flat_map(|root| environment.tree.descendants(root))
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NodeOverlay {
     pub nodes: Vec<Coord>,
@@ -46,6 +64,13 @@ pub(super) struct NodeEditState {
 }
 
 impl Session {
+    pub(crate) fn select_node_from_pick(&mut self, picked: render::PickResult) -> bool {
+        let render::PickResult::Hit(owner) = picked else {
+            return false;
+        };
+        self.begin_node_edit(owner)
+    }
+
     pub(crate) fn node_tool_available(&self) -> bool {
         let Some(id) = self.state.active() else {
             return false;
@@ -707,6 +732,91 @@ mod tests {
             oriented_node_session,
         },
     };
+
+    #[test]
+    fn node_sprite_eligibility_tracks_type_edits_history_and_profile_rebakes() {
+        let coord = Coord::new(1, 1, 1);
+        let map = node_map(1, 1, &[(coord, vec!["/obj/cable/heavy", "/obj/not_node"])]);
+        let (mut session, seed) = node_session(map, coord);
+        let id = session.state.active().unwrap();
+        session.textures.insert_missing_icon().unwrap();
+        session.rebuild_instances(id);
+        let eligibility = |session: &Session| session.instances().unwrap().sprite(seed).unwrap().node_pickable;
+        assert!(eligibility(&session), "registered descendants are eligible");
+        let other = *session
+            .state
+            .active_document()
+            .unwrap()
+            .instance_ids_at(coord)
+            .last()
+            .unwrap();
+        assert!(!session.instances().unwrap().sprite(other).unwrap().node_pickable);
+        assert!(session.replace_context_instance(seed, TreePath::parse("/obj/not_node")));
+        assert!(!eligibility(&session));
+        assert!(session.undo());
+        assert!(eligibility(&session));
+        assert!(session.redo());
+        assert!(!eligibility(&session));
+        assert!(session.undo());
+        assert!(session.delete_context_instance(seed));
+        assert!(session.instances().unwrap().sprite(seed).is_none());
+        assert!(session.undo());
+        assert!(eligibility(&session));
+
+        session.state.choose_prefab(Prefab::new(TreePath::parse("/obj/cable")));
+        session.set_tool(editor::tool::Tool::Place);
+        let placed = session.place_at(coord, None).unwrap();
+        assert!(session.instances().unwrap().sprite(placed).unwrap().node_pickable);
+
+        let bake = session.caches.get_mut(&id).unwrap().bake.take();
+        session.rebuild_instances(id);
+        assert!(
+            !eligibility(&session),
+            "no stale membership while the profile is absent"
+        );
+        session.caches.get_mut(&id).unwrap().bake = bake;
+        session.rebuild_instances(id);
+        assert!(eligibility(&session));
+        session.select_instance(Some(other));
+        let view = session
+            .map_view_frame(
+                id,
+                Default::default(),
+                Default::default(),
+                render::MapViewInteraction {
+                    selected: Some(other),
+                    mode: render::InteractionMode::Node { pick: None },
+                    ..Default::default()
+                },
+                &[],
+                &[],
+            )
+            .unwrap();
+        assert_eq!(view.interaction.selected, None);
+    }
+
+    #[test]
+    fn node_select_requires_a_supported_hit_and_preserves_the_network_on_a_miss() {
+        let coord = Coord::new(1, 1, 1);
+        let map = node_map(1, 1, &[(coord, vec!["/obj/cable/heavy", "/obj/not_node"])]);
+        let (mut session, seed) = node_session(map, coord);
+        session.set_tool(editor::tool::Tool::Node);
+        let other = *session
+            .state
+            .active_document()
+            .unwrap()
+            .instance_ids_at(coord)
+            .last()
+            .unwrap();
+        assert!(!session.select_node_from_pick(render::PickResult::Miss));
+        assert!(session.node_overlay().is_none());
+        assert!(session.select_node_from_pick(render::PickResult::Hit(seed)));
+        let overlay = session.node_overlay().unwrap();
+        assert!(!session.select_node_from_pick(render::PickResult::Hit(other)));
+        assert!(!session.select_node_from_pick(render::PickResult::Miss));
+        assert_eq!(session.selected_instance(), Some(seed));
+        assert_eq!(session.node_overlay(), Some(overlay));
+    }
 
     #[test]
     fn node_candidate_uses_the_visible_pick_with_tile_fallbacks() {

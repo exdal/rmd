@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::theme::DEFAULT_THEME;
 
 const MAX_RECENT: usize = 10;
-const DEFAULT_PREFERRED_EDITOR: &str = "code --goto {file}:{line}:{column}";
+const DEFAULT_PREFERRED_EDITOR: &str = "code {root} --goto {file}:{line}:{column}";
 pub(crate) const DEFAULT_COOP_PORT: u16 = 3131;
 pub const UI_SCALE_PERCENT: std::ops::RangeInclusive<u32> = 50..=200;
 pub const FONT_SIZE: std::ops::RangeInclusive<u32> = 8..=40;
@@ -993,15 +993,17 @@ pub(crate) enum Panel {
     Git,
     Inspector,
     Search,
+    MapIssues,
     Runtimes,
 }
 
 impl Panel {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::ObjectTree,
         Self::Git,
         Self::Inspector,
         Self::Search,
+        Self::MapIssues,
         Self::Runtimes,
     ];
 }
@@ -1013,6 +1015,8 @@ pub(crate) struct OpenPanels {
     pub git: bool,
     pub inspector: bool,
     pub search: bool,
+    #[serde(skip)]
+    pub map_issues: bool,
     pub runtimes: bool,
 }
 
@@ -1023,6 +1027,7 @@ impl OpenPanels {
             Panel::Git => self.git,
             Panel::Inspector => self.inspector,
             Panel::Search => self.search,
+            Panel::MapIssues => self.map_issues,
             Panel::Runtimes => self.runtimes,
         }
     }
@@ -1033,6 +1038,7 @@ impl OpenPanels {
             Panel::Git => &mut self.git,
             Panel::Inspector => &mut self.inspector,
             Panel::Search => &mut self.search,
+            Panel::MapIssues => &mut self.map_issues,
             Panel::Runtimes => &mut self.runtimes,
         }
     }
@@ -1045,6 +1051,7 @@ impl Default for OpenPanels {
             git: true,
             inspector: true,
             search: true,
+            map_issues: false,
             runtimes: false,
         }
     }
@@ -1226,6 +1233,7 @@ impl Settings {
     pub fn load() -> SettingsLoad { SettingsLoad::from_file_result(Self::try_load()) }
 
     pub fn save(&self) {
+        #[cfg(not(test))]
         if let Err(error) = self.try_save() {
             log::error!("saving settings: {error}");
         }
@@ -1385,6 +1393,7 @@ impl Settings {
         Ok(Some(toml::from_str(&source)?))
     }
 
+    #[cfg(not(test))]
     fn try_save(&self) -> Result<(), Box<dyn Error>> {
         let path = settings_path()?;
         if let Some(parent) = path.parent() {
@@ -1437,6 +1446,21 @@ fn settings_path_from(root: &Path, windows: bool) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_issues_panel_starts_closed_even_if_previously_saved_open() {
+        let old: Settings = toml::from_str("[panels]\nsearch = true\n").unwrap();
+        assert!(!old.panels.map_issues);
+        let previous: Settings = toml::from_str("[panels]\nmap_issues = true\nsearch = false\n").unwrap();
+        assert!(!previous.panels.map_issues);
+        assert!(!previous.panels.search);
+        let mut settings = old;
+        settings.panels.map_issues = true;
+        let encoded = toml::to_string(&settings).unwrap();
+        assert!(!encoded.contains("map_issues"));
+        let decoded: Settings = toml::from_str(&encoded).unwrap();
+        assert!(!decoded.panels.map_issues);
+    }
 
     #[test]
     fn defaults_preserve_existing_editor_behavior() {

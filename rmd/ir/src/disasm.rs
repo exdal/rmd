@@ -343,6 +343,7 @@ fn reachable(module: &Module, entry: IrNodeId) -> Vec<IrNodeId> {
                     ..
                 }) => branches.extend([*true_block, *false_block]),
                 Some(IrNode::TryCatch { body, catch, .. }) => branches.extend([*body, *catch]),
+                Some(IrNode::Spawn { body, .. }) => branches.push(*body),
                 Some(IrNode::LoopMerge {
                     merge_block,
                     continue_block,
@@ -534,6 +535,8 @@ fn format_node(node: &IrNode) -> String {
         IrNode::TryCatch { body, catch, merge } => {
             format!("try_catch body={body} catch={catch} merge={merge}")
         },
+        IrNode::Spawn { body, merge } => format!("spawn body={body} merge={merge}"),
+        IrNode::EndSpawn => "end_spawn".to_string(),
         IrNode::Del(id) => format!("del {id}"),
         IrNode::Throw(id) => format!("throw {id}"),
         IrNode::Output { target, value } => match target {

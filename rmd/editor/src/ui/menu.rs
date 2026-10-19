@@ -370,6 +370,7 @@ impl UiState {
                         Panel::Git => "Git",
                         Panel::Inspector => "Inspector",
                         Panel::Search => "Search",
+                        Panel::MapIssues => "Map Issues",
                         Panel::Runtimes => "Runtimes",
                     };
                     if ui.menu_item_enabled_selected_no_shortcut(label, settings.panels.is_open(panel), true) {

@@ -50,26 +50,29 @@ pub(super) fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewIn
     interaction.mode = match (tool, interaction.mode) {
         (Tool::Place | Tool::BlockSelect | Tool::Fill | Tool::RectFill, _) => InteractionMode::Place,
         (Tool::Select | Tool::Replace, InteractionMode::Select { pick }) => InteractionMode::Select { pick },
+        (Tool::Node, InteractionMode::Node { pick }) => InteractionMode::Node { pick },
         (Tool::Delete, InteractionMode::Delete { pick }) => InteractionMode::Delete { pick },
-        (Tool::Select | Tool::Replace | Tool::Node | Tool::Comment, _) => InteractionMode::Select { pick: None },
+        (Tool::Select | Tool::Replace | Tool::Comment, _) => InteractionMode::Select { pick: None },
+        (Tool::Node, _) => InteractionMode::Node { pick: None },
         (Tool::Delete, _) => InteractionMode::Delete { pick: None },
     };
     match tool {
-        Tool::Place | Tool::Node | Tool::BlockSelect | Tool::Fill | Tool::RectFill | Tool::Comment => {
+        Tool::Place | Tool::BlockSelect | Tool::Fill | Tool::RectFill | Tool::Comment => {
             interaction.cursor = None;
             interaction.selected = None;
         },
         Tool::Delete | Tool::Replace => {
             interaction.selected = None;
         },
-        Tool::Select => {},
+        Tool::Select | Tool::Node => {},
     }
 }
 
 pub(super) fn interaction_mode(tool: Tool) -> InteractionMode {
     match tool {
         Tool::Place | Tool::BlockSelect | Tool::Fill | Tool::RectFill => InteractionMode::Place,
-        Tool::Select | Tool::Replace | Tool::Node | Tool::Comment => InteractionMode::Select { pick: None },
+        Tool::Select | Tool::Replace | Tool::Comment => InteractionMode::Select { pick: None },
+        Tool::Node => InteractionMode::Node { pick: None },
         Tool::Delete => InteractionMode::Delete { pick: None },
     }
 }
@@ -77,7 +80,9 @@ pub(super) fn interaction_mode(tool: Tool) -> InteractionMode {
 pub(super) fn request_pick(interaction: &mut MapViewInteraction, request: PickRequest) {
     match &mut interaction.mode {
         InteractionMode::Place => {},
-        InteractionMode::Select { pick } | InteractionMode::Delete { pick } => *pick = Some(request),
+        InteractionMode::Select { pick } | InteractionMode::Node { pick } | InteractionMode::Delete { pick } => {
+            *pick = Some(request);
+        },
     }
 }
 
@@ -154,25 +159,23 @@ pub(super) fn apply_right_click(
 }
 
 pub(super) fn drive_node_tool(
-    session: &mut Session, frame: &mut ViewFrame<'_>, node_hit: &NodeOverlayHit, clicks: Clicks,
-    is_blame_capturing: bool,
+    session: &mut Session, frame: &mut ViewFrame<'_>, node_hit: &NodeOverlayHit, clicks: Clicks, is_capturing: bool,
 ) {
     if !frame.is_focused {
         session.cancel_node_drag();
     }
 
-    if !is_blame_capturing
-        && clicks.is_left_double_clicked
-        && let Some(coord) = frame.coord
-        && let Some(cursor) = frame.cursor
-    {
-        frame.interaction.cursor = Some(cursor_in_map_view(cursor, frame.layout.scale));
-        request_pick(frame.interaction, PickRequest::NodeSeed(coord));
-    } else if !is_blame_capturing
-        && clicks.is_left_clicked
-        && let Some(coord) = node_hit.handle
-    {
-        session.start_node_drag(coord);
+    if !is_capturing && !session.node_dragging() {
+        frame.interaction.cursor = frame
+            .cursor
+            .map(|cursor| cursor_in_map_view(cursor, frame.layout.scale));
+        if clicks.is_left_clicked {
+            if let Some(coord) = node_hit.handle {
+                session.start_node_drag(coord);
+            } else if frame.coord.is_some() && frame.interaction.cursor.is_some() {
+                request_pick(frame.interaction, PickRequest::NodeSelect);
+            }
+        }
     }
 
     if session.node_dragging() {

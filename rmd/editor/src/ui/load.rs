@@ -3,12 +3,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use dear_imgui_rs::{Condition, InputTextMultilineFlags, Key, StyleColor, Ui, WindowFlags, WindowKey};
+use dear_imgui_rs::{Condition, InputTextMultilineFlags, StyleColor, Ui, WindowFlags, WindowKey};
 use editor::progress::{Snapshot, Stage};
 
 use super::{
     SAVE_ERROR_COLOR,
-    common::{center_next_window, dpi},
+    common::{DialogButton, center_next_window, dialog_buttons, dpi},
 };
 use crate::{
     loader::LoadView,
@@ -65,15 +65,21 @@ impl DiagnosticsState {
     }
 
     pub(super) fn set_map(&mut self, path: PathBuf, report: LoadReport) {
-        if report.errors > 0 {
-            self.open = Some(DiagnosticSeverity::Error);
-        }
+        let errors = report.errors;
+        let warnings = report.warnings;
         if report.is_empty() {
             self.maps.remove(&path);
         } else {
             self.maps.insert(path, report);
         }
+
         self.close_empty_view();
+
+        if errors > 0 {
+            self.open = Some(DiagnosticSeverity::Error);
+        } else if warnings > 0 && self.open != Some(DiagnosticSeverity::Error) {
+            self.open = Some(DiagnosticSeverity::Warning);
+        }
     }
 
     pub(super) fn set_failed_codebase(&mut self, report: LoadReport) {
@@ -160,17 +166,14 @@ fn draw_load_body(
     ui: &Ui, load: Option<&LoadView>, notice: Option<&mut LoadNotice>, diagnostics: &DiagnosticsState,
     popup: &mut LoadPopup,
 ) {
-    let escape = ui.is_key_pressed(Key::Escape);
     match (load, notice) {
         (Some(view), _) => {
             draw_load_heading(ui, view.title, &view.path);
             draw_load_progress(ui, &view.snapshot);
 
             if view.cancellable {
-                ui.separator();
-
-                let _disabled = ui.begin_disabled_with_cond(view.cancelling);
-                if ui.button(if view.cancelling { "Cancelling..." } else { "Cancel" }) || escape {
+                let label = if view.cancelling { "Cancelling..." } else { "Cancel" };
+                if dialog_buttons(ui, &[DialogButton::cancel(label).enabled(!view.cancelling)], true).is_some() {
                     popup.cancel = true;
                 }
             }
@@ -180,14 +183,15 @@ fn draw_load_body(
             draw_load_heading(ui, title, path);
             let lines = wrapped_lines(ui, message).clamp(LOAD_TEXT_MIN_LINES, LOAD_ERROR_MAX_LINES);
             draw_selectable_text(ui, "##load-error", message, lines, Some(SAVE_ERROR_COLOR));
-            ui.separator();
 
-            if ui.button("Close") || escape {
-                popup.dismiss = true;
-            }
-            ui.same_line();
-            if ui.button("Copy") {
-                popup.copy = Some(message.clone());
+            match dialog_buttons(
+                ui,
+                &[DialogButton::cancel("Close"), DialogButton::secondary("Copy Error")],
+                true,
+            ) {
+                Some(0) => popup.dismiss = true,
+                Some(_) => popup.copy = Some(message.clone()),
+                None => {},
             }
         },
 
@@ -209,15 +213,18 @@ fn draw_load_body(
 
                 let lines = wrapped_lines(ui, &text).clamp(LOAD_TEXT_MIN_LINES, LOAD_DIAGNOSTICS_LINES);
                 draw_selectable_text(ui, "##load-diagnostics", &mut text, lines, Some(color));
-                ui.separator();
 
-                if ui.button("Close") || escape {
-                    popup.dismiss = true;
-                }
-
-                ui.same_line();
-                if ui.button("Copy") {
-                    popup.copy = Some(text);
+                match dialog_buttons(
+                    ui,
+                    &[
+                        DialogButton::cancel("Close"),
+                        DialogButton::secondary("Copy Diagnostics"),
+                    ],
+                    true,
+                ) {
+                    Some(0) => popup.dismiss = true,
+                    Some(_) => popup.copy = Some(text),
+                    None => {},
                 }
             }
         },
@@ -437,6 +444,56 @@ mod tests {
         state.set_map(PathBuf::from("b.dmm"), LoadReport::default());
         assert_eq!(state.count(DiagnosticSeverity::Error), 1);
         assert_eq!(state.open, None);
+    }
+
+    #[test]
+    fn map_warnings_open_automatically_and_remain_available_after_dismissal() {
+        let mut state = DiagnosticsState::default();
+        let path = PathBuf::from("map.dmm");
+        let report = LoadReport {
+            warnings: 1,
+            warning_lines: vec![String::from("map.dmm: unknown type path /obj/missing")],
+            ..LoadReport::default()
+        };
+        state.set_map(path.clone(), report.clone());
+        assert_eq!(state.open, Some(DiagnosticSeverity::Warning));
+
+        state.open = None;
+        assert_eq!(state.count(DiagnosticSeverity::Warning), 1);
+        assert_eq!(state.text(DiagnosticSeverity::Warning).0, report.warning_lines[0]);
+        state.set_map(path.clone(), report);
+        assert_eq!(state.count(DiagnosticSeverity::Warning), 1);
+        assert_eq!(state.open, Some(DiagnosticSeverity::Warning));
+
+        state.set_map(path, LoadReport::default());
+        assert_eq!(state.count(DiagnosticSeverity::Warning), 0);
+        assert_eq!(state.open, None);
+    }
+
+    #[test]
+    fn map_errors_take_priority_over_warnings_and_can_be_replaced_by_warnings() {
+        let mut state = DiagnosticsState::default();
+        let warning = LoadReport {
+            warnings: 1,
+            warning_lines: vec![String::from("unknown type path")],
+            ..LoadReport::default()
+        };
+        state.set_map(
+            PathBuf::from("errors.dmm"),
+            LoadReport {
+                errors: 1,
+                error_lines: vec![String::from("map error")],
+                ..warning.clone()
+            },
+        );
+        assert_eq!(state.open, Some(DiagnosticSeverity::Error));
+        state.set_map(PathBuf::from("warnings.dmm"), warning.clone());
+        assert_eq!(state.open, Some(DiagnosticSeverity::Error));
+        assert_eq!(state.count(DiagnosticSeverity::Warning), 2);
+
+        state.set_map(PathBuf::from("errors.dmm"), warning);
+        assert_eq!(state.count(DiagnosticSeverity::Error), 0);
+        assert_eq!(state.open, Some(DiagnosticSeverity::Warning));
     }
 
     #[test]

@@ -11,7 +11,7 @@ use editor::{
     tool::{Tool, default_tile_paths},
 };
 
-use super::{GitDocState, MAX_MAP_DIMENSION, Session, coop::LevelStep, is_reorder_label};
+use super::{GitDocState, Session, coop::LevelStep, is_reorder_label};
 use crate::loader::LoadedMap;
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -37,6 +37,7 @@ impl Session {
 
         if let Some(id) = self.state.document_for_path(&path) {
             self.set_active_document(id);
+            self.note_loaded_issues(id);
 
             return;
         }
@@ -55,6 +56,7 @@ impl Session {
             repo.map(|repo| GitDocState::new(repo, conflict.map(ConflictState::new)));
 
         self.refresh_git_document(id);
+        self.note_loaded_issues(id);
     }
 
     pub fn reload_map(&mut self, id: DocumentId, loaded: LoadedMap) -> bool {
@@ -92,6 +94,7 @@ impl Session {
         self.set_active_document(id);
         self.rebake(id);
         self.refresh_git_document(id);
+        self.note_loaded_issues(id);
 
         true
     }
@@ -131,16 +134,10 @@ impl Session {
     }
 
     pub fn create_map(&mut self, path: &Path, size: Size, format: MapFormat) -> Result<(), Box<dyn std::error::Error>> {
-        if size.x == 0
-            || size.y == 0
-            || size.z == 0
-            || size.x > MAX_MAP_DIMENSION
-            || size.y > MAX_MAP_DIMENSION
-            || size.z > MAX_MAP_DIMENSION
-        {
+        if size.x == 0 || size.y == 0 || size.z == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("map dimensions must each be between 1 and {MAX_MAP_DIMENSION}"),
+                "map dimensions must each be at least 1",
             )
             .into());
         }
@@ -610,6 +607,38 @@ mod tests {
     }
 
     #[test]
+    fn new_map_creation_accepts_dimensions_above_255() {
+        let mut session = Session::new();
+        session.load_environment(&examples().join("test.dme")).unwrap();
+        let fill = session.default_fill().unwrap();
+
+        for size in [
+            Size { x: 256, y: 1, z: 1 },
+            Size { x: 1, y: 256, z: 1 },
+            Size { x: 1, y: 1, z: 256 },
+        ] {
+            let path = std::env::temp_dir().join(format!(
+                "rmd-new-map-{}-{}-{}-{}.dmm",
+                size.x,
+                size.y,
+                size.z,
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&path);
+
+            session.create_map(&path, size, MapFormat::Tgm).unwrap();
+
+            let document = session.state.active_document().unwrap();
+            assert_eq!(document.map.size(), size);
+            assert_eq!(document.z, 1);
+            assert!(document.is_dirty());
+            for coord in [Coord::new(1, 1, 1), Coord::new(size.x, size.y, size.z)] {
+                assert_eq!(document.map.tile_at(coord), Some(&fill));
+            }
+        }
+    }
+
+    #[test]
     fn sanitizing_on_save_leaves_default_values_out_of_the_file_only() {
         let mut table = Prefab::new(TreePath::parse("/obj/structure/table"));
         table.set_var("name".into(), Value::Text(String::from("table")));
@@ -704,10 +733,18 @@ mod tests {
         let mut session = Session::new();
         let path = std::env::temp_dir().join(format!("rmd-new-map-collision-{}.dmm", std::process::id()));
 
-        let error = session
-            .create_map(&path, Size { x: 0, y: 1, z: 1 }, MapFormat::Standard)
-            .unwrap_err();
-        assert!(error.to_string().contains("between 1 and 255"));
+        for size in [
+            Size { x: 0, y: 1, z: 1 },
+            Size { x: 1, y: 0, z: 1 },
+            Size { x: 1, y: 1, z: 0 },
+        ] {
+            let error = session.create_map(&path, size, MapFormat::Standard).unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+            assert!(error.to_string().contains("at least 1"));
+        }
 
         std::fs::write(&path, "existing").unwrap();
         let error = session

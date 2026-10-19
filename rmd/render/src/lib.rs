@@ -72,6 +72,9 @@ pub enum InteractionMode {
     Select {
         pick: Option<PickRequest>,
     },
+    Node {
+        pick: Option<PickRequest>,
+    },
     Delete {
         pick: Option<PickRequest>,
     },
@@ -81,11 +84,13 @@ impl InteractionMode {
     pub const fn pick(self) -> Option<PickRequest> {
         match self {
             Self::Place => None,
-            Self::Select { pick } | Self::Delete { pick } => pick,
+            Self::Select { pick } | Self::Node { pick } | Self::Delete { pick } => pick,
         }
     }
 
     pub const fn is_delete(self) -> bool { matches!(self, Self::Delete { .. }) }
+
+    pub const fn is_node(self) -> bool { matches!(self, Self::Node { .. }) }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +98,7 @@ pub enum PickRequest {
     Select,
     Delete,
     Replace,
+    NodeSelect,
     NodeSeed(Coord),
     NodeDelete(Coord),
 }
@@ -136,6 +142,7 @@ pub struct SpriteInstance {
     pub is_area: bool,
     pub hidden: bool,
     pub click_through: bool,
+    pub node_pickable: bool,
     pub area_edges: u32,
     pub lighting: SpriteLighting,
     /// premultiplied RGBA

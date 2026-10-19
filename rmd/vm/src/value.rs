@@ -124,7 +124,7 @@ impl GenericValue {
             Self::Null | Self::Omitted => String::new(),
             Self::Num(n) => n.to_string(),
             Self::Text(s) | Self::Resource(s) => s.to_string(),
-            Self::Path(p) => p.to_string(),
+            Self::Path(p) => p.spelled(),
             Self::List(_) => "/list".into(),
             Self::ArgList(_) => "/list".into(),
             Self::Iterator(_) => "[iterator]".into(),

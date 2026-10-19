@@ -107,6 +107,69 @@ fn run(source: &str, name: &str) -> GenericValue {
         .expect("fixture should execute")
 }
 
+#[test]
+fn negative_spawn_delays_run_before_the_continuation() {
+    let source = fixture!("programs/immediate_spawns.dm");
+    assert_eq!(
+        run(source, "spawn_order"),
+        GenericValue::Text(
+            "before,delay,spawn,after;before,delay,spawn,after;before,delay,after;before,delay,after".into()
+        )
+    );
+    assert_eq!(
+        run(source, "spawn_default_delays"),
+        GenericValue::Text("before,after".into())
+    );
+}
+
+#[test]
+fn immediate_spawns_copy_locals_parameters_and_the_return_value() {
+    let source = fixture!("programs/immediate_spawns.dm");
+    assert_eq!(run(source, "spawn_frame"), GenericValue::Num(79959.0));
+    assert_eq!(run(source, "spawn_nested"), GenericValue::Text("33,22,11".into()));
+}
+
+#[test]
+fn immediate_spawn_returns_and_loop_controls_stay_inside_the_spawn() {
+    assert_eq!(
+        run(fixture!("programs/immediate_spawns.dm"), "spawn_returns_in_loops"),
+        GenericValue::Num(43.0)
+    );
+}
+
+#[test]
+fn immediate_spawns_preserve_shared_mutations_across_exception_scopes() {
+    let source = fixture!("programs/immediate_spawns.dm");
+    assert_eq!(run(source, "spawn_throws"), GenericValue::Num(7165.0));
+    assert_eq!(run(source, "spawn_sleeps"), GenericValue::Text("a,after".into()));
+    assert_eq!(
+        run(source, "spawn_returns_in_try"),
+        GenericValue::Text("after,parent caught".into())
+    );
+    assert_eq!(run(source, "spawn_dot_in_try"), GenericValue::Text("5,5,1".into()));
+    assert_eq!(run(source, "spawn_super_uses_copies"), GenericValue::Num(5.0));
+    assert_eq!(run(source, "spawn_try_inside"), GenericValue::Num(87.0));
+    assert_eq!(run(source, "spawn_static"), GenericValue::Num(1.0));
+    assert_eq!(run(source, "spawn_object"), GenericValue::Num(123.0));
+}
+
+#[test]
+fn immediate_spawns_do_not_swallow_sandbox_faults() {
+    let (tree, module) = compile(fixture!("programs/immediate_spawns.dm"));
+    let fault = Runtime::default()
+        .run(
+            &tree,
+            &module,
+            proc(&tree, &module.index, "spawn_shell_fault"),
+            None,
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
+        .expect_err("sandbox operation should fault");
+    assert_eq!(fault.kind, FaultKind::Blocked("shell".into()));
+}
+
 const WALLS: &str = fixture!("programs/profile-wall-bake.dm");
 
 fn wall_patch(tree: &ObjectTree) -> Vec<Atom> {
@@ -3300,6 +3363,17 @@ fn proc_macro_is_the_proc_path() {
     assert_eq!(
         run(fixture!("programs/proc_macro_is_the_proc_path.dm"), "test"),
         3.into()
+    );
+}
+
+#[test]
+fn proc_macro_text_keeps_the_declared_keyword() {
+    assert_eq!(
+        run(
+            fixture!("programs/proc_macro_text_keeps_the_declared_keyword.dm"),
+            "test"
+        ),
+        "/mob/proc/plain,/mob/verb/spoken,/mob/child/plain,/mob/child/spoken,/mob/proc/plain,/mob/verb/spoken,1".into()
     );
 }
 

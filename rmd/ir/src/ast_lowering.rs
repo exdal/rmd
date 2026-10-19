@@ -1,7 +1,7 @@
 use core::{
     location::{Location, SourceLine},
-    path::TreePath,
-    types::{Identifier, InputType, ListEntry, Value, VarModifiers, VarSpec},
+    path::{PathFlags, TreePath},
+    types::{Identifier, InputType, ListEntry, ProcKind, Value, VarModifiers, VarSpec},
 };
 
 use ast::{AST, AccessKind, ContextMacro, Expression, ExpressionId, ForLoop, Literal, Statement, constant::fold};
@@ -36,6 +36,7 @@ pub struct IrModuleBuilder<'a> {
     named_blocks: FxHashMap<Identifier, IrNodeId>,
     defined_named_blocks: FxHashSet<IrNodeId>,
     controls: Vec<ControlTarget>,
+    spawn_return: Option<BindingId>,
     current_block: Option<IrNodeId>,
     entry: IrNodeId,
     current_owner: TreePath,
@@ -100,6 +101,7 @@ impl<'a> IrModuleBuilder<'a> {
             named_blocks: FxHashMap::default(),
             defined_named_blocks: FxHashSet::default(),
             controls: Vec::new(),
+            spawn_return: None,
             current_block: None,
             entry: IrNodeId(0),
             current_owner: TreePath::default(),
@@ -203,16 +205,24 @@ impl<'a> IrModuleBuilder<'a> {
         &mut self, owner: TreePath, name: Identifier, params: &[ast::ProcParam], variadic: bool, body: &[Statement],
         location: Location,
     ) -> ProcId {
-        self.lower_proc_with_intrinsic(owner, name, params, variadic, body, None, location)
+        self.lower_proc_with_intrinsic(owner, name, ProcKind::Proc, params, variadic, body, None, location)
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn lower_proc_with_intrinsic(
-        &mut self, owner: TreePath, name: Identifier, params: &[ast::ProcParam], variadic: bool, body: &[Statement],
-        intrinsic: Option<Intrinsic>, location: Location,
+        &mut self, owner: TreePath, name: Identifier, kind: ProcKind, params: &[ast::ProcParam], variadic: bool,
+        body: &[Statement], intrinsic: Option<Intrinsic>, location: Location,
     ) -> ProcId {
-        let locals_in_memory = statements_contain_try(body);
-        let proc = owner.concat(&TreePath::parse(&format!("proc/{name}")));
+        let locals_in_memory = statements_contain_try(self.ast, body);
+        let proc = match kind {
+            ProcKind::Verb => owner.concat(&TreePath::parse(&format!("verb/{name}"))),
+            ProcKind::Override => {
+                let mut proc = owner.concat(&TreePath::new(vec![name.clone()], false));
+                proc.flags |= PathFlags::IS_PROC;
+                proc
+            },
+            ProcKind::Proc | ProcKind::Operator => owner.concat(&TreePath::parse(&format!("proc/{name}"))),
+        };
 
         self.lower_function(
             owner,
@@ -322,6 +332,7 @@ impl<'a> IrModuleBuilder<'a> {
         self.named_blocks.clear();
         self.defined_named_blocks.clear();
         self.controls.clear();
+        self.spawn_return = None;
         self.current_block = None;
         self.locals_in_memory = false;
         self.depth = 0;
@@ -899,6 +910,12 @@ impl<'a> IrModuleBuilder<'a> {
                 },
             },
             Some(Expression::Path(path)) => return self.intern_constant(Value::Path(path.clone())),
+            Some(Expression::Builtin(Builtin::ThisProc)) if let Some(binding) = self.spawn_return => {
+                return match self.current_block {
+                    Some(block) => self.read_variable(binding, block),
+                    None => self.undefined(),
+                };
+            },
             Some(Expression::Builtin(builtin)) => IrNode::Builtin(*builtin),
             Some(Expression::Grouped(inner)) => return self.lower_expr(*inner),
             Some(Expression::InterpString { chunks, expressions }) => {
@@ -1416,6 +1433,11 @@ impl<'a> IrModuleBuilder<'a> {
                     conditional: *conditional,
                 });
             },
+            Some(Expression::Builtin(Builtin::ThisProc)) if let Some(binding) = self.spawn_return => {
+                if let Some(block) = self.current_block {
+                    self.write_variable(binding, block, value);
+                }
+            },
             Some(Expression::Builtin(builtin)) => {
                 self.emit_instr(IrNode::StoreBuiltin {
                     builtin: *builtin,
@@ -1490,7 +1512,10 @@ impl<'a> IrModuleBuilder<'a> {
             },
             Statement::Return(e) => {
                 let value = e.map(|e| self.lower_expr(e));
-                self.terminate_current_block(IrNode::Return(value));
+                match self.spawn_return {
+                    Some(_) => self.terminate_current_block(IrNode::EndSpawn),
+                    None => self.terminate_current_block(IrNode::Return(value)),
+                }
             },
             Statement::If { branches, else_branch } => {
                 let merge = self.make_block();
@@ -1630,10 +1655,15 @@ impl<'a> IrModuleBuilder<'a> {
                 self.seal_block(merge);
                 self.resume(merge);
             },
-            // the bake is a snapshot taken before any spawned work runs
-            Statement::Spawn { delay, .. } => {
+            Statement::Spawn { delay, body } => {
                 if let Some(delay) = delay {
-                    self.lower_expr(*delay);
+                    let value = self.lower_expr(*delay);
+
+                    // speecial case for spawn with immediate delays
+                    // fuckass language
+                    if is_immediate_spawn(self.ast, Some(*delay)) {
+                        self.lower_immediate_spawn(value, body);
+                    }
                 }
             },
             Statement::TryCatch {
@@ -1722,6 +1752,101 @@ impl<'a> IrModuleBuilder<'a> {
                 }
             },
         }
+    }
+
+    fn lower_immediate_spawn(&mut self, delay: IrNodeId, body: &[Statement]) {
+        let taken = self.make_block();
+        let merge = self.make_block();
+        let zero = self.intern_constant(Value::Num(0.0));
+        let condition = self.emit_instr(IrNode::Binary {
+            op: BinaryOp::CompLess,
+            lhs: delay,
+            rhs: zero,
+        });
+        self.selection_merge(merge);
+        self.terminate_current_block(IrNode::ConditionalBranch {
+            condition,
+            true_block: taken,
+            false_block: merge,
+        });
+        self.seal_block(taken);
+        self.set_current_block(taken);
+
+        let spawn_body = self.make_block();
+        self.preds.entry(spawn_body).or_default().push(taken);
+        self.seal_block(spawn_body);
+        self.set_current_block(spawn_body);
+
+        // a spawn copies the proc's locals, but shares the objects and lists they reference
+        //
+        // shadow visible bindings instead of restoring them afterward, including when a body faults
+        // note for me: this is literally `[=]() mutable { ... }();`
+        let bindings = self
+            .vars
+            .iter()
+            .enumerate()
+            .filter(|(index, spec)| {
+                !spec.modifiers.is_static && self.lookup(&spec.name) == Some(BindingId(*index as u32))
+            })
+            .map(|(index, spec)| (BindingId(index as u32), spec.clone()))
+            .collect::<Vec<_>>();
+        self.scopes.push(FxHashMap::default());
+        let mut copies = FxHashMap::default();
+        for (binding, spec) in bindings {
+            let value = self.read_variable(binding, spawn_body);
+            let copy = self.declare_var(spec);
+            self.write_variable(copy, spawn_body, value);
+            copies.insert(binding, copy);
+        }
+
+        let this = match self.spawn_return {
+            Some(binding) => self.read_variable(binding, spawn_body),
+            None => self.emit_instr(IrNode::Builtin(Builtin::ThisProc)),
+        };
+        let dot_copy = self.declare_temp("$spawn_return");
+        if self.locals_in_memory {
+            let pointer = self.frame_local(dot_copy);
+            self.stored_bindings.insert(dot_copy, pointer);
+        }
+        self.write_variable(dot_copy, spawn_body, this);
+
+        let parent_spawn_return = self.spawn_return.replace(dot_copy);
+        let spawn_parameters = self
+            .parameters
+            .iter()
+            .map(|binding| copies.get(binding).copied().unwrap_or(*binding))
+            .collect();
+        let parent_parameters = std::mem::replace(&mut self.parameters, spawn_parameters);
+        let parent_controls = std::mem::take(&mut self.controls);
+        let parent_labels = std::mem::take(&mut self.named_blocks);
+        let parent_defined_labels = std::mem::take(&mut self.defined_named_blocks);
+        self.lower_statements(body);
+        self.terminate_current_block(IrNode::EndSpawn);
+        let labels = self
+            .named_blocks
+            .values()
+            .copied()
+            .chain(self.defined_named_blocks.iter().copied())
+            .collect::<FxHashSet<_>>();
+        for label in labels {
+            self.seal_block(label);
+        }
+
+        self.named_blocks = parent_labels;
+        self.defined_named_blocks = parent_defined_labels;
+        self.controls = parent_controls;
+        self.parameters = parent_parameters;
+        self.spawn_return = parent_spawn_return;
+        self.scopes.pop();
+
+        self.set_current_block(taken);
+        self.emit_instr(IrNode::Spawn {
+            body: spawn_body,
+            merge,
+        });
+        self.terminate_current_block(IrNode::Branch(merge));
+        self.seal_block(merge);
+        self.resume(merge);
     }
 
     fn lower_output_target(&mut self, id: ExpressionId) -> OutputTarget {
@@ -2021,29 +2146,43 @@ fn compound(kind: ast::AssignmentKind) -> Option<BinaryOp> {
     })
 }
 
-fn statements_contain_try(statements: &[Statement]) -> bool { statements.iter().any(statement_contains_try) }
+fn is_immediate_spawn(ast: &AST, delay: Option<ExpressionId>) -> bool {
+    delay.is_some_and(|delay| !matches!(fold(ast, delay), Value::Num(delay) if delay >= 0.0))
+}
 
-fn statement_contains_try(statement: &Statement) -> bool {
+fn statements_contain_try(ast: &AST, statements: &[Statement]) -> bool {
+    statements
+        .iter()
+        .any(|statement| statement_contains_try(ast, statement))
+}
+
+fn statement_contains_try(ast: &AST, statement: &Statement) -> bool {
     match statement {
         Statement::TryCatch { .. } => true,
         Statement::If { branches, else_branch } => {
-            branches.iter().any(|(_, body)| statements_contain_try(body))
-                || else_branch.as_deref().is_some_and(statements_contain_try)
+            branches.iter().any(|(_, body)| statements_contain_try(ast, body))
+                || else_branch
+                    .as_deref()
+                    .is_some_and(|body| statements_contain_try(ast, body))
         },
         Statement::While { body, .. } | Statement::DoWhile { body, .. } | Statement::Label { body, .. } => {
-            statements_contain_try(body)
+            statements_contain_try(ast, body)
         },
+        Statement::Spawn { delay, body } => is_immediate_spawn(ast, *delay) && statements_contain_try(ast, body),
         Statement::For(loop_) => match loop_.as_ref() {
             ForLoop::Standard { init, step, body, .. } => {
-                init.as_deref().is_some_and(statement_contains_try)
-                    || step.as_deref().is_some_and(statement_contains_try)
-                    || statements_contain_try(body)
+                init.as_deref()
+                    .is_some_and(|statement| statement_contains_try(ast, statement))
+                    || step
+                        .as_deref()
+                        .is_some_and(|statement| statement_contains_try(ast, statement))
+                    || statements_contain_try(ast, body)
             },
-            ForLoop::List { body, .. } | ForLoop::Range { body, .. } => statements_contain_try(body),
+            ForLoop::List { body, .. } | ForLoop::Range { body, .. } => statements_contain_try(ast, body),
         },
         Statement::Switch { cases, default, .. } => {
-            cases.iter().any(|case| statements_contain_try(&case.body))
-                || default.as_deref().is_some_and(statements_contain_try)
+            cases.iter().any(|case| statements_contain_try(ast, &case.body))
+                || default.as_deref().is_some_and(|body| statements_contain_try(ast, body))
         },
         _ => false,
     }
@@ -2100,6 +2239,22 @@ mod tests {
         }
 
         builder.finish_with_optimizations(enabled)
+    }
+
+    fn has_frame_locals(module: &Module) -> bool {
+        module
+            .nodes
+            .iter()
+            .any(|node| matches!(node, IrNode::Variable(name) if name.as_str().starts_with("__dmed_frame_local_")))
+    }
+
+    #[test]
+    fn only_immediate_spawn_bodies_force_locals_into_memory() {
+        let deferred = lower(fixture!("programs/deferred_spawn_try_keeps_locals_in_registers.dm"));
+        let immediate = lower(fixture!("programs/immediate_spawn_try_keeps_locals_in_memory.dm"));
+
+        assert!(!has_frame_locals(&deferred));
+        assert!(has_frame_locals(&immediate));
     }
 
     #[test]

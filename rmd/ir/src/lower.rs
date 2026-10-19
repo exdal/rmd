@@ -79,6 +79,7 @@ impl Lowering<'_> {
 
             Declaration::Proc {
                 path,
+                kind,
                 params,
                 body,
                 variadic,
@@ -102,6 +103,7 @@ impl Lowering<'_> {
                 let proc = self.builder.lower_proc_with_intrinsic(
                     owner,
                     name.clone(),
+                    *kind,
                     params,
                     *variadic,
                     statements,

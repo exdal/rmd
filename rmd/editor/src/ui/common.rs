@@ -1,9 +1,232 @@
-use dear_imgui_rs::{Condition, ModalPopupToken, StyleColor, TableFlags, Ui, WindowFlags, WindowHoveredFlags, sys};
+use std::{collections::HashSet, hash::Hash};
+
+use dear_imgui_rs::{
+    Condition,
+    Key,
+    ModalPopupToken,
+    StyleColor,
+    TableFlags,
+    Ui,
+    WindowFlags,
+    WindowHoveredFlags,
+    sys,
+};
+
+pub(super) struct RowSelection<K> {
+    keys: HashSet<K>,
+    anchor: Option<K>,
+}
+
+impl<K> Default for RowSelection<K> {
+    fn default() -> Self {
+        Self {
+            keys: HashSet::new(),
+            anchor: None,
+        }
+    }
+}
+
+impl<K: Copy + Eq + Hash> RowSelection<K> {
+    pub(super) fn contains(&self, coord: &K) -> bool { self.keys.contains(coord) }
+
+    pub(super) fn clear(&mut self) {
+        self.keys.clear();
+        self.anchor = None;
+    }
+
+    pub(super) fn select(&mut self, key: K) {
+        self.keys.clear();
+        self.keys.insert(key);
+        self.anchor = Some(key);
+    }
+
+    pub(super) fn among(&self, order: impl IntoIterator<Item = K>) -> Vec<K> {
+        order
+            .into_iter()
+            .filter(|coord| self.keys.contains(coord))
+            .collect::<Vec<_>>()
+    }
+
+    pub(super) fn click(&mut self, ui: &Ui, order: &[K], position: usize) -> bool {
+        let coord = order[position];
+        let io = ui.io();
+        let anchor = self
+            .anchor
+            .and_then(|anchor| order.iter().position(|candidate| *candidate == anchor));
+
+        if io.key_shift()
+            && let Some(anchor) = anchor
+        {
+            if !io.key_ctrl() {
+                self.keys.clear();
+            }
+            self.keys.extend(&order[anchor.min(position)..=anchor.max(position)]);
+            false
+        } else if io.key_ctrl() {
+            if !self.keys.remove(&coord) {
+                self.keys.insert(coord);
+            }
+            self.anchor = Some(coord);
+            false
+        } else {
+            self.keys.clear();
+            self.keys.insert(coord);
+            self.anchor = Some(coord);
+            true
+        }
+    }
+}
 
 const MIN_STRETCH_WIDTH: f32 = 40.0;
 
 /// Marks everything an identical scope edit reaches, in the inspector and on the map
 pub(super) const IDENTICAL_EDIT_COLOR: [f32; 4] = [1.0, 0.7, 0.15, 1.0];
+
+const DESTRUCTIVE_COLOR: [f32; 4] = [0.75, 0.15, 0.15, 1.0];
+const DESTRUCTIVE_HOVERED_COLOR: [f32; 4] = [0.85, 0.2, 0.2, 1.0];
+const DESTRUCTIVE_ACTIVE_COLOR: [f32; 4] = [0.6, 0.1, 0.1, 1.0];
+const DESTRUCTIVE_TEXT_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ButtonRole {
+    Cancel,
+    Secondary,
+    Primary,
+    Destructive { is_undoable: bool },
+}
+
+pub(super) struct DialogButton<'a> {
+    pub label: &'a str,
+    pub role: ButtonRole,
+    pub is_enabled: bool,
+    pub tooltip: Option<&'a str>,
+}
+
+impl<'a> DialogButton<'a> {
+    fn new(label: &'a str, role: ButtonRole) -> Self {
+        Self {
+            label,
+            role,
+            is_enabled: true,
+            tooltip: None,
+        }
+    }
+
+    pub(super) fn cancel(label: &'a str) -> Self { Self::new(label, ButtonRole::Cancel) }
+
+    pub(super) fn secondary(label: &'a str) -> Self { Self::new(label, ButtonRole::Secondary) }
+
+    pub(super) fn primary(label: &'a str) -> Self { Self::new(label, ButtonRole::Primary) }
+
+    pub(super) fn destructive(label: &'a str, is_undoable: bool) -> Self {
+        Self::new(label, ButtonRole::Destructive { is_undoable })
+    }
+
+    pub(super) fn enabled(mut self, is_enabled: bool) -> Self {
+        self.is_enabled = is_enabled;
+        self
+    }
+
+    pub(super) fn tooltip(mut self, tooltip: &'a str) -> Self {
+        self.tooltip = Some(tooltip);
+        self
+    }
+}
+
+fn cancel_index(buttons: &[DialogButton]) -> Option<usize> {
+    buttons
+        .iter()
+        .position(|button| button.role == ButtonRole::Cancel && button.is_enabled)
+}
+
+fn enter_index(buttons: &[DialogButton]) -> Option<usize> {
+    buttons.iter().position(|button| {
+        button.is_enabled
+            && matches!(
+                button.role,
+                ButtonRole::Primary | ButtonRole::Destructive { is_undoable: true }
+            )
+    })
+}
+
+pub(super) fn dialog_buttons(ui: &Ui, buttons: &[DialogButton], is_keys_enabled: bool) -> Option<usize> {
+    debug_assert!(
+        buttons
+            .iter()
+            .position(|button| button.role == ButtonRole::Cancel)
+            .is_none_or(|index| index == 0),
+        "Cancel must be the first button"
+    );
+    debug_assert!(
+        buttons
+            .iter()
+            .rposition(|button| button.role == ButtonRole::Primary)
+            .is_none_or(|index| index + 1 == buttons.len()),
+        "Primary must be the last button"
+    );
+
+    let style = ui.clone_style();
+    let gap = [0.0, style.item_spacing()[1]];
+    ui.dummy(gap);
+    ui.separator();
+    ui.dummy(gap);
+
+    let spacing = style.item_spacing()[0];
+    let total = buttons.iter().map(|button| button_width(ui, button.label)).sum::<f32>()
+        + spacing * buttons.len().saturating_sub(1) as f32;
+    let available = ui.content_region_avail_width();
+    if available > total {
+        let [x, y] = ui.cursor_pos();
+        ui.set_cursor_pos([x + available - total, y]);
+    }
+
+    let accent = style.color(StyleColor::ButtonHovered);
+    let accent_active = style.color(StyleColor::ButtonActive);
+
+    let mut clicked = None;
+    for (index, button) in buttons.iter().enumerate() {
+        if index > 0 {
+            ui.same_line();
+        }
+
+        let (normal, hovered, active, text) = match button.role {
+            ButtonRole::Cancel | ButtonRole::Secondary => (None, None, None, None),
+            ButtonRole::Primary => (Some(accent), Some(accent_active), Some(accent_active), None),
+            ButtonRole::Destructive { .. } => (
+                Some(DESTRUCTIVE_COLOR),
+                Some(DESTRUCTIVE_HOVERED_COLOR),
+                Some(DESTRUCTIVE_ACTIVE_COLOR),
+                Some(DESTRUCTIVE_TEXT_COLOR),
+            ),
+        };
+        let is_clicked = {
+            let _disabled = ui.begin_disabled_with_cond(!button.is_enabled);
+            let _normal = normal.map(|color| ui.push_style_color(StyleColor::Button, color));
+            let _hovered = hovered.map(|color| ui.push_style_color(StyleColor::ButtonHovered, color));
+            let _active = active.map(|color| ui.push_style_color(StyleColor::ButtonActive, color));
+            let _text = text.map(|color| ui.push_style_color(StyleColor::Text, color));
+            ui.button(button.label)
+        };
+
+        if is_clicked {
+            clicked = Some(index);
+        }
+
+        if let Some(tooltip) = button.tooltip {
+            ui.set_item_tooltip(tooltip);
+        }
+    }
+
+    if clicked.is_none() && is_keys_enabled {
+        if ui.is_key_pressed(Key::Escape) {
+            clicked = cancel_index(buttons);
+        } else if ui.is_key_pressed(Key::Enter) || ui.is_key_pressed(Key::KeypadEnter) {
+            clicked = enter_index(buttons);
+        }
+    }
+
+    clicked
+}
 
 pub(super) fn center_next_window(ui: &Ui, condition: Condition) {
     let center = ui.main_viewport().work_center();
@@ -123,9 +346,18 @@ pub(super) fn fit_icon(width: u32, height: u32, extent: f32) -> [f32; 2] {
 mod tests {
     use dear_imgui_rs::{Condition, Ui, WindowFlags, sys};
 
-    use super::{begin_centered_modal, focus_window_on_hover};
+    use super::{
+        DialogButton,
+        RowSelection,
+        begin_centered_modal,
+        cancel_index,
+        dialog_buttons,
+        enter_index,
+        focus_window_on_hover,
+    };
     use crate::ui::{
         IMGUI_CONTEXT,
+        dialog::MODAL_FLAGS,
         fixtures::{
             PopupContext,
             assert_window_centered,
@@ -135,6 +367,120 @@ mod tests {
             set_desktop_geometry,
         },
     };
+
+    #[test]
+    fn dialog_button_gap_ignores_dialog_width() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = popup_context(true);
+        set_desktop_geometry(&mut context, [0.0, 0.0], [1920.0, 1080.0]);
+        let buttons = [
+            DialogButton::cancel("Cancel"),
+            DialogButton::destructive("Exit Without Saving", false),
+        ];
+        let mut gap = |name: &str, text: &str| {
+            let mut measured = 0.0;
+            for frame in 0..4 {
+                let ui = context.frame();
+                if frame == 0 {
+                    ui.open_popup(name);
+                }
+
+                if let Some(_modal) = begin_centered_modal(ui, name, MODAL_FLAGS) {
+                    ui.text(text);
+                    let content_bottom = ui.item_rect_max()[1];
+                    dialog_buttons(ui, &buttons, false);
+                    measured = ui.item_rect_min()[1] - content_bottom;
+                }
+
+                finish_frame(&mut context);
+            }
+
+            measured
+        };
+
+        let narrow = gap("Narrow dialog", "Exit?");
+        let wide = gap("Wide dialog", &"A much wider line of dialog text ".repeat(4));
+        assert!(narrow > 0.0);
+        assert_eq!(narrow, wide);
+    }
+
+    #[test]
+    fn keys_map_cancel_and_primary() {
+        let buttons = [DialogButton::cancel("Cancel"), DialogButton::primary("Save Map")];
+        assert_eq!(cancel_index(&buttons), Some(0));
+        assert_eq!(enter_index(&buttons), Some(1));
+    }
+
+    #[test]
+    fn keys_without_cancel_have_no_escape_target() {
+        let buttons = [DialogButton::primary("Save Map")];
+        assert_eq!(cancel_index(&buttons), None);
+        assert_eq!(enter_index(&buttons), Some(0));
+    }
+
+    #[test]
+    fn disabled_primary_ignores_enter() {
+        let buttons = [
+            DialogButton::cancel("Cancel"),
+            DialogButton::primary("Save Map").enabled(false),
+        ];
+        assert_eq!(enter_index(&buttons), None);
+        assert_eq!(cancel_index(&buttons), Some(0));
+    }
+
+    #[test]
+    fn enter_triggers_only_undoable_destructive() {
+        let undoable = [
+            DialogButton::cancel("Cancel"),
+            DialogButton::destructive("Delete Level", true),
+        ];
+        assert_eq!(enter_index(&undoable), Some(1));
+
+        let irreversible = [
+            DialogButton::cancel("Cancel"),
+            DialogButton::destructive("Exit Without Saving", false),
+        ];
+        assert_eq!(enter_index(&irreversible), None);
+    }
+
+    #[test]
+    fn enter_skips_irreversible_destructive_for_primary() {
+        let buttons = [
+            DialogButton::cancel("Cancel"),
+            DialogButton::destructive("Discard Changes", false),
+            DialogButton::primary("Save Map"),
+        ];
+        assert_eq!(enter_index(&buttons), Some(2));
+    }
+
+    #[test]
+    fn secondary_only_rows_ignore_keys() {
+        let buttons = [
+            DialogButton::secondary("Use Default"),
+            DialogButton::secondary("Use StrongDMM"),
+        ];
+        assert_eq!(cancel_index(&buttons), None);
+        assert_eq!(enter_index(&buttons), None);
+    }
+
+    #[test]
+    fn table_selection_supports_control_toggle_and_shift_range() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = rectangle_context();
+        let mut selection = RowSelection::default();
+        let order = [10, 20, 30, 40];
+        assert!(selection.click(context.frame(), &order, 0));
+        assert!(context.render_legacy().valid());
+        context.io_mut().add_key_event(dear_imgui_rs::Key::ModCtrl, true);
+        assert!(!selection.click(context.frame(), &order, 2));
+        assert!(context.render_legacy().valid());
+        assert_eq!(selection.among(order), [10, 30]);
+        context.io_mut().add_key_event(dear_imgui_rs::Key::ModCtrl, false);
+        context.io_mut().add_key_event(dear_imgui_rs::Key::ModShift, true);
+        assert!(!selection.click(context.frame(), &order, 3));
+        assert!(context.render_legacy().valid());
+        assert_eq!(selection.among(order), [30, 40]);
+    }
 
     #[test]
     fn movable_modals_keep_their_position_until_reopened() {

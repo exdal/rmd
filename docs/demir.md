@@ -270,7 +270,7 @@ codebase. The files remain usable as templates for codebase-owned profiles:
 
 - [`examples/env/profile.dm`](../examples/env/profile.dm) is a small test profile.
 - [`examples/profiles`](../examples/profiles) contains integrations for CMSS13, Goonstation,
-  Monkestation, SecondCity, tgstation, and Vanderlin.
+  Monkestation, Monke’s Paw, Nova Sector, Oculis Station, SecondCity, TGMC, tgstation, and Vanderlin.
 
 ## Editor and viewer
 

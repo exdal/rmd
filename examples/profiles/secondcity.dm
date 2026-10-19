@@ -1,16 +1,14 @@
-// rmd embeds this integration for the Forced bundled profile setting. To make the profile part of a
+// rmd embeds this profile for the Forced bundled profile setting. To make the profile part of a
 // SecondCity checkout instead, copy it there and `#include` it from `tgstation.dme` after
-// `// END_INCLUDE`, the guard keeps BYOND compiling it to nothing. The build tool passes CBT, which
+// `// END_INCLUDE`. BYOND skips it because of the guard below. The build tool passes CBT, which
 // MAP_SWITCH needs to pick the runtime rock and wall icons, so also `#define CBT` inside the dme's
 // `__DEMIR_BAKE__` branch.
 //
-// The profile runs the codebase's own smoothing and icon-state code against a map, without
-// starting any subsystem. Calling `Initialize(TRUE)` instead faults on nearly every atom, so each
-// hook sets up only the data the icon selection it drives actually reads.
+// The profile runs the codebase's own smoothing and icon code without starting any subsystem.
+// `Initialize(TRUE)` faults on nearly every atom, so each hook sets up only the vars its icon code
+// reads.
 #ifdef __DEMIR_BAKE__
 
-// What each panel option drives, so a change re-derives that and nothing else. The types in each
-// group are declared once in New().
 #define DEMIR_GROUP_CABLES (1<<0)
 #define DEMIR_GROUP_PIPES (1<<1)
 #define DEMIR_GROUP_DISPOSALS (1<<2)
@@ -20,7 +18,7 @@
 
 #define DEMIR_NODE_BLOCKERS list(/turf/closed, /obj/effect/spawner/structure/window)
 
-// Run the codebase's smoothing setup without starting game subsystems.
+// Stand-ins for the subsystems the smoothing and icon code reads.
 /datum/controller/subsystem/mapping/demir_preview/New()
 	SSmapping = src
 
@@ -35,8 +33,8 @@
 	SSatoms = src
 	initialized = INITIALIZATION_INSSATOMS
 
-// INITIALIZE_IMMEDIATE types, organs among them, initialize from New() whatever SSatoms says, so a
-// freezer's PopulateContents() would run the whole item Initialize(). Leave them like placed atoms.
+// INITIALIZE_IMMEDIATE types initialize from New() whatever SSatoms says.
+// Keep temporary preview atoms uninitialized, like placed atoms.
 /datum/controller/subsystem/atoms/demir_preview/InitAtom(atom/A, from_template = FALSE, list/arguments)
 	return FALSE
 
@@ -97,8 +95,7 @@
 /turf/open/misc/Initialize(mapload)
 	return INITIALIZE_HINT_NORMAL
 
-// The light_system switch that closes /atom/movable/Initialize(). The component draws its own
-// mask and cone.
+// Same light_system switch as the end of /atom/movable/Initialize().
 /atom/movable/proc/demir_add_overlay_light()
 	switch(light_system)
 		if(OVERLAY_LIGHT)
@@ -108,8 +105,8 @@
 		if(OVERLAY_LIGHT_BEAM)
 			AddComponent(/datum/component/overlay_lighting, is_directional = TRUE, is_beam = TRUE)
 
-// The lighting subsystem's /datum/light_source is what the light hook stands in for, so the
-// codebase's own set_light*() calls only leave their values on the atom.
+// The light hook replaces /datum/light_source, so set_light() only stores its values on the
+// atom.
 /atom/update_light()
 	return
 
@@ -149,10 +146,9 @@
 	for(var/image/overlay in overlays)
 		overlay.demir_tag_emissive()
 
-// Link this device's nodes with the codebase's own connection checks; atmos_init()
-// then runs its native update_appearance() without starting pipe networks.
+// atmos_init() finds the nodes and redraws the device. It does not build pipe networks.
 /obj/machinery/atmospherics/demir_bake_appearance()
-	// GAGS sheets are generated at runtime, so keep the prebuilt map preview state.
+	// GAGS icons are built at runtime, so keep the mapped icon_state.
 	var/preview_state = icon_state
 	var/gags = greyscale_config
 	greyscale_config = null
@@ -172,8 +168,8 @@
 	pipe = mutable_appearance(icon, "pipe-[piping_layer]")
 	return ..()
 
-// The duct's post_machine_initialize() links both ends and repaints the neighbor, which a
-// per-placement bake would export as half-linked neighbor states, so this mirrors its checks.
+// post_machine_initialize() links both ducts and redraws the neighbor. The bake only exports the
+// duct it runs on, so this copies the color and layer checks and leaves the neighbor alone.
 /obj/machinery/duct/demir_bake_appearance()
 	neighbours = list()
 	for(var/check_dir in GLOB.cardinals)
@@ -187,8 +183,8 @@
 			break
 	update_icon_state()
 
-// Structure window spawners are mapping helpers. Preview the grille and windows
-// their native Initialize() creates without committing those temporary atoms.
+// Window spawners create their grille and windows in Initialize(). Run it for this spawner and
+// its neighbors so the windows smooth together, then draw only this spawner's atoms.
 /obj/effect/spawner/structure/window/demir_bake_appearance()
 	var/list/nearby_turfs = list(loc)
 	for(var/direction in list(NORTH, SOUTH, EAST, WEST, NORTHEAST, NORTHWEST, SOUTHEAST, SOUTHWEST))
@@ -222,8 +218,8 @@
 		preview.appearance = spawned.appearance
 		overlays += preview
 
-// A low wall builds its window in Initialize(). Preview the windows the low walls around it would
-// build, so the glass smooths into its neighbors, and keep only this wall's.
+// Low walls build their window in Initialize(). Build the windows of this wall and its neighbors
+// so they smooth together, then draw only this wall's.
 /obj/structure/platform/lowwall/proc/demir_bake_window()
 	var/list/nearby_turfs = list(loc)
 	for(var/direction in GLOB.alldirs)
@@ -259,12 +255,12 @@
 	new_overlays += preview
 	overlays = new_overlays
 
-// The frill's Initialize() adds the seethrough component this reads, and a bake never runs it.
+// This reads the seethrough component that the frill's Initialize() adds.
 /obj/effect/wall_frill/update_seethrough()
 	return
 
-// set_smoothed_icon_state() stands a frill on the turf to the north. A bake only exports the
-// placement it runs on, so the wall draws its frill one tile up, on the frill's own plane and layer.
+// set_smoothed_icon_state() places a frill on the turf to the north. The bake only exports the
+// atom it runs on, so the wall draws the frill itself, one tile up.
 /turf/closed/wall/vampwall/proc/demir_bake_frill()
 	var/datum/demir/secondcity/profile = demir_profile()
 	if(!wall_frill || !profile.show_frills)
@@ -275,10 +271,9 @@
 	preview.pixel_y += ICON_SIZE_Y
 	overlays += preview
 
-// Cables and pipes are covered by a floor tile through /datum/element/undertile, which reacts to
-// COMSIG_OBJ_HIDE from levelupdate(). No signals or elements run here, so read the turf's own
-// accessibility instead and apply the same result.
-// Null for anything the element never covers, so a shown one is told apart from an untouched one.
+// /datum/element/undertile hides cables and pipes on COMSIG_OBJ_HIDE. Signals do not run in a
+// bake, so this reads the turf's underfloor_accessibility instead. Null means the element never
+// applies to the type.
 /atom/movable/proc/demir_underfloor_shown()
 	return null
 
@@ -322,26 +317,25 @@
 
 	var/datum/demir/secondcity/profile = demir_profile()
 	if(profile.fade_underfloor)
-		// undertile.dm undefines its own ALPHA_UNDERTILE before this profile is included.
+		// ALPHA_UNDERTILE is undefined at the end of undertile.dm.
 		alpha = 128
 
-	// The element sinks whatever it leaves visible onto the floor plane, and only what is not already
-	// there. Without it a pipe covers the machines standing on its own tile; with the guard a cable
-	// keeps the per-cable-layer offsets it draws its ordering from. Assigned rather than
-	// SET_PLANE_IMPLICIT because the multi-z plane offsets that consults mean nothing to a bake.
-	// A wall's plane covers the floor plane, so a pipe running through one keeps its own plane.
+	// The element moves what it leaves visible to FLOOR_PLANE, so pipes draw under the machines on
+	// their tile. Cables already there keep the layer offsets they sort by. SET_PLANE_IMPLICIT is
+	// skipped because the bake has no multi-z plane offsets. A pipe inside a wall keeps its plane,
+	// or the wall would cover it.
 	if(plane != FLOOR_PLANE && !isclosedturf(our_turf))
 		plane = FLOOR_PLANE
 		layer = BELOW_CATWALK_LAYER
 
-// Inline in the airlock's Initialize().
+// Same as the airlock's Initialize().
 /obj/machinery/door/airlock/demir_bake_appearance()
 	if(glass)
 		airlock_material = "glass"
 	update_appearance(UPDATE_ICON)
 
-// A mapped mobile port is sized when its shuttle template loads. The template is the map being
-// edited, so its bounds stand in for the file preload_size() would parse.
+// A mobile port gets its size when its shuttle template loads. Here the template is the map being
+// edited, so use its bounds instead of parsing a file.
 /datum/map_template/shuttle/demir_preview/preload_size(path, cache)
 	width = world.maxx
 	height = world.maxy
@@ -350,7 +344,7 @@
 	if(width < 1 || height < 1)
 		return null
 
-	// Two opposite corners, not a min and a max.
+	// return_coords() gives two opposite corners in no particular order.
 	var/list/corners = return_coords(0, 0)
 	return list(
 		"x" = min(corners[1], corners[3]),
@@ -424,7 +418,7 @@
 	catch(var/exception/error)
 		return "invalid [path]: [error.name]"
 
-// The DISP_DIR_* rule is inline in the pipe's Initialize().
+// Same DISP_DIR_* rule as the pipe's Initialize().
 /datum/demir/secondcity/proc/register_disposal_node_orientations()
 	for(var/type_path in typesof(/obj/structure/disposalpipe))
 		var/obj/structure/disposalpipe/pipe_type = type_path
@@ -461,9 +455,8 @@
 
 		demir_modular_root(/obj/modular_map_root)
 
-		// A group is a type and everything under it, so the /visible atmos pipes join
-		// DEMIR_GROUP_PIPES too. Re-deriving one that was never hidden costs a preview and
-		// changes nothing.
+		// Groups include subtypes, so the /visible pipes are in DEMIR_GROUP_PIPES too. Rebaking
+		// them changes nothing.
 		demir_define_group(DEMIR_GROUP_CABLES, /obj/structure/cable)
 		demir_define_group(DEMIR_GROUP_CABLES, /obj/machinery/power/terminal)
 		demir_define_group(DEMIR_GROUP_PIPES, /obj/machinery/atmospherics/pipe)
@@ -475,9 +468,8 @@
 		demir_define_group(DEMIR_GROUP_POWER, /obj/item/radio/intercom)
 		demir_define_group(DEMIR_GROUP_FRILLS, /turf/closed/wall/vampwall)
 
-		// The node tool copies the seeded map prefab along a cardinal route and keeps
-		// every route out of closed turfs. Placements connect only on the same layer and
-		// color, so adjacent supply, scrubber and stacked pipes never merge.
+		// Node routes avoid closed turfs. Pipes connect only on the same layer and color, so
+		// supply, scrubber and stacked pipes stay separate.
 		demir_node_group(/obj/structure/cable, /turf/closed, null, "cable_layer")
 		demir_node_group(/obj/machinery/atmospherics/pipe/smart, DEMIR_NODE_BLOCKERS, null, list("piping_layer", "pipe_color"))
 		demir_node_group(/obj/machinery/duct, DEMIR_NODE_BLOCKERS, null, list("duct_layer", "duct_color"))
@@ -487,11 +479,10 @@
 
 		demir_rotatable(/obj/machinery/atmospherics, GLOB.cardinals)
 
-// ui() rolls its writes back on every frame but the one the viewer touched something on, so the
-// profile's own vars are where panel state belongs. Every other hook reads them off src, and the
-// frame that changes one re-derives appearances, highlights and lighting.
+// ui() writes are rolled back unless the viewer changed something that frame, so panel state
+// lives in the profile's vars.
 /datum/demir/secondcity/ui(atom/target)
-	if(!imgui_begin("Demir"))
+	if(!imgui_begin("SecondCity"))
 		imgui_end()
 		return
 
@@ -499,7 +490,7 @@
 	var/smoothed = imgui_checkbox("Smooth walls", src.smooth)
 	if(smoothed != src.smooth)
 		src.smooth = smoothed
-		// Smoothing is declared at a hundred-odd scattered types, so there is no honest group for it.
+		// Smoothing is set on too many unrelated types to group.
 		demir_rebake(DEMIR_BAKE_APPEARANCE)
 
 	// A frill covers the whole tile north of its wall.
@@ -511,7 +502,7 @@
 	var/lit = imgui_checkbox("Lighting", src.lighting)
 	if(lit != src.lighting)
 		src.lighting = lit
-		// Every area carries the fullbright flag, so this one is not worth narrowing.
+		// Every area reads the toggle, so this rebakes all lighting.
 		demir_rebake(DEMIR_BAKE_LIGHT)
 
 	imgui_separator("Under-floor")
@@ -552,7 +543,7 @@
 /atom/proc/demir_prepare_state()
 	demir_prepare_smoothing()
 
-// Inline in the flashlight's Initialize().
+// Same as the flashlight's Initialize().
 /obj/item/flashlight/demir_prepare_state()
 	..()
 	if(start_on)
@@ -562,24 +553,20 @@
 	..()
 	update_appearance()
 
-// Atmos Initialize() normally derives each port from dir before atmos_init().
-// Smart pipes need those neighboring port directions for can_be_node().
+// Initialize() sets the port directions from dir. Smart pipes read their neighbors' ports in
+// can_be_node().
 /obj/machinery/atmospherics/demir_prepare_state()
 	..()
 	if(pipe_flags & PIPING_CARDINAL_AUTONORMALIZE)
 		normalize_cardinal_directions()
 	set_init_directions(initialize_directions)
 
-/obj/structure/closet/demir_prepare_state()
-	..()
-	PopulateContents()
-
-// The bake builds atoms without New(), where an area sets up its power bookkeeping.
+// The bake skips New(), where areas set up their power bookkeeping.
 /area/demir_prepare_state()
 	New()
 	return ..()
 
-// Inline in the switch's Initialize(). Its appearance and light read the area it controls.
+// Same as the switch's Initialize(). Its icon and light read the area it controls.
 /obj/machinery/light_switch/demir_prepare_state()
 	..()
 	if(istext(area))
@@ -618,7 +605,7 @@
 	connect_cable(TRUE)
 	LateInitialize()
 
-// Multilayer cables bypass the ordinary cable setup, but retain the default smoothing path.
+// Multilayer cables skip the cable connection and only smooth.
 /obj/structure/cable/multilayer/demir_bake_appearance()
 	demir_bake_smoothing()
 
@@ -636,8 +623,8 @@
 /obj/machinery
 	var/demir_calculating_light = FALSE
 
-// Native power changes also redraw the machine. Leave that redraw to the appearance bake,
-// so it exports the native overlays rather than treating them as existing map appearance.
+// power_change() also redraws the machine. Skip that during the light pass, so the appearance
+// bake exports the overlays instead of keeping them as part of the mapped appearance.
 /obj/machinery/update_appearance(updates = ALL)
 	if(demir_calculating_light)
 		return
@@ -648,7 +635,7 @@
 	if(profile.power_all)
 		return TRUE
 
-	// Unchecked shows the map unpowered, as if no APC were charged. Areas that need no power keep it.
+	// When unchecked, only areas that need no power are powered.
 	return A && !A.requires_power && A.powered(chan)
 
 /obj/machinery/powered(chan = power_channel, ignore_use_power = FALSE)
@@ -659,10 +646,10 @@
 
 /obj/machinery/proc/demir_power_change()
 	power_change()
-	// Subtype overrides set their light after ..(), which the guard above skipped.
+	// Subtypes set their light after calling ..() in update_appearance(), so this still runs it.
 	update_appearance()
 
-// These redraws read subsystem or reagent state a bake never sets up.
+// These redraws read subsystem or reagent state that the bake does not set up.
 /obj/machinery/demir_bake_appearance()
 	var/static/list/skipped_types = list(
 		/obj/machinery/power/solar,
@@ -720,15 +707,14 @@
 	demir_light_angle = light_angle
 	demir_light_dir = light_dir
 	var/list/light_offset = get_light_offset()
-	// Native lighting adds these offsets to its sampling coordinates, which moves the source
-	// origin in the opposite direction.
+	// The game adds these offsets to the sample position, which moves the source the opposite way.
 	demir_light_offset_x = -light_offset[1]
 	demir_light_offset_y = -light_offset[2]
 	demir_light_height = light_height
 
-// Fixtures ship with `on = FALSE`. Initialize() aims the light through setDir() and
-// post_machine_initialize() switches it on from the area's lightswitch and power, then always
-// runs update(). Their power_change() reads the raw area channel, so the checkbox is applied here.
+// Fixtures start with `on = FALSE`. Initialize() aims the light with setDir(), and
+// post_machine_initialize() turns it on from the area's lightswitch and power. power_change()
+// reads the area channel directly, so the power checkbox is applied here instead.
 /obj/machinery/light/demir_apply_light()
 	setDir(dir)
 	return ..()
@@ -736,14 +722,14 @@
 /obj/machinery/light/demir_power_change()
 	var/area/local_area = get_room_area()
 	on = local_area.lightswitch && demir_area_powered(local_area, AREA_USAGE_LIGHT) && status == LIGHT_OK
-	// update() wears the bulb on every switch, so a relight would otherwise keep raising the odds.
+	// update() counts every switch toward burning out the bulb, so reset the count each bake.
 	switchcount = 0
 	update(FALSE)
-	// Emergency power keeps the last light until the cell drains, which only processing does.
+	// Unpowered lights would stay on until their emergency cell drains in process().
 	if(!on)
 		set_light(l_range = 0)
 
-// update_icon_state() lights the switch while its area is dark, powered or not, so it can be found.
+// The switch glows while its area's lights are off, so it can be found in the dark.
 /obj/machinery/light_switch/demir_power_change()
 	..()
 	set_light(area.lightswitch ? 0 : light_on_range)
@@ -764,7 +750,7 @@
 		set_light(0)
 	return ..()
 
-// Inline in the lava's Initialize(). Only lava bordering another turf casts light.
+// Same as the lava's Initialize(). Only lava next to another turf type casts light.
 /turf/open/lava/demir_apply_light()
 	refresh_light()
 	// The preview has no plane offsets, so refresh_light() never checks the levels above and below.
@@ -785,8 +771,7 @@
 /turf/open/space/openspace
 	demir_z_transparent = 1
 
-// Space is a fullbright area, so its tiles never hold a lighting object and only the ones
-// touching a statically lit turf call enable_starlight().
+// Space areas are fullbright. Only space tiles next to a lit turf call enable_starlight().
 /turf/open/space
 	demir_light_edge_only = 1
 
@@ -795,8 +780,7 @@
 	demir_light_power = GLOB.starlight_power
 	demir_light_color = GLOB.starlight_color
 
-// The city has no space. moonlight.dm instead lights every floor, misc and water turf of an
-// outdoors area that has no light of its own, through an element added in Initialize().
+// moonlight.dm lights floor, misc and water turfs in outdoor areas that have no light of their own.
 /turf/open/proc/demir_moonlit()
 	if(!istype(src, /turf/open/floor) && !istype(src, /turf/open/misc) && !istype(src, /turf/open/water))
 		return FALSE
@@ -818,8 +802,7 @@
 	demir_light_height = light_height
 
 /area/demir_apply_light()
-	// Switching lighting off lights the whole map rather than blacking it out, which is what a
-	// mapper wants from the toggle.
+	// Turning lighting off makes the whole map fullbright instead of dark.
 	var/datum/demir/secondcity/profile = demir_profile()
 	demir_fullbright = !profile.lighting || !static_lighting
 	demir_ambient_color = base_lighting_color
@@ -828,8 +811,8 @@
 /datum/demir/secondcity/light(atom/target)
 	target.demir_apply_light()
 
-// Connection channels are opaque to rmd. Keep the controlled type and DM value kind in the key
-// so an airlock id_tag cannot collide with a poddoor id, or a numeric ID with the same text.
+// rmd only compares channel keys. The key holds the door kind and the value type, so an airlock
+// id_tag never matches a poddoor id, and the number 1 never matches the text "1".
 /proc/get_connection_key(kind, value)
 	if(isnull(value))
 		return null
@@ -865,8 +848,8 @@
 /datum/demir/secondcity/connections(atom/target)
 	return target.demir_connections()
 
-// A border object only blocks the side it stands on, and the lighting corners care about
-// whether the whole tile is concealed. IS_OPAQUE_TURF wants ALL_CARDINALS.
+// A border object blocks only one side, but lighting corners only check whether the whole tile
+// is blocked. IS_OPAQUE_TURF needs ALL_CARDINALS.
 /atom/movable/demir_apply_light()
 	if(opacity && (flags_1 & ON_BORDER_1))
 		demir_blocks_light = 0

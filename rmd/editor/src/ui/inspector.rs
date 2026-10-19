@@ -2149,6 +2149,28 @@ mod tests {
     }
 
     #[test]
+    fn builtin_groups_are_plain_text_while_project_groups_link_to_source() {
+        let (session, _) = two_tables();
+        let snapshot = inspector_snapshot(&session).expect("selected table snapshot");
+        let table = snapshot
+            .groups
+            .iter()
+            .find(|group| group.path == "/obj/structure/table")
+            .expect("project type group");
+        let source = table.source.as_ref().expect("project source link");
+        assert!(source.path.ends_with("test.dm"));
+
+        for path in ["/atom", "/atom/movable", "/datum"] {
+            let group = snapshot
+                .groups
+                .iter()
+                .find(|group| group.path == path)
+                .expect("builtin type group");
+            assert!(group.source.is_none(), "{path} must render as plain text");
+        }
+    }
+
+    #[test]
     fn variables_group_under_their_declaring_types_from_child_to_parent() {
         let mut tree = ObjectTree::new();
         let parent = tree.register(&TreePath::parse("/obj"), Location::default());

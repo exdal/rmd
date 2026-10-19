@@ -7,8 +7,6 @@ use objtree::{ObjectTree, TypeId};
 
 use super::{LevelChange, Session};
 
-pub(super) const MAX_MAP_DIMENSION: u32 = 255;
-
 pub(crate) fn validate_level(z: u32, levels: u32) -> std::io::Result<()> {
     let levels = levels.max(1);
 
@@ -69,7 +67,7 @@ impl Session {
         }
 
         let levels = document.map.size().z.max(1);
-        document.z < levels || (levels < MAX_MAP_DIMENSION && self.tree().is_some())
+        document.z < levels || self.tree().is_some()
     }
 
     pub fn change_level(&mut self, delta: i32) -> LevelChange {
@@ -91,7 +89,7 @@ impl Session {
         } else {
             current.saturating_add(delta as u32)
         };
-        if target > levels && levels < MAX_MAP_DIMENSION {
+        if target > levels {
             return LevelChange::NewLevelRequested;
         }
 
@@ -120,9 +118,6 @@ impl Session {
         let levels = document.map.size().z.max(1);
         if document.z != levels {
             return Err(String::from("the map is no longer on its highest Z level"));
-        }
-        if levels >= MAX_MAP_DIMENSION {
-            return Err(format!("maps cannot exceed {MAX_MAP_DIMENSION} Z levels"));
         }
 
         if document.is_read_only() {
@@ -240,9 +235,6 @@ impl Session {
 
 impl Session {
     pub fn resize_map(&mut self, width: u32, height: u32, fill: &[Prefab]) -> Result<(), String> {
-        if !(1..=MAX_MAP_DIMENSION).contains(&width) || !(1..=MAX_MAP_DIMENSION).contains(&height) {
-            return Err(format!("map dimensions must each be between 1 and {MAX_MAP_DIMENSION}"));
-        }
         let id = self.state.active().ok_or_else(|| String::from("no map is open"))?;
 
         // a resize reshares the map
@@ -332,7 +324,7 @@ mod tests {
         tool::Tool,
     };
 
-    use super::{MAX_MAP_DIMENSION, validate_level};
+    use super::validate_level;
     use crate::session::{
         LevelChange,
         Session,
@@ -341,25 +333,54 @@ mod tests {
 
     #[test]
     fn resizing_the_map_rebuilds_the_render_cache_and_undo_restores_it() {
+        for (width, height) in [(5, 4), (256, 2), (3, 256)] {
+            let mut session = flat_session(3, 2);
+            let fill = session.default_fill().unwrap();
+            let tile = session.options.tile_size as f32;
+
+            assert_eq!(session.resize_map(width, height, &fill), Ok(()));
+            let size = session.map().unwrap().size();
+            assert_eq!((size.x, size.y), (width, height));
+            assert_eq!(
+                session.map().unwrap().tile_at(Coord::new(width, height, 1)),
+                Some(&fill)
+            );
+            assert_eq!(session.extent_px(), (width as f32 * tile, height as f32 * tile));
+            assert_render_cache_matches_rebuild(&session);
+
+            assert!(session.undo());
+            let size = session.map().unwrap().size();
+            assert_eq!((size.x, size.y), (3, 2));
+            assert_render_cache_matches_rebuild(&session);
+
+            assert!(session.redo());
+            let size = session.map().unwrap().size();
+            assert_eq!((size.x, size.y), (width, height));
+            assert_eq!(
+                session.map().unwrap().tile_at(Coord::new(width, height, 1)),
+                Some(&fill)
+            );
+            assert_render_cache_matches_rebuild(&session);
+        }
+    }
+
+    #[test]
+    fn resizing_with_zero_dimensions_leaves_the_map_and_history_unchanged() {
         let mut session = flat_session(3, 2);
         let fill = session.default_fill().unwrap();
-        let tile = session.options.tile_size as f32;
+        assert_eq!(session.resize_map(4, 2, &fill), Ok(()));
+        let map = session.map().unwrap().clone();
+        let revision = session.revision();
+        let undo_label = session.undo_label().map(str::to_owned);
+        let redo_label = session.redo_label().map(str::to_owned);
 
-        assert_eq!(session.resize_map(5, 4, &fill), Ok(()));
-        let size = session.map().unwrap().size();
-        assert_eq!((size.x, size.y), (5, 4));
-        assert_eq!(session.map().unwrap().tile_at(Coord::new(5, 4, 1)), Some(&fill));
-        assert_eq!(session.extent_px(), (5.0 * tile, 4.0 * tile));
-        assert_render_cache_matches_rebuild(&session);
-
-        assert!(session.undo());
-        let size = session.map().unwrap().size();
-        assert_eq!((size.x, size.y), (3, 2));
-        assert_render_cache_matches_rebuild(&session);
-
-        assert!(session.redo());
-        assert_eq!(session.map().unwrap().size().x, 5);
-        assert_render_cache_matches_rebuild(&session);
+        for (width, height) in [(0, 2), (4, 0), (0, 0)] {
+            assert_eq!(session.resize_map(width, height, &fill), Ok(()));
+            assert_eq!(session.map(), Some(&map));
+            assert_eq!(session.revision(), revision);
+            assert_eq!(session.undo_label(), undo_label.as_deref());
+            assert_eq!(session.redo_label(), redo_label.as_deref());
+        }
     }
 
     #[test]
@@ -371,8 +392,6 @@ mod tests {
         assert_eq!(session.resize_losses(3, 1, &fill), 0, "only the added fill tile goes");
         assert_eq!(session.resize_losses(2, 1, &fill), 1);
         assert_eq!(session.resize_losses(4, 1, &fill), 0);
-        assert!(session.resize_map(0, 1, &fill).is_err());
-        assert!(session.resize_map(1, MAX_MAP_DIMENSION + 1, &fill).is_err());
     }
 
     #[test]
@@ -687,15 +706,11 @@ mod tests {
     }
 
     #[test]
-    fn level_creation_stops_at_the_map_dimension_limit() {
+    fn level_creation_can_exceed_255_levels() {
         let root = examples();
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).expect("codebase");
-        let mut map = Map::new(Size {
-            x: 1,
-            y: 1,
-            z: MAX_MAP_DIMENSION,
-        });
+        let mut map = Map::new(Size { x: 1, y: 1, z: 255 });
         let key = map.intern_tile(vec![
             Prefab::new(TreePath::parse("/turf")),
             Prefab::new(TreePath::parse("/area")),
@@ -703,11 +718,19 @@ mod tests {
         for cell in map.grid.iter_mut().flatten().flatten() {
             *cell = key;
         }
-        session.activate_document(MapDocument::new(map, MAX_MAP_DIMENSION));
+        let id = session.activate_document(MapDocument::new(map, 255));
+        let fill = session.default_fill().unwrap();
 
-        assert!(!session.can_change_level(1));
-        assert_eq!(session.change_level(1), LevelChange::Unchanged);
-        assert_eq!(session.z(), MAX_MAP_DIMENSION);
-        assert_eq!(session.level_count(), MAX_MAP_DIMENSION);
+        for z in [256, 257] {
+            assert!(session.can_change_level(1));
+            assert_eq!(session.change_level(1), LevelChange::NewLevelRequested);
+            assert_eq!(session.z(), z - 1);
+            assert_eq!(session.level_count(), z - 1);
+
+            assert_eq!(session.create_level(id, &fill), Ok(z));
+            assert_eq!(session.z(), z);
+            assert_eq!(session.level_count(), z);
+            assert_eq!(session.map().unwrap().tile_at(Coord::new(1, 1, z)), Some(&fill));
+        }
     }
 }
