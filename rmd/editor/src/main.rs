@@ -1189,6 +1189,7 @@ impl ApplicationHandler for App {
                     self.apply_outcome(outcome);
                 }
                 self.session.poll_bake();
+                self.session.sync_open_modules();
                 self.session.poll_git();
                 self.session.poll_coop();
                 let is_busy = self.is_busy();

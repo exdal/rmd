@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -115,6 +115,8 @@ pub struct ModuleOverlay {
 }
 
 impl ModuleOverlay {
+    pub fn uses_file(&self, path: &Path) -> bool { self.layers.iter().any(|layer| layer.uses_file(path)) }
+
     pub fn view<'a>(&'a self, source: &'a Grid) -> MapView<'a> { MapView::new(source, &self.tiles) }
 
     pub fn changes(source: &Grid, previous: Option<&Self>, current: Option<&Self>) -> Vec<PrefabInstanceId> {

@@ -25,8 +25,18 @@ use super::{
     compose::update,
 };
 use crate::{
+    document::DocumentId,
     grid::Grid,
-    maploader::{ErrorKind, MAX_NESTING, ModuleFiles, RootSpecs, resolve_module_path, root_specs},
+    maploader::{
+        ErrorKind,
+        LoadedModule,
+        MAX_NESTING,
+        ModuleFiles,
+        OpenModule,
+        RootSpecs,
+        resolve_module_path,
+        root_specs,
+    },
 };
 
 const ROOT: &str = "/obj/modular_map_root";
@@ -941,4 +951,129 @@ fn composite_keeps_roots_and_is_stable_when_fed_back() {
     assert!(present.contains(&outer));
     assert!(present.contains(&nested));
     assert!(state.recompose(ctx, specs, &HashSet::new()).is_empty());
+}
+
+fn open_module(map: Map) -> OpenModule {
+    OpenModule {
+        document: DocumentId::new(),
+        generation: 1,
+        module: Arc::new(LoadedModule::new(map)),
+    }
+}
+
+fn open_fixture() -> (Fixture, Grid, ModulePreviewState, PathBuf) {
+    let fixture = Fixture::new();
+    fixture.map(
+        "a.dmm",
+        &map(
+            [2, 1, 1],
+            &[(Coord::new(1, 1, 1), CONNECTOR), (Coord::new(2, 1, 1), "/obj/disk")],
+        ),
+    );
+    let source = Grid::from_map(&map([3, 1, 1], &[(Coord::new(1, 1, 1), ROOT)]));
+    let path = resolve_module_path(&fixture.directory, "a.dmm").unwrap();
+    let specs = specs(&[(marker(&source, Coord::new(1, 1, 1)), fixture.spec(&["a.dmm"]))]);
+    let mut state = ModulePreviewState::default();
+    state.recompose(fixture.ctx(&source), specs, &HashSet::new());
+
+    (fixture, source, state, path)
+}
+
+fn open_override() -> OpenModule {
+    open_module(map(
+        [2, 1, 1],
+        &[(Coord::new(1, 1, 1), CONNECTOR), (Coord::new(2, 1, 1), "/obj/live")],
+    ))
+}
+
+#[test]
+fn open_module_replaces_the_disk_file_until_it_is_revoked() {
+    let (fixture, source, mut state, path) = open_fixture();
+    assert!(paths(state.view(&source), Coord::new(2, 1, 1)).contains(&"/obj/disk".to_owned()));
+
+    let changed = state.replace_module(fixture.ctx(&source), &path, Some(open_override()));
+    assert!(!changed.is_empty());
+    let live = paths(state.view(&source), Coord::new(2, 1, 1));
+    assert!(live.contains(&"/obj/live".to_owned()));
+    assert!(!live.contains(&"/obj/disk".to_owned()));
+
+    let changed = state.replace_module(fixture.ctx(&source), &path, None);
+    assert!(!changed.is_empty());
+    assert!(paths(state.view(&source), Coord::new(2, 1, 1)).contains(&"/obj/disk".to_owned()));
+    assert!(state.open_module(&path).is_none());
+}
+
+#[test]
+fn open_module_survives_reset_and_fresh() {
+    let (fixture, source, mut state, path) = open_fixture();
+    state.replace_module(fixture.ctx(&source), &path, Some(open_override()));
+
+    let mut fresh = state.fresh();
+    assert!(fresh.open_module(&path).is_some());
+    assert_eq!(fresh.open_modules().count(), 1);
+
+    state.reset();
+    assert!(state.open_module(&path).is_some());
+    let specs = specs(&[(marker(&source, Coord::new(1, 1, 1)), fixture.spec(&["a.dmm"]))]);
+    state.recompose(fixture.ctx(&source), specs.clone(), &HashSet::new());
+    assert!(paths(state.view(&source), Coord::new(2, 1, 1)).contains(&"/obj/live".to_owned()));
+
+    fresh.recompose(fixture.ctx(&source), specs, &HashSet::new());
+    assert!(paths(fresh.view(&source), Coord::new(2, 1, 1)).contains(&"/obj/live".to_owned()));
+}
+
+#[test]
+fn uses_file_tracks_loaded_paths() {
+    let (fixture, _source, state, path) = open_fixture();
+
+    assert!(state.uses_file(&path));
+    assert!(!state.uses_file(&fixture.directory.join("unrelated.dmm")));
+}
+
+#[test]
+fn an_override_alone_does_not_count_as_using_a_file() {
+    let (fixture, source, mut state, _path) = open_fixture();
+    let other = resolve_module_path(&fixture.directory, "other.dmm").unwrap();
+
+    state.replace_module(fixture.ctx(&source), &other, Some(open_override()));
+
+    assert!(state.open_module(&other).is_some());
+    assert!(!state.uses_file(&other));
+}
+
+#[test]
+fn overriding_a_nested_file_rebuilds_its_layer() {
+    let (fixture, source) = nested_fixture();
+    let outer = marker(&source, Coord::new(4, 3, 2));
+    let mut state = ModulePreviewState::default();
+    state.recompose(
+        fixture.ctx(&source),
+        specs(&[(outer, fixture.spec(&["outer.dmm"]))]),
+        &HashSet::new(),
+    );
+    let root = &state.preview.as_ref().unwrap().roots[0];
+    let choice = root.variants[0].choice.clone();
+    let nested = preview_id(&mut state.ids, &root.key, &choice, Coord::new(3, 2, 1), 2);
+    let all = specs(&[
+        (outer, fixture.spec(&["outer.dmm"])),
+        (nested, fixture.spec(&["leaf.dmm"])),
+    ]);
+    state.recompose(fixture.ctx(&source), all, &HashSet::new());
+    assert!(paths(state.view(&source), Coord::new(4, 4, 2)).contains(&"/obj/leaf".to_owned()));
+
+    let leaf = resolve_module_path(&fixture.directory, "leaf.dmm").unwrap();
+    let live = open_module(map(
+        [2, 2, 1],
+        &[
+            (Coord::new(2, 2, 1), "/obj/connector_alias"),
+            (Coord::new(1, 2, 1), "/obj/live"),
+        ],
+    ));
+    let changed = state.replace_module(fixture.ctx(&source), &leaf, Some(live));
+
+    assert!(!changed.is_empty());
+    let view = state.view(&source);
+    let tile = paths(view, Coord::new(4, 4, 2));
+    assert!(tile.contains(&"/obj/live".to_owned()));
+    assert!(!tile.contains(&"/obj/leaf".to_owned()));
 }

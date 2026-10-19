@@ -1,16 +1,14 @@
-use std::{collections::HashSet, mem};
+use std::{collections::HashSet, mem, path::Path, sync::Arc};
 
 use dmm::Prefab;
 use editor::{
     bake::{self, BakeUpdate},
     document::{DocumentId, PrefabInstanceId},
-    maploader::preview::{
-        ComposeContext,
-        MapView,
-        ModulePreviewState,
-        ModuleRootKey,
-        ModuleRootPreview,
-        PREVIEW_ID_START,
+    maploader::{
+        LoadedModule,
+        OpenModule,
+        preview::{ComposeContext, MapView, ModulePreviewState, ModuleRootKey, ModuleRootPreview, PREVIEW_ID_START},
+        resolved_path,
     },
     visual,
 };
@@ -235,6 +233,76 @@ impl Session {
             .or_default()
             .modules
             .set_enabled(&document.map, is_enabled);
+
+        self.settle_modules(id, changed);
+    }
+
+    pub fn sync_open_modules(&mut self) {
+        let sources = self
+            .state
+            .documents()
+            .iter()
+            .filter_map(|document| {
+                Some((
+                    document.id(),
+                    resolved_path(document.path.as_deref()?),
+                    document.generation(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let stale = self
+            .caches
+            .iter()
+            .flat_map(|(container, cache)| {
+                cache
+                    .modules
+                    .open_modules()
+                    .filter(|(path, open)| {
+                        !sources
+                            .iter()
+                            .any(|(source, resolved, _)| *source == open.document && resolved == path)
+                    })
+                    .map(|(path, _)| (*container, path.to_path_buf()))
+            })
+            .collect::<Vec<_>>();
+        for (container, path) in stale {
+            self.replace_module(container, &path, None);
+        }
+
+        for (source, path, generation) in sources {
+            let containers = self
+                .caches
+                .iter()
+                .filter(|(container, cache)| {
+                    **container != source
+                        && cache.modules.uses_file(&path)
+                        && cache
+                            .modules
+                            .open_module(&path)
+                            .is_none_or(|open| open.document != source || open.generation != generation)
+                })
+                .map(|(container, _)| *container)
+                .collect::<Vec<_>>();
+            let Some(document) = self.state.document(source).filter(|_| !containers.is_empty()) else {
+                continue;
+            };
+
+            let module = Arc::new(LoadedModule::new(document.to_map()));
+            for container in containers {
+                let open = OpenModule {
+                    document: source,
+                    generation,
+                    module: module.clone(),
+                };
+                self.replace_module(container, &path, Some(open));
+            }
+        }
+    }
+
+    fn replace_module(&mut self, id: DocumentId, path: &Path, open: Option<OpenModule>) {
+        let Some(changed) = self.with_modules(id, |modules, ctx| modules.replace_module(ctx, path, open)) else {
+            return;
+        };
 
         self.settle_modules(id, changed);
     }

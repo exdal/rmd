@@ -59,6 +59,10 @@ pub(super) struct ModuleLayer {
     clipped: usize,
 }
 
+impl ModuleLayer {
+    pub(super) fn uses_file(&self, path: &Path) -> bool { self.choice.path == path }
+}
+
 pub fn compose(
     ctx: ComposeContext<'_>, specs: &RootSpecs, files: &mut ModuleFiles, choices: &ModuleChoices,
     ids: &mut PreviewIdAllocator,

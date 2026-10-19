@@ -10,7 +10,10 @@ use dmm::{Coord, Map, Prefab, PrefabInstanceId};
 use objtree::{ObjectTree, TypeId};
 use vm::{Fault, bake::ModuleRoot};
 
-use crate::maploader::{ErrorKind, resolved_path};
+use crate::{
+    document::DocumentId,
+    maploader::{ErrorKind, resolved_path},
+};
 
 pub type RootSpecs = HashMap<PrefabInstanceId, Result<ModuleRoot, String>>;
 
@@ -41,6 +44,13 @@ pub struct LoadedModule {
 }
 
 impl LoadedModule {
+    pub fn new(map: Map) -> Self {
+        Self {
+            map: Arc::new(map),
+            anchors: Mutex::default(),
+        }
+    }
+
     pub fn anchor(&self, tree: &ObjectTree, ty: Option<TypeId>) -> Result<Anchor, ErrorKind> {
         let Some(ty) = ty else {
             return Ok((Coord::new(1, 1, 1), None));
@@ -65,19 +75,59 @@ impl LoadedModule {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct OpenModule {
+    pub document: DocumentId,
+    pub generation: u64,
+    pub module: Arc<LoadedModule>,
+}
+
 #[derive(Debug, Default)]
 pub struct ModuleFiles {
     entries: HashMap<PathBuf, Result<Arc<LoadedModule>, ErrorKind>>,
+    open: HashMap<PathBuf, OpenModule>,
 }
 
 impl ModuleFiles {
     pub fn clear(&mut self) { self.entries.clear(); }
 
     pub fn load(&mut self, path: &Path) -> Result<Arc<LoadedModule>, ErrorKind> {
+        if let Some(open) = self.open.get(path) {
+            return Ok(open.module.clone());
+        }
+
         self.entries
             .entry(path.to_path_buf())
             .or_insert_with(|| read(path))
             .clone()
+    }
+
+    pub fn is_loaded(&self, path: &Path) -> bool { self.entries.contains_key(path) }
+
+    pub fn open_module(&self, path: &Path) -> Option<&OpenModule> { self.open.get(path) }
+
+    pub fn open_modules(&self) -> impl Iterator<Item = (&Path, &OpenModule)> {
+        self.open.iter().map(|(path, open)| (path.as_path(), open))
+    }
+
+    pub fn set_open(&mut self, path: &Path, open: Option<OpenModule>) {
+        self.entries.remove(path);
+
+        match open {
+            Some(open) => {
+                self.open.insert(path.to_path_buf(), open);
+            },
+            None => {
+                self.open.remove(path);
+            },
+        }
+    }
+
+    pub fn open_only(&self) -> Self {
+        Self {
+            entries: HashMap::new(),
+            open: self.open.clone(),
+        }
     }
 }
 
@@ -91,10 +141,7 @@ fn read(path: &Path) -> Result<Arc<LoadedModule>, ErrorKind> {
         return Err(ErrorKind::Dmm(errors));
     }
 
-    Ok(Arc::new(LoadedModule {
-        map: Arc::new(map),
-        anchors: Mutex::default(),
-    }))
+    Ok(Arc::new(LoadedModule::new(map)))
 }
 
 pub(super) fn placements(map: &Map) -> impl Iterator<Item = (Coord, usize, &Prefab)> {

@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use dmm::{Coord, PrefabInstanceId, Size};
 
@@ -13,7 +16,7 @@ use super::{
 };
 use crate::{
     grid::Grid,
-    maploader::{ModuleFiles, RootSpecs},
+    maploader::{ModuleFiles, OpenModule, RootSpecs},
 };
 
 pub struct ModulePreviewState {
@@ -54,9 +57,26 @@ impl ModulePreviewState {
         Self {
             enabled: self.enabled,
             choices: self.choices.clone(),
+            files: self.files.open_only(),
             ..Self::default()
         }
     }
+
+    pub fn replace_module(
+        &mut self, ctx: ComposeContext<'_>, path: &Path, open: Option<OpenModule>,
+    ) -> Vec<PrefabInstanceId> {
+        self.files.set_open(path, open);
+
+        self.compose(ctx, &HashSet::new())
+    }
+
+    pub fn uses_file(&self, path: &Path) -> bool {
+        self.files.is_loaded(path) || self.preview.as_ref().is_some_and(|preview| preview.uses_file(path))
+    }
+
+    pub fn open_module(&self, path: &Path) -> Option<&OpenModule> { self.files.open_module(path) }
+
+    pub fn open_modules(&self) -> impl Iterator<Item = (&Path, &OpenModule)> { self.files.open_modules() }
 
     pub fn needs_recompose(&self, specs: &RootSpecs) -> bool { self.specs != *specs }
 

@@ -14,7 +14,7 @@ use std::{
 
 use dmm::{Coord, Map, MapFormat, Prefab, PrefabInstanceId, Size, writer};
 use editor::{
-    document::MapDocument,
+    document::{DocumentId, MapDocument},
     environment::BakeOptions,
     maploader::{ErrorKind, preview::PREVIEW_ID_START},
     progress::Progress,
@@ -960,6 +960,131 @@ fn tramstation_root_move_timing() -> TestResult {
             coord,
         );
     }
+
+    Ok(())
+}
+
+fn open_document(session: &mut Session, fixture: &Fixture, name: &str) -> TestResult<DocumentId> {
+    session.open_map(&fixture.dir.join(name), 1)?;
+    settle_bake(session);
+
+    Ok(session.state.active().ok_or("no active document")?)
+}
+
+fn place_in(session: &mut Session, id: DocumentId, x: u32, path: &str) -> TestResult {
+    session.set_active_document(id);
+    session.set_tool(Tool::Place);
+    session.state.choose_prefab(prefab(path));
+    session.place_at(coord(x), None).ok_or("nothing was placed")?;
+
+    Ok(())
+}
+
+fn show(session: &mut Session, id: DocumentId) {
+    session.set_active_document(id);
+    session.sync_open_modules();
+}
+
+#[test]
+fn edits_in_an_open_module_show_up_in_maps_that_place_it() -> TestResult {
+    let fixture = Fixture::new(&[(2, "outer")])?;
+    let mut session = fixture.session()?;
+    let main = session.state.active().ok_or("no active document")?;
+    let module = open_document(&mut session, &fixture, "a.dmm")?;
+
+    place_in(&mut session, module, 1, MODULE)?;
+    show(&mut session, main);
+
+    assert!(has(&session, 2, MODULE));
+    assert!(has(&session, 3, WALL), "the nested root still composes");
+    assert!(preview_ids(&session).iter().all(|id| is_baked(&session, *id)));
+    assert_settled(&session);
+
+    session.set_active_document(module);
+    assert!(session.undo());
+    show(&mut session, main);
+
+    assert!(!has(&session, 2, MODULE));
+    assert!(has(&session, 2, WALL));
+    assert_settled(&session);
+
+    Ok(())
+}
+
+#[test]
+fn closing_an_unsaved_module_reverts_maps_to_the_file_on_disk() -> TestResult {
+    let fixture = Fixture::new(&[(2, "outer")])?;
+    let mut session = fixture.session()?;
+    let main = session.state.active().ok_or("no active document")?;
+    let module = open_document(&mut session, &fixture, "a.dmm")?;
+    place_in(&mut session, module, 1, MODULE)?;
+    show(&mut session, main);
+    assert!(has(&session, 2, MODULE));
+
+    assert!(session.close_map(module));
+    show(&mut session, main);
+
+    assert!(!has(&session, 2, MODULE));
+    assert!(has(&session, 2, WALL));
+    assert!(preview_ids(&session).iter().all(|id| is_baked(&session, *id)));
+    assert_settled(&session);
+
+    Ok(())
+}
+
+#[test]
+fn live_module_edits_survive_a_rebake_of_the_containing_map() -> TestResult {
+    let fixture = Fixture::new(&[(2, "outer")])?;
+    let mut session = fixture.session()?;
+    let main = session.state.active().ok_or("no active document")?;
+    let module = open_document(&mut session, &fixture, "a.dmm")?;
+    place_in(&mut session, module, 1, MODULE)?;
+    show(&mut session, main);
+
+    session.rebake(main);
+    settle_bake(&mut session);
+
+    assert!(has(&session, 2, MODULE));
+    assert!(preview_ids(&session).iter().all(|id| is_baked(&session, *id)));
+    assert_settled(&session);
+
+    Ok(())
+}
+
+#[test]
+fn edits_in_a_nested_module_show_up_through_its_parent_module() -> TestResult {
+    let fixture = Fixture::new(&[(2, "outer")])?;
+    let mut session = fixture.session()?;
+    let main = session.state.active().ok_or("no active document")?;
+    let child = open_document(&mut session, &fixture, "child.dmm")?;
+
+    place_in(&mut session, child, 1, MODULE)?;
+    show(&mut session, main);
+
+    assert!(has(&session, 3, MODULE));
+    assert!(!has(&session, 2, MODULE));
+    assert!(preview_ids(&session).iter().all(|id| is_baked(&session, *id)));
+    assert_settled(&session);
+
+    Ok(())
+}
+
+#[test]
+fn a_map_opened_after_the_edit_shows_the_live_module() -> TestResult {
+    let fixture = Fixture::new(&[(2, "outer")])?;
+    let mut session = fixture.session()?;
+    let main = session.state.active().ok_or("no active document")?;
+    let module = open_document(&mut session, &fixture, "a.dmm")?;
+    place_in(&mut session, module, 1, MODULE)?;
+    assert!(session.close_map(main));
+
+    let main = open_document(&mut session, &fixture, "main.dmm")?;
+    assert!(!has(&session, 2, MODULE), "the bake starts from the file on disk");
+    show(&mut session, main);
+
+    assert!(has(&session, 2, MODULE));
+    assert!(preview_ids(&session).iter().all(|id| is_baked(&session, *id)));
+    assert_settled(&session);
 
     Ok(())
 }
