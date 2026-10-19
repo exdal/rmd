@@ -198,11 +198,14 @@
 // New(), prepare() and light() keep them, a ui() frame keeps them when the user interacted with it
 // (a placement counts as a write), and connections(), highlights() and bake() discard them.
 //
-//     list("root" = atom, "maps" = list(...), "anchor" = type, "skip" = type or list of types)
+//     list("root" = atom, "maps" = list(...), "anchor" = type, "skip" = type or list of types,
+//          "offset" = list(dx, dy, dz))
 //         Load the codebase-relative .dmm paths in "maps" at `root`, in order. Duplicates are
 //         allowed. The module tile holding an instance of "anchor" lands on the root's tile.
 //         Default: module tile (1, 1, 1). Module prefabs of exactly the "skip" types leave the
-//         destination untouched. "anchor" and "skip" are optional.
+//         destination untouched. "offset" moves the anchor's landing tile from the root's tile by
+//         that many tiles. Default: list(0, 0, 0). "dz" is optional. "anchor", "skip" and
+//         "offset" are optional.
 //     list("root" = atom, "error" = text)
 //         Show `text` as the root's error in the editor.
 /proc/demir_place_modular(list/placements)

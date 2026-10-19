@@ -73,6 +73,9 @@
 		..()
 		if(!GLOB)
 			GLOB = new /datum/controller/global_vars/demir_preview
+
+		demir_modular_root(/obj/effect/spawner/modularmap)
+
 		demir_define_group(DEMIR_GROUP_CABLES, /obj/structure/cable)
 		demir_define_group(DEMIR_GROUP_CABLES, /obj/machinery/power/terminal)
 		demir_define_group(DEMIR_GROUP_PIPES, /obj/machinery/atmospherics)
@@ -90,6 +93,56 @@
 			demir_node_orientation(/obj/machinery/atmospherics/pipe/simple, direction, direction)
 		register_disposal_node_orientations()
 		demir_rotatable(/obj/machinery/atmospherics, GLOB.cardinals)
+
+/datum/demir/tgmc/process_modular_root(list/roots)
+	var/list/templates = list()
+	for(var/template_path in subtypesof(/datum/map_template/modular))
+		var/datum/map_template/modular/template = template_path
+		var/modular_id = initial(template.modular_id)
+		if(modular_id == "none" || copytext(initial(template.mappath), -4) != ".dmm")
+			continue
+
+		var/list/by_id = templates[modular_id]
+		if(!by_id)
+			by_id = list()
+			templates[modular_id] = by_id
+
+		by_id += template_path
+
+	var/list/placements = list()
+	for(var/obj/effect/spawner/modularmap/root as anything in roots)
+		var/list/candidates = templates[root.mapid]
+		if(!length(candidates))
+			placements += list(list("root" = root, "error" = "no modular templates for \"[root.mapid]\""))
+			continue
+
+		var/list/files = list()
+		var/is_centered = FALSE
+		for(var/template_path in candidates)
+			var/datum/map_template/modular/template = template_path
+			if(initial(template.template_width) != root.spawner_width || initial(template.template_height) != root.spawner_height)
+				continue
+
+			if(!length(files))
+				is_centered = initial(template.keepcentered)
+
+			files += initial(template.mappath)
+
+		if(!length(files))
+			placements += list(list("root" = root, "error" = "no \"[root.mapid]\" template is [root.spawner_width]x[root.spawner_height]"))
+			continue
+
+		var/list/placement = list(
+			"root" = root,
+			"maps" = files,
+			"skip" = list(/turf/template_noop, /area/template_noop),
+		)
+		if(is_centered)
+			placement["offset"] = list(-round(root.spawner_width / 2), -round(root.spawner_height / 2))
+
+		placements += list(placement)
+
+	demir_place_modular(placements)
 
 // Same openings as the Initialize() of each pipe type. Most set dpdir inline.
 /datum/demir/tgmc/proc/register_disposal_node_orientations()
@@ -174,6 +227,11 @@
 		src.power_all = powered_all
 		demir_rebake(DEMIR_BAKE_LIGHT, DEMIR_GROUP_POWER)
 		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_POWER)
+
+	imgui_separator("Modular maps")
+	var/previewed = imgui_checkbox("Preview modules", demir_modular_preview())
+	if(previewed != demir_modular_preview())
+		demir_set_modular_preview(previewed)
 
 	imgui_end()
 

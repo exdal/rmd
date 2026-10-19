@@ -282,9 +282,9 @@ impl ModuleComposer<'_> {
         let choice = variants[selected].choice.clone();
         self.preview.choices.insert(key.clone(), choice.clone());
         let offset = [
-            i64::from(coord.x) - i64::from(anchor.0.x),
-            i64::from(coord.y) - i64::from(anchor.0.y),
-            i64::from(coord.z) - 1,
+            i64::from(coord.x) - i64::from(anchor.0.x) + i64::from(spec.offset[0]),
+            i64::from(coord.y) - i64::from(anchor.0.y) + i64::from(spec.offset[1]),
+            i64::from(coord.z) - 1 + i64::from(spec.offset[2]),
         ];
         let marker = (coord, marker);
         let cached = self

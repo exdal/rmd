@@ -3730,7 +3730,16 @@ fn a_process_modular_root_fault_reaches_every_root_of_its_pass() {
 #[test]
 fn placement_entries_become_module_roots_and_errors() {
     let (tree, module) = compile(fixture!("programs/placement_entries_become_module_roots.dm"));
-    let keys = ["none", "empty", "full", "single_skip", "error"];
+    let keys = [
+        "none",
+        "empty",
+        "full",
+        "single_skip",
+        "error",
+        "offset_2d",
+        "offset_3d",
+        "offset_null",
+    ];
     let atoms = keys
         .iter()
         .enumerate()
@@ -3750,6 +3759,7 @@ fn placement_entries_become_module_roots_and_errors() {
             files: Vec::new(),
             anchor: None,
             skip: Vec::new(),
+            offset: [0; 3],
         })
     );
     assert_eq!(
@@ -3758,8 +3768,12 @@ fn placement_entries_become_module_roots_and_errors() {
             files: vec!["a.dmm".into(), "b.dmm".into(), "a.dmm".into()],
             anchor: Some(ty("/obj/connector")),
             skip: vec![ty("/turf/hole"), ty("/area/hole")],
+            offset: [0; 3],
         })
     );
+    assert_eq!(modules.get(&id("offset_2d")).map(|root| root.offset), Some([-3, 4, 0]));
+    assert_eq!(modules.get(&id("offset_3d")).map(|root| root.offset), Some([1, -2, 5]));
+    assert_eq!(modules.get(&id("offset_null")).map(|root| root.offset), Some([0; 3]));
     assert_eq!(
         modules.get(&id("single_skip")).map(|root| root.skip.clone()),
         Some(vec![ty("/turf/hole")])
@@ -3804,6 +3818,18 @@ fn invalid_placement_entries_fault_the_task_for_every_root() {
         (
             "bad_skip",
             "demir_place_modular() skip must be a type or a list of types",
+        ),
+        (
+            "bad_offset_text",
+            "demir_place_modular() offset must be list(dx, dy) or list(dx, dy, dz)",
+        ),
+        (
+            "bad_offset_len",
+            "demir_place_modular() offset must be list(dx, dy) or list(dx, dy, dz)",
+        ),
+        (
+            "bad_offset_entry",
+            "demir_place_modular() offset must be list(dx, dy) or list(dx, dy, dz)",
         ),
         ("bad_error", "demir_place_modular() error must be text"),
         (

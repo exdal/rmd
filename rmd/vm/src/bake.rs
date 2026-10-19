@@ -108,6 +108,7 @@ pub struct ModuleRoot {
     pub files: Vec<String>,
     pub anchor: Option<TypeId>,
     pub skip: Vec<TypeId>,
+    pub offset: [i32; 3],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1793,7 +1794,47 @@ pub(crate) fn placement_entry(
         skip.push(ty);
     }
 
-    Ok((root, Placement::Maps(ModuleRoot { files, anchor, skip })))
+    let offset = match field(&fields, "offset") {
+        None | Some(GenericValue::Null) => Some([0; 3]),
+        Some(GenericValue::List(list)) => {
+            let entries = evaluator
+                .runtime
+                .heap
+                .list(*list)
+                .map(|list| list.entries.clone())
+                .ok_or_else(|| evaluator.fault(FaultKind::InvalidReference))?;
+            let numbers = entries
+                .iter()
+                .map(|(entry, _)| match entry {
+                    GenericValue::Num(number) => Some(*number as i32),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>();
+
+            match numbers.as_deref() {
+                Some(&[dx, dy]) => Some([dx, dy, 0]),
+                Some(&[dx, dy, dz]) => Some([dx, dy, dz]),
+                _ => None,
+            }
+        },
+        Some(_) => None,
+    };
+    let Some(offset) = offset else {
+        return Err(invalid(
+            evaluator,
+            "demir_place_modular() offset must be list(dx, dy) or list(dx, dy, dz)",
+        ));
+    };
+
+    Ok((
+        root,
+        Placement::Maps(ModuleRoot {
+            files,
+            anchor,
+            skip,
+            offset,
+        }),
+    ))
 }
 
 fn highlight_from_fields(

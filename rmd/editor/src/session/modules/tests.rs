@@ -872,6 +872,45 @@ fn tramstation_loads_its_modules_through_the_tgstation_profile() -> TestResult {
 }
 
 #[test]
+#[ignore = "requires the local target/TerraGov-Marine-Corps checkout"]
+fn lv624_loads_its_modules_through_the_tgmc_profile() -> TestResult {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/TerraGov-Marine-Corps");
+    let path = root.join("_maps/map_files/LV624/LV624.dmm");
+    let (map, errors) = dmm::parser::load(&path)?;
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let options = BakeOptions {
+        forced_profile: Some(String::from("tgmc")),
+        ..Default::default()
+    };
+    let loaded = load_codebase(&root.join("tgmc.dme"), &options, &Progress::new())?;
+    assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+
+    let mut session = Session::new();
+    session.apply_codebase(loaded);
+    session.activate_document(MapDocument::open(path, map, 1));
+    settle_bake(&mut session);
+
+    let modules = &session.active_cache().modules;
+    let preview = modules.preview.as_ref().ok_or("no module preview")?;
+    assert!(preview.diagnostics.is_empty(), "{:?}", preview.diagnostics);
+    assert!(!preview.roots.is_empty());
+    for root in &preview.roots {
+        eprintln!(
+            "root at {:?}: {} variants, selected {:?}, error {:?}",
+            root.coord,
+            root.variants.len(),
+            root.selected,
+            root.error
+        );
+        assert!(root.error.is_none(), "{:?}", root.error);
+        assert!(root.selected.is_some());
+    }
+
+    Ok(())
+}
+
+#[test]
 #[ignore = "timing harness for moving tramstation roots"]
 fn tramstation_root_move_timing() -> TestResult {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");

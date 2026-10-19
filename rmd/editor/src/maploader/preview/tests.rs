@@ -68,6 +68,7 @@ impl Fixture {
             files: files.iter().map(|file| (*file).to_owned()).collect(),
             anchor: Some(self.ty(CONNECTOR)),
             skip: vec![self.ty("/turf/template_noop"), self.ty("/area/template_noop")],
+            offset: [0; 3],
         }
     }
 
@@ -374,6 +375,33 @@ fn missing_anchor_type_places_the_module_at_its_local_origin() {
     );
     assert_eq!(
         paths(view, Coord::new(3, 1, 1)),
+        ["/turf/floor", "/area/test", "/obj/leaf"]
+    );
+}
+
+#[test]
+fn offset_shifts_the_module_layer() {
+    let fixture = Fixture::new();
+    fixture.map(
+        "plain.dmm",
+        &map(
+            [2, 1, 1],
+            &[(Coord::new(1, 1, 1), CONNECTOR), (Coord::new(2, 1, 1), "/obj/leaf")],
+        ),
+    );
+    let main = map([5, 1, 1], &[(Coord::new(2, 1, 1), ROOT)]);
+    let source = Grid::from_map(&main);
+    let root = ModuleRoot {
+        offset: [1, 0, 0],
+        ..fixture.spec(&["plain.dmm"])
+    };
+    let preview = fixture.compose(&source, &specs(&[(marker(&source, Coord::new(2, 1, 1)), root)]));
+    let view = preview.view(&source);
+
+    assert_eq!(paths(view, Coord::new(2, 1, 1)), ["/turf/floor", "/area/test", ROOT]);
+    assert_eq!(paths(view, Coord::new(3, 1, 1)), ["/turf/floor", "/area/test"]);
+    assert_eq!(
+        paths(view, Coord::new(4, 1, 1)),
         ["/turf/floor", "/area/test", "/obj/leaf"]
     );
 }

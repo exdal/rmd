@@ -237,10 +237,13 @@ checkbox leaves previews on.
 
 Each entry is an associative list, and its keys decide its kind:
 
-- `list("root" = atom, "maps" = list(...), "anchor" = type, "skip" = type or list of types)` loads
+- `list("root" = atom, "maps" = list(...), "anchor" = type, "skip" = type or list of types,
+  "offset" = list(dx, dy, dz))` loads
   the codebase-relative `.dmm` paths in `maps`, in load order, at `root`. `anchor` is a type whose
   module tile lands on the root's tile. Without it, module tile (1, 1, 1) lands on the root. Module
-  prefabs of exactly a `skip` type leave the destination untouched.
+  prefabs of exactly a `skip` type leave the destination untouched. `offset` moves the tile where
+  the anchor lands from the root's tile by that many tiles. It defaults to `list(0, 0, 0)`, and
+  `dz` is optional.
 - `list("root" = atom, "error" = text)` shows `text` as the root's error in the variant popup. Use
   it for content problems, like a config without the root's room. It is not a profile diagnostic.
 
