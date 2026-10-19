@@ -1942,6 +1942,47 @@ fn block_lists_turfs_inside_the_map() {
 }
 
 #[test]
+fn implicit_locate_searches_the_world() {
+    let (tree, module) = compile(fixture!("programs/implicit_locate_searches_the_world.dm"));
+    let ty = |path: &str| tree.id_of(&TreePath::parse(path)).expect("fixture type");
+    let placements = [
+        ("/area/zone", 1),
+        ("/turf/floor", 1),
+        ("/obj/decoy", 1),
+        ("/area/zone", 2),
+        ("/turf/floor", 2),
+        ("/obj/wanted", 2),
+    ];
+    let atoms = placements
+        .iter()
+        .enumerate()
+        .map(|(index, (path, x))| Atom {
+            instance: index as u64 + 1,
+            ty: ty(path),
+            position: Position::new(*x, 1, 1),
+            vars: Vec::new(),
+        })
+        .collect();
+    let bake = Bake::new(
+        &tree,
+        &module,
+        atoms,
+        [2, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    let name = bake.appearances[&2]
+        .vars
+        .iter()
+        .find(|(name, _)| name.as_str() == "name")
+        .and_then(|(_, value)| value.as_text())
+        .expect("the first turf names what it found");
+    assert_eq!(name, "2 1 1");
+}
+
+#[test]
 fn baking_exports_icon_objects_and_ignores_timed_effects() {
     let (tree, module) = compile(fixture!(
         "programs/baking_exports_icon_objects_and_ignores_timed_effects.dm"
@@ -2613,7 +2654,14 @@ fn world_log_output_uses_a_field_reference() {
 fn locate_in_searches_the_container() {
     let result = run(fixture!("programs/locate_in_searches_the_container.dm"), "test");
 
-    assert_eq!(result, GenericValue::from("1 1 1 1"));
+    assert_eq!(result, GenericValue::from("1 1 1 1 1"));
+}
+
+#[test]
+fn implicit_locate_uses_the_declared_type() {
+    let result = run(fixture!("programs/implicit_locate_uses_the_declared_type.dm"), "test");
+
+    assert_eq!(result, GenericValue::from("1 1 1 1 1"));
 }
 
 #[test]

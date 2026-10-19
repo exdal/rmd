@@ -1647,7 +1647,7 @@ impl<'a, 't> Parser<'a, 't> {
             return false;
         };
 
-        args.len() == 1
+        args.len() <= 1
             && matches!(self.expressions.get(callee.index()), Some(Expression::Identifier(name)) if name.as_str() == "locate")
     }
 

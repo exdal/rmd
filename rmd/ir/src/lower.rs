@@ -154,7 +154,7 @@ impl Lowering<'_> {
     }
 
     fn finish(mut self, optimize: bool) -> (Module, OptimizationTimings) {
-        for pending in self.builder.unresolved_new().to_vec() {
+        for pending in self.builder.unresolved_types().to_vec() {
             let ty = self
                 .tree
                 .id_of(&pending.owner)
@@ -162,7 +162,7 @@ impl Lowering<'_> {
                 .or_else(|| self.tree.var_inherited(TypeId::ROOT, &pending.name))
                 .and_then(|var| var.declared_type.clone());
             if let Some(ty) = ty {
-                self.builder.resolve_new(pending.node, ty);
+                self.builder.resolve_type(pending.node, ty);
             }
         }
 

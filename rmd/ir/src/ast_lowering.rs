@@ -10,7 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::*;
 
 #[derive(Debug, Clone)]
-pub(crate) struct UnresolvedNew {
+pub(crate) struct UnresolvedType {
     pub owner: TreePath,
     pub name: Identifier,
     pub node: IrNodeId,
@@ -19,7 +19,7 @@ pub(crate) struct UnresolvedNew {
 pub struct IrModuleBuilder<'a> {
     ast: &'a AST,
     pub module: Module,
-    unresolved_new: Vec<UnresolvedNew>,
+    unresolved_types: Vec<UnresolvedType>,
     constants: FxHashMap<ConstantKey, IrNodeId>,
     external_functions: FxHashMap<Identifier, IrNodeId>,
     named_variables: FxHashMap<Identifier, IrNodeId>,
@@ -84,7 +84,7 @@ impl<'a> IrModuleBuilder<'a> {
         Self {
             ast,
             module: Module::default(),
-            unresolved_new: Vec::new(),
+            unresolved_types: Vec::new(),
             constants: FxHashMap::default(),
             external_functions: FxHashMap::default(),
             named_variables: FxHashMap::default(),
@@ -196,9 +196,9 @@ impl<'a> IrModuleBuilder<'a> {
         (self.module, timings)
     }
 
-    pub(crate) fn unresolved_new(&self) -> &[UnresolvedNew] { &self.unresolved_new }
+    pub(crate) fn unresolved_types(&self) -> &[UnresolvedType] { &self.unresolved_types }
 
-    pub(crate) fn resolve_new(&mut self, node: IrNodeId, ty: TreePath) { self.set_new_type(node, Some(ty)); }
+    pub(crate) fn resolve_type(&mut self, node: IrNodeId, ty: TreePath) { self.set_implied_type(node, Some(ty)); }
 
     #[allow(clippy::too_many_arguments)]
     pub fn lower_proc(
@@ -950,10 +950,14 @@ impl<'a> IrModuleBuilder<'a> {
                 BinaryOp::In
                     if let Some(Expression::Call { callee, args }) = self.ast.get_expr(*lhs_expr)
                         && matches!(self.ast.get_expr(*callee), Some(Expression::Identifier(name)) if name.as_str() == "locate")
-                        && args.len() == 1
+                        && args.len() <= 1
                         && let Some(function) = self.call_target(*callee) =>
                 {
-                    let mut lowered = self.args(args);
+                    // `locate() in loc` takes its type from the variable it is stored in
+                    let mut lowered = match args.is_empty() {
+                        true => vec![Argument { key: None, value: None }],
+                        false => self.args(args),
+                    };
                     let container = self.lower_expr(*rhs_expr);
                     lowered.push(Argument {
                         key: None,
@@ -1109,6 +1113,13 @@ impl<'a> IrModuleBuilder<'a> {
                                 value: Some(self.intern_constant(Value::Path(ty))),
                             });
                         }
+
+                        if matches!(self.ast.get_expr(*callee), Some(Expression::Identifier(name)) if name.as_str() == "locate")
+                            && args.is_empty()
+                        {
+                            lowered.push(Argument { key: None, value: None });
+                        }
+
                         IrNode::FunctionCall {
                             function,
                             args: lowered,
@@ -1326,31 +1337,31 @@ impl<'a> IrModuleBuilder<'a> {
                 .lookup(name)
                 .and_then(|binding| self.vars.get(binding.0 as usize))
                 .and_then(|spec| spec.var_type.clone())
-                .or_else(|| self.defer_new_type(value, name)),
+                .or_else(|| self.defer_implied_type(value, name)),
             Some(Expression::Field { object, name, .. })
                 if matches!(self.ast.get_expr(*object), Some(Expression::Builtin(Builtin::Src))) =>
             {
-                self.defer_new_type(value, name)
+                self.defer_implied_type(value, name)
             },
             Some(Expression::Field { object, name, .. })
                 if matches!(self.ast.get_expr(*object), Some(Expression::Builtin(Builtin::Global))) =>
             {
-                self.defer_new_type_in(value, name, TreePath::default())
+                self.defer_implied_type_in(value, name, TreePath::default())
             },
             _ => None,
         };
-        self.set_new_type(value, inferred);
+        self.set_implied_type(value, inferred);
 
         self.store(lhs_expr, value)
     }
 
-    fn defer_new_type(&mut self, value: IrNodeId, name: &Identifier) -> Option<TreePath> {
-        self.defer_new_type_in(value, name, self.current_owner.clone())
+    fn defer_implied_type(&mut self, value: IrNodeId, name: &Identifier) -> Option<TreePath> {
+        self.defer_implied_type_in(value, name, self.current_owner.clone())
     }
 
-    fn defer_new_type_in(&mut self, value: IrNodeId, name: &Identifier, owner: TreePath) -> Option<TreePath> {
-        if matches!(self.module.node(value), Some(IrNode::New { ty: None, .. })) {
-            self.unresolved_new.push(UnresolvedNew {
+    fn defer_implied_type_in(&mut self, value: IrNodeId, name: &Identifier, owner: TreePath) -> Option<TreePath> {
+        if self.is_implicitly_typed(value) {
+            self.unresolved_types.push(UnresolvedType {
                 owner,
                 name: name.clone(),
                 node: value,
@@ -1360,8 +1371,8 @@ impl<'a> IrModuleBuilder<'a> {
         None
     }
 
-    fn set_new_type(&mut self, value: IrNodeId, inferred: Option<TreePath>) {
-        if !matches!(self.module.node(value), Some(IrNode::New { ty: None, .. })) {
+    fn set_implied_type(&mut self, value: IrNodeId, inferred: Option<TreePath>) {
+        if !self.is_implicitly_typed(value) {
             return;
         }
 
@@ -1371,8 +1382,23 @@ impl<'a> IrModuleBuilder<'a> {
 
         let ty = self.intern_constant(Value::Path(inferred));
 
-        if let Some(IrNode::New { ty: target, .. }) = self.module.nodes.get_mut(value.0 as usize) {
-            *target = Some(ty);
+        match self.module.nodes.get_mut(value.0 as usize) {
+            Some(IrNode::New { ty: target, .. }) => *target = Some(ty),
+            Some(IrNode::FunctionCall { args, .. }) => args[0].value = Some(ty),
+            _ => {},
+        }
+    }
+
+    fn is_implicitly_typed(&self, value: IrNodeId) -> bool {
+        match self.module.node(value) {
+            Some(IrNode::New { ty: None, .. }) => true,
+            Some(IrNode::FunctionCall { function, args }) => {
+                matches!(self.module.node(*function), Some(IrNode::ExternalFunction(name)) if name.as_str() == "locate")
+                    && args
+                        .first()
+                        .is_some_and(|argument| argument.key.is_none() && argument.value.is_none())
+            },
+            _ => false,
         }
     }
 
@@ -1501,7 +1527,7 @@ impl<'a> IrModuleBuilder<'a> {
                     None if dimensions.is_empty() => self.undefined(),
                     None => self.declared_array(&dimensions),
                 };
-                self.set_new_type(value, inferred);
+                self.set_implied_type(value, inferred);
                 if let Some(block) = self.current_block {
                     if let Some(pointer) = self.stored_bindings.get(&var).copied() {
                         self.emit_instr(IrNode::Initialize { pointer, value });

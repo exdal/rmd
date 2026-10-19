@@ -9,6 +9,7 @@
 #define DEMIR_GROUP_CABLES (1<<0)
 #define DEMIR_GROUP_PIPES (1<<1)
 #define DEMIR_GROUP_DISPOSALS (1<<2)
+#define DEMIR_GROUP_WEEDS (1<<3)
 #define DEMIR_GROUP_CAMERAS (1<<4)
 #define DEMIR_GROUP_POWER (1<<5)
 #define DEMIR_GROUP_UNDERFLOOR (DEMIR_GROUP_CABLES | DEMIR_GROUP_PIPES | DEMIR_GROUP_DISPOSALS)
@@ -46,6 +47,7 @@
 	InitGlobalemissive_color_no_bloom()
 	InitGlobalemissive_color()
 	InitGlobalem_block_color()
+	InitGlobalweed_prob_list()
 	if(!SSmapping)
 		SSmapping = new /datum/controller/subsystem/mapping/demir_preview
 	if(!SSoverlays)
@@ -64,6 +66,7 @@
 	var/show_disposals = TRUE
 	var/fade_underfloor = FALSE
 	var/show_camera_ranges = FALSE
+	var/show_weeds = FALSE
 	var/power_all = TRUE
 
 	New()
@@ -75,6 +78,7 @@
 		demir_define_group(DEMIR_GROUP_PIPES, /obj/machinery/atmospherics)
 		demir_define_group(DEMIR_GROUP_DISPOSALS, /obj/structure/disposalpipe)
 		demir_define_group(DEMIR_GROUP_CAMERAS, /obj/machinery/camera)
+		demir_define_group(DEMIR_GROUP_WEEDS, /obj/effect/landmark/weed_node)
 		demir_define_group(DEMIR_GROUP_POWER, /obj/machinery)
 		demir_node_group(/obj/structure/cable, /turf/closed, null, "cable_layer")
 		demir_node_group(/obj/machinery/atmospherics/pipe, /turf/closed, /obj/machinery/atmospherics/pipe/simple, list("piping_layer", "pipe_color"))
@@ -157,6 +161,12 @@
 	if(camera_ranges != src.show_camera_ranges)
 		src.show_camera_ranges = camera_ranges
 		demir_rebake(DEMIR_BAKE_HIGHLIGHT, DEMIR_GROUP_CAMERAS)
+
+	imgui_separator("Weeds")
+	var/weeds = imgui_checkbox("Fully grown", src.show_weeds)
+	if(weeds != src.show_weeds)
+		src.show_weeds = weeds
+		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_WEEDS)
 
 	imgui_separator("Power")
 	var/powered_all = imgui_checkbox("All areas powered", src.power_all)
@@ -311,6 +321,174 @@
 
 /obj/item/flashlight/demir_bake_appearance()
 	update_icon()
+
+/obj/effect/landmark/weed_node/demir_bake_appearance()
+	var/datum/demir/tgmc/profile = demir_profile()
+	if(!profile.show_weeds)
+		return ..()
+
+	var/node_type = pickweight(GLOB.weed_prob_list)
+	var/obj/alien/weeds/node/node_path = node_type
+	var/color_variant = initial(node_path.color_variant)
+	var/node_icon = initial(node_path.node_icon)
+	var/list/cluster = demir_weed_cluster()
+	var/list/owners = demir_weed_owners(cluster)
+	var/list/grown = demir_weed_grown(cluster, owners)
+
+	invisibility = 0
+	icon = 'icons/Xeno/weeds.dmi'
+	icon_state = demir_weed_floor_state(loc, grown, color_variant)
+	layer = XENO_WEEDS_LAYER
+	plane = FLOOR_PLANE
+	var/image/node_overlay = new
+	node_overlay.icon = icon
+	node_overlay.icon_state = "[node_icon][rand(0, 5)]"
+	overlays += node_overlay
+
+	for(var/turf/T as anything in grown)
+		var/is_owner = owners[T] == src
+		if(!is_owner || T == loc)
+			continue
+
+		var/image/weed = demir_weed_image(T, grown, color_variant)
+		weed.pixel_x = (T.x - x) * world.icon_size
+		weed.pixel_y = (T.y - y) * world.icon_size
+		overlays += weed
+
+/obj/effect/landmark/weed_node/proc/demir_weed_cluster()
+	var/list/cluster = list()
+	var/turf/low = locate(max(1, x - 5), max(1, y - 5), z)
+	var/turf/high = locate(min(world.maxx, x + 5), min(world.maxy, y + 5), z)
+	for(var/turf/T as anything in block(low, high))
+		for(var/obj/effect/landmark/weed_node/node in T)
+			cluster += node
+
+	return cluster
+
+/obj/effect/landmark/weed_node/proc/demir_weed_owners(list/cluster)
+	var/list/owners = list()
+	for(var/obj/effect/landmark/weed_node/node as anything in cluster)
+		for(var/turf/T as anything in demir_weed_pending(node))
+			var/obj/effect/landmark/weed_node/current = owners[T]
+			if(current && !demir_weed_is_closer(node, current, T))
+				continue
+
+			owners[T] = node
+
+	return owners
+
+/proc/demir_weed_pending(obj/effect/landmark/weed_node/node)
+	var/list/pending = list()
+	var/turf/origin = node.loc
+	pending[origin] = TRUE
+	var/list/frontier = list(origin)
+	for(var/step in 1 to 2)
+		var/list/next = list()
+		for(var/turf/T as anything in frontier)
+			for(var/direction in GLOB.alldirs)
+				var/turf/neighbor = get_step(T, direction)
+				if(!neighbor || pending[neighbor])
+					continue
+
+				pending[neighbor] = TRUE
+				if(!neighbor.density)
+					next += neighbor
+
+		frontier = next
+
+	return pending
+
+/proc/demir_weed_is_closer(obj/effect/landmark/weed_node/node, obj/effect/landmark/weed_node/current, turf/T)
+	var/node_distance = get_dist_euclidean_square(node, T)
+	var/current_distance = get_dist_euclidean_square(current, T)
+	if(node_distance != current_distance)
+		return node_distance < current_distance
+
+	if(node.y != current.y)
+		return node.y < current.y
+
+	return node.x < current.x
+
+/obj/effect/landmark/weed_node/proc/demir_weed_grown(list/cluster, list/owners)
+	var/list/grown = list()
+	var/list/frontier = list()
+	for(var/obj/effect/landmark/weed_node/node as anything in cluster)
+		var/turf/node_turf = node.loc
+		if(grown[node_turf])
+			continue
+
+		grown[node_turf] = TRUE
+		frontier += node_turf
+
+	for(var/depth in 1 to 5)
+		var/list/next = list()
+		for(var/turf/T as anything in frontier)
+			for(var/direction in GLOB.cardinals)
+				var/turf/neighbor = get_step(T, direction)
+				if(!neighbor || grown[neighbor] || !owners[neighbor] || !neighbor.is_weedable())
+					continue
+
+				var/obj/machinery/door/blocker = locate(/obj/machinery/door) in neighbor
+				if(blocker && blocker.density)
+					continue
+
+				grown[neighbor] = TRUE
+				next += neighbor
+
+		frontier = next
+
+	return grown
+
+/proc/demir_weed_floor_state(turf/T, list/grown, color_variant)
+	var/mask = 0
+	for(var/direction in GLOB.cardinals)
+		var/turf/neighbor = get_step(T, direction)
+		if(!neighbor)
+			continue
+
+		if(grown[neighbor] || istype(neighbor, /turf/closed/wall/resin))
+			mask |= direction
+
+	if(mask == 15)
+		return "weed[rand(0, 15)][color_variant]"
+
+	if(!mask)
+		return "base[color_variant]"
+
+	return "weed_dir[mask][color_variant]"
+
+/proc/demir_weed_image(turf/T, list/grown, color_variant)
+	var/image/weed = new
+	var/atom/wall = null
+	if(iswallturf(T))
+		wall = T
+		weed.layer = WEEDWALL_LAYER
+	else
+		wall = locate(/obj/structure/window/framed) in T
+		if(!wall)
+			wall = locate(/obj/structure/window_frame) in T
+		weed.layer = GIB_LAYER
+
+	if(!wall)
+		weed.icon = 'icons/Xeno/weeds.dmi'
+		weed.icon_state = demir_weed_floor_state(T, grown, color_variant)
+		weed.layer = XENO_WEEDS_LAYER
+		weed.plane = FLOOR_PLANE
+		return weed
+
+	wall.demir_bake_smoothing()
+	var/junction = wall.smoothing_junction
+	weed.icon_state = junction ? "weedwall-[junction]" : "weedwall"
+	weed.plane = GAME_PLANE
+	switch(color_variant)
+		if(STICKY_COLOR)
+			weed.icon = 'icons/obj/smooth_objects/weedwallsticky.dmi'
+		if(RESTING_COLOR)
+			weed.icon = 'icons/obj/smooth_objects/weedwallrest.dmi'
+		else
+			weed.icon = 'icons/obj/smooth_objects/weedwall.dmi'
+
+	return weed
 
 /atom/movable/proc/demir_underfloor_shown()
 	return null
@@ -504,6 +682,7 @@
 #undef DEMIR_GROUP_CABLES
 #undef DEMIR_GROUP_PIPES
 #undef DEMIR_GROUP_DISPOSALS
+#undef DEMIR_GROUP_WEEDS
 #undef DEMIR_GROUP_CAMERAS
 #undef DEMIR_GROUP_POWER
 #undef DEMIR_GROUP_UNDERFLOOR
