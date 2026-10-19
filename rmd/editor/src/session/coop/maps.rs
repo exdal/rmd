@@ -114,7 +114,9 @@ impl Session {
                     id,
                     self.coop_receiving(id).is_some()
                         || self.coop_out_of_date(id).is_some()
-                        || self.coop.as_ref().is_some_and(|coop| coop.paused) && self.coop_shared_map(id).is_some(),
+                        || self.coop.as_ref().is_some_and(|coop| coop.paused) && self.coop_shared_map(id).is_some()
+                        // keeping module previews in sync across peers isn't worth it
+                        || self.coop_shared_map(id).is_some() && self.is_module_document(id),
                 )
             })
             .collect::<Vec<_>>();

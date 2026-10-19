@@ -49,7 +49,7 @@ impl Session {
         self.start_coop(addr, password, nick, codebase, connection, None)
     }
 
-    fn start_coop(
+    pub(super) fn start_coop(
         &mut self, addr: String, password: PasswordHash, nick: String, codebase: CodebaseId,
         connection: CoopConnection, server: Option<Server>,
     ) -> Result<(), String> {

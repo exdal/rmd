@@ -43,6 +43,7 @@ mod codebase;
 mod connection;
 mod edits;
 mod maps;
+mod modules;
 
 fn session() -> Session {
     let mut session = Session::new();

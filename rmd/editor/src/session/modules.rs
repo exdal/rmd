@@ -253,6 +253,21 @@ impl Session {
         self.settle_modules(id, changed);
     }
 
+    pub(super) fn is_module_document(&self, id: DocumentId) -> bool {
+        let Some(path) = self
+            .state
+            .document(id)
+            .and_then(|document| document.path.as_deref())
+            .map(resolved_path)
+        else {
+            return false;
+        };
+
+        self.caches
+            .iter()
+            .any(|(container, cache)| *container != id && cache.modules.uses_file(&path))
+    }
+
     pub fn sync_open_modules(&mut self) {
         let sources = self
             .state
