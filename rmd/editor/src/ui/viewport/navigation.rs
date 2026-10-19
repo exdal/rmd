@@ -123,6 +123,13 @@ impl UiState {
         view.focus = true;
     }
 
+    pub fn focus_map(&mut self, session: &mut Session, document: DocumentId) {
+        session.set_active_document(document);
+        if let Some(view) = self.map_view_mut(document) {
+            view.focus = true;
+        }
+    }
+
     pub(super) fn map_view_mut(&mut self, document: DocumentId) -> Option<&mut MapViewState> {
         match self.map_views.entry(document) {
             Entry::Occupied(entry) => Some(entry.into_mut()),

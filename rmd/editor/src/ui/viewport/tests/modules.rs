@@ -266,3 +266,60 @@ fn escape_and_outside_clicks_close_the_popup() -> TestResult {
 
     Ok(())
 }
+
+#[test]
+fn the_popup_survives_switching_to_another_map_and_back() -> TestResult {
+    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let (_fixture, mut session) = module_viewport_session()?;
+    let modular = session.state.active().ok_or("no document")?;
+    let root = session.module_roots().first().ok_or("no module root")?;
+    let popup = (root.key.clone(), root.coord);
+    session.apply_map(crate::loader::LoadedMap {
+        path: std::env::temp_dir().join("rmd-module-popup-other.dmm"),
+        map: dmm::Map::new(Size { x: 4, y: 4, z: 1 }),
+        z: 1,
+        errors: vec![],
+        repo: None,
+        conflict: None,
+    });
+    let other = session.state.active().ok_or("no document")?;
+    session.set_active_document(modular);
+
+    let mut context = rectangle_context();
+    let mut state = UiState::new(false)?;
+    let mut settings = Settings::default();
+    let mut frames = |state: &mut UiState, session: &mut Session, focus: DocumentId| {
+        if let Some(view) = state.map_views.get_mut(&focus) {
+            view.focus = true;
+        }
+
+        for _ in 0..3 {
+            let ui = context.frame();
+            for (index, id) in [modular, other].into_iter().enumerate() {
+                let name = format!("###viewport-{}", id.get());
+                ui.set_window_pos_by_name(&name, [index as f32 * 400.0, 0.0]);
+                ui.set_window_size_by_name(&name, [400.0, 600.0]);
+            }
+
+            state.draw_map_views(ui, session, &mut settings, false);
+            assert!(context.render_legacy().valid());
+        }
+    };
+    frames(&mut state, &mut session, modular);
+    frames(&mut state, &mut session, modular);
+    assert_eq!(session.state.active(), Some(modular));
+    state
+        .map_views
+        .get_mut(&modular)
+        .ok_or("no modular view")?
+        .gestures
+        .module_popup = Some(popup.clone());
+
+    frames(&mut state, &mut session, other);
+    assert_eq!(session.state.active(), Some(other));
+    frames(&mut state, &mut session, modular);
+    assert_eq!(session.state.active(), Some(modular));
+    assert_eq!(state.map_views[&modular].gestures.module_popup, Some(popup));
+
+    Ok(())
+}

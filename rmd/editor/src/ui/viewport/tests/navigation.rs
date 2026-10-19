@@ -177,3 +177,22 @@ fn arrow_keys_pan_shift_pans_faster_and_space_drags_the_map_without_placing() {
         "the drag never reaches the place tool"
     );
 }
+
+#[test]
+fn refitting_a_map_without_a_view_leaves_the_other_views_alone() {
+    let mut session = Session::new();
+    let mut ui = UiState::new(false).unwrap();
+    let source = session
+        .state
+        .open_document(MapDocument::new(dmm::Map::new(Size { x: 4, y: 4, z: 1 }), 1));
+    let mut view = MapViewState::new(source).unwrap();
+    view.refit = false;
+    ui.map_views.insert(source, view);
+    let opened = session
+        .state
+        .open_document(MapDocument::new(dmm::Map::new(Size { x: 4, y: 4, z: 1 }), 1));
+
+    ui.request_refit(Some(opened));
+
+    assert!(!ui.map_views[&source].refit);
+}

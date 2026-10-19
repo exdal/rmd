@@ -1,6 +1,8 @@
+use std::path::PathBuf;
+
 use dear_imgui_rs::{MouseButton, Ui};
 use dmm::Coord;
-use editor::{maploader::preview::ModuleVariantKey, tool::Tool};
+use editor::{icons::materialdesignicons::ICON_OPEN_IN_NEW, maploader::preview::ModuleVariantKey, tool::Tool};
 use render::Renderer;
 
 use super::ViewFrame;
@@ -32,12 +34,21 @@ fn module_path(session: &Session, choice: &ModuleVariantKey) -> String {
     }
 }
 
+pub(super) struct ModuleControls {
+    pub(super) is_capturing: bool,
+    pub(super) open: Option<PathBuf>,
+}
+
 pub(super) fn draw(
     ui: &Ui, session: &mut Session, frame: &mut ViewFrame<'_>, is_escape: bool, is_gizmo_hot: bool,
-) -> bool {
+) -> ModuleControls {
+    let mut open = None;
     if !session.modules_enabled() || is_escape {
         frame.gestures.module_popup = None;
-        return false;
+        return ModuleControls {
+            is_capturing: false,
+            open,
+        };
     }
     let roots = session.module_roots().to_vec();
     if let Some((key, coord)) = frame.gestures.module_popup.as_mut() {
@@ -104,13 +115,12 @@ pub(super) fn draw(
 
         ui.set_cursor_screen_pos(position);
         let _id = ui.push_id("module-variant");
-        let current = root
-            .selected
-            .and_then(|index| root.variants.get(index))
+        let selected = root.selected.and_then(|index| root.variants.get(index));
+        let current = selected
             .map(|variant| label(&variant.choice))
             .unwrap_or_else(|| "No valid variants".into());
         let button = ui.frame_height();
-        ui.set_next_item_width(width - 2.0 * (button + ui.clone_style().item_spacing()[0]));
+        ui.set_next_item_width(width - 3.0 * (button + ui.clone_style().item_spacing()[0]));
         let mut choose = None;
         if let Some(_combo) = ui.begin_combo("##variant", &current) {
             combo_open = true;
@@ -139,6 +149,21 @@ pub(super) fn draw(
         if let Some(error) = &root.error {
             ui.set_item_tooltip(error.to_string());
         }
+
+        ui.same_line();
+        {
+            let _disabled = ui.begin_disabled_with_cond(selected.is_none());
+            if ui.button_with_size(format!("{ICON_OPEN_IN_NEW}##open-module"), [button, button])
+                && let Some(variant) = selected
+            {
+                open = Some(variant.choice.path.clone());
+            }
+
+            if let Some(variant) = selected {
+                ui.set_item_tooltip(format!("Open {}", module_path(session, &variant.choice)));
+            }
+        }
+
         for (forward, text) in [(false, "<"), (true, ">")] {
             ui.same_line();
             let next = root.adjacent(forward);
@@ -165,7 +190,10 @@ pub(super) fn draw(
             let root = hovered.get(index).unwrap_or(first);
             let is_source = session.is_source_root(root);
             if is_gizmo_hot && is_source && session.selected_instance() == Some(root.key.instance) {
-                return false;
+                return ModuleControls {
+                    is_capturing: false,
+                    open,
+                };
             }
 
             frame.gestures.module_popup = Some((root.key.clone(), root.coord));
@@ -177,7 +205,10 @@ pub(super) fn draw(
             frame.gestures.module_popup = None;
         }
     }
-    captured || combo_open
+    ModuleControls {
+        is_capturing: captured || combo_open,
+        open,
+    }
 }
 
 pub(in crate::ui) fn controls_layout(

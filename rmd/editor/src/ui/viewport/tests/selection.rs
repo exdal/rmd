@@ -566,3 +566,68 @@ fn rectangle_ui_moves_and_cuts_on_a_created_level() {
         assert!(app.session.clipboard().is_some(), "created: {created}");
     }
 }
+
+#[test]
+fn only_the_active_view_outlines_its_selected_instance() {
+    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let mut session = Session::new();
+    session
+        .load_environment(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme"))
+        .unwrap();
+    let mut select_table_in = |name: &str| {
+        let mut map = dmm::Map::new(Size { x: 4, y: 4, z: 1 });
+        let key = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/obj/structure/table")),
+            Prefab::new(TreePath::parse("/turf/open/floor")),
+            Prefab::new(TreePath::parse("/area/station")),
+        ]);
+        for row in &mut map.grid[0] {
+            row.fill(key);
+        }
+
+        session.apply_map(crate::loader::LoadedMap {
+            path: std::env::temp_dir().join(name),
+            map,
+            z: 1,
+            errors: vec![],
+            repo: None,
+            conflict: None,
+        });
+        let id = session.state.active().unwrap();
+        let table = session.state.document(id).unwrap().instance_ids_at(Coord::new(1, 1, 1))[0];
+        session.select_instance(Some(table));
+
+        (id, table)
+    };
+    let (left, _) = select_table_in("rmd-selection-left.dmm");
+    let (right, table) = select_table_in("rmd-selection-right.dmm");
+    assert!(session.selected_instance_of(left).is_some());
+    session.set_tool(Tool::Select);
+
+    let mut context = rectangle_context();
+    let mut state = UiState::new(false).unwrap();
+    let mut settings = Settings::default();
+    let mut frame = |state: &mut UiState, session: &mut Session| {
+        let ui = context.frame();
+        for (index, id) in [left, right].into_iter().enumerate() {
+            let name = format!("###viewport-{}", id.get());
+            ui.set_window_pos_by_name(&name, [index as f32 * 400.0, 0.0]);
+            ui.set_window_size_by_name(&name, [400.0, 600.0]);
+        }
+
+        let (views, ..) = state.draw_map_views(ui, session, &mut settings, false);
+        assert!(context.render_legacy().valid());
+
+        views
+    };
+    frame(&mut state, &mut session);
+    state.map_views.get_mut(&right).unwrap().focus = true;
+    let views = (0..3).map(|_| frame(&mut state, &mut session)).last().unwrap();
+    assert_eq!(session.state.active(), Some(right));
+
+    let outlined = views
+        .iter()
+        .map(|view| (view.document, view.interaction.selected))
+        .collect::<Vec<_>>();
+    assert_eq!(outlined, [(left, None), (right, Some(table))]);
+}

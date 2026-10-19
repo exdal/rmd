@@ -318,6 +318,7 @@ pub struct UiState {
     diagnostics: DiagnosticsState,
     keybind_preset_prompt: bool,
     copy_to_clipboard: Option<String>,
+    open_map: Option<PathBuf>,
     update_check: UpdateCheck,
     demand: Cell<FrameDemand>,
 }
@@ -399,6 +400,7 @@ impl UiState {
             diagnostics: DiagnosticsState::default(),
             keybind_preset_prompt,
             copy_to_clipboard: None,
+            open_map: None,
             update_check: UpdateCheck::default(),
             demand: Cell::new(FrameDemand::Idle),
         })
@@ -438,13 +440,8 @@ impl UiState {
     pub fn request_exit(&mut self) { self.exit_requested = true; }
 
     pub fn request_refit(&mut self, id: Option<DocumentId>) {
-        match id.and_then(|id| self.map_views.get_mut(&id)) {
-            Some(view) => view.refit = true,
-            None => {
-                for view in self.map_views.values_mut() {
-                    view.refit = true;
-                }
-            },
+        if let Some(view) = id.and_then(|id| self.map_views.get_mut(&id)) {
+            view.refit = true;
         }
     }
 
@@ -571,7 +568,10 @@ impl UiState {
             exit,
             map_views,
             picking,
-            open: coop_open.or(welcome.open).or(menu.open),
+            open: coop_open
+                .or(welcome.open)
+                .or(menu.open)
+                .or(self.open_map.take().map(OpenRequest::Map)),
             open_source,
             pick_new_map_path,
             screenshot: menu.screenshot,
@@ -974,7 +974,7 @@ impl UiState {
         let (pick_path, created) = draw_new_map_dialog(ui, session, &mut self.new_map_dialog);
         if created {
             self.show_welcome = false;
-            self.request_refit(None);
+            self.request_refit(session.state.active());
         }
 
         pick_path

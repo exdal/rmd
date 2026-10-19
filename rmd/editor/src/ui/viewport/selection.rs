@@ -36,7 +36,6 @@ pub(in crate::ui) struct ViewGestures {
 impl ViewGestures {
     pub(in crate::ui) fn cancel(&mut self, session: &mut Session, id: DocumentId) {
         restore_rectangle_gesture(session, id, &mut self.rectangle_gesture);
-        self.module_popup = None;
         self.block_selection_anchor = None;
         self.block_placement = None;
         self.fill_anchor = None;

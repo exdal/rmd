@@ -264,10 +264,6 @@ impl UiState {
         let mut coop = CoopPresence::default();
 
         for (&id, view) in &mut self.map_views {
-            if session.state.active() != Some(id) {
-                view.gestures.module_popup = None;
-            }
-
             if view.gestures.rectangle_gesture.is_some_and(|gesture| {
                 session.state.active() != Some(id)
                     || session.tool() != Tool::BlockSelect
@@ -309,7 +305,7 @@ impl UiState {
                 Default::default()
             };
             let mut interaction = MapViewInteraction {
-                selected: session.selected_instance_of(id),
+                selected: session.selected_instance_of(id).filter(|_| active),
                 highlight: settings.selection_highlight.style(),
                 mode: interaction_mode(session.tool()),
                 ..Default::default()
@@ -581,11 +577,15 @@ impl UiState {
                     hovered: frame.is_hovered && !ui.io().want_text_input(),
                 },
             );
-        let is_module_capturing = modules::draw(ui, session, frame, is_escape, is_gizmo_hot);
+        let module_controls = modules::draw(ui, session, frame, is_escape, is_gizmo_hot);
+        if let Some(path) = module_controls.open {
+            self.open_map = Some(path);
+        }
+
         let capture = MouseCapture {
             is_conflict_controls: conflict_controls_contain(ui, session, frame, &conflict_regions),
             is_banner: banner_contains(ui, session, frame),
-            is_blame_popup: is_blame_capturing || is_module_capturing,
+            is_blame_popup: is_blame_capturing || module_controls.is_capturing,
             is_escape,
         };
         let gizmo_view = GizmoMapView {
@@ -607,7 +607,7 @@ impl UiState {
         let clicks = Clicks::read(ui);
         if clicks.is_right_clicked
             && !is_blame_capturing
-            && !is_module_capturing
+            && !module_controls.is_capturing
             && let Some(coord) = frame.coord
         {
             apply_right_click(ui, session, frame, node_hit, coord);

@@ -70,6 +70,7 @@ impl UiState {
             },
             Some(EditCommand::Deselect) => {
                 frame.gestures.cancel(session, frame.id);
+                frame.gestures.module_popup = None;
                 self.gizmo.cancel();
                 session.select_block(None);
                 session.select_instance(None);

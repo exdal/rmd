@@ -42,6 +42,7 @@ use crate::{
     document::{DocumentId, MapDocument},
     environment::LoadDiagnostics,
     error::LoadError,
+    maploader::resolved_path,
     progress::{Progress, Stage},
     tool::Tool,
 };
@@ -358,9 +359,16 @@ impl EditorState {
     }
 
     pub fn document_for_path(&self, path: &Path) -> Option<DocumentId> {
+        let path = resolved_path(path);
+
         self.documents
             .iter()
-            .find(|document| document.path.as_deref() == Some(path))
+            .find(|document| {
+                document
+                    .path
+                    .as_deref()
+                    .is_some_and(|candidate| resolved_path(candidate) == path)
+            })
             .map(MapDocument::id)
     }
 

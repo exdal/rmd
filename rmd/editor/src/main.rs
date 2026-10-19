@@ -687,6 +687,14 @@ impl App {
             return;
         }
 
+        if let Opened::Map(path) = &resolved
+            && let Some(id) = self.session.state.document_for_path(path)
+        {
+            self.pending_share = None;
+            self.ui.focus_map(&mut self.session, id);
+            return;
+        }
+
         self.ui.set_open_error(None);
         self.ui.set_load_notice(None);
         self.pending_map = None;
@@ -1640,5 +1648,36 @@ a
         settings.optimizations_enabled = false;
         assert!(!bake_options(&settings, Some(environment)).optimizations_enabled);
         assert_eq!(bake_options(&settings, None).forced_profile, None);
+    }
+
+    #[test]
+    fn opening_an_already_open_map_focuses_it_without_loading() {
+        let _guard = ui::IMGUI_CONTEXT.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("rmd-open-focus-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut app = headless_editor();
+        let open = |app: &mut App, name: &str| {
+            let path = dir.join(name);
+            fs::write(&path, "").unwrap();
+            app.session.apply_map(loader::LoadedMap {
+                path,
+                map: dmm::Map::new(dmm::Size { x: 4, y: 4, z: 1 }),
+                z: 1,
+                errors: vec![],
+                repo: None,
+                conflict: None,
+            });
+
+            app.session.state.active().unwrap()
+        };
+        let first = open(&mut app, "first.dmm");
+        let second = open(&mut app, "second.dmm");
+        assert_eq!(app.session.state.active(), Some(second));
+
+        app.apply_open(OpenRequest::Map(dir.join(".").join("first.dmm")));
+        assert_eq!(app.session.state.active(), Some(first));
+        assert!(!app.loader.is_busy());
+        assert_eq!(app.session.state.document_ids().len(), 2);
+        let _ = fs::remove_dir_all(dir);
     }
 }
