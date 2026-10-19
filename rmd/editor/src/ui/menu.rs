@@ -174,7 +174,12 @@ impl UiState {
                         EditCommand::Paste,
                         session.clipboard().is_some(),
                     ),
-                    ("Delete", KeybindAction::Delete, EditCommand::Delete, selected),
+                    (
+                        "Delete",
+                        KeybindAction::Delete,
+                        EditCommand::Delete,
+                        selected || session.selected_instance().is_some(),
+                    ),
                     (
                         "Deselect",
                         KeybindAction::Deselect,

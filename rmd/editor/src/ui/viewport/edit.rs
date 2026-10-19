@@ -47,6 +47,10 @@ impl UiState {
                     session.delete_selection();
                 }
             },
+            Some(EditCommand::Delete) if session.selected_instance().is_some() => {
+                self.gizmo.cancel();
+                session.delete_selected_instance();
+            },
             Some(EditCommand::Paste) if let Some(block) = session.clipboard() => {
                 let (width, height) = (block.width(), block.height());
                 restore_rectangle_gesture(session, frame.id, &mut frame.gestures.rectangle_gesture);

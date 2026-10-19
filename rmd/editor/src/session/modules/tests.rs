@@ -1088,3 +1088,49 @@ fn a_map_opened_after_the_edit_shows_the_live_module() -> TestResult {
 
     Ok(())
 }
+
+fn preview_at(session: &Session, x: u32) -> Option<PrefabInstanceId> {
+    let id = session.state.active()?;
+
+    session
+        .effective_grid(id)?
+        .ids_at(coord(x))
+        .iter()
+        .copied()
+        .find(|id| id.get() >= PREVIEW_ID_START)
+}
+
+#[test]
+fn the_delete_tool_on_a_roots_tile_deletes_the_root_under_its_preview() -> TestResult {
+    let fixture = Fixture::new(&[(2, "outer")])?;
+    let mut session = fixture.session()?;
+    let root = root_at(&session, 2);
+    let preview = preview_at(&session, 2).ok_or("no preview over the root")?;
+    session.set_tool(Tool::Delete);
+
+    assert!(session.delete_instance(preview));
+
+    assert!(!source_paths(&session, 2).contains(&String::from(ROOT)));
+    let document = session.state.active_document().ok_or("no document")?;
+    assert!(document.instance_location(root).is_none());
+    assert!(session.module_roots().is_empty());
+    assert_settled(&session);
+
+    Ok(())
+}
+
+#[test]
+fn the_delete_tool_leaves_covered_tiles_without_a_root_alone() -> TestResult {
+    let fixture = Fixture::new(&[(2, "outer")])?;
+    let mut session = fixture.session()?;
+    let preview = preview_at(&session, 3).ok_or("no preview at the nested root")?;
+    let before = source_paths(&session, 3);
+    session.set_tool(Tool::Delete);
+
+    assert!(!session.delete_instance(preview));
+
+    assert_eq!(source_paths(&session, 3), before);
+    assert_eq!(session.module_roots().len(), 2);
+
+    Ok(())
+}

@@ -323,3 +323,43 @@ fn the_popup_survives_switching_to_another_map_and_back() -> TestResult {
 
     Ok(())
 }
+
+#[test]
+fn the_delete_key_removes_a_selected_source_root() -> TestResult {
+    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let (_fixture, mut app) = harness()?;
+    app.click(app.tile(2, 1));
+    let root = source_root(&app)?;
+    assert_eq!(app.session.selected_instance(), Some(root));
+
+    app.key(Key::Delete, true);
+    app.key(Key::Delete, false);
+
+    let document = app.session.state.active_document().ok_or("no document")?;
+    assert!(document.instance_location(root).is_none());
+    assert!(app.session.module_roots().is_empty());
+    assert_eq!(app.session.selected_instance(), None);
+
+    Ok(())
+}
+
+#[test]
+fn the_delete_tool_picks_through_a_marker_instead_of_opening_the_popup() -> TestResult {
+    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let (_fixture, mut app) = harness()?;
+    app.session.set_tool(Tool::Delete);
+    let marker = app.tile(2, 1);
+
+    app.pointer(marker, false);
+    app.pointer(marker, true);
+
+    assert!(app.view.gestures.module_popup.is_none());
+    assert_eq!(
+        app.interaction.mode,
+        InteractionMode::Delete {
+            pick: Some(PickRequest::Delete)
+        }
+    );
+
+    Ok(())
+}

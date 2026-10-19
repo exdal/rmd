@@ -177,7 +177,9 @@ pub(super) fn draw(
         }
     }
     if !captured && !combo_open && ui.is_mouse_clicked(MouseButton::Left) {
+        // the delete tool picks the root under its marker instead
         if frame.is_hovered
+            && session.tool() != Tool::Delete
             && let Some(first) = hovered.first()
         {
             // Repeated clicks cycle roots sharing the same marker position.

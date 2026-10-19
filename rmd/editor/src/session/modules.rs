@@ -205,6 +205,22 @@ impl Session {
             .map_or(&[], |preview| &preview.roots)
     }
 
+    // thois is a dedicated function to __PICK__ an atom under preview, for example: tramstation has map root atoms, and
+    // when we place the previews, those map root atoms fall under that preview, so visbuffer actually renders the
+    // previewed root atom that is coming from preview itself.
+    pub(super) fn source_root_under(&self, target: PrefabInstanceId) -> Option<PrefabInstanceId> {
+        if target.get() < PREVIEW_ID_START {
+            return None;
+        }
+
+        let coord = self.effective_grid(self.state.active()?)?.location(target)?.coord;
+
+        self.module_roots()
+            .iter()
+            .find(|root| root.coord == coord && self.is_source_root(root))
+            .map(|root| root.key.instance)
+    }
+
     pub fn is_source_root(&self, root: &ModuleRootPreview) -> bool {
         root.key.ancestry.is_empty()
             && self

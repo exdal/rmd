@@ -157,7 +157,15 @@ impl Session {
             return false;
         }
 
+        let target = self.source_root_under(target).unwrap_or(target);
+
         self.build_delete(target)
+            .is_some_and(|action| self.commit(action, None))
+    }
+
+    pub fn delete_selected_instance(&mut self) -> bool {
+        self.selected_instance()
+            .and_then(|target| self.build_delete(target))
             .is_some_and(|action| self.commit(action, None))
     }
 
