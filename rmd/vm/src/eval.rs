@@ -17,9 +17,10 @@ use objtree::{ObjectTree, TypeId};
 
 use crate::{
     Fault, FaultKind, GenericValue, Limits, StackFrame,
+    bake::Placement,
     heap::{Heap, Object, ObjectId},
     value::{IteratorId, ListData, ListId, ModifiedType, ProcRef, RangeValue, Receiver},
-    world::World,
+    world::{Position, World},
 };
 
 type Result<T, E = Fault> = std::result::Result<T, E>;
@@ -37,6 +38,7 @@ pub struct Runtime {
     output: Vec<String>,
     pub(crate) modular_roots: Vec<TypeId>,
     pub(crate) placement: crate::bake::PlacementState,
+    pub(crate) coordinate_modules: HashMap<Position, Placement>,
     pub(crate) pending_placements: crate::bake::PendingPlacements,
     pub(crate) global: Option<ObjectId>,
     pub(crate) world_object: Option<ObjectId>,
@@ -144,6 +146,7 @@ impl Runtime {
         &mut self, tree: &ObjectTree, module: &Module, ty: TypeId, constructor: Option<ProcId>, limits: Limits,
     ) -> Result<ObjectId> {
         self.modular_roots.clear();
+        self.coordinate_modules.clear();
         self.ensure_global()?;
         self.ensure_world(tree)?;
 

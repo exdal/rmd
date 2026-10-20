@@ -131,7 +131,7 @@ impl ModulePreviewState {
         let source = ctx.source;
         let is_affected = affected.iter().any(|id| {
             self.covered_source.contains_key(id)
-                || self.specs.contains_key(id)
+                || self.specs.atoms.contains_key(id)
                 || source.location(*id).is_some_and(|location| {
                     self.preview
                         .as_ref()

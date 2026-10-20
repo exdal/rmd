@@ -11,11 +11,11 @@ use std::{
 
 use dmm::{Coord, Map, Prefab, PrefabInstanceId, Size};
 use objtree::{ObjectTree, TypeId};
-use vm::{Fault, FaultKind, bake::ModuleRoot};
+use vm::{Fault, FaultKind, bake::ModuleRoot, world::Position};
 
 use super::{
-    ComposeContext, MapView, ModuleOverlay, ModulePreviewState, ModuleRootKey, ModuleVariantKey, PreviewIdAllocator,
-    compose, compose::update,
+    ComposeContext, MapView, ModuleOrigin, ModuleOverlay, ModulePreviewState, ModuleRootKey, ModuleVariantKey,
+    PREVIEW_ID_START, PreviewIdAllocator, compose, compose::update,
 };
 use crate::{
     document::DocumentId,
@@ -146,7 +146,10 @@ fn markers(source: &Grid, coord: Coord) -> Vec<PrefabInstanceId> {
 }
 
 fn specs(entries: &[(PrefabInstanceId, ModuleRoot)]) -> RootSpecs {
-    entries.iter().map(|(id, root)| (*id, Ok(root.clone()))).collect()
+    RootSpecs {
+        atoms: entries.iter().map(|(id, root)| (*id, Ok(root.clone()))).collect(),
+        coords: Default::default(),
+    }
 }
 
 fn paths(view: MapView<'_>, coord: Coord) -> Vec<String> {
@@ -170,7 +173,7 @@ fn error_kind(root: &super::ModuleRootPreview, variant: usize) -> &ErrorKind {
 #[test]
 fn preview_ids_report_exhaustion_and_preserve_existing_ids() {
     let root = ModuleRootKey {
-        instance: PrefabInstanceId::from_raw(1).unwrap(),
+        origin: ModuleOrigin::Atom(PrefabInstanceId::from_raw(1).unwrap()),
         ancestry: Vec::new(),
     };
     let choice = ModuleVariantKey {
@@ -470,7 +473,7 @@ fn preview_clips_and_keeps_failed_sibling_roots() {
         (ids[0], fixture.spec(&["wide.dmm"])),
         (ids[1], fixture.spec(&["missing.dmm"])),
     ]);
-    specs.insert(ids[2], hook);
+    specs.atoms.insert(ids[2], hook);
     let preview = fixture.compose(&source, &specs);
 
     assert_eq!(preview.view(&source).size(), main.size);
@@ -601,7 +604,7 @@ fn nested_roots_compose_at_grid_offsets_once_they_have_specs() {
         3
     );
 
-    specs.insert(nested, Ok(fixture.spec(&["leaf.dmm"])));
+    specs.atoms.insert(nested, Ok(fixture.spec(&["leaf.dmm"])));
     assert!(state.needs_recompose(&specs));
     ctx = fixture.ctx(&source);
     let changed = state.recompose(ctx, specs.clone(), &HashSet::new());
@@ -642,7 +645,7 @@ fn variant_matching_an_ancestor_is_a_cycle() {
     let root = &first.roots[0];
     let nested = preview_id(&mut ids, &root.key, &root.variants[0].choice, Coord::new(3, 2, 1), 2);
 
-    specs.insert(nested, Ok(fixture.spec(&["./outer.dmm"])));
+    specs.atoms.insert(nested, Ok(fixture.spec(&["./outer.dmm"])));
     let second = compose(ctx, &specs, &mut files, &Default::default(), &mut ids);
 
     assert_eq!(second.roots.len(), 2);
@@ -681,7 +684,9 @@ fn nesting_beyond_the_limit_is_rejected() {
 
         let choice = &last.variants[last.selected.unwrap()].choice;
         let nested = preview_id(&mut ids, &last.key, choice, Coord::new(1, 1, 1), 3);
-        specs.insert(nested, Ok(fixture.spec(&[&format!("m{depth}.dmm")])));
+        specs
+            .atoms
+            .insert(nested, Ok(fixture.spec(&[&format!("m{depth}.dmm")])));
     }
 
     panic!("nesting limit was never reached");
@@ -751,6 +756,7 @@ fn unrelated_recompose_keeps_layer_identity() {
 
     let mut other = specs.clone();
     other
+        .atoms
         .get_mut(&marker(&source, Coord::new(1, 1, 1)))
         .unwrap()
         .as_mut()
@@ -887,18 +893,30 @@ fn root_specs_collects_modules_faults_and_errors_and_skips_invalid_ids() {
         [(7, &spec), (0, &spec)].into_iter(),
         [(9, &fault), (0, &fault)].into_iter(),
         [(11, "no room"), (0, "no room")].into_iter(),
+        [
+            (Position { x: 3, y: 4, z: 1 }, Ok(&spec)),
+            (Position { x: 5, y: 6, z: 2 }, Err("no space")),
+            (Position { x: -1, y: 4, z: 1 }, Ok(&spec)),
+        ]
+        .into_iter(),
     );
 
-    assert_eq!(collected.len(), 3);
+    assert_eq!(collected.atoms.len(), 3);
     assert_eq!(
-        collected[&PrefabInstanceId::from_raw(11).unwrap()],
+        collected.atoms[&PrefabInstanceId::from_raw(11).unwrap()],
         Err("no room".to_string())
     );
-    assert_eq!(collected[&PrefabInstanceId::from_raw(7).unwrap()], Ok(spec));
     assert_eq!(
-        collected[&PrefabInstanceId::from_raw(9).unwrap()],
+        collected.atoms[&PrefabInstanceId::from_raw(7).unwrap()],
+        Ok(spec.clone())
+    );
+    assert_eq!(
+        collected.atoms[&PrefabInstanceId::from_raw(9).unwrap()],
         Err(fault.to_string())
     );
+    assert_eq!(collected.coords.len(), 2);
+    assert_eq!(collected.coords[&Coord::new(3, 4, 1)], Ok(spec));
+    assert_eq!(collected.coords[&Coord::new(5, 6, 2)], Err("no space".to_string()));
 }
 
 #[test]
@@ -936,7 +954,7 @@ fn composite_keeps_roots_and_is_stable_when_fed_back() {
         Coord::new(3, 2, 1),
         2,
     );
-    specs.insert(nested, Ok(fixture.spec(&["leaf.dmm"])));
+    specs.atoms.insert(nested, Ok(fixture.spec(&["leaf.dmm"])));
     state.recompose(ctx, specs.clone(), &HashSet::new());
 
     let present = state
@@ -1072,4 +1090,187 @@ fn overriding_a_nested_file_rebuilds_its_layer() {
     let tile = paths(view, Coord::new(4, 4, 2));
     assert!(tile.contains(&"/obj/live".to_owned()));
     assert!(!tile.contains(&"/obj/leaf".to_owned()));
+}
+
+fn coordinate_specs(entries: &[(Coord, ModuleRoot)]) -> RootSpecs {
+    RootSpecs {
+        atoms: Default::default(),
+        coords: entries.iter().map(|(coord, root)| (*coord, Ok(root.clone()))).collect(),
+    }
+}
+
+fn bare_module(size: [u32; 3], tiles: &[(Coord, &[&str])]) -> Map {
+    let mut module = Map::new(Size {
+        x: size[0],
+        y: size[1],
+        z: size[2],
+    });
+    for (coord, paths) in tiles {
+        let key = module.intern_tile(paths.iter().map(|path| prefab(path)).collect());
+        module.grid[coord.z as usize - 1][(module.size.y - coord.y) as usize][coord.x as usize - 1] = key;
+    }
+
+    module
+}
+
+#[test]
+fn a_coordinate_root_composes_its_module_without_a_marker() {
+    let fixture = Fixture::new();
+    fixture.map(
+        "pair.dmm",
+        &bare_module(
+            [2, 1, 1],
+            &[
+                (Coord::new(1, 1, 1), &[CONNECTOR]),
+                (Coord::new(2, 1, 1), &["/obj/module"]),
+            ],
+        ),
+    );
+    let source = Grid::from_map(&map([4, 1, 1], &[]));
+    let at = Coord::new(2, 1, 1);
+    let preview = fixture.compose(&source, &coordinate_specs(&[(at, fixture.spec(&["pair.dmm"]))]));
+
+    assert_eq!(preview.roots.len(), 1);
+    let root = &preview.roots[0];
+    assert!(root.marker.is_none());
+    assert_eq!(root.coord, at);
+    assert_eq!(root.key.origin, ModuleOrigin::Coord(at));
+    assert_eq!(root.selected, Some(0));
+    assert_eq!(
+        paths(preview.view(&source), Coord::new(3, 1, 1)),
+        ["/turf/floor", "/area/test", "/obj/module"]
+    );
+    assert!(preview.covered.contains(&Coord::new(3, 1, 1)));
+    assert!(!preview.covered.contains(&at));
+    assert_eq!(preview.view(&source).tile_at(at), source.tile_at(at));
+    assert!(preview.diagnostics.is_empty());
+}
+
+#[test]
+fn a_coordinate_error_spec_keeps_a_diagnostic_and_no_layer() {
+    let fixture = Fixture::new();
+    let source = Grid::from_map(&map([2, 1, 1], &[]));
+    let at = Coord::new(2, 1, 1);
+    let specs = RootSpecs {
+        atoms: Default::default(),
+        coords: [(at, Err("no room".to_string()))].into_iter().collect(),
+    };
+    let preview = fixture.compose(&source, &specs);
+
+    assert_eq!(preview.roots.len(), 1);
+    assert!(preview.roots[0].marker.is_none());
+    assert!(matches!(
+        preview.roots[0].error.as_ref().map(|error| &error.kind),
+        Some(ErrorKind::Hook(text)) if text == "no room"
+    ));
+    assert!(preview.covered.is_empty());
+}
+
+#[test]
+fn a_coordinate_module_wins_turf_and_area_over_an_atom_module() {
+    let fixture = Fixture::new();
+    fixture.map(
+        "atom.dmm",
+        &bare_module(
+            [1, 1, 1],
+            &[(Coord::new(1, 1, 1), &[CONNECTOR, "/obj/turf_alias", "/obj/area_alias"])],
+        ),
+    );
+    fixture.map(
+        "coordinate.dmm",
+        &bare_module(
+            [1, 1, 1],
+            &[(Coord::new(1, 1, 1), &[CONNECTOR, "/turf/wall", "/area/other"])],
+        ),
+    );
+    let cell = Coord::new(1, 1, 1);
+    let source = Grid::from_map(&map([1, 1, 1], &[(cell, ROOT)]));
+    let specs = RootSpecs {
+        atoms: [(marker(&source, cell), Ok(fixture.spec(&["atom.dmm"])))]
+            .into_iter()
+            .collect(),
+        coords: [(cell, Ok(fixture.spec(&["coordinate.dmm"])))].into_iter().collect(),
+    };
+    let preview = fixture.compose(&source, &specs);
+
+    assert_eq!(preview.roots.len(), 2);
+    assert!(preview.roots[0].marker.is_some());
+    assert!(preview.roots[1].marker.is_none());
+    assert_eq!(paths(preview.view(&source), cell), ["/turf/wall", "/area/other"]);
+}
+
+#[test]
+fn coordinate_modules_clear_the_tiles_they_give_a_turf() {
+    let fixture = Fixture::new();
+    fixture.map(
+        "room.dmm",
+        &bare_module(
+            [2, 1, 1],
+            &[
+                (Coord::new(1, 1, 1), &["/turf/wall", "/obj/sign"]),
+                (
+                    Coord::new(2, 1, 1),
+                    &["/turf/template_noop", "/area/template_noop", "/obj/sign"],
+                ),
+            ],
+        ),
+    );
+    let source = Grid::from_map(&map(
+        [2, 1, 1],
+        &[(Coord::new(1, 1, 1), "/obj/sign"), (Coord::new(2, 1, 1), "/obj/sign")],
+    ));
+    let spec = ModuleRoot {
+        anchor: None,
+        ..fixture.spec(&["room.dmm"])
+    };
+    let preview = fixture.compose(&source, &coordinate_specs(&[(Coord::new(1, 1, 1), spec)]));
+    let view = preview.view(&source);
+
+    assert_eq!(
+        paths(view, Coord::new(1, 1, 1)),
+        ["/area/test", "/turf/wall", "/obj/sign"]
+    );
+    let kept = view
+        .ids_at(Coord::new(1, 1, 1))
+        .iter()
+        .filter(|id| id.get() < PREVIEW_ID_START);
+    assert_eq!(kept.count(), 1);
+    assert_eq!(
+        paths(view, Coord::new(2, 1, 1)),
+        ["/turf/floor", "/area/test", "/obj/sign", "/obj/sign"]
+    );
+}
+
+#[test]
+fn choosing_a_variant_on_a_coordinate_root_recomposes_it() {
+    let fixture = Fixture::new();
+    for (file, module) in [("one.dmm", "/obj/one"), ("two.dmm", "/obj/two")] {
+        fixture.map(
+            file,
+            &bare_module([1, 1, 1], &[(Coord::new(1, 1, 1), &[CONNECTOR, module])]),
+        );
+    }
+
+    let cell = Coord::new(2, 1, 1);
+    let source = Grid::from_map(&map([2, 1, 1], &[]));
+    let mut state = ModulePreviewState::default();
+    state.recompose(
+        fixture.ctx(&source),
+        coordinate_specs(&[(cell, fixture.spec(&["one.dmm", "two.dmm"]))]),
+        &HashSet::new(),
+    );
+    let key = state.preview.as_ref().unwrap().roots[0].key.clone();
+    assert!(paths(state.view(&source), cell).contains(&"/obj/one".to_owned()));
+
+    let changed = state.choose(fixture.ctx(&source), &key, 1);
+
+    assert!(!changed.is_empty());
+    let chosen = paths(state.view(&source), cell);
+    assert!(chosen.contains(&"/obj/two".to_owned()));
+    assert!(!chosen.contains(&"/obj/one".to_owned()));
+    assert_eq!(state.preview.as_ref().unwrap().roots[0].selected, Some(1));
+    assert_eq!(
+        state.choices.get(&key).map(|choice| choice.path.clone()),
+        Some(resolve_module_path(&fixture.directory, "two.dmm").unwrap())
+    );
 }

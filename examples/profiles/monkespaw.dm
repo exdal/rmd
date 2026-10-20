@@ -512,17 +512,18 @@
 	catch(var/exception/error)
 		return "invalid [path]: [error.name]"
 
-/datum/demir/monkespaw/proc/read_automap_rooms()
+// The automapper loads these by coordinate after the station map, so they have no root atom.
+/datum/demir/monkespaw/proc/place_automap_rooms()
 	var/map = demir_map_path()
 	if(!map)
-		return null
+		return
 
 	var/datum/controller/subsystem/automapper/automapper = /datum/controller/subsystem/automapper
 	var/list/config = read_module_config(initial(automapper.config_file))
 	if(!islist(config))
-		return null
+		return
 
-	var/list/rooms = list()
+	var/list/placements = list()
 	var/list/templates = config["templates"]
 	for(var/name in templates)
 		var/list/template = templates[name]
@@ -537,20 +538,13 @@
 		for(var/file in template["map_files"])
 			files += template["directory"] + file
 
-		rooms["[coordinates[1]],[coordinates[2]],[coordinates[3]]"] = files
+		placements += list(list(
+			"at" = coordinates,
+			"maps" = files,
+			"skip" = list(/turf/template_noop, /area/template_noop),
+		))
 
-	return rooms
-
-/datum/demir/monkespaw/proc/place_automap_room(turf/target)
-	var/list/files = automap_rooms && automap_rooms["[target.x],[target.y],[target.z]"]
-	if(!files)
-		return
-
-	demir_place_modular(list(list(
-		"root" = target,
-		"maps" = files,
-		"skip" = list(/turf/template_noop, /area/template_noop),
-	)))
+	demir_place_modular(placements)
 
 // Same DISP_DIR_* rule as the pipe's Initialize().
 /datum/demir/monkespaw/proc/register_disposal_node_orientations()
@@ -581,7 +575,6 @@
 	var/fade_underfloor = FALSE
 	var/power_all = TRUE
 	var/show_camera_ranges = FALSE
-	var/list/automap_rooms
 
 	New()
 		..()
@@ -591,7 +584,7 @@
 		demir_modular_root(/obj/modular_map_root)
 		demir_modular_root(/obj/effect/spawner/random_engines)
 		demir_modular_root(/obj/effect/spawner/random_bar)
-		automap_rooms = read_automap_rooms()
+		place_automap_rooms()
 
 		// Groups include subtypes, so the /visible pipes are in DEMIR_GROUP_PIPES too. Rebaking
 		// them changes nothing.
@@ -674,6 +667,11 @@
 		demir_rebake(DEMIR_BAKE_LIGHT, DEMIR_GROUP_POWER)
 		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_POWER)
 
+	imgui_separator("Modular maps")
+	var/previewed = imgui_checkbox("Preview modules", demir_modular_preview())
+	if(previewed != demir_modular_preview())
+		demir_set_modular_preview(previewed)
+
 	imgui_end()
 
 /atom/proc/demir_prepare_state()
@@ -717,8 +715,6 @@
 
 /datum/demir/monkespaw/prepare(atom/target)
 	target.demir_prepare_state()
-	if(isturf(target))
-		place_automap_room(target)
 
 /atom/proc/demir_bake_smoothing()
 	var/datum/demir/monkespaw/profile = demir_profile()

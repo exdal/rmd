@@ -8,7 +8,7 @@ use defines::{EAST, NORTH, NORTHEAST, NORTHWEST, SOUTH, SOUTHEAST, SOUTHWEST, WE
 
 use crate::{
     FaultKind, GenericValue, Intrinsic,
-    bake::{NodeGroup, PlacementState, Rotation, placement_entry},
+    bake::{NodeGroup, PlacementState, PlacementTarget, Rotation, placement_entry},
     builtins::index_arg,
     eval::Evaluator,
     heap::ObjectId,
@@ -473,7 +473,30 @@ impl Evaluator<'_> {
 
             Intrinsic::DemirPlaceModular => {
                 for (value, _) in self.iter_values(arg(0))? {
-                    let (root, placement) = placement_entry(self, value)?;
+                    let (target, placement) = placement_entry(self, value)?;
+                    let root = match target {
+                        PlacementTarget::Root(root) => root,
+                        PlacementTarget::At(position) => {
+                            if !self.runtime.defining_groups {
+                                return Err(self.fault(FaultKind::Blocked(
+                                    "demir_place_modular() at outside a profile's New()".into(),
+                                )));
+                            }
+
+                            match self.runtime.coordinate_modules.entry(position) {
+                                Entry::Occupied(_) => {
+                                    return Err(self.fault(FaultKind::InvalidOperation(
+                                        "demir_place_modular() at already has an entry".into(),
+                                    )));
+                                },
+                                Entry::Vacant(entry) => {
+                                    entry.insert(placement);
+                                },
+                            }
+
+                            continue;
+                        },
+                    };
                     let message = match &mut self.runtime.placement {
                         PlacementState::Task { roots, entries } => {
                             if !roots.contains(&root) {

@@ -103,6 +103,12 @@ pub(crate) enum Placement {
     Error(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlacementTarget {
+    Root(ObjectId),
+    At(Position),
+}
+
 #[derive(Debug, Default)]
 pub(crate) enum PlacementState {
     #[default]
@@ -385,6 +391,10 @@ impl PendingBake<'_> {
         self.bake.module_errors()
     }
 
+    pub fn coordinate_modules(&self) -> impl Iterator<Item = (Position, Result<&ModuleRoot, &str>)> {
+        self.bake.coordinate_modules()
+    }
+
     pub fn replace_atoms(
         &mut self, replacements: Vec<Atom>, removed: &[u64], progress: impl FnMut(Stage, usize, usize),
     ) {
@@ -461,6 +471,24 @@ impl Bake {
 
     pub fn module_errors(&self) -> impl Iterator<Item = (u64, &str)> {
         self.module_errors.iter().map(|(id, error)| (*id, error.as_str()))
+    }
+
+    pub fn coordinate_modules(&self) -> impl Iterator<Item = (Position, Result<&ModuleRoot, &str>)> {
+        let mut entries = if self.initialized {
+            self.runtime.coordinate_modules.iter().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        entries.sort_by_key(|(position, _)| (position.z, position.y, position.x));
+
+        entries.into_iter().map(|(position, placement)| {
+            let module = match placement {
+                Placement::Maps(root) => Ok(root),
+                Placement::Error(error) => Err(error.as_str()),
+            };
+
+            (*position, module)
+        })
     }
 
     pub fn with_progress(
@@ -1738,7 +1766,7 @@ fn field_number(fields: &[(GenericValue, Option<GenericValue>)], name: &str, def
 
 pub(crate) fn placement_entry(
     evaluator: &mut crate::eval::Evaluator<'_>, value: GenericValue,
-) -> Result<(ObjectId, Placement), Fault> {
+) -> Result<(PlacementTarget, Placement), Fault> {
     let invalid = |evaluator: &crate::eval::Evaluator<'_>, message: &str| {
         evaluator.fault(FaultKind::InvalidOperation(message.into()))
     };
@@ -1757,17 +1785,29 @@ pub(crate) fn placement_entry(
         .map(|list| list.entries.clone())
         .ok_or_else(|| evaluator.fault(FaultKind::InvalidReference))?;
 
-    let Some(GenericValue::Object(root)) = field(&fields, "root") else {
-        return Err(invalid(evaluator, "demir_place_modular() entry needs a \"root\" atom"));
+    let target = match (field(&fields, "root"), field(&fields, "at")) {
+        (Some(_), Some(_)) => {
+            return Err(invalid(
+                evaluator,
+                "demir_place_modular() entry takes \"root\" or \"at\", not both",
+            ));
+        },
+        (Some(GenericValue::Object(root)), None) => PlacementTarget::Root(*root),
+        (Some(_), None) | (None, None) => {
+            return Err(invalid(
+                evaluator,
+                "demir_place_modular() entry needs a \"root\" atom or an \"at\" coordinate",
+            ));
+        },
+        (None, Some(at)) => PlacementTarget::At(coordinate(evaluator, at)?),
     };
-    let root = *root;
 
     if let Some(error) = field(&fields, "error") {
         let GenericValue::Text(error) = error else {
             return Err(invalid(evaluator, "demir_place_modular() error must be text"));
         };
 
-        return Ok((root, Placement::Error(error.to_string())));
+        return Ok((target, Placement::Error(error.to_string())));
     }
 
     let Some(maps) = field(&fields, "maps") else {
@@ -1866,7 +1906,7 @@ pub(crate) fn placement_entry(
     };
 
     Ok((
-        root,
+        target,
         Placement::Maps(ModuleRoot {
             files,
             anchor,
@@ -1874,6 +1914,37 @@ pub(crate) fn placement_entry(
             offset,
         }),
     ))
+}
+
+fn coordinate(evaluator: &mut crate::eval::Evaluator<'_>, value: &GenericValue) -> Result<Position, Fault> {
+    let invalid = || {
+        evaluator.fault(FaultKind::InvalidOperation(
+            "demir_place_modular() at must be list(x, y, z)".into(),
+        ))
+    };
+
+    let GenericValue::List(list) = value else {
+        return Err(invalid());
+    };
+
+    let entries = evaluator
+        .runtime
+        .heap
+        .list(*list)
+        .map(|list| list.entries.clone())
+        .ok_or_else(|| evaluator.fault(FaultKind::InvalidReference))?;
+    let numbers = entries
+        .iter()
+        .map(|(entry, _)| match entry {
+            GenericValue::Num(number) if number.fract() == 0.0 && *number >= 1.0 => Some(*number as i32),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>();
+
+    match numbers.as_deref() {
+        Some(&[x, y, z]) => Ok(Position { x, y, z }),
+        _ => Err(invalid()),
+    }
 }
 
 fn highlight_from_fields(

@@ -2,7 +2,11 @@ use std::path::PathBuf;
 
 use dear_imgui_rs::{MouseButton, Ui};
 use dmm::Coord;
-use editor::{icons::materialdesignicons::ICON_OPEN_IN_NEW, maploader::preview::ModuleVariantKey, tool::Tool};
+use editor::{
+    icons::materialdesignicons::{ICON_MAP_MARKER, ICON_OPEN_IN_NEW},
+    maploader::preview::ModuleVariantKey,
+    tool::Tool,
+};
 use render::Renderer;
 
 use super::ViewFrame;
@@ -10,7 +14,11 @@ use crate::{
     camera::Controller,
     session::Session,
     ui::{
-        OverlayRect, common::dpi, draw_overlay_underlay, overlay::placement_preview_bounds, welcome::codebase_relative,
+        OverlayRect,
+        common::{IDENTICAL_EDIT_COLOR, dpi},
+        draw_overlay_underlay,
+        overlay::{placement_preview_bounds, tile_bounds},
+        welcome::codebase_relative,
     },
 };
 
@@ -64,21 +72,45 @@ pub(super) fn draw(
             continue;
         }
 
-        let Some(preview) = root.marker.as_ref().and_then(|prefab| session.module_marker(prefab)) else {
-            continue;
-        };
-        let bounds = placement_preview_bounds(frame.camera, viewport.min, coord, session.options.tile_size, preview);
         let draw = ui.get_window_draw_list();
-        draw.with_clip_rect(viewport.min, viewport.max, || {
-            draw.add_image(
-                Renderer::sprite_texture(preview.thumbnail.texture.index),
-                bounds.min,
-                bounds.max,
-                preview.thumbnail.uv0,
-                preview.thumbnail.uv1,
-                preview.thumbnail.tint,
-            );
-        });
+        let bounds = match &root.marker {
+            Some(prefab) => {
+                let Some(preview) = session.module_marker(prefab) else {
+                    continue;
+                };
+                let bounds =
+                    placement_preview_bounds(frame.camera, viewport.min, coord, session.options.tile_size, preview);
+                draw.with_clip_rect(viewport.min, viewport.max, || {
+                    draw.add_image(
+                        Renderer::sprite_texture(preview.thumbnail.texture.index),
+                        bounds.min,
+                        bounds.max,
+                        preview.thumbnail.uv0,
+                        preview.thumbnail.uv1,
+                        preview.thumbnail.tint,
+                    );
+                });
+
+                bounds
+            },
+            None => {
+                let bounds = tile_bounds(frame.camera, viewport.min, coord, session.options.tile_size);
+                let icon = ICON_MAP_MARKER.to_string();
+                let size = ui.calc_text_size(&icon);
+                let center = [
+                    (bounds.min[0] + bounds.max[0] - size[0]) / 2.0,
+                    (bounds.min[1] + bounds.max[1] - size[1]) / 2.0,
+                ];
+                draw.with_clip_rect(viewport.min, viewport.max, || {
+                    draw.add_rect(bounds.min, bounds.max, IDENTICAL_EDIT_COLOR)
+                        .thickness(2.0)
+                        .build();
+                    draw.add_text(center, IDENTICAL_EDIT_COLOR, &icon);
+                });
+
+                bounds
+            },
+        };
         if viewport.contains(frame.mouse) && bounds.contains(frame.mouse) {
             hovered.push(root);
         }
@@ -186,8 +218,8 @@ pub(super) fn draw(
                 .and_then(|(key, _)| hovered.iter().position(|root| root.key == *key))
                 .map_or(0, |index| (index + 1) % hovered.len());
             let root = hovered.get(index).unwrap_or(first);
-            let is_source = session.is_source_root(root);
-            if is_gizmo_hot && is_source && session.selected_instance() == Some(root.key.instance) {
+            let source = session.source_root(root);
+            if is_gizmo_hot && source.is_some() && session.selected_instance() == source {
                 return ModuleControls {
                     is_capturing: false,
                     open,
@@ -195,8 +227,10 @@ pub(super) fn draw(
             }
 
             frame.gestures.module_popup = Some((root.key.clone(), root.coord));
-            if is_source && session.tool() == Tool::Select {
-                session.select_instance(Some(root.key.instance));
+            if session.tool() == Tool::Select
+                && let Some(id) = source
+            {
+                session.select_instance(Some(id));
             }
             captured = true;
         } else {

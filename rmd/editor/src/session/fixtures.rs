@@ -541,6 +541,10 @@ pub(crate) fn module_viewport_session() -> Result<(impl Sized, Session), Box<dyn
     super::modules::tests::viewport_session()
 }
 
+pub(crate) fn coordinate_viewport_session() -> Result<(impl Sized, Session), Box<dyn std::error::Error>> {
+    super::modules::tests::coordinate_viewport_session()
+}
+
 pub(super) fn assert_render_cache_matches_rebuild(session: &Session) {
     let environment = session.state.environment.as_ref().unwrap();
     let document_id = session.state.active().unwrap();

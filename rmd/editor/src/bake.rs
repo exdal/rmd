@@ -325,6 +325,7 @@ impl ModuleTarget for Live<'_> {
             self.bake.modules(),
             self.bake.module_faults(),
             self.bake.module_errors(),
+            self.bake.coordinate_modules(),
         )
     }
 
@@ -345,6 +346,7 @@ impl ModuleTarget for Pending<'_, '_> {
             self.pending.modules(),
             self.pending.module_faults(),
             self.pending.module_errors(),
+            self.pending.coordinate_modules(),
         )
     }
 

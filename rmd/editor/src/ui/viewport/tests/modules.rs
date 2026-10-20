@@ -4,7 +4,7 @@ use dear_imgui_rs::sys;
 use dmm::writer;
 
 use super::*;
-use crate::session::fixtures::module_viewport_session;
+use crate::session::fixtures::{coordinate_viewport_session, module_viewport_session};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -54,8 +54,8 @@ fn source_root(app: &RectangleUiHarness) -> Result<dmm::PrefabInstanceId, Box<dy
     app.session
         .module_roots()
         .iter()
-        .find(|root| root.key.ancestry.is_empty())
-        .map(|root| root.key.instance)
+        .filter(|root| root.key.ancestry.is_empty())
+        .find_map(|root| root.key.origin.atom())
         .ok_or_else(|| "source root is missing".into())
 }
 
@@ -69,6 +69,32 @@ fn clicking_a_source_roots_marker_selects_it() -> TestResult {
 
     assert_eq!(app.session.selected_instance(), Some(source_root(&app)?));
     assert!(app.view.gestures.module_popup.is_some());
+
+    Ok(())
+}
+
+#[test]
+fn clicking_a_coordinate_roots_marker_opens_the_popup_and_keeps_the_selection() -> TestResult {
+    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let (_fixture, session) = coordinate_viewport_session()?;
+    let mut app = RectangleUiHarness::with_session(session);
+    app.view.camera.camera.x = 64.0;
+    app.view.camera.camera.y = 16.0;
+    app.step();
+    assert!(app.session.module_roots()[0].marker.is_none());
+
+    app.click(app.tile(4, 1));
+
+    let (key, coord) = app
+        .view
+        .gestures
+        .module_popup
+        .clone()
+        .ok_or("module popup is missing")?;
+    assert_eq!(key, app.session.module_roots()[0].key);
+    assert_eq!(coord, Coord::new(4, 1, 1));
+    assert_eq!(app.session.selected_instance(), None);
+    assert!(app.module_buttons.is_some());
 
     Ok(())
 }
@@ -111,7 +137,7 @@ fn the_popup_follows_a_moved_root() -> TestResult {
 
     let (key, coord) = app.view.gestures.module_popup.clone().ok_or("module popup closed")?;
     assert_eq!(coord, target);
-    assert_eq!(key.instance, source_root(&app)?);
+    assert_eq!(key.origin.atom().ok_or("atom origin")?, source_root(&app)?);
     assert!(app.module_buttons.is_some());
 
     Ok(())

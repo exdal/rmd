@@ -35,6 +35,7 @@ use crate::{
 pub(in crate::session) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 const PROFILE: &str = include_str!("../../../tests/fixtures/programs/module_preview_profile.dm");
+const COORDINATE_PROFILE: &str = include_str!("../../../tests/fixtures/programs/module_coordinate_profile.dm");
 const PLACEMENTS_PROFILE: &str = include_str!("../../../tests/fixtures/programs/module_placements_profile.dm");
 pub(in crate::session) const WALL: &str = "/turf/closed/wall";
 pub(in crate::session) const MODULE: &str = "/obj/module";
@@ -157,6 +158,13 @@ impl Drop for Fixture {
 pub(crate) fn viewport_session() -> TestResult<(impl Sized, Session)> {
     let fixture = Fixture::with_variants(&[(2, "outer")], "'missing.dmm', 'a.dmm', 'b.dmm'")?;
     let session = fixture.session()?;
+
+    Ok((fixture, session))
+}
+
+pub(crate) fn coordinate_viewport_session() -> TestResult<(impl Sized, Session)> {
+    let fixture = Fixture::new(&[])?;
+    let session = fixture.session_with(COORDINATE_PROFILE)?;
 
     Ok((fixture, session))
 }
@@ -310,6 +318,97 @@ fn placements_made_while_baking_show_up_when_the_bake_lands() -> TestResult {
     assert!(!has(&session, 4, WALL));
     assert!(preview_ids(&session).iter().all(|id| is_baked(&session, *id)));
     assert_settled(&session);
+
+    Ok(())
+}
+
+#[test]
+fn a_module_placed_by_coordinate_shows_at_that_tile() -> TestResult {
+    let fixture = Fixture::new(&[])?;
+    let session = fixture.session_with(COORDINATE_PROFILE)?;
+
+    assert_eq!(session.module_roots().len(), 1);
+    let root = &session.module_roots()[0];
+    assert_eq!(root.coord, coord(4));
+    assert!(root.marker.is_none());
+    assert_eq!(root.selected, Some(0));
+    assert!(has(&session, 4, WALL));
+    assert!(!has(&session, 4, "/obj/modular_map_connector"));
+    assert!(has(&session, 5, ROOT));
+    assert!(!preview_ids(&session).is_empty());
+    assert!(preview_ids(&session).iter().all(|id| is_baked(&session, *id)));
+    assert_settled(&session);
+
+    Ok(())
+}
+
+#[test]
+fn a_coordinate_modules_turf_replaces_the_source_turf_and_settles() -> TestResult {
+    let fixture = Fixture::new(&[])?;
+    let session = fixture.session_with(COORDINATE_PROFILE)?;
+
+    assert!(source_paths(&session, 4).contains(&String::from("/turf/open/floor")));
+    assert!(has(&session, 4, WALL));
+    assert!(!has(&session, 4, "/turf/open/floor"));
+    assert_settled(&session);
+
+    Ok(())
+}
+
+#[test]
+fn a_coordinate_root_is_not_a_source_root() -> TestResult {
+    let fixture = Fixture::new(&[(2, "outer")])?;
+    let session = fixture.session_with(COORDINATE_PROFILE)?;
+    let root = session
+        .module_roots()
+        .iter()
+        .find(|root| root.marker.is_none())
+        .cloned()
+        .ok_or("coordinate root is missing")?;
+
+    assert!(session.source_root(&root).is_none());
+    let preview = session
+        .effective_grid(session.state.active().ok_or("no active document")?)
+        .and_then(|grid| grid.ids_at(root.coord).first().copied())
+        .ok_or("coordinate tile is empty")?;
+    assert_eq!(session.source_root_under(preview), None);
+
+    Ok(())
+}
+
+#[test]
+fn a_coordinate_roots_variant_choice_survives_a_rebake() -> TestResult {
+    let fixture = Fixture::new(&[])?;
+    let mut session = fixture.session_with(COORDINATE_PROFILE)?;
+    let key = session.module_roots()[0].key.clone();
+
+    session.choose_module_variant(&key, 1);
+
+    assert!(has(&session, 4, MODULE));
+    assert!(!has(&session, 4, WALL));
+    assert_settled(&session);
+
+    let id = session.state.active().ok_or("no active document")?;
+    session.rebake(id);
+    settle_bake(&mut session);
+
+    assert_eq!(session.module_roots()[0].key, key);
+    assert_eq!(session.module_roots()[0].selected, Some(1));
+    assert!(has(&session, 4, MODULE));
+    assert_settled(&session);
+
+    Ok(())
+}
+
+#[test]
+fn tiles_covered_by_a_coordinate_module_reject_edits() -> TestResult {
+    let fixture = Fixture::new(&[])?;
+    let session = fixture.session_with(COORDINATE_PROFILE)?;
+
+    assert!(!session.can_edit_at(coord(4)));
+    assert!(!session.can_edit_at(coord(5)));
+    assert!(session.can_edit_at(coord(3)));
+    assert!(session.can_edit_at(coord(6)));
 
     Ok(())
 }
@@ -879,7 +978,7 @@ fn tramstation_loads_its_modules_through_the_tgstation_profile() -> TestResult {
     let attachments = preview
         .roots
         .iter()
-        .filter(|root| root.key.instance == medsci.key.instance && root.depth == 1)
+        .filter(|root| root.key.origin == medsci.key.origin && root.depth == 1)
         .count();
     assert_eq!(attachments, 2);
 
@@ -1042,7 +1141,7 @@ fn tramstation_root_move_timing() -> TestResult {
         .module_roots()
         .iter()
         .filter(|root| root.key.ancestry.is_empty())
-        .map(|root| (root.key.instance, root.coord))
+        .filter_map(|root| Some((root.key.origin.atom()?, root.coord)))
         .collect::<Vec<_>>();
     for (instance, coord) in roots {
         session.select_instance(Some(instance));

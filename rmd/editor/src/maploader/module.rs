@@ -8,27 +8,47 @@ use std::{
 
 use dmm::{Coord, Map, Prefab, PrefabInstanceId};
 use objtree::{ObjectTree, TypeId};
-use vm::{Fault, bake::ModuleRoot};
+use vm::{Fault, bake::ModuleRoot, world::Position};
 
 use crate::{
     document::DocumentId,
     maploader::{ErrorKind, resolved_path},
 };
 
-pub type RootSpecs = HashMap<PrefabInstanceId, Result<ModuleRoot, String>>;
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RootSpecs {
+    pub atoms: HashMap<PrefabInstanceId, Result<ModuleRoot, String>>,
+    pub coords: HashMap<Coord, Result<ModuleRoot, String>>,
+}
 
 pub type Anchor = (Coord, Option<usize>);
 
 pub fn root_specs<'a>(
     modules: impl Iterator<Item = (u64, &'a ModuleRoot)>, faults: impl Iterator<Item = (u64, &'a Fault)>,
     errors: impl Iterator<Item = (u64, &'a str)>,
+    coordinates: impl Iterator<Item = (Position, Result<&'a ModuleRoot, &'a str>)>,
 ) -> RootSpecs {
     let modules = modules.filter_map(|(id, root)| Some((PrefabInstanceId::from_raw(id)?, Ok(root.clone()))));
     let faults = faults.filter_map(|(id, fault)| Some((PrefabInstanceId::from_raw(id)?, Err(fault.to_string()))));
 
     let errors = errors.filter_map(|(id, error)| Some((PrefabInstanceId::from_raw(id)?, Err(error.to_string()))));
 
-    modules.chain(faults).chain(errors).collect()
+    let coords = coordinates
+        .filter_map(|(position, spec)| {
+            let coord = Coord::new(
+                u32::try_from(position.x).ok()?,
+                u32::try_from(position.y).ok()?,
+                u32::try_from(position.z).ok()?,
+            );
+
+            Some((coord, spec.cloned().map_err(str::to_string)))
+        })
+        .collect();
+
+    RootSpecs {
+        atoms: modules.chain(faults).chain(errors).collect(),
+        coords,
+    }
 }
 
 pub fn resolve_module_path(base_dir: &Path, name: &str) -> Result<PathBuf, ErrorKind> {

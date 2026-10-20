@@ -324,6 +324,19 @@ pub(super) fn placement_preview_bounds(
     }
 }
 
+pub(super) fn tile_bounds(camera: &Controller, viewport_min: [f32; 2], coord: Coord, tile_size: u32) -> OverlayRect {
+    let tile_size = tile_size.max(1);
+    let x = coord.x.saturating_sub(1).saturating_mul(tile_size) as f32;
+    let y = coord.y.saturating_sub(1).saturating_mul(tile_size) as f32;
+    let top_left = camera.map_to_screen([x, y + tile_size as f32]);
+    let bottom_right = camera.map_to_screen([x + tile_size as f32, y]);
+
+    OverlayRect {
+        min: [viewport_min[0] + top_left[0], viewport_min[1] + top_left[1]],
+        max: [viewport_min[0] + bottom_right[0], viewport_min[1] + bottom_right[1]],
+    }
+}
+
 fn placement_preview_opacity(time: f64) -> f32 {
     let phase = time.rem_euclid(PLACEMENT_PREVIEW_PERIOD) / PLACEMENT_PREVIEW_PERIOD * std::f64::consts::TAU;
 

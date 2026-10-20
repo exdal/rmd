@@ -13,7 +13,7 @@ use defines::{EAST, NORTH, NORTHEAST, SOUTH, SOUTHWEST, WEST};
 use objtree::{ObjectTree, ResolvedVarType, TypeId, VarTypeKind};
 
 use crate::{
-    FaultKind, GenericValue, IconStates, Limits, Runtime,
+    Fault, FaultKind, GenericValue, IconStates, Limits, Runtime,
     bake::{
         Atom, Bake, BakeUpdate, HIGHLIGHT_ALWAYS, HIGHLIGHT_EDGE_NORTH, HIGHLIGHT_EDGE_SOUTH, HIGHLIGHT_EDGE_WEST,
         HIGHLIGHT_SELECTED, HighlightTile, ModuleRoot, PendingBake, ProfileError, Stage, has_profile, host_reads,
@@ -3779,7 +3779,10 @@ fn invalid_placement_entries_fault_the_task_for_every_root() {
 
     for (key, message) in [
         ("foreign", "demir_place_modular() root is not an atom of this pass"),
-        ("no_root", "demir_place_modular() entry needs a \"root\" atom"),
+        (
+            "no_root",
+            "demir_place_modular() entry needs a \"root\" atom or an \"at\" coordinate",
+        ),
         (
             "duplicate_in_call",
             "demir_place_modular() root already has an entry in this pass",
@@ -3945,6 +3948,159 @@ fn demir_place_from_ui_is_kept_only_on_a_committed_frame() {
     bake.ui(&tree, &module, Some(1), 0, feedback(true)).expect("frame");
     bake.update(&tree, &module, Vec::new(), &[1]);
     assert_eq!(bake.modules().count(), 0, "removing the atom drops its entry");
+}
+
+fn coordinate_entries<'a>(
+    modules: impl Iterator<Item = (Position, Result<&'a ModuleRoot, &'a str>)>,
+) -> Vec<(Position, Result<&'a ModuleRoot, &'a str>)> {
+    modules.collect()
+}
+
+#[test]
+fn at_entries_from_new_are_kept_per_coordinate_and_outlive_atoms() {
+    let (tree, module) = compile(fixture!("programs/placement_at_entries_come_from_new.dm"));
+    let profile = profile_type(&tree).expect("default profile");
+    let ty = |path: &str| tree.id_of(&TreePath::parse(path)).expect("type");
+    let expected = [
+        (Position::new(3, 2, 1), Err("no room")),
+        (
+            Position::new(5, 2, 1),
+            Ok(ModuleRoot {
+                files: vec!["a.dmm".into()],
+                anchor: None,
+                skip: Vec::new(),
+                offset: [0; 3],
+            }),
+        ),
+        (
+            Position::new(9, 1, 2),
+            Ok(ModuleRoot {
+                files: vec!["b.dmm".into(), "c.dmm".into()],
+                anchor: Some(ty("/obj/connector")),
+                skip: vec![ty("/turf/hole")],
+                offset: [1, -2, 3],
+            }),
+        ),
+        (
+            Position::new(40, 40, 40),
+            Ok(ModuleRoot {
+                files: Vec::new(),
+                anchor: None,
+                skip: Vec::new(),
+                offset: [0; 3],
+            }),
+        ),
+    ];
+    let check = |entries: Vec<(Position, Result<&ModuleRoot, &str>)>| {
+        let entries = entries
+            .into_iter()
+            .map(|(position, module)| (position, module.cloned().map_err(String::from)))
+            .collect::<Vec<_>>();
+        let expected = expected
+            .iter()
+            .map(|(position, module)| (*position, module.clone().map_err(String::from)))
+            .collect::<Vec<_>>();
+
+        assert_eq!(entries, expected);
+    };
+    let atoms = vec![root_atom(&tree, 1, "/obj/root", 1, "a")];
+
+    let pending = pending(&tree, &module, profile, atoms);
+    check(coordinate_entries(pending.coordinate_modules()));
+
+    let mut bake = pending.finish_with_progress(|_, _, _| {});
+    check(coordinate_entries(bake.coordinate_modules()));
+    assert_eq!(module_files(bake.modules()), [(1, vec!["root.dmm"])]);
+
+    bake.update(&tree, &module, vec![root_atom(&tree, 2, "/obj/root", 2, "b")], &[1]);
+    check(coordinate_entries(bake.coordinate_modules()));
+
+    bake.update(&tree, &module, Vec::new(), &[2]);
+    assert_eq!(bake.modules().count(), 0);
+    check(coordinate_entries(bake.coordinate_modules()));
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+}
+
+#[test]
+fn invalid_at_entries_fault_new() {
+    let (tree, module) = compile(fixture!("programs/placement_at_entries_are_validated.dm"));
+    let bad_at = "demir_place_modular() at must be list(x, y, z)";
+
+    for (profile, message) in [
+        (
+            "neither",
+            "demir_place_modular() entry needs a \"root\" atom or an \"at\" coordinate",
+        ),
+        ("both", "demir_place_modular() entry takes \"root\" or \"at\", not both"),
+        ("two_numbers", bad_at),
+        ("not_a_list", bad_at),
+        ("not_a_number", bad_at),
+        ("zero", bad_at),
+        ("fractional", bad_at),
+        ("duplicate_in_call", "demir_place_modular() at already has an entry"),
+        (
+            "duplicate_across_calls",
+            "demir_place_modular() at already has an entry",
+        ),
+    ] {
+        let profile_type = profile_at(&tree, &format!("/datum/demir/{profile}"));
+        let pending = pending(&tree, &module, profile_type, Vec::new());
+        let bake = pending.finish_with_progress(|_, _, _| {});
+
+        assert_eq!(bake.diagnostics.count(), 1, "{profile}: {:?}", bake.diagnostics);
+        assert_eq!(
+            bake.diagnostics.entries[0].fault.kind,
+            FaultKind::InvalidOperation(message.into()),
+            "{profile}"
+        );
+        assert_eq!(bake.coordinate_modules().count(), 0, "{profile}");
+    }
+}
+
+#[test]
+fn at_entries_outside_new_are_blocked() {
+    let (tree, module) = compile(fixture!("programs/placement_at_outside_new_is_blocked.dm"));
+    let is_blocked = |fault: &Fault| {
+        matches!(
+            &fault.kind,
+            FaultKind::Blocked(message) if message == "demir_place_modular() at outside a profile's New()"
+        )
+    };
+    let atoms = || vec![root_atom(&tree, 1, "/obj/root", 1, "a")];
+
+    for profile in ["from_pass", "from_prepare"] {
+        let profile = profile_at(&tree, &format!("/datum/demir/{profile}"));
+        let bake = pending(&tree, &module, profile, atoms()).finish_with_progress(|_, _, _| {});
+
+        assert_eq!(bake.diagnostics.count(), 1, "{:?}", bake.diagnostics);
+        assert!(is_blocked(&bake.diagnostics.entries[0].fault), "{:?}", bake.diagnostics);
+        assert_eq!(bake.coordinate_modules().count(), 0);
+    }
+
+    let profile = profile_at(&tree, "/datum/demir/from_ui");
+    let mut bake = pending(&tree, &module, profile, atoms()).finish_with_progress(|_, _, _| {});
+    let feedback = Feedback {
+        clicks: HashSet::from([String::from("Panel/Place")]),
+        interacted: true,
+        ..Default::default()
+    };
+    let fault = bake.ui(&tree, &module, Some(1), 0, feedback).expect_err("blocked");
+
+    assert!(is_blocked(&fault), "{fault:?}");
+    assert_eq!(bake.coordinate_modules().count(), 0);
+}
+
+#[test]
+fn an_uninitialized_bake_has_no_coordinate_modules() {
+    let (tree, module) = compile(fixture!("programs/placement_at_entries_vanish_when_new_faults.dm"));
+    let profile = profile_type(&tree).expect("default profile");
+    let pending = pending(&tree, &module, profile, Vec::new());
+
+    assert_eq!(pending.coordinate_modules().count(), 0);
+
+    let bake = pending.finish_with_progress(|_, _, _| {});
+    assert_eq!(bake.diagnostics.count(), 1, "{:?}", bake.diagnostics);
+    assert_eq!(bake.coordinate_modules().count(), 0);
 }
 
 #[test]

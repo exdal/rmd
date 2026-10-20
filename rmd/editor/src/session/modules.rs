@@ -59,8 +59,9 @@ impl Session {
         let exempt = preview
             .into_iter()
             .flat_map(|preview| &preview.roots)
-            .filter(|root| root.key.ancestry.is_empty() && document.prefab_instance(root.key.instance).is_some())
-            .map(|root| root.key.instance)
+            .filter(|root| root.key.ancestry.is_empty())
+            .filter_map(|root| root.key.origin.atom())
+            .filter(|id| document.prefab_instance(*id).is_some())
             .collect();
         if let Some(document) = self.state.document_mut(id) {
             document.set_preview_covered(covered, exempt);
@@ -216,16 +217,18 @@ impl Session {
 
         self.module_roots()
             .iter()
-            .find(|root| root.coord == coord && self.is_source_root(root))
-            .map(|root| root.key.instance)
+            .filter(|root| root.coord == coord)
+            .find_map(|root| self.source_root(root))
     }
 
-    pub fn is_source_root(&self, root: &ModuleRootPreview) -> bool {
-        root.key.ancestry.is_empty()
-            && self
-                .state
-                .active_document()
-                .is_some_and(|document| document.prefab_instance(root.key.instance).is_some())
+    pub fn source_root(&self, root: &ModuleRootPreview) -> Option<PrefabInstanceId> {
+        if !root.key.ancestry.is_empty() {
+            return None;
+        }
+
+        let id = root.key.origin.atom()?;
+
+        self.state.active_document()?.prefab_instance(id).map(|_| id)
     }
 
     pub fn modules_enabled(&self) -> bool {

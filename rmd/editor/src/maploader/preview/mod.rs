@@ -30,9 +30,24 @@ pub struct ModuleVariantKey {
     pub occurrence: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ModuleOrigin {
+    Atom(PrefabInstanceId),
+    Coord(Coord),
+}
+
+impl ModuleOrigin {
+    pub fn atom(self) -> Option<PrefabInstanceId> {
+        match self {
+            Self::Atom(id) => Some(id),
+            Self::Coord(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ModuleRootKey {
-    pub instance: PrefabInstanceId,
+    pub origin: ModuleOrigin,
     pub ancestry: Vec<(ModuleVariantKey, Coord, usize)>,
 }
 

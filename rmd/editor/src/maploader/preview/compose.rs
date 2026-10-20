@@ -12,8 +12,8 @@ use objtree::{ObjectTree, TypeId};
 use vm::bake::ModuleRoot;
 
 use super::{
-    ModuleChoices, ModuleOverlay, ModuleRootKey, ModuleRootPreview, ModuleVariantKey, ModuleVariantPreview,
-    PREVIEW_ID_START, PreviewIdAllocator,
+    ModuleChoices, ModuleOrigin, ModuleOverlay, ModuleRootKey, ModuleRootPreview, ModuleVariantKey,
+    ModuleVariantPreview, PREVIEW_ID_START, PreviewIdAllocator,
 };
 use crate::{
     grid::Grid,
@@ -40,7 +40,7 @@ pub(super) struct ModuleLayer {
     size: Size,
     cells: HashMap<Coord, Vec<(PrefabInstanceId, Prefab)>>,
     origins: HashMap<PrefabInstanceId, (Coord, usize)>,
-    marker: (Coord, PrefabInstanceId),
+    marker: Option<(Coord, PrefabInstanceId)>,
     skip: Vec<TypeId>,
     anchor: Anchor,
     clipped: usize,
@@ -87,6 +87,7 @@ pub(super) fn update(
     };
 
     let mut sources = specs
+        .atoms
         .keys()
         .filter(|id| id.get() < PREVIEW_ID_START)
         .filter_map(|id| source.prefab_instance(*id))
@@ -97,14 +98,32 @@ pub(super) fn update(
         (coord.z, Reverse(coord.y), coord.x, instance.location.prefab_index)
     });
     for instance in sources {
+        let Some(spec) = specs.atoms.get(&instance.id) else {
+            continue;
+        };
+
         composer.root(
             ModuleRootKey {
-                instance: instance.id,
+                origin: ModuleOrigin::Atom(instance.id),
                 ancestry: Vec::new(),
             },
             instance.location.coord,
-            instance.id,
-            instance.prefab().clone(),
+            Some((instance.id, instance.prefab().clone())),
+            spec,
+        );
+    }
+
+    let mut coords = specs.coords.iter().collect::<Vec<_>>();
+    coords.sort_by_key(|(coord, _)| (coord.z, Reverse(coord.y), coord.x));
+    for (coord, spec) in coords {
+        composer.root(
+            ModuleRootKey {
+                origin: ModuleOrigin::Coord(*coord),
+                ancestry: Vec::new(),
+            },
+            *coord,
+            None,
+            spec,
         );
     }
 
@@ -138,13 +157,13 @@ pub(super) fn update(
             && preview.layers.iter().any(|next| Arc::ptr_eq(next, layer));
         if !is_unchanged {
             dirty.extend(layer.cells.keys().copied());
-            dirty.insert(layer.marker.0);
+            dirty.extend(layer.marker.map(|(coord, _)| coord));
         }
     }
 
     for layer in &preview.layers {
         preview.covered.extend(layer.cells.keys().copied());
-        preview.covered.insert(layer.marker.0);
+        preview.covered.extend(layer.marker.map(|(coord, _)| coord));
     }
 
     for coord in dirty {
@@ -164,6 +183,12 @@ pub(super) fn update(
             .collect::<Vec<_>>();
         for layer in &preview.layers {
             if let Some(content) = layer.cells.get(&coord) {
+                let is_reserved = matches!(layer.key.origin, ModuleOrigin::Coord(_))
+                    && content.iter().any(|(_, prefab)| category(tree, prefab) == 1);
+                if is_reserved {
+                    entries.retain(|(_, existing)| category(tree, existing) == 2);
+                }
+
                 for (id, prefab) in content {
                     let kind = category(tree, prefab);
                     if kind != 0 {
@@ -192,12 +217,13 @@ struct ModuleComposer<'a> {
 }
 
 impl ModuleComposer<'_> {
-    fn root(&mut self, key: ModuleRootKey, coord: Coord, marker: PrefabInstanceId, prefab: Prefab) {
+    fn root(
+        &mut self, key: ModuleRootKey, coord: Coord, marker: Option<(PrefabInstanceId, Prefab)>,
+        spec: &Result<ModuleRoot, String>,
+    ) {
         let specs = self.specs;
-        let Some(spec) = specs.get(&marker) else {
-            return;
-        };
-
+        let marker_id = marker.as_ref().map(|(id, _)| *id);
+        let prefab = marker.map(|(_, prefab)| prefab);
         let spec = match spec {
             Ok(spec) => spec,
             Err(text) => {
@@ -212,7 +238,7 @@ impl ModuleComposer<'_> {
                     depth: key.ancestry.len(),
                     key,
                     coord,
-                    marker: Some(prefab),
+                    marker: prefab.clone(),
                     variants: Vec::new(),
                     selected: None,
                     error: Some(diagnostic),
@@ -263,7 +289,7 @@ impl ModuleComposer<'_> {
             key: key.clone(),
             coord,
             depth: key.ancestry.len(),
-            marker: Some(prefab),
+            marker: prefab,
             variants: variants.clone(),
             selected,
             error: None,
@@ -279,7 +305,7 @@ impl ModuleComposer<'_> {
             i64::from(coord.y) - i64::from(anchor.0.y) + i64::from(spec.offset[1]),
             i64::from(coord.z) - 1 + i64::from(spec.offset[2]),
         ];
-        let marker = (coord, marker);
+        let marker = marker_id.map(|id| (coord, id));
         let cached = self
             .cached
             .get(&key)
@@ -317,21 +343,25 @@ impl ModuleComposer<'_> {
             .cells
             .iter()
             .flat_map(|(cell, entries)| entries.iter().map(move |(id, prefab)| (*cell, *id, prefab)))
-            .filter(|(_, id, _)| specs.contains_key(id))
+            .filter(|(_, id, _)| specs.atoms.contains_key(id))
             .filter_map(|(cell, id, prefab)| Some((*layer.origins.get(&id)?, cell, id, prefab.clone())))
             .collect::<Vec<_>>();
         nested.sort_by_key(|((local, index), ..)| (local.z, Reverse(local.y), local.x, *index));
         for ((local, index), cell, id, prefab) in nested {
+            let Some(spec) = specs.atoms.get(&id) else {
+                continue;
+            };
+
             let mut ancestry = key.ancestry.clone();
             ancestry.push((choice.clone(), local, index));
             self.root(
                 ModuleRootKey {
-                    instance: key.instance,
+                    origin: key.origin,
                     ancestry,
                 },
                 cell,
-                id,
-                prefab,
+                Some((id, prefab)),
+                spec,
             );
         }
     }
@@ -375,7 +405,7 @@ impl ModuleComposer<'_> {
     #[allow(clippy::too_many_arguments)]
     fn layer(
         &mut self, module: &LoadedModule, spec: &ModuleRoot, key: &ModuleRootKey, choice: &ModuleVariantKey,
-        offset: [i64; 3], marker: (Coord, PrefabInstanceId), anchor: Anchor,
+        offset: [i64; 3], marker: Option<(Coord, PrefabInstanceId)>, anchor: Anchor,
     ) -> Result<ModuleLayer, ErrorKind> {
         let ComposeContext { source, tree, .. } = self.ctx;
         let mut layer = ModuleLayer {
