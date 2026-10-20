@@ -92,7 +92,7 @@ fn a_shared_map_placed_as_a_module_is_read_only() -> TestResult {
         mut session,
         main,
         module,
-        ..
+        fixture: _fixture,
     } = hosting_modules()?;
 
     share(&mut session, module, "a.dmm");
@@ -111,7 +111,7 @@ fn a_module_is_editable_again_once_its_container_closes() -> TestResult {
         mut session,
         main,
         module,
-        ..
+        fixture: _fixture,
     } = hosting_modules()?;
     share(&mut session, module, "a.dmm");
     assert!(is_read_only(&session, module));
@@ -127,7 +127,10 @@ fn a_module_is_editable_again_once_its_container_closes() -> TestResult {
 #[test]
 fn a_module_is_editable_again_once_it_stops_being_shared() -> TestResult {
     let Shared {
-        mut session, module, ..
+        fixture: _fixture,
+        mut session,
+        module,
+        ..
     } = hosting_modules()?;
     share(&mut session, module, "a.dmm");
     assert!(is_read_only(&session, module));
@@ -145,7 +148,10 @@ fn a_module_is_editable_again_once_it_stops_being_shared() -> TestResult {
 #[test]
 fn a_module_is_editable_again_once_co_op_ends() -> TestResult {
     let Shared {
-        mut session, module, ..
+        fixture: _fixture,
+        mut session,
+        module,
+        ..
     } = hosting_modules()?;
     share(&mut session, module, "a.dmm");
     assert!(is_read_only(&session, module));
@@ -163,7 +169,7 @@ fn the_containing_map_stays_editable_while_shared() -> TestResult {
         mut session,
         main,
         module,
-        ..
+        fixture: _fixture,
     } = hosting_modules()?;
 
     share(&mut session, main, "main.dmm");
@@ -197,7 +203,7 @@ fn an_unshared_module_stays_editable_and_shows_up_in_its_container() -> TestResu
         mut session,
         main,
         module,
-        ..
+        fixture: _fixture,
     } = hosting_modules()?;
     share(&mut session, main, "main.dmm");
     session.poll_coop();
