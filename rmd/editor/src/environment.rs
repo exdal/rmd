@@ -10,22 +10,13 @@ use dmi::error::IconError;
 use net::CodebaseHash;
 use objtree::TypeId;
 use preprocessor::{
-    PreludeFile,
-    Preprocessor,
-    SourceCache,
-    Spanned,
-    error::PreprocessError,
-    macros_used_before_definition,
+    PreludeFile, Preprocessor, SourceCache, Spanned, error::PreprocessError, macros_used_before_definition,
     prelude_files,
 };
 use sema::error::SemaError;
 
 use crate::{
-    BakeProgram,
-    LoadError,
-    ObjectTree,
-    Profiles,
-    fingerprint,
+    BakeProgram, LoadError, ObjectTree, Profiles, fingerprint,
     progress::{Progress, Stage},
 };
 
@@ -137,7 +128,9 @@ impl BundledProfile {
         }
     }
 
-    pub fn from_name(name: &str) -> Option<Self> { Self::ALL.into_iter().find(|profile| profile.stem() == name) }
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|profile| profile.stem() == name)
+    }
 
     const fn source_name(self) -> &'static str {
         match self {
@@ -338,7 +331,9 @@ impl Default for BakeOptions {
 }
 
 /// `DM_BAKE=0` turns baking off for one run without touching the saved setting.
-pub fn baking_enabled(setting: bool) -> bool { std::env::var_os("DM_BAKE").map_or(setting, |value| value != "0") }
+pub fn baking_enabled(setting: bool) -> bool {
+    std::env::var_os("DM_BAKE").map_or(setting, |value| value != "0")
+}
 
 pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) -> Result<Compiled, LoadError> {
     let arena = StrArena::new();

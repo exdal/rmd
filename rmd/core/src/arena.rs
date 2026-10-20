@@ -15,7 +15,9 @@ struct Bump {
 }
 
 impl StrArena {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn alloc(&self, s: String) -> &str {
         let boxed = s.into_boxed_str();
@@ -27,7 +29,9 @@ impl StrArena {
         unsafe { &*ptr }
     }
 
-    pub fn alloc_str(&self, s: &str) -> &str { self.alloc_concat(&[s]) }
+    pub fn alloc_str(&self, s: &str) -> &str {
+        self.alloc_concat(&[s])
+    }
 
     pub fn alloc_concat(&self, parts: &[&str]) -> &str {
         let len = parts.iter().map(|part| part.len()).sum::<usize>();
@@ -52,7 +56,11 @@ impl StrArena {
         }
     }
 
-    pub fn len(&self) -> usize { self.chunks.borrow().len() }
+    pub fn len(&self) -> usize {
+        self.chunks.borrow().len()
+    }
 
-    pub fn is_empty(&self) -> bool { self.chunks.borrow().is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.chunks.borrow().is_empty()
+    }
 }

@@ -12,7 +12,9 @@ pub struct Position {
 }
 
 impl Position {
-    pub fn new(x: i32, y: i32, z: i32) -> Self { Self { x, y, z } }
+    pub fn new(x: i32, y: i32, z: i32) -> Self {
+        Self { x, y, z }
+    }
 
     pub fn step(self, dir: i32) -> Self {
         let dir = dir as u32;
@@ -37,7 +39,9 @@ pub struct World {
 }
 
 impl World {
-    pub fn turf_at(&self, pos: Position) -> Option<ObjectId> { self.turfs.get(&pos).copied() }
+    pub fn turf_at(&self, pos: Position) -> Option<ObjectId> {
+        self.turfs.get(&pos).copied()
+    }
 
     pub fn position(&self, heap: &Heap, id: ObjectId) -> Option<Position> {
         let mut next = Some(id);

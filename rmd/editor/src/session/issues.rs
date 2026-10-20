@@ -160,7 +160,9 @@ mod tests {
         assert!(session.map_issues(id).is_empty());
     }
 
-    fn id_for(session: &Session) -> DocumentId { session.state.active().unwrap() }
+    fn id_for(session: &Session) -> DocumentId {
+        session.state.active().unwrap()
+    }
 
     #[test]
     fn bulk_replacement_preserves_each_override_identity_and_order_with_one_undo() {

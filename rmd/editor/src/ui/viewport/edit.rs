@@ -7,8 +7,7 @@ use crate::{
     session::Session,
     settings::{KeybindAction, Settings},
     ui::{
-        UiState,
-        centered_paste_min,
+        UiState, centered_paste_min,
         context_menu::{Action as MenuAction, NodeContext, draw_popup as draw_map_menu},
         restore_rectangle_gesture,
     },

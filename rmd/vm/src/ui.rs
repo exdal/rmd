@@ -119,7 +119,9 @@ const KIND_LIGHT: u32 = 2;
 const KIND_HIGHLIGHT: u32 = 4;
 
 impl Rebake {
-    pub fn is_empty(self) -> bool { self == Self::default() }
+    pub fn is_empty(self) -> bool {
+        self == Self::default()
+    }
 
     /// Folds in what another frame asked for, for a caller holding a request back until the viewer
     /// lets go of the widget driving it.
@@ -192,7 +194,9 @@ impl Panel {
         self.active = true;
     }
 
-    pub(crate) fn has_modular_preview_request(&self) -> bool { self.modular_preview.is_some() }
+    pub(crate) fn has_modular_preview_request(&self) -> bool {
+        self.modular_preview.is_some()
+    }
 
     pub(crate) fn end_frame(&mut self) -> (Vec<Command>, Rebake, Option<bool>) {
         self.active = false;
@@ -235,16 +239,26 @@ impl Panel {
         key
     }
 
-    fn open(&self, key: &str) -> bool { !self.feedback.closed.contains(key) }
+    fn open(&self, key: &str) -> bool {
+        !self.feedback.closed.contains(key)
+    }
 
-    fn clicked(&self, key: &str) -> bool { self.feedback.clicks.contains(key) }
+    fn clicked(&self, key: &str) -> bool {
+        self.feedback.clicks.contains(key)
+    }
 
-    fn value(&self, key: &str) -> Option<&Value> { self.feedback.values.get(key) }
+    fn value(&self, key: &str) -> Option<&Value> {
+        self.feedback.values.get(key)
+    }
 
-    fn popup(&self, handle: f32) -> Option<PopupId> { (handle == MOUSE_POPUP_HANDLE).then_some(PopupId::Mouse) }
+    fn popup(&self, handle: f32) -> Option<PopupId> {
+        (handle == MOUSE_POPUP_HANDLE).then_some(PopupId::Mouse)
+    }
 }
 
-fn clamped(text: &str, limit: usize) -> String { text.chars().take(limit).collect() }
+fn clamped(text: &str, limit: usize) -> String {
+    text.chars().take(limit).collect()
+}
 
 impl Evaluator<'_> {
     pub(crate) fn imgui(

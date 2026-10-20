@@ -36,9 +36,13 @@ impl SecondaryViewport {
         }
     }
 
-    pub const fn id(&self) -> u32 { self.id }
+    pub const fn id(&self) -> u32 {
+        self.id
+    }
 
-    pub(crate) fn draw_data(&self) -> &DrawData { unsafe { self.draw_data.as_ref() } }
+    pub(crate) fn draw_data(&self) -> &DrawData {
+        unsafe { self.draw_data.as_ref() }
+    }
 }
 
 pub(crate) struct ViewportTarget {
@@ -87,7 +91,9 @@ impl ViewportTarget {
         Ok(())
     }
 
-    pub(crate) fn mark_stale(&mut self) { self.stale = true; }
+    pub(crate) fn mark_stale(&mut self) {
+        self.stale = true;
+    }
 
     /// The caller waits for the device to be idle first.
     pub(crate) fn destroy(self, device: &mut Device) {

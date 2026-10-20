@@ -208,7 +208,9 @@ impl Session {
             .blame(id, git.repo.clone(), document.to_map(), cache.map_revision, depth);
     }
 
-    pub(crate) fn blame_progress(&self, id: DocumentId) -> Option<usize> { self.git_worker.blame_progress(id) }
+    pub(crate) fn blame_progress(&self, id: DocumentId) -> Option<usize> {
+        self.git_worker.blame_progress(id)
+    }
 
     pub(crate) fn blame_at(&self, id: DocumentId, coord: Coord) -> Option<(BlameCell<'_>, bool)> {
         let cache = self.caches.get(&id)?;
@@ -253,7 +255,9 @@ impl Session {
         }
     }
 
-    pub(crate) fn blame_state(&self, id: DocumentId) -> Option<&BlameState> { self.git_state(id)?.blame.as_ref() }
+    pub(crate) fn blame_state(&self, id: DocumentId) -> Option<&BlameState> {
+        self.git_state(id)?.blame.as_ref()
+    }
 }
 
 #[cfg(test)]

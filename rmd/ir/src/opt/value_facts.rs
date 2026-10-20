@@ -16,11 +16,17 @@ impl ValueKinds {
     const NUMBER: Self = Self(1 << 2);
     const U24: Self = Self(1 << 1);
 
-    fn union(self, other: Self) -> Self { Self(self.0 | other.0) }
+    fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
 
-    fn is_empty(self) -> bool { self.0 == 0 }
+    fn is_empty(self) -> bool {
+        self.0 == 0
+    }
 
-    fn is_subset_of(self, other: Self) -> bool { !self.is_empty() && self.0 & !other.0 == 0 }
+    fn is_subset_of(self, other: Self) -> bool {
+        !self.is_empty() && self.0 & !other.0 == 0
+    }
 }
 
 pub(super) struct ValueFacts {
@@ -59,13 +65,21 @@ impl ValueFacts {
         Self { kinds }
     }
 
-    pub(super) fn is_number(&self, id: IrNodeId) -> bool { self.kind(id).is_subset_of(ValueKinds::ANY_NUMBER) }
+    pub(super) fn is_number(&self, id: IrNodeId) -> bool {
+        self.kind(id).is_subset_of(ValueKinds::ANY_NUMBER)
+    }
 
-    pub(super) fn is_u24(&self, id: IrNodeId) -> bool { self.kind(id).is_subset_of(ValueKinds::ANY_U24) }
+    pub(super) fn is_u24(&self, id: IrNodeId) -> bool {
+        self.kind(id).is_subset_of(ValueKinds::ANY_U24)
+    }
 
-    pub(super) fn is_boolean(&self, id: IrNodeId) -> bool { self.kind(id).is_subset_of(ValueKinds::BOOLEAN) }
+    pub(super) fn is_boolean(&self, id: IrNodeId) -> bool {
+        self.kind(id).is_subset_of(ValueKinds::BOOLEAN)
+    }
 
-    fn kind(&self, id: IrNodeId) -> ValueKinds { self.kinds.get(id.0 as usize).copied().unwrap_or(ValueKinds::ANY) }
+    fn kind(&self, id: IrNodeId) -> ValueKinds {
+        self.kinds.get(id.0 as usize).copied().unwrap_or(ValueKinds::ANY)
+    }
 }
 
 fn transfer(node: &IrNode, kinds: &[ValueKinds]) -> ValueKinds {

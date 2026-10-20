@@ -44,5 +44,7 @@ impl std::fmt::Display for LoadError {
 impl std::error::Error for LoadError {}
 
 impl From<PreprocessError> for LoadError {
-    fn from(e: PreprocessError) -> Self { Self::Preprocess(e) }
+    fn from(e: PreprocessError) -> Self {
+        Self::Preprocess(e)
+    }
 }

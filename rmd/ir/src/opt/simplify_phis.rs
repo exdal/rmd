@@ -96,7 +96,9 @@ pub(super) trait Replace {
 }
 
 impl Replace for FxHashMap<IrNodeId, IrNodeId> {
-    fn replacement(&self, id: IrNodeId) -> Option<IrNodeId> { self.get(&id).copied() }
+    fn replacement(&self, id: IrNodeId) -> Option<IrNodeId> {
+        self.get(&id).copied()
+    }
 }
 
 pub(super) struct Replacements {
@@ -121,11 +123,17 @@ impl Replacements {
         self.targets[index] = replacement;
     }
 
-    pub(super) fn contains(&self, id: IrNodeId) -> bool { self.replacement(id).is_some() }
+    pub(super) fn contains(&self, id: IrNodeId) -> bool {
+        self.replacement(id).is_some()
+    }
 
-    pub(super) fn is_empty(&self) -> bool { self.replaced.is_empty() }
+    pub(super) fn is_empty(&self) -> bool {
+        self.replaced.is_empty()
+    }
 
-    pub(super) fn keys(&self) -> impl Iterator<Item = IrNodeId> + '_ { self.replaced.iter().copied() }
+    pub(super) fn keys(&self) -> impl Iterator<Item = IrNodeId> + '_ {
+        self.replaced.iter().copied()
+    }
 }
 
 impl Replace for Replacements {
@@ -162,7 +170,9 @@ fn intern_null(module: &mut Module) -> IrNodeId {
     id
 }
 
-fn replace_id(id: &mut IrNodeId, replacements: &impl Replace) { *id = resolve(replacements, *id); }
+fn replace_id(id: &mut IrNodeId, replacements: &impl Replace) {
+    *id = resolve(replacements, *id);
+}
 
 fn replace_optional(id: &mut Option<IrNodeId>, replacements: &impl Replace) {
     if let Some(id) = id {

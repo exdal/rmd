@@ -9,13 +9,17 @@ const BASE: u32 = 52;
 pub struct InvalidKey;
 
 impl std::fmt::Display for InvalidKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "invalid map key") }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid map key")
+    }
 }
 
 impl std::error::Error for InvalidKey {}
 
 impl Key {
-    pub fn parse(s: &str) -> Result<Self, InvalidKey> { Self::parse_bytes(s.as_bytes()) }
+    pub fn parse(s: &str) -> Result<Self, InvalidKey> {
+        Self::parse_bytes(s.as_bytes())
+    }
 
     pub fn parse_bytes(bytes: &[u8]) -> Result<Self, InvalidKey> {
         let mut value: u32 = 0;

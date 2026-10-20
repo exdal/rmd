@@ -1,17 +1,6 @@
 use dear_imgui_rs::{
-    ItemHoveredFlags,
-    ListClipper,
-    SelectableFlags,
-    StyleColor,
-    TabItemFlags,
-    TableColumnFlags,
-    TableFlags,
-    TableRowFlags,
-    TableSizingPolicy,
-    TreeNodeFlags,
-    Ui,
-    WindowKey,
-    WindowKeyError,
+    ItemHoveredFlags, ListClipper, SelectableFlags, StyleColor, TabItemFlags, TableColumnFlags, TableFlags,
+    TableRowFlags, TableSizingPolicy, TreeNodeFlags, Ui, WindowKey, WindowKeyError,
 };
 use dmm::Coord;
 use editor::{
@@ -21,18 +10,8 @@ use editor::{
     document::DocumentId,
     git::{CommitInfo, WebLinks},
     icons::materialdesignicons::{
-        ICON_ALERT,
-        ICON_ALERT_CIRCLE,
-        ICON_ARROW_RIGHT,
-        ICON_CHECK,
-        ICON_CIRCLE_SMALL,
-        ICON_CLOSE_THICK,
-        ICON_FILE_COMPARE,
-        ICON_PENCIL,
-        ICON_REFRESH,
-        ICON_RESTORE,
-        ICON_SOURCE_BRANCH,
-        ICON_SOURCE_COMMIT,
+        ICON_ALERT, ICON_ALERT_CIRCLE, ICON_ARROW_RIGHT, ICON_CHECK, ICON_CIRCLE_SMALL, ICON_CLOSE_THICK,
+        ICON_FILE_COMPARE, ICON_PENCIL, ICON_REFRESH, ICON_RESTORE, ICON_SOURCE_BRANCH, ICON_SOURCE_COMMIT,
         ICON_SOURCE_MERGE,
     },
 };
@@ -40,19 +19,8 @@ use editor::{
 use super::{
     SAVE_ERROR_COLOR,
     common::{
-        RowSelection,
-        align_right,
-        button_width,
-        centered_note,
-        checkbox_width,
-        dpi,
-        focus_window_on_hover,
-        label_width,
-        opaque,
-        overflow_scroll,
-        same_line_if_fits,
-        table_min_width,
-        text_wrapped_colored,
+        RowSelection, align_right, button_width, centered_note, checkbox_width, dpi, focus_window_on_hover,
+        label_width, opaque, overflow_scroll, same_line_if_fits, table_min_width, text_wrapped_colored,
     },
 };
 use crate::{
@@ -143,20 +111,28 @@ impl GitPanel {
         })
     }
 
-    pub const fn window(&self) -> &WindowKey { &self.window }
+    pub const fn window(&self) -> &WindowKey {
+        &self.window
+    }
 
     /// Brings the panel to the front of its dock node
-    pub fn focus(&mut self) { self.focus_requested = true; }
+    pub fn focus(&mut self) {
+        self.focus_requested = true;
+    }
 
     pub fn request(&mut self, tab: GitTab) {
         self.focus_requested = true;
         self.select_tab = Some(tab);
     }
 
-    pub fn has_focus_request(&self) -> bool { self.focus_requested }
+    pub fn has_focus_request(&self) -> bool {
+        self.focus_requested
+    }
 
     #[cfg(test)]
-    pub fn visible(&self) -> bool { self.visible }
+    pub fn visible(&self) -> bool {
+        self.visible
+    }
 
     pub fn draw(&mut self, ui: &Ui, session: &mut Session, settings: &Settings, open: &mut bool) -> GitPanelOutput {
         let mut output = GitPanelOutput::default();

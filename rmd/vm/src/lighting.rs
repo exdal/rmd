@@ -16,7 +16,9 @@ pub struct LightTile {
 }
 
 impl Default for LightTile {
-    fn default() -> Self { Self { corners: [[0.0; 3]; 4] } }
+    fn default() -> Self {
+        Self { corners: [[0.0; 3]; 4] }
+    }
 }
 
 /// An edit re-solves only the corners its atoms can reach. Sources are summed in id order, which
@@ -36,7 +38,9 @@ pub struct LightingMap {
 }
 
 impl PartialEq for LightingMap {
-    fn eq(&self, other: &Self) -> bool { self.size == other.size && self.tiles == other.tiles }
+    fn eq(&self, other: &Self) -> bool {
+        self.size == other.size && self.tiles == other.tiles
+    }
 }
 
 impl LightingMap {
@@ -112,7 +116,9 @@ impl LightingMap {
         tile_index(self.size, position).and_then(|index| self.tiles.get(index))
     }
 
-    pub(crate) fn set(&mut self, id: u64, atom: Option<LightingAtom>) { self.replace(id, atom, true); }
+    pub(crate) fn set(&mut self, id: u64, atom: Option<LightingAtom>) {
+        self.replace(id, atom, true);
+    }
 
     pub(crate) fn solve_dirty(&mut self) -> Option<Range<usize>> {
         let mut changed: Option<Range<usize>> = None;
@@ -134,13 +140,21 @@ impl LightingMap {
         changed
     }
 
-    fn width(&self) -> usize { self.size[0] as usize }
+    fn width(&self) -> usize {
+        self.size[0] as usize
+    }
 
-    fn levels(&self) -> usize { self.reach.len() }
+    fn levels(&self) -> usize {
+        self.reach.len()
+    }
 
-    fn height(&self) -> usize { self.size[1] as usize }
+    fn height(&self) -> usize {
+        self.size[1] as usize
+    }
 
-    fn plane(&self) -> usize { self.width() * self.height() }
+    fn plane(&self) -> usize {
+        self.width() * self.height()
+    }
 
     fn corner_bounds(&self) -> Rect {
         Rect {
@@ -167,7 +181,9 @@ impl LightingMap {
             .then(|| level * self.plane() + y * self.width() + x)
     }
 
-    fn cell(&self, level: usize, x: i32, y: i32) -> Option<&Cell> { self.cells.get(self.cell_index(level, x, y)?) }
+    fn cell(&self, level: usize, x: i32, y: i32) -> Option<&Cell> {
+        self.cells.get(self.cell_index(level, x, y)?)
+    }
 
     fn point(&self, level: usize, x: i32, y: i32) -> Option<[f32; 3]> {
         let x = usize::try_from(x).ok()?;
@@ -668,7 +684,9 @@ impl LightingMap {
     }
 }
 
-fn bucket_of(coordinate: i32) -> usize { usize::try_from(coordinate.saturating_sub(1)).unwrap_or(0) / BUCKET }
+fn bucket_of(coordinate: i32) -> usize {
+    usize::try_from(coordinate.saturating_sub(1)).unwrap_or(0) / BUCKET
+}
 
 fn step(count: u32, attach: bool) -> u32 {
     if attach {
@@ -716,7 +734,9 @@ impl Rect {
         }
     }
 
-    fn reach(x: i32, y: i32, bound: i32) -> Self { Self::cell(x, y).expand(bound) }
+    fn reach(x: i32, y: i32, bound: i32) -> Self {
+        Self::cell(x, y).expand(bound)
+    }
 
     fn expand(self, by: i32) -> Self {
         Self {
@@ -743,7 +763,9 @@ impl Rect {
         }
     }
 
-    fn contains(self, x: i32, y: i32) -> bool { (self.x0..=self.x1).contains(&x) && (self.y0..=self.y1).contains(&y) }
+    fn contains(self, x: i32, y: i32) -> bool {
+        (self.x0..=self.x1).contains(&x) && (self.y0..=self.y1).contains(&y)
+    }
 
     fn intersect(self, other: Self) -> Option<Self> {
         let rect = Self {
@@ -838,7 +860,9 @@ impl LightSource {
         (self.cell[0], self.cell[1], (self.range + offset).ceil().max(0.0) as i32)
     }
 
-    fn in_cone(self, dx: f32, dy: f32) -> bool { self.cone_strength(dx, dy) > 0.0 }
+    fn in_cone(self, dx: f32, dy: f32) -> bool {
+        self.cone_strength(dx, dy) > 0.0
+    }
 
     fn cone_strength(self, dx: f32, dy: f32) -> f32 {
         if self.angle >= 360.0 || self.angle <= 0.0 || (dx == 0.0 && dy == 0.0) {
@@ -862,7 +886,9 @@ struct Cell {
 }
 
 impl Cell {
-    fn blocked(&self) -> bool { self.blockers > 0 }
+    fn blocked(&self) -> bool {
+        self.blockers > 0
+    }
 }
 
 fn tile_index(size: [u32; 3], position: Position) -> Option<usize> {
@@ -916,7 +942,7 @@ pub(crate) fn color_bytes(text: &str) -> Option<([u8; 4], bool)> {
             }
         },
         6 | 8 => {
-            for (slot, pair) in out.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+            for (slot, pair) in out.iter_mut().zip(hex.as_bytes().as_chunks::<2>().0) {
                 *slot = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
             }
         },

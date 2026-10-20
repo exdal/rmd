@@ -37,7 +37,9 @@ pub struct SemaError {
 }
 
 impl SemaError {
-    pub fn new(kind: SemaErrorKind, location: Location) -> Self { Self { location, kind } }
+    pub fn new(kind: SemaErrorKind, location: Location) -> Self {
+        Self { location, kind }
+    }
 
     pub fn display<'a>(&'a self, path: Option<&'a Path>) -> SemaErrorDisplay<'a> {
         SemaErrorDisplay { error: self, path }

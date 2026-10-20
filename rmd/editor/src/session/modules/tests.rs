@@ -24,9 +24,7 @@ use editor::{
 use crate::{
     loader::load_codebase,
     session::{
-        ModuleBake,
-        Session,
-        build_textures,
+        ModuleBake, Session, build_textures,
         fixtures::{assert_render_cache_matches_rebuild, node_environment_with_profile, settle_bake},
     },
 };
@@ -125,7 +123,9 @@ impl Fixture {
         Ok(())
     }
 
-    pub(in crate::session) fn session(&self) -> TestResult<Session> { self.session_with(PROFILE) }
+    pub(in crate::session) fn session(&self) -> TestResult<Session> {
+        self.session_with(PROFILE)
+    }
 
     fn session_with(&self, profile: &'static str) -> TestResult<Session> {
         let mut environment = node_environment_with_profile(profile);
@@ -146,7 +146,9 @@ impl Fixture {
 }
 
 impl Drop for Fixture {
-    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.dir); }
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.dir);
+    }
 }
 
 pub(crate) fn viewport_session() -> TestResult<(impl Sized, Session)> {
@@ -156,7 +158,9 @@ pub(crate) fn viewport_session() -> TestResult<(impl Sized, Session)> {
     Ok((fixture, session))
 }
 
-fn prefab(path: &str) -> Prefab { Prefab::new(TreePath::parse(path)) }
+fn prefab(path: &str) -> Prefab {
+    Prefab::new(TreePath::parse(path))
+}
 
 fn keyed(key: &str) -> Prefab {
     let mut root = prefab(ROOT);
@@ -181,7 +185,9 @@ fn map(tiles: &[Vec<Prefab>]) -> Map {
     map
 }
 
-fn coord(x: u32) -> Coord { Coord::new(x, 1, 1) }
+fn coord(x: u32) -> Coord {
+    Coord::new(x, 1, 1)
+}
 
 fn effective_paths(session: &Session, x: u32) -> Vec<String> {
     let id = session.state.active().unwrap();
@@ -242,7 +248,9 @@ fn baked_position(session: &Session, id: PrefabInstanceId) -> Option<vm::world::
     session.active_cache().bake.as_ref()?.position(id.get())
 }
 
-fn is_deferred(session: &Session) -> bool { matches!(session.active_cache().module_bake, ModuleBake::Deferred { .. }) }
+fn is_deferred(session: &Session) -> bool {
+    matches!(session.active_cache().module_bake, ModuleBake::Deferred { .. })
+}
 
 pub(in crate::session) fn assert_settled(session: &Session) {
     assert!(!session.baker.is_busy());

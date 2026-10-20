@@ -28,8 +28,7 @@ mod update;
 mod viewports;
 
 use std::{
-    fs,
-    mem,
+    fs, mem,
     path::{Path, PathBuf},
     process::ExitCode,
     sync::Arc,
@@ -299,7 +298,9 @@ fn take_screenshot(
 struct SystemClipboard(arboard::Clipboard);
 
 impl ClipboardBackend for SystemClipboard {
-    fn get(&mut self) -> Option<String> { self.0.get_text().ok() }
+    fn get(&mut self) -> Option<String> {
+        self.0.get_text().ok()
+    }
 
     fn set(&mut self, value: &str) {
         if let Err(e) = self.0.set_text(value) {

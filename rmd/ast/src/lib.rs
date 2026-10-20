@@ -20,9 +20,13 @@ pub struct ExpressionId(u32);
 impl ExpressionId {
     pub const ROOT: Self = Self(0);
 
-    pub fn new(index: usize) -> Option<Self> { u32::try_from(index).ok().map(Self) }
+    pub fn new(index: usize) -> Option<Self> {
+        u32::try_from(index).ok().map(Self)
+    }
 
-    pub fn index(self) -> usize { self.0 as usize }
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
 }
 
 pub struct AST {
@@ -40,7 +44,9 @@ impl AST {
         }
     }
 
-    pub fn get_expr(&self, expr_id: ExpressionId) -> Option<&Expression> { self.expressions.get(expr_id.index()) }
+    pub fn get_expr(&self, expr_id: ExpressionId) -> Option<&Expression> {
+        self.expressions.get(expr_id.index())
+    }
 
     pub fn expression_line_near(&self, expr_id: ExpressionId, hint: &mut usize) -> Option<SourceLine> {
         self.expression_lines.get_near(expr_id, hint)

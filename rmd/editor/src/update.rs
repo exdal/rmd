@@ -61,7 +61,9 @@ impl UpdateCheck {
         });
     }
 
-    pub fn is_checking(&self) -> bool { self.receiver.is_some() }
+    pub fn is_checking(&self) -> bool {
+        self.receiver.is_some()
+    }
 
     pub fn poll(&mut self) -> Option<&Release> {
         if let Some(receiver) = &self.receiver

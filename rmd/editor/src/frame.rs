@@ -10,13 +10,7 @@ use dmi::metadata::{Dir, Metadata};
 use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
 use render::{
-    AREA_EDGE_EAST,
-    AREA_EDGE_NORTH,
-    AREA_EDGE_SOUTH,
-    AREA_EDGE_WEST,
-    SpriteInstance,
-    SpriteTexture,
-    UpdateRange,
+    AREA_EDGE_EAST, AREA_EDGE_NORTH, AREA_EDGE_SOUTH, AREA_EDGE_WEST, SpriteInstance, SpriteTexture, UpdateRange,
     texture::TextureCatalog,
 };
 use vm::{
@@ -47,7 +41,9 @@ type PlacementOrder = (Reverse<u32>, u32, usize);
 
 const FIRST_PLACEMENT: PlacementOrder = (Reverse(u32::MAX), 0, 0);
 
-fn placement_order(coord: Coord, prefab_index: usize) -> PlacementOrder { (Reverse(coord.y), coord.x, prefab_index) }
+fn placement_order(coord: Coord, prefab_index: usize) -> PlacementOrder {
+    (Reverse(coord.y), coord.x, prefab_index)
+}
 
 const AREA_PLANE: f32 = f32::INFINITY;
 
@@ -150,7 +146,9 @@ impl FrameInstances {
         self.area_component_tiles.get(&component).cloned().unwrap_or_default()
     }
 
-    pub fn unknown_type_coords(&self) -> impl Iterator<Item = Coord> + '_ { self.unknown_placements.values().copied() }
+    pub fn unknown_type_coords(&self) -> impl Iterator<Item = Coord> + '_ {
+        self.unknown_placements.values().copied()
+    }
 
     pub fn unknown_type_instances(&self) -> impl Iterator<Item = PrefabInstanceId> + '_ {
         self.unknown_placements.keys().copied()
@@ -178,7 +176,9 @@ impl FrameInstances {
     }
 }
 
-fn light_tile(tile: vm::bake::LightTile) -> render::LightTile { render::LightTile { corners: tile.corners } }
+fn light_tile(tile: vm::bake::LightTile) -> render::LightTile {
+    render::LightTile { corners: tile.corners }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrefabUpdate {
@@ -198,7 +198,9 @@ pub struct TypeVisibility {
 }
 
 impl TypeVisibility {
-    pub fn is_visible(&self, id: TypeId) -> bool { !self.hidden.contains(&id) }
+    pub fn is_visible(&self, id: TypeId) -> bool {
+        !self.hidden.contains(&id)
+    }
 
     pub fn set_subtree(&mut self, tree: &ObjectTree, root: TypeId, visible: bool) -> bool {
         if tree.get(root).is_none() {
@@ -224,7 +226,9 @@ impl TypeVisibility {
         changed
     }
 
-    pub fn hides_any(&self) -> bool { !self.hidden.is_empty() }
+    pub fn hides_any(&self) -> bool {
+        !self.hidden.is_empty()
+    }
 
     pub fn hidden_types(&self, tree: &ObjectTree) -> HiddenTypes {
         HiddenTypes {
@@ -254,7 +258,9 @@ impl HiddenTypes {
         }
     }
 
-    pub fn is_empty(&self) -> bool { self.paths.is_empty() && self.areas.as_ref().is_none_or(|areas| areas.is_empty()) }
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty() && self.areas.as_ref().is_none_or(|areas| areas.is_empty())
+    }
 
     pub fn hides(&self, prefab: &Prefab) -> bool {
         self.paths.contains(&prefab.path.segments)
@@ -1227,30 +1233,14 @@ mod tests {
     use dmm::{Coord, Map, Prefab, Size};
     use objtree::{ObjectTree, VarDecl};
     use render::{
-        AREA_EDGE_EAST,
-        AREA_EDGE_NORTH,
-        AREA_EDGE_SOUTH,
-        AREA_EDGE_WEST,
-        AREA_EDGES_ALL,
-        IDENTITY_TRANSFORM,
-        SpriteInstance,
-        SpriteTexture,
-        UpdateRange,
-        texture::TextureCatalog,
+        AREA_EDGE_EAST, AREA_EDGE_NORTH, AREA_EDGE_SOUTH, AREA_EDGE_WEST, AREA_EDGES_ALL, IDENTITY_TRANSFORM,
+        SpriteInstance, SpriteTexture, UpdateRange, texture::TextureCatalog,
     };
     use vm::{AppearanceDelta, bake::SharedAppearance, matrix::Matrix};
 
     use super::{
-        FrameInstances,
-        FrameRenderOptions,
-        PrefabUpdate,
-        TypeVisibility,
-        build,
-        build_with_options,
-        instance_for,
-        pages::tests::assert_pages_hold,
-        update_prefab,
-        update_prefabs,
+        FrameInstances, FrameRenderOptions, PrefabUpdate, TypeVisibility, build, build_with_options, instance_for,
+        pages::tests::assert_pages_hold, update_prefab, update_prefabs,
     };
     use crate::{
         command::Edit,
@@ -1260,9 +1250,13 @@ mod tests {
 
     const ICON: &str = "test.dmi";
 
-    pub(super) fn document(map: Map) -> MapDocument { MapDocument::new(map, 1) }
+    pub(super) fn document(map: Map) -> MapDocument {
+        MapDocument::new(map, 1)
+    }
 
-    fn owner() -> PrefabInstanceId { PrefabInstanceId::from_raw(1).expect("nonzero prefab instance ID") }
+    fn owner() -> PrefabInstanceId {
+        PrefabInstanceId::from_raw(1).expect("nonzero prefab instance ID")
+    }
 
     fn appearance(color: Option<&str>, alpha: u8) -> Appearance {
         Appearance {
@@ -1696,7 +1690,9 @@ mod tests {
     }
 
     /// The sprites a list draws, in draw order, without the pages' spare slots.
-    fn drawn(instances: &FrameInstances) -> Vec<SpriteInstance> { instances.live_sprites().copied().collect() }
+    fn drawn(instances: &FrameInstances) -> Vec<SpriteInstance> {
+        instances.live_sprites().copied().collect()
+    }
 
     pub(super) fn assert_render_data_matches(actual: &FrameInstances, expected: &FrameInstances) {
         assert_eq!(drawn(actual), drawn(expected), "drawn in the order of a clean build");
@@ -2408,7 +2404,7 @@ mod tests {
         let mut instances = build(&tree, &icons, &textures, &document, 32);
 
         document
-            .move_instance(owner, dmm::Coord::new(2, 1, 1), "move area", &[], None)
+            .move_instance(&tree, owner, dmm::Coord::new(2, 1, 1), "move area", &[], None)
             .unwrap();
         let update = update_prefab(&mut instances, &tree, &icons, &textures, &document, owner, 32);
         assert!(matches!(

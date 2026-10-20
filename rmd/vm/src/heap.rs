@@ -21,7 +21,9 @@ struct Journal {
 pub struct ObjectId(pub u32);
 
 impl BitIndex for ObjectId {
-    fn bit_index(self) -> usize { self.0 as usize }
+    fn bit_index(self) -> usize {
+        self.0 as usize
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -57,9 +59,13 @@ pub struct Heap {
 }
 
 impl Heap {
-    pub fn object(&self, id: ObjectId) -> Option<&Object> { self.objects.get(id.0 as usize).filter(|o| !o.deleted) }
+    pub fn object(&self, id: ObjectId) -> Option<&Object> {
+        self.objects.get(id.0 as usize).filter(|o| !o.deleted)
+    }
 
-    pub fn list(&self, id: ListId) -> Option<&ListData> { self.lists.get(id.0 as usize) }
+    pub fn list(&self, id: ListId) -> Option<&ListData> {
+        self.lists.get(id.0 as usize)
+    }
 
     pub fn objects(&self) -> impl Iterator<Item = (ObjectId, &Object)> {
         self.objects
@@ -119,7 +125,9 @@ impl Heap {
         self.journal.as_ref()?.lists.get(&id).or_else(|| self.list(id))
     }
 
-    pub fn list_changed(&self, id: ListId) -> bool { self.journal.as_ref().is_some_and(|j| j.lists.contains_key(&id)) }
+    pub fn list_changed(&self, id: ListId) -> bool {
+        self.journal.as_ref().is_some_and(|j| j.lists.contains_key(&id))
+    }
 
     pub fn changed_objects(&self) -> Vec<ObjectId> {
         self.journal
@@ -137,7 +145,9 @@ impl Heap {
         })
     }
 
-    pub fn commit(&mut self) { self.journal = None; }
+    pub fn commit(&mut self) {
+        self.journal = None;
+    }
 
     pub fn rollback(&mut self) {
         let Some(j) = self.journal.take() else {

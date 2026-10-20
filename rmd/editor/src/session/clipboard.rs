@@ -128,7 +128,9 @@ impl Session {
         self.cut_block(selection, self.selection_mode(), "cut block")
     }
 
-    pub fn clipboard(&self) -> Option<&TileBlock> { self.state.clipboard() }
+    pub fn clipboard(&self) -> Option<&TileBlock> {
+        self.state.clipboard()
+    }
 
     pub fn can_paste_clipboard(&self, min: Coord, rotation: SelectionRotation) -> bool {
         let Some(block) = self.state.clipboard() else {

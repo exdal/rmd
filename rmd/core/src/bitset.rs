@@ -56,7 +56,9 @@ impl<T: BitIndex> BitSet<T> {
         }
     }
 
-    pub fn is_empty(&self) -> bool { self.words.iter().all(|bits| *bits == 0) }
+    pub fn is_empty(&self) -> bool {
+        self.words.iter().all(|bits| *bits == 0)
+    }
 }
 
 #[cfg(test)]
@@ -64,7 +66,9 @@ mod tests {
     use super::*;
 
     impl BitIndex for usize {
-        fn bit_index(self) -> usize { self }
+        fn bit_index(self) -> usize {
+            self
+        }
     }
 
     #[test]

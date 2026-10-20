@@ -9,8 +9,7 @@ use render::Renderer;
 
 use super::{
     common::{IDENTICAL_EDIT_COLOR, dpi},
-    draw_marching_edge,
-    marching_stripe_offset,
+    draw_marching_edge, marching_stripe_offset,
 };
 use crate::{
     camera::Controller,
@@ -21,7 +20,9 @@ const OVERLAY_PADDING: f32 = 4.0;
 
 pub(super) const OVERLAY_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 
-pub(super) fn overlay_padding(ui: &Ui) -> f32 { OVERLAY_PADDING * dpi(ui) }
+pub(super) fn overlay_padding(ui: &Ui) -> f32 {
+    OVERLAY_PADDING * dpi(ui)
+}
 
 const PLACEMENT_PREVIEW_PERIOD: f64 = 1.5;
 

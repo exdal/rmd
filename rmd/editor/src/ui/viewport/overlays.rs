@@ -8,17 +8,8 @@ use crate::{
     session::{GuideBadge, Session},
     settings::Settings,
     ui::{
-        TopOverlayState,
-        UiState,
-        common::dpi,
-        draw_guide_badges,
-        draw_highlights,
-        draw_history_overlay,
-        draw_identical_outlines,
-        draw_placement_preview,
-        draw_selected_pixel_grid,
-        draw_tile_grid,
-        draw_top_overlay,
+        TopOverlayState, UiState, common::dpi, draw_guide_badges, draw_highlights, draw_history_overlay,
+        draw_identical_outlines, draw_placement_preview, draw_selected_pixel_grid, draw_tile_grid, draw_top_overlay,
     },
 };
 

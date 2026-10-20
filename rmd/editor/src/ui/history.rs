@@ -6,8 +6,7 @@ use render::Renderer;
 use super::{
     OverlayRect,
     common::{dpi, fit_icon},
-    draw_overlay_underlay,
-    overlay_padding,
+    draw_overlay_underlay, overlay_padding,
 };
 use crate::{session::Session, settings::KeyBindings};
 

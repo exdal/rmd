@@ -175,9 +175,13 @@ impl Environment {
         ))
     }
 
-    pub fn base_dir(&self) -> &Path { self.root.parent().unwrap_or(Path::new(".")) }
+    pub fn base_dir(&self) -> &Path {
+        self.root.parent().unwrap_or(Path::new("."))
+    }
 
-    pub fn is_builtin_file(&self, id: FileId) -> bool { self.builtin_files.contains(&id) }
+    pub fn is_builtin_file(&self, id: FileId) -> bool {
+        self.builtin_files.contains(&id)
+    }
 
     pub fn file(&self, id: core::location::FileId) -> Option<&Path> {
         self.files.get(id.0 as usize).map(PathBuf::as_path)
@@ -200,7 +204,9 @@ impl Environment {
         }
     }
 
-    pub fn icon(&self, name: &str) -> Option<&Metadata> { self.icons.get(name) }
+    pub fn icon(&self, name: &str) -> Option<&Metadata> {
+        self.icons.get(name)
+    }
 
     /// `'icons/obj/items.dmi'`
     pub fn icon_paths(&self) -> BTreeSet<&str> {
@@ -328,7 +334,9 @@ pub struct EditorState {
 }
 
 impl Default for EditorState {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EditorState {
@@ -344,11 +352,17 @@ impl EditorState {
         }
     }
 
-    pub fn documents(&self) -> &[MapDocument] { &self.documents }
+    pub fn documents(&self) -> &[MapDocument] {
+        &self.documents
+    }
 
-    pub fn document_ids(&self) -> Vec<DocumentId> { self.documents.iter().map(MapDocument::id).collect() }
+    pub fn document_ids(&self) -> Vec<DocumentId> {
+        self.documents.iter().map(MapDocument::id).collect()
+    }
 
-    pub fn is_empty(&self) -> bool { self.documents.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.documents.is_empty()
+    }
 
     pub fn document(&self, id: DocumentId) -> Option<&MapDocument> {
         self.documents.iter().find(|document| document.id() == id)
@@ -372,7 +386,9 @@ impl EditorState {
             .map(MapDocument::id)
     }
 
-    pub fn active(&self) -> Option<DocumentId> { self.active }
+    pub fn active(&self) -> Option<DocumentId> {
+        self.active
+    }
 
     pub fn set_active(&mut self, id: DocumentId) {
         if self.document(id).is_some() {
@@ -380,9 +396,13 @@ impl EditorState {
         }
     }
 
-    pub fn active_document(&self) -> Option<&MapDocument> { self.document(self.active?) }
+    pub fn active_document(&self) -> Option<&MapDocument> {
+        self.document(self.active?)
+    }
 
-    pub fn active_document_mut(&mut self) -> Option<&mut MapDocument> { self.document_mut(self.active?) }
+    pub fn active_document_mut(&mut self) -> Option<&mut MapDocument> {
+        self.document_mut(self.active?)
+    }
 
     pub fn open_document(&mut self, document: MapDocument) -> DocumentId {
         let id = document.id();
@@ -407,7 +427,9 @@ impl EditorState {
         Some(document)
     }
 
-    pub fn has_unsaved_changes(&self) -> bool { self.documents.iter().any(MapDocument::is_dirty) }
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.documents.iter().any(MapDocument::is_dirty)
+    }
 
     pub fn active_pair_mut(&mut self) -> Option<(&Environment, &mut MapDocument)> {
         let Self {
@@ -427,11 +449,17 @@ impl EditorState {
         Some((self.environment.as_ref()?, self.active_document()?))
     }
 
-    pub fn clipboard(&self) -> Option<&TileBlock> { self.clipboard.as_ref() }
+    pub fn clipboard(&self) -> Option<&TileBlock> {
+        self.clipboard.as_ref()
+    }
 
-    pub fn set_clipboard(&mut self, block: TileBlock) { self.clipboard = Some(block); }
+    pub fn set_clipboard(&mut self, block: TileBlock) {
+        self.clipboard = Some(block);
+    }
 
-    pub fn recent_prefabs(&self) -> &[dmm::Prefab] { &self.recent_prefabs }
+    pub fn recent_prefabs(&self) -> &[dmm::Prefab] {
+        &self.recent_prefabs
+    }
 
     pub fn choose_prefab(&mut self, prefab: dmm::Prefab) {
         if let Some(index) = self.recent_prefabs.iter().position(|recent| recent == &prefab) {

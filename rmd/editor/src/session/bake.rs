@@ -344,7 +344,9 @@ impl Session {
         self.flush_pending_rebake(id);
     }
 
-    pub fn bake_view(&self) -> Option<crate::loader::LoadView> { self.baker.view() }
+    pub fn bake_view(&self) -> Option<crate::loader::LoadView> {
+        self.baker.view()
+    }
 
     /// Faiults __PER MAP__, keep this in mind: setup faults first and then by hook
     pub(crate) fn runtime_faults(&self) -> Vec<(DocumentId, Vec<RuntimeFault<'_>>)> {
@@ -686,15 +688,21 @@ mod tests {
 
     #[test]
     #[ignore = "requires the local target/NovaSector checkout"]
-    fn bundled_novasector_profile_bakes_debug_maps() { check_downstream_profile("NovaSector", "novasector"); }
+    fn bundled_novasector_profile_bakes_debug_maps() {
+        check_downstream_profile("NovaSector", "novasector");
+    }
 
     #[test]
     #[ignore = "requires the local target/OculisStation checkout"]
-    fn bundled_oculis_profile_bakes_debug_maps() { check_downstream_profile("OculisStation", "oculis"); }
+    fn bundled_oculis_profile_bakes_debug_maps() {
+        check_downstream_profile("OculisStation", "oculis");
+    }
 
     #[test]
     #[ignore = "requires the local target/Monkes-Paw checkout"]
-    fn bundled_monkespaw_profile_bakes_debug_maps() { check_downstream_profile("Monkes-Paw", "monkespaw"); }
+    fn bundled_monkespaw_profile_bakes_debug_maps() {
+        check_downstream_profile("Monkes-Paw", "monkespaw");
+    }
 
     fn check_downstream_profile(checkout: &str, profile: &str) {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

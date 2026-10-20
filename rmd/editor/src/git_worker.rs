@@ -103,7 +103,9 @@ impl GitWorker {
         (*generation, self.sender.clone())
     }
 
-    pub fn is_busy(&self) -> bool { self.in_flight > 0 }
+    pub fn is_busy(&self) -> bool {
+        self.in_flight > 0
+    }
 
     pub fn status(&mut self, document: DocumentId, path: RepoPath) {
         let (generation, sender) = self.next(document, 0);

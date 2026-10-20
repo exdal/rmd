@@ -5,8 +5,7 @@ use editor::{
     bake::{self, BakeUpdate},
     document::{DocumentId, PrefabInstanceId},
     maploader::{
-        LoadedModule,
-        OpenModule,
+        LoadedModule, OpenModule,
         preview::{ComposeContext, MapView, ModulePreviewState, ModuleRootKey, ModuleRootPreview, PREVIEW_ID_START},
         resolved_path,
     },

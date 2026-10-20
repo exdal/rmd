@@ -13,14 +13,8 @@ use crate::{
     pacing::FrameDemand,
     session::{BlockPreviewSource, Session},
     ui::{
-        PendingBlockPlacement,
-        RectangleGesture,
-        UiState,
-        conflict_controls_layout,
-        draw_block_outline,
-        draw_conflict_controls,
-        rectangle_drag_coord,
-        restore_rectangle_gesture,
+        PendingBlockPlacement, RectangleGesture, UiState, conflict_controls_layout, draw_block_outline,
+        draw_conflict_controls, rectangle_drag_coord, restore_rectangle_gesture,
     },
 };
 
@@ -50,7 +44,9 @@ impl ViewGestures {
     }
 }
 
-pub(super) fn shows_block_selection(tool: Tool) -> bool { matches!(tool, Tool::BlockSelect | Tool::Fill) }
+pub(super) fn shows_block_selection(tool: Tool) -> bool {
+    matches!(tool, Tool::BlockSelect | Tool::Fill)
+}
 
 pub(super) fn sync_gestures(session: &Session, gestures: &mut ViewGestures, tool: Tool) {
     if tool != Tool::BlockSelect {

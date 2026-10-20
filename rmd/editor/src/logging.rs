@@ -72,7 +72,9 @@ impl FileLogger {
 }
 
 impl Log for FileLogger {
-    fn enabled(&self, metadata: &Metadata<'_>) -> bool { metadata.level() <= Level::Info }
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        metadata.level() <= Level::Info
+    }
 
     fn log(&self, record: &Record<'_>) {
         if self.enabled(record.metadata()) {

@@ -12,12 +12,16 @@ use gix::{
 pub struct GitError(pub String);
 
 impl std::fmt::Display for GitError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.0) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 impl std::error::Error for GitError {}
 
-fn fail(error: impl std::fmt::Display) -> GitError { GitError(error.to_string()) }
+fn fail(error: impl std::fmt::Display) -> GitError {
+    GitError(error.to_string())
+}
 
 pub type GitResult<T> = Result<T, GitError>;
 
@@ -52,7 +56,9 @@ impl OperationKind {
 /// Git's minimum abbreviation, used when a hash cannot be looked up to shorten it properly
 const MIN_ABBREV: usize = 7;
 
-fn short_hash(hash: &str) -> String { hash.chars().take(MIN_ABBREV).collect() }
+fn short_hash(hash: &str) -> String {
+    hash.chars().take(MIN_ABBREV).collect()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitRef {
@@ -149,7 +155,9 @@ pub struct WebLinks {
 
 impl WebLinks {
     /// `git@github.com:owner/repo.git`
-    pub fn from_remote(url: &str) -> Option<Self> { web_links(&gix::url::parse(url.as_bytes().as_bstr()).ok()?) }
+    pub fn from_remote(url: &str) -> Option<Self> {
+        web_links(&gix::url::parse(url.as_bytes().as_bstr()).ok()?)
+    }
 
     pub fn commit(&self, hash: &str) -> String {
         let route = match self.forge {
@@ -253,11 +261,15 @@ impl RepoPath {
         })
     }
 
-    pub fn file(&self) -> PathBuf { self.root.join(&self.rel) }
+    pub fn file(&self) -> PathBuf {
+        self.root.join(&self.rel)
+    }
 }
 
 impl Repo {
-    fn rel(&self) -> &BStr { self.path.rel.as_bytes().as_bstr() }
+    fn rel(&self) -> &BStr {
+        self.path.rel.as_bytes().as_bstr()
+    }
 
     pub fn web_links(&self) -> Option<WebLinks> {
         let remote = self
@@ -378,7 +390,9 @@ impl Repo {
         Ok(found.then_some(stages))
     }
 
-    pub fn blob(&self, id: ObjectId) -> GitResult<Vec<u8>> { Ok(self.repo.find_blob(id).map_err(fail)?.take_data()) }
+    pub fn blob(&self, id: ObjectId) -> GitResult<Vec<u8>> {
+        Ok(self.repo.find_blob(id).map_err(fail)?.take_data())
+    }
 
     /// The commit a revision such as `HEAD~3`, a branch, a tag or a hash points at
     pub fn resolve(&self, spec: &str) -> GitResult<CommitInfo> {
@@ -680,7 +694,9 @@ pub(crate) mod tests {
         Some(String::from_utf8_lossy(&output.stdout).into_owned() + &String::from_utf8_lossy(&output.stderr))
     }
 
-    pub(crate) fn git_available() -> bool { git(Path::new("."), &["--version"]).is_some() }
+    pub(crate) fn git_available() -> bool {
+        git(Path::new("."), &["--version"]).is_some()
+    }
 
     pub(crate) fn temp_repo(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("rmd-git-{name}-{}", std::process::id()));

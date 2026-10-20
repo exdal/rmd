@@ -31,7 +31,9 @@ impl RuntimesPanel {
         })
     }
 
-    pub(super) fn request(&mut self) { self.focus = true; }
+    pub(super) fn request(&mut self) {
+        self.focus = true;
+    }
 
     pub(super) fn draw(&mut self, ui: &Ui, session: &Session, settings: &Settings, open: &mut bool) -> RuntimesOutput {
         let mut output = RuntimesOutput::default();

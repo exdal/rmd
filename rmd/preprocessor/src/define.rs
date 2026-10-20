@@ -67,9 +67,13 @@ impl<'a> Define<'a> {
         }
     }
 
-    pub fn is_function_like(&self) -> bool { self.params.is_some() }
+    pub fn is_function_like(&self) -> bool {
+        self.params.is_some()
+    }
 
-    pub fn arity(&self) -> usize { self.params.as_ref().map_or(0, |p| p.len()) }
+    pub fn arity(&self) -> usize {
+        self.params.as_ref().map_or(0, |p| p.len())
+    }
 
     pub fn lookup(&self, name: &str) -> Option<Slot> {
         let params = self.params.as_ref()?;
@@ -100,7 +104,9 @@ pub struct DefineTable<'a> {
 }
 
 impl<'a> DefineTable<'a> {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn with_builtins() -> Self {
         let mut table = Self::default();
@@ -123,7 +129,9 @@ impl<'a> DefineTable<'a> {
         id
     }
 
-    pub fn find(&self, name: &str) -> Option<NameId> { self.names.get(name).copied() }
+    pub fn find(&self, name: &str) -> Option<NameId> {
+        self.names.get(name).copied()
+    }
 
     pub fn define(&mut self, define: Define<'a>) -> Option<Rc<Define<'a>>> {
         let id = self.name_id(define.name);
@@ -145,7 +153,9 @@ impl<'a> DefineTable<'a> {
         previous
     }
 
-    pub fn get(&self, name: &str) -> Option<&Define<'a>> { self.lookup_id(self.find(name)?).map(Rc::as_ref) }
+    pub fn get(&self, name: &str) -> Option<&Define<'a>> {
+        self.lookup_id(self.find(name)?).map(Rc::as_ref)
+    }
 
     pub fn lookup(&self, name: &str) -> Option<(NameId, Rc<Define<'a>>)> {
         let id = self.find(name)?;
@@ -153,11 +163,19 @@ impl<'a> DefineTable<'a> {
         self.lookup_id(id).map(|define| (id, define.clone()))
     }
 
-    fn lookup_id(&self, id: NameId) -> Option<&Rc<Define<'a>>> { self.defines[id.0 as usize].as_ref() }
+    fn lookup_id(&self, id: NameId) -> Option<&Rc<Define<'a>>> {
+        self.defines[id.0 as usize].as_ref()
+    }
 
-    pub fn is_defined(&self, name: &str) -> bool { self.get(name).is_some() }
+    pub fn is_defined(&self, name: &str) -> bool {
+        self.get(name).is_some()
+    }
 
-    pub fn len(&self) -> usize { self.len }
+    pub fn len(&self) -> usize {
+        self.len
+    }
 
-    pub fn is_empty(&self) -> bool { self.len == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 }

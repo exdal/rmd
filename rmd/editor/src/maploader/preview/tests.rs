@@ -14,28 +14,14 @@ use objtree::{ObjectTree, TypeId};
 use vm::{Fault, FaultKind, bake::ModuleRoot};
 
 use super::{
-    ComposeContext,
-    MapView,
-    ModuleOverlay,
-    ModulePreviewState,
-    ModuleRootKey,
-    ModuleVariantKey,
-    PreviewIdAllocator,
-    compose,
-    compose::update,
+    ComposeContext, MapView, ModuleOverlay, ModulePreviewState, ModuleRootKey, ModuleVariantKey, PreviewIdAllocator,
+    compose, compose::update,
 };
 use crate::{
     document::DocumentId,
     grid::Grid,
     maploader::{
-        ErrorKind,
-        LoadedModule,
-        MAX_NESTING,
-        ModuleFiles,
-        OpenModule,
-        RootSpecs,
-        resolve_module_path,
-        root_specs,
+        ErrorKind, LoadedModule, MAX_NESTING, ModuleFiles, OpenModule, RootSpecs, resolve_module_path, root_specs,
     },
 };
 
@@ -71,7 +57,9 @@ impl Fixture {
         fs::write(path, dmm::writer::write(map)).unwrap();
     }
 
-    fn ty(&self, path: &str) -> TypeId { self.tree.id_of(&TreePath::parse(path)).unwrap() }
+    fn ty(&self, path: &str) -> TypeId {
+        self.tree.id_of(&TreePath::parse(path)).unwrap()
+    }
 
     fn spec(&self, files: &[&str]) -> ModuleRoot {
         ModuleRoot {
@@ -103,7 +91,9 @@ impl Fixture {
 }
 
 impl Drop for Fixture {
-    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.directory); }
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+    }
 }
 
 fn analyze(entry: &Path) -> ObjectTree {
@@ -117,7 +107,9 @@ fn analyze(entry: &Path) -> ObjectTree {
     tree
 }
 
-fn prefab(path: &str) -> Prefab { Prefab::new(TreePath::parse(path)) }
+fn prefab(path: &str) -> Prefab {
+    Prefab::new(TreePath::parse(path))
+}
 
 fn map(size: [u32; 3], placed: &[(Coord, &str)]) -> Map {
     let mut map = Map::new(Size {
@@ -136,9 +128,13 @@ fn map(size: [u32; 3], placed: &[(Coord, &str)]) -> Map {
     map
 }
 
-fn leaf() -> Map { map([1, 1, 1], &[(Coord::new(1, 1, 1), CONNECTOR)]) }
+fn leaf() -> Map {
+    map([1, 1, 1], &[(Coord::new(1, 1, 1), CONNECTOR)])
+}
 
-fn marker(source: &Grid, coord: Coord) -> PrefabInstanceId { markers(source, coord)[0] }
+fn marker(source: &Grid, coord: Coord) -> PrefabInstanceId {
+    markers(source, coord)[0]
+}
 
 fn markers(source: &Grid, coord: Coord) -> Vec<PrefabInstanceId> {
     source

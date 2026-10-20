@@ -674,7 +674,9 @@ impl<'a> Reachability<'a> {
         Some(values)
     }
 
-    fn retain(&mut self, proc: ProcId) { retain(self.module, &mut self.reachable, &mut self.pending, proc); }
+    fn retain(&mut self, proc: ProcId) {
+        retain(self.module, &mut self.reachable, &mut self.pending, proc);
+    }
 
     fn retain_name(&mut self, name: &Identifier) {
         for candidate in self.by_name.get(name).into_iter().flatten() {

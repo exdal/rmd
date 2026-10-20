@@ -2,8 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
 use rustls::{
-    DigitallySignedStruct,
-    SignatureScheme,
+    DigitallySignedStruct, SignatureScheme,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     crypto::{CryptoProvider, ring::default_provider, verify_tls12_signature, verify_tls13_signature},
     pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName, UnixTime},
@@ -14,7 +13,9 @@ use crate::{Error, fail};
 
 pub(crate) const SERVER_NAME: &str = "rmd";
 
-fn provider() -> Arc<CryptoProvider> { Arc::new(default_provider()) }
+fn provider() -> Arc<CryptoProvider> {
+    Arc::new(default_provider())
+}
 
 fn transport() -> Arc<quinn::TransportConfig> {
     let mut transport = quinn::TransportConfig::default();

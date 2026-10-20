@@ -27,11 +27,15 @@ impl PrefabInstanceId {
         }
     }
 
-    pub const fn get(self) -> u64 { self.0.get() }
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
 }
 
 impl BitIndex for PrefabInstanceId {
-    fn bit_index(self) -> usize { self.get() as usize }
+    fn bit_index(self) -> usize {
+        self.get() as usize
+    }
 }
 
 /// DM counts `y` from the bottom
@@ -43,7 +47,9 @@ pub struct Coord {
 }
 
 impl Coord {
-    pub fn new(x: u32, y: u32, z: u32) -> Self { Self { x, y, z } }
+    pub fn new(x: u32, y: u32, z: u32) -> Self {
+        Self { x, y, z }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -61,13 +67,19 @@ pub struct VarValue {
 }
 
 impl VarValue {
-    pub fn new(value: Value) -> Self { Self { value, verbatim: None } }
+    pub fn new(value: Value) -> Self {
+        Self { value, verbatim: None }
+    }
 
-    pub fn verbatim(&self) -> Option<&str> { self.verbatim.as_deref() }
+    pub fn verbatim(&self) -> Option<&str> {
+        self.verbatim.as_deref()
+    }
 }
 
 impl From<Value> for VarValue {
-    fn from(value: Value) -> Self { Self::new(value) }
+    fn from(value: Value) -> Self {
+        Self::new(value)
+    }
 }
 
 /// Vars stay in file order
@@ -78,13 +90,17 @@ pub struct Prefab {
 }
 
 impl Prefab {
-    pub fn new(path: TreePath) -> Self { Self { path, vars: Vec::new() } }
+    pub fn new(path: TreePath) -> Self {
+        Self { path, vars: Vec::new() }
+    }
 
     pub fn var(&self, name: &Identifier) -> Option<&Value> {
         self.vars.iter().find(|(key, _)| key == name).map(|(_, var)| &var.value)
     }
 
-    pub fn set_var(&mut self, name: Identifier, value: Value) { self.set(name, VarValue::new(value)); }
+    pub fn set_var(&mut self, name: Identifier, value: Value) {
+        self.set(name, VarValue::new(value));
+    }
 
     pub fn remove_var(&mut self, name: &Identifier) -> Option<VarValue> {
         let index = self.vars.iter().position(|(key, _)| key == name)?;
@@ -151,7 +167,9 @@ impl Map {
         row.get(coord.x.checked_sub(1)? as usize).copied()
     }
 
-    pub fn tile_at(&self, coord: Coord) -> Option<&Tile> { self.dictionary.get(&self.key_at(coord)?) }
+    pub fn tile_at(&self, coord: Coord) -> Option<&Tile> {
+        self.dictionary.get(&self.key_at(coord)?)
+    }
 
     pub fn intern_tile(&mut self, tile: Tile) -> Key {
         if let Some((key, _)) = self.dictionary.iter().find(|(_, existing)| **existing == tile) {
@@ -285,7 +303,9 @@ mod tests {
 
     use crate::{Map, Prefab, Size, key::Key};
 
-    fn tile(path: &str) -> Vec<Prefab> { vec![Prefab::new(TreePath::parse(path))] }
+    fn tile(path: &str) -> Vec<Prefab> {
+        vec![Prefab::new(TreePath::parse(path))]
+    }
 
     #[test]
     fn resizing_keeps_the_bottom_left_corner() {

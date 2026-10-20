@@ -15,7 +15,9 @@ struct Interned {
 pub struct Symbol(Arc<Interned>);
 
 impl Symbol {
-    pub fn as_str(&self) -> &str { &self.0.text }
+    pub fn as_str(&self) -> &str {
+        &self.0.text
+    }
 }
 
 impl PartialEq for Symbol {
@@ -27,30 +29,42 @@ impl PartialEq for Symbol {
 impl Eq for Symbol {}
 
 impl Hash for Symbol {
-    fn hash<H: Hasher>(&self, state: &mut H) { state.write_u64(self.0.hash); }
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.0.hash);
+    }
 }
 
 impl PartialOrd for Symbol {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) }
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Ord for Symbol {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering { self.as_str().cmp(other.as_str()) }
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
 }
 
 impl std::fmt::Debug for Symbol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.as_str().fmt(f) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.as_str().fmt(f)
+    }
 }
 
 impl std::fmt::Display for Symbol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.as_str()) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SymbolHasher(u64);
 
 impl Hasher for SymbolHasher {
-    fn finish(&self) -> u64 { self.0 }
+    fn finish(&self) -> u64 {
+        self.0
+    }
 
     fn write(&mut self, bytes: &[u8]) {
         for byte in bytes {
@@ -69,11 +83,15 @@ pub type SymbolMap<V> = HashMap<Symbol, V, BuildHasherDefault<SymbolHasher>>;
 thread_local! { static IDENTIFIERS: RefCell<Interner> = RefCell::new(Interner::new()); }
 
 impl From<&str> for Symbol {
-    fn from(s: &str) -> Self { IDENTIFIERS.with(|pool| pool.borrow_mut().intern(s)) }
+    fn from(s: &str) -> Self {
+        IDENTIFIERS.with(|pool| pool.borrow_mut().intern(s))
+    }
 }
 
 impl From<String> for Symbol {
-    fn from(s: String) -> Self { Self::from(s.as_str()) }
+    fn from(s: String) -> Self {
+        Self::from(s.as_str())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -84,7 +102,9 @@ pub struct Interner {
 }
 
 impl Interner {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     fn hash(s: &str) -> u64 {
         let mut hash = DefaultHasher::new();
@@ -93,7 +113,9 @@ impl Interner {
         hash.finish()
     }
 
-    fn bucket(s: &str) -> u64 { rustc_hash::FxBuildHasher.hash_one(s) }
+    fn bucket(s: &str) -> u64 {
+        rustc_hash::FxBuildHasher.hash_one(s)
+    }
 
     pub fn intern(&mut self, s: &str) -> Symbol {
         let bucket = Self::bucket(s);
@@ -128,7 +150,9 @@ impl Interner {
         Symbol(value)
     }
 
-    pub fn get(&self, s: &str) -> Option<Symbol> { self.find(Self::bucket(s), s) }
+    pub fn get(&self, s: &str) -> Option<Symbol> {
+        self.find(Self::bucket(s), s)
+    }
 
     fn find(&self, bucket: u64, s: &str) -> Option<Symbol> {
         self.buckets
@@ -139,9 +163,13 @@ impl Interner {
             .map(Symbol)
     }
 
-    pub fn len(&self) -> usize { self.buckets.values().flatten().filter(|s| s.strong_count() > 0).count() }
+    pub fn len(&self) -> usize {
+        self.buckets.values().flatten().filter(|s| s.strong_count() > 0).count()
+    }
 
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 #[cfg(test)]

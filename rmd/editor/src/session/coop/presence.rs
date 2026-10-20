@@ -5,7 +5,9 @@ use super::{Coop, Following};
 use crate::session::Session;
 
 impl Session {
-    pub fn comment_tool_available(&self) -> bool { self.coop.as_ref().is_some_and(Coop::can_collaborate) }
+    pub fn comment_tool_available(&self) -> bool {
+        self.coop.as_ref().is_some_and(Coop::can_collaborate)
+    }
 
     pub fn add_coop_comment(&self, id: DocumentId, pos: [f32; 2], text: String) {
         let (Some(map), Some(document)) = (self.coop_shared_map_path(id), self.state.document(id)) else {
@@ -23,9 +25,13 @@ impl Session {
         }
     }
 
-    pub fn coop_cursor(&self, cursor: Option<Cursor>) { self.send_presence(cursor, Client::send_cursor); }
+    pub fn coop_cursor(&self, cursor: Option<Cursor>) {
+        self.send_presence(cursor, Client::send_cursor);
+    }
 
-    pub fn coop_view(&self, view: Option<View>) { self.send_presence(view, Client::send_view); }
+    pub fn coop_view(&self, view: Option<View>) {
+        self.send_presence(view, Client::send_view);
+    }
 
     pub fn coop_selection(&self, selection: Option<Selection>) {
         self.send_presence(selection, Client::send_selection);

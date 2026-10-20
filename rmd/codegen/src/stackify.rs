@@ -68,11 +68,17 @@ impl Stackify {
         self.schedules.get(&block).map(Vec::as_slice)
     }
 
-    pub(super) fn is_stacked(&self, value: IrNodeId) -> bool { self.stacked.contains(&value) }
+    pub(super) fn is_stacked(&self, value: IrNodeId) -> bool {
+        self.stacked.contains(&value)
+    }
 
-    pub(super) fn uses(&self, value: IrNodeId) -> u32 { self.uses.get(&value).copied().unwrap_or_default() }
+    pub(super) fn uses(&self, value: IrNodeId) -> u32 {
+        self.uses.get(&value).copied().unwrap_or_default()
+    }
 
-    pub(super) fn needs_local(&self, value: IrNodeId) -> bool { self.uses(value) != 0 && !self.is_stacked(value) }
+    pub(super) fn needs_local(&self, value: IrNodeId) -> bool {
+        self.uses(value) != 0 && !self.is_stacked(value)
+    }
 
     pub(super) fn sole_user(&self, value: IrNodeId) -> Option<IrNodeId> {
         if self.uses(value) != 1 {

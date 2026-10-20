@@ -1,15 +1,7 @@
 use std::{collections::HashSet, hash::Hash};
 
 use dear_imgui_rs::{
-    Condition,
-    Key,
-    ModalPopupToken,
-    StyleColor,
-    TableFlags,
-    Ui,
-    WindowFlags,
-    WindowHoveredFlags,
-    sys,
+    Condition, Key, ModalPopupToken, StyleColor, TableFlags, Ui, WindowFlags, WindowHoveredFlags, sys,
 };
 
 pub(super) struct RowSelection<K> {
@@ -27,7 +19,9 @@ impl<K> Default for RowSelection<K> {
 }
 
 impl<K: Copy + Eq + Hash> RowSelection<K> {
-    pub(super) fn contains(&self, coord: &K) -> bool { self.keys.contains(coord) }
+    pub(super) fn contains(&self, coord: &K) -> bool {
+        self.keys.contains(coord)
+    }
 
     pub(super) fn clear(&mut self) {
         self.keys.clear();
@@ -112,11 +106,17 @@ impl<'a> DialogButton<'a> {
         }
     }
 
-    pub(super) fn cancel(label: &'a str) -> Self { Self::new(label, ButtonRole::Cancel) }
+    pub(super) fn cancel(label: &'a str) -> Self {
+        Self::new(label, ButtonRole::Cancel)
+    }
 
-    pub(super) fn secondary(label: &'a str) -> Self { Self::new(label, ButtonRole::Secondary) }
+    pub(super) fn secondary(label: &'a str) -> Self {
+        Self::new(label, ButtonRole::Secondary)
+    }
 
-    pub(super) fn primary(label: &'a str) -> Self { Self::new(label, ButtonRole::Primary) }
+    pub(super) fn primary(label: &'a str) -> Self {
+        Self::new(label, ButtonRole::Primary)
+    }
 
     pub(super) fn destructive(label: &'a str, is_undoable: bool) -> Self {
         Self::new(label, ButtonRole::Destructive { is_undoable })
@@ -278,7 +278,9 @@ pub(crate) fn dpi(ui: &Ui) -> f32 {
     style.font_scale_dpi() * style.font_scale_main()
 }
 
-pub(super) fn label_width(ui: &Ui, label: &str) -> f32 { ui.calc_text_size_with_opts(label, true, -1.0)[0] }
+pub(super) fn label_width(ui: &Ui, label: &str) -> f32 {
+    ui.calc_text_size_with_opts(label, true, -1.0)[0]
+}
 
 pub(super) fn button_width(ui: &Ui, label: &str) -> f32 {
     label_width(ui, label) + ui.clone_style().frame_padding()[0] * 2.0
@@ -323,7 +325,9 @@ pub(super) fn table_min_width(ui: &Ui, fixed: &[f32], stretch: usize) -> f32 {
     fixed.iter().sum::<f32>() + MIN_STRETCH_WIDTH * dpi(ui) * stretch as f32 + padding * columns as f32
 }
 
-pub(super) const fn opaque(color: [f32; 3]) -> [f32; 4] { [color[0], color[1], color[2], 1.0] }
+pub(super) const fn opaque(color: [f32; 3]) -> [f32; 4] {
+    [color[0], color[1], color[2], 1.0]
+}
 
 pub(super) fn focus_window_on_hover(ui: &Ui) {
     if !ui.is_window_focused()
@@ -347,24 +351,14 @@ mod tests {
     use dear_imgui_rs::{Condition, Ui, WindowFlags, sys};
 
     use super::{
-        DialogButton,
-        RowSelection,
-        begin_centered_modal,
-        cancel_index,
-        dialog_buttons,
-        enter_index,
+        DialogButton, RowSelection, begin_centered_modal, cancel_index, dialog_buttons, enter_index,
         focus_window_on_hover,
     };
     use crate::ui::{
         IMGUI_CONTEXT,
         dialog::MODAL_FLAGS,
         fixtures::{
-            PopupContext,
-            assert_window_centered,
-            finish_frame,
-            popup_context,
-            rectangle_context,
-            set_desktop_geometry,
+            PopupContext, assert_window_centered, finish_frame, popup_context, rectangle_context, set_desktop_geometry,
         },
     };
 

@@ -26,7 +26,7 @@ fn parse_hex(hex: &str) -> Option<[f32; 4]> {
 
         6 | 8 => {
             let mut out = [1.0; 4];
-            for (slot, pair) in out.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+            for (slot, pair) in out.iter_mut().zip(hex.as_bytes().as_chunks::<2>().0) {
                 let pair = std::str::from_utf8(pair).ok()?;
                 *slot = channel(u8::from_str_radix(pair, 16).ok()?);
             }

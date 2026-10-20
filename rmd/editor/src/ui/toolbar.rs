@@ -7,15 +7,8 @@ use editor::{
 };
 
 use super::{
-    BlockSelectionOptions,
-    DeleteLevelDialog,
-    MAX_CUSTOM_FILL_SEARCH_RESULTS,
-    NewLevelDialog,
-    OverlayRect,
-    draw_overlay_underlay,
-    draw_selection_mode_controls,
-    draw_type_path_search,
-    overlay_padding,
+    BlockSelectionOptions, DeleteLevelDialog, MAX_CUSTOM_FILL_SEARCH_RESULTS, NewLevelDialog, OverlayRect,
+    draw_overlay_underlay, draw_selection_mode_controls, draw_type_path_search, overlay_padding,
 };
 use crate::{
     session::{LevelChange, Session},

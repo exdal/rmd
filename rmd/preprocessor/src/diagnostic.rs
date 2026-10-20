@@ -26,7 +26,9 @@ pub enum Code {
 }
 
 impl Code {
-    pub fn number(self) -> u16 { self as u16 }
+    pub fn number(self) -> u16 {
+        self as u16
+    }
 
     pub fn from_name(name: &str) -> Option<Self> {
         Some(match name {
@@ -88,7 +90,9 @@ impl Code {
 }
 
 impl std::fmt::Display for Code {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "DR{:04}", self.number()) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DR{:04}", self.number())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -132,9 +136,13 @@ pub struct PragmaTable {
 }
 
 impl PragmaTable {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-    pub fn push(&mut self) { self.stack.push(self.overrides.clone()); }
+    pub fn push(&mut self) {
+        self.stack.push(self.overrides.clone());
+    }
 
     pub fn pop(&mut self) -> bool {
         let Some(overrides) = self.stack.pop() else {

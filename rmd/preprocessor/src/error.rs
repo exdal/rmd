@@ -21,7 +21,9 @@ impl PreprocessError {
         }
     }
 
-    pub fn is_fatal(&self) -> bool { self.level == Level::Error }
+    pub fn is_fatal(&self) -> bool {
+        self.level == Level::Error
+    }
 
     pub fn display<'a>(&'a self, path: Option<&'a Path>) -> PreprocessErrorDisplay<'a> {
         PreprocessErrorDisplay { error: self, path }

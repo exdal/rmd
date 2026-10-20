@@ -96,14 +96,18 @@ impl Edit {
         self
     }
 
-    pub fn resize(&self) -> Option<Resize> { self.resize }
+    pub fn resize(&self) -> Option<Resize> {
+        self.resize
+    }
 
     pub(crate) fn changing_level(mut self, level: LevelEdit) -> Self {
         self.level = Some(level);
         self
     }
 
-    pub fn level(&self) -> Option<&LevelEdit> { self.level.as_ref() }
+    pub fn level(&self) -> Option<&LevelEdit> {
+        self.level.as_ref()
+    }
 
     pub fn selecting(mut self, selection: SelectionChange) -> Self {
         self.selection = Some(selection);
@@ -111,9 +115,13 @@ impl Edit {
         self
     }
 
-    pub fn selection(&self) -> Option<SelectionChange> { self.selection }
+    pub fn selection(&self) -> Option<SelectionChange> {
+        self.selection
+    }
 
-    pub fn is_structural(&self) -> bool { self.resize.is_some() || self.level.is_some() }
+    pub fn is_structural(&self) -> bool {
+        self.resize.is_some() || self.level.is_some()
+    }
 
     pub fn recorded_when_empty(mut self) -> Self {
         self.record_empty = true;
@@ -126,7 +134,9 @@ impl Edit {
         self.changes.push(TileChange { coord, before, after });
     }
 
-    pub fn is_empty(&self) -> bool { self.changes.is_empty() && self.level.is_none() }
+    pub fn is_empty(&self) -> bool {
+        self.changes.is_empty() && self.level.is_none()
+    }
 
     pub fn affected_instances(&self) -> Vec<PrefabInstanceId> {
         let mut affected = self
@@ -152,11 +162,15 @@ impl EditGroupId {
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }
 
-    pub const fn get(self) -> u64 { self.0 }
+    pub const fn get(self) -> u64 {
+        self.0
+    }
 }
 
 impl Default for EditGroupId {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Debug)]
@@ -184,7 +198,9 @@ impl Default for History {
 }
 
 impl History {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub(crate) fn apply_grouped(&mut self, grid: &mut Grid, edit: Edit, group: Option<EditGroupId>) -> bool {
         if edit.is_empty() && !edit.record_empty {
@@ -246,7 +262,9 @@ impl History {
         self.undo_stack.last().map(|entry| &entry.edit)
     }
 
-    pub fn mark_saved(&mut self) { self.saved_at = Some(self.undo_stack.len()); }
+    pub fn mark_saved(&mut self) {
+        self.saved_at = Some(self.undo_stack.len());
+    }
 
     pub fn clear(&mut self) {
         self.undo_stack.clear();
@@ -254,7 +272,9 @@ impl History {
         self.saved_at = None;
     }
 
-    pub fn is_dirty(&self) -> bool { self.saved_at != Some(self.undo_stack.len()) }
+    pub fn is_dirty(&self) -> bool {
+        self.saved_at != Some(self.undo_stack.len())
+    }
 
     pub fn is_applied(&self, group: EditGroupId) -> bool {
         self.undo_stack.iter().any(|entry| entry.group == Some(group))
@@ -264,21 +284,37 @@ impl History {
         self.undo_stack.iter().filter_map(|entry| entry.group).collect()
     }
 
-    pub fn undo_group(&self) -> Option<EditGroupId> { self.undo_stack.last()?.group }
+    pub fn undo_group(&self) -> Option<EditGroupId> {
+        self.undo_stack.last()?.group
+    }
 
-    pub fn undo_depth(&self) -> usize { self.undo_stack.len() }
+    pub fn undo_depth(&self) -> usize {
+        self.undo_stack.len()
+    }
 
-    pub fn can_undo(&self) -> bool { !self.undo_stack.is_empty() }
+    pub fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
 
-    pub fn can_redo(&self) -> bool { !self.redo_stack.is_empty() }
+    pub fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
 
-    pub fn next_undo(&self) -> Option<&Edit> { self.undo_stack.last().map(|entry| &entry.edit) }
+    pub fn next_undo(&self) -> Option<&Edit> {
+        self.undo_stack.last().map(|entry| &entry.edit)
+    }
 
-    pub fn next_redo(&self) -> Option<&Edit> { self.redo_stack.last().map(|entry| &entry.edit) }
+    pub fn next_redo(&self) -> Option<&Edit> {
+        self.redo_stack.last().map(|entry| &entry.edit)
+    }
 
-    pub fn undo_label(&self) -> Option<&str> { self.undo_stack.last().map(|entry| entry.edit.label.as_str()) }
+    pub fn undo_label(&self) -> Option<&str> {
+        self.undo_stack.last().map(|entry| entry.edit.label.as_str())
+    }
 
-    pub fn redo_label(&self) -> Option<&str> { self.redo_stack.last().map(|entry| entry.edit.label.as_str()) }
+    pub fn redo_label(&self) -> Option<&str> {
+        self.redo_stack.last().map(|entry| entry.edit.label.as_str())
+    }
 
     fn discard_redo(&mut self) {
         if self.saved_at.is_some_and(|saved_at| saved_at > self.undo_stack.len()) {
@@ -305,7 +341,9 @@ enum ChangeSide {
     After,
 }
 
-pub(crate) fn apply_unrecorded(grid: &mut Grid, edit: &Edit) -> bool { apply_edit(grid, edit, ChangeSide::After) }
+pub(crate) fn apply_unrecorded(grid: &mut Grid, edit: &Edit) -> bool {
+    apply_edit(grid, edit, ChangeSide::After)
+}
 
 fn apply_edit(grid: &mut Grid, edit: &Edit, side: ChangeSide) -> bool {
     if let Some(level) = &edit.level {

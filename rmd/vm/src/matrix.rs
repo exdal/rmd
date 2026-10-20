@@ -4,8 +4,7 @@ use codegen::opcode::Binary;
 use objtree::ObjectTree;
 
 use crate::{
-    FaultKind,
-    GenericValue,
+    FaultKind, GenericValue,
     eval::Evaluator,
     heap::{Heap, Object, ObjectId},
 };
@@ -30,15 +29,21 @@ const FIELDS: [&str; 6] = ["a", "b", "c", "d", "e", "f"];
 pub struct Matrix(pub [f32; 6]);
 
 impl Default for Matrix {
-    fn default() -> Self { Self::IDENTITY }
+    fn default() -> Self {
+        Self::IDENTITY
+    }
 }
 
 impl Matrix {
     pub const IDENTITY: Self = Self([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
 
-    pub fn scale(x: f32, y: f32) -> Self { Self([x, 0.0, 0.0, 0.0, y, 0.0]) }
+    pub fn scale(x: f32, y: f32) -> Self {
+        Self([x, 0.0, 0.0, 0.0, y, 0.0])
+    }
 
-    pub fn translate(x: f32, y: f32) -> Self { Self([1.0, 0.0, x, 0.0, 1.0, y]) }
+    pub fn translate(x: f32, y: f32) -> Self {
+        Self([1.0, 0.0, x, 0.0, 1.0, y])
+    }
 
     /// `Turn()` is clockwise
     pub fn turn(degrees: f32) -> Self {
@@ -118,7 +123,9 @@ impl Matrix {
         }
     }
 
-    pub fn is_identity(self) -> bool { self == Self::IDENTITY }
+    pub fn is_identity(self) -> bool {
+        self == Self::IDENTITY
+    }
 }
 
 struct Decomposed {
@@ -152,7 +159,9 @@ pub(crate) fn read(heap: &Heap, tree: &ObjectTree, value: &GenericValue) -> Opti
 }
 
 impl Evaluator<'_> {
-    pub(crate) fn matrix(&self, value: &GenericValue) -> Option<Matrix> { read(&self.runtime.heap, self.tree, value) }
+    pub(crate) fn matrix(&self, value: &GenericValue) -> Option<Matrix> {
+        read(&self.runtime.heap, self.tree, value)
+    }
 
     pub(crate) fn store_matrix(&mut self, target: Option<ObjectId>, matrix: Matrix) -> Result<GenericValue> {
         let id = match target {

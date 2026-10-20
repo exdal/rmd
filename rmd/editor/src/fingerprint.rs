@@ -90,7 +90,9 @@ fn write_value(context: &mut Context, value: &Value) {
     }
 }
 
-fn write_tag(context: &mut Context, tag: ValueTag) { context.update(&[tag as u8]); }
+fn write_tag(context: &mut Context, tag: ValueTag) {
+    context.update(&[tag as u8]);
+}
 
 fn write_option<T>(context: &mut Context, value: Option<T>, write: impl FnOnce(&mut Context, T)) {
     context.update(&[u8::from(value.is_some())]);
@@ -104,4 +106,6 @@ fn write_str(context: &mut Context, text: &str) {
     context.update(text.as_bytes());
 }
 
-fn write_len(context: &mut Context, len: usize) { context.update(&(len as u64).to_le_bytes()); }
+fn write_len(context: &mut Context, len: usize) {
+    context.update(&(len as u64).to_le_bytes());
+}

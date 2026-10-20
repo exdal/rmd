@@ -42,11 +42,17 @@ impl Session {
         self.caches.get(&self.state.active()?).map(|cache| &cache.instances)
     }
 
-    pub fn toggle_areas(&mut self) { self.options.show_areas = !self.options.show_areas; }
+    pub fn toggle_areas(&mut self) {
+        self.options.show_areas = !self.options.show_areas;
+    }
 
-    pub fn toggle_area_outlines(&mut self) { self.options.show_area_outlines = !self.options.show_area_outlines; }
+    pub fn toggle_area_outlines(&mut self) {
+        self.options.show_area_outlines = !self.options.show_area_outlines;
+    }
 
-    pub fn toggle_lighting(&mut self) { self.options.show_lighting = !self.options.show_lighting; }
+    pub fn toggle_lighting(&mut self) {
+        self.options.show_lighting = !self.options.show_lighting;
+    }
 
     pub fn is_type_visible(&self, id: TypeId) -> bool {
         self.tree().is_some_and(|tree| tree.get(id).is_some()) && self.type_visibility.is_visible(id)
@@ -62,9 +68,13 @@ impl Session {
             .is_some_and(|root| self.toggle_type_visibility(root))
     }
 
-    fn layer_root(&self, layer: TypeLayer) -> Option<TypeId> { layer.root(self.tree()?.roots()) }
+    fn layer_root(&self, layer: TypeLayer) -> Option<TypeId> {
+        layer.root(self.tree()?.roots())
+    }
 
-    pub fn hides_types(&self) -> bool { self.type_visibility.hides_any() }
+    pub fn hides_types(&self) -> bool {
+        self.type_visibility.hides_any()
+    }
 
     pub fn show_all_types(&mut self) -> bool {
         let changed = self.type_visibility.show_all();
@@ -182,7 +192,9 @@ impl Session {
         }
     }
 
-    pub fn texture_revision(&self) -> u64 { self.texture_revision }
+    pub fn texture_revision(&self) -> u64 {
+        self.texture_revision
+    }
 
     pub fn extent_px(&self) -> (f32, f32) {
         self.state
@@ -329,7 +341,9 @@ impl Session {
         )
     }
 
-    pub(super) fn update_instance(&mut self, selected: PrefabInstanceId) { self.update_instances(&[selected]); }
+    pub(super) fn update_instance(&mut self, selected: PrefabInstanceId) {
+        self.update_instances(&[selected]);
+    }
 
     pub(super) fn update_instances(&mut self, affected: &[PrefabInstanceId]) {
         if let Some(id) = self.state.active() {
@@ -356,8 +370,7 @@ mod tests {
     };
 
     use crate::session::{
-        Session,
-        TypeLayer,
+        Session, TypeLayer,
         bake::MAX_PENDING_UPDATES,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, settle_bake},
     };

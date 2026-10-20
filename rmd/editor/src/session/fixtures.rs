@@ -10,8 +10,7 @@ use std::{
 
 use dmm::{Coord, Map, Prefab, Size};
 use editor::{
-    BakeProgram,
-    Environment,
+    BakeProgram, Environment,
     blame::BlameResult,
     diff::DiffSource,
     document::{DocumentId, MapDocument, PrefabInstanceId},
@@ -70,10 +69,14 @@ fn counted(change: isize) {
 }
 
 /// Heap bytes currently allocated by the whole test process.
-pub(crate) fn live_bytes() -> usize { LIVE_BYTES.load(std::sync::atomic::Ordering::Relaxed) }
+pub(crate) fn live_bytes() -> usize {
+    LIVE_BYTES.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// The most heap bytes allocated at once since the last call, which restarts the count.
-pub(crate) fn take_peak_bytes() -> usize { PEAK_BYTES.swap(live_bytes(), std::sync::atomic::Ordering::Relaxed) }
+pub(crate) fn take_peak_bytes() -> usize {
+    PEAK_BYTES.swap(live_bytes(), std::sync::atomic::Ordering::Relaxed)
+}
 
 /// The editor always loads in the background, but tests want one blocking call.
 impl Session {
@@ -100,7 +103,9 @@ impl Session {
             .expect("a document is open")
     }
 
-    pub(super) fn revision(&self) -> u64 { self.active_cache().revision }
+    pub(super) fn revision(&self) -> u64 {
+        self.active_cache().revision
+    }
 
     pub(crate) fn is_module_bake_deferred(&self) -> bool {
         matches!(self.active_cache().module_bake, super::ModuleBake::Deferred { .. })
@@ -122,7 +127,9 @@ impl Session {
         positions
     }
 
-    pub(super) fn frame_update(&self) -> Option<FrameUpdate> { self.active_cache().frame_updates.last().cloned() }
+    pub(super) fn frame_update(&self) -> Option<FrameUpdate> {
+        self.active_cache().frame_updates.last().cloned()
+    }
 }
 
 pub(super) fn conflicted_session() -> Session {

@@ -102,7 +102,9 @@ pub(crate) struct LoadReport {
 }
 
 impl LoadReport {
-    pub fn is_empty(&self) -> bool { self.warnings + self.errors == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.warnings + self.errors == 0
+    }
 
     pub fn count(&self, severity: DiagnosticSeverity) -> usize {
         match severity {
@@ -301,7 +303,9 @@ impl Session {
         report
     }
 
-    pub fn tree(&self) -> Option<&ObjectTree> { self.state.environment.as_ref().map(|environment| &environment.tree) }
+    pub fn tree(&self) -> Option<&ObjectTree> {
+        self.state.environment.as_ref().map(|environment| &environment.tree)
+    }
 
     pub(crate) fn type_source(&self, id: TypeId) -> Option<SourceLocation> {
         let environment = self.state.environment.as_ref()?;
@@ -334,9 +338,13 @@ impl Session {
             .map(|environment| environment.root.as_path())
     }
 
-    pub fn codebase_dir(&self) -> Option<&Path> { self.state.environment.as_deref().map(Environment::base_dir) }
+    pub fn codebase_dir(&self) -> Option<&Path> {
+        self.state.environment.as_deref().map(Environment::base_dir)
+    }
 
-    pub fn maps(&self) -> &[PathBuf] { &self.maps }
+    pub fn maps(&self) -> &[PathBuf] {
+        &self.maps
+    }
 
     pub fn icon_metadata(&self, name: &str) -> Option<&dmi::metadata::Metadata> {
         self.state.environment.as_ref()?.icon(name)
@@ -361,12 +369,7 @@ mod tests {
     use objtree::ObjectTree;
 
     use super::{
-        DiagnosticSeverity,
-        LoadReport,
-        MAX_REPORTED_DIAGNOSTICS,
-        build_textures,
-        discover_maps,
-        preprocess_severity,
+        DiagnosticSeverity, LoadReport, MAX_REPORTED_DIAGNOSTICS, build_textures, discover_maps, preprocess_severity,
     };
     use crate::session::{
         Session,

@@ -15,9 +15,13 @@ pub(crate) struct DmUi {
 }
 
 impl DmUi {
-    pub(crate) fn request_mouse_popup(&mut self) { self.mouse_popup_requested = true; }
+    pub(crate) fn request_mouse_popup(&mut self) {
+        self.mouse_popup_requested = true;
+    }
 
-    pub(crate) fn skip(&mut self) { self.mouse_popup_requested = false; }
+    pub(crate) fn skip(&mut self) {
+        self.mouse_popup_requested = false;
+    }
 
     pub(crate) fn draw(&mut self, ui: &Ui, session: &mut Session, dockspace: u32) {
         let feedback = UiFeedback {
@@ -264,13 +268,21 @@ impl DmUi {
         self.prune(commands);
     }
 
-    pub(crate) fn values(&self) -> &std::collections::HashMap<String, UiValue> { &self.feedback.values }
+    pub(crate) fn values(&self) -> &std::collections::HashMap<String, UiValue> {
+        &self.feedback.values
+    }
 
-    pub(crate) fn closed(&self) -> &HashSet<String> { &self.feedback.closed }
+    pub(crate) fn closed(&self) -> &HashSet<String> {
+        &self.feedback.closed
+    }
 
-    pub(crate) fn clicks(&self) -> &HashSet<String> { &self.clicks }
+    pub(crate) fn clicks(&self) -> &HashSet<String> {
+        &self.clicks
+    }
 
-    pub(crate) fn open_popups(&self) -> &HashSet<UiPopupId> { &self.feedback.open_popups }
+    pub(crate) fn open_popups(&self) -> &HashSet<UiPopupId> {
+        &self.feedback.open_popups
+    }
 }
 
 #[cfg(test)]

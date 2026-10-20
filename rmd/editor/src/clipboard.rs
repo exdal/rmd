@@ -8,16 +8,8 @@ use crate::{
     document::{MapDocument, PlacedPrefab, PlacedTile, Selection},
     frame::HiddenTypes,
     tool::{
-        BlockSelectionMode,
-        PlacementKind,
-        SelectionRotation,
-        ToolEdit,
-        coord_in_bounds,
-        default_tile_paths,
-        insertion_index,
-        placement_kind,
-        rotate_point,
-        rotate_prefab,
+        BlockSelectionMode, PlacementKind, SelectionRotation, ToolEdit, coord_in_bounds, default_tile_paths,
+        insertion_index, placement_kind, rotate_point, rotate_prefab,
     },
 };
 
@@ -33,11 +25,17 @@ pub struct TileBlock {
 }
 
 impl TileBlock {
-    pub fn width(&self) -> u32 { self.width }
+    pub fn width(&self) -> u32 {
+        self.width
+    }
 
-    pub fn height(&self) -> u32 { self.height }
+    pub fn height(&self) -> u32 {
+        self.height
+    }
 
-    pub fn selection_mode(&self) -> BlockSelectionMode { self.selection_mode }
+    pub fn selection_mode(&self) -> BlockSelectionMode {
+        self.selection_mode
+    }
 
     pub fn tile(&self, x: u32, y: u32) -> Option<&Tile> {
         (x < self.width && y < self.height).then(|| &self.tiles[(y * self.width + x) as usize])

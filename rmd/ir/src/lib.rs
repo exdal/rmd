@@ -23,11 +23,15 @@ pub use verify::{VerifyError, verify};
 pub struct BindingId(pub u32);
 
 impl std::fmt::Display for BindingId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "var{}", self.0) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "var{}", self.0)
+    }
 }
 
 impl std::fmt::Debug for BindingId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { std::fmt::Display::fmt(self, f) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -327,7 +331,9 @@ impl IrNode {
         )
     }
 
-    pub fn is_merge(&self) -> bool { matches!(self, Self::SelectionMerge { .. } | Self::LoopMerge { .. }) }
+    pub fn is_merge(&self) -> bool {
+        matches!(self, Self::SelectionMerge { .. } | Self::LoopMerge { .. })
+    }
 
     pub fn operands(&self) -> Vec<IrNodeId> {
         let mut operands = Vec::new();
@@ -472,9 +478,13 @@ pub struct ProcIndex {
 }
 
 impl ProcIndex {
-    pub fn body(&self, ty: TypeId, name: &Identifier) -> Option<ProcId> { lookup(&self.bodies, ty, name) }
+    pub fn body(&self, ty: TypeId, name: &Identifier) -> Option<ProcId> {
+        lookup(&self.bodies, ty, name)
+    }
 
-    pub fn initializer(&self, ty: TypeId, name: &Identifier) -> Option<ProcId> { lookup(&self.initializers, ty, name) }
+    pub fn initializer(&self, ty: TypeId, name: &Identifier) -> Option<ProcId> {
+        lookup(&self.initializers, ty, name)
+    }
 
     pub fn inherited_body(&self, tree: &ObjectTree, ty: TypeId, name: &Identifier) -> Option<ProcId> {
         let declaration = tree
@@ -520,9 +530,13 @@ fn set(maps: &mut Vec<SymbolMap<ProcId>>, ty: TypeId, name: Identifier, proc: Op
 }
 
 impl Module {
-    pub fn node(&self, id: IrNodeId) -> Option<&IrNode> { self.nodes.get(id.0 as usize) }
+    pub fn node(&self, id: IrNodeId) -> Option<&IrNode> {
+        self.nodes.get(id.0 as usize)
+    }
 
-    pub fn proc(&self, id: ProcId) -> Option<&Procedure> { self.procs.get(id.0 as usize) }
+    pub fn proc(&self, id: ProcId) -> Option<&Procedure> {
+        self.procs.get(id.0 as usize)
+    }
 
     pub fn block(&self, id: IrNodeId) -> Option<&[IrNodeId]> {
         match self.node(id)? {

@@ -192,7 +192,9 @@ enum TextPropertyKind {
 }
 
 impl InspectorState {
-    pub(crate) const fn transform_mode(&self) -> TransformMode { self.transform_mode }
+    pub(crate) const fn transform_mode(&self) -> TransformMode {
+        self.transform_mode
+    }
 
     pub fn draw(&mut self, ui: &Ui, session: &mut Session, pins: &mut Vec<String>) -> InspectorOutput {
         let Some(snapshot) = inspector_snapshot(session) else {
@@ -819,7 +821,9 @@ fn end_drag(active_drag: &mut Option<(Identifier, EditGroupId)>, name: &Identifi
 }
 
 impl InspectorSnapshot {
-    fn property(&self, name: &str) -> Option<&InspectorProperty> { self.properties.get(&Identifier::from(name)) }
+    fn property(&self, name: &str) -> Option<&InspectorProperty> {
+        self.properties.get(&Identifier::from(name))
+    }
 
     fn text(&self, name: &str) -> String {
         self.property(name)
@@ -830,7 +834,9 @@ impl InspectorSnapshot {
 }
 
 impl InspectorFilter {
-    fn is_active(&self) -> bool { self.modified_only || !self.query.trim().is_empty() }
+    fn is_active(&self) -> bool {
+        self.modified_only || !self.query.trim().is_empty()
+    }
 
     fn shows(&self, name: &str, overridden: bool) -> bool {
         let query = self.query.trim().to_ascii_lowercase().replace(' ', "_");
@@ -1874,11 +1880,17 @@ impl InspectorPanel {
         })
     }
 
-    pub(super) const fn window(&self) -> &WindowKey { &self.window }
+    pub(super) const fn window(&self) -> &WindowKey {
+        &self.window
+    }
 
-    pub(super) const fn transform_mode(&self) -> TransformMode { self.state.transform_mode() }
+    pub(super) const fn transform_mode(&self) -> TransformMode {
+        self.state.transform_mode()
+    }
 
-    pub(super) fn edits_identical(&self) -> bool { self.state.scope == EditScope::Identical }
+    pub(super) fn edits_identical(&self) -> bool {
+        self.state.scope == EditScope::Identical
+    }
 
     pub(super) fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, focus: bool, open: &mut bool,

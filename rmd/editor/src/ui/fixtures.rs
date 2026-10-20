@@ -11,13 +11,9 @@ use editor::document::DocumentId;
 use render::MapViewInteraction;
 
 use super::{
-    MapViewState,
-    OverlayRect,
-    UiState,
-    conflict_controls_layout,
+    MapViewState, OverlayRect, UiState, conflict_controls_layout,
     menu::MenuActions,
-    overlay_padding,
-    recent_button_size,
+    overlay_padding, recent_button_size,
     viewport::{MapViewDraw, modules::controls_layout as module_controls_layout},
 };
 use crate::{session::Session, settings::Settings};
@@ -38,15 +34,21 @@ pub(super) struct PopupContext(Context);
 impl Deref for PopupContext {
     type Target = Context;
 
-    fn deref(&self) -> &Context { &self.0 }
+    fn deref(&self) -> &Context {
+        &self.0
+    }
 }
 
 impl DerefMut for PopupContext {
-    fn deref_mut(&mut self) -> &mut Context { &mut self.0 }
+    fn deref_mut(&mut self) -> &mut Context {
+        &mut self.0
+    }
 }
 
 impl Drop for PopupContext {
-    fn drop(&mut self) { self.0.destroy_platform_windows().unwrap(); }
+    fn drop(&mut self) {
+        self.0.destroy_platform_windows().unwrap();
+    }
 }
 
 /// Optionally installs a headless backend for ImGui's desktop-coordinate viewport behavior.

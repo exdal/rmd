@@ -9,15 +9,8 @@ use crate::{
     ui::{
         UiState,
         coop::{
-            CommentHit,
-            comment_at,
-            draw_comment_composer,
-            draw_comments,
-            draw_receiving,
-            draw_remote_cursors,
-            draw_remote_selections,
-            draw_tab_out_of_date,
-            draw_tab_progress,
+            CommentHit, comment_at, draw_comment_composer, draw_comments, draw_receiving, draw_remote_cursors,
+            draw_remote_selections, draw_tab_out_of_date, draw_tab_progress,
         },
     },
 };

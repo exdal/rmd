@@ -7,43 +7,15 @@ use ash::vk;
 use dear_imgui_rs::{
     TextureId,
     render::{
-        DrawCmd,
-        DrawData,
-        SnapshotTextureId,
-        TextureFeedback,
-        TextureOp,
-        TextureRequest,
-        TextureUploadIdentity,
+        DrawCmd, DrawData, SnapshotTextureId, TextureFeedback, TextureOp, TextureRequest, TextureUploadIdentity,
         TextureUploadRect,
     },
     texture::{TextureFormat, get_format_bytes_per_pixel},
 };
 use vir::{
-    Access,
-    AllocatorKind,
-    BlendPreset,
-    Buffer,
-    BufferImageCopy,
-    BufferInfo,
-    Context,
-    DomainFlag,
-    DynamicStateFlags,
-    FrameAllocator,
-    GraphicsPipelineInfo,
-    Image,
-    ImageAttachment,
-    ImageInfo,
-    MemoryLocation,
-    Module,
-    PassCallback,
-    PipelineId,
-    Program,
-    RasterizationState,
-    Rect2D,
-    RenderGraph,
-    SamplerInfo,
-    ValueId,
-    allocator::Allocator,
+    Access, AllocatorKind, BlendPreset, Buffer, BufferImageCopy, BufferInfo, Context, DomainFlag, DynamicStateFlags,
+    FrameAllocator, GraphicsPipelineInfo, Image, ImageAttachment, ImageInfo, MemoryLocation, Module, PassCallback,
+    PipelineId, Program, RasterizationState, Rect2D, RenderGraph, SamplerInfo, ValueId, allocator::Allocator,
 };
 
 use crate::{device::Device, error::GpuError, read_spirv, renderer::TextureImage};
@@ -56,7 +28,9 @@ const FIRST_MINTED_TEXTURE: u64 = 2;
 const MAP_VIEW_TEXTURE_TAG: u64 = 1 << 62;
 const SPRITE_TEXTURE_TAG: u64 = 1 << 63;
 
-pub const fn map_view_texture(index: usize) -> TextureId { TextureId::new(MAP_VIEW_TEXTURE_TAG | index as u64) }
+pub const fn map_view_texture(index: usize) -> TextureId {
+    TextureId::new(MAP_VIEW_TEXTURE_TAG | index as u64)
+}
 
 fn map_view_texture_index(texture: TextureId) -> Option<usize> {
     let raw = texture.id();
@@ -66,7 +40,9 @@ fn map_view_texture_index(texture: TextureId) -> Option<usize> {
         .then_some(index as usize)
 }
 
-pub const fn sprite_texture(index: u32) -> TextureId { TextureId::new(SPRITE_TEXTURE_TAG | index as u64) }
+pub const fn sprite_texture(index: u32) -> TextureId {
+    TextureId::new(SPRITE_TEXTURE_TAG | index as u64)
+}
 
 fn sprite_texture_index(texture: TextureId) -> Option<usize> {
     let raw = texture.id();
@@ -127,7 +103,9 @@ pub struct ImGuiFrame {
 }
 
 impl ImGuiFrame {
-    pub fn draw_count(&self) -> usize { self.draws.len() }
+    pub fn draw_count(&self) -> usize {
+        self.draws.len()
+    }
 }
 
 pub struct ImGuiSlots {
@@ -670,7 +648,9 @@ impl ImGuiPass {
     }
 }
 
-fn imgui_error(error: impl std::fmt::Display) -> GpuError { GpuError::ImGui(error.to_string()) }
+fn imgui_error(error: impl std::fmt::Display) -> GpuError {
+    GpuError::ImGui(error.to_string())
+}
 
 /// `DrawVert` as the vertex buffer holds it. The shader reads the color as a `uint`, so the
 /// packed layout is what goes over the wire.
@@ -796,9 +776,7 @@ fn rows(format: TextureFormat, extent: vk::Extent2D, row_pitch: usize, source: &
 mod tests {
     use dear_imgui_rs::{render::DrawVert, texture::TextureRect};
     use vir::{
-        DescriptorBinding,
-        VertexAttribute,
-        VertexLayout,
+        DescriptorBinding, VertexAttribute, VertexLayout,
         resource::{pipeline::push_constant_ranges, shader},
     };
 

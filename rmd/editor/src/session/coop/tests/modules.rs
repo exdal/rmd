@@ -2,15 +2,7 @@ use std::error::Error;
 
 use super::*;
 use crate::session::modules::tests::{
-    Fixture,
-    MODULE,
-    TestResult,
-    WALL,
-    assert_settled,
-    has,
-    open_document,
-    place_in,
-    show,
+    Fixture, MODULE, TestResult, WALL, assert_settled, has, open_document, place_in, show,
 };
 
 struct Shared {
@@ -72,7 +64,9 @@ fn share(session: &mut Session, id: DocumentId, path: &str) {
     });
 }
 
-fn is_read_only(session: &Session, id: DocumentId) -> bool { session.state.document(id).unwrap().is_read_only() }
+fn is_read_only(session: &Session, id: DocumentId) -> bool {
+    session.state.document(id).unwrap().is_read_only()
+}
 
 fn module_edit(seen: u32) -> net::MapEdit {
     let mut patch = dmm::Map::new(dmm::Size { x: 1, y: 1, z: 1 });

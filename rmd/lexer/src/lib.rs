@@ -39,9 +39,13 @@ impl IndentStack {
         }
     }
 
-    fn len(&self) -> usize { self.as_slice().len() }
+    fn len(&self) -> usize {
+        self.as_slice().len()
+    }
 
-    fn last(&self) -> Option<usize> { self.as_slice().last().map(|width| *width as usize) }
+    fn last(&self) -> Option<usize> {
+        self.as_slice().last().map(|width| *width as usize)
+    }
 
     fn push(&mut self, width: usize) {
         let width = width as u32;
@@ -111,7 +115,9 @@ pub struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-    pub fn new(buffer_view: &'a str) -> Self { Self::with_file(buffer_view, FileId::default()) }
+    pub fn new(buffer_view: &'a str) -> Self {
+        Self::with_file(buffer_view, FileId::default())
+    }
 
     pub fn with_file(buffer_view: &'a str, file: FileId) -> Self {
         Self {
@@ -132,17 +138,29 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub fn errors(&self) -> &[LexError] { &self.errors }
+    pub fn errors(&self) -> &[LexError] {
+        &self.errors
+    }
 
-    pub fn take_errors(&mut self) -> Vec<LexError> { std::mem::take(&mut self.errors) }
+    pub fn take_errors(&mut self) -> Vec<LexError> {
+        std::mem::take(&mut self.errors)
+    }
 
-    pub fn error_count(&self) -> usize { self.errors.len() }
+    pub fn error_count(&self) -> usize {
+        self.errors.len()
+    }
 
-    pub fn truncate_errors(&mut self, count: usize) { self.errors.truncate(count); }
+    pub fn truncate_errors(&mut self, count: usize) {
+        self.errors.truncate(count);
+    }
 
-    pub fn file(&self) -> FileId { self.file }
+    pub fn file(&self) -> FileId {
+        self.file
+    }
 
-    pub fn at_line_start(&self) -> bool { self.at_line_start }
+    pub fn at_line_start(&self) -> bool {
+        self.at_line_start
+    }
 
     pub fn indent_state(&self) -> IndentState {
         IndentState {
@@ -180,17 +198,29 @@ impl<'a> Lexer<'a> {
         self.brace_stack = state.brace_stack;
     }
 
-    pub fn keep_indents_at_eof(&mut self) { self.close_indents_at_eof = false; }
+    pub fn keep_indents_at_eof(&mut self) {
+        self.close_indents_at_eof = false;
+    }
 
-    pub fn open_indents(&self) -> usize { self.pending_dedents + self.indent_stack.len().saturating_sub(1) }
+    pub fn open_indents(&self) -> usize {
+        self.pending_dedents + self.indent_stack.len().saturating_sub(1)
+    }
 
-    pub fn position(&self) -> Position { Position::new(self.line + 1, self.offset - self.line_offset + 1) }
+    pub fn position(&self) -> Position {
+        Position::new(self.line + 1, self.offset - self.line_offset + 1)
+    }
 
-    fn byte_at(&self, offset: usize) -> u8 { self.buffer_view.as_bytes().get(offset).copied().unwrap_or(0) }
+    fn byte_at(&self, offset: usize) -> u8 {
+        self.buffer_view.as_bytes().get(offset).copied().unwrap_or(0)
+    }
 
-    fn peek(&self, look_ahead: usize) -> u8 { self.byte_at(self.offset + look_ahead) }
+    fn peek(&self, look_ahead: usize) -> u8 {
+        self.byte_at(self.offset + look_ahead)
+    }
 
-    fn is_eof(&self) -> bool { self.offset >= self.buffer_view.len() }
+    fn is_eof(&self) -> bool {
+        self.offset >= self.buffer_view.len()
+    }
 
     fn consume(&mut self) {
         debug_assert_ne!(self.peek(0), b'\n', "Unexpected new line");
@@ -214,19 +244,29 @@ impl<'a> Lexer<'a> {
         });
     }
 
-    fn slice(&self, start: usize) -> &'a str { &self.buffer_view[start..self.offset] }
+    fn slice(&self, start: usize) -> &'a str {
+        &self.buffer_view[start..self.offset]
+    }
 
     fn located(&self, token: Token<'a>, begin: Position) -> (Token<'a>, Location) {
         (token, Location::in_file(self.file, begin, self.position()))
     }
 
-    pub fn layout_suppressed(&self) -> bool { self.suppress_layout() }
+    pub fn layout_suppressed(&self) -> bool {
+        self.suppress_layout()
+    }
 
-    pub fn disable_layout(&mut self) { self.layout_disabled = true; }
+    pub fn disable_layout(&mut self) {
+        self.layout_disabled = true;
+    }
 
-    pub fn emit_suppressed_newlines(&mut self) { self.emit_suppressed_newlines = true; }
+    pub fn emit_suppressed_newlines(&mut self) {
+        self.emit_suppressed_newlines = true;
+    }
 
-    fn suppress_layout(&self) -> bool { self.layout_disabled || self.paren_depth > 0 || !self.brace_stack.is_empty() }
+    fn suppress_layout(&self) -> bool {
+        self.layout_disabled || self.paren_depth > 0 || !self.brace_stack.is_empty()
+    }
 
     fn skip_horizontal_whitespace(&mut self) {
         while matches!(self.peek(0), b' ' | b'\t') {
@@ -1055,7 +1095,9 @@ mod tests {
         token::{SoftKeyword, Token},
     };
 
-    fn drain(lexer: &mut Lexer<'_>) { while lexer.next(true).0 != Token::Eof {} }
+    fn drain(lexer: &mut Lexer<'_>) {
+        while lexer.next(true).0 != Token::Eof {}
+    }
 
     fn tokens(source: &str) -> Vec<Token<'_>> {
         let mut lexer = Lexer::new(source);

@@ -173,7 +173,9 @@ impl<'a> IrModuleBuilder<'a> {
         })
     }
 
-    pub fn finish(self) -> Module { self.finish_with_optimizations(true).0 }
+    pub fn finish(self) -> Module {
+        self.finish_with_optimizations(true).0
+    }
 
     pub fn finish_with_optimizations(mut self, enabled: bool) -> (Module, opt::OptimizationTimings) {
         self.link_global_function_calls();
@@ -196,9 +198,13 @@ impl<'a> IrModuleBuilder<'a> {
         (self.module, timings)
     }
 
-    pub(crate) fn unresolved_types(&self) -> &[UnresolvedType] { &self.unresolved_types }
+    pub(crate) fn unresolved_types(&self) -> &[UnresolvedType] {
+        &self.unresolved_types
+    }
 
-    pub(crate) fn resolve_type(&mut self, node: IrNodeId, ty: TreePath) { self.set_implied_type(node, Some(ty)); }
+    pub(crate) fn resolve_type(&mut self, node: IrNodeId, ty: TreePath) {
+        self.set_implied_type(node, Some(ty));
+    }
 
     #[allow(clippy::too_many_arguments)]
     pub fn lower_proc(
@@ -475,7 +481,9 @@ impl<'a> IrModuleBuilder<'a> {
         Some(self.intern_external_function(name.clone()))
     }
 
-    fn set_current_block(&mut self, block: IrNodeId) { self.current_block = Some(block); }
+    fn set_current_block(&mut self, block: IrNodeId) {
+        self.current_block = Some(block);
+    }
 
     fn emit_instr(&mut self, node: IrNode) -> IrNodeId {
         let id = self.make_node(node);
@@ -611,7 +619,9 @@ impl<'a> IrModuleBuilder<'a> {
         });
     }
 
-    fn selection_merge(&mut self, merge_block: IrNodeId) { self.emit_instr(IrNode::SelectionMerge { merge_block }); }
+    fn selection_merge(&mut self, merge_block: IrNodeId) {
+        self.emit_instr(IrNode::SelectionMerge { merge_block });
+    }
 
     fn write_variable(&mut self, var: BindingId, block: IrNodeId, value: IrNodeId) {
         if let Some(pointer) = self.stored_bindings.get(&var).copied() {
@@ -675,7 +685,9 @@ impl<'a> IrModuleBuilder<'a> {
         phi
     }
 
-    fn undefined(&mut self) -> IrNodeId { self.intern_constant(Value::Null) }
+    fn undefined(&mut self) -> IrNodeId {
+        self.intern_constant(Value::Null)
+    }
 
     /// `issaved(A.b)` and `issaved(A.vars[name])` ask about a var, not its value, so the call gets
     /// the var's owner and its name
@@ -2242,7 +2254,9 @@ mod tests {
         fixture!("programs/combined-control-flow-shape.dm"),
     ];
 
-    fn lower(source: &str) -> Module { lower_with_optimizations(source, true).0 }
+    fn lower(source: &str) -> Module {
+        lower_with_optimizations(source, true).0
+    }
 
     fn lower_with_optimizations(source: &str, enabled: bool) -> (Module, opt::OptimizationTimings) {
         let (tokens, _) = lexer::tokenize(source);
@@ -2349,9 +2363,13 @@ mod tests {
         preds
     }
 
-    fn nodes(module: &Module) -> Vec<String> { module.nodes.iter().map(|node| format!("{node:?}")).collect() }
+    fn nodes(module: &Module) -> Vec<String> {
+        module.nodes.iter().map(|node| format!("{node:?}")).collect()
+    }
 
-    fn has(module: &Module, needle: &str) -> bool { nodes(module).iter().any(|node| node.contains(needle)) }
+    fn has(module: &Module, needle: &str) -> bool {
+        nodes(module).iter().any(|node| node.contains(needle))
+    }
 
     /// A block that falls off its end would let the VM run into the next one by accident, and a
     /// merge declaration is only valid immediately before the branch it describes.

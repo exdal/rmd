@@ -911,15 +911,8 @@ mod tests {
     };
 
     use super::{
-        EntrySelection,
-        evaluate_file,
-        evaluate_file_with,
-        format_location,
-        format_parse_error,
-        parse_entry_selection,
-        render_icon,
-        render_tree,
-        source_root,
+        EntrySelection, evaluate_file, evaluate_file_with, format_location, format_parse_error, parse_entry_selection,
+        render_icon, render_tree, source_root,
     };
 
     #[test]

@@ -69,7 +69,9 @@ pub struct SourceMap<'a> {
 }
 
 impl<'a> SourceMap<'a> {
-    pub fn new() -> Self { Self { files: Vec::new() } }
+    pub fn new() -> Self {
+        Self { files: Vec::new() }
+    }
 
     pub fn add(&mut self, arena: &'a StrArena, path: impl Into<PathBuf>, contents: String) -> FileId {
         self.add_borrowed(path, arena.alloc(contents))
@@ -89,20 +91,30 @@ impl<'a> SourceMap<'a> {
         Ok(self.add(arena, path, contents))
     }
 
-    pub fn get(&self, id: FileId) -> Option<&SourceFile<'a>> { self.files.get(id.0 as usize) }
+    pub fn get(&self, id: FileId) -> Option<&SourceFile<'a>> {
+        self.files.get(id.0 as usize)
+    }
 
-    pub fn contents(&self, id: FileId) -> Option<&'a str> { self.get(id).map(|f| f.contents) }
+    pub fn contents(&self, id: FileId) -> Option<&'a str> {
+        self.get(id).map(|f| f.contents)
+    }
 
-    pub fn path(&self, id: FileId) -> Option<&Path> { self.get(id).map(|f| f.path.as_path()) }
+    pub fn path(&self, id: FileId) -> Option<&Path> {
+        self.get(id).map(|f| f.path.as_path())
+    }
 
     pub fn find(&self, path: impl AsRef<Path>) -> Option<FileId> {
         let path = path.as_ref();
         self.files.iter().position(|f| f.path == path).map(|i| FileId(i as u32))
     }
 
-    pub fn len(&self) -> usize { self.files.len() }
+    pub fn len(&self) -> usize {
+        self.files.len()
+    }
 
-    pub fn is_empty(&self) -> bool { self.files.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
 }
 
 #[cfg(test)]

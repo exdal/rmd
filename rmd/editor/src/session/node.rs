@@ -294,7 +294,9 @@ impl Session {
         commit && valid
     }
 
-    pub(crate) fn node_dragging(&self) -> bool { self.node_edit.as_ref().is_some_and(|state| state.drag.is_some()) }
+    pub(crate) fn node_dragging(&self) -> bool {
+        self.node_edit.as_ref().is_some_and(|state| state.drag.is_some())
+    }
 
     pub(crate) fn cancel_node_drag(&mut self) {
         let Some(mut state) = self.node_edit.take() else {
@@ -719,17 +721,10 @@ mod tests {
     use editor::{document::MapDocument, focus::AreaFocus};
 
     use crate::session::{
-        DocumentCache,
-        Session,
+        DocumentCache, Session,
         fixtures::{
-            layered_node_session,
-            node_environment,
-            node_map,
-            node_session,
-            node_tile_has_group,
-            oriented_dir,
-            oriented_node_map,
-            oriented_node_session,
+            layered_node_session, node_environment, node_map, node_session, node_tile_has_group, oriented_dir,
+            oriented_node_map, oriented_node_session,
         },
     };
 

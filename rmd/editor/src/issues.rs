@@ -26,7 +26,9 @@ fn unknown_kind(tree: &ObjectTree, path: &TreePath) -> Option<PlacementKind> {
     None
 }
 
-pub fn has_replacement_kind(tree: &ObjectTree, source: &TreePath) -> bool { unknown_kind(tree, source).is_some() }
+pub fn has_replacement_kind(tree: &ObjectTree, source: &TreePath) -> bool {
+    unknown_kind(tree, source).is_some()
+}
 
 pub fn can_replace(tree: &ObjectTree, source: &TreePath, target: &TreePath) -> bool {
     unknown_kind(tree, source).is_some_and(|kind| placement_kind(tree, &Prefab::new(target.clone())) == Some(kind))

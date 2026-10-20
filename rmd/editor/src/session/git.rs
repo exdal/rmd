@@ -327,7 +327,9 @@ impl Session {
     }
 
     /// The map whose merge conflicts were loaded since the last call
-    pub(crate) fn take_loaded_conflicts(&mut self) -> Option<DocumentId> { self.loaded_conflicts.take() }
+    pub(crate) fn take_loaded_conflicts(&mut self) -> Option<DocumentId> {
+        self.loaded_conflicts.take()
+    }
 
     pub(crate) fn clear_git_error(&mut self, id: DocumentId) {
         if let Some(git) = self.caches.get_mut(&id).and_then(|cache| cache.git.as_mut()) {

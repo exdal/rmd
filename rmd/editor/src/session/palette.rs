@@ -66,9 +66,13 @@ fn thumbnail_for_texture(
 }
 
 impl Session {
-    pub fn palette(&self) -> Option<&Prefab> { self.state.palette.as_ref() }
+    pub fn palette(&self) -> Option<&Prefab> {
+        self.state.palette.as_ref()
+    }
 
-    pub fn recent_prefabs(&self) -> &[Prefab] { self.state.recent_prefabs() }
+    pub fn recent_prefabs(&self) -> &[Prefab] {
+        self.state.recent_prefabs()
+    }
 
     pub(crate) fn prefab_appearance(&mut self, prefab: &Prefab) -> Option<visual::Appearance> {
         let environment = self.state.environment.clone()?;

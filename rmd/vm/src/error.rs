@@ -77,7 +77,9 @@ impl Fault {
         }
     }
 
-    pub fn proc(&self) -> Option<ProcId> { self.frames.first().map(|frame| frame.proc) }
+    pub fn proc(&self) -> Option<ProcId> {
+        self.frames.first().map(|frame| frame.proc)
+    }
 
     pub fn key(&self) -> FaultKey {
         FaultKey {
@@ -89,7 +91,9 @@ impl Fault {
         }
     }
 
-    pub fn outermost_proc_id(&self) -> Option<ProcId> { self.frames.last().map(|frame| frame.proc) }
+    pub fn outermost_proc_id(&self) -> Option<ProcId> {
+        self.frames.last().map(|frame| frame.proc)
+    }
 
     /// A fault raised before `proc` ran its first instruction, such as setting up its globals
     pub fn entering(mut self, module: &Module, proc: ProcId) -> Self {

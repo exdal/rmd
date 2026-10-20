@@ -24,18 +24,9 @@ use self::{
     tools::{Clicks, apply_right_click, configure_tool_interaction, draw_node_hit, drive_node_tool, interaction_mode},
 };
 use super::{
-    BlamePopup,
-    CloseFocus,
-    OverlayRect,
-    UiState,
-    VisibleMapView,
-    common::focus_window_on_hover,
-    context_menu::Target as MenuTarget,
-    draw_fill_limit_warning,
-    node::NodeOverlayHit,
-    overlay_padding,
-    recent_button_size,
-    restore_rectangle_gesture,
+    BlamePopup, CloseFocus, OverlayRect, UiState, VisibleMapView, common::focus_window_on_hover,
+    context_menu::Target as MenuTarget, draw_fill_limit_warning, node::NodeOverlayHit, overlay_padding,
+    recent_button_size, restore_rectangle_gesture,
 };
 use crate::{
     camera::Controller,
@@ -103,7 +94,9 @@ impl MapViewState {
         })
     }
 
-    pub(super) const fn window(&self) -> &WindowKey { &self.window }
+    pub(super) const fn window(&self) -> &WindowKey {
+        &self.window
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -140,7 +133,9 @@ impl ViewLayout {
         }
     }
 
-    fn center(&self) -> [f32; 2] { [self.extent.0 as f32 * 0.5, self.extent.1 as f32 * 0.5] }
+    fn center(&self) -> [f32; 2] {
+        [self.extent.0 as f32 * 0.5, self.extent.1 as f32 * 0.5]
+    }
 
     fn controls_area(&self) -> OverlayRect {
         OverlayRect {

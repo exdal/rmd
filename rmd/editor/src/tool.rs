@@ -16,15 +16,8 @@ use crate::{
     frame::HiddenTypes,
     grid::Grid,
     icons::materialdesignicons::{
-        ICON_COMMENT_TEXT_OUTLINE,
-        ICON_ERASER,
-        ICON_EYEDROPPER,
-        ICON_FIND_REPLACE,
-        ICON_FORMAT_COLOR_FILL,
-        ICON_PENCIL,
-        ICON_SELECT_DRAG,
-        ICON_TEXTURE,
-        ICON_VECTOR_POLYLINE,
+        ICON_COMMENT_TEXT_OUTLINE, ICON_ERASER, ICON_EYEDROPPER, ICON_FIND_REPLACE, ICON_FORMAT_COLOR_FILL,
+        ICON_PENCIL, ICON_SELECT_DRAG, ICON_TEXTURE, ICON_VECTOR_POLYLINE,
     },
     visual,
 };
@@ -131,7 +124,9 @@ pub struct SelectionMask {
 }
 
 impl SelectionMask {
-    pub fn includes(self, coord: Coord) -> bool { self.mode.includes(self.bounds, coord) }
+    pub fn includes(self, coord: Coord) -> bool {
+        self.mode.includes(self.bounds, coord)
+    }
 }
 
 impl BlockSelectionMode {
@@ -502,9 +497,13 @@ struct SelectionEditRequest<'a> {
 }
 
 impl SelectionEditRequest<'_> {
-    fn source_tiles(&self) -> impl Iterator<Item = Coord> { self.mode.tiles(self.source) }
+    fn source_tiles(&self) -> impl Iterator<Item = Coord> {
+        self.mode.tiles(self.source)
+    }
 
-    fn touched_tiles(&self) -> impl Iterator<Item = Coord> { self.source_tiles().chain(self.mode.tiles(self.target)) }
+    fn touched_tiles(&self) -> impl Iterator<Item = Coord> {
+        self.source_tiles().chain(self.mode.tiles(self.target))
+    }
 
     fn destination_of(&self, coord: Coord) -> Coord {
         let mut point = (coord.x - self.source.min.x, coord.y - self.source.min.y);
@@ -1237,30 +1236,10 @@ mod tests {
     use objtree::VarDecl;
 
     use super::{
-        BlockSelectionMode,
-        Dir,
-        FillError,
-        FillMode,
-        MAX_FILL_TILES,
-        Selection,
-        SelectionMask,
-        SelectionPlacement,
-        SelectionRotation,
-        SelectionTransform,
-        Tool,
-        ToolContext,
-        copy_selection,
-        default_tile_paths,
-        fill_selection,
-        move_selection,
-        place_replacing_objs,
-        place_selection,
-        place_selection_with_mode,
-        rotate_point,
-        transform_direction,
-        transform_point,
-        transform_selection,
-        transform_selection_with_mode,
+        BlockSelectionMode, Dir, FillError, FillMode, MAX_FILL_TILES, Selection, SelectionMask, SelectionPlacement,
+        SelectionRotation, SelectionTransform, Tool, ToolContext, copy_selection, default_tile_paths, fill_selection,
+        move_selection, place_replacing_objs, place_selection, place_selection_with_mode, rotate_point,
+        transform_direction, transform_point, transform_selection, transform_selection_with_mode,
         transformed_selection,
     };
     use crate::{document::MapDocument, focus::AreaFocus, frame::HiddenTypes};
@@ -1337,7 +1316,9 @@ mod tests {
         MapDocument::new(map, 1)
     }
 
-    fn prefabs(paths: &[&str]) -> Vec<Prefab> { paths.iter().map(|path| Prefab::new(TreePath::parse(path))).collect() }
+    fn prefabs(paths: &[&str]) -> Vec<Prefab> {
+        paths.iter().map(|path| Prefab::new(TreePath::parse(path))).collect()
+    }
 
     fn tile_paths(document: &MapDocument, coord: Coord) -> Vec<String> {
         document

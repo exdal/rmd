@@ -83,12 +83,18 @@ impl fmt::Display for Error {
 impl error::Error for Error {}
 
 impl From<postcard::Error> for Error {
-    fn from(e: postcard::Error) -> Self { Self::Codec(e) }
+    fn from(e: postcard::Error) -> Self {
+        Self::Codec(e)
+    }
 }
 
-pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, Error> { Ok(postcard::to_stdvec(value)?) }
+pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, Error> {
+    Ok(postcard::to_stdvec(value)?)
+}
 
-pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Error> { Ok(postcard::from_bytes(bytes)?) }
+pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Error> {
+    Ok(postcard::from_bytes(bytes)?)
+}
 
 #[cfg(test)]
 mod tests {

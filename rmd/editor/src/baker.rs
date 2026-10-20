@@ -70,7 +70,9 @@ pub struct Baker {
 }
 
 impl Baker {
-    pub fn is_busy(&self) -> bool { self.active.is_some() }
+    pub fn is_busy(&self) -> bool {
+        self.active.is_some()
+    }
 
     pub fn baking(&self, document: DocumentId) -> bool {
         self.active.as_ref().is_some_and(|active| active.document == document)
@@ -83,7 +85,9 @@ impl Baker {
     }
 
     #[cfg(test)]
-    pub fn invalidated(&self, document: DocumentId) -> bool { self.stale.contains(&document) }
+    pub fn invalidated(&self, document: DocumentId) -> bool {
+        self.stale.contains(&document)
+    }
 
     pub fn invalidate(&mut self, document: DocumentId) {
         if self.baking(document) && !self.stale.contains(&document) {

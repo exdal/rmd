@@ -27,7 +27,9 @@ impl DiffSide {
         Self { source, commit, map }
     }
 
-    pub fn is_working(&self) -> bool { self.source == DiffSource::Working }
+    pub fn is_working(&self) -> bool {
+        self.source == DiffSource::Working
+    }
 
     /// `HEAD` or `main` as typed, a short hash for commits picked from the history
     pub fn label(&self) -> String {
@@ -70,7 +72,9 @@ impl DiffState {
     }
 
     /// Whether tiles can be restored from `from` onto the map
-    pub fn restorable(&self) -> bool { self.to.is_working() && !self.from.is_working() }
+    pub fn restorable(&self) -> bool {
+        self.to.is_working() && !self.from.is_working()
+    }
 
     fn with_view<R>(&self, map_revision: u64, working: &Grid, read: impl FnOnce(&mut DiffView) -> R) -> R {
         let key = if self.from.is_working() || self.to.is_working() {

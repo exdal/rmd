@@ -7,9 +7,13 @@ pub struct ProcId(pub u32);
 impl ProcId {
     pub const INVALID: Self = Self(u32::MAX);
 
-    pub const fn is_valid(self) -> bool { self.0 != u32::MAX }
+    pub const fn is_valid(self) -> bool {
+        self.0 != u32::MAX
+    }
 
-    pub const fn is_invalid(self) -> bool { self.0 == u32::MAX }
+    pub const fn is_invalid(self) -> bool {
+        self.0 == u32::MAX
+    }
 }
 
 impl std::fmt::Display for ProcId {
@@ -22,7 +26,9 @@ impl std::fmt::Display for ProcId {
 }
 
 impl std::fmt::Debug for ProcId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { std::fmt::Display::fmt(self, f) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
 }
 
 /// this points to an IR arena in Module
@@ -32,9 +38,13 @@ pub struct IrNodeId(pub u32);
 impl IrNodeId {
     pub const INVALID: Self = Self(u32::MAX);
 
-    pub const fn is_valid(self) -> bool { self.0 != u32::MAX }
+    pub const fn is_valid(self) -> bool {
+        self.0 != u32::MAX
+    }
 
-    pub const fn is_invalid(self) -> bool { self.0 == u32::MAX }
+    pub const fn is_invalid(self) -> bool {
+        self.0 == u32::MAX
+    }
 }
 
 impl std::fmt::Display for IrNodeId {
@@ -47,7 +57,9 @@ impl std::fmt::Display for IrNodeId {
 }
 
 impl std::fmt::Debug for IrNodeId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { std::fmt::Display::fmt(self, f) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
 }
 
 /// Declaration modifiers on a `var/`.
@@ -219,7 +231,9 @@ impl InputType {
     pub const TEXT: Self = Self(1 << 11);
     pub const TURF: Self = Self(1 << 12);
 
-    pub fn contains(self, other: Self) -> bool { (self.0 & other.0) == other.0 }
+    pub fn contains(self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
 
     pub fn from_word(word: &str) -> Option<Self> {
         Some(match word {
@@ -248,11 +262,15 @@ impl InputType {
 impl std::ops::BitOr for InputType {
     type Output = Self;
 
-    fn bitor(self, rhs: Self) -> Self { Self(self.0 | rhs.0) }
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
 }
 
 impl std::ops::BitOrAssign for InputType {
-    fn bitor_assign(&mut self, rhs: Self) { self.0 |= rhs.0; }
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
 }
 #[cfg(test)]
 mod tests {

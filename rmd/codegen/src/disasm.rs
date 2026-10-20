@@ -1,13 +1,7 @@
 use std::fmt::Write;
 
 use crate::{
-    CodeOffset,
-    ConstantId,
-    FunctionId,
-    LocalId,
-    Module,
-    PathId,
-    StringId,
+    CodeOffset, ConstantId, FunctionId, LocalId, Module, PathId, StringId,
     opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, OutputTargetKind, Unary},
 };
 

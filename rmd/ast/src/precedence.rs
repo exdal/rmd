@@ -25,7 +25,9 @@ pub enum Precedence {
 }
 
 impl Precedence {
-    pub fn is_right_associative(self) -> bool { self == Precedence::Assignment }
+    pub fn is_right_associative(self) -> bool {
+        self == Precedence::Assignment
+    }
 
     pub fn next_tighter(self) -> Self {
         match self {

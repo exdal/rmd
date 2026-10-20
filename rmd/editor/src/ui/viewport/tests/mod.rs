@@ -15,15 +15,8 @@ use editor::{
 use render::{HighlightStyle, InteractionMode, MapViewInteraction, MapViewRect, PickRequest, PlacementFlash};
 
 use super::{
-    ActivePlacementFlash,
-    CoopPresence,
-    EditCommand,
-    MapViewState,
-    PickStroke,
-    PlacementStroke,
-    cursor_in_map_view,
-    framebuffer_rect,
-    panel_extent,
+    ActivePlacementFlash, CoopPresence, EditCommand, MapViewState, PickStroke, PlacementStroke, cursor_in_map_view,
+    framebuffer_rect, panel_extent,
     stroke::active_placement_flash,
     tools::{configure_tool_interaction, request_pick},
 };
@@ -31,15 +24,12 @@ use crate::{
     camera::Controller,
     gizmo::{BlockDrag, BlockGizmoTarget, GizmoMapView, GizmoState},
     session::{
-        LevelChange,
-        Session,
+        LevelChange, Session,
         fixtures::{install_blame, node_map, node_session, node_tile_has_group},
     },
     settings::{KeyBinding, KeybindAction, KeybindPreset, Settings},
     ui::{
-        IMGUI_CONTEXT,
-        RectangleGesture,
-        UiState,
+        IMGUI_CONTEXT, RectangleGesture, UiState,
         block::block_selection_bounds,
         context_menu::NodeContext,
         fixtures::{RectangleUiHarness, rectangle_context},

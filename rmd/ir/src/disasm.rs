@@ -5,9 +5,13 @@ use rustc_hash::FxHashSet;
 
 use crate::{AccessKind, Argument, Interpolation, IrNode, Module, OutputTarget};
 
-pub fn dump(module: &Module) -> String { dump_with(module, false) }
+pub fn dump(module: &Module) -> String {
+    dump_with(module, false)
+}
 
-pub fn dump_with(module: &Module, syntax_highlighting: bool) -> String { dump_impl(module, None, syntax_highlighting) }
+pub fn dump_with(module: &Module, syntax_highlighting: bool) -> String {
+    dump_impl(module, None, syntax_highlighting)
+}
 
 pub fn dump_selected_with(module: &Module, procedures: &FxHashSet<ProcId>, syntax_highlighting: bool) -> String {
     dump_impl(module, Some(procedures), syntax_highlighting)
@@ -379,7 +383,9 @@ fn constant(value: &Value) -> String {
     }
 }
 
-fn list(ids: &[IrNodeId]) -> String { ids.iter().map(IrNodeId::to_string).collect::<Vec<_>>().join(" ") }
+fn list(ids: &[IrNodeId]) -> String {
+    ids.iter().map(IrNodeId::to_string).collect::<Vec<_>>().join(" ")
+}
 
 fn arguments(args: &[Argument]) -> String {
     args.iter()

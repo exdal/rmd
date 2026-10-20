@@ -22,7 +22,9 @@ pub fn encode(map: &Grid, coords: impl IntoIterator<Item = Coord>) -> Option<(Ve
     Some((tiles.into_iter().map(|(coord, _)| coord).collect(), patch))
 }
 
-pub fn encode_tile(tile: &[Prefab]) -> String { write_row([tile]) }
+pub fn encode_tile(tile: &[Prefab]) -> String {
+    write_row([tile])
+}
 
 pub fn encode_level(level: &LevelCells) -> LevelContents {
     match level.fill() {

@@ -10,9 +10,7 @@ use editor::{
 };
 
 use super::{
-    DIAGNOSTIC_WARNING_COLOR,
-    MAX_CUSTOM_FILL_SEARCH_RESULTS,
-    UiState,
+    DIAGNOSTIC_WARNING_COLOR, MAX_CUSTOM_FILL_SEARCH_RESULTS, UiState,
     common::{DialogButton, begin_centered_modal, dialog_buttons, dpi},
     draw_type_path_search,
 };
@@ -166,7 +164,9 @@ impl TileFillSearch {
         }
     }
 
-    fn captures_keys(&self) -> bool { self.searching || self.was_searching }
+    fn captures_keys(&self) -> bool {
+        self.searching || self.was_searching
+    }
 
     fn remember(&self, session: &Session, remembered: &mut Option<TileFillPaths>) {
         *remembered = (self.paths != TileFillPaths::defaults(session)).then(|| self.paths.clone());
@@ -1101,39 +1101,19 @@ mod tests {
     use net::LevelContents;
 
     use super::{
-        DeleteLevelDialog,
-        FillWarningContext,
-        GO_TO_POPUP,
-        GoToDialog,
-        KEYBIND_PRESET_POPUP,
-        NewLevelDialog,
-        NewMapDialog,
-        PendingFillWarning,
-        RESIZE_MAP_POPUP,
-        ResizeMapDialog,
-        TileFillPaths,
-        TileFillSearch,
-        draw_delete_level_dialog,
-        draw_go_to_dialog,
-        draw_keybind_preset_dialog,
-        draw_new_level_dialog,
-        draw_new_map_dialog,
-        draw_resize_map_dialog,
-        resolve_new_map_path,
+        DeleteLevelDialog, FillWarningContext, GO_TO_POPUP, GoToDialog, KEYBIND_PRESET_POPUP, NewLevelDialog,
+        NewMapDialog, PendingFillWarning, RESIZE_MAP_POPUP, ResizeMapDialog, TileFillPaths, TileFillSearch,
+        draw_delete_level_dialog, draw_go_to_dialog, draw_keybind_preset_dialog, draw_new_level_dialog,
+        draw_new_map_dialog, draw_resize_map_dialog, resolve_new_map_path,
     };
     use crate::{
         session::Session,
         settings::Settings,
         theme::{DEFAULT_THEME, Themes},
         ui::{
-            IMGUI_CONTEXT,
-            UiState,
+            IMGUI_CONTEXT, UiState,
             fixtures::{
-                PopupContext,
-                assert_window_centered,
-                finish_frame,
-                popup_context,
-                rectangle_context,
+                PopupContext, assert_window_centered, finish_frame, popup_context, rectangle_context,
                 set_desktop_geometry,
             },
         },
@@ -1344,7 +1324,9 @@ mod tests {
     }
 
     impl Drop for TestDirectory {
-        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
     }
 
     #[test]

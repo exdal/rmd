@@ -10,25 +10,8 @@ use std::{
 use dmm::{Coord, error::MapError};
 use editor::document::DocumentId;
 use net::{
-    Client,
-    CodebaseId,
-    Comment,
-    CommentId,
-    Cursor,
-    GenerationId,
-    InsertAt,
-    InsertLevel,
-    LevelLog,
-    LevelOp,
-    MapEdit,
-    PRESENCE_REFRESH,
-    PasswordHash,
-    PeerId,
-    PeerInfo,
-    Selection,
-    SeqId,
-    Server,
-    View,
+    Client, CodebaseId, Comment, CommentId, Cursor, GenerationId, InsertAt, InsertLevel, LevelLog, LevelOp, MapEdit,
+    PRESENCE_REFRESH, PasswordHash, PeerId, PeerInfo, Selection, SeqId, Server, View,
 };
 
 use super::Session;
@@ -101,11 +84,17 @@ impl RemotePeer {
         }
     }
 
-    pub fn cursor(&self) -> Option<&Cursor> { self.cursor.as_ref().map(|cursor| &cursor.value) }
+    pub fn cursor(&self) -> Option<&Cursor> {
+        self.cursor.as_ref().map(|cursor| &cursor.value)
+    }
 
-    pub fn view(&self) -> Option<&View> { self.view.as_ref().map(|view| &view.value) }
+    pub fn view(&self) -> Option<&View> {
+        self.view.as_ref().map(|view| &view.value)
+    }
 
-    pub fn selection(&self) -> Option<&Selection> { self.selection.as_ref().map(|selection| &selection.value) }
+    pub fn selection(&self) -> Option<&Selection> {
+        self.selection.as_ref().map(|selection| &selection.value)
+    }
 
     pub fn is_cursor_easing(&self) -> bool {
         self.cursor().is_some_and(|cursor| {
@@ -267,7 +256,9 @@ impl SharedMap {
         }
     }
 
-    fn is_ready(&self) -> bool { matches!(self.state, SharedState::Ready) }
+    fn is_ready(&self) -> bool {
+        matches!(self.state, SharedState::Ready)
+    }
 
     // an upload that never got numbered leaves nothing behind
     fn is_abandoned(&self) -> bool {
@@ -366,19 +357,33 @@ enum CoopConnection {
 }
 
 impl Coop {
-    pub fn is_hosting(&self) -> bool { self.server.is_some() }
+    pub fn is_hosting(&self) -> bool {
+        self.server.is_some()
+    }
 
-    pub fn is_connected(&self) -> bool { matches!(self.status, CoopStatus::Connected) }
+    pub fn is_connected(&self) -> bool {
+        matches!(self.status, CoopStatus::Connected)
+    }
 
-    pub fn is_paused(&self) -> bool { self.paused }
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
 
-    pub fn was_hosting(&self) -> bool { matches!(self.connection, CoopConnection::Host { .. }) }
+    pub fn was_hosting(&self) -> bool {
+        matches!(self.connection, CoopConnection::Host { .. })
+    }
 
-    pub fn can_retry(&self) -> bool { self.stopping_server.is_none() && !self.paused }
+    pub fn can_retry(&self) -> bool {
+        self.stopping_server.is_none() && !self.paused
+    }
 
-    pub fn local_codebase(&self) -> &CodebaseId { &self.codebase }
+    pub fn local_codebase(&self) -> &CodebaseId {
+        &self.codebase
+    }
 
-    fn can_collaborate(&self) -> bool { self.is_connected() && !self.paused }
+    fn can_collaborate(&self) -> bool {
+        self.is_connected() && !self.paused
+    }
 
     pub fn nick_of(&self, id: PeerId) -> Option<&str> {
         if self.you == Some(id) {
@@ -388,7 +393,9 @@ impl Coop {
         self.peers.get(&id).map(|peer| peer.info.nick.as_str())
     }
 
-    pub fn host(&self) -> Option<SocketAddr> { self.server.as_ref().map(Server::local_addr) }
+    pub fn host(&self) -> Option<SocketAddr> {
+        self.server.as_ref().map(Server::local_addr)
+    }
 
     fn mismatch(&mut self, expected: CodebaseId) {
         self.end(String::from("different codebase"));
@@ -424,7 +431,9 @@ impl Coop {
 }
 
 impl Session {
-    pub fn coop(&self) -> Option<&Coop> { self.coop.as_ref() }
+    pub fn coop(&self) -> Option<&Coop> {
+        self.coop.as_ref()
+    }
 
     fn collaborating_client(&self) -> Option<&Client> {
         self.coop

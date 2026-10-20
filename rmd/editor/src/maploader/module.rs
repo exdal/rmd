@@ -89,7 +89,9 @@ pub struct ModuleFiles {
 }
 
 impl ModuleFiles {
-    pub fn clear(&mut self) { self.entries.clear(); }
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
 
     pub fn load(&mut self, path: &Path) -> Result<Arc<LoadedModule>, ErrorKind> {
         if let Some(open) = self.open.get(path) {
@@ -102,9 +104,13 @@ impl ModuleFiles {
             .clone()
     }
 
-    pub fn is_loaded(&self, path: &Path) -> bool { self.entries.contains_key(path) }
+    pub fn is_loaded(&self, path: &Path) -> bool {
+        self.entries.contains_key(path)
+    }
 
-    pub fn open_module(&self, path: &Path) -> Option<&OpenModule> { self.open.get(path) }
+    pub fn open_module(&self, path: &Path) -> Option<&OpenModule> {
+        self.open.get(path)
+    }
 
     pub fn open_modules(&self) -> impl Iterator<Item = (&Path, &OpenModule)> {
         self.open.iter().map(|(path, open)| (path.as_path(), open))

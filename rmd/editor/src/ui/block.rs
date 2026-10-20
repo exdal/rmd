@@ -393,11 +393,7 @@ mod tests {
     use editor::{document::Selection, tool::BlockSelectionMode};
 
     use super::{
-        BlockSelectionOptions,
-        block_border_segments,
-        block_selection_bounds,
-        hollow_selection_inner,
-        ring_regions,
+        BlockSelectionOptions, block_border_segments, block_selection_bounds, hollow_selection_inner, ring_regions,
     };
     use crate::{camera::Controller, ui::OverlayRect};
 

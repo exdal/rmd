@@ -122,7 +122,9 @@ pub struct ParamDecl {
 }
 
 impl Default for ObjectTree {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ObjectTree {
@@ -145,23 +147,37 @@ impl ObjectTree {
         }
     }
 
-    pub fn roots(&self) -> Roots { self.roots }
+    pub fn roots(&self) -> Roots {
+        self.roots
+    }
 
-    pub fn get(&self, id: TypeId) -> Option<&TypeDecl> { self.types.get(id.0 as usize) }
+    pub fn get(&self, id: TypeId) -> Option<&TypeDecl> {
+        self.types.get(id.0 as usize)
+    }
 
-    pub fn get_mut(&mut self, id: TypeId) -> Option<&mut TypeDecl> { self.types.get_mut(id.0 as usize) }
+    pub fn get_mut(&mut self, id: TypeId) -> Option<&mut TypeDecl> {
+        self.types.get_mut(id.0 as usize)
+    }
 
     pub fn get_by_path(&self, path: &TreePath) -> Option<&TypeDecl> {
         self.by_path.get(&path.segments).and_then(|id| self.get(*id))
     }
 
-    pub fn id_of(&self, path: &TreePath) -> Option<TypeId> { self.by_path.get(&path.segments).copied() }
+    pub fn id_of(&self, path: &TreePath) -> Option<TypeId> {
+        self.by_path.get(&path.segments).copied()
+    }
 
-    pub fn len(&self) -> usize { self.types.len() }
+    pub fn len(&self) -> usize {
+        self.types.len()
+    }
 
-    pub fn is_empty(&self) -> bool { self.types.len() <= 1 }
+    pub fn is_empty(&self) -> bool {
+        self.types.len() <= 1
+    }
 
-    pub fn iter(&self) -> impl Iterator<Item = &TypeDecl> { self.types.iter() }
+    pub fn iter(&self) -> impl Iterator<Item = &TypeDecl> {
+        self.types.iter()
+    }
 
     /// `/obj/item/weapon/sword`
     pub fn register(&mut self, path: &TreePath, location: Location) -> TypeId {
@@ -281,7 +297,9 @@ impl ObjectTree {
         })
     }
 
-    pub fn var(&self, id: TypeId, name: &Identifier) -> Option<&VarDecl> { self.get(id)?.vars.get(name) }
+    pub fn var(&self, id: TypeId, name: &Identifier) -> Option<&VarDecl> {
+        self.get(id)?.vars.get(name)
+    }
 
     pub fn var_declaration(&self, id: TypeId, name: &Identifier) -> Option<(&TypeDecl, &VarDecl)> {
         self.ancestors(id).find_map(|decl| Some((decl, decl.vars.get(name)?)))

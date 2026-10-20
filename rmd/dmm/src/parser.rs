@@ -6,12 +6,7 @@ use core::{
 use std::{collections::HashMap, path::Path};
 
 use crate::{
-    Coord,
-    Map,
-    MapFormat,
-    Prefab,
-    Size,
-    Tile,
+    Coord, Map, MapFormat, Prefab, Size, Tile,
     error::{MapError, MapErrorKind},
     key::Key,
 };
@@ -51,23 +46,37 @@ impl<'a> MapParser<'a> {
         }
     }
 
-    pub fn errors(&self) -> &[MapError] { &self.errors }
+    pub fn errors(&self) -> &[MapError] {
+        &self.errors
+    }
 
-    pub fn take_errors(&mut self) -> Vec<MapError> { std::mem::take(&mut self.errors) }
+    pub fn take_errors(&mut self) -> Vec<MapError> {
+        std::mem::take(&mut self.errors)
+    }
 
     pub fn position(&self) -> Position {
         Position::new(self.line + 1, self.offset.saturating_sub(self.line_offset) + 1)
     }
 
-    fn error(&self, kind: MapErrorKind) -> MapError { MapError::new(kind, self.position()) }
+    fn error(&self, kind: MapErrorKind) -> MapError {
+        MapError::new(kind, self.position())
+    }
 
-    fn byte_at(&self, offset: usize) -> Option<u8> { self.source.as_bytes().get(offset).copied() }
+    fn byte_at(&self, offset: usize) -> Option<u8> {
+        self.source.as_bytes().get(offset).copied()
+    }
 
-    fn peek(&self) -> Option<u8> { self.byte_at(self.offset) }
+    fn peek(&self) -> Option<u8> {
+        self.byte_at(self.offset)
+    }
 
-    fn peek_at(&self, ahead: usize) -> Option<u8> { self.byte_at(self.offset.saturating_add(ahead)) }
+    fn peek_at(&self, ahead: usize) -> Option<u8> {
+        self.byte_at(self.offset.saturating_add(ahead))
+    }
 
-    fn is_eof(&self) -> bool { self.offset >= self.source.len() }
+    fn is_eof(&self) -> bool {
+        self.offset >= self.source.len()
+    }
 
     fn bump(&mut self) -> Option<u8> {
         let byte = self.peek()?;
@@ -647,7 +656,9 @@ impl<'a> MapParser<'a> {
     }
 }
 
-pub fn parse(source: &str) -> (Map, Vec<MapError>) { MapParser::new(source).parse() }
+pub fn parse(source: &str) -> (Map, Vec<MapError>) {
+    MapParser::new(source).parse()
+}
 
 pub fn parse_value(source: &str) -> MapResult<Value> {
     let mut parser = MapParser::new(source);
@@ -689,9 +700,7 @@ mod tests {
     use core::types::{Identifier, Value};
 
     use crate::{
-        Coord,
-        MapFormat,
-        VarValue,
+        Coord, MapFormat, VarValue,
         error::MapErrorKind,
         key::Key,
         parser::{parse, parse_value},

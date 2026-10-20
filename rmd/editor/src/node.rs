@@ -245,7 +245,9 @@ fn edge(left: Coord, right: Coord) -> (Coord, Coord) {
     }
 }
 
-const fn coord_key(coord: Coord) -> (u32, u32, u32) { (coord.z, coord.y, coord.x) }
+const fn coord_key(coord: Coord) -> (u32, u32, u32) {
+    (coord.z, coord.y, coord.x)
+}
 
 pub fn route(
     document: &MapDocument, tree: &ObjectTree, group: &ResolvedGroup, start: Coord, target: Coord,
@@ -613,7 +615,9 @@ impl Ord for QueueEntry {
 }
 
 impl PartialOrd for QueueEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -646,7 +650,9 @@ impl Direction {
         }
     }
 
-    fn is_turn(self, next: Self) -> bool { !matches!(self, Self::None) && self != next }
+    fn is_turn(self, next: Self) -> bool {
+        !matches!(self, Self::None) && self != next
+    }
 }
 
 fn ordered_directions(current: Direction, coord: Coord, target: Coord) -> [Direction; 4] {

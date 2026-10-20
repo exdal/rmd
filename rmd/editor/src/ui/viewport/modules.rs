@@ -10,11 +10,7 @@ use crate::{
     camera::Controller,
     session::Session,
     ui::{
-        OverlayRect,
-        common::dpi,
-        draw_overlay_underlay,
-        overlay::placement_preview_bounds,
-        welcome::codebase_relative,
+        OverlayRect, common::dpi, draw_overlay_underlay, overlay::placement_preview_bounds, welcome::codebase_relative,
     },
 };
 

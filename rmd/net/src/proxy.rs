@@ -3,8 +3,7 @@ use std::{
     io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{
-        Arc,
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     thread,
@@ -33,7 +32,9 @@ pub struct Impairment {
 }
 
 impl Impairment {
-    pub fn is_none(&self) -> bool { self.latency.is_zero() && self.jitter.is_zero() && self.loss <= 0.0 }
+    pub fn is_none(&self) -> bool {
+        self.latency.is_zero() && self.jitter.is_zero() && self.loss <= 0.0
+    }
 }
 
 pub struct LossyProxy {
@@ -78,9 +79,13 @@ impl LossyProxy {
         })
     }
 
-    pub fn local_addr(&self) -> SocketAddr { self.addr }
+    pub fn local_addr(&self) -> SocketAddr {
+        self.addr
+    }
 
-    pub fn downstream_bytes(&self) -> u64 { self.downstream.load(Ordering::Relaxed) }
+    pub fn downstream_bytes(&self) -> u64 {
+        self.downstream.load(Ordering::Relaxed)
+    }
 }
 
 impl Drop for LossyProxy {

@@ -61,9 +61,13 @@ enum Handle {
 }
 
 impl Handle {
-    const fn moves_x(self) -> bool { matches!(self, Self::X | Self::XY) }
+    const fn moves_x(self) -> bool {
+        matches!(self, Self::X | Self::XY)
+    }
 
-    const fn moves_y(self) -> bool { matches!(self, Self::Y | Self::XY) }
+    const fn moves_y(self) -> bool {
+        matches!(self, Self::Y | Self::XY)
+    }
 
     const fn cursor(self) -> MouseCursor {
         match self {
@@ -111,7 +115,9 @@ struct DirectionSet {
 }
 
 impl DirectionSet {
-    fn contains(self, direction: Dir) -> bool { self.supported[clockwise_index(direction)] }
+    fn contains(self, direction: Dir) -> bool {
+        self.supported[clockwise_index(direction)]
+    }
 
     fn slot_directions(self) -> impl Iterator<Item = Dir> {
         CLOCKWISE_DIRECTIONS
@@ -125,7 +131,9 @@ impl DirectionSet {
             .filter(move |direction| self.contains(*direction))
     }
 
-    fn len(self) -> usize { self.supported.iter().filter(|supported| **supported).count() }
+    fn len(self) -> usize {
+        self.supported.iter().filter(|supported| **supported).count()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1111,7 +1119,9 @@ fn transform_mutations(mode: TransformMode, current: [i32; 2], next: [i32; 2]) -
     mutations
 }
 
-fn rounded_i32(value: f32) -> i32 { if value.is_finite() { value.round() as i32 } else { 0 } }
+fn rounded_i32(value: f32) -> i32 {
+    if value.is_finite() { value.round() as i32 } else { 0 }
+}
 
 fn themed_color(ui: &Ui, color: StyleColor, alpha: f32) -> [f32; 4] {
     let [red, green, blue, _] = ui.style_color(color);

@@ -54,7 +54,9 @@ pub struct MapError {
 }
 
 impl MapError {
-    pub fn new(kind: MapErrorKind, position: Position) -> Self { Self { position, kind } }
+    pub fn new(kind: MapErrorKind, position: Position) -> Self {
+        Self { position, kind }
+    }
 }
 
 impl std::fmt::Display for MapError {

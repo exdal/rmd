@@ -1,15 +1,7 @@
 use core::path::TreePath;
 
 use dear_imgui_rs::{
-    Condition,
-    ListClipper,
-    SelectableFlags,
-    StyleColor,
-    TableFlags,
-    TableSizingPolicy,
-    Ui,
-    WindowKey,
-    WindowKeyError,
+    Condition, ListClipper, SelectableFlags, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError,
 };
 use editor::{
     document::{DocumentId, PrefabInstanceId, Selection},
@@ -75,14 +67,22 @@ impl FindPanel {
         })
     }
 
-    pub(super) const fn window(&self) -> &WindowKey { &self.window }
+    pub(super) const fn window(&self) -> &WindowKey {
+        &self.window
+    }
 
-    pub(super) fn request(&mut self) { self.focus = true; }
+    pub(super) fn request(&mut self) {
+        self.focus = true;
+    }
 
-    pub(super) const fn has_focus_request(&self) -> bool { self.focus }
+    pub(super) const fn has_focus_request(&self) -> bool {
+        self.focus
+    }
 
     #[cfg(test)]
-    pub(super) const fn visible(&self) -> bool { self.visible }
+    pub(super) const fn visible(&self) -> bool {
+        self.visible
+    }
 
     pub(super) fn open_for(
         &mut self, session: &Session, document: DocumentId, instance: PrefabInstanceId, kind: SimilarMatchKind,

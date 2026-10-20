@@ -145,10 +145,14 @@ impl Device {
     }
 }
 
-fn load_entry() -> Result<ash::Entry, GpuError> { unsafe { ash::Entry::load() }.or_else(load_fallback) }
+fn load_entry() -> Result<ash::Entry, GpuError> {
+    unsafe { ash::Entry::load() }.or_else(load_fallback)
+}
 
 #[cfg(not(target_os = "macos"))]
-fn load_fallback(error: ash::LoadingError) -> Result<ash::Entry, GpuError> { Err(GpuError::Loader(error.to_string())) }
+fn load_fallback(error: ash::LoadingError) -> Result<ash::Entry, GpuError> {
+    Err(GpuError::Loader(error.to_string()))
+}
 
 #[cfg(target_os = "macos")]
 fn load_fallback(error: ash::LoadingError) -> Result<ash::Entry, GpuError> {

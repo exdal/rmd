@@ -42,7 +42,9 @@ pub struct MapView<'a> {
 }
 
 impl<'a> From<&'a Grid> for MapView<'a> {
-    fn from(source: &'a Grid) -> Self { Self { source, tiles: None } }
+    fn from(source: &'a Grid) -> Self {
+        Self { source, tiles: None }
+    }
 }
 
 impl<'a> MapView<'a> {
@@ -53,7 +55,9 @@ impl<'a> MapView<'a> {
         }
     }
 
-    pub fn size(self) -> Size { self.source.size() }
+    pub fn size(self) -> Size {
+        self.source.size()
+    }
 
     pub fn tile_at(self, coord: Coord) -> Option<&'a Tile> {
         self.source.tile_at(coord)?;

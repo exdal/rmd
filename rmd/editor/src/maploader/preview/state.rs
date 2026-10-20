@@ -6,13 +6,7 @@ use std::{
 use dmm::{Coord, PrefabInstanceId, Size};
 
 use super::{
-    ComposeContext,
-    MapView,
-    ModuleChoices,
-    ModuleOverlay,
-    ModuleRootKey,
-    PreviewIdAllocator,
-    compose::update,
+    ComposeContext, MapView, ModuleChoices, ModuleOverlay, ModuleRootKey, PreviewIdAllocator, compose::update,
 };
 use crate::{
     grid::Grid,
@@ -74,11 +68,17 @@ impl ModulePreviewState {
         self.files.is_loaded(path) || self.preview.as_ref().is_some_and(|preview| preview.uses_file(path))
     }
 
-    pub fn open_module(&self, path: &Path) -> Option<&OpenModule> { self.files.open_module(path) }
+    pub fn open_module(&self, path: &Path) -> Option<&OpenModule> {
+        self.files.open_module(path)
+    }
 
-    pub fn open_modules(&self) -> impl Iterator<Item = (&Path, &OpenModule)> { self.files.open_modules() }
+    pub fn open_modules(&self) -> impl Iterator<Item = (&Path, &OpenModule)> {
+        self.files.open_modules()
+    }
 
-    pub fn needs_recompose(&self, specs: &RootSpecs) -> bool { self.specs != *specs }
+    pub fn needs_recompose(&self, specs: &RootSpecs) -> bool {
+        self.specs != *specs
+    }
 
     pub fn reset(&mut self) {
         self.preview = None;

@@ -35,9 +35,13 @@ pub fn evaluate(tokens: &[(Token<'_>, Location)], context: &Context<'_>) -> (Opt
 /// BYOND:tm: holds 24 bits for the "integers" so `~0` is 16777215 and not -1_u32
 const BIT_WIDTH_MASK: i32 = 0xFF_FFFF;
 
-fn to_int(value: f32) -> i32 { value as i32 }
+fn to_int(value: f32) -> i32 {
+    value as i32
+}
 
-fn from_int(value: i32) -> f32 { value as f32 }
+fn from_int(value: i32) -> f32 {
+    value as f32
+}
 
 struct Parser<'a, 'ctx> {
     tokens: &'a [(Token<'a>, Location)],
@@ -47,7 +51,9 @@ struct Parser<'a, 'ctx> {
 }
 
 impl<'a> Parser<'a, '_> {
-    fn current(&self) -> Option<Token<'a>> { self.tokens.get(self.index).map(|(t, _)| *t) }
+    fn current(&self) -> Option<Token<'a>> {
+        self.tokens.get(self.index).map(|(t, _)| *t)
+    }
 
     fn location(&self) -> Location {
         self.tokens
@@ -57,7 +63,9 @@ impl<'a> Parser<'a, '_> {
             .unwrap_or_default()
     }
 
-    fn advance(&mut self) { self.index += 1; }
+    fn advance(&mut self) {
+        self.index += 1;
+    }
 
     fn check(&mut self, token: Token<'a>) -> bool {
         if self.current() == Some(token) {
@@ -85,7 +93,9 @@ impl<'a> Parser<'a, '_> {
         });
     }
 
-    fn expression(&mut self) -> Option<f32> { self.logical_or() }
+    fn expression(&mut self) -> Option<f32> {
+        self.logical_or()
+    }
 
     fn logical_or(&mut self) -> Option<f32> {
         let mut left = self.logical_and()?;

@@ -103,7 +103,9 @@ impl OptimizationTimings {
         }
     }
 
-    pub const fn samples(self) -> u32 { self.samples }
+    pub const fn samples(self) -> u32 {
+        self.samples
+    }
 
     pub fn average(self, pass: OptimizationPass) -> Duration {
         self.elapsed[pass as usize]

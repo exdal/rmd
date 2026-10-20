@@ -1,36 +1,17 @@
 use core::path::TreePath;
 use std::{
-    env,
-    fs,
+    env, fs,
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
-    process,
-    thread,
+    process, thread,
     time::{Duration, Instant},
 };
 
 use dmm::{Coord, Prefab, parser};
 use editor::{command::Edit, document::DocumentId, tool::Tool};
 use net::{
-    CodebaseHash,
-    CodebaseId,
-    Cursor,
-    DeleteLevel,
-    Direction,
-    Event,
-    GenerationId,
-    Impairment,
-    InsertAt,
-    InsertLevel,
-    LevelContents,
-    LevelOp,
-    LossyProxy,
-    PeerId,
-    PeerInfo,
-    SeqId,
-    Server,
-    ServerConfig,
-    View,
+    CodebaseHash, CodebaseId, Cursor, DeleteLevel, Direction, Event, GenerationId, Impairment, InsertAt, InsertLevel,
+    LevelContents, LevelOp, LossyProxy, PeerId, PeerInfo, SeqId, Server, ServerConfig, View,
 };
 
 use super::*;
@@ -150,7 +131,8 @@ fn guest_out_of_date(name: &str) -> (PathBuf, Session, PathBuf, Session, Documen
     poll_until(&mut [&mut host], |sessions| {
         sessions[0]
             .coop()
-            .is_some_and(|coop| coop.shared_maps.contains_key("_maps/a.dmm"))
+            .and_then(|coop| coop.shared_maps.get("_maps/a.dmm"))
+            .is_some_and(SharedMap::is_ready)
     });
 
     let port = host.coop().and_then(Coop::host).unwrap().port();
@@ -172,7 +154,9 @@ fn guest_out_of_date(name: &str) -> (PathBuf, Session, PathBuf, Session, Documen
     (host_dir, host, guest_dir, guest, local)
 }
 
-fn width_on_disk(file: &Path) -> u32 { parser::parse(&fs::read_to_string(file).unwrap()).0.size.x }
+fn width_on_disk(file: &Path) -> u32 {
+    parser::parse(&fs::read_to_string(file).unwrap()).0.size.x
+}
 
 fn paint(session: &mut Session, file: &Path, coord: Coord, path: &str) {
     let id = session.state.document_for_path(file).unwrap();

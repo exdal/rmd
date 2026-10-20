@@ -4,8 +4,7 @@ use editor::tool::Tool;
 use render::{InteractionMode, MapViewInteraction, PickRequest};
 
 use super::{
-    ViewFrame,
-    cursor_in_map_view,
+    ViewFrame, cursor_in_map_view,
     stroke::{ActivePlacementFlash, PickStroke, PlacementStroke},
 };
 use crate::{
@@ -13,12 +12,7 @@ use crate::{
     session::{FillOutcome, Session},
     settings::{KeybindAction, Settings},
     ui::{
-        FILL_LIMIT_WARNING_POPUP,
-        FillWarningContext,
-        NodeOverlayView,
-        NodeRightClick,
-        PendingFillWarning,
-        UiState,
+        FILL_LIMIT_WARNING_POPUP, FillWarningContext, NodeOverlayView, NodeRightClick, PendingFillWarning, UiState,
         context_menu::{NodeContext, POPUP as MAP_MENU_POPUP, Target as MenuTarget},
         coop::{COMMENT_POPUP, CommentDraft},
         draw_node_overlay,

@@ -1,4 +1,9 @@
+use core::types::Value;
+
+use dmm::{Map, MapFormat, writer::MapWriter};
+
 use super::*;
+use crate::loader::LoadedMap;
 
 #[test]
 fn node_tool_hover_and_single_click_survive_the_full_view_frame() {
@@ -213,6 +218,81 @@ fn object_gizmo_only_appears_on_the_selected_instances_z_level() {
         object_gizmo_frame(&mut context, &mut gizmo, &mut session, &camera, &settings);
     assert!(visible_again.captures_mouse);
     assert!(restored_vertices > hidden_vertices);
+}
+
+#[test]
+fn ctrl_dragging_an_object_onto_another_tile_keeps_its_area_last() {
+    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let mut context = rectangle_context();
+    let mut session = Session::new();
+    let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
+    session.load_environment(&examples.join("test.dme")).unwrap();
+    let start = Coord::new(6, 3, 1);
+    let above = Coord::new(6, 4, 1);
+    let floor = Prefab::new(TreePath::parse("/turf/open/floor"));
+    let area = Prefab::new(TreePath::parse("/area/station"));
+    let mut light = Prefab::new(TreePath::parse("/obj/machinery/light"));
+    light.set_var("pixel_y".into(), Value::Num(32.0));
+    let mut map = Map::new(Size { x: 8, y: 6, z: 1 });
+    map.format = MapFormat::Tgm;
+    let base = map.intern_tile(vec![floor.clone(), area.clone()]);
+    let lit = map.intern_tile(vec![light, floor, area]);
+    for row in &mut map.grid[0] {
+        row.fill(base);
+    }
+
+    // DM counts `y` from the bottom
+    map.grid[0][(map.size.y - start.y) as usize][(start.x - 1) as usize] = lit;
+    session.apply_map(LoadedMap {
+        path: PathBuf::from("object-gizmo-reanchor-test.dmm"),
+        map,
+        z: 1,
+        errors: vec![],
+        repo: None,
+        conflict: None,
+    });
+    let selected = session.state.active_document().unwrap().instance_ids_at(start)[0];
+    session.select_instance(Some(selected));
+
+    let mut camera = Controller::new();
+    camera.resize(800, 600);
+    camera.center_on_tile(start, session.options.tile_size);
+    let sprite = session.selected_transform().unwrap().sprite;
+    let center = [sprite.x + sprite.width * 0.5, sprite.y + sprite.height * 0.5];
+    let mut gizmo = GizmoState::default();
+    let settings = Settings::default();
+    context.io_mut().add_mouse_pos_event(camera.map_to_screen(center));
+    context.io_mut().add_mouse_button_event(MouseButton::Left, true);
+    object_gizmo_frame(&mut context, &mut gizmo, &mut session, &camera, &settings);
+    assert!(gizmo.is_interacting());
+
+    // ctrl rehomes the light onto the tile its sprite is drawn over
+    context.io_mut().add_key_event(Key::ModCtrl, true);
+    context
+        .io_mut()
+        .add_mouse_pos_event(camera.map_to_screen([center[0] + 1.0, center[1]]));
+    object_gizmo_frame(&mut context, &mut gizmo, &mut session, &camera, &settings);
+    context.io_mut().add_key_event(Key::ModCtrl, false);
+    context.io_mut().add_mouse_button_event(MouseButton::Left, false);
+    object_gizmo_frame(&mut context, &mut gizmo, &mut session, &camera, &settings);
+
+    let document = session.state.active_document().unwrap();
+    assert_eq!(
+        document.instance_location(selected).map(|location| location.coord),
+        Some(above)
+    );
+    let paths = document
+        .map
+        .tile_at(above)
+        .unwrap()
+        .iter()
+        .map(|prefab| prefab.path.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(paths, ["/obj/machinery/light", "/turf/open/floor", "/area/station"]);
+
+    // maplint only ends a var edit block with `\t},`, so a var edited atom can never close the tile
+    let written = MapWriter::new(&document.to_map()).write();
+    assert!(!written.contains("\t})"), "{written}");
 }
 
 #[test]

@@ -75,7 +75,9 @@ impl SoftKeyword {
 }
 
 impl std::fmt::Display for SoftKeyword {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.as_word()) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_word())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,9 +299,13 @@ impl<'a> Token<'a> {
         })
     }
 
-    pub fn is_comment(&self) -> bool { matches!(self, Token::LineComment(_) | Token::BlockComment(_)) }
+    pub fn is_comment(&self) -> bool {
+        matches!(self, Token::LineComment(_) | Token::BlockComment(_))
+    }
 
-    pub fn is_identifier(&self) -> bool { self.identifier_name().is_some() }
+    pub fn is_identifier(&self) -> bool {
+        self.identifier_name().is_some()
+    }
 
     /// The name behind a token that can stand in for an ordinary identifier. Soft keywords do that
     /// everywhere outside the position that reserves them.

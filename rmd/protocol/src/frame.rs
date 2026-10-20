@@ -54,11 +54,15 @@ pub struct FrameReader {
 }
 
 impl Default for FrameReader {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FrameReader {
-    pub const fn new() -> Self { Self::with_max(MAX_FRAME_LEN) }
+    pub const fn new() -> Self {
+        Self::with_max(MAX_FRAME_LEN)
+    }
 
     pub const fn with_max(max: usize) -> Self {
         Self {

@@ -177,14 +177,9 @@ mod tests {
     use vm::profile::ProfileHook;
 
     use crate::session::{
-        FaultState,
-        Session,
+        FaultState, Session,
         fixtures::{
-            examples,
-            faulting_profile_session,
-            highlight_toggle_fault_session,
-            interaction_fault_session,
-            settle_bake,
+            examples, faulting_profile_session, highlight_toggle_fault_session, interaction_fault_session, settle_bake,
         },
     };
 

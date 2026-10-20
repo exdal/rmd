@@ -7,15 +7,7 @@ use std::{
 };
 
 use dear_imgui_rs::{
-    DockLayout,
-    DockLayoutApply,
-    DockNodeFlags,
-    DockSplit,
-    DockspaceError,
-    Id,
-    Ui,
-    WindowFlags,
-    WindowKey,
+    DockLayout, DockLayoutApply, DockNodeFlags, DockSplit, DockspaceError, Id, Ui, WindowFlags, WindowKey,
     WindowKeyError,
 };
 use dmm::{Coord, PrefabInstanceId};
@@ -64,42 +56,15 @@ mod welcome;
 use self::{
     blame::{BlamePopup, blame_tooltip_position, draw_blame_popup},
     block::{
-        BlockSelectionOptions,
-        PendingBlockPlacement,
-        RectangleGesture,
-        draw_block_outline,
-        draw_marching_edge,
-        draw_selection_mode_controls,
-        marching_stripe_offset,
-        rectangle_drag_coord,
-        restore_rectangle_gesture,
+        BlockSelectionOptions, PendingBlockPlacement, RectangleGesture, draw_block_outline, draw_marching_edge,
+        draw_selection_mode_controls, marching_stripe_offset, rectangle_drag_coord, restore_rectangle_gesture,
     },
     dialog::{
-        DeleteLevelDialog,
-        FILL_LIMIT_WARNING_POPUP,
-        FillWarningContext,
-        GO_TO_POPUP,
-        GoToDialog,
-        NEW_MAP_POPUP,
-        NewLevelDialog,
-        NewMapDialog,
-        PendingFillWarning,
-        RESIZE_MAP_POPUP,
-        ResizeMapDialog,
-        SAVE_ERROR_COLOR,
-        SAVE_MAP_POPUP,
-        SaveDialog,
-        SaveDialogOutcome,
-        TileFillPaths,
-        TileFillSearch,
-        draw_delete_level_dialog,
-        draw_fill_limit_warning,
-        draw_go_to_dialog,
-        draw_keybind_preset_dialog,
-        draw_new_level_dialog,
-        draw_new_map_dialog,
-        draw_resize_map_dialog,
-        draw_save_dialog,
+        DeleteLevelDialog, FILL_LIMIT_WARNING_POPUP, FillWarningContext, GO_TO_POPUP, GoToDialog, NEW_MAP_POPUP,
+        NewLevelDialog, NewMapDialog, PendingFillWarning, RESIZE_MAP_POPUP, ResizeMapDialog, SAVE_ERROR_COLOR,
+        SAVE_MAP_POPUP, SaveDialog, SaveDialogOutcome, TileFillPaths, TileFillSearch, draw_delete_level_dialog,
+        draw_fill_limit_warning, draw_go_to_dialog, draw_keybind_preset_dialog, draw_new_level_dialog,
+        draw_new_map_dialog, draw_resize_map_dialog, draw_save_dialog,
     },
     grid::{draw_selected_pixel_grid, draw_tile_grid},
     history::{draw_history_overlay, recent_button_size},
@@ -107,29 +72,15 @@ use self::{
     menu::MenuActions,
     node::{NodeOverlayView, NodeRightClick, draw_node_overlay, node_right_click},
     overlay::{
-        OVERLAY_BG,
-        OverlayRect,
-        conflict_controls_layout,
-        draw_conflict_controls,
-        draw_guide_badges,
-        draw_highlights,
-        draw_identical_outlines,
-        draw_overlay_underlay,
-        draw_placement_preview,
-        overlay_padding,
+        OVERLAY_BG, OverlayRect, conflict_controls_layout, draw_conflict_controls, draw_guide_badges, draw_highlights,
+        draw_identical_outlines, draw_overlay_underlay, draw_placement_preview, overlay_padding,
     },
     paste::centered_paste_min,
     search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search},
     toolbar::{DEFAULT_CUSTOM_FILL_BOUNDARY, TopOverlayState, draw_top_overlay, request_level_change},
     tooltip::{draw_conflict_tooltip, draw_diff_tooltip},
     viewport::{
-        ActivePlacementFlash,
-        EDIT_KEYS,
-        EditCommand,
-        MapViewState,
-        MomentaryTool,
-        PickStroke,
-        PlacementStroke,
+        ActivePlacementFlash, EDIT_KEYS, EditCommand, MapViewState, MomentaryTool, PickStroke, PlacementStroke,
     },
     welcome::{ForgetRequest, WelcomeOutput},
 };
@@ -237,11 +188,17 @@ struct StartupPanelFocus {
 }
 
 impl StartupPanelFocus {
-    const fn new() -> Self { Self { remaining_draws: 3 } }
+    const fn new() -> Self {
+        Self { remaining_draws: 3 }
+    }
 
-    const fn requested(&self) -> bool { self.remaining_draws > 0 }
+    const fn requested(&self) -> bool {
+        self.remaining_draws > 0
+    }
 
-    fn cancel(&mut self) { self.remaining_draws = 0; }
+    fn cancel(&mut self) {
+        self.remaining_draws = 0;
+    }
 
     fn after_draw(&mut self, docked: bool) {
         if docked {
@@ -406,10 +363,14 @@ impl UiState {
         })
     }
 
-    pub fn is_checking_for_updates(&self) -> bool { self.update_check.is_checking() }
+    pub fn is_checking_for_updates(&self) -> bool {
+        self.update_check.is_checking()
+    }
 
     #[cfg(test)]
-    pub(crate) fn map_issues_visible(&self) -> bool { self.issues.visible() }
+    pub(crate) fn map_issues_visible(&self) -> bool {
+        self.issues.visible()
+    }
 
     fn raise_demand(&self, demand: FrameDemand) {
         let mut raised = self.demand.get();
@@ -417,27 +378,45 @@ impl UiState {
         self.demand.set(raised);
     }
 
-    pub fn set_open_error(&mut self, error: Option<String>) { self.open_error = error; }
+    pub fn set_open_error(&mut self, error: Option<String>) {
+        self.open_error = error;
+    }
 
-    pub fn reset_coop_notice(&mut self) { self.coop_notice.reset(); }
+    pub fn reset_coop_notice(&mut self) {
+        self.coop_notice.reset();
+    }
 
     pub fn reveal_selected_instance(&mut self, session: &Session) {
         self.object_tree.reveal_selected_instance(session);
     }
 
-    pub fn request_mouse_popup(&mut self) { self.dm_ui.request_mouse_popup(); }
+    pub fn request_mouse_popup(&mut self) {
+        self.dm_ui.request_mouse_popup();
+    }
 
-    pub fn set_load_notice(&mut self, notice: Option<LoadNotice>) { self.load_notice = notice; }
+    pub fn set_load_notice(&mut self, notice: Option<LoadNotice>) {
+        self.load_notice = notice;
+    }
 
-    pub fn set_profiles(&mut self, profiles: Vec<String>) { self.settings_window.set_profiles(profiles); }
+    pub fn set_profiles(&mut self, profiles: Vec<String>) {
+        self.settings_window.set_profiles(profiles);
+    }
 
-    pub fn set_codebase_report(&mut self, report: LoadReport) { self.diagnostics.set_codebase(report); }
+    pub fn set_codebase_report(&mut self, report: LoadReport) {
+        self.diagnostics.set_codebase(report);
+    }
 
-    pub fn set_map_report(&mut self, path: PathBuf, report: LoadReport) { self.diagnostics.set_map(path, report); }
+    pub fn set_map_report(&mut self, path: PathBuf, report: LoadReport) {
+        self.diagnostics.set_map(path, report);
+    }
 
-    pub fn set_failed_codebase_report(&mut self, report: LoadReport) { self.diagnostics.set_failed_codebase(report); }
+    pub fn set_failed_codebase_report(&mut self, report: LoadReport) {
+        self.diagnostics.set_failed_codebase(report);
+    }
 
-    pub fn request_exit(&mut self) { self.exit_requested = true; }
+    pub fn request_exit(&mut self) {
+        self.exit_requested = true;
+    }
 
     pub fn request_refit(&mut self, id: Option<DocumentId>) {
         if let Some(view) = id.and_then(|id| self.map_views.get_mut(&id)) {
@@ -1109,14 +1088,8 @@ mod tests {
     use editor::tool::FillMode;
 
     use super::{
-        BlockSelectionOptions,
-        DEFAULT_CUSTOM_FILL_BOUNDARY,
-        IMGUI_CONTEXT,
-        UiState,
-        common::button_width,
-        fixtures::rectangle_context,
-        git,
-        menu::MenuActions,
+        BlockSelectionOptions, DEFAULT_CUSTOM_FILL_BOUNDARY, IMGUI_CONTEXT, UiState, common::button_width,
+        fixtures::rectangle_context, git, menu::MenuActions,
     };
     use crate::{
         session::{DiagnosticSeverity, Session, fixtures::install_diff},

@@ -4,55 +4,18 @@ use ash::vk;
 use dear_imgui_rs::render::{PendingFrame, ReconciledFrame};
 use dmi::IconFile;
 use vir::{
-    Access,
-    AllocatorKind,
-    BlendPreset,
-    Buffer,
-    BufferCopy,
-    BufferImageCopy,
-    BufferInfo,
-    ClearValue,
-    ColorBlendAttachmentState,
-    ComputePipelineInfo,
-    DRAW_INDIRECT_STRIDE,
-    DepthState,
-    DomainFlag,
-    DrawIndirectCommand,
-    FrameAllocator,
-    GraphicsPipelineInfo,
-    Image,
-    ImageAttachment,
-    ImageInfo,
-    MemoryLocation,
-    Module,
-    PassCallback,
-    PipelineId,
-    Program,
-    RasterizationState,
-    Rect2D,
-    RenderGraph,
-    SamplerInfo,
-    SuperFrameAllocator,
-    SwapChain,
-    ValueId,
+    Access, AllocatorKind, BlendPreset, Buffer, BufferCopy, BufferImageCopy, BufferInfo, ClearValue,
+    ColorBlendAttachmentState, ComputePipelineInfo, DRAW_INDIRECT_STRIDE, DepthState, DomainFlag, DrawIndirectCommand,
+    FrameAllocator, GraphicsPipelineInfo, Image, ImageAttachment, ImageInfo, MemoryLocation, Module, PassCallback,
+    PipelineId, Program, RasterizationState, Rect2D, RenderGraph, SamplerInfo, SuperFrameAllocator, SwapChain, ValueId,
     allocator::Allocator,
 };
 
 use crate::{
-    AREA_EDGES_ALL,
-    CapturedImage,
-    Device,
-    Frame,
-    GpuError,
-    PickRequest,
-    PickResult,
-    SpriteInstance,
-    SpritePreview,
-    VisibilityId,
-    extent3d,
+    AREA_EDGES_ALL, CapturedImage, Device, Frame, GpuError, PickRequest, PickResult, SpriteInstance, SpritePreview,
+    VisibilityId, extent3d,
     imgui::{ImGuiFrame, ImGuiPass, ImGuiSlots},
-    read_spirv,
-    spec,
+    read_spirv, spec,
     texture::TextureCatalog,
     viewport::{SecondaryViewport, ViewportTarget, sync_targets},
 };
@@ -794,9 +757,13 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub const fn map_view_texture(index: usize) -> dear_imgui_rs::TextureId { crate::imgui::map_view_texture(index) }
+    pub const fn map_view_texture(index: usize) -> dear_imgui_rs::TextureId {
+        crate::imgui::map_view_texture(index)
+    }
 
-    pub const fn sprite_texture(index: u32) -> dear_imgui_rs::TextureId { crate::imgui::sprite_texture(index) }
+    pub const fn sprite_texture(index: u32) -> dear_imgui_rs::TextureId {
+        crate::imgui::sprite_texture(index)
+    }
 
     pub fn new(device: Device, width: u32, height: u32, texture_capacity: usize) -> Result<Self, GpuError> {
         let texture_limit = device.max_bindless_textures.min(SPRITE_TEXTURE_CAPACITY);
@@ -1061,7 +1028,9 @@ impl Renderer {
         Ok(renderer)
     }
 
-    pub fn extent(&self) -> vk::Extent2D { self.extent }
+    pub fn extent(&self) -> vk::Extent2D {
+        self.extent
+    }
 
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
@@ -3092,9 +3061,13 @@ fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSprite, GpuErr
     })
 }
 
-fn owner_words(owner: dmm::PrefabInstanceId) -> [u32; 2] { split_owner(owner.get()) }
+fn owner_words(owner: dmm::PrefabInstanceId) -> [u32; 2] {
+    split_owner(owner.get())
+}
 
-fn split_owner(owner: u64) -> [u32; 2] { [owner as u32, (owner >> 32) as u32] }
+fn split_owner(owner: u64) -> [u32; 2] {
+    [owner as u32, (owner >> 32) as u32]
+}
 
 fn project_guide_line(
     guide: crate::GuideLine, camera: crate::Camera, rect: crate::MapViewRect,
@@ -3584,89 +3557,28 @@ mod tests {
     use vir::resource::shader;
 
     use super::{
-        AREA_COLOR_CS_SPV,
-        AreaColorPush,
-        BLUR_FS_SPV,
-        BlurPush,
-        CAPTURE_CS_SPV,
-        CAPTURE_WORKGROUP_SIZE,
-        CULL_WORKGROUP_SIZE,
-        CameraPush,
-        CaptureTile,
-        CullPush,
-        Frame,
-        FrameGraphState,
-        GEOMETRY_VS_SPV,
-        GUIDE_FS_SPV,
-        GpuGuideLine,
-        GpuSprite,
-        GuidePush,
-        INTERACTION_FS_SPV,
-        InteractionPush,
-        LIGHTING_FS_SPV,
-        LevelRange,
-        LightingPush,
-        PICK_CS_SPV,
-        PickPush,
-        SCENE_RESOLVE_FS_SPV,
-        SPRITE_CULL_CLASSIFY_CS_SPV,
-        SPRITE_CULL_COMPACT_CS_SPV,
-        SPRITE_CULL_SCAN_CS_SPV,
-        SPRITE_FLAG_AREA,
-        SPRITE_FLAG_CLICK_THROUGH,
-        SPRITE_FLAG_EMISSIVE_BLOCKER,
-        SPRITE_FLAG_EMISSIVE_MASK,
-        SPRITE_FLAG_FULLBRIGHT,
-        SPRITE_FLAG_OVERLAY_LIGHT,
-        SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT,
-        SPRITE_FLAGS_SHIFT,
-        SPRITE_OVERLAY_LIGHT_FS_SPV,
-        SPRITE_SCENE_FS_SPV,
-        SPRITE_SHADE_FS_SPV,
-        SPRITE_TEXTURE_MASK,
-        SPRITE_VIS_FS_SPV,
-        UPLOAD_BATCH_BYTES,
-        VisibleRange,
-        area_color_group_count,
-        batch_ranges,
-        capture_tiles,
-        copy_region,
-        descriptor_capacity,
-        gpu_light_tile,
-        gpu_sprite,
-        level_ranges,
-        merged_ranges,
-        meshopt_dequantize_half,
-        meshopt_dequantize_unorm,
-        meshopt_quantize_half,
-        pack_unorm4x8,
-        project_guide_line,
-        spec,
-        split_owner,
-        updates_since,
-        valid_update_range,
+        AREA_COLOR_CS_SPV, AreaColorPush, BLUR_FS_SPV, BlurPush, CAPTURE_CS_SPV, CAPTURE_WORKGROUP_SIZE,
+        CULL_WORKGROUP_SIZE, CameraPush, CaptureTile, CullPush, Frame, FrameGraphState, GEOMETRY_VS_SPV, GUIDE_FS_SPV,
+        GpuGuideLine, GpuSprite, GuidePush, INTERACTION_FS_SPV, InteractionPush, LIGHTING_FS_SPV, LevelRange,
+        LightingPush, PICK_CS_SPV, PickPush, SCENE_RESOLVE_FS_SPV, SPRITE_CULL_CLASSIFY_CS_SPV,
+        SPRITE_CULL_COMPACT_CS_SPV, SPRITE_CULL_SCAN_CS_SPV, SPRITE_FLAG_AREA, SPRITE_FLAG_CLICK_THROUGH,
+        SPRITE_FLAG_EMISSIVE_BLOCKER, SPRITE_FLAG_EMISSIVE_MASK, SPRITE_FLAG_FULLBRIGHT, SPRITE_FLAG_OVERLAY_LIGHT,
+        SPRITE_FLAG_OVERLAY_LIGHT_SUBTRACT, SPRITE_FLAGS_SHIFT, SPRITE_OVERLAY_LIGHT_FS_SPV, SPRITE_SCENE_FS_SPV,
+        SPRITE_SHADE_FS_SPV, SPRITE_TEXTURE_MASK, SPRITE_VIS_FS_SPV, UPLOAD_BATCH_BYTES, VisibleRange,
+        area_color_group_count, batch_ranges, capture_tiles, copy_region, descriptor_capacity, gpu_light_tile,
+        gpu_sprite, level_ranges, merged_ranges, meshopt_dequantize_half, meshopt_dequantize_unorm,
+        meshopt_quantize_half, pack_unorm4x8, project_guide_line, spec, split_owner, updates_since, valid_update_range,
         visible_range,
     };
     use crate::{
-        AREA_EDGE_EAST,
-        AREA_EDGE_NORTH,
-        Camera,
-        GpuError,
-        GuideLine,
-        HighlightStyle,
-        InteractionMode,
-        LightTile,
-        LightingFrame,
-        MapViewFrame,
-        MapViewRect,
-        SpriteInstance,
-        SpriteLighting,
-        SpriteTexture,
-        UpdateRange,
+        AREA_EDGE_EAST, AREA_EDGE_NORTH, Camera, GpuError, GuideLine, HighlightStyle, InteractionMode, LightTile,
+        LightingFrame, MapViewFrame, MapViewRect, SpriteInstance, SpriteLighting, SpriteTexture, UpdateRange,
         read_spirv,
     };
 
-    fn owner() -> PrefabInstanceId { PrefabInstanceId::from_raw(1).expect("nonzero prefab instance ID") }
+    fn owner() -> PrefabInstanceId {
+        PrefabInstanceId::from_raw(1).expect("nonzero prefab instance ID")
+    }
 
     fn sprite(z: u32) -> SpriteInstance {
         SpriteInstance {

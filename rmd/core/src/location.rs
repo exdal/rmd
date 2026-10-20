@@ -19,7 +19,9 @@ impl Position {
 }
 
 impl std::fmt::Display for Position {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}:{}", self.line, self.col) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.line, self.col)
+    }
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -38,16 +40,24 @@ impl Location {
         }
     }
 
-    pub fn in_file(file: FileId, begin: Position, end: Position) -> Self { Self { file, begin, end } }
+    pub fn in_file(file: FileId, begin: Position, end: Position) -> Self {
+        Self { file, begin, end }
+    }
 
-    pub fn with_file(self, file: FileId) -> Self { Self { file, ..self } }
+    pub fn with_file(self, file: FileId) -> Self {
+        Self { file, ..self }
+    }
 
     /// `code/game/objects/items.dm:22:1`, or `<file 3>:22:1` for a file the caller cannot name.
-    pub fn display(self, path: Option<&Path>) -> LocationDisplay<'_> { LocationDisplay { location: self, path } }
+    pub fn display(self, path: Option<&Path>) -> LocationDisplay<'_> {
+        LocationDisplay { location: self, path }
+    }
 }
 
 impl std::fmt::Display for Location {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.begin) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.begin)
+    }
 }
 
 pub struct LocationDisplay<'a> {
@@ -100,7 +110,9 @@ pub struct LineTable<K> {
 }
 
 impl<K> Default for LineTable<K> {
-    fn default() -> Self { Self { runs: Vec::new() } }
+    fn default() -> Self {
+        Self { runs: Vec::new() }
+    }
 }
 
 impl<K: Copy + Ord> LineTable<K> {
@@ -144,7 +156,11 @@ impl<K: Copy + Ord> LineTable<K> {
         self.runs.get(*hint)?.1
     }
 
-    pub fn len(&self) -> usize { self.runs.len() }
+    pub fn len(&self) -> usize {
+        self.runs.len()
+    }
 
-    pub fn is_empty(&self) -> bool { self.runs.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.runs.is_empty()
+    }
 }

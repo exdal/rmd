@@ -1,14 +1,18 @@
 use dmm::{Coord, Size};
 use render::Camera;
 
-pub fn clamp_zoom(zoom: f32) -> f32 { zoom.clamp(0.05, 64.0) }
+pub fn clamp_zoom(zoom: f32) -> f32 {
+    zoom.clamp(0.05, 64.0)
+}
 
 pub struct Controller {
     pub camera: Camera,
 }
 
 impl Default for Controller {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Controller {

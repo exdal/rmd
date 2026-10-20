@@ -10,7 +10,9 @@ use objtree::ObjectTree;
 
 use super::{FillOutcome, Session};
 
-pub(super) fn is_reorder_label(label: &str) -> bool { matches!(label, "move atom to top" | "move atom to bottom") }
+pub(super) fn is_reorder_label(label: &str) -> bool {
+    matches!(label, "move atom to top" | "move atom to bottom")
+}
 
 pub(crate) fn context_placement_group(tree: &ObjectTree, path: &TreePath) -> Option<u8> {
     let id = tree.id_of(path)?;
@@ -27,7 +29,9 @@ pub(crate) fn context_placement_group(tree: &ObjectTree, path: &TreePath) -> Opt
 }
 
 impl Session {
-    pub fn tool(&self) -> Tool { self.state.tool }
+    pub fn tool(&self) -> Tool {
+        self.state.tool
+    }
 
     pub fn set_tool(&mut self, tool: Tool) {
         if tool == Tool::Node && !self.node_tool_available() {
@@ -375,8 +379,7 @@ mod tests {
     };
 
     use crate::session::{
-        FillOutcome,
-        Session,
+        FillOutcome, Session,
         fixtures::{area_at, examples, flat_session, focus_session},
     };
 

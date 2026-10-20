@@ -633,7 +633,9 @@ fn shared_level_redo_stays_blocked_when_the_shared_entry_is_closed() -> Result<(
     Ok(())
 }
 
-fn levels(session: &Session, id: DocumentId) -> u32 { session.state.document(id).unwrap().map.size().z }
+fn levels(session: &Session, id: DocumentId) -> u32 {
+    session.state.document(id).unwrap().map.size().z
+}
 
 fn marked(path: &str) -> Vec<Prefab> {
     vec![

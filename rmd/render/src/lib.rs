@@ -15,7 +15,9 @@ pub use crate::{device::Device, error::GpuError, renderer::Renderer, viewport::S
 pub struct VisibilityId(std::num::NonZeroU32);
 
 impl VisibilityId {
-    pub fn from_raw(raw: u32) -> Option<Self> { std::num::NonZeroU32::new(raw).map(Self) }
+    pub fn from_raw(raw: u32) -> Option<Self> {
+        std::num::NonZeroU32::new(raw).map(Self)
+    }
 
     pub fn from_sprite_index(index: usize) -> Option<Self> {
         let index = u32::try_from(index).ok()?;
@@ -23,9 +25,13 @@ impl VisibilityId {
         index.checked_add(1).and_then(Self::from_raw)
     }
 
-    pub const fn get(self) -> u32 { self.0.get() }
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
 
-    pub const fn sprite_index(self) -> usize { self.get() as usize - 1 }
+    pub const fn sprite_index(self) -> usize {
+        self.get() as usize - 1
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,7 +58,9 @@ pub enum HighlightStyle {
 }
 
 impl HighlightStyle {
-    pub const fn is_tint(self) -> bool { matches!(self, Self::Tint) }
+    pub const fn is_tint(self) -> bool {
+        matches!(self, Self::Tint)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -88,9 +96,13 @@ impl InteractionMode {
         }
     }
 
-    pub const fn is_delete(self) -> bool { matches!(self, Self::Delete { .. }) }
+    pub const fn is_delete(self) -> bool {
+        matches!(self, Self::Delete { .. })
+    }
 
-    pub const fn is_node(self) -> bool { matches!(self, Self::Node { .. }) }
+    pub const fn is_node(self) -> bool {
+        matches!(self, Self::Node { .. })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,7 +202,9 @@ pub struct MapViewRect {
 }
 
 impl MapViewRect {
-    pub const fn is_empty(self) -> bool { self.width == 0 || self.height == 0 }
+    pub const fn is_empty(self) -> bool {
+        self.width == 0 || self.height == 0
+    }
 }
 
 #[derive(Debug)]

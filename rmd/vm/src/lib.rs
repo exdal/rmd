@@ -76,11 +76,15 @@ impl IconStates {
         self.0.get(&icon_key(path)).map(|icon| icon.states.as_slice())
     }
 
-    pub(crate) fn size(&self, path: &str) -> Option<[u32; 2]> { self.0.get(&icon_key(path)).map(|icon| icon.size) }
+    pub(crate) fn size(&self, path: &str) -> Option<[u32; 2]> {
+        self.0.get(&icon_key(path)).map(|icon| icon.size)
+    }
 }
 
 /// BYOND resolves resource paths case-insensitively and accepts either slash.
-fn icon_key(path: &str) -> String { file_path::forward_slashes(path).to_ascii_lowercase() }
+fn icon_key(path: &str) -> String {
+    file_path::forward_slashes(path).to_ascii_lowercase()
+}
 
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
@@ -118,7 +122,9 @@ impl Diagnostics {
         }
     }
 
-    pub fn count(&self) -> usize { self.entries.iter().map(|diagnostic| diagnostic.count).sum() }
+    pub fn count(&self) -> usize {
+        self.entries.iter().map(|diagnostic| diagnostic.count).sum()
+    }
 }
 
 #[cfg(test)]

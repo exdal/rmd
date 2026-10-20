@@ -24,7 +24,9 @@ pub fn decode(source: &str, budget: usize) -> Result<Value, FaultKind> {
     Ok(value)
 }
 
-fn invalid() -> FaultKind { FaultKind::InvalidOperation("invalid JSON".into()) }
+fn invalid() -> FaultKind {
+    FaultKind::InvalidOperation("invalid JSON".into())
+}
 
 fn validate_depth(value: &Value, depth: usize) -> Result<(), FaultKind> {
     if depth >= MAX_DEPTH {
@@ -59,25 +61,41 @@ struct JsonVisitor;
 impl<'de> Visitor<'de> for JsonVisitor {
     type Value = JsonValue;
 
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result { formatter.write_str("a JSON value") }
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON value")
+    }
 
-    fn visit_unit<E>(self) -> Result<Self::Value, E> { Ok(JsonValue(Value::Null)) }
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(JsonValue(Value::Null))
+    }
 
-    fn visit_none<E>(self) -> Result<Self::Value, E> { Ok(JsonValue(Value::Null)) }
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(JsonValue(Value::Null))
+    }
 
     fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
         Ok(JsonValue(Value::Num(if value { 1.0 } else { 0.0 })))
     }
 
-    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> { Ok(JsonValue(Value::Num(value as f32))) }
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(JsonValue(Value::Num(value as f32)))
+    }
 
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> { Ok(JsonValue(Value::Num(value as f32))) }
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(JsonValue(Value::Num(value as f32)))
+    }
 
-    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E> { Ok(JsonValue(Value::Num(value as f32))) }
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E> {
+        Ok(JsonValue(Value::Num(value as f32)))
+    }
 
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> { Ok(JsonValue(Value::Text(value.into()))) }
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(JsonValue(Value::Text(value.into())))
+    }
 
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> { Ok(JsonValue(Value::Text(value))) }
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(JsonValue(Value::Text(value)))
+    }
 
     fn visit_seq<A>(self, mut values: A) -> Result<Self::Value, A::Error>
     where
@@ -112,7 +130,9 @@ impl<'de> Visitor<'de> for JsonVisitor {
 mod tests {
     use super::*;
 
-    fn entry(key: Value, value: Option<Value>) -> ListEntry { ListEntry { key, value } }
+    fn entry(key: Value, value: Option<Value>) -> ListEntry {
+        ListEntry { key, value }
+    }
 
     #[test]
     fn decodes_nested_arrays_and_objects() {

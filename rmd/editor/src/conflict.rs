@@ -1,9 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use dmm::{
-    Coord,
-    Prefab,
-    Tile,
+    Coord, Prefab, Tile,
     merge::{TileConflict, tiles_equal},
 };
 
@@ -57,7 +55,9 @@ impl Region {
 pub struct Resolved(HashMap<Coord, Side>);
 
 impl Resolved {
-    pub fn side(&self, coord: Coord) -> Option<Side> { self.0.get(&coord).copied() }
+    pub fn side(&self, coord: Coord) -> Option<Side> {
+        self.0.get(&coord).copied()
+    }
 }
 
 /// One conflicting tile as the conflict table lists it
@@ -196,10 +196,14 @@ impl ConflictState {
     }
 
     /// Every conflict grouped by region, in reading order
-    pub fn rows(&self) -> &[ConflictRow] { &self.rows }
+    pub fn rows(&self) -> &[ConflictRow] {
+        &self.rows
+    }
 
     /// Changes whenever a resolution is recorded
-    pub fn revision(&self) -> u64 { self.revision }
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
 
     pub fn side_label(&self, side: Side) -> &str {
         match side {
@@ -224,13 +228,21 @@ impl ConflictState {
         }
     }
 
-    pub fn len(&self) -> usize { self.order.len() }
+    pub fn len(&self) -> usize {
+        self.order.len()
+    }
 
-    pub fn is_empty(&self) -> bool { self.order.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
 
-    pub fn conflict_at(&self, coord: Coord) -> Option<&TileConflict> { self.tiles.get(&coord) }
+    pub fn conflict_at(&self, coord: Coord) -> Option<&TileConflict> {
+        self.tiles.get(&coord)
+    }
 
-    pub fn coords(&self) -> &[Coord] { &self.order }
+    pub fn coords(&self) -> &[Coord] {
+        &self.order
+    }
 
     /// The latest resolution that is still applied in the history
     pub fn resolution(&self, coord: Coord, history: &History) -> Option<Side> {
@@ -267,7 +279,9 @@ impl ConflictState {
             .filter(move |coord| !resolved.0.contains_key(coord))
     }
 
-    pub fn unresolved_count(&self, history: &History) -> usize { self.unresolved_in(&self.resolved(history)).count() }
+    pub fn unresolved_count(&self, history: &History) -> usize {
+        self.unresolved_in(&self.resolved(history)).count()
+    }
 
     pub fn side_tile(&self, coord: Coord, side: Side) -> Option<Option<&Tile>> {
         let conflict = self.tiles.get(&coord)?;
@@ -362,7 +376,9 @@ mod tests {
     use super::{ConflictData, ConflictState, Side};
     use crate::{command::EditGroupId, document::MapDocument};
 
-    fn tile(path: &str) -> Vec<Prefab> { vec![Prefab::new(TreePath::parse(path))] }
+    fn tile(path: &str) -> Vec<Prefab> {
+        vec![Prefab::new(TreePath::parse(path))]
+    }
 
     fn setup(coords: &[(u32, u32)]) -> (MapDocument, ConflictState) {
         let mut map = Map::new(Size { x: 6, y: 6, z: 1 });

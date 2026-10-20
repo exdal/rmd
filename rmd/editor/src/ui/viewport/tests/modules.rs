@@ -32,7 +32,9 @@ fn source(app: &RectangleUiHarness) -> Result<String, Box<dyn Error>> {
     ))
 }
 
-fn selected(app: &RectangleUiHarness) -> Option<usize> { app.session.module_roots()[0].selected }
+fn selected(app: &RectangleUiHarness) -> Option<usize> {
+    app.session.module_roots()[0].selected
+}
 
 #[test]
 fn clicking_a_marker_opens_the_popup() -> TestResult {

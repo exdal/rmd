@@ -64,7 +64,9 @@ impl Receiver {
 }
 
 impl From<Option<ObjectId>> for Receiver {
-    fn from(id: Option<ObjectId>) -> Self { id.map_or(Self::None, Self::Object) }
+    fn from(id: Option<ObjectId>) -> Self {
+        id.map_or(Self::None, Self::Object)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -139,19 +141,27 @@ impl GenericValue {
 }
 
 impl From<f32> for GenericValue {
-    fn from(n: f32) -> Self { Self::Num(n) }
+    fn from(n: f32) -> Self {
+        Self::Num(n)
+    }
 }
 
 impl From<bool> for GenericValue {
-    fn from(b: bool) -> Self { Self::Num(if b { 1.0 } else { 0.0 }) }
+    fn from(b: bool) -> Self {
+        Self::Num(if b { 1.0 } else { 0.0 })
+    }
 }
 
 impl From<&str> for GenericValue {
-    fn from(s: &str) -> Self { Self::Text(s.into()) }
+    fn from(s: &str) -> Self {
+        Self::Text(s.into())
+    }
 }
 
 impl From<String> for GenericValue {
-    fn from(s: String) -> Self { Self::Text(s.into()) }
+    fn from(s: String) -> Self {
+        Self::Text(s.into())
+    }
 }
 
 impl PartialEq for GenericValue {
@@ -239,7 +249,9 @@ pub struct ListData {
 }
 
 impl PartialEq for ListData {
-    fn eq(&self, other: &Self) -> bool { self.kind == other.kind && self.entries == other.entries }
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.entries == other.entries
+    }
 }
 
 impl ListData {
@@ -297,7 +309,9 @@ impl ListData {
             .unwrap_or_default()
     }
 
-    pub fn contains(&self, value: &GenericValue) -> bool { self.position(value).is_some() }
+    pub fn contains(&self, value: &GenericValue) -> bool {
+        self.position(value).is_some()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -331,9 +345,13 @@ pub struct AppearanceDelta {
 }
 
 impl From<i32> for GenericValue {
-    fn from(n: i32) -> Self { Self::Num(n as f32) }
+    fn from(n: i32) -> Self {
+        Self::Num(n as f32)
+    }
 }
 
 impl From<usize> for GenericValue {
-    fn from(n: usize) -> Self { Self::Num(n as f32) }
+    fn from(n: usize) -> Self {
+        Self::Num(n as f32)
+    }
 }

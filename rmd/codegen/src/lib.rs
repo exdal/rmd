@@ -27,9 +27,13 @@ macro_rules! id_type {
         impl $name {
             pub const INVALID: Self = Self(u32::MAX);
 
-            pub const fn is_valid(self) -> bool { self.0 != u32::MAX }
+            pub const fn is_valid(self) -> bool {
+                self.0 != u32::MAX
+            }
 
-            pub const fn is_invalid(self) -> bool { self.0 == u32::MAX }
+            pub const fn is_invalid(self) -> bool {
+                self.0 == u32::MAX
+            }
         }
 
         impl std::fmt::Display for $name {
@@ -61,9 +65,13 @@ pub struct CodeOffset(pub u32);
 impl CodeOffset {
     pub const INVALID: Self = Self(u32::MAX);
 
-    pub const fn is_valid(self) -> bool { self.0 != u32::MAX }
+    pub const fn is_valid(self) -> bool {
+        self.0 != u32::MAX
+    }
 
-    pub const fn is_invalid(self) -> bool { self.0 == u32::MAX }
+    pub const fn is_invalid(self) -> bool {
+        self.0 == u32::MAX
+    }
 }
 
 impl std::fmt::Display for CodeOffset {
@@ -100,9 +108,13 @@ impl Module {
     pub const MAGIC: [u8; 4] = *b"DMIR";
     pub const VERSION: u16 = 2;
 
-    pub fn function(&self, id: FunctionId) -> Option<&CompiledFunction> { self.functions.get(id.0 as usize) }
+    pub fn function(&self, id: FunctionId) -> Option<&CompiledFunction> {
+        self.functions.get(id.0 as usize)
+    }
 
-    pub fn line_at(&self, offset: CodeOffset) -> Option<SourceLine> { self.lines.get(offset) }
+    pub fn line_at(&self, offset: CodeOffset) -> Option<SourceLine> {
+        self.lines.get(offset)
+    }
 
     pub fn function_for_proc(&self, proc: ProcId) -> Option<&CompiledFunction> {
         let id = self.proc_functions.get(proc.0 as usize).copied()?;
@@ -156,7 +168,9 @@ pub enum ProcedureReachability {
     Selected(FxHashSet<ProcId>),
 }
 
-pub fn generate(module: &ir::Module) -> Result<Module, CodegenError> { Generator::new().generate(module, None) }
+pub fn generate(module: &ir::Module) -> Result<Module, CodegenError> {
+    Generator::new().generate(module, None)
+}
 
 /// `read_vars` names the vars the host reads off objects itself, which no reachable procedure shows
 pub fn reachable_procedures(
@@ -225,7 +239,9 @@ impl FunctionState {
         self.locals.get(&node).copied().ok_or(CodegenError::MissingLocal(node))
     }
 
-    fn assigned_local(&self, node: IrNodeId) -> Option<LocalId> { self.locals.get(&node).copied() }
+    fn assigned_local(&self, node: IrNodeId) -> Option<LocalId> {
+        self.locals.get(&node).copied()
+    }
 
     fn assign_local(&mut self, node: IrNodeId, local: LocalId) {
         let previous = self.locals.insert(node, local);
@@ -1037,13 +1053,21 @@ impl Generator {
         Ok(id)
     }
 
-    fn emit_op(&mut self, op: Op) { self.emit_u8(op as u8); }
+    fn emit_op(&mut self, op: Op) {
+        self.emit_u8(op as u8);
+    }
 
-    fn emit_bool(&mut self, value: bool) { self.emit_u8(u8::from(value)); }
+    fn emit_bool(&mut self, value: bool) {
+        self.emit_u8(u8::from(value));
+    }
 
-    fn emit_u8(&mut self, value: u8) { self.code.push(value); }
+    fn emit_u8(&mut self, value: u8) {
+        self.code.push(value);
+    }
 
-    fn emit_u32(&mut self, value: u32) { self.code.extend_from_slice(&value.to_le_bytes()); }
+    fn emit_u32(&mut self, value: u32) {
+        self.code.extend_from_slice(&value.to_le_bytes());
+    }
 
     fn emit_count(&mut self, count: usize, what: &'static str) -> Result<(), CodegenError> {
         let count = u32::try_from(count).map_err(|_| CodegenError::PoolTooLarge(what))?;
@@ -1088,7 +1112,9 @@ impl Generator {
         label
     }
 
-    fn mark_label(&mut self, label: Label) { self.labels.insert(label, self.code.len()); }
+    fn mark_label(&mut self, label: Label) {
+        self.labels.insert(label, self.code.len());
+    }
 
     fn write_address(&mut self, operand: usize, target: usize) -> Result<(), CodegenError> {
         let end = operand.checked_add(4).ok_or(CodegenError::CodeTooLarge)?;

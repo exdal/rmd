@@ -85,7 +85,9 @@ fn fold_binary(op: BinaryOp, lhs: Value, rhs: Value) -> Value {
     Value::Num(value)
 }
 
-fn bool_to_num(v: bool) -> f32 { if v { 1.0 } else { 0.0 } }
+fn bool_to_num(v: bool) -> f32 {
+    if v { 1.0 } else { 0.0 }
+}
 
 #[cfg(test)]
 mod tests {

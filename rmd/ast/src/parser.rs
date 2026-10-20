@@ -7,29 +7,9 @@ use core::{
 use lexer::token::{SoftKeyword, Token};
 
 use crate::{
-    AST,
-    AccessKind,
-    Argument,
-    AssignmentKind,
-    BinaryOp,
-    Builtin,
-    Declaration,
-    Expression,
-    ExpressionId,
-    ForLoop,
-    InputType,
-    Literal,
-    LoopBinding,
-    PickValue,
-    ProcKind,
-    ProcParam,
-    SettingMode,
-    Statement,
-    SwitchCase,
-    SwitchValue,
-    TypeSpec,
-    UnaryOp,
-    VarSpec,
+    AST, AccessKind, Argument, AssignmentKind, BinaryOp, Builtin, Declaration, Expression, ExpressionId, ForLoop,
+    InputType, Literal, LoopBinding, PickValue, ProcKind, ProcParam, SettingMode, Statement, SwitchCase, SwitchValue,
+    TypeSpec, UnaryOp, VarSpec,
     error::ParseError,
     precedence::{Precedence, token_to_assignment_kind, token_to_binary_op, token_to_precedence, token_to_unary_op},
 };
@@ -139,13 +119,17 @@ impl<'a, 't> Parser<'a, 't> {
         Ok(ast)
     }
 
-    fn peek(&self) -> Option<(Token<'a>, Location)> { self.tokens.get(self.cursor).copied() }
+    fn peek(&self) -> Option<(Token<'a>, Location)> {
+        self.tokens.get(self.cursor).copied()
+    }
 
     fn peek_at(&self, look_ahead: usize) -> Option<(Token<'a>, Location)> {
         self.tokens.get(self.cursor + look_ahead).copied()
     }
 
-    fn peek_is(&self, token: Token<'_>) -> bool { self.peek().is_some_and(|(t, _)| t == token) }
+    fn peek_is(&self, token: Token<'_>) -> bool {
+        self.peek().is_some_and(|(t, _)| t == token)
+    }
 
     fn peek_at_is(&self, look_ahead: usize, token: Token<'_>) -> bool {
         self.peek_at(look_ahead).is_some_and(|(t, _)| t == token)
@@ -188,7 +172,9 @@ impl<'a, 't> Parser<'a, 't> {
         }
     }
 
-    fn consume_step(&mut self) -> bool { self.consume(Token::Soft(SoftKeyword::Step)) }
+    fn consume_step(&mut self) -> bool {
+        self.consume(Token::Soft(SoftKeyword::Step))
+    }
 
     fn skip_newlines(&mut self) {
         while self.peek_is(Token::Newline) {
@@ -344,7 +330,9 @@ impl<'a, 't> Parser<'a, 't> {
         operator_proc
     }
 
-    fn parse_path(&mut self) -> ParseResult<TreePath> { self.parse_path_in(false) }
+    fn parse_path(&mut self) -> ParseResult<TreePath> {
+        self.parse_path_in(false)
+    }
 
     /// `/obj/item/paper/final` names a type, and only `var/final/x` or a `var` block makes it a modifier
     fn parse_path_in(&mut self, declaring: bool) -> ParseResult<TreePath> {
@@ -2150,7 +2138,9 @@ impl<'a, 't> Parser<'a, 't> {
     }
 }
 
-pub fn parse(tokens: &[(Token<'_>, Location)]) -> ParseResult<AST> { Parser::new(tokens).parse() }
+pub fn parse(tokens: &[(Token<'_>, Location)]) -> ParseResult<AST> {
+    Parser::new(tokens).parse()
+}
 
 #[cfg(test)]
 mod tests {

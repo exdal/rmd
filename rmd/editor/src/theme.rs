@@ -503,7 +503,9 @@ pub(crate) const STYLE_COLORS: [(StyleColor, &str); StyleColor::COUNT] = [
     (StyleColor::ModalWindowDimBg, "ModalWindowDimBg"),
 ];
 
-fn snap_tab_close(value: f32) -> f32 { if value < 0.0 { -1.0 } else { value } }
+fn snap_tab_close(value: f32) -> f32 {
+    if value < 0.0 { -1.0 } else { value }
+}
 
 pub(crate) const fn direction_name(direction: Direction) -> &'static str {
     match direction {
@@ -522,7 +524,9 @@ pub(crate) fn tree_lines_name(mode: TreeLineMode) -> &'static str {
         .map_or("None", |(_, name)| name)
 }
 
-fn color_byte(channel: f32) -> u8 { (channel.clamp(0.0, 1.0) * 255.0).round() as u8 }
+fn color_byte(channel: f32) -> u8 {
+    (channel.clamp(0.0, 1.0) * 255.0).round() as u8
+}
 
 pub(crate) fn hex_color(rgba: [f32; 4]) -> String {
     let [r, g, b, a] = rgba.map(color_byte);
@@ -545,7 +549,9 @@ fn parse_hex_color(hex: &str) -> Option<[f32; 4]> {
     Some([channel(0)?, channel(1)?, channel(2)?, channel(3)?].map(|channel| f32::from(channel) / 255.0))
 }
 
-fn float_value(value: f32) -> Value { Value::Float(value.to_string().parse().unwrap_or(f64::from(value))) }
+fn float_value(value: f32) -> Value {
+    Value::Float(value.to_string().parse().unwrap_or(f64::from(value)))
+}
 
 fn read_float(value: &Value) -> Option<f32> {
     let value = match value {
@@ -564,7 +570,9 @@ fn read_vec2(value: &Value) -> Option<[f32; 2]> {
     }
 }
 
-fn clamp(value: f32, range: &RangeInclusive<f32>) -> f32 { value.clamp(*range.start(), *range.end()) }
+fn clamp(value: f32, range: &RangeInclusive<f32>) -> f32 {
+    value.clamp(*range.start(), *range.end())
+}
 
 impl StyleField {
     fn write(&self, style: &Style) -> Value {
@@ -765,15 +773,25 @@ impl Themes {
         themes
     }
 
-    fn sort(&mut self) { self.entries.sort_by_key(|entry| entry.theme.name.to_lowercase()); }
+    fn sort(&mut self) {
+        self.entries.sort_by_key(|entry| entry.theme.name.to_lowercase());
+    }
 
-    pub fn active_style(&self) -> &Style { &self.entries[self.active].theme.style }
+    pub fn active_style(&self) -> &Style {
+        &self.entries[self.active].theme.style
+    }
 
-    pub fn active_id(&self) -> &str { &self.entries[self.active].id }
+    pub fn active_id(&self) -> &str {
+        &self.entries[self.active].id
+    }
 
-    pub fn active_theme(&self) -> &Theme { &self.entries[self.active].theme }
+    pub fn active_theme(&self) -> &Theme {
+        &self.entries[self.active].theme
+    }
 
-    pub fn active_theme_mut(&mut self) -> &mut Theme { &mut self.entries[self.active].theme }
+    pub fn active_theme_mut(&mut self) -> &mut Theme {
+        &mut self.entries[self.active].theme
+    }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Theme)> {
         self.entries.iter().map(|entry| (entry.id.as_str(), &entry.theme))
@@ -820,9 +838,13 @@ impl Themes {
             .map(|(_, theme)| theme)
     }
 
-    pub fn is_active_builtin(&self) -> bool { self.active_builtin().is_some() }
+    pub fn is_active_builtin(&self) -> bool {
+        self.active_builtin().is_some()
+    }
 
-    pub fn is_active_default(&self) -> bool { self.active_builtin() == Some(self.active_theme()) }
+    pub fn is_active_default(&self) -> bool {
+        self.active_builtin() == Some(self.active_theme())
+    }
 
     pub fn reset_active(&mut self) {
         if let Some(builtin) = self.active_builtin().cloned() {
@@ -874,7 +896,9 @@ impl Themes {
     }
 }
 
-fn theme_path(dir: &Path, id: &str) -> PathBuf { dir.join(format!("{id}.toml")) }
+fn theme_path(dir: &Path, id: &str) -> PathBuf {
+    dir.join(format!("{id}.toml"))
+}
 
 fn write_missing(dir: &Path, builtins: &[(&str, Theme)]) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(dir)?;
@@ -930,7 +954,9 @@ mod tests {
 
     use super::*;
 
-    fn default_style() -> Style { Context::create().style().clone() }
+    fn default_style() -> Style {
+        Context::create().style().clone()
+    }
 
     fn scratch_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("rmd-theme-{name}-{}", std::process::id()));

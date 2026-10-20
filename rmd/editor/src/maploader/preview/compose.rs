@@ -12,26 +12,13 @@ use objtree::{ObjectTree, TypeId};
 use vm::bake::ModuleRoot;
 
 use super::{
-    ModuleChoices,
-    ModuleOverlay,
-    ModuleRootKey,
-    ModuleRootPreview,
-    ModuleVariantKey,
-    ModuleVariantPreview,
-    PREVIEW_ID_START,
-    PreviewIdAllocator,
+    ModuleChoices, ModuleOverlay, ModuleRootKey, ModuleRootPreview, ModuleVariantKey, ModuleVariantPreview,
+    PREVIEW_ID_START, PreviewIdAllocator,
 };
 use crate::{
     grid::Grid,
     maploader::{
-        Diagnostic,
-        ErrorKind,
-        LoadedModule,
-        MAX_NESTING,
-        ModuleFiles,
-        RootSpecs,
-        module::Anchor,
-        resolve_module_path,
+        Diagnostic, ErrorKind, LoadedModule, MAX_NESTING, ModuleFiles, RootSpecs, module::Anchor, resolve_module_path,
         resolved_path,
     },
 };
@@ -60,7 +47,9 @@ pub(super) struct ModuleLayer {
 }
 
 impl ModuleLayer {
-    pub(super) fn uses_file(&self, path: &Path) -> bool { self.choice.path == path }
+    pub(super) fn uses_file(&self, path: &Path) -> bool {
+        self.choice.path == path
+    }
 }
 
 pub fn compose(

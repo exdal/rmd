@@ -7,12 +7,7 @@ use core::{
 };
 
 use ast::{
-    AST,
-    Declaration,
-    Expression,
-    ExpressionId,
-    Literal,
-    Statement,
+    AST, Declaration, Expression, ExpressionId, Literal, Statement,
     constant::fold,
     intrinsic::{IntrinsicMarkerError, intrinsic_marker},
 };
@@ -47,7 +42,9 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    pub fn errors(&self) -> &[SemaError] { &self.errors }
+    pub fn errors(&self) -> &[SemaError] {
+        &self.errors
+    }
 
     pub fn add(&mut self) {
         let ast = self.ast;

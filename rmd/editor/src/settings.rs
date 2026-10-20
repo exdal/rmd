@@ -1,8 +1,7 @@
 use std::{
     env,
     error::Error,
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -204,9 +203,13 @@ impl KeyBinding {
         ui.is_key_pressed_with_repeat(self.key, true) && self.modifiers_match(ui)
     }
 
-    pub fn is_down(self, ui: &Ui) -> bool { ui.is_key_down(self.key) && self.modifiers_match(ui) }
+    pub fn is_down(self, ui: &Ui) -> bool {
+        ui.is_key_down(self.key) && self.modifiers_match(ui)
+    }
 
-    pub fn is_key_held(self, ui: &Ui) -> bool { ui.is_key_down(self.key) }
+    pub fn is_key_held(self, ui: &Ui) -> bool {
+        ui.is_key_down(self.key)
+    }
 
     pub fn is_held(self, ui: &Ui) -> bool {
         let io = ui.io();
@@ -233,7 +236,9 @@ impl KeyBinding {
         .is_down(ui)
     }
 
-    pub fn is_released(self, ui: &Ui) -> bool { ui.is_key_released(self.key) && self.modifiers_match(ui) }
+    pub fn is_released(self, ui: &Ui) -> bool {
+        ui.is_key_released(self.key) && self.modifiers_match(ui)
+    }
 
     fn modifiers_match(self, ui: &Ui) -> bool {
         let io = ui.io();
@@ -279,7 +284,9 @@ impl KeyBinding {
 const CTRL_NAME: &str = if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" };
 const SUPER_NAME: &str = if cfg!(target_os = "macos") { "Ctrl" } else { "Super" };
 
-const fn is_false(value: &bool) -> bool { !*value }
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeybindPreset {
@@ -492,7 +499,9 @@ impl KeybindAction {
         }
     }
 
-    pub const fn is_held(self) -> bool { matches!(self, Self::ToolAlternate | Self::PanFaster | Self::PanDrag) }
+    pub const fn is_held(self) -> bool {
+        matches!(self, Self::ToolAlternate | Self::PanFaster | Self::PanDrag)
+    }
 
     pub const fn id(self) -> &'static str {
         match self {
@@ -1230,7 +1239,9 @@ impl Default for Settings {
 }
 
 impl Settings {
-    pub fn load() -> SettingsLoad { SettingsLoad::from_file_result(Self::try_load()) }
+    pub fn load() -> SettingsLoad {
+        SettingsLoad::from_file_result(Self::try_load())
+    }
 
     pub fn save(&self) {
         #[cfg(not(test))]
@@ -1405,7 +1416,9 @@ impl Settings {
     }
 }
 
-fn absolute(path: &Path) -> PathBuf { std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()) }
+fn absolute(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
 
 fn settings_path() -> io::Result<PathBuf> {
     #[cfg(target_os = "windows")]
@@ -1420,11 +1433,17 @@ fn settings_path() -> io::Result<PathBuf> {
     Ok(settings_path_from(Path::new(&root), cfg!(target_os = "windows")))
 }
 
-pub(crate) fn imgui_ini_path() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("imgui.ini")) }
+pub(crate) fn imgui_ini_path() -> io::Result<PathBuf> {
+    Ok(settings_path()?.with_file_name("imgui.ini"))
+}
 
-pub(crate) fn backup_dir() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("backup")) }
+pub(crate) fn backup_dir() -> io::Result<PathBuf> {
+    Ok(settings_path()?.with_file_name("backup"))
+}
 
-pub(crate) fn themes_dir() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("themes")) }
+pub(crate) fn themes_dir() -> io::Result<PathBuf> {
+    Ok(settings_path()?.with_file_name("themes"))
+}
 
 pub(crate) fn profiles_dir() -> io::Result<PathBuf> {
     Ok(settings_path()?
@@ -1433,7 +1452,9 @@ pub(crate) fn profiles_dir() -> io::Result<PathBuf> {
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn log_path() -> io::Result<PathBuf> { Ok(settings_path()?.with_file_name("latest.log")) }
+pub(crate) fn log_path() -> io::Result<PathBuf> {
+    Ok(settings_path()?.with_file_name("latest.log"))
+}
 
 fn settings_path_from(root: &Path, windows: bool) -> PathBuf {
     if windows {

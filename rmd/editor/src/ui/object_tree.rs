@@ -156,11 +156,17 @@ impl ObjectTreeFilter {
         filter
     }
 
-    fn is_empty(&self) -> bool { self.roots.is_empty() }
+    fn is_empty(&self) -> bool {
+        self.roots.is_empty()
+    }
 
-    fn contains(&self, id: TypeId) -> bool { self.matches.contains(&id) }
+    fn contains(&self, id: TypeId) -> bool {
+        self.matches.contains(&id)
+    }
 
-    fn children(&self, id: TypeId) -> &[TypeId] { self.children.get(&id).map_or(&[], Vec::as_slice) }
+    fn children(&self, id: TypeId) -> &[TypeId] {
+        self.children.get(&id).map_or(&[], Vec::as_slice)
+    }
 }
 
 pub(super) struct ObjectTreePanel {
@@ -184,7 +190,9 @@ impl ObjectTreePanel {
         })
     }
 
-    pub(super) const fn window(&self) -> &WindowKey { &self.window }
+    pub(super) const fn window(&self) -> &WindowKey {
+        &self.window
+    }
 
     pub(super) fn reveal_selected_instance(&mut self, session: &Session) {
         let Some(selected) = session
@@ -198,7 +206,9 @@ impl ObjectTreePanel {
         self.reveal = Some(selected);
     }
 
-    pub(super) fn invalidate_filter(&mut self) { self.filter_revision = u64::MAX; }
+    pub(super) fn invalidate_filter(&mut self) {
+        self.filter_revision = u64::MAX;
+    }
 
     pub(super) fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, focus: bool, open: &mut bool,

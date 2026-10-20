@@ -25,9 +25,13 @@ impl<'a> MapWriter<'a> {
         self
     }
 
-    pub fn write(&self) -> String { self.to_string() }
+    pub fn write(&self) -> String {
+        self.to_string()
+    }
 
-    pub fn save(&self, path: impl AsRef<Path>) -> std::io::Result<()> { std::fs::write(path, self.write()) }
+    pub fn save(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
+        std::fs::write(path, self.write())
+    }
 
     fn write_dictionary(&self, out: &mut impl Write) -> std::fmt::Result {
         let mut entries: Vec<(&Key, &Tile)> = self.map.dictionary.iter().collect();
@@ -211,17 +215,16 @@ pub fn format_value(value: &Value) -> String {
     out
 }
 
-pub fn write(map: &Map) -> String { MapWriter::new(map).write() }
+pub fn write(map: &Map) -> String {
+    MapWriter::new(map).write()
+}
 
 #[cfg(test)]
 mod tests {
     use core::{path::TreePath, types::Value};
 
     use crate::{
-        Map,
-        MapFormat,
-        Prefab,
-        Size,
+        Map, MapFormat, Prefab, Size,
         key::Key,
         parser::parse,
         writer::{MapWriter, format_value, write},
@@ -285,10 +288,14 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_standard_bytes() { round_trip(STANDARD); }
+    fn round_trips_standard_bytes() {
+        round_trip(STANDARD);
+    }
 
     #[test]
-    fn round_trips_tgm_bytes() { round_trip(TGM); }
+    fn round_trips_tgm_bytes() {
+        round_trip(TGM);
+    }
 
     #[test]
     fn formats_variable_values_as_dmm_expressions() {

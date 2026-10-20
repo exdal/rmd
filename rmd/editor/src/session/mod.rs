@@ -46,14 +46,8 @@ mod preview;
 mod search;
 
 use self::{
-    bake::report_bake_output,
-    clipboard::FloatingPaste,
-    diff::DiffState,
-    direction::direction_state,
-    edit::is_reorder_label,
-    highlight::always_highlighted,
-    node::NodeEditState,
-    preview::BlockPreviewCache,
+    bake::report_bake_output, clipboard::FloatingPaste, diff::DiffState, direction::direction_state,
+    edit::is_reorder_label, highlight::always_highlighted, node::NodeEditState, preview::BlockPreviewCache,
 };
 pub(crate) use self::{
     bake::{FaultState, RuntimeFault},

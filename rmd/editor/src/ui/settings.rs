@@ -1,30 +1,14 @@
 use std::ops::RangeInclusive;
 
 use dear_imgui_rs::{
-    ColorDisplayMode,
-    ColorEditFlags,
-    Condition,
-    DragFlags,
-    Key,
-    StbTrueTypeFontData,
-    Style,
-    TableFlags,
-    TableSizingPolicy,
-    Ui,
-    WindowFlags,
-    WindowKey,
-    WindowKeyError,
+    ColorDisplayMode, ColorEditFlags, Condition, DragFlags, Key, StbTrueTypeFontData, Style, TableFlags,
+    TableSizingPolicy, Ui, WindowFlags, WindowKey, WindowKeyError,
 };
 use editor::environment::profile_label;
 
 use super::{
     common::{
-        DialogButton,
-        begin_centered_modal,
-        button_width,
-        center_next_window,
-        dialog_buttons,
-        dpi,
+        DialogButton, begin_centered_modal, button_width, center_next_window, dialog_buttons, dpi,
         focus_window_on_hover,
     },
     dialog::{MODAL_FLAGS, SAVE_ERROR_COLOR, draw_keybind_preset_dialog},
@@ -33,30 +17,12 @@ use crate::{
     fonts::{BUNDLED_FONT_NAME, SystemFonts},
     session::Session,
     settings::{
-        BINDABLE_KEYS,
-        FONT_BRIGHTNESS_PERCENT,
-        FONT_SIZE,
-        FontSettings,
-        KeyBinding,
-        KeyBindings,
-        KeybindAction,
-        MODIFIER_KEYS,
-        ObjectTreeFilterOptions,
-        ObjectTreeSearchOptions,
-        SelectionHighlight,
-        Settings,
-        UI_SCALE_PERCENT,
-        backup_dir,
+        BINDABLE_KEYS, FONT_BRIGHTNESS_PERCENT, FONT_SIZE, FontSettings, KeyBinding, KeyBindings, KeybindAction,
+        MODIFIER_KEYS, ObjectTreeFilterOptions, ObjectTreeSearchOptions, SelectionHighlight, Settings,
+        UI_SCALE_PERCENT, backup_dir,
     },
     theme::{
-        FieldKind,
-        STYLE_COLORS,
-        STYLE_FIELDS,
-        StyleField,
-        TREE_LINE_MODES,
-        Themes,
-        direction_name,
-        tree_lines_name,
+        FieldKind, STYLE_COLORS, STYLE_FIELDS, StyleField, TREE_LINE_MODES, Themes, direction_name, tree_lines_name,
     },
     ui::ProfileReload,
 };
@@ -247,11 +213,17 @@ impl SettingsWindow {
         })
     }
 
-    pub(super) fn open(&mut self) { self.open = true; }
+    pub(super) fn open(&mut self) {
+        self.open = true;
+    }
 
-    pub(super) fn set_profiles(&mut self, profiles: Vec<String>) { self.profiles = profiles; }
+    pub(super) fn set_profiles(&mut self, profiles: Vec<String>) {
+        self.profiles = profiles;
+    }
 
-    pub(super) const fn is_capturing_keybind(&self) -> bool { self.capturing.is_some() }
+    pub(super) const fn is_capturing_keybind(&self) -> bool {
+        self.capturing.is_some()
+    }
 
     pub(super) fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, themes: &mut Themes, loading: bool,
@@ -384,7 +356,9 @@ fn draw_heading(ui: &Ui, label: &str, scale: f32) {
     ui.text(label);
 }
 
-fn draw_section_heading(ui: &Ui, label: &str) { draw_heading(ui, label, SETTINGS_SECTION_SCALE); }
+fn draw_section_heading(ui: &Ui, label: &str) {
+    draw_heading(ui, label, SETTINGS_SECTION_SCALE);
+}
 
 fn draw_git_settings(ui: &Ui, settings: &mut Settings) {
     ui.checkbox("Enable Git map integration", &mut settings.git_enabled);
@@ -989,7 +963,9 @@ fn draw_optimization_settings(ui: &Ui, session: &Session, settings: &mut Setting
         });
 }
 
-fn format_pass_time(duration: std::time::Duration) -> String { format!("{:.3} ms", duration.as_secs_f64() * 1_000.0) }
+fn format_pass_time(duration: std::time::Duration) -> String {
+    format!("{:.3} ms", duration.as_secs_f64() * 1_000.0)
+}
 
 fn draw_profile_setting(
     ui: &Ui, session: &Session, settings: &Settings, loading: bool, profiles: &[String],

@@ -7,9 +7,13 @@ fn clicking_a_blamed_tile_opens_a_popup_without_placing_a_tile() {
         map: dmm::Map,
     }
     impl editor::blame::VersionSource for OneVersion {
-        fn commits(&self) -> &[editor::git::CommitInfo] { &self.commits }
+        fn commits(&self) -> &[editor::git::CommitInfo] {
+            &self.commits
+        }
 
-        fn truncated(&self) -> bool { false }
+        fn truncated(&self) -> bool {
+            false
+        }
 
         fn map_at(&mut self, _: usize) -> Result<editor::blame::MapVersion, editor::git::GitError> {
             Ok(editor::blame::MapVersion::Present(self.map.clone()))

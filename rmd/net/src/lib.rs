@@ -9,31 +9,9 @@ mod tls;
 use std::{error, fmt};
 
 pub use protocol::coop::{
-    CodebaseHash,
-    CodebaseId,
-    Comment,
-    CommentId,
-    Cursor,
-    DeleteLevel,
-    GenerationId,
-    InsertAt,
-    InsertLevel,
-    LevelChange,
-    LevelContents,
-    LevelLog,
-    LevelOp,
-    MAX_COMMENT_LEN,
-    MAX_LEVELS,
-    MapEdit,
-    PasswordHash,
-    PeerId,
-    PeerInfo,
-    Selection,
-    SelectionMode,
-    SeqId,
-    Tool,
-    View,
-    is_map_path,
+    CodebaseHash, CodebaseId, Comment, CommentId, Cursor, DeleteLevel, GenerationId, InsertAt, InsertLevel,
+    LevelChange, LevelContents, LevelLog, LevelOp, MAX_COMMENT_LEN, MAX_LEVELS, MapEdit, PasswordHash, PeerId,
+    PeerInfo, Selection, SelectionMode, SeqId, Tool, View, is_map_path,
 };
 use tokio::runtime::{Builder, Runtime};
 
@@ -48,11 +26,17 @@ pub use crate::{
 pub struct Error(pub String);
 
 impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.0) }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 impl error::Error for Error {}
 
-pub(crate) fn fail(error: impl fmt::Display) -> Error { Error(error.to_string()) }
+pub(crate) fn fail(error: impl fmt::Display) -> Error {
+    Error(error.to_string())
+}
 
-pub(crate) fn runtime() -> Result<Runtime, Error> { Builder::new_current_thread().enable_all().build().map_err(fail) }
+pub(crate) fn runtime() -> Result<Runtime, Error> {
+    Builder::new_current_thread().enable_all().build().map_err(fail)
+}

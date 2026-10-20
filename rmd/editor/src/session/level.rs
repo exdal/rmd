@@ -21,7 +21,9 @@ pub(crate) fn validate_level(z: u32, levels: u32) -> std::io::Result<()> {
 }
 
 impl Session {
-    pub fn z(&self) -> u32 { self.state.active_document().map_or(1, |document| document.z) }
+    pub fn z(&self) -> u32 {
+        self.state.active_document().map_or(1, |document| document.z)
+    }
 
     pub fn level_count(&self) -> u32 {
         self.state
@@ -326,8 +328,7 @@ mod tests {
 
     use super::validate_level;
     use crate::session::{
-        LevelChange,
-        Session,
+        LevelChange, Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session, settle_bake},
     };
 

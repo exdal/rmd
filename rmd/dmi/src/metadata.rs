@@ -81,9 +81,13 @@ impl IconState {
         self.offset + (frame as usize * self.dirs as usize) + dir.index_within(self.dirs)
     }
 
-    pub fn sprite_count(&self) -> usize { (self.dirs * self.frames) as usize }
+    pub fn sprite_count(&self) -> usize {
+        (self.dirs * self.frames) as usize
+    }
 
-    pub fn is_animated(&self) -> bool { self.frames > 1 }
+    pub fn is_animated(&self) -> bool {
+        self.frames > 1
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -97,7 +101,9 @@ pub struct Metadata {
 impl std::error::Error for MetadataError {}
 
 impl Metadata {
-    pub fn find(&self, name: &str) -> Option<&IconState> { self.states.iter().find(|state| state.name == name) }
+    pub fn find(&self, name: &str) -> Option<&IconState> {
+        self.states.iter().find(|state| state.name == name)
+    }
 
     pub fn sprite_rect(&self, index: usize, sheet_width: u32) -> (u32, u32, u32, u32) {
         let columns = (sheet_width / self.width).max(1) as usize;

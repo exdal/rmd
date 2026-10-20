@@ -193,7 +193,9 @@ impl Session {
             .cloned()
     }
 
-    pub fn map(&self) -> Option<&Grid> { self.state.active_document().map(|document| &document.map) }
+    pub fn map(&self) -> Option<&Grid> {
+        self.state.active_document().map(|document| &document.map)
+    }
 
     pub fn map_path(&self) -> Option<&Path> {
         self.state
@@ -201,7 +203,9 @@ impl Session {
             .and_then(|document| document.path.as_deref())
     }
 
-    pub fn map_format(&self) -> Option<MapFormat> { self.state.active_document().map(MapDocument::format) }
+    pub fn map_format(&self) -> Option<MapFormat> {
+        self.state.active_document().map(MapDocument::format)
+    }
 
     fn is_level_history_blocked(&self, id: DocumentId) -> bool {
         self.has_loaded_conflicts(id) || !self.can_step_coop_level(id)
@@ -382,7 +386,9 @@ impl Session {
         outcome
     }
 
-    pub fn save_document(&mut self, id: DocumentId) -> std::io::Result<()> { self.write_document(id, None) }
+    pub fn save_document(&mut self, id: DocumentId) -> std::io::Result<()> {
+        self.write_document(id, None)
+    }
 
     pub fn save_map_as(&mut self, path: &Path, format: MapFormat) -> std::io::Result<()> {
         let Some(id) = self.state.active() else {
@@ -410,7 +416,9 @@ impl Session {
         }
     }
 
-    pub fn set_sanitize_vars_on_save(&mut self, enabled: bool) { self.sanitize_vars_on_save = enabled; }
+    pub fn set_sanitize_vars_on_save(&mut self, enabled: bool) {
+        self.sanitize_vars_on_save = enabled;
+    }
 
     pub(super) fn activate_document(&mut self, document: MapDocument) -> DocumentId {
         self.cancel_node_edit();

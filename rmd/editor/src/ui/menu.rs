@@ -1,11 +1,7 @@
 use dear_imgui_rs::Ui;
 
 use super::{
-    LAYER_KEYS,
-    OpenRequest,
-    ScreenshotArea,
-    ScreenshotRequest,
-    UiState,
+    LAYER_KEYS, OpenRequest, ScreenshotArea, ScreenshotRequest, UiState,
     coop::{CoopDialogKind, draw_coop_peers, draw_coop_status},
     viewport::EditCommand,
     welcome::codebase_relative,

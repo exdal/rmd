@@ -12,4 +12,6 @@ pub use module::{LoadedModule, ModuleFiles, OpenModule, RootSpecs, resolve_modul
 
 pub const MAX_NESTING: usize = 128;
 
-pub fn resolved_path(path: &Path) -> PathBuf { fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()) }
+pub fn resolved_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}

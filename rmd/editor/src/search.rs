@@ -244,7 +244,14 @@ mod tests {
         let deleted = matches[2];
 
         assert_eq!(
-            document.move_instance(moved, Coord::new(2, 1, 1), "move table", &[], None),
+            document.move_instance(
+                &ObjectTree::default(),
+                moved,
+                Coord::new(2, 1, 1),
+                "move table",
+                &[],
+                None
+            ),
             Some(true)
         );
         assert!(document.apply(delete_instances(&document, &[deleted]).unwrap().edit));

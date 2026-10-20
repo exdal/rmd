@@ -7,7 +7,9 @@ pub struct Controller {
 }
 
 impl Default for Controller {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Controller {
@@ -37,7 +39,9 @@ impl Controller {
         self.camera.viewport_height = height;
     }
 
-    pub fn set_dragging(&mut self, dragging: bool) { self.dragging = dragging; }
+    pub fn set_dragging(&mut self, dragging: bool) {
+        self.dragging = dragging;
+    }
 
     pub fn cursor_moved(&mut self, x: f32, y: f32) {
         let (dx, dy) = (x - self.cursor.0, y - self.cursor.1);

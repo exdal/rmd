@@ -13,30 +13,11 @@ use defines::{EAST, NORTH, NORTHEAST, SOUTH, SOUTHWEST, WEST};
 use objtree::{ObjectTree, ResolvedVarType, TypeId, VarTypeKind};
 
 use crate::{
-    FaultKind,
-    GenericValue,
-    IconStates,
-    Limits,
-    Runtime,
+    FaultKind, GenericValue, IconStates, Limits, Runtime,
     bake::{
-        Atom,
-        Bake,
-        BakeUpdate,
-        HIGHLIGHT_ALWAYS,
-        HIGHLIGHT_EDGE_NORTH,
-        HIGHLIGHT_EDGE_SOUTH,
-        HIGHLIGHT_EDGE_WEST,
-        HIGHLIGHT_SELECTED,
-        HighlightTile,
-        ModuleRoot,
-        PendingBake,
-        ProfileError,
-        Stage,
-        has_profile,
-        host_reads,
-        profile_catalog,
-        profile_type,
-        selected_profile_type,
+        Atom, Bake, BakeUpdate, HIGHLIGHT_ALWAYS, HIGHLIGHT_EDGE_NORTH, HIGHLIGHT_EDGE_SOUTH, HIGHLIGHT_EDGE_WEST,
+        HIGHLIGHT_SELECTED, HighlightTile, ModuleRoot, PendingBake, ProfileError, Stage, has_profile, host_reads,
+        profile_catalog, profile_type, selected_profile_type,
     },
     eval::Evaluator,
     heap::{Object, ObjectId},
@@ -3614,7 +3595,9 @@ fn root_atom(tree: &ObjectTree, instance: u64, path: &str, x: i32, key: &str) ->
     }
 }
 
-fn profile_at(tree: &ObjectTree, path: &str) -> TypeId { tree.id_of(&TreePath::parse(path)).expect("profile type") }
+fn profile_at(tree: &ObjectTree, path: &str) -> TypeId {
+    tree.id_of(&TreePath::parse(path)).expect("profile type")
+}
 
 fn pending<'a>(
     tree: &'a ObjectTree, module: &'a codegen::Module, profile: TypeId, atoms: Vec<Atom>,

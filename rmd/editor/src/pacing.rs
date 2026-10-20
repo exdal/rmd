@@ -15,7 +15,9 @@ pub enum FrameDemand {
 }
 
 impl FrameDemand {
-    pub fn raise(&mut self, demand: Self) { *self = (*self).max(demand); }
+    pub fn raise(&mut self, demand: Self) {
+        *self = (*self).max(demand);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +39,9 @@ pub struct FramePacer {
 }
 
 impl FramePacer {
-    pub fn activity(&mut self, now: Instant) { self.last_activity = Some(now); }
+    pub fn activity(&mut self, now: Instant) {
+        self.last_activity = Some(now);
+    }
 
     pub fn next(&self, now: Instant, frame_start: Instant, demand: FrameDemand, status: Status) -> NextFrame {
         // a hidden window presents nothing, so nothing would hold a frame back to the display rate

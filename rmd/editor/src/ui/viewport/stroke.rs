@@ -85,7 +85,9 @@ impl PlacementStroke {
         tool == Tool::Place && prefab == Some(&self.prefab) && z == self.tiles.z
     }
 
-    pub(super) fn visit(&mut self, coord: Coord) -> Option<EditGroupId> { self.tiles.visit(coord) }
+    pub(super) fn visit(&mut self, coord: Coord) -> Option<EditGroupId> {
+        self.tiles.visit(coord)
+    }
 }
 
 #[derive(Debug)]
@@ -102,7 +104,9 @@ impl PickStroke {
         }
     }
 
-    pub(super) fn clear(&mut self, coord: Coord) -> Option<EditGroupId> { self.tiles.visit(coord) }
+    pub(super) fn clear(&mut self, coord: Coord) -> Option<EditGroupId> {
+        self.tiles.visit(coord)
+    }
 
     pub(super) fn move_to(&mut self, cursor: [u32; 2]) -> bool {
         let moved = self.cursor != cursor;

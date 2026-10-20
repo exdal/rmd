@@ -9,28 +9,10 @@ use std::{
 
 use bytes::Bytes;
 use protocol::{
-    FrameReader,
-    Hello,
-    Service,
+    FrameReader, Hello, Service,
     coop::{
-        ClientHello,
-        ClientMessage,
-        CodebaseId,
-        Comment,
-        CommentId,
-        Cursor,
-        Datagram,
-        GenerationId,
-        MapEdit,
-        PasswordHash,
-        PeerId,
-        PeerInfo,
-        Relayed,
-        Selection,
-        SeqId,
-        ServerMessage,
-        Transfer,
-        View,
+        ClientHello, ClientMessage, CodebaseId, Comment, CommentId, Cursor, Datagram, GenerationId, MapEdit,
+        PasswordHash, PeerId, PeerInfo, Relayed, Selection, SeqId, ServerMessage, Transfer, View,
     },
 };
 use quinn::{Connection, Endpoint};
@@ -42,16 +24,9 @@ use tokio::{
 };
 
 use crate::{
-    Error,
-    fail,
+    Error, fail,
     stream::{
-        CLOSE_GRACE,
-        abort_transfers,
-        read_message,
-        read_payload,
-        read_transfer_header,
-        send_transfer,
-        write_message,
+        CLOSE_GRACE, abort_transfers, read_message, read_payload, read_transfer_header, send_transfer, write_message,
     },
     tls,
 };
@@ -204,13 +179,17 @@ impl Client {
         }
     }
 
-    pub fn poll(&self) -> impl Iterator<Item = Event> + '_ { self.events.try_iter() }
+    pub fn poll(&self) -> impl Iterator<Item = Event> + '_ {
+        self.events.try_iter()
+    }
 
     pub fn send_comment(&self, map: String, z: u32, pos: [f32; 2], text: String) {
         self.send(ClientMessage::Comment { map, z, pos, text });
     }
 
-    pub fn delete_comment(&self, id: CommentId) { self.send(ClientMessage::DeleteComment(id)); }
+    pub fn delete_comment(&self, id: CommentId) {
+        self.send(ClientMessage::DeleteComment(id));
+    }
 
     // `base` is the generation our copy tracks and the next edit of it the snapshot lacks,
     // so the server can carry peers' later edits into the new generation
@@ -223,13 +202,21 @@ impl Client {
         });
     }
 
-    pub fn send_edit(&self, edit: MapEdit) { self.send(ClientMessage::Edit(edit)); }
+    pub fn send_edit(&self, edit: MapEdit) {
+        self.send(ClientMessage::Edit(edit));
+    }
 
-    pub fn resync(&self, path: String) { self.send(ClientMessage::Resync { path }); }
+    pub fn resync(&self, path: String) {
+        self.send(ClientMessage::Resync { path });
+    }
 
-    pub fn unshare_map(&self, path: String) { self.send(ClientMessage::Unshare { path }); }
+    pub fn unshare_map(&self, path: String) {
+        self.send(ClientMessage::Unshare { path });
+    }
 
-    fn send(&self, message: ClientMessage) { let _ = self.outbox.send(message); }
+    fn send(&self, message: ClientMessage) {
+        let _ = self.outbox.send(message);
+    }
 
     pub fn send_cursor(&self, cursor: Option<Cursor>) {
         self.cursor.send_if_modified(|current| {

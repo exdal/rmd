@@ -117,7 +117,9 @@ impl TreePath {
     }
 
     /// The final segment - the name of the datum, proc or var being declared.
-    pub fn name(&self) -> Option<&Identifier> { self.segments.get(self.name_offset) }
+    pub fn name(&self) -> Option<&Identifier> {
+        self.segments.get(self.name_offset)
+    }
 
     /// `/mob/proc/plain`, `/mob/verb/spoken`, and `/mob/child/plain` for an override
     pub fn spelled(&self) -> String {
@@ -144,7 +146,9 @@ impl TreePath {
     }
 
     /// The type that owns this declaration: everything before the `var`/`proc` keyword.
-    pub fn owner(&self) -> &[Identifier] { &self.segments[..self.keyword_offset.min(self.segments.len())] }
+    pub fn owner(&self) -> &[Identifier] {
+        &self.segments[..self.keyword_offset.min(self.segments.len())]
+    }
 
     /// The type a declaration attaches to, whether or not a `var`/`proc` keyword was spelled out.
     /// `/obj/foo/proc/bar` and `/obj/foo/bar` (a proc override) both hang off `/obj/foo`.
@@ -164,11 +168,17 @@ impl TreePath {
         &self.segments[begin..end]
     }
 
-    pub fn is_root(&self) -> bool { self.segments.is_empty() }
+    pub fn is_root(&self) -> bool {
+        self.segments.is_empty()
+    }
 
-    pub fn len(&self) -> usize { self.segments.len() }
+    pub fn len(&self) -> usize {
+        self.segments.len()
+    }
 
-    pub fn is_empty(&self) -> bool { self.segments.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
 
     /// `/obj/item` + `sword` -> `/obj/item/sword`
     pub fn join(&self, segment: Identifier) -> Self {
@@ -219,7 +229,9 @@ impl TreePath {
     }
 
     /// Whether `self` is `other` or lives underneath it.
-    pub fn starts_with(&self, other: &Self) -> bool { self.segments.starts_with(&other.segments) }
+    pub fn starts_with(&self, other: &Self) -> bool {
+        self.segments.starts_with(&other.segments)
+    }
 }
 
 impl std::fmt::Display for TreePath {

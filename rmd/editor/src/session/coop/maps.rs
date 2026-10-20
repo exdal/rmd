@@ -226,9 +226,13 @@ impl Session {
         self.state.document_for_path(&self.codebase_dir()?.join(path))
     }
 
-    pub fn can_share_coop_maps(&self) -> bool { self.coop.as_ref().is_some_and(Coop::can_collaborate) }
+    pub fn can_share_coop_maps(&self) -> bool {
+        self.coop.as_ref().is_some_and(Coop::can_collaborate)
+    }
 
-    pub fn can_share_coop_map(&self) -> bool { self.state.active().is_some_and(|id| self.can_share_coop_document(id)) }
+    pub fn can_share_coop_map(&self) -> bool {
+        self.state.active().is_some_and(|id| self.can_share_coop_document(id))
+    }
 
     // our own reshare would carry a level change we're still waiting on as a new one
     pub fn can_share_coop_document(&self, id: DocumentId) -> bool {

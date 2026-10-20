@@ -8,13 +8,7 @@ use editor::{
     grid::Grid,
 };
 use render::{
-    Frame,
-    LightTile,
-    LightingFrame,
-    MapViewFrame,
-    MapViewInteraction,
-    MapViewRect,
-    SpriteInstance,
+    Frame, LightTile, LightingFrame, MapViewFrame, MapViewInteraction, MapViewRect, SpriteInstance,
     texture::TextureCatalog,
 };
 
@@ -135,9 +129,13 @@ impl Session {
             .cloned()
     }
 
-    pub fn map(&self) -> Option<&Grid> { self.document.as_ref().map(|document| &document.map) }
+    pub fn map(&self) -> Option<&Grid> {
+        self.document.as_ref().map(|document| &document.map)
+    }
 
-    pub fn z(&self) -> u32 { self.document.as_ref().map_or(1, |document| document.z) }
+    pub fn z(&self) -> u32 {
+        self.document.as_ref().map_or(1, |document| document.z)
+    }
 
     pub fn change_level(&mut self, delta: i32) {
         let Some(document) = self.document.as_mut() else {
@@ -152,11 +150,17 @@ impl Session {
         }
     }
 
-    pub fn toggle_areas(&mut self) { self.options.show_areas = !self.options.show_areas; }
+    pub fn toggle_areas(&mut self) {
+        self.options.show_areas = !self.options.show_areas;
+    }
 
-    pub fn toggle_area_outlines(&mut self) { self.options.show_area_outlines = !self.options.show_area_outlines; }
+    pub fn toggle_area_outlines(&mut self) {
+        self.options.show_area_outlines = !self.options.show_area_outlines;
+    }
 
-    pub fn toggle_lighting(&mut self) { self.options.show_lighting = !self.options.show_lighting; }
+    pub fn toggle_lighting(&mut self) {
+        self.options.show_lighting = !self.options.show_lighting;
+    }
 
     pub fn map_view(&self, camera: render::Camera) -> MapViewFrame<'_> {
         MapViewFrame {
@@ -201,13 +205,21 @@ impl Session {
         }
     }
 
-    pub fn sprite_count(&self) -> usize { self.sprite_instances.len() }
+    pub fn sprite_count(&self) -> usize {
+        self.sprite_instances.len()
+    }
 
-    pub fn texture_count(&self) -> usize { self.textures.len() }
+    pub fn texture_count(&self) -> usize {
+        self.textures.len()
+    }
 
-    pub fn texture_cell_count(&self) -> usize { self.textures.cell_count() }
+    pub fn texture_cell_count(&self) -> usize {
+        self.textures.cell_count()
+    }
 
-    pub fn texture_bytes(&self) -> usize { self.textures.decoded_bytes() }
+    pub fn texture_bytes(&self) -> usize {
+        self.textures.decoded_bytes()
+    }
 
     pub fn extent_px(&self) -> (f32, f32) {
         let tile = self.options.tile_size.max(1) as f32;

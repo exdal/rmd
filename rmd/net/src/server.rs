@@ -3,8 +3,7 @@ use std::{
     mem,
     net::SocketAddr,
     sync::{
-        Arc,
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicU32, Ordering},
     },
     thread,
@@ -13,35 +12,11 @@ use std::{
 
 use bytes::Bytes;
 use protocol::{
-    FrameReader,
-    Hello,
-    Service,
+    FrameReader, Hello, Service,
     coop::{
-        ClientHello,
-        ClientMessage,
-        CodebaseId,
-        Comment,
-        CommentId,
-        Datagram,
-        DeleteLevel,
-        GenerationId,
-        InsertAt,
-        InsertLevel,
-        LevelChange,
-        LevelLog,
-        LevelOp,
-        MAX_COMMENT_LEN,
-        MAX_MAP_LEN,
-        MAX_NICK_LEN,
-        MapEdit,
-        PasswordHash,
-        PeerId,
-        PeerInfo,
-        Relayed,
-        SeqId,
-        ServerMessage,
-        Transfer,
-        is_map_path,
+        ClientHello, ClientMessage, CodebaseId, Comment, CommentId, Datagram, DeleteLevel, GenerationId, InsertAt,
+        InsertLevel, LevelChange, LevelLog, LevelOp, MAX_COMMENT_LEN, MAX_MAP_LEN, MAX_NICK_LEN, MapEdit, PasswordHash,
+        PeerId, PeerInfo, Relayed, SeqId, ServerMessage, Transfer, is_map_path,
     },
 };
 use quinn::{Connection, Endpoint, EndpointConfig, TokioRuntime};
@@ -56,21 +31,9 @@ use tokio::{
 };
 
 use crate::{
-    Error,
-    PeerStats,
-    ServerStats,
-    Traffic,
-    Transport,
-    fail,
-    socket,
+    Error, PeerStats, ServerStats, Traffic, Transport, fail, socket,
     stream::{
-        CLOSE_GRACE,
-        abort_transfers,
-        read_message,
-        read_payload,
-        read_transfer_header,
-        send_transfer,
-        write_message,
+        CLOSE_GRACE, abort_transfers, read_message, read_payload, read_transfer_header, send_transfer, write_message,
     },
     tls,
 };
@@ -150,7 +113,9 @@ impl Server {
         })
     }
 
-    pub fn local_addr(&self) -> SocketAddr { self.addr }
+    pub fn local_addr(&self) -> SocketAddr {
+        self.addr
+    }
 
     pub fn stats(&self) -> ServerStats {
         let mut peers = self
@@ -221,9 +186,13 @@ struct Meter {
 }
 
 impl Meter {
-    fn received(&self, kind: &'static str, bytes: usize) { self.received.lock().unwrap().record(kind, bytes as u64); }
+    fn received(&self, kind: &'static str, bytes: usize) {
+        self.received.lock().unwrap().record(kind, bytes as u64);
+    }
 
-    fn sent(&self, kind: &'static str, bytes: usize) { self.sent.lock().unwrap().record(kind, bytes as u64); }
+    fn sent(&self, kind: &'static str, bytes: usize) {
+        self.sent.lock().unwrap().record(kind, bytes as u64);
+    }
 }
 
 #[derive(Default)]

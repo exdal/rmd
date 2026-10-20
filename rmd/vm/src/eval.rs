@@ -10,24 +10,13 @@ use std::{
 };
 
 use codegen::{
-    CodeOffset,
-    CompiledFunction,
-    ConstantId,
-    FunctionId,
-    LocalId,
-    Module,
-    PathId,
-    StringId,
+    CodeOffset, CompiledFunction, ConstantId, FunctionId, LocalId, Module, PathId, StringId,
     opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, OutputTargetKind, Unary},
 };
 use objtree::{ObjectTree, TypeId};
 
 use crate::{
-    Fault,
-    FaultKind,
-    GenericValue,
-    Limits,
-    StackFrame,
+    Fault, FaultKind, GenericValue, Limits, StackFrame,
     heap::{Heap, Object, ObjectId},
     value::{IteratorId, ListData, ListId, ModifiedType, ProcRef, RangeValue, Receiver},
     world::World,
@@ -55,9 +44,13 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    pub fn output(&self) -> &[String] { &self.output }
+    pub fn output(&self) -> &[String] {
+        &self.output
+    }
 
-    pub fn take_output(&mut self) -> Vec<String> { std::mem::take(&mut self.output) }
+    pub fn take_output(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.output)
+    }
 
     /// `seed` is the atom a hook was called about, which is what its randomness and its memo safety
     /// are measured against. It is not `src`: a hook's `src` is the profile, which has no position.
@@ -93,7 +86,9 @@ impl Runtime {
         self.pending_placements.mark();
     }
 
-    pub(crate) fn commit_journal(&mut self) { self.heap.commit(); }
+    pub(crate) fn commit_journal(&mut self) {
+        self.heap.commit();
+    }
 
     pub(crate) fn rollback_journal(&mut self) {
         self.heap.rollback();
@@ -354,11 +349,15 @@ impl CallFrameGuard<'_, '_> {
 impl<'a> std::ops::Deref for CallFrameGuard<'_, 'a> {
     type Target = Evaluator<'a>;
 
-    fn deref(&self) -> &Self::Target { self.eval }
+    fn deref(&self) -> &Self::Target {
+        self.eval
+    }
 }
 
 impl std::ops::DerefMut for CallFrameGuard<'_, '_> {
-    fn deref_mut(&mut self) -> &mut Self::Target { self.eval }
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.eval
+    }
 }
 
 impl Drop for CallFrameGuard<'_, '_> {
@@ -407,7 +406,9 @@ impl<'a> Evaluator<'a> {
     }
 
     /// Callers add their frames as the fault unwinds through them
-    pub fn fault(&self, kind: FaultKind) -> Fault { fault_at(self.module, self.current, self.current_offset, kind) }
+    pub fn fault(&self, kind: FaultKind) -> Fault {
+        fault_at(self.module, self.current, self.current_offset, kind)
+    }
 
     pub fn charge(&mut self, amount: usize) -> Result<()> {
         self.instruction_budget_remaining = self
@@ -1884,7 +1885,9 @@ impl Evaluator<'_> {
             .unwrap_or_default()
     }
 
-    fn world_type(&self) -> Option<TypeId> { self.tree.roots().world }
+    fn world_type(&self) -> Option<TypeId> {
+        self.tree.roots().world
+    }
 
     fn shared_key(&self, ty: TypeId, name: &Identifier) -> Option<Identifier> {
         let (owner, variable) = self.tree.var_declaration(ty, name)?;

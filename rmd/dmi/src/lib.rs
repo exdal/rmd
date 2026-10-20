@@ -91,16 +91,14 @@ fn to_rgba8(info: &OutputInfo, buffer: Vec<u8>) -> Result<Vec<u8>, IconError> {
 
     match info.color_type {
         ColorType::Rgb => {
-            for pixel in buffer.chunks_exact(3) {
+            for pixel in buffer.as_chunks::<3>().0 {
                 rgba.extend_from_slice(pixel);
                 rgba.push(255);
             }
         },
         ColorType::GrayscaleAlpha => {
-            for pixel in buffer.chunks_exact(2) {
-                if let [gray, alpha] = *pixel {
-                    rgba.extend_from_slice(&[gray, gray, gray, alpha]);
-                }
+            for &[gray, alpha] in buffer.as_chunks::<2>().0 {
+                rgba.extend_from_slice(&[gray, gray, gray, alpha]);
             }
         },
         ColorType::Grayscale => {
@@ -129,7 +127,9 @@ impl IconFile {
         })
     }
 
-    pub fn load_metadata(path: impl AsRef<Path>) -> Result<Metadata, IconError> { Ok(Self::load_info(path)?.metadata) }
+    pub fn load_metadata(path: impl AsRef<Path>) -> Result<Metadata, IconError> {
+        Ok(Self::load_info(path)?.metadata)
+    }
 
     pub fn load_info(path: impl AsRef<Path>) -> Result<IconInfo, IconError> {
         let path = path.as_ref();
@@ -144,11 +144,15 @@ impl IconFile {
         })
     }
 
-    pub fn cell_count(&self) -> usize { cell_count(&self.metadata, self.sheet_width, self.sheet_height) }
+    pub fn cell_count(&self) -> usize {
+        cell_count(&self.metadata, self.sheet_width, self.sheet_height)
+    }
 }
 
 impl IconInfo {
-    pub fn cell_count(&self) -> usize { cell_count(&self.metadata, self.sheet_width, self.sheet_height) }
+    pub fn cell_count(&self) -> usize {
+        cell_count(&self.metadata, self.sheet_width, self.sheet_height)
+    }
 }
 
 fn cell_count(metadata: &Metadata, sheet_width: u32, sheet_height: u32) -> usize {

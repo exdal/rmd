@@ -255,7 +255,9 @@ fn parse_arguments(arguments: &[String]) -> Result<Arguments, String> {
 struct StderrLogger;
 
 impl log::Log for StderrLogger {
-    fn enabled(&self, metadata: &log::Metadata) -> bool { metadata.level() <= log::Level::Info }
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Info
+    }
 
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {

@@ -274,7 +274,9 @@ impl<'a> Solver<'a> {
         }
     }
 
-    fn value(&self, id: IrNodeId) -> Lattice { self.values.get(id.0 as usize).copied().unwrap_or(Lattice::Overdefined) }
+    fn value(&self, id: IrNodeId) -> Lattice {
+        self.values.get(id.0 as usize).copied().unwrap_or(Lattice::Overdefined)
+    }
 
     fn constant(&self, value: ConstantRef) -> Option<&Value> {
         match value {
@@ -368,7 +370,9 @@ impl<'a> Solver<'a> {
     }
 }
 
-fn edge_key(from: IrNodeId, to: IrNodeId) -> u64 { (u64::from(from.0) << 32) | u64::from(to.0) }
+fn edge_key(from: IrNodeId, to: IrNodeId) -> u64 {
+    (u64::from(from.0) << 32) | u64::from(to.0)
+}
 
 struct CandidateUses {
     slots: Vec<u32>,
@@ -411,7 +415,9 @@ impl CandidateUses {
         }
     }
 
-    fn candidates(&self) -> &[IrNodeId] { &self.candidates }
+    fn candidates(&self) -> &[IrNodeId] {
+        &self.candidates
+    }
 }
 
 enum SolverInstruction<'a> {
@@ -686,7 +692,9 @@ fn number(value: &Value) -> Option<f32> {
     }
 }
 
-fn boolean(value: bool) -> Value { Value::Num(if value { 1.0 } else { 0.0 }) }
+fn boolean(value: bool) -> Value {
+    Value::Num(if value { 1.0 } else { 0.0 })
+}
 
 fn fold_unary(op: UnaryOp, operand: &Value) -> Option<Value> {
     match op {

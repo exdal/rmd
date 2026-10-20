@@ -2,33 +2,30 @@ use dmm::Coord;
 use editor::{
     document::Selection,
     tool::{
-        BlockSelectionMode,
-        SelectionMask,
-        SelectionPlacement,
-        SelectionRotation,
-        SelectionTransform,
-        Tool,
-        fill_selection as build_selection_fill,
-        is_placeable,
-        place_selection_with_mode as build_selection_placement,
-        rotated_selection_at,
-        transform_selection_with_mode as build_selection_transform,
-        transformed_selection,
+        BlockSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, SelectionTransform, Tool,
+        fill_selection as build_selection_fill, is_placeable, place_selection_with_mode as build_selection_placement,
+        rotated_selection_at, transform_selection_with_mode as build_selection_transform, transformed_selection,
     },
 };
 
 use super::Session;
 
 impl Session {
-    pub fn selection(&self) -> Option<Selection> { self.selection_mask().map(|mask| mask.bounds) }
+    pub fn selection(&self) -> Option<Selection> {
+        self.selection_mask().map(|mask| mask.bounds)
+    }
 
-    pub fn selection_mask(&self) -> Option<SelectionMask> { self.state.active_document()?.selection_mask() }
+    pub fn selection_mask(&self) -> Option<SelectionMask> {
+        self.state.active_document()?.selection_mask()
+    }
 
     pub fn selection_mode(&self) -> BlockSelectionMode {
         self.selection_mask().map_or(BlockSelectionMode::Full, |mask| mask.mode)
     }
 
-    pub(crate) fn edit_revision(&self) -> Option<u64> { Some(self.caches.get(&self.state.active()?)?.revision) }
+    pub(crate) fn edit_revision(&self) -> Option<u64> {
+        Some(self.caches.get(&self.state.active()?)?.revision)
+    }
 
     pub fn can_select_block(&self, mask: SelectionMask) -> bool {
         self.state.active_document().is_some_and(|document| {
@@ -308,20 +305,13 @@ mod tests {
     use editor::{
         document::{PrefabInstanceId, Selection},
         tool::{
-            BlockSelectionMode,
-            FillMode,
-            SelectionMask,
-            SelectionPlacement,
-            SelectionRotation,
-            SelectionTransform,
+            BlockSelectionMode, FillMode, SelectionMask, SelectionPlacement, SelectionRotation, SelectionTransform,
             Tool,
         },
     };
 
     use crate::session::{
-        BlockPreviewSource,
-        FillOutcome,
-        Session,
+        BlockPreviewSource, FillOutcome, Session,
         fixtures::{assert_render_cache_matches_rebuild, flat_session, focus_session},
     };
 

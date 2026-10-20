@@ -115,7 +115,9 @@ impl BlameResult {
         find(prefer_z).or_else(|| (1..=self.size.z).filter(|z| *z != prefer_z).find_map(find))
     }
 
-    pub fn oldest_commit(&self) -> Option<&CommitInfo> { self.commits.last() }
+    pub fn oldest_commit(&self) -> Option<&CommitInfo> {
+        self.commits.last()
+    }
 
     pub fn boundary_label(&self) -> String {
         self.parse_boundary
@@ -339,9 +341,13 @@ fn history_window(mut versions: Vec<FileVersion>, depth: usize) -> (Vec<FileVers
 }
 
 impl VersionSource for GitVersions {
-    fn commits(&self) -> &[CommitInfo] { &self.commits }
+    fn commits(&self) -> &[CommitInfo] {
+        &self.commits
+    }
 
-    fn truncated(&self) -> bool { self.truncated }
+    fn truncated(&self) -> bool {
+        self.truncated
+    }
 
     fn map_at(&mut self, index: usize) -> Result<MapVersion, GitError> {
         let Some(version) = self.versions.get(index) else {
@@ -385,14 +391,7 @@ mod tests {
     use dmm::{Coord, parser::parse};
 
     use super::{
-        BlameCell,
-        BlameCounts,
-        MapVersion,
-        UNCOMMITTED,
-        VersionSource,
-        blame,
-        history_window,
-        pending_note,
+        BlameCell, BlameCounts, MapVersion, UNCOMMITTED, VersionSource, blame, history_window, pending_note,
         relative_time,
     };
     use crate::git::{CommitInfo, FileVersion, GitError};
@@ -468,9 +467,13 @@ mod tests {
     }
 
     impl VersionSource for Versions {
-        fn commits(&self) -> &[CommitInfo] { &self.commits }
+        fn commits(&self) -> &[CommitInfo] {
+            &self.commits
+        }
 
-        fn truncated(&self) -> bool { self.truncated }
+        fn truncated(&self) -> bool {
+            self.truncated
+        }
 
         fn map_at(&mut self, index: usize) -> Result<MapVersion, GitError> {
             self.reads += 1;
@@ -492,7 +495,9 @@ mod tests {
         format!("\"a\" = (/turf/floor)\n\"b\" = (/turf/wall)\n\n(1,1,1) = {{\"\n{rows}\n\"}}\n")
     }
 
-    fn leak(text: String) -> &'static str { Box::leak(text.into_boxed_str()) }
+    fn leak(text: String) -> &'static str {
+        Box::leak(text.into_boxed_str())
+    }
 
     fn commit_of(result: &super::BlameResult, x: u32, y: u32) -> Option<String> {
         match result.at(Coord::new(x, y, 1))? {

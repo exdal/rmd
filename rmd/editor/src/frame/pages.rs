@@ -346,15 +346,9 @@ pub(super) mod tests {
         command::Edit,
         document::{MapDocument, PrefabInstanceId},
         frame::{
-            FrameInstances,
-            FrameRenderOptions,
-            PrefabUpdate,
-            TypeVisibility,
-            build,
-            build_with_options,
+            FrameInstances, FrameRenderOptions, PrefabUpdate, TypeVisibility, build, build_with_options,
             tests::{assert_render_data_matches, document, icons, textures, tree},
-            update_prefab,
-            update_prefabs,
+            update_prefab, update_prefabs,
         },
     };
 
@@ -460,7 +454,7 @@ pub(super) mod tests {
         assert_eq!(instances.live_sprites().last().unwrap().owner, table);
 
         assert_eq!(
-            document.move_instance(table, Coord::new(20, 1, 1), "move table", &[], None),
+            document.move_instance(&tree, table, Coord::new(20, 1, 1), "move table", &[], None),
             Some(true)
         );
         update_prefab(&mut instances, &tree, &icons, &textures, &document, table, 32);

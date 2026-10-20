@@ -4,11 +4,7 @@ use dear_imgui_rs::{StyleColor, Ui};
 use editor::icons::materialdesignicons::{ICON_ALERT, ICON_ALERT_CIRCLE, ICON_CLOSE_THICK, ICON_WEB};
 
 use super::{
-    CloseFocus,
-    DIAGNOSTIC_WARNING_COLOR,
-    OpenRequest,
-    SAVE_ERROR_COLOR,
-    UiState,
+    CloseFocus, DIAGNOSTIC_WARNING_COLOR, OpenRequest, SAVE_ERROR_COLOR, UiState,
     common::{dpi, focus_window_on_hover},
     coop::shared_maps,
 };

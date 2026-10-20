@@ -22,12 +22,7 @@ use objtree::TypeId;
 use render::texture::TextureCatalog;
 
 use crate::session::{
-    PrefabThumbnail,
-    build_textures,
-    discover_maps,
-    prefab_thumbnail_for,
-    prefab_thumbnail_or_missing,
-    validate_level,
+    PrefabThumbnail, build_textures, discover_maps, prefab_thumbnail_for, prefab_thumbnail_or_missing, validate_level,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,7 +92,9 @@ pub struct LoadView {
 }
 
 impl Loader {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn with_backups(root: PathBuf) -> Self {
         Self {
@@ -106,7 +103,9 @@ impl Loader {
         }
     }
 
-    pub fn is_busy(&self) -> bool { self.active.is_some() }
+    pub fn is_busy(&self) -> bool {
+        self.active.is_some()
+    }
 
     pub fn start(&mut self, job: Job) {
         if self.is_busy() {

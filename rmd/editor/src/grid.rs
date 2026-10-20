@@ -25,7 +25,9 @@ impl LevelCells {
         self.cells.iter().flat_map(|cell| cell.ids.iter().copied())
     }
 
-    pub fn tiles(&self) -> impl Iterator<Item = &Tile> + '_ { self.cells.iter().map(|cell| cell.tile.as_ref()) }
+    pub fn tiles(&self) -> impl Iterator<Item = &Tile> + '_ {
+        self.cells.iter().map(|cell| cell.tile.as_ref())
+    }
 
     // the one tile every cell shares, like a level from `filled_level`
     pub fn fill(&self) -> Option<&Tile> {
@@ -47,7 +49,9 @@ pub struct Grid {
 }
 
 impl PartialEq for Grid {
-    fn eq(&self, other: &Self) -> bool { self.size == other.size && self.cells == other.cells }
+    fn eq(&self, other: &Self) -> bool {
+        self.size == other.size && self.cells == other.cells
+    }
 }
 
 impl Grid {
@@ -86,17 +90,25 @@ impl Grid {
         grid
     }
 
-    pub fn size(&self) -> Size { self.size }
+    pub fn size(&self) -> Size {
+        self.size
+    }
 
-    pub fn tile_at(&self, coord: Coord) -> Option<&Tile> { Some(&self.cell(coord)?.tile) }
+    pub fn tile_at(&self, coord: Coord) -> Option<&Tile> {
+        Some(&self.cell(coord)?.tile)
+    }
 
-    pub(crate) fn shared_tile_at(&self, coord: Coord) -> Option<&Arc<Tile>> { Some(&self.cell(coord)?.tile) }
+    pub(crate) fn shared_tile_at(&self, coord: Coord) -> Option<&Arc<Tile>> {
+        Some(&self.cell(coord)?.tile)
+    }
 
     pub fn ids_at(&self, coord: Coord) -> &[PrefabInstanceId] {
         self.cell(coord).map(|cell| cell.ids.as_slice()).unwrap_or_default()
     }
 
-    pub fn location(&self, id: PrefabInstanceId) -> Option<PrefabLocation> { self.locations.get(&id).copied() }
+    pub fn location(&self, id: PrefabInstanceId) -> Option<PrefabLocation> {
+        self.locations.get(&id).copied()
+    }
 
     pub fn prefab_instance(&self, id: PrefabInstanceId) -> Option<PrefabInstance<'_>> {
         let location = self.location(id)?;
@@ -425,12 +437,18 @@ impl Grid {
         map
     }
 
-    fn index(&self, coord: Coord) -> Option<usize> { index_in(self.size, coord) }
+    fn index(&self, coord: Coord) -> Option<usize> {
+        index_in(self.size, coord)
+    }
 
-    fn cell(&self, coord: Coord) -> Option<&Cell> { self.cells.get(self.index(coord)?) }
+    fn cell(&self, coord: Coord) -> Option<&Cell> {
+        self.cells.get(self.index(coord)?)
+    }
 }
 
-fn cell_count(size: Size) -> usize { size.x as usize * size.y as usize * size.z as usize }
+fn cell_count(size: Size) -> usize {
+    size.x as usize * size.y as usize * size.z as usize
+}
 
 fn index_in(size: Size, coord: Coord) -> Option<usize> {
     let is_inside =
@@ -444,7 +462,9 @@ fn index_in(size: Size, coord: Coord) -> Option<usize> {
     Some((z * size.y as usize + y) * size.x as usize + x)
 }
 
-fn paths(tile: &Tile) -> Vec<&TreePath> { tile.iter().map(|prefab| &prefab.path).collect() }
+fn paths(tile: &Tile) -> Vec<&TreePath> {
+    tile.iter().map(|prefab| &prefab.path).collect()
+}
 
 #[cfg(test)]
 mod tests {
@@ -478,7 +498,9 @@ bza
         map
     }
 
-    fn key(name: &str) -> Key { Key::parse(name).unwrap() }
+    fn key(name: &str) -> Key {
+        Key::parse(name).unwrap()
+    }
 
     fn replace(document: &mut MapDocument, coord: Coord, tile: Vec<Prefab>) {
         let placed = tile

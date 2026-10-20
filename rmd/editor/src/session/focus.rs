@@ -32,7 +32,9 @@ impl Session {
         })
     }
 
-    pub fn focused_area(&self) -> Option<PrefabInstanceId> { Some(self.state.active_document()?.focus()?.component()) }
+    pub fn focused_area(&self) -> Option<PrefabInstanceId> {
+        Some(self.state.active_document()?.focus()?.component())
+    }
 
     pub fn toggle_focus_at(&mut self, coord: Option<Coord>) {
         if self.focused_area().is_some()

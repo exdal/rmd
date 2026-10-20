@@ -267,7 +267,9 @@ fn percent(state: &SharedState) -> String {
     fraction(state).map_or_else(String::new, |fraction| format!("{:.0}%", fraction * 100.0))
 }
 
-fn megabytes(bytes: u64) -> String { format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0)) }
+fn megabytes(bytes: u64) -> String {
+    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+}
 
 fn transfer_line(coop: &Coop, path: &str, state: &SharedState) -> Option<String> {
     let line = match *state {
@@ -680,9 +682,13 @@ pub(super) struct CoopNotice {
 }
 
 impl CoopNotice {
-    pub(super) fn request(&mut self) { self.requested = true; }
+    pub(super) fn request(&mut self) {
+        self.requested = true;
+    }
 
-    pub(super) fn reset(&mut self) { *self = Self::default(); }
+    pub(super) fn reset(&mut self) {
+        *self = Self::default();
+    }
 
     fn observe(&mut self, coop: Option<&Coop>) {
         let status = coop

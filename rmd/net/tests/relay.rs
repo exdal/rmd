@@ -5,30 +5,9 @@ use std::{
 };
 
 use net::{
-    Client,
-    CodebaseHash,
-    CodebaseId,
-    Cursor,
-    DeleteLevel,
-    Direction,
-    Event,
-    GenerationId,
-    Impairment,
-    InsertAt,
-    InsertLevel,
-    LevelContents,
-    LevelOp,
-    LossyProxy,
-    MapEdit,
-    PRESENCE_REFRESH,
-    Selection,
-    SelectionMode,
-    SeqId,
-    Server,
-    ServerConfig,
-    Tool,
-    View,
-    hash_password,
+    Client, CodebaseHash, CodebaseId, Cursor, DeleteLevel, Direction, Event, GenerationId, Impairment, InsertAt,
+    InsertLevel, LevelContents, LevelOp, LossyProxy, MapEdit, PRESENCE_REFRESH, Selection, SelectionMode, SeqId,
+    Server, ServerConfig, Tool, View, hash_password,
 };
 
 const PASSWORD: &str = "hunter2";
@@ -42,7 +21,9 @@ fn server() -> Server {
     .unwrap()
 }
 
-fn join(server: &Server, password: &str, nick: &str) -> Client { join_at(server.local_addr(), password, nick) }
+fn join(server: &Server, password: &str, nick: &str) -> Client {
+    join_at(server.local_addr(), password, nick)
+}
 
 fn join_at(addr: SocketAddr, password: &str, nick: &str) -> Client {
     Client::connect(

@@ -2,7 +2,9 @@
 pub struct MetadataError(pub String);
 
 impl std::fmt::Display for MetadataError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "bad dmi metadata: {}", self.0) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "bad dmi metadata: {}", self.0)
+    }
 }
 
 #[derive(Debug)]
@@ -27,11 +29,15 @@ impl std::fmt::Display for IconError {
 impl std::error::Error for IconError {}
 
 impl From<std::io::Error> for IconError {
-    fn from(e: std::io::Error) -> Self { Self::Io(e) }
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
 }
 
 impl From<MetadataError> for IconError {
-    fn from(e: MetadataError) -> Self { Self::Metadata(e) }
+    fn from(e: MetadataError) -> Self {
+        Self::Metadata(e)
+    }
 }
 
 impl From<png::DecodingError> for IconError {

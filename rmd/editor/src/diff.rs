@@ -4,11 +4,7 @@ use std::{
 };
 
 use dmm::{
-    Coord,
-    Map,
-    Prefab,
-    Size,
-    Tile,
+    Coord, Map, Prefab, Size, Tile,
     key::Key,
     merge::{prefabs_equal, tiles_equal},
 };
@@ -32,7 +28,9 @@ pub enum DiffSource {
 }
 
 impl DiffSource {
-    pub fn head() -> Self { Self::Revision(String::from("HEAD")) }
+    pub fn head() -> Self {
+        Self::Revision(String::from("HEAD"))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -87,15 +85,25 @@ pub struct MapDiff {
 }
 
 impl MapDiff {
-    pub fn changes(&self) -> &[ChangedTile] { &self.changes }
+    pub fn changes(&self) -> &[ChangedTile] {
+        &self.changes
+    }
 
-    pub fn is_empty(&self) -> bool { self.changes.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.changes.is_empty()
+    }
 
-    pub fn len(&self) -> usize { self.changes.len() }
+    pub fn len(&self) -> usize {
+        self.changes.len()
+    }
 
-    pub fn at(&self, coord: Coord) -> Option<ChangeKind> { Some(self.changes[*self.index.get(&coord)?].kind) }
+    pub fn at(&self, coord: Coord) -> Option<ChangeKind> {
+        Some(self.changes[*self.index.get(&coord)?].kind)
+    }
 
-    pub fn count(&self, kind: ChangeKind) -> usize { self.counts[kind.index()] }
+    pub fn count(&self, kind: ChangeKind) -> usize {
+        self.counts[kind.index()]
+    }
 
     pub fn highlights(&self, z: u32) -> Vec<Highlight> {
         let mut covered: [HashSet<[i32; 2]>; 3] = Default::default();
@@ -407,7 +415,9 @@ mod tests {
     use super::{ChangeKind, LineKind, VarChange, Version, diff, restore_edit, tile_lines};
     use crate::document::MapDocument;
 
-    fn tile(paths: &[&str]) -> Tile { paths.iter().map(|path| Prefab::new(TreePath::parse(path))).collect() }
+    fn tile(paths: &[&str]) -> Tile {
+        paths.iter().map(|path| Prefab::new(TreePath::parse(path))).collect()
+    }
 
     fn map(size: (u32, u32), edits: &[((u32, u32), &[&str])]) -> Map {
         let mut map = Map::new(Size {

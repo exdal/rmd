@@ -22,15 +22,25 @@ impl AreaFocus {
         }
     }
 
-    pub fn seed(&self) -> Coord { self.seed }
+    pub fn seed(&self) -> Coord {
+        self.seed
+    }
 
-    pub fn prefab(&self) -> &Prefab { &self.prefab }
+    pub fn prefab(&self) -> &Prefab {
+        &self.prefab
+    }
 
-    pub fn component(&self) -> PrefabInstanceId { self.component }
+    pub fn component(&self) -> PrefabInstanceId {
+        self.component
+    }
 
-    pub fn allows(&self, coord: Coord) -> bool { coord.z != self.seed.z || self.tiles.contains(&coord) }
+    pub fn allows(&self, coord: Coord) -> bool {
+        coord.z != self.seed.z || self.tiles.contains(&coord)
+    }
 
-    pub fn allows_edit(&self, edit: &Edit) -> bool { edit.changes.iter().all(|change| self.allows(change.coord)) }
+    pub fn allows_edit(&self, edit: &Edit) -> bool {
+        edit.changes.iter().all(|change| self.allows(change.coord))
+    }
 }
 
 #[cfg(test)]

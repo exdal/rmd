@@ -2,14 +2,7 @@ use core::path::TreePath;
 use std::collections::HashMap;
 
 use dear_imgui_rs::{
-    Direction,
-    ListClipper,
-    SelectableFlags,
-    TableColumnFlags,
-    TableFlags,
-    TableSizingPolicy,
-    Ui,
-    WindowKey,
+    Direction, ListClipper, SelectableFlags, TableColumnFlags, TableFlags, TableSizingPolicy, Ui, WindowKey,
     WindowKeyError,
 };
 use editor::{
@@ -19,14 +12,8 @@ use editor::{
 
 use super::{
     common::{
-        RowSelection,
-        button_width,
-        centered_note,
-        checkbox_width,
-        focus_window_on_hover,
-        overflow_scroll,
-        same_line_if_fits,
-        table_min_width,
+        RowSelection, button_width, centered_note, checkbox_width, focus_window_on_hover, overflow_scroll,
+        same_line_if_fits, table_min_width,
     },
     find::JumpTarget,
     search::draw_type_path_search,
@@ -102,7 +89,9 @@ impl IssuesPanel {
         })
     }
 
-    pub(super) fn window(&self) -> &WindowKey { &self.window }
+    pub(super) fn window(&self) -> &WindowKey {
+        &self.window
+    }
 
     pub(super) fn request(&mut self, document: Option<DocumentId>) {
         self.focus_requested = true;
@@ -113,10 +102,14 @@ impl IssuesPanel {
         }
     }
 
-    pub(super) fn has_focus_request(&self) -> bool { self.focus_requested }
+    pub(super) fn has_focus_request(&self) -> bool {
+        self.focus_requested
+    }
 
     #[cfg(test)]
-    pub(super) fn visible(&self) -> bool { self.visible }
+    pub(super) fn visible(&self) -> bool {
+        self.visible
+    }
 
     pub(super) fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &Settings, open: &mut bool,

@@ -39,21 +39,27 @@ pub struct ClientHello {
 pub struct CommentId(pub u32);
 
 impl CommentId {
-    pub fn next(self) -> Self { Self(self.0 + 1) }
+    pub fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct GenerationId(pub u32);
 
 impl GenerationId {
-    pub fn next(self) -> Self { Self(self.0 + 1) }
+    pub fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SeqId(pub u32);
 
 impl SeqId {
-    pub fn next(self) -> Self { Self(self.0 + 1) }
+    pub fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -185,7 +191,9 @@ pub struct LevelLog {
 }
 
 impl LevelLog {
-    pub fn changes(&self) -> impl Iterator<Item = (SeqId, LevelChange)> + '_ { self.changes.iter().copied() }
+    pub fn changes(&self) -> impl Iterator<Item = (SeqId, LevelChange)> + '_ {
+        self.changes.iter().copied()
+    }
 
     fn since(&self, seen: SeqId) -> impl Iterator<Item = LevelChange> + '_ {
         self.changes
@@ -198,7 +206,9 @@ impl LevelLog {
         self.since(seen).try_fold(z, |z, change| change.level(z))
     }
 
-    pub fn rebase_slot(&self, seen: SeqId, z: u32) -> u32 { self.since(seen).fold(z, |z, change| change.slot(z)) }
+    pub fn rebase_slot(&self, seen: SeqId, z: u32) -> u32 {
+        self.since(seen).fold(z, |z, change| change.slot(z))
+    }
 
     /// the change the op makes to a map of `levels` levels, none when it lost a race
     pub fn sequence(&mut self, levels: u32, seq: SeqId, seen: SeqId, op: &LevelOp) -> Option<LevelChange> {
@@ -500,7 +510,9 @@ mod tests {
         });
     }
 
-    fn delete(z: u32) -> LevelOp { LevelOp::Delete(DeleteLevel { z }) }
+    fn delete(z: u32) -> LevelOp {
+        LevelOp::Delete(DeleteLevel { z })
+    }
 
     fn insert(at: InsertAt) -> LevelOp {
         LevelOp::Insert(InsertLevel {

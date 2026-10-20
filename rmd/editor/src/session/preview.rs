@@ -5,13 +5,7 @@ use editor::{
     document::{DocumentId, PrefabInstanceId, Selection},
     frame::{self},
     tool::{
-        BlockSelectionMode,
-        SelectionMask,
-        SelectionRotation,
-        Tool,
-        rotate_point,
-        rotate_prefab,
-        rotated_selection_at,
+        BlockSelectionMode, SelectionMask, SelectionRotation, Tool, rotate_point, rotate_prefab, rotated_selection_at,
     },
     visual,
 };
