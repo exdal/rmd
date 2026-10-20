@@ -884,6 +884,56 @@ fn tramstation_loads_its_modules_through_the_tgstation_profile() -> TestResult {
 }
 
 #[test]
+#[ignore = "requires the local target/MonkeStation2.0 checkout"]
+fn metastation_loads_its_random_engine_through_the_monkestation_profile() -> TestResult {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
+    let path = root.join("_maps/map_files/MetaStation/MetaStation.dmm");
+    let (map, errors) = dmm::parser::load(&path)?;
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let options = BakeOptions {
+        forced_profile: Some(String::from("monkestation")),
+        ..Default::default()
+    };
+    let loaded = load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())?;
+    assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+
+    let mut session = Session::new();
+    session.apply_codebase(loaded);
+    session.activate_document(MapDocument::open(path, map, 1));
+    settle_bake(&mut session);
+
+    let modules = &session.active_cache().modules;
+    let preview = modules.preview.as_ref().ok_or("no module preview")?;
+    assert!(preview.diagnostics.is_empty(), "{:?}", preview.diagnostics);
+
+    let engine = preview
+        .roots
+        .iter()
+        .find(|root| {
+            root.variants.iter().any(|variant| {
+                variant
+                    .choice
+                    .path
+                    .ends_with("RandomEngines/MetaStation/supermatter.dmm")
+            })
+        })
+        .ok_or("engine root")?;
+    assert_eq!(engine.coord, Coord::new(162, 141, 1));
+    assert_eq!(engine.variants.len(), 2);
+    assert!(engine.variants.iter().any(|variant| {
+        variant
+            .choice
+            .path
+            .ends_with("RandomEngines/MetaStation/singularity.dmm")
+    }));
+    assert!(engine.error.is_none(), "{:?}", engine.error);
+    assert!(engine.variants.iter().all(|variant| variant.error.is_none()));
+
+    Ok(())
+}
+
+#[test]
 #[ignore = "requires the local target/TerraGov-Marine-Corps checkout"]
 fn lv624_loads_its_modules_through_the_tgmc_profile() -> TestResult {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/TerraGov-Marine-Corps");

@@ -403,36 +403,69 @@
 /datum/demir/monkestation/process_modular_root(list/roots)
 	var/list/configs = list()
 	var/list/placements = list()
-	for(var/obj/modular_map_root/root as anything in roots)
-		if(!root.config_file || !root.key)
-			continue
+	for(var/atom/root as anything in roots)
+		var/list/placement
+		if(istype(root, /obj/modular_map_root))
+			placement = module_placement(root, configs)
+		else if(istype(root, /obj/effect/spawner/random_engines))
+			var/obj/effect/spawner/random_engines/spawner = root
+			placement = random_room_placement(spawner, /datum/map_template/random_room/random_engines, spawner.room_width, spawner.room_height)
+		else if(istype(root, /obj/effect/spawner/random_bar))
+			var/obj/effect/spawner/random_bar/spawner = root
+			placement = random_room_placement(spawner, /datum/map_template/random_room/random_bar, spawner.room_width, spawner.room_height)
 
-		var/path = root.config_file
-		if(!(path in configs))
-			configs[path] = read_module_config(path)
+		if(placement)
+			placements += list(placement)
 
-		var/list/config = configs[path]
-		if(istext(config))
-			placements += list(list("root" = root, "error" = config))
-			continue
-
-		var/list/rooms = config["rooms"]
-		var/list/room = rooms && rooms[root.key]
-		if(!room)
-			placements += list(list("root" = root, "error" = "no room [root.key] in [path]"))
-			continue
-
-		var/list/files = list()
-		for(var/file in room["modules"])
-			files += config["directory"] + file
-
-		placements += list(list(
-			"root" = root,
-			"maps" = files,
-			"anchor" = /obj/modular_map_connector,
-			"skip" = list(/turf/template_noop, /area/template_noop),
-		))
 	demir_place_modular(placements)
+
+/datum/demir/monkestation/proc/module_placement(obj/modular_map_root/root, list/configs)
+	if(!root.config_file || !root.key)
+		return null
+
+	var/path = root.config_file
+	if(!(path in configs))
+		configs[path] = read_module_config(path)
+
+	var/list/config = configs[path]
+	if(istext(config))
+		return list("root" = root, "error" = config)
+
+	var/list/rooms = config["rooms"]
+	var/list/room = rooms && rooms[root.key]
+	if(!room)
+		return list("root" = root, "error" = "no room [root.key] in [path]")
+
+	var/list/files = list()
+	for(var/file in room["modules"])
+		files += config["directory"] + file
+
+	return list(
+		"root" = root,
+		"maps" = files,
+		"anchor" = /obj/modular_map_connector,
+		"skip" = list(/turf/template_noop, /area/template_noop),
+	)
+
+/datum/demir/monkestation/proc/random_room_placement(obj/effect/spawner/root, base_type, width, height)
+	var/list/files = list()
+	for(var/datum/map_template/random_room/template as anything in subtypesof(base_type))
+		if(!initial(template.mappath) || !initial(template.weight))
+			continue
+
+		if(initial(template.template_width) != width || initial(template.template_height) != height)
+			continue
+
+		files += initial(template.mappath)
+
+	if(!length(files))
+		return list("root" = root, "error" = "no [base_type] template is [width]x[height]")
+
+	return list(
+		"root" = root,
+		"maps" = files,
+		"skip" = list(/turf/template_noop, /area/template_noop),
+	)
 
 /datum/demir/monkestation/proc/read_module_config(path)
 	var/text = file2text(path)
@@ -479,6 +512,8 @@
 			GLOB = new /datum/controller/global_vars/demir_preview
 
 		demir_modular_root(/obj/modular_map_root)
+		demir_modular_root(/obj/effect/spawner/random_engines)
+		demir_modular_root(/obj/effect/spawner/random_bar)
 
 		// Groups include subtypes, so the /visible pipes are in DEMIR_GROUP_PIPES too. Rebaking
 		// them changes nothing.
