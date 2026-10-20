@@ -434,6 +434,124 @@
 /datum/demir/monkespaw/highlights(atom/target)
 	return target.demir_highlights()
 
+/datum/demir/monkespaw/process_modular_root(list/roots)
+	var/list/configs = list()
+	var/list/placements = list()
+	for(var/atom/root as anything in roots)
+		var/list/placement
+		if(istype(root, /obj/modular_map_root))
+			placement = module_placement(root, configs)
+		else if(istype(root, /obj/effect/spawner/random_engines))
+			var/obj/effect/spawner/random_engines/spawner = root
+			placement = random_room_placement(spawner, /datum/map_template/random_room/random_engines, spawner.room_width, spawner.room_height)
+		else if(istype(root, /obj/effect/spawner/random_bar))
+			var/obj/effect/spawner/random_bar/spawner = root
+			placement = random_room_placement(spawner, /datum/map_template/random_room/random_bar, spawner.room_width, spawner.room_height)
+
+		if(placement)
+			placements += list(placement)
+
+	demir_place_modular(placements)
+
+/datum/demir/monkespaw/proc/module_placement(obj/modular_map_root/root, list/configs)
+	if(!root.config_file || !root.key)
+		return null
+
+	var/path = root.config_file
+	if(!(path in configs))
+		configs[path] = read_module_config(path)
+
+	var/list/config = configs[path]
+	if(istext(config))
+		return list("root" = root, "error" = config)
+
+	var/list/rooms = config["rooms"]
+	var/list/room = rooms && rooms[root.key]
+	if(!room)
+		return list("root" = root, "error" = "no room [root.key] in [path]")
+
+	var/list/files = list()
+	for(var/file in room["modules"])
+		files += config["directory"] + file
+
+	return list(
+		"root" = root,
+		"maps" = files,
+		"anchor" = /obj/modular_map_connector,
+		"skip" = list(/turf/template_noop, /area/template_noop),
+	)
+
+/datum/demir/monkespaw/proc/random_room_placement(obj/effect/spawner/root, base_type, width, height)
+	var/list/files = list()
+	for(var/datum/map_template/random_room/template as anything in subtypesof(base_type))
+		if(!initial(template.mappath) || !initial(template.weight))
+			continue
+
+		if(initial(template.template_width) != width || initial(template.template_height) != height)
+			continue
+
+		files += initial(template.mappath)
+
+	if(!length(files))
+		return list("root" = root, "error" = "no [base_type] template is [width]x[height]")
+
+	// Every template loads with centerspawner = FALSE, so its bottom-left tile lands on the spawner.
+	return list(
+		"root" = root,
+		"maps" = files,
+		"skip" = list(/turf/template_noop, /area/template_noop),
+	)
+
+/datum/demir/monkespaw/proc/read_module_config(path)
+	var/text = file2text(path)
+	if(!text)
+		return "cannot read [path]"
+
+	try
+		return demir_toml_decode(text)
+	catch(var/exception/error)
+		return "invalid [path]: [error.name]"
+
+/datum/demir/monkespaw/proc/read_automap_rooms()
+	var/map = demir_map_path()
+	if(!map)
+		return null
+
+	var/datum/controller/subsystem/automapper/automapper = /datum/controller/subsystem/automapper
+	var/list/config = read_module_config(initial(automapper.config_file))
+	if(!islist(config))
+		return null
+
+	var/list/rooms = list()
+	var/list/templates = config["templates"]
+	for(var/name in templates)
+		var/list/template = templates[name]
+		if("_maps/[template["required_map"]]" != map)
+			continue
+
+		var/list/coordinates = template["coordinates"]
+		if(length(coordinates) != 3)
+			continue
+
+		var/list/files = list()
+		for(var/file in template["map_files"])
+			files += template["directory"] + file
+
+		rooms["[coordinates[1]],[coordinates[2]],[coordinates[3]]"] = files
+
+	return rooms
+
+/datum/demir/monkespaw/proc/place_automap_room(turf/target)
+	var/list/files = automap_rooms && automap_rooms["[target.x],[target.y],[target.z]"]
+	if(!files)
+		return
+
+	demir_place_modular(list(list(
+		"root" = target,
+		"maps" = files,
+		"skip" = list(/turf/template_noop, /area/template_noop),
+	)))
+
 // Same DISP_DIR_* rule as the pipe's Initialize().
 /datum/demir/monkespaw/proc/register_disposal_node_orientations()
 	for(var/type_path in typesof(/obj/structure/disposalpipe))
@@ -463,11 +581,17 @@
 	var/fade_underfloor = FALSE
 	var/power_all = TRUE
 	var/show_camera_ranges = FALSE
+	var/list/automap_rooms
 
 	New()
 		..()
 		if(!GLOB)
 			GLOB = new /datum/controller/global_vars/demir_preview
+
+		demir_modular_root(/obj/modular_map_root)
+		demir_modular_root(/obj/effect/spawner/random_engines)
+		demir_modular_root(/obj/effect/spawner/random_bar)
+		automap_rooms = read_automap_rooms()
 
 		// Groups include subtypes, so the /visible pipes are in DEMIR_GROUP_PIPES too. Rebaking
 		// them changes nothing.
@@ -593,6 +717,8 @@
 
 /datum/demir/monkespaw/prepare(atom/target)
 	target.demir_prepare_state()
+	if(isturf(target))
+		place_automap_room(target)
 
 /atom/proc/demir_bake_smoothing()
 	var/datum/demir/monkespaw/profile = demir_profile()

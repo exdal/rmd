@@ -16,7 +16,10 @@ use dmm::{Coord, Map, MapFormat, Prefab, PrefabInstanceId, Size, writer};
 use editor::{
     document::{DocumentId, MapDocument},
     environment::BakeOptions,
-    maploader::{ErrorKind, preview::PREVIEW_ID_START},
+    maploader::{
+        ErrorKind,
+        preview::{ModuleRootPreview, PREVIEW_ID_START},
+    },
     progress::Progress,
     tool::Tool,
 };
@@ -929,6 +932,53 @@ fn metastation_loads_its_random_engine_through_the_monkestation_profile() -> Tes
     }));
     assert!(engine.error.is_none(), "{:?}", engine.error);
     assert!(engine.variants.iter().all(|variant| variant.error.is_none()));
+
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires the local target/Monkes-Paw checkout"]
+fn metastation_loads_its_automapper_room_and_random_engine_through_the_monkespaw_profile() -> TestResult {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/Monkes-Paw");
+    let path = root.join("_maps/map_files/MetaStation/MetaStation.dmm");
+    let (map, errors) = dmm::parser::load(&path)?;
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let options = BakeOptions {
+        forced_profile: Some(String::from("monkespaw")),
+        ..Default::default()
+    };
+    let loaded = load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())?;
+    assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+
+    let mut session = Session::new();
+    session.apply_codebase(loaded);
+    session.activate_document(MapDocument::open(path, map, 1));
+    settle_bake(&mut session);
+
+    let modules = &session.active_cache().modules;
+    let preview = modules.preview.as_ref().ok_or("no module preview")?;
+    assert!(preview.diagnostics.is_empty(), "{:?}", preview.diagnostics);
+
+    let uses =
+        |root: &ModuleRootPreview, file: &str| root.variants.iter().any(|variant| variant.choice.path.ends_with(file));
+    let rancher = preview
+        .roots
+        .iter()
+        .find(|root| uses(root, "automapper/templates/metastation/metastation_slime_rancher.dmm"))
+        .ok_or("automapper root")?;
+    assert_eq!(rancher.coord, Coord::new(168, 74, 1));
+    assert_eq!(rancher.variants.len(), 1);
+    assert!(rancher.error.is_none(), "{:?}", rancher.error);
+    assert!(rancher.variants.iter().all(|variant| variant.error.is_none()));
+
+    let engine = preview
+        .roots
+        .iter()
+        .find(|root| uses(root, "RandomEngines/MetaStation/supermatter.dmm"))
+        .ok_or("engine root")?;
+    assert_eq!(engine.variants.len(), 2);
+    assert!(engine.error.is_none(), "{:?}", engine.error);
 
     Ok(())
 }
