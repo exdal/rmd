@@ -110,7 +110,7 @@ impl ModulePreviewState {
         let changed = ModuleOverlay::changes(
             ctx.source,
             self.preview.as_ref().filter(|_| self.enabled),
-            Some(&next).filter(|_| self.enabled),
+            self.enabled.then_some(&next),
         );
 
         self.choices = next.choices.clone();
