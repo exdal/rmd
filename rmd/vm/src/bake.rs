@@ -421,7 +421,18 @@ impl Bake {
         tree: &ObjectTree, module: &Module, profile: TypeId, atoms: Vec<Atom>, size: [i32; 3], limits: Limits,
         icons: IconStates, root: Option<PathBuf>,
     ) -> Self {
-        Self::with_profile_and_progress(tree, module, profile, atoms, size, limits, icons, root, |_, _, _| {})
+        Self::with_profile_and_progress(
+            tree,
+            module,
+            profile,
+            atoms,
+            size,
+            limits,
+            icons,
+            root,
+            None,
+            |_, _, _| {},
+        )
     }
 
     pub fn node_groups(&self) -> &[NodeGroup] {
@@ -458,13 +469,14 @@ impl Bake {
     ) -> Self {
         let profile = profile_type(tree).expect("Bake::with_progress requires a valid default profile");
 
-        Self::with_profile_and_progress(tree, module, profile, atoms, size, limits, icons, None, progress)
+        Self::with_profile_and_progress(tree, module, profile, atoms, size, limits, icons, None, None, progress)
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn with_profile_and_progress(
         tree: &ObjectTree, module: &Module, profile: TypeId, atoms: Vec<Atom>, size: [i32; 3], limits: Limits,
-        icons: IconStates, root: Option<PathBuf>, mut progress: impl FnMut(Stage, usize, usize),
+        icons: IconStates, root: Option<PathBuf>, map_path: Option<String>,
+        mut progress: impl FnMut(Stage, usize, usize),
     ) -> Self {
         Self::initialize_with_profile_and_progress(
             tree,
@@ -475,6 +487,7 @@ impl Bake {
             limits,
             icons,
             root,
+            map_path,
             &mut progress,
         )
         .finish_with_progress(progress)
@@ -483,7 +496,8 @@ impl Bake {
     #[allow(clippy::too_many_arguments)]
     pub fn initialize_with_profile_and_progress<'a>(
         tree: &'a ObjectTree, module: &'a Module, profile: TypeId, atoms: Vec<Atom>, size: [i32; 3], limits: Limits,
-        icons: IconStates, root: Option<PathBuf>, mut progress: impl FnMut(Stage, usize, usize),
+        icons: IconStates, root: Option<PathBuf>, map_path: Option<String>,
+        mut progress: impl FnMut(Stage, usize, usize),
     ) -> PendingBake<'a> {
         let definition = ProfileDefinition::resolve(tree, &module.index, profile);
         let mut bake = Self {
@@ -495,6 +509,7 @@ impl Bake {
         bake.runtime.world.size = size;
         bake.runtime.icons = icons;
         bake.runtime.world.root = root;
+        bake.runtime.world.map_path = map_path;
 
         let mut atoms = atoms;
         atoms.sort_by_key(|atom| atom.instance);

@@ -3613,6 +3613,7 @@ fn pending<'a>(
         Limits::default(),
         IconStates::default(),
         None,
+        None,
         |_, _, _| {},
     )
 }
@@ -4046,6 +4047,37 @@ fn demir_toml_decode_converts_to_dm_values() {
 }
 
 #[test]
+fn demir_map_path_is_the_value_the_bake_was_built_with() {
+    let (tree, module) = compile(fixture!("programs/demir_map_path_reaches_every_hook.dm"));
+    let baked = |map_path: Option<&str>| {
+        let atoms = vec![Atom {
+            instance: 1,
+            ty: tree.id_of(&TreePath::parse("/turf/wall")).expect("wall type"),
+            position: Position::new(1, 1, 1),
+            vars: Vec::new(),
+        }];
+        let bake = Bake::with_profile_and_progress(
+            &tree,
+            &module,
+            profile_type(&tree).expect("profile type"),
+            atoms,
+            [1, 1, 1],
+            Limits::default(),
+            IconStates::default(),
+            None,
+            map_path.map(str::to_owned),
+            |_, _, _| {},
+        );
+
+        baked_state(&bake, 1).map(str::to_owned)
+    };
+
+    let path = "_maps/map_files/Test/Test.dmm";
+    assert_eq!(baked(Some(path)), Some(format!("{path}|{path}")));
+    assert_eq!(baked(None), Some("null|null".to_owned()));
+}
+
+#[test]
 fn file_reads_cannot_leave_the_codebase_root() {
     let (tree, module) = compile(fixture!("programs/filesystem_reads_stay_inside_the_root.dm"));
     let root = std::env::temp_dir().join(format!("rmd-sandbox-{}", std::process::id()));
@@ -4104,6 +4136,7 @@ fn modules_are_inserted_before_atom_hooks() {
         [2, 1, 1],
         Limits::default(),
         IconStates::default(),
+        None,
         None,
         |stage, done, total| progress.push((stage, done, total)),
     );

@@ -267,6 +267,11 @@ entry for the roots that use that file. `file2text`, `fexists`, `flist` and `fil
 under the codebase directory, which is the directory of the `.dme`. Paths that are absolute or climb
 above that directory are blocked.
 
+`demir_map_path()` returns the path of the map being baked, relative to the codebase directory and
+with forward slashes, such as `"_maps/map_files/MetaStation/MetaStation.dmm"`. It returns null when
+the map is unsaved or lies outside the codebase directory. Every hook can call it. The value is
+fixed when the bake is built, so Save As takes effect at the next full bake.
+
 The prelude is the complete DM interface. It defines every hook, helper, flag, lighting field, and
 UI procedure. The editor embeds the example integrations so they can be forced without changing a
 codebase. The files remain usable as templates for codebase-owned profiles:

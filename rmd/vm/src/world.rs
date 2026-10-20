@@ -36,6 +36,7 @@ pub struct World {
     pub areas: HashMap<Position, ObjectId>,
     pub size: [i32; 3],
     pub root: Option<PathBuf>,
+    pub map_path: Option<String>,
 }
 
 impl World {

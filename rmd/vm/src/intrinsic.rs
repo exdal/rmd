@@ -549,6 +549,11 @@ impl Evaluator<'_> {
                 Ok(GenericValue::Null)
             },
 
+            Intrinsic::DemirMapPath => match self.runtime.world.map_path.clone() {
+                Some(path) => self.text(path),
+                None => Ok(GenericValue::Null),
+            },
+
             Intrinsic::DemirRebake
             | Intrinsic::DemirModularPreview
             | Intrinsic::DemirSetModularPreview

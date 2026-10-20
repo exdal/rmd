@@ -224,6 +224,13 @@
 /proc/demir_set_modular_preview(enabled)
 	set __demir_intrin = 732
 
+// The path of the map being baked, relative to the codebase directory and with forward slashes,
+// such as "_maps/map_files/MetaStation/MetaStation.dmm". Returns null when the map is unsaved or
+// lies outside the codebase directory. The value is fixed when the bake is built, so Save As takes
+// effect at the next full bake.
+/proc/demir_map_path()
+	set __demir_intrin = 733
+
 // Rebaking
 
 // Add `type` and its descendants to the bit group `group`. demir_rebake() can select that group.
