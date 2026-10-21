@@ -531,20 +531,34 @@
 			continue
 
 		var/list/coordinates = template["coordinates"]
-		if(length(coordinates) != 3)
+		if(!is_map_coordinate(coordinates))
 			continue
 
 		var/list/files = list()
 		for(var/file in template["map_files"])
 			files += template["directory"] + file
 
-		placements += list(list(
+		placements["[coordinates[1]],[coordinates[2]],[coordinates[3]]"] = list(
 			"at" = coordinates,
 			"maps" = files,
 			"skip" = list(/turf/template_noop, /area/template_noop),
-		))
+		)
 
-	demir_place_modular(placements)
+	var/list/entries = list()
+	for(var/coordinate in placements)
+		entries += list(placements[coordinate])
+
+	demir_place_modular(entries)
+
+/datum/demir/monkespaw/proc/is_map_coordinate(list/coordinates)
+	if(!islist(coordinates) || length(coordinates) != 3)
+		return FALSE
+
+	for(var/value in coordinates)
+		if(!isnum(value) || value < 1 || round(value) != value)
+			return FALSE
+
+	return TRUE
 
 // Same DISP_DIR_* rule as the pipe's Initialize().
 /datum/demir/monkespaw/proc/register_disposal_node_orientations()
