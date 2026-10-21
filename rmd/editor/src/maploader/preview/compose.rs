@@ -186,7 +186,10 @@ pub(super) fn update(
             .collect::<Vec<_>>();
         for layer in &preview.layers {
             if let Some(content) = layer.cells.get(&coord) {
+                // nested layers inherit the coordinate origin but are placed by a root atom, clearing would hide
+                // that root and drop the layer itself
                 let is_reserved = matches!(layer.key.origin, ModuleOrigin::Coord(_))
+                    && layer.key.ancestry.is_empty()
                     && content.iter().any(|(_, prefab)| category(tree, prefab) == 1);
                 if is_reserved {
                     entries.retain(|(_, existing)| category(tree, existing) == 2);

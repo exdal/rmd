@@ -37,6 +37,8 @@ pub(in crate::session) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 const PROFILE: &str = include_str!("../../../tests/fixtures/programs/module_preview_profile.dm");
 const COORDINATE_PROFILE: &str = include_str!("../../../tests/fixtures/programs/module_coordinate_profile.dm");
 const PLACEMENTS_PROFILE: &str = include_str!("../../../tests/fixtures/programs/module_placements_profile.dm");
+const COORDINATE_NESTED_PROFILE: &str =
+    include_str!("../../../tests/fixtures/programs/module_coordinate_nested_profile.dm");
 pub(in crate::session) const WALL: &str = "/turf/closed/wall";
 pub(in crate::session) const MODULE: &str = "/obj/module";
 const ROOT: &str = "/obj/modular_map_root";
@@ -337,6 +339,19 @@ fn a_module_placed_by_coordinate_shows_at_that_tile() -> TestResult {
     assert!(has(&session, 5, ROOT));
     assert!(!preview_ids(&session).is_empty());
     assert!(preview_ids(&session).iter().all(|id| is_baked(&session, *id)));
+    assert_settled(&session);
+
+    Ok(())
+}
+
+#[test]
+fn a_root_nested_in_a_coordinate_module_settles() -> TestResult {
+    let fixture = Fixture::new(&[])?;
+    let session = fixture.session_with(COORDINATE_NESTED_PROFILE)?;
+
+    assert_eq!(session.module_roots().len(), 2);
+    assert!(has(&session, 5, ROOT));
+    assert!(has(&session, 5, WALL));
     assert_settled(&session);
 
     Ok(())
