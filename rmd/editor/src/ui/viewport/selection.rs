@@ -184,7 +184,7 @@ impl UiState {
         &self, ui: &Ui, session: &mut Session, frame: &mut ViewFrame<'_>, coord: Coord, is_left_clicked: bool,
     ) {
         let gestures = &mut *frame.gestures;
-        if gestures.block_placement.is_some() || !is_left_clicked || !session.can_edit_at(coord) {
+        if gestures.block_placement.is_some() || !is_left_clicked || !session.can_select_at(coord) {
             return;
         }
 

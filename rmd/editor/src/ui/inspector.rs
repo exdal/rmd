@@ -13,6 +13,7 @@ use editor::{
     command::EditGroupId,
     document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation},
     icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_PIN, ICON_PIN_OUTLINE},
+    maploader::preview::PREVIEW_ID_START,
     visual,
 };
 use objtree::{ObjectTree, ResolvedVarType, TypeId, VarTypeKind};
@@ -210,7 +211,13 @@ impl InspectorState {
             snapshot.location.coord.x, snapshot.location.coord.y, snapshot.location.coord.z
         ));
         let find_similar = ui.text_link("Find similar...");
+        let is_preview = snapshot.selected.get() >= PREVIEW_ID_START;
+        if is_preview {
+            ui.text_disabled("Module preview, read only");
+        }
+
         ui.separator();
+        let _disabled = ui.begin_disabled_with_cond(is_preview);
         session.refresh_identical();
         match self.scope {
             EditScope::Selected => {

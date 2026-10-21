@@ -7,6 +7,7 @@ use crate::{
     command::Edit,
     document::{MapDocument, PlacedPrefab, PlacedTile, Selection},
     frame::HiddenTypes,
+    maploader::preview::MapView,
     tool::{
         BlockSelectionMode, PlacementKind, SelectionRotation, ToolEdit, coord_in_bounds, default_tile_paths,
         insertion_index, placement_kind, rotate_point, rotate_prefab,
@@ -86,7 +87,7 @@ impl TileBlock {
 }
 
 pub fn copy_block(
-    document: &MapDocument, selection: Selection, mode: BlockSelectionMode, hidden: HiddenTypes,
+    map: MapView<'_>, selection: Selection, mode: BlockSelectionMode, hidden: HiddenTypes,
 ) -> Option<TileBlock> {
     if !selection.is_well_formed() {
         return None;
@@ -100,7 +101,7 @@ pub fn copy_block(
             let coord = Coord::new(selection.min.x + x, selection.min.y + y, selection.min.z);
             let tile = included
                 .contains(&coord)
-                .then(|| document.map.tile_at(coord))
+                .then(|| map.tile_at(coord))
                 .flatten()
                 .map(|tile| tile.iter().filter(|prefab| !hidden.hides(prefab)).cloned().collect())
                 .unwrap_or_default();
@@ -339,7 +340,7 @@ mod tests {
     fn a_copied_block_keeps_its_tiles_in_row_major_order() {
         let document = MapDocument::new(map(Size { x: 4, y: 4, z: 1 }), 1);
         let block = copy_block(
-            &document,
+            (&document.map).into(),
             selection((2, 2), (3, 4)),
             BlockSelectionMode::Full,
             HiddenTypes::default(),
@@ -356,7 +357,7 @@ mod tests {
     fn a_hollow_copy_leaves_its_middle_as_a_hole() {
         let document = MapDocument::new(map(Size { x: 5, y: 5, z: 1 }), 1);
         let block = copy_block(
-            &document,
+            (&document.map).into(),
             selection((1, 1), (3, 3)),
             BlockSelectionMode::Hollow { line_width: 1 },
             HiddenTypes::default(),
@@ -372,7 +373,13 @@ mod tests {
     fn a_copy_leaves_hidden_types_behind() {
         let document = MapDocument::new(map(Size { x: 2, y: 1, z: 1 }), 1);
         let hidden = [TreePath::parse("/area")].into_iter().collect();
-        let block = copy_block(&document, selection((1, 1), (2, 1)), BlockSelectionMode::Full, hidden).expect("block");
+        let block = copy_block(
+            (&document.map).into(),
+            selection((1, 1), (2, 1)),
+            BlockSelectionMode::Full,
+            hidden,
+        )
+        .expect("block");
 
         assert_eq!(
             block.tile(0, 0),
@@ -387,7 +394,13 @@ mod tests {
         let mut destination = MapDocument::new(map(Size { x: 2, y: 1, z: 1 }), 1);
         let tree = ObjectTree::default();
         let hidden = [TreePath::parse("/area")].into_iter().collect();
-        let block = copy_block(&source, selection((1, 1), (1, 1)), BlockSelectionMode::Full, hidden).expect("block");
+        let block = copy_block(
+            (&source.map).into(),
+            selection((1, 1), (1, 1)),
+            BlockSelectionMode::Full,
+            hidden,
+        )
+        .expect("block");
         let area = destination.placed_tile(Coord::new(2, 1, 1)).expect("tile")[1].clone();
 
         let (edit, _) = paste_block(
@@ -414,7 +427,7 @@ mod tests {
     fn a_quarter_turn_swaps_the_footprint() {
         let document = MapDocument::new(map(Size { x: 4, y: 4, z: 1 }), 1);
         let block = copy_block(
-            &document,
+            (&document.map).into(),
             selection((1, 1), (2, 4)),
             BlockSelectionMode::Full,
             HiddenTypes::default(),
@@ -438,7 +451,7 @@ mod tests {
         let mut destination = MapDocument::new(map(Size { x: 4, y: 4, z: 1 }), 1);
         let tree = ObjectTree::default();
         let block = copy_block(
-            &source,
+            (&source.map).into(),
             selection((1, 1), (2, 2)),
             BlockSelectionMode::Full,
             HiddenTypes::default(),
@@ -484,7 +497,7 @@ mod tests {
         let mut destination = MapDocument::new(map(Size { x: 4, y: 4, z: 1 }), 1);
         let tree = ObjectTree::default();
         let block = copy_block(
-            &source,
+            (&source.map).into(),
             selection((1, 1), (3, 3)),
             BlockSelectionMode::Full,
             HiddenTypes::default(),

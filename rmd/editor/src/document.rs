@@ -19,6 +19,7 @@ use crate::{
     command::{self, Edit, EditGroupId, History, LevelEdit, Resize, SelectionChange},
     focus::AreaFocus,
     grid::{Grid, LevelCells},
+    maploader::preview::PREVIEW_ID_START,
     patch,
     tool::{BlockSelectionMode, PlacementKind, SelectionMask, insertion_index, placement_kind},
 };
@@ -422,12 +423,15 @@ impl MapDocument {
     }
 
     pub fn selected_instance(&self) -> Option<PrefabInstanceId> {
-        self.selected_instance
-            .filter(|id| self.instance_location(*id).is_some())
+        self.selected_instance.filter(|id| self.is_selectable_instance(*id))
     }
 
     pub fn select_instance(&mut self, selected: Option<PrefabInstanceId>) {
-        self.selected_instance = selected.filter(|id| self.instance_location(*id).is_some());
+        self.selected_instance = selected.filter(|id| self.is_selectable_instance(*id));
+    }
+
+    fn is_selectable_instance(&self, id: PrefabInstanceId) -> bool {
+        id.get() >= PREVIEW_ID_START || self.instance_location(id).is_some()
     }
 
     pub fn placed_tile(&self, coord: Coord) -> Option<PlacedTile> {
@@ -633,6 +637,10 @@ impl MapDocument {
 
     pub fn allows_edit_at(&self, coord: Coord) -> bool {
         !self.read_only && self.is_within_focus(coord) && !self.preview_covered.contains(&coord)
+    }
+
+    pub fn allows_select_at(&self, coord: Coord) -> bool {
+        !self.read_only && self.is_within_focus(coord)
     }
 
     pub fn allows_edit_instance(&self, id: PrefabInstanceId) -> bool {

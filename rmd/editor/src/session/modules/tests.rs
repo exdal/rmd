@@ -14,14 +14,14 @@ use std::{
 
 use dmm::{Coord, Map, MapFormat, Prefab, PrefabInstanceId, Size, writer};
 use editor::{
-    document::{DocumentId, MapDocument},
+    document::{DocumentId, MapDocument, Selection},
     environment::BakeOptions,
     maploader::{
         ErrorKind,
         preview::{ModuleRootPreview, PREVIEW_ID_START},
     },
     progress::Progress,
-    tool::Tool,
+    tool::{BlockSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
 };
 
 use crate::{
@@ -616,6 +616,141 @@ fn covered_tiles_reject_edits_but_undo_still_applies() -> TestResult {
     session.set_modules_enabled(false);
     assert!(session.can_edit_at(coord(2)));
     assert!(session.can_edit_at(coord(3)));
+
+    Ok(())
+}
+
+fn mask(from: u32, to: u32) -> SelectionMask {
+    SelectionMask {
+        bounds: Selection::from_drag(coord(from), coord(to)),
+        mode: BlockSelectionMode::Full,
+    }
+}
+
+fn clipboard_paths(session: &Session) -> Vec<Vec<String>> {
+    let block = session.clipboard().expect("clipboard");
+
+    (0..block.width())
+        .map(|x| {
+            block
+                .tile(x, 0)
+                .map(|tile| tile.iter().map(|prefab| prefab.path.to_string()).collect())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+#[test]
+fn a_preview_atom_can_be_selected_but_not_edited() -> TestResult {
+    let fixture = Fixture::new(&[(2, "outer")])?;
+    let mut session = fixture.session()?;
+    session.set_tool(Tool::Select);
+    let preview = *preview_ids(&session).first().ok_or("no preview atoms")?;
+    let id = session.state.active().ok_or("no active document")?;
+    let expected = session
+        .effective_grid(id)
+        .and_then(|grid| grid.prefab_instance(preview))
+        .map(|instance| instance.prefab().clone())
+        .ok_or("preview prefab is missing")?;
+    let effective_before = (1..=6).map(|x| effective_paths(&session, x)).collect::<Vec<_>>();
+    let source_before = (1..=6).map(|x| source_paths(&session, x)).collect::<Vec<_>>();
+
+    session.select_instance(Some(preview));
+
+    assert_eq!(session.selected_instance(), Some(preview));
+    assert_eq!(session.selected_prefab(), Some(&expected));
+    assert_eq!(session.palette(), Some(&expected));
+    assert!(session.selected_location().is_some());
+    assert!(!session.can_edit_instance(preview));
+    assert!(session.gizmo_transform().is_none());
+
+    let changed = session.set_selected_instance_var("name".into(), Value::Text("renamed".into()));
+    assert_ne!(changed, Some(true));
+    assert_eq!(
+        (1..=6).map(|x| effective_paths(&session, x)).collect::<Vec<_>>(),
+        effective_before
+    );
+    assert_eq!(
+        (1..=6).map(|x| source_paths(&session, x)).collect::<Vec<_>>(),
+        source_before
+    );
+    assert!(!session.undo());
+
+    Ok(())
+}
+
+#[test]
+fn disabling_previews_clears_a_preview_selection() -> TestResult {
+    let fixture = Fixture::new(&[(2, "outer")])?;
+    let mut session = fixture.session()?;
+    let preview = *preview_ids(&session).first().ok_or("no preview atoms")?;
+    session.select_instance(Some(preview));
+    assert_eq!(session.selected_instance(), Some(preview));
+
+    session.set_modules_enabled(false);
+
+    assert_eq!(session.selected_instance(), None);
+
+    Ok(())
+}
+
+#[test]
+fn covered_tiles_can_be_selected_and_copied_but_not_written() -> TestResult {
+    let fixture = Fixture::new(&[(2, "outer")])?;
+    let mut session = fixture.session()?;
+    assert!(!session.can_edit_at(coord(3)));
+    assert!(session.can_select_at(coord(3)));
+    let effective = [effective_paths(&session, 2), effective_paths(&session, 3)];
+    assert_ne!(effective[0], source_paths(&session, 2));
+
+    assert!(session.try_select_block(mask(2, 3)));
+    assert!(session.copy_selection(BlockSelectionMode::Full));
+    let visible = effective
+        .iter()
+        .map(|paths| {
+            paths
+                .iter()
+                .filter(|path| !path.starts_with("/area/"))
+                .cloned()
+                .collect()
+        })
+        .collect::<Vec<Vec<String>>>();
+    assert_eq!(clipboard_paths(&session), visible);
+
+    let effective_before = (1..=6).map(|x| effective_paths(&session, x)).collect::<Vec<_>>();
+    let source_before = (1..=6).map(|x| source_paths(&session, x)).collect::<Vec<_>>();
+    let clipboard = session.clipboard().cloned();
+
+    assert!(!session.cut_selection());
+    assert!(!session.delete_selection());
+    assert!(!session.fill_rect(mask(2, 3)));
+    assert!(!session.place_selected_block_with_mode(
+        coord(5),
+        SelectionRotation::Original,
+        SelectionPlacement::Move,
+        BlockSelectionMode::Full,
+    ));
+    assert!(!session.place_selected_block_with_mode(
+        coord(5),
+        SelectionRotation::Original,
+        SelectionPlacement::Copy,
+        BlockSelectionMode::Full,
+    ));
+    assert_eq!(session.clipboard().cloned(), clipboard);
+    assert_eq!(
+        (1..=6).map(|x| effective_paths(&session, x)).collect::<Vec<_>>(),
+        effective_before
+    );
+    assert_eq!(
+        (1..=6).map(|x| source_paths(&session, x)).collect::<Vec<_>>(),
+        source_before
+    );
+
+    assert!(!session.can_paste_clipboard(coord(1), SelectionRotation::Original));
+    assert!(session.can_paste_clipboard(coord(5), SelectionRotation::Original));
+    assert!(session.paste_clipboard(coord(5), SelectionRotation::Original));
+    assert_eq!(&source_paths(&session, 5)[..visible[0].len()], visible[0]);
+    assert_eq!(&source_paths(&session, 6)[..visible[1].len()], visible[1]);
 
     Ok(())
 }

@@ -63,8 +63,17 @@ impl Session {
             .filter_map(|root| root.key.origin.atom())
             .filter(|id| document.prefab_instance(*id).is_some())
             .collect();
+        let is_selection_stale = document.selected_instance().is_some_and(|selected| {
+            selected.get() >= PREVIEW_ID_START
+                && self
+                    .effective_grid(id)
+                    .is_none_or(|view| view.location(selected).is_none())
+        });
         if let Some(document) = self.state.document_mut(id) {
             document.set_preview_covered(covered, exempt);
+            if is_selection_stale {
+                document.select_instance(None);
+            }
         }
     }
 

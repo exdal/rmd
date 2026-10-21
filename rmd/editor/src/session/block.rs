@@ -33,7 +33,10 @@ impl Session {
                 && mask.bounds.min.z == document.z
                 && mask.bounds.max.x <= document.map.size().x
                 && mask.bounds.max.y <= document.map.size().y
-                && mask.mode.tiles(mask.bounds).all(|coord| document.allows_edit_at(coord))
+                && mask
+                    .mode
+                    .tiles(mask.bounds)
+                    .all(|coord| document.allows_select_at(coord))
         })
     }
 
@@ -57,7 +60,7 @@ impl Session {
                 && selection.max.y <= document.map.size().y
                 && selection_mode
                     .tiles(*selection)
-                    .all(|coord| document.allows_edit_at(coord))
+                    .all(|coord| document.allows_select_at(coord))
         });
         document.set_selection(selection, selection_mode);
         document.select_instance(None);

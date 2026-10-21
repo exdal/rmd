@@ -46,16 +46,19 @@ impl Session {
     }
 
     pub fn selected_prefab(&self) -> Option<&Prefab> {
-        let document = self.state.active_document()?;
-        let selected = document.selected_instance()?;
+        let active = self.state.active()?;
+        let selected = self.state.active_document()?.selected_instance()?;
 
-        document.prefab_instance(selected).map(|instance| instance.prefab())
+        self.effective_grid(active)?
+            .prefab_instance(selected)
+            .map(|instance| instance.prefab())
     }
 
     pub fn selected_location(&self) -> Option<PrefabLocation> {
-        let document = self.state.active_document()?;
+        let active = self.state.active()?;
+        let selected = self.state.active_document()?.selected_instance()?;
 
-        document.instance_location(document.selected_instance()?)
+        self.effective_grid(active)?.location(selected)
     }
 
     pub(crate) fn gizmo_transform(&self) -> Option<SelectedTransform> {
@@ -100,10 +103,10 @@ impl Session {
     }
 
     pub fn select_instance(&mut self, selected: Option<PrefabInstanceId>) {
-        let prefab = self.state.active_document().and_then(|document| {
+        let prefab = self.state.active().and_then(|active| {
             let selected = selected?;
 
-            document
+            self.effective_grid(active)?
                 .prefab_instance(selected)
                 .map(|instance| instance.prefab().clone())
         });

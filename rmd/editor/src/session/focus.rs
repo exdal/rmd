@@ -59,6 +59,12 @@ impl Session {
             .is_none_or(|document| document.allows_edit_at(coord))
     }
 
+    pub fn can_select_at(&self, coord: Coord) -> bool {
+        self.state
+            .active_document()
+            .is_none_or(|document| document.allows_select_at(coord))
+    }
+
     fn set_focus(&mut self, focus: Option<AreaFocus>) {
         if let Some(document) = self.state.active_document_mut() {
             document.set_focus(focus);

@@ -47,8 +47,9 @@ impl Session {
         let hidden = self.hidden_types();
         let Some(block) = self
             .state
-            .active_document()
-            .and_then(|document| clipboard::copy_block(document, selection, mode, hidden))
+            .active()
+            .and_then(|active| self.effective_grid(active))
+            .and_then(|map| clipboard::copy_block(map, selection, mode, hidden))
         else {
             return false;
         };
@@ -83,8 +84,9 @@ impl Session {
         let hidden = self.hidden_types();
         let Some(block) = self
             .state
-            .active_document()
-            .and_then(|document| clipboard::copy_block(document, selection, mode, hidden))
+            .active()
+            .and_then(|active| self.effective_grid(active))
+            .and_then(|map| clipboard::copy_block(map, selection, mode, hidden))
         else {
             return false;
         };
