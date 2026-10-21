@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    fs,
     path::{Component, Path, PathBuf},
 };
 
@@ -28,6 +29,19 @@ pub fn within(root: &Path, name: &str) -> Option<PathBuf> {
     Some(path)
 }
 
+pub fn relative(root: &Path, file: &Path) -> Option<String> {
+    let root = fs::canonicalize(root).ok()?;
+    let file = fs::canonicalize(file).ok()?;
+    let parts = file
+        .strip_prefix(root)
+        .ok()?
+        .components()
+        .map(|part| part.as_os_str().to_str())
+        .collect::<Option<Vec<_>>>()?;
+
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -45,5 +59,24 @@ mod tests {
         assert_eq!(within(root, "_maps/../b.dmm"), Some(PathBuf::from("/tg/b.dmm")));
         assert_eq!(within(root, "../outside.dmm"), None);
         assert_eq!(within(root, "/etc/passwd"), None);
+    }
+
+    #[test]
+    fn relative_paths_use_forward_slashes_and_stay_inside_the_root() {
+        let dir = std::env::temp_dir().join(format!("rmd-relative-{}", std::process::id()));
+        let base = dir.join("base");
+        fs::create_dir_all(base.join("sub")).unwrap();
+        fs::write(base.join("sub/name.dmm"), "").unwrap();
+        fs::write(dir.join("outside.dmm"), "").unwrap();
+
+        assert_eq!(
+            relative(&base, &base.join("sub/name.dmm")).as_deref(),
+            Some("sub/name.dmm")
+        );
+        assert_eq!(relative(&base, &dir.join("outside.dmm")), None);
+        assert_eq!(relative(&base, &base), None);
+        assert_eq!(relative(&base, &base.join("missing.dmm")), None);
+
+        fs::remove_dir_all(&dir).ok();
     }
 }

@@ -64,6 +64,10 @@ impl ModulePreviewState {
         self.compose(ctx, &HashSet::new())
     }
 
+    pub fn has_module_files(&self) -> bool {
+        !self.files.is_empty() || self.preview.as_ref().is_some_and(|preview| !preview.layers.is_empty())
+    }
+
     pub fn uses_file(&self, path: &Path) -> bool {
         self.files.is_loaded(path) || self.preview.as_ref().is_some_and(|preview| preview.uses_file(path))
     }

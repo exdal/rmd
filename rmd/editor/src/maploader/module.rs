@@ -124,6 +124,10 @@ impl ModuleFiles {
             .clone()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty() && self.open.is_empty()
+    }
+
     pub fn is_loaded(&self, path: &Path) -> bool {
         self.entries.contains_key(path)
     }

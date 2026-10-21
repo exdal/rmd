@@ -418,7 +418,10 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
         vm::Limits::default(),
         icons,
         entry.parent().map(Path::to_path_buf),
-        codebase_relative(entry, map_path),
+        entry
+            .canonicalize()
+            .ok()
+            .and_then(|entry| file_path::relative(entry.parent()?, map_path)),
         |_, _, _| {},
     );
     let bake_seconds = bake_started.elapsed().as_secs_f64();
@@ -568,14 +571,6 @@ fn count_lighting_roles(appearance: &vm::AppearanceDelta, roles: &mut [usize; 3]
     for layer in appearance.overlays.iter().chain(&appearance.underlays) {
         count_lighting_roles(layer, roles);
     }
-}
-
-fn codebase_relative(entry: &Path, map_path: &Path) -> Option<String> {
-    let root = entry.canonicalize().ok()?.parent()?.to_path_buf();
-    let map_path = map_path.canonicalize().ok()?;
-    let relative = map_path.strip_prefix(root).ok()?.to_str()?;
-
-    Some(file_path::forward_slashes(relative).into_owned())
 }
 
 fn report_bake_output(bake: &mut vm::bake::Bake) {

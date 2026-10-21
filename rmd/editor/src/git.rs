@@ -1,3 +1,4 @@
+use core::file_path;
 use std::path::{Path, PathBuf};
 
 use dmm::Map;
@@ -197,18 +198,6 @@ pub fn parse_map(blob: Vec<u8>) -> Option<Map> {
     errors.is_empty().then_some(map)
 }
 
-fn relative(root: &Path, file: &Path) -> Option<String> {
-    let root = std::fs::canonicalize(root).ok()?;
-    let file = std::fs::canonicalize(file).ok()?;
-    let rel = file.strip_prefix(root).ok()?;
-    let parts = rel
-        .components()
-        .map(|part| part.as_os_str().to_str())
-        .collect::<Option<Vec<_>>>()?;
-
-    (!parts.is_empty()).then(|| parts.join("/"))
-}
-
 /// Finds the repository that holds `path`. `None` outside a work tree.
 pub fn discover(path: &Path) -> Option<RepoPath> {
     let dir = match path.parent() {
@@ -217,7 +206,7 @@ pub fn discover(path: &Path) -> Option<RepoPath> {
     };
     let repo = gix::discover(dir).ok()?;
     let root = repo.workdir()?.to_path_buf();
-    let rel = relative(&root, path)?;
+    let rel = file_path::relative(&root, path)?;
 
     Some(RepoPath {
         git_dir: repo.git_dir().to_path_buf(),

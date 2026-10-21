@@ -117,19 +117,27 @@
 			continue
 
 		var/list/files = list()
-		var/is_centered = FALSE
+		var/is_centered = null
+		var/is_mixed = FALSE
 		for(var/template_path in candidates)
 			var/datum/map_template/modular/template = template_path
 			if(initial(template.template_width) != root.spawner_width || initial(template.template_height) != root.spawner_height)
 				continue
 
-			if(!length(files))
-				is_centered = initial(template.keepcentered)
+			var/is_template_centered = initial(template.keepcentered)
+			if(isnull(is_centered))
+				is_centered = is_template_centered
+			else if(is_template_centered != is_centered)
+				is_mixed = TRUE
 
 			files += initial(template.mappath)
 
 		if(!length(files))
 			placements += list(list("root" = root, "error" = "no \"[root.mapid]\" template is [root.spawner_width]x[root.spawner_height]"))
+			continue
+
+		if(is_mixed)
+			placements += list(list("root" = root, "error" = "\"[root.mapid]\" templates disagree on keepcentered"))
 			continue
 
 		var/list/placement = list(

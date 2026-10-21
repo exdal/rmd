@@ -1,3 +1,4 @@
+use core::file_path;
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
@@ -30,7 +31,7 @@ use crate::{
     maploader::{
         RootSpecs,
         preview::{ComposeContext, MapView, ModulePreviewState},
-        resolved_path, root_specs,
+        root_specs,
     },
     progress::{Progress, Stage},
 };
@@ -133,19 +134,6 @@ pub fn size(document: &MapDocument) -> [i32; 3] {
     [size.x as i32, size.y as i32, size.z as i32]
 }
 
-pub fn relative_map_path(base_dir: &Path, file: &Path) -> Option<String> {
-    let relative = resolved_path(file)
-        .strip_prefix(resolved_path(base_dir))
-        .ok()?
-        .to_path_buf();
-
-    relative
-        .components()
-        .map(|part| part.as_os_str().to_str())
-        .collect::<Option<Vec<_>>>()
-        .map(|parts| parts.join("/"))
-}
-
 pub fn build_atoms(
     environment: &Environment, atoms: Vec<Atom>, size: [i32; 3], document_path: Option<&Path>, progress: &Progress,
 ) -> Option<Bake> {
@@ -161,7 +149,7 @@ pub fn build_atoms(
         environment.bake_options.limits,
         program.icon_states.clone(),
         Some(environment.base_dir().to_path_buf()),
-        document_path.and_then(|path| relative_map_path(environment.base_dir(), path)),
+        document_path.and_then(|path| file_path::relative(environment.base_dir(), path)),
         report(progress, &mut current),
     ))
 }
@@ -432,7 +420,7 @@ pub fn build_map(
         Some(environment.base_dir().to_path_buf()),
         document_path
             .as_deref()
-            .and_then(|path| relative_map_path(environment.base_dir(), path)),
+            .and_then(|path| file_path::relative(environment.base_dir(), path)),
         report(progress, &mut current),
     );
 
@@ -470,28 +458,6 @@ mod tests {
 
     use super::*;
     use crate::{command::Edit, frame, visual};
-
-    #[test]
-    fn map_path_is_relative_to_the_base_dir_with_forward_slashes() {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "rmd-map-path-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let base = dir.join("base");
-        std::fs::create_dir_all(base.join("sub")).unwrap();
-        std::fs::write(base.join("sub/name.dmm"), "").unwrap();
-        std::fs::write(dir.join("outside.dmm"), "").unwrap();
-
-        assert_eq!(
-            relative_map_path(&base, &base.join("sub/name.dmm")).as_deref(),
-            Some("sub/name.dmm")
-        );
-        assert_eq!(relative_map_path(&base, &dir.join("outside.dmm")), None);
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
 
     fn examples() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env")

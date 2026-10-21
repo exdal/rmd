@@ -72,7 +72,7 @@ pub(super) fn update(
     let mut composer = ModuleComposer {
         preview: ModuleOverlay {
             tiles: previous.map(|preview| preview.tiles.clone()).unwrap_or_default(),
-            covered: HashSet::new(),
+            covered: Arc::default(),
             roots: Vec::new(),
             diagnostics: Vec::new(),
             choices: choices.clone(),
@@ -161,10 +161,13 @@ pub(super) fn update(
         }
     }
 
+    let mut covered = HashSet::new();
     for layer in &preview.layers {
-        preview.covered.extend(layer.cells.keys().copied());
-        preview.covered.extend(layer.marker.map(|(coord, _)| coord));
+        covered.extend(layer.cells.keys().copied());
+        covered.extend(layer.marker.map(|(coord, _)| coord));
     }
+
+    preview.covered = Arc::new(covered);
 
     for coord in dirty {
         preview.tiles.remove(coord);

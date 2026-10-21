@@ -270,16 +270,23 @@ impl Session {
             report_bake_output(bake);
         }
 
+        // keep the order consistent below
+
         self.sync_module_guard(id);
 
-        if let Some(feedback) = self.ui_feedback.clone() {
-            self.replay_ui(id, &feedback);
-        }
+        let is_replayed = self
+            .ui_feedback
+            .clone()
+            .is_some_and(|feedback| self.replay_ui(id, &feedback));
 
         self.collect_bake_diagnostics();
         self.apply_bake_update(id, update);
         self.resize_lighting(id);
-        self.settle_modules(id, Vec::new());
+
+        if is_replayed {
+            self.settle_modules(id, Vec::new());
+        }
+
         self.flush_pending_rebake(id);
         self.bake_new_levels(id);
     }

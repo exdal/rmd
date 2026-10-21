@@ -4,7 +4,10 @@ use std::{
     io::Write,
     mem,
     path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 pub use dmm::PrefabInstanceId;
@@ -80,7 +83,7 @@ pub struct MapDocument {
     generation: u64,
     journal: Option<Journal>,
     read_only: bool,
-    preview_covered: HashSet<Coord>,
+    preview_covered: Arc<HashSet<Coord>>,
     preview_exempt: HashSet<PrefabInstanceId>,
 }
 
@@ -242,7 +245,7 @@ impl MapDocument {
             generation: 0,
             journal: None,
             read_only: false,
-            preview_covered: HashSet::new(),
+            preview_covered: Arc::default(),
             preview_exempt: HashSet::new(),
         }
     }
@@ -642,7 +645,7 @@ impl MapDocument {
             && (self.preview_exempt.contains(&id) || !self.preview_covered.contains(&location.coord))
     }
 
-    pub fn set_preview_covered(&mut self, covered: HashSet<Coord>, exempt: HashSet<PrefabInstanceId>) {
+    pub fn set_preview_covered(&mut self, covered: Arc<HashSet<Coord>>, exempt: HashSet<PrefabInstanceId>) {
         self.preview_covered = covered;
         self.preview_exempt = exempt;
     }

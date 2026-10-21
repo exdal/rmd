@@ -3950,6 +3950,77 @@ fn demir_place_from_ui_is_kept_only_on_a_committed_frame() {
     assert_eq!(bake.modules().count(), 0, "removing the atom drops its entry");
 }
 
+fn place_clicked() -> Feedback {
+    Feedback {
+        clicks: HashSet::from([String::from("Panel/Place")]),
+        interacted: true,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_ui_placement_survives_its_atom_being_reinserted_but_not_removed() {
+    let (tree, module, profile) = place_from_hook("/datum/demir/from_ui");
+    let atoms = vec![root_atom(&tree, 1, "/obj/thing", 1, "a")];
+
+    let mut bake = pending(&tree, &module, profile, atoms).finish_with_progress(|_, _, _| {});
+    bake.ui(&tree, &module, Some(1), 0, place_clicked()).expect("frame");
+    bake.update(&tree, &module, vec![root_atom(&tree, 1, "/obj/thing", 1, "b")], &[]);
+    assert_eq!(module_files(bake.modules()), [(1, vec!["ui.dmm"])]);
+
+    bake.update(&tree, &module, Vec::new(), &[1]);
+    assert_eq!(bake.modules().count(), 0);
+}
+
+#[test]
+fn a_new_placement_survives_its_atom_being_reinserted_but_not_removed() {
+    let (tree, module, profile) = place_from_hook("/datum/demir/from_new");
+    let atoms = vec![root_atom(&tree, 1, "/obj/thing", 1, "a")];
+
+    let mut bake = pending(&tree, &module, profile, atoms).finish_with_progress(|_, _, _| {});
+    bake.update(&tree, &module, vec![root_atom(&tree, 1, "/obj/thing", 1, "b")], &[]);
+    assert_eq!(module_files(bake.modules()), [(1, vec!["new.dmm"])]);
+
+    bake.update(&tree, &module, Vec::new(), &[1]);
+    assert_eq!(bake.modules().count(), 0);
+}
+
+#[test]
+fn a_prepare_placement_is_decided_again_when_its_atom_is_reinserted() {
+    let (tree, module, profile) = place_from_hook("/datum/demir/conditional_prepare");
+    let atoms = vec![root_atom(&tree, 1, "/obj/thing", 1, "place")];
+
+    let mut bake = pending(&tree, &module, profile, atoms).finish_with_progress(|_, _, _| {});
+    assert_eq!(module_files(bake.modules()), [(1, vec!["prepare.dmm"])]);
+
+    bake.update(&tree, &module, vec![root_atom(&tree, 1, "/obj/thing", 1, "skip")], &[]);
+    assert_eq!(bake.modules().count(), 0);
+
+    bake.update(&tree, &module, vec![root_atom(&tree, 1, "/obj/thing", 1, "place")], &[]);
+    assert_eq!(module_files(bake.modules()), [(1, vec!["prepare.dmm"])]);
+}
+
+#[test]
+fn a_ui_placement_on_a_modular_root_survives_a_pass_that_places_nothing() {
+    let (tree, module, profile) = place_from_hook("/datum/demir/ui_on_a_root");
+    let atoms = vec![root_atom(&tree, 1, "/obj/thing", 1, "skip")];
+
+    let mut bake = pending(&tree, &module, profile, atoms).finish_with_progress(|_, _, _| {});
+    assert_eq!(bake.modules().count(), 0);
+
+    bake.ui(&tree, &module, Some(1), 0, place_clicked()).expect("frame");
+    assert_eq!(module_files(bake.modules()), [(1, vec!["ui.dmm"])]);
+
+    bake.update(&tree, &module, vec![root_atom(&tree, 1, "/obj/thing", 1, "skip2")], &[]);
+    assert_eq!(module_files(bake.modules()), [(1, vec!["ui.dmm"])]);
+
+    bake.update(&tree, &module, vec![root_atom(&tree, 1, "/obj/thing", 1, "pass")], &[]);
+    assert_eq!(module_files(bake.modules()), [(1, vec!["pass.dmm"])]);
+
+    bake.update(&tree, &module, vec![root_atom(&tree, 1, "/obj/thing", 1, "skip")], &[]);
+    assert_eq!(bake.modules().count(), 0, "the pass-owned entry is cleared again");
+}
+
 fn coordinate_entries<'a>(
     modules: impl Iterator<Item = (Position, Result<&'a ModuleRoot, &'a str>)>,
 ) -> Vec<(Position, Result<&'a ModuleRoot, &'a str>)> {

@@ -271,6 +271,10 @@ impl Session {
     }
 
     pub fn sync_open_modules(&mut self) {
+        if !self.caches.values().any(|cache| cache.modules.has_module_files()) {
+            return;
+        }
+
         let sources = self
             .state
             .documents()

@@ -445,6 +445,46 @@ fn a_ui_button_can_place_a_module_on_the_selected_atom() -> TestResult {
 }
 
 #[test]
+fn a_ui_placed_module_survives_editing_its_root_and_leaves_with_it() -> TestResult {
+    let fixture = Fixture::new(&[(2, "outer")])?;
+    let mut session = fixture.session_with(PLACEMENTS_PROFILE)?;
+    let id = session.state.active().ok_or("no active document")?;
+    let root = root_at(&session, 2);
+    session
+        .state
+        .document_mut(id)
+        .ok_or("document is missing")?
+        .select_instance(Some(root));
+    session.dm_ui(
+        0,
+        editor::bake::UiFeedback {
+            clicks: ["Panel/Place".to_owned()].into(),
+            interacted: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(session.module_roots().len(), 1);
+
+    assert_eq!(
+        session.set_selected_instance_var("key".into(), Value::Text("edited".into())),
+        Some(true)
+    );
+
+    assert_eq!(session.module_roots().len(), 1);
+    assert!(has(&session, 2, WALL));
+    assert!(preview_ids(&session).iter().all(|id| is_baked(&session, *id)));
+    assert_settled(&session);
+
+    let root = root_at(&session, 2);
+    assert!(session.delete_context_instance(root));
+
+    assert!(session.module_roots().is_empty());
+    assert_settled(&session);
+
+    Ok(())
+}
+
+#[test]
 fn choosing_a_variant_changes_the_view_and_the_bake_without_editing() -> TestResult {
     let fixture = Fixture::new(&[(2, "outer")])?;
     let mut session = fixture.session()?;

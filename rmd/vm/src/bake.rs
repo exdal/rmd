@@ -104,6 +104,25 @@ pub(crate) enum Placement {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlacementOrigin {
+    Hook,
+    Profile,
+}
+
+#[derive(Debug)]
+enum ModuleState {
+    Maps(ModuleRoot),
+    Error(String),
+    Fault(Fault),
+}
+
+#[derive(Debug)]
+struct ModuleEntry {
+    state: ModuleState,
+    origin: PlacementOrigin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PlacementTarget {
     Root(ObjectId),
     At(Position),
@@ -349,9 +368,7 @@ pub struct Bake {
     connection_index: HashMap<String, ConnectionChannel>,
     highlights: HashMap<u64, Vec<Highlight>>,
     highlight_faults: HashMap<u64, Fault>,
-    modules: HashMap<u64, ModuleRoot>,
-    module_faults: HashMap<u64, Fault>,
-    module_errors: HashMap<u64, String>,
+    module_roots: HashMap<u64, ModuleEntry>,
     ui_fault_target: Option<u64>,
     type_groups: HashMap<TypeId, u32>,
     profile: ProfileDefinition,
@@ -458,19 +475,31 @@ impl Bake {
     }
 
     pub fn modules(&self) -> impl Iterator<Item = (u64, &ModuleRoot)> {
-        self.modules.iter().map(|(id, root)| (*id, root))
+        self.module_roots.iter().filter_map(|(id, entry)| match &entry.state {
+            ModuleState::Maps(root) => Some((*id, root)),
+            _ => None,
+        })
     }
 
     pub fn module_faults(&self) -> impl Iterator<Item = (u64, &Fault)> {
-        self.module_faults.iter().map(|(id, fault)| (*id, fault))
+        self.module_roots.iter().filter_map(|(id, entry)| match &entry.state {
+            ModuleState::Fault(fault) => Some((*id, fault)),
+            _ => None,
+        })
     }
 
     pub fn module_fault(&self, id: u64) -> Option<&Fault> {
-        self.module_faults.get(&id)
+        match &self.module_roots.get(&id)?.state {
+            ModuleState::Fault(fault) => Some(fault),
+            _ => None,
+        }
     }
 
     pub fn module_errors(&self) -> impl Iterator<Item = (u64, &str)> {
-        self.module_errors.iter().map(|(id, error)| (*id, error.as_str()))
+        self.module_roots.iter().filter_map(|(id, entry)| match &entry.state {
+            ModuleState::Error(error) => Some((*id, error.as_str())),
+            _ => None,
+        })
     }
 
     pub fn coordinate_modules(&self) -> impl Iterator<Item = (Position, Result<&ModuleRoot, &str>)> {
@@ -479,6 +508,7 @@ impl Bake {
         } else {
             Vec::new()
         };
+
         entries.sort_by_key(|(position, _)| (position.z, position.y, position.x));
 
         entries.into_iter().map(|(position, placement)| {
@@ -566,10 +596,10 @@ impl Bake {
             bake.diagnostics.record(fault);
         } else {
             bake.initialized = true;
-            bake.drain_placements();
+            bake.drain_placements(PlacementOrigin::Profile);
             let ids = bake.sorted_ids();
             bake.module_pass(tree, module, &ids);
-            bake.drain_placements();
+            bake.drain_placements(PlacementOrigin::Hook);
         }
 
         PendingBake { bake, tree, module }
@@ -585,6 +615,7 @@ impl Bake {
             if index.is_multiple_of(4096) {
                 progress(Stage::Prepare, index, total);
             }
+
             self.prepare(tree, module, *id);
         }
 
@@ -594,8 +625,10 @@ impl Bake {
             if index.is_multiple_of(4096) {
                 progress(Stage::Connections, index, total);
             }
+
             self.connect(tree, module, *id);
         }
+
         self.rebuild_connection_index();
         progress(Stage::Connections, total, total);
 
@@ -613,6 +646,7 @@ impl Bake {
             if index.is_multiple_of(4096) {
                 progress(Stage::Light, index, total);
             }
+
             self.light(tree, module, *id);
         }
 
@@ -640,12 +674,13 @@ impl Bake {
             if index.is_multiple_of(4096) {
                 progress(Stage::Smooth, index, total);
             }
+
             self.bake_atom(tree, module, *id, Some(&mut cache));
         }
 
         progress(Stage::Smooth, total, total);
         self.compose();
-        self.drain_placements();
+        self.drain_placements(PlacementOrigin::Hook);
     }
 
     // the new level's atoms go in through `update`
@@ -710,7 +745,7 @@ impl Bake {
         let frame = self
             .runtime
             .ui_frame(tree, module, proc, object, dockspace, feedback, self.limits);
-        self.drain_placements();
+        self.drain_placements(PlacementOrigin::Profile);
         match &frame {
             Err(fault) => {
                 self.ui_fault = Some(fault.clone());
@@ -1090,27 +1125,45 @@ impl Bake {
     }
 
     fn clear_module(&mut self, id: u64) {
-        self.modules.remove(&id);
-        self.module_errors.remove(&id);
-        let Some(previous) = self.module_faults.remove(&id) else {
+        let Some(ModuleEntry {
+            state: ModuleState::Fault(previous),
+            ..
+        }) = self.module_roots.remove(&id)
+        else {
             return;
         };
 
-        let is_shared = self.module_faults.values().any(|other| other.key() == previous.key());
-        if !is_shared {
+        if !self.is_module_fault_shared(&previous) {
             self.diagnostics.remove(&previous);
         }
     }
 
-    fn set_module_fault(&mut self, id: u64, fault: Fault) {
-        let is_shared = self.module_faults.values().any(|other| other.key() == fault.key());
-        if !is_shared {
-            self.diagnostics.record(fault.clone());
+    fn clear_hook_module(&mut self, id: u64) {
+        let is_hook = self
+            .module_roots
+            .get(&id)
+            .is_some_and(|entry| entry.origin == PlacementOrigin::Hook);
+        if is_hook {
+            self.clear_module(id);
         }
-        self.module_faults.insert(id, fault);
     }
 
-    fn drain_placements(&mut self) {
+    fn is_module_fault_shared(&self, fault: &Fault) -> bool {
+        self.module_faults().any(|(_, other)| other.key() == fault.key())
+    }
+
+    fn set_module(&mut self, id: u64, state: ModuleState, origin: PlacementOrigin) {
+        self.clear_module(id);
+        if let ModuleState::Fault(fault) = &state
+            && !self.is_module_fault_shared(fault)
+        {
+            self.diagnostics.record(fault.clone());
+        }
+
+        self.module_roots.insert(id, ModuleEntry { state, origin });
+    }
+
+    fn drain_placements(&mut self, origin: PlacementOrigin) {
         for (object, placement) in self.runtime.pending_placements.take() {
             let Some(id) = self.runtime.heap.object(object).and_then(|object| object.instance) else {
                 continue;
@@ -1120,15 +1173,12 @@ impl Bake {
                 continue;
             }
 
-            self.clear_module(id);
-            match placement {
-                Placement::Maps(root) => {
-                    self.modules.insert(id, root);
-                },
-                Placement::Error(error) => {
-                    self.module_errors.insert(id, error);
-                },
-            }
+            let state = match placement {
+                Placement::Maps(root) => ModuleState::Maps(root),
+                Placement::Error(error) => ModuleState::Error(error),
+            };
+
+            self.set_module(id, state, origin);
         }
     }
 
@@ -1159,27 +1209,25 @@ impl Bake {
         }
 
         for (id, _) in &roots {
-            self.clear_module(*id);
+            self.clear_hook_module(*id);
         }
 
         let objects = roots.iter().map(|(_, object)| *object).collect::<Vec<_>>();
         match self.runtime.placements(tree, module, task, &objects, self.limits) {
             Ok(mut placements) => {
                 for (id, object) in roots {
-                    match placements.remove(&object) {
-                        Some(Placement::Maps(root)) => {
-                            self.modules.insert(id, root);
-                        },
-                        Some(Placement::Error(error)) => {
-                            self.module_errors.insert(id, error);
-                        },
-                        None => {},
-                    }
+                    let state = match placements.remove(&object) {
+                        Some(Placement::Maps(root)) => ModuleState::Maps(root),
+                        Some(Placement::Error(error)) => ModuleState::Error(error),
+                        None => continue,
+                    };
+
+                    self.set_module(id, state, PlacementOrigin::Hook);
                 }
             },
             Err(fault) => {
                 for (id, _) in roots {
-                    self.set_module_fault(id, fault.clone());
+                    self.set_module(id, ModuleState::Fault(fault.clone()), PlacementOrigin::Hook);
                 }
             },
         }
@@ -1433,7 +1481,9 @@ impl Bake {
             .collect::<Vec<_>>();
         remove.sort_unstable();
 
+        let replaced = replacements.iter().map(|atom| atom.instance).collect::<HashSet<_>>();
         for id in &remove {
+            let is_replaced = replaced.contains(id);
             if let Some(atom) = self.atoms.remove(id) {
                 dirty.insert(atom.position);
                 if let Some(lighting) = self.lighting.as_mut() {
@@ -1478,7 +1528,11 @@ impl Bake {
                 self.diagnostics.remove(&fault);
             }
 
-            self.clear_module(*id);
+            if is_replaced {
+                self.clear_hook_module(*id);
+            } else {
+                self.clear_module(*id);
+            }
             self.connection_endpoints.remove(id);
             self.highlights.remove(id);
             self.failed.remove(id);
@@ -1501,7 +1555,7 @@ impl Bake {
 
         if self.initialized {
             self.module_pass(tree, module, &inserted);
-            self.drain_placements();
+            self.drain_placements(PlacementOrigin::Hook);
         }
 
         Replacements {
@@ -1585,7 +1639,8 @@ impl Bake {
                 self.bake_atom(tree, module, *id, None);
             }
         }
-        self.drain_placements();
+
+        self.drain_placements(PlacementOrigin::Hook);
         let mut changed = self.compose();
         changed.extend(remove);
         changed.sort_unstable();
@@ -1686,7 +1741,8 @@ impl Bake {
         for id in selected(request.appearance) {
             self.bake_atom(tree, module, id, None);
         }
-        self.drain_placements();
+
+        self.drain_placements(PlacementOrigin::Hook);
 
         BakeUpdate {
             appearances: self.compose(),
@@ -1857,6 +1913,7 @@ pub(crate) fn placement_entry(
             .ok_or_else(|| evaluator.fault(FaultKind::InvalidReference))?,
         Some(value) => vec![value.clone()],
     };
+
     let mut skip = Vec::new();
     for entry in skipped {
         let GenericValue::Path(path) = &entry else {
@@ -1898,6 +1955,7 @@ pub(crate) fn placement_entry(
         },
         Some(_) => None,
     };
+
     let Some(offset) = offset else {
         return Err(invalid(
             evaluator,
@@ -2130,8 +2188,8 @@ impl Runtime {
 
         let is_changed =
             self.heap.changed() || !self.pending_placements.is_marked_empty() || self.ui.has_modular_preview_request();
-        let committed = interacted && result.is_ok() && is_changed;
-        match committed {
+        let is_committed = interacted && result.is_ok() && is_changed;
+        match is_committed {
             true => self.commit_journal(),
             false => self.rollback_journal(),
         }
@@ -2140,9 +2198,9 @@ impl Runtime {
 
         result.map(|_| crate::ui::Frame {
             commands,
-            committed,
-            rebake: if committed { rebake } else { Default::default() },
-            modular_preview: modular_preview.filter(|_| committed),
+            committed: is_committed,
+            rebake: if is_committed { rebake } else { Default::default() },
+            modular_preview: modular_preview.filter(|_| is_committed),
         })
     }
 
@@ -2220,6 +2278,7 @@ impl Runtime {
             roots: roots.iter().copied().collect(),
             entries: HashMap::new(),
         };
+
         let result = (|| {
             let entries = roots.iter().map(|root| (GenericValue::Object(*root), None)).collect();
             let list = self.heap.alloc_list(ListData::new(entries)).map_err(Fault::detached)?;

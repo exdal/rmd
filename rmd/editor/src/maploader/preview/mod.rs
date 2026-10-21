@@ -123,7 +123,7 @@ impl PreviewIdAllocator {
 pub struct ModuleOverlay {
     tiles: OverlayTiles,
     layers: Vec<Arc<ModuleLayer>>,
-    pub covered: HashSet<Coord>,
+    pub covered: Arc<HashSet<Coord>>,
     pub roots: Vec<ModuleRootPreview>,
     pub diagnostics: Vec<Diagnostic>,
     pub choices: ModuleChoices,
