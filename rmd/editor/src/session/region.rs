@@ -1,3 +1,5 @@
+use std::mem;
+
 use dmm::Coord;
 use editor::{
     command::EditGroupId,
@@ -9,37 +11,96 @@ use editor::{
     },
 };
 
-use super::Session;
+use super::{Session, clipboard::FloatingPaste};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub(super) struct PendingMove {
     document: DocumentId,
     source: SelectionMask,
     state: PendingMoveState,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Default)]
+pub(super) enum RegionState {
+    #[default]
+    Idle,
+    Floating(FloatingPaste),
+    Moving(PendingMove),
+}
+
+// god have a mercy
+impl RegionState {
+    pub(super) fn floating(&self) -> Option<&FloatingPaste> {
+        match self {
+            RegionState::Floating(floating)
+            | RegionState::Moving(PendingMove {
+                state: PendingMoveState::Floating(floating),
+                ..
+            }) => Some(floating),
+            _ => None,
+        }
+    }
+
+    pub(super) fn take_floating(&mut self) -> Option<FloatingPaste> {
+        match mem::take(self) {
+            RegionState::Floating(floating) => Some(floating),
+            RegionState::Moving(mut pending) => {
+                let floating = match mem::replace(&mut pending.state, PendingMoveState::Unmoved) {
+                    PendingMoveState::Floating(floating_paste) => Some(floating_paste),
+                    state => {
+                        pending.state = state;
+
+                        None
+                    },
+                };
+
+                *self = RegionState::Moving(pending);
+
+                floating
+            },
+            other => {
+                *self = other;
+
+                None
+            },
+        }
+    }
+
+    pub(super) fn put_floating(&mut self, floating: FloatingPaste) {
+        match self {
+            RegionState::Moving(pending) => pending.state = PendingMoveState::Floating(floating),
+            RegionState::Idle | RegionState::Floating(_) => *self = RegionState::Floating(floating),
+        }
+    }
+}
+
+#[derive(Debug)]
 enum PendingMoveState {
     Unmoved,
     Moved { group: EditGroupId, target: SelectionMask },
     // a fresh paste follows by pasting again, which puts back what it covered
-    Floating,
+    Floating(FloatingPaste),
 }
 
 impl Session {
-    fn live_pending_move(&self) -> Option<PendingMove> {
-        let pending = self.pending_move?;
+    fn live_pending_move(&self) -> Option<&PendingMove> {
+        let RegionState::Moving(pending) = &self.region_state else {
+            // we only care about moving state
+            return None;
+        };
+
         let document = self.state.active_document()?;
         if document.id() != pending.document {
+            // handled in different doc
             return None;
         }
 
-        let is_live = match pending.state {
+        let is_live = match &pending.state {
             PendingMoveState::Unmoved => self.selection_mask() == Some(pending.source),
             PendingMoveState::Moved { group, target } => {
-                document.history.undo_group() == Some(group) && self.selection_mask() == Some(target)
+                document.history.undo_group() == Some(*group) && self.selection_mask() == Some(*target)
             },
-            PendingMoveState::Floating => self.live_floating_paste().is_some(),
+            PendingMoveState::Floating(floating) => self.is_floating_live(floating),
         };
 
         is_live.then_some(pending)
@@ -50,39 +111,39 @@ impl Session {
     }
 
     pub fn move_selected_region_live(&mut self, target_min: Coord) -> bool {
-        let pending = if self.pending_move.is_some() {
-            let Some(pending) = self.live_pending_move() else {
-                return false;
-            };
+        if !matches!(self.region_state, RegionState::Moving(_)) {
+            // force current region state into pending move
 
-            pending
-        } else {
             let (Some(document), Some(source)) = (self.state.active(), self.selection_mask()) else {
                 return false;
             };
 
-            let state = if self.live_floating_paste().is_some() {
-                PendingMoveState::Floating
-            } else {
-                PendingMoveState::Unmoved
-            };
-            let pending = PendingMove {
+            let state = self
+                .live_floating_paste()
+                .is_some()
+                .then(|| self.region_state.take_floating())
+                .flatten()
+                .map_or(PendingMoveState::Unmoved, PendingMoveState::Floating);
+
+            self.region_state = RegionState::Moving(PendingMove {
                 document,
                 source,
                 state,
-            };
-            self.pending_move = Some(pending);
+            });
             self.hold_bake(document);
+        }
 
-            pending
+        let Some(pending) = self.live_pending_move() else {
+            return false;
         };
 
+        let (document, source) = (pending.document, pending.source);
         if self.selection().is_some_and(|selection| selection.min == target_min) {
             return true;
         }
 
         match pending.state {
-            PendingMoveState::Unmoved => self.commit_pending_move(pending, target_min, &[]),
+            PendingMoveState::Unmoved => self.commit_pending_move(document, source, target_min, &[]),
             PendingMoveState::Moved { group, .. } => {
                 let is_back = target_min == pending.source.bounds.min;
                 if !is_back
@@ -105,19 +166,20 @@ impl Session {
                     return false;
                 };
 
-                if !is_back && self.commit_pending_move(pending, target_min, &retracted) {
+                if !is_back && self.commit_pending_move(document, source, target_min, &retracted) {
                     return true;
                 }
 
-                self.pending_move = Some(PendingMove {
+                self.region_state = RegionState::Moving(PendingMove {
+                    document,
+                    source,
                     state: PendingMoveState::Unmoved,
-                    ..pending
                 });
                 self.settle_retracted(&retracted);
 
                 is_back
             },
-            PendingMoveState::Floating => {
+            PendingMoveState::Floating(_) => {
                 let Some(rotation) = self.live_floating_paste().map(|floating| floating.rotation) else {
                     return false;
                 };
@@ -131,7 +193,7 @@ impl Session {
                     return false;
                 }
 
-                let Some(floating) = self.floating_paste.take() else {
+                let Some(floating) = self.region_state.take_floating() else {
                     return false;
                 };
 
@@ -140,8 +202,10 @@ impl Session {
         }
     }
 
-    fn commit_pending_move(&mut self, pending: PendingMove, target_min: Coord, retracted: &[PrefabInstanceId]) -> bool {
-        let mode = pending.source.mode;
+    fn commit_pending_move(
+        &mut self, document: DocumentId, source: SelectionMask, target_min: Coord, retracted: &[PrefabInstanceId],
+    ) -> bool {
+        let mode = source.mode;
         if !self.can_place_selected_region_with_mode(
             target_min,
             SelectionRotation::Original,
@@ -167,9 +231,10 @@ impl Session {
             return false;
         };
 
-        self.pending_move = Some(PendingMove {
+        self.region_state = RegionState::Moving(PendingMove {
+            document,
+            source,
             state: PendingMoveState::Moved { group, target },
-            ..pending
         });
 
         true
@@ -185,18 +250,23 @@ impl Session {
     }
 
     pub fn finish_live_move(&mut self) {
-        if let Some(pending) = self.pending_move.take() {
-            self.release_bake(pending.document);
+        match mem::take(&mut self.region_state) {
+            RegionState::Moving(pending_move) => {
+                self.release_bake(pending_move.document);
+
+                if let PendingMoveState::Floating(floating_paste) = pending_move.state {
+                    self.region_state = RegionState::Floating(floating_paste)
+                }
+            },
+            state => {
+                self.region_state = state;
+            },
         }
     }
 
     pub fn cancel_live_move(&mut self) {
-        let pending = self.live_pending_move();
-        let Some(document) = self.pending_move.take().map(|pending_move| pending_move.document) else {
-            return;
-        };
-
-        if let Some(pending) = pending {
+        if let Some(pending) = self.live_pending_move() {
+            let source = pending.source;
             match pending.state {
                 PendingMoveState::Unmoved => {},
                 PendingMoveState::Moved { group, .. } => {
@@ -208,19 +278,19 @@ impl Session {
                         self.settle_retracted(&retracted);
                     }
                 },
-                PendingMoveState::Floating => {
+                PendingMoveState::Floating(_) => {
                     if let Some(floating) = self.live_floating_paste()
-                        && floating.target.bounds.min != pending.source.bounds.min
-                        && let Some(floating) = self.floating_paste.take()
+                        && floating.target.bounds.min != source.bounds.min
+                        && let Some(floating) = self.region_state.take_floating()
                     {
                         let rotation = floating.rotation;
-                        self.store_pasted_floating(floating, pending.source.bounds.min, rotation);
+                        self.store_pasted_floating(floating, source.bounds.min, rotation);
                     }
                 },
             }
         }
 
-        self.release_bake(document);
+        self.finish_live_move();
     }
 
     pub fn selection(&self) -> Option<Selection> {
@@ -279,7 +349,8 @@ impl Session {
         });
         document.set_selection(selection, selection_mode);
         document.pick_instance(None);
-        self.floating_paste = None;
+        self.finish_live_move();
+        self.region_state = RegionState::Idle;
 
         selection.is_some()
     }
@@ -296,7 +367,7 @@ impl Session {
             && rotation == SelectionRotation::Original
             && let Some(floating) = self.live_floating_paste()
             && floating.target.mode == selection_mode
-            && let Some(floating) = self.floating_paste.take()
+            && let Some(floating) = self.region_state.take_floating()
         {
             let rotation = floating.rotation;
 
@@ -459,7 +530,7 @@ impl Session {
                 SelectionTransform::MirrorHorizontal | SelectionTransform::MirrorVertical => None,
             };
             if let Some(rotation) = rotation
-                && let Some(floating) = self.floating_paste.take()
+                && let Some(floating) = self.region_state.take_floating()
             {
                 let min = floating.target.bounds.min;
 
@@ -1226,5 +1297,111 @@ mod tests {
 
         session.cancel_live_move();
         assert!(!is_bake_held(&session), "an idle cancel leaves the bake alone");
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum MoveExit {
+        Finish,
+        Cancel,
+        Deselect,
+        Reselect,
+        Paste,
+    }
+
+    #[test]
+    fn every_way_out_of_a_live_move_releases_the_bake() {
+        let paste_at = Coord::new(2, 1, 1);
+        for is_floating in [false, true] {
+            for exit in [
+                MoveExit::Finish,
+                MoveExit::Cancel,
+                MoveExit::Deselect,
+                MoveExit::Reselect,
+                MoveExit::Paste,
+            ] {
+                let case = format!("{exit:?}, is_floating: {is_floating}");
+                let (mut session, _) = table_beside_a_wall(Coord::new(3, 1, 1));
+                assert!(session.copy_tile(Coord::new(1, 1, 1)));
+                if is_floating {
+                    assert!(session.paste_clipboard(Coord::new(4, 1, 1), SelectionRotation::Original));
+                }
+
+                let start = session.selection().unwrap().min;
+                assert!(
+                    session.move_selected_region_live(Coord::new(start.x + 1, 1, 1)),
+                    "{case}"
+                );
+                assert!(is_bake_held(&session), "{case}");
+
+                let is_still_floating = match exit {
+                    MoveExit::Finish => {
+                        session.finish_live_move();
+
+                        is_floating
+                    },
+                    MoveExit::Cancel => {
+                        session.cancel_live_move();
+
+                        is_floating
+                    },
+                    MoveExit::Deselect => {
+                        session.select_region(None);
+
+                        false
+                    },
+                    MoveExit::Reselect => {
+                        let selection = session.selection();
+                        session.select_region(selection);
+
+                        false
+                    },
+                    MoveExit::Paste => {
+                        assert!(session.paste_clipboard(paste_at, SelectionRotation::Original));
+                        assert_eq!(session.selection(), Some(Selection::from_drag(paste_at, paste_at)));
+
+                        true
+                    },
+                };
+
+                assert!(!is_bake_held(&session), "{case}");
+                assert_eq!(session.pending_move_source(), None, "{case}");
+                assert_eq!(session.live_floating_paste().is_some(), is_still_floating, "{case}");
+                assert_render_cache_matches_rebuild(&session);
+            }
+        }
+    }
+
+    #[test]
+    fn a_normal_move_drops_a_stale_float_so_undo_cannot_revive_it() {
+        for is_moved in [false, true] {
+            let (mut session, _) = table_beside_a_wall(Coord::new(3, 1, 1));
+            assert!(session.copy_tile(Coord::new(1, 1, 1)));
+            assert!(session.paste_clipboard(Coord::new(4, 1, 1), SelectionRotation::Original));
+            session
+                .state
+                .choose_prefab(Prefab::new(TreePath::parse("/obj/structure/table")));
+            session.set_tool(Tool::Place);
+            assert!(session.place_at(Coord::new(6, 1, 1), None).is_some());
+            session.set_tool(Tool::Select);
+            assert!(
+                session.live_floating_paste().is_none(),
+                "another edit makes the paste stale"
+            );
+
+            if is_moved {
+                assert!(session.move_selected_region_live(Coord::new(5, 1, 1)));
+                session.finish_live_move();
+                assert_eq!(session.undo_label(), Some("move region"));
+                assert!(session.undo());
+            }
+
+            assert!(session.undo());
+            assert_eq!(session.undo_label(), Some("paste region"));
+            assert_eq!(
+                session.live_floating_paste().is_some(),
+                !is_moved,
+                "undoing back to the paste revives it unless a normal move started in between"
+            );
+        }
     }
 }

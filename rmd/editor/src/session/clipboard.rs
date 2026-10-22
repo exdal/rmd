@@ -6,8 +6,9 @@ use editor::{
     tool::{RegionSelectionMode, SelectionMask, SelectionRotation, ToolEdit},
 };
 
-use super::Session;
+use super::{RegionState, Session};
 
+#[derive(Debug)]
 pub(super) struct FloatingPaste {
     document: DocumentId,
     group: EditGroupId,
@@ -142,7 +143,8 @@ impl Session {
             return false;
         };
 
-        self.floating_paste = Some(floating);
+        self.finish_live_move();
+        self.region_state = RegionState::Floating(floating);
 
         true
     }
@@ -176,7 +178,7 @@ impl Session {
         })
     }
 
-    fn is_floating_live(&self, floating: &FloatingPaste) -> bool {
+    pub(super) fn is_floating_live(&self, floating: &FloatingPaste) -> bool {
         let Some(document) = self.state.active_document() else {
             return false;
         };
@@ -187,7 +189,7 @@ impl Session {
     }
 
     pub(super) fn live_floating_paste(&self) -> Option<&FloatingPaste> {
-        let floating = self.floating_paste.as_ref()?;
+        let floating = self.region_state.floating()?;
 
         self.is_floating_live(floating).then_some(floating)
     }
@@ -227,7 +229,7 @@ impl Session {
         let paste = self.repaste_floating(floating, min, rotation);
         let is_pasted = paste.is_ok();
         let (Ok(floating) | Err(floating)) = paste;
-        self.floating_paste = Some(floating);
+        self.region_state.put_floating(floating);
 
         is_pasted
     }
