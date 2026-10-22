@@ -862,7 +862,7 @@ impl Evaluator<'_> {
                 if let (Some(a), Some(b)) = (origin, query)
                     && (a.z != b.z || a.x.abs_diff(b.x) > 1 || a.y.abs_diff(b.y) > 1)
                 {
-                    self.memo_safe = false;
+                    self.is_cacheable = false;
                 }
 
                 Ok(arg(0)
@@ -899,7 +899,7 @@ impl Evaluator<'_> {
             },
             Intrinsic::Locate => {
                 if args.len() >= 3 || args.len() < 2 {
-                    self.memo_safe = false;
+                    self.is_cacheable = false;
                 }
 
                 if args.len() >= 3 {
@@ -1126,7 +1126,7 @@ impl Evaluator<'_> {
                 self.constant(&value)
             },
             Intrinsic::Ref => {
-                self.memo_safe = false;
+                self.is_cacheable = false;
 
                 self.text(arg(0).display())
             },
@@ -1514,7 +1514,7 @@ impl Evaluator<'_> {
 
         // A bake caches against the 3 by 3 neighbourhood, which anything wider reaches past
         if size.0 > 3 || size.1 > 3 {
-            self.memo_safe = false;
+            self.is_cacheable = false;
         }
 
         let roots = self.tree.roots();
@@ -1527,7 +1527,7 @@ impl Evaluator<'_> {
         let mut entries = Vec::new();
         let mut areas = HashSet::new();
         if is(self, center, roots.area) {
-            self.memo_safe = false;
+            self.is_cacheable = false;
             entries.push(GenericValue::Object(center));
             areas.insert(center);
             let mut positions = self
@@ -1594,7 +1594,7 @@ impl Evaluator<'_> {
 
     /// `block(Start, End)` or `block(x1, y1, z1, x2 = x1, y2 = y1, z2 = z1)`
     fn block(&mut self, args: &[GenericValue]) -> Result<GenericValue> {
-        self.memo_safe = false;
+        self.is_cacheable = false;
         let (start, end) = match args {
             [GenericValue::Object(start), GenericValue::Object(end), ..] => {
                 let world = &self.runtime.world;

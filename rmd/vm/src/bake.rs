@@ -334,7 +334,7 @@ impl Contributions {
 #[derive(Debug)]
 struct Preview {
     values: HashMap<u64, AppearanceDelta>,
-    memo_safe: bool,
+    is_cacheable: bool,
     position_sensitive: bool,
 }
 
@@ -1374,7 +1374,7 @@ impl Bake {
                     .into_iter()
                     .map(|(target, appearance)| (target, shared(appearance)))
                     .collect::<HashMap<_, _>>();
-                if preview.memo_safe
+                if preview.is_cacheable
                     && values.len() == 1
                     && let Some(appearance) = values.get(&id)
                     && let Some(mut key) = key
@@ -2431,7 +2431,7 @@ impl Runtime {
 
             Ok(Preview {
                 values,
-                memo_safe: evaluator.memo_safe,
+                is_cacheable: evaluator.is_cacheable,
                 position_sensitive: evaluator.position_sensitive,
             })
         })();
