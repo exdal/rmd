@@ -338,7 +338,7 @@ fn demir_profile_reaches_the_instance_from_an_ordinary_proc() {
     assert_eq!(baked_state(&bake, 1), Some("lit"));
 }
 
-/// Memo safety is measured against the atom a hook was called about, not against `src`. A profile
+/// Cacheability is measured against the atom a hook was called about, not against `src`. A profile
 /// has no position, so seeding from it would mark every neighbourhood read uncacheable and silently
 /// cost every cache hit in a real bake.
 #[test]
@@ -3242,7 +3242,7 @@ fn evaluation_reports_randomness_and_nonlocal_world_reads() {
         .call(proc(&tree, &module.index, "test"), None, Vec::new())
         .expect("fixture should execute");
     assert!(evaluator.position_sensitive);
-    assert!(!evaluator.memo_safe);
+    assert!(!evaluator.is_cacheable);
 }
 
 #[test]

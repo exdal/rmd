@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use crate::{
-    CodeOffset, ConstantId, FunctionId, LocalId, Module, PathId, StringId,
+    CodeOffset, ConstantId, FunctionId, Module, PathId, RegisterId, StringId,
     opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, OutputTargetKind, Unary},
 };
 
@@ -72,8 +72,8 @@ pub fn dump(module: &Module) -> Result<String, DecodeError> {
             .unwrap_or_default();
         let _ = writeln!(
             output,
-            "{} = function {name} params={} locals={} address={}{}",
-            function.id, function.parameter_count, function.local_count, function.address, intrinsic
+            "{} = function {name} params={} registers={} address={}{}",
+            function.id, function.parameter_count, function.register_count, function.address, intrinsic
         );
         let start = function.address.0 as usize;
         let end = start
@@ -114,138 +114,215 @@ impl Cursor<'_> {
         let mut output = snake_case(op);
 
         match op {
-            Op::Nop
-            | Op::IterNext
-            | Op::IterValue
-            | Op::IterKey
-            | Op::RangeTest
-            | Op::Return
-            | Op::EndSpawn
-            | Op::ReturnValue
-            | Op::Del
-            | Op::Throw
-            | Op::CatchValue
-            | Op::Drop => {},
-            Op::PushConstant => {
+            Op::Nop | Op::Return | Op::EndSpawn => {},
+            Op::MoveConst => {
+                let destination = self.register()?;
                 let id = ConstantId(self.u32()?);
                 let value = self
                     .module
                     .constants
                     .get(id.0 as usize)
                     .ok_or(DecodeError::InvalidConstant(id))?;
-                let _ = write!(output, " {id} ; {value}");
+                let _ = write!(output, " {destination}, {id} ; {value}");
             },
-            Op::LoadLocal | Op::StoreLocal | Op::DefaultParameter => {
-                let _ = write!(output, " {}", LocalId(self.u32()?));
+            Op::Move | Op::DefaultParameter | Op::IterNext | Op::IterValue | Op::IterKey => {
+                let destination = self.register()?;
+                let source = self.register()?;
+                let _ = write!(output, " {destination}, {source}");
             },
-            Op::LoadVariable | Op::StoreVariable | Op::Blocked | Op::Trap => {
+            Op::ReturnValue | Op::Del | Op::Throw | Op::CatchValue => {
+                let _ = write!(output, " {}", self.register()?);
+            },
+            Op::LoadVar => {
+                let destination = self.register()?;
+                let value = string(self.module, StringId(self.u32()?))?;
+                let _ = write!(output, " {destination}, {value}");
+            },
+            Op::StoreVar | Op::InitVar => {
+                let value = string(self.module, StringId(self.u32()?))?;
+                let source = self.register()?;
+                let _ = write!(output, " {value}, {source}");
+            },
+            Op::Blocked | Op::Trap => {
                 let id = StringId(self.u32()?);
                 let value = string(self.module, id)?;
                 let _ = write!(output, " {value}");
             },
-            Op::PushBuiltin | Op::StoreBuiltin => {
+            Op::LoadBuiltin => {
+                let destination = self.register()?;
                 let value = self.enum_operand::<Builtin>("builtin")?;
-                let _ = write!(output, " {}", snake_case(value));
+                let _ = write!(output, " {destination}, {}", snake_case(value));
+            },
+            Op::StoreBuiltin => {
+                let value = self.enum_operand::<Builtin>("builtin")?;
+                let source = self.register()?;
+                let _ = write!(output, " {}, {source}", snake_case(value));
             },
             Op::Interpolate => {
-                let values = self.u32()?;
+                let destination = self.register()?;
+                let value_count = self.u32()?;
                 let chunk_count = self.u32()?;
                 let mut chunks = Vec::with_capacity(chunk_count as usize);
                 for _ in 0..chunk_count {
                     let id = StringId(self.u32()?);
                     chunks.push(format!("{id}=\"{}\"", string(self.module, id)?));
                 }
-                let _ = write!(output, " values={values} chunks=[{}]", chunks.join(", "));
+
+                let values = self.registers(value_count)?;
+                let _ = write!(
+                    output,
+                    " {destination}, chunks=[{}] values=[{values}]",
+                    chunks.join(", ")
+                );
             },
             Op::Unary => {
+                let destination = self.register()?;
                 let value = self.enum_operand::<Unary>("unary")?;
-                let _ = write!(output, " {}", snake_case(value));
+                let source = self.register()?;
+                let _ = write!(output, " {destination}, {} {source}", snake_case(value));
             },
             Op::Binary | Op::CompoundBinary => {
+                let destination = self.register()?;
                 let value = self.enum_operand::<Binary>("binary")?;
-                let _ = write!(output, " {}", snake_case(value));
+                let left = self.register()?;
+                let right = self.register()?;
+                let _ = write!(output, " {destination}, {} {left}, {right}", snake_case(value));
             },
-            Op::AccessField | Op::SetField => {
+            Op::AccessField => {
+                let destination = self.register()?;
                 let name = StringId(self.u32()?);
                 let access = self.enum_operand::<Access>("access")?;
-                let _ = write!(output, " {}{}", access_operator(access), string(self.module, name)?);
-                if op == Op::AccessField && self.boolean()? {
+                let is_method = self.boolean()?;
+                let object = self.register()?;
+                let _ = write!(
+                    output,
+                    " {destination}, {object}{}{}",
+                    access_operator(access),
+                    string(self.module, name)?
+                );
+                if is_method {
                     output.push_str(" method");
                 }
             },
-            Op::Initial => {
-                let has_object = self.boolean()?;
+            Op::SetField => {
                 let name = StringId(self.u32()?);
-                let prefix = if has_object { "." } else { "" };
-                let _ = write!(output, " {prefix}{}", string(self.module, name)?);
+                let access = self.enum_operand::<Access>("access")?;
+                let object = self.register()?;
+                let value = self.register()?;
+                let _ = write!(
+                    output,
+                    " {object}{}{}, {value}",
+                    access_operator(access),
+                    string(self.module, name)?
+                );
+            },
+            Op::Initial => {
+                let destination = self.register()?;
+                let has_object = self.boolean()?;
+                let name = string(self.module, StringId(self.u32()?))?;
+                if has_object {
+                    let object = self.register()?;
+                    let _ = write!(output, " {destination}, {object}.{name}");
+                } else {
+                    let _ = write!(output, " {destination}, {name}");
+                }
             },
             Op::Index => {
-                if self.boolean()? {
+                let destination = self.register()?;
+                let is_conditional = self.boolean()?;
+                let object = self.register()?;
+                let index = self.register()?;
+                let _ = write!(output, " {destination}, {object}[{index}]");
+                if is_conditional {
                     output.push_str(" conditional");
                 }
             },
             Op::SetIndex => {
-                if self.boolean()? {
+                let is_conditional = self.boolean()?;
+                let object = self.register()?;
+                let index = self.register()?;
+                let value = self.register()?;
+                let _ = write!(output, " {object}[{index}], {value}");
+                if is_conditional {
                     output.push_str(" conditional");
                 }
             },
             Op::Output => match self.enum_operand::<OutputTargetKind>("output target")? {
-                OutputTargetKind::Value => output.push_str(" value"),
+                OutputTargetKind::Value => {
+                    let target = self.register()?;
+                    let value = self.register()?;
+                    let _ = write!(output, " value {target}, {value}");
+                },
                 OutputTargetKind::Field => {
                     let name = StringId(self.u32()?);
                     let access = self.enum_operand::<Access>("access")?;
+                    let object = self.register()?;
+                    let value = self.register()?;
                     let _ = write!(
                         output,
-                        " field {}{}",
+                        " field {object}{}{}, {value}",
                         access_operator(access),
                         string(self.module, name)?
                     );
                 },
                 OutputTargetKind::Index => {
-                    output.push_str(" index");
-
-                    if self.boolean()? {
+                    let is_conditional = self.boolean()?;
+                    let object = self.register()?;
+                    let index = self.register()?;
+                    let value = self.register()?;
+                    let _ = write!(output, " index {object}[{index}], {value}");
+                    if is_conditional {
                         output.push_str(" conditional");
                     }
                 },
             },
             Op::MakeList => {
+                let destination = self.register()?;
                 let layout = self.argument_layout()?;
-                let _ = write!(output, " {layout}");
+                let _ = write!(output, " {destination}, {layout}");
             },
             Op::Call => {
+                let destination = self.register()?;
+                let is_conditional = self.boolean()?;
+                let callee = self.register()?;
                 let layout = self.argument_layout()?;
-                let _ = write!(output, " {layout}");
-
-                if self.boolean()? {
+                let _ = write!(output, " {destination}, {callee} {layout}");
+                if is_conditional {
                     output.push_str(" conditional");
                 }
             },
             Op::SuperCall => {
+                let destination = self.register()?;
+                let forwards_extra_args = self.boolean()?;
                 let layout = self.argument_layout()?;
-                let _ = write!(output, " {layout}");
-
-                if self.boolean()? {
+                let _ = write!(output, " {destination}, {layout}");
+                if forwards_extra_args {
                     output.push_str(" extra_args");
                 }
             },
             Op::FunctionCall => {
+                let destination = self.register()?;
                 let function = FunctionId(self.u32()?);
                 if self.module.function(function).is_none() {
                     return Err(DecodeError::InvalidFunctionOperand(function));
                 }
+
                 let layout = self.argument_layout()?;
-                let _ = write!(output, " {function} {layout}");
+                let _ = write!(output, " {destination}, {function} {layout}");
             },
             Op::New => {
+                let destination = self.register()?;
                 let has_type = self.boolean()?;
-                let layout = self.argument_layout()?;
+                let _ = write!(output, " {destination},");
                 if has_type {
-                    output.push_str(" typed");
+                    let _ = write!(output, " {}", self.register()?);
                 }
+
+                let layout = self.argument_layout()?;
                 let _ = write!(output, " {layout}");
             },
             Op::ModifiedType => {
+                let destination = self.register()?;
                 let path = PathId(self.u32()?);
                 let value = self
                     .module
@@ -253,29 +330,65 @@ impl Cursor<'_> {
                     .get(path.0 as usize)
                     .ok_or(DecodeError::InvalidPath(path))?;
                 let count = self.u32()?;
-                let mut names = Vec::with_capacity(count as usize);
+                let mut overrides = Vec::with_capacity(count as usize);
                 for _ in 0..count {
-                    names.push(string(self.module, StringId(self.u32()?))?);
+                    let name = string(self.module, StringId(self.u32()?))?;
+                    overrides.push(format!("{name}={}", self.register()?));
                 }
-                let _ = write!(output, " {path}={value} overrides=[{}]", names.join(", "));
+
+                let _ = write!(
+                    output,
+                    " {destination}, {path}={value} overrides=[{}]",
+                    overrides.join(", ")
+                );
             },
             Op::Pick => {
+                let destination = self.register()?;
                 let count = self.u32()?;
                 let mut choices = Vec::with_capacity(count as usize);
                 for _ in 0..count {
-                    choices.push(match self.boolean()? {
-                        true => "weighted",
-                        false => "plain",
-                    });
+                    let choice = if self.boolean()? {
+                        let weight = self.register()?;
+                        format!("{weight}: {}", self.register()?)
+                    } else {
+                        self.register()?.to_string()
+                    };
+                    choices.push(choice);
                 }
-                let _ = write!(output, " [{}]", choices.join(", "));
+
+                let _ = write!(output, " {destination}, [{}]", choices.join(", "));
             },
-            Op::InRange | Op::Range => {
-                if self.boolean()? {
-                    output.push_str(" step");
+            Op::InRange => {
+                let destination = self.register()?;
+                let has_step = self.boolean()?;
+                let value = self.register()?;
+                let start = self.register()?;
+                let end = self.register()?;
+                let _ = write!(output, " {destination}, {value} in {start} to {end}");
+                if has_step {
+                    let _ = write!(output, " step {}", self.register()?);
                 }
+            },
+            Op::Range => {
+                let destination = self.register()?;
+                let has_step = self.boolean()?;
+                let start = self.register()?;
+                let end = self.register()?;
+                let _ = write!(output, " {destination}, {start} to {end}");
+                if has_step {
+                    let _ = write!(output, " step {}", self.register()?);
+                }
+            },
+            Op::RangeTest => {
+                let destination = self.register()?;
+                let current = self.register()?;
+                let end = self.register()?;
+                let step = self.register()?;
+                let _ = write!(output, " {destination}, {current}, {end}, {step}");
             },
             Op::IterInit => {
+                let destination = self.register()?;
+                let _ = write!(output, " {destination},");
                 if self.boolean()? {
                     let path = PathId(self.u32()?);
                     let value = self
@@ -283,15 +396,22 @@ impl Cursor<'_> {
                         .paths
                         .get(path.0 as usize)
                         .ok_or(DecodeError::InvalidPath(path))?;
-                    let _ = write!(output, " ty={path} ; {value}");
+                    let _ = write!(output, " ty={path}={value}");
                 }
 
-                if self.boolean()? {
+                let is_associated = self.boolean()?;
+                let _ = write!(output, " {}", self.register()?);
+                if is_associated {
                     output.push_str(" values=associated");
                 }
             },
-            Op::Jump | Op::JumpIfFalse => {
+            Op::Jump => {
                 let _ = write!(output, " {}", CodeOffset(self.u32()?));
+            },
+            Op::JumpIfFalse => {
+                let target = CodeOffset(self.u32()?);
+                let condition = self.register()?;
+                let _ = write!(output, " {target}, {condition}");
             },
             Op::TryCatch => {
                 let body = CodeOffset(self.u32()?);
@@ -303,20 +423,22 @@ impl Cursor<'_> {
                 let body = CodeOffset(self.u32()?);
                 let _ = write!(output, " body={body}");
             },
-            Op::InitializeVariable => {
-                let id = StringId(self.u32()?);
-                let value = string(self.module, id)?;
-
-                let _ = write!(output, " {}", value);
-            },
         }
 
         Ok(output)
     }
 
+    fn registers(&mut self, count: u32) -> Result<String, DecodeError> {
+        let registers = (0..count)
+            .map(|_| self.register().map(|register| register.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(registers.join(", "))
+    }
+
     fn argument_layout(&mut self) -> Result<String, DecodeError> {
         let count = self.u32()?;
-        let mut shapes = Vec::with_capacity(count as usize);
+        let mut args = Vec::with_capacity(count as usize);
         for _ in 0..count {
             let shape = self.u8()?;
             if shape & !(ARGUMENT_KEY | ARGUMENT_VALUE) != 0 {
@@ -326,15 +448,26 @@ impl Cursor<'_> {
                     value: shape,
                 });
             }
-            shapes.push(match shape {
-                0 => "-",
-                ARGUMENT_KEY => "key",
-                ARGUMENT_VALUE => "value",
-                _ => "key_value",
+
+            let key = if shape & ARGUMENT_KEY != 0 {
+                Some(self.register()?)
+            } else {
+                None
+            };
+            let value = if shape & ARGUMENT_VALUE != 0 {
+                Some(self.register()?)
+            } else {
+                None
+            };
+            args.push(match (key, value) {
+                (Some(key), Some(value)) => format!("{key}={value}"),
+                (Some(key), None) => format!("{key}="),
+                (None, Some(value)) => value.to_string(),
+                (None, None) => "-".to_owned(),
             });
         }
 
-        Ok(format!("args=[{}]", shapes.join(", ")))
+        Ok(format!("args=[{}]", args.join(", ")))
     }
 
     fn boolean(&mut self) -> Result<bool, DecodeError> {
@@ -369,6 +502,26 @@ impl Cursor<'_> {
         self.position += 1;
 
         Ok(value)
+    }
+
+    fn u16(&mut self) -> Result<u16, DecodeError> {
+        let end = self
+            .position
+            .checked_add(2)
+            .ok_or(DecodeError::Truncated(self.instruction))?;
+        let bytes = self
+            .module
+            .code
+            .get(self.position..end)
+            .filter(|_| end <= self.end)
+            .ok_or(DecodeError::Truncated(self.instruction))?;
+        self.position = end;
+
+        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
+    }
+
+    fn register(&mut self) -> Result<RegisterId, DecodeError> {
+        self.u16().map(RegisterId)
     }
 
     fn u32(&mut self) -> Result<u32, DecodeError> {
