@@ -2,7 +2,7 @@ use dmm::{Coord, Prefab, Size};
 use editor::{
     document::{DocumentId, PrefabInstanceId, Selection},
     focus::AreaFocus,
-    frame::{self, FrameInstances, FrameRenderOptions, PrefabUpdate},
+    frame::{self, FrameInstances, FrameRenderOptions, HiddenTypes, PrefabUpdate},
 };
 use objtree::{Roots, TypeId};
 use render::{Frame, GuideLine, MapViewFrame, MapViewInteraction, MapViewRect, SpritePreview};
@@ -83,6 +83,19 @@ impl Session {
         }
 
         changed
+    }
+
+    pub(super) fn hidden_types(&self) -> HiddenTypes {
+        let Some(environment) = self.state.environment.as_ref() else {
+            return HiddenTypes::default();
+        };
+
+        let hidden = self.type_visibility.hidden_types(&environment.tree);
+        if self.options.show_areas {
+            return hidden;
+        }
+
+        hidden.with_areas(environment.area_paths())
     }
 
     pub fn toggle_type_visibility(&mut self, id: TypeId) -> bool {

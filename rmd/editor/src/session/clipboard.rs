@@ -3,7 +3,6 @@ use editor::{
     clipboard::{self, TileRegion},
     command::EditGroupId,
     document::{DocumentId, Selection},
-    frame::HiddenTypes,
     tool::{RegionSelectionMode, SelectionMask, SelectionRotation, ToolEdit},
 };
 
@@ -18,17 +17,12 @@ pub(super) struct FloatingPaste {
 }
 
 impl Session {
-    pub(super) fn hidden_types(&self) -> HiddenTypes {
-        let Some(environment) = self.state.environment.as_ref() else {
-            return HiddenTypes::default();
-        };
-
-        let hidden = self.type_visibility.hidden_types(&environment.tree);
-        if self.options.show_areas {
-            return hidden;
-        }
-
-        hidden.with_areas(environment.area_paths())
+    fn read_region(&self, selection: Selection, mode: RegionSelectionMode) -> Option<TileRegion> {
+        let hidden = self.hidden_types();
+        self.state
+            .active()
+            .and_then(|active| self.effective_grid(active))
+            .and_then(|map| clipboard::copy_region(map, selection, mode, hidden))
     }
 
     pub fn copy_selection(&mut self, mode: RegionSelectionMode) -> bool {
@@ -44,15 +38,10 @@ impl Session {
     }
 
     fn copy_region(&mut self, selection: Selection, mode: RegionSelectionMode) -> bool {
-        let hidden = self.hidden_types();
-        let Some(region) = self
-            .state
-            .active()
-            .and_then(|active| self.effective_grid(active))
-            .and_then(|map| clipboard::copy_region(map, selection, mode, hidden))
-        else {
+        let Some(region) = self.read_region(selection, mode) else {
             return false;
         };
+
         self.state.set_clipboard(region);
 
         true
@@ -78,16 +67,11 @@ impl Session {
     }
 
     fn cut_region(&mut self, selection: Selection, mode: RegionSelectionMode, label: &str) -> bool {
-        let Some(action) = self.build_clear(selection, mode, label) else {
+        let Some(region) = self.read_region(selection, mode) else {
             return false;
         };
-        let hidden = self.hidden_types();
-        let Some(region) = self
-            .state
-            .active()
-            .and_then(|active| self.effective_grid(active))
-            .and_then(|map| clipboard::copy_region(map, selection, mode, hidden))
-        else {
+
+        let Some(action) = self.build_clear(selection, mode, label) else {
             return false;
         };
 
@@ -190,32 +174,36 @@ impl Session {
         true
     }
 
-    pub(super) fn live_floating_paste(&self) -> Option<&FloatingPaste> {
-        let floating = self.floating_paste.as_ref()?;
-        let document = self.state.active_document()?;
-
-        (document.id() == floating.document
-            && document.history.undo_group() == Some(floating.group)
-            && self.selection_mask() == Some(floating.target))
-        .then_some(floating)
-    }
-
-    pub(super) fn repaste_floating(&mut self, min: Coord, rotation: SelectionRotation) -> bool {
-        let Some(floating) = self.live_floating_paste() else {
+    fn is_floating_live(&self, floating: &FloatingPaste) -> bool {
+        let Some(document) = self.state.active_document() else {
             return false;
         };
 
-        if !self
-            .state
-            .active_document()
-            .is_some_and(|document| clipboard::can_paste(document, &floating.region, min, rotation))
-        {
+        document.id() == floating.document
+            && document.history.undo_group() == Some(floating.group)
+            && self.selection_mask() == Some(floating.target)
+    }
+
+    pub(super) fn live_floating_paste(&self) -> Option<&FloatingPaste> {
+        let floating = self.floating_paste.as_ref()?;
+
+        self.is_floating_live(floating).then_some(floating)
+    }
+
+    pub(super) fn repaste_floating(&mut self, min: Coord, rotation: SelectionRotation) -> bool {
+        let Some(document) = self.state.active_document() else {
             return false;
-        }
+        };
 
         let Some(floating) = self.floating_paste.take() else {
             return false;
         };
+
+        if !self.is_floating_live(&floating) || !clipboard::can_paste(document, &floating.region, min, rotation) {
+            self.floating_paste = Some(floating);
+
+            return false;
+        }
 
         if !self.undo() {
             self.floating_paste = Some(floating);
