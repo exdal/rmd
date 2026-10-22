@@ -122,12 +122,20 @@ impl Session {
                     return false;
                 };
 
-                self.can_place_selected_region_with_mode(
+                if !self.can_place_selected_region_with_mode(
                     target_min,
                     SelectionRotation::Original,
                     SelectionPlacement::Move,
                     pending.source.mode,
-                ) && self.repaste_floating(target_min, rotation)
+                ) {
+                    return false;
+                }
+
+                let Some(floating) = self.floating_paste.take() else {
+                    return false;
+                };
+
+                self.store_pasted_floating(floating, target_min, rotation)
             },
         }
     }
@@ -203,8 +211,10 @@ impl Session {
                 PendingMoveState::Floating => {
                     if let Some(floating) = self.live_floating_paste()
                         && floating.target.bounds.min != pending.source.bounds.min
+                        && let Some(floating) = self.floating_paste.take()
                     {
-                        self.repaste_floating(pending.source.bounds.min, floating.rotation);
+                        let rotation = floating.rotation;
+                        self.store_pasted_floating(floating, pending.source.bounds.min, rotation);
                     }
                 },
             }
@@ -286,8 +296,11 @@ impl Session {
             && rotation == SelectionRotation::Original
             && let Some(floating) = self.live_floating_paste()
             && floating.target.mode == selection_mode
+            && let Some(floating) = self.floating_paste.take()
         {
-            return self.repaste_floating(target_min, floating.rotation);
+            let rotation = floating.rotation;
+
+            return self.store_pasted_floating(floating, target_min, rotation);
         }
 
         self.commit_region_placement(target_min, rotation, placement, selection_mode, None, &[])
@@ -445,8 +458,12 @@ impl Session {
                 SelectionTransform::RotateCounterClockwise => Some(floating.rotation.counter_clockwise()),
                 SelectionTransform::MirrorHorizontal | SelectionTransform::MirrorVertical => None,
             };
-            if let Some(rotation) = rotation {
-                return self.repaste_floating(floating.target.bounds.min, rotation);
+            if let Some(rotation) = rotation
+                && let Some(floating) = self.floating_paste.take()
+            {
+                let min = floating.target.bounds.min;
+
+                return self.store_pasted_floating(floating, min, rotation);
             }
         }
 

@@ -138,20 +138,24 @@ impl Session {
             return false;
         };
 
-        self.paste_floating(region, min, rotation)
+        let Some(floating) = self.paste_floating(region, min, rotation) else {
+            return false;
+        };
+
+        self.floating_paste = Some(floating);
+
+        true
     }
 
-    fn paste_floating(&mut self, region: TileRegion, min: Coord, rotation: SelectionRotation) -> bool {
+    fn paste_floating(&mut self, region: TileRegion, min: Coord, rotation: SelectionRotation) -> Option<FloatingPaste> {
         let built = {
-            let Some((environment, document)) = self.state.active_pair_mut() else {
-                return false;
-            };
+            let (environment, document) = self.state.active_pair_mut()?;
 
             clipboard::paste_region(document, &environment.tree, &region, min, rotation)
         };
 
         let (Some((action, bounds)), Some(document)) = (built, self.state.active()) else {
-            return false;
+            return None;
         };
 
         let group = EditGroupId::new();
@@ -160,18 +164,16 @@ impl Session {
             mode: region.selection_mode(),
         };
         if !self.commit_selecting(action, target, Some(group)) {
-            return false;
+            return None;
         }
 
-        self.floating_paste = Some(FloatingPaste {
+        Some(FloatingPaste {
             document,
             group,
             region,
             rotation,
             target,
-        });
-
-        true
+        })
     }
 
     fn is_floating_live(&self, floating: &FloatingPaste) -> bool {
@@ -190,35 +192,44 @@ impl Session {
         self.is_floating_live(floating).then_some(floating)
     }
 
-    pub(super) fn repaste_floating(&mut self, min: Coord, rotation: SelectionRotation) -> bool {
+    /// This function returns paste depending on the paste result:
+    /// Old paste on err (aka paste failed), new paste on success (aka new paste returned from paste_floating)
+    #[allow(clippy::result_large_err)]
+    pub(super) fn repaste_floating(
+        &mut self, floating: FloatingPaste, min: Coord, rotation: SelectionRotation,
+    ) -> Result<FloatingPaste, FloatingPaste> {
         let Some(document) = self.state.active_document() else {
-            return false;
-        };
-
-        let Some(floating) = self.floating_paste.take() else {
-            return false;
+            return Err(floating);
         };
 
         if !self.is_floating_live(&floating) || !clipboard::can_paste(document, &floating.region, min, rotation) {
-            self.floating_paste = Some(floating);
-
-            return false;
+            return Err(floating);
         }
 
         if !self.undo() {
-            self.floating_paste = Some(floating);
-
-            return false;
+            return Err(floating);
         }
 
-        if self.paste_floating(floating.region.clone(), min, rotation) {
-            return true;
+        // TODO: This deep copies entire region, get rid of it
+        let region = floating.region.clone();
+        if let Some(new_floating) = self.paste_floating(region, min, rotation) {
+            return Ok(new_floating);
         }
 
         self.redo();
+
+        Err(floating)
+    }
+
+    pub(super) fn store_pasted_floating(
+        &mut self, floating: FloatingPaste, min: Coord, rotation: SelectionRotation,
+    ) -> bool {
+        let paste = self.repaste_floating(floating, min, rotation);
+        let is_pasted = paste.is_ok();
+        let (Ok(floating) | Err(floating)) = paste;
         self.floating_paste = Some(floating);
 
-        false
+        is_pasted
     }
 }
 
