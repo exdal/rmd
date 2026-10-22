@@ -2,7 +2,6 @@ pub mod disasm;
 pub mod error;
 pub mod opcode;
 mod reachability;
-mod stackify;
 
 use core::{
     location::{LineTable, Location, SourceLine},
@@ -13,26 +12,28 @@ use std::collections::VecDeque;
 
 pub use error::CodegenError;
 pub use ir::ProcIndex;
-use ir::{Argument, Interpolation, IrNode, OutputTarget, Procedure};
+use ir::{Argument, IrNode, OutputTarget, Procedure};
 use objtree::ObjectTree;
-use opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, OutputTargetKind, Unary};
+use opcode::{Access, Binary, Builtin, Op, Unary};
 use prelude::Intrinsic;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, OutputTargetKind};
+
 macro_rules! id_type {
-    ($name:ident, $prefix:literal) => {
+    ($name:ident, $repr:ty, $prefix:literal) => {
         #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-        pub struct $name(pub u32);
+        pub struct $name(pub $repr);
 
         impl $name {
-            pub const INVALID: Self = Self(u32::MAX);
+            pub const INVALID: Self = Self(<$repr>::MAX);
 
             pub const fn is_valid(self) -> bool {
-                self.0 != u32::MAX
+                self.0 != <$repr>::MAX
             }
 
             pub const fn is_invalid(self) -> bool {
-                self.0 == u32::MAX
+                self.0 == <$repr>::MAX
             }
         }
 
@@ -53,11 +54,11 @@ macro_rules! id_type {
     };
 }
 
-id_type!(FunctionId, "fn");
-id_type!(LocalId, "local");
-id_type!(ConstantId, "const");
-id_type!(StringId, "str");
-id_type!(PathId, "path");
+id_type!(FunctionId, u32, "fn");
+id_type!(RegisterId, u16, "r");
+id_type!(ConstantId, u32, "const");
+id_type!(StringId, u32, "str");
+id_type!(PathId, u32, "path");
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CodeOffset(pub u32);
@@ -106,7 +107,7 @@ pub struct Module {
 
 impl Module {
     pub const MAGIC: [u8; 4] = *b"DMIR";
-    pub const VERSION: u16 = 2;
+    pub const VERSION: u16 = 3;
 
     pub fn function(&self, id: FunctionId) -> Option<&CompiledFunction> {
         self.functions.get(id.0 as usize)
@@ -156,7 +157,7 @@ pub struct CompiledFunction {
     pub address: CodeOffset,
     pub length: u32,
     pub parameter_count: u32,
-    pub local_count: u32,
+    pub register_count: u16,
     pub external: bool,
     pub intrinsic: Option<Intrinsic>,
     pub location: Location,
@@ -216,38 +217,40 @@ struct EdgeStub {
 
 struct FunctionState {
     blocks: Vec<IrNodeId>,
-    locals: FxHashMap<IrNodeId, LocalId>,
-    parameter_defaults: FxHashMap<IrNodeId, LocalId>,
-    next_local: u32,
-    stackify: stackify::Stackify,
+    registers: FxHashMap<IrNodeId, RegisterId>,
+    parameter_defaults: FxHashMap<IrNodeId, RegisterId>,
+    phi_temporaries: FxHashMap<IrNodeId, RegisterId>,
+    next_register: u16,
 }
 
 impl FunctionState {
-    fn reserve(&mut self, node: IrNodeId) -> LocalId {
-        if let Some(local) = self.locals.get(&node) {
-            return *local;
+    fn fresh(&mut self) -> Result<RegisterId, CodegenError> {
+        let register = RegisterId(self.next_register);
+        if register.is_invalid() {
+            return Err(CodegenError::TooManyRegisters);
         }
 
-        let local = LocalId(self.next_local);
-        self.next_local += 1;
-        self.locals.insert(node, local);
+        self.next_register += 1;
 
-        local
+        Ok(register)
     }
 
-    fn local(&self, node: IrNodeId) -> Result<LocalId, CodegenError> {
-        self.locals.get(&node).copied().ok_or(CodegenError::MissingLocal(node))
-    }
-
-    fn assigned_local(&self, node: IrNodeId) -> Option<LocalId> {
-        self.locals.get(&node).copied()
-    }
-
-    fn assign_local(&mut self, node: IrNodeId, local: LocalId) {
-        let previous = self.locals.insert(node, local);
-        if let Some(previous) = previous {
-            debug_assert_eq!(previous, local);
+    fn reserve(&mut self, node: IrNodeId) -> Result<RegisterId, CodegenError> {
+        if let Some(register) = self.registers.get(&node) {
+            return Ok(*register);
         }
+
+        let register = self.fresh()?;
+        self.registers.insert(node, register);
+
+        Ok(register)
+    }
+
+    fn register(&self, node: IrNodeId) -> Result<RegisterId, CodegenError> {
+        self.registers
+            .get(&node)
+            .copied()
+            .ok_or(CodegenError::MissingRegister(node))
     }
 }
 
@@ -387,7 +390,7 @@ impl Generator {
                 address: CodeOffset::INVALID,
                 length: 0,
                 parameter_count: proc.parameters.len() as u32,
-                local_count: 0,
+                register_count: 0,
                 external: false,
                 intrinsic: proc.intrinsic,
                 location: proc.location,
@@ -416,7 +419,7 @@ impl Generator {
                 address: CodeOffset::INVALID,
                 length: 0,
                 parameter_count: 0,
-                local_count: 0,
+                register_count: 0,
                 external: true,
                 intrinsic: None,
                 location: Location::default(),
@@ -429,47 +432,88 @@ impl Generator {
     fn generate_function(&mut self, module: &ir::Module, proc: &Procedure) -> Result<(), CodegenError> {
         let blocks = reachable_blocks(module, proc.body)?;
         let layout = block_layout(module, proc.body, &blocks)?;
-        let stackify = stackify::Stackify::analyze(module, proc, &blocks)?;
         let mut state = FunctionState {
             blocks,
-            locals: FxHashMap::default(),
+            registers: FxHashMap::default(),
             parameter_defaults: FxHashMap::default(),
-            next_local: 0,
-            stackify,
+            phi_temporaries: FxHashMap::default(),
+            next_register: 0,
         };
 
         for parameter in &proc.parameters {
-            state.reserve(*parameter);
+            state.reserve(*parameter)?;
         }
 
+        let mut constants = Vec::new();
         let mut constant_defaults = Vec::new();
         for (index, parameter) in proc.params.iter().enumerate() {
             let Some(default) = parameter.default else {
                 continue;
             };
-            let destination = state.local(proc.parameters[index])?;
+
+            let destination = state.register(proc.parameters[index])?;
             if matches!(module.node(default), Some(IrNode::Constant(_))) {
+                constants.push(default);
                 constant_defaults.push((default, destination));
             } else {
                 state.parameter_defaults.insert(default, destination);
             }
         }
 
-        assign_phi_locals(module, &mut state)?;
+        for block in &state.blocks {
+            for instruction in module.block(*block).ok_or(CodegenError::ExpectedBlock(*block))? {
+                let node = module
+                    .node(*instruction)
+                    .ok_or(CodegenError::MissingNode(*instruction))?;
+                node.for_each_operand(|operand| {
+                    if matches!(module.node(operand), Some(IrNode::Constant(_))) {
+                        constants.push(operand);
+                    }
+                });
+            }
+        }
+
+        for constant in &constants {
+            state.reserve(*constant)?;
+        }
 
         for block in state.blocks.clone() {
             for instruction in module.block(block).ok_or(CodegenError::ExpectedBlock(block))? {
-                if module.node(*instruction).is_some_and(produces_value) && state.stackify.needs_local(*instruction) {
-                    state.reserve(*instruction);
+                let node = module
+                    .node(*instruction)
+                    .ok_or(CodegenError::MissingNode(*instruction))?;
+                if produces_value(node) {
+                    state.reserve(*instruction)?;
+                }
+
+                if matches!(node, IrNode::Phi { .. }) {
+                    let temporary = state.fresh()?;
+                    state.phi_temporaries.insert(*instruction, temporary);
                 }
             }
         }
 
         let address = self.code_offset()?;
+        let mut loaded = FxHashSet::default();
+        for constant in constants {
+            if !loaded.insert(constant) {
+                continue;
+            }
+
+            let id = self
+                .constant_ids
+                .get(&constant)
+                .copied()
+                .ok_or(CodegenError::MissingConstant(constant))?;
+            self.emit_op(Op::MoveConst);
+            self.emit_register(state.register(constant)?);
+            self.emit_u32(id.0);
+        }
+
         for (default, destination) in constant_defaults {
-            self.emit_value(module, &state, default)?;
             self.emit_op(Op::DefaultParameter);
-            self.emit_u32(destination.0);
+            self.emit_register(destination);
+            self.emit_register(state.register(default)?);
         }
 
         let mut edge_stubs = Vec::new();
@@ -496,7 +540,7 @@ impl Generator {
             .ok_or(CodegenError::MissingFunction(proc.function))?;
         function.address = address;
         function.length = length;
-        function.local_count = state.next_local;
+        function.register_count = state.next_register;
 
         Ok(())
     }
@@ -506,16 +550,8 @@ impl Generator {
         edge_stubs: &mut Vec<EdgeStub>,
     ) -> Result<(), CodegenError> {
         self.mark_label(Label::Block(block));
-        let instructions = state
-            .stackify
-            .schedule(block)
-            .ok_or(CodegenError::ExpectedBlock(block))?;
-
+        let instructions = module.block(block).ok_or(CodegenError::ExpectedBlock(block))?;
         for instruction in instructions {
-            if state.stackify.is_stacked(*instruction) {
-                continue;
-            }
-
             let line = module.node_lines.get_near(*instruction, &mut self.line_hint);
             self.function_lines.push((self.code.len(), line));
             match module
@@ -536,7 +572,7 @@ impl Generator {
                     true_block,
                     false_block,
                 } => {
-                    self.emit_value(module, state, *condition)?;
+                    let condition = state.register(*condition)?;
                     let false_target = if has_phi_copies(module, state, block, *false_block)? {
                         // Phi copies belong to the incoming edge so keep the false
                         // copies behind the conditional while the true copies can
@@ -553,6 +589,7 @@ impl Generator {
                         Label::Block(*false_block)
                     };
                     self.emit_jump(Op::JumpIfFalse, false_target);
+                    self.emit_register(condition);
 
                     self.emit_phi_copies(module, state, block, *true_block)?;
                     if next != Some(*true_block) {
@@ -585,86 +622,98 @@ impl Generator {
             IrNode::Load { pointer } => {
                 let name = variable_name(module, *pointer)?;
                 let name = self.intern_identifier(name)?;
-                self.emit_op(Op::LoadVariable);
+                self.emit_op(Op::LoadVar);
+                self.emit_register(state.register(id)?);
                 self.emit_u32(name.0);
-                self.store_result(state, id)?;
             },
             IrNode::Builtin(builtin) => {
-                self.emit_op(Op::PushBuiltin);
+                self.emit_op(Op::LoadBuiltin);
+                self.emit_register(state.register(id)?);
                 self.emit_u8(builtin_code(*builtin) as u8);
-                self.store_result(state, id)?;
             },
             IrNode::Interpolate(interpolation) => {
-                let Interpolation { chunks, values } = &**interpolation;
-                for value in values {
-                    self.emit_value(module, state, *value)?;
-                }
-
-                let chunks = chunks
+                let values = interpolation
+                    .values
+                    .iter()
+                    .map(|value| state.register(*value))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let chunks = interpolation
+                    .chunks
                     .iter()
                     .map(|chunk| self.intern_string(chunk.clone()))
                     .collect::<Result<Vec<_>, _>>()?;
                 self.emit_op(Op::Interpolate);
+                self.emit_register(state.register(id)?);
                 self.emit_count(values.len(), "interpolation value")?;
-                self.emit_count(chunks.len(), "interpolation chunk")?;
+                self.emit_count(chunks.len(), "interpolation chunks")?;
                 for chunk in chunks {
                     self.emit_u32(chunk.0);
                 }
-                self.store_result(state, id)?;
+
+                for value in values {
+                    self.emit_register(value);
+                }
             },
             IrNode::Unary { op, operand } => {
-                self.emit_value(module, state, *operand)?;
+                let operand = state.register(*operand)?;
                 self.emit_op(Op::Unary);
+                self.emit_register(state.register(id)?);
                 self.emit_u8(unary_code(*op) as u8);
-                self.store_result(state, id)?;
+                self.emit_register(operand);
             },
             IrNode::Binary { op, lhs, rhs } => {
-                self.emit_value(module, state, *lhs)?;
-                self.emit_value(module, state, *rhs)?;
+                let lhs = state.register(*lhs)?;
+                let rhs = state.register(*rhs)?;
                 self.emit_op(Op::Binary);
+                self.emit_register(state.register(id)?);
                 self.emit_u8(binary_code(*op) as u8);
-                self.store_result(state, id)?;
+                self.emit_register(lhs);
+                self.emit_register(rhs);
             },
             IrNode::CompoundBinary { op, lhs, rhs } => {
-                self.emit_value(module, state, *lhs)?;
-                self.emit_value(module, state, *rhs)?;
+                let lhs = state.register(*lhs)?;
+                let rhs = state.register(*rhs)?;
                 self.emit_op(Op::CompoundBinary);
+                self.emit_register(state.register(id)?);
                 self.emit_u8(binary_code(*op) as u8);
-                self.store_result(state, id)?;
+                self.emit_register(lhs);
+                self.emit_register(rhs);
             },
             IrNode::AccessField { object, name, access } => {
-                self.emit_value(module, state, *object)?;
+                let object = state.register(*object)?;
                 let name = self.intern_identifier(name)?;
                 self.emit_op(Op::AccessField);
+                self.emit_register(state.register(id)?);
                 self.emit_u32(name.0);
                 self.emit_u8(access_code(*access) as u8);
                 self.emit_bool(self.callees.contains(&id));
-                self.store_result(state, id)?;
+                self.emit_register(object);
             },
             IrNode::Initial { object, name } => {
-                if let Some(object) = object {
-                    self.emit_value(module, state, *object)?;
-                }
+                let object = object.map(|object| state.register(object)).transpose()?;
                 let name = self.intern_identifier(name)?;
                 self.emit_op(Op::Initial);
+                self.emit_register(state.register(id)?);
                 self.emit_bool(object.is_some());
                 self.emit_u32(name.0);
-                self.store_result(state, id)?;
+                if let Some(object) = object {
+                    self.emit_register(object);
+                }
             },
             IrNode::Index {
                 object,
                 index,
                 conditional,
             } => {
-                self.emit_value(module, state, *object)?;
-                self.emit_value(module, state, *index)?;
+                let object = state.register(*object)?;
+                let index = state.register(*index)?;
                 self.emit_op(Op::Index);
+                self.emit_register(state.register(id)?);
                 self.emit_bool(*conditional);
-                self.store_result(state, id)?;
+                self.emit_register(object);
+                self.emit_register(index);
             },
             IrNode::Call { callee, args } => {
-                self.emit_value(module, state, *callee)?;
-                let shapes = self.emit_arguments(module, state, args)?;
                 let conditional = matches!(
                     module.node(*callee),
                     Some(IrNode::AccessField {
@@ -672,81 +721,87 @@ impl Generator {
                         ..
                     })
                 );
+                let callee = state.register(*callee)?;
                 self.emit_op(Op::Call);
-                self.emit_argument_layout(&shapes)?;
+                self.emit_register(state.register(id)?);
                 self.emit_bool(conditional);
-                self.store_result(state, id)?;
+                self.emit_register(callee);
+                self.emit_arguments(state, args)?;
             },
             IrNode::FunctionCall { function, args } => {
-                let shapes = self.emit_arguments(module, state, args)?;
                 let function = self
                     .function_ids
                     .get(function)
                     .copied()
                     .ok_or(CodegenError::MissingFunction(*function))?;
                 self.emit_op(Op::FunctionCall);
+                self.emit_register(state.register(id)?);
                 self.emit_u32(function.0);
-                self.emit_argument_layout(&shapes)?;
-                self.store_result(state, id)?;
+                self.emit_arguments(state, args)?;
             },
             IrNode::Super {
                 args,
                 forwards_extra_args,
             } => {
-                let shapes = self.emit_arguments(module, state, args)?;
                 self.emit_op(Op::SuperCall);
-                self.emit_argument_layout(&shapes)?;
+                self.emit_register(state.register(id)?);
                 self.emit_bool(*forwards_extra_args);
-                self.store_result(state, id)?;
+                self.emit_arguments(state, args)?;
             },
             IrNode::New { ty, args } => {
-                if let Some(ty) = ty {
-                    self.emit_value(module, state, *ty)?;
-                }
-                let shapes = self.emit_arguments(module, state, args)?;
+                let ty = ty.map(|ty| state.register(ty)).transpose()?;
+
                 self.emit_op(Op::New);
+                self.emit_register(state.register(id)?);
                 self.emit_bool(ty.is_some());
-                self.emit_argument_layout(&shapes)?;
-                self.store_result(state, id)?;
+                if let Some(ty) = ty {
+                    self.emit_register(ty);
+                }
+                self.emit_arguments(state, args)?;
             },
             IrNode::ModifiedType { path, overrides } => {
-                for (_, value) in overrides {
-                    self.emit_value(module, state, *value)?;
-                }
                 let path = self.intern_path(TreePath::clone(path))?;
-                let names = overrides
+                let overrides = overrides
                     .iter()
-                    .map(|(name, _)| self.intern_identifier(name))
+                    .map(|(name, value)| Ok((self.intern_identifier(name)?, state.register(*value)?)))
                     .collect::<Result<Vec<_>, _>>()?;
+
                 self.emit_op(Op::ModifiedType);
+                self.emit_register(state.register(id)?);
                 self.emit_u32(path.0);
-                self.emit_count(names.len(), "modified type override")?;
-                for name in names {
+                self.emit_count(overrides.len(), "modified type override")?;
+                for (name, value) in overrides {
                     self.emit_u32(name.0);
+                    self.emit_register(value);
                 }
-                self.store_result(state, id)?;
             },
             IrNode::List(args) => {
-                let shapes = self.emit_arguments(module, state, args)?;
                 self.emit_op(Op::MakeList);
-                self.emit_argument_layout(&shapes)?;
-                self.store_result(state, id)?;
+                self.emit_register(state.register(id)?);
+                self.emit_arguments(state, args)?;
             },
             IrNode::Pick(choices) => {
-                let mut weighted = Vec::with_capacity(choices.len());
-                for (weight, value) in choices {
-                    if let Some(weight) = weight {
-                        self.emit_value(module, state, *weight)?;
-                    }
-                    self.emit_value(module, state, *value)?;
-                    weighted.push(weight.is_some());
-                }
+                let choices = choices
+                    .iter()
+                    .map(|(weight, value)| {
+                        Ok((
+                            weight.map(|weight| state.register(weight)).transpose()?,
+                            state.register(*value)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 self.emit_op(Op::Pick);
-                self.emit_count(weighted.len(), "pick choice")?;
-                for weighted in weighted {
-                    self.emit_bool(weighted);
+                self.emit_register(state.register(id)?);
+                self.emit_count(choices.len(), "pick choice")?;
+                for (weight, value) in choices {
+                    self.emit_bool(weight.is_some());
+                    if let Some(weight) = weight {
+                        self.emit_register(weight);
+                    }
+
+                    self.emit_register(value);
                 }
-                self.store_result(state, id)?;
             },
             IrNode::InRange {
                 value,
@@ -754,59 +809,66 @@ impl Generator {
                 end,
                 step,
             } => {
-                self.emit_value(module, state, *value)?;
-                self.emit_value(module, state, *start)?;
-                self.emit_value(module, state, *end)?;
-                if let Some(step) = step {
-                    self.emit_value(module, state, *step)?;
-                }
+                let value = state.register(*value)?;
+                let start = state.register(*start)?;
+                let end = state.register(*end)?;
+                let step = step.map(|step| state.register(step)).transpose()?;
                 self.emit_op(Op::InRange);
+                self.emit_register(state.register(id)?);
                 self.emit_bool(step.is_some());
-                self.store_result(state, id)?;
+                self.emit_register(value);
+                self.emit_register(start);
+                self.emit_register(end);
+                if let Some(step) = step {
+                    self.emit_register(step);
+                }
             },
             IrNode::Range { start, end, step } => {
-                self.emit_value(module, state, *start)?;
-                self.emit_value(module, state, *end)?;
-                if let Some(step) = step {
-                    self.emit_value(module, state, *step)?;
-                }
+                let start = state.register(*start)?;
+                let end = state.register(*end)?;
+                let step = step.map(|step| state.register(step)).transpose()?;
                 self.emit_op(Op::Range);
+                self.emit_register(state.register(id)?);
                 self.emit_bool(step.is_some());
-                self.store_result(state, id)?;
+                self.emit_register(start);
+                self.emit_register(end);
+                if let Some(step) = step {
+                    self.emit_register(step);
+                }
             },
             IrNode::IterInit {
                 list,
                 ty,
                 value_is_associated,
             } => {
-                self.emit_value(module, state, *list)?;
+                let list = state.register(*list)?;
                 let ty = ty.as_deref().cloned().map(|ty| self.intern_path(ty)).transpose()?;
                 self.emit_op(Op::IterInit);
+                self.emit_register(state.register(id)?);
                 self.emit_optional_path(ty);
                 self.emit_bool(*value_is_associated);
-                self.store_result(state, id)?;
+                self.emit_register(list);
             },
-            IrNode::IterNext(iter) => {
-                self.emit_value(module, state, *iter)?;
-                self.emit_op(Op::IterNext);
-                self.store_result(state, id)?;
-            },
-            IrNode::IterValue(iter) => {
-                self.emit_value(module, state, *iter)?;
-                self.emit_op(Op::IterValue);
-                self.store_result(state, id)?;
-            },
-            IrNode::IterKey(iter) => {
-                self.emit_value(module, state, *iter)?;
-                self.emit_op(Op::IterKey);
-                self.store_result(state, id)?;
+            IrNode::IterNext(iter) | IrNode::IterValue(iter) | IrNode::IterKey(iter) => {
+                let op = match node {
+                    IrNode::IterNext(_) => Op::IterNext,
+                    IrNode::IterValue(_) => Op::IterValue,
+                    _ => Op::IterKey,
+                };
+                let iter = state.register(*iter)?;
+                self.emit_op(op);
+                self.emit_register(state.register(id)?);
+                self.emit_register(iter);
             },
             IrNode::RangeTest { current, end, step } => {
-                self.emit_value(module, state, *current)?;
-                self.emit_value(module, state, *end)?;
-                self.emit_value(module, state, *step)?;
+                let current = state.register(*current)?;
+                let end = state.register(*end)?;
+                let step = state.register(*step)?;
                 self.emit_op(Op::RangeTest);
-                self.store_result(state, id)?;
+                self.emit_register(state.register(id)?);
+                self.emit_register(current);
+                self.emit_register(end);
+                self.emit_register(step);
             },
             IrNode::SetField {
                 object,
@@ -814,12 +876,14 @@ impl Generator {
                 access,
                 value,
             } => {
-                self.emit_value(module, state, *object)?;
-                self.emit_value(module, state, *value)?;
+                let object = state.register(*object)?;
+                let value = state.register(*value)?;
                 let name = self.intern_identifier(name)?;
                 self.emit_op(Op::SetField);
                 self.emit_u32(name.0);
                 self.emit_u8(access_code(*access) as u8);
+                self.emit_register(object);
+                self.emit_register(value);
             },
             IrNode::SetIndex {
                 object,
@@ -827,72 +891,81 @@ impl Generator {
                 value,
                 conditional,
             } => {
-                self.emit_value(module, state, *object)?;
-                self.emit_value(module, state, *index)?;
-                self.emit_value(module, state, *value)?;
+                let object = state.register(*object)?;
+                let index = state.register(*index)?;
+                let value = state.register(*value)?;
                 self.emit_op(Op::SetIndex);
                 self.emit_bool(*conditional);
+                self.emit_register(object);
+                self.emit_register(index);
+                self.emit_register(value);
             },
-            IrNode::Store { pointer, value } => {
-                self.emit_value(module, state, *value)?;
+            IrNode::Store { pointer, value } | IrNode::Initialize { pointer, value } => {
+                let op = match node {
+                    IrNode::Store { .. } => Op::StoreVar,
+                    _ => Op::InitVar,
+                };
+                let value = state.register(*value)?;
                 let name = variable_name(module, *pointer)?;
                 let name = self.intern_identifier(name)?;
-                self.emit_op(Op::StoreVariable);
+                self.emit_op(op);
                 self.emit_u32(name.0);
-            },
-            IrNode::Initialize { pointer, value } => {
-                self.emit_value(module, state, *value)?;
-                let name = variable_name(module, *pointer)?;
-                let name = self.intern_identifier(name)?;
-                self.emit_op(Op::InitializeVariable);
-                self.emit_u32(name.0);
+                self.emit_register(value);
             },
             IrNode::StoreBuiltin { builtin, value } => {
-                self.emit_value(module, state, *value)?;
+                let value = state.register(*value)?;
                 self.emit_op(Op::StoreBuiltin);
                 self.emit_u8(builtin_code(*builtin) as u8);
+                self.emit_register(value);
             },
             IrNode::CatchValue => {
                 self.emit_op(Op::CatchValue);
-                self.store_result(state, id)?;
+                self.emit_register(state.register(id)?);
             },
             IrNode::Return(value) => match value {
                 Some(value) => {
-                    self.emit_value(module, state, *value)?;
+                    let value = state.register(*value)?;
                     self.emit_op(Op::ReturnValue);
+                    self.emit_register(value);
                 },
                 None => self.emit_op(Op::Return),
             },
-            IrNode::Del(value) => {
-                self.emit_value(module, state, *value)?;
-                self.emit_op(Op::Del);
-            },
-            IrNode::Throw(value) => {
-                self.emit_value(module, state, *value)?;
-                self.emit_op(Op::Throw);
+            IrNode::Del(value) | IrNode::Throw(value) => {
+                let op = match node {
+                    IrNode::Del(_) => Op::Del,
+                    _ => Op::Throw,
+                };
+                let value = state.register(*value)?;
+                self.emit_op(op);
+                self.emit_register(value);
             },
             IrNode::Output { target, value } => {
-                match target {
-                    OutputTarget::Value(target) => self.emit_value(module, state, *target)?,
-                    OutputTarget::Field { object, .. } => self.emit_value(module, state, *object)?,
-                    OutputTarget::Index { object, index, .. } => {
-                        self.emit_value(module, state, *object)?;
-                        self.emit_value(module, state, *index)?;
-                    },
-                }
-                self.emit_value(module, state, *value)?;
                 self.emit_op(Op::Output);
                 match target {
-                    OutputTarget::Value(_) => self.emit_u8(OutputTargetKind::Value as u8),
-                    OutputTarget::Field { name, access, .. } => {
+                    OutputTarget::Value(target) => {
+                        self.emit_u8(OutputTargetKind::Value as u8);
+                        self.emit_register(state.register(*target)?);
+                        self.emit_register(state.register(*value)?);
+                    },
+                    OutputTarget::Field { object, name, access } => {
                         let name = self.intern_identifier(name)?;
+
                         self.emit_u8(OutputTargetKind::Field as u8);
                         self.emit_u32(name.0);
                         self.emit_u8(access_code(*access) as u8);
+                        self.emit_register(state.register(*object)?);
+                        self.emit_register(state.register(*value)?);
                     },
-                    OutputTarget::Index { conditional, .. } => {
+                    OutputTarget::Index {
+                        object,
+                        index,
+                        conditional,
+                    } => {
                         self.emit_u8(OutputTargetKind::Index as u8);
                         self.emit_bool(*conditional);
+                        self.emit_register(state.register(*object)?);
+                        self.emit_register(state.register(*index)?);
+                        self.emit_register(state.register(*value)?);
                     },
                 }
             },
@@ -922,9 +995,9 @@ impl Generator {
         }
 
         if let Some(parameter) = state.parameter_defaults.get(&id) {
-            self.emit_value(module, state, id)?;
             self.emit_op(Op::DefaultParameter);
-            self.emit_u32(parameter.0);
+            self.emit_register(*parameter);
+            self.emit_register(state.register(id)?);
         }
 
         Ok(())
@@ -935,84 +1008,57 @@ impl Generator {
     ) -> Result<(), CodegenError> {
         let copies = phi_copies(module, state, predecessor, target)?;
 
-        for (source, _) in &copies {
-            self.emit_value(module, state, *source)?;
-        }
+        // the copies happen at once, a phi that reads another phi of the same block needs
+        // that phi's old value, so go through the temporaries when any source is overwritten
+        let is_overlapping = copies
+            .iter()
+            .any(|copy| copies.iter().any(|other| other.destination == copy.source));
+        if !is_overlapping {
+            for copy in &copies {
+                self.emit_move(copy.destination, copy.source);
+            }
 
-        for (_, destination) in copies.iter().rev() {
-            self.emit_op(Op::StoreLocal);
-            self.emit_u32(destination.0);
-        }
-
-        Ok(())
-    }
-
-    fn emit_value(&mut self, module: &ir::Module, state: &FunctionState, value: IrNodeId) -> Result<(), CodegenError> {
-        if state.stackify.is_stacked(value) {
-            let node = module.node(value).ok_or(CodegenError::MissingNode(value))?;
-            return self.generate_instruction(module, state, value, node);
-        }
-
-        match module.node(value).ok_or(CodegenError::MissingNode(value))? {
-            IrNode::Constant(_) => {
-                let constant = self
-                    .constant_ids
-                    .get(&value)
-                    .copied()
-                    .ok_or(CodegenError::MissingConstant(value))?;
-                self.emit_op(Op::PushConstant);
-                self.emit_u32(constant.0);
-            },
-            _ => {
-                let local = state.local(value)?;
-                self.emit_op(Op::LoadLocal);
-                self.emit_u32(local.0);
-            },
-        }
-
-        Ok(())
-    }
-
-    fn store_result(&mut self, state: &FunctionState, value: IrNodeId) -> Result<(), CodegenError> {
-        if state.stackify.is_stacked(value) {
             return Ok(());
         }
 
-        if state.stackify.uses(value) == 0 {
-            self.emit_op(Op::Drop);
-            return Ok(());
+        for copy in &copies {
+            self.emit_move(copy.temporary, copy.source);
         }
 
-        let local = state.local(value)?;
-        self.emit_op(Op::StoreLocal);
-        self.emit_u32(local.0);
+        for copy in &copies {
+            self.emit_move(copy.destination, copy.temporary);
+        }
 
         Ok(())
     }
 
-    fn emit_arguments(
-        &mut self, module: &ir::Module, state: &FunctionState, args: &[Argument],
-    ) -> Result<Vec<u8>, CodegenError> {
-        let mut shapes = Vec::with_capacity(args.len());
+    fn emit_move(&mut self, destination: RegisterId, source: RegisterId) {
+        self.emit_op(Op::Move);
+        self.emit_register(destination);
+        self.emit_register(source);
+    }
+
+    fn emit_arguments(&mut self, state: &FunctionState, args: &[Argument]) -> Result<(), CodegenError> {
+        self.emit_count(args.len(), "argument")?;
         for argument in args {
             let mut shape = 0;
-            if let Some(key) = argument.key {
-                self.emit_value(module, state, key)?;
+            if argument.key.is_some() {
                 shape |= ARGUMENT_KEY;
             }
-            if let Some(value) = argument.value {
-                self.emit_value(module, state, value)?;
+
+            if argument.value.is_some() {
                 shape |= ARGUMENT_VALUE;
             }
-            shapes.push(shape);
+
+            self.emit_u8(shape);
+            if let Some(key) = argument.key {
+                self.emit_register(state.register(key)?);
+            }
+
+            if let Some(value) = argument.value {
+                self.emit_register(state.register(value)?);
+            }
         }
-
-        Ok(shapes)
-    }
-
-    fn emit_argument_layout(&mut self, shapes: &[u8]) -> Result<(), CodegenError> {
-        self.emit_count(shapes.len(), "argument")?;
-        self.code.extend_from_slice(shapes);
 
         Ok(())
     }
@@ -1065,8 +1111,16 @@ impl Generator {
         self.code.push(value);
     }
 
+    fn emit_u16(&mut self, value: u16) {
+        self.code.extend_from_slice(&value.to_le_bytes());
+    }
+
     fn emit_u32(&mut self, value: u32) {
         self.code.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn emit_register(&mut self, register: RegisterId) {
+        self.emit_u16(register.0);
     }
 
     fn emit_count(&mut self, count: usize, what: &'static str) -> Result<(), CodegenError> {
@@ -1265,73 +1319,21 @@ fn label_offset(labels: &FxHashMap<Label, usize>, label: Label) -> Result<usize,
     }
 }
 
-fn assign_phi_locals(module: &ir::Module, state: &mut FunctionState) -> Result<(), CodegenError> {
-    let phis = state
-        .blocks
-        .iter()
-        .copied()
-        .map(|block| {
-            module
-                .block(block)
-                .ok_or(CodegenError::ExpectedBlock(block))
-                .map(|instructions| {
-                    instructions
-                        .iter()
-                        .copied()
-                        .filter(|instruction| matches!(module.node(*instruction), Some(IrNode::Phi { .. })))
-                        .map(|phi| (block, phi))
-                        .collect::<Vec<_>>()
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-
-    for (target, phi) in phis {
-        let Some(IrNode::Phi { operands }) = module.node(phi) else {
-            continue;
-        };
-
-        let candidates = operands
-            .iter()
-            .filter(|operand| {
-                state
-                    .stackify
-                    .can_coalesce_phi_source(module, operand.block, target, phi, operand.value)
-            })
-            .map(|operand| operand.value)
-            .collect::<Vec<_>>();
-
-        // parameters have fixed ABI slots, prefer the first eligible fixed slot,
-        // otherwise allocate the phi before assigning its edge-dead producers
-        let existing = candidates.iter().find_map(|source| state.assigned_local(*source));
-        let local = match existing {
-            Some(local) => {
-                state.assign_local(phi, local);
-                local
-            },
-            None => state.reserve(phi),
-        };
-
-        for source in candidates {
-            if state.assigned_local(source).is_none() {
-                state.assign_local(source, local);
-            }
-        }
-    }
-
-    Ok(())
+struct PhiCopy {
+    source: RegisterId,
+    destination: RegisterId,
+    temporary: RegisterId,
 }
 
 fn phi_copies(
     module: &ir::Module, state: &FunctionState, predecessor: IrNodeId, target: IrNodeId,
-) -> Result<Vec<(IrNodeId, LocalId)>, CodegenError> {
+) -> Result<Vec<PhiCopy>, CodegenError> {
     let mut copies = Vec::new();
     for instruction in module.block(target).ok_or(CodegenError::ExpectedBlock(target))? {
         let Some(IrNode::Phi { operands }) = module.node(*instruction) else {
             continue;
         };
+
         let source = operands
             .iter()
             .find(|operand| operand.block == predecessor)
@@ -1340,10 +1342,22 @@ fn phi_copies(
                 phi: *instruction,
                 predecessor,
             })?;
-        let destination = state.local(*instruction)?;
-        if state.assigned_local(source) != Some(destination) {
-            copies.push((source, destination));
+        let source = state.register(source)?;
+        let destination = state.register(*instruction)?;
+        if source == destination {
+            continue;
         }
+
+        let temporary = state
+            .phi_temporaries
+            .get(instruction)
+            .copied()
+            .ok_or(CodegenError::MissingRegister(*instruction))?;
+        copies.push(PhiCopy {
+            source,
+            destination,
+            temporary,
+        });
     }
 
     Ok(copies)
@@ -1633,7 +1647,7 @@ mod tests {
         assert_eq!(module.version, Module::VERSION);
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.functions[0].parameter_count, 2);
-        assert_eq!(module.functions[0].local_count, 2);
+        assert_eq!(module.functions[0].register_count, 2);
         assert!(output.contains("load_local local0"), "{output}");
         assert!(output.contains("load_local local1"), "{output}");
         assert!(output.contains("binary add"), "{output}");
@@ -1658,7 +1672,7 @@ mod tests {
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
-        assert_eq!(module.functions[1].local_count, 0);
+        assert_eq!(module.functions[1].register_count, 0);
         assert!(output.contains("function_call fn0 args=[]\n"), "{output}");
         assert!(output.contains(" drop\n"), "{output}");
     }
@@ -1693,7 +1707,7 @@ mod tests {
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
-        assert_eq!(module.functions[0].local_count, 2, "{output}");
+        assert_eq!(module.functions[0].register_count, 2, "{output}");
         assert!(!output.contains("local2"), "{output}");
         assert_eq!(output.matches("store_local local1").count(), 2, "{output}");
     }
@@ -1706,7 +1720,7 @@ mod tests {
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
-        assert_eq!(module.functions[0].local_count, 4, "{output}");
+        assert_eq!(module.functions[0].register_count, 4, "{output}");
         assert!(!output.contains("local4"), "{output}");
         assert_eq!(output.matches("store_local local3").count(), 2, "{output}");
     }
@@ -1719,7 +1733,7 @@ mod tests {
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
-        assert_eq!(module.functions[0].local_count, 3, "{output}");
+        assert_eq!(module.functions[0].register_count, 3, "{output}");
         assert!(output.contains("store_local local2"), "{output}");
         assert!(output.contains("load_local local2"), "{output}");
     }
@@ -1732,7 +1746,7 @@ mod tests {
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
 
-        assert_eq!(module.functions[0].local_count, 3, "{output}");
+        assert_eq!(module.functions[0].register_count, 3, "{output}");
         assert!(output.contains("store_local local2"), "{output}");
         assert!(output.contains("load_local local2"), "{output}");
     }
@@ -1746,7 +1760,7 @@ mod tests {
         let output = disasm::dump(&module).expect("disassemble");
         let instructions = bytecode_instructions(&output);
 
-        assert_eq!(module.functions[0].local_count, 2, "{output}");
+        assert_eq!(module.functions[0].register_count, 2, "{output}");
         assert_eq!(
             instructions
                 .iter()
@@ -2265,7 +2279,6 @@ mod tests {
         assert_eq!(Op::DefaultParameter as u8, 0x29);
         assert_eq!(Op::CompoundBinary as u8, 0x2a);
         assert_eq!(Op::Initial as u8, 0x2b);
-        assert_eq!(Op::Drop as u8, 0x2c);
         assert_eq!(Op::Spawn as u8, 0x2d);
         assert_eq!(Op::EndSpawn as u8, 0x2e);
         assert_eq!(Unary::Dereference as u8, 0x08);

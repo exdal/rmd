@@ -25,55 +25,59 @@ macro_rules! byte_enum {
     };
 }
 
+// operand order: rD, immediates, source registers
+// r = u16 register, k = u32 constant, name/str/path/fn/count/target = u32, flag/op = u8
+// args = count, then per argument: shape:u8, rKey if ARGUMENT_KEY, rValue if ARGUMENT_VALUE
 byte_enum! {
     pub enum Op {
         Nop = 0x00,
-        PushConstant = 0x01,
-        LoadLocal = 0x02,
-        StoreLocal = 0x03,
-        LoadVariable = 0x04,
-        StoreVariable = 0x05,
-        PushBuiltin = 0x06,
-        Interpolate = 0x07,
-        Unary = 0x08,
-        Binary = 0x09,
-        AccessField = 0x0a,
-        Index = 0x0b,
-        Call = 0x0c,
-        FunctionCall = 0x0d,
-        SuperCall = 0x0e,
-        New = 0x0f,
-        ModifiedType = 0x10,
-        MakeList = 0x11,
-        Pick = 0x12,
-        InRange = 0x13,
-        Range = 0x14,
-        IterInit = 0x15,
-        IterNext = 0x16,
-        IterValue = 0x17,
-        IterKey = 0x18,
-        RangeTest = 0x19,
-        SetField = 0x1a,
-        SetIndex = 0x1b,
-        Jump = 0x1c,
-        JumpIfFalse = 0x1d,
-        Return = 0x1e,
-        ReturnValue = 0x1f,
-        Del = 0x20,
-        Throw = 0x21,
-        Output = 0x22,
-        TryCatch = 0x23,
-        Blocked = 0x24,
-        Trap = 0x25,
-        StoreBuiltin = 0x26,
-        InitializeVariable = 0x27,
-        CatchValue = 0x28,
-        DefaultParameter = 0x29,
-        CompoundBinary = 0x2a,
-        Initial = 0x2b,
-        Drop = 0x2c,
-        Spawn = 0x2d,
-        EndSpawn = 0x2e,
+        MoveConst = 0x01,        // rD, k
+        Move = 0x02,             // rD, rS
+        LoadVar = 0x04,          // rD, name
+        StoreVar = 0x05,         // name, rS
+        LoadBuiltin = 0x06,      // rD, builtin:u8
+        Interpolate = 0x07,      // rD, value_count, chunk_count, str * chunk_count, r * value_count
+        Unary = 0x08,            // rD, op:Unary, rS
+        Binary = 0x09,           // rD, op:Binary, rA, rB
+        AccessField = 0x0a,      // rD, name, access:Access, method:flag, rObject
+        Index = 0x0b,            // rD, conditional:flag, rObject, rIndex
+        Call = 0x0c,             // rD, conditional:flag, rCallee, args
+        FunctionCall = 0x0d,     // rD, fn, args
+        SuperCall = 0x0e,        // rD, forwards_extra_args:flag, args
+        New = 0x0f,              // rD, has_type:flag, [rType], args
+        ModifiedType = 0x10,     // rD, path, count, (name, rValue) * count
+        MakeList = 0x11,         // rD, args
+        Pick = 0x12,             // rD, count, (weighted:flag, [rWeight], rValue) * count
+        InRange = 0x13,          // rD, has_step:flag, rValue, rStart, rEnd, [rStep]
+        Range = 0x14,            // rD, has_step:flag, rStart, rEnd, [rStep]
+        IterInit = 0x15,         // rD, has_type:flag, [path], associated:flag, rList
+        IterNext = 0x16,         // rD, rIter
+        IterValue = 0x17,        // rD, rIter
+        IterKey = 0x18,          // rD, rIter
+        RangeTest = 0x19,        // rD, rCurrent, rEnd, rStep
+        SetField = 0x1a,         // name, access:Access, rObject, rValue
+        SetIndex = 0x1b,         // conditional:flag, rObject, rIndex, rValue
+        Jump = 0x1c,             // target
+        JumpIfFalse = 0x1d,      // target, rCondition
+        Return = 0x1e,           //
+        ReturnValue = 0x1f,      // rS
+        Del = 0x20,              // rS
+        Throw = 0x21,            // rS
+        Output = 0x22,           // kind:OutputTargetKind, then by kind:
+                                 //   Value: rTarget, rValue
+                                 //   Field: name, access:Access, rObject, rValue
+                                 //   Index: conditional:flag, rObject, rIndex, rValue
+        TryCatch = 0x23,         // body:target, catch:target, merge:target
+        Blocked = 0x24,          // reason:str
+        Trap = 0x25,             // reason:str
+        StoreBuiltin = 0x26,     // builtin:u8, rS
+        InitVar = 0x27,          // name, rS
+        CatchValue = 0x28,       // rD
+        DefaultParameter = 0x29, // rParameter, rValue, writes rValue only while rParameter is omitted
+        CompoundBinary = 0x2a,   // rD, op:Binary, rA, rB
+        Initial = 0x2b,          // rD, has_object:flag, name, [rObject]
+        Spawn = 0x2d,            // body:target
+        EndSpawn = 0x2e,         //
     }
 }
 

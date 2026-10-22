@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use crate::{
-    CodeOffset, ConstantId, FunctionId, LocalId, Module, PathId, StringId,
+    CodeOffset, ConstantId, FunctionId, Module, PathId, RegisterId, StringId,
     opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, OutputTargetKind, Unary},
 };
 
@@ -72,8 +72,8 @@ pub fn dump(module: &Module) -> Result<String, DecodeError> {
             .unwrap_or_default();
         let _ = writeln!(
             output,
-            "{} = function {name} params={} locals={} address={}{}",
-            function.id, function.parameter_count, function.local_count, function.address, intrinsic
+            "{} = function {name} params={} registers={} address={}{}",
+            function.id, function.parameter_count, function.register_count, function.address, intrinsic
         );
         let start = function.address.0 as usize;
         let end = start
@@ -124,26 +124,43 @@ impl Cursor<'_> {
             | Op::ReturnValue
             | Op::Del
             | Op::Throw
-            | Op::CatchValue
-            | Op::Drop => {},
-            Op::PushConstant => {
+            | Op::CatchValue => {},
+            Op::MoveConst => {
+                let destination = self.register()?;
                 let id = ConstantId(self.u32()?);
                 let value = self
                     .module
                     .constants
                     .get(id.0 as usize)
                     .ok_or(DecodeError::InvalidConstant(id))?;
-                let _ = write!(output, " {id} ; {value}");
+                let _ = write!(output, " {destination}, {id} ; {value}");
             },
-            Op::LoadLocal | Op::StoreLocal | Op::DefaultParameter => {
-                let _ = write!(output, " {}", LocalId(self.u32()?));
+            Op::Move | Op::DefaultParameter => {
+                let destination = self.register()?;
+                let source = self.register()?;
+                let _ = write!(output, " {destination}, {source}");
             },
-            Op::LoadVariable | Op::StoreVariable | Op::Blocked | Op::Trap => {
+            Op::LoadVar => {
+                let destination = self.register()?;
+                let value = string(self.module, StringId(self.u32()?))?;
+                let _ = write!(output, " {destination}, {value}");
+            },
+            Op::StoreVar | Op::InitVar => {
+                let value = string(self.module, StringId(self.u32()?))?;
+                let source = self.register()?;
+                let _ = write!(output, " {value}, {source}");
+            },
+            Op::Blocked | Op::Trap => {
                 let id = StringId(self.u32()?);
                 let value = string(self.module, id)?;
                 let _ = write!(output, " {value}");
             },
-            Op::PushBuiltin | Op::StoreBuiltin => {
+            Op::LoadBuiltin => {
+                let destination = self.register()?;
+                let value = self.enum_operand::<Builtin>("builtin")?;
+                let _ = write!(output, " {destination}, {}", snake_case(value));
+            },
+            Op::StoreBuiltin => {
                 let value = self.enum_operand::<Builtin>("builtin")?;
                 let _ = write!(output, " {}", snake_case(value));
             },
@@ -303,12 +320,6 @@ impl Cursor<'_> {
                 let body = CodeOffset(self.u32()?);
                 let _ = write!(output, " body={body}");
             },
-            Op::InitializeVariable => {
-                let id = StringId(self.u32()?);
-                let value = string(self.module, id)?;
-
-                let _ = write!(output, " {}", value);
-            },
         }
 
         Ok(output)
@@ -369,6 +380,26 @@ impl Cursor<'_> {
         self.position += 1;
 
         Ok(value)
+    }
+
+    fn u16(&mut self) -> Result<u16, DecodeError> {
+        let end = self
+            .position
+            .checked_add(2)
+            .ok_or(DecodeError::Truncated(self.instruction))?;
+        let bytes = self
+            .module
+            .code
+            .get(self.position..end)
+            .filter(|_| end <= self.end)
+            .ok_or(DecodeError::Truncated(self.instruction))?;
+        self.position = end;
+
+        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
+    }
+
+    fn register(&mut self) -> Result<RegisterId, DecodeError> {
+        self.u16().map(RegisterId)
     }
 
     fn u32(&mut self) -> Result<u32, DecodeError> {
