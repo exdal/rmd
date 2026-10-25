@@ -220,13 +220,21 @@ struct FunctionState {
     registers: FxHashMap<IrNodeId, RegisterId>,
     parameter_defaults: FxHashMap<IrNodeId, RegisterId>,
     phi_temporaries: FxHashMap<IrNodeId, RegisterId>,
+    constant_loads: FxHashMap<IrNodeId, Vec<(IrNodeId, RegisterId)>>,
+    /// the instruction being generated, a constant operand resolves to the register it loaded into for it
+    instruction: IrNodeId,
 }
 
 impl FunctionState {
     fn register(&self, node: IrNodeId) -> Result<RegisterId, CodegenError> {
-        self.registers
-            .get(&node)
-            .copied()
+        if let Some(register) = self.registers.get(&node) {
+            return Ok(*register);
+        }
+
+        self.constant_loads
+            .get(&self.instruction)
+            .and_then(|loads| loads.iter().find(|(constant, _)| *constant == node))
+            .map(|(_, register)| *register)
             .ok_or(CodegenError::MissingRegister(node))
     }
 }
@@ -411,12 +419,13 @@ impl Generator {
     fn generate_function(&mut self, module: &ir::Module, proc: &Procedure) -> Result<(), CodegenError> {
         let blocks = reachable_blocks(module, proc.body)?;
         let layout = block_layout(module, proc.body, &blocks)?;
-        let constants = proc_constants(module, proc, &blocks)?;
-        let allocation = registers::allocate(&mut self.register_scratch, module, proc, &blocks, &constants)?;
+        let allocation = registers::allocate(&mut self.register_scratch, module, proc, &blocks)?;
         let mut state = FunctionState {
             registers: allocation.registers,
             parameter_defaults: FxHashMap::default(),
             phi_temporaries: allocation.phi_temporaries,
+            constant_loads: allocation.constant_loads,
+            instruction: proc.body,
         };
 
         let mut constant_defaults = Vec::new();
@@ -434,33 +443,21 @@ impl Generator {
         }
 
         let address = self.code_offset()?;
-        let mut loaded = FxHashSet::default();
-        for constant in constants {
-            if !loaded.insert(constant) {
-                continue;
-            }
-
-            let id = self
-                .constant_ids
-                .get(&constant)
-                .copied()
-                .ok_or(CodegenError::MissingConstant(constant))?;
-            self.emit_op(Op::MoveConst);
-            self.emit_register(state.register(constant)?);
-            self.emit_u32(id.0);
-        }
-
         for (default, destination) in constant_defaults {
+            let temporary = allocation
+                .default_temporary
+                .ok_or(CodegenError::MissingRegister(default))?;
+            self.emit_constant_load(module, temporary, default)?;
             self.emit_op(Op::DefaultParameter);
             self.emit_register(destination);
-            self.emit_register(state.register(default)?);
+            self.emit_register(temporary);
         }
 
         let mut edge_stubs = Vec::new();
 
         for (index, block) in layout.iter().copied().enumerate() {
             let next = layout.get(index + 1).copied();
-            self.generate_block(module, block, next, &state, &mut edge_stubs)?;
+            self.generate_block(module, block, next, &mut state, &mut edge_stubs)?;
         }
 
         for stub in edge_stubs {
@@ -486,7 +483,7 @@ impl Generator {
     }
 
     fn generate_block(
-        &mut self, module: &ir::Module, block: IrNodeId, next: Option<IrNodeId>, state: &FunctionState,
+        &mut self, module: &ir::Module, block: IrNodeId, next: Option<IrNodeId>, state: &mut FunctionState,
         edge_stubs: &mut Vec<EdgeStub>,
     ) -> Result<(), CodegenError> {
         self.mark_label(Label::Block(block));
@@ -494,6 +491,13 @@ impl Generator {
         for instruction in instructions {
             let line = module.node_lines.get_near(*instruction, &mut self.line_hint);
             self.function_lines.push((self.code.len(), line));
+            state.instruction = *instruction;
+            if let Some(loads) = state.constant_loads.get(instruction) {
+                for (constant, register) in loads {
+                    self.emit_constant_load(module, *register, *constant)?;
+                }
+            }
+
             match module
                 .node(*instruction)
                 .ok_or(CodegenError::MissingNode(*instruction))?
@@ -601,6 +605,14 @@ impl Generator {
                 self.emit_u8(unary_code(*op) as u8);
                 self.emit_register(operand);
             },
+            IrNode::Binary { op, lhs, rhs } if let Some(immediate) = number_constant(module, *rhs) => {
+                let lhs = state.register(*lhs)?;
+                self.emit_op(Op::BinaryI);
+                self.emit_register(state.register(id)?);
+                self.emit_u8(binary_code(*op) as u8);
+                self.emit_register(lhs);
+                self.emit_f32(immediate);
+            },
             IrNode::Binary { op, lhs, rhs } => {
                 let lhs = state.register(*lhs)?;
                 let rhs = state.register(*rhs)?;
@@ -609,6 +621,14 @@ impl Generator {
                 self.emit_u8(binary_code(*op) as u8);
                 self.emit_register(lhs);
                 self.emit_register(rhs);
+            },
+            IrNode::CompoundBinary { op, lhs, rhs } if let Some(immediate) = number_constant(module, *rhs) => {
+                let lhs = state.register(*lhs)?;
+                self.emit_op(Op::CompoundBinaryI);
+                self.emit_register(state.register(id)?);
+                self.emit_u8(binary_code(*op) as u8);
+                self.emit_register(lhs);
+                self.emit_f32(immediate);
             },
             IrNode::CompoundBinary { op, lhs, rhs } => {
                 let lhs = state.register(*lhs)?;
@@ -639,6 +659,18 @@ impl Generator {
                 if let Some(object) = object {
                     self.emit_register(object);
                 }
+            },
+            IrNode::Index {
+                object,
+                index,
+                conditional,
+            } if let Some(immediate) = number_constant(module, *index) => {
+                let object = state.register(*object)?;
+                self.emit_op(Op::IndexI);
+                self.emit_register(state.register(id)?);
+                self.emit_bool(*conditional);
+                self.emit_register(object);
+                self.emit_f32(immediate);
             },
             IrNode::Index {
                 object,
@@ -862,13 +894,18 @@ impl Generator {
                 self.emit_op(Op::CatchValue);
                 self.emit_register(state.register(id)?);
             },
-            IrNode::Return(value) => match value {
-                Some(value) => {
+            IrNode::Return(None) => self.emit_op(Op::Return),
+            IrNode::Return(Some(value)) if is_null_constant(module, *value) => self.emit_op(Op::ReturnNull),
+            IrNode::Return(Some(value)) => match number_constant(module, *value) {
+                Some(number) => {
+                    self.emit_op(Op::ReturnValueI);
+                    self.emit_f32(number);
+                },
+                None => {
                     let value = state.register(*value)?;
                     self.emit_op(Op::ReturnValue);
                     self.emit_register(value);
                 },
-                None => self.emit_op(Op::Return),
             },
             IrNode::Del(value) | IrNode::Throw(value) => {
                 let op = match node {
@@ -947,26 +984,57 @@ impl Generator {
         &mut self, module: &ir::Module, state: &FunctionState, predecessor: IrNodeId, target: IrNodeId,
     ) -> Result<(), CodegenError> {
         let copies = phi_copies(module, state, predecessor, target)?;
+        let moves = || {
+            copies.iter().filter_map(|copy| match copy.source {
+                PhiSource::Register(source) => Some((copy, source)),
+                PhiSource::Constant(_) => None,
+            })
+        };
 
         // the copies happen at once, a phi that reads another phi of the same block needs
-        // that phi's old value, so go through the temporaries when any source is overwritten
-        let is_overlapping = copies
-            .iter()
-            .any(|copy| copies.iter().any(|other| other.destination == copy.source));
-        if !is_overlapping {
-            for copy in &copies {
-                self.emit_move(copy.destination, copy.source);
+        // that phi's old value, so go through the temporaries when any source is overwritten.
+        // Constants load after every move, so only the moves can overwrite a source
+        let is_overlapping = moves().any(|(_, source)| moves().any(|(other, _)| other.destination == source));
+        if is_overlapping {
+            for (copy, source) in moves() {
+                self.emit_move(copy.temporary, source);
             }
 
-            return Ok(());
+            for (copy, _) in moves() {
+                self.emit_move(copy.destination, copy.temporary);
+            }
+        } else {
+            for (copy, source) in moves() {
+                self.emit_move(copy.destination, source);
+            }
         }
 
+        // a constant reads no register, loading it after the moves can't clobber their sources
         for copy in &copies {
-            self.emit_move(copy.temporary, copy.source);
+            if let PhiSource::Constant(constant) = copy.source {
+                self.emit_constant_load(module, copy.destination, constant)?;
+            }
         }
 
-        for copy in &copies {
-            self.emit_move(copy.destination, copy.temporary);
+        Ok(())
+    }
+
+    fn emit_constant_load(
+        &mut self, module: &ir::Module, destination: RegisterId, constant: IrNodeId,
+    ) -> Result<(), CodegenError> {
+        if let Some(value) = number_constant(module, constant) {
+            self.emit_op(Op::MoveImm);
+            self.emit_register(destination);
+            self.emit_f32(value);
+        } else {
+            let id = self
+                .constant_ids
+                .get(&constant)
+                .copied()
+                .ok_or(CodegenError::MissingConstant(constant))?;
+            self.emit_op(Op::MoveConst);
+            self.emit_register(destination);
+            self.emit_u32(id.0);
         }
 
         Ok(())
@@ -1056,6 +1124,10 @@ impl Generator {
     }
 
     fn emit_u32(&mut self, value: u32) {
+        self.code.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn emit_f32(&mut self, value: f32) {
         self.code.extend_from_slice(&value.to_le_bytes());
     }
 
@@ -1259,8 +1331,14 @@ fn label_offset(labels: &FxHashMap<Label, usize>, label: Label) -> Result<usize,
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PhiSource {
+    Register(RegisterId),
+    Constant(IrNodeId),
+}
+
 struct PhiCopy {
-    source: RegisterId,
+    source: PhiSource,
     destination: RegisterId,
     temporary: RegisterId,
 }
@@ -1282,9 +1360,13 @@ fn phi_copies(
                 phi: *instruction,
                 predecessor,
             })?;
-        let source = state.register(source)?;
         let destination = state.register(*instruction)?;
-        if source == destination {
+        let source = if matches!(module.node(source), Some(IrNode::Constant(_))) {
+            PhiSource::Constant(source)
+        } else {
+            PhiSource::Register(state.register(source)?)
+        };
+        if source == PhiSource::Register(destination) {
             continue;
         }
 
@@ -1361,30 +1443,41 @@ fn referenced_nodes(module: &ir::Module, procedures: &FxHashSet<ProcId>) -> Resu
     Ok(referenced)
 }
 
-fn proc_constants(module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId]) -> Result<Vec<IrNodeId>, CodegenError> {
-    let mut constants = Vec::new();
-    for parameter in &proc.params {
-        if let Some(default) = parameter.default
-            && matches!(module.node(default), Some(IrNode::Constant(_)))
+// the constants an instruction reads from a register: every constant operand except the one it
+// carries as an immediate. Phi sources load on the incoming edge instead
+pub(crate) fn for_each_loaded_constant(module: &ir::Module, node: &IrNode, mut visit: impl FnMut(IrNodeId)) {
+    let mut visit_constant = |operand: IrNodeId| {
+        if matches!(module.node(operand), Some(IrNode::Constant(_))) {
+            visit(operand);
+        }
+    };
+
+    match node {
+        IrNode::Phi { .. } => {},
+        IrNode::Binary { lhs, rhs, .. } | IrNode::CompoundBinary { lhs, rhs, .. }
+            if number_constant(module, *rhs).is_some() =>
         {
-            constants.push(default);
-        }
+            visit_constant(*lhs);
+        },
+        IrNode::Index { object, index, .. } if number_constant(module, *index).is_some() => visit_constant(*object),
+        IrNode::Return(Some(value))
+            if is_null_constant(module, *value) || number_constant(module, *value).is_some() => {},
+        node => node.for_each_operand(visit_constant),
     }
+}
 
-    for block in blocks {
-        for instruction in module.block(*block).ok_or(CodegenError::ExpectedBlock(*block))? {
-            let node = module
-                .node(*instruction)
-                .ok_or(CodegenError::MissingNode(*instruction))?;
-            node.for_each_operand(|operand| {
-                if matches!(module.node(operand), Some(IrNode::Constant(_))) {
-                    constants.push(operand);
-                }
-            });
-        }
+fn number_constant(module: &ir::Module, node: IrNodeId) -> Option<f32> {
+    match module.node(node) {
+        Some(IrNode::Constant(value)) => match **value {
+            Value::Num(value) => Some(value),
+            _ => None,
+        },
+        _ => None,
     }
+}
 
-    Ok(constants)
+fn is_null_constant(module: &ir::Module, node: IrNodeId) -> bool {
+    matches!(module.node(node), Some(IrNode::Constant(value)) if **value == Value::Null)
 }
 
 pub(crate) fn reachable_blocks(module: &ir::Module, entry: IrNodeId) -> Result<Vec<IrNodeId>, CodegenError> {
@@ -1644,6 +1737,135 @@ mod tests {
         assert!(!output.contains(" move "), "{output}");
     }
 
+    // fn0 = function /::immediates params=2 registers=4 address=0x00000000
+    //   0x00000000 compound_binary_i r2, add r0, 2
+    //   0x0000000a binary_i r3, comp_less r2, 3
+    //   0x00000014 jump_if_false 0x00000020, r3
+    //   0x0000001b return_value_i 5
+    //   0x00000020 index_i r3, r1[2]
+    //   0x0000002a jump_if_false 0x00000032, r3
+    //   0x00000031 return_null
+    //   0x00000032 move_imm r3, 1
+    //   0x00000039 binary r2, sub r3, r2
+    //   0x00000041 return_value r2
+    #[test]
+    fn number_operands_are_immediates() {
+        let module = generate(&lower(fixture!("programs/number_operands_are_immediates.dm"))).expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (_, compound) = operation(&instructions, "compound_binary_i");
+        let (_, less) = operation(&instructions, "binary_i");
+        let (_, index) = operation(&instructions, "index_i");
+        let (subtracted, subtract) = operation(&instructions, "binary");
+        let lhs = subtract
+            .split_once(", sub ")
+            .and_then(|(_, operands)| operands.split_once(','))
+            .map(|(lhs, _)| lhs)
+            .expect("subtraction operands");
+
+        assert!(compound.ends_with(", add r0, 2"), "{output}");
+        assert!(
+            less.ends_with(&format!(", comp_less {}, 3", destination(compound))),
+            "{output}"
+        );
+        assert!(output.contains(" return_value_i 5\n"), "{output}");
+        assert!(index.ends_with(", r1[2]"), "{output}");
+        assert!(output.contains(" return_null\n"), "{output}");
+        assert!(
+            instructions[subtracted - 1].ends_with(&format!(" move_imm {lhs}, 1")),
+            "{output}"
+        );
+        assert!(subtract.ends_with(&format!(", {}", destination(compound))), "{output}");
+        assert_ne!(lhs, destination(compound), "{output}");
+        assert_eq!(output.matches(" move_imm ").count(), 1, "{output}");
+        assert!(!output.contains(" move_const "), "{output}");
+    }
+
+    // fn0 = function /::pair params=1 registers=3 address=0x00000000
+    //   0x00000000 move_const r1, const0 ; "a"
+    //   0x00000007 move_const r2, const1 ; "b"
+    //   0x0000000e make_list r1, args=[r1, r0, r2]
+    //   0x0000001e return_value r1
+    #[test]
+    fn constant_operands_load_right_before_their_instruction() {
+        let module = generate(&lower(fixture!(
+            "programs/constant_operands_load_right_before_their_instruction.dm"
+        )))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (index, list) = operation(&instructions, "make_list");
+        let load = |offset: usize| {
+            let (_, instruction) = instructions[index - offset].split_once(' ').expect("instruction");
+            instruction
+        };
+        let (a, b) = (load(2), load(1));
+
+        assert_eq!(index, 2, "{output}");
+        assert!(a.starts_with("move_const ") && a.ends_with("; \"a\""), "{output}");
+        assert!(b.starts_with("move_const ") && b.ends_with("; \"b\""), "{output}");
+        assert_ne!(destination(a), destination(b), "{output}");
+        assert_eq!(destination(list), destination(a), "{output}");
+        assert!(
+            list.ends_with(&format!("args=[{}, r0, {}]", destination(a), destination(b))),
+            "{output}"
+        );
+    }
+
+    // fn0 = function /::choose params=1 registers=3 address=0x00000000
+    //   0x00000000 jump_if_false 0x00000011, r0
+    //   0x00000007 move_const r1, const1 ; "yes"
+    //   0x0000000e return_value r1
+    //   0x00000011 move_const r1, const2 ; "no"
+    //   0x00000018 jump 0x0000000e
+    #[test]
+    fn constant_phi_sources_load_on_their_edge() {
+        let module =
+            generate(&lower(fixture!("programs/constant_phi_sources_load_on_their_edge.dm"))).expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (_, returned) = operation(&instructions, "return_value");
+        let merged = returned.strip_prefix("return_value ").expect("returned register");
+
+        assert!(
+            output.contains(&format!("move_const {merged}, const1 ; \"yes\"\n")),
+            "{output}"
+        );
+        assert!(
+            output.contains(&format!("move_const {merged}, const2 ; \"no\"\n")),
+            "{output}"
+        );
+        assert!(!output.contains(" move "), "{output}");
+    }
+
+    // fn0 = function /::greet params=2 registers=3 address=0x00000000
+    //   0x00000000 move_imm r2, 5
+    //   0x00000007 default_parameter r0, r2
+    //   0x0000000c move_const r2, const1 ; "x"
+    //   0x00000013 default_parameter r1, r2
+    //   0x00000018 return_value r0
+    #[test]
+    fn constant_defaults_load_above_the_parameters() {
+        let module = generate(&lower(fixture!(
+            "programs/constant_defaults_load_above_the_parameters.dm"
+        )))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output)
+            .iter()
+            .filter_map(|line| line.split_once(' ').map(|(_, instruction)| instruction))
+            .collect::<Vec<_>>();
+
+        assert_eq!(module.functions[0].register_count, 3, "{output}");
+        assert_eq!(instructions[0], "move_imm r2, 5", "{output}");
+        assert_eq!(instructions[1], "default_parameter r0, r2", "{output}");
+        assert!(
+            instructions[2].starts_with("move_const r2, ") && instructions[2].ends_with("; \"x\""),
+            "{output}"
+        );
+        assert_eq!(instructions[3], "default_parameter r1, r2", "{output}");
+    }
+
     #[test]
     fn named_calls_use_function_table_ids() {
         let module = generate(&lower(fixture!("programs/named_calls_use_function_table_ids.dm"))).expect("generate");
@@ -1676,14 +1898,13 @@ mod tests {
         assert!(lookup < argument && argument < call, "{output}");
     }
 
-    // fn0 = function /::count params=1 registers=5 address=0x00000000
-    //   0x00000000 move_const r1, const0 ; 0
-    //   0x00000007 move_const r2, const1 ; 1
-    //   0x0000000e binary r3, comp_less r1, r0
-    //   0x00000016 jump_if_false 0x0000002a, r3
-    //   0x0000001d binary r1, add r1, r2
-    //   0x00000025 jump 0x0000000e
-    //   0x0000002a return_value r1
+    // fn0 = function /::count params=1 registers=4 address=0x00000000
+    //   0x00000000 move_imm r1, 0
+    //   0x00000007 binary r2, comp_less r1, r0
+    //   0x0000000f jump_if_false 0x00000025, r2
+    //   0x00000016 binary_i r1, add r1, 1
+    //   0x00000020 jump 0x00000007
+    //   0x00000025 return_value r1
     #[test]
     fn a_loop_counter_is_updated_in_its_own_register() {
         let module = generate(&lower(fixture!("programs/counting_loop.dm"))).expect("generate");
@@ -1693,20 +1914,19 @@ mod tests {
         let counter = returned.strip_prefix("return_value ").expect("returned register");
 
         assert!(
-            output.contains(&format!("binary {counter}, add {counter}, ")),
+            output.contains(&format!("binary_i {counter}, add {counter}, 1\n")),
             "{output}"
         );
+        assert!(output.contains(&format!("move_imm {counter}, 0\n")), "{output}");
         assert!(!output.contains(" move "), "{output}");
     }
 
-    // fn0 = function /::select params=3 registers=6 address=0x00000000
-    //   0x00000000 move_const r3, const1 ; 1
-    //   0x00000007 move_const r4, const2 ; 2
-    //   0x0000000e jump_if_false 0x00000020, r0
-    //   0x00000015 binary r3, add r1, r3
-    //   0x0000001d return_value r3
-    //   0x00000020 binary r3, add r2, r4
-    //   0x00000028 jump 0x0000001d
+    // fn0 = function /::select params=3 registers=5 address=0x00000000
+    //   0x00000000 jump_if_false 0x00000014, r0
+    //   0x00000007 binary_i r3, add r1, 1
+    //   0x00000011 return_value r3
+    //   0x00000014 binary_i r3, add r2, 2
+    //   0x0000001e jump 0x00000011
     #[test]
     fn both_arms_write_the_merge_register() {
         let module = generate(&lower(fixture!(
@@ -1718,18 +1938,18 @@ mod tests {
         let (_, returned) = operation(&instructions, "return_value");
         let merged = returned.strip_prefix("return_value ").expect("returned register");
 
-        assert!(output.contains(&format!("binary {merged}, add r1, ")), "{output}");
-        assert!(output.contains(&format!("binary {merged}, add r2, ")), "{output}");
+        assert!(output.contains(&format!("binary_i {merged}, add r1, 1\n")), "{output}");
+        assert!(output.contains(&format!("binary_i {merged}, add r2, 2\n")), "{output}");
         assert!(!output.contains(" move "), "{output}");
     }
 
-    // fn0 = function /::support params=1 registers=4 address=0x00000000
-    //   0x00000000 move_const r1, const1 ; 1
-    //   0x00000007 move_const r2, const0 ; null
-    //   0x0000000e binary r1, comp_greater r0, r1
-    //   0x00000016 jump_if_false 0x00000022, r1
-    //   0x0000001d move r2, r0
-    //   0x00000022 return_value r2
+    // fn0 = function /::support params=1 registers=3 address=0x00000000
+    //   0x00000000 binary_i r1, comp_greater r0, 1
+    //   0x0000000a jump_if_false 0x00000019, r1
+    //   0x00000011 move r1, r0
+    //   0x00000016 return_value r1
+    //   0x00000019 move_const r1, const0 ; null
+    //   0x00000020 jump 0x00000016
     #[test]
     fn a_phi_takes_a_free_source_register() {
         let module = generate(&lower(fixture!("programs/a_phi_takes_a_free_source_register.dm"))).expect("generate");
@@ -1748,12 +1968,10 @@ mod tests {
         assert!(output.contains(&format!(" move {null}, r0\n")), "{output}");
     }
 
-    // fn0 = function /::scale params=2 registers=4 address=0x00000000
-    //   0x00000000 move_const r2, const0 ; 2
-    //   0x00000007 move_const r3, const1 ; 1
-    //   0x0000000e binary r2, mul r0, r2
-    //   0x00000016 binary r2, add r2, r3
-    //   0x0000001e return_value r2
+    // fn0 = function /::scale params=2 registers=3 address=0x00000000
+    //   0x00000000 binary_i r2, mul r0, 2
+    //   0x0000000a binary_i r2, add r2, 1
+    //   0x00000014 return_value r2
     #[test]
     fn parameters_keep_their_registers_after_their_last_use() {
         let module = generate(&lower(fixture!(
@@ -2306,6 +2524,7 @@ mod tests {
         assert_eq!(Op::Initial as u8, 0x2b);
         assert_eq!(Op::Spawn as u8, 0x2d);
         assert_eq!(Op::EndSpawn as u8, 0x2e);
+        assert_eq!(Op::MoveImm as u8, 0x34);
         assert_eq!(Unary::Dereference as u8, 0x08);
         assert_eq!(Binary::In as u8, 0x17);
         assert_eq!(Builtin::SuperProc as u8, 0x08);

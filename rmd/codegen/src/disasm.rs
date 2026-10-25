@@ -114,7 +114,7 @@ impl Cursor<'_> {
         let mut output = snake_case(op);
 
         match op {
-            Op::Nop | Op::Return | Op::EndSpawn => {},
+            Op::Nop | Op::Return | Op::ReturnNull | Op::EndSpawn => {},
             Op::MoveConst => {
                 let destination = self.register()?;
                 let id = ConstantId(self.u32()?);
@@ -125,6 +125,10 @@ impl Cursor<'_> {
                     .ok_or(DecodeError::InvalidConstant(id))?;
                 let _ = write!(output, " {destination}, {id} ; {value}");
             },
+            Op::MoveImm => {
+                let destination = self.register()?;
+                let _ = write!(output, " {destination}, {}", self.f32()?);
+            },
             Op::Move | Op::DefaultParameter | Op::IterNext | Op::IterValue | Op::IterKey => {
                 let destination = self.register()?;
                 let source = self.register()?;
@@ -132,6 +136,9 @@ impl Cursor<'_> {
             },
             Op::ReturnValue | Op::Del | Op::Throw | Op::CatchValue => {
                 let _ = write!(output, " {}", self.register()?);
+            },
+            Op::ReturnValueI => {
+                let _ = write!(output, " {}", self.f32()?);
             },
             Op::LoadVar => {
                 let destination = self.register()?;
@@ -188,6 +195,13 @@ impl Cursor<'_> {
                 let right = self.register()?;
                 let _ = write!(output, " {destination}, {} {left}, {right}", snake_case(value));
             },
+            Op::BinaryI | Op::CompoundBinaryI => {
+                let destination = self.register()?;
+                let value = self.enum_operand::<Binary>("binary")?;
+                let left = self.register()?;
+                let right = self.f32()?;
+                let _ = write!(output, " {destination}, {} {left}, {right}", snake_case(value));
+            },
             Op::AccessField => {
                 let destination = self.register()?;
                 let name = StringId(self.u32()?);
@@ -232,6 +246,16 @@ impl Cursor<'_> {
                 let is_conditional = self.boolean()?;
                 let object = self.register()?;
                 let index = self.register()?;
+                let _ = write!(output, " {destination}, {object}[{index}]");
+                if is_conditional {
+                    output.push_str(" conditional");
+                }
+            },
+            Op::IndexI => {
+                let destination = self.register()?;
+                let is_conditional = self.boolean()?;
+                let object = self.register()?;
+                let index = self.f32()?;
                 let _ = write!(output, " {destination}, {object}[{index}]");
                 if is_conditional {
                     output.push_str(" conditional");
@@ -538,6 +562,10 @@ impl Cursor<'_> {
         self.position = end;
 
         Ok(u32::from_le_bytes(bytes.try_into().expect("four-byte slice")))
+    }
+
+    fn f32(&mut self) -> Result<f32, DecodeError> {
+        self.u32().map(f32::from_bits)
     }
 }
 

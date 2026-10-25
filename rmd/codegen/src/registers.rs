@@ -37,12 +37,16 @@ use fixedbitset::FixedBitSet;
 use ir::{IrNode, Procedure};
 use rustc_hash::FxHashMap;
 
-use crate::{CodegenError, RegisterId, produces_value};
+use crate::{CodegenError, RegisterId, for_each_loaded_constant, produces_value};
 
 #[derive(Default)]
 pub(crate) struct Allocation {
     pub(crate) registers: FxHashMap<IrNodeId, RegisterId>,
     pub(crate) phi_temporaries: FxHashMap<IrNodeId, RegisterId>,
+    /// per instruction, the constants loaded right before it and the registers they load into
+    pub(crate) constant_loads: FxHashMap<IrNodeId, Vec<(IrNodeId, RegisterId)>>,
+    /// constant parameter defaults load here in the prologue, before any value is live
+    pub(crate) default_temporary: Option<RegisterId>,
     pub(crate) register_count: u16,
 }
 
@@ -84,6 +88,7 @@ pub(crate) struct Scratch {
     live: FixedBitSet,
     dead: FixedBitSet,
     dying: Vec<Vec<ValueIndex>>,
+    loads: Vec<IrNodeId>,
 }
 
 impl Scratch {
@@ -101,19 +106,13 @@ impl Scratch {
         }
     }
 
-    fn number(
-        &mut self, module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId], constants: &[IrNodeId],
-    ) -> Result<(), CodegenError> {
+    fn number(&mut self, module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId]) -> Result<(), CodegenError> {
         for (index, block) in blocks.iter().enumerate() {
             self.block_index.insert(*block, BlockIndex(index as u32));
         }
 
         for parameter in &proc.parameters {
             self.add_value(*parameter);
-        }
-
-        for constant in constants {
-            self.add_value(*constant);
         }
 
         for block in blocks {
@@ -240,15 +239,12 @@ impl Scratch {
 
     /// Definition 2 (Strict program): "A program is strict, if each usage of a variable v is
     /// dominated by Dv." (Dv is the label where v is defined)
-    /// Only parameters and constants exist before the first instruction, anything else live
-    /// into the entry is read on some path before it is written
+    /// Only parameters exist before the first instruction, anything else live into the entry is
+    /// read on some path before it is written
     fn is_strict(&self, module: &ir::Module, entry: BlockIndex) -> bool {
-        self.live_in[entry.index()].ones().all(|index| {
-            matches!(
-                module.node(self.values[index]),
-                Some(IrNode::FunctionParameter(_) | IrNode::Constant(_))
-            )
-        })
+        self.live_in[entry.index()]
+            .ones()
+            .all(|index| matches!(module.node(self.values[index]), Some(IrNode::FunctionParameter(_))))
     }
 
     // Reverse postorder is the output of a postorder depth-first search (DFS) flipped
@@ -324,13 +320,7 @@ impl Scratch {
             self.assigned[self.value_index[parameter].index()] = RegisterId(index as u16);
         }
 
-        // constants load in the prologue, before any block
-        for index in 0..value_count {
-            if matches!(module.node(self.values[index]), Some(IrNode::Constant(_))) {
-                self.assigned[index] = take(&mut self.occupied, None)?;
-            }
-        }
-
+        let mut constant_loads = FxHashMap::default();
         let order = std::mem::take(&mut self.order);
         let mut phi_count = 0;
         for block in &order {
@@ -415,8 +405,34 @@ impl Scratch {
             }
 
             for (position, instruction) in instructions.iter().enumerate().skip(phis) {
+                let node = module
+                    .node(*instruction)
+                    .ok_or(CodegenError::MissingNode(*instruction))?;
+
+                // a constant loads right before the instruction that reads it and dies there, so it
+                // takes a register while the operands are still held and frees it with them
+                self.loads.clear();
+                for_each_loaded_constant(module, node, |constant| {
+                    if !self.loads.contains(&constant) {
+                        self.loads.push(constant);
+                    }
+                });
+
+                let mut loads = Vec::with_capacity(self.loads.len());
+                for constant in &self.loads {
+                    loads.push((*constant, take(&mut self.occupied, None)?));
+                }
+
                 for value in &self.dying[position] {
                     release(&mut self.occupied, self.assigned[value.index()], parameters);
+                }
+
+                for (_, register) in &loads {
+                    release(&mut self.occupied, *register, parameters);
+                }
+
+                if !loads.is_empty() {
+                    constant_loads.insert(*instruction, loads);
                 }
 
                 let Some(value) = self.value_index.get(instruction).map(|value| value.index()) else {
@@ -434,7 +450,10 @@ impl Scratch {
 
         self.order = order;
 
-        let mut allocation = Allocation::default();
+        let mut allocation = Allocation {
+            constant_loads,
+            ..Allocation::default()
+        };
         for (index, register) in self.assigned.iter().enumerate() {
             if register.is_invalid() {
                 return Ok(None);
@@ -520,18 +539,33 @@ impl Allocation {
 }
 
 pub(crate) fn allocate(
-    scratch: &mut Scratch, module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId], constants: &[IrNodeId],
+    scratch: &mut Scratch, module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId],
 ) -> Result<Allocation, CodegenError> {
     // try and spawn bodies run as nested execute_until calls that resume after the
     // instruction, so the IR control flow does not describe where values stay live
-    if has_nested_execution(module, blocks)? {
-        return one_per_value(module, proc, blocks, constants);
+    let mut allocation = if has_nested_execution(module, blocks)? {
+        one_per_value(module, proc, blocks)?
+    } else {
+        match greedy(scratch, module, proc, blocks)? {
+            Some(allocation) => allocation,
+            None => one_per_value(module, proc, blocks)?,
+        }
+    };
+
+    let has_constant_default = proc.params.iter().any(|parameter| {
+        parameter
+            .default
+            .is_some_and(|default| matches!(module.node(default), Some(IrNode::Constant(_))))
+    });
+    if has_constant_default {
+        let temporary = register_at(proc.parameters.len())?;
+        allocation.register_count = allocation
+            .register_count
+            .max(register_at(usize::from(temporary.0) + 1)?.0);
+        allocation.default_temporary = Some(temporary);
     }
 
-    match greedy(scratch, module, proc, blocks, constants)? {
-        Some(allocation) => Ok(allocation),
-        None => one_per_value(module, proc, blocks, constants),
-    }
+    Ok(allocation)
 }
 
 // Theorem 1, 2:
@@ -552,10 +586,10 @@ pub(crate) fn allocate(
 // d ── c                        d ── c
 // a-b-c-d-a has no chord        a-c is a chord
 fn greedy(
-    scratch: &mut Scratch, module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId], constants: &[IrNodeId],
+    scratch: &mut Scratch, module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId],
 ) -> Result<Option<Allocation>, CodegenError> {
     scratch.clear(blocks.len());
-    scratch.number(module, proc, blocks, constants)?;
+    scratch.number(module, proc, blocks)?;
     scratch.collect_successors(module, blocks)?;
     scratch.liveness(module, blocks)?;
 
@@ -568,23 +602,36 @@ fn greedy(
     scratch.assign(module, proc, blocks)
 }
 
-fn one_per_value(
-    module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId], constants: &[IrNodeId],
-) -> Result<Allocation, CodegenError> {
+fn one_per_value(module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId]) -> Result<Allocation, CodegenError> {
     let mut allocation = Allocation::default();
     for parameter in &proc.parameters {
         allocation.reserve(*parameter)?;
     }
 
-    for constant in constants {
-        allocation.reserve(*constant)?;
-    }
-
+    let mut constants = FxHashMap::default();
     for block in blocks {
         for instruction in module.block(*block).ok_or(CodegenError::ExpectedBlock(*block))? {
             let node = module
                 .node(*instruction)
                 .ok_or(CodegenError::MissingNode(*instruction))?;
+            let mut loads = Vec::new();
+            for_each_loaded_constant(module, node, |constant| {
+                if !loads.iter().any(|(loaded, _)| *loaded == constant) {
+                    loads.push((constant, RegisterId::INVALID));
+                }
+            });
+
+            for (constant, register) in &mut loads {
+                *register = match constants.entry(*constant) {
+                    Entry::Occupied(entry) => *entry.get(),
+                    Entry::Vacant(entry) => *entry.insert(allocation.fresh()?),
+                };
+            }
+
+            if !loads.is_empty() {
+                allocation.constant_loads.insert(*instruction, loads);
+            }
+
             if produces_value(node) {
                 allocation.reserve(*instruction)?;
             }
@@ -623,15 +670,14 @@ mod tests {
     }
 
     use super::*;
-    use crate::{proc_constants, reachable_blocks, tests::lower};
+    use crate::{reachable_blocks, tests::lower};
 
     fn analyzed(module: &ir::Module) -> (Scratch, Vec<IrNodeId>) {
         let proc = &module.procs[0];
         let blocks = reachable_blocks(module, proc.body).expect("blocks");
-        let constants = proc_constants(module, proc, &blocks).expect("constants");
         let mut scratch = Scratch::default();
         scratch.clear(blocks.len());
-        scratch.number(module, proc, &blocks, &constants).expect("number");
+        scratch.number(module, proc, &blocks).expect("number");
         scratch.collect_successors(module, &blocks).expect("successors");
         scratch.liveness(module, &blocks).expect("liveness");
 
@@ -662,14 +708,6 @@ mod tests {
             .copied()
             .find(|value| module.node(*value).is_some_and(&is_match))
             .expect("value")
-    }
-
-    fn constant(module: &ir::Module, scratch: &Scratch, number: f32) -> IrNodeId {
-        value_with(
-            module,
-            scratch,
-            |node| matches!(node, IrNode::Constant(value) if **value == core::types::Value::Num(number)),
-        )
     }
 
     fn sum_of(module: &ir::Module, scratch: &Scratch, lhs: IrNodeId) -> IrNodeId {
@@ -722,8 +760,7 @@ mod tests {
         assert_eq!(proc.parameters.len(), 3);
         assert_eq!(&scratch.values[..3], proc.parameters.as_slice());
 
-        let mut expected = proc_constants(&module, proc, &blocks).expect("constants");
-        expected.extend(&proc.parameters);
+        let mut expected = proc.parameters.clone();
         for block in &blocks {
             for instruction in module.block(*block).unwrap_or_default() {
                 if module.node(*instruction).is_some_and(produces_value) {
@@ -740,6 +777,10 @@ mod tests {
 
         for (index, value) in scratch.values.iter().enumerate() {
             assert_eq!(scratch.value_index[value], ValueIndex(index as u32));
+        }
+
+        for constant in &module.constants {
+            assert!(!scratch.value_index.contains_key(constant));
         }
     }
 
@@ -819,8 +860,6 @@ mod tests {
         let module = lower(fixture!("programs/counting_loop.dm"));
         let (scratch, blocks) = analyzed(&module);
         let n = module.procs[0].parameters[0];
-        let zero = constant(&module, &scratch, 0.0);
-        let one = constant(&module, &scratch, 1.0);
         let i = value_with(&module, &scratch, |node| matches!(node, IrNode::Phi { .. }));
         let next = sum_of(&module, &scratch, i);
         let entry = scratch.block_index[&module.procs[0].body].index();
@@ -837,12 +876,12 @@ mod tests {
         .index();
         let exit = block_with(&module, &scratch, &blocks, |node| matches!(node, IrNode::Return(_))).index();
 
-        assert_eq!(live(&scratch, &scratch.live_in[entry]), sorted([n, zero, one]));
-        assert_eq!(live(&scratch, &scratch.live_out[entry]), sorted([n, zero, one]));
-        assert_eq!(live(&scratch, &scratch.live_in[header]), sorted([n, one]));
-        assert_eq!(live(&scratch, &scratch.live_out[header]), sorted([n, one, i]));
-        assert_eq!(live(&scratch, &scratch.live_in[body]), sorted([n, one, i]));
-        assert_eq!(live(&scratch, &scratch.live_out[body]), sorted([n, one, next]));
+        assert_eq!(live(&scratch, &scratch.live_in[entry]), [n]);
+        assert_eq!(live(&scratch, &scratch.live_out[entry]), [n]);
+        assert_eq!(live(&scratch, &scratch.live_in[header]), [n]);
+        assert_eq!(live(&scratch, &scratch.live_out[header]), sorted([n, i]));
+        assert_eq!(live(&scratch, &scratch.live_in[body]), sorted([n, i]));
+        assert_eq!(live(&scratch, &scratch.live_out[body]), sorted([n, next]));
         assert_eq!(live(&scratch, &scratch.live_in[exit]), [i]);
         assert!(scratch.live_out[exit].is_clear());
     }
@@ -879,8 +918,6 @@ mod tests {
         let [condition, a, b] = module.procs[0].parameters[..] else {
             panic!("three parameters");
         };
-        let one = constant(&module, &scratch, 1.0);
-        let two = constant(&module, &scratch, 2.0);
         let left = sum_of(&module, &scratch, a);
         let right = sum_of(&module, &scratch, b);
         let entry = scratch.block_index[&module.procs[0].body].index();
@@ -900,14 +937,11 @@ mod tests {
         .index();
         let merge = block_with(&module, &scratch, &blocks, |node| matches!(node, IrNode::Phi { .. })).index();
 
-        assert_eq!(
-            live(&scratch, &scratch.live_in[entry]),
-            sorted([condition, a, b, one, two])
-        );
-        assert_eq!(live(&scratch, &scratch.live_out[entry]), sorted([a, b, one, two]));
-        assert_eq!(live(&scratch, &scratch.live_in[then]), sorted([a, one]));
+        assert_eq!(live(&scratch, &scratch.live_in[entry]), sorted([condition, a, b]));
+        assert_eq!(live(&scratch, &scratch.live_out[entry]), sorted([a, b]));
+        assert_eq!(live(&scratch, &scratch.live_in[then]), [a]);
         assert_eq!(live(&scratch, &scratch.live_out[then]), [left]);
-        assert_eq!(live(&scratch, &scratch.live_in[otherwise]), sorted([b, two]));
+        assert_eq!(live(&scratch, &scratch.live_in[otherwise]), [b]);
         assert_eq!(live(&scratch, &scratch.live_out[otherwise]), [right]);
         assert!(scratch.live_in[merge].is_clear());
         assert!(scratch.live_out[merge].is_clear());

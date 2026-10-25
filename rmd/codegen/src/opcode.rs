@@ -25,8 +25,8 @@ macro_rules! byte_enum {
     };
 }
 
-// operand order: rD, immediates, source registers
-// r = u16 register, k = u32 constant, name/str/path/fn/count/target = u32, flag/op = u8
+// operand order: rD, immediates, source registers. An imm sits where the source register it replaces would.
+// r = u16 register, k = u32 constant, name/str/path/fn/count/target = u32, flag/op = u8, imm = f32
 // args = count, then per argument: shape:u8, rKey if ARGUMENT_KEY, rValue if ARGUMENT_VALUE
 byte_enum! {
     pub enum Op {
@@ -78,6 +78,12 @@ byte_enum! {
         Initial = 0x2b,          // rD, has_object:flag, name, [rObject]
         Spawn = 0x2d,            // body:target
         EndSpawn = 0x2e,         //
+        BinaryI = 0x2f,          // rD, op:Binary, rA, imm
+        CompoundBinaryI = 0x30,  // rD, op:Binary, rA, imm
+        IndexI = 0x31,           // rD, conditional:flag, rObject, imm
+        ReturnValueI = 0x32,     // imm
+        ReturnNull = 0x33,       //
+        MoveImm = 0x34,          // rD, imm
     }
 }
 

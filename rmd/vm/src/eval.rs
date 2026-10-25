@@ -660,6 +660,11 @@ impl<'a> Evaluator<'a> {
                     let value = self.constant(&value)?;
                     self.set(frame, destination, value)?;
                 },
+                Op::MoveImm => {
+                    let destination = self.register(frame)?;
+                    let value = self.f32(frame)?;
+                    self.set(frame, destination, value.into())?;
+                },
                 Op::Move => {
                     let destination = self.register(frame)?;
                     let source = self.register(frame)?;
@@ -747,6 +752,15 @@ impl<'a> Evaluator<'a> {
                     let value = self.binary(op, left, right)?;
                     self.set(frame, destination, value)?;
                 },
+                Op::BinaryI => {
+                    let destination = self.register(frame)?;
+                    let op = self.enum_operand::<Binary>(frame, "binary")?;
+                    let left = self.register(frame)?;
+                    let right = self.f32(frame)?;
+                    let left = self.get(frame, left)?.clone();
+                    let value = self.binary(op, left, right.into())?;
+                    self.set(frame, destination, value)?;
+                },
                 Op::CompoundBinary => {
                     let destination = self.register(frame)?;
                     let op = self.enum_operand::<Binary>(frame, "binary")?;
@@ -755,6 +769,15 @@ impl<'a> Evaluator<'a> {
                     let left = self.get(frame, left)?.clone();
                     let right = self.get(frame, right)?.clone();
                     let value = self.compound_binary(op, left, right)?;
+                    self.set(frame, destination, value)?;
+                },
+                Op::CompoundBinaryI => {
+                    let destination = self.register(frame)?;
+                    let op = self.enum_operand::<Binary>(frame, "binary")?;
+                    let left = self.register(frame)?;
+                    let right = self.f32(frame)?;
+                    let left = self.get(frame, left)?.clone();
+                    let value = self.compound_binary(op, left, right.into())?;
                     self.set(frame, destination, value)?;
                 },
                 Op::AccessField => {
@@ -787,6 +810,19 @@ impl<'a> Evaluator<'a> {
                         GenericValue::Null
                     } else {
                         self.get_index(object, key)?
+                    };
+                    self.set(frame, destination, value)?;
+                },
+                Op::IndexI => {
+                    let destination = self.register(frame)?;
+                    let conditional = self.boolean(frame)?;
+                    let object = self.register(frame)?;
+                    let key = self.f32(frame)?;
+                    let object = self.get(frame, object)?.clone();
+                    let value = if conditional && object == GenericValue::Null {
+                        GenericValue::Null
+                    } else {
+                        self.get_index(object, key.into())?
                     };
                     self.set(frame, destination, value)?;
                 },
@@ -1019,6 +1055,14 @@ impl<'a> Evaluator<'a> {
                     frame.dot = self.get(frame, source)?.clone();
                     return Ok(Flow::Return);
                 },
+                Op::ReturnValueI => {
+                    frame.dot = self.f32(frame)?.into();
+                    return Ok(Flow::Return);
+                },
+                Op::ReturnNull => {
+                    frame.dot = GenericValue::Null;
+                    return Ok(Flow::Return);
+                },
                 Op::Del => {
                     let source = self.register(frame)?;
                     let value = self.get(frame, source)?.clone();
@@ -1135,6 +1179,10 @@ impl<'a> Evaluator<'a> {
 
     fn u32(&self, frame: &mut Frame) -> Result<u32> {
         Ok(u32::from_le_bytes(self.bytes::<4>(frame)?))
+    }
+
+    fn f32(&self, frame: &mut Frame) -> Result<f32> {
+        Ok(f32::from_le_bytes(self.bytes::<4>(frame)?))
     }
 
     fn register(&self, frame: &mut Frame) -> Result<RegisterId> {

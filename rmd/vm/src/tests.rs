@@ -2552,6 +2552,96 @@ fn loop_carried_values_rotate_in_parallel() {
 }
 
 #[test]
+fn a_number_on_the_right_is_an_immediate() {
+    assert_eq!(
+        run(fixture!("programs/number_immediates.dm"), "test_arithmetic"),
+        GenericValue::Text("6,4,0,-4".into())
+    );
+}
+
+#[test]
+fn compound_assignment_with_a_number_still_mutates_lists_in_place() {
+    let source = fixture!("programs/number_immediates.dm");
+    assert_eq!(run(source, "test_add_in_place"), 7.into());
+    assert_eq!(run(source, "test_append_in_place"), GenericValue::Text("3,3".into()));
+}
+
+#[test]
+fn a_number_key_indexes_lists_and_skips_null_conditionally() {
+    assert_eq!(
+        run(fixture!("programs/number_immediates.dm"), "test_second"),
+        GenericValue::Text("b,1".into())
+    );
+}
+
+#[test]
+fn returning_null_clears_dot_and_a_bare_return_keeps_it() {
+    let source = fixture!("programs/number_immediates.dm");
+    assert_eq!(run(source, "test_return_number"), 5.into());
+    assert_eq!(run(source, "test_return_null"), GenericValue::Null);
+    assert_eq!(run(source, "test_return_dot"), 3.into());
+}
+
+#[test]
+fn constant_defaults_load_through_one_temporary() {
+    assert_eq!(
+        run(fixture!("programs/constants_load_at_their_use.dm"), "test_defaults"),
+        GenericValue::Text("5x,1x,1y".into())
+    );
+}
+
+#[test]
+fn a_constant_loads_again_on_every_iteration_that_reads_it() {
+    assert_eq!(
+        run(fixture!("programs/constants_load_at_their_use.dm"), "test_repeat"),
+        GenericValue::Text(",ababab".into())
+    );
+}
+
+#[test]
+fn constants_read_by_one_instruction_get_their_own_registers() {
+    assert_eq!(
+        run(
+            fixture!("programs/constants_load_at_their_use.dm"),
+            "test_two_constants"
+        ),
+        GenericValue::Text("ab".into())
+    );
+}
+
+#[test]
+fn each_edge_loads_its_constant_into_the_merge() {
+    assert_eq!(
+        run(fixture!("programs/constants_load_at_their_use.dm"), "test_choose"),
+        GenericValue::Text("yes,no".into())
+    );
+}
+
+#[test]
+fn a_constant_load_keeps_clear_of_operands_dying_at_the_same_instruction() {
+    assert_eq!(
+        run(fixture!("programs/constants_load_at_their_use.dm"), "test_minus"),
+        4.into()
+    );
+}
+
+#[test]
+fn edge_constants_load_after_the_moves_that_read_their_registers() {
+    assert_eq!(
+        run(fixture!("programs/constants_load_at_their_use.dm"), "test_shift"),
+        GenericValue::Text("0,5,5,7,7,7".into())
+    );
+}
+
+#[test]
+fn constants_load_at_their_use_inside_try_bodies() {
+    assert_eq!(
+        run(fixture!("programs/constants_load_at_their_use.dm"), "test_guarded"),
+        GenericValue::Text("boom-3-2".into())
+    );
+}
+
+#[test]
 fn associative_iteration_preserves_keys_and_values() {
     assert_eq!(
         run(
