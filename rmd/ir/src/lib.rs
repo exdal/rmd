@@ -442,6 +442,30 @@ impl IrNode {
             _ => {},
         }
     }
+
+    pub fn for_each_successor(&self, mut visit: impl FnMut(IrNodeId)) {
+        match self {
+            Self::Branch(target) => visit(*target),
+            Self::ConditionalBranch {
+                true_block,
+                false_block,
+                ..
+            } => {
+                visit(*true_block);
+                visit(*false_block);
+            },
+            Self::TryCatch { body, catch, merge } => {
+                visit(*body);
+                visit(*catch);
+                visit(*merge);
+            },
+            Self::Spawn { body, merge } => {
+                visit(*body);
+                visit(*merge);
+            },
+            _ => {},
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

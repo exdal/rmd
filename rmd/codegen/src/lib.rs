@@ -2,6 +2,7 @@ pub mod disasm;
 pub mod error;
 pub mod opcode;
 mod reachability;
+mod registers;
 
 use core::{
     location::{LineTable, Location, SourceLine},
@@ -216,36 +217,12 @@ struct EdgeStub {
 }
 
 struct FunctionState {
-    blocks: Vec<IrNodeId>,
     registers: FxHashMap<IrNodeId, RegisterId>,
     parameter_defaults: FxHashMap<IrNodeId, RegisterId>,
     phi_temporaries: FxHashMap<IrNodeId, RegisterId>,
-    next_register: u16,
 }
 
 impl FunctionState {
-    fn fresh(&mut self) -> Result<RegisterId, CodegenError> {
-        let register = RegisterId(self.next_register);
-        if register.is_invalid() {
-            return Err(CodegenError::TooManyRegisters);
-        }
-
-        self.next_register += 1;
-
-        Ok(register)
-    }
-
-    fn reserve(&mut self, node: IrNodeId) -> Result<RegisterId, CodegenError> {
-        if let Some(register) = self.registers.get(&node) {
-            return Ok(*register);
-        }
-
-        let register = self.fresh()?;
-        self.registers.insert(node, register);
-
-        Ok(register)
-    }
-
     fn register(&self, node: IrNodeId) -> Result<RegisterId, CodegenError> {
         self.registers
             .get(&node)
@@ -274,6 +251,7 @@ struct Generator {
     line_hint: usize,
     /// `a.b()` looks `b` up as a proc first, and plain `a.b` as a var first
     callees: FxHashSet<IrNodeId>,
+    register_scratch: registers::Scratch,
 }
 
 impl Generator {
@@ -296,6 +274,7 @@ impl Generator {
             function_lines: Vec::new(),
             line_hint: 0,
             callees: FxHashSet::default(),
+            register_scratch: registers::Scratch::default(),
         }
     }
 
@@ -432,19 +411,14 @@ impl Generator {
     fn generate_function(&mut self, module: &ir::Module, proc: &Procedure) -> Result<(), CodegenError> {
         let blocks = reachable_blocks(module, proc.body)?;
         let layout = block_layout(module, proc.body, &blocks)?;
+        let constants = proc_constants(module, proc, &blocks)?;
+        let allocation = registers::allocate(&mut self.register_scratch, module, proc, &blocks, &constants)?;
         let mut state = FunctionState {
-            blocks,
-            registers: FxHashMap::default(),
+            registers: allocation.registers,
             parameter_defaults: FxHashMap::default(),
-            phi_temporaries: FxHashMap::default(),
-            next_register: 0,
+            phi_temporaries: allocation.phi_temporaries,
         };
 
-        for parameter in &proc.parameters {
-            state.reserve(*parameter)?;
-        }
-
-        let mut constants = Vec::new();
         let mut constant_defaults = Vec::new();
         for (index, parameter) in proc.params.iter().enumerate() {
             let Some(default) = parameter.default else {
@@ -453,43 +427,9 @@ impl Generator {
 
             let destination = state.register(proc.parameters[index])?;
             if matches!(module.node(default), Some(IrNode::Constant(_))) {
-                constants.push(default);
                 constant_defaults.push((default, destination));
             } else {
                 state.parameter_defaults.insert(default, destination);
-            }
-        }
-
-        for block in &state.blocks {
-            for instruction in module.block(*block).ok_or(CodegenError::ExpectedBlock(*block))? {
-                let node = module
-                    .node(*instruction)
-                    .ok_or(CodegenError::MissingNode(*instruction))?;
-                node.for_each_operand(|operand| {
-                    if matches!(module.node(operand), Some(IrNode::Constant(_))) {
-                        constants.push(operand);
-                    }
-                });
-            }
-        }
-
-        for constant in &constants {
-            state.reserve(*constant)?;
-        }
-
-        for block in state.blocks.clone() {
-            for instruction in module.block(block).ok_or(CodegenError::ExpectedBlock(block))? {
-                let node = module
-                    .node(*instruction)
-                    .ok_or(CodegenError::MissingNode(*instruction))?;
-                if produces_value(node) {
-                    state.reserve(*instruction)?;
-                }
-
-                if matches!(node, IrNode::Phi { .. }) {
-                    let temporary = state.fresh()?;
-                    state.phi_temporaries.insert(*instruction, temporary);
-                }
             }
         }
 
@@ -540,7 +480,7 @@ impl Generator {
             .ok_or(CodegenError::MissingFunction(proc.function))?;
         function.address = address;
         function.length = length;
-        function.register_count = state.next_register;
+        function.register_count = allocation.register_count;
 
         Ok(())
     }
@@ -1421,6 +1361,32 @@ fn referenced_nodes(module: &ir::Module, procedures: &FxHashSet<ProcId>) -> Resu
     Ok(referenced)
 }
 
+fn proc_constants(module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId]) -> Result<Vec<IrNodeId>, CodegenError> {
+    let mut constants = Vec::new();
+    for parameter in &proc.params {
+        if let Some(default) = parameter.default
+            && matches!(module.node(default), Some(IrNode::Constant(_)))
+        {
+            constants.push(default);
+        }
+    }
+
+    for block in blocks {
+        for instruction in module.block(*block).ok_or(CodegenError::ExpectedBlock(*block))? {
+            let node = module
+                .node(*instruction)
+                .ok_or(CodegenError::MissingNode(*instruction))?;
+            node.for_each_operand(|operand| {
+                if matches!(module.node(operand), Some(IrNode::Constant(_))) {
+                    constants.push(operand);
+                }
+            });
+        }
+    }
+
+    Ok(constants)
+}
+
 pub(crate) fn reachable_blocks(module: &ir::Module, entry: IrNodeId) -> Result<Vec<IrNodeId>, CodegenError> {
     let mut blocks = Vec::new();
     let mut seen = FxHashSet::default();
@@ -1579,7 +1545,7 @@ mod tests {
 
     use super::*;
 
-    fn lower(source: &str) -> ir::Module {
+    pub(crate) fn lower(source: &str) -> ir::Module {
         let (tokens, errors) = lexer::tokenize(source);
         assert!(errors.is_empty());
         let ast = ast::parse(&tokens).expect("fixture should parse");

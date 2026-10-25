@@ -98,11 +98,13 @@ fn analyze_procedure(module: &Module, proc: &Procedure, scratch: &mut Scratch, r
     for (index, block) in blocks.iter().enumerate() {
         let successors = &mut scratch.successors[index];
         for instruction in module.block(*block).unwrap_or_default() {
-            append_successors(module.node(*instruction), &mut |successor| {
-                if let Some(successor) = scratch.block_index.get(&successor) {
-                    successors.push(*successor);
-                }
-            });
+            if let Some(node) = module.node(*instruction) {
+                node.for_each_successor(|successor| {
+                    if let Some(successor) = scratch.block_index.get(&successor) {
+                        successors.push(*successor);
+                    }
+                });
+            }
         }
 
         successors.sort_unstable();
@@ -362,35 +364,13 @@ fn reachable_blocks(module: &Module, entry: IrNodeId) -> Vec<IrNodeId> {
         };
         blocks.push(block);
         for instruction in instructions {
-            append_successors(module.node(*instruction), &mut |block| pending.push(block));
+            if let Some(node) = module.node(*instruction) {
+                node.for_each_successor(|block| pending.push(block));
+            }
         }
     }
 
     blocks
-}
-
-fn append_successors(node: Option<&IrNode>, push: &mut impl FnMut(IrNodeId)) {
-    match node {
-        Some(IrNode::Branch(target)) => push(*target),
-        Some(IrNode::ConditionalBranch {
-            true_block,
-            false_block,
-            ..
-        }) => {
-            push(*true_block);
-            push(*false_block);
-        },
-        Some(IrNode::TryCatch { body, catch, merge }) => {
-            push(*body);
-            push(*catch);
-            push(*merge);
-        },
-        Some(IrNode::Spawn { body, merge }) => {
-            push(*body);
-            push(*merge);
-        },
-        _ => {},
-    }
 }
 
 fn region_blocks(module: &Module, entry: IrNodeId, stop: IrNodeId) -> Vec<IrNodeId> {
@@ -407,7 +387,9 @@ fn region_blocks(module: &Module, entry: IrNodeId, stop: IrNodeId) -> Vec<IrNode
         };
         blocks.push(block);
         for instruction in instructions {
-            append_successors(module.node(*instruction), &mut |block| pending.push(block));
+            if let Some(node) = module.node(*instruction) {
+                node.for_each_successor(|block| pending.push(block));
+            }
         }
     }
 

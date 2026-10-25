@@ -423,6 +423,7 @@ version = "1.2.2"
 dependencies = [
  "ast",
  "core",
+ "fixedbitset",
  "ir",
  "lexer",
  "objtree",
