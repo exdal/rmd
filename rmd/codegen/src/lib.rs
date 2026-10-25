@@ -605,13 +605,13 @@ impl Generator {
                 self.emit_u8(unary_code(*op) as u8);
                 self.emit_register(operand);
             },
-            IrNode::Binary { op, lhs, rhs } if let Some(immediate) = number_constant(module, *rhs) => {
+            IrNode::Binary { op, lhs, .. } if let Some(Immediate::Number(value)) = immediate(module, node) => {
                 let lhs = state.register(*lhs)?;
                 self.emit_op(Op::BinaryI);
                 self.emit_register(state.register(id)?);
                 self.emit_u8(binary_code(*op) as u8);
                 self.emit_register(lhs);
-                self.emit_f32(immediate);
+                self.emit_f32(value);
             },
             IrNode::Binary { op, lhs, rhs } => {
                 let lhs = state.register(*lhs)?;
@@ -622,13 +622,13 @@ impl Generator {
                 self.emit_register(lhs);
                 self.emit_register(rhs);
             },
-            IrNode::CompoundBinary { op, lhs, rhs } if let Some(immediate) = number_constant(module, *rhs) => {
+            IrNode::CompoundBinary { op, lhs, .. } if let Some(Immediate::Number(value)) = immediate(module, node) => {
                 let lhs = state.register(*lhs)?;
                 self.emit_op(Op::CompoundBinaryI);
                 self.emit_register(state.register(id)?);
                 self.emit_u8(binary_code(*op) as u8);
                 self.emit_register(lhs);
-                self.emit_f32(immediate);
+                self.emit_f32(value);
             },
             IrNode::CompoundBinary { op, lhs, rhs } => {
                 let lhs = state.register(*lhs)?;
@@ -661,16 +661,14 @@ impl Generator {
                 }
             },
             IrNode::Index {
-                object,
-                index,
-                conditional,
-            } if let Some(immediate) = number_constant(module, *index) => {
+                object, conditional, ..
+            } if let Some(Immediate::Number(value)) = immediate(module, node) => {
                 let object = state.register(*object)?;
                 self.emit_op(Op::IndexI);
                 self.emit_register(state.register(id)?);
                 self.emit_bool(*conditional);
                 self.emit_register(object);
-                self.emit_f32(immediate);
+                self.emit_f32(value);
             },
             IrNode::Index {
                 object,
@@ -895,10 +893,12 @@ impl Generator {
                 self.emit_register(state.register(id)?);
             },
             IrNode::Return(None) => self.emit_op(Op::Return),
-            IrNode::Return(Some(value)) if is_null_constant(module, *value) => self.emit_op(Op::ReturnNull),
-            IrNode::Return(Some(value)) if let Some(immediate) = number_constant(module, *value) => {
+            IrNode::Return(Some(_)) if let Some(Immediate::Null) = immediate(module, node) => {
+                self.emit_op(Op::ReturnNull)
+            },
+            IrNode::Return(Some(_)) if let Some(Immediate::Number(value)) = immediate(module, node) => {
                 self.emit_op(Op::ReturnValueI);
-                self.emit_f32(immediate);
+                self.emit_f32(value);
             },
             IrNode::Return(Some(value)) => {
                 let value = state.register(*value)?;
@@ -1450,17 +1450,40 @@ pub(crate) fn for_each_loaded_constant(module: &ir::Module, node: &IrNode, mut v
         }
     };
 
+    // which operand an immediate replaces is fixed per instruction, so name it by position: in
+    // `1 + 1` both sides can be the same interned constant node and the lhs still needs a load
     match node {
         IrNode::Phi { .. } => {},
-        IrNode::Binary { lhs, rhs, .. } | IrNode::CompoundBinary { lhs, rhs, .. }
-            if number_constant(module, *rhs).is_some() =>
-        {
+        IrNode::Binary { lhs, .. } | IrNode::CompoundBinary { lhs, .. } if immediate(module, node).is_some() => {
             visit_constant(*lhs);
         },
-        IrNode::Index { object, index, .. } if number_constant(module, *index).is_some() => visit_constant(*object),
-        IrNode::Return(Some(value))
-            if is_null_constant(module, *value) || number_constant(module, *value).is_some() => {},
-        node => node.for_each_operand(visit_constant),
+        IrNode::Index { object, .. } if immediate(module, node).is_some() => visit_constant(*object),
+        IrNode::Return(Some(_)) if immediate(module, node).is_some() => {},
+        node => {
+            debug_assert!(
+                immediate(module, node).is_none(),
+                "an instruction with an immediate form needs its own arm here"
+            );
+            node.for_each_operand(visit_constant);
+        },
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Immediate {
+    Number(f32),
+    Null,
+}
+
+// the operand an instruction carries inside itself instead of reading it from a register
+fn immediate(module: &ir::Module, node: &IrNode) -> Option<Immediate> {
+    match node {
+        IrNode::Binary { rhs, .. } | IrNode::CompoundBinary { rhs, .. } | IrNode::Index { index: rhs, .. } => {
+            number_constant(module, *rhs).map(Immediate::Number)
+        },
+        IrNode::Return(Some(value)) if is_null_constant(module, *value) => Some(Immediate::Null),
+        IrNode::Return(Some(value)) => number_constant(module, *value).map(Immediate::Number),
+        _ => None,
     }
 }
 
@@ -1862,6 +1885,38 @@ mod tests {
             "{output}"
         );
         assert_eq!(instructions[3], "default_parameter r1, r2", "{output}");
+    }
+
+    // fn0 = function /::contains params=0 registers=1 address=0x00000000
+    //   0x00000000 move_imm r0, 1
+    //   0x00000007 binary_i r0, in r0, 1
+    //   0x00000011 return_value r0
+    //
+    // fn1 = function /::first params=0 registers=1 address=0x00000014
+    //   0x00000014 move_imm r0, 1
+    //   0x0000001b index_i r0, r0[1]
+    //   0x00000025 return_value r0
+    #[test]
+    fn a_constant_on_both_sides_loads_only_the_left() {
+        let module = lower(fixture!("programs/a_constant_on_both_sides_loads_only_the_left.dm"));
+        let is_shared = module
+            .nodes
+            .iter()
+            .any(|node| matches!(node, IrNode::Binary { lhs, rhs, .. } if lhs == rhs))
+            && module
+                .nodes
+                .iter()
+                .any(|node| matches!(node, IrNode::Index { object, index, .. } if object == index));
+        let output = disasm::dump(&generate(&module).expect("generate")).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (contained, contains) = operation(&instructions, "binary_i");
+        let (indexed, index) = operation(&instructions, "index_i");
+
+        assert!(is_shared, "both sides should be one interned constant");
+        assert_eq!(contains, "binary_i r0, in r0, 1", "{output}");
+        assert!(instructions[contained - 1].ends_with(" move_imm r0, 1"), "{output}");
+        assert_eq!(index, "index_i r0, r0[1]", "{output}");
+        assert!(instructions[indexed - 1].ends_with(" move_imm r0, 1"), "{output}");
     }
 
     #[test]
