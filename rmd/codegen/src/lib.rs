@@ -896,16 +896,14 @@ impl Generator {
             },
             IrNode::Return(None) => self.emit_op(Op::Return),
             IrNode::Return(Some(value)) if is_null_constant(module, *value) => self.emit_op(Op::ReturnNull),
-            IrNode::Return(Some(value)) => match number_constant(module, *value) {
-                Some(number) => {
-                    self.emit_op(Op::ReturnValueI);
-                    self.emit_f32(number);
-                },
-                None => {
-                    let value = state.register(*value)?;
-                    self.emit_op(Op::ReturnValue);
-                    self.emit_register(value);
-                },
+            IrNode::Return(Some(value)) if let Some(immediate) = number_constant(module, *value) => {
+                self.emit_op(Op::ReturnValueI);
+                self.emit_f32(immediate);
+            },
+            IrNode::Return(Some(value)) => {
+                let value = state.register(*value)?;
+                self.emit_op(Op::ReturnValue);
+                self.emit_register(value);
             },
             IrNode::Del(value) | IrNode::Throw(value) => {
                 let op = match node {
