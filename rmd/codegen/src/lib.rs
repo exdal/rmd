@@ -1676,6 +1676,103 @@ mod tests {
         assert!(lookup < argument && argument < call, "{output}");
     }
 
+    // fn0 = function /::count params=1 registers=5 address=0x00000000
+    //   0x00000000 move_const r1, const0 ; 0
+    //   0x00000007 move_const r2, const1 ; 1
+    //   0x0000000e binary r3, comp_less r1, r0
+    //   0x00000016 jump_if_false 0x0000002a, r3
+    //   0x0000001d binary r1, add r1, r2
+    //   0x00000025 jump 0x0000000e
+    //   0x0000002a return_value r1
+    #[test]
+    fn a_loop_counter_is_updated_in_its_own_register() {
+        let module = generate(&lower(fixture!("programs/counting_loop.dm"))).expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (_, returned) = operation(&instructions, "return_value");
+        let counter = returned.strip_prefix("return_value ").expect("returned register");
+
+        assert!(
+            output.contains(&format!("binary {counter}, add {counter}, ")),
+            "{output}"
+        );
+        assert!(!output.contains(" move "), "{output}");
+    }
+
+    // fn0 = function /::select params=3 registers=6 address=0x00000000
+    //   0x00000000 move_const r3, const1 ; 1
+    //   0x00000007 move_const r4, const2 ; 2
+    //   0x0000000e jump_if_false 0x00000020, r0
+    //   0x00000015 binary r3, add r1, r3
+    //   0x0000001d return_value r3
+    //   0x00000020 binary r3, add r2, r4
+    //   0x00000028 jump 0x0000001d
+    #[test]
+    fn both_arms_write_the_merge_register() {
+        let module = generate(&lower(fixture!(
+            "programs/phi_sources_are_live_only_on_their_own_edge.dm"
+        )))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (_, returned) = operation(&instructions, "return_value");
+        let merged = returned.strip_prefix("return_value ").expect("returned register");
+
+        assert!(output.contains(&format!("binary {merged}, add r1, ")), "{output}");
+        assert!(output.contains(&format!("binary {merged}, add r2, ")), "{output}");
+        assert!(!output.contains(" move "), "{output}");
+    }
+
+    // fn0 = function /::support params=1 registers=4 address=0x00000000
+    //   0x00000000 move_const r1, const1 ; 1
+    //   0x00000007 move_const r2, const0 ; null
+    //   0x0000000e binary r1, comp_greater r0, r1
+    //   0x00000016 jump_if_false 0x00000022, r1
+    //   0x0000001d move r2, r0
+    //   0x00000022 return_value r2
+    #[test]
+    fn a_phi_takes_a_free_source_register() {
+        let module = generate(&lower(fixture!("programs/a_phi_takes_a_free_source_register.dm"))).expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let null = instructions
+            .iter()
+            .find(|line| line.ends_with("; null"))
+            .and_then(|line| line.split_once(' '))
+            .map(|(_, instruction)| destination(instruction))
+            .expect("null constant");
+        let (_, returned) = operation(&instructions, "return_value");
+
+        assert_eq!(returned, format!("return_value {null}"), "{output}");
+        assert_eq!(output.matches(" move ").count(), 1, "{output}");
+        assert!(output.contains(&format!(" move {null}, r0\n")), "{output}");
+    }
+
+    // fn0 = function /::scale params=2 registers=4 address=0x00000000
+    //   0x00000000 move_const r2, const0 ; 2
+    //   0x00000007 move_const r3, const1 ; 1
+    //   0x0000000e binary r2, mul r0, r2
+    //   0x00000016 binary r2, add r2, r3
+    //   0x0000001e return_value r2
+    #[test]
+    fn parameters_keep_their_registers_after_their_last_use() {
+        let module = generate(&lower(fixture!(
+            "programs/parameters_keep_their_registers_after_their_last_use.dm"
+        )))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+
+        for line in bytecode_instructions(&output) {
+            let (_, instruction) = line.split_once(' ').expect("address");
+            if ["binary ", "move_const ", "move "]
+                .iter()
+                .any(|mnemonic| instruction.starts_with(mnemonic))
+            {
+                assert!(!["r0", "r1"].contains(&destination(instruction)), "{output}");
+            }
+        }
+    }
+
     #[test]
     fn conditional_true_successor_falls_through() {
         let module =

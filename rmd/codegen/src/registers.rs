@@ -1,3 +1,35 @@
+// Reference: Hack, Grund, Goos, "Register allocation for programs in SSA-form" (CC 2006)
+//            https://bernsteinbear.com/assets/img/ra-programs-ssa.pdf
+//            For phi coalescing (the task of eliminating useless copies) we use the
+//            "coloring" method this paper talks about instead of going full on aggressive
+//            graph building pass:
+//            "We consider coalescing as the task of obtaining a good coloring with respect to
+//            φ-operations. [...] The advantage over merging the node of y with the nodes of the
+//            xi in the interference graph is, that we do not modify the graph's structure (i.e.
+//            possibly rendering it non-chordal)" (section 4)
+// Never forget this: phis are __permutations__, just reading the code is confusing
+// to anyone who reads this code without a proper mental model. One phi picks one source per
+// incoming edge (source = the value on that edge ie: `phi [%12 from block %7] ...`), and all
+// phis of a block run at once when the block is entered, so on each edge they move registers
+// like one permutation:
+// "all φ-operations in a basic block have to be executed simultaneously before all other
+// instructions in that basic block" (4.2)
+// "So generally φ-operations work like permutations on registers and not like a set of
+// copies." (4.2)
+// ```dm
+// if(foo)
+//      bar = 2
+// else
+//      bar = 3
+// return bar
+// ```
+// `return_value` returns the phi, which has 2 incoming sources, one per edge:
+// `phi [2 from the then block, 3 from the else block]`. When the phi shares a register with
+// a source, that edge maps the register to itself and needs no copy:
+// "coalescing is the task of finding a register allocation in which the permutations will have
+// as many fixed points (registers that are mapped to themselves) as possible." (4.2)
+//
+
 use core::types::IrNodeId;
 use std::collections::hash_map::Entry;
 
@@ -44,6 +76,14 @@ pub(crate) struct Scratch {
     edge_uses: Vec<FixedBitSet>,
     live_in: Vec<FixedBitSet>,
     live_out: Vec<FixedBitSet>,
+    order: Vec<BlockIndex>,
+    assigned: Vec<RegisterId>,
+    /// the phi a value is a source of, its register is the value's coalescing hint
+    feeds: Vec<Option<ValueIndex>>,
+    occupied: FixedBitSet,
+    live: FixedBitSet,
+    dead: FixedBitSet,
+    dying: Vec<Vec<ValueIndex>>,
 }
 
 impl Scratch {
@@ -118,6 +158,8 @@ impl Scratch {
         Ok(())
     }
 
+    // Definition 3 (Interference): "We say, two variables interfere if there exists a label in
+    // the program where they are both live."
     fn liveness(&mut self, module: &ir::Module, blocks: &[IrNodeId]) -> Result<(), CodegenError> {
         let empty = FixedBitSet::with_capacity(self.values.len());
         for sets in [
@@ -195,6 +237,262 @@ impl Scratch {
 
         Ok(())
     }
+
+    /// Definition 2 (Strict program): "A program is strict, if each usage of a variable v is
+    /// dominated by Dv." (Dv is the label where v is defined)
+    /// Only parameters and constants exist before the first instruction, anything else live
+    /// into the entry is read on some path before it is written
+    fn is_strict(&self, module: &ir::Module, entry: BlockIndex) -> bool {
+        self.live_in[entry.index()].ones().all(|index| {
+            matches!(
+                module.node(self.values[index]),
+                Some(IrNode::FunctionParameter(_) | IrNode::Constant(_))
+            )
+        })
+    }
+
+    // Reverse postorder is the output of a postorder depth-first search (DFS) flipped
+    // backwards. Postorder records a block only after everything below it is finished, so
+    // flipped, a block comes after every block that leads into it (back edges aside), and after
+    // every block that dominates it. That's the order the paper colors in:
+    // "Theorem 2. A variable v can be added to a PEO of G if all variables whose definitions
+    // are dominated by the definition of v have already been added to the PEO."
+    // "Thus, a PEO of a SSA interference graph's nodes can be easily obtained by a post order
+    // walk over the program's dominance tree."
+    // "re-insert the nodes in reverse order and give each vi the first free color not used by
+    // its already re-inserted neighbors." (section 3)
+    fn reverse_postorder(&mut self, entry: BlockIndex, block_count: usize) {
+        self.order.clear();
+
+        let mut visited = FixedBitSet::with_capacity(block_count);
+        visited.insert(entry.index());
+
+        let mut stack = vec![(entry, 0)];
+        while let Some(top) = stack.len().checked_sub(1) {
+            let (block, next) = stack[top];
+            if let Some(successor) = self.successors[block.index()].get(next).copied() {
+                stack[top].1 += 1;
+                if !visited.put(successor.index()) {
+                    stack.push((successor, 0));
+                }
+            } else {
+                // every successor is done, so this block is finished: record it (btw this is what all the yapping is about)
+                self.order.push(block);
+                stack.pop();
+            }
+        }
+
+        self.order.reverse();
+    }
+
+    fn assign(
+        &mut self, module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId],
+    ) -> Result<Option<Allocation>, CodegenError> {
+        let value_count = self.values.len();
+
+        self.assigned.clear();
+        self.assigned.resize(value_count, RegisterId::INVALID);
+
+        self.feeds.clear();
+        self.feeds.resize(value_count, None);
+
+        for block in blocks {
+            for instruction in module.block(*block).ok_or(CodegenError::ExpectedBlock(*block))? {
+                let Some(IrNode::Phi { operands }) = module.node(*instruction) else {
+                    continue;
+                };
+
+                let phi = self.value_index[instruction];
+                for operand in operands {
+                    if let Some(value) = self.value_index.get(&operand.value) {
+                        self.feeds[value.index()].get_or_insert(phi); // a value feeding several phis keeps the first one
+                    }
+                }
+            }
+        }
+
+        // the VM binds arguments to r0..n and reads them back for `args`, so parameters never move or free
+        let parameters = proc.parameters.len();
+        if parameters >= usize::from(u16::MAX) {
+            return Err(CodegenError::TooManyRegisters);
+        }
+
+        // the length is the register count so far, start it at this proc's parameters
+        self.occupied.clone_from(&FixedBitSet::with_capacity(parameters));
+        self.occupied.insert_range(..parameters);
+        for (index, parameter) in proc.parameters.iter().enumerate() {
+            self.assigned[self.value_index[parameter].index()] = RegisterId(index as u16);
+        }
+
+        // constants load in the prologue, before any block
+        for index in 0..value_count {
+            if matches!(module.node(self.values[index]), Some(IrNode::Constant(_))) {
+                self.assigned[index] = take(&mut self.occupied, None)?;
+            }
+        }
+
+        let order = std::mem::take(&mut self.order);
+        let mut phi_count = 0;
+        for block in &order {
+            let index = block.index();
+            let instructions = module
+                .block(blocks[index])
+                .ok_or(CodegenError::ExpectedBlock(blocks[index]))?;
+
+            // "Lemma 2. If v, w interfere and Dv ⪰ Dw, then v is live at Dw." Everything a value
+            // here interferes with is live here, so live_in is all the block needs to know
+            self.occupied.clear();
+            self.occupied.insert_range(..parameters);
+            for value in self.live_in[index].ones() {
+                let register = self.assigned[value];
+                if register.is_invalid() {
+                    self.order = order;
+                    return Ok(None);
+                }
+
+                self.occupied.insert(usize::from(register.0));
+            }
+
+            self.live.clone_from(&self.live_out[index]);
+            self.dead.clear();
+            self.dead.grow(value_count);
+            if self.dying.len() < instructions.len() {
+                self.dying.resize_with(instructions.len(), Vec::new);
+            }
+
+            for dying in &mut self.dying[..instructions.len()] {
+                dying.clear();
+            }
+
+            for (position, instruction) in instructions.iter().enumerate().rev() {
+                let node = module
+                    .node(*instruction)
+                    .ok_or(CodegenError::MissingNode(*instruction))?;
+                if let Some(value) = self.value_index.get(instruction) {
+                    if !self.live.contains(value.index()) {
+                        self.dead.insert(value.index());
+                    }
+
+                    self.live.set(value.index(), false);
+                }
+
+                if !matches!(node, IrNode::Phi { .. }) {
+                    node.for_each_operand(|operand| {
+                        if let Some(value) = self.value_index.get(&operand)
+                            && !self.live.put(value.index())
+                        {
+                            self.dying[position].push(*value);
+                        }
+                    });
+                }
+            }
+
+            // phis are all written by the incoming edge at once, so a dead one frees only after the last
+            let mut phis = 0;
+            for instruction in instructions {
+                let Some(IrNode::Phi { operands }) = module.node(*instruction) else {
+                    break;
+                };
+
+                // "If we can assign as many of the xi the color of y, we save move operations on the
+                // respective edges to the φ's block." (section 4)
+                let hint = operands
+                    .iter()
+                    .filter_map(|operand| self.value_index.get(&operand.value))
+                    .map(|source| self.assigned[source.index()])
+                    .find(|register| register.is_valid() && !self.occupied.contains(usize::from(register.0)));
+                let value = self.value_index[instruction].index();
+                self.assigned[value] = take(&mut self.occupied, hint)?;
+                phis += 1;
+            }
+
+            phi_count = phi_count.max(phis);
+            for instruction in &instructions[..phis] {
+                let value = self.value_index[instruction].index();
+                if self.dead.contains(value) {
+                    release(&mut self.occupied, self.assigned[value], parameters);
+                }
+            }
+
+            for (position, instruction) in instructions.iter().enumerate().skip(phis) {
+                for value in &self.dying[position] {
+                    release(&mut self.occupied, self.assigned[value.index()], parameters);
+                }
+
+                let Some(value) = self.value_index.get(instruction).map(|value| value.index()) else {
+                    continue;
+                };
+
+                // same idea from the other side: a back-edge source asks for its phi's color
+                let hint = self.feeds[value].map(|phi| self.assigned[phi.index()]);
+                self.assigned[value] = take(&mut self.occupied, hint)?;
+                if self.dead.contains(value) {
+                    release(&mut self.occupied, self.assigned[value], parameters);
+                }
+            }
+        }
+
+        self.order = order;
+
+        let mut allocation = Allocation::default();
+        for (index, register) in self.assigned.iter().enumerate() {
+            if register.is_invalid() {
+                return Ok(None);
+            }
+
+            allocation.registers.insert(self.values[index], *register);
+        }
+
+        // emit_phi_copies routes cyclic copies through these, above every value so they never clash
+        // "each permutation of size n can be written as a sequence of transpositions (swaps) and
+        // thus is implementable using n registers, using no extra register. [...] However, if one
+        // register is spare at the φs, we can use it to implement the permutation with moves." (4.2)
+        let base = self.occupied.len();
+        for block in blocks {
+            let phis = module
+                .block(*block)
+                .ok_or(CodegenError::ExpectedBlock(*block))?
+                .iter()
+                .take_while(|instruction| matches!(module.node(**instruction), Some(IrNode::Phi { .. })));
+            for (position, phi) in phis.enumerate() {
+                allocation.phi_temporaries.insert(*phi, register_at(base + position)?);
+            }
+        }
+
+        allocation.register_count = u16::try_from(base + phi_count)
+            .ok()
+            .filter(|count| *count != u16::MAX)
+            .ok_or(CodegenError::TooManyRegisters)?;
+
+        Ok(Some(allocation))
+    }
+}
+
+fn register_at(index: usize) -> Result<RegisterId, CodegenError> {
+    u16::try_from(index)
+        .ok()
+        .map(RegisterId)
+        .filter(|register| register.is_valid())
+        .ok_or(CodegenError::TooManyRegisters)
+}
+
+fn take(occupied: &mut FixedBitSet, preferred: Option<RegisterId>) -> Result<RegisterId, CodegenError> {
+    let index = match preferred {
+        Some(register) if register.is_valid() && !occupied.contains(usize::from(register.0)) => usize::from(register.0),
+        _ => occupied.zeroes().next().unwrap_or(occupied.len()),
+    };
+
+    let register = register_at(index)?;
+    occupied.grow(index + 1);
+    occupied.insert(index);
+
+    Ok(register)
+}
+
+fn release(occupied: &mut FixedBitSet, register: RegisterId, parameters: usize) {
+    if usize::from(register.0) >= parameters {
+        occupied.set(usize::from(register.0), false);
+    }
 }
 
 impl Allocation {
@@ -230,18 +528,44 @@ pub(crate) fn allocate(
         return one_per_value(module, proc, blocks, constants);
     }
 
-    greedy(scratch, module, proc, blocks, constants)
+    match greedy(scratch, module, proc, blocks, constants)? {
+        Some(allocation) => Ok(allocation),
+        None => one_per_value(module, proc, blocks, constants),
+    }
 }
 
+// Theorem 1, 2:
+// Interference graph of an SSA program is chordal[1], and the dominance order is a perfect
+// elimination order for it, so coloring in that order with the first free color is optimal.
+// "Theorem 1. For each clique C = {c1, ..., cn} ⊆ V in the interference graph G = (V, E) of a
+// SSA-form program P, there exists a label ℓ ∈ LabelsP where all c1, ..., cn are live."
+// "Theorem 2 together with definition 4 state that the chromatic number of a SSA interference
+// graph is determined by the largest clique in the graph." (section 4)
+// So the registers we need = the most values live at one point, no backtracking.
+//
+// 1: every cycle of 4 or more nodes has a chord (an edge between two nodes of the cycle that
+//    aren't next to each other on it):
+// not chordal                   chordal
+// a ── b                        a ── b
+// │    │                        │ ╲  │
+// │    │                        │  ╲ │
+// d ── c                        d ── c
+// a-b-c-d-a has no chord        a-c is a chord
 fn greedy(
     scratch: &mut Scratch, module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId], constants: &[IrNodeId],
-) -> Result<Allocation, CodegenError> {
+) -> Result<Option<Allocation>, CodegenError> {
     scratch.clear(blocks.len());
     scratch.number(module, proc, blocks, constants)?;
     scratch.collect_successors(module, blocks)?;
     scratch.liveness(module, blocks)?;
 
-    todo!()
+    let entry = scratch.block_index[&proc.body];
+    if !scratch.is_strict(module, entry) {
+        return Ok(None);
+    }
+
+    scratch.reverse_postorder(entry, blocks.len());
+    scratch.assign(module, proc, blocks)
 }
 
 fn one_per_value(
@@ -367,6 +691,26 @@ mod tests {
         values.to_vec()
     }
 
+    // ; constants
+    //  %5 = constant 3
+    // %11 = constant 1
+    //
+    //  %0 = function /::choose vars=3
+    //  %1 =   function_parameter #0
+    //  %2 =   function_parameter #1
+    //  %3 =   function_parameter #2
+    //
+    //  %4 =   label
+    //  %9 =     selection_merge merge=%6
+    // %10 =     conditional_branch %1 %7 %6
+    //
+    //  %7 =   label
+    // %12 =     binary add %2 %11
+    // %13 =     return %12
+    //
+    //  %6 =   label
+    // %15 =     binary add %3 %11
+    // %16 =     return %15
     #[test]
     fn parameters_come_first_and_every_value_is_numbered_once() {
         let module = lower(fixture!(
@@ -399,6 +743,28 @@ mod tests {
         }
     }
 
+    // ; constants
+    //  %3 = constant 0
+    // %13 = constant 1
+    //
+    //  %0 = function /::count vars=2
+    //  %1 =   function_parameter #0
+    //
+    //  %2 =   label
+    //  %7 =     branch %4
+    //
+    //  %4 =   label
+    //  %8 =     phi [%3 from block %2] [%14 from block %5]
+    // %10 =     binary comp_less %8 %1
+    // %11 =     loop_merge merge=%6 continue=%4
+    // %12 =     conditional_branch %10 %5 %6
+    //
+    //  %5 =   label
+    // %14 =     binary add %8 %13
+    // %15 =     branch %4
+    //
+    //  %6 =   label
+    // %16 =     return %8
     #[test]
     fn successors_follow_the_loop() {
         let module = lower(fixture!("programs/counting_loop.dm"));
@@ -426,6 +792,28 @@ mod tests {
         assert!(successors(exit).is_empty());
     }
 
+    // ; constants
+    //  %3 = constant 0
+    // %13 = constant 1
+    //
+    //  %0 = function /::count vars=2
+    //  %1 =   function_parameter #0
+    //
+    //  %2 =   label
+    //  %7 =     branch %4
+    //
+    //  %4 =   label
+    //  %8 =     phi [%3 from block %2] [%14 from block %5]
+    // %10 =     binary comp_less %8 %1
+    // %11 =     loop_merge merge=%6 continue=%4
+    // %12 =     conditional_branch %10 %5 %6
+    //
+    //  %5 =   label
+    // %14 =     binary add %8 %13
+    // %15 =     branch %4
+    //
+    //  %6 =   label
+    // %16 =     return %8
     #[test]
     fn loop_values_stay_live_around_the_back_edge() {
         let module = lower(fixture!("programs/counting_loop.dm"));
@@ -459,6 +847,31 @@ mod tests {
         assert!(scratch.live_out[exit].is_clear());
     }
 
+    // ; constants
+    //  %5 = constant null
+    // %11 = constant 1
+    // %14 = constant 2
+    //
+    //  %0 = function /::select vars=4
+    //  %1 =   function_parameter #0
+    //  %2 =   function_parameter #1
+    //  %3 =   function_parameter #2
+    //
+    //  %4 =   label
+    //  %9 =     selection_merge merge=%6
+    // %10 =     conditional_branch %1 %7 %8
+    //
+    //  %7 =   label
+    // %12 =     binary add %2 %11
+    // %13 =     branch %6
+    //
+    //  %6 =   label
+    // %17 =     phi [%12 from block %7] [%15 from block %8]
+    // %18 =     return %17
+    //
+    //  %8 =   label
+    // %15 =     binary add %3 %14
+    // %16 =     branch %6
     #[test]
     fn phi_sources_are_live_only_on_their_own_edge() {
         let module = lower(fixture!("programs/phi_sources_are_live_only_on_their_own_edge.dm"));
