@@ -221,8 +221,8 @@ struct FunctionState {
     parameter_defaults: FxHashMap<IrNodeId, RegisterId>,
     phi_temporaries: FxHashMap<IrNodeId, RegisterId>,
     constant_loads: FxHashMap<IrNodeId, Vec<(IrNodeId, RegisterId)>>,
-    /// the instruction being generated, a constant operand resolves to the register it loaded into for it
-    instruction: IrNodeId,
+    /// a constant operand resolves to the register it loaded into for this instruction
+    current_instruction: IrNodeId,
 }
 
 impl FunctionState {
@@ -232,7 +232,7 @@ impl FunctionState {
         }
 
         self.constant_loads
-            .get(&self.instruction)
+            .get(&self.current_instruction)
             .and_then(|loads| loads.iter().find(|(constant, _)| *constant == node))
             .map(|(_, register)| *register)
             .ok_or(CodegenError::MissingRegister(node))
@@ -425,7 +425,7 @@ impl Generator {
             parameter_defaults: FxHashMap::default(),
             phi_temporaries: allocation.phi_temporaries,
             constant_loads: allocation.constant_loads,
-            instruction: proc.body,
+            current_instruction: proc.body,
         };
 
         let mut constant_defaults = Vec::new();
@@ -491,7 +491,7 @@ impl Generator {
         for instruction in instructions {
             let line = module.node_lines.get_near(*instruction, &mut self.line_hint);
             self.function_lines.push((self.code.len(), line));
-            state.instruction = *instruction;
+            state.current_instruction = *instruction;
             if let Some(loads) = state.constant_loads.get(instruction) {
                 for (constant, register) in loads {
                     self.emit_constant_load(module, *register, *constant)?;
