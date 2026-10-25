@@ -2511,6 +2511,47 @@ fn conditional_fallthrough_preserves_both_phi_edges() {
 }
 
 #[test]
+fn each_branch_feeds_its_own_value_into_the_merge() {
+    assert_eq!(
+        run(
+            fixture!("programs/each_branch_feeds_its_own_value_into_the_merge.dm"),
+            "test",
+        ),
+        1121.into()
+    );
+}
+
+#[test]
+fn a_loop_reads_the_old_value_after_computing_the_next() {
+    assert_eq!(
+        run(
+            fixture!("programs/a_loop_reads_the_old_value_after_computing_the_next.dm"),
+            "test",
+        ),
+        GenericValue::Text("012:3".into())
+    );
+}
+
+#[test]
+fn a_loop_reads_the_next_value_before_carrying_it() {
+    assert_eq!(
+        run(
+            fixture!("programs/a_loop_reads_the_next_value_before_carrying_it.dm"),
+            "test",
+        ),
+        GenericValue::Text("123:3".into())
+    );
+}
+
+#[test]
+fn loop_carried_values_rotate_in_parallel() {
+    assert_eq!(
+        run(fixture!("programs/loop_carried_values_rotate_in_parallel.dm"), "test"),
+        GenericValue::Text("21,12,231,312".into())
+    );
+}
+
+#[test]
 fn associative_iteration_preserves_keys_and_values() {
     assert_eq!(
         run(

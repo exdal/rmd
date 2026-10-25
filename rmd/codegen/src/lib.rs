@@ -1635,141 +1635,79 @@ mod tests {
             .collect::<Vec<_>>()
     }
 
+    fn operation<'a>(instructions: &[&'a str], mnemonic: &str) -> (usize, &'a str) {
+        instructions
+            .iter()
+            .enumerate()
+            .find_map(|(index, line)| {
+                let (_, instruction) = line.split_once(' ')?;
+                instruction
+                    .starts_with(&format!("{mnemonic} "))
+                    .then_some((index, instruction))
+            })
+            .unwrap_or_else(|| panic!("missing {mnemonic}"))
+    }
+
+    fn destination(instruction: &str) -> &str {
+        instruction
+            .split_once(' ')
+            .and_then(|(_, operands)| operands.split_once(','))
+            .map(|(destination, _)| destination)
+            .expect("instruction should write a register")
+    }
+
     #[test]
-    fn arithmetic_ssa_values_are_stackified_without_a_temporary_local() {
+    fn binary_operands_read_parameter_registers_directly() {
         let module = generate(&lower(fixture!(
-            "programs/arithmetic_ssa_values_are_stackified_without_a_temporary_local.dm"
+            "programs/binary_operands_read_parameter_registers_directly.dm"
         )))
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (_, add) = operation(&instructions, "binary");
 
         assert_eq!(module.magic, Module::MAGIC);
         assert_eq!(module.version, Module::VERSION);
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.functions[0].parameter_count, 2);
-        assert_eq!(module.functions[0].register_count, 2);
-        assert!(output.contains("load_local local0"), "{output}");
-        assert!(output.contains("load_local local1"), "{output}");
-        assert!(output.contains("binary add"), "{output}");
-        assert!(output.contains("return_value"), "{output}");
-        assert!(!output.contains("store_local"), "{output}");
+        assert!(add.ends_with(", add r0, r1"), "{output}");
+        assert!(
+            output.contains(&format!("return_value {}\n", destination(add))),
+            "{output}"
+        );
+        assert!(!output.contains(" move "), "{output}");
     }
 
     #[test]
     fn named_calls_use_function_table_ids() {
         let module = generate(&lower(fixture!("programs/named_calls_use_function_table_ids.dm"))).expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (_, call) = operation(&instructions, "function_call");
 
         assert_eq!(module.functions.len(), 2);
-        assert!(output.contains("function_call fn1"), "{output}");
+        assert!(call.ends_with(", fn1 args=[r0]"), "{output}");
     }
 
     #[test]
-    fn unused_call_results_are_dropped_without_a_local() {
+    fn dynamic_calls_look_up_the_method_before_evaluating_arguments() {
         let module = generate(&lower(fixture!(
-            "programs/unused_call_results_are_dropped_without_a_local.dm"
-        )))
-        .expect("generate");
-        let output = disasm::dump(&module).expect("disassemble");
-
-        assert_eq!(module.functions[1].register_count, 0);
-        assert!(output.contains("function_call fn0 args=[]\n"), "{output}");
-        assert!(output.contains(" drop\n"), "{output}");
-    }
-
-    #[test]
-    fn stackification_preserves_dynamic_evaluation_order() {
-        let module = generate(&lower(fixture!(
-            "programs/stackification_preserves_dynamic_evaluation_order.dm"
-        )))
-        .expect("generate");
-        let output = disasm::dump(&module).expect("disassemble");
-
-        let object = output.find("load_local local0").expect("object load");
-        let field = output.find("access_field .run method").expect("method lookup");
-        let lhs = output.find("load_local local1").expect("left argument");
-        let rhs = output.find("load_local local2").expect("right argument");
-        let add = output.find("binary add").expect("argument expression");
-        let call = output.find("call args=[value]").expect("dynamic call");
-
-        assert!(
-            object < field && field < lhs && lhs < rhs && rhs < add && add < call,
-            "{output}"
-        );
-        assert!(!output.contains("store_local"), "{output}");
-    }
-
-    #[test]
-    fn coalesces_edge_dead_loop_updates_into_the_phi_local() {
-        let module = generate(&lower(fixture!(
-            "programs/coalesces_edge_dead_loop_updates_into_the_phi_local.dm"
-        )))
-        .expect("generate");
-        let output = disasm::dump(&module).expect("disassemble");
-
-        assert_eq!(module.functions[0].register_count, 2, "{output}");
-        assert!(!output.contains("local2"), "{output}");
-        assert_eq!(output.matches("store_local local1").count(), 2, "{output}");
-    }
-
-    #[test]
-    fn coalesces_distinct_edge_dead_sources_into_one_phi_local() {
-        let module = generate(&lower(fixture!(
-            "programs/coalesces_distinct_edge_dead_sources_into_one_phi_local.dm"
-        )))
-        .expect("generate");
-        let output = disasm::dump(&module).expect("disassemble");
-
-        assert_eq!(module.functions[0].register_count, 4, "{output}");
-        assert!(!output.contains("local4"), "{output}");
-        assert_eq!(output.matches("store_local local3").count(), 2, "{output}");
-    }
-
-    #[test]
-    fn keeps_a_phi_copy_when_the_old_value_is_used_after_the_source() {
-        let module = generate(&lower(fixture!(
-            "programs/keeps_a_phi_copy_when_the_old_value_is_used_after_the_source.dm"
-        )))
-        .expect("generate");
-        let output = disasm::dump(&module).expect("disassemble");
-
-        assert_eq!(module.functions[0].register_count, 3, "{output}");
-        assert!(output.contains("store_local local2"), "{output}");
-        assert!(output.contains("load_local local2"), "{output}");
-    }
-
-    #[test]
-    fn keeps_a_phi_copy_when_the_source_has_another_user() {
-        let module = generate(&lower(fixture!(
-            "programs/keeps_a_phi_copy_when_the_source_has_another_user.dm"
-        )))
-        .expect("generate");
-        let output = disasm::dump(&module).expect("disassemble");
-
-        assert_eq!(module.functions[0].register_count, 3, "{output}");
-        assert!(output.contains("store_local local2"), "{output}");
-        assert!(output.contains("load_local local2"), "{output}");
-    }
-
-    #[test]
-    fn a_coalesced_false_edge_needs_no_copy_stub() {
-        let module = generate(&lower(fixture!(
-            "programs/a_coalesced_false_edge_needs_no_copy_stub.dm"
+            "programs/dynamic_calls_look_up_the_method_before_evaluating_arguments.dm"
         )))
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
         let instructions = bytecode_instructions(&output);
+        let (lookup, method) = operation(&instructions, "access_field");
+        let (argument, add) = operation(&instructions, "binary");
+        let (call, dynamic) = operation(&instructions, "call");
 
-        assert_eq!(module.functions[0].register_count, 2, "{output}");
-        assert_eq!(
-            instructions
-                .iter()
-                .filter(|instruction| instruction.contains(" jump "))
-                .count(),
-            0,
+        assert!(method.ends_with(", r0.run method"), "{output}");
+        assert!(add.ends_with(", add r1, r2"), "{output}");
+        assert!(
+            dynamic.ends_with(&format!(", {} args=[{}]", destination(method), destination(add))),
             "{output}"
         );
-        assert_eq!(output.matches("store_local local1").count(), 1, "{output}");
+        assert!(lookup < argument && argument < call, "{output}");
     }
 
     #[test]
@@ -1824,16 +1762,14 @@ mod tests {
             .expect("conditional jump");
         let target = instructions[branch]
             .split_whitespace()
-            .last()
+            .nth(2)
+            .map(|target| target.trim_end_matches(','))
             .expect("conditional target");
         let stub = instructions
             .iter()
             .position(|instruction| instruction.starts_with(target))
             .expect("false-edge stub");
-        let return_value = instructions
-            .iter()
-            .position(|instruction| instruction.ends_with("return_value"))
-            .expect("return");
+        let (return_value, _) = operation(&instructions, "return_value");
 
         assert!(stub > return_value, "{output}");
         assert!(
@@ -1929,9 +1865,17 @@ mod tests {
         let module =
             generate(&lower(fixture!("programs/output_preserves_field_reference_shape.dm"))).expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (_, hello) = operation(&instructions, "move_const");
+        let (_, world) = operation(&instructions, "load_builtin");
+        let (_, write) = operation(&instructions, "output");
 
-        assert!(output.contains("output field .log"), "{output}");
-        assert!(!output.contains("access_field .log"), "{output}");
+        assert_eq!(
+            write,
+            format!("output field {}.log, {}", destination(world), destination(hello)),
+            "{output}"
+        );
+        assert!(!output.contains("access_field"), "{output}");
     }
 
     #[test]
@@ -1944,7 +1888,7 @@ mod tests {
     }
 
     #[test]
-    fn phi_cycles_load_every_source_before_storing_any_destination() {
+    fn phi_cycles_read_every_source_before_writing_any_destination() {
         let module = ir::Module {
             nodes: vec![
                 IrNode::Function(ProcId(0)),
@@ -2000,21 +1944,39 @@ mod tests {
         };
         let module = generate(&module).expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
-        let instructions = bytecode_instructions(&output)
-            .into_iter()
-            .map(|line| line.split_whitespace().skip(1).collect::<Vec<_>>().join(" "))
-            .collect::<Vec<_>>();
+        let instructions = bytecode_instructions(&output);
+        let (_, back_edge) = operation(&instructions, "jump");
+        let header = back_edge.strip_prefix("jump ").expect("jump target");
 
-        assert_eq!(
-            &instructions[..5],
-            [
-                "load_local local1",
-                "load_local local0",
-                "store_local local1",
-                "store_local local0",
-                "jump 0x00000000",
-            ]
-        );
+        let mut entry = FxHashMap::default();
+        let mut values = FxHashMap::default();
+        let mut is_loop = false;
+        for line in &instructions {
+            let (address, instruction) = line.split_once(' ').expect("address");
+            if address == header {
+                is_loop = true;
+            }
+
+            if instruction.starts_with("jump ") {
+                break;
+            }
+
+            let (destination, source) = instruction
+                .strip_prefix("move ")
+                .and_then(|operands| operands.split_once(", "))
+                .unwrap_or_else(|| panic!("only phi copies expected: {output}"));
+            if is_loop {
+                let value = values.get(source).copied().unwrap_or(source);
+                values.insert(destination, value);
+            } else {
+                entry.insert(source, destination);
+            }
+        }
+
+        let first = entry["r0"];
+        let second = entry["r1"];
+        assert_eq!(values.get(first).copied(), Some(second), "{output}");
+        assert_eq!(values.get(second).copied(), Some(first), "{output}");
     }
 
     #[test]
