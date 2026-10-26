@@ -271,9 +271,16 @@ impl<'a> IrModuleBuilder<'a> {
             let var = self.declare_var(spec.clone());
             self.parameters.push(var);
             self.write_variable(var, entry, value);
-            lowered.push(ProcParam {
+            if let Some(default) = param.default {
+                let default = self.lower_expr(default);
+                self.emit_instr(IrNode::DefaultParameter {
+                    parameter: value,
+                    value: default,
+                });
+            }
+
+            lowered.push(ParamDecl {
                 spec,
-                default: param.default.map(|id| self.lower_expr(id)),
                 in_list: param.in_list.map(|id| self.lower_expr(id)),
             });
         }
@@ -2539,19 +2546,47 @@ mod tests {
     }
 
     #[test]
-    fn metadata_does_not_reference_defaults_after_a_noreturn_default() {
-        let module = lower(fixture!(
-            "programs/metadata_does_not_reference_defaults_after_a_noreturn_default.dm"
-        ));
+    fn a_noreturn_default_drops_the_defaults_after_it() {
+        let module = lower(fixture!("programs/a_noreturn_default_drops_the_defaults_after_it.dm"));
+        let entry = module.block(module.procs[0].body).expect("procedure body");
 
         assert!(matches!(
-            module.procs[0].params[0]
-                .default
-                .and_then(|default| module.node(default)),
+            entry.last().and_then(|id| module.node(*id)),
             Some(IrNode::Blocked("input"))
         ));
-        assert_eq!(module.procs[0].params[1].default, None);
-        crate::verify(&module).expect("removed defaults should not leave stale metadata");
+        assert!(
+            !module
+                .nodes
+                .iter()
+                .any(|node| matches!(node, IrNode::DefaultParameter { .. }))
+        );
+        crate::verify(&module).expect("removed defaults should verify");
+    }
+
+    #[test]
+    fn parameter_defaults_lower_to_entry_block_instructions() {
+        let module = lower(fixture!(
+            "programs/parameter_defaults_lower_to_entry_block_instructions.dm"
+        ));
+        let entry = module.block(module.procs[0].body).expect("procedure body");
+        let defaults = entry
+            .iter()
+            .filter_map(|id| match module.node(*id) {
+                Some(IrNode::DefaultParameter { parameter, value }) => Some((*parameter, *value)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let parameters = &module.procs[0].parameters;
+
+        assert_eq!(defaults.len(), 2);
+        assert_eq!(defaults[0].0, parameters[1]);
+        assert!(matches!(module.node(defaults[0].1), Some(IrNode::Constant(_))));
+        assert_eq!(defaults[1].0, parameters[2]);
+        assert!(matches!(
+            module.node(defaults[1].1),
+            Some(IrNode::Binary { lhs, .. }) if *lhs == parameters[0]
+        ));
+        crate::verify(&module).expect("parameter defaults should verify");
     }
 
     #[test]

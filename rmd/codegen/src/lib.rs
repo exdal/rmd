@@ -218,7 +218,6 @@ struct EdgeStub {
 
 struct FunctionState {
     registers: FxHashMap<IrNodeId, RegisterId>,
-    parameter_defaults: FxHashMap<IrNodeId, RegisterId>,
     phi_temporaries: FxHashMap<IrNodeId, RegisterId>,
     constant_loads: FxHashMap<IrNodeId, Vec<(IrNodeId, RegisterId)>>,
     /// a constant operand resolves to the register it loaded into for this instruction
@@ -422,36 +421,12 @@ impl Generator {
         let allocation = registers::allocate(&mut self.register_scratch, module, proc, &blocks)?;
         let mut state = FunctionState {
             registers: allocation.registers,
-            parameter_defaults: FxHashMap::default(),
             phi_temporaries: allocation.phi_temporaries,
             constant_loads: allocation.constant_loads,
             current_instruction: proc.body,
         };
 
-        let mut constant_defaults = Vec::new();
-        for (index, parameter) in proc.params.iter().enumerate() {
-            let Some(default) = parameter.default else {
-                continue;
-            };
-
-            let destination = state.register(proc.parameters[index])?;
-            if matches!(module.node(default), Some(IrNode::Constant(_))) {
-                constant_defaults.push((default, destination));
-            } else {
-                state.parameter_defaults.insert(default, destination);
-            }
-        }
-
         let address = self.code_offset()?;
-        for (default, destination) in constant_defaults {
-            let temporary = allocation
-                .default_temporary
-                .ok_or(CodegenError::MissingRegister(default))?;
-            self.emit_constant_load(module, temporary, default)?;
-            self.emit_op(Op::DefaultParameter);
-            self.emit_register(destination);
-            self.emit_register(temporary);
-        }
 
         let mut edge_stubs = Vec::new();
 
@@ -882,6 +857,12 @@ impl Generator {
                 self.emit_u32(name.0);
                 self.emit_register(value);
             },
+            IrNode::DefaultParameter { parameter, value } => {
+                let value = state.register(*value)?;
+                self.emit_op(Op::DefaultParameter);
+                self.emit_register(state.register(*parameter)?);
+                self.emit_register(value);
+            },
             IrNode::StoreBuiltin { builtin, value } => {
                 let value = state.register(*value)?;
                 self.emit_op(Op::StoreBuiltin);
@@ -967,12 +948,6 @@ impl Generator {
                 self.emit_u32(reason.0);
                 return Ok(());
             },
-        }
-
-        if let Some(parameter) = state.parameter_defaults.get(&id) {
-            self.emit_op(Op::DefaultParameter);
-            self.emit_register(*parameter);
-            self.emit_register(state.register(id)?);
         }
 
         Ok(())
@@ -1420,10 +1395,6 @@ fn referenced_nodes(module: &ir::Module, procedures: &FxHashSet<ProcId>) -> Resu
         let Some(proc) = module.proc(*proc_id) else {
             continue;
         };
-
-        for parameter in &proc.params {
-            referenced.extend(parameter.default);
-        }
 
         for block in reachable_blocks(module, proc.body)? {
             for instruction in module.block(block).ok_or(CodegenError::ExpectedBlock(block))? {

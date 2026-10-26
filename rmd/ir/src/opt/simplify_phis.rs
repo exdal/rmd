@@ -191,7 +191,6 @@ pub(super) fn replace_all_uses(module: &mut Module, replacements: &impl Replace)
 pub(super) fn replace_metadata_uses(module: &mut Module, replacements: &impl Replace) {
     for proc in &mut module.procs {
         for param in &mut proc.params {
-            replace_optional(&mut param.default, replacements);
             replace_optional(&mut param.in_list, replacements);
             for dimension in &mut param.spec.dimensions {
                 replace_optional(dimension, replacements);
@@ -302,6 +301,10 @@ pub(super) fn replace_operands(node: &mut IrNode, replacements: &impl Replace) {
             replace_id(value, replacements);
         },
         IrNode::StoreBuiltin { value, .. } => replace_id(value, replacements),
+        IrNode::DefaultParameter { parameter, value } => {
+            replace_id(parameter, replacements);
+            replace_id(value, replacements);
+        },
         IrNode::ConditionalBranch { condition, .. } => replace_id(condition, replacements),
         IrNode::Return(value) => replace_optional(value, replacements),
         IrNode::Output { target, value } => {

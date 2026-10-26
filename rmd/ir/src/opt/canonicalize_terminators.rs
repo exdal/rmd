@@ -58,7 +58,6 @@ pub fn canonicalize_terminators(module: &mut Module) {
 
     for proc in &mut module.procs {
         for parameter in &mut proc.params {
-            clear_removed(&mut parameter.default, &removed);
             clear_removed(&mut parameter.in_list, &removed);
             for dimension in &mut parameter.spec.dimensions {
                 clear_removed(dimension, &removed);

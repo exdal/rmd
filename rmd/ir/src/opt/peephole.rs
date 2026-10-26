@@ -428,9 +428,16 @@ mod tests {
     }
 
     #[test]
-    fn updates_parameter_default_metadata() {
-        let module = lower(fixture!("programs/updates_parameter_default_metadata.dm"));
-        let default = module.procs[0].params[0].default.expect("default value");
+    fn rewrites_a_parameter_default_value() {
+        let module = lower(fixture!("programs/rewrites_a_parameter_default_value.dm"));
+        let default = module
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                IrNode::DefaultParameter { value, .. } => Some(*value),
+                _ => None,
+            })
+            .expect("parameter default");
 
         assert!(matches!(
             module.node(default),

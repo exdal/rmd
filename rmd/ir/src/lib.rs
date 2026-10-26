@@ -1,4 +1,4 @@
-pub use core::types::{IrNodeId, ProcId, ProcKind, ProcParam};
+pub use core::types::{IrNodeId, ProcId, ProcKind};
 use core::{
     interner::SymbolMap,
     location::{LineTable, Location, SourceLine},
@@ -184,6 +184,10 @@ pub enum IrNode {
         builtin: Builtin,
         value: IrNodeId,
     },
+    DefaultParameter {
+        parameter: IrNodeId,
+        value: IrNodeId,
+    },
     CatchValue,
 
     Label(Vec<IrNodeId>),
@@ -291,6 +295,7 @@ impl IrNode {
             | Self::Store { .. }
             | Self::Initialize { .. }
             | Self::StoreBuiltin { .. }
+            | Self::DefaultParameter { .. }
             | Self::CatchValue
             | Self::Del(_)
             | Self::Output { .. } => SideEffect::Observable,
@@ -425,6 +430,10 @@ impl IrNode {
                 visit(*value);
             },
             Self::StoreBuiltin { value, .. } => visit(*value),
+            Self::DefaultParameter { parameter, value } => {
+                visit(*parameter);
+                visit(*value);
+            },
             Self::ConditionalBranch { condition, .. } => visit(*condition),
             Self::Return(value) => value.iter().copied().for_each(&mut visit),
             Self::Output { target, value } => {
@@ -469,13 +478,20 @@ impl IrNode {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParamDecl {
+    pub spec: VarSpec<IrNodeId>,
+    /// `in list(...)`
+    pub in_list: Option<IrNodeId>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Procedure {
     pub function: IrNodeId,
     pub parameters: Vec<IrNodeId>,
     pub previous: Option<ProcId>,
     pub owner: TreePath,
     pub name: Identifier,
-    pub params: Vec<ProcParam<IrNodeId>>,
+    pub params: Vec<ParamDecl>,
     pub variadic: bool,
     pub vars: Vec<VarSpec<IrNodeId>>,
     pub body: IrNodeId,

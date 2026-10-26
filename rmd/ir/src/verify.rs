@@ -61,11 +61,6 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
         for parameter in &proc.params {
             verify_optional(
                 module,
-                parameter.default,
-                &format!("procedure {index} parameter default"),
-            )?;
-            verify_optional(
-                module,
                 parameter.in_list,
                 &format!("procedure {index} parameter in-list"),
             )?;
@@ -131,6 +126,14 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
             if let Some(owner) = instruction_blocks.insert(instruction, *block) {
                 return Err(VerifyError::new(format!(
                     "instruction {instruction} belongs to both block {owner} and block {block}"
+                )));
+            }
+
+            if let IrNode::DefaultParameter { parameter, .. } = node
+                && !matches!(module.node(*parameter), Some(IrNode::FunctionParameter(_)))
+            {
+                return Err(VerifyError::new(format!(
+                    "parameter default {instruction} targets non-parameter node {parameter}"
                 )));
             }
 

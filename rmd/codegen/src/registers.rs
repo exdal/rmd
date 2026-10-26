@@ -45,8 +45,6 @@ pub(crate) struct Allocation {
     pub(crate) phi_temporaries: FxHashMap<IrNodeId, RegisterId>,
     /// per instruction, the constants loaded right before it and the registers they load into
     pub(crate) constant_loads: FxHashMap<IrNodeId, Vec<(IrNodeId, RegisterId)>>,
-    /// constant parameter defaults load here in the prologue, before any value is live
-    pub(crate) default_temporary: Option<RegisterId>,
     pub(crate) register_count: u16,
 }
 
@@ -543,29 +541,14 @@ pub(crate) fn allocate(
 ) -> Result<Allocation, CodegenError> {
     // try and spawn bodies run as nested execute_until calls that resume after the
     // instruction, so the IR control flow does not describe where values stay live
-    let mut allocation = if has_nested_execution(module, blocks)? {
-        one_per_value(module, proc, blocks)?
-    } else {
-        match greedy(scratch, module, proc, blocks)? {
-            Some(allocation) => allocation,
-            None => one_per_value(module, proc, blocks)?,
-        }
-    };
-
-    let has_constant_default = proc.params.iter().any(|parameter| {
-        parameter
-            .default
-            .is_some_and(|default| matches!(module.node(default), Some(IrNode::Constant(_))))
-    });
-    if has_constant_default {
-        let temporary = register_at(proc.parameters.len())?;
-        allocation.register_count = allocation
-            .register_count
-            .max(register_at(usize::from(temporary.0) + 1)?.0);
-        allocation.default_temporary = Some(temporary);
+    if has_nested_execution(module, blocks)? {
+        return one_per_value(module, proc, blocks);
     }
 
-    Ok(allocation)
+    match greedy(scratch, module, proc, blocks)? {
+        Some(allocation) => Ok(allocation),
+        None => one_per_value(module, proc, blocks),
+    }
 }
 
 // Theorem 1, 2:

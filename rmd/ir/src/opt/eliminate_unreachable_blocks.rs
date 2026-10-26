@@ -59,7 +59,6 @@ pub fn eliminate_unreachable_blocks(module: &mut Module) {
     let removed = removed.into_iter().collect::<FxHashSet<_>>();
     for proc in &mut module.procs {
         for parameter in &mut proc.params {
-            clear_removed(&mut parameter.default, &removed);
             clear_removed(&mut parameter.in_list, &removed);
 
             for dimension in &mut parameter.spec.dimensions {

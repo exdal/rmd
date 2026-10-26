@@ -194,9 +194,8 @@ impl<'a> Reachability<'a> {
             .iter()
             .flat_map(|parameter| {
                 parameter
-                    .default
+                    .in_list
                     .into_iter()
-                    .chain(parameter.in_list)
                     .chain(parameter.spec.dimensions.iter().flatten().copied())
             })
             .chain(

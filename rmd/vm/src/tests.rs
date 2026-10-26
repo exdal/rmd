@@ -2481,6 +2481,14 @@ fn executes_arithmetic_direct_calls_and_defaults() {
 }
 
 #[test]
+fn a_default_can_be_another_parameter() {
+    assert_eq!(
+        run(fixture!("programs/a_default_can_be_another_parameter.dm"), "test"),
+        GenericValue::Text("1,2,1,2;1,2,3,2;1,2,3,4".into())
+    );
+}
+
+#[test]
 fn nonconstant_defaults_can_read_earlier_parameters() {
     assert_eq!(
         run(
@@ -2583,7 +2591,7 @@ fn returning_null_clears_dot_and_a_bare_return_keeps_it() {
 }
 
 #[test]
-fn constant_defaults_load_through_one_temporary() {
+fn constant_defaults_apply_only_to_omitted_arguments() {
     assert_eq!(
         run(fixture!("programs/constants_load_at_their_use.dm"), "test_defaults"),
         GenericValue::Text("5x,1x,1y".into())

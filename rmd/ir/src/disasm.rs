@@ -138,9 +138,8 @@ fn selected_nodes(module: &Module, procedures: &FxHashSet<ProcId>) -> FxHashSet<
         }
         for parameter in &procedure.params {
             for node in parameter
-                .default
+                .in_list
                 .into_iter()
-                .chain(parameter.in_list)
                 .chain(parameter.spec.dimensions.iter().flatten().copied())
             {
                 mark(node, &mut selected, &mut pending);
@@ -264,7 +263,6 @@ fn dump_referenced_nodes(
             continue;
         }
         for parameter in &procedure.params {
-            pending.extend(parameter.default);
             pending.extend(parameter.in_list);
             pending.extend(parameter.spec.dimensions.iter().flatten().copied());
         }
@@ -446,6 +444,7 @@ fn format_node(node: &IrNode) -> String {
         IrNode::StoreBuiltin { builtin, value } => {
             format!("store_builtin {} {value}", snake_case(builtin))
         },
+        IrNode::DefaultParameter { parameter, value } => format!("default_parameter {parameter} {value}"),
         IrNode::CatchValue => String::from("catch_value"),
         IrNode::AccessField { object, name, access } => {
             format!("access_field {object} {}{name}", access_operator(*access))
@@ -776,7 +775,7 @@ mod tests {
                 "programs/disassembly_is_stable_and_names_variables.dm"
             ))),
             concat!(
-                "; ir module: 5 nodes, 1 constants, 0 external functions, 1 functions, 1 blocks\n",
+                "; ir module: 6 nodes, 1 constants, 0 external functions, 1 functions, 1 blocks\n",
                 "\n",
                 "; constants\n",
                 "%3 = constant 2\n",
@@ -785,7 +784,8 @@ mod tests {
                 "%1 =   function_parameter #0\n",
                 "\n",
                 "%2 =   label\n",
-                "%4 =     return %1\n",
+                "%4 =     default_parameter %1 %3\n",
+                "%5 =     return %1\n",
             )
         );
     }
