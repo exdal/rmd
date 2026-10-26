@@ -3517,6 +3517,14 @@ fn matrix_operations_follow_byond() {
     );
 }
 
+#[test]
+fn equivalence_compares_contents_like_byond() {
+    assert_eq!(
+        run(fixture!("programs/equivalence_compares_contents_like_byond.dm"), "test"),
+        "101000;110000;10;10010;11;101;10".into()
+    );
+}
+
 /// `/alist` is a list, not a plain object, so `new` has to take the same path `/list` does.
 #[test]
 fn new_alist_is_a_list_seeded_from_its_pairs() {

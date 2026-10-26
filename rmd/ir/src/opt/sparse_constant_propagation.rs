@@ -931,5 +931,13 @@ mod tests {
             fold_binary(BinaryOp::CompEq, &Value::Null, &Value::Num(0.0)),
             Some(Value::Num(0.0))
         );
+        assert_eq!(
+            fold_binary(
+                BinaryOp::CompEquiv,
+                &Value::Text("abc".into()),
+                &Value::Text("ABC".into())
+            ),
+            Some(Value::Num(0.0))
+        );
     }
 }

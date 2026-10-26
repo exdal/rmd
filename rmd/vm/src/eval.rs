@@ -5,6 +5,7 @@ use core::{
     vars,
 };
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
@@ -24,6 +25,7 @@ use crate::{
 };
 
 type Result<T, E = Fault> = std::result::Result<T, E>;
+type Entry = (GenericValue, Option<GenericValue>);
 
 #[derive(Debug, Default)]
 pub struct Runtime {
@@ -2226,8 +2228,10 @@ impl Evaluator<'_> {
     pub fn binary(&mut self, op: Binary, left: GenericValue, right: GenericValue) -> Result<GenericValue> {
         use Binary::*;
         match op {
-            CompEq | CompEquiv => return Ok((left == right).into()),
-            CompNotEq | CompNotEquiv => return Ok((left != right).into()),
+            CompEq => return Ok((left == right).into()),
+            CompNotEq => return Ok((left != right).into()),
+            CompEquiv => return Ok(self.equivalent(&left, &right).into()),
+            CompNotEquiv => return Ok((!self.equivalent(&left, &right)).into()),
             LogicalAnd => return Ok(if left.truthy() { right } else { left }),
             LogicalOr => return Ok(if left.truthy() { left } else { right }),
             In => {
@@ -2381,6 +2385,39 @@ impl Evaluator<'_> {
                 .map(|list| list.entries.clone())
                 .unwrap_or_default(),
             value => vec![(value, None)],
+        }
+    }
+
+    fn equivalent(&self, left: &GenericValue, right: &GenericValue) -> bool {
+        if left == right {
+            return true;
+        }
+
+        let (Some(left), Some(right)) = (self.equivalence_entries(left), self.equivalence_entries(right)) else {
+            return false;
+        };
+
+        left.len() == right.len()
+            && left
+                .iter()
+                .zip(right.iter())
+                .all(|((left_key, left_value), (right_key, right_value))| {
+                    left_key == right_key
+                        && left_value.as_ref().unwrap_or(&GenericValue::Null)
+                            == right_value.as_ref().unwrap_or(&GenericValue::Null)
+                })
+    }
+
+    fn equivalence_entries(&self, value: &GenericValue) -> Option<Cow<'_, [Entry]>> {
+        match value {
+            GenericValue::List(id) | GenericValue::ArgList(id) => self
+                .runtime
+                .heap
+                .list(*id)
+                .map(|list| Cow::Borrowed(list.entries.as_slice())),
+            value => self
+                .matrix(value)
+                .map(|matrix| Cow::Owned(matrix.0.map(|component| (component.into(), None)).to_vec())),
         }
     }
 
