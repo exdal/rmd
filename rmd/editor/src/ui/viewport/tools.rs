@@ -421,6 +421,7 @@ impl UiState {
             return;
         }
 
+        frame.interaction.cursor = None;
         let Some(size) = session.map().map(|map| map.size()) else {
             return;
         };

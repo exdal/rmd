@@ -667,6 +667,33 @@ fn move_tool_ignores_where_pixel_offsets_draw_the_atom() {
 }
 
 #[test]
+fn move_tool_highlights_only_the_dragged_atom() {
+    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let mut app = RectangleUiHarness::new();
+    app.session.set_tool(Tool::Place);
+    app.session
+        .state
+        .choose_prefab(Prefab::new(TreePath::parse("/obj/structure/table")));
+    let table_id = app.session.place_at(Coord::new(5, 8, 1), None).unwrap();
+    app.session.set_tool(Tool::Move);
+
+    app.pointer(app.tile(5, 8), true);
+    assert!(
+        app.interaction.cursor.is_some(),
+        "the press keeps the cursor so the pick can run"
+    );
+
+    app.session.pick_instance(Some(table_id));
+    app.pointer(app.tile(5, 8), true);
+    app.pointer(app.tile(6, 8), true);
+    assert_eq!(app.interaction.cursor, None);
+    assert_eq!(app.interaction.picked, Some(table_id));
+
+    app.pointer(app.tile(6, 8), false);
+    assert!(app.interaction.cursor.is_some());
+}
+
+#[test]
 fn move_tool_leaves_turfs_in_place() {
     let _guard = IMGUI_CONTEXT.lock().unwrap();
     let mut app = RectangleUiHarness::new();
