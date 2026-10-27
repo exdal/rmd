@@ -57,6 +57,7 @@ impl<'a> Analyzer<'a> {
     pub fn finish(mut self) -> (ObjectTree, Vec<SemaError>) {
         self.tree.resolve_parent_types();
         self.resolve_var_types();
+        self.tree.number_shared_vars();
 
         (self.tree, self.errors)
     }
@@ -161,6 +162,7 @@ impl<'a> Analyzer<'a> {
                         declared: declares || is_already_declared,
                         location: *location,
                         resolved_type: None,
+                        shared: None,
                     },
                 );
             },
@@ -244,6 +246,7 @@ impl<'a> Analyzer<'a> {
                         declared: is_already_declared,
                         location: *location,
                         resolved_type: None,
+                        shared: None,
                     },
                 );
             },
@@ -514,6 +517,20 @@ mod tests {
         assert_eq!(kind("mixed_flag").single(), Some(VarTypeKind::Bool));
         assert_eq!(kind("loose_flag").single(), Some(VarTypeKind::Number));
         assert_eq!(kind("counted").single(), Some(VarTypeKind::Number));
+    }
+
+    #[test]
+    fn only_type_statics_and_globals_are_shared() {
+        let (tree, errors) = analyze_source(fixture!("programs/only_type_statics_and_globals_are_shared.dm"));
+        assert!(errors.is_empty(), "{errors:?}");
+        let counter = tree.id_of(&TreePath::parse("/datum/counter")).unwrap();
+        let shared = |ty: TypeId, name: &str| tree.var_inherited(ty, &name.into()).unwrap().shared;
+
+        assert_eq!(shared(TypeId::ROOT, "top"), None);
+        assert_eq!(shared(counter, "plain"), None);
+        assert!(shared(counter, "count").is_some());
+        assert!(shared(counter, "total").is_some());
+        assert_ne!(shared(counter, "count"), shared(counter, "total"));
     }
 
     #[test]

@@ -102,7 +102,12 @@ pub struct VarDecl {
     pub declared: bool,
     pub location: Location,
     pub resolved_type: Option<ResolvedVarType>,
+    /// set for `var/static` and `var/global` on a type, which every instance shares
+    pub shared: Option<SharedVarId>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SharedVarId(pub u32);
 
 #[derive(Debug, Clone)]
 pub struct ProcDecl {
@@ -149,6 +154,19 @@ impl ObjectTree {
 
     pub fn roots(&self) -> Roots {
         self.roots
+    }
+
+    /// a `var/global` on the root is an ordinary global and keeps its name
+    pub fn number_shared_vars(&mut self) {
+        let mut next = 0;
+        for decl in self.types.iter_mut().filter(|decl| decl.id != TypeId::ROOT) {
+            for var in decl.vars.values_mut() {
+                if var.modifiers.is_static || var.modifiers.is_global {
+                    var.shared = Some(SharedVarId(next));
+                    next += 1;
+                }
+            }
+        }
     }
 
     pub fn get(&self, id: TypeId) -> Option<&TypeDecl> {

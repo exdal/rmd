@@ -758,6 +758,7 @@ mod tests {
                 declared: true,
                 location: Location::default(),
                 resolved_type: None,
+                shared: None,
             },
         );
     }

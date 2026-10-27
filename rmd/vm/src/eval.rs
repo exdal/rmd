@@ -19,7 +19,7 @@ use objtree::{ObjectTree, TypeId};
 use crate::{
     Fault, FaultKind, GenericValue, Limits, StackFrame,
     bake::Placement,
-    heap::{Heap, Object, ObjectId},
+    heap::{Heap, Object, ObjectId, Static},
     value::{IteratorId, ListData, ListId, ModifiedType, ProcRef, RangeValue, Receiver},
     world::{Position, World},
 };
@@ -726,7 +726,12 @@ impl<'a> Evaluator<'a> {
                 Op::LoadStatic => {
                     let destination = self.register(frame)?;
                     let id = self.static_id(frame)?;
-                    let value = self.runtime.heap.static_local(id).cloned().unwrap_or_default();
+                    let value = self
+                        .runtime
+                        .heap
+                        .static_value(Static::Local(id))
+                        .cloned()
+                        .unwrap_or_default();
                     self.set(frame, destination, value)?;
                 },
                 Op::StoreStatic | Op::InitStatic => {
@@ -734,8 +739,8 @@ impl<'a> Evaluator<'a> {
                     let source = self.register(frame)?;
                     let value = self.get(frame, source)?.clone();
                     // an initialized static stays untouched, so the journal does not see a write
-                    if op == Op::StoreStatic || self.runtime.heap.static_local(id).is_none() {
-                        *self.runtime.heap.static_local_mut(id) = Some(value);
+                    if op == Op::StoreStatic || self.runtime.heap.static_value(Static::Local(id)).is_none() {
+                        *self.runtime.heap.static_value_mut(Static::Local(id)) = Some(value);
                     }
                 },
                 Op::LoadBuiltin => {
@@ -1964,14 +1969,10 @@ impl Evaluator<'_> {
 
                 let object_type = object.ty;
                 let declaration = self.tree.var_declaration(object_type, name);
-                let shared = declaration.and_then(|(owner, variable)| shared_key(owner, variable, name));
+                let shared = declaration.and_then(|(_, variable)| variable.shared).map(Static::Var);
 
-                if let Some(shared) = &shared
-                    && let Some(value) = self
-                        .runtime
-                        .global
-                        .and_then(|global| self.runtime.heap.object(global))
-                        .and_then(|global| global.vars.get(shared))
+                if let Some(shared) = shared
+                    && let Some(value) = self.runtime.heap.static_value(shared)
                 {
                     return Ok(value.clone());
                 }
@@ -1980,17 +1981,7 @@ impl Evaluator<'_> {
                 let declaration = declaration.map(|(_, variable)| variable);
                 if let Some(initializer) = initializer {
                     let value = self.call(initializer, Some(id), Vec::new())?;
-                    let (storage, key) = if let Some(shared) = shared {
-                        (
-                            self.runtime
-                                .global
-                                .ok_or_else(|| self.fault(FaultKind::InvalidReference))?,
-                            shared,
-                        )
-                    } else {
-                        (id, name.clone())
-                    };
-                    self.object_mut(storage)?.vars.insert(key, value.clone());
+                    self.store_var(id, name.clone(), shared, value.clone())?;
                     return Ok(value);
                 }
 
@@ -2013,17 +2004,7 @@ impl Evaluator<'_> {
                 };
 
                 if matches!(value, GenericValue::List(_)) || shared.is_some() {
-                    let (storage, key) = if let Some(shared) = shared {
-                        (
-                            self.runtime
-                                .global
-                                .ok_or_else(|| self.fault(FaultKind::InvalidReference))?,
-                            shared,
-                        )
-                    } else {
-                        (id, name.clone())
-                    };
-                    self.object_mut(storage)?.vars.insert(key, value.clone());
+                    self.store_var(id, name.clone(), shared, value.clone())?;
                 }
 
                 Ok(value)
@@ -2046,10 +2027,15 @@ impl Evaluator<'_> {
         self.tree.roots().world
     }
 
-    fn shared_key(&self, ty: TypeId, name: &Identifier) -> Option<Identifier> {
-        let (owner, variable) = self.tree.var_declaration(ty, name)?;
+    fn store_var(&mut self, id: ObjectId, name: Identifier, shared: Option<Static>, value: GenericValue) -> Result<()> {
+        match shared {
+            Some(shared) => *self.runtime.heap.static_value_mut(shared) = Some(value),
+            None => {
+                self.object_mut(id)?.vars.insert(name, value);
+            },
+        }
 
-        shared_key(owner, variable, name)
+        Ok(())
     }
 
     /// `/datum/light` declares its own `x`, which only atoms and images derive from their location
@@ -2141,19 +2127,10 @@ impl Evaluator<'_> {
                     .runtime
                     .heap
                     .object(id)
-                    .and_then(|object| self.shared_key(object.ty, &name));
-                let (storage, key) = if let Some(shared) = shared {
-                    (
-                        self.runtime
-                            .global
-                            .ok_or_else(|| self.fault(FaultKind::InvalidReference))?,
-                        shared,
-                    )
-                } else {
-                    (id, name)
-                };
-                self.object_mut(storage)?.vars.insert(key, value);
-                Ok(())
+                    .and_then(|object| self.tree.var_declaration(object.ty, &name))
+                    .and_then(|(_, variable)| variable.shared)
+                    .map(Static::Var);
+                self.store_var(id, name, shared, value)
             },
             GenericValue::Null => Err(self.fault(FaultKind::Null(format!("modify null.{key}")))),
             _ => Err(self.fault(FaultKind::InvalidOperation(format!("cannot write {key}")))),
@@ -2840,11 +2817,4 @@ impl Evaluator<'_> {
 
         Ok(GenericValue::Object(id))
     }
-}
-
-/// `var/static/x` and `var/global/x` share one slot on the global object, keyed by the type that
-/// declares them
-fn shared_key(owner: &objtree::TypeDecl, variable: &objtree::VarDecl, name: &Identifier) -> Option<Identifier> {
-    (owner.id != TypeId::ROOT && (variable.modifiers.is_static || variable.modifiers.is_global))
-        .then(|| format!("__dmed_static_{}_{}", owner.id.0, name).into())
 }
