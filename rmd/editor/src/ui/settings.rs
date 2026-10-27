@@ -170,6 +170,7 @@ const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
         &[
             KeybindAction::PlaceTool,
             KeybindAction::PickTool,
+            KeybindAction::MoveTool,
             KeybindAction::NodeTool,
             KeybindAction::SelectTool,
             KeybindAction::DeleteTool,

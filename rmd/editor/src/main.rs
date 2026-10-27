@@ -602,6 +602,13 @@ impl App {
                     },
                     PickResult::Miss => session.pick_instance(None),
                 },
+                PickRequest::Move => match pick {
+                    PickResult::Hit(owner) => {
+                        session.pick_instance(Some(owner));
+                        ui.reveal_picked_instance(session);
+                    },
+                    PickResult::Miss => session.pick_instance(None),
+                },
                 PickRequest::Delete => {
                     if let PickResult::Hit(owner) = pick {
                         session.delete_instance(owner);

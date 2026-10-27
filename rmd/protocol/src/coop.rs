@@ -330,6 +330,7 @@ pub enum Tool {
     Replace,
     Fill,
     Comment,
+    Move,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -113,6 +113,7 @@ pub enum PickRequest {
     NodeSelect,
     NodeSeed(Coord),
     NodeDelete(Coord),
+    Move,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

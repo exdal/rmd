@@ -1,11 +1,15 @@
 use dear_imgui_rs::{MouseButton, Ui};
 use dmm::Coord;
-use editor::tool::Tool;
+use editor::{
+    command::EditGroupId,
+    document::DocumentId,
+    tool::{PlacementKind, Tool},
+};
 use render::{InteractionMode, MapViewInteraction, PickRequest};
 
 use super::{
     ViewFrame, cursor_in_map_view,
-    stroke::{ActivePlacementFlash, PickStroke, PlacementStroke},
+    stroke::{ActivePlacementFlash, MoveStroke, PickStroke, PlacementStroke},
 };
 use crate::{
     gizmo::GizmoMapView,
@@ -43,10 +47,10 @@ impl Clicks {
 pub(super) fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewInteraction) {
     interaction.mode = match (tool, interaction.mode) {
         (Tool::Place | Tool::Select | Tool::Fill | Tool::RectFill, _) => InteractionMode::Place,
-        (Tool::Pick | Tool::Replace, InteractionMode::Pick { pick }) => InteractionMode::Pick { pick },
+        (Tool::Pick | Tool::Replace | Tool::Move, InteractionMode::Pick { pick }) => InteractionMode::Pick { pick },
         (Tool::Node, InteractionMode::Node { pick }) => InteractionMode::Node { pick },
         (Tool::Delete, InteractionMode::Delete { pick }) => InteractionMode::Delete { pick },
-        (Tool::Pick | Tool::Replace | Tool::Comment, _) => InteractionMode::Pick { pick: None },
+        (Tool::Pick | Tool::Replace | Tool::Comment | Tool::Move, _) => InteractionMode::Pick { pick: None },
         (Tool::Node, _) => InteractionMode::Node { pick: None },
         (Tool::Delete, _) => InteractionMode::Delete { pick: None },
     };
@@ -58,14 +62,14 @@ pub(super) fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewIn
         Tool::Delete | Tool::Replace => {
             interaction.picked = None;
         },
-        Tool::Pick | Tool::Node => {},
+        Tool::Pick | Tool::Node | Tool::Move => {},
     }
 }
 
 pub(super) fn interaction_mode(tool: Tool) -> InteractionMode {
     match tool {
         Tool::Place | Tool::Select | Tool::Fill | Tool::RectFill => InteractionMode::Place,
-        Tool::Pick | Tool::Replace | Tool::Comment => InteractionMode::Pick { pick: None },
+        Tool::Pick | Tool::Replace | Tool::Comment | Tool::Move => InteractionMode::Pick { pick: None },
         Tool::Node => InteractionMode::Node { pick: None },
         Tool::Delete => InteractionMode::Delete { pick: None },
     }
@@ -224,7 +228,7 @@ impl UiState {
                     .captures_mouse
             },
             Tool::Select => self.draw_region_gizmo(ui, session, frame, gizmo_view),
-            Tool::Node | Tool::Comment | Tool::Delete | Tool::Replace | Tool::Fill | Tool::RectFill => {
+            Tool::Node | Tool::Comment | Tool::Delete | Tool::Replace | Tool::Fill | Tool::RectFill | Tool::Move => {
                 self.gizmo.cancel();
 
                 false
@@ -288,6 +292,7 @@ impl UiState {
             Tool::Delete | Tool::Replace => self.pick_at(ui, session, frame, coord, pixel, clicks, is_alternate),
             Tool::Fill => self.fill_at(ui, session, coord, clicks.is_left_clicked),
             Tool::RectFill => self.start_fill_rect(session, frame, coord, clicks.is_left_clicked),
+            Tool::Move => self.move_at(session, frame, coord, clicks),
         }
     }
 
@@ -376,4 +381,78 @@ impl UiState {
             ui.open_popup(FILL_LIMIT_WARNING_POPUP);
         }
     }
+
+    fn move_at(&mut self, session: &mut Session, frame: &mut ViewFrame<'_>, coord: Coord, clicks: Clicks) {
+        if clicks.is_left_clicked {
+            request_pick(frame.interaction, PickRequest::Move);
+            self.move_stroke = Some(MoveStroke::Pressed {
+                document: frame.id,
+                press: coord,
+            });
+
+            return;
+        }
+
+        if !clicks.is_left_down {
+            self.move_stroke = None;
+
+            return;
+        }
+
+        // the press frame's pick lands after that frame, so the atom is bound on the next one
+        if let Some(MoveStroke::Pressed { document, press }) = self.move_stroke {
+            self.move_stroke = bind_move_stroke(session, document, press, frame.id);
+        }
+
+        let Some(MoveStroke::Dragging {
+            document,
+            picked,
+            press,
+            origin,
+            group,
+        }) = self.move_stroke
+        else {
+            return;
+        };
+
+        if document != frame.id || coord.z != press.z || session.picked_instance() != Some(picked) {
+            self.move_stroke = None;
+
+            return;
+        }
+
+        frame.interaction.cursor = None;
+        let Some(size) = session.map().map(|map| map.size()) else {
+            return;
+        };
+        let target = Coord::new(
+            shifted_axis(origin.x, press.x, coord.x, size.x),
+            shifted_axis(origin.y, press.y, coord.y, size.y),
+            origin.z,
+        );
+        if session
+            .picked_location()
+            .is_some_and(|location| location.coord != target)
+        {
+            session.move_picked_instance(target, "move atom", &[], Some(group));
+        }
+    }
+}
+
+fn bind_move_stroke(session: &Session, document: DocumentId, press: Coord, active: DocumentId) -> Option<MoveStroke> {
+    let picked = session.picked_instance()?;
+    let location = session.picked_location()?;
+    let is_atom = session.picked_placement_kind() == Some(PlacementKind::Atom);
+
+    (is_atom && document == active && location.coord.z == press.z).then(|| MoveStroke::Dragging {
+        document,
+        picked,
+        press,
+        origin: location.coord,
+        group: EditGroupId::new(),
+    })
+}
+
+fn shifted_axis(origin: u32, press: u32, cursor: u32, limit: u32) -> u32 {
+    (i64::from(origin) + i64::from(cursor) - i64::from(press)).clamp(1, i64::from(limit.max(1))) as u32
 }

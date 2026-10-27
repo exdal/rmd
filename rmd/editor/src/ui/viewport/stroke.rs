@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use dmm::{Coord, Prefab, PrefabInstanceId};
-use editor::{command::EditGroupId, tool::Tool};
+use editor::{command::EditGroupId, document::DocumentId, tool::Tool};
 use render::PlacementFlash;
 
 const PLACEMENT_FLASH_DURATION: f64 = 0.25;
@@ -113,5 +113,26 @@ impl PickStroke {
         self.cursor = cursor;
 
         moved
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(in crate::ui) enum MoveStroke {
+    Pressed {
+        document: DocumentId,
+        press: Coord,
+    },
+    Dragging {
+        document: DocumentId,
+        picked: PrefabInstanceId,
+        press: Coord,
+        origin: Coord,
+        group: EditGroupId,
+    },
+}
+
+impl MoveStroke {
+    pub(super) const fn is_dragging(&self) -> bool {
+        matches!(self, Self::Dragging { .. })
     }
 }
