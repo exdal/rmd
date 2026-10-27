@@ -114,9 +114,10 @@ fn analyze_procedure(module: &Module, proc: &Procedure, scratch: &mut Scratch, r
     resize_lists(&mut scratch.catches, blocks.len());
     for block in &blocks {
         for instruction in module.block(*block).unwrap_or_default() {
-            let (body, catch, merge) = match module.node(*instruction) {
-                Some(IrNode::TryCatch { body, catch, merge }) => (body, catch, merge),
-                Some(IrNode::Spawn { body, merge }) => (body, merge, merge),
+            // a spawn body that sleeps resumes at its merge
+            let (body, catch) = match module.node(*instruction) {
+                Some(IrNode::TryCatch { body, catch }) => (body, catch),
+                Some(IrNode::Spawn { body, merge }) => (body, merge),
                 _ => continue,
             };
 
@@ -124,7 +125,7 @@ fn analyze_procedure(module: &Module, proc: &Procedure, scratch: &mut Scratch, r
                 continue;
             };
 
-            for protected in region_blocks(module, *body, *merge) {
+            for protected in module.region_blocks(*body) {
                 if let Some(protected) = scratch.block_index.get(&protected) {
                     scratch.catches[*protected].push(catch);
                 }
@@ -357,29 +358,6 @@ fn reachable_blocks(module: &Module, entry: IrNodeId) -> Vec<IrNodeId> {
 
     while let Some(block) = pending.pop() {
         if !seen.insert(block) {
-            continue;
-        }
-        let Some(instructions) = module.block(block) else {
-            continue;
-        };
-        blocks.push(block);
-        for instruction in instructions {
-            if let Some(node) = module.node(*instruction) {
-                node.for_each_successor(|block| pending.push(block));
-            }
-        }
-    }
-
-    blocks
-}
-
-fn region_blocks(module: &Module, entry: IrNodeId, stop: IrNodeId) -> Vec<IrNodeId> {
-    let mut blocks = Vec::new();
-    let mut seen = FxHashSet::default();
-    let mut pending = vec![entry];
-
-    while let Some(block) = pending.pop() {
-        if block == stop || !seen.insert(block) {
             continue;
         }
         let Some(instructions) = module.block(block) else {

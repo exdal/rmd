@@ -36,6 +36,11 @@ pub struct IrModuleBuilder<'a> {
     named_blocks: FxHashMap<Identifier, IrNodeId>,
     defined_named_blocks: FxHashSet<IrNodeId>,
     controls: Vec<ControlTarget>,
+    /// the try and catch bodies being lowered, innermost last
+    regions: Vec<RegionId>,
+    next_region: RegionId,
+    label_regions: FxHashMap<IrNodeId, Vec<RegionId>>,
+    pending_gotos: Vec<PendingGoto>,
     spawn_return: Option<BindingId>,
     current_block: Option<IrNodeId>,
     entry: IrNodeId,
@@ -101,6 +106,10 @@ impl<'a> IrModuleBuilder<'a> {
             named_blocks: FxHashMap::default(),
             defined_named_blocks: FxHashSet::default(),
             controls: Vec::new(),
+            regions: Vec::new(),
+            next_region: RegionId(0),
+            label_regions: FxHashMap::default(),
+            pending_gotos: Vec::new(),
             spawn_return: None,
             current_block: None,
             entry: IrNodeId(0),
@@ -345,6 +354,9 @@ impl<'a> IrModuleBuilder<'a> {
         self.named_blocks.clear();
         self.defined_named_blocks.clear();
         self.controls.clear();
+        self.regions.clear();
+        self.label_regions.clear();
+        self.pending_gotos.clear();
         self.spawn_return = None;
         self.current_block = None;
         self.locals_in_memory = false;
@@ -581,7 +593,7 @@ impl<'a> IrModuleBuilder<'a> {
         block
     }
 
-    fn break_target(&self, name: &Option<Identifier>) -> Option<IrNodeId> {
+    fn break_target(&self, name: &Option<Identifier>) -> Option<(IrNodeId, usize)> {
         match name {
             None => self
                 .controls
@@ -594,17 +606,67 @@ impl<'a> IrModuleBuilder<'a> {
                 .rev()
                 .find(|target| target.name.as_ref() == Some(name)),
         }
-        .map(|target| target.break_block)
+        .map(|target| (target.break_block, target.region_depth))
     }
 
-    fn continue_target(&self, name: &Option<Identifier>) -> Option<IrNodeId> {
+    fn continue_target(&self, name: &Option<Identifier>) -> Option<(IrNodeId, usize)> {
         self.controls
             .iter()
             .rev()
             .find(|target| {
                 target.continue_block.is_some() && name.as_ref().is_none_or(|name| target.name.as_ref() == Some(name))
             })
-            .and_then(|target| target.continue_block)
+            .and_then(|target| Some((target.continue_block?, target.region_depth)))
+    }
+
+    fn branch_out(&mut self, target: IrNodeId, region_depth: usize) {
+        let node = region_exit(&self.regions, &self.regions[..region_depth], target);
+        self.terminate_current_block(node);
+    }
+
+    fn lower_region(&mut self, merge: IrNodeId, body: impl FnOnce(&mut Self)) -> IrNodeId {
+        let block = self.make_block();
+        let previous = self.current_block;
+        if let Some(previous) = previous {
+            self.preds.entry(block).or_default().push(previous);
+        }
+
+        self.seal_block(block);
+        self.set_current_block(block);
+        self.regions.push(self.next_region);
+        self.next_region = RegionId(self.next_region.0 + 1);
+        body(self);
+        self.terminate_current_block(IrNode::Leave {
+            regions: 1,
+            target: merge,
+        });
+        self.regions.pop();
+        self.current_block = previous;
+
+        block
+    }
+
+    fn define_label(&mut self, name: &Identifier) -> IrNodeId {
+        let label = self.define_named_block(name);
+        self.label_regions.insert(label, self.regions.clone());
+
+        let (gotos, pending) = std::mem::take(&mut self.pending_gotos)
+            .into_iter()
+            .partition::<Vec<_>, _>(|goto| goto.target == label);
+        self.pending_gotos = pending;
+        for goto in gotos {
+            let node = region_exit(&goto.regions, &self.regions, label);
+            if matches!(node, IrNode::Trap { .. })
+                && let Some(preds) = self.preds.get_mut(&label)
+                && let Some(position) = preds.iter().position(|pred| *pred == goto.block)
+            {
+                preds.remove(position);
+            }
+
+            self.module.nodes[goto.branch.0 as usize] = node;
+        }
+
+        label
     }
 
     fn enter_loop(
@@ -623,6 +685,7 @@ impl<'a> IrModuleBuilder<'a> {
             name: name.cloned(),
             break_block: merge_block,
             continue_block: Some(continue_block),
+            region_depth: self.regions.len(),
         });
     }
 
@@ -1717,31 +1780,24 @@ impl<'a> IrModuleBuilder<'a> {
                 catch_body,
             } => {
                 let merge = self.make_block();
-                let body = self.block_branching_to(try_body, merge);
+                let body = self.lower_region(merge, |this| this.lower_statements(try_body));
 
                 self.scopes.push(FxHashMap::default());
                 let catch_binding = catch_param.as_ref().map(|s| {
                     let spec = self.spec(s);
                     self.declare_var(spec)
                 });
-                let catch = self.make_block();
-                let previous = self.current_block;
-                if let Some(previous) = previous {
-                    self.preds.entry(catch).or_default().push(previous);
-                }
-                self.seal_block(catch);
-                self.set_current_block(catch);
-                if let Some(binding) = catch_binding {
-                    let value = self.emit_instr(IrNode::CatchValue);
-                    self.write_variable(binding, catch, value);
-                }
-                self.lower_statements(catch_body);
-                self.terminate_current_block(IrNode::Branch(merge));
-                self.current_block = previous;
+                let catch = self.lower_region(merge, |this| {
+                    if let (Some(binding), Some(catch)) = (catch_binding, this.current_block) {
+                        let value = this.emit_instr(IrNode::CatchValue);
+                        this.write_variable(binding, catch, value);
+                    }
+
+                    this.lower_statements(catch_body);
+                });
                 self.scopes.pop();
 
-                self.emit_instr(IrNode::TryCatch { body, catch, merge });
-                self.terminate_current_block(IrNode::Branch(merge));
+                self.terminate_current_block(IrNode::TryCatch { body, catch });
                 self.seal_block(merge);
                 self.resume(merge);
             },
@@ -1754,7 +1810,7 @@ impl<'a> IrModuleBuilder<'a> {
                 self.emit_instr(IrNode::Del(value));
             },
             Statement::Break(name) => match self.break_target(name) {
-                Some(block) => self.terminate_current_block(IrNode::Branch(block)),
+                Some((block, region_depth)) => self.branch_out(block, region_depth),
                 None => {
                     self.emit_instr(IrNode::Trap {
                         reason: "break outside loop".into(),
@@ -1762,7 +1818,7 @@ impl<'a> IrModuleBuilder<'a> {
                 },
             },
             Statement::Continue(name) => match self.continue_target(name) {
-                Some(block) => self.terminate_current_block(IrNode::Branch(block)),
+                Some((block, region_depth)) => self.branch_out(block, region_depth),
                 None => {
                     self.emit_instr(IrNode::Trap {
                         reason: "continue outside loop".into(),
@@ -1770,11 +1826,30 @@ impl<'a> IrModuleBuilder<'a> {
                 },
             },
             Statement::Goto(name) => {
-                let block = self.named_block(name);
-                self.terminate_current_block(IrNode::Branch(block));
+                let label = self.named_block(name);
+                match self.label_regions.get(&label) {
+                    Some(regions) => {
+                        let node = region_exit(&self.regions, regions, label);
+                        self.terminate_current_block(node);
+                    },
+                    None => {
+                        // the label's regions are known once it is defined, which patches this branch
+                        if let Some(block) = self.current_block {
+                            self.terminate_current_block(IrNode::Branch(label));
+                            if let Some(branch) = self.module.block(block).and_then(<[IrNodeId]>::last) {
+                                self.pending_gotos.push(PendingGoto {
+                                    branch: *branch,
+                                    block,
+                                    target: label,
+                                    regions: self.regions.clone(),
+                                });
+                            }
+                        }
+                    },
+                }
             },
             Statement::Label { name, body } => {
-                let block = self.define_named_block(name);
+                let block = self.define_label(name);
                 self.fall_through(block);
 
                 match body.split_first() {
@@ -1787,6 +1862,7 @@ impl<'a> IrModuleBuilder<'a> {
                             name: Some(name.clone()),
                             break_block: exit,
                             continue_block: None,
+                            region_depth: self.regions.len(),
                         });
                         self.lower_statements(body);
                         self.terminate_current_block(IrNode::Branch(exit));
@@ -1885,11 +1961,10 @@ impl<'a> IrModuleBuilder<'a> {
         self.scopes.pop();
 
         self.set_current_block(taken);
-        self.emit_instr(IrNode::Spawn {
+        self.terminate_current_block(IrNode::Spawn {
             body: spawn_body,
             merge,
         });
-        self.terminate_current_block(IrNode::Branch(merge));
         self.seal_block(merge);
         self.resume(merge);
     }
@@ -1922,22 +1997,6 @@ impl<'a> IrModuleBuilder<'a> {
             },
             _ => OutputTarget::Value(self.lower_expr(id)),
         }
-    }
-
-    fn block_branching_to(&mut self, body: &[Statement], next: IrNodeId) -> IrNodeId {
-        let block = self.make_block();
-        let previous = self.current_block;
-
-        if let Some(previous) = previous {
-            self.preds.entry(block).or_default().push(previous);
-        }
-        self.seal_block(block);
-        self.set_current_block(block);
-        self.lower_statements(body);
-        self.terminate_current_block(IrNode::Branch(next));
-        self.current_block = previous;
-
-        block
     }
 
     fn case_condition(&mut self, subject: IrNodeId, values: &[ast::SwitchValue]) -> IrNodeId {
@@ -2157,11 +2216,37 @@ struct ControlTarget {
     name: Option<Identifier>,
     break_block: IrNodeId,
     continue_block: Option<IrNodeId>,
+    /// how many of `regions` enclose the statement
+    region_depth: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RegionId(u32);
+
+struct PendingGoto {
+    branch: IrNodeId,
+    block: IrNodeId,
+    target: IrNodeId,
+    regions: Vec<RegionId>,
+}
+
+fn region_exit(from: &[RegionId], to: &[RegionId], target: IrNodeId) -> IrNode {
+    match from.strip_prefix(to) {
+        Some([]) => IrNode::Branch(target),
+        Some(exited) => IrNode::Leave {
+            regions: exited.len() as u32,
+            target,
+        },
+        None => IrNode::Trap {
+            reason: "goto into a try or catch body".into(),
+        },
+    }
+}
+
+// a try or spawn body is wired to its block before it is lowered, so only the edges out count here
 fn branch_targets(node: &IrNode) -> Vec<IrNodeId> {
     match node {
-        IrNode::Branch(target) => vec![*target],
+        IrNode::Branch(target) | IrNode::Leave { target, .. } | IrNode::Spawn { merge: target, .. } => vec![*target],
         IrNode::ConditionalBranch {
             true_block,
             false_block,
@@ -2293,6 +2378,44 @@ mod tests {
             .nodes
             .iter()
             .any(|node| matches!(node, IrNode::Variable(name) if name.as_str().starts_with("__dmed_frame_local_")))
+    }
+
+    #[test]
+    fn a_break_out_of_two_tries_leaves_both() {
+        let module = lower(fixture!("programs/a_break_out_of_two_tries_leaves_both.dm"));
+        verify(&module).expect("leaving IR should verify");
+
+        let leave = module
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                IrNode::Leave { regions: 2, target } => Some(*target),
+                _ => None,
+            })
+            .expect("the break leaves both tries");
+        let outer_body = module
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                IrNode::TryCatch { body, .. } => Some(*body),
+                _ => None,
+            })
+            .expect("try");
+
+        assert!(!module.region_blocks(outer_body).contains(&leave));
+    }
+
+    #[test]
+    fn a_goto_into_a_try_body_traps() {
+        let module = lower(fixture!("programs/a_goto_into_a_try_body_traps.dm"));
+        verify(&module).expect("trapped goto should verify");
+
+        assert!(
+            module
+                .nodes
+                .iter()
+                .any(|node| matches!(node, IrNode::Trap { reason } if reason == "goto into a try or catch body"))
+        );
     }
 
     #[test]

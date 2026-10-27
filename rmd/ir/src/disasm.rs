@@ -338,14 +338,14 @@ fn reachable(module: &Module, entry: IrNodeId) -> Vec<IrNodeId> {
         let mut merges = Vec::new();
         for instruction in instructions {
             match module.node(*instruction) {
-                Some(IrNode::Branch(target)) => branches.push(*target),
+                Some(IrNode::Branch(target) | IrNode::Leave { target, .. }) => branches.push(*target),
                 Some(IrNode::ConditionalBranch {
                     true_block,
                     false_block,
                     ..
                 }) => branches.extend([*true_block, *false_block]),
-                Some(IrNode::TryCatch { body, catch, .. }) => branches.extend([*body, *catch]),
-                Some(IrNode::Spawn { body, .. }) => branches.push(*body),
+                Some(IrNode::TryCatch { body, catch }) => branches.extend([*body, *catch]),
+                Some(IrNode::Spawn { body, merge }) => branches.extend([*body, *merge]),
                 Some(IrNode::LoopMerge {
                     merge_block,
                     continue_block,
@@ -537,9 +537,8 @@ fn format_node(node: &IrNode) -> String {
         IrNode::IterValue(id) => format!("iter_value {id}"),
         IrNode::IterKey(id) => format!("iter_key {id}"),
         IrNode::RangeTest { current, end, step } => format!("range_test {current} end={end} step={step}"),
-        IrNode::TryCatch { body, catch, merge } => {
-            format!("try_catch body={body} catch={catch} merge={merge}")
-        },
+        IrNode::TryCatch { body, catch } => format!("try_catch body={body} catch={catch}"),
+        IrNode::Leave { regions, target } => format!("leave regions={regions} {target}"),
         IrNode::Spawn { body, merge } => format!("spawn body={body} merge={merge}"),
         IrNode::EndSpawn => "end_spawn".to_string(),
         IrNode::Del(id) => format!("del {id}"),

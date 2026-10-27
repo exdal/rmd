@@ -486,6 +486,19 @@ impl Generator {
                     self.emit_phi_copies(module, state, block, *target)?;
                     self.emit_jump(Op::Jump, Label::Block(*target));
                 },
+                IrNode::Leave { regions, target } => {
+                    self.emit_phi_copies(module, state, block, *target)?;
+                    self.emit_op(Op::Leave);
+                    self.emit_u32(*regions);
+                    self.emit_address(Label::Block(*target));
+                },
+                // the VM resumes after the body here, so the merge edge's copies follow the op
+                IrNode::Spawn { body, merge } => {
+                    self.emit_op(Op::Spawn);
+                    self.emit_address(Label::Block(*body));
+                    self.emit_phi_copies(module, state, block, *merge)?;
+                    self.emit_jump(Op::Jump, Label::Block(*merge));
+                },
                 IrNode::ConditionalBranch {
                     condition,
                     true_block,
@@ -537,6 +550,8 @@ impl Generator {
             | IrNode::LoopMerge { .. }
             | IrNode::Branch(_)
             | IrNode::ConditionalBranch { .. }
+            | IrNode::Leave { .. }
+            | IrNode::Spawn { .. }
             | IrNode::Noop => {},
             IrNode::Load { pointer } => {
                 let name = variable_name(module, *pointer)?;
@@ -925,15 +940,10 @@ impl Generator {
                     },
                 }
             },
-            IrNode::TryCatch { body, catch, merge } => {
+            IrNode::TryCatch { body, catch } => {
                 self.emit_op(Op::TryCatch);
                 self.emit_address(Label::Block(*body));
                 self.emit_address(Label::Block(*catch));
-                self.emit_address(Label::Block(*merge));
-            },
-            IrNode::Spawn { body, .. } => {
-                self.emit_op(Op::Spawn);
-                self.emit_address(Label::Block(*body));
             },
             IrNode::EndSpawn => self.emit_op(Op::EndSpawn),
             IrNode::Blocked(reason) => {
@@ -1378,7 +1388,7 @@ fn block_layout(module: &ir::Module, entry: IrNodeId, reachable: &[IrNodeId]) ->
                 break;
             };
             block = match terminator {
-                IrNode::Branch(target) => *target,
+                IrNode::Branch(target) | IrNode::Spawn { merge: target, .. } => *target,
                 IrNode::ConditionalBranch { true_block, .. } => *true_block,
                 _ => break,
             };
@@ -1486,26 +1496,10 @@ pub(crate) fn reachable_blocks(module: &ir::Module, entry: IrNodeId) -> Result<V
         blocks.push(block);
 
         for instruction in instructions {
-            match module
+            module
                 .node(*instruction)
                 .ok_or(CodegenError::MissingNode(*instruction))?
-            {
-                IrNode::Branch(target) => pending.push_back(*target),
-                IrNode::ConditionalBranch {
-                    true_block,
-                    false_block,
-                    ..
-                } => {
-                    pending.push_back(*true_block);
-                    pending.push_back(*false_block);
-                },
-                IrNode::TryCatch { body, catch, .. } => {
-                    pending.push_back(*body);
-                    pending.push_back(*catch);
-                },
-                IrNode::Spawn { body, .. } => pending.push_back(*body),
-                _ => {},
-            }
+                .for_each_successor(|successor| pending.push_back(successor));
         }
     }
 

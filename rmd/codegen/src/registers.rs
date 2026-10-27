@@ -66,12 +66,21 @@ impl ValueIndex {
     }
 }
 
+// try and spawn bodies run as nested execute_until calls that can stop at any instruction: a
+// throw continues in the catch block, a sleep in a spawn body resumes on the spawn's merge edge
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Exit {
+    Resume { spawn: BlockIndex, merge: BlockIndex },
+    Throw(BlockIndex),
+}
+
 #[derive(Default)]
 pub(crate) struct Scratch {
     block_index: FxHashMap<IrNodeId, BlockIndex>,
     value_index: FxHashMap<IrNodeId, ValueIndex>,
     values: Vec<IrNodeId>,
     successors: Vec<Vec<BlockIndex>>,
+    exits: Vec<Vec<Exit>>,
     defs: Vec<FixedBitSet>,
     uses: Vec<FixedBitSet>,
     /// phi sources a block hands to its successors, live at the end of this block only
@@ -101,6 +110,14 @@ impl Scratch {
 
         for successors in &mut self.successors {
             successors.clear();
+        }
+
+        if self.exits.len() < block_count {
+            self.exits.resize_with(block_count, Vec::new);
+        }
+
+        for exits in &mut self.exits {
+            exits.clear();
         }
     }
 
@@ -150,6 +167,34 @@ impl Scratch {
 
             successors.sort_unstable();
             successors.dedup();
+        }
+
+        Ok(())
+    }
+
+    fn collect_exits(&mut self, module: &ir::Module, blocks: &[IrNodeId]) -> Result<(), CodegenError> {
+        for block in blocks {
+            let instructions = module.block(*block).ok_or(CodegenError::ExpectedBlock(*block))?;
+            let exit = match instructions.last().and_then(|terminator| module.node(*terminator)) {
+                Some(IrNode::TryCatch { body, catch }) => {
+                    self.block_index.get(catch).map(|catch| (*body, Exit::Throw(*catch)))
+                },
+                Some(IrNode::Spawn { body, merge }) => self.block_index.get(merge).map(|merge| {
+                    let spawn = self.block_index[block];
+                    (*body, Exit::Resume { spawn, merge: *merge })
+                }),
+                _ => None,
+            };
+
+            let Some((body, exit)) = exit else {
+                continue;
+            };
+
+            for protected in module.region_blocks(body) {
+                if let Some(protected) = self.block_index.get(&protected) {
+                    self.exits[protected.index()].push(exit);
+                }
+            }
         }
 
         Ok(())
@@ -212,6 +257,16 @@ impl Scratch {
                 output.clone_from(&self.edge_uses[block]);
                 for successor in &self.successors[block] {
                     output.union_with(&self.live_in[successor.index()]);
+                }
+
+                for exit in &self.exits[block] {
+                    match exit {
+                        Exit::Resume { spawn, merge } => {
+                            output.union_with(&self.edge_uses[spawn.index()]);
+                            output.union_with(&self.live_in[merge.index()]);
+                        },
+                        Exit::Throw(catch) => output.union_with(&self.live_in[catch.index()]),
+                    }
                 }
 
                 if self.live_out[block] != output {
@@ -539,12 +594,6 @@ impl Allocation {
 pub(crate) fn allocate(
     scratch: &mut Scratch, module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId],
 ) -> Result<Allocation, CodegenError> {
-    // try and spawn bodies run as nested execute_until calls that resume after the
-    // instruction, so the IR control flow does not describe where values stay live
-    if has_nested_execution(module, blocks)? {
-        return one_per_value(module, proc, blocks);
-    }
-
     match greedy(scratch, module, proc, blocks)? {
         Some(allocation) => Ok(allocation),
         None => one_per_value(module, proc, blocks),
@@ -574,6 +623,7 @@ fn greedy(
     scratch.clear(blocks.len());
     scratch.number(module, proc, blocks)?;
     scratch.collect_successors(module, blocks)?;
+    scratch.collect_exits(module, blocks)?;
     scratch.liveness(module, blocks)?;
 
     let entry = scratch.block_index[&proc.body];
@@ -629,21 +679,6 @@ fn one_per_value(module: &ir::Module, proc: &Procedure, blocks: &[IrNodeId]) -> 
     Ok(allocation)
 }
 
-fn has_nested_execution(module: &ir::Module, blocks: &[IrNodeId]) -> Result<bool, CodegenError> {
-    for block in blocks {
-        for instruction in module.block(*block).ok_or(CodegenError::ExpectedBlock(*block))? {
-            if matches!(
-                module.node(*instruction),
-                Some(IrNode::TryCatch { .. } | IrNode::Spawn { .. })
-            ) {
-                return Ok(true);
-            }
-        }
-    }
-
-    Ok(false)
-}
-
 #[cfg(test)]
 mod tests {
     macro_rules! fixture {
@@ -662,6 +697,7 @@ mod tests {
         scratch.clear(blocks.len());
         scratch.number(module, proc, &blocks).expect("number");
         scratch.collect_successors(module, &blocks).expect("successors");
+        scratch.collect_exits(module, &blocks).expect("exits");
         scratch.liveness(module, &blocks).expect("liveness");
 
         (scratch, blocks)
@@ -928,5 +964,36 @@ mod tests {
         assert_eq!(live(&scratch, &scratch.live_out[otherwise]), [right]);
         assert!(scratch.live_in[merge].is_clear());
         assert!(scratch.live_out[merge].is_clear());
+    }
+
+    #[test]
+    fn spawn_bodies_keep_values_used_after_them_live() {
+        let module = lower(fixture!("programs/spawn_bodies_keep_values_used_after_them_live.dm"));
+        let (scratch, blocks) = analyzed(&module);
+        let kept = sum_of(&module, &scratch, module.procs[0].parameters[0]);
+        let (body, merge) = blocks
+            .iter()
+            .flat_map(|block| module.block(*block).unwrap_or_default())
+            .find_map(|instruction| match module.node(*instruction) {
+                Some(IrNode::Spawn { body, merge }) => Some((scratch.block_index[body], scratch.block_index[merge])),
+                _ => None,
+            })
+            .expect("spawn");
+
+        let mut region = vec![body];
+        let mut pending = vec![body];
+        while let Some(block) = pending.pop() {
+            for successor in &scratch.successors[block.index()] {
+                if *successor != merge && !region.contains(successor) {
+                    region.push(*successor);
+                    pending.push(*successor);
+                }
+            }
+        }
+
+        assert!(region.len() > 1);
+        for block in region {
+            assert!(scratch.live_out[block.index()].contains(scratch.value_index[&kept].index()));
+        }
     }
 }

@@ -17,6 +17,7 @@ pub use ast_lowering::IrModuleBuilder;
 pub use lower::lower;
 use objtree::{ObjectTree, TypeId};
 pub use prelude::Intrinsic;
+use rustc_hash::FxHashSet;
 pub use verify::{VerifyError, verify};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -212,11 +213,15 @@ pub enum IrNode {
         target: OutputTarget,
         value: IrNodeId,
     },
-    // DM unwinding has no branch form, so this stays structured. `body` and `catch` are blocks
+    // the VM runs `body`, and `catch` after a throw, as nested executions that end with a `Leave`
     TryCatch {
         body: IrNodeId,
         catch: IrNodeId,
-        merge: IrNodeId,
+    },
+    /// `regions` is how many enclosing try and catch bodies the branch exits
+    Leave {
+        regions: u32,
+        target: IrNodeId,
     },
     Spawn {
         body: IrNodeId,
@@ -303,6 +308,9 @@ impl IrNode {
             Self::Branch(_)
             | Self::ConditionalBranch { .. }
             | Self::Return(_)
+            | Self::TryCatch { .. }
+            | Self::Leave { .. }
+            | Self::Spawn { .. }
             | Self::EndSpawn
             | Self::Throw(_)
             | Self::Blocked(_)
@@ -317,8 +325,6 @@ impl IrNode {
             | Self::Label(_)
             | Self::SelectionMerge { .. }
             | Self::LoopMerge { .. }
-            | Self::TryCatch { .. }
-            | Self::Spawn { .. }
             | Self::Noop => SideEffect::Structural,
         }
     }
@@ -329,6 +335,9 @@ impl IrNode {
             Self::Branch(_)
                 | Self::ConditionalBranch { .. }
                 | Self::Return(_)
+                | Self::TryCatch { .. }
+                | Self::Leave { .. }
+                | Self::Spawn { .. }
                 | Self::EndSpawn
                 | Self::Throw(_)
                 | Self::Blocked(_)
@@ -463,11 +472,11 @@ impl IrNode {
                 visit(*true_block);
                 visit(*false_block);
             },
-            Self::TryCatch { body, catch, merge } => {
+            Self::TryCatch { body, catch } => {
                 visit(*body);
                 visit(*catch);
-                visit(*merge);
             },
+            Self::Leave { target, .. } => visit(*target),
             Self::Spawn { body, merge } => {
                 visit(*body);
                 visit(*merge);
@@ -583,6 +592,38 @@ impl Module {
             IrNode::Label(instructions) => Some(instructions),
             _ => None,
         }
+    }
+
+    /// The blocks of the try, catch or spawn body starting at `entry`, nested regions included
+    pub fn region_blocks(&self, entry: IrNodeId) -> Vec<IrNodeId> {
+        let mut blocks = Vec::new();
+        let mut seen = FxHashSet::default();
+        // depth counts the try and catch bodies entered since `entry`, the ones a `Leave` exits
+        let mut pending = vec![(entry, 0_u32)];
+
+        while let Some((block, depth)) = pending.pop() {
+            if !seen.insert(block) {
+                continue;
+            }
+
+            let Some(terminator) = self.block(block).and_then(<[IrNodeId]>::last) else {
+                continue;
+            };
+
+            blocks.push(block);
+            match self.node(*terminator) {
+                Some(IrNode::TryCatch { body, catch }) => pending.extend([(*body, depth + 1), (*catch, depth + 1)]),
+                Some(IrNode::Leave { regions, target }) => {
+                    if let Some(depth) = depth.checked_sub(*regions) {
+                        pending.push((*target, depth));
+                    }
+                },
+                Some(node) => node.for_each_successor(|successor| pending.push((successor, depth))),
+                None => {},
+            }
+        }
+
+        blocks
     }
 
     /// Names a procedure left for the runtime to resolve, declared in its entry block, each at the line of its

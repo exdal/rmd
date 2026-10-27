@@ -67,7 +67,7 @@ byte_enum! {
                                  //   Value: rTarget, rValue
                                  //   Field: name, access:Access, rObject, rValue
                                  //   Index: conditional:flag, rObject, rIndex, rValue
-        TryCatch = 0x23,         // body:target, catch:target, merge:target
+        TryCatch = 0x23,         // body:target, catch:target
         Blocked = 0x24,          // reason:str
         Trap = 0x25,             // reason:str
         StoreBuiltin = 0x26,     // builtin:u8, rS
@@ -84,6 +84,7 @@ byte_enum! {
         ReturnValueI = 0x32,     // imm
         ReturnNull = 0x33,       //
         MoveImm = 0x34,          // rD, imm
+        Leave = 0x35,            // regions:u32, target
     }
 }
 

@@ -270,7 +270,7 @@ pub(crate) struct Frame {
     usr: Option<ObjectId>,
     args: Option<ListId>,
     extra_args: Vec<GenericValue>,
-    dot: GenericValue,
+    this: GenericValue,
     function: FunctionId,
     proc: ProcId,
     ip: usize,
@@ -289,9 +289,9 @@ struct IteratorState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Flow {
-    Continue,
     Return,
     EndSpawn,
+    Leave { regions: u32, target: usize },
 }
 
 pub(crate) struct Evaluator<'a> {
@@ -606,7 +606,7 @@ impl<'a> Evaluator<'a> {
             usr,
             args: None,
             extra_args,
-            dot: GenericValue::Null,
+            this: GenericValue::Null,
             function: function.id,
             proc,
             ip: start,
@@ -615,9 +615,14 @@ impl<'a> Evaluator<'a> {
         };
 
         let mut call = CallFrameGuard::enter(self, proc, src);
-        call.execute_until(&mut frame, None)
-            .map(|_| frame.dot)
-            .map_err(|fault| call.unwound(fault))
+        match call.execute(&mut frame) {
+            Ok(Flow::Leave { .. }) => {
+                let fault = call.fault(FaultKind::InvalidOperation("leave outside a try".into()));
+                Err(call.unwound(fault))
+            },
+            Ok(_) => Ok(frame.this),
+            Err(fault) => Err(call.unwound(fault)),
+        }
     }
 
     fn function_name(&self, function: &CompiledFunction) -> String {
@@ -634,14 +639,16 @@ impl<'a> Evaluator<'a> {
             .unwrap_or_else(|| proc_name.to_owned())
     }
 
-    fn execute_until(&mut self, frame: &mut Frame, stop: Option<usize>) -> Result<Flow> {
+    fn execute_from(&mut self, frame: &mut Frame, ip: usize) -> Result<Flow> {
+        frame.ip = ip;
+
+        self.execute(frame)
+    }
+
+    fn execute(&mut self, frame: &mut Frame) -> Result<Flow> {
         loop {
             if frame.ip >= frame.end {
                 return Ok(Flow::Return);
-            }
-
-            if stop == Some(frame.ip) {
-                return Ok(Flow::Continue);
             }
 
             self.charge(1)?;
@@ -702,7 +709,7 @@ impl<'a> Evaluator<'a> {
                     let source = self.register(frame)?;
                     let value = self.get(frame, source)?.clone();
                     match builtin {
-                        Builtin::ThisProc => frame.dot = value,
+                        Builtin::ThisProc => frame.this = value,
                         _ => return Err(self.fault(FaultKind::InvalidOperation("builtin is not assignable".into()))),
                     }
                 },
@@ -1031,38 +1038,34 @@ impl<'a> Evaluator<'a> {
                     }
                 },
                 Op::Jump => {
-                    let target = self.jump_target(frame)?;
-                    if stop == Some(target) {
-                        return Ok(Flow::Continue);
-                    }
-
-                    frame.ip = target;
+                    frame.ip = self.jump_target(frame)?;
                 },
                 Op::JumpIfFalse => {
                     let target = self.jump_target(frame)?;
                     let condition = self.register(frame)?;
                     if !self.get(frame, condition)?.truthy() {
-                        if stop == Some(target) {
-                            return Ok(Flow::Continue);
-                        }
-
                         frame.ip = target;
                     }
+                },
+                Op::Leave => {
+                    let regions = self.u32(frame)?;
+                    let target = self.jump_target(frame)?;
+                    return Ok(Flow::Leave { regions, target });
                 },
                 Op::Return => {
                     return Ok(Flow::Return);
                 },
                 Op::ReturnValue => {
                     let source = self.register(frame)?;
-                    frame.dot = self.get(frame, source)?.clone();
+                    frame.this = self.get(frame, source)?.clone();
                     return Ok(Flow::Return);
                 },
                 Op::ReturnValueI => {
-                    frame.dot = self.f32(frame)?.into();
+                    frame.this = self.f32(frame)?.into();
                     return Ok(Flow::Return);
                 },
                 Op::ReturnNull => {
-                    frame.dot = GenericValue::Null;
+                    frame.this = GenericValue::Null;
                     return Ok(Flow::Return);
                 },
                 Op::Del => {
@@ -1096,30 +1099,31 @@ impl<'a> Evaluator<'a> {
                 Op::TryCatch => {
                     let body = self.jump_target(frame)?;
                     let catch = self.jump_target(frame)?;
-                    let merge = self.jump_target(frame)?;
-                    let resume = frame.ip;
-                    frame.ip = body;
-                    match self.execute_until(frame, Some(merge)) {
-                        Ok(Flow::Continue) => {},
-                        Ok(flow) => return Ok(flow),
-                        Err(fault) if matches!(fault.kind, FaultKind::Thrown(_)) => {
-                            frame.ip = catch;
-                            match self.execute_until(frame, Some(merge))? {
-                                Flow::Continue => {},
-                                flow => return Ok(flow),
-                            }
+                    let flow = match self.execute_from(frame, body) {
+                        Err(fault) if matches!(fault.kind, FaultKind::Thrown(_)) => self.execute_from(frame, catch)?,
+                        flow => flow?,
+                    };
+
+                    match flow {
+                        Flow::Leave { regions: 1, target } => frame.ip = target,
+                        Flow::Leave { regions, target } if regions > 1 => {
+                            return Ok(Flow::Leave {
+                                regions: regions - 1,
+                                target,
+                            });
                         },
-                        Err(fault) => return Err(fault),
+                        flow => return Ok(flow),
                     }
-                    frame.ip = resume;
                 },
                 Op::Spawn => {
                     let body = self.jump_target(frame)?;
                     let resume = frame.ip;
-                    frame.ip = body;
-                    match self.execute_until(frame, None) {
+                    match self.execute_from(frame, body) {
                         Ok(Flow::Return) => return Ok(Flow::Return),
-                        Ok(_) => {},
+                        Ok(Flow::Leave { .. }) => {
+                            return Err(self.fault(FaultKind::InvalidOperation("leave out of a spawn".into())));
+                        },
+                        Ok(Flow::EndSpawn) => {},
                         Err(fault) if matches!(fault.kind, FaultKind::Thrown(_)) => self.thrown = None,
                         Err(fault) if fault.kind == FaultKind::Sleep => {},
                         Err(fault) => return Err(fault),
@@ -1416,7 +1420,7 @@ impl Evaluator<'_> {
                 proc: frame.proc,
             }),
             Builtin::Caller => return Err(self.fault(FaultKind::Unsupported("caller".into()))),
-            Builtin::ThisProc => frame.dot.clone(),
+            Builtin::ThisProc => frame.this.clone(),
             Builtin::SuperProc => return Err(self.fault(FaultKind::Unsupported("super proc value".into()))),
         })
     }

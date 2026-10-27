@@ -440,8 +440,12 @@ impl Cursor<'_> {
             Op::TryCatch => {
                 let body = CodeOffset(self.u32()?);
                 let catch = CodeOffset(self.u32()?);
-                let merge = CodeOffset(self.u32()?);
-                let _ = write!(output, " body={body} catch={catch} merge={merge}");
+                let _ = write!(output, " body={body} catch={catch}");
+            },
+            Op::Leave => {
+                let regions = self.u32()?;
+                let target = CodeOffset(self.u32()?);
+                let _ = write!(output, " regions={regions} {target}");
             },
             Op::Spawn => {
                 let body = CodeOffset(self.u32()?);

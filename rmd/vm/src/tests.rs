@@ -104,6 +104,17 @@ fn negative_spawn_delays_run_before_the_continuation() {
 }
 
 #[test]
+fn values_used_after_a_spawn_survive_its_body() {
+    assert_eq!(
+        run(
+            fixture!("programs/values_used_after_a_spawn_survive_its_body.dm"),
+            "test"
+        ),
+        442.into()
+    );
+}
+
+#[test]
 fn immediate_spawns_copy_locals_parameters_and_the_return_value() {
     let source = fixture!("programs/immediate_spawns.dm");
     assert_eq!(run(source, "spawn_frame"), GenericValue::Num(79959.0));
@@ -2922,6 +2933,16 @@ fn values_live_across_try_and_catch_merge_correctly() {
         ),
         11.into()
     );
+}
+
+#[test]
+fn leaving_a_try_drops_its_handler() {
+    let source = fixture!("programs/leaving_a_try_drops_its_handler.dm");
+    assert_eq!(run(source, "after_break"), "body1,caught late".into());
+    assert_eq!(run(source, "after_continue"), 1006.into());
+    assert_eq!(run(source, "after_breaking_two_tries"), "caught late".into());
+    assert_eq!(run(source, "after_forward_goto"), "caught late".into());
+    assert_eq!(run(source, "after_backward_goto"), "body3,caught late".into());
 }
 
 #[test]

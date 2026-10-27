@@ -102,22 +102,8 @@ fn reachable_blocks(module: &Module) -> Vec<bool> {
         reachable[index] = true;
 
         for instruction in instructions {
-            match module.node(*instruction) {
-                Some(IrNode::Branch(target)) => pending.push(*target),
-                Some(IrNode::ConditionalBranch {
-                    true_block,
-                    false_block,
-                    ..
-                }) => {
-                    pending.push(*true_block);
-                    pending.push(*false_block);
-                },
-                Some(IrNode::TryCatch { body, catch, .. }) => {
-                    pending.push(*body);
-                    pending.push(*catch);
-                },
-                Some(IrNode::Spawn { body, .. }) => pending.push(*body),
-                _ => {},
+            if let Some(node) = module.node(*instruction) {
+                node.for_each_successor(|successor| pending.push(successor));
             }
         }
     }
@@ -234,18 +220,22 @@ mod tests {
         let mut module = Module {
             nodes: vec![
                 IrNode::Function(ProcId(0)),
-                IrNode::Label(vec![IrNodeId(2), IrNodeId(3)]),
+                IrNode::Label(vec![IrNodeId(2)]),
                 IrNode::TryCatch {
-                    body: IrNodeId(4),
-                    catch: IrNodeId(6),
-                    merge: IrNodeId(8),
+                    body: IrNodeId(3),
+                    catch: IrNodeId(5),
                 },
-                IrNode::Branch(IrNodeId(8)),
-                IrNode::Label(vec![IrNodeId(5)]),
-                IrNode::Return(None),
-                IrNode::Label(vec![IrNodeId(7)]),
-                IrNode::Return(None),
-                IrNode::Label(vec![IrNodeId(9)]),
+                IrNode::Label(vec![IrNodeId(4)]),
+                IrNode::Leave {
+                    regions: 1,
+                    target: IrNodeId(7),
+                },
+                IrNode::Label(vec![IrNodeId(6)]),
+                IrNode::Leave {
+                    regions: 1,
+                    target: IrNodeId(7),
+                },
+                IrNode::Label(vec![IrNodeId(8)]),
                 IrNode::Return(None),
             ],
             procs: vec![procedure(IrNodeId(1))],
@@ -254,7 +244,7 @@ mod tests {
 
         eliminate_unreachable_blocks(&mut module);
 
-        for block in [IrNodeId(1), IrNodeId(4), IrNodeId(6), IrNodeId(8)] {
+        for block in [IrNodeId(1), IrNodeId(3), IrNodeId(5), IrNodeId(7)] {
             assert!(matches!(module.node(block), Some(IrNode::Label(_))));
         }
         crate::verify(&module).expect("try/catch regions should survive CFG cleanup");
