@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use dear_imgui_rs::{ChildFlags, DragFlags, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError};
 use dmi::metadata::Dir;
-use dmm::{Coord, Prefab, parser::parse_value, writer::format_value};
+use dmm::{Coord, Prefab, error::MapErrorKind, parser::parse_value, writer::format_value};
 use editor::{
     blame::{self, BlameCell},
     command::EditGroupId,
@@ -174,8 +174,8 @@ struct InspectorSnapshot {
     icon_states: Vec<(String, u32)>,
     declared_directions: Option<[bool; 8]>,
     directional_types: Option<DirectionalTypes>,
-    icon_known: bool,
-    icon_state_known: bool,
+    unknown_icon: Option<MapErrorKind>,
+    unknown_icon_state: Option<MapErrorKind>,
 }
 
 #[derive(Default)]
@@ -428,7 +428,7 @@ impl InspectorState {
             vars::ICON,
             "Icon",
             TextPropertyKind::Resource,
-            (!snapshot.icon_known).then_some("The current DMI is not loaded"),
+            snapshot.unknown_icon.as_ref().map(ToString::to_string).as_deref(),
         );
         self.draw_asset_property(
             ui,
@@ -437,7 +437,7 @@ impl InspectorState {
             vars::ICON_STATE,
             "Icon state",
             TextPropertyKind::Text,
-            (!snapshot.icon_state_known).then_some("The current state is not present in the DMI"),
+            snapshot.unknown_icon_state.as_ref().map(ToString::to_string).as_deref(),
         );
         self.draw_direction_property(ui, session, snapshot);
         self.draw_float_property(ui, session, snapshot, vars::PLANE, "Plane");
@@ -939,9 +939,10 @@ fn inspector_snapshot(session: &Session) -> Option<InspectorSnapshot> {
         icon_states,
         declared_directions,
         directional_types,
-        icon_known: icon.is_empty() || metadata.is_some(),
-        icon_state_known: icon_state.is_empty()
-            || metadata.is_some_and(|metadata| metadata.find(&icon_state).is_some()),
+        unknown_icon: (!icon.is_empty() && metadata.is_none()).then_some(MapErrorKind::UnknownIcon(icon)),
+        unknown_icon_state: (!icon_state.is_empty()
+            && metadata.is_none_or(|metadata| metadata.find(&icon_state).is_none()))
+        .then_some(MapErrorKind::UnknownIconState(icon_state)),
     })
 }
 

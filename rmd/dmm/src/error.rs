@@ -20,6 +20,8 @@ pub enum MapErrorKind {
     BareWord(String),
     OverlappingBlocks(Coord),
     IncompleteGrid(Coord),
+    UnknownIcon(String),
+    UnknownIconState(String),
 }
 
 impl std::fmt::Display for MapErrorKind {
@@ -43,6 +45,8 @@ impl std::fmt::Display for MapErrorKind {
             Self::BareWord(s) => write!(f, "'{s}' is not a value, quote it for text: \"{s}\""),
             Self::OverlappingBlocks(c) => write!(f, "two grid blocks cover ({},{},{})", c.x, c.y, c.z),
             Self::IncompleteGrid(c) => write!(f, "no grid block covers ({},{},{})", c.x, c.y, c.z),
+            Self::UnknownIcon(s) => write!(f, "atom references icon '{s}' that is not loaded"),
+            Self::UnknownIconState(s) => write!(f, "atom references undefined icon state '{s}'"),
         }
     }
 }
