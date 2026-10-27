@@ -294,6 +294,7 @@ fn resize_lists(lists: &mut Vec<Vec<usize>>, len: usize) {
 fn storage(module: &Module, pointer: IrNodeId) -> Option<Storage> {
     match module.node(pointer)? {
         IrNode::FrameSlot(_) => Some(Storage::Frame),
+        IrNode::StaticSlot(_) => Some(Storage::External),
         IrNode::Variable(name) if is_observable_name(name.as_str()) => Some(Storage::Observable),
         IrNode::Variable(_) => Some(Storage::External),
         _ => None,

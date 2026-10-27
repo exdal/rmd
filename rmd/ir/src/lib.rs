@@ -44,6 +44,15 @@ impl std::fmt::Display for SlotId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StaticId(pub u32);
+
+impl std::fmt::Display for StaticId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "static{}", self.0)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Argument {
     pub key: Option<IrNodeId>,
@@ -88,6 +97,7 @@ pub enum IrNode {
     },
     Variable(Identifier),
     FrameSlot(SlotId),
+    StaticSlot(StaticId),
     Load {
         pointer: IrNodeId,
     },
@@ -333,6 +343,7 @@ impl IrNode {
             | Self::Phi { .. }
             | Self::Variable(_)
             | Self::FrameSlot(_)
+            | Self::StaticSlot(_)
             | Self::Label(_)
             | Self::SelectionMerge { .. }
             | Self::LoopMerge { .. }
@@ -528,6 +539,7 @@ pub struct Module {
     /// Module-scope declarations for bare proc names defined outside this module.
     pub external_functions: Vec<IrNodeId>,
     pub procs: Vec<Procedure>,
+    pub static_count: u32,
     pub index: ProcIndex,
     pub node_lines: LineTable<IrNodeId>,
 }

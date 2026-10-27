@@ -723,6 +723,21 @@ impl<'a> Evaluator<'a> {
                         .get_mut(slot)
                         .ok_or_else(|| self.fault(FaultKind::InvalidReference))? = value;
                 },
+                Op::LoadStatic => {
+                    let destination = self.register(frame)?;
+                    let id = self.static_id(frame)?;
+                    let value = self.runtime.heap.static_local(id).cloned().unwrap_or_default();
+                    self.set(frame, destination, value)?;
+                },
+                Op::StoreStatic | Op::InitStatic => {
+                    let id = self.static_id(frame)?;
+                    let source = self.register(frame)?;
+                    let value = self.get(frame, source)?.clone();
+                    // an initialized static stays untouched, so the journal does not see a write
+                    if op == Op::StoreStatic || self.runtime.heap.static_local(id).is_none() {
+                        *self.runtime.heap.static_local_mut(id) = Some(value);
+                    }
+                },
                 Op::LoadBuiltin => {
                     let destination = self.register(frame)?;
                     let builtin = self.enum_operand::<Builtin>(frame, "builtin")?;
@@ -1370,6 +1385,15 @@ impl Evaluator<'_> {
                 crate::value::ListKind::Alist => self.tree.roots().alist,
             },
         }
+    }
+
+    fn static_id(&self, frame: &mut Frame) -> Result<u32> {
+        let id = self.u32(frame)?;
+        if id >= self.module.static_count {
+            return Err(self.fault(FaultKind::InvalidReference));
+        }
+
+        Ok(id)
     }
 
     fn read_name(&mut self, frame: &Frame, name: &Identifier) -> Result<GenericValue> {

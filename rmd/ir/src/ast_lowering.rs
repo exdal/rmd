@@ -854,8 +854,8 @@ impl<'a> IrModuleBuilder<'a> {
         }
         self.vars.push(spec);
         if is_static {
-            let proc = self.module.procs.len();
-            let pointer = self.make_node(IrNode::Variable(format!("__dmed_static_local_{proc}_{}", id.0).into()));
+            let pointer = self.make_node(IrNode::StaticSlot(StaticId(self.module.static_count)));
+            self.module.static_count += 1;
             self.stored_bindings.insert(id, pointer);
         }
 
@@ -2395,6 +2395,22 @@ mod tests {
                 .iter()
                 .any(|node| matches!(node, IrNode::Trap { reason } if reason == "goto into a try or catch body"))
         );
+    }
+
+    #[test]
+    fn static_locals_get_module_wide_ids() {
+        let module = lower(fixture!("programs/static_locals_get_module_wide_ids.dm"));
+        let ids = module
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                IrNode::StaticSlot(id) => Some(*id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, [StaticId(0), StaticId(1)]);
+        assert_eq!(module.static_count, 2);
     }
 
     #[test]

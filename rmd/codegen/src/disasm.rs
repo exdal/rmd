@@ -164,6 +164,16 @@ impl Cursor<'_> {
                 let source = self.register()?;
                 let _ = write!(output, " slot{slot}, {source}");
             },
+            Op::LoadStatic => {
+                let destination = self.register()?;
+                let id = self.u32()?;
+                let _ = write!(output, " {destination}, static{id}");
+            },
+            Op::StoreStatic | Op::InitStatic => {
+                let id = self.u32()?;
+                let source = self.register()?;
+                let _ = write!(output, " static{id}, {source}");
+            },
             Op::Blocked | Op::Trap => {
                 let id = StringId(self.u32()?);
                 let value = string(self.module, id)?;

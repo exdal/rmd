@@ -15,6 +15,7 @@ struct Journal {
     lists_len: usize,
     objects: HashMap<ObjectId, Object>,
     lists: HashMap<ListId, ListData>,
+    statics: HashMap<u32, Option<GenericValue>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +56,8 @@ impl Object {
 pub struct Heap {
     pub(crate) objects: Vec<Object>,
     pub(crate) lists: Vec<ListData>,
+    /// `var/static` locals, `None` until their declaration runs
+    statics: Vec<Option<GenericValue>>,
     journal: Option<Journal>,
 }
 
@@ -108,12 +111,31 @@ impl Heap {
         Ok(value)
     }
 
+    pub fn static_local(&self, id: u32) -> Option<&GenericValue> {
+        self.statics.get(id as usize)?.as_ref()
+    }
+
+    pub fn static_local_mut(&mut self, id: u32) -> &mut Option<GenericValue> {
+        let index = id as usize;
+        if self.statics.len() <= index {
+            self.statics.resize(index + 1, None);
+        }
+
+        let value = &mut self.statics[index];
+        if let Some(j) = &mut self.journal {
+            j.statics.entry(id).or_insert_with(|| value.clone());
+        }
+
+        value
+    }
+
     pub fn begin(&mut self) {
         self.journal = Some(Journal {
             objects_len: self.objects.len(),
             lists_len: self.lists.len(),
             objects: HashMap::new(),
             lists: HashMap::new(),
+            statics: HashMap::new(),
         });
     }
 
@@ -140,6 +162,7 @@ impl Heap {
         self.journal.as_ref().is_some_and(|j| {
             !j.objects.is_empty()
                 || !j.lists.is_empty()
+                || !j.statics.is_empty()
                 || self.objects.len() > j.objects_len
                 || self.lists.len() > j.lists_len
         })
@@ -165,6 +188,12 @@ impl Heap {
 
         for (id, value) in j.lists {
             if let Some(slot) = self.lists.get_mut(id.0 as usize) {
+                *slot = value;
+            }
+        }
+
+        for (id, value) in j.statics {
+            if let Some(slot) = self.statics.get_mut(id as usize) {
                 *slot = value;
             }
         }
@@ -221,5 +250,25 @@ impl Heap {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Heap;
+    use crate::value::GenericValue;
+
+    #[test]
+    fn rollback_restores_static_locals_written_in_the_journal() {
+        let mut heap = Heap::default();
+        *heap.static_local_mut(0) = Some(GenericValue::Num(1.0));
+        heap.begin();
+        *heap.static_local_mut(0) = Some(GenericValue::Num(2.0));
+        *heap.static_local_mut(1) = Some(GenericValue::Num(3.0));
+
+        assert!(heap.changed());
+        heap.rollback();
+        assert_eq!(heap.static_local(0), Some(&GenericValue::Num(1.0)));
+        assert_eq!(heap.static_local(1), None);
     }
 }

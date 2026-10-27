@@ -26,7 +26,7 @@ macro_rules! byte_enum {
 }
 
 // operand order: rD, immediates, source registers. An imm sits where the source register it replaces would.
-// r = u16 register, k = u32 constant, name/str/path/fn/count/target/slot = u32, flag/op = u8, imm = f32
+// r = u16 register, k = u32 constant, name/str/path/fn/count/target/slot/static = u32, flag/op = u8, imm = f32
 // args = count, then per argument: shape:u8, rKey if ARGUMENT_KEY, rValue if ARGUMENT_VALUE
 byte_enum! {
     pub enum Op {
@@ -87,6 +87,9 @@ byte_enum! {
         Leave = 0x35,            // regions:u32, target
         LoadSlot = 0x36,         // rD, slot
         StoreSlot = 0x37,        // slot, rS
+        LoadStatic = 0x38,       // rD, static
+        StoreStatic = 0x39,      // static, rS
+        InitStatic = 0x3a,       // static, rS, writes rS only while the static is uninitialized
     }
 }
 

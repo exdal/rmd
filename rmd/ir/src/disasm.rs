@@ -414,6 +414,7 @@ fn format_node(node: &IrNode) -> String {
         ),
         IrNode::Variable(name) => format!("variable {name}"),
         IrNode::FrameSlot(slot) => format!("frame_slot {slot}"),
+        IrNode::StaticSlot(id) => format!("static_slot {id}"),
         IrNode::Load { pointer } => format!("load {pointer}"),
         IrNode::Builtin(builtin) => format!("builtin {}", snake_case(builtin)),
         IrNode::Interpolate(interpolation) => {

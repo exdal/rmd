@@ -100,6 +100,7 @@ pub struct Module {
     pub symbols: Vec<Identifier>,
     pub paths: Vec<TreePath>,
     pub functions: Vec<CompiledFunction>,
+    pub static_count: u32,
     pub code: Vec<u8>,
     pub lines: LineTable<CodeOffset>,
     proc_functions: Vec<FunctionId>,
@@ -322,6 +323,7 @@ impl Generator {
             paths: self.paths,
             proc_functions: Module::index_procs(&self.functions),
             functions: self.functions,
+            static_count: module.static_count,
             code: self.code,
             lines: self.lines,
             index: module.index.clone(),
@@ -483,6 +485,7 @@ impl Generator {
                 IrNode::Phi { .. }
                 | IrNode::Variable(_)
                 | IrNode::FrameSlot(_)
+                | IrNode::StaticSlot(_)
                 | IrNode::SelectionMerge { .. }
                 | IrNode::LoopMerge { .. }
                 | IrNode::Noop => {},
@@ -551,6 +554,7 @@ impl Generator {
             | IrNode::Phi { .. }
             | IrNode::Variable(_)
             | IrNode::FrameSlot(_)
+            | IrNode::StaticSlot(_)
             | IrNode::SelectionMerge { .. }
             | IrNode::LoopMerge { .. }
             | IrNode::Branch(_)
@@ -562,6 +566,11 @@ impl Generator {
                 self.emit_op(Op::LoadSlot);
                 self.emit_register(state.register(id)?);
                 self.emit_u32(slot.0);
+            },
+            IrNode::Load { pointer } if let Some(IrNode::StaticSlot(static_id)) = module.node(*pointer) => {
+                self.emit_op(Op::LoadStatic);
+                self.emit_register(state.register(id)?);
+                self.emit_u32(static_id.0);
             },
             IrNode::Load { pointer } => {
                 let name = variable_name(module, *pointer)?;
@@ -874,6 +883,18 @@ impl Generator {
                 let value = state.register(*value)?;
                 self.emit_op(Op::StoreSlot);
                 self.emit_u32(slot.0);
+                self.emit_register(value);
+            },
+            IrNode::Store { pointer, value } | IrNode::Initialize { pointer, value }
+                if let Some(IrNode::StaticSlot(static_id)) = module.node(*pointer) =>
+            {
+                let op = match node {
+                    IrNode::Store { .. } => Op::StoreStatic,
+                    _ => Op::InitStatic,
+                };
+                let value = state.register(*value)?;
+                self.emit_op(op);
+                self.emit_u32(static_id.0);
                 self.emit_register(value);
             },
             IrNode::Store { pointer, value } | IrNode::Initialize { pointer, value } => {
@@ -2267,6 +2288,7 @@ mod tests {
                 intrinsic: None,
                 location: Location::default(),
             }],
+            static_count: 0,
             index: ir::ProcIndex::default(),
             node_lines: Default::default(),
         };
