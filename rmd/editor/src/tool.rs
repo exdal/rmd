@@ -16,8 +16,8 @@ use crate::{
     frame::HiddenTypes,
     grid::Grid,
     icons::materialdesignicons::{
-        ICON_COMMENT_TEXT_OUTLINE, ICON_ERASER, ICON_EYEDROPPER, ICON_FIND_REPLACE, ICON_FORMAT_COLOR_FILL,
-        ICON_PENCIL, ICON_SELECT_DRAG, ICON_TEXTURE, ICON_VECTOR_POLYLINE,
+        ICON_ARROW_ALL, ICON_COMMENT_TEXT_OUTLINE, ICON_ERASER, ICON_EYEDROPPER, ICON_FIND_REPLACE,
+        ICON_FORMAT_COLOR_FILL, ICON_PENCIL, ICON_SELECT_DRAG, ICON_TEXTURE, ICON_VECTOR_POLYLINE,
     },
     visual,
 };
@@ -36,6 +36,7 @@ pub enum Tool {
     Fill,
     RectFill,
     Comment,
+    Move,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,7 +179,7 @@ pub enum FillError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PlacementKind {
+pub enum PlacementKind {
     Atom,
     Turf,
     Area,
@@ -196,6 +197,7 @@ impl Tool {
             Tool::Fill => "Fill",
             Tool::RectFill => "Rectangle Fill",
             Tool::Comment => "Comment",
+            Tool::Move => "Move",
         }
     }
 
@@ -210,6 +212,7 @@ impl Tool {
             Tool::Fill => ICON_FORMAT_COLOR_FILL,
             Tool::RectFill => ICON_TEXTURE,
             Tool::Comment => ICON_COMMENT_TEXT_OUTLINE,
+            Tool::Move => ICON_ARROW_ALL,
         }
     }
 
@@ -217,7 +220,9 @@ impl Tool {
         match self {
             Self::Place => place(context),
             Self::Delete => delete(context),
-            Self::Pick | Self::Node | Self::Select | Self::Replace | Self::RectFill | Self::Comment => None,
+            Self::Pick | Self::Node | Self::Select | Self::Replace | Self::RectFill | Self::Comment | Self::Move => {
+                None
+            },
             Self::Fill => fill(context, Some(MAX_FILL_TILES), None).ok().flatten(),
         }
     }
@@ -250,6 +255,7 @@ impl From<Tool> for net::Tool {
             Tool::Replace => Self::Replace,
             Tool::Fill | Tool::RectFill => Self::Fill,
             Tool::Comment => Self::Comment,
+            Tool::Move => Self::Move,
         }
     }
 }
@@ -265,6 +271,7 @@ impl From<net::Tool> for Tool {
             net::Tool::Replace => Self::Replace,
             net::Tool::Fill => Self::Fill,
             net::Tool::Comment => Self::Comment,
+            net::Tool::Move => Self::Move,
         }
     }
 }
@@ -1202,7 +1209,7 @@ fn placement_rank(kind: PlacementKind) -> u8 {
     }
 }
 
-pub(crate) fn placement_kind(tree: &ObjectTree, prefab: &Prefab) -> Option<PlacementKind> {
+pub fn placement_kind(tree: &ObjectTree, prefab: &Prefab) -> Option<PlacementKind> {
     let id = tree.id_of(&prefab.path)?;
     let roots = tree.roots();
     let atom = roots.atom?;

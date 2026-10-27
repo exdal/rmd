@@ -4,7 +4,7 @@ use dmm::{Coord, Prefab};
 use editor::{
     command::EditGroupId,
     document::{DocumentId, MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
-    tool::Tool,
+    tool::{PlacementKind, Tool, placement_kind},
     visual,
 };
 use render::SpriteInstance;
@@ -52,6 +52,12 @@ impl Session {
         self.effective_grid(active)?
             .prefab_instance(picked)
             .map(|instance| instance.prefab())
+    }
+
+    pub(crate) fn picked_placement_kind(&self) -> Option<PlacementKind> {
+        let environment = self.state.environment.as_ref()?;
+
+        placement_kind(&environment.tree, self.picked_prefab()?)
     }
 
     pub fn picked_location(&self) -> Option<PrefabLocation> {

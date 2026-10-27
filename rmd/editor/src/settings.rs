@@ -323,6 +323,7 @@ pub(crate) enum KeybindAction {
     Refit,
     PlaceTool,
     PickTool,
+    MoveTool,
     NodeTool,
     SelectTool,
     DeleteTool,
@@ -365,7 +366,7 @@ pub(crate) enum KeybindAction {
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 57] = [
+    pub const ALL: [Self; 58] = [
         Self::Save,
         Self::SaveAll,
         Self::CloseMap,
@@ -384,6 +385,7 @@ impl KeybindAction {
         Self::Refit,
         Self::PlaceTool,
         Self::PickTool,
+        Self::MoveTool,
         Self::NodeTool,
         Self::SelectTool,
         Self::DeleteTool,
@@ -457,6 +459,7 @@ impl KeybindAction {
             Self::Refit => "Refit",
             Self::PlaceTool => "Place tool",
             Self::PickTool => "Pick tool",
+            Self::MoveTool => "Move tool",
             Self::NodeTool => "Node tool",
             Self::SelectTool => "Select tool",
             Self::DeleteTool => "Delete tool",
@@ -523,6 +526,7 @@ impl KeybindAction {
             Self::Refit => "refit",
             Self::PlaceTool => "place-tool",
             Self::PickTool => "pick-tool",
+            Self::MoveTool => "move-tool",
             Self::NodeTool => "node-tool",
             Self::SelectTool => "select-tool",
             Self::DeleteTool => "delete-tool",
@@ -588,6 +592,7 @@ pub(crate) struct KeyBindings {
     place_tool: KeyBinding,
     #[serde(rename = "select_tool")]
     pick_tool: KeyBinding,
+    move_tool: KeyBinding,
     node_tool: KeyBinding,
     #[serde(rename = "block_select_tool")]
     select_tool: KeyBinding,
@@ -651,6 +656,7 @@ impl Default for KeyBindings {
             refit: KeyBinding::new(Key::Home),
             place_tool: KeyBinding::new(Key::W),
             pick_tool: KeyBinding::new(Key::S),
+            move_tool: KeyBinding::new(Key::M),
             node_tool: KeyBinding::new(Key::N),
             select_tool: KeyBinding::with_shift(Key::S),
             delete_tool: KeyBinding::new(Key::X),
@@ -715,6 +721,7 @@ impl KeyBindings {
             refit: KeyBinding::new(Key::Home),
             place_tool: KeyBinding::new(Key::Key1),
             pick_tool: KeyBinding::new(Key::S),
+            move_tool: KeyBinding::new(Key::M),
             node_tool: KeyBinding::new(Key::N),
             select_tool: KeyBinding::new(Key::Key3),
             delete_tool: KeyBinding::new(Key::D),
@@ -777,6 +784,7 @@ impl KeyBindings {
             KeybindAction::Refit => self.refit,
             KeybindAction::PlaceTool => self.place_tool,
             KeybindAction::PickTool => self.pick_tool,
+            KeybindAction::MoveTool => self.move_tool,
             KeybindAction::NodeTool => self.node_tool,
             KeybindAction::SelectTool => self.select_tool,
             KeybindAction::DeleteTool => self.delete_tool,
@@ -894,6 +902,7 @@ impl KeyBindings {
             KeybindAction::Refit => self.refit = binding,
             KeybindAction::PlaceTool => self.place_tool = binding,
             KeybindAction::PickTool => self.pick_tool = binding,
+            KeybindAction::MoveTool => self.move_tool = binding,
             KeybindAction::NodeTool => self.node_tool = binding,
             KeybindAction::SelectTool => self.select_tool = binding,
             KeybindAction::DeleteTool => self.delete_tool = binding,
@@ -1543,6 +1552,7 @@ mod tests {
             (KeybindAction::Refit, Key::Home),
             (KeybindAction::PlaceTool, Key::W),
             (KeybindAction::PickTool, Key::S),
+            (KeybindAction::MoveTool, Key::M),
             (KeybindAction::DeleteTool, Key::X),
             (KeybindAction::ReplaceTool, Key::E),
             (KeybindAction::FillTool, Key::Q),
@@ -1600,6 +1610,7 @@ mod tests {
             (KeybindAction::Refit, KeyBinding::new(Key::Home)),
             (KeybindAction::PlaceTool, KeyBinding::new(Key::Key1)),
             (KeybindAction::PickTool, KeyBinding::new(Key::S)),
+            (KeybindAction::MoveTool, KeyBinding::new(Key::M)),
             (KeybindAction::NodeTool, KeyBinding::new(Key::N)),
             (KeybindAction::SelectTool, KeyBinding::new(Key::Key3)),
             (KeybindAction::DeleteTool, KeyBinding::new(Key::D)),

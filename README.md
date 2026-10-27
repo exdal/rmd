@@ -6,7 +6,7 @@ Rapid Mapping Device (rmd) is a map editor for Space Station 13 that can run DM 
 
 ## Features
 
-- **Map editing:** Select and resize regions. Fill, copy, move, rotate, or mirror tiles. Edit individual atoms from the map context menu.
+- **Map editing:** Select and resize regions. Fill, copy, move, rotate, or mirror tiles. Edit individual atoms from the map context menu, or drag single atoms around the map with the Move tool.
 - **Multiplayer and co-op:** Edit shared maps together. See other users' cursors and selections in real time. Follow their view. Add comments to shared maps.
 - **Appearance previews:** Run a DM profile to draw icon states, overlays, and underlays. RMD updates affected tiles after edits, undo, and redo.
 - **Lighting:** Preview lights and blockers across Z levels. Use the viewport settings to hide lighting or reduce darkness.

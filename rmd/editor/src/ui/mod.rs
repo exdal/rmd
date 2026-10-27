@@ -80,7 +80,8 @@ use self::{
     toolbar::{DEFAULT_CUSTOM_FILL_BOUNDARY, TopOverlayState, draw_top_overlay, request_level_change},
     tooltip::{draw_conflict_tooltip, draw_diff_tooltip},
     viewport::{
-        ActivePlacementFlash, EDIT_KEYS, EditCommand, MapViewState, MomentaryTool, PickStroke, PlacementStroke,
+        ActivePlacementFlash, EDIT_KEYS, EditCommand, MapViewState, MomentaryTool, MoveStroke, PickStroke,
+        PlacementStroke,
     },
     welcome::{ForgetRequest, WelcomeOutput},
 };
@@ -238,6 +239,7 @@ pub struct UiState {
     reset_layout: bool,
     gizmo: GizmoState,
     gizmo_context: Option<(DocumentId, Tool, u32)>,
+    move_stroke: Option<MoveStroke>,
     placement_flash: Option<ActivePlacementFlash>,
     placement_stroke: Option<PlacementStroke>,
     pick_stroke: Option<PickStroke>,
@@ -320,6 +322,7 @@ impl UiState {
             reset_layout: false,
             gizmo: GizmoState::default(),
             gizmo_context: None,
+            move_stroke: None,
             placement_flash: None,
             placement_stroke: None,
             pick_stroke: None,
@@ -426,6 +429,7 @@ impl UiState {
 
     fn cancel_tool_gestures(&mut self) {
         self.gizmo.cancel();
+        self.move_stroke = None;
         self.placement_flash = None;
         self.placement_stroke = None;
         self.pick_stroke = None;
@@ -1886,8 +1890,12 @@ mod tests {
             bindings.get(KeybindAction::NodeTool),
             KeyBinding::new(dear_imgui_rs::Key::N)
         );
+        assert_eq!(
+            bindings.get(KeybindAction::MoveTool),
+            KeyBinding::new(dear_imgui_rs::Key::M)
+        );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 57);
+        assert_eq!(KeybindAction::ALL.len(), 58);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));
@@ -1895,6 +1903,7 @@ mod tests {
         assert!(KeybindAction::ALL.contains(&KeybindAction::Copy));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Paste));
         assert!(KeybindAction::ALL.contains(&KeybindAction::NodeTool));
+        assert!(KeybindAction::ALL.contains(&KeybindAction::MoveTool));
         assert!(KeybindAction::ALL.contains(&KeybindAction::ShowLighting));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Recent1));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Recent0));

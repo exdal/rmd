@@ -75,6 +75,7 @@ impl UiState {
                 frame.gestures.cancel(session, frame.id);
                 frame.gestures.module_popup = None;
                 self.gizmo.cancel();
+                self.move_stroke = None;
                 session.select_region(None);
                 session.pick_instance(None);
             },
@@ -106,6 +107,7 @@ impl UiState {
         }
 
         self.gizmo.cancel();
+        self.move_stroke = None;
         session.cancel_node_drag();
 
         true
