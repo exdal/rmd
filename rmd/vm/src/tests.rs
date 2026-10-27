@@ -2946,6 +2946,17 @@ fn leaving_a_try_drops_its_handler() {
 }
 
 #[test]
+fn catch_sees_the_last_value_the_try_body_wrote() {
+    let source = fixture!("programs/catch_sees_the_last_value_the_try_body_wrote.dm");
+    assert_eq!(run(source, "assigned_after_a_throwing_call"), 1.into());
+    assert_eq!(run(source, "read_after_the_merge"), 221.into());
+    assert_eq!(run(source, "assigned_in_a_loop"), 6.into());
+    assert_eq!(run(source, "rethrown_from_an_inner_catch"), 2.into());
+    assert_eq!(run(source, "written_by_an_inner_catch"), 5.into());
+    assert_eq!(run(source, "inside_an_immediate_spawn"), "2,1".into());
+}
+
+#[test]
 fn try_inside_a_loop_preserves_frame_locals() {
     assert_eq!(
         run(fixture!("programs/try_inside_a_loop_preserves_frame_locals.dm"), "test",),

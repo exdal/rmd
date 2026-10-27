@@ -72,8 +72,12 @@ pub fn canonicalize_terminators(module: &mut Module) {
 
     let predecessors = Adjacency::new(module.nodes.len(), |edge| {
         for block in &blocks {
-            for target in successors(module, *block).into_iter().flatten() {
-                edge(target.0, *block);
+            let terminator = module
+                .block(*block)
+                .and_then(<[IrNodeId]>::last)
+                .and_then(|id| module.node(*id));
+            if let Some(terminator) = terminator {
+                terminator.for_each_successor(|target| edge(target.0, *block));
             }
         }
     });
@@ -116,22 +120,6 @@ pub fn canonicalize_terminators(module: &mut Module) {
     }
 }
 
-fn successors(module: &Module, block: IrNodeId) -> [Option<IrNodeId>; 2] {
-    let terminator = module
-        .block(block)
-        .and_then(<[IrNodeId]>::last)
-        .and_then(|id| module.node(*id));
-    match terminator {
-        Some(IrNode::Branch(target)) => [Some(*target), None],
-        Some(IrNode::ConditionalBranch {
-            true_block,
-            false_block,
-            ..
-        }) => [Some(*true_block), Some(*false_block)],
-        _ => [None, None],
-    }
-}
-
 /// `values` as sorted `(value, occurrences)` pairs
 fn counts(values: &[IrNodeId], counts: &mut Vec<(IrNodeId, usize)>) {
     counts.clear();
@@ -159,6 +147,37 @@ mod tests {
 
     use super::canonicalize_terminators;
     use crate::{IrNode, Module, PhiOperand};
+
+    #[test]
+    fn keeps_phi_edges_from_leave() {
+        let mut module = Module {
+            nodes: vec![
+                IrNode::Constant(Box::new(Value::Num(1.0))),
+                IrNode::Label(vec![core::types::IrNodeId(2)]),
+                IrNode::Leave {
+                    regions: 1,
+                    target: core::types::IrNodeId(3),
+                },
+                IrNode::Label(vec![core::types::IrNodeId(4), core::types::IrNodeId(5)]),
+                IrNode::Phi {
+                    operands: vec![PhiOperand {
+                        block: core::types::IrNodeId(1),
+                        value: core::types::IrNodeId(0),
+                    }],
+                },
+                IrNode::Return(Some(core::types::IrNodeId(4))),
+            ],
+            constants: vec![core::types::IrNodeId(0)],
+            ..Module::default()
+        };
+
+        canonicalize_terminators(&mut module);
+
+        assert!(matches!(
+            module.node(core::types::IrNodeId(4)),
+            Some(IrNode::Phi { operands }) if operands.len() == 1
+        ));
+    }
 
     #[test]
     fn removes_instructions_and_phi_edges_after_throw() {

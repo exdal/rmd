@@ -20,7 +20,7 @@ pub use prelude::Intrinsic;
 use rustc_hash::FxHashSet;
 pub use verify::{VerifyError, verify};
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BindingId(pub u32);
 
 impl std::fmt::Display for BindingId {
