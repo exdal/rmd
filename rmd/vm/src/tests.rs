@@ -104,6 +104,17 @@ fn negative_spawn_delays_run_before_the_continuation() {
 }
 
 #[test]
+fn values_used_after_a_spawn_survive_its_body() {
+    assert_eq!(
+        run(
+            fixture!("programs/values_used_after_a_spawn_survive_its_body.dm"),
+            "test"
+        ),
+        442.into()
+    );
+}
+
+#[test]
 fn immediate_spawns_copy_locals_parameters_and_the_return_value() {
     let source = fixture!("programs/immediate_spawns.dm");
     assert_eq!(run(source, "spawn_frame"), GenericValue::Num(79959.0));
@@ -338,7 +349,7 @@ fn demir_profile_reaches_the_instance_from_an_ordinary_proc() {
     assert_eq!(baked_state(&bake, 1), Some("lit"));
 }
 
-/// Memo safety is measured against the atom a hook was called about, not against `src`. A profile
+/// Cacheability is measured against the atom a hook was called about, not against `src`. A profile
 /// has no position, so seeding from it would mark every neighbourhood read uncacheable and silently
 /// cost every cache hit in a real bake.
 #[test]
@@ -2481,6 +2492,14 @@ fn executes_arithmetic_direct_calls_and_defaults() {
 }
 
 #[test]
+fn a_default_can_be_another_parameter() {
+    assert_eq!(
+        run(fixture!("programs/a_default_can_be_another_parameter.dm"), "test"),
+        GenericValue::Text("1,2,1,2;1,2,3,2;1,2,3,4".into())
+    );
+}
+
+#[test]
 fn nonconstant_defaults_can_read_earlier_parameters() {
     assert_eq!(
         run(
@@ -2507,6 +2526,137 @@ fn conditional_fallthrough_preserves_both_phi_edges() {
             "test",
         ),
         12.into()
+    );
+}
+
+#[test]
+fn each_branch_feeds_its_own_value_into_the_merge() {
+    assert_eq!(
+        run(
+            fixture!("programs/each_branch_feeds_its_own_value_into_the_merge.dm"),
+            "test",
+        ),
+        1121.into()
+    );
+}
+
+#[test]
+fn a_loop_reads_the_old_value_after_computing_the_next() {
+    assert_eq!(
+        run(
+            fixture!("programs/a_loop_reads_the_old_value_after_computing_the_next.dm"),
+            "test",
+        ),
+        GenericValue::Text("012:3".into())
+    );
+}
+
+#[test]
+fn a_loop_reads_the_next_value_before_carrying_it() {
+    assert_eq!(
+        run(
+            fixture!("programs/a_loop_reads_the_next_value_before_carrying_it.dm"),
+            "test",
+        ),
+        GenericValue::Text("123:3".into())
+    );
+}
+
+#[test]
+fn loop_carried_values_rotate_in_parallel() {
+    assert_eq!(
+        run(fixture!("programs/loop_carried_values_rotate_in_parallel.dm"), "test"),
+        GenericValue::Text("21,12,231,312".into())
+    );
+}
+
+#[test]
+fn a_number_on_the_right_is_an_immediate() {
+    assert_eq!(
+        run(fixture!("programs/number_immediates.dm"), "test_arithmetic"),
+        GenericValue::Text("6,4,0,-4".into())
+    );
+}
+
+#[test]
+fn compound_assignment_with_a_number_still_mutates_lists_in_place() {
+    let source = fixture!("programs/number_immediates.dm");
+    assert_eq!(run(source, "test_add_in_place"), 7.into());
+    assert_eq!(run(source, "test_append_in_place"), GenericValue::Text("3,3".into()));
+}
+
+#[test]
+fn a_number_key_indexes_lists_and_skips_null_conditionally() {
+    assert_eq!(
+        run(fixture!("programs/number_immediates.dm"), "test_second"),
+        GenericValue::Text("b,1".into())
+    );
+}
+
+#[test]
+fn returning_null_clears_dot_and_a_bare_return_keeps_it() {
+    let source = fixture!("programs/number_immediates.dm");
+    assert_eq!(run(source, "test_return_number"), 5.into());
+    assert_eq!(run(source, "test_return_null"), GenericValue::Null);
+    assert_eq!(run(source, "test_return_dot"), 3.into());
+}
+
+#[test]
+fn constant_defaults_apply_only_to_omitted_arguments() {
+    assert_eq!(
+        run(fixture!("programs/constants_load_at_their_use.dm"), "test_defaults"),
+        GenericValue::Text("5x,1x,1y".into())
+    );
+}
+
+#[test]
+fn a_constant_loads_again_on_every_iteration_that_reads_it() {
+    assert_eq!(
+        run(fixture!("programs/constants_load_at_their_use.dm"), "test_repeat"),
+        GenericValue::Text(",ababab".into())
+    );
+}
+
+#[test]
+fn constants_read_by_one_instruction_get_their_own_registers() {
+    assert_eq!(
+        run(
+            fixture!("programs/constants_load_at_their_use.dm"),
+            "test_two_constants"
+        ),
+        GenericValue::Text("ab".into())
+    );
+}
+
+#[test]
+fn each_edge_loads_its_constant_into_the_merge() {
+    assert_eq!(
+        run(fixture!("programs/constants_load_at_their_use.dm"), "test_choose"),
+        GenericValue::Text("yes,no".into())
+    );
+}
+
+#[test]
+fn a_constant_load_keeps_clear_of_operands_dying_at_the_same_instruction() {
+    assert_eq!(
+        run(fixture!("programs/constants_load_at_their_use.dm"), "test_minus"),
+        4.into()
+    );
+}
+
+#[test]
+fn edge_constants_load_after_the_moves_that_read_their_registers() {
+    assert_eq!(
+        run(fixture!("programs/constants_load_at_their_use.dm"), "test_shift"),
+        GenericValue::Text("0,5,5,7,7,7".into())
+    );
+}
+
+#[test]
+fn constants_load_at_their_use_inside_try_bodies() {
+    assert_eq!(
+        run(fixture!("programs/constants_load_at_their_use.dm"), "test_guarded"),
+        GenericValue::Text("boom-3-2".into())
     );
 }
 
@@ -2783,6 +2933,27 @@ fn values_live_across_try_and_catch_merge_correctly() {
         ),
         11.into()
     );
+}
+
+#[test]
+fn leaving_a_try_drops_its_handler() {
+    let source = fixture!("programs/leaving_a_try_drops_its_handler.dm");
+    assert_eq!(run(source, "after_break"), "body1,caught late".into());
+    assert_eq!(run(source, "after_continue"), 1006.into());
+    assert_eq!(run(source, "after_breaking_two_tries"), "caught late".into());
+    assert_eq!(run(source, "after_forward_goto"), "caught late".into());
+    assert_eq!(run(source, "after_backward_goto"), "body3,caught late".into());
+}
+
+#[test]
+fn catch_sees_the_last_value_the_try_body_wrote() {
+    let source = fixture!("programs/catch_sees_the_last_value_the_try_body_wrote.dm");
+    assert_eq!(run(source, "assigned_after_a_throwing_call"), 1.into());
+    assert_eq!(run(source, "read_after_the_merge"), 221.into());
+    assert_eq!(run(source, "assigned_in_a_loop"), 6.into());
+    assert_eq!(run(source, "rethrown_from_an_inner_catch"), 2.into());
+    assert_eq!(run(source, "written_by_an_inner_catch"), 5.into());
+    assert_eq!(run(source, "inside_an_immediate_spawn"), "2,1".into());
 }
 
 #[test]
@@ -3242,7 +3413,7 @@ fn evaluation_reports_randomness_and_nonlocal_world_reads() {
         .call(proc(&tree, &module.index, "test"), None, Vec::new())
         .expect("fixture should execute");
     assert!(evaluator.position_sensitive);
-    assert!(!evaluator.memo_safe);
+    assert!(!evaluator.is_cacheable);
 }
 
 #[test]
@@ -3375,6 +3546,14 @@ fn matrix_operations_follow_byond() {
     assert_eq!(
         run(fixture!("programs/matrix_operations_follow_byond.dm"), "test"),
         "2,6,10;1;12;0,1;1;1;-4".into()
+    );
+}
+
+#[test]
+fn equivalence_compares_contents_like_byond() {
+    assert_eq!(
+        run(fixture!("programs/equivalence_compares_contents_like_byond.dm"), "test"),
+        "101000;110000;10;10010;11;101;10".into()
     );
 }
 

@@ -36,11 +36,11 @@ pub fn merge_linear_blocks(module: &mut Module) {
                     protect(&mut protected, *merge_block);
                     protect(&mut protected, *continue_block);
                 },
-                Some(IrNode::TryCatch { body, catch, merge }) => {
+                Some(IrNode::TryCatch { body, catch }) => {
                     protect(&mut protected, *body);
                     protect(&mut protected, *catch);
-                    protect(&mut protected, *merge);
                 },
+                Some(IrNode::Leave { target, .. }) => protect(&mut protected, *target),
                 Some(IrNode::Spawn { body, merge }) => {
                     protect(&mut protected, *body);
                     protect(&mut protected, *merge);
@@ -88,7 +88,7 @@ fn merge_successor(module: &mut Module, block: IrNodeId, predecessor_count: &mut
     {
         return false;
     }
-    let outgoing = ordinary_successors(module, successor_instructions);
+    let outgoing = successors(module, successor_instructions);
 
     let IrNode::Label(successor_instructions) =
         std::mem::replace(&mut module.nodes[successor.0 as usize], IrNode::Noop)
@@ -115,16 +115,13 @@ fn merge_successor(module: &mut Module, block: IrNodeId, predecessor_count: &mut
     true
 }
 
-fn ordinary_successors(module: &Module, instructions: &[IrNodeId]) -> Vec<IrNodeId> {
-    match instructions.last().and_then(|instruction| module.node(*instruction)) {
-        Some(IrNode::Branch(target)) => vec![*target],
-        Some(IrNode::ConditionalBranch {
-            true_block,
-            false_block,
-            ..
-        }) => vec![*true_block, *false_block],
-        _ => Vec::new(),
+fn successors(module: &Module, instructions: &[IrNodeId]) -> Vec<IrNodeId> {
+    let mut successors = Vec::new();
+    if let Some(terminator) = instructions.last().and_then(|instruction| module.node(*instruction)) {
+        terminator.for_each_successor(|successor| successors.push(successor));
     }
+
+    successors
 }
 
 fn replace_phi_predecessor(module: &mut Module, target: IrNodeId, from: IrNodeId, to: IrNodeId) {
@@ -182,6 +179,7 @@ mod tests {
             params: Vec::new(),
             variadic: false,
             vars: Vec::new(),
+            slot_count: 0,
             body,
             intrinsic: None,
             location: Location::default(),

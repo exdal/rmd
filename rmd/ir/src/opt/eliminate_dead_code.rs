@@ -26,7 +26,6 @@ pub fn eliminate_dead_code(module: &mut Module) {
 
     for proc in &module.procs {
         for parameter in &proc.params {
-            mark_optional(parameter.default, &mut live, &mut pending);
             mark_optional(parameter.in_list, &mut live, &mut pending);
             for dimension in &parameter.spec.dimensions {
                 mark_optional(*dimension, &mut live, &mut pending);
@@ -111,6 +110,7 @@ mod tests {
             params: Vec::new(),
             variadic: false,
             vars: Vec::new(),
+            slot_count: 0,
             body,
             intrinsic: None,
             location: Location::default(),

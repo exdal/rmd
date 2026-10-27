@@ -34,11 +34,11 @@ pub fn eliminate_forwarding_blocks(module: &mut Module) {
                     protect(&mut protected, *merge_block);
                     protect(&mut protected, *continue_block);
                 },
-                Some(IrNode::TryCatch { body, catch, merge }) => {
+                Some(IrNode::TryCatch { body, catch }) => {
                     protect(&mut protected, *body);
                     protect(&mut protected, *catch);
-                    protect(&mut protected, *merge);
                 },
+                Some(IrNode::Leave { target, .. }) => protect(&mut protected, *target),
                 Some(IrNode::Spawn { body, merge }) => {
                     protect(&mut protected, *body);
                     protect(&mut protected, *merge);
@@ -270,6 +270,7 @@ mod tests {
             params: Vec::new(),
             variadic: false,
             vars: Vec::new(),
+            slot_count: 0,
             body,
             intrinsic: None,
             location: Location::default(),

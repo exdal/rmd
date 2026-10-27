@@ -36,12 +36,18 @@ pub struct IrModuleBuilder<'a> {
     named_blocks: FxHashMap<Identifier, IrNodeId>,
     defined_named_blocks: FxHashSet<IrNodeId>,
     controls: Vec<ControlTarget>,
+    /// the try and catch bodies being lowered, innermost last
+    regions: Vec<RegionId>,
+    next_region: RegionId,
+    label_regions: FxHashMap<IrNodeId, Vec<RegionId>>,
+    pending_gotos: Vec<PendingGoto>,
+    try_regions: Vec<TryRegion>,
+    try_slots: FxHashMap<BindingId, IrNodeId>,
     spawn_return: Option<BindingId>,
     current_block: Option<IrNodeId>,
     entry: IrNodeId,
     current_owner: TreePath,
     current_proc: Option<TreePath>,
-    locals_in_memory: bool,
     depth: usize,
     line: Option<SourceLine>,
     line_hint: usize,
@@ -101,12 +107,17 @@ impl<'a> IrModuleBuilder<'a> {
             named_blocks: FxHashMap::default(),
             defined_named_blocks: FxHashSet::default(),
             controls: Vec::new(),
+            regions: Vec::new(),
+            next_region: RegionId(0),
+            label_regions: FxHashMap::default(),
+            pending_gotos: Vec::new(),
+            try_regions: Vec::new(),
+            try_slots: FxHashMap::default(),
             spawn_return: None,
             current_block: None,
             entry: IrNodeId(0),
             current_owner: TreePath::default(),
             current_proc: None,
-            locals_in_memory: false,
             depth: 0,
             line: None,
             line_hint: 0,
@@ -136,7 +147,7 @@ impl<'a> IrModuleBuilder<'a> {
         // idea: "Hidden initializer procs". We encapsulate initializer into a hidden proc, we only call it when we
         // need. This would be terrible idea for a game, but for an editor, it actually makes perfect sense once
         // you think about it.
-        let func_id = self.lower_function(owner, name, &[], false, None, location, false, |this| {
+        let func_id = self.lower_function(owner, name, &[], false, None, location, |this| {
             this.lower_statements(&[Statement::Return(Some(expression))])
         });
 
@@ -163,7 +174,7 @@ impl<'a> IrModuleBuilder<'a> {
     fn lower_default_list(
         &mut self, owner: TreePath, name: Identifier, dimensions: &[Option<ExpressionId>], location: Location,
     ) -> ProcId {
-        self.lower_function(owner, name, &[], false, None, location, false, |this| {
+        self.lower_function(owner, name, &[], false, None, location, |this| {
             let dimensions = dimensions
                 .iter()
                 .map(|dimension| dimension.map(|expression| this.lower_expr(expression)))
@@ -219,7 +230,6 @@ impl<'a> IrModuleBuilder<'a> {
         &mut self, owner: TreePath, name: Identifier, kind: ProcKind, params: &[ast::ProcParam], variadic: bool,
         body: &[Statement], intrinsic: Option<Intrinsic>, location: Location,
     ) -> ProcId {
-        let locals_in_memory = statements_contain_try(self.ast, body);
         let proc = match kind {
             ProcKind::Verb => owner.concat(&TreePath::parse(&format!("verb/{name}"))),
             ProcKind::Override => {
@@ -230,25 +240,16 @@ impl<'a> IrModuleBuilder<'a> {
             ProcKind::Proc | ProcKind::Operator => owner.concat(&TreePath::parse(&format!("proc/{name}"))),
         };
 
-        self.lower_function(
-            owner,
-            name,
-            params,
-            variadic,
-            intrinsic,
-            location,
-            locals_in_memory,
-            |this| {
-                this.current_proc = Some(proc);
-                this.lower_statements(body)
-            },
-        )
+        self.lower_function(owner, name, params, variadic, intrinsic, location, |this| {
+            this.current_proc = Some(proc);
+            this.lower_statements(body)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
     fn lower_function(
         &mut self, owner: TreePath, name: Identifier, params: &[ast::ProcParam], variadic: bool,
-        intrinsic: Option<Intrinsic>, location: Location, locals_in_memory: bool, body: impl FnOnce(&mut Self),
+        intrinsic: Option<Intrinsic>, location: Location, body: impl FnOnce(&mut Self),
     ) -> ProcId {
         self.reset_proc();
         self.current_owner = owner.clone();
@@ -271,22 +272,18 @@ impl<'a> IrModuleBuilder<'a> {
             let var = self.declare_var(spec.clone());
             self.parameters.push(var);
             self.write_variable(var, entry, value);
-            lowered.push(ProcParam {
+            if let Some(default) = param.default {
+                let default = self.lower_expr(default);
+                self.emit_instr(IrNode::DefaultParameter {
+                    parameter: value,
+                    value: default,
+                });
+            }
+
+            lowered.push(ParamDecl {
                 spec,
-                default: param.default.map(|id| self.lower_expr(id)),
                 in_list: param.in_list.map(|id| self.lower_expr(id)),
             });
-        }
-
-        if locals_in_memory {
-            let parameters = self.parameters.clone();
-            for binding in parameters {
-                let value = self.read_variable(binding, entry);
-                let pointer = self.frame_local(binding);
-                self.stored_bindings.insert(binding, pointer);
-                self.emit_instr(IrNode::Store { pointer, value });
-            }
-            self.locals_in_memory = true;
         }
 
         body(self);
@@ -314,6 +311,7 @@ impl<'a> IrModuleBuilder<'a> {
             params: lowered,
             variadic,
             vars,
+            slot_count: self.try_slots.len() as u32,
             body: entry,
             intrinsic,
             location,
@@ -338,9 +336,13 @@ impl<'a> IrModuleBuilder<'a> {
         self.named_blocks.clear();
         self.defined_named_blocks.clear();
         self.controls.clear();
+        self.regions.clear();
+        self.label_regions.clear();
+        self.pending_gotos.clear();
+        self.try_regions.clear();
+        self.try_slots.clear();
         self.spawn_return = None;
         self.current_block = None;
-        self.locals_in_memory = false;
         self.depth = 0;
         self.current_proc = None;
     }
@@ -574,7 +576,7 @@ impl<'a> IrModuleBuilder<'a> {
         block
     }
 
-    fn break_target(&self, name: &Option<Identifier>) -> Option<IrNodeId> {
+    fn break_target(&self, name: &Option<Identifier>) -> Option<(IrNodeId, usize)> {
         match name {
             None => self
                 .controls
@@ -587,17 +589,67 @@ impl<'a> IrModuleBuilder<'a> {
                 .rev()
                 .find(|target| target.name.as_ref() == Some(name)),
         }
-        .map(|target| target.break_block)
+        .map(|target| (target.break_block, target.region_depth))
     }
 
-    fn continue_target(&self, name: &Option<Identifier>) -> Option<IrNodeId> {
+    fn continue_target(&self, name: &Option<Identifier>) -> Option<(IrNodeId, usize)> {
         self.controls
             .iter()
             .rev()
             .find(|target| {
                 target.continue_block.is_some() && name.as_ref().is_none_or(|name| target.name.as_ref() == Some(name))
             })
-            .and_then(|target| target.continue_block)
+            .and_then(|target| Some((target.continue_block?, target.region_depth)))
+    }
+
+    fn branch_out(&mut self, target: IrNodeId, region_depth: usize) {
+        let node = region_exit(&self.regions, &self.regions[..region_depth], target);
+        self.terminate_current_block(node);
+    }
+
+    fn lower_region(&mut self, merge: IrNodeId, body: impl FnOnce(&mut Self)) -> IrNodeId {
+        let block = self.make_block();
+        let previous = self.current_block;
+        if let Some(previous) = previous {
+            self.preds.entry(block).or_default().push(previous);
+        }
+
+        self.seal_block(block);
+        self.set_current_block(block);
+        self.regions.push(self.next_region);
+        self.next_region = RegionId(self.next_region.0 + 1);
+        body(self);
+        self.terminate_current_block(IrNode::Leave {
+            regions: 1,
+            target: merge,
+        });
+        self.regions.pop();
+        self.current_block = previous;
+
+        block
+    }
+
+    fn define_label(&mut self, name: &Identifier) -> IrNodeId {
+        let label = self.define_named_block(name);
+        self.label_regions.insert(label, self.regions.clone());
+
+        let (gotos, pending) = std::mem::take(&mut self.pending_gotos)
+            .into_iter()
+            .partition::<Vec<_>, _>(|goto| goto.target == label);
+        self.pending_gotos = pending;
+        for goto in gotos {
+            let node = region_exit(&goto.regions, &self.regions, label);
+            if matches!(node, IrNode::Trap { .. })
+                && let Some(preds) = self.preds.get_mut(&label)
+                && let Some(position) = preds.iter().position(|pred| *pred == goto.block)
+            {
+                preds.remove(position);
+            }
+
+            self.module.nodes[goto.branch.0 as usize] = node;
+        }
+
+        label
     }
 
     fn enter_loop(
@@ -616,6 +668,7 @@ impl<'a> IrModuleBuilder<'a> {
             name: name.cloned(),
             break_block: merge_block,
             continue_block: Some(continue_block),
+            region_depth: self.regions.len(),
         });
     }
 
@@ -629,7 +682,20 @@ impl<'a> IrModuleBuilder<'a> {
 
             return;
         }
+
         self.current_def.insert((var, block), value);
+
+        // a throw can stop the body after any instruction, so the catch reads what the body last
+        // wrote from a slot. the innermost try was entered last, so it has the newest first binding
+        if self.try_regions.last().is_some_and(|region| var < region.first_binding) {
+            let pointer = self.try_slot(var);
+            self.emit_instr(IrNode::Store { pointer, value });
+            for region in &mut self.try_regions {
+                if var < region.first_binding && !region.assigned.contains(&var) {
+                    region.assigned.push(var);
+                }
+            }
+        }
     }
 
     fn read_variable(&mut self, var: BindingId, block: IrNodeId) -> IrNodeId {
@@ -661,7 +727,7 @@ impl<'a> IrModuleBuilder<'a> {
                 },
                 _ => {
                     let phi = self.new_phi(block);
-                    self.write_variable(var, block, phi);
+                    self.current_def.insert((var, block), phi);
                     self.add_phi_operands(var, phi);
 
                     phi
@@ -669,7 +735,8 @@ impl<'a> IrModuleBuilder<'a> {
             }
         };
 
-        self.write_variable(var, block, value);
+        // caches the read, it is not a definition, so it must not store into a try slot
+        self.current_def.insert((var, block), value);
 
         value
     }
@@ -780,32 +847,31 @@ impl<'a> IrModuleBuilder<'a> {
 
     fn declare_var(&mut self, spec: VarSpec<IrNodeId>) -> BindingId {
         let id = BindingId(self.vars.len() as u32);
-        let stored = spec.modifiers.is_static || self.locals_in_memory;
-        let static_local = spec.modifiers.is_static;
+        let is_static = spec.modifiers.is_static;
 
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(spec.name.clone(), id);
         }
         self.vars.push(spec);
-        if stored {
-            let pointer = if static_local {
-                let proc = self.module.procs.len();
-                self.make_node(IrNode::Variable(format!("__dmed_static_local_{proc}_{}", id.0).into()))
-            } else {
-                self.frame_local(id)
-            };
+        if is_static {
+            let pointer = self.make_node(IrNode::StaticSlot(StaticId(self.module.static_count)));
+            self.module.static_count += 1;
             self.stored_bindings.insert(id, pointer);
         }
 
         id
     }
 
-    fn frame_local(&mut self, binding: BindingId) -> IrNodeId {
-        let proc = self.module.procs.len();
+    fn try_slot(&mut self, binding: BindingId) -> IrNodeId {
+        if let Some(pointer) = self.try_slots.get(&binding) {
+            return *pointer;
+        }
 
-        self.make_node(IrNode::Variable(
-            format!("__dmed_frame_local_{proc}_{}", binding.0).into(),
-        ))
+        let slot = SlotId(self.try_slots.len() as u32);
+        let pointer = self.make_node(IrNode::FrameSlot(slot));
+        self.try_slots.insert(binding, pointer);
+
+        pointer
     }
 
     fn declare_temp(&mut self, name: &str) -> BindingId {
@@ -1710,31 +1776,50 @@ impl<'a> IrModuleBuilder<'a> {
                 catch_body,
             } => {
                 let merge = self.make_block();
-                let body = self.block_branching_to(try_body, merge);
+                self.try_regions.push(TryRegion {
+                    first_binding: BindingId(self.vars.len() as u32),
+                    assigned: Vec::new(),
+                });
+                let body = self.lower_region(merge, |this| this.lower_statements(try_body));
+                let assigned = self.try_regions.pop().map(|region| region.assigned).unwrap_or_default();
+
+                // the body's stores only cover what it assigned, so the slots start from the values
+                // the try was entered with
+                if let Some(block) = self.current_block {
+                    for var in &assigned {
+                        let value = self.read_variable(*var, block);
+                        let pointer = self.try_slot(*var);
+                        self.emit_instr(IrNode::Store { pointer, value });
+                    }
+                }
 
                 self.scopes.push(FxHashMap::default());
                 let catch_binding = catch_param.as_ref().map(|s| {
                     let spec = self.spec(s);
                     self.declare_var(spec)
                 });
-                let catch = self.make_block();
-                let previous = self.current_block;
-                if let Some(previous) = previous {
-                    self.preds.entry(catch).or_default().push(previous);
-                }
-                self.seal_block(catch);
-                self.set_current_block(catch);
-                if let Some(binding) = catch_binding {
-                    let value = self.emit_instr(IrNode::CatchValue);
-                    self.write_variable(binding, catch, value);
-                }
-                self.lower_statements(catch_body);
-                self.terminate_current_block(IrNode::Branch(merge));
-                self.current_block = previous;
+                let catch = self.lower_region(merge, |this| {
+                    let Some(catch) = this.current_block else {
+                        return;
+                    };
+
+                    // an outer try's slot is this same slot, so the loaded value needs no store
+                    for var in assigned {
+                        let pointer = this.try_slot(var);
+                        let value = this.emit_instr(IrNode::Load { pointer });
+                        this.current_def.insert((var, catch), value);
+                    }
+
+                    if let Some(binding) = catch_binding {
+                        let value = this.emit_instr(IrNode::CatchValue);
+                        this.write_variable(binding, catch, value);
+                    }
+
+                    this.lower_statements(catch_body);
+                });
                 self.scopes.pop();
 
-                self.emit_instr(IrNode::TryCatch { body, catch, merge });
-                self.terminate_current_block(IrNode::Branch(merge));
+                self.terminate_current_block(IrNode::TryCatch { body, catch });
                 self.seal_block(merge);
                 self.resume(merge);
             },
@@ -1747,7 +1832,7 @@ impl<'a> IrModuleBuilder<'a> {
                 self.emit_instr(IrNode::Del(value));
             },
             Statement::Break(name) => match self.break_target(name) {
-                Some(block) => self.terminate_current_block(IrNode::Branch(block)),
+                Some((block, region_depth)) => self.branch_out(block, region_depth),
                 None => {
                     self.emit_instr(IrNode::Trap {
                         reason: "break outside loop".into(),
@@ -1755,7 +1840,7 @@ impl<'a> IrModuleBuilder<'a> {
                 },
             },
             Statement::Continue(name) => match self.continue_target(name) {
-                Some(block) => self.terminate_current_block(IrNode::Branch(block)),
+                Some((block, region_depth)) => self.branch_out(block, region_depth),
                 None => {
                     self.emit_instr(IrNode::Trap {
                         reason: "continue outside loop".into(),
@@ -1763,11 +1848,30 @@ impl<'a> IrModuleBuilder<'a> {
                 },
             },
             Statement::Goto(name) => {
-                let block = self.named_block(name);
-                self.terminate_current_block(IrNode::Branch(block));
+                let label = self.named_block(name);
+                match self.label_regions.get(&label) {
+                    Some(regions) => {
+                        let node = region_exit(&self.regions, regions, label);
+                        self.terminate_current_block(node);
+                    },
+                    None => {
+                        // the label's regions are known once it is defined, which patches this branch
+                        if let Some(block) = self.current_block {
+                            self.terminate_current_block(IrNode::Branch(label));
+                            if let Some(branch) = self.module.block(block).and_then(<[IrNodeId]>::last) {
+                                self.pending_gotos.push(PendingGoto {
+                                    branch: *branch,
+                                    block,
+                                    target: label,
+                                    regions: self.regions.clone(),
+                                });
+                            }
+                        }
+                    },
+                }
             },
             Statement::Label { name, body } => {
-                let block = self.define_named_block(name);
+                let block = self.define_label(name);
                 self.fall_through(block);
 
                 match body.split_first() {
@@ -1780,6 +1884,7 @@ impl<'a> IrModuleBuilder<'a> {
                             name: Some(name.clone()),
                             break_block: exit,
                             continue_block: None,
+                            region_depth: self.regions.len(),
                         });
                         self.lower_statements(body);
                         self.terminate_current_block(IrNode::Branch(exit));
@@ -1842,10 +1947,6 @@ impl<'a> IrModuleBuilder<'a> {
             None => self.emit_instr(IrNode::Builtin(Builtin::ThisProc)),
         };
         let dot_copy = self.declare_temp("$spawn_return");
-        if self.locals_in_memory {
-            let pointer = self.frame_local(dot_copy);
-            self.stored_bindings.insert(dot_copy, pointer);
-        }
         self.write_variable(dot_copy, spawn_body, this);
 
         let parent_spawn_return = self.spawn_return.replace(dot_copy);
@@ -1878,11 +1979,10 @@ impl<'a> IrModuleBuilder<'a> {
         self.scopes.pop();
 
         self.set_current_block(taken);
-        self.emit_instr(IrNode::Spawn {
+        self.terminate_current_block(IrNode::Spawn {
             body: spawn_body,
             merge,
         });
-        self.terminate_current_block(IrNode::Branch(merge));
         self.seal_block(merge);
         self.resume(merge);
     }
@@ -1915,22 +2015,6 @@ impl<'a> IrModuleBuilder<'a> {
             },
             _ => OutputTarget::Value(self.lower_expr(id)),
         }
-    }
-
-    fn block_branching_to(&mut self, body: &[Statement], next: IrNodeId) -> IrNodeId {
-        let block = self.make_block();
-        let previous = self.current_block;
-
-        if let Some(previous) = previous {
-            self.preds.entry(block).or_default().push(previous);
-        }
-        self.seal_block(block);
-        self.set_current_block(block);
-        self.lower_statements(body);
-        self.terminate_current_block(IrNode::Branch(next));
-        self.current_block = previous;
-
-        block
     }
 
     fn case_condition(&mut self, subject: IrNodeId, values: &[ast::SwitchValue]) -> IrNodeId {
@@ -2150,11 +2234,43 @@ struct ControlTarget {
     name: Option<Identifier>,
     break_block: IrNodeId,
     continue_block: Option<IrNodeId>,
+    /// how many of `regions` enclose the statement
+    region_depth: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RegionId(u32);
+
+struct TryRegion {
+    /// bindings from here on are declared inside the body, so the catch cannot see them
+    first_binding: BindingId,
+    assigned: Vec<BindingId>,
+}
+
+struct PendingGoto {
+    branch: IrNodeId,
+    block: IrNodeId,
+    target: IrNodeId,
+    regions: Vec<RegionId>,
+}
+
+fn region_exit(from: &[RegionId], to: &[RegionId], target: IrNodeId) -> IrNode {
+    match from.strip_prefix(to) {
+        Some([]) => IrNode::Branch(target),
+        Some(exited) => IrNode::Leave {
+            regions: exited.len() as u32,
+            target,
+        },
+        None => IrNode::Trap {
+            reason: "goto into a try or catch body".into(),
+        },
+    }
+}
+
+// a try or spawn body is wired to its block before it is lowered, so only the edges out count here
 fn branch_targets(node: &IrNode) -> Vec<IrNodeId> {
     match node {
-        IrNode::Branch(target) => vec![*target],
+        IrNode::Branch(target) | IrNode::Leave { target, .. } | IrNode::Spawn { merge: target, .. } => vec![*target],
         IrNode::ConditionalBranch {
             true_block,
             false_block,
@@ -2186,44 +2302,6 @@ fn compound(kind: ast::AssignmentKind) -> Option<BinaryOp> {
 
 fn is_immediate_spawn(ast: &AST, delay: Option<ExpressionId>) -> bool {
     delay.is_some_and(|delay| !matches!(fold(ast, delay), Value::Num(delay) if delay >= 0.0))
-}
-
-fn statements_contain_try(ast: &AST, statements: &[Statement]) -> bool {
-    statements
-        .iter()
-        .any(|statement| statement_contains_try(ast, statement))
-}
-
-fn statement_contains_try(ast: &AST, statement: &Statement) -> bool {
-    match statement {
-        Statement::TryCatch { .. } => true,
-        Statement::If { branches, else_branch } => {
-            branches.iter().any(|(_, body)| statements_contain_try(ast, body))
-                || else_branch
-                    .as_deref()
-                    .is_some_and(|body| statements_contain_try(ast, body))
-        },
-        Statement::While { body, .. } | Statement::DoWhile { body, .. } | Statement::Label { body, .. } => {
-            statements_contain_try(ast, body)
-        },
-        Statement::Spawn { delay, body } => is_immediate_spawn(ast, *delay) && statements_contain_try(ast, body),
-        Statement::For(loop_) => match loop_.as_ref() {
-            ForLoop::Standard { init, step, body, .. } => {
-                init.as_deref()
-                    .is_some_and(|statement| statement_contains_try(ast, statement))
-                    || step
-                        .as_deref()
-                        .is_some_and(|statement| statement_contains_try(ast, statement))
-                    || statements_contain_try(ast, body)
-            },
-            ForLoop::List { body, .. } | ForLoop::Range { body, .. } => statements_contain_try(ast, body),
-        },
-        Statement::Switch { cases, default, .. } => {
-            cases.iter().any(|case| statements_contain_try(ast, &case.body))
-                || default.as_deref().is_some_and(|body| statements_contain_try(ast, body))
-        },
-        _ => false,
-    }
 }
 
 #[cfg(test)]
@@ -2281,20 +2359,72 @@ mod tests {
         builder.finish_with_optimizations(enabled)
     }
 
-    fn has_frame_locals(module: &Module) -> bool {
-        module
+    #[test]
+    fn a_break_out_of_two_tries_leaves_both() {
+        let module = lower(fixture!("programs/a_break_out_of_two_tries_leaves_both.dm"));
+        verify(&module).expect("leaving IR should verify");
+
+        let leave = module
             .nodes
             .iter()
-            .any(|node| matches!(node, IrNode::Variable(name) if name.as_str().starts_with("__dmed_frame_local_")))
+            .find_map(|node| match node {
+                IrNode::Leave { regions: 2, target } => Some(*target),
+                _ => None,
+            })
+            .expect("the break leaves both tries");
+        let outer_body = module
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                IrNode::TryCatch { body, .. } => Some(*body),
+                _ => None,
+            })
+            .expect("try");
+
+        assert!(!module.region_blocks(outer_body).contains(&leave));
     }
 
     #[test]
-    fn only_immediate_spawn_bodies_force_locals_into_memory() {
-        let deferred = lower(fixture!("programs/deferred_spawn_try_keeps_locals_in_registers.dm"));
-        let immediate = lower(fixture!("programs/immediate_spawn_try_keeps_locals_in_memory.dm"));
+    fn a_goto_into_a_try_body_traps() {
+        let module = lower(fixture!("programs/a_goto_into_a_try_body_traps.dm"));
+        verify(&module).expect("trapped goto should verify");
 
-        assert!(!has_frame_locals(&deferred));
-        assert!(has_frame_locals(&immediate));
+        assert!(
+            module
+                .nodes
+                .iter()
+                .any(|node| matches!(node, IrNode::Trap { reason } if reason == "goto into a try or catch body"))
+        );
+    }
+
+    #[test]
+    fn static_locals_get_module_wide_ids() {
+        let module = lower(fixture!("programs/static_locals_get_module_wide_ids.dm"));
+        let ids = module
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                IrNode::StaticSlot(id) => Some(*id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, [StaticId(0), StaticId(1)]);
+        assert_eq!(module.static_count, 2);
+    }
+
+    #[test]
+    fn only_locals_assigned_in_a_try_body_get_a_slot() {
+        let module = lower(fixture!("programs/only_locals_assigned_in_a_try_body_get_a_slot.dm"));
+        let slots = module
+            .nodes
+            .iter()
+            .filter(|node| matches!(node, IrNode::FrameSlot(_)))
+            .count();
+
+        // `kept` is only read in the body, `assigned` is written there
+        assert_eq!(slots, 1);
+        assert_eq!(module.procs[0].slot_count, 1);
     }
 
     #[test]
@@ -2539,19 +2669,47 @@ mod tests {
     }
 
     #[test]
-    fn metadata_does_not_reference_defaults_after_a_noreturn_default() {
-        let module = lower(fixture!(
-            "programs/metadata_does_not_reference_defaults_after_a_noreturn_default.dm"
-        ));
+    fn a_noreturn_default_drops_the_defaults_after_it() {
+        let module = lower(fixture!("programs/a_noreturn_default_drops_the_defaults_after_it.dm"));
+        let entry = module.block(module.procs[0].body).expect("procedure body");
 
         assert!(matches!(
-            module.procs[0].params[0]
-                .default
-                .and_then(|default| module.node(default)),
+            entry.last().and_then(|id| module.node(*id)),
             Some(IrNode::Blocked("input"))
         ));
-        assert_eq!(module.procs[0].params[1].default, None);
-        crate::verify(&module).expect("removed defaults should not leave stale metadata");
+        assert!(
+            !module
+                .nodes
+                .iter()
+                .any(|node| matches!(node, IrNode::DefaultParameter { .. }))
+        );
+        crate::verify(&module).expect("removed defaults should verify");
+    }
+
+    #[test]
+    fn parameter_defaults_lower_to_entry_block_instructions() {
+        let module = lower(fixture!(
+            "programs/parameter_defaults_lower_to_entry_block_instructions.dm"
+        ));
+        let entry = module.block(module.procs[0].body).expect("procedure body");
+        let defaults = entry
+            .iter()
+            .filter_map(|id| match module.node(*id) {
+                Some(IrNode::DefaultParameter { parameter, value }) => Some((*parameter, *value)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let parameters = &module.procs[0].parameters;
+
+        assert_eq!(defaults.len(), 2);
+        assert_eq!(defaults[0].0, parameters[1]);
+        assert!(matches!(module.node(defaults[0].1), Some(IrNode::Constant(_))));
+        assert_eq!(defaults[1].0, parameters[2]);
+        assert!(matches!(
+            module.node(defaults[1].1),
+            Some(IrNode::Binary { lhs, .. }) if *lhs == parameters[0]
+        ));
+        crate::verify(&module).expect("parameter defaults should verify");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use core::{bitset::BitIndex, interner::SymbolMap};
 use std::collections::HashMap;
 
-use objtree::TypeId;
+use objtree::{SharedVarId, TypeId};
 
 use crate::{
     FaultKind,
@@ -15,6 +15,25 @@ struct Journal {
     lists_len: usize,
     objects: HashMap<ObjectId, Object>,
     lists: HashMap<ListId, ListData>,
+    statics: HashMap<Static, Option<GenericValue>>,
+}
+
+/// storage every call of a proc, or every instance of a type, shares
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Static {
+    /// `var/static` inside a proc
+    Local(u32),
+    /// `var/static` or `var/global` on a type
+    Var(SharedVarId),
+}
+
+impl Static {
+    fn index(self) -> usize {
+        match self {
+            Self::Local(id) => id as usize,
+            Self::Var(id) => id.0 as usize,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +74,9 @@ impl Object {
 pub struct Heap {
     pub(crate) objects: Vec<Object>,
     pub(crate) lists: Vec<ListData>,
+    /// `None` until the declaration runs or the initializer is called
+    static_locals: Vec<Option<GenericValue>>,
+    shared_vars: Vec<Option<GenericValue>>,
     journal: Option<Journal>,
 }
 
@@ -108,12 +130,40 @@ impl Heap {
         Ok(value)
     }
 
+    pub fn static_value(&self, key: Static) -> Option<&GenericValue> {
+        let values = match key {
+            Static::Local(_) => &self.static_locals,
+            Static::Var(_) => &self.shared_vars,
+        };
+
+        values.get(key.index())?.as_ref()
+    }
+
+    pub fn static_value_mut(&mut self, key: Static) -> &mut Option<GenericValue> {
+        let values = match key {
+            Static::Local(_) => &mut self.static_locals,
+            Static::Var(_) => &mut self.shared_vars,
+        };
+        let index = key.index();
+        if values.len() <= index {
+            values.resize(index + 1, None);
+        }
+
+        let value = &mut values[index];
+        if let Some(j) = &mut self.journal {
+            j.statics.entry(key).or_insert_with(|| value.clone());
+        }
+
+        value
+    }
+
     pub fn begin(&mut self) {
         self.journal = Some(Journal {
             objects_len: self.objects.len(),
             lists_len: self.lists.len(),
             objects: HashMap::new(),
             lists: HashMap::new(),
+            statics: HashMap::new(),
         });
     }
 
@@ -140,6 +190,7 @@ impl Heap {
         self.journal.as_ref().is_some_and(|j| {
             !j.objects.is_empty()
                 || !j.lists.is_empty()
+                || !j.statics.is_empty()
                 || self.objects.len() > j.objects_len
                 || self.lists.len() > j.lists_len
         })
@@ -165,6 +216,16 @@ impl Heap {
 
         for (id, value) in j.lists {
             if let Some(slot) = self.lists.get_mut(id.0 as usize) {
+                *slot = value;
+            }
+        }
+
+        for (key, value) in j.statics {
+            let values = match key {
+                Static::Local(_) => &mut self.static_locals,
+                Static::Var(_) => &mut self.shared_vars,
+            };
+            if let Some(slot) = values.get_mut(key.index()) {
                 *slot = value;
             }
         }
@@ -221,5 +282,27 @@ impl Heap {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use objtree::SharedVarId;
+
+    use super::{Heap, Static};
+    use crate::value::GenericValue;
+
+    #[test]
+    fn rollback_restores_statics_written_in_the_journal() {
+        let mut heap = Heap::default();
+        *heap.static_value_mut(Static::Local(0)) = Some(GenericValue::Num(1.0));
+        heap.begin();
+        *heap.static_value_mut(Static::Local(0)) = Some(GenericValue::Num(2.0));
+        *heap.static_value_mut(Static::Var(SharedVarId(0))) = Some(GenericValue::Num(3.0));
+
+        assert!(heap.changed());
+        heap.rollback();
+        assert_eq!(heap.static_value(Static::Local(0)), Some(&GenericValue::Num(1.0)));
+        assert_eq!(heap.static_value(Static::Var(SharedVarId(0))), None);
     }
 }

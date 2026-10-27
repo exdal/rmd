@@ -61,11 +61,6 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
         for parameter in &proc.params {
             verify_optional(
                 module,
-                parameter.default,
-                &format!("procedure {index} parameter default"),
-            )?;
-            verify_optional(
-                module,
                 parameter.in_list,
                 &format!("procedure {index} parameter in-list"),
             )?;
@@ -134,6 +129,14 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                 )));
             }
 
+            if let IrNode::DefaultParameter { parameter, .. } = node
+                && !matches!(module.node(*parameter), Some(IrNode::FunctionParameter(_)))
+            {
+                return Err(VerifyError::new(format!(
+                    "parameter default {instruction} targets non-parameter node {parameter}"
+                )));
+            }
+
             if matches!(node, IrNode::Phi { .. }) {
                 if saw_non_phi {
                     return Err(VerifyError::new(format!(
@@ -164,18 +167,8 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
             verify_targets(node, &block_set, instruction, *block)?;
         }
 
-        let terminator = instructions.last().and_then(|instruction| module.node(*instruction));
-        match terminator {
-            Some(IrNode::Branch(target)) => predecessors.entry(*target).or_default().push(*block),
-            Some(IrNode::ConditionalBranch {
-                true_block,
-                false_block,
-                ..
-            }) => {
-                predecessors.entry(*true_block).or_default().push(*block);
-                predecessors.entry(*false_block).or_default().push(*block);
-            },
-            _ => {},
+        if let Some(terminator) = instructions.last().and_then(|instruction| module.node(*instruction)) {
+            terminator.for_each_successor(|target| predecessors.entry(target).or_default().push(*block));
         }
     }
 
@@ -238,7 +231,8 @@ fn verify_targets(
             false_block,
             ..
         } => vec![*true_block, *false_block],
-        IrNode::TryCatch { body, catch, merge } => vec![*body, *catch, *merge],
+        IrNode::TryCatch { body, catch } => vec![*body, *catch],
+        IrNode::Leave { target, .. } => vec![*target],
         IrNode::Spawn { body, merge } => vec![*body, *merge],
         IrNode::Phi { operands } => operands.iter().map(|operand| operand.block).collect::<Vec<_>>(),
         _ => Vec::new(),

@@ -1,4 +1,4 @@
-pub use core::types::{IrNodeId, ProcId, ProcKind, ProcParam};
+pub use core::types::{IrNodeId, ProcId, ProcKind};
 use core::{
     interner::SymbolMap,
     location::{LineTable, Location, SourceLine},
@@ -17,9 +17,10 @@ pub use ast_lowering::IrModuleBuilder;
 pub use lower::lower;
 use objtree::{ObjectTree, TypeId};
 pub use prelude::Intrinsic;
+use rustc_hash::FxHashSet;
 pub use verify::{VerifyError, verify};
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BindingId(pub u32);
 
 impl std::fmt::Display for BindingId {
@@ -31,6 +32,24 @@ impl std::fmt::Display for BindingId {
 impl std::fmt::Debug for BindingId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SlotId(pub u32);
+
+impl std::fmt::Display for SlotId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "slot{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StaticId(pub u32);
+
+impl std::fmt::Display for StaticId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "static{}", self.0)
     }
 }
 
@@ -77,6 +96,8 @@ pub enum IrNode {
         operands: Vec<PhiOperand>,
     },
     Variable(Identifier),
+    FrameSlot(SlotId),
+    StaticSlot(StaticId),
     Load {
         pointer: IrNodeId,
     },
@@ -184,6 +205,10 @@ pub enum IrNode {
         builtin: Builtin,
         value: IrNodeId,
     },
+    DefaultParameter {
+        parameter: IrNodeId,
+        value: IrNodeId,
+    },
     CatchValue,
 
     Label(Vec<IrNodeId>),
@@ -208,11 +233,15 @@ pub enum IrNode {
         target: OutputTarget,
         value: IrNodeId,
     },
-    // DM unwinding has no branch form, so this stays structured. `body` and `catch` are blocks
+    // the VM runs `body`, and `catch` after a throw, as nested executions that end with a `Leave`
     TryCatch {
         body: IrNodeId,
         catch: IrNodeId,
-        merge: IrNodeId,
+    },
+    /// `regions` is how many enclosing try and catch bodies the branch exits
+    Leave {
+        regions: u32,
+        target: IrNodeId,
     },
     Spawn {
         body: IrNodeId,
@@ -291,6 +320,7 @@ impl IrNode {
             | Self::Store { .. }
             | Self::Initialize { .. }
             | Self::StoreBuiltin { .. }
+            | Self::DefaultParameter { .. }
             | Self::CatchValue
             | Self::Del(_)
             | Self::Output { .. } => SideEffect::Observable,
@@ -298,6 +328,9 @@ impl IrNode {
             Self::Branch(_)
             | Self::ConditionalBranch { .. }
             | Self::Return(_)
+            | Self::TryCatch { .. }
+            | Self::Leave { .. }
+            | Self::Spawn { .. }
             | Self::EndSpawn
             | Self::Throw(_)
             | Self::Blocked(_)
@@ -309,11 +342,11 @@ impl IrNode {
             | Self::FunctionParameter(_)
             | Self::Phi { .. }
             | Self::Variable(_)
+            | Self::FrameSlot(_)
+            | Self::StaticSlot(_)
             | Self::Label(_)
             | Self::SelectionMerge { .. }
             | Self::LoopMerge { .. }
-            | Self::TryCatch { .. }
-            | Self::Spawn { .. }
             | Self::Noop => SideEffect::Structural,
         }
     }
@@ -324,6 +357,9 @@ impl IrNode {
             Self::Branch(_)
                 | Self::ConditionalBranch { .. }
                 | Self::Return(_)
+                | Self::TryCatch { .. }
+                | Self::Leave { .. }
+                | Self::Spawn { .. }
                 | Self::EndSpawn
                 | Self::Throw(_)
                 | Self::Blocked(_)
@@ -425,6 +461,10 @@ impl IrNode {
                 visit(*value);
             },
             Self::StoreBuiltin { value, .. } => visit(*value),
+            Self::DefaultParameter { parameter, value } => {
+                visit(*parameter);
+                visit(*value);
+            },
             Self::ConditionalBranch { condition, .. } => visit(*condition),
             Self::Return(value) => value.iter().copied().for_each(&mut visit),
             Self::Output { target, value } => {
@@ -442,6 +482,37 @@ impl IrNode {
             _ => {},
         }
     }
+
+    pub fn for_each_successor(&self, mut visit: impl FnMut(IrNodeId)) {
+        match self {
+            Self::Branch(target) => visit(*target),
+            Self::ConditionalBranch {
+                true_block,
+                false_block,
+                ..
+            } => {
+                visit(*true_block);
+                visit(*false_block);
+            },
+            Self::TryCatch { body, catch } => {
+                visit(*body);
+                visit(*catch);
+            },
+            Self::Leave { target, .. } => visit(*target),
+            Self::Spawn { body, merge } => {
+                visit(*body);
+                visit(*merge);
+            },
+            _ => {},
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ParamDecl {
+    pub spec: VarSpec<IrNodeId>,
+    /// `in list(...)`
+    pub in_list: Option<IrNodeId>,
 }
 
 #[derive(Debug, Clone)]
@@ -451,9 +522,10 @@ pub struct Procedure {
     pub previous: Option<ProcId>,
     pub owner: TreePath,
     pub name: Identifier,
-    pub params: Vec<ProcParam<IrNodeId>>,
+    pub params: Vec<ParamDecl>,
     pub variadic: bool,
     pub vars: Vec<VarSpec<IrNodeId>>,
+    pub slot_count: u32,
     pub body: IrNodeId,
     pub intrinsic: Option<Intrinsic>,
     pub location: Location,
@@ -467,6 +539,7 @@ pub struct Module {
     /// Module-scope declarations for bare proc names defined outside this module.
     pub external_functions: Vec<IrNodeId>,
     pub procs: Vec<Procedure>,
+    pub static_count: u32,
     pub index: ProcIndex,
     pub node_lines: LineTable<IrNodeId>,
 }
@@ -543,6 +616,38 @@ impl Module {
             IrNode::Label(instructions) => Some(instructions),
             _ => None,
         }
+    }
+
+    /// The blocks of the try, catch or spawn body starting at `entry`, nested regions included
+    pub fn region_blocks(&self, entry: IrNodeId) -> Vec<IrNodeId> {
+        let mut blocks = Vec::new();
+        let mut seen = FxHashSet::default();
+        // depth counts the try and catch bodies entered since `entry`, the ones a `Leave` exits
+        let mut pending = vec![(entry, 0_u32)];
+
+        while let Some((block, depth)) = pending.pop() {
+            if !seen.insert(block) {
+                continue;
+            }
+
+            let Some(terminator) = self.block(block).and_then(<[IrNodeId]>::last) else {
+                continue;
+            };
+
+            blocks.push(block);
+            match self.node(*terminator) {
+                Some(IrNode::TryCatch { body, catch }) => pending.extend([(*body, depth + 1), (*catch, depth + 1)]),
+                Some(IrNode::Leave { regions, target }) => {
+                    if let Some(depth) = depth.checked_sub(*regions) {
+                        pending.push((*target, depth));
+                    }
+                },
+                Some(node) => node.for_each_successor(|successor| pending.push((successor, depth))),
+                None => {},
+            }
+        }
+
+        blocks
     }
 
     /// Names a procedure left for the runtime to resolve, declared in its entry block, each at the line of its

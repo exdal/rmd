@@ -335,6 +335,7 @@ mod tests {
                 declared: true,
                 location: Location::default(),
                 resolved_type: None,
+                shared: None,
             },
         );
         let mut prefab = Prefab::new(TreePath::parse("/obj/item"));

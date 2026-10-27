@@ -138,9 +138,8 @@ fn selected_nodes(module: &Module, procedures: &FxHashSet<ProcId>) -> FxHashSet<
         }
         for parameter in &procedure.params {
             for node in parameter
-                .default
+                .in_list
                 .into_iter()
-                .chain(parameter.in_list)
                 .chain(parameter.spec.dimensions.iter().flatten().copied())
             {
                 mark(node, &mut selected, &mut pending);
@@ -264,7 +263,6 @@ fn dump_referenced_nodes(
             continue;
         }
         for parameter in &procedure.params {
-            pending.extend(parameter.default);
             pending.extend(parameter.in_list);
             pending.extend(parameter.spec.dimensions.iter().flatten().copied());
         }
@@ -340,14 +338,14 @@ fn reachable(module: &Module, entry: IrNodeId) -> Vec<IrNodeId> {
         let mut merges = Vec::new();
         for instruction in instructions {
             match module.node(*instruction) {
-                Some(IrNode::Branch(target)) => branches.push(*target),
+                Some(IrNode::Branch(target) | IrNode::Leave { target, .. }) => branches.push(*target),
                 Some(IrNode::ConditionalBranch {
                     true_block,
                     false_block,
                     ..
                 }) => branches.extend([*true_block, *false_block]),
-                Some(IrNode::TryCatch { body, catch, .. }) => branches.extend([*body, *catch]),
-                Some(IrNode::Spawn { body, .. }) => branches.push(*body),
+                Some(IrNode::TryCatch { body, catch }) => branches.extend([*body, *catch]),
+                Some(IrNode::Spawn { body, merge }) => branches.extend([*body, *merge]),
                 Some(IrNode::LoopMerge {
                     merge_block,
                     continue_block,
@@ -415,6 +413,8 @@ fn format_node(node: &IrNode) -> String {
                 .join(" ")
         ),
         IrNode::Variable(name) => format!("variable {name}"),
+        IrNode::FrameSlot(slot) => format!("frame_slot {slot}"),
+        IrNode::StaticSlot(id) => format!("static_slot {id}"),
         IrNode::Load { pointer } => format!("load {pointer}"),
         IrNode::Builtin(builtin) => format!("builtin {}", snake_case(builtin)),
         IrNode::Interpolate(interpolation) => {
@@ -446,6 +446,7 @@ fn format_node(node: &IrNode) -> String {
         IrNode::StoreBuiltin { builtin, value } => {
             format!("store_builtin {} {value}", snake_case(builtin))
         },
+        IrNode::DefaultParameter { parameter, value } => format!("default_parameter {parameter} {value}"),
         IrNode::CatchValue => String::from("catch_value"),
         IrNode::AccessField { object, name, access } => {
             format!("access_field {object} {}{name}", access_operator(*access))
@@ -538,9 +539,8 @@ fn format_node(node: &IrNode) -> String {
         IrNode::IterValue(id) => format!("iter_value {id}"),
         IrNode::IterKey(id) => format!("iter_key {id}"),
         IrNode::RangeTest { current, end, step } => format!("range_test {current} end={end} step={step}"),
-        IrNode::TryCatch { body, catch, merge } => {
-            format!("try_catch body={body} catch={catch} merge={merge}")
-        },
+        IrNode::TryCatch { body, catch } => format!("try_catch body={body} catch={catch}"),
+        IrNode::Leave { regions, target } => format!("leave regions={regions} {target}"),
         IrNode::Spawn { body, merge } => format!("spawn body={body} merge={merge}"),
         IrNode::EndSpawn => "end_spawn".to_string(),
         IrNode::Del(id) => format!("del {id}"),
@@ -776,7 +776,7 @@ mod tests {
                 "programs/disassembly_is_stable_and_names_variables.dm"
             ))),
             concat!(
-                "; ir module: 5 nodes, 1 constants, 0 external functions, 1 functions, 1 blocks\n",
+                "; ir module: 6 nodes, 1 constants, 0 external functions, 1 functions, 1 blocks\n",
                 "\n",
                 "; constants\n",
                 "%3 = constant 2\n",
@@ -785,7 +785,8 @@ mod tests {
                 "%1 =   function_parameter #0\n",
                 "\n",
                 "%2 =   label\n",
-                "%4 =     return %1\n",
+                "%4 =     default_parameter %1 %3\n",
+                "%5 =     return %1\n",
             )
         );
     }
@@ -888,6 +889,7 @@ mod tests {
                 params: Vec::new(),
                 variadic: false,
                 vars: Vec::new(),
+                slot_count: 0,
                 body: IrNodeId(1),
                 intrinsic: None,
                 location: Location::default(),

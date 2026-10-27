@@ -1158,6 +1158,7 @@ mod tests {
                     declared: true,
                     location: Default::default(),
                     resolved_type: None,
+                    shared: None,
                 },
             );
         }

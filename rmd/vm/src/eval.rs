@@ -5,12 +5,13 @@ use core::{
     vars,
 };
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
 
 use codegen::{
-    CodeOffset, CompiledFunction, ConstantId, FunctionId, LocalId, Module, PathId, StringId,
+    CodeOffset, CompiledFunction, ConstantId, FunctionId, Module, PathId, RegisterId, StringId,
     opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, OutputTargetKind, Unary},
 };
 use objtree::{ObjectTree, TypeId};
@@ -18,12 +19,13 @@ use objtree::{ObjectTree, TypeId};
 use crate::{
     Fault, FaultKind, GenericValue, Limits, StackFrame,
     bake::Placement,
-    heap::{Heap, Object, ObjectId},
+    heap::{Heap, Object, ObjectId, Static},
     value::{IteratorId, ListData, ListId, ModifiedType, ProcRef, RangeValue, Receiver},
     world::{Position, World},
 };
 
 type Result<T, E = Fault> = std::result::Result<T, E>;
+type Entry = (GenericValue, Option<GenericValue>);
 
 #[derive(Debug, Default)]
 pub struct Runtime {
@@ -54,7 +56,7 @@ impl Runtime {
         std::mem::take(&mut self.output)
     }
 
-    /// `seed` is the atom a hook was called about, which is what its randomness and its memo safety
+    /// `seed` is the atom a hook was called about, which is what its randomness and its cacheability
     /// are measured against. It is not `src`: a hook's `src` is the profile, which has no position.
     #[allow(clippy::too_many_arguments)]
     pub fn run(
@@ -262,14 +264,13 @@ fn stack_frame(module: &Module, proc: ProcId, offset: Option<CodeOffset>) -> Sta
 
 #[derive(Debug)]
 pub(crate) struct Frame {
-    locals: Vec<GenericValue>,
-    variables: HashMap<Identifier, GenericValue>,
-    stack: Vec<GenericValue>,
+    registers: Vec<GenericValue>,
+    slots: Vec<GenericValue>,
     pub(crate) src: Receiver,
     usr: Option<ObjectId>,
     args: Option<ListId>,
     extra_args: Vec<GenericValue>,
-    dot: GenericValue,
+    this: GenericValue,
     function: FunctionId,
     proc: ProcId,
     ip: usize,
@@ -288,9 +289,9 @@ struct IteratorState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Flow {
-    Continue,
     Return,
     EndSpawn,
+    Leave { regions: u32, target: usize },
 }
 
 pub(crate) struct Evaluator<'a> {
@@ -304,7 +305,7 @@ pub(crate) struct Evaluator<'a> {
     pub current: Option<ProcId>,
     pub current_receiver: Receiver,
     pub current_offset: Option<CodeOffset>,
-    pub memo_safe: bool,
+    pub is_cacheable: bool, // memoization
     pub position_sensitive: bool,
     pub origin: Option<ObjectId>,
     pub appearance_reads: HashSet<ObjectId>,
@@ -397,7 +398,7 @@ impl<'a> Evaluator<'a> {
             current: None,
             current_receiver: Receiver::None,
             current_offset: None,
-            memo_safe: true,
+            is_cacheable: true,
             position_sensitive: false,
             origin: src,
             appearance_reads: HashSet::new(),
@@ -411,6 +412,29 @@ impl<'a> Evaluator<'a> {
     /// Callers add their frames as the fault unwinds through them
     pub fn fault(&self, kind: FaultKind) -> Fault {
         fault_at(self.module, self.current, self.current_offset, kind)
+    }
+
+    fn get<'f>(&self, frame: &'f Frame, register: RegisterId) -> Result<&'f GenericValue> {
+        let value = frame
+            .registers
+            .get(usize::from(register.0))
+            .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
+
+        match value {
+            GenericValue::Omitted => Ok(&GenericValue::Null),
+            _ => Ok(value),
+        }
+    }
+
+    fn set(&self, frame: &mut Frame, register: RegisterId, value: GenericValue) -> Result<()> {
+        let slot = frame
+            .registers
+            .get_mut(usize::from(register.0))
+            .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
+
+        *slot = value;
+
+        Ok(())
     }
 
     pub fn charge(&mut self, amount: usize) -> Result<()> {
@@ -526,8 +550,14 @@ impl<'a> Evaluator<'a> {
             return self.intrinsic_impl(id, src, &name, &params, args);
         }
 
-        let local_count = usize::try_from(function.local_count).map_err(|_| self.fault(FaultKind::Memory))?;
-        self.reserve(local_count.saturating_add(args.len()).saturating_add(1))?;
+        let register_count = usize::from(function.register_count);
+        let slot_count = function.slot_count as usize;
+        self.reserve(
+            register_count
+                .saturating_add(slot_count)
+                .saturating_add(args.len())
+                .saturating_add(1),
+        )?;
         let start = function.address.0 as usize;
         let end = start
             .checked_add(function.length as usize)
@@ -535,7 +565,7 @@ impl<'a> Evaluator<'a> {
             .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
         let proc = function.proc.ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
         let parameter_count = function.parameter_count as usize;
-        let mut locals = vec![GenericValue::Omitted; local_count];
+        let mut registers = vec![GenericValue::Omitted; register_count];
         let mut used = vec![false; args.len()];
         let mut next_positional = 0;
         for index in 0..parameter_count {
@@ -562,7 +592,7 @@ impl<'a> Evaluator<'a> {
 
             if let Some((position, (_, value))) = supplied {
                 used[position] = true;
-                if let Some(slot) = locals.get_mut(index)
+                if let Some(slot) = registers.get_mut(index)
                     && !matches!(value, GenericValue::Omitted | GenericValue::Null)
                 {
                     *slot = value.clone();
@@ -576,14 +606,13 @@ impl<'a> Evaluator<'a> {
             .map(|((_, value), _)| value.clone())
             .collect::<Vec<_>>();
         let mut frame = Frame {
-            locals,
-            variables: HashMap::new(),
-            stack: Vec::new(),
+            registers,
+            slots: vec![GenericValue::Null; slot_count],
             src,
             usr,
             args: None,
             extra_args,
-            dot: GenericValue::Null,
+            this: GenericValue::Null,
             function: function.id,
             proc,
             ip: start,
@@ -592,9 +621,14 @@ impl<'a> Evaluator<'a> {
         };
 
         let mut call = CallFrameGuard::enter(self, proc, src);
-        call.execute_until(&mut frame, None)
-            .map(|_| frame.dot)
-            .map_err(|fault| call.unwound(fault))
+        match call.execute(&mut frame) {
+            Ok(Flow::Leave { .. }) => {
+                let fault = call.fault(FaultKind::InvalidOperation("leave outside a try".into()));
+                Err(call.unwound(fault))
+            },
+            Ok(_) => Ok(frame.this),
+            Err(fault) => Err(call.unwound(fault)),
+        }
     }
 
     fn function_name(&self, function: &CompiledFunction) -> String {
@@ -611,14 +645,16 @@ impl<'a> Evaluator<'a> {
             .unwrap_or_else(|| proc_name.to_owned())
     }
 
-    fn execute_until(&mut self, frame: &mut Frame, stop: Option<usize>) -> Result<Flow> {
+    fn execute_from(&mut self, frame: &mut Frame, ip: usize) -> Result<Flow> {
+        frame.ip = ip;
+
+        self.execute(frame)
+    }
+
+    fn execute(&mut self, frame: &mut Frame) -> Result<Flow> {
         loop {
             if frame.ip >= frame.end {
                 return Ok(Flow::Return);
-            }
-
-            if stop == Some(frame.ip) {
-                return Ok(Flow::Continue);
             }
 
             self.charge(1)?;
@@ -627,7 +663,8 @@ impl<'a> Evaluator<'a> {
             let op = self.enum_operand::<Op>(frame, "opcode")?;
             match op {
                 Op::Nop => {},
-                Op::PushConstant => {
+                Op::MoveConst => {
+                    let destination = self.register(frame)?;
                     let id = ConstantId(self.u32(frame)?);
                     let value = self
                         .module
@@ -636,202 +673,330 @@ impl<'a> Evaluator<'a> {
                         .cloned()
                         .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
                     let value = self.constant(&value)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
                 },
-                Op::LoadLocal => {
-                    let local = LocalId(self.u32(frame)?);
-                    let value = frame
-                        .locals
-                        .get(local.0 as usize)
-                        .cloned()
-                        .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
-                    frame.stack.push(if value == GenericValue::Omitted {
-                        GenericValue::Null
-                    } else {
-                        value
-                    });
+                Op::MoveImm => {
+                    let destination = self.register(frame)?;
+                    let value = self.f32(frame)?;
+                    self.set(frame, destination, value.into())?;
                 },
-                Op::StoreLocal => {
-                    let local = LocalId(self.u32(frame)?);
-                    let value = self.pop(frame)?;
-                    *frame
-                        .locals
-                        .get_mut(local.0 as usize)
-                        .ok_or_else(|| self.fault(FaultKind::InvalidReference))? = value;
+                Op::Move => {
+                    let destination = self.register(frame)?;
+                    let source = self.register(frame)?;
+                    let value = self.get(frame, source)?.clone();
+                    self.set(frame, destination, value)?;
                 },
-                Op::LoadVariable => {
+                Op::LoadVar => {
+                    let destination = self.register(frame)?;
                     let name = self.identifier(frame)?;
                     let value = self.read_name(frame, &name)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
                 },
-                Op::StoreVariable => {
+                Op::StoreVar => {
                     let name = self.identifier(frame)?;
-                    let value = self.pop(frame)?;
+                    let source = self.register(frame)?;
+                    let value = self.get(frame, source)?.clone();
                     self.write_name(frame, name, value)?;
                 },
-                Op::InitializeVariable => {
+                Op::InitVar => {
                     let name = self.identifier(frame)?;
-                    let value = self.pop(frame)?;
+                    let source = self.register(frame)?;
+                    let value = self.get(frame, source)?.clone();
                     self.initialize_name(frame, name, value)?;
                 },
-                Op::PushBuiltin => {
+                Op::LoadSlot => {
+                    let destination = self.register(frame)?;
+                    let slot = self.u32(frame)? as usize;
+                    let value = frame
+                        .slots
+                        .get(slot)
+                        .cloned()
+                        .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
+                    self.set(frame, destination, value)?;
+                },
+                Op::StoreSlot => {
+                    let slot = self.u32(frame)? as usize;
+                    let source = self.register(frame)?;
+                    let value = self.get(frame, source)?.clone();
+                    *frame
+                        .slots
+                        .get_mut(slot)
+                        .ok_or_else(|| self.fault(FaultKind::InvalidReference))? = value;
+                },
+                Op::LoadStatic => {
+                    let destination = self.register(frame)?;
+                    let id = self.static_id(frame)?;
+                    let value = self
+                        .runtime
+                        .heap
+                        .static_value(Static::Local(id))
+                        .cloned()
+                        .unwrap_or_default();
+                    self.set(frame, destination, value)?;
+                },
+                Op::StoreStatic | Op::InitStatic => {
+                    let id = self.static_id(frame)?;
+                    let source = self.register(frame)?;
+                    let value = self.get(frame, source)?.clone();
+                    // an initialized static stays untouched, so the journal does not see a write
+                    if op == Op::StoreStatic || self.runtime.heap.static_value(Static::Local(id)).is_none() {
+                        *self.runtime.heap.static_value_mut(Static::Local(id)) = Some(value);
+                    }
+                },
+                Op::LoadBuiltin => {
+                    let destination = self.register(frame)?;
                     let builtin = self.enum_operand::<Builtin>(frame, "builtin")?;
                     let value = self.builtin_value(frame, builtin)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
                 },
                 Op::StoreBuiltin => {
                     let builtin = self.enum_operand::<Builtin>(frame, "builtin")?;
-                    let value = self.pop(frame)?;
+                    let source = self.register(frame)?;
+                    let value = self.get(frame, source)?.clone();
                     match builtin {
-                        Builtin::ThisProc => frame.dot = value,
+                        Builtin::ThisProc => frame.this = value,
                         _ => return Err(self.fault(FaultKind::InvalidOperation("builtin is not assignable".into()))),
                     }
                 },
                 Op::Interpolate => {
+                    let destination = self.register(frame)?;
                     let value_count = self.u32(frame)? as usize;
                     let chunk_count = self.u32(frame)? as usize;
                     let chunks = (0..chunk_count)
                         .map(|_| self.string(frame).map(ToOwned::to_owned))
                         .collect::<Result<Vec<_>>>()?;
-                    let values = self.pop_many(frame, value_count)?;
+                    let registers = (0..value_count)
+                        .map(|_| self.register(frame))
+                        .collect::<Result<Vec<_>>>()?;
                     let mut output = String::new();
                     for (index, chunk) in chunks.iter().enumerate() {
                         output.push_str(chunk);
-                        if let Some(value) = values.get(index) {
+                        if let Some(value) = registers.get(index) {
+                            let value = self.get(frame, *value)?;
                             if matches!(value, GenericValue::Object(_) | GenericValue::Proc(_)) {
-                                self.memo_safe = false;
+                                self.is_cacheable = false;
                             }
+
                             output.push_str(&value.display());
                         }
+
                         if output.len() > self.limits.text_bytes {
                             return Err(self.fault(FaultKind::Memory));
                         }
                     }
+
                     let value = self.text(output)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
                 },
                 Op::Unary => {
+                    let destination = self.register(frame)?;
                     let op = self.enum_operand::<Unary>(frame, "unary")?;
-                    let value = self.pop(frame)?;
+                    let source = self.register(frame)?;
+                    let value = self.get(frame, source)?.clone();
                     let value = self.unary(op, value)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
                 },
                 Op::Binary => {
+                    let destination = self.register(frame)?;
                     let op = self.enum_operand::<Binary>(frame, "binary")?;
-                    let right = self.pop(frame)?;
-                    let left = self.pop(frame)?;
+                    let left = self.register(frame)?;
+                    let right = self.register(frame)?;
+                    let left = self.get(frame, left)?.clone();
+                    let right = self.get(frame, right)?.clone();
                     let value = self.binary(op, left, right)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
+                },
+                Op::BinaryI => {
+                    let destination = self.register(frame)?;
+                    let op = self.enum_operand::<Binary>(frame, "binary")?;
+                    let left = self.register(frame)?;
+                    let right = self.f32(frame)?;
+                    let left = self.get(frame, left)?.clone();
+                    let value = self.binary(op, left, right.into())?;
+                    self.set(frame, destination, value)?;
                 },
                 Op::CompoundBinary => {
+                    let destination = self.register(frame)?;
                     let op = self.enum_operand::<Binary>(frame, "binary")?;
-                    let right = self.pop(frame)?;
-                    let left = self.pop(frame)?;
+                    let left = self.register(frame)?;
+                    let right = self.register(frame)?;
+                    let left = self.get(frame, left)?.clone();
+                    let right = self.get(frame, right)?.clone();
                     let value = self.compound_binary(op, left, right)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
+                },
+                Op::CompoundBinaryI => {
+                    let destination = self.register(frame)?;
+                    let op = self.enum_operand::<Binary>(frame, "binary")?;
+                    let left = self.register(frame)?;
+                    let right = self.f32(frame)?;
+                    let left = self.get(frame, left)?.clone();
+                    let value = self.compound_binary(op, left, right.into())?;
+                    self.set(frame, destination, value)?;
                 },
                 Op::AccessField => {
+                    let destination = self.register(frame)?;
                     let name = self.identifier(frame)?;
                     let access = self.enum_operand::<Access>(frame, "access")?;
                     let method = self.boolean(frame)?;
-                    let object = self.pop(frame)?;
+                    let object = self.register(frame)?;
+                    let object = self.get(frame, object)?.clone();
                     let value = self.access_field(object, name, access, method)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
                 },
                 Op::Initial => {
+                    let destination = self.register(frame)?;
                     let has_object = self.boolean(frame)?;
                     let name = self.identifier(frame)?;
-                    let object = if has_object { Some(self.pop(frame)?) } else { None };
+                    let object = if has_object { Some(self.register(frame)?) } else { None };
+                    let object = object.map(|object| self.get(frame, object).cloned()).transpose()?;
                     let value = self.initial_value(frame, object, &name)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
                 },
                 Op::Index => {
+                    let destination = self.register(frame)?;
                     let conditional = self.boolean(frame)?;
-                    let key = self.pop(frame)?;
-                    let object = self.pop(frame)?;
+                    let object = self.register(frame)?;
+                    let key = self.register(frame)?;
+                    let object = self.get(frame, object)?.clone();
+                    let key = self.get(frame, key)?.clone();
                     let value = if conditional && object == GenericValue::Null {
                         GenericValue::Null
                     } else {
                         self.get_index(object, key)?
                     };
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
+                },
+                Op::IndexI => {
+                    let destination = self.register(frame)?;
+                    let conditional = self.boolean(frame)?;
+                    let object = self.register(frame)?;
+                    let key = self.f32(frame)?;
+                    let object = self.get(frame, object)?.clone();
+                    let value = if conditional && object == GenericValue::Null {
+                        GenericValue::Null
+                    } else {
+                        self.get_index(object, key.into())?
+                    };
+                    self.set(frame, destination, value)?;
                 },
                 Op::Call => {
-                    let args = self.arguments(frame)?;
+                    let destination = self.register(frame)?;
                     let conditional = self.boolean(frame)?;
-                    let callee = self.pop(frame)?;
+                    let callee = self.register(frame)?;
+                    let args = self.arguments(frame)?;
+                    let callee = self.get(frame, callee)?.clone();
                     let value = if conditional && callee == GenericValue::Null {
                         GenericValue::Null
                     } else {
                         self.invoke(callee, args, frame)?
                     };
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
                 },
                 Op::FunctionCall => {
+                    let destination = self.register(frame)?;
                     let function = FunctionId(self.u32(frame)?);
                     let args = self.arguments(frame)?;
                     let value = self.invoke_function(function, args, frame)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
                 },
                 Op::SuperCall => {
+                    let destination = self.register(frame)?;
+                    let forwards_extra_args = self.boolean(frame)?;
                     let mut args = self.arguments(frame)?;
-                    if self.boolean(frame)? {
+                    if forwards_extra_args {
                         args.extend(frame.extra_args.iter().cloned().map(|value| (None, value)));
                     }
+
                     let value = self.invoke_super(args, frame)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
                 },
                 Op::New => {
+                    let destination = self.register(frame)?;
                     let has_type = self.boolean(frame)?;
+                    let ty = if has_type {
+                        let ty = self.register(frame)?;
+                        self.get(frame, ty)?.clone()
+                    } else {
+                        GenericValue::Null
+                    };
                     let args = self.arguments(frame)?;
-                    let ty = if has_type { self.pop(frame)? } else { GenericValue::Null };
                     let value = self.new_object(ty, args)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
                 },
                 Op::ModifiedType => {
+                    let destination = self.register(frame)?;
                     let path = self.path(frame)?;
                     let count = self.u32(frame)? as usize;
-                    let names = (0..count).map(|_| self.identifier(frame)).collect::<Result<Vec<_>>>()?;
-                    let values = self.pop_many(frame, count)?;
-                    frame.stack.push(GenericValue::ModifiedType(Box::new(ModifiedType {
-                        path,
-                        overrides: names.into_iter().zip(values).collect::<Vec<_>>(),
-                    })));
+                    let overrides = (0..count)
+                        .map(|_| {
+                            let name = self.identifier(frame)?;
+                            let register = self.register(frame)?;
+                            Ok((name, self.get(frame, register)?.clone()))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let value = GenericValue::ModifiedType(Box::new(ModifiedType { path, overrides }));
+                    self.set(frame, destination, value)?;
                 },
                 Op::MakeList => {
+                    let destination = self.register(frame)?;
                     let args = self.argument_values(frame)?;
                     let value = self.make_list(args)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
                 },
                 Op::Pick => {
+                    let destination = self.register(frame)?;
                     let count = self.u32(frame)? as usize;
-                    let weighted = (0..count).map(|_| self.boolean(frame)).collect::<Result<Vec<_>>>()?;
-                    let operand_count = count.saturating_add(weighted.iter().filter(|value| **value).count());
-                    let operands = self.pop_many(frame, operand_count)?;
+                    let mut weighted = Vec::with_capacity(count);
+                    let mut operands = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        let is_weighted = self.boolean(frame)?;
+                        weighted.push(is_weighted);
+                        if is_weighted {
+                            let weight = self.register(frame)?;
+                            operands.push(self.get(frame, weight)?.clone());
+                        }
+
+                        let value = self.register(frame)?;
+                        operands.push(self.get(frame, value)?.clone());
+                    }
+
                     let value = self.pick(&weighted, operands)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
                 },
                 Op::InRange => {
+                    let destination = self.register(frame)?;
                     let has_step = self.boolean(frame)?;
-                    let step = if has_step { self.pop(frame)? } else { 1.into() };
-                    let end = self.pop(frame)?;
-                    let start = self.pop(frame)?;
-                    let value = self.pop(frame)?;
+                    let value = self.register(frame)?;
+                    let start = self.register(frame)?;
+                    let end = self.register(frame)?;
+                    let step = if has_step { Some(self.register(frame)?) } else { None };
+                    let value = self.get(frame, value)?.clone();
+                    let start = self.get(frame, start)?.clone();
+                    let end = self.get(frame, end)?.clone();
+                    let step = match step {
+                        Some(step) => self.get(frame, step)?.clone(),
+                        None => 1.into(),
+                    };
                     let value = self.in_range(value, start, end, step)?;
-                    frame.stack.push(value);
+                    self.set(frame, destination, value)?;
                 },
                 Op::Range => {
+                    let destination = self.register(frame)?;
                     let has_step = self.boolean(frame)?;
-                    let step = if has_step { self.pop(frame)? } else { 1.into() };
-                    let end = self.pop(frame)?;
-                    let start = self.pop(frame)?;
-                    frame.stack.push(GenericValue::Range(RangeValue {
-                        start: self.number(&start)?,
-                        end: self.number(&end)?,
-                        step: self.number(&step)?,
-                    }));
+                    let start = self.register(frame)?;
+                    let end = self.register(frame)?;
+                    let step = if has_step { Some(self.register(frame)?) } else { None };
+                    let start = self.number(self.get(frame, start)?)?;
+                    let end = self.number(self.get(frame, end)?)?;
+                    let step = match step {
+                        Some(step) => self.number(self.get(frame, step)?)?,
+                        None => 1.0,
+                    };
+                    self.set(frame, destination, GenericValue::Range(RangeValue { start, end, step }))?;
                 },
                 Op::IterInit => {
+                    let destination = self.register(frame)?;
                     let ty = if self.boolean(frame)? {
                         Some(self.path(frame)?)
                     } else {
@@ -839,48 +1004,66 @@ impl<'a> Evaluator<'a> {
                     };
 
                     let value_is_associated = self.boolean(frame)?;
-                    let value = self.pop(frame)?;
+                    let list = self.register(frame)?;
+                    let value = self.get(frame, list)?.clone();
                     let iterator = self.iterator(value, ty, value_is_associated)?;
-                    frame.stack.push(GenericValue::Iterator(iterator));
+                    self.set(frame, destination, GenericValue::Iterator(iterator))?;
                 },
                 Op::IterNext => {
-                    let iterator = self.iterator_id(self.pop(frame)?)?;
+                    let destination = self.register(frame)?;
+                    let iterator = self.register(frame)?;
+                    let iterator = self.iterator_id(self.get(frame, iterator)?.clone())?;
                     let value = self.iterator_next(iterator)?;
-                    frame.stack.push(value.into());
+                    self.set(frame, destination, value.into())?;
                 },
                 Op::IterValue => {
-                    let iterator = self.iterator_id(self.pop(frame)?)?;
-                    frame.stack.push(self.iterator_value(iterator)?);
+                    let destination = self.register(frame)?;
+                    let iterator = self.register(frame)?;
+                    let iterator = self.iterator_id(self.get(frame, iterator)?.clone())?;
+                    let value = self.iterator_value(iterator)?;
+                    self.set(frame, destination, value)?;
                 },
                 Op::IterKey => {
-                    let iterator = self.iterator_id(self.pop(frame)?)?;
-                    frame.stack.push(self.iterator_key(iterator)?);
+                    let destination = self.register(frame)?;
+                    let iterator = self.register(frame)?;
+                    let iterator = self.iterator_id(self.get(frame, iterator)?.clone())?;
+                    let value = self.iterator_key(iterator)?;
+                    self.set(frame, destination, value)?;
                 },
                 Op::RangeTest => {
-                    let step = self.number(&self.pop(frame)?)?;
-                    let end = self.number(&self.pop(frame)?)?;
-                    let current = self.number(&self.pop(frame)?)?;
+                    let destination = self.register(frame)?;
+                    let current = self.register(frame)?;
+                    let end = self.register(frame)?;
+                    let step = self.register(frame)?;
+                    let current = self.number(self.get(frame, current)?)?;
+                    let end = self.number(self.get(frame, end)?)?;
+                    let step = self.number(self.get(frame, step)?)?;
                     let value = match step.partial_cmp(&0.0) {
                         Some(std::cmp::Ordering::Greater) => current <= end,
                         Some(std::cmp::Ordering::Less) => current >= end,
                         _ => return Err(self.fault(FaultKind::InvalidOperation("range step must be nonzero".into()))),
                     };
-                    frame.stack.push(value.into());
+                    self.set(frame, destination, value.into())?;
                 },
                 Op::SetField => {
                     let name = self.identifier(frame)?;
                     let access = self.enum_operand::<Access>(frame, "access")?;
-                    let value = self.pop(frame)?;
-                    let object = self.pop(frame)?;
+                    let object = self.register(frame)?;
+                    let value = self.register(frame)?;
+                    let object = self.get(frame, object)?.clone();
+                    let value = self.get(frame, value)?.clone();
                     if !(object == GenericValue::Null && matches!(access, Access::SafeDot | Access::SafeColon)) {
                         self.write_field(object, name, value)?;
                     }
                 },
                 Op::SetIndex => {
                     let conditional = self.boolean(frame)?;
-                    let value = self.pop(frame)?;
-                    let key = self.pop(frame)?;
-                    let object = self.pop(frame)?;
+                    let object = self.register(frame)?;
+                    let key = self.register(frame)?;
+                    let value = self.register(frame)?;
+                    let object = self.get(frame, object)?.clone();
+                    let key = self.get(frame, key)?.clone();
+                    let value = self.get(frame, value)?.clone();
 
                     if conditional && object == GenericValue::Null {
                         continue;
@@ -893,112 +1076,111 @@ impl<'a> Evaluator<'a> {
                     {
                         let index = (index as usize).wrapping_sub(1);
                         if index < self.function(frame.function)?.parameter_count as usize
-                            && let Some(slot) = frame.locals.get_mut(index)
+                            && let Some(slot) = frame.registers.get_mut(index)
                         {
                             *slot = value;
                         }
                     }
                 },
                 Op::Jump => {
-                    let target = self.jump_target(frame)?;
-                    if stop == Some(target) {
-                        return Ok(Flow::Continue);
-                    }
-
-                    frame.ip = target;
+                    frame.ip = self.jump_target(frame)?;
                 },
                 Op::JumpIfFalse => {
                     let target = self.jump_target(frame)?;
-
-                    if !self.pop(frame)?.truthy() {
-                        if stop == Some(target) {
-                            return Ok(Flow::Continue);
-                        }
-
+                    let condition = self.register(frame)?;
+                    if !self.get(frame, condition)?.truthy() {
                         frame.ip = target;
                     }
+                },
+                Op::Leave => {
+                    let regions = self.u32(frame)?;
+                    let target = self.jump_target(frame)?;
+                    return Ok(Flow::Leave { regions, target });
                 },
                 Op::Return => {
                     return Ok(Flow::Return);
                 },
                 Op::ReturnValue => {
-                    frame.dot = self.pop(frame)?;
+                    let source = self.register(frame)?;
+                    frame.this = self.get(frame, source)?.clone();
+                    return Ok(Flow::Return);
+                },
+                Op::ReturnValueI => {
+                    frame.this = self.f32(frame)?.into();
+                    return Ok(Flow::Return);
+                },
+                Op::ReturnNull => {
+                    frame.this = GenericValue::Null;
                     return Ok(Flow::Return);
                 },
                 Op::Del => {
-                    let value = self.pop(frame)?;
+                    let source = self.register(frame)?;
+                    let value = self.get(frame, source)?.clone();
                     self.delete(value)?;
                 },
                 Op::Throw => {
-                    let value = self.pop(frame)?;
+                    let source = self.register(frame)?;
+                    let value = self.get(frame, source)?.clone();
 
                     return Err(self.throw(value));
                 },
                 Op::Output => match self.enum_operand::<OutputTargetKind>(frame, "output target")? {
-                    OutputTargetKind::Value => {
-                        let _value = self.pop(frame)?;
-                        let _target = self.pop(frame)?;
+                    OutputTargetKind::Value | OutputTargetKind::Index => {
                         return Err(self.fault(FaultKind::Blocked("output".into())));
                     },
                     OutputTargetKind::Field => {
                         let name = self.identifier(frame)?;
                         let _access = self.enum_operand::<Access>(frame, "access")?;
-                        let value = self.pop(frame)?;
-                        let object = self.pop(frame)?;
-                        if object != GenericValue::World || name.as_str() != vars::LOG {
+                        let object = self.register(frame)?;
+                        let value = self.register(frame)?;
+                        if *self.get(frame, object)? != GenericValue::World || name.as_str() != vars::LOG {
                             return Err(self.fault(FaultKind::Blocked("output".into())));
                         }
-                        self.runtime.output.push(value.display());
-                    },
-                    OutputTargetKind::Index => {
-                        let _conditional = self.boolean(frame)?;
-                        let _value = self.pop(frame)?;
-                        let _index = self.pop(frame)?;
-                        let _object = self.pop(frame)?;
-                        return Err(self.fault(FaultKind::Blocked("output".into())));
+
+                        let text = self.get(frame, value)?.display();
+                        self.runtime.output.push(text);
                     },
                 },
                 Op::TryCatch => {
                     let body = self.jump_target(frame)?;
                     let catch = self.jump_target(frame)?;
-                    let merge = self.jump_target(frame)?;
-                    let stack_len = frame.stack.len();
-                    let resume = frame.ip;
-                    frame.ip = body;
-                    match self.execute_until(frame, Some(merge)) {
-                        Ok(Flow::Continue) => {},
-                        Ok(flow) => return Ok(flow),
-                        Err(fault) if matches!(fault.kind, FaultKind::Thrown(_)) => {
-                            frame.stack.truncate(stack_len);
-                            frame.ip = catch;
-                            match self.execute_until(frame, Some(merge))? {
-                                Flow::Continue => {},
-                                flow => return Ok(flow),
-                            }
+                    let flow = match self.execute_from(frame, body) {
+                        Err(fault) if matches!(fault.kind, FaultKind::Thrown(_)) => self.execute_from(frame, catch)?,
+                        flow => flow?,
+                    };
+
+                    match flow {
+                        Flow::Leave { regions: 1, target } => frame.ip = target,
+                        Flow::Leave { regions, target } if regions > 1 => {
+                            return Ok(Flow::Leave {
+                                regions: regions - 1,
+                                target,
+                            });
                         },
-                        Err(fault) => return Err(fault),
+                        flow => return Ok(flow),
                     }
-                    frame.ip = resume;
                 },
                 Op::Spawn => {
                     let body = self.jump_target(frame)?;
-                    let stack_len = frame.stack.len();
                     let resume = frame.ip;
-                    frame.ip = body;
-                    match self.execute_until(frame, None) {
+                    match self.execute_from(frame, body) {
                         Ok(Flow::Return) => return Ok(Flow::Return),
-                        Ok(_) => {},
+                        Ok(Flow::Leave { .. }) => {
+                            return Err(self.fault(FaultKind::InvalidOperation("leave out of a spawn".into())));
+                        },
+                        Ok(Flow::EndSpawn) => {},
                         Err(fault) if matches!(fault.kind, FaultKind::Thrown(_)) => self.thrown = None,
                         Err(fault) if fault.kind == FaultKind::Sleep => {},
                         Err(fault) => return Err(fault),
                     }
-                    frame.stack.truncate(stack_len);
+
                     frame.ip = resume;
                 },
                 Op::EndSpawn => return Ok(Flow::EndSpawn),
-                Op::CatchValue => frame.stack.push(self.thrown.take().unwrap_or_default()),
-                Op::Drop => {
-                    self.pop(frame)?;
+                Op::CatchValue => {
+                    let destination = self.register(frame)?;
+                    let value = self.thrown.take().unwrap_or_default();
+                    self.set(frame, destination, value)?;
                 },
                 Op::Blocked => {
                     let reason = self.string(frame)?.to_owned();
@@ -1009,11 +1191,12 @@ impl<'a> Evaluator<'a> {
                     return Err(self.fault(FaultKind::Trap(reason)));
                 },
                 Op::DefaultParameter => {
-                    let local = LocalId(self.u32(frame)?);
-                    let value = self.pop(frame)?;
+                    let parameter = self.register(frame)?;
+                    let source = self.register(frame)?;
+                    let value = self.get(frame, source)?.clone();
                     let slot = frame
-                        .locals
-                        .get_mut(local.0 as usize)
+                        .registers
+                        .get_mut(usize::from(parameter.0))
                         .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
                     if *slot == GenericValue::Omitted {
                         *slot = value;
@@ -1023,23 +1206,10 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    fn u8(&self, frame: &mut Frame) -> Result<u8> {
-        let value = self
-            .module
-            .code
-            .get(frame.ip)
-            .copied()
-            .filter(|_| frame.ip < frame.end)
-            .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
-        frame.ip += 1;
-
-        Ok(value)
-    }
-
-    fn u32(&self, frame: &mut Frame) -> Result<u32> {
+    fn bytes<const N: usize>(&self, frame: &mut Frame) -> Result<[u8; N]> {
         let end = frame
             .ip
-            .checked_add(4)
+            .checked_add(N)
             .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
         let bytes = self
             .module
@@ -1049,7 +1219,25 @@ impl<'a> Evaluator<'a> {
             .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
         frame.ip = end;
 
-        Ok(u32::from_le_bytes(bytes.try_into().expect("four-byte slice")))
+        Ok(bytes.try_into().expect("slice of length N"))
+    }
+
+    fn u8(&self, frame: &mut Frame) -> Result<u8> {
+        let [value] = self.bytes::<1>(frame)?;
+
+        Ok(value)
+    }
+
+    fn u32(&self, frame: &mut Frame) -> Result<u32> {
+        Ok(u32::from_le_bytes(self.bytes::<4>(frame)?))
+    }
+
+    fn f32(&self, frame: &mut Frame) -> Result<f32> {
+        Ok(f32::from_le_bytes(self.bytes::<4>(frame)?))
+    }
+
+    fn register(&self, frame: &mut Frame) -> Result<RegisterId> {
+        Ok(RegisterId(u16::from_le_bytes(self.bytes::<2>(frame)?)))
     }
 
     fn enum_operand<T>(&self, frame: &mut Frame, kind: &str) -> Result<T>
@@ -1100,22 +1288,6 @@ impl<'a> Evaluator<'a> {
             .get(id.0 as usize)
             .cloned()
             .ok_or_else(|| self.fault(FaultKind::InvalidReference))
-    }
-
-    fn pop(&self, frame: &mut Frame) -> Result<GenericValue> {
-        frame
-            .stack
-            .pop()
-            .ok_or_else(|| self.fault(FaultKind::InvalidOperation("operand stack underflow".into())))
-    }
-
-    fn pop_many(&self, frame: &mut Frame, count: usize) -> Result<Vec<GenericValue>> {
-        let start = frame
-            .stack
-            .len()
-            .checked_sub(count)
-            .ok_or_else(|| self.fault(FaultKind::InvalidOperation("operand stack underflow".into())))?;
-        Ok(frame.stack.drain(start..).collect::<Vec<_>>())
     }
 
     fn function(&self, id: FunctionId) -> Result<&CompiledFunction> {
@@ -1220,29 +1392,24 @@ impl Evaluator<'_> {
         }
     }
 
-    fn read_name(&mut self, frame: &Frame, name: &Identifier) -> Result<GenericValue> {
-        if name.as_str().starts_with("__dmed_frame_local_") {
-            return Ok(frame.variables.get(name).cloned().unwrap_or_default());
+    fn static_id(&self, frame: &mut Frame) -> Result<u32> {
+        let id = self.u32(frame)?;
+        if id >= self.module.static_count {
+            return Err(self.fault(FaultKind::InvalidReference));
         }
 
+        Ok(id)
+    }
+
+    fn read_name(&mut self, frame: &Frame, name: &Identifier) -> Result<GenericValue> {
         self.read_field(self.name_target(frame, name), name)
     }
 
     fn write_name(&mut self, frame: &mut Frame, name: Identifier, value: GenericValue) -> Result<()> {
-        if name.as_str().starts_with("__dmed_frame_local_") {
-            frame.variables.insert(name, value);
-            return Ok(());
-        }
-
         self.write_field(self.name_target(frame, &name), name, value)
     }
 
     fn initialize_name(&mut self, frame: &mut Frame, name: Identifier, value: GenericValue) -> Result<()> {
-        if name.as_str().starts_with("__dmed_frame_local_") {
-            frame.variables.insert(name, value);
-            return Ok(());
-        }
-
         let target = self.name_target(frame, &name);
         let storage = match target {
             GenericValue::Object(id) => id,
@@ -1293,7 +1460,7 @@ impl Evaluator<'_> {
                 proc: frame.proc,
             }),
             Builtin::Caller => return Err(self.fault(FaultKind::Unsupported("caller".into()))),
-            Builtin::ThisProc => frame.dot.clone(),
+            Builtin::ThisProc => frame.this.clone(),
             Builtin::SuperProc => return Err(self.fault(FaultKind::Unsupported("super proc value".into()))),
         })
     }
@@ -1308,7 +1475,7 @@ impl Evaluator<'_> {
             .function(frame.function)
             .map_or(0, |function| function.parameter_count as usize);
         frame
-            .locals
+            .registers
             .iter()
             .take(count)
             .map(|value| {
@@ -1336,33 +1503,25 @@ impl Evaluator<'_> {
 
     fn argument_values(&mut self, frame: &mut Frame) -> Result<Vec<(Option<GenericValue>, GenericValue)>> {
         let count = self.u32(frame)? as usize;
-        let shapes = (0..count).map(|_| self.u8(frame)).collect::<Result<Vec<_>>>()?;
-        if let Some(shape) = shapes
-            .iter()
-            .copied()
-            .find(|shape| shape & !(ARGUMENT_KEY | ARGUMENT_VALUE) != 0)
-        {
-            return Err(self.fault(FaultKind::InvalidOperation(format!(
-                "invalid argument shape 0x{shape:02x}"
-            ))));
-        }
-
-        let operand_count = shapes
-            .iter()
-            .map(|shape| (shape & ARGUMENT_KEY != 0) as usize + (shape & ARGUMENT_VALUE != 0) as usize)
-            .sum();
-        let operands = self.pop_many(frame, operand_count)?;
-        let mut operands = operands.into_iter();
         let mut args = Vec::with_capacity(count);
-        for shape in shapes {
+        for _ in 0..count {
+            let shape = self.u8(frame)?;
+            if shape & !(ARGUMENT_KEY | ARGUMENT_VALUE) != 0 {
+                return Err(self.fault(FaultKind::InvalidOperation(format!(
+                    "invalid argument shape 0x{shape:02x}"
+                ))));
+            }
+
             let key = if shape & ARGUMENT_KEY != 0 {
-                Some(operands.next().ok_or_else(|| self.fault(FaultKind::InvalidReference))?)
+                let key = self.register(frame)?;
+                Some(self.get(frame, key)?.clone())
             } else {
                 None
             };
 
             let value = if shape & ARGUMENT_VALUE != 0 {
-                operands.next().ok_or_else(|| self.fault(FaultKind::InvalidReference))?
+                let value = self.register(frame)?;
+                self.get(frame, value)?.clone()
             } else {
                 GenericValue::Omitted
             };
@@ -1649,7 +1808,7 @@ impl Evaluator<'_> {
                 "maxz" => (self.runtime.world.size[2] as f32).into(),
                 vars::LOG => GenericValue::Null,
                 vars::CONTENTS => {
-                    self.memo_safe = false;
+                    self.is_cacheable = false;
                     let values = self
                         .runtime
                         .heap
@@ -1731,7 +1890,7 @@ impl Evaluator<'_> {
                     let object_position = self.runtime.world.position(&self.runtime.heap, id);
                     if let (Some(origin), Some(object)) = (origin_position, object_position) {
                         if origin.z != object.z || origin.x.abs_diff(object.x) > 1 || origin.y.abs_diff(object.y) > 1 {
-                            self.memo_safe = false;
+                            self.is_cacheable = false;
                         }
                     } else if !self
                         .tree
@@ -1739,7 +1898,7 @@ impl Evaluator<'_> {
                         .area
                         .is_some_and(|area| self.tree.is_subtype_of(object.ty, area))
                     {
-                        self.memo_safe = false;
+                        self.is_cacheable = false;
                     }
                 }
 
@@ -1791,7 +1950,7 @@ impl Evaluator<'_> {
                             .area
                             .is_some_and(|area| self.tree.is_subtype_of(object.ty, area))
                         {
-                            self.memo_safe = false;
+                            self.is_cacheable = false;
                         }
                         let entries = object
                             .contents
@@ -1810,14 +1969,10 @@ impl Evaluator<'_> {
 
                 let object_type = object.ty;
                 let declaration = self.tree.var_declaration(object_type, name);
-                let shared = declaration.and_then(|(owner, variable)| shared_key(owner, variable, name));
+                let shared = declaration.and_then(|(_, variable)| variable.shared).map(Static::Var);
 
-                if let Some(shared) = &shared
-                    && let Some(value) = self
-                        .runtime
-                        .global
-                        .and_then(|global| self.runtime.heap.object(global))
-                        .and_then(|global| global.vars.get(shared))
+                if let Some(shared) = shared
+                    && let Some(value) = self.runtime.heap.static_value(shared)
                 {
                     return Ok(value.clone());
                 }
@@ -1826,17 +1981,7 @@ impl Evaluator<'_> {
                 let declaration = declaration.map(|(_, variable)| variable);
                 if let Some(initializer) = initializer {
                     let value = self.call(initializer, Some(id), Vec::new())?;
-                    let (storage, key) = if let Some(shared) = shared {
-                        (
-                            self.runtime
-                                .global
-                                .ok_or_else(|| self.fault(FaultKind::InvalidReference))?,
-                            shared,
-                        )
-                    } else {
-                        (id, name.clone())
-                    };
-                    self.object_mut(storage)?.vars.insert(key, value.clone());
+                    self.store_var(id, name.clone(), shared, value.clone())?;
                     return Ok(value);
                 }
 
@@ -1859,17 +2004,7 @@ impl Evaluator<'_> {
                 };
 
                 if matches!(value, GenericValue::List(_)) || shared.is_some() {
-                    let (storage, key) = if let Some(shared) = shared {
-                        (
-                            self.runtime
-                                .global
-                                .ok_or_else(|| self.fault(FaultKind::InvalidReference))?,
-                            shared,
-                        )
-                    } else {
-                        (id, name.clone())
-                    };
-                    self.object_mut(storage)?.vars.insert(key, value.clone());
+                    self.store_var(id, name.clone(), shared, value.clone())?;
                 }
 
                 Ok(value)
@@ -1892,10 +2027,15 @@ impl Evaluator<'_> {
         self.tree.roots().world
     }
 
-    fn shared_key(&self, ty: TypeId, name: &Identifier) -> Option<Identifier> {
-        let (owner, variable) = self.tree.var_declaration(ty, name)?;
+    fn store_var(&mut self, id: ObjectId, name: Identifier, shared: Option<Static>, value: GenericValue) -> Result<()> {
+        match shared {
+            Some(shared) => *self.runtime.heap.static_value_mut(shared) = Some(value),
+            None => {
+                self.object_mut(id)?.vars.insert(name, value);
+            },
+        }
 
-        shared_key(owner, variable, name)
+        Ok(())
     }
 
     /// `/datum/light` declares its own `x`, which only atoms and images derive from their location
@@ -1987,19 +2127,10 @@ impl Evaluator<'_> {
                     .runtime
                     .heap
                     .object(id)
-                    .and_then(|object| self.shared_key(object.ty, &name));
-                let (storage, key) = if let Some(shared) = shared {
-                    (
-                        self.runtime
-                            .global
-                            .ok_or_else(|| self.fault(FaultKind::InvalidReference))?,
-                        shared,
-                    )
-                } else {
-                    (id, name)
-                };
-                self.object_mut(storage)?.vars.insert(key, value);
-                Ok(())
+                    .and_then(|object| self.tree.var_declaration(object.ty, &name))
+                    .and_then(|(_, variable)| variable.shared)
+                    .map(Static::Var);
+                self.store_var(id, name, shared, value)
             },
             GenericValue::Null => Err(self.fault(FaultKind::Null(format!("modify null.{key}")))),
             _ => Err(self.fault(FaultKind::InvalidOperation(format!("cannot write {key}")))),
@@ -2113,8 +2244,10 @@ impl Evaluator<'_> {
     pub fn binary(&mut self, op: Binary, left: GenericValue, right: GenericValue) -> Result<GenericValue> {
         use Binary::*;
         match op {
-            CompEq | CompEquiv => return Ok((left == right).into()),
-            CompNotEq | CompNotEquiv => return Ok((left != right).into()),
+            CompEq => return Ok((left == right).into()),
+            CompNotEq => return Ok((left != right).into()),
+            CompEquiv => return Ok(self.equivalent(&left, &right).into()),
+            CompNotEquiv => return Ok((!self.equivalent(&left, &right)).into()),
             LogicalAnd => return Ok(if left.truthy() { right } else { left }),
             LogicalOr => return Ok(if left.truthy() { left } else { right }),
             In => {
@@ -2271,6 +2404,39 @@ impl Evaluator<'_> {
         }
     }
 
+    fn equivalent(&self, left: &GenericValue, right: &GenericValue) -> bool {
+        if left == right {
+            return true;
+        }
+
+        let (Some(left), Some(right)) = (self.equivalence_entries(left), self.equivalence_entries(right)) else {
+            return false;
+        };
+
+        left.len() == right.len()
+            && left
+                .iter()
+                .zip(right.iter())
+                .all(|((left_key, left_value), (right_key, right_value))| {
+                    left_key == right_key
+                        && left_value.as_ref().unwrap_or(&GenericValue::Null)
+                            == right_value.as_ref().unwrap_or(&GenericValue::Null)
+                })
+    }
+
+    fn equivalence_entries(&self, value: &GenericValue) -> Option<Cow<'_, [Entry]>> {
+        match value {
+            GenericValue::List(id) | GenericValue::ArgList(id) => self
+                .runtime
+                .heap
+                .list(*id)
+                .map(|list| Cow::Borrowed(list.entries.as_slice())),
+            value => self
+                .matrix(value)
+                .map(|matrix| Cow::Owned(matrix.0.map(|component| (component.into(), None)).to_vec())),
+        }
+    }
+
     pub fn iter_values(&mut self, value: GenericValue) -> Result<Vec<(GenericValue, Option<GenericValue>)>> {
         let entries = match value {
             GenericValue::Null => Vec::new(),
@@ -2293,7 +2459,7 @@ impl Evaluator<'_> {
                 })
                 .ok_or_else(|| self.fault(FaultKind::InvalidReference))?,
             GenericValue::World => {
-                self.memo_safe = false;
+                self.is_cacheable = false;
                 self.runtime
                     .heap
                     .objects()
@@ -2651,11 +2817,4 @@ impl Evaluator<'_> {
 
         Ok(GenericValue::Object(id))
     }
-}
-
-/// `var/static/x` and `var/global/x` share one slot on the global object, keyed by the type that
-/// declares them
-fn shared_key(owner: &objtree::TypeDecl, variable: &objtree::VarDecl, name: &Identifier) -> Option<Identifier> {
-    (owner.id != TypeId::ROOT && (variable.modifiers.is_static || variable.modifiers.is_global))
-        .then(|| format!("__dmed_static_{}_{}", owner.id.0, name).into())
 }

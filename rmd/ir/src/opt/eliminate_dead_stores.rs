@@ -98,11 +98,13 @@ fn analyze_procedure(module: &Module, proc: &Procedure, scratch: &mut Scratch, r
     for (index, block) in blocks.iter().enumerate() {
         let successors = &mut scratch.successors[index];
         for instruction in module.block(*block).unwrap_or_default() {
-            append_successors(module.node(*instruction), &mut |successor| {
-                if let Some(successor) = scratch.block_index.get(&successor) {
-                    successors.push(*successor);
-                }
-            });
+            if let Some(node) = module.node(*instruction) {
+                node.for_each_successor(|successor| {
+                    if let Some(successor) = scratch.block_index.get(&successor) {
+                        successors.push(*successor);
+                    }
+                });
+            }
         }
 
         successors.sort_unstable();
@@ -112,9 +114,10 @@ fn analyze_procedure(module: &Module, proc: &Procedure, scratch: &mut Scratch, r
     resize_lists(&mut scratch.catches, blocks.len());
     for block in &blocks {
         for instruction in module.block(*block).unwrap_or_default() {
-            let (body, catch, merge) = match module.node(*instruction) {
-                Some(IrNode::TryCatch { body, catch, merge }) => (body, catch, merge),
-                Some(IrNode::Spawn { body, merge }) => (body, merge, merge),
+            // a spawn body that sleeps resumes at its merge
+            let (body, catch) = match module.node(*instruction) {
+                Some(IrNode::TryCatch { body, catch }) => (body, catch),
+                Some(IrNode::Spawn { body, merge }) => (body, merge),
                 _ => continue,
             };
 
@@ -122,7 +125,7 @@ fn analyze_procedure(module: &Module, proc: &Procedure, scratch: &mut Scratch, r
                 continue;
             };
 
-            for protected in region_blocks(module, *body, *merge) {
+            for protected in module.region_blocks(*body) {
                 if let Some(protected) = scratch.block_index.get(&protected) {
                     scratch.catches[*protected].push(catch);
                 }
@@ -289,16 +292,12 @@ fn resize_lists(lists: &mut Vec<Vec<usize>>, len: usize) {
 }
 
 fn storage(module: &Module, pointer: IrNodeId) -> Option<Storage> {
-    let IrNode::Variable(name) = module.node(pointer)? else {
-        return None;
-    };
-    let name = name.as_str();
-    if name.starts_with("__dmed_frame_local_") {
-        Some(Storage::Frame)
-    } else if is_observable_name(name) {
-        Some(Storage::Observable)
-    } else {
-        Some(Storage::External)
+    match module.node(pointer)? {
+        IrNode::FrameSlot(_) => Some(Storage::Frame),
+        IrNode::StaticSlot(_) => Some(Storage::External),
+        IrNode::Variable(name) if is_observable_name(name.as_str()) => Some(Storage::Observable),
+        IrNode::Variable(_) => Some(Storage::External),
+        _ => None,
     }
 }
 
@@ -362,52 +361,9 @@ fn reachable_blocks(module: &Module, entry: IrNodeId) -> Vec<IrNodeId> {
         };
         blocks.push(block);
         for instruction in instructions {
-            append_successors(module.node(*instruction), &mut |block| pending.push(block));
-        }
-    }
-
-    blocks
-}
-
-fn append_successors(node: Option<&IrNode>, push: &mut impl FnMut(IrNodeId)) {
-    match node {
-        Some(IrNode::Branch(target)) => push(*target),
-        Some(IrNode::ConditionalBranch {
-            true_block,
-            false_block,
-            ..
-        }) => {
-            push(*true_block);
-            push(*false_block);
-        },
-        Some(IrNode::TryCatch { body, catch, merge }) => {
-            push(*body);
-            push(*catch);
-            push(*merge);
-        },
-        Some(IrNode::Spawn { body, merge }) => {
-            push(*body);
-            push(*merge);
-        },
-        _ => {},
-    }
-}
-
-fn region_blocks(module: &Module, entry: IrNodeId, stop: IrNodeId) -> Vec<IrNodeId> {
-    let mut blocks = Vec::new();
-    let mut seen = FxHashSet::default();
-    let mut pending = vec![entry];
-
-    while let Some(block) = pending.pop() {
-        if block == stop || !seen.insert(block) {
-            continue;
-        }
-        let Some(instructions) = module.block(block) else {
-            continue;
-        };
-        blocks.push(block);
-        for instruction in instructions {
-            append_successors(module.node(*instruction), &mut |block| pending.push(block));
+            if let Some(node) = module.node(*instruction) {
+                node.for_each_successor(|block| pending.push(block));
+            }
         }
     }
 
@@ -423,7 +379,7 @@ mod tests {
     };
 
     use super::eliminate_dead_stores;
-    use crate::{IrNode, Module, Procedure};
+    use crate::{IrNode, Module, Procedure, SlotId};
 
     fn procedure(body: IrNodeId) -> Procedure {
         Procedure {
@@ -435,6 +391,7 @@ mod tests {
             params: Vec::new(),
             variadic: false,
             vars: Vec::new(),
+            slot_count: 0,
             body,
             intrinsic: None,
             location: Location::default(),
@@ -510,14 +467,14 @@ mod tests {
     }
 
     #[test]
-    fn removes_an_unread_frame_initialization() {
+    fn removes_an_unread_frame_slot_store() {
         let mut module = Module {
             nodes: vec![
                 IrNode::Function(ProcId(0)),
-                IrNode::Variable("__dmed_frame_local_0_0".into()),
+                IrNode::FrameSlot(SlotId(0)),
                 IrNode::Constant(Box::new(Value::Num(1.0))),
-                IrNode::Label(vec![IrNodeId(1), IrNodeId(4), IrNodeId(5)]),
-                IrNode::Initialize {
+                IrNode::Label(vec![IrNodeId(4), IrNodeId(5)]),
+                IrNode::Store {
                     pointer: IrNodeId(1),
                     value: IrNodeId(2),
                 },
@@ -530,7 +487,7 @@ mod tests {
 
         eliminate_dead_stores(&mut module);
 
-        assert_eq!(module.block(IrNodeId(3)), Some([IrNodeId(1), IrNodeId(5)].as_slice()));
+        assert_eq!(module.block(IrNodeId(3)), Some([IrNodeId(5)].as_slice()));
         assert!(matches!(module.node(IrNodeId(4)), Some(IrNode::Noop)));
     }
 

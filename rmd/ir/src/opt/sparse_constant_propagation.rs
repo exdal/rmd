@@ -225,7 +225,10 @@ impl<'a> Solver<'a> {
                 self.mark_block(*body);
                 self.mark_block(*catch);
             },
-            SolverInstruction::Spawn { body } => self.mark_block(*body),
+            SolverInstruction::Spawn { body, merge } => {
+                self.mark_block(*body);
+                self.mark_edge(block, *merge);
+            },
             _ => {},
         }
 
@@ -433,6 +436,7 @@ enum SolverInstruction<'a> {
     },
     Spawn {
         body: IrNodeId,
+        merge: IrNodeId,
     },
     Phi(&'a [PhiOperand]),
     Unary {
@@ -450,7 +454,7 @@ enum SolverInstruction<'a> {
 impl<'a> From<&'a IrNode> for SolverInstruction<'a> {
     fn from(node: &'a IrNode) -> Self {
         match node {
-            IrNode::Branch(target) => Self::Branch(*target),
+            IrNode::Branch(target) | IrNode::Leave { target, .. } => Self::Branch(*target),
             IrNode::ConditionalBranch {
                 condition,
                 true_block,
@@ -460,11 +464,14 @@ impl<'a> From<&'a IrNode> for SolverInstruction<'a> {
                 true_block: *true_block,
                 false_block: *false_block,
             },
-            IrNode::TryCatch { body, catch, .. } => Self::TryCatch {
+            IrNode::TryCatch { body, catch } => Self::TryCatch {
                 body: *body,
                 catch: *catch,
             },
-            IrNode::Spawn { body, .. } => Self::Spawn { body: *body },
+            IrNode::Spawn { body, merge } => Self::Spawn {
+                body: *body,
+                merge: *merge,
+            },
             IrNode::Phi { operands } => Self::Phi(operands),
             IrNode::Unary { op, operand } => Self::Unary {
                 op: *op,
@@ -484,6 +491,7 @@ fn is_solver_instruction(node: &IrNode) -> bool {
     matches!(
         node,
         IrNode::Branch(_)
+            | IrNode::Leave { .. }
             | IrNode::ConditionalBranch { .. }
             | IrNode::TryCatch { .. }
             | IrNode::Spawn { .. }
@@ -929,6 +937,14 @@ mod tests {
         );
         assert_eq!(
             fold_binary(BinaryOp::CompEq, &Value::Null, &Value::Num(0.0)),
+            Some(Value::Num(0.0))
+        );
+        assert_eq!(
+            fold_binary(
+                BinaryOp::CompEquiv,
+                &Value::Text("abc".into()),
+                &Value::Text("ABC".into())
+            ),
             Some(Value::Num(0.0))
         );
     }

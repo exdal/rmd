@@ -2,7 +2,7 @@ pub mod disasm;
 pub mod error;
 pub mod opcode;
 mod reachability;
-mod stackify;
+mod registers;
 
 use core::{
     location::{LineTable, Location, SourceLine},
@@ -13,26 +13,28 @@ use std::collections::VecDeque;
 
 pub use error::CodegenError;
 pub use ir::ProcIndex;
-use ir::{Argument, Interpolation, IrNode, OutputTarget, Procedure};
+use ir::{Argument, IrNode, OutputTarget, Procedure};
 use objtree::ObjectTree;
-use opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, Access, Binary, Builtin, Op, OutputTargetKind, Unary};
+use opcode::{Access, Binary, Builtin, Op, Unary};
 use prelude::Intrinsic;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::opcode::{ARGUMENT_KEY, ARGUMENT_VALUE, OutputTargetKind};
+
 macro_rules! id_type {
-    ($name:ident, $prefix:literal) => {
+    ($name:ident, $repr:ty, $prefix:literal) => {
         #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-        pub struct $name(pub u32);
+        pub struct $name(pub $repr);
 
         impl $name {
-            pub const INVALID: Self = Self(u32::MAX);
+            pub const INVALID: Self = Self(<$repr>::MAX);
 
             pub const fn is_valid(self) -> bool {
-                self.0 != u32::MAX
+                self.0 != <$repr>::MAX
             }
 
             pub const fn is_invalid(self) -> bool {
-                self.0 == u32::MAX
+                self.0 == <$repr>::MAX
             }
         }
 
@@ -53,11 +55,11 @@ macro_rules! id_type {
     };
 }
 
-id_type!(FunctionId, "fn");
-id_type!(LocalId, "local");
-id_type!(ConstantId, "const");
-id_type!(StringId, "str");
-id_type!(PathId, "path");
+id_type!(FunctionId, u32, "fn");
+id_type!(RegisterId, u16, "r");
+id_type!(ConstantId, u32, "const");
+id_type!(StringId, u32, "str");
+id_type!(PathId, u32, "path");
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CodeOffset(pub u32);
@@ -98,6 +100,7 @@ pub struct Module {
     pub symbols: Vec<Identifier>,
     pub paths: Vec<TreePath>,
     pub functions: Vec<CompiledFunction>,
+    pub static_count: u32,
     pub code: Vec<u8>,
     pub lines: LineTable<CodeOffset>,
     proc_functions: Vec<FunctionId>,
@@ -106,7 +109,7 @@ pub struct Module {
 
 impl Module {
     pub const MAGIC: [u8; 4] = *b"DMIR";
-    pub const VERSION: u16 = 2;
+    pub const VERSION: u16 = 3;
 
     pub fn function(&self, id: FunctionId) -> Option<&CompiledFunction> {
         self.functions.get(id.0 as usize)
@@ -156,7 +159,8 @@ pub struct CompiledFunction {
     pub address: CodeOffset,
     pub length: u32,
     pub parameter_count: u32,
-    pub local_count: u32,
+    pub register_count: u16,
+    pub slot_count: u32,
     pub external: bool,
     pub intrinsic: Option<Intrinsic>,
     pub location: Location,
@@ -215,39 +219,24 @@ struct EdgeStub {
 }
 
 struct FunctionState {
-    blocks: Vec<IrNodeId>,
-    locals: FxHashMap<IrNodeId, LocalId>,
-    parameter_defaults: FxHashMap<IrNodeId, LocalId>,
-    next_local: u32,
-    stackify: stackify::Stackify,
+    registers: FxHashMap<IrNodeId, RegisterId>,
+    phi_temporaries: FxHashMap<IrNodeId, RegisterId>,
+    constant_loads: FxHashMap<IrNodeId, Vec<(IrNodeId, RegisterId)>>,
+    /// a constant operand resolves to the register it loaded into for this instruction
+    current_instruction: IrNodeId,
 }
 
 impl FunctionState {
-    fn reserve(&mut self, node: IrNodeId) -> LocalId {
-        if let Some(local) = self.locals.get(&node) {
-            return *local;
+    fn register(&self, node: IrNodeId) -> Result<RegisterId, CodegenError> {
+        if let Some(register) = self.registers.get(&node) {
+            return Ok(*register);
         }
 
-        let local = LocalId(self.next_local);
-        self.next_local += 1;
-        self.locals.insert(node, local);
-
-        local
-    }
-
-    fn local(&self, node: IrNodeId) -> Result<LocalId, CodegenError> {
-        self.locals.get(&node).copied().ok_or(CodegenError::MissingLocal(node))
-    }
-
-    fn assigned_local(&self, node: IrNodeId) -> Option<LocalId> {
-        self.locals.get(&node).copied()
-    }
-
-    fn assign_local(&mut self, node: IrNodeId, local: LocalId) {
-        let previous = self.locals.insert(node, local);
-        if let Some(previous) = previous {
-            debug_assert_eq!(previous, local);
-        }
+        self.constant_loads
+            .get(&self.current_instruction)
+            .and_then(|loads| loads.iter().find(|(constant, _)| *constant == node))
+            .map(|(_, register)| *register)
+            .ok_or(CodegenError::MissingRegister(node))
     }
 }
 
@@ -271,6 +260,7 @@ struct Generator {
     line_hint: usize,
     /// `a.b()` looks `b` up as a proc first, and plain `a.b` as a var first
     callees: FxHashSet<IrNodeId>,
+    register_scratch: registers::Scratch,
 }
 
 impl Generator {
@@ -293,6 +283,7 @@ impl Generator {
             function_lines: Vec::new(),
             line_hint: 0,
             callees: FxHashSet::default(),
+            register_scratch: registers::Scratch::default(),
         }
     }
 
@@ -332,6 +323,7 @@ impl Generator {
             paths: self.paths,
             proc_functions: Module::index_procs(&self.functions),
             functions: self.functions,
+            static_count: module.static_count,
             code: self.code,
             lines: self.lines,
             index: module.index.clone(),
@@ -387,7 +379,8 @@ impl Generator {
                 address: CodeOffset::INVALID,
                 length: 0,
                 parameter_count: proc.parameters.len() as u32,
-                local_count: 0,
+                register_count: 0,
+                slot_count: proc.slot_count,
                 external: false,
                 intrinsic: proc.intrinsic,
                 location: proc.location,
@@ -416,7 +409,8 @@ impl Generator {
                 address: CodeOffset::INVALID,
                 length: 0,
                 parameter_count: 0,
-                local_count: 0,
+                register_count: 0,
+                slot_count: 0,
                 external: true,
                 intrinsic: None,
                 location: Location::default(),
@@ -429,54 +423,21 @@ impl Generator {
     fn generate_function(&mut self, module: &ir::Module, proc: &Procedure) -> Result<(), CodegenError> {
         let blocks = reachable_blocks(module, proc.body)?;
         let layout = block_layout(module, proc.body, &blocks)?;
-        let stackify = stackify::Stackify::analyze(module, proc, &blocks)?;
+        let allocation = registers::allocate(&mut self.register_scratch, module, proc, &blocks)?;
         let mut state = FunctionState {
-            blocks,
-            locals: FxHashMap::default(),
-            parameter_defaults: FxHashMap::default(),
-            next_local: 0,
-            stackify,
+            registers: allocation.registers,
+            phi_temporaries: allocation.phi_temporaries,
+            constant_loads: allocation.constant_loads,
+            current_instruction: proc.body,
         };
 
-        for parameter in &proc.parameters {
-            state.reserve(*parameter);
-        }
-
-        let mut constant_defaults = Vec::new();
-        for (index, parameter) in proc.params.iter().enumerate() {
-            let Some(default) = parameter.default else {
-                continue;
-            };
-            let destination = state.local(proc.parameters[index])?;
-            if matches!(module.node(default), Some(IrNode::Constant(_))) {
-                constant_defaults.push((default, destination));
-            } else {
-                state.parameter_defaults.insert(default, destination);
-            }
-        }
-
-        assign_phi_locals(module, &mut state)?;
-
-        for block in state.blocks.clone() {
-            for instruction in module.block(block).ok_or(CodegenError::ExpectedBlock(block))? {
-                if module.node(*instruction).is_some_and(produces_value) && state.stackify.needs_local(*instruction) {
-                    state.reserve(*instruction);
-                }
-            }
-        }
-
         let address = self.code_offset()?;
-        for (default, destination) in constant_defaults {
-            self.emit_value(module, &state, default)?;
-            self.emit_op(Op::DefaultParameter);
-            self.emit_u32(destination.0);
-        }
 
         let mut edge_stubs = Vec::new();
 
         for (index, block) in layout.iter().copied().enumerate() {
             let next = layout.get(index + 1).copied();
-            self.generate_block(module, block, next, &state, &mut edge_stubs)?;
+            self.generate_block(module, block, next, &mut state, &mut edge_stubs)?;
         }
 
         for stub in edge_stubs {
@@ -496,34 +457,35 @@ impl Generator {
             .ok_or(CodegenError::MissingFunction(proc.function))?;
         function.address = address;
         function.length = length;
-        function.local_count = state.next_local;
+        function.register_count = allocation.register_count;
 
         Ok(())
     }
 
     fn generate_block(
-        &mut self, module: &ir::Module, block: IrNodeId, next: Option<IrNodeId>, state: &FunctionState,
+        &mut self, module: &ir::Module, block: IrNodeId, next: Option<IrNodeId>, state: &mut FunctionState,
         edge_stubs: &mut Vec<EdgeStub>,
     ) -> Result<(), CodegenError> {
         self.mark_label(Label::Block(block));
-        let instructions = state
-            .stackify
-            .schedule(block)
-            .ok_or(CodegenError::ExpectedBlock(block))?;
-
+        let instructions = module.block(block).ok_or(CodegenError::ExpectedBlock(block))?;
         for instruction in instructions {
-            if state.stackify.is_stacked(*instruction) {
-                continue;
-            }
-
             let line = module.node_lines.get_near(*instruction, &mut self.line_hint);
             self.function_lines.push((self.code.len(), line));
+            state.current_instruction = *instruction;
+            if let Some(loads) = state.constant_loads.get(instruction) {
+                for (constant, register) in loads {
+                    self.emit_constant_load(module, *register, *constant)?;
+                }
+            }
+
             match module
                 .node(*instruction)
                 .ok_or(CodegenError::MissingNode(*instruction))?
             {
                 IrNode::Phi { .. }
                 | IrNode::Variable(_)
+                | IrNode::FrameSlot(_)
+                | IrNode::StaticSlot(_)
                 | IrNode::SelectionMerge { .. }
                 | IrNode::LoopMerge { .. }
                 | IrNode::Noop => {},
@@ -531,12 +493,25 @@ impl Generator {
                     self.emit_phi_copies(module, state, block, *target)?;
                     self.emit_jump(Op::Jump, Label::Block(*target));
                 },
+                IrNode::Leave { regions, target } => {
+                    self.emit_phi_copies(module, state, block, *target)?;
+                    self.emit_op(Op::Leave);
+                    self.emit_u32(*regions);
+                    self.emit_address(Label::Block(*target));
+                },
+                // the VM resumes after the body here, so the merge edge's copies follow the op
+                IrNode::Spawn { body, merge } => {
+                    self.emit_op(Op::Spawn);
+                    self.emit_address(Label::Block(*body));
+                    self.emit_phi_copies(module, state, block, *merge)?;
+                    self.emit_jump(Op::Jump, Label::Block(*merge));
+                },
                 IrNode::ConditionalBranch {
                     condition,
                     true_block,
                     false_block,
                 } => {
-                    self.emit_value(module, state, *condition)?;
+                    let condition = state.register(*condition)?;
                     let false_target = if has_phi_copies(module, state, block, *false_block)? {
                         // Phi copies belong to the incoming edge so keep the false
                         // copies behind the conditional while the true copies can
@@ -553,6 +528,7 @@ impl Generator {
                         Label::Block(*false_block)
                     };
                     self.emit_jump(Op::JumpIfFalse, false_target);
+                    self.emit_register(condition);
 
                     self.emit_phi_copies(module, state, block, *true_block)?;
                     if next != Some(*true_block) {
@@ -577,94 +553,146 @@ impl Generator {
             | IrNode::Label(_)
             | IrNode::Phi { .. }
             | IrNode::Variable(_)
+            | IrNode::FrameSlot(_)
+            | IrNode::StaticSlot(_)
             | IrNode::SelectionMerge { .. }
             | IrNode::LoopMerge { .. }
             | IrNode::Branch(_)
             | IrNode::ConditionalBranch { .. }
+            | IrNode::Leave { .. }
+            | IrNode::Spawn { .. }
             | IrNode::Noop => {},
+            IrNode::Load { pointer } if let Some(IrNode::FrameSlot(slot)) = module.node(*pointer) => {
+                self.emit_op(Op::LoadSlot);
+                self.emit_register(state.register(id)?);
+                self.emit_u32(slot.0);
+            },
+            IrNode::Load { pointer } if let Some(IrNode::StaticSlot(static_id)) = module.node(*pointer) => {
+                self.emit_op(Op::LoadStatic);
+                self.emit_register(state.register(id)?);
+                self.emit_u32(static_id.0);
+            },
             IrNode::Load { pointer } => {
                 let name = variable_name(module, *pointer)?;
                 let name = self.intern_identifier(name)?;
-                self.emit_op(Op::LoadVariable);
+                self.emit_op(Op::LoadVar);
+                self.emit_register(state.register(id)?);
                 self.emit_u32(name.0);
-                self.store_result(state, id)?;
             },
             IrNode::Builtin(builtin) => {
-                self.emit_op(Op::PushBuiltin);
+                self.emit_op(Op::LoadBuiltin);
+                self.emit_register(state.register(id)?);
                 self.emit_u8(builtin_code(*builtin) as u8);
-                self.store_result(state, id)?;
             },
             IrNode::Interpolate(interpolation) => {
-                let Interpolation { chunks, values } = &**interpolation;
-                for value in values {
-                    self.emit_value(module, state, *value)?;
-                }
-
-                let chunks = chunks
+                let values = interpolation
+                    .values
+                    .iter()
+                    .map(|value| state.register(*value))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let chunks = interpolation
+                    .chunks
                     .iter()
                     .map(|chunk| self.intern_string(chunk.clone()))
                     .collect::<Result<Vec<_>, _>>()?;
                 self.emit_op(Op::Interpolate);
+                self.emit_register(state.register(id)?);
                 self.emit_count(values.len(), "interpolation value")?;
-                self.emit_count(chunks.len(), "interpolation chunk")?;
+                self.emit_count(chunks.len(), "interpolation chunks")?;
                 for chunk in chunks {
                     self.emit_u32(chunk.0);
                 }
-                self.store_result(state, id)?;
+
+                for value in values {
+                    self.emit_register(value);
+                }
             },
             IrNode::Unary { op, operand } => {
-                self.emit_value(module, state, *operand)?;
+                let operand = state.register(*operand)?;
                 self.emit_op(Op::Unary);
+                self.emit_register(state.register(id)?);
                 self.emit_u8(unary_code(*op) as u8);
-                self.store_result(state, id)?;
+                self.emit_register(operand);
+            },
+            IrNode::Binary { op, lhs, .. } if let Some(Immediate::Number(value)) = immediate(module, node) => {
+                let lhs = state.register(*lhs)?;
+                self.emit_op(Op::BinaryI);
+                self.emit_register(state.register(id)?);
+                self.emit_u8(binary_code(*op) as u8);
+                self.emit_register(lhs);
+                self.emit_f32(value);
             },
             IrNode::Binary { op, lhs, rhs } => {
-                self.emit_value(module, state, *lhs)?;
-                self.emit_value(module, state, *rhs)?;
+                let lhs = state.register(*lhs)?;
+                let rhs = state.register(*rhs)?;
                 self.emit_op(Op::Binary);
+                self.emit_register(state.register(id)?);
                 self.emit_u8(binary_code(*op) as u8);
-                self.store_result(state, id)?;
+                self.emit_register(lhs);
+                self.emit_register(rhs);
+            },
+            IrNode::CompoundBinary { op, lhs, .. } if let Some(Immediate::Number(value)) = immediate(module, node) => {
+                let lhs = state.register(*lhs)?;
+                self.emit_op(Op::CompoundBinaryI);
+                self.emit_register(state.register(id)?);
+                self.emit_u8(binary_code(*op) as u8);
+                self.emit_register(lhs);
+                self.emit_f32(value);
             },
             IrNode::CompoundBinary { op, lhs, rhs } => {
-                self.emit_value(module, state, *lhs)?;
-                self.emit_value(module, state, *rhs)?;
+                let lhs = state.register(*lhs)?;
+                let rhs = state.register(*rhs)?;
                 self.emit_op(Op::CompoundBinary);
+                self.emit_register(state.register(id)?);
                 self.emit_u8(binary_code(*op) as u8);
-                self.store_result(state, id)?;
+                self.emit_register(lhs);
+                self.emit_register(rhs);
             },
             IrNode::AccessField { object, name, access } => {
-                self.emit_value(module, state, *object)?;
+                let object = state.register(*object)?;
                 let name = self.intern_identifier(name)?;
                 self.emit_op(Op::AccessField);
+                self.emit_register(state.register(id)?);
                 self.emit_u32(name.0);
                 self.emit_u8(access_code(*access) as u8);
                 self.emit_bool(self.callees.contains(&id));
-                self.store_result(state, id)?;
+                self.emit_register(object);
             },
             IrNode::Initial { object, name } => {
-                if let Some(object) = object {
-                    self.emit_value(module, state, *object)?;
-                }
+                let object = object.map(|object| state.register(object)).transpose()?;
                 let name = self.intern_identifier(name)?;
                 self.emit_op(Op::Initial);
+                self.emit_register(state.register(id)?);
                 self.emit_bool(object.is_some());
                 self.emit_u32(name.0);
-                self.store_result(state, id)?;
+                if let Some(object) = object {
+                    self.emit_register(object);
+                }
+            },
+            IrNode::Index {
+                object, conditional, ..
+            } if let Some(Immediate::Number(value)) = immediate(module, node) => {
+                let object = state.register(*object)?;
+                self.emit_op(Op::IndexI);
+                self.emit_register(state.register(id)?);
+                self.emit_bool(*conditional);
+                self.emit_register(object);
+                self.emit_f32(value);
             },
             IrNode::Index {
                 object,
                 index,
                 conditional,
             } => {
-                self.emit_value(module, state, *object)?;
-                self.emit_value(module, state, *index)?;
+                let object = state.register(*object)?;
+                let index = state.register(*index)?;
                 self.emit_op(Op::Index);
+                self.emit_register(state.register(id)?);
                 self.emit_bool(*conditional);
-                self.store_result(state, id)?;
+                self.emit_register(object);
+                self.emit_register(index);
             },
             IrNode::Call { callee, args } => {
-                self.emit_value(module, state, *callee)?;
-                let shapes = self.emit_arguments(module, state, args)?;
                 let conditional = matches!(
                     module.node(*callee),
                     Some(IrNode::AccessField {
@@ -672,81 +700,87 @@ impl Generator {
                         ..
                     })
                 );
+                let callee = state.register(*callee)?;
                 self.emit_op(Op::Call);
-                self.emit_argument_layout(&shapes)?;
+                self.emit_register(state.register(id)?);
                 self.emit_bool(conditional);
-                self.store_result(state, id)?;
+                self.emit_register(callee);
+                self.emit_arguments(state, args)?;
             },
             IrNode::FunctionCall { function, args } => {
-                let shapes = self.emit_arguments(module, state, args)?;
                 let function = self
                     .function_ids
                     .get(function)
                     .copied()
                     .ok_or(CodegenError::MissingFunction(*function))?;
                 self.emit_op(Op::FunctionCall);
+                self.emit_register(state.register(id)?);
                 self.emit_u32(function.0);
-                self.emit_argument_layout(&shapes)?;
-                self.store_result(state, id)?;
+                self.emit_arguments(state, args)?;
             },
             IrNode::Super {
                 args,
                 forwards_extra_args,
             } => {
-                let shapes = self.emit_arguments(module, state, args)?;
                 self.emit_op(Op::SuperCall);
-                self.emit_argument_layout(&shapes)?;
+                self.emit_register(state.register(id)?);
                 self.emit_bool(*forwards_extra_args);
-                self.store_result(state, id)?;
+                self.emit_arguments(state, args)?;
             },
             IrNode::New { ty, args } => {
-                if let Some(ty) = ty {
-                    self.emit_value(module, state, *ty)?;
-                }
-                let shapes = self.emit_arguments(module, state, args)?;
+                let ty = ty.map(|ty| state.register(ty)).transpose()?;
+
                 self.emit_op(Op::New);
+                self.emit_register(state.register(id)?);
                 self.emit_bool(ty.is_some());
-                self.emit_argument_layout(&shapes)?;
-                self.store_result(state, id)?;
+                if let Some(ty) = ty {
+                    self.emit_register(ty);
+                }
+                self.emit_arguments(state, args)?;
             },
             IrNode::ModifiedType { path, overrides } => {
-                for (_, value) in overrides {
-                    self.emit_value(module, state, *value)?;
-                }
                 let path = self.intern_path(TreePath::clone(path))?;
-                let names = overrides
+                let overrides = overrides
                     .iter()
-                    .map(|(name, _)| self.intern_identifier(name))
+                    .map(|(name, value)| Ok((self.intern_identifier(name)?, state.register(*value)?)))
                     .collect::<Result<Vec<_>, _>>()?;
+
                 self.emit_op(Op::ModifiedType);
+                self.emit_register(state.register(id)?);
                 self.emit_u32(path.0);
-                self.emit_count(names.len(), "modified type override")?;
-                for name in names {
+                self.emit_count(overrides.len(), "modified type override")?;
+                for (name, value) in overrides {
                     self.emit_u32(name.0);
+                    self.emit_register(value);
                 }
-                self.store_result(state, id)?;
             },
             IrNode::List(args) => {
-                let shapes = self.emit_arguments(module, state, args)?;
                 self.emit_op(Op::MakeList);
-                self.emit_argument_layout(&shapes)?;
-                self.store_result(state, id)?;
+                self.emit_register(state.register(id)?);
+                self.emit_arguments(state, args)?;
             },
             IrNode::Pick(choices) => {
-                let mut weighted = Vec::with_capacity(choices.len());
-                for (weight, value) in choices {
-                    if let Some(weight) = weight {
-                        self.emit_value(module, state, *weight)?;
-                    }
-                    self.emit_value(module, state, *value)?;
-                    weighted.push(weight.is_some());
-                }
+                let choices = choices
+                    .iter()
+                    .map(|(weight, value)| {
+                        Ok((
+                            weight.map(|weight| state.register(weight)).transpose()?,
+                            state.register(*value)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 self.emit_op(Op::Pick);
-                self.emit_count(weighted.len(), "pick choice")?;
-                for weighted in weighted {
-                    self.emit_bool(weighted);
+                self.emit_register(state.register(id)?);
+                self.emit_count(choices.len(), "pick choice")?;
+                for (weight, value) in choices {
+                    self.emit_bool(weight.is_some());
+                    if let Some(weight) = weight {
+                        self.emit_register(weight);
+                    }
+
+                    self.emit_register(value);
                 }
-                self.store_result(state, id)?;
             },
             IrNode::InRange {
                 value,
@@ -754,59 +788,66 @@ impl Generator {
                 end,
                 step,
             } => {
-                self.emit_value(module, state, *value)?;
-                self.emit_value(module, state, *start)?;
-                self.emit_value(module, state, *end)?;
-                if let Some(step) = step {
-                    self.emit_value(module, state, *step)?;
-                }
+                let value = state.register(*value)?;
+                let start = state.register(*start)?;
+                let end = state.register(*end)?;
+                let step = step.map(|step| state.register(step)).transpose()?;
                 self.emit_op(Op::InRange);
+                self.emit_register(state.register(id)?);
                 self.emit_bool(step.is_some());
-                self.store_result(state, id)?;
+                self.emit_register(value);
+                self.emit_register(start);
+                self.emit_register(end);
+                if let Some(step) = step {
+                    self.emit_register(step);
+                }
             },
             IrNode::Range { start, end, step } => {
-                self.emit_value(module, state, *start)?;
-                self.emit_value(module, state, *end)?;
-                if let Some(step) = step {
-                    self.emit_value(module, state, *step)?;
-                }
+                let start = state.register(*start)?;
+                let end = state.register(*end)?;
+                let step = step.map(|step| state.register(step)).transpose()?;
                 self.emit_op(Op::Range);
+                self.emit_register(state.register(id)?);
                 self.emit_bool(step.is_some());
-                self.store_result(state, id)?;
+                self.emit_register(start);
+                self.emit_register(end);
+                if let Some(step) = step {
+                    self.emit_register(step);
+                }
             },
             IrNode::IterInit {
                 list,
                 ty,
                 value_is_associated,
             } => {
-                self.emit_value(module, state, *list)?;
+                let list = state.register(*list)?;
                 let ty = ty.as_deref().cloned().map(|ty| self.intern_path(ty)).transpose()?;
                 self.emit_op(Op::IterInit);
+                self.emit_register(state.register(id)?);
                 self.emit_optional_path(ty);
                 self.emit_bool(*value_is_associated);
-                self.store_result(state, id)?;
+                self.emit_register(list);
             },
-            IrNode::IterNext(iter) => {
-                self.emit_value(module, state, *iter)?;
-                self.emit_op(Op::IterNext);
-                self.store_result(state, id)?;
-            },
-            IrNode::IterValue(iter) => {
-                self.emit_value(module, state, *iter)?;
-                self.emit_op(Op::IterValue);
-                self.store_result(state, id)?;
-            },
-            IrNode::IterKey(iter) => {
-                self.emit_value(module, state, *iter)?;
-                self.emit_op(Op::IterKey);
-                self.store_result(state, id)?;
+            IrNode::IterNext(iter) | IrNode::IterValue(iter) | IrNode::IterKey(iter) => {
+                let op = match node {
+                    IrNode::IterNext(_) => Op::IterNext,
+                    IrNode::IterValue(_) => Op::IterValue,
+                    _ => Op::IterKey,
+                };
+                let iter = state.register(*iter)?;
+                self.emit_op(op);
+                self.emit_register(state.register(id)?);
+                self.emit_register(iter);
             },
             IrNode::RangeTest { current, end, step } => {
-                self.emit_value(module, state, *current)?;
-                self.emit_value(module, state, *end)?;
-                self.emit_value(module, state, *step)?;
+                let current = state.register(*current)?;
+                let end = state.register(*end)?;
+                let step = state.register(*step)?;
                 self.emit_op(Op::RangeTest);
-                self.store_result(state, id)?;
+                self.emit_register(state.register(id)?);
+                self.emit_register(current);
+                self.emit_register(end);
+                self.emit_register(step);
             },
             IrNode::SetField {
                 object,
@@ -814,12 +855,14 @@ impl Generator {
                 access,
                 value,
             } => {
-                self.emit_value(module, state, *object)?;
-                self.emit_value(module, state, *value)?;
+                let object = state.register(*object)?;
+                let value = state.register(*value)?;
                 let name = self.intern_identifier(name)?;
                 self.emit_op(Op::SetField);
                 self.emit_u32(name.0);
                 self.emit_u8(access_code(*access) as u8);
+                self.emit_register(object);
+                self.emit_register(value);
             },
             IrNode::SetIndex {
                 object,
@@ -827,84 +870,117 @@ impl Generator {
                 value,
                 conditional,
             } => {
-                self.emit_value(module, state, *object)?;
-                self.emit_value(module, state, *index)?;
-                self.emit_value(module, state, *value)?;
+                let object = state.register(*object)?;
+                let index = state.register(*index)?;
+                let value = state.register(*value)?;
                 self.emit_op(Op::SetIndex);
                 self.emit_bool(*conditional);
+                self.emit_register(object);
+                self.emit_register(index);
+                self.emit_register(value);
             },
-            IrNode::Store { pointer, value } => {
-                self.emit_value(module, state, *value)?;
+            IrNode::Store { pointer, value } if let Some(IrNode::FrameSlot(slot)) = module.node(*pointer) => {
+                let value = state.register(*value)?;
+                self.emit_op(Op::StoreSlot);
+                self.emit_u32(slot.0);
+                self.emit_register(value);
+            },
+            IrNode::Store { pointer, value } | IrNode::Initialize { pointer, value }
+                if let Some(IrNode::StaticSlot(static_id)) = module.node(*pointer) =>
+            {
+                let op = match node {
+                    IrNode::Store { .. } => Op::StoreStatic,
+                    _ => Op::InitStatic,
+                };
+                let value = state.register(*value)?;
+                self.emit_op(op);
+                self.emit_u32(static_id.0);
+                self.emit_register(value);
+            },
+            IrNode::Store { pointer, value } | IrNode::Initialize { pointer, value } => {
+                let op = match node {
+                    IrNode::Store { .. } => Op::StoreVar,
+                    _ => Op::InitVar,
+                };
+                let value = state.register(*value)?;
                 let name = variable_name(module, *pointer)?;
                 let name = self.intern_identifier(name)?;
-                self.emit_op(Op::StoreVariable);
+                self.emit_op(op);
                 self.emit_u32(name.0);
+                self.emit_register(value);
             },
-            IrNode::Initialize { pointer, value } => {
-                self.emit_value(module, state, *value)?;
-                let name = variable_name(module, *pointer)?;
-                let name = self.intern_identifier(name)?;
-                self.emit_op(Op::InitializeVariable);
-                self.emit_u32(name.0);
+            IrNode::DefaultParameter { parameter, value } => {
+                let value = state.register(*value)?;
+                self.emit_op(Op::DefaultParameter);
+                self.emit_register(state.register(*parameter)?);
+                self.emit_register(value);
             },
             IrNode::StoreBuiltin { builtin, value } => {
-                self.emit_value(module, state, *value)?;
+                let value = state.register(*value)?;
                 self.emit_op(Op::StoreBuiltin);
                 self.emit_u8(builtin_code(*builtin) as u8);
+                self.emit_register(value);
             },
             IrNode::CatchValue => {
                 self.emit_op(Op::CatchValue);
-                self.store_result(state, id)?;
+                self.emit_register(state.register(id)?);
             },
-            IrNode::Return(value) => match value {
-                Some(value) => {
-                    self.emit_value(module, state, *value)?;
-                    self.emit_op(Op::ReturnValue);
-                },
-                None => self.emit_op(Op::Return),
+            IrNode::Return(None) => self.emit_op(Op::Return),
+            IrNode::Return(Some(_)) if let Some(Immediate::Null) = immediate(module, node) => {
+                self.emit_op(Op::ReturnNull)
             },
-            IrNode::Del(value) => {
-                self.emit_value(module, state, *value)?;
-                self.emit_op(Op::Del);
+            IrNode::Return(Some(_)) if let Some(Immediate::Number(value)) = immediate(module, node) => {
+                self.emit_op(Op::ReturnValueI);
+                self.emit_f32(value);
             },
-            IrNode::Throw(value) => {
-                self.emit_value(module, state, *value)?;
-                self.emit_op(Op::Throw);
+            IrNode::Return(Some(value)) => {
+                let value = state.register(*value)?;
+                self.emit_op(Op::ReturnValue);
+                self.emit_register(value);
+            },
+            IrNode::Del(value) | IrNode::Throw(value) => {
+                let op = match node {
+                    IrNode::Del(_) => Op::Del,
+                    _ => Op::Throw,
+                };
+                let value = state.register(*value)?;
+                self.emit_op(op);
+                self.emit_register(value);
             },
             IrNode::Output { target, value } => {
-                match target {
-                    OutputTarget::Value(target) => self.emit_value(module, state, *target)?,
-                    OutputTarget::Field { object, .. } => self.emit_value(module, state, *object)?,
-                    OutputTarget::Index { object, index, .. } => {
-                        self.emit_value(module, state, *object)?;
-                        self.emit_value(module, state, *index)?;
-                    },
-                }
-                self.emit_value(module, state, *value)?;
                 self.emit_op(Op::Output);
                 match target {
-                    OutputTarget::Value(_) => self.emit_u8(OutputTargetKind::Value as u8),
-                    OutputTarget::Field { name, access, .. } => {
+                    OutputTarget::Value(target) => {
+                        self.emit_u8(OutputTargetKind::Value as u8);
+                        self.emit_register(state.register(*target)?);
+                        self.emit_register(state.register(*value)?);
+                    },
+                    OutputTarget::Field { object, name, access } => {
                         let name = self.intern_identifier(name)?;
+
                         self.emit_u8(OutputTargetKind::Field as u8);
                         self.emit_u32(name.0);
                         self.emit_u8(access_code(*access) as u8);
+                        self.emit_register(state.register(*object)?);
+                        self.emit_register(state.register(*value)?);
                     },
-                    OutputTarget::Index { conditional, .. } => {
+                    OutputTarget::Index {
+                        object,
+                        index,
+                        conditional,
+                    } => {
                         self.emit_u8(OutputTargetKind::Index as u8);
                         self.emit_bool(*conditional);
+                        self.emit_register(state.register(*object)?);
+                        self.emit_register(state.register(*index)?);
+                        self.emit_register(state.register(*value)?);
                     },
                 }
             },
-            IrNode::TryCatch { body, catch, merge } => {
+            IrNode::TryCatch { body, catch } => {
                 self.emit_op(Op::TryCatch);
                 self.emit_address(Label::Block(*body));
                 self.emit_address(Label::Block(*catch));
-                self.emit_address(Label::Block(*merge));
-            },
-            IrNode::Spawn { body, .. } => {
-                self.emit_op(Op::Spawn);
-                self.emit_address(Label::Block(*body));
             },
             IrNode::EndSpawn => self.emit_op(Op::EndSpawn),
             IrNode::Blocked(reason) => {
@@ -921,12 +997,6 @@ impl Generator {
             },
         }
 
-        if let Some(parameter) = state.parameter_defaults.get(&id) {
-            self.emit_value(module, state, id)?;
-            self.emit_op(Op::DefaultParameter);
-            self.emit_u32(parameter.0);
-        }
-
         Ok(())
     }
 
@@ -934,85 +1004,89 @@ impl Generator {
         &mut self, module: &ir::Module, state: &FunctionState, predecessor: IrNodeId, target: IrNodeId,
     ) -> Result<(), CodegenError> {
         let copies = phi_copies(module, state, predecessor, target)?;
+        let moves = || {
+            copies.iter().filter_map(|copy| match copy.source {
+                PhiSource::Register(source) => Some((copy, source)),
+                PhiSource::Constant(_) => None,
+            })
+        };
 
-        for (source, _) in &copies {
-            self.emit_value(module, state, *source)?;
+        // the copies happen at once, a phi that reads another phi of the same block needs
+        // that phi's old value, so go through the temporaries when any source is overwritten.
+        // Constants load after every move, so only the moves can overwrite a source
+        let is_overlapping = moves().any(|(_, source)| moves().any(|(other, _)| other.destination == source));
+        if is_overlapping {
+            for (copy, source) in moves() {
+                self.emit_move(copy.temporary, source);
+            }
+
+            for (copy, _) in moves() {
+                self.emit_move(copy.destination, copy.temporary);
+            }
+        } else {
+            for (copy, source) in moves() {
+                self.emit_move(copy.destination, source);
+            }
         }
 
-        for (_, destination) in copies.iter().rev() {
-            self.emit_op(Op::StoreLocal);
-            self.emit_u32(destination.0);
-        }
-
-        Ok(())
-    }
-
-    fn emit_value(&mut self, module: &ir::Module, state: &FunctionState, value: IrNodeId) -> Result<(), CodegenError> {
-        if state.stackify.is_stacked(value) {
-            let node = module.node(value).ok_or(CodegenError::MissingNode(value))?;
-            return self.generate_instruction(module, state, value, node);
-        }
-
-        match module.node(value).ok_or(CodegenError::MissingNode(value))? {
-            IrNode::Constant(_) => {
-                let constant = self
-                    .constant_ids
-                    .get(&value)
-                    .copied()
-                    .ok_or(CodegenError::MissingConstant(value))?;
-                self.emit_op(Op::PushConstant);
-                self.emit_u32(constant.0);
-            },
-            _ => {
-                let local = state.local(value)?;
-                self.emit_op(Op::LoadLocal);
-                self.emit_u32(local.0);
-            },
+        // a constant reads no register, loading it after the moves can't clobber their sources
+        for copy in &copies {
+            if let PhiSource::Constant(constant) = copy.source {
+                self.emit_constant_load(module, copy.destination, constant)?;
+            }
         }
 
         Ok(())
     }
 
-    fn store_result(&mut self, state: &FunctionState, value: IrNodeId) -> Result<(), CodegenError> {
-        if state.stackify.is_stacked(value) {
-            return Ok(());
+    fn emit_constant_load(
+        &mut self, module: &ir::Module, destination: RegisterId, constant: IrNodeId,
+    ) -> Result<(), CodegenError> {
+        if let Some(value) = number_constant(module, constant) {
+            self.emit_op(Op::MoveImm);
+            self.emit_register(destination);
+            self.emit_f32(value);
+        } else {
+            let id = self
+                .constant_ids
+                .get(&constant)
+                .copied()
+                .ok_or(CodegenError::MissingConstant(constant))?;
+            self.emit_op(Op::MoveConst);
+            self.emit_register(destination);
+            self.emit_u32(id.0);
         }
-
-        if state.stackify.uses(value) == 0 {
-            self.emit_op(Op::Drop);
-            return Ok(());
-        }
-
-        let local = state.local(value)?;
-        self.emit_op(Op::StoreLocal);
-        self.emit_u32(local.0);
 
         Ok(())
     }
 
-    fn emit_arguments(
-        &mut self, module: &ir::Module, state: &FunctionState, args: &[Argument],
-    ) -> Result<Vec<u8>, CodegenError> {
-        let mut shapes = Vec::with_capacity(args.len());
+    fn emit_move(&mut self, destination: RegisterId, source: RegisterId) {
+        self.emit_op(Op::Move);
+        self.emit_register(destination);
+        self.emit_register(source);
+    }
+
+    fn emit_arguments(&mut self, state: &FunctionState, args: &[Argument]) -> Result<(), CodegenError> {
+        self.emit_count(args.len(), "argument")?;
         for argument in args {
             let mut shape = 0;
-            if let Some(key) = argument.key {
-                self.emit_value(module, state, key)?;
+            if argument.key.is_some() {
                 shape |= ARGUMENT_KEY;
             }
-            if let Some(value) = argument.value {
-                self.emit_value(module, state, value)?;
+
+            if argument.value.is_some() {
                 shape |= ARGUMENT_VALUE;
             }
-            shapes.push(shape);
+
+            self.emit_u8(shape);
+            if let Some(key) = argument.key {
+                self.emit_register(state.register(key)?);
+            }
+
+            if let Some(value) = argument.value {
+                self.emit_register(state.register(value)?);
+            }
         }
-
-        Ok(shapes)
-    }
-
-    fn emit_argument_layout(&mut self, shapes: &[u8]) -> Result<(), CodegenError> {
-        self.emit_count(shapes.len(), "argument")?;
-        self.code.extend_from_slice(shapes);
 
         Ok(())
     }
@@ -1065,8 +1139,20 @@ impl Generator {
         self.code.push(value);
     }
 
+    fn emit_u16(&mut self, value: u16) {
+        self.code.extend_from_slice(&value.to_le_bytes());
+    }
+
     fn emit_u32(&mut self, value: u32) {
         self.code.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn emit_f32(&mut self, value: f32) {
+        self.code.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn emit_register(&mut self, register: RegisterId) {
+        self.emit_u16(register.0);
     }
 
     fn emit_count(&mut self, count: usize, what: &'static str) -> Result<(), CodegenError> {
@@ -1265,73 +1351,27 @@ fn label_offset(labels: &FxHashMap<Label, usize>, label: Label) -> Result<usize,
     }
 }
 
-fn assign_phi_locals(module: &ir::Module, state: &mut FunctionState) -> Result<(), CodegenError> {
-    let phis = state
-        .blocks
-        .iter()
-        .copied()
-        .map(|block| {
-            module
-                .block(block)
-                .ok_or(CodegenError::ExpectedBlock(block))
-                .map(|instructions| {
-                    instructions
-                        .iter()
-                        .copied()
-                        .filter(|instruction| matches!(module.node(*instruction), Some(IrNode::Phi { .. })))
-                        .map(|phi| (block, phi))
-                        .collect::<Vec<_>>()
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PhiSource {
+    Register(RegisterId),
+    Constant(IrNodeId),
+}
 
-    for (target, phi) in phis {
-        let Some(IrNode::Phi { operands }) = module.node(phi) else {
-            continue;
-        };
-
-        let candidates = operands
-            .iter()
-            .filter(|operand| {
-                state
-                    .stackify
-                    .can_coalesce_phi_source(module, operand.block, target, phi, operand.value)
-            })
-            .map(|operand| operand.value)
-            .collect::<Vec<_>>();
-
-        // parameters have fixed ABI slots, prefer the first eligible fixed slot,
-        // otherwise allocate the phi before assigning its edge-dead producers
-        let existing = candidates.iter().find_map(|source| state.assigned_local(*source));
-        let local = match existing {
-            Some(local) => {
-                state.assign_local(phi, local);
-                local
-            },
-            None => state.reserve(phi),
-        };
-
-        for source in candidates {
-            if state.assigned_local(source).is_none() {
-                state.assign_local(source, local);
-            }
-        }
-    }
-
-    Ok(())
+struct PhiCopy {
+    source: PhiSource,
+    destination: RegisterId,
+    temporary: RegisterId,
 }
 
 fn phi_copies(
     module: &ir::Module, state: &FunctionState, predecessor: IrNodeId, target: IrNodeId,
-) -> Result<Vec<(IrNodeId, LocalId)>, CodegenError> {
+) -> Result<Vec<PhiCopy>, CodegenError> {
     let mut copies = Vec::new();
     for instruction in module.block(target).ok_or(CodegenError::ExpectedBlock(target))? {
         let Some(IrNode::Phi { operands }) = module.node(*instruction) else {
             continue;
         };
+
         let source = operands
             .iter()
             .find(|operand| operand.block == predecessor)
@@ -1340,10 +1380,26 @@ fn phi_copies(
                 phi: *instruction,
                 predecessor,
             })?;
-        let destination = state.local(*instruction)?;
-        if state.assigned_local(source) != Some(destination) {
-            copies.push((source, destination));
+        let destination = state.register(*instruction)?;
+        let source = if matches!(module.node(source), Some(IrNode::Constant(_))) {
+            PhiSource::Constant(source)
+        } else {
+            PhiSource::Register(state.register(source)?)
+        };
+        if source == PhiSource::Register(destination) {
+            continue;
         }
+
+        let temporary = state
+            .phi_temporaries
+            .get(instruction)
+            .copied()
+            .ok_or(CodegenError::MissingRegister(*instruction))?;
+        copies.push(PhiCopy {
+            source,
+            destination,
+            temporary,
+        });
     }
 
     Ok(copies)
@@ -1369,7 +1425,7 @@ fn block_layout(module: &ir::Module, entry: IrNodeId, reachable: &[IrNodeId]) ->
                 break;
             };
             block = match terminator {
-                IrNode::Branch(target) => *target,
+                IrNode::Branch(target) | IrNode::Spawn { merge: target, .. } => *target,
                 IrNode::ConditionalBranch { true_block, .. } => *true_block,
                 _ => break,
             };
@@ -1387,10 +1443,6 @@ fn referenced_nodes(module: &ir::Module, procedures: &FxHashSet<ProcId>) -> Resu
             continue;
         };
 
-        for parameter in &proc.params {
-            referenced.extend(parameter.default);
-        }
-
         for block in reachable_blocks(module, proc.body)? {
             for instruction in module.block(block).ok_or(CodegenError::ExpectedBlock(block))? {
                 let node = module
@@ -1407,6 +1459,66 @@ fn referenced_nodes(module: &ir::Module, procedures: &FxHashSet<ProcId>) -> Resu
     Ok(referenced)
 }
 
+// the constants an instruction reads from a register: every constant operand except the one it
+// carries as an immediate. Phi sources load on the incoming edge instead
+pub(crate) fn for_each_loaded_constant(module: &ir::Module, node: &IrNode, mut visit: impl FnMut(IrNodeId)) {
+    let mut visit_constant = |operand: IrNodeId| {
+        if matches!(module.node(operand), Some(IrNode::Constant(_))) {
+            visit(operand);
+        }
+    };
+
+    // which operand an immediate replaces is fixed per instruction, so name it by position: in
+    // `1 + 1` both sides can be the same interned constant node and the lhs still needs a load
+    match node {
+        IrNode::Phi { .. } => {},
+        IrNode::Binary { lhs, .. } | IrNode::CompoundBinary { lhs, .. } if immediate(module, node).is_some() => {
+            visit_constant(*lhs);
+        },
+        IrNode::Index { object, .. } if immediate(module, node).is_some() => visit_constant(*object),
+        IrNode::Return(Some(_)) if immediate(module, node).is_some() => {},
+        node => {
+            debug_assert!(
+                immediate(module, node).is_none(),
+                "an instruction with an immediate form needs its own arm here"
+            );
+            node.for_each_operand(visit_constant);
+        },
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Immediate {
+    Number(f32),
+    Null,
+}
+
+// the operand an instruction carries inside itself instead of reading it from a register
+fn immediate(module: &ir::Module, node: &IrNode) -> Option<Immediate> {
+    match node {
+        IrNode::Binary { rhs, .. } | IrNode::CompoundBinary { rhs, .. } | IrNode::Index { index: rhs, .. } => {
+            number_constant(module, *rhs).map(Immediate::Number)
+        },
+        IrNode::Return(Some(value)) if is_null_constant(module, *value) => Some(Immediate::Null),
+        IrNode::Return(Some(value)) => number_constant(module, *value).map(Immediate::Number),
+        _ => None,
+    }
+}
+
+fn number_constant(module: &ir::Module, node: IrNodeId) -> Option<f32> {
+    match module.node(node) {
+        Some(IrNode::Constant(value)) => match **value {
+            Value::Num(value) => Some(value),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn is_null_constant(module: &ir::Module, node: IrNodeId) -> bool {
+    matches!(module.node(node), Some(IrNode::Constant(value)) if **value == Value::Null)
+}
+
 pub(crate) fn reachable_blocks(module: &ir::Module, entry: IrNodeId) -> Result<Vec<IrNodeId>, CodegenError> {
     let mut blocks = Vec::new();
     let mut seen = FxHashSet::default();
@@ -1421,26 +1533,10 @@ pub(crate) fn reachable_blocks(module: &ir::Module, entry: IrNodeId) -> Result<V
         blocks.push(block);
 
         for instruction in instructions {
-            match module
+            module
                 .node(*instruction)
                 .ok_or(CodegenError::MissingNode(*instruction))?
-            {
-                IrNode::Branch(target) => pending.push_back(*target),
-                IrNode::ConditionalBranch {
-                    true_block,
-                    false_block,
-                    ..
-                } => {
-                    pending.push_back(*true_block);
-                    pending.push_back(*false_block);
-                },
-                IrNode::TryCatch { body, catch, .. } => {
-                    pending.push_back(*body);
-                    pending.push_back(*catch);
-                },
-                IrNode::Spawn { body, .. } => pending.push_back(*body),
-                _ => {},
-            }
+                .for_each_successor(|successor| pending.push_back(successor));
         }
     }
 
@@ -1565,7 +1661,7 @@ mod tests {
 
     use super::*;
 
-    fn lower(source: &str) -> ir::Module {
+    pub(crate) fn lower(source: &str) -> ir::Module {
         let (tokens, errors) = lexer::tokenize(source);
         assert!(errors.is_empty());
         let ast = ast::parse(&tokens).expect("fixture should parse");
@@ -1621,141 +1717,333 @@ mod tests {
             .collect::<Vec<_>>()
     }
 
+    fn operation<'a>(instructions: &[&'a str], mnemonic: &str) -> (usize, &'a str) {
+        instructions
+            .iter()
+            .enumerate()
+            .find_map(|(index, line)| {
+                let (_, instruction) = line.split_once(' ')?;
+                instruction
+                    .starts_with(&format!("{mnemonic} "))
+                    .then_some((index, instruction))
+            })
+            .unwrap_or_else(|| panic!("missing {mnemonic}"))
+    }
+
+    fn destination(instruction: &str) -> &str {
+        instruction
+            .split_once(' ')
+            .and_then(|(_, operands)| operands.split_once(','))
+            .map(|(destination, _)| destination)
+            .expect("instruction should write a register")
+    }
+
     #[test]
-    fn arithmetic_ssa_values_are_stackified_without_a_temporary_local() {
+    fn binary_operands_read_parameter_registers_directly() {
         let module = generate(&lower(fixture!(
-            "programs/arithmetic_ssa_values_are_stackified_without_a_temporary_local.dm"
+            "programs/binary_operands_read_parameter_registers_directly.dm"
         )))
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (_, add) = operation(&instructions, "binary");
 
         assert_eq!(module.magic, Module::MAGIC);
         assert_eq!(module.version, Module::VERSION);
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.functions[0].parameter_count, 2);
-        assert_eq!(module.functions[0].local_count, 2);
-        assert!(output.contains("load_local local0"), "{output}");
-        assert!(output.contains("load_local local1"), "{output}");
-        assert!(output.contains("binary add"), "{output}");
-        assert!(output.contains("return_value"), "{output}");
-        assert!(!output.contains("store_local"), "{output}");
+        assert!(add.ends_with(", add r0, r1"), "{output}");
+        assert!(
+            output.contains(&format!("return_value {}\n", destination(add))),
+            "{output}"
+        );
+        assert!(!output.contains(" move "), "{output}");
+    }
+
+    // fn0 = function /::immediates params=2 registers=4 address=0x00000000
+    //   0x00000000 compound_binary_i r2, add r0, 2
+    //   0x0000000a binary_i r3, comp_less r2, 3
+    //   0x00000014 jump_if_false 0x00000020, r3
+    //   0x0000001b return_value_i 5
+    //   0x00000020 index_i r3, r1[2]
+    //   0x0000002a jump_if_false 0x00000032, r3
+    //   0x00000031 return_null
+    //   0x00000032 move_imm r3, 1
+    //   0x00000039 binary r2, sub r3, r2
+    //   0x00000041 return_value r2
+    #[test]
+    fn number_operands_are_immediates() {
+        let module = generate(&lower(fixture!("programs/number_operands_are_immediates.dm"))).expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (_, compound) = operation(&instructions, "compound_binary_i");
+        let (_, less) = operation(&instructions, "binary_i");
+        let (_, index) = operation(&instructions, "index_i");
+        let (subtracted, subtract) = operation(&instructions, "binary");
+        let lhs = subtract
+            .split_once(", sub ")
+            .and_then(|(_, operands)| operands.split_once(','))
+            .map(|(lhs, _)| lhs)
+            .expect("subtraction operands");
+
+        assert!(compound.ends_with(", add r0, 2"), "{output}");
+        assert!(
+            less.ends_with(&format!(", comp_less {}, 3", destination(compound))),
+            "{output}"
+        );
+        assert!(output.contains(" return_value_i 5\n"), "{output}");
+        assert!(index.ends_with(", r1[2]"), "{output}");
+        assert!(output.contains(" return_null\n"), "{output}");
+        assert!(
+            instructions[subtracted - 1].ends_with(&format!(" move_imm {lhs}, 1")),
+            "{output}"
+        );
+        assert!(subtract.ends_with(&format!(", {}", destination(compound))), "{output}");
+        assert_ne!(lhs, destination(compound), "{output}");
+        assert_eq!(output.matches(" move_imm ").count(), 1, "{output}");
+        assert!(!output.contains(" move_const "), "{output}");
+    }
+
+    // fn0 = function /::pair params=1 registers=3 address=0x00000000
+    //   0x00000000 move_const r1, const0 ; "a"
+    //   0x00000007 move_const r2, const1 ; "b"
+    //   0x0000000e make_list r1, args=[r1, r0, r2]
+    //   0x0000001e return_value r1
+    #[test]
+    fn constant_operands_load_right_before_their_instruction() {
+        let module = generate(&lower(fixture!(
+            "programs/constant_operands_load_right_before_their_instruction.dm"
+        )))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (index, list) = operation(&instructions, "make_list");
+        let load = |offset: usize| {
+            let (_, instruction) = instructions[index - offset].split_once(' ').expect("instruction");
+            instruction
+        };
+        let (a, b) = (load(2), load(1));
+
+        assert_eq!(index, 2, "{output}");
+        assert!(a.starts_with("move_const ") && a.ends_with("; \"a\""), "{output}");
+        assert!(b.starts_with("move_const ") && b.ends_with("; \"b\""), "{output}");
+        assert_ne!(destination(a), destination(b), "{output}");
+        assert_eq!(destination(list), destination(a), "{output}");
+        assert!(
+            list.ends_with(&format!("args=[{}, r0, {}]", destination(a), destination(b))),
+            "{output}"
+        );
+    }
+
+    // fn0 = function /::choose params=1 registers=3 address=0x00000000
+    //   0x00000000 jump_if_false 0x00000011, r0
+    //   0x00000007 move_const r1, const1 ; "yes"
+    //   0x0000000e return_value r1
+    //   0x00000011 move_const r1, const2 ; "no"
+    //   0x00000018 jump 0x0000000e
+    #[test]
+    fn constant_phi_sources_load_on_their_edge() {
+        let module =
+            generate(&lower(fixture!("programs/constant_phi_sources_load_on_their_edge.dm"))).expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (_, returned) = operation(&instructions, "return_value");
+        let merged = returned.strip_prefix("return_value ").expect("returned register");
+
+        assert!(
+            output.contains(&format!("move_const {merged}, const1 ; \"yes\"\n")),
+            "{output}"
+        );
+        assert!(
+            output.contains(&format!("move_const {merged}, const2 ; \"no\"\n")),
+            "{output}"
+        );
+        assert!(!output.contains(" move "), "{output}");
+    }
+
+    // fn0 = function /::greet params=2 registers=3 address=0x00000000
+    //   0x00000000 move_imm r2, 5
+    //   0x00000007 default_parameter r0, r2
+    //   0x0000000c move_const r2, const1 ; "x"
+    //   0x00000013 default_parameter r1, r2
+    //   0x00000018 return_value r0
+    #[test]
+    fn constant_defaults_load_above_the_parameters() {
+        let module = generate(&lower(fixture!(
+            "programs/constant_defaults_load_above_the_parameters.dm"
+        )))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output)
+            .iter()
+            .filter_map(|line| line.split_once(' ').map(|(_, instruction)| instruction))
+            .collect::<Vec<_>>();
+
+        assert_eq!(module.functions[0].register_count, 3, "{output}");
+        assert_eq!(instructions[0], "move_imm r2, 5", "{output}");
+        assert_eq!(instructions[1], "default_parameter r0, r2", "{output}");
+        assert!(
+            instructions[2].starts_with("move_const r2, ") && instructions[2].ends_with("; \"x\""),
+            "{output}"
+        );
+        assert_eq!(instructions[3], "default_parameter r1, r2", "{output}");
+    }
+
+    // fn0 = function /::contains params=0 registers=1 address=0x00000000
+    //   0x00000000 move_imm r0, 1
+    //   0x00000007 binary_i r0, in r0, 1
+    //   0x00000011 return_value r0
+    //
+    // fn1 = function /::first params=0 registers=1 address=0x00000014
+    //   0x00000014 move_imm r0, 1
+    //   0x0000001b index_i r0, r0[1]
+    //   0x00000025 return_value r0
+    #[test]
+    fn a_constant_on_both_sides_loads_only_the_left() {
+        let module = lower(fixture!("programs/a_constant_on_both_sides_loads_only_the_left.dm"));
+        let is_shared = module
+            .nodes
+            .iter()
+            .any(|node| matches!(node, IrNode::Binary { lhs, rhs, .. } if lhs == rhs))
+            && module
+                .nodes
+                .iter()
+                .any(|node| matches!(node, IrNode::Index { object, index, .. } if object == index));
+        let output = disasm::dump(&generate(&module).expect("generate")).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (contained, contains) = operation(&instructions, "binary_i");
+        let (indexed, index) = operation(&instructions, "index_i");
+
+        assert!(is_shared, "both sides should be one interned constant");
+        assert_eq!(contains, "binary_i r0, in r0, 1", "{output}");
+        assert!(instructions[contained - 1].ends_with(" move_imm r0, 1"), "{output}");
+        assert_eq!(index, "index_i r0, r0[1]", "{output}");
+        assert!(instructions[indexed - 1].ends_with(" move_imm r0, 1"), "{output}");
     }
 
     #[test]
     fn named_calls_use_function_table_ids() {
         let module = generate(&lower(fixture!("programs/named_calls_use_function_table_ids.dm"))).expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (_, call) = operation(&instructions, "function_call");
 
         assert_eq!(module.functions.len(), 2);
-        assert!(output.contains("function_call fn1"), "{output}");
+        assert!(call.ends_with(", fn1 args=[r0]"), "{output}");
     }
 
     #[test]
-    fn unused_call_results_are_dropped_without_a_local() {
+    fn dynamic_calls_look_up_the_method_before_evaluating_arguments() {
         let module = generate(&lower(fixture!(
-            "programs/unused_call_results_are_dropped_without_a_local.dm"
-        )))
-        .expect("generate");
-        let output = disasm::dump(&module).expect("disassemble");
-
-        assert_eq!(module.functions[1].local_count, 0);
-        assert!(output.contains("function_call fn0 args=[]\n"), "{output}");
-        assert!(output.contains(" drop\n"), "{output}");
-    }
-
-    #[test]
-    fn stackification_preserves_dynamic_evaluation_order() {
-        let module = generate(&lower(fixture!(
-            "programs/stackification_preserves_dynamic_evaluation_order.dm"
-        )))
-        .expect("generate");
-        let output = disasm::dump(&module).expect("disassemble");
-
-        let object = output.find("load_local local0").expect("object load");
-        let field = output.find("access_field .run method").expect("method lookup");
-        let lhs = output.find("load_local local1").expect("left argument");
-        let rhs = output.find("load_local local2").expect("right argument");
-        let add = output.find("binary add").expect("argument expression");
-        let call = output.find("call args=[value]").expect("dynamic call");
-
-        assert!(
-            object < field && field < lhs && lhs < rhs && rhs < add && add < call,
-            "{output}"
-        );
-        assert!(!output.contains("store_local"), "{output}");
-    }
-
-    #[test]
-    fn coalesces_edge_dead_loop_updates_into_the_phi_local() {
-        let module = generate(&lower(fixture!(
-            "programs/coalesces_edge_dead_loop_updates_into_the_phi_local.dm"
-        )))
-        .expect("generate");
-        let output = disasm::dump(&module).expect("disassemble");
-
-        assert_eq!(module.functions[0].local_count, 2, "{output}");
-        assert!(!output.contains("local2"), "{output}");
-        assert_eq!(output.matches("store_local local1").count(), 2, "{output}");
-    }
-
-    #[test]
-    fn coalesces_distinct_edge_dead_sources_into_one_phi_local() {
-        let module = generate(&lower(fixture!(
-            "programs/coalesces_distinct_edge_dead_sources_into_one_phi_local.dm"
-        )))
-        .expect("generate");
-        let output = disasm::dump(&module).expect("disassemble");
-
-        assert_eq!(module.functions[0].local_count, 4, "{output}");
-        assert!(!output.contains("local4"), "{output}");
-        assert_eq!(output.matches("store_local local3").count(), 2, "{output}");
-    }
-
-    #[test]
-    fn keeps_a_phi_copy_when_the_old_value_is_used_after_the_source() {
-        let module = generate(&lower(fixture!(
-            "programs/keeps_a_phi_copy_when_the_old_value_is_used_after_the_source.dm"
-        )))
-        .expect("generate");
-        let output = disasm::dump(&module).expect("disassemble");
-
-        assert_eq!(module.functions[0].local_count, 3, "{output}");
-        assert!(output.contains("store_local local2"), "{output}");
-        assert!(output.contains("load_local local2"), "{output}");
-    }
-
-    #[test]
-    fn keeps_a_phi_copy_when_the_source_has_another_user() {
-        let module = generate(&lower(fixture!(
-            "programs/keeps_a_phi_copy_when_the_source_has_another_user.dm"
-        )))
-        .expect("generate");
-        let output = disasm::dump(&module).expect("disassemble");
-
-        assert_eq!(module.functions[0].local_count, 3, "{output}");
-        assert!(output.contains("store_local local2"), "{output}");
-        assert!(output.contains("load_local local2"), "{output}");
-    }
-
-    #[test]
-    fn a_coalesced_false_edge_needs_no_copy_stub() {
-        let module = generate(&lower(fixture!(
-            "programs/a_coalesced_false_edge_needs_no_copy_stub.dm"
+            "programs/dynamic_calls_look_up_the_method_before_evaluating_arguments.dm"
         )))
         .expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
         let instructions = bytecode_instructions(&output);
+        let (lookup, method) = operation(&instructions, "access_field");
+        let (argument, add) = operation(&instructions, "binary");
+        let (call, dynamic) = operation(&instructions, "call");
 
-        assert_eq!(module.functions[0].local_count, 2, "{output}");
-        assert_eq!(
-            instructions
-                .iter()
-                .filter(|instruction| instruction.contains(" jump "))
-                .count(),
-            0,
+        assert!(method.ends_with(", r0.run method"), "{output}");
+        assert!(add.ends_with(", add r1, r2"), "{output}");
+        assert!(
+            dynamic.ends_with(&format!(", {} args=[{}]", destination(method), destination(add))),
             "{output}"
         );
-        assert_eq!(output.matches("store_local local1").count(), 1, "{output}");
+        assert!(lookup < argument && argument < call, "{output}");
+    }
+
+    // fn0 = function /::count params=1 registers=4 address=0x00000000
+    //   0x00000000 move_imm r1, 0
+    //   0x00000007 binary r2, comp_less r1, r0
+    //   0x0000000f jump_if_false 0x00000025, r2
+    //   0x00000016 binary_i r1, add r1, 1
+    //   0x00000020 jump 0x00000007
+    //   0x00000025 return_value r1
+    #[test]
+    fn a_loop_counter_is_updated_in_its_own_register() {
+        let module = generate(&lower(fixture!("programs/counting_loop.dm"))).expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (_, returned) = operation(&instructions, "return_value");
+        let counter = returned.strip_prefix("return_value ").expect("returned register");
+
+        assert!(
+            output.contains(&format!("binary_i {counter}, add {counter}, 1\n")),
+            "{output}"
+        );
+        assert!(output.contains(&format!("move_imm {counter}, 0\n")), "{output}");
+        assert!(!output.contains(" move "), "{output}");
+    }
+
+    // fn0 = function /::select params=3 registers=5 address=0x00000000
+    //   0x00000000 jump_if_false 0x00000014, r0
+    //   0x00000007 binary_i r3, add r1, 1
+    //   0x00000011 return_value r3
+    //   0x00000014 binary_i r3, add r2, 2
+    //   0x0000001e jump 0x00000011
+    #[test]
+    fn both_arms_write_the_merge_register() {
+        let module = generate(&lower(fixture!(
+            "programs/phi_sources_are_live_only_on_their_own_edge.dm"
+        )))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (_, returned) = operation(&instructions, "return_value");
+        let merged = returned.strip_prefix("return_value ").expect("returned register");
+
+        assert!(output.contains(&format!("binary_i {merged}, add r1, 1\n")), "{output}");
+        assert!(output.contains(&format!("binary_i {merged}, add r2, 2\n")), "{output}");
+        assert!(!output.contains(" move "), "{output}");
+    }
+
+    // fn0 = function /::support params=1 registers=3 address=0x00000000
+    //   0x00000000 binary_i r1, comp_greater r0, 1
+    //   0x0000000a jump_if_false 0x00000019, r1
+    //   0x00000011 move r1, r0
+    //   0x00000016 return_value r1
+    //   0x00000019 move_const r1, const0 ; null
+    //   0x00000020 jump 0x00000016
+    #[test]
+    fn a_phi_takes_a_free_source_register() {
+        let module = generate(&lower(fixture!("programs/a_phi_takes_a_free_source_register.dm"))).expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let null = instructions
+            .iter()
+            .find(|line| line.ends_with("; null"))
+            .and_then(|line| line.split_once(' '))
+            .map(|(_, instruction)| destination(instruction))
+            .expect("null constant");
+        let (_, returned) = operation(&instructions, "return_value");
+
+        assert_eq!(returned, format!("return_value {null}"), "{output}");
+        assert_eq!(output.matches(" move ").count(), 1, "{output}");
+        assert!(output.contains(&format!(" move {null}, r0\n")), "{output}");
+    }
+
+    // fn0 = function /::scale params=2 registers=3 address=0x00000000
+    //   0x00000000 binary_i r2, mul r0, 2
+    //   0x0000000a binary_i r2, add r2, 1
+    //   0x00000014 return_value r2
+    #[test]
+    fn parameters_keep_their_registers_after_their_last_use() {
+        let module = generate(&lower(fixture!(
+            "programs/parameters_keep_their_registers_after_their_last_use.dm"
+        )))
+        .expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+
+        for line in bytecode_instructions(&output) {
+            let (_, instruction) = line.split_once(' ').expect("address");
+            if ["binary ", "move_const ", "move "]
+                .iter()
+                .any(|mnemonic| instruction.starts_with(mnemonic))
+            {
+                assert!(!["r0", "r1"].contains(&destination(instruction)), "{output}");
+            }
+        }
     }
 
     #[test]
@@ -1810,16 +2098,14 @@ mod tests {
             .expect("conditional jump");
         let target = instructions[branch]
             .split_whitespace()
-            .last()
+            .nth(2)
+            .map(|target| target.trim_end_matches(','))
             .expect("conditional target");
         let stub = instructions
             .iter()
             .position(|instruction| instruction.starts_with(target))
             .expect("false-edge stub");
-        let return_value = instructions
-            .iter()
-            .position(|instruction| instruction.ends_with("return_value"))
-            .expect("return");
+        let (return_value, _) = operation(&instructions, "return_value");
 
         assert!(stub > return_value, "{output}");
         assert!(
@@ -1915,9 +2201,17 @@ mod tests {
         let module =
             generate(&lower(fixture!("programs/output_preserves_field_reference_shape.dm"))).expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
+        let instructions = bytecode_instructions(&output);
+        let (_, hello) = operation(&instructions, "move_const");
+        let (_, world) = operation(&instructions, "load_builtin");
+        let (_, write) = operation(&instructions, "output");
 
-        assert!(output.contains("output field .log"), "{output}");
-        assert!(!output.contains("access_field .log"), "{output}");
+        assert_eq!(
+            write,
+            format!("output field {}.log, {}", destination(world), destination(hello)),
+            "{output}"
+        );
+        assert!(!output.contains("access_field"), "{output}");
     }
 
     #[test]
@@ -1930,7 +2224,19 @@ mod tests {
     }
 
     #[test]
-    fn phi_cycles_load_every_source_before_storing_any_destination() {
+    fn try_write_through_uses_frame_slots() {
+        let module = lower(fixture!("programs/try_write_through_uses_frame_slots.dm"));
+        let module = generate(&module).expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+
+        assert!(output.contains("slots=1"), "{output}");
+        assert!(output.contains("store_slot slot0, "), "{output}");
+        assert!(output.contains("load_slot "), "{output}");
+        assert!(!output.contains("_var"), "{output}");
+    }
+
+    #[test]
+    fn phi_cycles_read_every_source_before_writing_any_destination() {
         let module = ir::Module {
             nodes: vec![
                 IrNode::Function(ProcId(0)),
@@ -1977,30 +2283,50 @@ mod tests {
                 params: Vec::new(),
                 variadic: false,
                 vars: Vec::new(),
+                slot_count: 0,
                 body: IrNodeId(3),
                 intrinsic: None,
                 location: Location::default(),
             }],
+            static_count: 0,
             index: ir::ProcIndex::default(),
             node_lines: Default::default(),
         };
         let module = generate(&module).expect("generate");
         let output = disasm::dump(&module).expect("disassemble");
-        let instructions = bytecode_instructions(&output)
-            .into_iter()
-            .map(|line| line.split_whitespace().skip(1).collect::<Vec<_>>().join(" "))
-            .collect::<Vec<_>>();
+        let instructions = bytecode_instructions(&output);
+        let (_, back_edge) = operation(&instructions, "jump");
+        let header = back_edge.strip_prefix("jump ").expect("jump target");
 
-        assert_eq!(
-            &instructions[..5],
-            [
-                "load_local local1",
-                "load_local local0",
-                "store_local local1",
-                "store_local local0",
-                "jump 0x00000000",
-            ]
-        );
+        let mut entry = FxHashMap::default();
+        let mut values = FxHashMap::default();
+        let mut is_loop = false;
+        for line in &instructions {
+            let (address, instruction) = line.split_once(' ').expect("address");
+            if address == header {
+                is_loop = true;
+            }
+
+            if instruction.starts_with("jump ") {
+                break;
+            }
+
+            let (destination, source) = instruction
+                .strip_prefix("move ")
+                .and_then(|operands| operands.split_once(", "))
+                .unwrap_or_else(|| panic!("only phi copies expected: {output}"));
+            if is_loop {
+                let value = values.get(source).copied().unwrap_or(source);
+                values.insert(destination, value);
+            } else {
+                entry.insert(source, destination);
+            }
+        }
+
+        let first = entry["r0"];
+        let second = entry["r1"];
+        assert_eq!(values.get(first).copied(), Some(second), "{output}");
+        assert_eq!(values.get(second).copied(), Some(first), "{output}");
     }
 
     #[test]
@@ -2265,9 +2591,9 @@ mod tests {
         assert_eq!(Op::DefaultParameter as u8, 0x29);
         assert_eq!(Op::CompoundBinary as u8, 0x2a);
         assert_eq!(Op::Initial as u8, 0x2b);
-        assert_eq!(Op::Drop as u8, 0x2c);
         assert_eq!(Op::Spawn as u8, 0x2d);
         assert_eq!(Op::EndSpawn as u8, 0x2e);
+        assert_eq!(Op::MoveImm as u8, 0x34);
         assert_eq!(Unary::Dereference as u8, 0x08);
         assert_eq!(Binary::In as u8, 0x17);
         assert_eq!(Builtin::SuperProc as u8, 0x08);

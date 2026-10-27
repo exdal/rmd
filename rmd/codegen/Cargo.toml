@@ -4,6 +4,7 @@ version = "1.2.2"
 edition = "2024"
 
 [dependencies]
+fixedbitset = "0.5"
 rustc-hash = "2"
 core = { path = "../core" }
 ir = { path = "../ir" }
