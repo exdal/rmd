@@ -35,6 +35,15 @@ impl std::fmt::Debug for BindingId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SlotId(pub u32);
+
+impl std::fmt::Display for SlotId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "slot{}", self.0)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Argument {
     pub key: Option<IrNodeId>,
@@ -78,6 +87,7 @@ pub enum IrNode {
         operands: Vec<PhiOperand>,
     },
     Variable(Identifier),
+    FrameSlot(SlotId),
     Load {
         pointer: IrNodeId,
     },
@@ -322,6 +332,7 @@ impl IrNode {
             | Self::FunctionParameter(_)
             | Self::Phi { .. }
             | Self::Variable(_)
+            | Self::FrameSlot(_)
             | Self::Label(_)
             | Self::SelectionMerge { .. }
             | Self::LoopMerge { .. }
@@ -503,6 +514,7 @@ pub struct Procedure {
     pub params: Vec<ParamDecl>,
     pub variadic: bool,
     pub vars: Vec<VarSpec<IrNodeId>>,
+    pub slot_count: u32,
     pub body: IrNodeId,
     pub intrinsic: Option<Intrinsic>,
     pub location: Location,

@@ -311,6 +311,7 @@ impl<'a> IrModuleBuilder<'a> {
             params: lowered,
             variadic,
             vars,
+            slot_count: self.try_slots.len() as u32,
             body: entry,
             intrinsic,
             location,
@@ -866,10 +867,8 @@ impl<'a> IrModuleBuilder<'a> {
             return *pointer;
         }
 
-        let proc = self.module.procs.len();
-        let pointer = self.make_node(IrNode::Variable(
-            format!("__dmed_frame_local_{proc}_{}", binding.0).into(),
-        ));
+        let slot = SlotId(self.try_slots.len() as u32);
+        let pointer = self.make_node(IrNode::FrameSlot(slot));
         self.try_slots.insert(binding, pointer);
 
         pointer
@@ -2404,14 +2403,12 @@ mod tests {
         let slots = module
             .nodes
             .iter()
-            .filter_map(|node| match node {
-                IrNode::Variable(name) if name.as_str().starts_with("__dmed_frame_local_") => Some(name.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+            .filter(|node| matches!(node, IrNode::FrameSlot(_)))
+            .count();
 
-        // bindings are the parameter `value`, then `kept`, then `assigned`
-        assert_eq!(slots, ["__dmed_frame_local_0_2"]);
+        // `kept` is only read in the body, `assigned` is written there
+        assert_eq!(slots, 1);
+        assert_eq!(module.procs[0].slot_count, 1);
     }
 
     #[test]

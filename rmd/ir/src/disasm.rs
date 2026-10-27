@@ -413,6 +413,7 @@ fn format_node(node: &IrNode) -> String {
                 .join(" ")
         ),
         IrNode::Variable(name) => format!("variable {name}"),
+        IrNode::FrameSlot(slot) => format!("frame_slot {slot}"),
         IrNode::Load { pointer } => format!("load {pointer}"),
         IrNode::Builtin(builtin) => format!("builtin {}", snake_case(builtin)),
         IrNode::Interpolate(interpolation) => {
@@ -887,6 +888,7 @@ mod tests {
                 params: Vec::new(),
                 variadic: false,
                 vars: Vec::new(),
+                slot_count: 0,
                 body: IrNodeId(1),
                 intrinsic: None,
                 location: Location::default(),

@@ -292,16 +292,11 @@ fn resize_lists(lists: &mut Vec<Vec<usize>>, len: usize) {
 }
 
 fn storage(module: &Module, pointer: IrNodeId) -> Option<Storage> {
-    let IrNode::Variable(name) = module.node(pointer)? else {
-        return None;
-    };
-    let name = name.as_str();
-    if name.starts_with("__dmed_frame_local_") {
-        Some(Storage::Frame)
-    } else if is_observable_name(name) {
-        Some(Storage::Observable)
-    } else {
-        Some(Storage::External)
+    match module.node(pointer)? {
+        IrNode::FrameSlot(_) => Some(Storage::Frame),
+        IrNode::Variable(name) if is_observable_name(name.as_str()) => Some(Storage::Observable),
+        IrNode::Variable(_) => Some(Storage::External),
+        _ => None,
     }
 }
 
@@ -383,7 +378,7 @@ mod tests {
     };
 
     use super::eliminate_dead_stores;
-    use crate::{IrNode, Module, Procedure};
+    use crate::{IrNode, Module, Procedure, SlotId};
 
     fn procedure(body: IrNodeId) -> Procedure {
         Procedure {
@@ -395,6 +390,7 @@ mod tests {
             params: Vec::new(),
             variadic: false,
             vars: Vec::new(),
+            slot_count: 0,
             body,
             intrinsic: None,
             location: Location::default(),
@@ -470,14 +466,14 @@ mod tests {
     }
 
     #[test]
-    fn removes_an_unread_frame_initialization() {
+    fn removes_an_unread_frame_slot_store() {
         let mut module = Module {
             nodes: vec![
                 IrNode::Function(ProcId(0)),
-                IrNode::Variable("__dmed_frame_local_0_0".into()),
+                IrNode::FrameSlot(SlotId(0)),
                 IrNode::Constant(Box::new(Value::Num(1.0))),
-                IrNode::Label(vec![IrNodeId(1), IrNodeId(4), IrNodeId(5)]),
-                IrNode::Initialize {
+                IrNode::Label(vec![IrNodeId(4), IrNodeId(5)]),
+                IrNode::Store {
                     pointer: IrNodeId(1),
                     value: IrNodeId(2),
                 },
@@ -490,7 +486,7 @@ mod tests {
 
         eliminate_dead_stores(&mut module);
 
-        assert_eq!(module.block(IrNodeId(3)), Some([IrNodeId(1), IrNodeId(5)].as_slice()));
+        assert_eq!(module.block(IrNodeId(3)), Some([IrNodeId(5)].as_slice()));
         assert!(matches!(module.node(IrNodeId(4)), Some(IrNode::Noop)));
     }
 

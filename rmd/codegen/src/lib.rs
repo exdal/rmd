@@ -159,6 +159,7 @@ pub struct CompiledFunction {
     pub length: u32,
     pub parameter_count: u32,
     pub register_count: u16,
+    pub slot_count: u32,
     pub external: bool,
     pub intrinsic: Option<Intrinsic>,
     pub location: Location,
@@ -377,6 +378,7 @@ impl Generator {
                 length: 0,
                 parameter_count: proc.parameters.len() as u32,
                 register_count: 0,
+                slot_count: proc.slot_count,
                 external: false,
                 intrinsic: proc.intrinsic,
                 location: proc.location,
@@ -406,6 +408,7 @@ impl Generator {
                 length: 0,
                 parameter_count: 0,
                 register_count: 0,
+                slot_count: 0,
                 external: true,
                 intrinsic: None,
                 location: Location::default(),
@@ -479,6 +482,7 @@ impl Generator {
             {
                 IrNode::Phi { .. }
                 | IrNode::Variable(_)
+                | IrNode::FrameSlot(_)
                 | IrNode::SelectionMerge { .. }
                 | IrNode::LoopMerge { .. }
                 | IrNode::Noop => {},
@@ -546,6 +550,7 @@ impl Generator {
             | IrNode::Label(_)
             | IrNode::Phi { .. }
             | IrNode::Variable(_)
+            | IrNode::FrameSlot(_)
             | IrNode::SelectionMerge { .. }
             | IrNode::LoopMerge { .. }
             | IrNode::Branch(_)
@@ -553,6 +558,11 @@ impl Generator {
             | IrNode::Leave { .. }
             | IrNode::Spawn { .. }
             | IrNode::Noop => {},
+            IrNode::Load { pointer } if let Some(IrNode::FrameSlot(slot)) = module.node(*pointer) => {
+                self.emit_op(Op::LoadSlot);
+                self.emit_register(state.register(id)?);
+                self.emit_u32(slot.0);
+            },
             IrNode::Load { pointer } => {
                 let name = variable_name(module, *pointer)?;
                 let name = self.intern_identifier(name)?;
@@ -858,6 +868,12 @@ impl Generator {
                 self.emit_bool(*conditional);
                 self.emit_register(object);
                 self.emit_register(index);
+                self.emit_register(value);
+            },
+            IrNode::Store { pointer, value } if let Some(IrNode::FrameSlot(slot)) = module.node(*pointer) => {
+                let value = state.register(*value)?;
+                self.emit_op(Op::StoreSlot);
+                self.emit_u32(slot.0);
                 self.emit_register(value);
             },
             IrNode::Store { pointer, value } | IrNode::Initialize { pointer, value } => {
@@ -2187,6 +2203,18 @@ mod tests {
     }
 
     #[test]
+    fn try_write_through_uses_frame_slots() {
+        let module = lower(fixture!("programs/try_write_through_uses_frame_slots.dm"));
+        let module = generate(&module).expect("generate");
+        let output = disasm::dump(&module).expect("disassemble");
+
+        assert!(output.contains("slots=1"), "{output}");
+        assert!(output.contains("store_slot slot0, "), "{output}");
+        assert!(output.contains("load_slot "), "{output}");
+        assert!(!output.contains("_var"), "{output}");
+    }
+
+    #[test]
     fn phi_cycles_read_every_source_before_writing_any_destination() {
         let module = ir::Module {
             nodes: vec![
@@ -2234,6 +2262,7 @@ mod tests {
                 params: Vec::new(),
                 variadic: false,
                 vars: Vec::new(),
+                slot_count: 0,
                 body: IrNodeId(3),
                 intrinsic: None,
                 location: Location::default(),

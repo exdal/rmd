@@ -66,13 +66,17 @@ pub fn dump(module: &Module) -> Result<String, DecodeError> {
             continue;
         }
 
+        let slots = match function.slot_count {
+            0 => String::new(),
+            count => format!(" slots={count}"),
+        };
         let intrinsic = function
             .intrinsic
             .map(|intrinsic| format!(" intrinsic={intrinsic}"))
             .unwrap_or_default();
         let _ = writeln!(
             output,
-            "{} = function {name} params={} registers={} address={}{}",
+            "{} = function {name} params={} registers={}{slots} address={}{}",
             function.id, function.parameter_count, function.register_count, function.address, intrinsic
         );
         let start = function.address.0 as usize;
@@ -149,6 +153,16 @@ impl Cursor<'_> {
                 let value = string(self.module, StringId(self.u32()?))?;
                 let source = self.register()?;
                 let _ = write!(output, " {value}, {source}");
+            },
+            Op::LoadSlot => {
+                let destination = self.register()?;
+                let slot = self.u32()?;
+                let _ = write!(output, " {destination}, slot{slot}");
+            },
+            Op::StoreSlot => {
+                let slot = self.u32()?;
+                let source = self.register()?;
+                let _ = write!(output, " slot{slot}, {source}");
             },
             Op::Blocked | Op::Trap => {
                 let id = StringId(self.u32()?);

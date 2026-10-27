@@ -265,7 +265,7 @@ fn stack_frame(module: &Module, proc: ProcId, offset: Option<CodeOffset>) -> Sta
 #[derive(Debug)]
 pub(crate) struct Frame {
     registers: Vec<GenericValue>,
-    variables: HashMap<Identifier, GenericValue>,
+    slots: Vec<GenericValue>,
     pub(crate) src: Receiver,
     usr: Option<ObjectId>,
     args: Option<ListId>,
@@ -551,7 +551,13 @@ impl<'a> Evaluator<'a> {
         }
 
         let register_count = usize::from(function.register_count);
-        self.reserve(register_count.saturating_add(args.len()).saturating_add(1))?;
+        let slot_count = function.slot_count as usize;
+        self.reserve(
+            register_count
+                .saturating_add(slot_count)
+                .saturating_add(args.len())
+                .saturating_add(1),
+        )?;
         let start = function.address.0 as usize;
         let end = start
             .checked_add(function.length as usize)
@@ -601,7 +607,7 @@ impl<'a> Evaluator<'a> {
             .collect::<Vec<_>>();
         let mut frame = Frame {
             registers,
-            variables: HashMap::new(),
+            slots: vec![GenericValue::Null; slot_count],
             src,
             usr,
             args: None,
@@ -697,6 +703,25 @@ impl<'a> Evaluator<'a> {
                     let source = self.register(frame)?;
                     let value = self.get(frame, source)?.clone();
                     self.initialize_name(frame, name, value)?;
+                },
+                Op::LoadSlot => {
+                    let destination = self.register(frame)?;
+                    let slot = self.u32(frame)? as usize;
+                    let value = frame
+                        .slots
+                        .get(slot)
+                        .cloned()
+                        .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
+                    self.set(frame, destination, value)?;
+                },
+                Op::StoreSlot => {
+                    let slot = self.u32(frame)? as usize;
+                    let source = self.register(frame)?;
+                    let value = self.get(frame, source)?.clone();
+                    *frame
+                        .slots
+                        .get_mut(slot)
+                        .ok_or_else(|| self.fault(FaultKind::InvalidReference))? = value;
                 },
                 Op::LoadBuiltin => {
                     let destination = self.register(frame)?;
@@ -1348,28 +1373,14 @@ impl Evaluator<'_> {
     }
 
     fn read_name(&mut self, frame: &Frame, name: &Identifier) -> Result<GenericValue> {
-        if name.as_str().starts_with("__dmed_frame_local_") {
-            return Ok(frame.variables.get(name).cloned().unwrap_or_default());
-        }
-
         self.read_field(self.name_target(frame, name), name)
     }
 
     fn write_name(&mut self, frame: &mut Frame, name: Identifier, value: GenericValue) -> Result<()> {
-        if name.as_str().starts_with("__dmed_frame_local_") {
-            frame.variables.insert(name, value);
-            return Ok(());
-        }
-
         self.write_field(self.name_target(frame, &name), name, value)
     }
 
     fn initialize_name(&mut self, frame: &mut Frame, name: Identifier, value: GenericValue) -> Result<()> {
-        if name.as_str().starts_with("__dmed_frame_local_") {
-            frame.variables.insert(name, value);
-            return Ok(());
-        }
-
         let target = self.name_target(frame, &name);
         let storage = match target {
             GenericValue::Object(id) => id,
