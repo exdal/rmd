@@ -20,7 +20,7 @@ use crate::{
     Fault, FaultKind, GenericValue, Limits, StackFrame,
     bake::Placement,
     heap::{Heap, Object, ObjectId, Static},
-    value::{IteratorId, ListData, ListId, ModifiedType, ProcRef, RangeValue, Receiver},
+    value::{IteratorId, ListData, ListId, ModifiedType, ProcRef, RangeValue, Src},
     world::{Position, World},
 };
 
@@ -160,7 +160,7 @@ impl Runtime {
             let mut evaluator = Evaluator::new(self, tree, module, limits, None);
             match constructor {
                 Some(proc) => evaluator
-                    .call_function_for_proc(proc, Receiver::Object(id), None, Vec::new())
+                    .call_function_for_proc(proc, Src::Object(id), None, Vec::new())
                     .map(|_| ()),
                 None => Ok(()),
             }
@@ -266,7 +266,7 @@ fn stack_frame(module: &Module, proc: ProcId, offset: Option<CodeOffset>) -> Sta
 pub(crate) struct Frame {
     registers: Vec<GenericValue>,
     slots: Vec<GenericValue>,
-    pub(crate) src: Receiver,
+    pub(crate) src: Src,
     usr: Option<ObjectId>,
     args: Option<ListId>,
     extra_args: Vec<GenericValue>,
@@ -303,7 +303,7 @@ pub(crate) struct Evaluator<'a> {
     pub allocations: usize,
     pub depth: usize,
     pub current: Option<ProcId>,
-    pub current_receiver: Receiver,
+    pub current_receiver: Src,
     pub current_offset: Option<CodeOffset>,
     pub is_cacheable: bool, // memoization
     pub position_sensitive: bool,
@@ -318,12 +318,12 @@ pub(crate) struct Evaluator<'a> {
 struct CallFrameGuard<'e, 'a> {
     eval: &'e mut Evaluator<'a>,
     previous_proc: Option<ProcId>,
-    previous_receiver: Receiver,
+    previous_receiver: Src,
     previous_offset: Option<CodeOffset>,
 }
 
 impl<'e, 'a> CallFrameGuard<'e, 'a> {
-    fn enter(eval: &'e mut Evaluator<'a>, proc: ProcId, receiver: Receiver) -> Self {
+    fn enter(eval: &'e mut Evaluator<'a>, proc: ProcId, receiver: Src) -> Self {
         let previous_proc = eval.current.replace(proc);
         let previous_receiver = std::mem::replace(&mut eval.current_receiver, receiver);
         let previous_offset = eval.current_offset.take();
@@ -396,7 +396,7 @@ impl<'a> Evaluator<'a> {
             allocations: 0,
             depth: 0,
             current: None,
-            current_receiver: Receiver::None,
+            current_receiver: Src::None,
             current_offset: None,
             is_cacheable: true,
             position_sensitive: false,
@@ -520,7 +520,7 @@ impl<'a> Evaluator<'a> {
     }
 
     fn call_function(
-        &mut self, function: &CompiledFunction, src: Receiver, usr: Option<ObjectId>,
+        &mut self, function: &CompiledFunction, src: Src, usr: Option<ObjectId>,
         args: Vec<(Option<Identifier>, GenericValue)>,
     ) -> Result<GenericValue> {
         if function.external {
@@ -1381,11 +1381,11 @@ impl Evaluator<'_> {
         GenericValue::Global
     }
 
-    pub(crate) fn receiver_type(&self, receiver: Receiver) -> Option<TypeId> {
+    pub(crate) fn receiver_type(&self, receiver: Src) -> Option<TypeId> {
         match receiver {
-            Receiver::None => None,
-            Receiver::Object(id) => self.runtime.heap.object(id).map(|object| object.ty),
-            Receiver::List(id) => match self.runtime.heap.list(id)?.kind {
+            Src::None => None,
+            Src::Object(id) => self.runtime.heap.object(id).map(|object| object.ty),
+            Src::List(id) => match self.runtime.heap.list(id)?.kind {
                 crate::value::ListKind::List | crate::value::ListKind::Vars(_) => self.tree.roots().list,
                 crate::value::ListKind::Alist => self.tree.roots().alist,
             },
@@ -1558,7 +1558,7 @@ impl Evaluator<'_> {
             .function(id)
             .ok_or_else(|| self.fault(FaultKind::InvalidReference))?;
         if !function.external {
-            return self.call_function(function, Receiver::None, frame.usr, args);
+            return self.call_function(function, Src::None, frame.usr, args);
         }
 
         let identifier = module
@@ -1579,14 +1579,14 @@ impl Evaluator<'_> {
         }
 
         if let Some(proc) = self.find_proc(TypeId::ROOT, identifier) {
-            return self.call_function_for_proc(proc, Receiver::None, frame.usr, args);
+            return self.call_function_for_proc(proc, Src::None, frame.usr, args);
         }
 
         Err(self.fault(FaultKind::MissingProc(identifier.as_str().to_owned())))
     }
 
     fn call_function_for_proc(
-        &mut self, proc: ProcId, src: Receiver, usr: Option<ObjectId>, args: Vec<(Option<Identifier>, GenericValue)>,
+        &mut self, proc: ProcId, src: Src, usr: Option<ObjectId>, args: Vec<(Option<Identifier>, GenericValue)>,
     ) -> Result<GenericValue> {
         let module = self.module;
         let function = module
@@ -1667,7 +1667,7 @@ impl Evaluator<'_> {
                         .and_then(|object| self.find_proc(object.ty, &name))
                 {
                     Ok(GenericValue::Proc(ProcRef {
-                        src: Receiver::Object(id),
+                        src: Src::Object(id),
                         proc,
                     }))
                 } else {
@@ -1678,7 +1678,7 @@ impl Evaluator<'_> {
                 self.read_field(GenericValue::List(id), &name)
             },
             GenericValue::List(id) | GenericValue::ArgList(id) => {
-                let receiver = Receiver::List(id);
+                let receiver = Src::List(id);
                 let proc = self
                     .receiver_type(receiver)
                     .and_then(|ty| self.find_proc(ty, &name))
@@ -1688,10 +1688,7 @@ impl Evaluator<'_> {
             GenericValue::Global => {
                 let has_var = !method && self.tree.var_declaration(TypeId::ROOT, &name).is_some();
                 if !has_var && let Some(proc) = self.find_proc(TypeId::ROOT, &name) {
-                    Ok(GenericValue::Proc(ProcRef {
-                        src: Receiver::None,
-                        proc,
-                    }))
+                    Ok(GenericValue::Proc(ProcRef { src: Src::None, proc }))
                 } else {
                     self.read_field(GenericValue::Global, &name)
                 }
@@ -2761,7 +2758,7 @@ impl Evaluator<'_> {
                 && let Some(ty) = self.tree.id_of(&path)
                 && let Some(proc) = self.find_proc(ty, &"New".into())
             {
-                self.call_function_for_proc(proc, Receiver::List(*id), None, args)?;
+                self.call_function_for_proc(proc, Src::List(*id), None, args)?;
             }
             return Ok(value);
         }
@@ -2777,7 +2774,7 @@ impl Evaluator<'_> {
                 && let Some(ty) = self.tree.id_of(&path)
                 && let Some(proc) = self.find_proc(ty, &"New".into())
             {
-                self.call_function_for_proc(proc, Receiver::List(*id), None, args)?;
+                self.call_function_for_proc(proc, Src::List(*id), None, args)?;
             }
             return Ok(value);
         }
@@ -2812,7 +2809,7 @@ impl Evaluator<'_> {
         }
 
         if let Some(proc) = self.find_proc(ty, &"New".into()) {
-            self.call_function_for_proc(proc, Receiver::Object(id), None, args)?;
+            self.call_function_for_proc(proc, Src::Object(id), None, args)?;
         }
 
         Ok(GenericValue::Object(id))
