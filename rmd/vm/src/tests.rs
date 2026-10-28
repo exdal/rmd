@@ -2672,6 +2672,14 @@ fn associative_iteration_preserves_keys_and_values() {
 }
 
 #[test]
+fn params2list_splits_and_decodes_pairs() {
+    assert_eq!(
+        run(fixture!("programs/params2list_splits_and_decodes_pairs.dm"), "test"),
+        GenericValue::Text("4:1,2:13,0:1:a b!".into())
+    );
+}
+
+#[test]
 fn labelled_break_leaves_a_plain_block() {
     assert_eq!(
         run(fixture!("programs/labelled_break_leaves_a_plain_block.dm"), "test",),

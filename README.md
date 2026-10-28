@@ -67,7 +67,7 @@ To turn off the integration, clear **Settings > Git > Enable Git map integration
 
 ## Integrate your codebase
 
-The editor includes profiles for CMSS13, Goonstation, Monkestation, Monke’s Paw, Nova Sector, Oculis Station, SecondCity, TGMC, tgstation, and Vanderlin. To try one, open your `.dme` and choose it under **Settings > Compiler > Forced bundled profile**. The bundled profile runs without changes to your codebase.
+The editor includes profiles for BeeStation, CMSS13, Goonstation, Monkestation, Monke’s Paw, Nova Sector, Oculis Station, SecondCity, TGMC, tgstation, and Vanderlin. To try one, open your `.dme` and choose it under **Settings > Compiler > Forced bundled profile**. The bundled profile runs without changes to your codebase.
 
 To keep a profile in your codebase:
 

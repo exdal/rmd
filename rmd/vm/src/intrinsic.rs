@@ -1115,6 +1115,24 @@ impl Evaluator<'_> {
 
                 self.list(entries)
             },
+            Intrinsic::Params2list => {
+                let source = text(0);
+                self.charge(source.len())?;
+                let mut entries: Vec<(GenericValue, Option<GenericValue>)> = Vec::new();
+                for pair in source.split(['&', ';']).filter(|pair| !pair.is_empty()) {
+                    let (key, value) = match pair.split_once('=') {
+                        Some((key, value)) => (decode_param(key), Some(GenericValue::from(decode_param(value)))),
+                        None => (decode_param(pair), None),
+                    };
+                    let key = GenericValue::from(key);
+                    match entries.iter_mut().find(|(existing, _)| *existing == key) {
+                        Some(entry) => entry.1 = value,
+                        None => entries.push((key, value)),
+                    }
+                }
+
+                self.list(entries)
+            },
             Intrinsic::JsonDecode => {
                 let value = crate::json::decode(
                     text(0),
@@ -1355,7 +1373,6 @@ impl Evaluator<'_> {
             | Intrinsic::Ohearers
             | Intrinsic::Output
             | Intrinsic::Oviewers
-            | Intrinsic::Params2list
             | Intrinsic::Pixloc
             | Intrinsic::RandSeed
             | Intrinsic::Refcount
@@ -1978,4 +1995,28 @@ fn dantom_spiral(center: (i32, i32), size: (i32, i32)) -> Vec<(i32, i32)> {
     }
 
     tiles
+}
+
+fn decode_param(text: &str) -> String {
+    let mut bytes = Vec::with_capacity(text.len());
+    let mut rest = text.as_bytes();
+    while let Some((&byte, tail)) = rest.split_first() {
+        rest = tail;
+        match byte {
+            b'+' => bytes.push(b' '),
+            b'%' => match rest
+                .first_chunk::<2>()
+                .and_then(|hex| u8::from_str_radix(str::from_utf8(hex).ok()?, 16).ok())
+            {
+                Some(decoded) => {
+                    bytes.push(decoded);
+                    rest = &rest[2..];
+                },
+                None => bytes.push(byte),
+            },
+            _ => bytes.push(byte),
+        }
+    }
+
+    String::from_utf8_lossy(&bytes).into_owned()
 }

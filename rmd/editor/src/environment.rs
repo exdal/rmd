@@ -72,6 +72,7 @@ pub(crate) fn source_root<'a>(sources: &'a SourceMap<'_>, entry: Option<FileId>,
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BundledProfile {
+    Beestation,
     Cmss13,
     Goonstation,
     Monkestation,
@@ -85,7 +86,8 @@ pub enum BundledProfile {
 }
 
 impl BundledProfile {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
+        Self::Beestation,
         Self::Cmss13,
         Self::Goonstation,
         Self::Monkestation,
@@ -100,6 +102,7 @@ impl BundledProfile {
 
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Beestation => "BeeStation",
             Self::Cmss13 => "CMSS13",
             Self::Goonstation => "Goonstation",
             Self::Monkestation => "Monkestation",
@@ -115,6 +118,7 @@ impl BundledProfile {
 
     pub const fn stem(self) -> &'static str {
         match self {
+            Self::Beestation => "beestation",
             Self::Cmss13 => "cmss13",
             Self::Goonstation => "goonstation",
             Self::Monkestation => "monkestation",
@@ -134,6 +138,7 @@ impl BundledProfile {
 
     const fn source_name(self) -> &'static str {
         match self {
+            Self::Beestation => "<bundled-profile-beestation.dm>",
             Self::Cmss13 => "<bundled-profile-cmss13.dm>",
             Self::Goonstation => "<bundled-profile-goonstation.dm>",
             Self::Monkestation => "<bundled-profile-monkestation.dm>",
@@ -149,6 +154,7 @@ impl BundledProfile {
 
     const fn source(self) -> &'static str {
         match self {
+            Self::Beestation => include_str!("../../../examples/profiles/beestation.dm"),
             Self::Cmss13 => include_str!("../../../examples/profiles/cmss13.dm"),
             Self::Goonstation => include_str!("../../../examples/profiles/goonstation.dm"),
             Self::Monkestation => include_str!("../../../examples/profiles/monkestation.dm"),
@@ -167,6 +173,10 @@ impl BundledProfile {
             Self::Goonstation => Some((
                 "<bundled-profile-goonstation-defines.dm>",
                 "#define USE_PERSPECTIVE_EDITOR_WALLS\n",
+            )),
+            Self::Beestation => Some((
+                "<bundled-profile-beestation-defines.dm>",
+                "#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n",
             )),
             // COCK AND BALL TORTURE
             Self::Tgstation => Some((
@@ -828,6 +838,7 @@ mod tests {
         assert_eq!(
             BundledProfile::ALL.map(BundledProfile::stem),
             [
+                "beestation",
                 "cmss13",
                 "goonstation",
                 "monkestation",
@@ -865,6 +876,7 @@ mod tests {
             Some("#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n")
         );
         for profile in [
+            BundledProfile::Beestation,
             BundledProfile::Monkespaw,
             BundledProfile::Novasector,
             BundledProfile::Oculis,
@@ -874,6 +886,7 @@ mod tests {
                 Some("#ifdef __DEMIR_BAKE__\n#define CBT\n#endif\n")
             );
         }
+        assert_eq!(profile_label("beestation"), "BeeStation");
         assert_eq!(profile_label("novasector"), "Nova Sector");
         assert_eq!(profile_label("oculis"), "Oculis Station");
         assert_eq!(profile_label("monkespaw"), "Monke’s Paw");
@@ -927,6 +940,7 @@ mod tests {
         assert_eq!(
             scan_profiles(&dir),
             [
+                "beestation",
                 "cmss13",
                 "goonstation",
                 "mine",

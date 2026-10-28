@@ -800,26 +800,32 @@ mod tests {
     #[test]
     #[ignore = "requires the local target/NovaSector checkout"]
     fn bundled_novasector_profile_bakes_debug_maps() {
-        check_downstream_profile("NovaSector", "novasector");
+        check_downstream_profile("NovaSector", "tgstation.dme", "novasector");
     }
 
     #[test]
     #[ignore = "requires the local target/OculisStation checkout"]
     fn bundled_oculis_profile_bakes_debug_maps() {
-        check_downstream_profile("OculisStation", "oculis");
+        check_downstream_profile("OculisStation", "tgstation.dme", "oculis");
     }
 
     #[test]
     #[ignore = "requires the local target/Monkes-Paw checkout"]
     fn bundled_monkespaw_profile_bakes_debug_maps() {
-        check_downstream_profile("Monkes-Paw", "monkespaw");
+        check_downstream_profile("Monkes-Paw", "tgstation.dme", "monkespaw");
     }
 
-    fn check_downstream_profile(checkout: &str, profile: &str) {
+    #[test]
+    #[ignore = "requires the local target/BeeStation-Hornet checkout without its code/~overrides/demir.dm"]
+    fn bundled_beestation_profile_bakes_debug_maps() {
+        check_downstream_profile("BeeStation-Hornet", "beestation.dme", "beestation");
+    }
+
+    fn check_downstream_profile(checkout: &str, dme: &str, profile: &str) {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../target")
             .join(checkout);
-        let entry = root.join("tgstation.dme");
+        let entry = root.join(dme);
         let options = editor::environment::BakeOptions {
             forced_profile: Some(String::from(profile)),
             ..Default::default()
@@ -984,6 +990,8 @@ mod tests {
                     (2, 2) => add("/obj/machinery/light", &[]),
                     (2, 3) => add(camera, &[]),
                     (6 | 7, 2) => add(cable, &[]),
+                    (5, 2) if profile == "beestation" => add(cable, &[]),
+                    (9, 2) if profile == "beestation" => add("/obj/machinery/door/airlock/public", &[]),
                     (6 | 7, 3) => add(pipe, &[]),
                     (6 | 7, 4) => add(disposal, &[("dir", Value::Num(defines::EAST as f32))]),
                     (8, 2) => add(door, &[("id", Value::Text("preview-door".into()))]),
@@ -1003,6 +1011,17 @@ mod tests {
         assert_eq!(bake.diagnostics.count(), 0, "{profile}: {:?}", bake.diagnostics.entries);
         assert_eq!(bake.node_groups().len(), 5);
         assert!(!bake.rotations().is_empty());
+        if profile == "beestation" {
+            let run = downstream_appearance(session, 6, 2, cable);
+            assert_eq!(run.icon_state.as_deref(), Some("4-8"));
+
+            let airlock = "/obj/machinery/door/airlock/public";
+            let id = downstream_instance(session, 9, 2, airlock);
+            let bake = session.active_cache().bake.as_ref().unwrap();
+            assert_eq!(bake.appearances[&id.get()].overlays.len(), 2);
+            assert!(downstream_appearance(session, 9, 2, airlock).icon.is_none());
+        }
+
         let source = downstream_instance(session, 8, 3, button);
         let target = downstream_instance(session, 8, 2, door);
         assert_eq!(bake.connections(source.get()), vec![target.get()]);
@@ -1039,6 +1058,11 @@ mod tests {
         assert_eq!(lighting(session), 0.0);
         downstream_checkbox(session, "All areas powered", true);
         assert!(lighting(session) > 0.0);
+        let overlay_var = if profile == "beestation" {
+            "overlayicon"
+        } else {
+            "overlay_icon"
+        };
         let fixture = downstream_instance(session, 2, 2, "/obj/machinery/light");
         let environment = session.state.environment.as_ref().unwrap();
         let fixture_type = environment
@@ -1047,7 +1071,7 @@ mod tests {
             .unwrap();
         let overlay_icon = environment
             .tree
-            .var_inherited(fixture_type, &"overlay_icon".into())
+            .var_inherited(fixture_type, &overlay_var.into())
             .and_then(|var| var.value.as_text())
             .unwrap()
             .to_owned();
