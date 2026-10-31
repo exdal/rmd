@@ -1,6 +1,6 @@
 
 /proc/nameof(X)
-    set __demir_intrin = 400
+    set __demir_intrin = "Nameof"
 /proc/work()
     return 1
 /proc/test()

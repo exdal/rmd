@@ -1,8 +1,8 @@
 
 /proc/call(Target, ProcName)
-    set __demir_intrin = 401
+    set __demir_intrin = "Call"
 /proc/typesof(Type1, Type2)
-    set __demir_intrin = 377
+    set __demir_intrin = "Typesof"
 /datum/controller/global_vars/proc/Initialize()
     var/list/global_procs = typesof(/datum/controller/global_vars/proc)
     for(var/proc_path in global_procs)

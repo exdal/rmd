@@ -143,7 +143,7 @@
 // Return the active profile. An ordinary procedure can use it to read profile state. Return null
 // outside a bake.
 /proc/demir_profile()
-	set __demir_intrin = 720
+	set __demir_intrin = "DemirProfile"
 
 // Enable the Node tool for `subtype` and its descendants. `blocker` accepts one type or a list of
 // types. The router cannot cross those types or their descendants. Pass null when no blocker is
@@ -155,13 +155,13 @@
 // A conflicting non-null orientable subtype leaves that registration unchanged. Any other invalid
 // argument is a runtime error.
 /proc/demir_node_group(subtype, blocker, orientable_subtype = null, matching = null)
-	set __demir_intrin = 721
+	set __demir_intrin = "DemirNodeGroup"
 
 // Map one icon `dir` of `subtype` to its cardinal opening mask (NORTH | SOUTH | EAST | WEST).
 // Call from the profile's New(), after demir_node_group(). Repeating a type and `dir`
 // replaces its previous mask. A mask of zero explicitly leaves that orientation disconnected.
 /proc/demir_node_orientation(subtype, direction, openings)
-	set __demir_intrin = 726
+	set __demir_intrin = "DemirNodeOrientation"
 
 // Let placements of `subtype` and its descendants take each `dir` in `directions`, one direction
 // or a list of them. The editor offers these in the inspector and the rotation gizmo even when the
@@ -169,20 +169,20 @@
 // Call this procedure only from the profile's New(). The most specific registered subtype wins,
 // and repeating a subtype replaces its directions.
 /proc/demir_rotatable(subtype, directions)
-	set __demir_intrin = 727
+	set __demir_intrin = "DemirRotatable"
 
 // Modular maps
 
 // Select `type` and its descendants as modular roots for process_modular_root(). Call this
 // procedure only from the profile's New().
 /proc/demir_modular_root(type)
-	set __demir_intrin = 728
+	set __demir_intrin = "DemirModularRoot"
 
 // Parse TOML text into an associative list, like json_decode(). Tables become associative lists,
 // arrays become lists, booleans become 1 or 0 and dates become text. Invalid TOML throws an
 // /exception whose name holds the parse error, so try/catch can handle it.
 /proc/demir_toml_decode(text)
-	set __demir_intrin = 729
+	set __demir_intrin = "DemirTomlDecode"
 
 // Submit placements. `placements` is a list of associative lists. The keys of an entry decide its
 // kind. Any invalid entry is a runtime error.
@@ -209,12 +209,12 @@
 //     list("root" = atom, "error" = text)
 //         Show `text` as the root's error in the editor.
 /proc/demir_place_modular(list/placements)
-	set __demir_intrin = 730
+	set __demir_intrin = "DemirPlaceModular"
 
 // Whether the active map shows its modular map previews as 1 or 0. Call this procedure only from
 // ui().
 /proc/demir_modular_preview()
-	set __demir_intrin = 731
+	set __demir_intrin = "DemirModularPreview"
 
 // Ask the editor to show previews when `enabled` is true and hide them otherwise. Call this
 // procedure only from ui(). The editor applies the request only when it keeps the frame's writes,
@@ -222,14 +222,14 @@
 // or a placement. The last call in a frame wins. Previews are per map, and the request affects the
 // active map.
 /proc/demir_set_modular_preview(enabled)
-	set __demir_intrin = 732
+	set __demir_intrin = "DemirSetModularPreview"
 
 // The path of the map being baked, relative to the codebase directory and with forward slashes,
 // such as "_maps/map_files/MetaStation/MetaStation.dmm". Returns null when the map is unsaved or
 // lies outside the codebase directory. The value is fixed when the bake is built, so Save As takes
 // effect at the next full bake.
 /proc/demir_map_path()
-	set __demir_intrin = 733
+	set __demir_intrin = "DemirMapPath"
 
 // Rebaking
 
@@ -237,7 +237,7 @@
 // The profile defines the meaning of each bit. The editor only matches the bits. A type can belong
 // to multiple groups. Call this procedure only from the profile's New().
 /proc/demir_define_group(group, type)
-	set __demir_intrin = 719
+	set __demir_intrin = "DemirDefineGroup"
 
 // Combine these flags to select the derived data for demir_rebake().
 #define DEMIR_BAKE_APPEARANCE 1
@@ -252,4 +252,4 @@
 //
 // Profile state does not affect the map until ui() requests the required derived data.
 /proc/demir_rebake(kinds, groups = 0)
-	set __demir_intrin = 718
+	set __demir_intrin = "DemirRebake"

@@ -6,7 +6,7 @@ pub enum IntrinsicMarkerError {
     Invalid,
 }
 
-pub fn intrinsic_marker(ast: &AST, body: &[Statement]) -> Result<Option<u16>, IntrinsicMarkerError> {
+pub fn intrinsic_marker(ast: &AST, body: &[Statement]) -> Result<Option<String>, IntrinsicMarkerError> {
     let markers = body
         .iter()
         .filter_map(|statement| match statement {
@@ -31,13 +31,9 @@ pub fn intrinsic_marker(ast: &AST, body: &[Statement]) -> Result<Option<u16>, In
         return Ok(None);
     };
 
-    let Expression::Literal(Literal::Num(number)) = expression else {
+    let Expression::Literal(Literal::String(name)) = expression else {
         return Err(IntrinsicMarkerError::Invalid);
     };
 
-    if !number.is_finite() || *number < 0.0 || number.fract() != 0.0 || *number > u16::MAX as f32 {
-        return Err(IntrinsicMarkerError::Invalid);
-    }
-
-    Ok(Some(*number as u16))
+    Ok(Some(name.clone()))
 }

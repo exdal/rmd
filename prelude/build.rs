@@ -1,13 +1,12 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     env, fs,
     path::{Path, PathBuf},
 };
 
 #[derive(Debug)]
 struct Declaration {
-    variant: String,
-    id: u16,
+    name: String,
     file: PathBuf,
     line: usize,
 }
@@ -36,17 +35,27 @@ fn main() {
 
     validate(&declarations);
 
-    let mut generated = String::from(
-        "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, num_enum::TryFromPrimitive)]\n#[repr(u16)]\npub enum \
-         Intrinsic {\n",
-    );
+    let mut generated = String::from("#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]\npub enum Intrinsic {\n");
     for declaration in &declarations {
-        generated.push_str(&format!("    {} = {},\n", declaration.variant, declaration.id));
+        generated.push_str(&format!("    {},\n", declaration.name));
     }
     generated.push_str(
         "}\n\nimpl std::fmt::Display for Intrinsic {\n\tfn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> \
          std::fmt::Result {\n\t\twrite!(formatter, \"{self:?}\")\n\t}\n}\n",
     );
+
+    let mut from_str = String::from(
+        "impl std::str::FromStr for Intrinsic {\n    type Err = String;\n\n    fn from_str(text: &str) -> \
+         Result<Self, Self::Err> {\n        match text {\n",
+    );
+    for declaration in &declarations {
+        from_str.push_str(&format!(
+            "            {:?} => Ok(Self::{}),\n",
+            declaration.name, declaration.name
+        ));
+    }
+    from_str.push_str("            unknown => Err(unknown.to_owned()),\n        }\n    }\n}\n");
+    generated.push_str(&from_str);
 
     fs::write(out_dir.join("intrinsic.rs"), generated).expect("write generated intrinsic enum");
 }
@@ -89,17 +98,15 @@ fn read_declarations(path: &Path) -> Vec<Declaration> {
             continue;
         }
 
-        if let Some(id) = intrinsic_id(trimmed, path, line_number) {
-            let Some((proc_owner, proc_name, proc_line)) = pending_proc.take() else {
+        if let Some(name) = intrinsic_name(trimmed, path, line_number) {
+            let Some((_, _, proc_line)) = pending_proc.take() else {
                 panic!(
                     "{}:{line_number}: intrinsic marker is not attached to a procedure",
                     path.display()
                 );
             };
-            let variant = variant_name(&proc_owner, &proc_name);
             declarations.push(Declaration {
-                variant,
-                id,
+                name,
                 file: path.to_path_buf(),
                 line: proc_line,
             });
@@ -113,7 +120,7 @@ fn read_declarations(path: &Path) -> Vec<Declaration> {
     declarations
 }
 
-fn intrinsic_id(line: &str, path: &Path, line_number: usize) -> Option<u16> {
+fn intrinsic_name(line: &str, path: &Path, line_number: usize) -> Option<String> {
     let after_set = line.strip_prefix("set")?;
     if !after_set.starts_with(char::is_whitespace) {
         return None;
@@ -128,11 +135,30 @@ fn intrinsic_id(line: &str, path: &Path, line_number: usize) -> Option<u16> {
         .trim_start()
         .strip_prefix('=')
         .unwrap_or_else(|| panic!("{}:{line_number}: malformed intrinsic marker", path.display()));
-    value
-        .trim()
-        .parse::<u16>()
-        .map(Some)
-        .unwrap_or_else(|_| panic!("{}:{line_number}: intrinsic id must be a u16 integer", path.display()))
+    let quoted = value.trim();
+    let Some(name) = quoted.strip_prefix('"').and_then(|name| name.strip_suffix('"')) else {
+        panic!(
+            "{}:{line_number}: intrinsic name must be a text literal",
+            path.display()
+        );
+    };
+
+    if !is_identifier(name) {
+        panic!(
+            "{}:{line_number}: intrinsic name '{name}' is not a valid Rust identifier",
+            path.display()
+        );
+    }
+
+    Some(name.to_owned())
+}
+
+fn is_identifier(name: &str) -> bool {
+    let mut characters = name.chars();
+    match characters.next() {
+        Some(first) if first.is_ascii_alphabetic() => characters.all(|character| character.is_ascii_alphanumeric()),
+        _ => false,
+    }
 }
 
 fn procedure_name(line: &str, indent: usize, owner: &str) -> Option<(String, String)> {
@@ -150,64 +176,15 @@ fn procedure_name(line: &str, indent: usize, owner: &str) -> Option<(String, Str
     None
 }
 
-fn variant_name(owner: &str, proc_name: &str) -> String {
-    let owner = owner.rsplit('/').next().unwrap_or_default();
-    let mut variant = pascal_case(owner);
-    variant.push_str(&pascal_case(proc_name));
-    if variant.is_empty() || variant.starts_with(|character: char| character.is_ascii_digit()) {
-        panic!("cannot derive a Rust intrinsic variant from {owner}/{proc_name}");
-    }
-    match variant.as_str() {
-        "WorldFile2list" => String::from("WorldFile2List"),
-        "DmIconGetpixel" => String::from("DmIconGetPixel"),
-        _ => variant,
-    }
-}
-
-fn pascal_case(value: &str) -> String {
-    let mut output = String::new();
-    for piece in value.split(|character: char| !character.is_ascii_alphanumeric()) {
-        if piece.is_empty() {
-            continue;
-        }
-        push_word(&mut output, piece);
-    }
-    output
-}
-
-fn push_word(output: &mut String, word: &str) {
-    let normalized = if word.chars().all(|character| !character.is_ascii_lowercase()) {
-        word.to_ascii_lowercase()
-    } else {
-        word.to_owned()
-    };
-    let mut characters = normalized.chars();
-    if let Some(first) = characters.next() {
-        output.extend(first.to_uppercase());
-        output.extend(characters);
-    }
-}
-
 fn validate(declarations: &[Declaration]) {
-    let mut ids = HashMap::new();
-    let mut variants = HashSet::new();
+    let mut names = HashSet::new();
     for declaration in declarations {
-        if let Some(previous) = ids.insert(declaration.id, declaration) {
+        if !names.insert(declaration.name.clone()) {
             panic!(
-                "{}:{} and {}:{} both declare intrinsic {}",
-                previous.file.display(),
-                previous.line,
+                "{}:{} declares intrinsic variant {} more than once",
                 declaration.file.display(),
                 declaration.line,
-                declaration.id
-            );
-        }
-        if !variants.insert(declaration.variant.clone()) {
-            panic!(
-                "{}:{} generates duplicate intrinsic variant {}",
-                declaration.file.display(),
-                declaration.line,
-                declaration.variant
+                declaration.name
             );
         }
     }

@@ -27,19 +27,19 @@ pub struct ModifiedType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProcRef {
-    pub src: Receiver,
+    pub src: Src,
     pub proc: ProcId,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub enum Receiver {
+pub enum Src {
     #[default]
     None,
     Object(ObjectId),
     List(ListId),
 }
 
-impl Receiver {
+impl Src {
     pub fn value(self) -> GenericValue {
         match self {
             Self::None => GenericValue::Null,
@@ -63,7 +63,7 @@ impl Receiver {
     }
 }
 
-impl From<Option<ObjectId>> for Receiver {
+impl From<Option<ObjectId>> for Src {
     fn from(id: Option<ObjectId>) -> Self {
         id.map_or(Self::None, Self::Object)
     }

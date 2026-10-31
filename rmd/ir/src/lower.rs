@@ -99,7 +99,7 @@ impl Lowering<'_> {
                 let intrinsic = intrinsic_marker(self.ast, statements)
                     .ok()
                     .flatten()
-                    .and_then(|id| Intrinsic::try_from(id).ok());
+                    .and_then(|name| name.parse::<Intrinsic>().ok());
                 let proc = self.builder.lower_proc_with_intrinsic(
                     owner,
                     name.clone(),
