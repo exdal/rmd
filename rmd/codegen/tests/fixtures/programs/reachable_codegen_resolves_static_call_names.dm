@@ -1,6 +1,6 @@
 
 /proc/call(Target, ProcName)
-    set __demir_intrin = 401
+    set __demir_intrin = "Call"
 /datum/base/proc/live()
     return 1
 /datum/base/proc/dead()

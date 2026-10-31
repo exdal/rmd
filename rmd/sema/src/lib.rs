@@ -5,6 +5,7 @@ use core::{
     types::{Identifier, InputType, TypeSpec, Value},
     vars,
 };
+use std::str::FromStr;
 
 use ast::{
     AST, Declaration, Expression, ExpressionId, Literal, Statement,
@@ -255,7 +256,7 @@ impl<'a> Analyzer<'a> {
 
     fn check_intrinsic(&mut self, body: &[Statement], location: core::location::Location) {
         let kind = match intrinsic_marker(self.ast, body) {
-            Ok(Some(id)) if Intrinsic::try_from(id).is_err() => SemaErrorKind::UnknownIntrinsic(id),
+            Ok(Some(name)) if Intrinsic::from_str(&name).is_err() => SemaErrorKind::UnknownIntrinsic(name),
             Ok(_) => return,
             Err(IntrinsicMarkerError::Duplicate) => SemaErrorKind::DuplicateIntrinsic,
             Err(IntrinsicMarkerError::Invalid) => SemaErrorKind::InvalidIntrinsic,
@@ -578,9 +579,9 @@ mod tests {
     }
 
     #[test]
-    fn intrinsic_markers_reject_malformed_unknown_and_duplicate_ids() {
+    fn intrinsic_markers_reject_malformed_unknown_and_duplicate_names() {
         let (_, malformed) = analyze_source(fixture!(
-            "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_ids.dm"
+            "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_names.dm"
         ));
         assert!(matches!(
             malformed.as_slice(),
@@ -591,7 +592,7 @@ mod tests {
         ));
 
         let (_, wrong_mode) = analyze_source(fixture!(
-            "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_ids-2.dm"
+            "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_names-2.dm"
         ));
         assert!(matches!(
             wrong_mode.as_slice(),
@@ -602,18 +603,18 @@ mod tests {
         ));
 
         let (_, unknown) = analyze_source(fixture!(
-            "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_ids-3.dm"
+            "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_names-3.dm"
         ));
         assert!(matches!(
             unknown.as_slice(),
             [SemaError {
-                kind: SemaErrorKind::UnknownIntrinsic(65535),
+                kind: SemaErrorKind::UnknownIntrinsic(name),
                 ..
-            }]
+            }] if name == "Bogus"
         ));
 
         let (_, duplicate) = analyze_source(fixture!(
-            "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_ids-4.dm"
+            "programs/intrinsic_markers_reject_malformed_unknown_and_duplicate_names-4.dm"
         ));
         assert!(matches!(
             duplicate.as_slice(),

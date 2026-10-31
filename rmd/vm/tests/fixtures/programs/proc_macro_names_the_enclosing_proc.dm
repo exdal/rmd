@@ -1,5 +1,5 @@
 /proc/nameof(X)
-    set __demir_intrin = 400
+    set __demir_intrin = "Nameof"
 /proc/global_name()
     return nameof(__PROC__)
 /datum/thing

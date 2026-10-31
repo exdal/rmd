@@ -12,16 +12,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generated_intrinsics_preserve_the_declared_abi() {
-        assert_eq!(Intrinsic::try_from(100).unwrap(), Intrinsic::WorldNew);
-        assert_eq!(Intrinsic::try_from(401).unwrap(), Intrinsic::Call);
-        assert_eq!(Intrinsic::try_from(721).unwrap(), Intrinsic::DemirNodeGroup);
-        assert_eq!(Intrinsic::try_from(726).unwrap(), Intrinsic::DemirNodeOrientation);
-        assert_eq!(Intrinsic::try_from(727).unwrap(), Intrinsic::DemirRotatable);
-        assert_eq!(Intrinsic::try_from(722).unwrap(), Intrinsic::ImguiMousePopup);
-        assert_eq!(Intrinsic::try_from(725).unwrap(), Intrinsic::ImguiEndPopup);
-        assert_eq!(Intrinsic::try_from(1100).unwrap(), Intrinsic::ListAdd);
-        assert!(Intrinsic::try_from(u16::MAX).is_err());
+    fn generated_intrinsics_parse_the_declared_names() {
+        assert_eq!("WorldNew".parse::<Intrinsic>().unwrap(), Intrinsic::WorldNew);
+        assert_eq!("Call".parse::<Intrinsic>().unwrap(), Intrinsic::Call);
+        assert_eq!(
+            "DemirNodeGroup".parse::<Intrinsic>().unwrap(),
+            Intrinsic::DemirNodeGroup
+        );
+        assert_eq!(
+            "DemirNodeOrientation".parse::<Intrinsic>().unwrap(),
+            Intrinsic::DemirNodeOrientation
+        );
+        assert_eq!(
+            "DemirRotatable".parse::<Intrinsic>().unwrap(),
+            Intrinsic::DemirRotatable
+        );
+        assert_eq!(
+            "ImguiMousePopup".parse::<Intrinsic>().unwrap(),
+            Intrinsic::ImguiMousePopup
+        );
+        assert_eq!("ImguiEndPopup".parse::<Intrinsic>().unwrap(), Intrinsic::ImguiEndPopup);
+        assert_eq!("ListAdd".parse::<Intrinsic>().unwrap(), Intrinsic::ListAdd);
+        assert!("Bogus".parse::<Intrinsic>().is_err());
     }
 
     #[test]
