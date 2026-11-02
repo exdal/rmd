@@ -1,6 +1,7 @@
 use core::path::TreePath;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{cell::Ref, collections::BTreeMap, sync::Arc};
 
+use dmm::Coord;
 use editor::{
     document::{DocumentId, PrefabInstanceId},
     issues,
@@ -18,14 +19,12 @@ pub(crate) struct MapIssueGroup {
 pub(super) struct IssueGroups {
     key: (u64, u64),
     groups: Arc<[MapIssueGroup]>,
+    missing_bases: Arc<[Coord]>,
 }
 
 impl Session {
-    pub(crate) fn map_issues(&self, id: DocumentId) -> Arc<[MapIssueGroup]> {
-        let (Some(document), Some(cache)) = (self.state.document(id), self.caches.get(&id)) else {
-            return Arc::default();
-        };
-
+    fn issues(&self, id: DocumentId) -> Option<Ref<'_, IssueGroups>> {
+        let (document, cache) = (self.state.document(id)?, self.caches.get(&id)?);
         let key = (document.generation(), cache.revision);
         let mut issues = cache.issues.borrow_mut();
         if issues.key != key {
@@ -60,14 +59,29 @@ impl Session {
             }
 
             issues.groups = grouped.into_values().collect::<Vec<_>>().into();
+            issues.missing_bases = issues::missing_base_tiles(document).into();
             issues.key = key;
         }
 
-        Arc::clone(&issues.groups)
+        drop(issues);
+
+        Some(cache.issues.borrow())
+    }
+
+    pub(crate) fn map_issues(&self, id: DocumentId) -> Arc<[MapIssueGroup]> {
+        self.issues(id)
+            .map(|issues| Arc::clone(&issues.groups))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn missing_base_tiles(&self, id: DocumentId) -> Arc<[Coord]> {
+        self.issues(id)
+            .map(|issues| Arc::clone(&issues.missing_bases))
+            .unwrap_or_default()
     }
 
     pub(super) fn note_loaded_issues(&mut self, id: DocumentId) {
-        if !self.map_issues(id).is_empty() {
+        if !self.map_issues(id).is_empty() || !self.missing_base_tiles(id).is_empty() {
             self.loaded_issues = Some(id);
         }
     }
@@ -103,6 +117,13 @@ impl Session {
     ) -> bool {
         let action = self.state.pair_mut(id).and_then(|(environment, document)| {
             issues::delete_instances(document, &environment.tree, &environment.world, path, instances)
+        });
+        action.is_some_and(|action| self.set_active_document(id) && self.commit(action, None))
+    }
+
+    pub(crate) fn fill_missing_bases(&mut self, id: DocumentId, tiles: &[Coord]) -> bool {
+        let action = self.state.pair_mut(id).and_then(|(environment, document)| {
+            issues::fill_missing_bases(document, &environment.tree, &environment.world, tiles)
         });
         action.is_some_and(|action| self.set_active_document(id) && self.commit(action, None))
     }
@@ -307,5 +328,36 @@ mod tests {
         assert!(session.take_loaded_issues().is_some());
         session.load_environment(&examples().join("test.dme")).unwrap();
         assert_eq!(session.map_issues(id)[0].instances.len(), 3);
+    }
+
+    #[test]
+    fn tiles_missing_a_turf_or_area_are_listed_and_filled_in_one_undo_step() {
+        let mut session = unknown_paths_session();
+        let id = session.state.active().unwrap();
+        let missing = [
+            Coord::new(1, 1, 1),
+            Coord::new(2, 1, 1),
+            Coord::new(1, 1, 2),
+            Coord::new(2, 1, 2),
+        ];
+        assert_eq!(*session.missing_base_tiles(id), missing);
+
+        assert!(session.fill_missing_bases(id, &missing));
+        assert!(session.missing_base_tiles(id).is_empty());
+        let roots = session
+            .map()
+            .unwrap()
+            .tile_at(Coord::new(2, 1, 1))
+            .unwrap()
+            .iter()
+            .map(|prefab| prefab.path.segments[0].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(roots.iter().filter(|root| **root == "turf").count(), 1);
+        assert_eq!(roots.iter().filter(|root| **root == "area").count(), 1);
+        assert_render_cache_matches_rebuild(&session);
+
+        assert!(session.undo());
+        assert_eq!(*session.missing_base_tiles(id), missing);
+        assert!(!session.fill_missing_bases(id, &[]));
     }
 }

@@ -689,6 +689,12 @@ impl BaseKind {
     }
 }
 
+pub fn is_missing_base(tile: &[Prefab]) -> bool {
+    [BaseKind::Turf, BaseKind::Area]
+        .into_iter()
+        .any(|kind| !tile.iter().any(|prefab| kind.is_prefab(prefab)))
+}
+
 pub fn same_prefabs(left: &[PlacedPrefab], right: &[PlacedPrefab]) -> bool {
     left.len() == right.len()
         && left

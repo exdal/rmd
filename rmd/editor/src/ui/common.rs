@@ -28,12 +28,6 @@ impl<K: Copy + Eq + Hash> RowSelection<K> {
         self.anchor = None;
     }
 
-    pub(super) fn select(&mut self, key: K) {
-        self.keys.clear();
-        self.keys.insert(key);
-        self.anchor = Some(key);
-    }
-
     pub(super) fn among(&self, order: impl IntoIterator<Item = K>) -> Vec<K> {
         order
             .into_iter()

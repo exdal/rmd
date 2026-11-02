@@ -61,7 +61,6 @@ pub(crate) use self::{
     git::GitDocState,
     guides::GuideBadge,
     instance::{EditScope, PickedTransform},
-    issues::MapIssueGroup,
     level::validate_level,
     node::NodeOverlay,
     palette::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},

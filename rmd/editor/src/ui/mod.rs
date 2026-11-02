@@ -877,6 +877,10 @@ impl UiState {
         if let Some(target) = issues.jump {
             self.jump_to_instance(session, target);
         }
+
+        if let Some((document, coord)) = issues.tile {
+            self.go_to_tile(session, document, coord, ui.time());
+        }
         if issues.copy.is_some() {
             self.copy_to_clipboard = issues.copy;
         }
