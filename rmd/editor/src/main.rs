@@ -456,7 +456,7 @@ impl App {
         );
 
         let mut renderer = Renderer::new(device, size.width, size.height, self.session.textures.len())?;
-        renderer.upload_textures(&self.session.textures)?;
+        renderer.set_textures(&self.session.textures)?;
 
         self.uploaded_texture_revision = Some(self.session.texture_revision());
         self.consumer = Some(consumer);
@@ -514,7 +514,7 @@ impl App {
 
         if *uploaded_texture_revision != Some(session.texture_revision()) {
             *uploaded_texture_revision = Some(session.texture_revision());
-            if let Err(e) = renderer.upload_textures(&session.textures) {
+            if let Err(e) = renderer.set_textures(&session.textures) {
                 log::error!("{e}");
                 ui.set_open_error(Some(e.to_string()));
             }
