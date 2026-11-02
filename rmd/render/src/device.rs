@@ -279,6 +279,29 @@ fn select_physical_device(
     let (handle, _, families, max_bindless_textures, max_compute_work_group_count_x, max_image_dimension_2d) =
         candidates.into_iter().next().ok_or(GpuError::NoSuitableDevice)?;
 
+    let memory = unsafe { instance.get_physical_device_memory_properties(handle) };
+    for (index, heap) in memory.memory_heaps[..memory.memory_heap_count as usize]
+        .iter()
+        .enumerate()
+    {
+        log::info!(
+            "memory heap {index}: {} MiB, {:?}",
+            heap.size / (1024 * 1024),
+            heap.flags
+        );
+    }
+
+    for (index, memory_type) in memory.memory_types[..memory.memory_type_count as usize]
+        .iter()
+        .enumerate()
+    {
+        log::info!(
+            "memory type {index}: {:?}, heap {}",
+            memory_type.property_flags,
+            memory_type.heap_index
+        );
+    }
+
     Ok((
         handle,
         families,

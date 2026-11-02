@@ -18,7 +18,12 @@ use vir::{
     PipelineId, Program, RasterizationState, Rect2D, RenderGraph, SamplerInfo, ValueId, allocator::Allocator,
 };
 
-use crate::{device::Device, error::GpuError, read_spirv, renderer::TextureImage};
+use crate::{
+    device::Device,
+    error::GpuError,
+    read_spirv,
+    renderer::{Sheet, TextureImage},
+};
 
 const VERTEX_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/imgui.vert.spv"));
 const FRAGMENT_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/imgui.frag.spv"));
@@ -49,6 +54,22 @@ fn sprite_texture_index(texture: TextureId) -> Option<usize> {
     let index = raw & !SPRITE_TEXTURE_TAG;
 
     (raw & SPRITE_TEXTURE_TAG != 0 && index <= u32::MAX as u64).then_some(index as usize)
+}
+
+fn push_sprite_sheet(texture: TextureId, sheets: &mut Vec<u32>) {
+    if let Some(index) = sprite_texture_index(texture) {
+        sheets.push(index as u32);
+    }
+}
+
+pub(crate) fn collect_sprite_sheets(data: &DrawData, sheets: &mut Vec<u32>) {
+    for list in data.draw_lists() {
+        for command in list.commands() {
+            if let DrawCmd::Elements { cmd_params, .. } = command {
+                push_sprite_sheet(cmd_params.texture_id, sheets);
+            }
+        }
+    }
 }
 
 #[repr(C)]
@@ -256,7 +277,8 @@ impl ImGuiPass {
     }
 
     pub(crate) fn prepare(
-        &self, allocator: &mut FrameAllocator, data: &DrawData, target: vk::Extent2D, sprite_textures: &[TextureImage],
+        &self, allocator: &mut FrameAllocator, data: &DrawData, target: vk::Extent2D, sheets: &[Sheet],
+        fallback: &TextureImage,
     ) -> Result<ImGuiFrame, GpuError> {
         if data.requirements().requires_raw_callback_support() {
             return Err(GpuError::RawDrawCallback);
@@ -298,9 +320,10 @@ impl ImGuiPass {
                         {
                             (Source::MapView(index), sampler)
                         } else if let Some(index) = sprite_texture_index(cmd_params.texture_id) {
-                            let Some(texture) = sprite_textures.get(index) else {
+                            let Some(sheet) = sheets.get(index) else {
                                 return Err(GpuError::UnknownTexture(cmd_params.texture_id.id()));
                             };
+                            let texture = sheet.image().unwrap_or(fallback);
 
                             (Source::Owned(texture.attachment(TEXTURE_RESTING.into())), self.nearest)
                         } else {
@@ -798,6 +821,23 @@ mod tests {
             sprite_texture_index(TextureId::new(SPRITE_TEXTURE_TAG | (1 << 32))),
             None
         );
+    }
+
+    #[test]
+    fn only_sprite_tagged_ids_are_collected() {
+        let mut sheets = Vec::new();
+        for texture in [
+            TextureId::new(0),
+            TextureId::new(FIRST_MINTED_TEXTURE),
+            map_view_texture(3),
+            sprite_texture(5),
+            sprite_texture(5),
+            sprite_texture(0),
+        ] {
+            push_sprite_sheet(texture, &mut sheets);
+        }
+
+        assert_eq!(sheets, [5, 5, 0]);
     }
 
     #[test]
