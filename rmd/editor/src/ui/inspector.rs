@@ -12,7 +12,10 @@ use editor::{
     blame::{self, BlameCell},
     command::EditGroupId,
     document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation},
-    icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_PIN, ICON_PIN_OUTLINE},
+    icons::materialdesignicons::{
+        ICON_ARROW_BOTTOM_LEFT, ICON_ARROW_BOTTOM_RIGHT, ICON_ARROW_DOWN, ICON_ARROW_LEFT, ICON_ARROW_RIGHT,
+        ICON_ARROW_TOP_LEFT, ICON_ARROW_TOP_RIGHT, ICON_ARROW_UP, ICON_CIRCLE_SMALL, ICON_PIN, ICON_PIN_OUTLINE,
+    },
     maploader::preview::PREVIEW_ID_START,
     visual,
 };
@@ -617,7 +620,6 @@ impl InspectorState {
         let current = selected_direction(bits, snapshot.directional_types);
         let preview = current
             .map(direction_label)
-            .map(str::to_string)
             .unwrap_or_else(|| format!("Custom ({number})"));
 
         begin_property_row(ui, session, self.scope, property, "Direction");
@@ -1507,7 +1509,24 @@ fn draw_draft_error(ui: &Ui, draft: &VariableDraft) {
     }
 }
 
-fn direction_label(direction: Dir) -> &'static str {
+fn direction_label(direction: Dir) -> String {
+    format!("{} {}", direction_icon(direction), direction_name(direction))
+}
+
+fn direction_icon(direction: Dir) -> char {
+    match direction {
+        Dir::South => ICON_ARROW_DOWN,
+        Dir::North => ICON_ARROW_UP,
+        Dir::East => ICON_ARROW_RIGHT,
+        Dir::West => ICON_ARROW_LEFT,
+        Dir::Southeast => ICON_ARROW_BOTTOM_RIGHT,
+        Dir::Southwest => ICON_ARROW_BOTTOM_LEFT,
+        Dir::Northeast => ICON_ARROW_TOP_RIGHT,
+        Dir::Northwest => ICON_ARROW_TOP_LEFT,
+    }
+}
+
+fn direction_name(direction: Dir) -> &'static str {
     match direction {
         Dir::South => "South",
         Dir::North => "North",

@@ -3,7 +3,7 @@ use core::{
     vars,
 };
 
-use dear_imgui_rs::{MouseButton, MouseCursor, StyleColor, Ui};
+use dear_imgui_rs::{DrawListMut, MouseButton, MouseCursor, StyleColor, Ui};
 use dmi::metadata::Dir;
 use dmm::{Coord, Size};
 use editor::{
@@ -38,6 +38,11 @@ const DIRECTION_ARROW_LENGTH: f32 = 14.0;
 const DIRECTION_ARROW_HALF_WIDTH: f32 = 7.5;
 const DIRECTION_SECTOR_GAP: f32 = 0.035;
 const DIRECTION_SECTOR_SEGMENTS: usize = 8;
+const FACING_OFFSET: f32 = 26.0;
+const FACING_LENGTH: f32 = 20.0;
+const FACING_ARROW_LENGTH: f32 = 9.0;
+const FACING_ARROW_HALF_WIDTH: f32 = 6.0;
+const FACING_LINE_THICKNESS: f32 = 3.0;
 
 const CLOCKWISE_DIRECTIONS: [Dir; 8] = [
     Dir::North,
@@ -381,7 +386,8 @@ impl GizmoState {
             if let Some(handle) = hot {
                 ui.set_mouse_cursor(Some(handle.cursor()));
             }
-            draw_gizmo(ui, origin, map_view, hot);
+            let facing = facing_direction(picked_direction_target(target).state);
+            draw_gizmo(ui, origin, map_view, hot, facing);
         }
 
         GizmoResponse {
@@ -928,6 +934,11 @@ const fn is_diagonal(direction: Dir) -> bool {
     )
 }
 
+fn facing_direction(state: DirectionState) -> Option<Dir> {
+    direction_set(state.dmi_directions, state.declared, state.directional_types)
+        .and_then(|set| current_direction(state, set))
+}
+
 fn current_direction(state: DirectionState, set: DirectionSet) -> Option<Dir> {
     state
         .directional_types
@@ -1129,7 +1140,7 @@ fn themed_color(ui: &Ui, color: StyleColor, alpha: f32) -> [f32; 4] {
     [red, green, blue, alpha]
 }
 
-fn draw_gizmo(ui: &Ui, origin: [f32; 2], map_view: GizmoMapView, hot: Option<Handle>) {
+fn draw_gizmo(ui: &Ui, origin: [f32; 2], map_view: GizmoMapView, hot: Option<Handle>, facing: Option<Dir>) {
     let center = themed_color(ui, StyleColor::Text, 1.0);
     let hot_color = themed_color(ui, StyleColor::ButtonHovered, 1.0);
     let shadow_color = themed_color(ui, StyleColor::BorderShadow, 0.85);
@@ -1140,6 +1151,12 @@ fn draw_gizmo(ui: &Ui, origin: [f32; 2], map_view: GizmoMapView, hot: Option<Han
     let center_half_size = CENTER_HALF_SIZE * scale;
     let draw_list = ui.get_window_draw_list();
     draw_list.with_clip_rect(map_view.min, map_view.max, || {
+        if let Some(direction) = facing {
+            let color = themed_color(ui, StyleColor::Text, 0.9);
+            let center = [origin[0], origin[1] + FACING_OFFSET * scale];
+            draw_facing_arrow(&draw_list, center, direction, color, shadow_color, scale);
+        }
+
         let x_base = [origin[0] + axis_length - arrow_length, origin[1]];
         let x_tip = [origin[0] + axis_length, origin[1]];
         let y_base = [origin[0], origin[1] - axis_length + arrow_length];
@@ -1167,6 +1184,37 @@ fn draw_gizmo(ui: &Ui, origin: [f32; 2], map_view: GizmoMapView, hot: Option<Han
         draw_list
             .add_line(origin, y_base, shadow_color)
             .thickness(y_thickness + 2.0 * scale)
+            .build();
+        let shadow_expansion = 1.5 * scale;
+        draw_list
+            .add_triangle(
+                [x_tip[0] + shadow_expansion, x_tip[1]],
+                [
+                    x_base[0] - shadow_expansion,
+                    x_base[1] - arrow_half_width - shadow_expansion,
+                ],
+                [
+                    x_base[0] - shadow_expansion,
+                    x_base[1] + arrow_half_width + shadow_expansion,
+                ],
+                shadow_color,
+            )
+            .filled(true)
+            .build();
+        draw_list
+            .add_triangle(
+                [y_tip[0], y_tip[1] - shadow_expansion],
+                [
+                    y_base[0] - arrow_half_width - shadow_expansion,
+                    y_base[1] + shadow_expansion,
+                ],
+                [
+                    y_base[0] + arrow_half_width + shadow_expansion,
+                    y_base[1] + shadow_expansion,
+                ],
+                shadow_color,
+            )
+            .filled(true)
             .build();
         draw_list
             .add_line(origin, x_base, x_color)
@@ -1212,6 +1260,37 @@ fn draw_gizmo(ui: &Ui, origin: [f32; 2], map_view: GizmoMapView, hot: Option<Han
         draw_list.add_text([x_tip[0] + 3.0 * scale, x_tip[1] - 8.0 * scale], x_color, "X");
         draw_list.add_text([y_tip[0] - 4.0 * scale, y_tip[1] - 17.0 * scale], y_color, "Y");
     });
+}
+
+fn draw_facing_arrow(
+    draw_list: &DrawListMut<'_>, center: [f32; 2], direction: Dir, color: [f32; 4], shadow_color: [f32; 4], scale: f32,
+) {
+    let vector = direction_vector(direction);
+    let perpendicular = [-vector[1], vector[0]];
+    let point = |radius: f32, side: f32| {
+        [
+            center[0] + (vector[0] * radius + perpendicular[0] * side) * scale,
+            center[1] + (vector[1] * radius + perpendicular[1] * side) * scale,
+        ]
+    };
+    let tip = FACING_LENGTH * 0.5;
+    let base = tip - FACING_ARROW_LENGTH;
+
+    for (color, expansion) in [(shadow_color, 1.5), (color, 0.0)] {
+        draw_list
+            .add_line(point(-tip - expansion, 0.0), point(base, 0.0), color)
+            .thickness((FACING_LINE_THICKNESS + 2.0 * expansion) * scale)
+            .build();
+        draw_list
+            .add_triangle(
+                point(tip + expansion, 0.0),
+                point(base - expansion, FACING_ARROW_HALF_WIDTH + expansion),
+                point(base - expansion, -FACING_ARROW_HALF_WIDTH - expansion),
+                color,
+            )
+            .filled(true)
+            .build();
+    }
 }
 
 fn direction_angle(direction: Dir) -> f32 {
