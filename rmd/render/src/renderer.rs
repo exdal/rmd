@@ -43,6 +43,7 @@ const BLUR_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blur.frag.s
 const PICK_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pick.comp.spv"));
 const CAPTURE_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/capture.comp.spv"));
 const SHEET_BUDGET_BYTES: usize = 512 * 1024 * 1024;
+const FRAMES_IN_FLIGHT: usize = 2;
 const UPLOAD_BATCH_BYTES: usize = 64 * 1024 * 1024;
 const HIGHLIGHT_STRIPE_PERIOD: f32 = 12.0;
 const HIGHLIGHT_STRIPE_SPEED: f32 = 12.0;
@@ -1533,7 +1534,7 @@ impl Renderer {
         self.frames = Some(
             self.device
                 .context
-                .create_super_frame_allocator(swapchain.attachments.len()),
+                .create_super_frame_allocator(swapchain.attachments.len().min(FRAMES_IN_FLIGHT)),
         );
 
         if let Some(old) = self.swapchain.replace(swapchain) {
