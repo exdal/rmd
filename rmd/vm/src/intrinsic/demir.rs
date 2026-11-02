@@ -6,7 +6,7 @@ use defines::{EAST, NORTH, NORTHEAST, NORTHWEST, SOUTH, SOUTHEAST, SOUTHWEST, WE
 use super::Result;
 use crate::{
     FaultKind, GenericValue,
-    bake::{NodeGroup, NodeOrientation, PlacementState, PlacementTarget, Rotation, placement_entry},
+    bake::{NodeGroup, NodeOrientation, NodePortRule, PlacementState, PlacementTarget, Rotation, placement_entry},
     eval::Evaluator,
     toml_value,
 };
@@ -18,7 +18,7 @@ impl Evaluator<'_> {
 
     pub(crate) fn node_group(
         &mut self, name: &str, subtype_arg: GenericValue, blocker_arg: GenericValue, orientable_arg: GenericValue,
-        matching_arg: GenericValue,
+        matching_arg: GenericValue, cosmetic_dir_arg: GenericValue,
     ) -> Result<GenericValue> {
         if !self.runtime.defining_groups {
             return Err(self.fault(FaultKind::Blocked(format!("{name} outside a profile's New()"))));
@@ -94,6 +94,12 @@ impl Evaluator<'_> {
             matching.push(Identifier::from(text));
         }
 
+        let ports = if cosmetic_dir_arg.truthy() {
+            NodePortRule::AllSides
+        } else {
+            NodePortRule::Orientation
+        };
+
         if let Some(group) = self
             .runtime
             .node_groups
@@ -108,6 +114,10 @@ impl Evaluator<'_> {
             }
 
             group.orientable_subtype = group.orientable_subtype.or(orientable_subtype);
+            if ports == NodePortRule::AllSides {
+                group.ports = ports;
+            }
+
             for blocker in blockers {
                 if !group.blockers.contains(&blocker) {
                     group.blockers.push(blocker);
@@ -125,6 +135,7 @@ impl Evaluator<'_> {
                 subtype,
                 orientable_subtype,
                 orientations: Vec::new(),
+                ports,
                 blockers: blockers.into_iter().fold(Vec::new(), |mut unique, blocker| {
                     if !unique.contains(&blocker) {
                         unique.push(blocker);

@@ -202,9 +202,13 @@ Call `demir_define_group` from `New()` to assign type subtrees to profile-owned 
 change can pass those bits to `demir_rebake`. This limits new work to the affected kinds and type
 groups. A UI change has no map effect until it requests a rebake.
 
-Call `demir_node_group(subtype, blocker, orientable_subtype = null)` from `New()` to enable the Node
-tool for a type subtree. Each registration can name blocker types that the cardinal router cannot
-cross. An optional descendant `orientable_subtype` lets routes change those placements' `dir`.
+Call `demir_node_group(subtype, blocker, orientable_subtype = null, matching = null,
+cosmetic_dir = FALSE)` from `New()` to enable the Node tool for a type subtree. Each registration
+can name blocker types that the cardinal router cannot cross. An optional descendant
+`orientable_subtype` lets routes change those placements' `dir`.
+`matching` names one var or a list of vars. Placements connect only when each named var resolves
+to the same value. When `cosmetic_dir` is TRUE, every placement connects on every side and the
+registered orientations only choose the `dir` a route writes.
 Register the connection openings for each icon direction with
 `demir_node_orientation(subtype, direction, openings)`. The `openings` mask uses the standard
 cardinal direction bits. The editor follows reciprocal openings and selects a registered

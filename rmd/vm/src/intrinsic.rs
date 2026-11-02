@@ -131,7 +131,8 @@ impl Evaluator<'_> {
 
             Intrinsic::DemirProfile => self.profile(),
 
-            Intrinsic::DemirNodeGroup => self.node_group(name, arg(0), arg(1), arg(2), arg(3)),
+            // surely this function cannot get any larger
+            Intrinsic::DemirNodeGroup => self.node_group(name, arg(0), arg(1), arg(2), arg(3), arg(4)),
 
             Intrinsic::DemirNodeOrientation => self.node_orientation(name, &args),
 

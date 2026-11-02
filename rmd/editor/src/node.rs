@@ -10,7 +10,7 @@ use std::{
 use bitflags::bitflags;
 use dmm::{Coord, Prefab, PrefabInstanceId};
 use objtree::{ObjectTree, TypeId};
-use vm::bake::NodeGroup;
+use vm::bake::{NodeGroup, NodePortRule};
 
 use crate::{
     document::{MapDocument, PlacedTile},
@@ -462,6 +462,10 @@ fn ports(tree: &ObjectTree, group: &ResolvedGroup, prefab: &Prefab) -> NodePorts
     let Some(ty) = tree.id_of(&prefab.path) else {
         return NodePorts::empty();
     };
+    if group.definition.ports == NodePortRule::AllSides {
+        return NodePorts::all();
+    }
+
     let direction = effective_direction(tree, prefab);
 
     group
@@ -552,12 +556,27 @@ pub fn oriented_route_directions(
             }
         }
 
-        if mask.bits().count_ones() > 2 {
-            return None;
-        }
+        let is_all_sides = group.definition.ports == NodePortRule::AllSides;
+        let template = existing.unwrap_or(brush);
+        let icon = if mask.bits().count_ones() > 2 {
+            None
+        } else {
+            icon_direction(tree, group, template, mask)
+        };
 
-        let dir = match icon_direction(tree, group, existing.unwrap_or(brush), mask) {
+        let dir = match icon {
             Some(dir) => dir,
+            None if is_all_sides => {
+                if existing.is_some() {
+                    continue;
+                }
+
+                match icon_direction(tree, group, brush, required.get(&coord).copied().unwrap_or_default()) {
+                    Some(dir) => dir,
+                    None => continue,
+                }
+            },
+            None if mask.bits().count_ones() > 2 => return None,
             None if mask.is_empty() => continue,
             None => return None,
         };
@@ -803,6 +822,7 @@ mod tests {
             orientable_subtype: None,
             orientations: Vec::new(),
             matching: Vec::new(),
+            ports: NodePortRule::Orientation,
         }
     }
 
@@ -853,6 +873,7 @@ mod tests {
                 orientable_subtype: Some(segment),
                 orientations,
                 matching: Vec::new(),
+                ports: NodePortRule::Orientation,
             }],
             0,
             &Prefab::new(TreePath::parse("/obj/link/segment")),
@@ -891,6 +912,7 @@ mod tests {
                 orientable_subtype: None,
                 orientations: Vec::new(),
                 matching: vec![Identifier::from("piping_layer")],
+                ports: NodePortRule::Orientation,
             }],
             0,
             seed,
@@ -1106,6 +1128,107 @@ mod tests {
         assert_eq!(directions[&center], NodePorts::NORTHEAST.bits());
     }
 
+    fn all_sides_group(tree: &ObjectTree) -> ResolvedGroup {
+        let mut group = configured_group(tree);
+        group.definition.ports = NodePortRule::AllSides;
+
+        group
+    }
+
+    fn segment_brush() -> Prefab {
+        Prefab::new(TreePath::parse("/obj/link/segment"))
+    }
+
+    #[test]
+    fn all_sides_routes_pick_icon_directions_for_straights_and_bends() {
+        let tree = tree();
+        let group = all_sides_group(&tree);
+        let document = document(5, 5, &[]);
+        let brush = segment_brush();
+
+        let east_west = [Coord::new(1, 1, 1), Coord::new(2, 1, 1), Coord::new(3, 1, 1)];
+        let directions =
+            oriented_route_directions(&document, &tree, &group, &brush, &east_west, &HashMap::new()).unwrap();
+        assert!(
+            east_west
+                .iter()
+                .all(|coord| directions[coord] == NodePorts::EAST.bits())
+        );
+
+        let north_south = [Coord::new(1, 1, 1), Coord::new(1, 2, 1), Coord::new(1, 3, 1)];
+        let directions =
+            oriented_route_directions(&document, &tree, &group, &brush, &north_south, &HashMap::new()).unwrap();
+        assert!(
+            north_south
+                .iter()
+                .all(|coord| directions[coord] == NodePorts::NORTH.bits())
+        );
+
+        let center = Coord::new(3, 3, 1);
+        let bend = [Coord::new(3, 4, 1), center, Coord::new(2, 3, 1)];
+        let directions = oriented_route_directions(&document, &tree, &group, &brush, &bend, &HashMap::new()).unwrap();
+        assert_eq!(directions[&center], NodePorts::NORTHWEST.bits());
+    }
+
+    #[test]
+    fn all_sides_misdirected_segments_still_join_the_component() {
+        let tree = tree();
+        let group = all_sides_group(&tree);
+        let left = Coord::new(1, 1, 1);
+        let right = Coord::new(2, 1, 1);
+        let document = configured_document(&[
+            (left, "/obj/link/segment", NodePorts::NORTH),
+            (right, "/obj/link/segment", NodePorts::NORTH),
+        ]);
+
+        let network = component(&document, &tree, &group, left).unwrap();
+        assert_eq!(network.tiles, HashSet::from([left, right]));
+    }
+
+    #[test]
+    fn all_sides_t_branch_leaves_the_existing_segment_direction() {
+        let tree = tree();
+        let group = all_sides_group(&tree);
+        let west = Coord::new(1, 2, 1);
+        let middle = Coord::new(2, 2, 1);
+        let east = Coord::new(3, 2, 1);
+        let branch = Coord::new(2, 1, 1);
+        let document = configured_document(&[
+            (west, "/obj/link/segment", NodePorts::EAST),
+            (middle, "/obj/link/segment", NodePorts::EAST),
+            (east, "/obj/link/segment", NodePorts::EAST),
+        ]);
+
+        let directions = oriented_route_directions(
+            &document,
+            &tree,
+            &group,
+            &segment_brush(),
+            &[branch, middle],
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(directions[&branch], NodePorts::NORTH.bits());
+        assert!(!directions.contains_key(&middle));
+    }
+
+    #[test]
+    fn all_sides_route_beside_a_parallel_line_orients_along_the_route() {
+        let tree = tree();
+        let group = all_sides_group(&tree);
+        let document = configured_document(&[
+            (Coord::new(1, 2, 1), "/obj/link/segment", NodePorts::EAST),
+            (Coord::new(2, 2, 1), "/obj/link/segment", NodePorts::EAST),
+            (Coord::new(3, 2, 1), "/obj/link/segment", NodePorts::EAST),
+        ]);
+        let route = [Coord::new(1, 1, 1), Coord::new(2, 1, 1), Coord::new(3, 1, 1)];
+
+        let directions =
+            oriented_route_directions(&document, &tree, &group, &segment_brush(), &route, &HashMap::new()).unwrap();
+        assert_eq!(directions.len(), 3);
+        assert!(route.iter().all(|coord| directions[coord] == NodePorts::EAST.bits()));
+    }
+
     #[test]
     fn most_specific_registered_group_wins() {
         let tree = tree();
@@ -1116,6 +1239,7 @@ mod tests {
                 orientable_subtype: None,
                 orientations: Vec::new(),
                 matching: Vec::new(),
+                ports: NodePortRule::Orientation,
             },
             group_definition(&tree),
         ];
@@ -1134,6 +1258,7 @@ mod tests {
                 orientable_subtype: None,
                 orientations: Vec::new(),
                 matching: Vec::new(),
+                ports: NodePortRule::Orientation,
             },
             group_definition(&tree),
         ];

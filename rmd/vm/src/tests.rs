@@ -16,8 +16,8 @@ use crate::{
     Fault, FaultKind, GenericValue, IconStates, Limits, Runtime,
     bake::{
         Atom, Bake, BakeUpdate, HIGHLIGHT_ALWAYS, HIGHLIGHT_EDGE_NORTH, HIGHLIGHT_EDGE_SOUTH, HIGHLIGHT_EDGE_WEST,
-        HIGHLIGHT_SELECTED, HighlightTile, ModuleRoot, PendingBake, ProfileError, Stage, has_profile, host_reads,
-        profile_catalog, profile_type, selected_profile_type,
+        HIGHLIGHT_SELECTED, HighlightTile, ModuleRoot, NodePortRule, PendingBake, ProfileError, Stage, has_profile,
+        host_reads, profile_catalog, profile_type, selected_profile_type,
     },
     eval::Evaluator,
     heap::{Object, ObjectId},
@@ -1259,6 +1259,31 @@ fn node_groups_keep_valid_orientable_subtypes_and_ignore_conflicts() {
     );
     assert_eq!(group.orientations[0].direction, 1);
     assert_eq!(group.orientations[0].openings, 12);
+}
+
+#[test]
+fn node_groups_accept_cosmetic_dir() {
+    let (tree, module) = compile(fixture!("programs/node_groups_accept_cosmetic_dir.dm"));
+    let bake = Bake::new(
+        &tree,
+        &module,
+        Vec::new(),
+        [1, 1, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    let ports_of = |path: &str| {
+        let id = tree.id_of(&TreePath::parse(path)).unwrap();
+        bake.node_groups()
+            .iter()
+            .find(|group| group.subtype == id)
+            .unwrap()
+            .ports
+    };
+    assert_eq!(bake.node_groups().len(), 3);
+    assert_eq!(ports_of("/obj/pipe"), NodePortRule::AllSides);
+    assert_eq!(ports_of("/obj/duct"), NodePortRule::Orientation);
+    assert_eq!(ports_of("/obj/cable"), NodePortRule::AllSides);
 }
 
 #[test]
