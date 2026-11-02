@@ -42,6 +42,38 @@ pub fn relative(root: &Path, file: &Path) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
+pub fn find_ignoring_case(path: &Path) -> Option<PathBuf> {
+    let mut found = PathBuf::new();
+    for component in path.components() {
+        let Component::Normal(name) = component else {
+            found.push(component);
+            continue;
+        };
+
+        let exact = found.join(name);
+        if exact.exists() {
+            found = exact;
+            continue;
+        }
+
+        let name = name.to_str()?;
+        let dir = if found.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            found.as_path()
+        };
+        let entry = fs::read_dir(dir).ok()?.flatten().find(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|entry| entry.eq_ignore_ascii_case(name))
+        })?;
+        found.push(entry.file_name());
+    }
+
+    found.is_file().then_some(found)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

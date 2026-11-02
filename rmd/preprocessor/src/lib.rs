@@ -1677,7 +1677,7 @@ impl<'a> Preprocessor<'a> {
 
         if is_resource {
             if !path.is_file() {
-                self.diagnose_missing(&path, location);
+                self.include_ignoring_case(&path, location);
                 return;
             }
 
@@ -1695,7 +1695,7 @@ impl<'a> Preprocessor<'a> {
                     contents
                 },
                 Err(_) if !path.is_file() => {
-                    self.diagnose_missing(&path, location);
+                    self.include_ignoring_case(&path, location);
                     return;
                 },
                 Err(error) => {
@@ -1723,6 +1723,13 @@ impl<'a> Preprocessor<'a> {
         }
 
         self.push_file(file, &path);
+    }
+
+    fn include_ignoring_case(&mut self, path: &Path, location: Location) {
+        match file_path::find_ignoring_case(path) {
+            Some(found) => self.include_file(&found, location),
+            None => self.diagnose_missing(path, location),
+        }
     }
 
     fn diagnose_missing(&mut self, path: &Path, location: Location) {
@@ -2414,6 +2421,17 @@ var/after = 3
             ("nothing.dm", ""),
         ]);
         assert_eq!(empty, "/ datum / a\n> var / x = 1\nvar / y = 2\n<");
+    }
+
+    #[test]
+    fn includes_ignore_case_like_windows_byond() {
+        let (rendered, errors) = pp_with_errors(&[
+            ("entry.dm", fixture!("programs/include-ignoring-case.dm")),
+            ("maps/station.dm", "station_file\n"),
+        ]);
+
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(rendered, "station_file");
     }
 
     #[test]

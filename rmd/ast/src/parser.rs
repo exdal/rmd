@@ -1675,7 +1675,13 @@ impl<'a, 't> Parser<'a, 't> {
         self.ternary_true_depth -= 1;
         let true_expr = true_result?;
         self.expect_next(Token::Colon)?;
-        let false_expr = self.parse_expression(Precedence::Ternary)?;
+        // `"[foo.bar ? "this language is" : ]"`
+        let false_expr = match self.peek() {
+            Some((Token::InterpStringMid(_) | Token::InterpStringEnd(_), _)) => {
+                self.make_expr(Expression::Literal(Literal::Null))
+            },
+            _ => self.parse_expression(Precedence::Ternary)?,
+        };
 
         Ok(self.make_expr(Expression::Ternary {
             condition,
@@ -2374,6 +2380,28 @@ mod tests {
         assert!(path.absolute);
         assert!(path.flags.contains(PathFlags::IS_PROC));
         assert_eq!(path.declaration_owner(), &path.segments[..2]);
+    }
+
+    #[test]
+    fn an_interpolated_ternary_may_leave_its_false_branch_empty() {
+        let (expressions, root) = parse_expr(r#""[a ? "b" : ] [c ? d : ]""#);
+        let Expression::InterpString {
+            expressions: embedded, ..
+        } = &expressions[root.index()]
+        else {
+            panic!("expected an interpolated string")
+        };
+
+        for embedded in embedded {
+            let Some(Expression::Ternary { false_expr, .. }) = embedded.map(|id| &expressions[id.index()]) else {
+                panic!("expected a ternary")
+            };
+
+            assert!(matches!(
+                expressions[false_expr.index()],
+                Expression::Literal(Literal::Null)
+            ));
+        }
     }
 
     #[test]
