@@ -45,6 +45,7 @@ mod menu;
 mod node;
 mod overlay;
 mod paste;
+mod prefab_menu;
 mod region;
 mod runtimes;
 mod search;
@@ -72,6 +73,7 @@ use self::{
         draw_identical_outlines, draw_overlay_underlay, draw_placement_preview, overlay_padding,
     },
     paste::centered_paste_min,
+    prefab_menu::{PrefabMenu, update_prefab_menu},
     region::{
         PendingRegionPlacement, RectangleGesture, RegionSelectionOptions, draw_marching_edge, draw_region_outline,
         draw_selection_mode_controls, marching_stripe_offset, rectangle_drag_coord, restore_rectangle_gesture,
@@ -1895,7 +1897,7 @@ mod tests {
             KeyBinding::new(dear_imgui_rs::Key::M)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 58);
+        assert_eq!(KeybindAction::ALL.len(), 59);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));

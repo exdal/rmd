@@ -180,6 +180,7 @@ const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
             KeybindAction::CommentTool,
             KeybindAction::Rotate,
             KeybindAction::ToolAlternate,
+            KeybindAction::PrefabVariants,
         ],
     ),
     ("Recent", &KeybindAction::RECENT),

@@ -1,6 +1,6 @@
 use core::{path::TreePath, types::Identifier, vars};
 
-use dear_imgui_rs::{MouseButton, Ui, WindowHoveredFlags};
+use dear_imgui_rs::{Key, MouseButton, PopupToken, Ui, WindowHoveredFlags};
 use dmm::{Coord, Prefab, PrefabInstanceId};
 use editor::{blame::BlameCell, conflict::Side, document::DocumentId};
 use objtree::ObjectTree;
@@ -50,20 +50,29 @@ pub(super) enum Action {
     Mirror(SelectionTransform),
 }
 
-pub(super) fn draw_popup(
-    ui: &Ui, session: &mut Session, settings: &super::Settings, target: &mut Target,
-) -> Option<Action> {
-    let _popup = ui.begin_popup(POPUP)?;
-    if session.state.active() != Some(target.document) {
+pub(super) fn begin_map_popup<'ui>(
+    ui: &'ui Ui, session: &Session, name: &str, document: DocumentId,
+) -> Option<PopupToken<'ui>> {
+    let popup = ui.begin_popup(name)?;
+    if session.state.active() != Some(document) {
         return None;
     }
 
-    if ui.is_mouse_clicked(MouseButton::Middle) && !ui.is_window_hovered_with_flags(WindowHoveredFlags::CHILD_WINDOWS) {
+    let is_middle_clicked_outside =
+        ui.is_mouse_clicked(MouseButton::Middle) && !ui.is_window_hovered_with_flags(WindowHoveredFlags::CHILD_WINDOWS);
+    if is_middle_clicked_outside || ui.is_key_pressed(Key::Escape) {
         ui.close_current_popup();
 
         return None;
     }
 
+    Some(popup)
+}
+
+pub(super) fn draw_popup(
+    ui: &Ui, session: &mut Session, settings: &super::Settings, target: &mut Target,
+) -> Option<Action> {
+    let _popup = begin_map_popup(ui, session, POPUP, target.document)?;
     let coord = target.coord;
     ui.text_disabled(format!("X: {}, Y: {}, Z: {}", coord.x, coord.y, coord.z));
     // every section starts with its own separator so none of them double up

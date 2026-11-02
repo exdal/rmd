@@ -144,6 +144,13 @@ impl Session {
 
         true
     }
+
+    pub fn choose_prefab(&mut self, prefab: Prefab) {
+        self.state.choose_prefab(prefab);
+        if !matches!(self.state.tool, Tool::Fill | Tool::RectFill | Tool::Select) {
+            self.state.tool = Tool::Place;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -292,6 +299,26 @@ mod tests {
         assert!(session.instances().unwrap().sprite(picked).is_some());
         assert_eq!(session.revision(), revision.wrapping_add(1));
         assert_eq!(session.frame_update().unwrap().previous_revision, revision);
+    }
+
+    #[test]
+    fn choosing_a_prefab_sets_the_brush_and_switches_to_place() {
+        let root = examples();
+        let mut session = Session::new();
+        session.load_environment(&root.join("test.dme")).unwrap();
+        let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+
+        session.set_tool(Tool::Delete);
+        session.choose_prefab(table.clone());
+        assert_eq!(session.palette(), Some(&table));
+        assert_eq!(session.tool(), Tool::Place);
+        assert_eq!(session.recent_prefabs()[0], table);
+
+        for tool in [Tool::Fill, Tool::RectFill, Tool::Select] {
+            session.set_tool(tool);
+            session.choose_prefab(table.clone());
+            assert_eq!(session.tool(), tool);
+        }
     }
 
     #[test]
