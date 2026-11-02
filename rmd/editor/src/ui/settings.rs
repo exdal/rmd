@@ -115,7 +115,10 @@ const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
             KeybindAction::Save,
             KeybindAction::SaveAll,
             KeybindAction::CloseMap,
-            KeybindAction::Screenshot,
+            KeybindAction::ScreenshotMap,
+            KeybindAction::ScreenshotSelection,
+            KeybindAction::CopyMapScreenshot,
+            KeybindAction::CopySelectionScreenshot,
         ],
     ),
     (

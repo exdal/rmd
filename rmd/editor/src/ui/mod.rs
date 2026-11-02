@@ -126,6 +126,13 @@ const LAYER_KEYS: [(KeybindAction, TypeLayer); 4] = [
     (KeybindAction::ToggleMobLayer, TypeLayer::Mob),
 ];
 
+const SCREENSHOT_KEYS: [(KeybindAction, ScreenshotArea, bool); 4] = [
+    (KeybindAction::ScreenshotMap, ScreenshotArea::Map, false),
+    (KeybindAction::ScreenshotSelection, ScreenshotArea::Selection, false),
+    (KeybindAction::CopyMapScreenshot, ScreenshotArea::Map, true),
+    (KeybindAction::CopySelectionScreenshot, ScreenshotArea::Selection, true),
+];
+
 const RELOAD_CONFLICTS_POPUP: &str = "Load merge conflicts##reload-conflicts";
 
 pub struct VisibleMapView {
@@ -709,11 +716,12 @@ impl UiState {
             self.request_close(session, session.state.document_ids());
         }
 
-        if self.map_keys_enabled(ui, session) && settings.keybindings.get(KeybindAction::Screenshot).is_pressed(ui) {
-            menu.screenshot = Some(ScreenshotRequest {
-                area: ScreenshotArea::Map,
-                copy: false,
-            });
+        if self.map_keys_enabled(ui, session) {
+            for (action, area, copy) in SCREENSHOT_KEYS {
+                if settings.keybindings.get(action).is_pressed(ui) {
+                    menu.screenshot = Some(ScreenshotRequest { area, copy });
+                }
+            }
         }
     }
 
@@ -1895,7 +1903,7 @@ mod tests {
             KeyBinding::new(dear_imgui_rs::Key::M)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 58);
+        assert_eq!(KeybindAction::ALL.len(), 61);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));
