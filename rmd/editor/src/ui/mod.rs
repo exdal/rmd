@@ -13,11 +13,10 @@ use dear_imgui_rs::{
 use dmm::{Coord, PrefabInstanceId};
 use editor::{
     document::{DocumentId, MapDocument},
-    icons::materialdesignicons::ICON_IMAGE_BROKEN,
     tool::{FillMode, SelectionRotation, SelectionTransform, Tool},
 };
 pub(crate) use inspector::TransformMode;
-use render::{Camera, GuideLine, MapViewInteraction, MapViewRect, Renderer};
+use render::{Camera, GuideLine, MapViewInteraction, MapViewRect};
 
 use self::{inspector::InspectorPanel, object_tree::ObjectTreePanel, settings::SettingsWindow};
 use crate::{
@@ -45,6 +44,7 @@ mod menu;
 mod node;
 mod overlay;
 mod paste;
+mod prefab_menu;
 mod region;
 mod runtimes;
 mod search;
@@ -72,6 +72,7 @@ use self::{
         draw_identical_outlines, draw_overlay_underlay, draw_placement_preview, overlay_padding,
     },
     paste::centered_paste_min,
+    prefab_menu::{PrefabMenu, update_prefab_menu},
     region::{
         PendingRegionPlacement, RectangleGesture, RegionSelectionOptions, draw_marching_edge, draw_region_outline,
         draw_selection_mode_controls, marching_stripe_offset, rectangle_drag_coord, restore_rectangle_gesture,
@@ -124,6 +125,13 @@ const LAYER_KEYS: [(KeybindAction, TypeLayer); 4] = [
     (KeybindAction::ToggleTurfLayer, TypeLayer::Turf),
     (KeybindAction::ToggleObjLayer, TypeLayer::Obj),
     (KeybindAction::ToggleMobLayer, TypeLayer::Mob),
+];
+
+const SCREENSHOT_KEYS: [(KeybindAction, ScreenshotArea, bool); 4] = [
+    (KeybindAction::ScreenshotMap, ScreenshotArea::Map, false),
+    (KeybindAction::ScreenshotSelection, ScreenshotArea::Selection, false),
+    (KeybindAction::CopyMapScreenshot, ScreenshotArea::Map, true),
+    (KeybindAction::CopySelectionScreenshot, ScreenshotArea::Selection, true),
 ];
 
 const RELOAD_CONFLICTS_POPUP: &str = "Load merge conflicts##reload-conflicts";
@@ -511,7 +519,10 @@ impl UiState {
         }
 
         let reload_profile = self.draw_settings_window(ui, session, settings, themes, load.is_some());
-        self.show_welcome |= menu.show_welcome;
+        if menu.show_welcome {
+            self.show_welcome = true;
+            self.close_focus = Some(CloseFocus::Welcome);
+        }
 
         let open_source = self.draw_panels(ui, session, settings);
         let load_conflicts = self.draw_reload_conflicts_popup(ui, session);
@@ -709,11 +720,12 @@ impl UiState {
             self.request_close(session, session.state.document_ids());
         }
 
-        if self.map_keys_enabled(ui, session) && settings.keybindings.get(KeybindAction::Screenshot).is_pressed(ui) {
-            menu.screenshot = Some(ScreenshotRequest {
-                area: ScreenshotArea::Map,
-                copy: false,
-            });
+        if self.map_keys_enabled(ui, session) {
+            for (action, area, copy) in SCREENSHOT_KEYS {
+                if settings.keybindings.get(action).is_pressed(ui) {
+                    menu.screenshot = Some(ScreenshotRequest { area, copy });
+                }
+            }
         }
     }
 
@@ -1899,7 +1911,7 @@ mod tests {
             KeyBinding::new(dear_imgui_rs::Key::M)
         );
         // Every action is reachable from the settings list, or it cannot be rebound.
-        assert_eq!(KeybindAction::ALL.len(), 58);
+        assert_eq!(KeybindAction::ALL.len(), 62);
         assert_eq!(KeybindAction::RECENT.len(), 10);
         assert!(KeybindAction::ALL.contains(&KeybindAction::Save));
         assert!(KeybindAction::ALL.contains(&KeybindAction::Undo));

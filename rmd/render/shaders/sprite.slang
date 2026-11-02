@@ -109,8 +109,10 @@ func sample_sprite_I_FUCKING_HATE_BYOND(VSOutput input, bool gamma) -> f32x4 {
             discard;
         }
 
+        let outline_color = SHOW_AREAS ? f32x4(1.0) : color;
+
         return apply_focus_brightness(
-            apply_placement_flash(color, input.placement_flash_strength),
+            apply_placement_flash(outline_color, input.placement_flash_strength),
             brightness
         );
     }

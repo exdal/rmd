@@ -1,12 +1,13 @@
 use core::{path::TreePath, types::Identifier, vars};
 
-use dear_imgui_rs::{MouseButton, Ui, WindowHoveredFlags};
+use dear_imgui_rs::{Key, MouseButton, PopupToken, Ui, WindowHoveredFlags};
 use dmm::{Coord, Prefab, PrefabInstanceId};
 use editor::{blame::BlameCell, conflict::Side, document::DocumentId};
 use objtree::ObjectTree;
 
 use super::{
-    EditCommand, SelectionTransform, Session, Tool, common::fit_icon, draw_type_path_search, find::SimilarMatchKind,
+    EditCommand, SelectionTransform, Session, Tool, common::draw_thumbnail, draw_type_path_search,
+    find::SimilarMatchKind,
 };
 use crate::session::context_placement_group;
 
@@ -53,20 +54,29 @@ pub(super) enum Action {
     Mirror(SelectionTransform),
 }
 
-pub(super) fn draw_popup(
-    ui: &Ui, session: &mut Session, settings: &super::Settings, target: &mut Target,
-) -> Option<Action> {
-    let _popup = ui.begin_popup(POPUP)?;
-    if session.state.active() != Some(target.document) {
+pub(super) fn begin_map_popup<'ui>(
+    ui: &'ui Ui, session: &Session, name: &str, document: DocumentId,
+) -> Option<PopupToken<'ui>> {
+    let popup = ui.begin_popup(name)?;
+    if session.state.active() != Some(document) {
         return None;
     }
 
-    if ui.is_mouse_clicked(MouseButton::Middle) && !ui.is_window_hovered_with_flags(WindowHoveredFlags::CHILD_WINDOWS) {
+    let is_middle_clicked_outside =
+        ui.is_mouse_clicked(MouseButton::Middle) && !ui.is_window_hovered_with_flags(WindowHoveredFlags::CHILD_WINDOWS);
+    if is_middle_clicked_outside || ui.is_key_pressed(Key::Escape) {
         ui.close_current_popup();
 
         return None;
     }
 
+    Some(popup)
+}
+
+pub(super) fn draw_popup(
+    ui: &Ui, session: &mut Session, settings: &super::Settings, target: &mut Target,
+) -> Option<Action> {
+    let _popup = begin_map_popup(ui, session, POPUP, target.document)?;
     let coord = target.coord;
     ui.text_disabled(format!("X: {}, Y: {}, Z: {}", coord.x, coord.y, coord.z));
     // every section starts with its own separator so none of them double up
@@ -373,33 +383,8 @@ pub(super) fn draw_popup(
                 action = Some(Action::Search(instance, SimilarMatchKind::Prefab));
             }
         }
+        draw_thumbnail(ui, thumbnail, origin, icon_extent, None);
         let draw = ui.get_window_draw_list();
-        if let Some(thumbnail) = thumbnail {
-            let size = fit_icon(thumbnail.texture.width, thumbnail.texture.height, icon_extent);
-            let min = [
-                origin[0] + (icon_extent - size[0]) * 0.5,
-                origin[1] + (icon_extent - size[1]) * 0.5,
-            ];
-            draw.add_image(
-                super::Renderer::sprite_texture(thumbnail.texture.index),
-                min,
-                [min[0] + size[0], min[1] + size[1]],
-                thumbnail.uv0,
-                thumbnail.uv1,
-                thumbnail.tint,
-            );
-        } else {
-            let icon = super::ICON_IMAGE_BROKEN.to_string();
-            let size = ui.calc_text_size(&icon);
-            draw.add_text(
-                [
-                    origin[0] + (icon_extent - size[0]) * 0.5,
-                    origin[1] + (icon_extent - size[1]) * 0.5,
-                ],
-                ui.style_color(dear_imgui_rs::StyleColor::TextDisabled),
-                icon,
-            );
-        }
         let text_color = ui.style_color(dear_imgui_rs::StyleColor::Text);
         draw.add_text([origin[0] + icon_width, origin[1]], text_color, name);
         draw.add_text([origin[0] + path_column, origin[1]], text_color, path_text);

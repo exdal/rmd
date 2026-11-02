@@ -3,6 +3,14 @@ use std::{collections::HashSet, hash::Hash};
 use dear_imgui_rs::{
     Condition, Key, ModalPopupToken, StyleColor, TableFlags, Ui, WindowFlags, WindowHoveredFlags, sys,
 };
+use editor::icons::materialdesignicons::ICON_IMAGE_BROKEN;
+use render::Renderer;
+
+use crate::session::PrefabThumbnail;
+
+const ORIGIN_RADIUS: f32 = 3.0;
+const ORIGIN_MAX_DISTANCE: f32 = 32.0;
+const ORIGIN_COLOR: [f32; 4] = [1.0, 0.5, 0.0, 1.0];
 
 pub(super) struct RowSelection<K> {
     keys: HashSet<K>,
@@ -169,6 +177,8 @@ pub(super) fn dialog_buttons(ui: &Ui, buttons: &[DialogButton], is_keys_enabled:
     let total = buttons.iter().map(|button| button_width(ui, button.label)).sum::<f32>()
         + spacing * buttons.len().saturating_sub(1) as f32;
     let available = ui.content_region_avail_width();
+    let row_start = ui.cursor_screen_pos()[0];
+    let max_x = unsafe { (*sys::igGetCurrentWindow()).DC.CursorMaxPos.x };
     if available > total {
         let [x, y] = ui.cursor_pos();
         ui.set_cursor_pos([x + available - total, y]);
@@ -210,6 +220,8 @@ pub(super) fn dialog_buttons(ui: &Ui, buttons: &[DialogButton], is_keys_enabled:
             ui.set_item_tooltip(tooltip);
         }
     }
+
+    unsafe { (*sys::igGetCurrentWindow()).DC.CursorMaxPos.x = max_x.max(row_start + total) };
 
     if clicked.is_none() && is_keys_enabled {
         if ui.is_key_pressed(Key::Escape) {
@@ -340,12 +352,76 @@ pub(super) fn fit_icon(width: u32, height: u32, extent: f32) -> [f32; 2] {
     [width * scale, height * scale]
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct IconOrigin {
+    pub offset: [i32; 2],
+    pub tile_size: u32,
+}
+
+pub(super) fn draw_thumbnail(
+    ui: &Ui, thumbnail: Option<PrefabThumbnail>, min: [f32; 2], extent: f32, origin: Option<IconOrigin>,
+) {
+    let draw = ui.get_window_draw_list();
+    let Some(thumbnail) = thumbnail else {
+        let icon = ICON_IMAGE_BROKEN.to_string();
+        let size = ui.calc_text_size(&icon);
+        draw.add_text(
+            [min[0] + (extent - size[0]) * 0.5, min[1] + (extent - size[1]) * 0.5],
+            ui.style_color(StyleColor::TextDisabled),
+            icon,
+        );
+        return;
+    };
+
+    let size = fit_icon(thumbnail.texture.width, thumbnail.texture.height, extent);
+    let image_min = [min[0] + (extent - size[0]) * 0.5, min[1] + (extent - size[1]) * 0.5];
+    let image_max = [image_min[0] + size[0], image_min[1] + size[1]];
+    draw.add_image(
+        Renderer::sprite_texture(thumbnail.texture.index),
+        image_min,
+        image_max,
+        thumbnail.uv0,
+        thumbnail.uv1,
+        thumbnail.tint,
+    );
+
+    let Some(IconOrigin { offset, tile_size }) = origin else {
+        return;
+    };
+
+    if offset == [0, 0] {
+        return;
+    }
+
+    let scale = size[0] / thumbnail.texture.width.max(1) as f32;
+    let half_tile = tile_size.max(1) as f32 * 0.5;
+    let mut delta = [
+        half_tile - offset[0] as f32 - thumbnail.texture.width as f32 * 0.5,
+        half_tile - offset[1] as f32 - thumbnail.texture.height as f32 * 0.5,
+    ];
+    let distance = delta[0].hypot(delta[1]);
+    if distance > ORIGIN_MAX_DISTANCE {
+        let shrink = ORIGIN_MAX_DISTANCE / distance;
+        delta = [delta[0] * shrink, delta[1] * shrink];
+    }
+
+    let radius = ORIGIN_RADIUS * dpi(ui);
+    let center = [
+        ((image_min[0] + image_max[0]) * 0.5 + delta[0] * scale).clamp(min[0] + radius, min[0] + extent - radius),
+        ((image_min[1] + image_max[1]) * 0.5 - delta[1] * scale).clamp(min[1] + radius, min[1] + extent - radius),
+    ];
+    draw.add_circle(center, radius + 1.0, [0.05, 0.05, 0.05, 0.95])
+        .filled(true)
+        .build();
+    draw.add_circle(center, radius, ORIGIN_COLOR).filled(true).build();
+}
+
 #[cfg(test)]
 mod tests {
     use dear_imgui_rs::{Condition, Ui, WindowFlags, sys};
 
     use super::{
-        DialogButton, RowSelection, begin_centered_modal, cancel_index, dialog_buttons, enter_index,
+        DialogButton, RowSelection, begin_centered_modal, cancel_index, dialog_buttons, enter_index, fit_icon,
         focus_window_on_hover,
     };
     use crate::ui::{
@@ -355,6 +431,14 @@ mod tests {
             PopupContext, assert_window_centered, finish_frame, popup_context, rectangle_context, set_desktop_geometry,
         },
     };
+
+    #[test]
+    fn icons_fit_inside_a_square_without_changing_aspect_ratio() {
+        assert_eq!(fit_icon(32, 32, 48.0), [48.0, 48.0]);
+        assert_eq!(fit_icon(64, 32, 48.0), [48.0, 24.0]);
+        assert_eq!(fit_icon(16, 32, 48.0), [24.0, 48.0]);
+        assert_eq!(fit_icon(0, 0, 48.0), [48.0, 48.0]);
+    }
 
     #[test]
     fn dialog_button_gap_ignores_dialog_width() {
@@ -390,6 +474,43 @@ mod tests {
         let wide = gap("Wide dialog", &"A much wider line of dialog text ".repeat(4));
         assert!(narrow > 0.0);
         assert_eq!(narrow, wide);
+    }
+
+    #[test]
+    fn dialog_shrinks_after_wide_content_goes_away() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = popup_context(true);
+        set_desktop_geometry(&mut context, [0.0, 0.0], [1920.0, 1080.0]);
+        let name = "Shrinking dialog";
+        let buttons = [DialogButton::cancel("Cancel")];
+        let mut draw = |text: &str, frames: usize, open: bool| {
+            let mut edges = (0.0, 0.0);
+            for frame in 0..frames {
+                let ui = context.frame();
+                if open && frame == 0 {
+                    ui.open_popup(name);
+                }
+
+                if let Some(_modal) = begin_centered_modal(ui, name, MODAL_FLAGS) {
+                    ui.text(text);
+                    let content_right = ui.cursor_screen_pos()[0] + ui.content_region_avail_width();
+                    dialog_buttons(ui, &buttons, false);
+                    edges = (ui.item_rect_max()[0], content_right);
+                }
+
+                finish_frame(&mut context);
+            }
+
+            let width = unsafe { (*sys::igFindWindowByName(c"Shrinking dialog".as_ptr())).Size.x };
+            (width, edges)
+        };
+
+        let (narrow, _) = draw("Short", 4, true);
+        let (wide, _) = draw(&"A much wider line of dialog text ".repeat(4), 4, false);
+        let (shrunk, (button_right, content_right)) = draw("Short", 4, false);
+        assert!(wide > narrow);
+        assert_eq!(shrunk, narrow);
+        assert_eq!(button_right, content_right);
     }
 
     #[test]

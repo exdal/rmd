@@ -165,7 +165,7 @@ impl App {
         let device = Device::new(window.window_handle()?.as_raw(), window.display_handle()?.as_raw())?;
 
         let mut renderer = Renderer::new(device, size.width, size.height, self.session.textures.len())?;
-        renderer.upload_textures(&self.session.textures)?;
+        renderer.set_textures(&self.session.textures)?;
 
         self.camera.resize(size.width, size.height);
         let (width, height) = self.session.extent_px();

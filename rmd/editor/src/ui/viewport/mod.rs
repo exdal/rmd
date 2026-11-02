@@ -24,9 +24,9 @@ use self::{
     tools::{Clicks, apply_right_click, configure_tool_interaction, draw_node_hit, drive_node_tool, interaction_mode},
 };
 use super::{
-    BlamePopup, CloseFocus, OverlayRect, UiState, VisibleMapView, common::focus_window_on_hover,
+    BlamePopup, CloseFocus, OverlayRect, PrefabMenu, UiState, VisibleMapView, common::focus_window_on_hover,
     context_menu::Target as MenuTarget, draw_fill_limit_warning, node::NodeOverlayHit, overlay_padding,
-    recent_button_size, restore_rectangle_gesture,
+    recent_button_size, restore_rectangle_gesture, update_prefab_menu,
 };
 use crate::{
     camera::Controller,
@@ -60,6 +60,7 @@ pub(super) struct MapViewState {
     pub(super) focus: bool,
     hovered_coord: Option<Coord>,
     blame_popup: Option<BlamePopup>,
+    prefab_menu: Option<PrefabMenu>,
     pub(super) gestures: ViewGestures,
     context: Option<MenuTarget>,
 }
@@ -88,6 +89,7 @@ impl MapViewState {
             refit: true,
             hovered_coord: None,
             blame_popup: None,
+            prefab_menu: None,
             focus: false,
             gestures: ViewGestures::default(),
             context: None,
@@ -397,6 +399,7 @@ impl UiState {
             focus,
             hovered_coord,
             blame_popup,
+            prefab_menu,
             gestures,
             context,
         } = view;
@@ -495,6 +498,7 @@ impl UiState {
             share_presence(session, &frame, coop);
 
             let is_blame_capturing = draw_tile_hover(ui, session, &mut frame, is_over_blame_popup);
+            update_prefab_menu(ui, session, settings, id, frame.is_focused, prefab_menu);
             let node_hit = draw_node_hit(ui, session, &frame);
             configure_tool_interaction(session.tool(), frame.interaction);
             self.toggle_focus_on_key(ui, session, settings, &frame);

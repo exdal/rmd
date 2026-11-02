@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use core::path::TreePath;
 use dmm::{Map, MapFormat, Prefab, Size};
 use editor::{
     conflict::ConflictState,
@@ -200,6 +201,23 @@ impl Session {
 
     pub fn map(&self) -> Option<&Grid> {
         self.state.active_document().map(|document| &document.map)
+    }
+
+    pub fn map_prefabs_of(&self, id: DocumentId, path: &TreePath) -> Vec<Prefab> {
+        let Some(document) = self.state.document(id) else {
+            return Vec::new();
+        };
+
+        let mut prefabs = Vec::new();
+        for instance in document.prefab_instances() {
+            let prefab = instance.prefab();
+            if prefab.path == *path && !prefabs.contains(prefab) {
+                prefabs.push(prefab.clone());
+            }
+        }
+
+        prefabs.sort_by_key(|prefab| prefab.vars.len());
+        prefabs
     }
 
     pub fn map_path(&self) -> Option<&Path> {

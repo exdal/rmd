@@ -25,8 +25,6 @@ const LOAD_TEXT_MIN_LINES: usize = 4;
 
 const LOAD_ERROR_MAX_LINES: usize = 10;
 
-const LOAD_PATH_MAX_CHARS: usize = 60;
-
 pub(super) const DIAGNOSTIC_WARNING_COLOR: [f32; 4] = [1.0, 0.8, 0.25, 1.0];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,7 +166,7 @@ fn draw_load_body(
 ) {
     match (load, notice) {
         (Some(view), _) => {
-            draw_load_heading(ui, view.title, &view.path);
+            draw_load_heading(ui, view.title, &view.path, LOAD_POPUP_WIDTH);
             draw_load_progress(ui, &view.snapshot);
 
             if view.cancellable {
@@ -180,7 +178,7 @@ fn draw_load_body(
         },
 
         (None, Some(LoadNotice::Failed { title, path, message })) => {
-            draw_load_heading(ui, title, path);
+            draw_load_heading(ui, title, path, LOAD_TEXT_WIDTH);
             let lines = wrapped_lines(ui, message).clamp(LOAD_TEXT_MIN_LINES, LOAD_ERROR_MAX_LINES);
             draw_selectable_text(ui, "##load-error", message, lines, Some(SAVE_ERROR_COLOR));
 
@@ -251,9 +249,9 @@ fn wrapped_lines(ui: &Ui, text: &str) -> usize {
         .max(1)
 }
 
-fn draw_load_heading(ui: &Ui, title: &str, path: &str) {
+fn draw_load_heading(ui: &Ui, title: &str, path: &str, width: f32) {
     ui.text(title);
-    ui.text_disabled(shorten_path(path, LOAD_PATH_MAX_CHARS));
+    ui.text_disabled(fit_path(ui, path, width * dpi(ui)));
     ui.separator();
 }
 
@@ -277,7 +275,16 @@ fn draw_load_progress(ui: &Ui, snapshot: &Snapshot) {
     }
 
     ui.text(snapshot.stage.label());
-    ui.text_disabled(shorten_path(&snapshot.detail, LOAD_PATH_MAX_CHARS));
+    ui.text_disabled(fit_path(ui, &snapshot.detail, LOAD_POPUP_WIDTH * dpi(ui)));
+}
+
+fn fit_path(ui: &Ui, path: &str, width: f32) -> String {
+    let count = path.chars().count();
+    (0..=count)
+        .rev()
+        .map(|max| shorten_path(path, max))
+        .find(|shortened| ui.calc_text_size(shortened)[0] <= width)
+        .unwrap_or_default()
 }
 
 fn shorten_path(path: &str, max: usize) -> String {
@@ -309,9 +316,10 @@ fn grouped(value: usize) -> String {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use dear_imgui_rs::{Context, WindowKey};
+    use dear_imgui_rs::{Context, WindowKey, sys};
+    use editor::progress::{Snapshot, Stage};
 
-    use super::{DiagnosticsState, LoadNotice, draw_load_popup, grouped, shorten_path};
+    use super::{DiagnosticsState, LOAD_POPUP_WIDTH, LoadNotice, draw_load_popup, fit_path, grouped, shorten_path};
     use crate::{
         loader::LoadView,
         session::{DiagnosticSeverity, LoadReport},
@@ -372,6 +380,58 @@ mod tests {
             assert_eq!(context.main_viewport().size(), [900.0, 600.0]);
             assert_window_centered(&mut context, c"###load-resize-test");
         }
+    }
+
+    #[test]
+    fn long_progress_details_do_not_widen_the_popup() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = popup_context(true);
+        set_desktop_geometry(&mut context, [0.0, 0.0], [1920.0, 1080.0]);
+        let window = WindowKey::new("load-width-test", "Load").unwrap();
+        let diagnostics = DiagnosticsState::default();
+        let mut width = |detail: &str| {
+            let progress = LoadView {
+                title: "Opening codebase",
+                path: "code/".repeat(40),
+                snapshot: Snapshot {
+                    stage: Stage::Preprocess,
+                    done: 0,
+                    total: 0,
+                    detail: String::from(detail),
+                },
+                cancelling: false,
+                cancellable: true,
+            };
+            for _ in 0..4 {
+                draw_load_popup(context.frame(), &window, Some(&progress), None, &diagnostics);
+                finish_frame(&mut context);
+            }
+
+            // SAFETY: the test owns the current context and its live window.
+            unsafe { (*sys::igFindWindowByName(c"###load-width-test".as_ptr())).Size.x }
+        };
+
+        let short = width("");
+        assert_eq!(width(&"code/modules/".repeat(20)), short);
+        assert_eq!(width(""), short);
+        let padding = context.style().window_padding()[0];
+        assert_eq!(short, LOAD_POPUP_WIDTH + padding * 2.0);
+    }
+
+    #[test]
+    fn paths_are_fitted_to_a_pixel_width_keeping_their_tail() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = popup_context(false);
+        let ui = context.frame();
+        let path = "code/modules/mob/living/carbon/human/human.dm";
+        let width = ui.calc_text_size("human/human.dm")[0] + 1.0;
+
+        let fitted = fit_path(ui, path, width);
+        assert!(ui.calc_text_size(&fitted)[0] <= width);
+        assert!(fitted.starts_with('\u{2026}') && path.ends_with(fitted.trim_start_matches('\u{2026}')));
+        assert_eq!(fit_path(ui, path, 1000.0), path);
+        assert_eq!(fit_path(ui, "", 10.0), "");
+        finish_frame(&mut context);
     }
 
     #[test]

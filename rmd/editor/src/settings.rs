@@ -354,7 +354,10 @@ pub(crate) enum KeybindAction {
     Recent0,
     ShowTileGrid,
     ShowPixelGrid,
-    Screenshot,
+    ScreenshotMap,
+    ScreenshotSelection,
+    CopyMapScreenshot,
+    CopySelectionScreenshot,
     PanLeft,
     PanRight,
     PanUp,
@@ -363,10 +366,11 @@ pub(crate) enum KeybindAction {
     PanDrag,
     ZoomIn,
     ZoomOut,
+    PrefabVariants,
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 58] = [
+    pub const ALL: [Self; 62] = [
         Self::Save,
         Self::SaveAll,
         Self::CloseMap,
@@ -416,7 +420,10 @@ impl KeybindAction {
         Self::Recent0,
         Self::ShowTileGrid,
         Self::ShowPixelGrid,
-        Self::Screenshot,
+        Self::ScreenshotMap,
+        Self::ScreenshotSelection,
+        Self::CopyMapScreenshot,
+        Self::CopySelectionScreenshot,
         Self::PanLeft,
         Self::PanRight,
         Self::PanUp,
@@ -425,6 +432,7 @@ impl KeybindAction {
         Self::PanDrag,
         Self::ZoomIn,
         Self::ZoomOut,
+        Self::PrefabVariants,
     ];
     pub const RECENT: [Self; 10] = [
         Self::Recent1,
@@ -490,7 +498,10 @@ impl KeybindAction {
             Self::Recent0 => "Recent 0",
             Self::ShowTileGrid => "Show tile grid",
             Self::ShowPixelGrid => "Show pixel grid",
-            Self::Screenshot => "Screenshot",
+            Self::ScreenshotMap => "Save map screenshot",
+            Self::ScreenshotSelection => "Save selection screenshot",
+            Self::CopyMapScreenshot => "Copy map screenshot",
+            Self::CopySelectionScreenshot => "Copy selection screenshot",
             Self::PanLeft => "Pan left",
             Self::PanRight => "Pan right",
             Self::PanUp => "Pan up",
@@ -499,6 +510,7 @@ impl KeybindAction {
             Self::PanDrag => "Drag to pan (hold)",
             Self::ZoomIn => "Zoom in",
             Self::ZoomOut => "Zoom out",
+            Self::PrefabVariants => "Prefab variants",
         }
     }
 
@@ -557,7 +569,10 @@ impl KeybindAction {
             Self::Recent0 => "recent-0",
             Self::ShowTileGrid => "show-tile-grid",
             Self::ShowPixelGrid => "show-pixel-grid",
-            Self::Screenshot => "screenshot",
+            Self::ScreenshotMap => "screenshot-map",
+            Self::ScreenshotSelection => "screenshot-selection",
+            Self::CopyMapScreenshot => "copy-map-screenshot",
+            Self::CopySelectionScreenshot => "copy-selection-screenshot",
             Self::PanLeft => "pan-left",
             Self::PanRight => "pan-right",
             Self::PanUp => "pan-up",
@@ -566,6 +581,7 @@ impl KeybindAction {
             Self::PanDrag => "pan-drag",
             Self::ZoomIn => "zoom-in",
             Self::ZoomOut => "zoom-out",
+            Self::PrefabVariants => "prefab-variants",
         }
     }
 }
@@ -624,7 +640,11 @@ pub(crate) struct KeyBindings {
     recent_0: KeyBinding,
     show_tile_grid: KeyBinding,
     show_pixel_grid: KeyBinding,
-    screenshot: KeyBinding,
+    #[serde(rename = "screenshot")]
+    screenshot_map: KeyBinding,
+    screenshot_selection: KeyBinding,
+    copy_map_screenshot: KeyBinding,
+    copy_selection_screenshot: KeyBinding,
     pan_left: KeyBinding,
     pan_right: KeyBinding,
     pan_up: KeyBinding,
@@ -633,6 +653,7 @@ pub(crate) struct KeyBindings {
     pan_drag: KeyBinding,
     zoom_in: KeyBinding,
     zoom_out: KeyBinding,
+    prefab_variants: KeyBinding,
 }
 
 impl Default for KeyBindings {
@@ -687,7 +708,10 @@ impl Default for KeyBindings {
             recent_0: KeyBinding::new(Key::Key0),
             show_tile_grid: KeyBinding::new(Key::G),
             show_pixel_grid: KeyBinding::with_shift(Key::G),
-            screenshot: KeyBinding::new(Key::F12),
+            screenshot_map: KeyBinding::new(Key::F12),
+            screenshot_selection: KeyBinding::with_shift(Key::F12),
+            copy_map_screenshot: KeyBinding::with_ctrl(Key::F12),
+            copy_selection_screenshot: KeyBinding::with_ctrl_shift(Key::F12),
             pan_left: KeyBinding::new(Key::LeftArrow),
             pan_right: KeyBinding::new(Key::RightArrow),
             pan_up: KeyBinding::new(Key::UpArrow),
@@ -696,6 +720,7 @@ impl Default for KeyBindings {
             pan_drag: KeyBinding::new(Key::Space),
             zoom_in: KeyBinding::new(Key::Equal),
             zoom_out: KeyBinding::new(Key::Minus),
+            prefab_variants: KeyBinding::new(Key::Tab),
         }
     }
 }
@@ -752,7 +777,10 @@ impl KeyBindings {
             recent_0: KeyBinding::new(Key::P),
             show_tile_grid: KeyBinding::new(Key::G),
             show_pixel_grid: KeyBinding::with_shift(Key::G),
-            screenshot: KeyBinding::new(Key::F12),
+            screenshot_map: KeyBinding::new(Key::F12),
+            screenshot_selection: KeyBinding::with_shift(Key::F12),
+            copy_map_screenshot: KeyBinding::with_ctrl(Key::F12),
+            copy_selection_screenshot: KeyBinding::with_ctrl_shift(Key::F12),
             pan_left: KeyBinding::new(Key::LeftArrow),
             pan_right: KeyBinding::new(Key::RightArrow),
             pan_up: KeyBinding::new(Key::UpArrow),
@@ -761,6 +789,7 @@ impl KeyBindings {
             pan_drag: KeyBinding::new(Key::Space),
             zoom_in: KeyBinding::new(Key::Equal),
             zoom_out: KeyBinding::new(Key::Minus),
+            prefab_variants: KeyBinding::new(Key::Tab),
         }
     }
 
@@ -815,7 +844,10 @@ impl KeyBindings {
             KeybindAction::Recent0 => self.recent_0,
             KeybindAction::ShowTileGrid => self.show_tile_grid,
             KeybindAction::ShowPixelGrid => self.show_pixel_grid,
-            KeybindAction::Screenshot => self.screenshot,
+            KeybindAction::ScreenshotMap => self.screenshot_map,
+            KeybindAction::ScreenshotSelection => self.screenshot_selection,
+            KeybindAction::CopyMapScreenshot => self.copy_map_screenshot,
+            KeybindAction::CopySelectionScreenshot => self.copy_selection_screenshot,
             KeybindAction::PanLeft => self.pan_left,
             KeybindAction::PanRight => self.pan_right,
             KeybindAction::PanUp => self.pan_up,
@@ -824,6 +856,7 @@ impl KeyBindings {
             KeybindAction::PanDrag => self.pan_drag,
             KeybindAction::ZoomIn => self.zoom_in,
             KeybindAction::ZoomOut => self.zoom_out,
+            KeybindAction::PrefabVariants => self.prefab_variants,
         }
     }
 
@@ -933,7 +966,10 @@ impl KeyBindings {
             KeybindAction::Recent0 => self.recent_0 = binding,
             KeybindAction::ShowTileGrid => self.show_tile_grid = binding,
             KeybindAction::ShowPixelGrid => self.show_pixel_grid = binding,
-            KeybindAction::Screenshot => self.screenshot = binding,
+            KeybindAction::ScreenshotMap => self.screenshot_map = binding,
+            KeybindAction::ScreenshotSelection => self.screenshot_selection = binding,
+            KeybindAction::CopyMapScreenshot => self.copy_map_screenshot = binding,
+            KeybindAction::CopySelectionScreenshot => self.copy_selection_screenshot = binding,
             KeybindAction::PanLeft => self.pan_left = binding,
             KeybindAction::PanRight => self.pan_right = binding,
             KeybindAction::PanUp => self.pan_up = binding,
@@ -942,6 +978,7 @@ impl KeyBindings {
             KeybindAction::PanDrag => self.pan_drag = binding,
             KeybindAction::ZoomIn => self.zoom_in = binding,
             KeybindAction::ZoomOut => self.zoom_out = binding,
+            KeybindAction::PrefabVariants => self.prefab_variants = binding,
         }
     }
 }
