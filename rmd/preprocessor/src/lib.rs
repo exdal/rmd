@@ -1632,10 +1632,13 @@ impl<'a> Preprocessor<'a> {
             return;
         }
 
-        let is_resource = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| ["dmm", "dmp", "dmf", "dmi"].iter().any(|r| e.eq_ignore_ascii_case(r)));
+        let extension = path.extension().and_then(|e| e.to_str());
+        if extension.is_some_and(|e| e.eq_ignore_ascii_case("dms")) {
+            return;
+        }
+
+        let is_resource =
+            extension.is_some_and(|e| ["dmm", "dmp", "dmf", "dmi"].iter().any(|r| e.eq_ignore_ascii_case(r)));
 
         if is_resource {
             if !path.is_file() {
@@ -2376,6 +2379,17 @@ var/after = 3
             ("nothing.dm", ""),
         ]);
         assert_eq!(empty, "/ datum / a\n> var / x = 1\nvar / y = 2\n<");
+    }
+
+    #[test]
+    fn dms_includes_are_ignored() {
+        let (rendered, errors) = pp_with_errors(&[
+            ("entry.dm", fixture!("programs/include-dms.dm")),
+            ("style.dms", "body { color: red; }\n"),
+        ]);
+
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(rendered, "/ datum / a\n/ datum / b");
     }
 
     #[test]
