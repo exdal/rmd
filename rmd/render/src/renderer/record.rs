@@ -244,7 +244,7 @@ impl Renderer {
 
         let (cull_values, cull) = record_sprite_cull(
             module,
-            self.cull_pipelines,
+            self.pipelines.cull,
             sprites,
             CullValues {
                 visible: visible_indices,
@@ -276,7 +276,7 @@ impl Renderer {
                     visible_indices,
                 ))
                 .with_name(format!("{name} underlays"))
-                .bind_graphics_pipeline(self.scene_pipeline)
+                .bind_graphics_pipeline(self.pipelines.scene)
                 .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
                 .set_viewport(0, Rect2D::framebuffer())
                 .set_scissor(0, Rect2D::framebuffer())
@@ -304,7 +304,7 @@ impl Renderer {
             [scene_attachment] = module
                 .begin_rendering([(scene_attachment, Access::ColorRW)])
                 .with_name(format!("{name} underlay blur"))
-                .bind_graphics_pipeline(self.blur_pipeline)
+                .bind_graphics_pipeline(self.pipelines.blur)
                 .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_LIST)
                 .set_viewport(0, Rect2D::framebuffer())
                 .set_scissor(0, Rect2D::framebuffer())
@@ -324,7 +324,7 @@ impl Renderer {
                 visible_indices,
             ))
             .with_name(format!("{name} sprites"))
-            .bind_graphics_pipeline(self.scene_pipeline)
+            .bind_graphics_pipeline(self.pipelines.scene)
             .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
             .set_viewport(0, Rect2D::framebuffer())
             .set_scissor(0, Rect2D::framebuffer())
@@ -366,7 +366,7 @@ impl Renderer {
                     (visible_indices, Access::VertexRead),
                 ])
                 .with_name(format!("{name} overlay lights"))
-                .bind_graphics_pipeline(self.overlay_light_pipeline)
+                .bind_graphics_pipeline(self.pipelines.overlay_light)
                 .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
                 .set_viewport(0, Rect2D::framebuffer())
                 .set_scissor(0, Rect2D::framebuffer())
@@ -409,7 +409,7 @@ impl Renderer {
             [lit_attachment] = module
                 .begin_rendering([(lit_attachment, Access::ColorRW)])
                 .with_name(format!("{name} static lighting"))
-                .bind_graphics_pipeline(self.lighting_pipeline)
+                .bind_graphics_pipeline(self.pipelines.lighting)
                 .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_LIST)
                 .set_viewport(0, Rect2D::framebuffer())
                 .set_scissor(0, Rect2D::framebuffer())
@@ -435,7 +435,7 @@ impl Renderer {
             [resolved_attachment] = module
                 .begin_rendering([(resolved_attachment, Access::ColorRW)])
                 .with_name(format!("{name} scene resolve"))
-                .bind_graphics_pipeline(self.resolve_pipeline)
+                .bind_graphics_pipeline(self.pipelines.resolve)
                 .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_LIST)
                 .set_viewport(0, Rect2D::framebuffer())
                 .set_scissor(0, Rect2D::framebuffer())
@@ -459,7 +459,7 @@ impl Renderer {
                         (visible_indices, Access::VertexRead),
                     ])
                     .with_name(format!("{name} area outlines"))
-                    .bind_graphics_pipeline(self.sprite_pipeline)
+                    .bind_graphics_pipeline(self.pipelines.sprite)
                     .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
                     .set_viewport(0, Rect2D::framebuffer())
                     .set_scissor(0, Rect2D::framebuffer())
@@ -568,7 +568,7 @@ impl Renderer {
                                 (visible_indices, Access::VertexRead),
                             ])
                             .with_name(format!("map view {index} visibility"))
-                            .bind_graphics_pipeline(self.visibility_pipeline)
+                            .bind_graphics_pipeline(self.pipelines.visibility)
                             .specialize_constant(spec::NODE_MODE, view.node_mode)
                             .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
                             .set_viewport(0, Rect2D::framebuffer())
@@ -613,7 +613,7 @@ impl Renderer {
                                 (connected_owners, Access::FragmentRead),
                             ])
                             .with_name(format!("map view {index} highlights"))
-                            .bind_graphics_pipeline(self.interaction_pipeline)
+                            .bind_graphics_pipeline(self.pipelines.interaction)
                             .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
                             .set_viewport(0, Rect2D::framebuffer())
                             .set_scissor(0, Rect2D::framebuffer())
@@ -646,7 +646,7 @@ impl Renderer {
                                 (guide_lines, Access::VertexRead | Access::FragmentRead),
                             ])
                             .with_name(format!("map view {index} guides"))
-                            .bind_graphics_pipeline(self.guide_pipeline)
+                            .bind_graphics_pipeline(self.pipelines.guide)
                             .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
                             .set_viewport(0, Rect2D::framebuffer())
                             .set_scissor(0, Rect2D::framebuffer())
@@ -678,7 +678,7 @@ impl Renderer {
                                 (pick_buffer, Access::ComputeWrite),
                             ])
                             .with_name(format!("map view {index} mouse pick"))
-                            .bind_compute_pipeline(self.pick_pipeline)
+                            .bind_compute_pipeline(self.pipelines.pick)
                             .bind_image(0, 1, visibility_attachment)
                             .bind_buffer(0, 3, pick_buffer)
                             .push_constants_from(pick_push)
@@ -722,7 +722,7 @@ impl Renderer {
                 let commands = module.declare_buffer_var(&format!("{name} draw commands"), Access::IndirectRead);
                 let (values, cull) = record_sprite_cull(
                     &mut module,
-                    self.cull_pipelines,
+                    self.pipelines.cull,
                     sprites,
                     CullValues {
                         visible,
@@ -740,7 +740,7 @@ impl Renderer {
                         (values.visible, Access::VertexRead),
                     ])
                     .with_name(name)
-                    .bind_graphics_pipeline(self.sprite_pipeline)
+                    .bind_graphics_pipeline(self.pipelines.sprite)
                     .set_primitive_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
                     .set_viewport(0, Rect2D::framebuffer())
                     .set_scissor(0, Rect2D::framebuffer())

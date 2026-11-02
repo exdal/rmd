@@ -3,8 +3,7 @@ use std::time::Instant;
 use ash::vk;
 use dear_imgui_rs::render::ReconciledFrame;
 use vir::{
-    Buffer, BufferInfo, ComputePipelineInfo, GraphicsPipelineInfo, MemoryLocation, PipelineId, RenderGraph,
-    SamplerInfo, SuperFrameAllocator, SwapChain, allocator::Allocator,
+    Buffer, BufferInfo, MemoryLocation, RenderGraph, SamplerInfo, SuperFrameAllocator, SwapChain, allocator::Allocator,
 };
 
 use self::{
@@ -13,21 +12,15 @@ use self::{
     cull::CullBuffers,
     gpu::SPRITE_TEXTURE_CAPACITY,
     lighting::UploadedLighting,
+    pipelines::Pipelines,
     preview::UploadedPreview,
     record::Recorded,
-    shaders::{
-        AREA_COLOR_CS_SPV, BLUR_FS_SPV, BLUR_VS_SPV, CAPTURE_CS_SPV, GEOMETRY_VS_SPV, GUIDE_FS_SPV, GUIDE_VS_SPV,
-        INTERACTION_FS_SPV, INTERACTION_VS_SPV, LIGHTING_FS_SPV, LIGHTING_VS_SPV, PICK_CS_SPV, SCENE_RESOLVE_FS_SPV,
-        SPRITE_CULL_CLASSIFY_CS_SPV, SPRITE_CULL_COMPACT_CS_SPV, SPRITE_CULL_SCAN_CS_SPV, SPRITE_OVERLAY_LIGHT_FS_SPV,
-        SPRITE_SCENE_FS_SPV, SPRITE_SHADE_FS_SPV, SPRITE_VIS_FS_SPV,
-    },
     sprites::UploadedMapView,
     upload::{TextureSource, destroy_images, loaded_images},
 };
 use crate::{
     Device, GpuError,
     imgui::ImGuiPass,
-    read_spirv,
     viewport::{SecondaryViewport, ViewportTarget},
 };
 
@@ -41,6 +34,7 @@ mod fixtures;
 mod gpu;
 mod guides;
 mod lighting;
+mod pipelines;
 mod preview;
 mod record;
 mod shaders;
@@ -63,18 +57,7 @@ pub struct Renderer {
     swapchain: Option<SwapChain>,
     viewports: Vec<ViewportTarget>,
     failed_viewports: Vec<(u32, [u32; 2])>,
-    sprite_pipeline: PipelineId,
-    scene_pipeline: PipelineId,
-    visibility_pipeline: PipelineId,
-    overlay_light_pipeline: PipelineId,
-    cull_pipelines: [PipelineId; 3],
-    lighting_pipeline: PipelineId,
-    resolve_pipeline: PipelineId,
-    blur_pipeline: PipelineId,
-    interaction_pipeline: PipelineId,
-    guide_pipeline: PipelineId,
-    pick_pipeline: PipelineId,
-    capture_pipeline: PipelineId,
+    pipelines: Pipelines,
     area_colors: AreaColorPass,
     bindless: BindlessDescriptorSet,
     sheets: Vec<Sheet>,
@@ -115,179 +98,10 @@ impl Renderer {
         let bindless = BindlessDescriptorSet::create(&device, texture_capacity)?;
         let mut graph = RenderGraph::new(&device.context);
 
-        let geometry_vs = read_spirv(GEOMETRY_VS_SPV)?;
-        let sprite_pipeline = match graph.declare_pipeline(
-            GraphicsPipelineInfo::new()
-                .with_shader(&geometry_vs)
-                .with_shader(&read_spirv(SPRITE_SHADE_FS_SPV)?)
-                .with_bindless_set(1, bindless.layout, bindless.set),
-        ) {
-            Ok(pipeline) => pipeline,
-            Err(error) => {
-                drop(graph);
-                bindless.destroy(&device);
-
-                return Err(error.into());
-            },
-        };
-        let scene_pipeline = match graph.declare_pipeline(
-            GraphicsPipelineInfo::new()
-                .with_shader(&geometry_vs)
-                .with_shader(&read_spirv(SPRITE_SCENE_FS_SPV)?)
-                .with_bindless_set(1, bindless.layout, bindless.set),
-        ) {
-            Ok(pipeline) => pipeline,
-            Err(error) => {
-                drop(graph);
-                bindless.destroy(&device);
-
-                return Err(error.into());
-            },
-        };
-        let visibility_pipeline = match graph.declare_pipeline(
-            GraphicsPipelineInfo::new()
-                .with_shader(&geometry_vs)
-                .with_shader(&read_spirv(SPRITE_VIS_FS_SPV)?)
-                .with_bindless_set(1, bindless.layout, bindless.set),
-        ) {
-            Ok(pipeline) => pipeline,
-            Err(error) => {
-                drop(graph);
-                bindless.destroy(&device);
-
-                return Err(error.into());
-            },
-        };
-        let overlay_light_pipeline = match graph.declare_pipeline(
-            GraphicsPipelineInfo::new()
-                .with_shader(&geometry_vs)
-                .with_shader(&read_spirv(SPRITE_OVERLAY_LIGHT_FS_SPV)?)
-                .with_bindless_set(1, bindless.layout, bindless.set),
-        ) {
-            Ok(pipeline) => pipeline,
-            Err(error) => {
-                drop(graph);
-                bindless.destroy(&device);
-
-                return Err(error.into());
-            },
-        };
-        let cull_pipelines = match (|| -> Result<[PipelineId; 3], GpuError> {
-            Ok([
-                graph.declare_compute_pipeline(ComputePipelineInfo::new(&read_spirv(SPRITE_CULL_CLASSIFY_CS_SPV)?))?,
-                graph.declare_compute_pipeline(ComputePipelineInfo::new(&read_spirv(SPRITE_CULL_SCAN_CS_SPV)?))?,
-                graph.declare_compute_pipeline(ComputePipelineInfo::new(&read_spirv(SPRITE_CULL_COMPACT_CS_SPV)?))?,
-            ])
-        })() {
-            Ok(pipelines) => pipelines,
-            Err(error) => {
-                drop(graph);
-                bindless.destroy(&device);
-
-                return Err(error);
-            },
-        };
-        let interaction_pipeline = match graph.declare_pipeline(
-            GraphicsPipelineInfo::new()
-                .with_shader(&read_spirv(INTERACTION_VS_SPV)?)
-                .with_shader(&read_spirv(INTERACTION_FS_SPV)?),
-        ) {
-            Ok(pipeline) => pipeline,
-            Err(error) => {
-                drop(graph);
-                bindless.destroy(&device);
-
-                return Err(error.into());
-            },
-        };
-        let guide_pipeline = match graph.declare_pipeline(
-            GraphicsPipelineInfo::new()
-                .with_shader(&read_spirv(GUIDE_VS_SPV)?)
-                .with_shader(&read_spirv(GUIDE_FS_SPV)?),
-        ) {
-            Ok(pipeline) => pipeline,
-            Err(error) => {
-                drop(graph);
-                bindless.destroy(&device);
-
-                return Err(error.into());
-            },
-        };
-        let lighting_pipeline = match graph.declare_pipeline(
-            GraphicsPipelineInfo::new()
-                .with_shader(&read_spirv(LIGHTING_VS_SPV)?)
-                .with_shader(&read_spirv(LIGHTING_FS_SPV)?),
-        ) {
-            Ok(pipeline) => pipeline,
-            Err(error) => {
-                drop(graph);
-                bindless.destroy(&device);
-
-                return Err(error.into());
-            },
-        };
-        let resolve_pipeline = match graph.declare_pipeline(
-            GraphicsPipelineInfo::new()
-                .with_shader(&read_spirv(LIGHTING_VS_SPV)?)
-                .with_shader(&read_spirv(SCENE_RESOLVE_FS_SPV)?),
-        ) {
-            Ok(pipeline) => pipeline,
-            Err(error) => {
-                drop(graph);
-                bindless.destroy(&device);
-
-                return Err(error.into());
-            },
-        };
-        let blur_pipeline = match graph.declare_pipeline(
-            GraphicsPipelineInfo::new()
-                .with_shader(&read_spirv(BLUR_VS_SPV)?)
-                .with_shader(&read_spirv(BLUR_FS_SPV)?),
-        ) {
-            Ok(pipeline) => pipeline,
-            Err(error) => {
-                drop(graph);
-                bindless.destroy(&device);
-
-                return Err(error.into());
-            },
-        };
-        let pick_pipeline = match graph.declare_compute_pipeline(ComputePipelineInfo::new(&read_spirv(PICK_CS_SPV)?)) {
-            Ok(pipeline) => pipeline,
-            Err(error) => {
-                drop(graph);
-                bindless.destroy(&device);
-
-                return Err(error.into());
-            },
-        };
-        let capture_pipeline =
-            match graph.declare_compute_pipeline(ComputePipelineInfo::new(&read_spirv(CAPTURE_CS_SPV)?)) {
-                Ok(pipeline) => pipeline,
-                Err(error) => {
-                    drop(graph);
-                    bindless.destroy(&device);
-
-                    return Err(error.into());
-                },
-            };
-        let area_color_pipeline = match graph.declare_compute_pipeline(
-            ComputePipelineInfo::new(&read_spirv(AREA_COLOR_CS_SPV)?).with_bindless_set(
-                1,
-                bindless.layout,
-                bindless.set,
-            ),
-        ) {
-            Ok(pipeline) => pipeline,
-            Err(error) => {
-                drop(graph);
-                bindless.destroy(&device);
-
-                return Err(error.into());
-            },
-        };
-        let area_colors = match AreaColorPass::record(&graph, area_color_pipeline) {
-            Ok(pass) => pass,
+        let (pipelines, area_colors) = match Pipelines::declare(&mut graph, &bindless).and_then(|pipelines| {
+            AreaColorPass::record(&graph, pipelines.area_color).map(|area_colors| (pipelines, area_colors))
+        }) {
+            Ok(created) => created,
             Err(error) => {
                 drop(graph);
                 bindless.destroy(&device);
@@ -303,18 +117,7 @@ impl Renderer {
             swapchain: None,
             viewports: Vec::new(),
             failed_viewports: Vec::new(),
-            sprite_pipeline,
-            scene_pipeline,
-            visibility_pipeline,
-            overlay_light_pipeline,
-            cull_pipelines,
-            lighting_pipeline,
-            resolve_pipeline,
-            blur_pipeline,
-            interaction_pipeline,
-            guide_pipeline,
-            pick_pipeline,
-            capture_pipeline,
+            pipelines,
             area_colors,
             bindless,
             sheets: Vec::new(),

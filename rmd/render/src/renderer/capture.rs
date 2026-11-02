@@ -86,7 +86,7 @@ impl Renderer {
                 (pixels_slot, Access::ComputeWrite),
             ])
             .with_name("capture readback")
-            .bind_compute_pipeline(self.capture_pipeline)
+            .bind_compute_pipeline(self.pipelines.capture)
             .bind_image(0, 0, scene.scene)
             .bind_buffer(0, 1, pixels_slot)
             .push_constants(&[tile, tile])
