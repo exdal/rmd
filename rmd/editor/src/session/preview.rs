@@ -217,7 +217,12 @@ impl Session {
         }
 
         let prefab = self.palette()?.clone();
-        let appearance = self.prefab_appearance(&prefab)?;
+
+        self.prefab_placement(&prefab)
+    }
+
+    pub(crate) fn prefab_placement(&mut self, prefab: &Prefab) -> Option<PlacementPreview> {
+        let appearance = self.prefab_appearance(prefab)?;
         let environment = self.state.environment.as_ref()?;
         let thumbnail = self.prefab_thumbnail_for(environment, &appearance)?;
         let offset = [
