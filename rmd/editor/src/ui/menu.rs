@@ -1,7 +1,7 @@
 use dear_imgui_rs::Ui;
 
 use super::{
-    LAYER_KEYS, OpenRequest, ScreenshotArea, ScreenshotRequest, UiState,
+    LAYER_KEYS, OpenRequest, SCREENSHOT_KEYS, ScreenshotArea, ScreenshotRequest, UiState,
     coop::{CoopDialogKind, draw_coop_peers, draw_coop_status},
     viewport::EditCommand,
     welcome::codebase_relative,
@@ -98,16 +98,21 @@ impl UiState {
                     actions.save_all = true;
                 }
                 if let Some(_screenshot) = ui.begin_menu_with_enabled("Screenshot", session.map().is_some()) {
-                    let shortcut = settings.keybindings.get(KeybindAction::Screenshot).label(ui);
                     let selected = session.selection().is_some();
-                    for (label, area, copy, enabled) in [
-                        ("Save map...", ScreenshotArea::Map, false, true),
-                        ("Save selection...", ScreenshotArea::Selection, false, selected),
-                        ("Copy map", ScreenshotArea::Map, true, true),
-                        ("Copy selection", ScreenshotArea::Selection, true, selected),
-                    ] {
-                        let shortcut = (area == ScreenshotArea::Map && !copy).then_some(shortcut.as_str());
-                        if ui.menu_item_enabled_selected(label, shortcut, false, enabled) {
+                    for (action, area, copy) in SCREENSHOT_KEYS {
+                        let label = match (area, copy) {
+                            (ScreenshotArea::Map, false) => "Save map...",
+                            (ScreenshotArea::Selection, false) => "Save selection...",
+                            (ScreenshotArea::Map, true) => "Copy map",
+                            (ScreenshotArea::Selection, true) => "Copy selection",
+                        };
+                        let enabled = area == ScreenshotArea::Map || selected;
+                        if ui.menu_item_enabled_selected_with_shortcut(
+                            label,
+                            settings.keybindings.get(action).label(ui),
+                            false,
+                            enabled,
+                        ) {
                             actions.screenshot = Some(ScreenshotRequest { area, copy });
                         }
                     }

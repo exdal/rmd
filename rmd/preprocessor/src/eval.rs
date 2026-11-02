@@ -24,9 +24,9 @@ pub fn evaluate(tokens: &[(Token<'_>, Location)], context: &Context<'_>) -> (Opt
 
     let value = parser.expression();
 
-    if parser.index < parser.tokens.len() {
+    if let Some(token) = parser.current() {
         let location = parser.location();
-        parser.complain(location, "trailing tokens in preprocessor expression");
+        parser.complain(location, format!("unexpected token: {token}"));
     }
 
     (value, parser.complaints)
@@ -263,9 +263,9 @@ impl<'a> Parser<'a, '_> {
     }
 
     fn multiplicative(&mut self) -> Option<f32> {
-        let mut left = self.power()?;
+        let mut left = self.unary()?;
         while let Some(operator) = self.check_any(&[Token::Mul, Token::Slash, Token::Modulo]) {
-            let Some(right) = self.power() else {
+            let Some(right) = self.unary() else {
                 let location = self.location();
                 self.complain(location, "expected a second value");
                 break;
@@ -276,21 +276,6 @@ impl<'a> Parser<'a, '_> {
                 Token::Slash => left / right,
                 _ => left % right,
             };
-        }
-
-        Some(left)
-    }
-
-    fn power(&mut self) -> Option<f32> {
-        let left = self.unary()?;
-        if self.check(Token::Pow) {
-            let Some(right) = self.power() else {
-                let location = self.location();
-                self.complain(location, "expected a second value");
-                return Some(left);
-            };
-
-            return Some(left.powf(right));
         }
 
         Some(left)
@@ -457,6 +442,15 @@ mod tests {
         assert!(messages.is_empty(), "{source:?} complained: {messages:?}");
 
         value.unwrap_or_else(|| panic!("{source:?} did not evaluate"))
+    }
+
+    #[test]
+    fn power_is_not_an_operator() {
+        let (value, complaints) = run("2 ** 3 ** 2", &[]);
+        let messages: Vec<_> = complaints.iter().map(|c| c.message.as_str()).collect();
+
+        assert_eq!(value, Some(2.0));
+        assert_eq!(messages, ["unexpected token: **"]);
     }
 
     #[test]

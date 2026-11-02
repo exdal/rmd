@@ -415,6 +415,15 @@
 		for(var/direction in GLOB.diagonals)
 			demir_node_orientation(type_path, direction, extra == DISP_DIR_NONE ? 0 : direction)
 
+/datum/demir/tgstation/proc/register_smart_pipe_node_orientations()
+	var/type_path = /obj/machinery/atmospherics/pipe/smart/simple
+	demir_node_orientation(type_path, EAST, EAST | WEST)
+	demir_node_orientation(type_path, SOUTH, NORTH | SOUTH)
+	demir_node_orientation(type_path, NORTH, NORTH | SOUTH)
+	demir_node_orientation(type_path, WEST, EAST | WEST)
+	for(var/direction in GLOB.diagonals)
+		demir_node_orientation(type_path, direction, direction)
+
 /datum/demir/tgstation
 	default = TRUE
 	var/smooth = TRUE
@@ -450,13 +459,15 @@
 		// Node routes avoid closed turfs. Pipes connect only on the same layer and color, so
 		// supply, scrubber and stacked pipes stay separate.
 		demir_node_group(/obj/structure/cable, /turf/closed, null, "cable_layer")
-		demir_node_group(/obj/machinery/atmospherics/pipe/smart, DEMIR_NODE_BLOCKERS, null, list("piping_layer", "pipe_color"))
+		demir_node_group(/obj/machinery/atmospherics/pipe/smart, DEMIR_NODE_BLOCKERS, /obj/machinery/atmospherics/pipe/smart/simple, list("piping_layer", "pipe_color"), TRUE)
 		demir_node_group(/obj/machinery/duct, DEMIR_NODE_BLOCKERS, null, list("duct_layer", "duct_color"))
 		demir_node_group(/obj/structure/disposalpipe, DEMIR_NODE_BLOCKERS, /obj/structure/disposalpipe/segment)
 		demir_node_group(/obj/structure/disposalconstruct, DEMIR_NODE_BLOCKERS)
 		register_disposal_node_orientations()
+		register_smart_pipe_node_orientations()
 
 		demir_rotatable(/obj/machinery/atmospherics, GLOB.cardinals)
+		demir_rotatable(/obj/machinery/atmospherics/pipe/smart/simple, GLOB.alldirs)
 
 // ui() writes are rolled back unless the viewer changed something that frame, so panel state
 // lives in the profile's vars.

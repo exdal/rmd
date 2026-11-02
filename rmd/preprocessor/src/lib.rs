@@ -55,6 +55,13 @@ enum Spacing {
     Separated,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IndentOwner {
+    Layout,
+    /// /proc/foo(){ ... }
+    Brace,
+}
+
 /// Index into [`HideSets`], `0` being the empty set.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 struct HideSet(u32);
@@ -251,6 +258,7 @@ pub struct Preprocessor<'a> {
     /// Layout held until a line emits code
     carried_layout: Vec<Spanned<'a>>,
     line_layout: Vec<Spanned<'a>>,
+    indent_owners: Vec<IndentOwner>,
     /// Indentation before the current line
     line_indent: Option<(usize, IndentState)>,
     line_has_content: bool,
@@ -290,6 +298,7 @@ impl<'a> Preprocessor<'a> {
             errors: Vec::new(),
             carried_layout: Vec::new(),
             line_layout: Vec::new(),
+            indent_owners: Vec::new(),
             line_indent: None,
             line_has_content: false,
             can_use_directive: true,
@@ -520,8 +529,34 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn flush_layout(&mut self) {
-        self.output.append(&mut self.carried_layout);
-        self.output.append(&mut self.line_layout);
+        let mut layout = std::mem::take(&mut self.carried_layout);
+        layout.append(&mut self.line_layout);
+        for (token, location) in layout.drain(..) {
+            self.push_layout(token, location);
+        }
+
+        self.carried_layout = layout;
+    }
+
+    fn push_layout(&mut self, token: Token<'a>, location: Location) {
+        match token {
+            Token::Indent => {
+                let after_brace = self.output.iter().rev().find(|(token, _)| *token != Token::Newline);
+                let owner = match after_brace {
+                    Some((Token::BraceLeft, _)) => IndentOwner::Brace,
+                    _ => IndentOwner::Layout,
+                };
+
+                self.indent_owners.push(owner);
+                if owner == IndentOwner::Brace {
+                    return;
+                }
+            },
+            Token::Dedent if self.indent_owners.pop() == Some(IndentOwner::Brace) => return,
+            _ => {},
+        }
+
+        self.output.push((token, location));
     }
 
     fn next_raw(&mut self) -> Option<RawToken<'a>> {
@@ -1632,14 +1667,17 @@ impl<'a> Preprocessor<'a> {
             return;
         }
 
-        let is_resource = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| ["dmm", "dmp", "dmf", "dmi"].iter().any(|r| e.eq_ignore_ascii_case(r)));
+        let extension = path.extension().and_then(|e| e.to_str());
+        if extension.is_some_and(|e| e.eq_ignore_ascii_case("dms")) {
+            return;
+        }
+
+        let is_resource =
+            extension.is_some_and(|e| ["dmm", "dmp", "dmf", "dmi"].iter().any(|r| e.eq_ignore_ascii_case(r)));
 
         if is_resource {
             if !path.is_file() {
-                self.diagnose_missing(&path, location);
+                self.include_ignoring_case(&path, location);
                 return;
             }
 
@@ -1657,7 +1695,7 @@ impl<'a> Preprocessor<'a> {
                     contents
                 },
                 Err(_) if !path.is_file() => {
-                    self.diagnose_missing(&path, location);
+                    self.include_ignoring_case(&path, location);
                     return;
                 },
                 Err(error) => {
@@ -1685,6 +1723,13 @@ impl<'a> Preprocessor<'a> {
         }
 
         self.push_file(file, &path);
+    }
+
+    fn include_ignoring_case(&mut self, path: &Path, location: Location) {
+        match file_path::find_ignoring_case(path) {
+            Some(found) => self.include_file(&found, location),
+            None => self.diagnose_missing(path, location),
+        }
     }
 
     fn diagnose_missing(&mut self, path: &Path, location: Location) {
@@ -2376,6 +2421,39 @@ var/after = 3
             ("nothing.dm", ""),
         ]);
         assert_eq!(empty, "/ datum / a\n> var / x = 1\nvar / y = 2\n<");
+    }
+
+    #[test]
+    fn includes_ignore_case_like_windows_byond() {
+        let (rendered, errors) = pp_with_errors(&[
+            ("entry.dm", fixture!("programs/include-ignoring-case.dm")),
+            ("maps/station.dm", "station_file\n"),
+        ]);
+
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(rendered, "station_file");
+    }
+
+    #[test]
+    fn dms_includes_are_ignored() {
+        let (rendered, errors) = pp_with_errors(&[
+            ("entry.dm", fixture!("programs/include-dms.dm")),
+            ("style.dms", "body { color: red; }\n"),
+        ]);
+
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(rendered, "/ datum / a\n/ datum / b");
+    }
+
+    #[test]
+    fn a_brace_owns_the_indent_it_opens() {
+        let rendered = pp(&[("writer.dm", fixture!("programs/brace-owned-indent.dm"))]);
+
+        assert_eq!(
+            rendered,
+            "dmm_writer {\nproc {\nmake ( x ) {\nif ( x ) {\na ( )\n} else { b ( ) }\nif ( x )\n> c ( )\n< \
+             return\n}\n}\n}\n/ datum / after"
+        );
     }
 
     #[test]

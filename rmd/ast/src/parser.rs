@@ -7,9 +7,9 @@ use core::{
 use lexer::token::{SoftKeyword, Token};
 
 use crate::{
-    AST, AccessKind, Argument, AssignmentKind, BinaryOp, Builtin, Declaration, Expression, ExpressionId, ForLoop,
-    InputType, Literal, LoopBinding, PickValue, ProcKind, ProcParam, SettingMode, Statement, SwitchCase, SwitchValue,
-    TypeSpec, UnaryOp, VarSpec,
+    AST, AccessKind, Argument, AssignmentKind, BinaryOp, Builtin, ContextMacro, Declaration, Expression, ExpressionId,
+    ForLoop, InputType, Literal, LoopBinding, PickValue, ProcKind, ProcParam, SettingMode, Statement, SwitchCase,
+    SwitchValue, TypeSpec, UnaryOp, VarSpec,
     error::ParseError,
     precedence::{Precedence, token_to_assignment_kind, token_to_binary_op, token_to_precedence, token_to_unary_op},
 };
@@ -305,6 +305,10 @@ impl<'a, 't> Parser<'a, 't> {
         self.peek_is(Token::Dot)
             && (self.peek_at_is(1, Token::Soft(SoftKeyword::Proc))
                 || self.peek_at_is(1, Token::Soft(SoftKeyword::Verb)))
+    }
+
+    fn at_dot_run(&self) -> bool {
+        self.peek_is(Token::Dot) || self.peek_is(Token::Super) || self.peek_is(Token::Ellipsis)
     }
 
     /// `var/matrix/final` declares `final` and `var/datum/admin_verb/verb` declares `verb`
@@ -1671,7 +1675,13 @@ impl<'a, 't> Parser<'a, 't> {
         self.ternary_true_depth -= 1;
         let true_expr = true_result?;
         self.expect_next(Token::Colon)?;
-        let false_expr = self.parse_expression(Precedence::Ternary)?;
+        // `"[foo.bar ? "this language is" : ]"`
+        let false_expr = match self.peek() {
+            Some((Token::InterpStringMid(_) | Token::InterpStringEnd(_), _)) => {
+                self.make_expr(Expression::Literal(Literal::Null))
+            },
+            _ => self.parse_expression(Precedence::Ternary)?,
+        };
 
         Ok(self.make_expr(Expression::Ternary {
             condition,
@@ -1856,6 +1866,15 @@ impl<'a, 't> Parser<'a, 't> {
                 self.parse_path_expression()
             },
             Token::Dot => Ok(self.make_expr(Expression::Builtin(Builtin::ThisProc))),
+            // `by_type[......]`
+            // this language is not real
+            Token::Ellipsis if self.at_dot_run() => {
+                while self.at_dot_run() {
+                    self.advance()?;
+                }
+
+                Ok(self.make_expr(Expression::ContextMacro(ContextMacro::Type)))
+            },
             Token::Scope => {
                 let object = self.make_expr(Expression::Builtin(Builtin::Global));
                 let name = self.parse_identifier()?;
@@ -2310,6 +2329,24 @@ mod tests {
     }
 
     #[test]
+    fn dot_runs_name_the_enclosing_type() {
+        for source in ["by_type[....]", "by_type[.....]", "by_type[......]", "by_type[.......]"] {
+            let (expressions, root) = parse_expr(source);
+            let Expression::Index { index, .. } = &expressions[root.index()] else {
+                panic!("expected an index in {source}")
+            };
+
+            assert!(
+                matches!(
+                    &expressions[index.index()],
+                    Expression::ContextMacro(ContextMacro::Type)
+                ),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn parses_proc_reference_paths() {
         let (expressions, root) = parse_expr("nameof(.proc/Life)");
         let Expression::Call { args, .. } = &expressions[root.index()] else {
@@ -2343,6 +2380,28 @@ mod tests {
         assert!(path.absolute);
         assert!(path.flags.contains(PathFlags::IS_PROC));
         assert_eq!(path.declaration_owner(), &path.segments[..2]);
+    }
+
+    #[test]
+    fn an_interpolated_ternary_may_leave_its_false_branch_empty() {
+        let (expressions, root) = parse_expr(r#""[a ? "b" : ] [c ? d : ]""#);
+        let Expression::InterpString {
+            expressions: embedded, ..
+        } = &expressions[root.index()]
+        else {
+            panic!("expected an interpolated string")
+        };
+
+        for embedded in embedded {
+            let Some(Expression::Ternary { false_expr, .. }) = embedded.map(|id| &expressions[id.index()]) else {
+                panic!("expected a ternary")
+            };
+
+            assert!(matches!(
+                expressions[false_expr.index()],
+                Expression::Literal(Literal::Null)
+            ));
+        }
     }
 
     #[test]

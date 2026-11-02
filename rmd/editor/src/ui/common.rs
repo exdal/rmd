@@ -183,6 +183,8 @@ pub(super) fn dialog_buttons(ui: &Ui, buttons: &[DialogButton], is_keys_enabled:
     let total = buttons.iter().map(|button| button_width(ui, button.label)).sum::<f32>()
         + spacing * buttons.len().saturating_sub(1) as f32;
     let available = ui.content_region_avail_width();
+    let row_start = ui.cursor_screen_pos()[0];
+    let max_x = unsafe { (*sys::igGetCurrentWindow()).DC.CursorMaxPos.x };
     if available > total {
         let [x, y] = ui.cursor_pos();
         ui.set_cursor_pos([x + available - total, y]);
@@ -224,6 +226,8 @@ pub(super) fn dialog_buttons(ui: &Ui, buttons: &[DialogButton], is_keys_enabled:
             ui.set_item_tooltip(tooltip);
         }
     }
+
+    unsafe { (*sys::igGetCurrentWindow()).DC.CursorMaxPos.x = max_x.max(row_start + total) };
 
     if clicked.is_none() && is_keys_enabled {
         if ui.is_key_pressed(Key::Escape) {
@@ -476,6 +480,43 @@ mod tests {
         let wide = gap("Wide dialog", &"A much wider line of dialog text ".repeat(4));
         assert!(narrow > 0.0);
         assert_eq!(narrow, wide);
+    }
+
+    #[test]
+    fn dialog_shrinks_after_wide_content_goes_away() {
+        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let mut context = popup_context(true);
+        set_desktop_geometry(&mut context, [0.0, 0.0], [1920.0, 1080.0]);
+        let name = "Shrinking dialog";
+        let buttons = [DialogButton::cancel("Cancel")];
+        let mut draw = |text: &str, frames: usize, open: bool| {
+            let mut edges = (0.0, 0.0);
+            for frame in 0..frames {
+                let ui = context.frame();
+                if open && frame == 0 {
+                    ui.open_popup(name);
+                }
+
+                if let Some(_modal) = begin_centered_modal(ui, name, MODAL_FLAGS) {
+                    ui.text(text);
+                    let content_right = ui.cursor_screen_pos()[0] + ui.content_region_avail_width();
+                    dialog_buttons(ui, &buttons, false);
+                    edges = (ui.item_rect_max()[0], content_right);
+                }
+
+                finish_frame(&mut context);
+            }
+
+            let width = unsafe { (*sys::igFindWindowByName(c"Shrinking dialog".as_ptr())).Size.x };
+            (width, edges)
+        };
+
+        let (narrow, _) = draw("Short", 4, true);
+        let (wide, _) = draw(&"A much wider line of dialog text ".repeat(4), 4, false);
+        let (shrunk, (button_right, content_right)) = draw("Short", 4, false);
+        assert!(wide > narrow);
+        assert_eq!(shrunk, narrow);
+        assert_eq!(button_right, content_right);
     }
 
     #[test]

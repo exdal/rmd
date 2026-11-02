@@ -150,11 +150,12 @@
 // required. `orientable_subtype` names the descendant subtree whose `dir` may change to fit a
 // route. Register each participating type's directional openings with demir_node_orientation().
 // `matching` names one var or a list of vars. Two placements connect only when each named var
-// resolves to the same value, instance edits included.
+// resolves to the same value, instance edits included. When `cosmetic_dir` is TRUE every placement
+// connects on every side and the orientations only choose the `dir` a route writes.
 // Call this procedure only from the profile's New(). Repeat a subtype to add blockers or vars.
 // A conflicting non-null orientable subtype leaves that registration unchanged. Any other invalid
 // argument is a runtime error.
-/proc/demir_node_group(subtype, blocker, orientable_subtype = null, matching = null)
+/proc/demir_node_group(subtype, blocker, orientable_subtype = null, matching = null, cosmetic_dir = FALSE)
 	set __demir_intrin = "DemirNodeGroup"
 
 // Map one icon `dir` of `subtype` to its cardinal opening mask (NORTH | SOUTH | EAST | WEST).
