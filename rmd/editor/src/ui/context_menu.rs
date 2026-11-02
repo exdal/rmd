@@ -5,7 +5,9 @@ use dmm::{Coord, Prefab, PrefabInstanceId};
 use editor::{blame::BlameCell, conflict::Side, document::DocumentId};
 use objtree::ObjectTree;
 
-use super::{SelectionTransform, Session, Tool, common::fit_icon, draw_type_path_search, find::SimilarMatchKind};
+use super::{
+    EditCommand, SelectionTransform, Session, Tool, common::fit_icon, draw_type_path_search, find::SimilarMatchKind,
+};
 use crate::session::context_placement_group;
 
 pub(super) const POPUP: &str = "Map context##map-context";
@@ -40,6 +42,7 @@ pub(super) enum Action {
     Paste(Coord),
     Cut(Coord),
     Delete(Coord),
+    Selection(EditCommand),
     Select(PrefabInstanceId),
     DeleteAtom(PrefabInstanceId),
     Reorder(PrefabInstanceId, bool),
@@ -201,14 +204,18 @@ pub(super) fn draw_popup(
         action = Some(Action::Redo);
     }
     ui.separator();
-    let tile_exists = session.map().is_some_and(|map| map.tile_at(coord).is_some());
+    let can_copy = target.region_selected || session.map().is_some_and(|map| map.tile_at(coord).is_some());
     if ui.menu_item_enabled_selected_with_shortcut(
         "Copy",
         settings.keybindings.get(super::KeybindAction::Copy).label(ui),
         false,
-        tile_exists,
+        can_copy,
     ) {
-        action = Some(Action::Copy(coord));
+        action = Some(if target.region_selected {
+            Action::Selection(EditCommand::Copy)
+        } else {
+            Action::Copy(coord)
+        });
     }
     let can_paste = session.can_paste_clipboard(coord, super::SelectionRotation::Original);
     if ui.menu_item_enabled_selected_with_shortcut(
@@ -219,12 +226,24 @@ pub(super) fn draw_popup(
     ) {
         action = Some(Action::Paste(coord));
     }
-    let can_clear = session.can_clear_tile(coord);
+    let can_clear = if target.region_selected {
+        session.can_clear_selection()
+    } else {
+        session.can_clear_tile(coord)
+    };
     if ui.menu_item_enabled_selected_no_shortcut("Cut", false, can_clear) {
-        action = Some(Action::Cut(coord));
+        action = Some(if target.region_selected {
+            Action::Selection(EditCommand::Cut)
+        } else {
+            Action::Cut(coord)
+        });
     }
     if ui.menu_item_enabled_selected_no_shortcut("Delete", false, can_clear) {
-        action = Some(Action::Delete(coord));
+        action = Some(if target.region_selected {
+            Action::Selection(EditCommand::Delete)
+        } else {
+            Action::Delete(coord)
+        });
     }
 
     if target.region_selected {

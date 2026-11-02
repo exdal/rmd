@@ -101,11 +101,9 @@ impl Session {
     pub(crate) fn delete_issue_instances(
         &mut self, id: DocumentId, path: &TreePath, instances: &[PrefabInstanceId],
     ) -> bool {
-        let action = self
-            .state
-            .document(id)
-            .zip(self.tree())
-            .and_then(|(document, tree)| issues::delete_instances(document, tree, path, instances));
+        let action = self.state.pair_mut(id).and_then(|(environment, document)| {
+            issues::delete_instances(document, &environment.tree, &environment.world, path, instances)
+        });
         action.is_some_and(|action| self.set_active_document(id) && self.commit(action, None))
     }
 }

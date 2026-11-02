@@ -20,6 +20,7 @@ use crate::{
         ICON_FORMAT_COLOR_FILL, ICON_PENCIL, ICON_SELECT_DRAG, ICON_TEXTURE, ICON_VECTOR_POLYLINE,
     },
     visual,
+    world::{BaseTile, World},
 };
 
 pub const MAX_FILL_TILES: usize = 5_000;
@@ -159,6 +160,7 @@ impl RegionSelectionMode {
 pub struct ToolContext<'a> {
     pub document: &'a mut MapDocument,
     pub tree: &'a ObjectTree,
+    pub world: &'a World,
     pub prefab: Option<&'a Prefab>,
     pub target: Option<PrefabInstanceId>,
     pub coord: Coord,
@@ -295,11 +297,12 @@ impl From<net::SelectionMode> for RegionSelectionMode {
 }
 
 pub fn move_selection(
-    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, target_min: Coord,
+    document: &mut MapDocument, tree: &ObjectTree, world: &World, selection: Selection, target_min: Coord,
 ) -> Option<(ToolEdit, Selection)> {
     place_selection(
         document,
         tree,
+        world,
         selection,
         target_min,
         SelectionRotation::Original,
@@ -308,11 +311,12 @@ pub fn move_selection(
 }
 
 pub fn copy_selection(
-    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, target_min: Coord,
+    document: &mut MapDocument, tree: &ObjectTree, world: &World, selection: Selection, target_min: Coord,
 ) -> Option<(ToolEdit, Selection)> {
     place_selection(
         document,
         tree,
+        world,
         selection,
         target_min,
         SelectionRotation::Original,
@@ -357,12 +361,13 @@ pub fn fill_selection(
 }
 
 pub fn place_selection(
-    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, target_min: Coord,
+    document: &mut MapDocument, tree: &ObjectTree, world: &World, selection: Selection, target_min: Coord,
     rotation: SelectionRotation, placement: SelectionPlacement,
 ) -> Option<(ToolEdit, Selection)> {
     place_selection_with_mode(
         document,
         tree,
+        world,
         selection,
         target_min,
         rotation,
@@ -374,7 +379,7 @@ pub fn place_selection(
 
 #[allow(clippy::too_many_arguments)]
 pub fn place_selection_with_mode(
-    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, target_min: Coord,
+    document: &mut MapDocument, tree: &ObjectTree, world: &World, selection: Selection, target_min: Coord,
     rotation: SelectionRotation, placement: SelectionPlacement, mode: RegionSelectionMode, hidden: &HiddenTypes,
 ) -> Option<(ToolEdit, Selection)> {
     let target = rotated_selection_at(selection, target_min, rotation)?;
@@ -389,6 +394,7 @@ pub fn place_selection_with_mode(
     build_selection_edit(
         document,
         tree,
+        world,
         SelectionEditRequest {
             source: selection,
             target,
@@ -402,11 +408,12 @@ pub fn place_selection_with_mode(
 }
 
 pub fn transform_selection(
-    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, transform: SelectionTransform,
+    document: &mut MapDocument, tree: &ObjectTree, world: &World, selection: Selection, transform: SelectionTransform,
 ) -> Option<(ToolEdit, Selection)> {
     transform_selection_with_mode(
         document,
         tree,
+        world,
         selection,
         transform,
         RegionSelectionMode::Full,
@@ -415,7 +422,7 @@ pub fn transform_selection(
 }
 
 pub fn transform_selection_with_mode(
-    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, transform: SelectionTransform,
+    document: &mut MapDocument, tree: &ObjectTree, world: &World, selection: Selection, transform: SelectionTransform,
     mode: RegionSelectionMode, hidden: &HiddenTypes,
 ) -> Option<(ToolEdit, Selection)> {
     if !selection.is_well_formed() {
@@ -432,6 +439,7 @@ pub fn transform_selection_with_mode(
     build_selection_edit(
         document,
         tree,
+        world,
         SelectionEditRequest {
             source: selection,
             target,
@@ -534,7 +542,8 @@ impl SelectionEditRequest<'_> {
 }
 
 fn build_selection_edit(
-    document: &mut MapDocument, tree: &ObjectTree, request: SelectionEditRequest<'_>, hidden: &HiddenTypes,
+    document: &mut MapDocument, tree: &ObjectTree, world: &World, request: SelectionEditRequest<'_>,
+    hidden: &HiddenTypes,
 ) -> Option<(ToolEdit, Selection)> {
     let size = document.map.size();
     let touched = request.touched_tiles().collect::<HashSet<_>>();
@@ -545,8 +554,8 @@ fn build_selection_edit(
         return None;
     }
 
-    let defaults = if request.placement == SelectionPlacement::Move {
-        Some(default_tile_paths(tree)?)
+    let base_tile = if request.placement == SelectionPlacement::Move {
+        Some(world.base_tile.as_ref()?)
     } else {
         None
     };
@@ -573,7 +582,7 @@ fn build_selection_edit(
     }
 
     let mut staged = HashMap::<Coord, PlacedTile>::new();
-    if let Some((default_turf, default_area)) = defaults {
+    if let Some(base_tile) = base_tile {
         for coord in request.source_tiles() {
             let mut left = document
                 .placed_tile(coord)?
@@ -581,8 +590,8 @@ fn build_selection_edit(
                 .filter(|placed| hidden.hides(placed.prefab()))
                 .collect::<PlacedTile>();
             for (kind, path) in [
-                (PlacementKind::Turf, &default_turf),
-                (PlacementKind::Area, &default_area),
+                (PlacementKind::Turf, &base_tile.turf),
+                (PlacementKind::Area, &base_tile.area),
             ] {
                 if !has_kind(tree, &left, kind) {
                     let placed = document.instantiate(Prefab::new(path.clone()));
@@ -632,26 +641,69 @@ fn build_selection_edit(
     ))
 }
 
-pub fn default_tile_paths(tree: &ObjectTree) -> Option<(TreePath, TreePath)> {
-    Some((
-        default_path(tree, "turf", tree.roots().turf?)?,
-        default_path(tree, "area", tree.roots().area?)?,
-    ))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BaseKind {
+    Turf,
+    Area,
 }
 
-fn default_path(tree: &ObjectTree, variable: &str, root: TypeId) -> Option<TreePath> {
-    let configured = tree
-        .id_of(&TreePath::parse("/world"))
-        .and_then(|world| tree.var_inherited(world, &Identifier::from(variable)))
-        .and_then(|var| match &var.value {
-            Value::Path(path) => Some(path),
-            _ => None,
-        })
-        .and_then(|path| tree.id_of(path).map(|id| (path, id)))
-        .filter(|(_, id)| tree.is_subtype_of(*id, root))
-        .map(|(path, _)| path.clone());
+impl BaseKind {
+    fn placement(self) -> PlacementKind {
+        match self {
+            Self::Turf => PlacementKind::Turf,
+            Self::Area => PlacementKind::Area,
+        }
+    }
 
-    configured.or_else(|| tree.get(root).map(|decl| TreePath::parse(&decl.path.to_string())))
+    fn root(self) -> &'static str {
+        match self {
+            Self::Turf => "turf",
+            Self::Area => "area",
+        }
+    }
+
+    fn is_prefab(self, prefab: &Prefab) -> bool {
+        prefab
+            .path
+            .segments
+            .first()
+            .is_some_and(|segment| segment.as_str() == self.root())
+    }
+
+    fn is_in(self, tile: &[PlacedPrefab]) -> bool {
+        tile.iter().any(|placed| self.is_prefab(placed.prefab()))
+    }
+
+    fn refill(
+        self, document: &mut MapDocument, tree: &ObjectTree, path: &TreePath, tile: &mut PlacedTile,
+    ) -> Option<PrefabInstanceId> {
+        if self.is_in(tile) {
+            return None;
+        }
+
+        let placed = document.instantiate(Prefab::new(path.clone()));
+        let id = placed.id();
+        tile.insert(insertion_index(tree, tile, self.placement()), placed);
+
+        Some(id)
+    }
+}
+
+pub fn same_prefabs(left: &[PlacedPrefab], right: &[PlacedPrefab]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| left.prefab() == right.prefab())
+}
+
+pub fn refill_missing_bases(
+    document: &mut MapDocument, tree: &ObjectTree, base_tile: &BaseTile, tile: &mut PlacedTile,
+) -> Vec<PrefabInstanceId> {
+    [(BaseKind::Turf, &base_tile.turf), (BaseKind::Area, &base_tile.area)]
+        .into_iter()
+        .filter_map(|(kind, path)| kind.refill(document, tree, path, tile))
+        .collect()
 }
 
 fn transform_point((x, y): (u32, u32), width: u32, height: u32, transform: SelectionTransform) -> (u32, u32) {
@@ -933,14 +985,29 @@ fn delete(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
     if !context.document.allows_edit_instance(target) {
         return None;
     }
-    let mut after = context.document.placed_tile(location.coord)?;
-    if after
+    let before = context.document.placed_tile(location.coord)?;
+    if before
         .get(location.prefab_index)
         .is_none_or(|placed| placed.id() != target)
     {
         return None;
     }
+
+    let mut after = before.clone();
     let placed = after.remove(location.prefab_index);
+    let mut affected = vec![target];
+    if let Some(base_tile) = &context.world.base_tile {
+        affected.extend(refill_missing_bases(
+            context.document,
+            context.tree,
+            base_tile,
+            &mut after,
+        ));
+    }
+
+    if same_prefabs(&before, &after) {
+        return None;
+    }
 
     let mut edit = Edit::new(format!("delete {}", placed.prefab().path));
     edit.change(context.document, location.coord, after);
@@ -948,7 +1015,7 @@ fn delete(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
     Some(ToolEdit {
         edit,
         picked: None,
-        affected: vec![target],
+        affected,
     })
 }
 
@@ -1244,12 +1311,16 @@ mod tests {
 
     use super::{
         Dir, FillError, FillMode, MAX_FILL_TILES, RegionSelectionMode, Selection, SelectionMask, SelectionPlacement,
-        SelectionRotation, SelectionTransform, Tool, ToolContext, copy_selection, default_tile_paths, fill_selection,
-        move_selection, place_replacing_objs, place_selection, place_selection_with_mode, rotate_point,
-        transform_direction, transform_point, transform_selection, transform_selection_with_mode,
-        transformed_selection,
+        SelectionRotation, SelectionTransform, Tool, ToolContext, copy_selection, fill_selection, move_selection,
+        place_replacing_objs, place_selection, place_selection_with_mode, rotate_point, transform_direction,
+        transform_point, transform_selection, transform_selection_with_mode, transformed_selection,
     };
-    use crate::{document::MapDocument, focus::AreaFocus, frame::HiddenTypes};
+    use crate::{
+        document::MapDocument,
+        focus::AreaFocus,
+        frame::HiddenTypes,
+        world::{BaseTile, World},
+    };
 
     fn tree() -> objtree::ObjectTree {
         let mut tree = objtree::ObjectTree::new();
@@ -1370,6 +1441,7 @@ mod tests {
         Tool::Fill.build_edit(&mut ToolContext {
             document,
             tree,
+            world: &World::new(tree),
             prefab: Some(prefab),
             target: None,
             coord,
@@ -1387,6 +1459,7 @@ mod tests {
             &mut ToolContext {
                 document,
                 tree,
+                world: &World::new(tree),
                 prefab: Some(prefab),
                 target: None,
                 coord,
@@ -1402,6 +1475,7 @@ mod tests {
         Tool::Place.build_edit(&mut ToolContext {
             document,
             tree,
+            world: &World::new(tree),
             prefab: Some(prefab),
             target: None,
             coord: dmm::Coord::new(1, 1, 1),
@@ -1418,6 +1492,7 @@ mod tests {
             &mut ToolContext {
                 document,
                 tree: &tree(),
+                world: &World::default(),
                 prefab: Some(&Prefab::new(TreePath::parse("/turf/open/floor/blue"))),
                 target: None,
                 coord,
@@ -1650,6 +1725,7 @@ mod tests {
             .build_edit(&mut ToolContext {
                 document: &mut document,
                 tree: &tree,
+                world: &World::new(&tree),
                 prefab: None,
                 target: Some(target),
                 coord,
@@ -1678,6 +1754,7 @@ mod tests {
                 .build_edit(&mut ToolContext {
                     document: &mut document,
                     tree: &tree,
+                    world: &World::new(&tree),
                     prefab: None,
                     target: Some(target),
                     coord,
@@ -1692,6 +1769,85 @@ mod tests {
         assert_eq!(document.instance_ids_at(coord)[0], target);
         assert!(document.redo());
         assert_eq!(document.instance_location(target), None);
+    }
+
+    fn delete_at(document: &mut MapDocument, tree: &objtree::ObjectTree, index: usize) -> Option<super::ToolEdit> {
+        let coord = Coord::new(1, 1, 1);
+        let target = document.instance_ids_at(coord)[index];
+
+        Tool::Delete.build_edit(&mut ToolContext {
+            document,
+            tree,
+            world: &World::new(tree),
+            prefab: None,
+            target: Some(target),
+            coord,
+            anchor: None,
+            fill_mode: FillMode::default(),
+            custom_fill_boundaries: &[],
+        })
+    }
+
+    #[test]
+    fn deleting_a_turf_or_area_leaves_the_default_in_its_place() {
+        let tree = tree();
+        let mut document = map_document(&["/obj/table", "/turf/floor", "/area/station"]);
+        let before = document.map.clone();
+
+        let action = delete_at(&mut document, &tree, 1).unwrap();
+        assert_eq!(action.affected.len(), 2);
+        document.apply(action.edit);
+        assert_eq!(
+            tile_paths(&document, Coord::new(1, 1, 1)),
+            ["/obj/table", "/turf", "/area/station"]
+        );
+
+        let action = delete_at(&mut document, &tree, 2).unwrap();
+        document.apply(action.edit);
+        assert_eq!(
+            tile_paths(&document, Coord::new(1, 1, 1)),
+            ["/obj/table", "/turf", "/area"]
+        );
+
+        assert!(document.undo());
+        assert!(document.undo());
+        assert_eq!(document.map, before);
+    }
+
+    #[test]
+    fn deleting_an_object_adds_the_defaults_a_tile_lacks() {
+        let tree = tree();
+        let mut document = map_document(&["/obj/table"]);
+        let before = document.map.clone();
+
+        let action = delete_at(&mut document, &tree, 0).unwrap();
+        document.apply(action.edit);
+        assert_eq!(tile_paths(&document, Coord::new(1, 1, 1)), ["/turf", "/area"]);
+
+        assert!(document.undo());
+        assert_eq!(document.map, before);
+    }
+
+    #[test]
+    fn deleting_a_plain_default_changes_nothing() {
+        let tree = tree();
+        let mut document = map_document(&["/turf", "/area"]);
+
+        assert!(delete_at(&mut document, &tree, 0).is_none());
+        assert!(delete_at(&mut document, &tree, 1).is_none());
+    }
+
+    #[test]
+    fn an_unknown_type_turf_still_counts_as_the_tiles_turf() {
+        let tree = tree();
+        let mut document = map_document(&["/obj/table", "/turf/removed_floor", "/area/station"]);
+
+        let action = delete_at(&mut document, &tree, 0).unwrap();
+        document.apply(action.edit);
+        assert_eq!(
+            tile_paths(&document, Coord::new(1, 1, 1)),
+            ["/turf/removed_floor", "/area/station"]
+        );
     }
 
     #[test]
@@ -2359,6 +2515,7 @@ mod tests {
         let (action, selected) = place_selection_with_mode(
             &mut document,
             &tree,
+            &World::new(&tree),
             source,
             target.min,
             SelectionRotation::Original,
@@ -2419,6 +2576,7 @@ mod tests {
         let (action, selected) = place_selection_with_mode(
             &mut document,
             &tree,
+            &World::new(&tree),
             source,
             target.min,
             SelectionRotation::Original,
@@ -2489,6 +2647,7 @@ mod tests {
         let (action, target) = place_selection_with_mode(
             &mut document,
             &tree,
+            &World::new(&tree),
             source,
             Coord::new(6, 1, 1),
             SelectionRotation::Clockwise,
@@ -2548,6 +2707,7 @@ mod tests {
         let (action, _) = place_selection_with_mode(
             &mut document,
             &tree,
+            &World::new(&tree),
             source,
             Coord::new(2, 1, 1),
             SelectionRotation::Original,
@@ -2585,6 +2745,7 @@ mod tests {
         let (action, _) = place_selection_with_mode(
             &mut document,
             &tree,
+            &World::new(&tree),
             source,
             Coord::new(2, 1, 1),
             SelectionRotation::Original,
@@ -2614,6 +2775,7 @@ mod tests {
         let (action, _) = transform_selection_with_mode(
             &mut document,
             &tree,
+            &World::new(&tree),
             selection,
             SelectionTransform::MirrorHorizontal,
             RegionSelectionMode::Full,
@@ -2652,6 +2814,7 @@ mod tests {
         let (action, mirrored) = transform_selection_with_mode(
             &mut document,
             &tree,
+            &World::new(&tree),
             selection,
             SelectionTransform::MirrorHorizontal,
             border,
@@ -2793,7 +2956,8 @@ mod tests {
         let chair = document.instance_ids_at(Coord::new(2, 1, 1))[0];
         let window = document.instance_ids_at(Coord::new(3, 1, 1))[0];
 
-        let (action, moved) = move_selection(&mut document, &tree, source, Coord::new(2, 1, 1)).unwrap();
+        let (action, moved) =
+            move_selection(&mut document, &tree, &World::new(&tree), source, Coord::new(2, 1, 1)).unwrap();
         assert_eq!(moved, Selection::from_drag(Coord::new(2, 1, 1), Coord::new(3, 1, 1)));
         assert_eq!(action.edit.changes.len(), 3);
         document.apply(action.edit);
@@ -2834,9 +2998,9 @@ mod tests {
     #[test]
     fn region_moves_restore_configured_world_turf_and_area() {
         let mut tree = tree();
-        let world = tree.register(&TreePath::parse("/world"), Location::default());
+        let world_id = tree.register(&TreePath::parse("/world"), Location::default());
         for (name, path) in [("turf", "/turf/open/space"), ("area", "/area/space")] {
-            tree.get_mut(world).unwrap().vars.insert(
+            tree.get_mut(world_id).unwrap().vars.insert(
                 name.into(),
                 VarDecl {
                     name: name.into(),
@@ -2851,8 +3015,11 @@ mod tests {
             );
         }
         assert_eq!(
-            default_tile_paths(&tree),
-            Some((TreePath::parse("/turf/open/space"), TreePath::parse("/area/space")))
+            World::new(&tree).base_tile,
+            Some(BaseTile {
+                turf: TreePath::parse("/turf/open/space"),
+                area: TreePath::parse("/area/space"),
+            })
         );
         let mut document = grid_document(2, 1, |coord| {
             if coord.x == 1 {
@@ -2863,7 +3030,8 @@ mod tests {
         });
         let source = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(1, 1, 1));
 
-        let (action, _) = move_selection(&mut document, &tree, source, Coord::new(2, 1, 1)).unwrap();
+        let (action, _) =
+            move_selection(&mut document, &tree, &World::new(&tree), source, Coord::new(2, 1, 1)).unwrap();
         document.apply(action.edit);
 
         assert_eq!(
@@ -2896,7 +3064,8 @@ mod tests {
         let source_table = source_before[0].id();
         let destination_chair = destination_before[0].id();
 
-        let (action, copied) = copy_selection(&mut document, &tree, selection, destination_coord).unwrap();
+        let (action, copied) =
+            copy_selection(&mut document, &tree, &World::new(&tree), selection, destination_coord).unwrap();
         assert_eq!(copied, Selection::from_drag(destination_coord, destination_coord));
         document.apply(action.edit);
 
@@ -2951,6 +3120,7 @@ mod tests {
         let (action, target) = place_selection(
             &mut document,
             &tree,
+            &World::new(&tree),
             source,
             target_min,
             SelectionRotation::Clockwise,
@@ -3001,7 +3171,7 @@ mod tests {
             .collect::<Vec<_>>();
         let selection = Selection::from_drag(source, source);
 
-        assert!(move_selection(&mut document, &tree, selection, Coord::new(2, 1, 1)).is_none());
+        assert!(move_selection(&mut document, &tree, &World::new(&tree), selection, Coord::new(2, 1, 1)).is_none());
         assert_eq!(
             (1..=2)
                 .map(|x| document.placed_tile(Coord::new(x, 1, 1)).unwrap())
@@ -3048,8 +3218,14 @@ mod tests {
         let invalid_numeric = document.instance_ids_at(Coord::new(2, 1, 1))[0];
         let invalid_text = document.instance_ids_at(Coord::new(1, 2, 1))[0];
 
-        let (action, rotated) =
-            transform_selection(&mut document, &tree, source, SelectionTransform::RotateClockwise).unwrap();
+        let (action, rotated) = transform_selection(
+            &mut document,
+            &tree,
+            &World::new(&tree),
+            source,
+            SelectionTransform::RotateClockwise,
+        )
+        .unwrap();
         assert_eq!(rotated, Selection::from_drag(Coord::new(1, 1, 1), Coord::new(3, 2, 1)));
         document.apply(action.edit);
 
@@ -3152,6 +3328,7 @@ mod tests {
         let (action, _) = place_selection(
             &mut document,
             &tree,
+            &World::new(&tree),
             selection,
             coord,
             SelectionRotation::Clockwise,
@@ -3238,8 +3415,14 @@ mod tests {
         let object = document.instance_ids_at(coord)[0];
         let selection = Selection::from_drag(coord, coord);
 
-        let (action, _) =
-            transform_selection(&mut document, &tree, selection, SelectionTransform::RotateClockwise).unwrap();
+        let (action, _) = transform_selection(
+            &mut document,
+            &tree,
+            &World::new(&tree),
+            selection,
+            SelectionTransform::RotateClockwise,
+        )
+        .unwrap();
         document.apply(action.edit);
 
         let instance = document.prefab_instance(object).ok_or("prefab instance is missing")?;

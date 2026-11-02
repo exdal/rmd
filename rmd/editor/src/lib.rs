@@ -22,6 +22,7 @@ pub mod progress;
 pub mod search;
 pub mod tool;
 pub mod visual;
+pub mod world;
 
 use core::{
     location::FileId,
@@ -45,6 +46,7 @@ use crate::{
     maploader::resolved_path,
     progress::{Progress, Stage},
     tool::Tool,
+    world::World,
 };
 
 pub const RECENT_PREFAB_CAPACITY: usize = 10;
@@ -68,6 +70,7 @@ pub struct Environment {
     pub root: PathBuf,
     /// The compatibility view used by the editor and static renderer.
     pub tree: ObjectTree,
+    pub world: World,
     /// Runtime declarations and bytecode compiled without mapping compatibility defines.
     pub bake_program: Option<BakeProgram>,
     /// Profiles discovered in the runtime view, even when bytecode generation failed.
@@ -92,6 +95,7 @@ impl Environment {
     pub fn new(root: impl Into<PathBuf>, tree: ObjectTree) -> Self {
         Self {
             root: root.into(),
+            world: World::new(&tree),
             tree,
             bake_program: None,
             profiles: None,
@@ -137,6 +141,7 @@ impl Environment {
 
         let mut environment = Self {
             root: compiled.root,
+            world: World::new(&compiled.tree),
             tree: compiled.tree,
             bake_program: compiled.bake_program,
             profiles: compiled.profiles,
@@ -427,14 +432,14 @@ impl EditorState {
     }
 
     pub fn active_pair_mut(&mut self) -> Option<(&Environment, &mut MapDocument)> {
+        self.pair_mut((self.active)?)
+    }
+
+    pub fn pair_mut(&mut self, id: DocumentId) -> Option<(&Environment, &mut MapDocument)> {
         let Self {
-            environment,
-            documents,
-            active,
-            ..
+            environment, documents, ..
         } = self;
         let environment = environment.as_ref()?;
-        let id = (*active)?;
         let document = documents.iter_mut().find(|document| document.id() == id)?;
 
         Some((environment, document))

@@ -1,4 +1,3 @@
-use core::{path::TreePath, types::Identifier, vars};
 use std::{
     collections::{BTreeSet, HashSet},
     path::{Path, PathBuf},
@@ -11,6 +10,7 @@ use editor::{
     frame::TypeVisibility,
     progress::{Progress, Stage},
     tool::Tool,
+    world::World,
 };
 use objtree::{ObjectTree, TypeId};
 use render::texture::TextureCatalog;
@@ -307,6 +307,10 @@ impl Session {
         self.state.environment.as_ref().map(|environment| &environment.tree)
     }
 
+    pub fn world(&self) -> Option<&World> {
+        self.state.environment.as_ref().map(|environment| &environment.world)
+    }
+
     pub(crate) fn type_source(&self, id: TypeId) -> Option<SourceLocation> {
         let environment = self.state.environment.as_ref()?;
         let location = environment.tree.get(id)?.location.get();
@@ -322,13 +326,7 @@ impl Session {
     }
 
     pub fn codebase_name(&self) -> Option<&str> {
-        let tree = self.tree()?;
-        let world = tree.id_of(&TreePath::parse("/world"))?;
-
-        tree.var_inherited(world, &Identifier::from(vars::NAME))?
-            .value
-            .as_text()
-            .filter(|name| !name.is_empty())
+        self.world()?.name.as_deref()
     }
 
     pub fn environment_path(&self) -> Option<&Path> {

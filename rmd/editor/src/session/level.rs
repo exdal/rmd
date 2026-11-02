@@ -1,7 +1,7 @@
 use core::path::TreePath;
 
 use dmm::{Coord, Prefab};
-use editor::{bake::BakeUpdate, document::DocumentId, patch, tool::default_tile_paths};
+use editor::{bake::BakeUpdate, document::DocumentId, patch};
 use net::{DeleteLevel, InsertAt, InsertLevel, LevelContents, LevelOp};
 use objtree::{ObjectTree, TypeId};
 
@@ -286,9 +286,9 @@ impl Session {
     }
 
     pub(crate) fn default_fill(&self) -> Result<Vec<Prefab>, String> {
-        self.tree()
-            .and_then(default_tile_paths)
-            .map(|(turf, area)| vec![Prefab::new(turf), Prefab::new(area)])
+        self.world()
+            .and_then(|world| world.base_tile.as_ref())
+            .map(|base_tile| vec![Prefab::new(base_tile.turf.clone()), Prefab::new(base_tile.area.clone())])
             .ok_or_else(|| String::from("the codebase does not define usable /turf and /area types"))
     }
 

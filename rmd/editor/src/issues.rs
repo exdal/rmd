@@ -9,6 +9,7 @@ use crate::{
     document::{MapDocument, PrefabInstanceId},
     search,
     tool::{PlacementKind, ToolEdit, placement_kind},
+    world::World,
 };
 
 fn unknown_kind(tree: &ObjectTree, path: &TreePath) -> Option<PlacementKind> {
@@ -58,9 +59,11 @@ pub fn editable_instances(
 }
 
 pub fn delete_instances(
-    document: &MapDocument, tree: &ObjectTree, source: &TreePath, instances: &[PrefabInstanceId],
+    document: &mut MapDocument, tree: &ObjectTree, world: &World, source: &TreePath, instances: &[PrefabInstanceId],
 ) -> Option<ToolEdit> {
-    search::delete_instances(document, &editable_instances(document, tree, source, instances))
+    let editable = editable_instances(document, tree, source, instances);
+
+    search::delete_instances(document, tree, world, &editable)
 }
 
 /// This func changes __ONLY__ the paths, placements IDs, overrides and orders are retained.

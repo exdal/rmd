@@ -79,6 +79,7 @@ impl Session {
                 None => Tool::Place.build_edit(&mut ToolContext {
                     document,
                     tree: &environment.tree,
+                    world: &environment.world,
                     prefab: Some(&prefab),
                     target: None,
                     coord,
@@ -133,6 +134,7 @@ impl Session {
                 &mut ToolContext {
                     document,
                     tree: &environment.tree,
+                    world: &environment.world,
                     prefab: Some(&prefab),
                     target: None,
                     coord,
@@ -323,6 +325,7 @@ impl Session {
         Tool::Delete.build_edit(&mut ToolContext {
             document,
             tree: &environment.tree,
+            world: &environment.world,
             prefab: None,
             target: Some(target),
             coord,

@@ -9,9 +9,10 @@ use crate::{
     frame::HiddenTypes,
     maploader::preview::MapView,
     tool::{
-        PlacementKind, RegionSelectionMode, SelectionRotation, ToolEdit, coord_in_bounds, default_tile_paths,
-        insertion_index, placement_kind, rotate_point, rotate_prefab,
+        PlacementKind, RegionSelectionMode, SelectionRotation, ToolEdit, coord_in_bounds, insertion_index,
+        placement_kind, rotate_point, rotate_prefab,
     },
+    world::{BaseTile, World},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -223,7 +224,7 @@ pub(crate) fn merge_pasted(
 
 /// Removes what is not hidden, leaving the default turf and area behind
 pub fn clear_region(
-    document: &mut MapDocument, tree: &ObjectTree, selection: Selection, mode: RegionSelectionMode,
+    document: &mut MapDocument, tree: &ObjectTree, world: &World, selection: Selection, mode: RegionSelectionMode,
     hidden: &HiddenTypes, label: &str,
 ) -> Option<ToolEdit> {
     if !selection.is_well_formed()
@@ -234,14 +235,14 @@ pub fn clear_region(
         return None;
     }
 
-    let defaults = default_prefabs(tree)?;
+    let base_tile = world.base_tile.as_ref()?;
     let mut edit = Edit::new(label);
     let mut affected = Vec::new();
     for coord in mode.tiles(selection) {
         if !document
             .map
             .tile_at(coord)
-            .is_some_and(|tile| clears_anything(tile, hidden, &defaults))
+            .is_some_and(|tile| clears_anything(tile, hidden, base_tile))
         {
             continue;
         }
@@ -249,13 +250,16 @@ pub fn clear_region(
         let before = document.placed_tile(coord)?;
         let mut after = before
             .iter()
-            .filter(|placed| hidden.hides(placed.prefab()) || defaults.contains(placed.prefab()))
+            .filter(|placed| hidden.hides(placed.prefab()) || is_base(placed.prefab(), base_tile))
             .cloned()
             .collect::<PlacedTile>();
 
-        for (kind, prefab) in [(PlacementKind::Turf, &defaults[0]), (PlacementKind::Area, &defaults[1])] {
+        for (kind, path) in [
+            (PlacementKind::Turf, &base_tile.turf),
+            (PlacementKind::Area, &base_tile.area),
+        ] {
             if !has_kind(tree, &after, kind) {
-                let placed = document.instantiate(prefab.clone());
+                let placed = document.instantiate(Prefab::new(path.clone()));
                 after.insert(insertion_index(tree, &after, kind), placed);
             }
         }
@@ -279,19 +283,20 @@ pub fn clear_region(
     })
 }
 
-pub fn can_clear(tree: &ObjectTree, tile: &Tile, hidden: &HiddenTypes) -> bool {
-    default_prefabs(tree).is_some_and(|defaults| clears_anything(tile, hidden, &defaults))
+pub fn can_clear(world: &World, tile: &Tile, hidden: &HiddenTypes) -> bool {
+    world
+        .base_tile
+        .as_ref()
+        .is_some_and(|base_tile| clears_anything(tile, hidden, base_tile))
 }
 
-fn clears_anything(tile: &[Prefab], hidden: &HiddenTypes, defaults: &[Prefab; 2]) -> bool {
+fn clears_anything(tile: &[Prefab], hidden: &HiddenTypes, base_tile: &BaseTile) -> bool {
     tile.iter()
-        .any(|prefab| !hidden.hides(prefab) && !defaults.contains(prefab))
+        .any(|prefab| !hidden.hides(prefab) && !is_base(prefab, base_tile))
 }
 
-fn default_prefabs(tree: &ObjectTree) -> Option<[Prefab; 2]> {
-    let (turf, area) = default_tile_paths(tree)?;
-
-    Some([Prefab::new(turf), Prefab::new(area)])
+fn is_base(prefab: &Prefab, base_tile: &BaseTile) -> bool {
+    prefab.vars.is_empty() && (prefab.path == base_tile.turf || prefab.path == base_tile.area)
 }
 
 fn kind_of(tree: &ObjectTree, prefab: &Prefab) -> PlacementKind {

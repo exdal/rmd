@@ -8,7 +8,7 @@ use editor::{
     conflict::ConflictState,
     document::{DocumentId, MapDocument},
     grid::Grid,
-    tool::{Tool, default_tile_paths},
+    tool::Tool,
 };
 
 use super::{GitDocState, Session, coop::LevelStep, is_reorder_label};
@@ -165,14 +165,19 @@ impl Session {
             .into());
         }
 
-        let tree = self
-            .tree()
+        let world = self
+            .world()
             .ok_or_else(|| std::io::Error::other("no codebase is loaded"))?;
-        let (turf, area) = default_tile_paths(tree)
+        let base_tile = world
+            .base_tile
+            .as_ref()
             .ok_or_else(|| std::io::Error::other("the codebase does not define usable /turf and /area types"))?;
         let mut map = Map::new(size);
         map.format = format;
-        let key = map.intern_tile(vec![Prefab::new(turf), Prefab::new(area)]);
+        let key = map.intern_tile(vec![
+            Prefab::new(base_tile.turf.clone()),
+            Prefab::new(base_tile.area.clone()),
+        ]);
         for cell in map.grid.iter_mut().flatten().flatten() {
             *cell = key;
         }

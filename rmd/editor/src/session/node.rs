@@ -540,6 +540,7 @@ impl Session {
                 let Some(placement) = Tool::Place.build_edit(&mut ToolContext {
                     document,
                     tree: &environment.tree,
+                    world: &environment.world,
                     prefab: Some(&state.brush),
                     target: None,
                     coord: *coord,
@@ -630,6 +631,7 @@ impl Session {
                     let Some(placement) = Tool::Place.build_edit(&mut ToolContext {
                         document,
                         tree: &environment.tree,
+                        world: &environment.world,
                         prefab: Some(&state.brush),
                         target: None,
                         coord,

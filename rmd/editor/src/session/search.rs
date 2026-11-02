@@ -1,6 +1,7 @@
 use editor::{
     document::{DocumentId, PrefabInstanceId, Selection},
     search::{self, SearchQuery},
+    world::World,
 };
 use objtree::ObjectTree;
 
@@ -25,10 +26,16 @@ impl Session {
             return false;
         }
 
-        self.state
-            .active_document()
-            .and_then(|document| search::delete_instances(document, instances))
-            .is_some_and(|action| self.commit(action, None))
+        let action = match self.state.active_pair_mut() {
+            Some((environment, document)) => {
+                search::delete_instances(document, &environment.tree, &environment.world, instances)
+            },
+            None => self.state.active_document_mut().and_then(|document| {
+                search::delete_instances(document, &ObjectTree::default(), &World::default(), instances)
+            }),
+        };
+
+        action.is_some_and(|action| self.commit(action, None))
     }
 
     pub fn replace_instances(&mut self, document: DocumentId, instances: &[PrefabInstanceId]) -> bool {
