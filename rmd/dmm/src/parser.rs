@@ -358,12 +358,33 @@ impl<'a> MapParser<'a> {
                     "null" => Ok(Value::Null),
                     // `newlist(/obj/a, /obj/b)` keeps its spelling through the prefab's verbatim source
                     "list" | "newlist" if self.peek() == Some(b'(') => self.parse_list(),
+                    // `displayed = new/obj/item/captaingun`
+                    "new" if self.at_new_path() => self.parse_new(),
                     // `list(ACCEPTING = "DONATIONS")`
                     _ => Ok(Value::Path(TreePath::parse(word))),
                 }
             },
             _ => Err(self.error(MapErrorKind::MalformedValue(String::new()))),
         }
+    }
+
+    fn at_new_path(&self) -> bool {
+        let mut ahead = 0;
+        while matches!(self.peek_at(ahead), Some(b' ' | b'\t')) {
+            ahead += 1;
+        }
+
+        self.peek_at(ahead) == Some(b'/')
+    }
+
+    fn parse_new(&mut self) -> MapResult<Value> {
+        self.skip_trivial();
+        self.parse_value()?;
+        if self.peek() == Some(b'(') {
+            self.parse_list()?;
+        }
+
+        Ok(Value::Unevaluated)
     }
 
     fn parse_number(&mut self) -> MapResult<Value> {
@@ -923,6 +944,19 @@ mod tests {
 
         assert!(matches!(&vars[0].1.value, Value::List(entries) if entries.len() == 2));
         assert_eq!(vars[0].1.verbatim(), Some(source));
+    }
+
+    #[test]
+    fn reads_new_as_a_runtime_value_and_keeps_its_spelling() {
+        for source in ["new/obj/item/captaingun", "new /obj/item(1, \"a\")"] {
+            let vars = prefab_vars(&format!(
+                "\"a\" = (/obj/t{{displayed = {source};\n\tpixel_y = 6\n\t}},/area)\n\n(1,1,1) = {{\"\na\n\"}}\n"
+            ));
+
+            assert_eq!(vars[0].1.value, Value::Unevaluated);
+            assert_eq!(vars[0].1.verbatim(), Some(source));
+            assert_eq!(vars[1].1.value, Value::Num(6.0));
+        }
     }
 
     #[test]
