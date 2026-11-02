@@ -518,7 +518,10 @@ impl UiState {
         }
 
         let reload_profile = self.draw_settings_window(ui, session, settings, themes, load.is_some());
-        self.show_welcome |= menu.show_welcome;
+        if menu.show_welcome {
+            self.show_welcome = true;
+            self.close_focus = Some(CloseFocus::Welcome);
+        }
 
         let open_source = self.draw_panels(ui, session, settings);
         let load_conflicts = self.draw_reload_conflicts_popup(ui, session);
