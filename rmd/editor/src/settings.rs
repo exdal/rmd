@@ -366,10 +366,11 @@ pub(crate) enum KeybindAction {
     PanDrag,
     ZoomIn,
     ZoomOut,
+    PrefabVariants,
 }
 
 impl KeybindAction {
-    pub const ALL: [Self; 61] = [
+    pub const ALL: [Self; 62] = [
         Self::Save,
         Self::SaveAll,
         Self::CloseMap,
@@ -431,6 +432,7 @@ impl KeybindAction {
         Self::PanDrag,
         Self::ZoomIn,
         Self::ZoomOut,
+        Self::PrefabVariants,
     ];
     pub const RECENT: [Self; 10] = [
         Self::Recent1,
@@ -508,6 +510,7 @@ impl KeybindAction {
             Self::PanDrag => "Drag to pan (hold)",
             Self::ZoomIn => "Zoom in",
             Self::ZoomOut => "Zoom out",
+            Self::PrefabVariants => "Prefab variants",
         }
     }
 
@@ -578,6 +581,7 @@ impl KeybindAction {
             Self::PanDrag => "pan-drag",
             Self::ZoomIn => "zoom-in",
             Self::ZoomOut => "zoom-out",
+            Self::PrefabVariants => "prefab-variants",
         }
     }
 }
@@ -649,6 +653,7 @@ pub(crate) struct KeyBindings {
     pan_drag: KeyBinding,
     zoom_in: KeyBinding,
     zoom_out: KeyBinding,
+    prefab_variants: KeyBinding,
 }
 
 impl Default for KeyBindings {
@@ -715,6 +720,7 @@ impl Default for KeyBindings {
             pan_drag: KeyBinding::new(Key::Space),
             zoom_in: KeyBinding::new(Key::Equal),
             zoom_out: KeyBinding::new(Key::Minus),
+            prefab_variants: KeyBinding::new(Key::Tab),
         }
     }
 }
@@ -783,6 +789,7 @@ impl KeyBindings {
             pan_drag: KeyBinding::new(Key::Space),
             zoom_in: KeyBinding::new(Key::Equal),
             zoom_out: KeyBinding::new(Key::Minus),
+            prefab_variants: KeyBinding::new(Key::Tab),
         }
     }
 
@@ -849,6 +856,7 @@ impl KeyBindings {
             KeybindAction::PanDrag => self.pan_drag,
             KeybindAction::ZoomIn => self.zoom_in,
             KeybindAction::ZoomOut => self.zoom_out,
+            KeybindAction::PrefabVariants => self.prefab_variants,
         }
     }
 
@@ -970,6 +978,7 @@ impl KeyBindings {
             KeybindAction::PanDrag => self.pan_drag = binding,
             KeybindAction::ZoomIn => self.zoom_in = binding,
             KeybindAction::ZoomOut => self.zoom_out = binding,
+            KeybindAction::PrefabVariants => self.prefab_variants = binding,
         }
     }
 }

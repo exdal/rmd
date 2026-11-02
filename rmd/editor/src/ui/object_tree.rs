@@ -2,12 +2,11 @@ use core::{path::TreePath, types::Identifier, vars};
 use std::collections::{HashMap, HashSet};
 
 use dear_imgui_rs::{ListClipper, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError};
-use editor::icons::materialdesignicons::{ICON_COG, ICON_EYE, ICON_EYE_OFF, ICON_FILTER, ICON_IMAGE_BROKEN};
+use editor::icons::materialdesignicons::{ICON_COG, ICON_EYE, ICON_EYE_OFF, ICON_FILTER};
 use objtree::{ObjectTree, TypeId};
-use render::Renderer;
 
 use super::{
-    common::{dpi, fit_icon, focus_window_on_hover},
+    common::{dpi, draw_thumbnail, focus_window_on_hover},
     settings::{draw_object_tree_filter_settings, draw_object_tree_search_settings},
 };
 use crate::{
@@ -658,38 +657,9 @@ fn draw_type_icon(ui: &Ui, thumbnail: Option<crate::session::PrefabThumbnail>, c
     let row_height = (row_max[1] - row_min[1]).max(1.0);
     let icon_extent = ui.text_line_height().min(row_height);
     let icon_slot_x = cursor[0] + ui.tree_node_to_label_spacing();
-    let draw = ui.get_window_draw_list();
+    let min = [icon_slot_x, row_min[1] + (row_height - icon_extent) * 0.5];
 
-    match thumbnail {
-        Some(thumbnail) => {
-            let image_size = fit_icon(thumbnail.texture.width, thumbnail.texture.height, icon_extent);
-            let image_min = [
-                icon_slot_x + (icon_extent - image_size[0]) * 0.5,
-                row_min[1] + (row_height - image_size[1]) * 0.5,
-            ];
-            let image_max = [image_min[0] + image_size[0], image_min[1] + image_size[1]];
-            draw.add_image(
-                Renderer::sprite_texture(thumbnail.texture.index),
-                image_min,
-                image_max,
-                thumbnail.uv0,
-                thumbnail.uv1,
-                thumbnail.tint,
-            );
-        },
-        None => {
-            let fallback = ICON_IMAGE_BROKEN.to_string();
-            let fallback_width = ui.calc_text_size(&fallback)[0];
-            draw.add_text(
-                [
-                    icon_slot_x + (icon_extent - fallback_width) * 0.5,
-                    row_min[1] + (row_height - ui.text_line_height()) * 0.5,
-                ],
-                ui.style_color(StyleColor::TextDisabled),
-                fallback,
-            );
-        },
-    }
+    draw_thumbnail(ui, thumbnail, min, icon_extent, None);
 }
 
 fn sorted_children(tree: &ObjectTree, parent: TypeId) -> Vec<TypeId> {

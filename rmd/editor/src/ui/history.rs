@@ -1,11 +1,9 @@
-use dear_imgui_rs::{StyleColor, StyleVar, Ui};
+use dear_imgui_rs::{StyleColor, Ui};
 use dmm::Prefab;
-use editor::icons::materialdesignicons::ICON_IMAGE_BROKEN;
-use render::Renderer;
 
 use super::{
     OverlayRect,
-    common::{dpi, fit_icon},
+    common::{IconOrigin, dpi, draw_thumbnail},
     draw_overlay_underlay, overlay_padding,
 };
 use crate::{session::Session, settings::KeyBindings};
@@ -37,24 +35,21 @@ pub(super) fn draw_history_overlay(
             .unwrap_or_else(|| String::from("?"));
         let _selected = (palette.as_ref() == Some(prefab))
             .then(|| ui.push_style_color(StyleColor::Button, ui.style_color(StyleColor::ButtonActive)));
-        let clicked = match session.prefab_thumbnail(prefab) {
-            Some(thumbnail) => {
-                let image_size = fit_recent_icon(thumbnail.texture.width, thumbnail.texture.height, dpi(ui));
-                let padding = [(button_size - image_size[0]) * 0.5, (button_size - image_size[1]) * 0.5];
-                let _padding = ui.push_style_var(StyleVar::FramePadding(padding));
-
-                ui.image_button_config(
-                    format!("recent-{index}"),
-                    Renderer::sprite_texture(thumbnail.texture.index),
-                    image_size,
-                )
-                .uv0(thumbnail.uv0)
-                .uv1(thumbnail.uv1)
-                .tint_color(thumbnail.tint)
-                .build()
-            },
-            None => ui.button_with_size(format!("{ICON_IMAGE_BROKEN}##recent-{index}"), [button_size; 2]),
-        };
+        let clicked = ui.button_with_size(format!("##recent-{index}"), [button_size; 2]);
+        let icon_extent = RECENT_ICON_SIZE * dpi(ui);
+        let button_min = ui.item_rect_min();
+        let inset = (button_size - icon_extent) * 0.5;
+        let placement = session.prefab_placement(prefab);
+        draw_thumbnail(
+            ui,
+            placement.map(|placement| placement.thumbnail),
+            [button_min[0] + inset, button_min[1] + inset],
+            icon_extent,
+            placement.map(|placement| IconOrigin {
+                offset: placement.offset,
+                tile_size: session.options.tile_size,
+            }),
+        );
         draw_recent_badge(ui, &key);
         if clicked {
             chosen = Some(index);
@@ -71,10 +66,6 @@ pub(super) fn recent_button_size(ui: &Ui) -> f32 {
     let padding = ui.clone_style().frame_padding();
 
     RECENT_ICON_SIZE * dpi(ui) + padding[0].max(padding[1]) * 2.0
-}
-
-fn fit_recent_icon(width: u32, height: u32, scale: f32) -> [f32; 2] {
-    fit_icon(width, height, RECENT_ICON_SIZE * scale)
 }
 
 fn draw_recent_badge(ui: &Ui, key: &str) {
@@ -105,15 +96,7 @@ mod tests {
 
     use dmm::Prefab;
 
-    use super::{RECENT_ICON_SIZE, fit_recent_icon, prefab_tooltip};
-
-    #[test]
-    fn recent_icons_fit_inside_a_square_without_changing_aspect_ratio() {
-        assert_eq!(fit_recent_icon(32, 32, 1.0), [RECENT_ICON_SIZE, RECENT_ICON_SIZE]);
-        assert_eq!(fit_recent_icon(64, 32, 1.0), [RECENT_ICON_SIZE, RECENT_ICON_SIZE / 2.0]);
-        assert_eq!(fit_recent_icon(16, 32, 1.0), [RECENT_ICON_SIZE / 2.0, RECENT_ICON_SIZE]);
-        assert_eq!(fit_recent_icon(0, 0, 1.0), [RECENT_ICON_SIZE, RECENT_ICON_SIZE]);
-    }
+    use super::prefab_tooltip;
 
     #[test]
     fn prefab_tooltips_include_the_path_and_exact_overrides() {
