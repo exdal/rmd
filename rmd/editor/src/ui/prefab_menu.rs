@@ -1,4 +1,4 @@
-use std::ptr;
+use std::{iter, ptr};
 
 use dear_imgui_rs::{StyleColor, Ui, sys};
 use dmm::Prefab;
@@ -28,12 +28,14 @@ struct Row {
     placement: Option<PlacementPreview>,
     path: String,
     overrides: Vec<String>,
+    height: f32,
 }
 
 pub(super) struct PrefabMenu {
     document: DocumentId,
     tile_size: u32,
-    row_height: f32,
+    icon_extent: f32,
+    text_width: f32,
     rows: Vec<Row>,
     selected: Option<usize>,
 }
@@ -41,16 +43,35 @@ pub(super) struct PrefabMenu {
 impl PrefabMenu {
     fn new(ui: &Ui, session: &mut Session, document: DocumentId) -> Option<Self> {
         let brush = session.palette()?.clone();
-        let row_height = ROW_HEIGHT * dpi(ui);
-        let max_lines = (row_height / ui.text_line_height_with_spacing()).floor().max(1.0) as usize;
+        let icon_extent = ROW_HEIGHT * dpi(ui);
+        let style = ui.clone_style();
+        let text_width = (MAX_WIDTH * dpi(ui)
+            - 2.0 * style.window_padding()[0]
+            - icon_extent
+            - 2.0 * style.item_spacing()[0]
+            - 1.0
+            - style.scrollbar_size())
+        .max(1.0);
+        let spacing_y = style.item_spacing()[1];
         let rows = session
             .map_prefabs_of(document, &brush.path)
             .into_iter()
-            .map(|prefab| Row {
-                placement: session.prefab_placement(&prefab),
-                path: prefab.path.to_string(),
-                overrides: override_lines(&prefab, max_lines - 1),
-                prefab,
+            .map(|prefab| {
+                let path = prefab.path.to_string();
+                let overrides = override_lines(&prefab);
+                let text_height = iter::once(&path)
+                    .chain(&overrides)
+                    .map(|line| ui.calc_text_size_with_opts(line, false, text_width)[1] + spacing_y)
+                    .sum::<f32>()
+                    - spacing_y;
+
+                Row {
+                    placement: session.prefab_placement(&prefab),
+                    path,
+                    overrides,
+                    height: icon_extent.max(text_height),
+                    prefab,
+                }
             })
             .collect::<Vec<_>>();
         let selected = rows.iter().position(|row| row.prefab == brush);
@@ -58,27 +79,20 @@ impl PrefabMenu {
         Some(Self {
             document,
             tile_size: session.options.tile_size,
-            row_height,
+            icon_extent,
+            text_width,
             rows,
             selected,
         })
     }
 }
 
-fn override_lines(prefab: &Prefab, max: usize) -> Vec<String> {
-    let mut lines = prefab
+fn override_lines(prefab: &Prefab) -> Vec<String> {
+    prefab
         .vars
         .iter()
         .map(|(name, value)| format!("{name} = {}", dmm::writer::format_value(&value.value)))
-        .collect::<Vec<_>>();
-    if lines.len() > max {
-        let shown = max.saturating_sub(1);
-        let hidden = lines.len() - shown;
-        lines.truncate(shown);
-        lines.push(format!("+{hidden} more"));
-    }
-
-    lines
+        .collect()
 }
 
 pub(super) fn update_prefab_menu(
@@ -105,7 +119,7 @@ pub(super) fn update_prefab_menu(
 
     let style = ui.clone_style();
     let spacing_y = style.item_spacing()[1];
-    let max_height = VISIBLE_ROWS as f32 * (open.row_height + spacing_y) - spacing_y + 2.0 * style.window_padding()[1];
+    let max_height = VISIBLE_ROWS as f32 * (open.icon_extent + spacing_y) - spacing_y + 2.0 * style.window_padding()[1];
     unsafe {
         sys::igSetNextWindowSizeConstraints(
             sys::ImVec2_c { x: 0.0, y: 0.0 },
@@ -134,12 +148,16 @@ fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<&'a Prefab> {
 
     let mut chosen = None;
     for (index, row) in menu.rows.iter().enumerate() {
+        if index > 0 {
+            ui.separator();
+        }
+
         let origin = ui.cursor_screen_pos();
         ui.set_next_item_allow_overlap();
         if ui
             .selectable_config(format!("##prefab-{index}"))
             .selected(menu.selected == Some(index))
-            .size([0.0, menu.row_height])
+            .size([0.0, row.height])
             .build()
         {
             chosen = Some(&row.prefab);
@@ -150,10 +168,11 @@ fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<&'a Prefab> {
         }
 
         ui.set_cursor_screen_pos(origin);
-        draw_icon(ui, row.placement, menu.tile_size, menu.row_height);
+        draw_icon(ui, row.placement, menu.tile_size, menu.icon_extent, row.height);
         ui.same_line();
         ui.separator_vertical();
         ui.same_line();
+        let _wrap = ui.push_text_wrap_pos(ui.cursor_pos()[0] + menu.text_width);
         ui.group(|| {
             ui.text(&row.path);
             for line in &row.overrides {
@@ -165,8 +184,8 @@ fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<&'a Prefab> {
     chosen
 }
 
-fn draw_icon(ui: &Ui, placement: Option<PlacementPreview>, tile_size: u32, extent: f32) {
-    ui.dummy([extent, extent]);
+fn draw_icon(ui: &Ui, placement: Option<PlacementPreview>, tile_size: u32, extent: f32, row_height: f32) {
+    ui.dummy([extent, row_height]);
     let min = ui.item_rect_min();
     let draw = ui.get_window_draw_list();
     match placement {
