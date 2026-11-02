@@ -13,11 +13,10 @@ use dear_imgui_rs::{
 use dmm::{Coord, PrefabInstanceId};
 use editor::{
     document::{DocumentId, MapDocument},
-    icons::materialdesignicons::ICON_IMAGE_BROKEN,
     tool::{FillMode, SelectionRotation, SelectionTransform, Tool},
 };
 pub(crate) use inspector::TransformMode;
-use render::{Camera, GuideLine, MapViewInteraction, MapViewRect, Renderer};
+use render::{Camera, GuideLine, MapViewInteraction, MapViewRect};
 
 use self::{inspector::InspectorPanel, object_tree::ObjectTreePanel, settings::SettingsWindow};
 use crate::{

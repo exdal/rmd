@@ -5,7 +5,7 @@ use dmm::{Coord, Prefab, PrefabInstanceId};
 use editor::{blame::BlameCell, conflict::Side, document::DocumentId};
 use objtree::ObjectTree;
 
-use super::{SelectionTransform, Session, Tool, common::fit_icon, draw_type_path_search, find::SimilarMatchKind};
+use super::{SelectionTransform, Session, Tool, common::draw_thumbnail, draw_type_path_search, find::SimilarMatchKind};
 use crate::session::context_placement_group;
 
 pub(super) const POPUP: &str = "Map context##map-context";
@@ -363,33 +363,8 @@ pub(super) fn draw_popup(
                 action = Some(Action::Search(instance, SimilarMatchKind::Prefab));
             }
         }
+        draw_thumbnail(ui, thumbnail, origin, icon_extent, None);
         let draw = ui.get_window_draw_list();
-        if let Some(thumbnail) = thumbnail {
-            let size = fit_icon(thumbnail.texture.width, thumbnail.texture.height, icon_extent);
-            let min = [
-                origin[0] + (icon_extent - size[0]) * 0.5,
-                origin[1] + (icon_extent - size[1]) * 0.5,
-            ];
-            draw.add_image(
-                super::Renderer::sprite_texture(thumbnail.texture.index),
-                min,
-                [min[0] + size[0], min[1] + size[1]],
-                thumbnail.uv0,
-                thumbnail.uv1,
-                thumbnail.tint,
-            );
-        } else {
-            let icon = super::ICON_IMAGE_BROKEN.to_string();
-            let size = ui.calc_text_size(&icon);
-            draw.add_text(
-                [
-                    origin[0] + (icon_extent - size[0]) * 0.5,
-                    origin[1] + (icon_extent - size[1]) * 0.5,
-                ],
-                ui.style_color(dear_imgui_rs::StyleColor::TextDisabled),
-                icon,
-            );
-        }
         let text_color = ui.style_color(dear_imgui_rs::StyleColor::Text);
         draw.add_text([origin[0] + icon_width, origin[1]], text_color, name);
         draw.add_text([origin[0] + path_column, origin[1]], text_color, path_text);
