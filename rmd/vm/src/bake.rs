@@ -175,6 +175,14 @@ pub struct NodeGroup {
     pub orientable_subtype: Option<TypeId>,
     pub orientations: Vec<NodeOrientation>,
     pub matching: Vec<Identifier>,
+    pub ports: NodePortRule,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NodePortRule {
+    #[default]
+    Orientation,
+    AllSides,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

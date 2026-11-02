@@ -93,6 +93,7 @@
 			demir_node_orientation(/obj/machinery/atmospherics/pipe/simple, direction, direction)
 		register_disposal_node_orientations()
 		demir_rotatable(/obj/machinery/atmospherics, GLOB.cardinals)
+		demir_rotatable(/obj/machinery/atmospherics/pipe/simple, GLOB.alldirs)
 
 /datum/demir/tgmc/process_modular_root(list/roots)
 	var/list/templates = list()
