@@ -393,6 +393,7 @@ impl Session {
             build_selection_placement(
                 document,
                 &environment.tree,
+                &environment.world,
                 *selection,
                 target_min,
                 rotation,
@@ -550,6 +551,7 @@ impl Session {
             build_selection_transform(
                 document,
                 &environment.tree,
+                &environment.world,
                 selection,
                 transform,
                 selection_mode,

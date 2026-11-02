@@ -57,14 +57,42 @@ impl Session {
             && document
                 .map
                 .tile_at(coord)
-                .is_some_and(|tile| clipboard::can_clear(&environment.tree, tile, &self.hidden_types()))
+                .is_some_and(|tile| clipboard::can_clear(&environment.world, tile, &self.hidden_types()))
+    }
+
+    pub fn can_clear_selection(&self) -> bool {
+        let Some(selection) = self.selection() else {
+            return false;
+        };
+        let Some((environment, document)) = self.state.active_pair() else {
+            return false;
+        };
+
+        let mode = self.selection_mode();
+        let hidden = self.hidden_types();
+
+        mode.tiles(selection).all(|coord| document.allows_edit_at(coord))
+            && mode.tiles(selection).any(|coord| {
+                document
+                    .map
+                    .tile_at(coord)
+                    .is_some_and(|tile| clipboard::can_clear(&environment.world, tile, &hidden))
+            })
     }
 
     fn build_clear(&mut self, selection: Selection, mode: RegionSelectionMode, label: &str) -> Option<ToolEdit> {
         let hidden = self.hidden_types();
         let (environment, document) = self.state.active_pair_mut()?;
 
-        clipboard::clear_region(document, &environment.tree, selection, mode, &hidden, label)
+        clipboard::clear_region(
+            document,
+            &environment.tree,
+            &environment.world,
+            selection,
+            mode,
+            &hidden,
+            label,
+        )
     }
 
     fn cut_region(&mut self, selection: Selection, mode: RegionSelectionMode, label: &str) -> bool {
@@ -514,9 +542,9 @@ mod tests {
         assert!(session.select_region(Some(Selection::from_drag(source, source))));
         assert!(session.cut_selection());
         let cut = session.state.active_document().unwrap().placed_tile(source).unwrap();
-        let defaults = editor::tool::default_tile_paths(session.tree().unwrap()).unwrap();
+        let defaults = session.world().unwrap().base_tile.clone().unwrap();
         assert_eq!(cut.len(), 2);
-        assert_eq!(cut[0].prefab().path, defaults.0);
+        assert_eq!(cut[0].prefab().path, defaults.turf);
         assert_eq!(cut[1], source_area, "the hidden area is untouched");
         assert_render_cache_matches_rebuild(&session);
 
@@ -583,8 +611,32 @@ mod tests {
         assert!(session.select_region(Some(Selection::from_drag(Coord::new(1, 1, 1), Coord::new(4, 4, 1)))));
 
         assert!(!session.can_clear_tile(Coord::new(1, 1, 1)));
+        assert!(!session.can_clear_selection());
         assert!(!session.delete_selection());
         assert!(!session.state.active_document().unwrap().is_dirty());
+    }
+
+    #[test]
+    fn a_region_can_be_cleared_while_any_tile_in_it_has_something_to_remove() {
+        let mut session = flat_session(4, 4);
+        session.set_tool(Tool::Select);
+        assert!(!session.can_clear_selection());
+
+        assert!(session.select_region(Some(Selection::from_drag(Coord::new(1, 1, 1), Coord::new(4, 4, 1)))));
+        assert!(session.can_clear_selection());
+        assert!(session.delete_selection());
+        assert!(!session.can_clear_tile(Coord::new(1, 1, 1)));
+        assert!(!session.can_clear_selection());
+
+        place(
+            &mut session,
+            Prefab::new(TreePath::parse("/obj/structure/table")),
+            Coord::new(4, 4, 1),
+        );
+        session.set_tool(Tool::Select);
+        assert!(session.select_region(Some(Selection::from_drag(Coord::new(1, 1, 1), Coord::new(4, 4, 1)))));
+        assert!(!session.can_clear_tile(Coord::new(1, 1, 1)));
+        assert!(session.can_clear_selection());
     }
 
     fn wall_under_a_paste(width: u32, height: u32, wall: Coord) -> Session {
@@ -765,11 +817,11 @@ mod tests {
         assert_eq!(session.clipboard().unwrap().tile(0, 0), Some(&before));
         assert!(session.cut_tile(source));
         assert_render_cache_matches_rebuild(&session);
-        let defaults = editor::tool::default_tile_paths(session.tree().unwrap()).unwrap();
+        let defaults = session.world().unwrap().base_tile.clone().unwrap();
         let cleared = session.map().unwrap().tile_at(source).unwrap();
         assert_eq!(
             cleared.iter().map(|prefab| &prefab.path).collect::<Vec<_>>(),
-            vec![&defaults.0, &defaults.1]
+            vec![&defaults.turf, &defaults.area]
         );
         assert!(session.undo());
         assert_eq!(session.map().unwrap().tile_at(source), Some(&before));

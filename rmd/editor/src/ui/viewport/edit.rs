@@ -166,6 +166,10 @@ impl UiState {
             MenuAction::Delete(coord) => {
                 session.delete_tile(coord, None);
             },
+            MenuAction::Selection(command) => {
+                self.edit_command = Some(command);
+                self.apply_edit_command(session, frame);
+            },
             MenuAction::Select(instance) => {
                 session.pick_instance(Some(instance));
                 self.reveal_picked_instance(session);

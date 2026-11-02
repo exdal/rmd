@@ -7,7 +7,8 @@ use objtree::ObjectTree;
 use crate::{
     command::Edit,
     document::{MapDocument, PrefabInstanceId, PrefabLocation, Selection},
-    tool::{ToolEdit, placement_kind},
+    tool::{ToolEdit, placement_kind, refill_missing_bases, same_prefabs},
+    world::World,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,7 +73,9 @@ pub fn resolve_instances(
         .collect()
 }
 
-pub fn delete_instances(document: &MapDocument, instances: &[PrefabInstanceId]) -> Option<ToolEdit> {
+pub fn delete_instances(
+    document: &mut MapDocument, tree: &ObjectTree, world: &World, instances: &[PrefabInstanceId],
+) -> Option<ToolEdit> {
     let by_tile = editable_by_tile(document, instances);
     let mut edit = Edit::new(match instances {
         [instance] => format!("delete {}", document.prefab_instance(*instance)?.prefab().path),
@@ -80,9 +83,20 @@ pub fn delete_instances(document: &MapDocument, instances: &[PrefabInstanceId]) 
     });
     let mut affected = Vec::new();
     for (coord, targets) in by_tile {
-        let mut after = document.placed_tile(coord)?;
+        let before = document.placed_tile(coord)?;
+        let mut after = before.clone();
         after.retain(|placed| !targets.contains(&placed.id()));
+        let mut added = Vec::new();
+        if let Some(base_tile) = &world.base_tile {
+            added = refill_missing_bases(document, tree, base_tile, &mut after);
+        }
+
+        if same_prefabs(&before, &after) {
+            continue;
+        }
+
         affected.extend(targets);
+        affected.extend(added);
         edit.change(document, coord, after);
     }
 
@@ -153,7 +167,7 @@ fn finish(edit: Edit, mut affected: Vec<PrefabInstanceId>) -> Option<ToolEdit> {
 
 #[cfg(test)]
 mod tests {
-    use core::types::Value;
+    use core::{location::Location, types::Value};
 
     use dmm::{Map, Size};
 
@@ -254,7 +268,8 @@ mod tests {
             ),
             Some(true)
         );
-        assert!(document.apply(delete_instances(&document, &[deleted]).unwrap().edit));
+        let action = delete_instances(&mut document, &ObjectTree::default(), &World::default(), &[deleted]).unwrap();
+        assert!(document.apply(action.edit));
 
         let rows = resolve_instances(&document, &matches);
         assert_eq!(rows.len(), matches.len() - 1);
@@ -274,7 +289,7 @@ mod tests {
         let grid = document.map.clone();
         let matches = find_instances(&document, &ObjectTree::default(), &SearchQuery::Prefab(target), None);
 
-        let action = delete_instances(&document, &matches).unwrap();
+        let action = delete_instances(&mut document, &ObjectTree::default(), &World::default(), &matches).unwrap();
         assert_eq!(action.edit.label, "delete 3 instances");
         assert!(document.apply(action.edit));
         assert!(resolve_instances(&document, &matches).is_empty());
@@ -298,7 +313,45 @@ mod tests {
         let seed = Coord::new(1, 1, 1);
         document.set_focus(Some(AreaFocus::new(seed, target, matches[0], [seed].into())));
 
-        let action = delete_instances(&document, &matches).unwrap();
+        let action = delete_instances(&mut document, &ObjectTree::default(), &World::default(), &matches).unwrap();
         assert_eq!(action.affected, [matches[0], matches[2]]);
+    }
+
+    #[test]
+    fn deleting_turfs_leaves_the_default_turf() {
+        let mut tree = ObjectTree::new();
+        for path in ["/atom", "/turf", "/turf/floor", "/area", "/area/station"] {
+            tree.register(&TreePath::parse(path), Location::default());
+        }
+        for (path, parent) in [("/turf", "/atom"), ("/area", "/atom")] {
+            let id = tree.id_of(&TreePath::parse(path)).unwrap();
+            tree.get_mut(id).unwrap().parent_type = Some(TreePath::parse(parent));
+        }
+        tree.resolve_parent_types();
+
+        let floor = Prefab::new(TreePath::parse("/turf/floor"));
+        let mut map = Map::new(Size { x: 2, y: 1, z: 1 });
+        let tile = map.intern_tile(vec![floor.clone(), Prefab::new(TreePath::parse("/area/station"))]);
+        map.grid[0][0] = vec![tile, tile];
+        let mut document = MapDocument::new(map, 1);
+        let before = document.map.clone();
+
+        let matches = find_instances(&document, &tree, &SearchQuery::Prefab(floor), None);
+        assert_eq!(matches.len(), 2);
+        let action = delete_instances(&mut document, &tree, &World::new(&tree), &matches).unwrap();
+        assert!(document.apply(action.edit));
+        for x in 1..=2 {
+            let paths = document
+                .map
+                .tile_at(Coord::new(x, 1, 1))
+                .unwrap()
+                .iter()
+                .map(|prefab| prefab.path.to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(paths, ["/turf", "/area/station"]);
+        }
+
+        assert!(document.undo());
+        assert_eq!(document.map, before);
     }
 }
