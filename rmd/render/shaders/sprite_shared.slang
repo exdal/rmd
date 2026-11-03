@@ -85,3 +85,28 @@ public struct Sprite {
         return this.packed_texture_flags >> SPRITE_FLAGS_SHIFT;
     }
 };
+
+public func contains_owner(StructuredBuffer<u32x2> owners, u32 count, u32x2 owner) -> bool {
+    if (!any(owner != u32x2(0))) {
+        return false;
+    }
+
+    u32 low = 0;
+    u32 high = count;
+    while (low < high) {
+        let mid = (low + high) / 2;
+        let candidate = owners[mid];
+        if (all(candidate == owner)) {
+            return true;
+        }
+
+        if (candidate.y < owner.y || (candidate.y == owner.y && candidate.x < owner.x)) {
+            low = mid + 1;
+        }
+        else {
+            high = mid;
+        }
+    }
+
+    return false;
+}

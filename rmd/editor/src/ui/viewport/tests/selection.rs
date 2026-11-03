@@ -593,7 +593,7 @@ fn only_the_active_view_outlines_its_selected_instance() {
     };
     let (left, _) = select_table_in("rmd-selection-left.dmm");
     let (right, table) = select_table_in("rmd-selection-right.dmm");
-    assert!(session.picked_instance_of(left).is_some());
+    assert!(session.state.document(left).unwrap().picked_instance().is_some());
     session.set_tool(Tool::Pick);
 
     let mut context = rectangle_context();
@@ -619,7 +619,7 @@ fn only_the_active_view_outlines_its_selected_instance() {
 
     let outlined = views
         .iter()
-        .map(|view| (view.document, view.interaction.picked))
+        .map(|view| (view.document, view.picked.last().copied()))
         .collect::<Vec<_>>();
     assert_eq!(outlined, [(left, None), (right, Some(table))]);
 }

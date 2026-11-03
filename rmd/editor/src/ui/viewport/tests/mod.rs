@@ -190,7 +190,6 @@ fn tool_interaction_configures_highlights_and_pick_requests() {
     let owner = PrefabInstanceId::from_raw(7).unwrap();
     let interaction = MapViewInteraction {
         cursor: Some([10, 20]),
-        picked: Some(owner),
         placement_flash: Some(PlacementFlash { owner, strength: 0.5 }),
         highlight: HighlightStyle::Tint,
         mode: InteractionMode::Pick {
@@ -207,7 +206,6 @@ fn tool_interaction_configures_highlights_and_pick_requests() {
     assert_eq!(
         delete,
         MapViewInteraction {
-            picked: None,
             mode: InteractionMode::Delete { pick: None },
             ..interaction
         }

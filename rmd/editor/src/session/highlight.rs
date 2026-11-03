@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use dmm::Coord;
 use editor::{
-    bake::{HIGHLIGHT_ALWAYS, Highlight, highlight_tiles},
+    bake::{Bake, HIGHLIGHT_ALWAYS, HIGHLIGHT_HOVERED, HIGHLIGHT_SELECTED, Highlight, highlight_tiles},
     blame::BlameCell,
     document::{DocumentId, PrefabInstanceId},
 };
@@ -53,17 +53,14 @@ impl UnknownHighlights {
     }
 }
 
-pub(super) fn always_highlighted(bake: Option<&editor::bake::Bake>) -> Vec<PrefabInstanceId> {
+pub(super) fn always_highlighted(bake: Option<&Bake>) -> Vec<PrefabInstanceId> {
     let Some(bake) = bake else {
         return Vec::new();
     };
 
     let mut always = bake
         .highlighted()
-        .filter(|(_, list)| {
-            list.iter()
-                .any(|highlight| highlight.shown_when(editor::bake::HIGHLIGHT_ALWAYS))
-        })
+        .filter(|(_, list)| list.iter().any(|highlight| highlight.shown_when(HIGHLIGHT_ALWAYS)))
         .filter_map(|(id, _)| PrefabInstanceId::from_raw(id))
         .collect::<Vec<_>>();
     always.sort_unstable();
@@ -73,12 +70,12 @@ pub(super) fn always_highlighted(bake: Option<&editor::bake::Bake>) -> Vec<Prefa
 
 /// Highlights for one frame, borrowed from the bake or shared from the document caches
 pub(crate) struct HighlightSet<'a> {
-    borrowed: Vec<&'a editor::bake::Highlight>,
+    borrowed: Vec<&'a Highlight>,
     shared: Vec<SharedHighlights>,
 }
 
 impl HighlightSet<'_> {
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &editor::bake::Highlight> + '_ {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Highlight> + '_ {
         self.borrowed
             .iter()
             .copied()
@@ -103,11 +100,9 @@ impl Session {
         let mut sources = cache
             .always_highlights
             .iter()
-            .map(|owner| (*owner, editor::bake::HIGHLIGHT_ALWAYS))
+            .map(|owner| (*owner, HIGHLIGHT_ALWAYS))
             .collect::<Vec<_>>();
-        if let Some(picked) = document.picked_instance() {
-            sources.push((picked, editor::bake::HIGHLIGHT_SELECTED));
-        }
+        sources.extend(document.picked_instances().map(|picked| (picked, HIGHLIGHT_SELECTED)));
 
         if let Some(hovered) = hovered {
             sources.extend(
@@ -115,7 +110,7 @@ impl Session {
                     .unwrap_or_else(|| (&document.map).into())
                     .ids_at(hovered)
                     .iter()
-                    .map(|owner| (*owner, editor::bake::HIGHLIGHT_HOVERED)),
+                    .map(|owner| (*owner, HIGHLIGHT_HOVERED)),
             );
         }
 
@@ -178,7 +173,11 @@ mod tests {
     use std::sync::Arc;
 
     use dmm::{Map, Prefab, Size};
-    use editor::{Environment, document::MapDocument};
+    use editor::{
+        Environment,
+        bake::{HIGHLIGHT_EDGE_EAST, HIGHLIGHT_EDGE_WEST},
+        document::MapDocument,
+    };
     use objtree::ObjectTree;
 
     use super::*;
@@ -244,8 +243,8 @@ mod tests {
         assert!(highlight.outline && highlight.fill > 0.0);
         assert!(highlight.shown_when(HIGHLIGHT_ALWAYS));
         assert_eq!(positions(&session), [[1, 1], [2, 1]]);
-        assert_eq!(highlight.tiles[0].edges & editor::bake::HIGHLIGHT_EDGE_EAST, 0);
-        assert_eq!(highlight.tiles[1].edges & editor::bake::HIGHLIGHT_EDGE_WEST, 0);
+        assert_eq!(highlight.tiles[0].edges & HIGHLIGHT_EDGE_EAST, 0);
+        assert_eq!(highlight.tiles[1].edges & HIGHLIGHT_EDGE_WEST, 0);
         let again = session.highlights(id, Some(Coord::new(3, 1, 1)));
         assert!(Arc::ptr_eq(&first.shared[0], &again.shared[0]));
         drop((first, again));

@@ -14,6 +14,9 @@ RWStructuredBuffer<u32> pick_result;
 [[vk::binding(4, 0)]]
 StructuredBuffer<u32x2> connected_owners;
 
+[[vk::binding(5, 0)]]
+StructuredBuffer<u32x2> picked_owners;
+
 struct VSOutput {
     f32x4 position : SV_Position;
     f32x2 uv;
@@ -45,12 +48,12 @@ func owner_at(i32x2 pixel, u32 width, u32 height) -> u32x2 {
     return owner_for(visibility.Load(i32x3(pixel, 0)));
 }
 
-func is_highlighted_owner(u32x2 owner, u32x2 picked_owner, u32x2 hovered_owner) -> bool {
+func is_highlighted_owner(u32x2 owner, u32 picked_count, u32x2 hovered_owner) -> bool {
     if (!any(owner != u32x2(0))) {
         return false;
     }
 
-    return (any(picked_owner != u32x2(0)) && same_owner(owner, picked_owner)) ||
+    return contains_owner(picked_owners, picked_count, owner) ||
         (any(hovered_owner != u32x2(0)) && same_owner(owner, hovered_owner));
 }
 
@@ -94,7 +97,7 @@ func fs_main(
     VSOutput input,
     uniform u32x2 cursor,
     uniform u32 cursor_valid,
-    uniform u32x2 picked_owner,
+    uniform u32 picked_count,
     uniform f32 stripe_offset,
     uniform u32x2 focused_area_owner,
     uniform u32 connected_count
@@ -115,12 +118,12 @@ func fs_main(
         }
     }
 
-    if (!any(picked_owner != u32x2(0)) && !any(hovered_owner != u32x2(0)) && connected_count == 0) {
+    if (picked_count == 0 && !any(hovered_owner != u32x2(0)) && connected_count == 0) {
         discard;
     }
 
     let owner = owner_at(pixel, width, height);
-    let on_picked = any(picked_owner != u32x2(0)) && same_owner(owner, picked_owner);
+    let on_picked = contains_owner(picked_owners, picked_count, owner);
     if (on_picked) {
         if (!HIGHLIGHT_TINT) {
             discard;
@@ -155,7 +158,7 @@ func fs_main(
                 }
 
                 let neighbor = owner_at(pixel + i32x2(x, y), width, height);
-                if (is_highlighted_owner(neighbor, picked_owner, hovered_owner)) {
+                if (is_highlighted_owner(neighbor, picked_count, hovered_owner)) {
                     nearest = i32x2(x, y);
                     nearest_distance = distance;
                 }

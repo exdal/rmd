@@ -173,9 +173,10 @@ impl Session {
             .is_some_and(|action| self.commit(action, None))
     }
 
-    pub fn delete_picked_instance(&mut self) -> bool {
-        self.picked_instance()
-            .and_then(|target| self.build_delete(target))
+    pub fn delete_picked_instances(&mut self) -> bool {
+        let targets = self.picked_instances();
+
+        self.build_delete_instances(&targets, "delete")
             .is_some_and(|action| self.commit(action, None))
     }
 
@@ -318,6 +319,12 @@ impl Session {
         changed
     }
 
+    pub(super) fn build_delete_instances(&mut self, targets: &[PrefabInstanceId], verb: &str) -> Option<ToolEdit> {
+        let (environment, document) = self.state.active_pair_mut()?;
+
+        tool::delete_instances(document, &environment.tree, &environment.world, targets, verb)
+    }
+
     fn build_delete(&mut self, target: PrefabInstanceId) -> Option<ToolEdit> {
         let (environment, document) = self.state.active_pair_mut()?;
         let coord = Coord::new(1, 1, document.z);
@@ -382,6 +389,7 @@ mod tests {
     use dmm::{Coord, Prefab};
     use editor::{
         command::EditGroupId,
+        document::PrefabInstanceId,
         tool::{FillMode, SelectionRotation, Tool},
     };
 
@@ -819,5 +827,106 @@ mod tests {
         assert!(!session.replace_context_instance(target, TreePath::parse("/obj/machinery/light")));
         assert!(!session.can_paste_clipboard(outside, SelectionRotation::Original));
         assert_eq!(session.map().unwrap().tile_at(outside), Some(&before));
+    }
+
+    fn table() -> Prefab {
+        Prefab::new(TreePath::parse("/obj/structure/table"))
+    }
+
+    fn place(session: &mut Session, prefab: Prefab, coord: Coord) {
+        session.state.choose_prefab(prefab);
+        session.set_tool(Tool::Place);
+        assert!(session.place_at(coord, None).is_some());
+    }
+
+    fn atom_at(session: &Session, coord: Coord) -> PrefabInstanceId {
+        session.state.active_document().unwrap().instance_ids_at(coord)[0]
+    }
+
+    fn paths_at(session: &Session, coord: Coord) -> Vec<String> {
+        session
+            .map()
+            .unwrap()
+            .tile_at(coord)
+            .unwrap()
+            .iter()
+            .map(|prefab| prefab.path.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn deleting_picks_is_one_undo_and_labels_the_count() {
+        let mut session = flat_session(3, 1);
+        place(&mut session, table(), Coord::new(1, 1, 1));
+        place(
+            &mut session,
+            Prefab::new(TreePath::parse("/obj/machinery/light")),
+            Coord::new(1, 1, 1),
+        );
+        place(&mut session, table(), Coord::new(3, 1, 1));
+        let ids = session
+            .state
+            .active_document()
+            .unwrap()
+            .instance_ids_at(Coord::new(1, 1, 1))
+            .to_vec();
+        let far = atom_at(&session, Coord::new(3, 1, 1));
+        let before = session.map().unwrap().clone();
+        session.set_tool(Tool::Pick);
+        session.pick_instance(None);
+        for id in [ids[0], ids[1], far] {
+            session.toggle_pick(id);
+        }
+
+        assert!(session.delete_picked_instances());
+        assert_eq!(session.undo_label(), Some("delete 3 atoms"));
+        assert_eq!(
+            paths_at(&session, Coord::new(1, 1, 1)),
+            ["/turf/open/floor", "/area/station"]
+        );
+        assert_eq!(
+            paths_at(&session, Coord::new(3, 1, 1)),
+            ["/turf/open/floor", "/area/station"]
+        );
+
+        assert!(session.undo());
+        assert_eq!(*session.map().unwrap(), before);
+    }
+
+    #[test]
+    fn deleting_one_pick_keeps_its_path_label() {
+        let mut session = flat_session(2, 1);
+        place(&mut session, table(), Coord::new(1, 1, 1));
+        let id = atom_at(&session, Coord::new(1, 1, 1));
+        session.set_tool(Tool::Pick);
+        session.pick_instance(Some(id));
+
+        assert!(session.delete_picked_instances());
+        assert_eq!(session.undo_label(), Some("delete /obj/structure/table"));
+    }
+
+    #[test]
+    fn deleting_picks_skips_what_the_area_focus_protects() {
+        let mut session = focus_session();
+        place(&mut session, table(), Coord::new(1, 1, 1));
+        place(&mut session, table(), Coord::new(3, 1, 1));
+        let near = atom_at(&session, Coord::new(1, 1, 1));
+        let far = atom_at(&session, Coord::new(3, 1, 1));
+        session.toggle_focus_at(Some(Coord::new(1, 1, 1)));
+        session.set_tool(Tool::Pick);
+        session.pick_instance(None);
+        session.toggle_pick(near);
+        session.toggle_pick(far);
+
+        assert!(session.delete_picked_instances());
+        assert_eq!(
+            paths_at(&session, Coord::new(1, 1, 1)),
+            ["/turf/open/floor", "/area/station"]
+        );
+        assert_eq!(
+            paths_at(&session, Coord::new(3, 1, 1)),
+            ["/obj/structure/table", "/turf/open/floor", "/area/station"]
+        );
+        assert_eq!(session.undo_label(), Some("delete /obj/structure/table"));
     }
 }

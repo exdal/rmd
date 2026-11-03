@@ -44,7 +44,7 @@ pub(super) struct CameraPush {
 pub(super) struct InteractionPush {
     pub(super) cursor: [u32; 2],
     pub(super) cursor_valid: u32,
-    pub(super) picked_owner: [u32; 2],
+    pub(super) picked_count: u32,
     pub(super) stripe_offset: f32,
     pub(super) focused_area_owner: [u32; 2],
     pub(super) connected_count: u32,
@@ -76,6 +76,7 @@ pub(super) struct InteractionSlots {
     pub(super) has_highlight: ValueId,
     pub(super) needs_visibility: ValueId,
     pub(super) connected_owners: ValueId,
+    pub(super) picked_owners: ValueId,
     pub(super) pick_push: ValueId,
     pub(super) highlight_draw: ValueId,
 }
@@ -604,13 +605,16 @@ impl Renderer {
                 let highlight_draw = module.declare_callback_var(&format!("map view {index} highlight draw"));
                 let connected_owners =
                     module.declare_buffer_var(&format!("map view {index} connected owners"), Access::HostWrite);
+                let picked_owners =
+                    module.declare_buffer_var(&format!("map view {index} picked owners"), Access::HostWrite);
                 let highlighted_scene_attachment = module.set_condition(
                     has_highlight,
                     |m| {
-                        let [highlighted, _] = m
+                        let [highlighted, _, _] = m
                             .begin_rendering([
                                 (scene_attachment, Access::ColorRW),
                                 (connected_owners, Access::FragmentRead),
+                                (picked_owners, Access::FragmentRead),
                             ])
                             .with_name(format!("map view {index} highlights"))
                             .bind_graphics_pipeline(self.pipelines.interaction)
@@ -621,6 +625,7 @@ impl Renderer {
                             .bind_image(0, 1, visibility_attachment)
                             .bind_buffer(0, 2, sprites)
                             .bind_buffer(0, 4, connected_owners)
+                            .bind_buffer(0, 5, picked_owners)
                             .specialize_constant(spec::HIGHLIGHT_TINT, view.highlight_tint)
                             .specialize_constant(spec::DELETE_MODE, view.delete_mode)
                             .push_constants_from(push)
@@ -640,10 +645,11 @@ impl Renderer {
                 let guided_scene_attachment = module.set_condition(
                     has_guide_lines,
                     |m| {
-                        let [guided, _] = m
+                        let [guided, _, _] = m
                             .begin_rendering([
                                 (highlighted_scene_attachment, Access::ColorRW),
                                 (guide_lines, Access::VertexRead | Access::FragmentRead),
+                                (picked_owners, Access::FragmentRead),
                             ])
                             .with_name(format!("map view {index} guides"))
                             .bind_graphics_pipeline(self.pipelines.guide)
@@ -657,6 +663,7 @@ impl Renderer {
                             .bind_buffer(0, 0, guide_lines)
                             .bind_image(0, 1, visibility_attachment)
                             .bind_buffer(0, 2, sprites)
+                            .bind_buffer(0, 3, picked_owners)
                             .push_constants_from(guide_push)
                             .record_from(guide_draw)
                             .end_rendering();
@@ -698,6 +705,7 @@ impl Renderer {
                         has_highlight,
                         needs_visibility,
                         connected_owners,
+                        picked_owners,
                         pick_push,
                         highlight_draw,
                     }),
@@ -890,11 +898,12 @@ mod tests {
             height: 480,
         };
         let unchanged = [map_view(rect)];
+        let owners = [owner()];
         let mut dynamic = map_view(rect);
         dynamic.camera.x = 32.0;
         dynamic.camera.zoom = 2.0;
         dynamic.interaction.cursor = Some([120, 80]);
-        dynamic.interaction.picked = Some(owner());
+        dynamic.picked = &owners;
         let dynamic = [dynamic];
 
         assert_eq!(

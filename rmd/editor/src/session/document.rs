@@ -591,6 +591,7 @@ mod tests {
                     Default::default(),
                     &[],
                     &[],
+                    &[],
                 )
                 .is_none()
         );

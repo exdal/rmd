@@ -1406,6 +1406,7 @@ fn commit_int_property(
 
     // Each identical instance keeps its own tile, so their offsets are set as typed
     if scope == EditScope::Selected
+        && session.is_single_pick()
         && let Some(axis) = transform_axis(mode, name)
         && let Some(transform) = session.picked_transform()
         && let Some(location) = session.picked_location()

@@ -5,7 +5,13 @@ use core::{
 };
 
 use dmi::metadata::Dir;
-use editor::{Environment, command::EditGroupId, document::VarMutation, tool::Tool, visual};
+use editor::{
+    Environment,
+    command::EditGroupId,
+    document::{InstanceChange, VarMutation},
+    tool::Tool,
+    visual,
+};
 use objtree::{ObjectTree, TypeId};
 
 use super::{EditScope, Session};
@@ -22,6 +28,10 @@ pub(crate) struct DirectionState {
     pub dmi_directions: Option<u32>,
     pub declared: Option<[bool; 8]>,
     pub directional_types: Option<DirectionalTypes>,
+}
+
+fn direction_mutation(direction: Dir) -> VarMutation {
+    VarMutation::Set(Identifier::from(vars::DIR), Value::Num(direction.to_bits() as f32))
 }
 
 pub(super) fn direction_state(
@@ -159,6 +169,18 @@ impl Session {
         ))
     }
 
+    pub(crate) fn set_picked_direction(&mut self, direction: Dir, group: Option<EditGroupId>) -> Option<bool> {
+        if self.picked_instances().len() > 1 {
+            return self.set_direction_each(direction, group);
+        }
+
+        if self.picked_directional_types().is_some() {
+            return self.set_picked_directional_type(direction, group);
+        }
+
+        self.edit_picked_instance_vars("set dir", &[direction_mutation(direction)], group)
+    }
+
     pub(crate) fn set_picked_directional_type(&mut self, direction: Dir, group: Option<EditGroupId>) -> Option<bool> {
         self.set_directional_type_in(EditScope::Selected, direction, group)
     }
@@ -166,6 +188,10 @@ impl Session {
     pub(crate) fn set_directional_type_in(
         &mut self, scope: EditScope, direction: Dir, group: Option<EditGroupId>,
     ) -> Option<bool> {
+        if scope == EditScope::Selected && self.picked_instances().len() > 1 {
+            return self.set_direction_each(direction, group);
+        }
+
         let picked = self.picked_instance()?;
         let path = {
             let environment = self.state.environment.as_ref()?;
@@ -183,6 +209,39 @@ impl Session {
             &[VarMutation::Remove(Identifier::from(vars::DIR))],
             group,
         )
+    }
+
+    fn set_direction_each(&mut self, direction: Dir, group: Option<EditGroupId>) -> Option<bool> {
+        let environment = self.state.environment.as_ref()?;
+        let document = self.state.active_document()?;
+        let changes = self
+            .picked_instances()
+            .into_iter()
+            .filter(|id| document.allows_edit_instance(*id))
+            .filter_map(|id| {
+                let prefab = document.prefab_instance(id)?.prefab();
+                let type_id = environment.tree.id_of(&prefab.path)?;
+                let (path, mutation) = if directional_types_for(&environment.tree, type_id).is_some() {
+                    let target = directional_type_target(&environment.tree, type_id, direction)?;
+
+                    (Some(target), VarMutation::Remove(Identifier::from(vars::DIR)))
+                } else {
+                    (None, direction_mutation(direction))
+                };
+
+                Some(InstanceChange {
+                    id,
+                    to_coord: None,
+                    path,
+                    mutations: vec![mutation],
+                })
+            })
+            .collect::<Vec<_>>();
+        if changes.is_empty() {
+            return None;
+        }
+
+        self.change_instances(&changes, "set direction", group)
     }
 
     pub(crate) fn set_placement_direction(&mut self, direction: Dir) -> Option<bool> {
@@ -213,15 +272,19 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::{location::Location, path::TreePath, types::Value};
+    use core::{
+        location::Location,
+        path::TreePath,
+        types::{Identifier, Value},
+    };
     use std::sync::Arc;
 
     use dmi::metadata::Dir;
     use dmm::Prefab;
-    use editor::{Environment, tool::Tool};
+    use editor::{Environment, document::VarMutation, tool::Tool};
     use objtree::ObjectTree;
 
-    use super::{directional_type_target, directional_types_for};
+    use super::{direction_mutation, directional_type_target, directional_types_for};
     use crate::session::{EditScope, Session};
 
     #[test]
@@ -317,5 +380,61 @@ mod tests {
             Some(Dir::East)
         );
         assert_eq!(session.set_placement_direction(Dir::East), Some(false));
+    }
+
+    #[test]
+    fn direction_mutations_use_byond_direction_bits() {
+        for direction in Dir::ORDER {
+            assert_eq!(
+                direction_mutation(direction),
+                VarMutation::Set(Identifier::from("dir"), Value::Num(direction.to_bits() as f32))
+            );
+        }
+    }
+
+    #[test]
+    fn facing_several_picks_changes_the_path_of_directional_types_and_the_dir_of_the_rest() {
+        let mut tree = ObjectTree::new();
+        tree.register(&TreePath::parse("/obj/alarm/directional/north"), Location::default());
+        tree.register(&TreePath::parse("/obj/alarm/directional/east"), Location::default());
+        tree.register(&TreePath::parse("/obj/plain"), Location::default());
+        let mut map = dmm::Map::new(dmm::Size { x: 2, y: 1, z: 1 });
+        let alarm = map.intern_tile(vec![Prefab::new(TreePath::parse("/obj/alarm/directional/north"))]);
+        let plain = map.intern_tile(vec![Prefab::new(TreePath::parse("/obj/plain"))]);
+        map.grid[0][0] = vec![alarm, plain];
+        let mut session = Session::new();
+        session.state.environment = Some(Arc::new(Environment::new(".", tree)));
+        let id = session.state.open_document(editor::document::MapDocument::new(map, 1));
+        session.rebuild_instances(id);
+        let ids = (1..=2)
+            .map(|x| {
+                session
+                    .state
+                    .active_document()
+                    .unwrap()
+                    .instance_ids_at(dmm::Coord::new(x, 1, 1))[0]
+            })
+            .collect::<Vec<_>>();
+        session.toggle_pick(ids[0]);
+        session.toggle_pick(ids[1]);
+
+        assert_eq!(session.set_picked_direction(Dir::East, None), Some(true));
+
+        let document = session.state.active_document().unwrap();
+        let alarm = document.prefab_instance(ids[0]).unwrap().prefab();
+        assert_eq!(alarm.path, TreePath::parse("/obj/alarm/directional/east"));
+        assert_eq!(alarm.var(&"dir".into()), None);
+        let plain = document.prefab_instance(ids[1]).unwrap().prefab();
+        assert_eq!(plain.path, TreePath::parse("/obj/plain"));
+        assert_eq!(plain.var(&"dir".into()), Some(&Value::Num(Dir::East.to_bits() as f32)));
+
+        assert!(session.undo());
+        let document = session.state.active_document().unwrap();
+        let alarm = document.prefab_instance(ids[0]).unwrap().prefab();
+        assert_eq!(alarm.path, TreePath::parse("/obj/alarm/directional/north"));
+        assert_eq!(
+            document.prefab_instance(ids[1]).unwrap().prefab().var(&"dir".into()),
+            None
+        );
     }
 }

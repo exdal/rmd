@@ -3,7 +3,7 @@ use core::{
     types::{Identifier, Value},
     vars,
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use dmi::metadata::Dir;
 use dmm::{Coord, Prefab};
@@ -987,36 +987,70 @@ fn place_prefab_into(
 
 fn delete(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
     let target = context.target?;
-    let location = context.document.instance_location(target)?;
-    if !context.document.allows_edit_instance(target) {
-        return None;
-    }
-    let before = context.document.placed_tile(location.coord)?;
-    if before
-        .get(location.prefab_index)
-        .is_none_or(|placed| placed.id() != target)
-    {
-        return None;
+
+    delete_instances(context.document, context.tree, context.world, &[target], "delete")
+}
+
+pub fn delete_instances(
+    document: &mut MapDocument, tree: &ObjectTree, world: &World, targets: &[PrefabInstanceId], verb: &str,
+) -> Option<ToolEdit> {
+    let mut targets_by_tile = BTreeMap::<Coord, Vec<PrefabInstanceId>>::new();
+    for target in targets {
+        let Some(location) = document.instance_location(*target) else {
+            continue;
+        };
+
+        if !document.allows_edit_instance(*target) {
+            continue;
+        }
+
+        targets_by_tile.entry(location.coord).or_default().push(*target);
     }
 
-    let mut after = before.clone();
-    let placed = after.remove(location.prefab_index);
-    let mut affected = vec![target];
-    if let Some(base_tile) = &context.world.base_tile {
-        affected.extend(refill_missing_bases(
-            context.document,
-            context.tree,
-            base_tile,
-            &mut after,
-        ));
+    let mut changes = Vec::new();
+    let mut affected = Vec::new();
+    let mut removed = Vec::new();
+    for (coord, ids) in targets_by_tile {
+        let Some(before) = document.placed_tile(coord) else {
+            continue;
+        };
+
+        let mut after = before.clone();
+        let mut removed_on_tile = Vec::new();
+        for id in ids {
+            if let Some(index) = after.iter().position(|placed| placed.id() == id) {
+                removed_on_tile.push(after.remove(index));
+            }
+        }
+
+        if removed_on_tile.is_empty() {
+            continue;
+        }
+
+        let mut affected_on_tile = removed_on_tile.iter().map(PlacedPrefab::id).collect::<Vec<_>>();
+        if let Some(base_tile) = &world.base_tile {
+            affected_on_tile.extend(refill_missing_bases(document, tree, base_tile, &mut after));
+        }
+
+        if same_prefabs(&before, &after) {
+            continue;
+        }
+
+        affected.extend(affected_on_tile);
+        removed.extend(removed_on_tile);
+        changes.push((coord, after));
     }
 
-    if same_prefabs(&before, &after) {
-        return None;
-    }
+    let label = match removed.as_slice() {
+        [] => return None,
+        [placed] => format!("{verb} {}", placed.prefab().path),
+        _ => format!("{verb} {} atoms", removed.len()),
+    };
 
-    let mut edit = Edit::new(format!("delete {}", placed.prefab().path));
-    edit.change(context.document, location.coord, after);
+    let mut edit = Edit::new(label);
+    for (coord, after) in changes {
+        edit.change(document, coord, after);
+    }
 
     Some(ToolEdit {
         edit,

@@ -60,7 +60,7 @@ pub(crate) use self::{
     frame::TypeLayer,
     git::GitDocState,
     guides::GuideBadge,
-    instance::{EditScope, PickedTransform},
+    instance::{EditScope, GizmoMember, PickedTransform},
     level::validate_level,
     node::NodeOverlay,
     palette::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},

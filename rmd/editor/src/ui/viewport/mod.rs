@@ -21,7 +21,10 @@ use self::{
     presence::{draw_coop_status, draw_tab_menu, hit_comment, share_presence},
     selection::{ViewGestures, conflict_controls_contain, prepare_region_preview, sync_gestures},
     shortcuts::choose_recent_on_key,
-    tools::{Clicks, apply_right_click, configure_tool_interaction, draw_node_hit, drive_node_tool, interaction_mode},
+    tools::{
+        Clicks, apply_right_click, configure_tool_interaction, draw_node_hit, drive_node_tool, interaction_mode,
+        shows_picked,
+    },
 };
 use super::{
     BlamePopup, CloseFocus, OverlayRect, PrefabMenu, UiState, VisibleMapView, common::focus_window_on_hover,
@@ -302,7 +305,6 @@ impl UiState {
                 Default::default()
             };
             let mut interaction = MapViewInteraction {
-                picked: session.picked_instance_of(id).filter(|_| active),
                 highlight: settings.selection_highlight.style(),
                 mode: interaction_mode(session.tool()),
                 ..Default::default()
@@ -326,6 +328,11 @@ impl UiState {
             );
 
             if view.visible && !view.rect.is_empty() {
+                let picked = if active && shows_picked(session.tool()) {
+                    session.picked_instances()
+                } else {
+                    Vec::new()
+                };
                 visible.push(VisibleMapView {
                     document: id,
                     rect: view.rect,
@@ -333,6 +340,7 @@ impl UiState {
                     interaction,
                     guide_lines: guides.lines,
                     connected: guides.connected,
+                    picked,
                 });
             }
 

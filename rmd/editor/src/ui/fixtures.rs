@@ -237,10 +237,7 @@ impl RectangleUiHarness {
         let name = format!("###viewport-{}", self.id.get());
         ui.set_window_pos_by_name(&name, [0.0; 2]);
         ui.set_window_size_by_name(&name, [800.0, 600.0]);
-        self.interaction = MapViewInteraction {
-            picked: self.session.picked_instance(),
-            ..Default::default()
-        };
+        self.interaction = MapViewInteraction::default();
         self.state.draw_map_view(
             ui,
             &mut self.session,

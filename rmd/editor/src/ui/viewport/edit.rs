@@ -1,5 +1,8 @@
 use dear_imgui_rs::{Key, PopupQueryFlags, Ui};
-use editor::tool::{SelectionRotation, Tool};
+use editor::{
+    clipboard::PasteMerge,
+    tool::{SelectionRotation, Tool},
+};
 use render::PickRequest;
 
 use super::{ViewFrame, tools::request_pick};
@@ -32,7 +35,20 @@ pub(in crate::ui) enum EditCommand {
 
 impl UiState {
     pub(super) fn apply_edit_command(&mut self, session: &mut Session, frame: &mut ViewFrame<'_>) {
+        let is_picking = session.tool() == Tool::Pick && session.picked_instance().is_some();
         match self.edit_command.take() {
+            Some(EditCommand::Copy) if is_picking => {
+                session.copy_picked();
+            },
+            Some(command @ (EditCommand::Cut | EditCommand::Delete)) if is_picking => {
+                self.gizmo.cancel();
+
+                if command == EditCommand::Cut {
+                    session.cut_picked();
+                } else {
+                    session.delete_picked_instances();
+                }
+            },
             Some(EditCommand::Copy) => {
                 session.copy_selection(session.selection_mode());
             },
@@ -48,10 +64,10 @@ impl UiState {
             },
             Some(EditCommand::Delete) if session.picked_instance().is_some() => {
                 self.gizmo.cancel();
-                session.delete_picked_instance();
+                session.delete_picked_instances();
             },
             Some(EditCommand::Paste) if let Some(region) = session.clipboard() => {
-                let (width, height) = (region.width(), region.height());
+                let (width, height, merge) = (region.width(), region.height(), region.merge());
                 restore_rectangle_gesture(session, frame.id, &mut frame.gestures.rectangle_gesture);
                 let anchor = frame.coord.or_else(|| {
                     let size = session.map()?.size();
@@ -61,10 +77,12 @@ impl UiState {
                         .screen_to_tile(frame.layout.center(), size, session.options.tile_size, session.z())
                 });
                 if let (Some(anchor), Some(size)) = (anchor, session.map().map(|map| map.size())) {
-                    session.set_tool(Tool::Select);
+                    if merge == PasteMerge::Replace {
+                        session.set_tool(Tool::Select);
+                        frame.gestures.region_placement = None;
+                        frame.gestures.region_selection_anchor = None;
+                    }
                     self.gizmo.cancel();
-                    frame.gestures.region_placement = None;
-                    frame.gestures.region_selection_anchor = None;
                     session.paste_clipboard(
                         centered_paste_min(width, height, anchor, size),
                         SelectionRotation::Original,

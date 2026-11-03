@@ -214,14 +214,16 @@ pub(super) fn draw_popup(
         action = Some(Action::Redo);
     }
     ui.separator();
-    let can_copy = target.region_selected || session.map().is_some_and(|map| map.tile_at(coord).is_some());
+    let is_picking = !target.region_selected && session.tool() == Tool::Pick && session.picked_instance().is_some();
+    let is_group_command = target.region_selected || is_picking;
+    let can_copy = is_group_command || session.map().is_some_and(|map| map.tile_at(coord).is_some());
     if ui.menu_item_enabled_selected_with_shortcut(
         "Copy",
         settings.keybindings.get(super::KeybindAction::Copy).label(ui),
         false,
         can_copy,
     ) {
-        action = Some(if target.region_selected {
+        action = Some(if is_group_command {
             Action::Selection(EditCommand::Copy)
         } else {
             Action::Copy(coord)
@@ -236,20 +238,25 @@ pub(super) fn draw_popup(
     ) {
         action = Some(Action::Paste(coord));
     }
-    let can_clear = if target.region_selected {
+    let can_clear = if is_picking {
+        session
+            .picked_instances()
+            .into_iter()
+            .any(|id| session.can_edit_instance(id))
+    } else if target.region_selected {
         session.can_clear_selection()
     } else {
         session.can_clear_tile(coord)
     };
     if ui.menu_item_enabled_selected_no_shortcut("Cut", false, can_clear) {
-        action = Some(if target.region_selected {
+        action = Some(if is_group_command {
             Action::Selection(EditCommand::Cut)
         } else {
             Action::Cut(coord)
         });
     }
     if ui.menu_item_enabled_selected_no_shortcut("Delete", false, can_clear) {
-        action = Some(if target.region_selected {
+        action = Some(if is_group_command {
             Action::Selection(EditCommand::Delete)
         } else {
             Action::Delete(coord)

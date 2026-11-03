@@ -554,6 +554,7 @@ impl App {
                 view.interaction,
                 &view.guide_lines,
                 &view.connected,
+                &view.picked,
             ) else {
                 continue;
             };
@@ -601,6 +602,12 @@ impl App {
                         ui.request_mouse_popup();
                     },
                     PickResult::Miss => session.pick_instance(None),
+                },
+                PickRequest::Toggle => {
+                    if let PickResult::Hit(owner) = pick {
+                        session.toggle_pick(owner);
+                        ui.reveal_picked_instance(session);
+                    }
                 },
                 PickRequest::Move => match pick {
                     PickResult::Hit(owner) => {

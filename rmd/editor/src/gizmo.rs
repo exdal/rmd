@@ -1,19 +1,17 @@
-use core::{
-    types::{Identifier, Value},
-    vars,
-};
+use core::types::{Identifier, Value};
 
 use dear_imgui_rs::{DrawListMut, MouseButton, MouseCursor, StyleColor, Ui};
 use dmi::metadata::Dir;
 use dmm::{Coord, Size};
 use editor::{
     command::EditGroupId,
-    document::{PrefabInstanceId, Selection, VarMutation},
+    document::{InstanceChange, PrefabInstanceId, Selection, VarMutation},
+    tool::SelectionRotation,
 };
 
 use crate::{
     camera::Controller,
-    session::{DirectionState, DirectionalTypes, PickedTransform, Session},
+    session::{DirectionState, DirectionalTypes, GizmoMember, PickedTransform, Session},
     settings::{KeybindAction, Settings},
     transform::anchor_to_tile,
     ui::{TransformMode, dpi},
@@ -54,6 +52,8 @@ const CLOCKWISE_DIRECTIONS: [Dir; 8] = [
     Dir::West,
     Dir::Northwest,
 ];
+const ALL_DIRECTION_SLOTS: u8 = CLOCKWISE_DIRECTIONS.len() as u8;
+const CARDINAL_DIRECTION_SLOTS: u8 = ALL_DIRECTION_SLOTS / 2;
 
 const X_COLOR: [f32; 4] = [0.92, 0.24, 0.22, 1.0];
 const Y_COLOR: [f32; 4] = [0.28, 0.82, 0.35, 1.0];
@@ -83,18 +83,24 @@ impl Handle {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct DragState {
-    picked: PrefabInstanceId,
+    members: Vec<DragMember>,
+    start_group_anchor: [f32; 2],
     mode: TransformMode,
     handle: Handle,
     start_mouse: [f32; 2],
-    start_values: [i32; 2],
-    start_anchor: [f32; 2],
-    start_coord: Coord,
     zoom: f32,
     tile_size: u32,
     group: EditGroupId,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DragMember {
+    id: PrefabInstanceId,
+    start_values: [i32; 2],
+    start_anchor: [f32; 2],
+    start_coord: Coord,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -127,7 +133,7 @@ impl DirectionSet {
     fn slot_directions(self) -> impl Iterator<Item = Dir> {
         CLOCKWISE_DIRECTIONS
             .into_iter()
-            .filter(move |direction| self.slots == 8 || !is_diagonal(*direction))
+            .filter(move |direction| self.slots == ALL_DIRECTION_SLOTS || !is_diagonal(*direction))
     }
 
     fn directions(self) -> impl Iterator<Item = Dir> {
@@ -146,7 +152,8 @@ struct DirectionGesture {
     target: DirectionGestureTarget,
     placement_coord: Option<Coord>,
     pressed_at: f64,
-    set: DirectionSet,
+    action: DirectionAction,
+    set: Option<DirectionSet>,
     phase: DirectionPhase,
 }
 
@@ -186,6 +193,30 @@ enum PendingDirectionOutcome {
     Open,
     Tap,
     Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectionTap {
+    RotateGroup,
+    Face(Dir),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectionAction {
+    Face,
+    RotateGroup,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DirectionRequest {
+    RotateGroup {
+        rotation: SelectionRotation,
+        group: Option<EditGroupId>,
+    },
+    Face {
+        direction: Dir,
+        group: Option<EditGroupId>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -239,14 +270,13 @@ impl GizmoState {
             return true;
         }
 
-        let Some(target) = session.gizmo_transform() else {
+        let members = mode_members(&session.gizmo_members(), mode);
+        let Some(bounds) = union_bounds(&members) else {
             return false;
         };
-        let origin = gizmo_origin(camera, map_view.min, target.sprite);
+        let origin = gizmo_origin(camera, map_view.min, bounds);
 
-        map_view.hovered
-            && transform_values(target, mode).is_some()
-            && handle_at(ui.io().mouse_pos(), origin, map_view.min, map_view.max, dpi(ui)).is_some()
+        map_view.hovered && handle_at(ui.io().mouse_pos(), origin, map_view.min, map_view.max, dpi(ui)).is_some()
     }
 
     pub(crate) fn cancel(&mut self) {
@@ -260,117 +290,146 @@ impl GizmoState {
         map_view: GizmoMapView,
     ) -> GizmoResponse {
         self.region_drag = None;
-        let Some(mut target) = session.gizmo_transform() else {
+        let all_members = session.gizmo_members();
+        if all_members.is_empty() {
             self.drag = None;
             self.direction = None;
 
             return GizmoResponse::default();
-        };
-        let values = transform_values(target, mode);
-        if values.is_none() {
+        }
+
+        let mut members = mode_members(&all_members, mode);
+        let has_handles = !members.is_empty();
+        if !has_handles {
             self.drag = None;
         }
 
-        if self
-            .drag
-            .is_some_and(|drag| drag.picked != target.picked || drag.mode != mode)
-        {
+        if self.drag.as_ref().is_some_and(|drag| {
+            drag.mode != mode
+                || !drag
+                    .members
+                    .iter()
+                    .map(|member| member.id)
+                    .eq(members.iter().map(|member| member.id))
+        }) {
             self.drag = None;
         }
 
         let mouse = ui.io().mouse_pos();
         let scale = dpi(ui);
-        let initial_origin = gizmo_origin(camera, map_view.min, target.sprite);
-        let direction_origin = session
-            .picked_location()
-            .map(|location| tile_center_origin(camera, map_view.min, location.coord, session.options.tile_size));
+        let initial_origin = union_bounds(&members).map(|bounds| gizmo_origin(camera, map_view.min, bounds));
+        let direction_origin = tiles_center(&all_members)
+            .map(|center| tile_point_origin(camera, map_view.min, center, session.options.tile_size));
         let was_dragging = self.drag.is_some();
-        let was_direction_active = self.update_direction(
-            ui,
-            session,
-            settings,
-            DirectionUpdate {
-                target: picked_direction_target(target),
-                origin: direction_origin,
-                placement_coord: None,
-                map_view,
-            },
-        );
-        if let Some(updated) = session.picked_transform() {
-            target = updated;
-        }
+        let mut direction_target = session.gizmo_transform();
+        let was_direction_active = match direction_target {
+            Some(target) => self.update_direction(
+                ui,
+                session,
+                settings,
+                DirectionUpdate {
+                    target: picked_direction_target(target),
+                    origin: direction_origin,
+                    placement_coord: None,
+                    map_view,
+                },
+            ),
+            None => {
+                self.direction = None;
 
-        let hovered_handle = values
+                false
+            },
+        };
+        if let Some(updated) = session.picked_transform() {
+            direction_target = Some(updated);
+        }
+        members = mode_members(&session.gizmo_members(), mode);
+
+        let hovered_handle = initial_origin
             .filter(|_| map_view.hovered)
-            .and_then(|_| handle_at(mouse, initial_origin, map_view.min, map_view.max, scale));
+            .and_then(|origin| handle_at(mouse, origin, map_view.min, map_view.max, scale));
 
         if self.direction.is_none()
             && self.drag.is_none()
             && let Some(handle) = hovered_handle
             && ui.is_mouse_clicked(MouseButton::Left)
-            && let Some(location) = session.picked_location()
-            && let Some(values) = values
+            && let Some(bounds) = union_bounds(&members)
         {
             self.drag = Some(DragState {
-                picked: target.picked,
+                members: members
+                    .iter()
+                    .map(|member| DragMember {
+                        id: member.id,
+                        start_values: member_values(member, mode),
+                        start_anchor: [member.sprite.x, member.sprite.y],
+                        start_coord: member.coord,
+                    })
+                    .collect(),
+                start_group_anchor: [bounds[0], bounds[1]],
                 mode,
                 handle,
                 start_mouse: mouse,
-                start_values: values,
-                start_anchor: [target.sprite.x, target.sprite.y],
-                start_coord: location.coord,
                 zoom: camera.camera.zoom.max(f32::EPSILON),
                 tile_size: session.options.tile_size.max(1),
                 group: EditGroupId::new(),
             });
         }
 
-        let active_handle = self.drag.map(|drag| drag.handle);
-        if let Some(drag) = self.drag {
+        let active_handle = self.drag.as_ref().map(|drag| drag.handle);
+        if let Some(drag) = &self.drag {
             if !ui.is_mouse_down(MouseButton::Left) {
                 self.drag = None;
-            } else if mouse != drag.start_mouse
-                && mouse.iter().all(|value| value.is_finite())
-                && let Some(location) = session.picked_location()
-            {
+            } else if mouse != drag.start_mouse && mouse.iter().all(|value| value.is_finite()) {
                 let size = session
                     .map()
                     .map_or((1, 1), |map| (map.size().x.max(1), map.size().y.max(1)));
                 let shift_snap = ui.io().key_shift();
                 let ctrl_reanchor = ui.io().key_ctrl();
-                let (coord, next) = anchored_values(drag, mouse, shift_snap, ctrl_reanchor, size);
-                let current = transform_values(target, mode).unwrap_or(drag.start_values);
-                let mutations = transform_mutations(mode, current, next);
-                let label = format!("move {} offsets", mode.label().to_ascii_lowercase());
+                let group = dragged_group(drag, mouse, shift_snap);
+                let changes = drag
+                    .members
+                    .iter()
+                    .filter_map(|member| {
+                        let current = members.iter().find(|current| current.id == member.id)?;
+                        let (coord, next) = anchored_member(drag, member, group, ctrl_reanchor, size);
+                        let mutations = transform_mutations(mode, member_values(current, mode), next);
+                        let to_coord = (coord != current.coord).then_some(coord);
 
-                if coord != location.coord {
-                    session.move_picked_instance(coord, label, &mutations, Some(drag.group));
-                } else if !mutations.is_empty() {
-                    session.edit_picked_instance_vars(label, &mutations, Some(drag.group));
-                }
-                if let Some(updated) = session.picked_transform() {
-                    target = updated;
+                        (to_coord.is_some() || !mutations.is_empty()).then_some(InstanceChange {
+                            id: member.id,
+                            to_coord,
+                            path: None,
+                            mutations,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                if !changes.is_empty() {
+                    let label = format!("move {} offsets", mode.label().to_ascii_lowercase());
+                    session.change_instances(&changes, label, Some(drag.group));
+                    members = mode_members(&session.gizmo_members(), mode);
                 }
             }
         }
 
-        let origin = gizmo_origin(camera, map_view.min, target.sprite);
+        let origin = union_bounds(&members).map(|bounds| gizmo_origin(camera, map_view.min, bounds));
         let hovered = if self.drag.is_some() {
             None
-        } else if map_view.hovered && values.is_some() {
-            handle_at(mouse, origin, map_view.min, map_view.max, scale)
+        } else if map_view.hovered {
+            origin.and_then(|origin| handle_at(mouse, origin, map_view.min, map_view.max, scale))
         } else {
             None
         };
-        let hot = self.drag.map(|drag| drag.handle).or(hovered).or(active_handle);
+        let hot = self.drag.as_ref().map(|drag| drag.handle).or(hovered).or(active_handle);
         let open_wheel = self.direction.and_then(|gesture| match gesture.phase {
             DirectionPhase::Open {
                 origin, last_hovered, ..
-            } => Some((origin, gesture.set, last_hovered)),
+            } => gesture.set.map(|set| (origin, set, last_hovered)),
             DirectionPhase::Pending => None,
         });
+        let direction_state = direction_target.map(|target| picked_direction_target(target).state);
 
-        if let Some((wheel_origin, set, hovered_direction)) = open_wheel {
+        if let Some(((wheel_origin, set, hovered_direction), state)) = open_wheel.zip(direction_state) {
             if hovered_direction.is_some() {
                 ui.set_mouse_cursor(Some(MouseCursor::Hand));
             }
@@ -379,14 +438,14 @@ impl GizmoState {
                 wheel_origin,
                 map_view,
                 set,
-                current_direction(picked_direction_target(target).state, set),
+                current_direction(state, set),
                 hovered_direction,
             );
-        } else if values.is_some() {
+        } else if let Some(origin) = origin {
             if let Some(handle) = hot {
                 ui.set_mouse_cursor(Some(handle.cursor()));
             }
-            let facing = facing_direction(picked_direction_target(target).state);
+            let facing = direction_state.and_then(facing_direction);
             draw_gizmo(ui, origin, map_view, hot, facing);
         }
 
@@ -537,7 +596,7 @@ impl GizmoState {
         let open_wheel = self.direction.and_then(|gesture| match gesture.phase {
             DirectionPhase::Open {
                 origin, last_hovered, ..
-            } => Some((origin, gesture.set, last_hovered)),
+            } => gesture.set.map(|set| (origin, set, last_hovered)),
             DirectionPhase::Pending => None,
         });
 
@@ -573,21 +632,35 @@ impl GizmoState {
         if self.direction.is_some_and(|gesture| gesture.target != target.id) {
             self.direction = None;
         }
+        let is_group =
+            matches!(target.id, DirectionGestureTarget::Selection(_)) && session.picked_instances().len() > 1;
+        let (action, set) = if is_group {
+            (
+                DirectionAction::RotateGroup,
+                Some(group_direction_set(reference_direction(target.state))),
+            )
+        } else {
+            (
+                DirectionAction::Face,
+                direction_set(
+                    target.state.dmi_directions,
+                    target.state.declared,
+                    target.state.directional_types,
+                ),
+            )
+        };
         if self.direction.is_none()
             && self.drag.is_none()
             && map_view.hovered
             && rotation_key.is_pressed(ui)
             && origin.is_some()
-            && let Some(set) = direction_set(
-                target.state.dmi_directions,
-                target.state.declared,
-                target.state.directional_types,
-            )
+            && set.is_some()
         {
             self.direction = Some(DirectionGesture {
                 target: target.id,
                 placement_coord,
                 pressed_at: ui.time(),
+                action,
                 set,
                 phase: DirectionPhase::Pending,
             });
@@ -595,14 +668,16 @@ impl GizmoState {
         let was_direction_active = self.direction.is_some();
         let key_down = rotation_key.is_down(ui);
         let key_released = rotation_key.is_released(ui);
-        let mut requested_direction = None;
+        let mut request = None;
 
         if let Some(mut gesture) = self.direction {
             if matches!(gesture.phase, DirectionPhase::Pending) {
                 match pending_direction_outcome(gesture.pressed_at, ui.time(), key_down, key_released) {
                     PendingDirectionOutcome::Pending => {},
                     PendingDirectionOutcome::Open => {
-                        if let Some(origin) = origin {
+                        if let Some(origin) = origin
+                            && gesture.set.is_some()
+                        {
                             gesture.phase = DirectionPhase::Open {
                                 origin,
                                 group: EditGroupId::new(),
@@ -613,9 +688,18 @@ impl GizmoState {
                         }
                     },
                     PendingDirectionOutcome::Tap => {
-                        requested_direction =
-                            next_clockwise_direction(gesture.set, current_direction(target.state, gesture.set))
-                                .map(|direction| (direction, None));
+                        match direction_tap(gesture.action, gesture.set, target.state) {
+                            Some(DirectionTap::RotateGroup) => {
+                                request = Some(DirectionRequest::RotateGroup {
+                                    rotation: SelectionRotation::Clockwise,
+                                    group: None,
+                                });
+                            },
+                            Some(DirectionTap::Face(direction)) => {
+                                request = Some(DirectionRequest::Face { direction, group: None });
+                            },
+                            None => {},
+                        }
                         self.direction = None;
                     },
                     PendingDirectionOutcome::Cancel => self.direction = None,
@@ -627,24 +711,16 @@ impl GizmoState {
                 group,
                 mut last_hovered,
             } = gesture.phase
+                && let Some(set) = gesture.set
             {
                 if key_released || !key_down {
                     self.direction = None;
                 } else {
-                    let hovered = direction_at(
-                        ui.io().mouse_pos(),
-                        origin,
-                        map_view.min,
-                        map_view.max,
-                        gesture.set,
-                        dpi(ui),
-                    );
+                    let hovered = direction_at(ui.io().mouse_pos(), origin, map_view.min, map_view.max, set, dpi(ui));
                     if hovered != last_hovered {
                         last_hovered = hovered;
-                        if let Some(direction) = hovered
-                            && current_direction(target.state, gesture.set) != Some(direction)
-                        {
-                            requested_direction = Some((direction, Some(group)));
+                        if let Some(direction) = hovered {
+                            request = hover_request(gesture.action, target.state, set, direction, group);
                         }
                     }
                     gesture.phase = DirectionPhase::Open {
@@ -659,31 +735,79 @@ impl GizmoState {
             }
         }
 
-        if let Some((direction, group)) = requested_direction {
-            apply_direction(session, target, direction, group);
+        match request {
+            Some(DirectionRequest::RotateGroup { rotation, group }) => {
+                session.rotate_picked_group(rotation, group);
+            },
+            Some(DirectionRequest::Face { direction, group }) => apply_direction(session, target, direction, group),
+            None => {},
         }
 
         was_direction_active
     }
 }
 
-fn transform_values(target: PickedTransform, mode: TransformMode) -> Option<[i32; 2]> {
+fn mode_members(members: &[GizmoMember], mode: TransformMode) -> Vec<GizmoMember> {
+    members
+        .iter()
+        .filter(|member| mode == TransformMode::Pixel || member.is_movable)
+        .copied()
+        .collect()
+}
+
+fn member_values(member: &GizmoMember, mode: TransformMode) -> [i32; 2] {
     match mode {
-        TransformMode::Pixel => Some(target.pixel),
-        TransformMode::Step if target.is_movable => Some(target.step),
-        TransformMode::Step => None,
+        TransformMode::Pixel => member.pixel,
+        TransformMode::Step => member.step,
     }
 }
 
-fn gizmo_origin(camera: &Controller, viewport_min: [f32; 2], sprite: render::SpriteInstance) -> [f32; 2] {
-    let center = camera.map_to_screen([sprite.x + sprite.width * 0.5, sprite.y + sprite.height * 0.5]);
+fn union_bounds(members: &[GizmoMember]) -> Option<[f32; 4]> {
+    members
+        .iter()
+        .map(|member| {
+            [
+                member.sprite.x,
+                member.sprite.y,
+                member.sprite.width,
+                member.sprite.height,
+            ]
+        })
+        .reduce(|union, bounds| {
+            let x = union[0].min(bounds[0]);
+            let y = union[1].min(bounds[1]);
+            let right = (union[0] + union[2]).max(bounds[0] + bounds[2]);
+            let top = (union[1] + union[3]).max(bounds[1] + bounds[3]);
+
+            [x, y, right - x, top - y]
+        })
+}
+
+fn tiles_center(members: &[GizmoMember]) -> Option<[f32; 2]> {
+    let first = members.first()?.coord;
+    let (min, max) = members.iter().fold((first, first), |(min, max), member| {
+        (
+            Coord::new(min.x.min(member.coord.x), min.y.min(member.coord.y), min.z),
+            Coord::new(max.x.max(member.coord.x), max.y.max(member.coord.y), max.z),
+        )
+    });
+
+    Some([(min.x + max.x) as f32 * 0.5, (min.y + max.y) as f32 * 0.5])
+}
+
+fn gizmo_origin(camera: &Controller, viewport_min: [f32; 2], bounds: [f32; 4]) -> [f32; 2] {
+    let center = camera.map_to_screen([bounds[0] + bounds[2] * 0.5, bounds[1] + bounds[3] * 0.5]);
 
     [viewport_min[0] + center[0], viewport_min[1] + center[1]]
 }
 
 fn tile_center_origin(camera: &Controller, viewport_min: [f32; 2], coord: Coord, tile_size: u32) -> [f32; 2] {
+    tile_point_origin(camera, viewport_min, [coord.x as f32, coord.y as f32], tile_size)
+}
+
+fn tile_point_origin(camera: &Controller, viewport_min: [f32; 2], tile: [f32; 2], tile_size: u32) -> [f32; 2] {
     let tile_size = tile_size.max(1) as f32;
-    let center = camera.map_to_screen([(coord.x as f32 - 0.5) * tile_size, (coord.y as f32 - 0.5) * tile_size]);
+    let center = camera.map_to_screen([(tile[0] - 0.5) * tile_size, (tile[1] - 0.5) * tile_size]);
 
     [viewport_min[0] + center[0], viewport_min[1] + center[1]]
 }
@@ -884,7 +1008,7 @@ fn direction_set(
 ) -> Option<DirectionSet> {
     let mut set = DirectionSet {
         supported: [false; 8],
-        slots: 4,
+        slots: CARDINAL_DIRECTION_SLOTS,
     };
 
     if let Some(supported) = directional_types.map(|types| types.supported).or(declared) {
@@ -903,7 +1027,11 @@ fn direction_set(
         }
     }
 
-    set.slots = if set.directions().any(is_diagonal) { 8 } else { 4 };
+    set.slots = if set.directions().any(is_diagonal) {
+        ALL_DIRECTION_SLOTS
+    } else {
+        CARDINAL_DIRECTION_SLOTS
+    };
 
     (set.len() > 1).then_some(set)
 }
@@ -957,6 +1085,73 @@ fn next_clockwise_direction(set: DirectionSet, current: Option<Dir>) -> Option<D
         .find(|direction| set.contains(*direction))
 }
 
+fn direction_tap(action: DirectionAction, set: Option<DirectionSet>, state: DirectionState) -> Option<DirectionTap> {
+    if action == DirectionAction::RotateGroup {
+        return Some(DirectionTap::RotateGroup);
+    }
+
+    let set = set?;
+
+    next_clockwise_direction(set, current_direction(state, set)).map(DirectionTap::Face)
+}
+
+fn reference_direction(state: DirectionState) -> Dir {
+    state
+        .directional_types
+        .and_then(|types| types.current)
+        .or_else(|| Dir::from_bits(state.dir))
+        .unwrap_or(Dir::North)
+}
+
+fn group_direction_set(reference: Dir) -> DirectionSet {
+    let mut set = DirectionSet {
+        supported: [false; 8],
+        slots: if is_diagonal(reference) {
+            ALL_DIRECTION_SLOTS
+        } else {
+            CARDINAL_DIRECTION_SLOTS
+        },
+    };
+    let start = clockwise_index(reference);
+    for turn in 0..4 {
+        set.supported[(start + turn * 2) % CLOCKWISE_DIRECTIONS.len()] = true;
+    }
+
+    set
+}
+
+fn quarter_turns(from: Dir, to: Dir) -> Option<SelectionRotation> {
+    let steps = (clockwise_index(to) + CLOCKWISE_DIRECTIONS.len() - clockwise_index(from)) % CLOCKWISE_DIRECTIONS.len();
+
+    match steps {
+        0 => Some(SelectionRotation::Original),
+        2 => Some(SelectionRotation::Clockwise),
+        4 => Some(SelectionRotation::Half),
+        6 => Some(SelectionRotation::CounterClockwise),
+        _ => None,
+    }
+}
+
+fn hover_request(
+    action: DirectionAction, state: DirectionState, set: DirectionSet, direction: Dir, group: EditGroupId,
+) -> Option<DirectionRequest> {
+    match action {
+        DirectionAction::Face => (current_direction(state, set) != Some(direction)).then_some(DirectionRequest::Face {
+            direction,
+            group: Some(group),
+        }),
+        DirectionAction::RotateGroup => {
+            let rotation = quarter_turns(reference_direction(state), direction)
+                .filter(|rotation| *rotation != SelectionRotation::Original)?;
+
+            Some(DirectionRequest::RotateGroup {
+                rotation,
+                group: Some(group),
+            })
+        },
+    }
+}
+
 fn pending_direction_outcome(pressed_at: f64, now: f64, key_down: bool, key_released: bool) -> PendingDirectionOutcome {
     let held_long_enough = now.is_finite()
         && pressed_at.is_finite()
@@ -978,20 +1173,13 @@ fn pending_direction_outcome(pressed_at: f64, now: f64, key_down: bool, key_rele
 
 fn apply_direction(session: &mut Session, target: DirectionTarget, direction: Dir, group: Option<EditGroupId>) {
     match target.id {
-        DirectionGestureTarget::Selection(_) if target.state.directional_types.is_some() => {
-            session.set_picked_directional_type(direction, group);
-        },
         DirectionGestureTarget::Selection(_) => {
-            session.edit_picked_instance_vars("set dir", &[direction_mutation(direction)], group);
+            session.set_picked_direction(direction, group);
         },
         DirectionGestureTarget::Placement => {
             session.set_placement_direction(direction);
         },
     }
-}
-
-fn direction_mutation(direction: Dir) -> VarMutation {
-    VarMutation::Set(Identifier::from(vars::DIR), Value::Num(direction.to_bits() as f32))
 }
 
 fn direction_vector(direction: Dir) -> [f32; 2] {
@@ -1063,18 +1251,24 @@ fn direction_at(
 }
 
 #[derive(Debug, Clone, Copy)]
+struct DraggedGroup {
+    delta: [i32; 2],
+    anchor: [f32; 2],
+}
+
+#[derive(Debug, Clone, Copy)]
 struct DraggedTransform {
     values: [i32; 2],
     anchor: [f32; 2],
 }
 
-fn dragged_values(drag: DragState, mouse: [f32; 2], snap: bool) -> DraggedTransform {
+fn dragged_group(drag: &DragState, mouse: [f32; 2], snap: bool) -> DraggedGroup {
     let map_delta = [
         (mouse[0] - drag.start_mouse[0]) / drag.zoom,
         -(mouse[1] - drag.start_mouse[1]) / drag.zoom,
     ];
-    let mut next = drag.start_values;
-    let mut anchor = drag.start_anchor;
+    let mut delta = [0; 2];
+    let mut anchor = drag.start_group_anchor;
 
     for axis in 0..2 {
         let enabled = if axis == 0 {
@@ -1086,7 +1280,7 @@ fn dragged_values(drag: DragState, mouse: [f32; 2], snap: bool) -> DraggedTransf
             continue;
         }
 
-        let desired = drag.start_anchor[axis] + map_delta[axis];
+        let desired = drag.start_group_anchor[axis] + map_delta[axis];
         anchor[axis] = if snap {
             let tile = drag.tile_size as f32;
 
@@ -1094,21 +1288,36 @@ fn dragged_values(drag: DragState, mouse: [f32; 2], snap: bool) -> DraggedTransf
         } else {
             desired
         };
-        next[axis] = drag.start_values[axis].saturating_add(rounded_i32(anchor[axis] - drag.start_anchor[axis]));
+        delta[axis] = rounded_i32(anchor[axis] - drag.start_group_anchor[axis]);
     }
 
-    DraggedTransform { values: next, anchor }
+    DraggedGroup { delta, anchor }
 }
 
-fn anchored_values(
-    drag: DragState, mouse: [f32; 2], snap: bool, reanchor: bool, size: (u32, u32),
+fn dragged_member(drag: &DragState, member: &DragMember, group: DraggedGroup) -> DraggedTransform {
+    let offset = [
+        member.start_anchor[0] - drag.start_group_anchor[0],
+        member.start_anchor[1] - drag.start_group_anchor[1],
+    ];
+
+    DraggedTransform {
+        values: [
+            member.start_values[0].saturating_add(group.delta[0]),
+            member.start_values[1].saturating_add(group.delta[1]),
+        ],
+        anchor: [group.anchor[0] + offset[0], group.anchor[1] + offset[1]],
+    }
+}
+
+fn anchored_member(
+    drag: &DragState, member: &DragMember, group: DraggedGroup, reanchor: bool, size: (u32, u32),
 ) -> (Coord, [i32; 2]) {
-    let dragged = dragged_values(drag, mouse, snap);
+    let dragged = dragged_member(drag, member, group);
     if !reanchor {
-        return (drag.start_coord, dragged.values);
+        return (member.start_coord, dragged.values);
     }
 
-    let anchored = anchor_to_tile(dragged.anchor, drag.start_coord, drag.tile_size, size);
+    let anchored = anchor_to_tile(dragged.anchor, member.start_coord, drag.tile_size, size);
     let next = [
         dragged.values[0].saturating_add(anchored.adjust[0]),
         dragged.values[1].saturating_add(anchored.adjust[1]),
@@ -1393,17 +1602,39 @@ mod tests {
 
     fn drag(handle: Handle) -> DragState {
         DragState {
-            picked: picked(),
+            members: vec![DragMember {
+                id: picked(),
+                start_values: [5, -3],
+                start_anchor: [45.0, 29.0],
+                start_coord: dmm::Coord::new(2, 1, 1),
+            }],
+            start_group_anchor: [45.0, 29.0],
             mode: TransformMode::Pixel,
             handle,
             start_mouse: [100.0, 100.0],
-            start_values: [5, -3],
-            start_anchor: [45.0, 29.0],
-            start_coord: dmm::Coord::new(2, 1, 1),
             zoom: 2.0,
             tile_size: 32,
             group: EditGroupId::new(),
         }
+    }
+
+    fn restart(state: &mut DragState, values: [i32; 2], anchor: [f32; 2], coord: Coord) {
+        state.members[0].start_values = values;
+        state.members[0].start_anchor = anchor;
+        state.members[0].start_coord = coord;
+        state.start_group_anchor = anchor;
+    }
+
+    fn dragged_values(state: &DragState, mouse: [f32; 2], snap: bool) -> DraggedTransform {
+        dragged_member(state, &state.members[0], dragged_group(state, mouse, snap))
+    }
+
+    fn anchored_values(
+        state: &DragState, mouse: [f32; 2], snap: bool, reanchor: bool, size: (u32, u32),
+    ) -> (Coord, [i32; 2]) {
+        let group = dragged_group(state, mouse, snap);
+
+        anchored_member(state, &state.members[0], group, reanchor, size)
     }
 
     fn region_drag() -> RegionDragState {
@@ -1586,14 +1817,14 @@ mod tests {
         assert_eq!(direction_set(Some(2), None, None), None);
 
         let four = direction_set(Some(4), None, None).unwrap();
-        assert_eq!(four.slots, 4);
+        assert_eq!(four.slots, CARDINAL_DIRECTION_SLOTS);
         assert_eq!(
             four.directions().collect::<Vec<_>>(),
             [Dir::North, Dir::East, Dir::South, Dir::West]
         );
 
         let eight = direction_set(Some(8), None, None).unwrap();
-        assert_eq!(eight.slots, 8);
+        assert_eq!(eight.slots, ALL_DIRECTION_SLOTS);
         assert_eq!(eight.directions().collect::<Vec<_>>(), CLOCKWISE_DIRECTIONS);
     }
 
@@ -1610,7 +1841,7 @@ mod tests {
 
         let set = direction_set(Some(8), None, Some(types)).unwrap();
         assert_eq!(set.directions().collect::<Vec<_>>(), [Dir::North, Dir::East, Dir::West]);
-        assert_eq!(set.slots, 4);
+        assert_eq!(set.slots, CARDINAL_DIRECTION_SLOTS);
 
         let one_type = DirectionalTypes {
             supported: [true, false, false, false, false, false, false, false],
@@ -1629,7 +1860,7 @@ mod tests {
             set.directions().collect::<Vec<_>>(),
             [Dir::North, Dir::East, Dir::South, Dir::West]
         );
-        assert_eq!(set.slots, 4);
+        assert_eq!(set.slots, CARDINAL_DIRECTION_SLOTS);
 
         let types = DirectionalTypes {
             supported: [false, true, true, false, false, false, false, false],
@@ -1702,6 +1933,89 @@ mod tests {
     }
 
     #[test]
+    fn a_tap_rotates_the_group_even_without_a_direction_set() {
+        let state = DirectionState {
+            dir: Dir::North.to_bits(),
+            dmi_directions: Some(4),
+            declared: None,
+            directional_types: None,
+        };
+        let set = direction_set(Some(4), None, None);
+
+        assert_eq!(
+            direction_tap(DirectionAction::RotateGroup, None, state),
+            Some(DirectionTap::RotateGroup)
+        );
+        assert_eq!(
+            direction_tap(DirectionAction::RotateGroup, set, state),
+            Some(DirectionTap::RotateGroup)
+        );
+        assert_eq!(direction_tap(DirectionAction::Face, None, state), None);
+        assert_eq!(
+            direction_tap(DirectionAction::Face, set, state),
+            Some(DirectionTap::Face(Dir::East))
+        );
+    }
+
+    #[test]
+    fn quarter_turns_count_clockwise_steps_between_same_kind_directions() {
+        assert_eq!(quarter_turns(Dir::North, Dir::East), Some(SelectionRotation::Clockwise));
+        assert_eq!(quarter_turns(Dir::North, Dir::South), Some(SelectionRotation::Half));
+        assert_eq!(
+            quarter_turns(Dir::North, Dir::West),
+            Some(SelectionRotation::CounterClockwise)
+        );
+        assert_eq!(quarter_turns(Dir::West, Dir::North), Some(SelectionRotation::Clockwise));
+        assert_eq!(
+            quarter_turns(Dir::Northeast, Dir::Southeast),
+            Some(SelectionRotation::Clockwise)
+        );
+        assert_eq!(
+            quarter_turns(Dir::Northeast, Dir::Northeast),
+            Some(SelectionRotation::Original)
+        );
+        assert_eq!(quarter_turns(Dir::North, Dir::Northeast), None);
+    }
+
+    #[test]
+    fn the_group_wheel_offers_the_reference_and_its_quarter_turns() {
+        let cardinal = group_direction_set(Dir::East);
+        assert_eq!(cardinal.slots, CARDINAL_DIRECTION_SLOTS);
+        assert_eq!(
+            cardinal.directions().collect::<Vec<_>>(),
+            [Dir::North, Dir::East, Dir::South, Dir::West]
+        );
+
+        let diagonal = group_direction_set(Dir::Southwest);
+        assert_eq!(diagonal.slots, ALL_DIRECTION_SLOTS);
+        assert_eq!(
+            diagonal.directions().collect::<Vec<_>>(),
+            [Dir::Northeast, Dir::Southeast, Dir::Southwest, Dir::Northwest]
+        );
+    }
+
+    #[test]
+    fn a_group_hover_turns_from_the_current_facing_to_the_hovered_slot() {
+        let state = DirectionState {
+            dir: Dir::East.to_bits(),
+            dmi_directions: None,
+            declared: None,
+            directional_types: None,
+        };
+        let set = group_direction_set(Dir::North);
+        let group = EditGroupId::new();
+
+        assert!(matches!(
+            hover_request(DirectionAction::RotateGroup, state, set, Dir::West, group),
+            Some(DirectionRequest::RotateGroup {
+                rotation: SelectionRotation::Half,
+                ..
+            })
+        ));
+        assert!(hover_request(DirectionAction::RotateGroup, state, set, Dir::East, group).is_none());
+    }
+
+    #[test]
     fn tap_rotates_clockwise_and_skips_unsupported_directions() {
         let four = direction_set(Some(4), None, None).unwrap();
         assert_eq!(next_clockwise_direction(four, Some(Dir::North)), Some(Dir::East));
@@ -1744,20 +2058,10 @@ mod tests {
     }
 
     #[test]
-    fn direction_mutations_use_byond_direction_bits() {
-        for direction in Dir::ORDER {
-            assert_eq!(
-                direction_mutation(direction),
-                VarMutation::Set(Identifier::from("dir"), Value::Num(direction.to_bits() as f32))
-            );
-        }
-    }
-
-    #[test]
     fn drag_converts_screen_motion_to_integer_map_pixels() {
-        let both = dragged_values(drag(Handle::XY), [107.0, 95.0], false);
-        let x = dragged_values(drag(Handle::X), [107.0, 95.0], false);
-        let y = dragged_values(drag(Handle::Y), [107.0, 95.0], false);
+        let both = dragged_values(&drag(Handle::XY), [107.0, 95.0], false);
+        let x = dragged_values(&drag(Handle::X), [107.0, 95.0], false);
+        let y = dragged_values(&drag(Handle::Y), [107.0, 95.0], false);
 
         assert_eq!(both.values, [9, 0]);
         assert_eq!(x.values, [9, -3]);
@@ -1775,7 +2079,7 @@ mod tests {
 
         // The active value starts at 5, while other offsets put the rendered
         // anchor at 45. Snapping its dragged position to 64 adds 19, yielding 24.
-        let snapped = dragged_values(state, [110.0, 90.0], true);
+        let snapped = dragged_values(&state, [110.0, 90.0], true);
 
         assert_eq!(snapped.values, [24, 0]);
         assert_eq!(snapped.anchor, [64.0, 32.0]);
@@ -1786,33 +2090,29 @@ mod tests {
         let mut state = drag(Handle::X);
         state.zoom = 1.0;
 
-        assert_eq!(dragged_values(state, [110.0, 90.0], true).values, [24, -3]);
+        assert_eq!(dragged_values(&state, [110.0, 90.0], true).values, [24, -3]);
     }
 
     #[test]
     fn reanchoring_is_disabled_without_ctrl() {
         let mut state = drag(Handle::X);
-        state.start_coord = dmm::Coord::new(2, 1, 1);
-        state.start_values = [15, 0];
-        state.start_anchor = [47.0, 0.0];
+        restart(&mut state, [15, 0], [47.0, 0.0], dmm::Coord::new(2, 1, 1));
         state.zoom = 1.0;
 
-        let (coord, values) = anchored_values(state, [120.0, 100.0], false, false, (10, 10));
+        let (coord, values) = anchored_values(&state, [120.0, 100.0], false, false, (10, 10));
 
-        assert_eq!(coord, state.start_coord);
+        assert_eq!(coord, state.members[0].start_coord);
         assert_eq!(values, [35, 0]);
     }
 
     #[test]
     fn ctrl_reanchoring_stays_relative_to_the_start_tile_during_a_continued_drag() {
         let mut state = drag(Handle::X);
-        state.start_coord = dmm::Coord::new(2, 1, 1);
-        state.start_values = [15, 0];
-        state.start_anchor = [47.0, 0.0];
+        restart(&mut state, [15, 0], [47.0, 0.0], dmm::Coord::new(2, 1, 1));
         state.zoom = 1.0;
 
-        let (first_coord, first_values) = anchored_values(state, [120.0, 100.0], false, true, (10, 10));
-        let (second_coord, second_values) = anchored_values(state, [125.0, 100.0], false, true, (10, 10));
+        let (first_coord, first_values) = anchored_values(&state, [120.0, 100.0], false, true, (10, 10));
+        let (second_coord, second_values) = anchored_values(&state, [125.0, 100.0], false, true, (10, 10));
 
         assert_eq!(first_coord, dmm::Coord::new(3, 1, 1));
         assert_eq!(second_coord, first_coord);
@@ -1823,6 +2123,72 @@ mod tests {
         assert_eq!((second_coord.x - 1) * 32 + second_values[0] as u32, 72);
     }
 
+    fn two_member_drag(handle: Handle) -> DragState {
+        let mut state = drag(handle);
+        state.zoom = 1.0;
+        state.start_group_anchor = [47.0, 0.0];
+        state.members = vec![
+            DragMember {
+                id: picked(),
+                start_values: [15, 0],
+                start_anchor: [47.0, 0.0],
+                start_coord: Coord::new(2, 1, 1),
+            },
+            DragMember {
+                id: picked(),
+                start_values: [0, 0],
+                start_anchor: [128.0, 0.0],
+                start_coord: Coord::new(5, 1, 1),
+            },
+        ];
+
+        state
+    }
+
+    #[test]
+    fn every_member_receives_the_group_delta() {
+        let state = two_member_drag(Handle::XY);
+        let group = dragged_group(&state, [120.0, 90.0], false);
+
+        assert_eq!(group.delta, [20, 10]);
+        let moved = state
+            .members
+            .iter()
+            .map(|member| dragged_member(&state, member, group).values)
+            .collect::<Vec<_>>();
+        assert_eq!(moved, [[35, 10], [20, 10]]);
+    }
+
+    #[test]
+    fn shift_snaps_the_group_anchor_and_members_keep_their_offsets() {
+        let state = two_member_drag(Handle::XY);
+        let group = dragged_group(&state, [120.0, 80.0], true);
+
+        assert_eq!(group.anchor, [64.0, 32.0]);
+        assert_eq!(group.delta, [17, 32]);
+        let anchors = state
+            .members
+            .iter()
+            .map(|member| dragged_member(&state, member, group).anchor)
+            .collect::<Vec<_>>();
+        assert_eq!(anchors, [[64.0, 32.0], [145.0, 32.0]]);
+    }
+
+    #[test]
+    fn ctrl_reanchors_each_member_against_its_own_start_tile() {
+        let state = two_member_drag(Handle::X);
+        let group = dragged_group(&state, [120.0, 100.0], false);
+        let moved = state
+            .members
+            .iter()
+            .map(|member| anchored_member(&state, member, group, true, (10, 10)))
+            .collect::<Vec<_>>();
+
+        assert_eq!(moved, [(Coord::new(3, 1, 1), [3, 0]), (Coord::new(6, 1, 1), [-12, 0])]);
+
+        let unanchored = anchored_member(&state, &state.members[1], group, false, (10, 10));
+        assert_eq!(unanchored, (Coord::new(5, 1, 1), [20, 0]));
+    }
     #[test]
     fn mutations_target_only_changed_axes_in_the_active_mode() {
         assert_eq!(

@@ -165,7 +165,7 @@ mod tests {
             .collect::<Vec<_>>();
         bindings.sort_unstable();
 
-        assert_eq!(bindings, [(0, 1), (0, 2), (0, 4)]);
+        assert_eq!(bindings, [(0, 1), (0, 2), (0, 4), (0, 5)]);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<InteractionPush>());
     }
@@ -180,7 +180,7 @@ mod tests {
             .collect::<Vec<_>>();
         bindings.sort_unstable();
 
-        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2)]);
+        assert_eq!(bindings, [(0, 0), (0, 1), (0, 2), (0, 3)]);
         assert_eq!(reflection.push_constant_offset, 0);
         assert_eq!(reflection.push_constant_size as usize, size_of::<GuidePush>());
         assert_eq!(size_of::<GpuGuideLine>(), 16);

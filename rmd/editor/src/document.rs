@@ -1,4 +1,7 @@
-use core::types::{Identifier, Value};
+use core::{
+    path::TreePath,
+    types::{Identifier, Value},
+};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -79,7 +82,7 @@ pub struct MapDocument {
     needs_initial_save: bool,
     /// Contents differ from the file on disk without any history, like a merge result
     pending_write: bool,
-    picked_instance: Option<PrefabInstanceId>,
+    picked: Vec<PrefabInstanceId>,
     selection: Option<Selection>,
     selection_mode: RegionSelectionMode,
     focus: Option<AreaFocus>,
@@ -193,6 +196,14 @@ pub enum VarMutation {
     Remove(Identifier),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstanceChange {
+    pub id: PrefabInstanceId,
+    pub to_coord: Option<Coord>,
+    pub path: Option<TreePath>,
+    pub mutations: Vec<VarMutation>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Selection {
     pub min: Coord,
@@ -205,6 +216,16 @@ impl Selection {
             min: Coord::new(anchor.x.min(cursor.x), anchor.y.min(cursor.y), anchor.z),
             max: Coord::new(anchor.x.max(cursor.x), anchor.y.max(cursor.y), anchor.z),
         }
+    }
+
+    pub fn enclosing(coords: impl IntoIterator<Item = Coord>) -> Option<Self> {
+        let mut coords = coords.into_iter();
+        let first = coords.next()?;
+
+        Some(coords.fold(Self::from_drag(first, first), |bounds, coord| Self {
+            min: Coord::new(bounds.min.x.min(coord.x), bounds.min.y.min(coord.y), bounds.min.z),
+            max: Coord::new(bounds.max.x.max(coord.x), bounds.max.y.max(coord.y), bounds.max.z),
+        }))
     }
 
     pub fn is_well_formed(&self) -> bool {
@@ -265,7 +286,7 @@ impl MapDocument {
             z,
             needs_initial_save: false,
             pending_write: false,
-            picked_instance: None,
+            picked: Vec::new(),
             selection: None,
             selection_mode: RegionSelectionMode::Full,
             focus: None,
@@ -465,11 +486,42 @@ impl MapDocument {
     }
 
     pub fn picked_instance(&self) -> Option<PrefabInstanceId> {
-        self.picked_instance.filter(|id| self.is_pickable_instance(*id))
+        self.picked_instances().last()
+    }
+
+    pub fn picked_instances(&self) -> impl Iterator<Item = PrefabInstanceId> + '_ {
+        self.picked.iter().copied().filter(|id| self.is_pickable_instance(*id))
+    }
+
+    pub fn picked_ids(&self) -> &[PrefabInstanceId] {
+        &self.picked
     }
 
     pub fn pick_instance(&mut self, picked: Option<PrefabInstanceId>) {
-        self.picked_instance = picked.filter(|id| self.is_pickable_instance(*id));
+        self.picked = picked.filter(|id| self.is_pickable_instance(*id)).into_iter().collect();
+    }
+
+    pub fn pick_instances(&mut self, ids: &[PrefabInstanceId]) {
+        self.picked = ids
+            .iter()
+            .copied()
+            .filter(|id| self.is_pickable_instance(*id))
+            .collect();
+    }
+
+    pub fn toggle_picked_instance(&mut self, id: PrefabInstanceId) {
+        if let Some(index) = self.picked.iter().position(|picked| *picked == id) {
+            self.picked.remove(index);
+            return;
+        }
+
+        if self.is_pickable_instance(id) {
+            self.picked.push(id);
+        }
+    }
+
+    pub fn retain_picked(&mut self, keep: impl FnMut(&PrefabInstanceId) -> bool) {
+        self.picked.retain(keep);
     }
 
     fn is_pickable_instance(&self, id: PrefabInstanceId) -> bool {
@@ -569,6 +621,79 @@ impl MapDocument {
     /// Every placement of exactly `prefab`, on every level
     pub fn identical_instances(&self, prefab: &Prefab) -> Vec<PrefabInstanceId> {
         self.map.identical(prefab)
+    }
+
+    pub fn change_instances(
+        &mut self, tree: &ObjectTree, changes: &[InstanceChange], label: impl Into<String>, group: Option<EditGroupId>,
+    ) -> Option<bool> {
+        let size = self.map.size();
+        let mut before = BTreeMap::<Coord, PlacedTile>::new();
+        let mut batch = Vec::with_capacity(changes.len());
+
+        for change in changes {
+            let source_coord = self.instance_location(change.id)?.coord;
+            let destination_coord = change.to_coord.filter(|to| {
+                to.z == source_coord.z
+                    && (1..=size.x.max(1)).contains(&to.x)
+                    && (1..=size.y.max(1)).contains(&to.y)
+                    && *to != source_coord
+            });
+
+            let source_tile = self.placed_tile(source_coord)?;
+            before.entry(source_coord).or_insert(source_tile);
+
+            if let Some(destination) = destination_coord {
+                before
+                    .entry(destination)
+                    .or_insert_with(|| self.placed_tile(destination).unwrap_or_default());
+            }
+
+            batch.push((change, source_coord, destination_coord));
+        }
+
+        let mut after = before.clone();
+
+        for (change, source_coord, destination_coord) in batch {
+            let source_tile = after.get_mut(&source_coord)?;
+            let index = source_tile.iter().position(|placed| placed.id == change.id)?;
+            let instance = &mut source_tile[index];
+
+            if let Some(path) = &change.path {
+                instance.prefab_mut().path = path.clone();
+            }
+
+            for mutation in &change.mutations {
+                match mutation {
+                    VarMutation::Set(name, value) => instance.prefab_mut().set_var(name.clone(), value.clone()),
+                    VarMutation::Remove(name) => {
+                        instance.prefab_mut().remove_var(name);
+                    },
+                }
+            }
+
+            let Some(destination_coord) = destination_coord else {
+                continue;
+            };
+
+            let moved = after.get_mut(&source_coord)?.remove(index);
+            let destination_tile = after.get_mut(&destination_coord)?;
+            let kind = placement_kind(tree, moved.prefab()).unwrap_or(PlacementKind::Atom);
+
+            destination_tile.insert(insertion_index(tree, destination_tile, kind), moved);
+        }
+
+        let mut edit = Edit::new(label);
+        for (coord, after_tile) in after {
+            if before.get(&coord) != Some(&after_tile) {
+                edit.change(self, coord, after_tile);
+            }
+        }
+
+        if edit.is_empty() {
+            return Some(false);
+        }
+
+        Some(self.apply_grouped(edit, group))
     }
 
     pub fn move_instance(
@@ -977,7 +1102,7 @@ impl MapDocument {
     fn level_changed(&mut self, z: u32) {
         self.z = z.min(self.map.size().z).max(1);
         self.selection = None;
-        self.picked_instance = None;
+        self.picked.clear();
         self.focus = None;
     }
 
@@ -1040,9 +1165,9 @@ impl MapDocument {
     }
 
     fn clear_stale_picked_instance(&mut self) {
-        if self.picked_instance().is_none() {
-            self.picked_instance = None;
-        }
+        let mut picked = mem::take(&mut self.picked);
+        picked.retain(|id| self.is_pickable_instance(*id));
+        self.picked = picked;
     }
 }
 

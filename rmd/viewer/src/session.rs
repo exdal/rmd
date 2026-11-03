@@ -190,6 +190,7 @@ impl Session {
             }),
             guide_lines: &[],
             connected: &[],
+            picked: &[],
             interaction: MapViewInteraction::default(),
             preview: None,
         }
