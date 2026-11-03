@@ -1,3 +1,4 @@
+use dmm::PrefabInstanceId;
 use vir::{Buffer, FrameAllocator, ValueId};
 
 use super::{
@@ -18,7 +19,7 @@ pub(super) struct GpuGuideLine {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct GuidePush {
     pub(super) viewport: [f32; 2],
-    pub(super) picked_owner: [u32; 2],
+    pub(super) picked_count: u32,
     pub(super) stripe_offset: f32,
 }
 
@@ -33,8 +34,10 @@ pub(super) struct GuideSlots {
 pub(super) struct PreparedGuides {
     pub(super) lines: Buffer,
     pub(super) connected_owners: Buffer,
+    pub(super) picked_owners: Buffer,
     pub(super) line_count: u32,
     pub(super) connected_count: u32,
+    pub(super) picked_count: u32,
 }
 
 impl Renderer {
@@ -66,18 +69,30 @@ impl Renderer {
                     .map(owner_words)
                     .take(u32::MAX as usize)
                     .collect::<Vec<_>>();
+                let picked = sorted_picked_owners(view.picked);
                 let lines_buffer = upload_frame_buffer(allocator, payload_bytes(&lines), "selection guide lines")?;
                 let connected_owners = upload_frame_buffer(allocator, payload_bytes(&owners), "connected owners")?;
+                let picked_owners = upload_frame_buffer(allocator, payload_bytes(&picked), "picked owners")?;
 
                 Ok(PreparedGuides {
                     lines: lines_buffer,
                     connected_owners,
+                    picked_owners,
                     line_count: lines.len() as u32,
                     connected_count: owners.len() as u32,
+                    picked_count: picked.len() as u32,
                 })
             })
             .collect()
     }
+}
+
+fn sorted_picked_owners(picked: &[PrefabInstanceId]) -> Vec<[u32; 2]> {
+    let mut ids = picked.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+
+    ids.into_iter().map(owner_words).take(u32::MAX as usize).collect()
 }
 
 fn project_guide_line(
@@ -129,6 +144,14 @@ mod tests {
         // Projecting against the physical size instead halves the map relative
         // to every ImGui overlay, which is the 2x mismatch this guards.
         assert_eq!(projected_tile_size(zoom, 1600.0, 1600.0), 4.0);
+    }
+
+    #[test]
+    fn picked_owners_are_sorted_by_high_word_then_low_word_without_duplicates() {
+        let id = |raw| dmm::PrefabInstanceId::from_raw(raw).unwrap();
+        let picked = [id(1 << 32), id(5), id(1 << 32), id(2 | (1 << 32)), id(3)];
+
+        assert_eq!(sorted_picked_owners(&picked), vec![[3, 0], [5, 0], [0, 1], [2, 1]],);
     }
 
     #[test]

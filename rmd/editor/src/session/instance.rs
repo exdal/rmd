@@ -309,10 +309,6 @@ impl Session {
 
         Some(changed)
     }
-
-    pub fn picked_instance_of(&self, id: DocumentId) -> Option<PrefabInstanceId> {
-        self.state.document(id).and_then(MapDocument::picked_instance)
-    }
 }
 
 #[cfg(test)]

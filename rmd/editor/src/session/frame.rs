@@ -137,22 +137,25 @@ impl Session {
         self.options.underlay_depth = depth;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn map_view_frame<'a>(
         &'a self, id: DocumentId, rect: MapViewRect, camera: render::Camera, interaction: MapViewInteraction,
-        guide_lines: &'a [GuideLine], connected: &'a [PrefabInstanceId],
+        guide_lines: &'a [GuideLine], connected: &'a [PrefabInstanceId], picked: &'a [PrefabInstanceId],
     ) -> Option<MapViewFrame<'a>> {
         let document = self.state.document(id)?;
         let cache = self.caches.get(&id)?;
 
-        let mut interaction = interaction;
-        if interaction.mode.is_node() {
-            interaction.picked = interaction.picked.filter(|owner| {
-                cache
-                    .instances
-                    .sprite(*owner)
-                    .is_some_and(|sprite| sprite.node_pickable)
-            });
-        }
+        let is_node_pickable = |owner: &PrefabInstanceId| {
+            cache
+                .instances
+                .sprite(*owner)
+                .is_some_and(|sprite| sprite.node_pickable)
+        };
+        let picked = if interaction.mode.is_node() && !picked.iter().all(is_node_pickable) {
+            &picked[..0]
+        } else {
+            picked
+        };
 
         Some(MapViewFrame {
             rect,
@@ -175,6 +178,7 @@ impl Session {
             ),
             guide_lines,
             connected,
+            picked,
             interaction,
             preview: cache
                 .preview
@@ -582,10 +586,10 @@ mod tests {
         };
         let map_views = [
             session
-                .map_view_frame(ids[0], left, Default::default(), Default::default(), &[], &[])
+                .map_view_frame(ids[0], left, Default::default(), Default::default(), &[], &[], &[])
                 .expect("left map view"),
             session
-                .map_view_frame(ids[1], right, Default::default(), Default::default(), &[], &[])
+                .map_view_frame(ids[1], right, Default::default(), Default::default(), &[], &[], &[])
                 .expect("right map view"),
         ];
         let frame = session.frame(&map_views, Some(1));
@@ -651,10 +655,10 @@ mod tests {
 
         let rect = render::MapViewRect::default();
         let a = session
-            .map_view_frame(first, rect, Default::default(), Default::default(), &[], &[])
+            .map_view_frame(first, rect, Default::default(), Default::default(), &[], &[], &[])
             .expect("first map view");
         let b = session
-            .map_view_frame(second, rect, Default::default(), Default::default(), &[], &[])
+            .map_view_frame(second, rect, Default::default(), Default::default(), &[], &[], &[])
             .expect("second map view");
 
         assert_eq!(a.active_z, 1);
@@ -687,6 +691,7 @@ mod tests {
                 Default::default(),
                 &[],
                 &[],
+                &[],
             )
             .expect("first frame");
         let second = session
@@ -695,6 +700,7 @@ mod tests {
                 render::MapViewRect::default(),
                 render::Camera::default(),
                 Default::default(),
+                &[],
                 &[],
                 &[],
             )
@@ -751,6 +757,7 @@ mod tests {
                 Default::default(),
                 &[],
                 &[],
+                &[],
             )
             .expect("the open map has a map view");
         assert_eq!(view.revision, 7, "changing the view does not re-upload sprites");
@@ -780,6 +787,7 @@ mod tests {
                     render::MapViewRect::default(),
                     Default::default(),
                     Default::default(),
+                    &[],
                     &[],
                     &[],
                 )

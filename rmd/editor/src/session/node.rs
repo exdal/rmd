@@ -775,21 +775,22 @@ mod tests {
         session.rebuild_instances(id);
         assert!(eligibility(&session));
         session.pick_instance(Some(other));
+        let picked = [other];
         let view = session
             .map_view_frame(
                 id,
                 Default::default(),
                 Default::default(),
                 render::MapViewInteraction {
-                    picked: Some(other),
                     mode: render::InteractionMode::Node { pick: None },
                     ..Default::default()
                 },
                 &[],
                 &[],
+                &picked,
             )
             .unwrap();
-        assert_eq!(view.interaction.picked, None);
+        assert_eq!(view.picked, &[]);
     }
 
     #[test]

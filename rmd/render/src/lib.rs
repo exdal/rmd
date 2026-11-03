@@ -66,7 +66,6 @@ impl HighlightStyle {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct MapViewInteraction {
     pub cursor: Option<[u32; 2]>,
-    pub picked: Option<PrefabInstanceId>,
     pub placement_flash: Option<PlacementFlash>,
     pub highlight: HighlightStyle,
     pub mode: InteractionMode,
@@ -223,6 +222,7 @@ pub struct MapViewFrame<'a> {
     pub lighting: Option<LightingFrame<'a>>,
     pub guide_lines: &'a [GuideLine],
     pub connected: &'a [PrefabInstanceId],
+    pub picked: &'a [PrefabInstanceId],
     pub interaction: MapViewInteraction,
     pub preview: Option<SpritePreview<'a>>,
 }
@@ -233,8 +233,7 @@ impl MapViewFrame<'_> {
             .interaction
             .cursor
             .is_some_and(|cursor| cursor[0] < self.rect.width && cursor[1] < self.rect.height);
-        let is_outlined =
-            !self.interaction.highlight.is_tint() && (self.interaction.picked.is_some() || is_cursor_inside);
+        let is_outlined = !self.interaction.highlight.is_tint() && (!self.picked.is_empty() || is_cursor_inside);
 
         is_outlined || !self.guide_lines.is_empty()
     }

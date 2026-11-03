@@ -57,13 +57,13 @@ pub(super) fn configure_tool_interaction(tool: Tool, interaction: &mut MapViewIn
     match tool {
         Tool::Place | Tool::Select | Tool::Fill | Tool::RectFill | Tool::Comment => {
             interaction.cursor = None;
-            interaction.picked = None;
         },
-        Tool::Delete | Tool::Replace => {
-            interaction.picked = None;
-        },
-        Tool::Pick | Tool::Node | Tool::Move => {},
+        Tool::Delete | Tool::Replace | Tool::Pick | Tool::Node | Tool::Move => {},
     }
+}
+
+pub(super) fn shows_picked(tool: Tool) -> bool {
+    matches!(tool, Tool::Pick | Tool::Node | Tool::Move)
 }
 
 pub(super) fn interaction_mode(tool: Tool) -> InteractionMode {

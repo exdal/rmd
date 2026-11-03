@@ -702,7 +702,7 @@ fn move_tool_highlights_only_the_dragged_atom() {
     app.pointer(app.tile(5, 8), true);
     app.pointer(app.tile(6, 8), true);
     assert_eq!(app.interaction.cursor, None);
-    assert_eq!(app.interaction.picked, Some(table_id));
+    assert_eq!(app.session.picked_instance(), Some(table_id));
 
     app.pointer(app.tile(6, 8), false);
     assert!(app.interaction.cursor.is_some());

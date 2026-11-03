@@ -41,6 +41,7 @@ pub(super) fn map_view(rect: MapViewRect) -> MapViewFrame<'static> {
         lighting: None,
         guide_lines: &[],
         connected: &[],
+        picked: &[],
         interaction: Default::default(),
         preview: None,
     }

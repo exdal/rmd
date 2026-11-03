@@ -308,13 +308,14 @@ impl Renderer {
             let push = InteractionPush {
                 cursor: local_cursor.unwrap_or([0; 2]),
                 cursor_valid: u32::from(local_cursor.is_some()),
-                picked_owner: interaction.picked.map(owner_words).unwrap_or([0; 2]),
+                picked_count: guides.picked_count,
                 stripe_offset,
                 focused_area_owner: view.focused_area.map(owner_words).unwrap_or([0; 2]),
                 connected_count: guides.connected_count,
             };
             recorded.program.set_bytes(slots.push, &push);
             recorded.program.set(slots.connected_owners, guides.connected_owners);
+            recorded.program.set(slots.picked_owners, guides.picked_owners);
             recorded.program.set_bytes(
                 slots.pick_push,
                 &PickPush {
@@ -326,7 +327,7 @@ impl Renderer {
             let picks = pick.is_some() && picking_map == Some(index) && local_cursor.is_some();
             recorded.program.set(should_pick, picks);
 
-            let has_highlight = interaction.picked.is_some() || local_cursor.is_some() || guides.connected_count > 0;
+            let has_highlight = !view.picked.is_empty() || local_cursor.is_some() || guides.connected_count > 0;
             let has_guide_lines = guides.line_count > 0;
             recorded.program.set(slots.has_highlight, has_highlight);
             recorded
@@ -341,7 +342,7 @@ impl Renderer {
                     slots.push,
                     &GuidePush {
                         viewport: [map_extent.width as f32, map_extent.height as f32],
-                        picked_owner: interaction.picked.map(owner_words).unwrap_or([0; 2]),
+                        picked_count: guides.picked_count,
                         stripe_offset,
                     },
                 );
@@ -452,8 +453,9 @@ mod tests {
         outside.interaction.cursor = Some([640, 10]);
         assert!(!outside.is_animated());
 
+        let owners = [owner()];
         let mut picked = map_view(rect);
-        picked.interaction.picked = Some(owner());
+        picked.picked = &owners;
         assert!(picked.is_animated());
 
         picked.interaction.highlight = HighlightStyle::Tint;
@@ -465,6 +467,7 @@ mod tests {
         }];
         let guided = MapViewFrame {
             guide_lines: &guides,
+            picked: picked.picked,
             interaction: picked.interaction,
             ..map_view(rect)
         };

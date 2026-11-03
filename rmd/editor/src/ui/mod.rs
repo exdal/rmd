@@ -143,6 +143,7 @@ pub struct VisibleMapView {
     pub interaction: MapViewInteraction,
     pub guide_lines: Vec<GuideLine>,
     pub connected: Vec<PrefabInstanceId>,
+    pub picked: Vec<PrefabInstanceId>,
 }
 
 #[derive(Default)]

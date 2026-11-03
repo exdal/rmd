@@ -554,6 +554,7 @@ impl App {
                 view.interaction,
                 &view.guide_lines,
                 &view.connected,
+                &view.picked,
             ) else {
                 continue;
             };

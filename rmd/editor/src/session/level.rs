@@ -691,7 +691,15 @@ mod tests {
         );
         assert_eq!(
             session
-                .map_view_frame(id, Default::default(), Default::default(), Default::default(), &[], &[])
+                .map_view_frame(
+                    id,
+                    Default::default(),
+                    Default::default(),
+                    Default::default(),
+                    &[],
+                    &[],
+                    &[]
+                )
                 .unwrap()
                 .level_count,
             2
