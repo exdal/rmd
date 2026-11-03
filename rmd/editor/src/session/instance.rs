@@ -124,6 +124,37 @@ impl Session {
         }
     }
 
+    pub fn picked_instances(&self) -> Vec<PrefabInstanceId> {
+        self.state
+            .active_document()
+            .map(|document| document.picked_instances().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn is_single_pick(&self) -> bool {
+        self.state
+            .active_document()
+            .is_some_and(|document| document.picked_instances().count() == 1)
+    }
+
+    pub fn toggle_pick(&mut self, id: PrefabInstanceId) {
+        let prefab = self.state.active().and_then(|active| {
+            self.effective_grid(active)?
+                .prefab_instance(id)
+                .map(|instance| instance.prefab().clone())
+        });
+        let Some(document) = self.state.active_document_mut() else {
+            return;
+        };
+
+        document.toggle_picked_instance(id);
+        if document.picked_ids().contains(&id)
+            && let Some(prefab) = prefab
+        {
+            self.state.choose_prefab(prefab);
+        }
+    }
+
     #[cfg(test)]
     pub fn set_picked_instance_var(
         &mut self, name: core::types::Identifier, value: core::types::Value,
@@ -166,16 +197,26 @@ impl Session {
     }
 
     fn scope_targets(&mut self, scope: EditScope) -> Option<Vec<PrefabInstanceId>> {
-        let picked = self.picked_instance()?;
+        let picked = self.picked_instances();
+        let primary = *picked.last()?;
         let mut targets = match scope {
+            EditScope::Selected if picked.len() > 1 => {
+                let document = self.state.active_document()?;
+                let targets: Vec<_> = picked
+                    .into_iter()
+                    .filter(|id| document.allows_edit_instance(*id))
+                    .collect();
+
+                return (!targets.is_empty()).then_some(targets);
+            },
             EditScope::Selected => Vec::new(),
             EditScope::Identical => {
                 self.refresh_identical();
                 self.identical().to_vec()
             },
         };
-        if !targets.contains(&picked) {
-            targets.push(picked);
+        if !targets.contains(&primary) {
+            targets.push(primary);
         }
 
         Some(targets)
@@ -193,13 +234,13 @@ impl Session {
         let Some(document) = self.state.active_document() else {
             return Vec::new();
         };
-        let picked = document.picked_instance();
+        let picked: Vec<_> = document.picked_instances().collect();
         let tile = self.options.tile_size.max(1) as f32;
         let instances = self.instances();
 
         self.identical()
             .iter()
-            .filter(|id| Some(**id) != picked)
+            .filter(|id| !picked.contains(id))
             .filter_map(|id| {
                 let location = document.instance_location(*id)?;
                 if location.coord.z != document.z {
@@ -312,6 +353,96 @@ mod tests {
 
     fn set_name(name: &str) -> [VarMutation; 1] {
         [VarMutation::Set("name".into(), Value::Text(name.to_string()))]
+    }
+
+    fn three_tables() -> (Session, Vec<PrefabInstanceId>) {
+        let mut session = flat_session(3, 1);
+        let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        let ids = place(&mut session, &[(1, &table), (2, &table), (3, &table)]);
+        session.set_tool(Tool::Pick);
+        session.pick_instance(None);
+
+        (session, ids)
+    }
+
+    #[test]
+    fn toggling_adds_removes_and_hands_the_primary_back() {
+        let (mut session, ids) = three_tables();
+
+        session.toggle_pick(ids[0]);
+        session.toggle_pick(ids[1]);
+        assert_eq!(session.picked_instances(), vec![ids[0], ids[1]]);
+        assert_eq!(session.picked_instance(), Some(ids[1]));
+
+        session.toggle_pick(ids[1]);
+        assert_eq!(session.picked_instances(), vec![ids[0]]);
+        assert_eq!(session.picked_instance(), Some(ids[0]));
+
+        session.toggle_pick(ids[0]);
+        assert!(session.picked_instances().is_empty());
+        assert_eq!(session.picked_instance(), None);
+    }
+
+    #[test]
+    fn picking_replaces_or_clears_the_whole_set() {
+        let (mut session, ids) = three_tables();
+        session.toggle_pick(ids[0]);
+        session.toggle_pick(ids[1]);
+
+        session.pick_instance(Some(ids[2]));
+        assert_eq!(session.picked_instances(), vec![ids[2]]);
+
+        session.toggle_pick(ids[0]);
+        session.pick_instance(None);
+        assert!(session.picked_instances().is_empty());
+    }
+
+    #[test]
+    fn a_level_change_clears_the_set() {
+        let (mut session, ids) = three_tables();
+        session.toggle_pick(ids[0]);
+        session.toggle_pick(ids[1]);
+        let document = session.state.active().unwrap();
+
+        session.create_level(document, &[]).unwrap();
+
+        assert!(session.picked_instances().is_empty());
+    }
+
+    #[test]
+    fn deleting_a_picked_atom_prunes_it_from_the_set() {
+        let (mut session, ids) = three_tables();
+        session.toggle_pick(ids[0]);
+        session.toggle_pick(ids[1]);
+
+        assert!(session.delete_context_instance(ids[1]));
+        assert_eq!(session.picked_instances(), vec![ids[0]]);
+        assert_eq!(session.picked_instance(), Some(ids[0]));
+
+        assert!(session.undo());
+        assert_eq!(session.picked_instances(), vec![ids[0]]);
+
+        assert!(session.delete_context_instance(ids[0]));
+        assert!(session.undo());
+        assert!(session.picked_instances().is_empty());
+    }
+
+    #[test]
+    fn a_selected_scope_edit_changes_every_picked_atom_in_one_undo() {
+        let (mut session, ids) = three_tables();
+        for id in &ids {
+            session.toggle_pick(*id);
+        }
+        let before = names(&session, &ids);
+
+        assert_eq!(
+            session.edit_instance_vars_in(EditScope::Selected, "set name", &set_name("Oak"), None),
+            Some(true)
+        );
+        assert_eq!(names(&session, &ids), vec![Some(Value::Text(String::from("Oak"))); 3]);
+
+        assert!(session.undo());
+        assert_eq!(names(&session, &ids), before);
     }
 
     #[test]

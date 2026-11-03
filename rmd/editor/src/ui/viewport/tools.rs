@@ -278,7 +278,12 @@ impl UiState {
                 if clicks.is_left_double_clicked {
                     request_pick(frame.interaction, PickRequest::NodeSeed(coord));
                 } else if clicks.is_left_clicked {
-                    request_pick(frame.interaction, PickRequest::Pick);
+                    let request = if ui.io().key_ctrl() {
+                        PickRequest::Toggle
+                    } else {
+                        PickRequest::Pick
+                    };
+                    request_pick(frame.interaction, request);
                 }
             },
             Tool::Node => {},

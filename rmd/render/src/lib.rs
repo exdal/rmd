@@ -108,6 +108,7 @@ impl InteractionMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickRequest {
     Pick,
+    Toggle,
     Delete,
     Replace,
     NodeSelect,

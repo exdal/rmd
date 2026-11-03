@@ -44,6 +44,21 @@ fn selection_keeps_its_double_click_node_shortcut() {
 }
 
 #[test]
+fn ctrl_clicking_with_the_pick_tool_requests_a_toggle() {
+    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let coord = Coord::new(5, 8, 1);
+    let (mut session, _) = node_session(node_map(20, 20, &[(coord, vec!["/obj/cable"])]), coord);
+    session.set_tool(Tool::Pick);
+    let mut app = RectangleUiHarness::with_session(session);
+    let point = app.tile(coord.x, coord.y);
+    app.pointer(point, false);
+    app.key(Key::ModCtrl, true);
+    app.pointer(point, true);
+    assert_eq!(app.interaction.mode.pick(), Some(PickRequest::Toggle));
+    app.key(Key::ModCtrl, false);
+}
+
+#[test]
 fn node_handles_start_a_drag_instead_of_requesting_a_new_pick() {
     let _guard = IMGUI_CONTEXT.lock().unwrap();
     let coord = Coord::new(5, 8, 1);

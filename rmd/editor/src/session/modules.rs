@@ -61,17 +61,18 @@ impl Session {
             .filter_map(|root| root.key.origin.atom())
             .filter(|id| document.prefab_instance(*id).is_some())
             .collect();
-        let is_pick_stale = document.picked_instance().is_some_and(|picked| {
-            picked.get() >= PREVIEW_ID_START
-                && self
-                    .effective_grid(id)
-                    .is_none_or(|view| view.location(picked).is_none())
-        });
+        let stale_picks: Vec<_> = document
+            .picked_instances()
+            .filter(|picked| {
+                picked.get() >= PREVIEW_ID_START
+                    && self
+                        .effective_grid(id)
+                        .is_none_or(|view| view.location(*picked).is_none())
+            })
+            .collect();
         if let Some(document) = self.state.document_mut(id) {
             document.set_preview_covered(covered, exempt);
-            if is_pick_stale {
-                document.pick_instance(None);
-            }
+            document.retain_picked(|picked| !stale_picks.contains(picked));
         }
     }
 

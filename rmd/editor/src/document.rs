@@ -79,7 +79,7 @@ pub struct MapDocument {
     needs_initial_save: bool,
     /// Contents differ from the file on disk without any history, like a merge result
     pending_write: bool,
-    picked_instance: Option<PrefabInstanceId>,
+    picked: Vec<PrefabInstanceId>,
     selection: Option<Selection>,
     selection_mode: RegionSelectionMode,
     focus: Option<AreaFocus>,
@@ -265,7 +265,7 @@ impl MapDocument {
             z,
             needs_initial_save: false,
             pending_write: false,
-            picked_instance: None,
+            picked: Vec::new(),
             selection: None,
             selection_mode: RegionSelectionMode::Full,
             focus: None,
@@ -465,11 +465,34 @@ impl MapDocument {
     }
 
     pub fn picked_instance(&self) -> Option<PrefabInstanceId> {
-        self.picked_instance.filter(|id| self.is_pickable_instance(*id))
+        self.picked_instances().last()
+    }
+
+    pub fn picked_instances(&self) -> impl Iterator<Item = PrefabInstanceId> + '_ {
+        self.picked.iter().copied().filter(|id| self.is_pickable_instance(*id))
+    }
+
+    pub fn picked_ids(&self) -> &[PrefabInstanceId] {
+        &self.picked
     }
 
     pub fn pick_instance(&mut self, picked: Option<PrefabInstanceId>) {
-        self.picked_instance = picked.filter(|id| self.is_pickable_instance(*id));
+        self.picked = picked.filter(|id| self.is_pickable_instance(*id)).into_iter().collect();
+    }
+
+    pub fn toggle_picked_instance(&mut self, id: PrefabInstanceId) {
+        if let Some(index) = self.picked.iter().position(|picked| *picked == id) {
+            self.picked.remove(index);
+            return;
+        }
+
+        if self.is_pickable_instance(id) {
+            self.picked.push(id);
+        }
+    }
+
+    pub fn retain_picked(&mut self, keep: impl FnMut(&PrefabInstanceId) -> bool) {
+        self.picked.retain(keep);
     }
 
     fn is_pickable_instance(&self, id: PrefabInstanceId) -> bool {
@@ -977,7 +1000,7 @@ impl MapDocument {
     fn level_changed(&mut self, z: u32) {
         self.z = z.min(self.map.size().z).max(1);
         self.selection = None;
-        self.picked_instance = None;
+        self.picked.clear();
         self.focus = None;
     }
 
@@ -1040,9 +1063,9 @@ impl MapDocument {
     }
 
     fn clear_stale_picked_instance(&mut self) {
-        if self.picked_instance().is_none() {
-            self.picked_instance = None;
-        }
+        let mut picked = mem::take(&mut self.picked);
+        picked.retain(|id| self.is_pickable_instance(*id));
+        self.picked = picked;
     }
 }
 
