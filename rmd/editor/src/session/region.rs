@@ -240,7 +240,7 @@ impl Session {
         true
     }
 
-    fn settle_retracted(&mut self, retracted: &[PrefabInstanceId]) {
+    pub(super) fn settle_retracted(&mut self, retracted: &[PrefabInstanceId]) {
         self.update_instances(retracted);
         if let Some(id) = self.state.active()
             && let Some(cache) = self.caches.get_mut(&id)

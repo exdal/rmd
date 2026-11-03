@@ -93,6 +93,7 @@ struct DragState {
     zoom: f32,
     tile_size: u32,
     group: EditGroupId,
+    is_rebuilding: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -372,6 +373,7 @@ impl GizmoState {
                 zoom: camera.camera.zoom.max(f32::EPSILON),
                 tile_size: session.options.tile_size.max(1),
                 group: EditGroupId::new(),
+                is_rebuilding: members.iter().any(|member| !member.is_movable),
             });
         }
 
@@ -406,7 +408,26 @@ impl GizmoState {
 
                 if !changes.is_empty() {
                     let label = format!("move {} offsets", mode.label().to_ascii_lowercase());
-                    session.change_instances(&changes, label, Some(drag.group));
+                    if drag.is_rebuilding {
+                        let changes = drag
+                            .members
+                            .iter()
+                            .map(|member| {
+                                let (coord, next) = anchored_member(drag, member, group, ctrl_reanchor, size);
+
+                                InstanceChange {
+                                    id: member.id,
+                                    to_coord: (coord != member.start_coord).then_some(coord),
+                                    path: None,
+                                    mutations: transform_mutations(mode, member.start_values, next),
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        session.rechange_instances(&changes, label, drag.group);
+                    } else {
+                        session.change_instances(&changes, label, Some(drag.group));
+                    }
+
                     members = mode_members(&session.gizmo_members(), mode);
                 }
             }
@@ -1615,6 +1636,7 @@ mod tests {
             zoom: 2.0,
             tile_size: 32,
             group: EditGroupId::new(),
+            is_rebuilding: false,
         }
     }
 

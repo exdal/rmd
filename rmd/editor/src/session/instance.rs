@@ -371,6 +371,36 @@ impl Session {
         Some(self.commit(action, group))
     }
 
+    /// Takes back `group`'s edit first, so the changes apply to the map the group started from
+    pub(crate) fn rechange_instances(
+        &mut self, changes: &[InstanceChange], label: impl Into<String>, group: EditGroupId,
+    ) -> bool {
+        let retracted = self
+            .state
+            .active_document_mut()
+            .and_then(|document| document.retract_with_affected(group))
+            .unwrap_or_default();
+        let is_committed = self
+            .state
+            .active_pair_mut()
+            .and_then(|(environment, document)| {
+                document.change_instances(&environment.tree, &environment.world, changes, label)
+            })
+            .filter(|action| !action.edit.is_empty())
+            .is_some_and(|mut action| {
+                action.affected.extend_from_slice(&retracted);
+                action.affected.sort_unstable();
+                action.affected.dedup();
+
+                self.commit(action, Some(group))
+            });
+        if !is_committed && !retracted.is_empty() {
+            self.settle_retracted(&retracted);
+        }
+
+        is_committed || !retracted.is_empty()
+    }
+
     pub(crate) fn rotate_picked_group(&mut self, rotation: SelectionRotation, group: Option<EditGroupId>) -> bool {
         let Some(changes) = self.picked_rotation_changes(rotation) else {
             return false;
@@ -835,6 +865,41 @@ mod tests {
         assert!(session.undo());
         assert_eq!(turf_at(&session, from), turf);
         assert_eq!(turf_at(&session, to), replaced);
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    fn rechanging_a_dragged_turf_puts_back_the_turf_it_passed_over() {
+        let mut session = flat_session(3, 1);
+        let tiles = [Coord::new(1, 1, 1), Coord::new(2, 1, 1), Coord::new(3, 1, 1)];
+        let originals = tiles.map(|coord| turf_at(&session, coord));
+        let group = EditGroupId::new();
+
+        assert!(session.rechange_instances(&[change(originals[0], Some(tiles[1]), &[])], "drag", group));
+        assert!(session.rechange_instances(&[change(originals[0], Some(tiles[2]), &[])], "drag", group));
+
+        assert_ne!(turf_at(&session, tiles[0]), originals[0]);
+        assert_eq!(turf_at(&session, tiles[1]), originals[1]);
+        assert_eq!(turf_at(&session, tiles[2]), originals[0]);
+        assert_render_cache_matches_rebuild(&session);
+
+        assert!(session.undo());
+        assert_eq!(tiles.map(|coord| turf_at(&session, coord)), originals);
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    fn rechanging_back_to_the_start_leaves_nothing_to_undo() {
+        let mut session = flat_session(2, 1);
+        let tiles = [Coord::new(1, 1, 1), Coord::new(2, 1, 1)];
+        let originals = tiles.map(|coord| turf_at(&session, coord));
+        let group = EditGroupId::new();
+
+        assert!(session.rechange_instances(&[change(originals[0], Some(tiles[1]), &[])], "drag", group));
+        assert!(session.rechange_instances(&[change(originals[0], None, &[])], "drag", group));
+
+        assert_eq!(tiles.map(|coord| turf_at(&session, coord)), originals);
+        assert!(!session.undo());
         assert_render_cache_matches_rebuild(&session);
     }
 
