@@ -12,6 +12,7 @@
 #define DEMIR_GROUP_WEEDS (1<<3)
 #define DEMIR_GROUP_CAMERAS (1<<4)
 #define DEMIR_GROUP_POWER (1<<5)
+#define DEMIR_GROUP_PLATFORMS (1<<6)
 #define DEMIR_GROUP_UNDERFLOOR (DEMIR_GROUP_CABLES | DEMIR_GROUP_PIPES | DEMIR_GROUP_DISPOSALS)
 
 // The bake has no plane offsets, so planes stay unshifted.
@@ -68,6 +69,7 @@
 	var/show_camera_ranges = FALSE
 	var/show_weeds = FALSE
 	var/power_all = TRUE
+	var/show_platforms = FALSE
 
 	New()
 		..()
@@ -83,6 +85,7 @@
 		demir_define_group(DEMIR_GROUP_CAMERAS, /obj/machinery/camera)
 		demir_define_group(DEMIR_GROUP_WEEDS, /obj/effect/landmark/weed_node)
 		demir_define_group(DEMIR_GROUP_POWER, /obj/machinery)
+		demir_define_group(DEMIR_GROUP_PLATFORMS, /obj/structure/platform)
 		demir_node_group(/obj/structure/cable, /turf/closed, null, "cable_layer")
 		demir_node_group(/obj/machinery/atmospherics/pipe, /turf/closed, /obj/machinery/atmospherics/pipe/simple, list("piping_layer", "pipe_color"))
 		demir_node_group(/obj/structure/disposalpipe, /turf/closed, /obj/structure/disposalpipe/segment)
@@ -237,6 +240,12 @@
 		demir_rebake(DEMIR_BAKE_LIGHT, DEMIR_GROUP_POWER)
 		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_POWER)
 
+	imgui_separator("Platforms")
+	var/platforms = imgui_checkbox("Show edges", src.show_platforms)
+	if(platforms != src.show_platforms)
+		src.show_platforms = platforms
+		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_PLATFORMS)
+
 	imgui_separator("Modular maps")
 	var/previewed = imgui_checkbox("Preview modules", demir_modular_preview())
 	if(previewed != demir_modular_preview())
@@ -388,6 +397,16 @@
 
 /obj/item/flashlight/demir_bake_appearance()
 	update_icon()
+
+/obj/structure/platform/demir_bake_appearance()
+	var/datum/demir/tgmc/profile = demir_profile()
+	if(profile.show_platforms)
+		update_appearance(UPDATE_ICON)
+
+/obj/structure/platform_decoration/demir_bake_appearance()
+	switch(dir)
+		if(NORTH, SOUTH, SOUTHEAST, SOUTHWEST)
+			layer = ABOVE_MOB_PLATFORM_LAYER
 
 /obj/effect/landmark/weed_node/demir_bake_appearance()
 	var/datum/demir/tgmc/profile = demir_profile()
@@ -752,6 +771,7 @@
 #undef DEMIR_GROUP_WEEDS
 #undef DEMIR_GROUP_CAMERAS
 #undef DEMIR_GROUP_POWER
+#undef DEMIR_GROUP_PLATFORMS
 #undef DEMIR_GROUP_UNDERFLOOR
 
 #endif
