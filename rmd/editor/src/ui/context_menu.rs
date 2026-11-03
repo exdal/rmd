@@ -248,8 +248,18 @@ pub(super) fn draw_popup(
             Action::Cut(coord)
         });
     }
-    if ui.menu_item_enabled_selected_no_shortcut("Delete", false, can_clear) {
-        action = Some(if target.region_selected {
+    let is_picking = !target.region_selected && session.tool() == Tool::Pick && session.picked_instance().is_some();
+    let can_delete = if is_picking {
+        session
+            .picked_instances()
+            .into_iter()
+            .any(|id| session.can_edit_instance(id))
+    } else {
+        can_clear
+    };
+
+    if ui.menu_item_enabled_selected_no_shortcut("Delete", false, can_delete) {
+        action = Some(if target.region_selected || is_picking {
             Action::Selection(EditCommand::Delete)
         } else {
             Action::Delete(coord)

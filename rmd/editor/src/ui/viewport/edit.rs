@@ -32,7 +32,12 @@ pub(in crate::ui) enum EditCommand {
 
 impl UiState {
     pub(super) fn apply_edit_command(&mut self, session: &mut Session, frame: &mut ViewFrame<'_>) {
+        let is_picking = session.tool() == Tool::Pick && session.picked_instance().is_some();
         match self.edit_command.take() {
+            Some(EditCommand::Delete) if is_picking => {
+                self.gizmo.cancel();
+                session.delete_picked_instances();
+            },
             Some(EditCommand::Copy) => {
                 session.copy_selection(session.selection_mode());
             },
@@ -48,7 +53,7 @@ impl UiState {
             },
             Some(EditCommand::Delete) if session.picked_instance().is_some() => {
                 self.gizmo.cancel();
-                session.delete_picked_instance();
+                session.delete_picked_instances();
             },
             Some(EditCommand::Paste) if let Some(region) = session.clipboard() => {
                 let (width, height) = (region.width(), region.height());
