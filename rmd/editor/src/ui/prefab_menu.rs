@@ -2,7 +2,7 @@ use std::{iter, ptr};
 
 use dear_imgui_rs::{Ui, sys};
 use dmm::Prefab;
-use editor::{document::DocumentId, tool::Tool};
+use editor::document::DocumentId;
 
 use super::{
     common::{IconOrigin, dpi, draw_thumbnail},
@@ -96,7 +96,6 @@ pub(super) fn update_prefab_menu(
     menu: &mut Option<PrefabMenu>,
 ) {
     let is_open_requested = settings.keybindings.get(KeybindAction::PrefabVariants).is_pressed(ui)
-        && session.tool() == Tool::Place
         && is_focused
         && !ui.io().want_text_input();
     if is_open_requested && let Some(opened) = PrefabMenu::new(ui, session, document) {
