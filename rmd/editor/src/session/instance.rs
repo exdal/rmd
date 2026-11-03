@@ -3,7 +3,7 @@ use core::path::TreePath;
 use dmm::{Coord, Prefab};
 use editor::{
     command::EditGroupId,
-    document::{DocumentId, MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
+    document::{DocumentId, InstanceChange, MapDocument, PrefabInstanceId, PrefabLocation, VarMutation},
     tool::{PlacementKind, Tool, placement_kind},
     visual,
 };
@@ -38,6 +38,16 @@ pub(crate) struct PickedTransform {
     pub dmi_directions: Option<u32>,
     pub declared: Option<[bool; 8]>,
     pub directional_types: Option<DirectionalTypes>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct GizmoMember {
+    pub id: PrefabInstanceId,
+    pub sprite: SpriteInstance,
+    pub pixel: [i32; 2],
+    pub step: [i32; 2],
+    pub is_movable: bool,
+    pub coord: Coord,
 }
 
 impl Session {
@@ -76,10 +86,49 @@ impl Session {
             .filter(|transform| transform.sprite.z == self.z())
     }
 
+    pub(crate) fn gizmo_members(&self) -> Vec<GizmoMember> {
+        if self.tool() != Tool::Pick {
+            return Vec::new();
+        }
+
+        let (Some(active), Some(document)) = (self.state.active(), self.state.active_document()) else {
+            return Vec::new();
+        };
+        let Some(grid) = self.effective_grid(active) else {
+            return Vec::new();
+        };
+        let is_group = document.picked_instances().nth(1).is_some();
+
+        document
+            .picked_instances()
+            .filter(|id| !is_group || document.allows_edit_instance(*id))
+            .filter_map(|id| {
+                let transform = self.picked_transform_of(id)?;
+                if transform.sprite.z != self.z() {
+                    return None;
+                }
+
+                Some(GizmoMember {
+                    id,
+                    sprite: transform.sprite,
+                    pixel: transform.pixel,
+                    step: transform.step,
+                    is_movable: transform.is_movable,
+                    coord: grid.location(id)?.coord,
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn picked_transform(&self) -> Option<PickedTransform> {
+        let picked = self.state.active_document()?.picked_instance()?;
+
+        self.picked_transform_of(picked)
+    }
+
+    fn picked_transform_of(&self, picked: PrefabInstanceId) -> Option<PickedTransform> {
         let environment = self.state.environment.as_ref()?;
         let document = self.state.active_document()?;
-        let picked = document.picked_instance()?;
         let prefab = document.prefab_instance(picked)?.prefab();
         let id = environment.tree.id_of(&prefab.path)?;
         let atom = environment.tree.roots().atom?;
@@ -202,10 +251,10 @@ impl Session {
         let mut targets = match scope {
             EditScope::Selected if picked.len() > 1 => {
                 let document = self.state.active_document()?;
-                let targets: Vec<_> = picked
+                let targets = picked
                     .into_iter()
                     .filter(|id| document.allows_edit_instance(*id))
-                    .collect();
+                    .collect::<Vec<_>>();
 
                 return (!targets.is_empty()).then_some(targets);
             },
@@ -234,7 +283,7 @@ impl Session {
         let Some(document) = self.state.active_document() else {
             return Vec::new();
         };
-        let picked: Vec<_> = document.picked_instances().collect();
+        let picked = document.picked_instances().collect::<Vec<_>>();
         let tile = self.options.tile_size.max(1) as f32;
         let instances = self.instances();
 
@@ -295,6 +344,21 @@ impl Session {
         }
     }
 
+    pub(crate) fn change_instances(
+        &mut self, changes: &[InstanceChange], label: impl Into<String>, group: Option<EditGroupId>,
+    ) -> Option<bool> {
+        let (environment, document) = self.state.active_pair_mut()?;
+
+        let changed = document.change_instances(&environment.tree, changes, label, group)?;
+
+        if changed {
+            let ids = changes.iter().map(|change| change.id).collect::<Vec<_>>();
+            self.update_instances(&ids);
+        }
+
+        Some(changed)
+    }
+
     pub fn move_picked_instance(
         &mut self, to_coord: Coord, label: impl Into<String>, mutations: &[VarMutation], group: Option<EditGroupId>,
     ) -> Option<bool> {
@@ -317,7 +381,7 @@ mod tests {
 
     use dmm::{Coord, Prefab};
     use editor::{
-        document::{PrefabInstanceId, VarMutation},
+        document::{InstanceChange, PrefabInstanceId, VarMutation},
         tool::Tool,
     };
 
@@ -543,6 +607,108 @@ mod tests {
 
         let oak = Some(Value::Text(String::from("Oak")));
         assert_eq!(names(&session, &ids), [oak.clone(), oak, None]);
+    }
+
+    fn coords(session: &Session, ids: &[PrefabInstanceId]) -> Vec<Coord> {
+        let document = session.state.active_document().unwrap();
+
+        ids.iter()
+            .map(|id| document.instance_location(*id).unwrap().coord)
+            .collect()
+    }
+
+    fn change(id: PrefabInstanceId, to_coord: Option<Coord>, mutations: &[VarMutation]) -> InstanceChange {
+        InstanceChange {
+            id,
+            to_coord,
+            path: None,
+            mutations: mutations.to_vec(),
+        }
+    }
+
+    #[test]
+    fn a_batched_change_moves_and_edits_several_atoms_in_one_undo() {
+        let mut session = flat_session(4, 1);
+        let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        let ids = place(&mut session, &[(1, &table), (1, &table), (3, &table)]);
+        assert_eq!(
+            coords(&session, &ids),
+            [Coord::new(1, 1, 1), Coord::new(1, 1, 1), Coord::new(3, 1, 1)]
+        );
+        let revision = session.revision();
+
+        let changed = session.change_instances(
+            &[
+                change(ids[0], Some(Coord::new(2, 1, 1)), &[]),
+                change(ids[1], Some(Coord::new(4, 1, 1)), &[]),
+                change(ids[2], None, &set_name("Oak")),
+            ],
+            "move",
+            None,
+        );
+
+        assert_eq!(changed, Some(true));
+        assert_eq!(
+            coords(&session, &ids),
+            [Coord::new(2, 1, 1), Coord::new(4, 1, 1), Coord::new(3, 1, 1)]
+        );
+        assert_eq!(
+            names(&session, &ids),
+            [None, None, Some(Value::Text(String::from("Oak")))]
+        );
+        assert_ne!(session.revision(), revision);
+        assert_render_cache_matches_rebuild(&session);
+
+        assert!(session.undo());
+        assert_eq!(
+            coords(&session, &ids),
+            [Coord::new(1, 1, 1), Coord::new(1, 1, 1), Coord::new(3, 1, 1)]
+        );
+        assert_eq!(names(&session, &ids), [None, None, None]);
+        assert_render_cache_matches_rebuild(&session);
+    }
+
+    #[test]
+    fn a_batched_change_outside_the_map_edits_in_place() {
+        let mut session = flat_session(2, 1);
+        let table = Prefab::new(TreePath::parse("/obj/structure/table"));
+        let ids = place(&mut session, &[(1, &table)]);
+
+        for to_coord in [Coord::new(9, 1, 1), Coord::new(2, 1, 2), Coord::new(1, 1, 1)] {
+            assert_eq!(
+                session.change_instances(&[change(ids[0], Some(to_coord), &set_name("Oak"))], "edit", None),
+                Some(true)
+            );
+            assert_eq!(coords(&session, &ids), [Coord::new(1, 1, 1)]);
+            assert!(session.undo());
+        }
+
+        assert_eq!(
+            session.change_instances(&[change(ids[0], Some(Coord::new(1, 1, 1)), &[])], "edit", None),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn the_gizmo_members_cover_every_editable_pick_on_the_level() {
+        let (mut session, ids) = three_tables();
+        session.toggle_pick(ids[0]);
+        session.toggle_pick(ids[2]);
+
+        let members = session.gizmo_members();
+
+        assert_eq!(
+            members.iter().map(|member| member.id).collect::<Vec<_>>(),
+            [ids[0], ids[2]]
+        );
+        assert_eq!(
+            members.iter().map(|member| member.coord).collect::<Vec<_>>(),
+            [Coord::new(1, 1, 1), Coord::new(3, 1, 1)]
+        );
+        assert!(members[0].sprite.x < members[1].sprite.x);
+
+        session.set_tool(Tool::Place);
+        assert!(session.gizmo_members().is_empty());
     }
 
     #[test]

@@ -61,7 +61,7 @@ impl Session {
             .filter_map(|root| root.key.origin.atom())
             .filter(|id| document.prefab_instance(*id).is_some())
             .collect();
-        let stale_picks: Vec<_> = document
+        let stale_picks = document
             .picked_instances()
             .filter(|picked| {
                 picked.get() >= PREVIEW_ID_START
@@ -69,7 +69,7 @@ impl Session {
                         .effective_grid(id)
                         .is_none_or(|view| view.location(*picked).is_none())
             })
-            .collect();
+            .collect::<Vec<_>>();
         if let Some(document) = self.state.document_mut(id) {
             document.set_preview_covered(covered, exempt);
             document.retain_picked(|picked| !stale_picks.contains(picked));
