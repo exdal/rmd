@@ -340,7 +340,13 @@ fn draw_tool_button(ui: &Ui, session: &mut Session, keybindings: KeyBindings, to
             KeybindAction::PlaceTool,
             format!("Click to place the brush\n{alternate}: object brush replaces tile objects"),
         ),
-        Tool::Pick => (KeybindAction::PickTool, String::from("Click an atom to pick it")),
+        Tool::Pick => (
+            KeybindAction::PickTool,
+            format!(
+                "Click an atom to pick it\nCtrl+click: add or remove an atom\n{}: rotate the picked atoms",
+                keybindings.get(KeybindAction::Rotate).label(ui)
+            ),
+        ),
         Tool::Move => (
             KeybindAction::MoveTool,
             String::from(

@@ -6,6 +6,7 @@ use dmm::{Coord, Size};
 use editor::{
     command::EditGroupId,
     document::{InstanceChange, PrefabInstanceId, Selection, VarMutation},
+    tool::SelectionRotation,
 };
 
 use crate::{
@@ -51,6 +52,8 @@ const CLOCKWISE_DIRECTIONS: [Dir; 8] = [
     Dir::West,
     Dir::Northwest,
 ];
+const ALL_DIRECTION_SLOTS: u8 = CLOCKWISE_DIRECTIONS.len() as u8;
+const CARDINAL_DIRECTION_SLOTS: u8 = ALL_DIRECTION_SLOTS / 2;
 
 const X_COLOR: [f32; 4] = [0.92, 0.24, 0.22, 1.0];
 const Y_COLOR: [f32; 4] = [0.28, 0.82, 0.35, 1.0];
@@ -130,7 +133,7 @@ impl DirectionSet {
     fn slot_directions(self) -> impl Iterator<Item = Dir> {
         CLOCKWISE_DIRECTIONS
             .into_iter()
-            .filter(move |direction| self.slots == 8 || !is_diagonal(*direction))
+            .filter(move |direction| self.slots == ALL_DIRECTION_SLOTS || !is_diagonal(*direction))
     }
 
     fn directions(self) -> impl Iterator<Item = Dir> {
@@ -149,7 +152,8 @@ struct DirectionGesture {
     target: DirectionGestureTarget,
     placement_coord: Option<Coord>,
     pressed_at: f64,
-    set: DirectionSet,
+    action: DirectionAction,
+    set: Option<DirectionSet>,
     phase: DirectionPhase,
 }
 
@@ -189,6 +193,30 @@ enum PendingDirectionOutcome {
     Open,
     Tap,
     Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectionTap {
+    RotateGroup,
+    Face(Dir),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectionAction {
+    Face,
+    RotateGroup,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DirectionRequest {
+    RotateGroup {
+        rotation: SelectionRotation,
+        group: Option<EditGroupId>,
+    },
+    Face {
+        direction: Dir,
+        group: Option<EditGroupId>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -396,7 +424,7 @@ impl GizmoState {
         let open_wheel = self.direction.and_then(|gesture| match gesture.phase {
             DirectionPhase::Open {
                 origin, last_hovered, ..
-            } => Some((origin, gesture.set, last_hovered)),
+            } => gesture.set.map(|set| (origin, set, last_hovered)),
             DirectionPhase::Pending => None,
         });
         let direction_state = direction_target.map(|target| picked_direction_target(target).state);
@@ -568,7 +596,7 @@ impl GizmoState {
         let open_wheel = self.direction.and_then(|gesture| match gesture.phase {
             DirectionPhase::Open {
                 origin, last_hovered, ..
-            } => Some((origin, gesture.set, last_hovered)),
+            } => gesture.set.map(|set| (origin, set, last_hovered)),
             DirectionPhase::Pending => None,
         });
 
@@ -604,21 +632,35 @@ impl GizmoState {
         if self.direction.is_some_and(|gesture| gesture.target != target.id) {
             self.direction = None;
         }
+        let is_group =
+            matches!(target.id, DirectionGestureTarget::Selection(_)) && session.picked_instances().len() > 1;
+        let (action, set) = if is_group {
+            (
+                DirectionAction::RotateGroup,
+                Some(group_direction_set(reference_direction(target.state))),
+            )
+        } else {
+            (
+                DirectionAction::Face,
+                direction_set(
+                    target.state.dmi_directions,
+                    target.state.declared,
+                    target.state.directional_types,
+                ),
+            )
+        };
         if self.direction.is_none()
             && self.drag.is_none()
             && map_view.hovered
             && rotation_key.is_pressed(ui)
             && origin.is_some()
-            && let Some(set) = direction_set(
-                target.state.dmi_directions,
-                target.state.declared,
-                target.state.directional_types,
-            )
+            && set.is_some()
         {
             self.direction = Some(DirectionGesture {
                 target: target.id,
                 placement_coord,
                 pressed_at: ui.time(),
+                action,
                 set,
                 phase: DirectionPhase::Pending,
             });
@@ -626,14 +668,16 @@ impl GizmoState {
         let was_direction_active = self.direction.is_some();
         let key_down = rotation_key.is_down(ui);
         let key_released = rotation_key.is_released(ui);
-        let mut requested_direction = None;
+        let mut request = None;
 
         if let Some(mut gesture) = self.direction {
             if matches!(gesture.phase, DirectionPhase::Pending) {
                 match pending_direction_outcome(gesture.pressed_at, ui.time(), key_down, key_released) {
                     PendingDirectionOutcome::Pending => {},
                     PendingDirectionOutcome::Open => {
-                        if let Some(origin) = origin {
+                        if let Some(origin) = origin
+                            && gesture.set.is_some()
+                        {
                             gesture.phase = DirectionPhase::Open {
                                 origin,
                                 group: EditGroupId::new(),
@@ -644,9 +688,18 @@ impl GizmoState {
                         }
                     },
                     PendingDirectionOutcome::Tap => {
-                        requested_direction =
-                            next_clockwise_direction(gesture.set, current_direction(target.state, gesture.set))
-                                .map(|direction| (direction, None));
+                        match direction_tap(gesture.action, gesture.set, target.state) {
+                            Some(DirectionTap::RotateGroup) => {
+                                request = Some(DirectionRequest::RotateGroup {
+                                    rotation: SelectionRotation::Clockwise,
+                                    group: None,
+                                });
+                            },
+                            Some(DirectionTap::Face(direction)) => {
+                                request = Some(DirectionRequest::Face { direction, group: None });
+                            },
+                            None => {},
+                        }
                         self.direction = None;
                     },
                     PendingDirectionOutcome::Cancel => self.direction = None,
@@ -658,24 +711,16 @@ impl GizmoState {
                 group,
                 mut last_hovered,
             } = gesture.phase
+                && let Some(set) = gesture.set
             {
                 if key_released || !key_down {
                     self.direction = None;
                 } else {
-                    let hovered = direction_at(
-                        ui.io().mouse_pos(),
-                        origin,
-                        map_view.min,
-                        map_view.max,
-                        gesture.set,
-                        dpi(ui),
-                    );
+                    let hovered = direction_at(ui.io().mouse_pos(), origin, map_view.min, map_view.max, set, dpi(ui));
                     if hovered != last_hovered {
                         last_hovered = hovered;
-                        if let Some(direction) = hovered
-                            && current_direction(target.state, gesture.set) != Some(direction)
-                        {
-                            requested_direction = Some((direction, Some(group)));
+                        if let Some(direction) = hovered {
+                            request = hover_request(gesture.action, target.state, set, direction, group);
                         }
                     }
                     gesture.phase = DirectionPhase::Open {
@@ -690,8 +735,12 @@ impl GizmoState {
             }
         }
 
-        if let Some((direction, group)) = requested_direction {
-            apply_direction(session, target, direction, group);
+        match request {
+            Some(DirectionRequest::RotateGroup { rotation, group }) => {
+                session.rotate_picked_group(rotation, group);
+            },
+            Some(DirectionRequest::Face { direction, group }) => apply_direction(session, target, direction, group),
+            None => {},
         }
 
         was_direction_active
@@ -959,7 +1008,7 @@ fn direction_set(
 ) -> Option<DirectionSet> {
     let mut set = DirectionSet {
         supported: [false; 8],
-        slots: 4,
+        slots: CARDINAL_DIRECTION_SLOTS,
     };
 
     if let Some(supported) = directional_types.map(|types| types.supported).or(declared) {
@@ -978,7 +1027,11 @@ fn direction_set(
         }
     }
 
-    set.slots = if set.directions().any(is_diagonal) { 8 } else { 4 };
+    set.slots = if set.directions().any(is_diagonal) {
+        ALL_DIRECTION_SLOTS
+    } else {
+        CARDINAL_DIRECTION_SLOTS
+    };
 
     (set.len() > 1).then_some(set)
 }
@@ -1030,6 +1083,73 @@ fn next_clockwise_direction(set: DirectionSet, current: Option<Dir>) -> Option<D
     (usize::from(!include_start)..=CLOCKWISE_DIRECTIONS.len())
         .map(|offset| CLOCKWISE_DIRECTIONS[(start + offset) % CLOCKWISE_DIRECTIONS.len()])
         .find(|direction| set.contains(*direction))
+}
+
+fn direction_tap(action: DirectionAction, set: Option<DirectionSet>, state: DirectionState) -> Option<DirectionTap> {
+    if action == DirectionAction::RotateGroup {
+        return Some(DirectionTap::RotateGroup);
+    }
+
+    let set = set?;
+
+    next_clockwise_direction(set, current_direction(state, set)).map(DirectionTap::Face)
+}
+
+fn reference_direction(state: DirectionState) -> Dir {
+    state
+        .directional_types
+        .and_then(|types| types.current)
+        .or_else(|| Dir::from_bits(state.dir))
+        .unwrap_or(Dir::North)
+}
+
+fn group_direction_set(reference: Dir) -> DirectionSet {
+    let mut set = DirectionSet {
+        supported: [false; 8],
+        slots: if is_diagonal(reference) {
+            ALL_DIRECTION_SLOTS
+        } else {
+            CARDINAL_DIRECTION_SLOTS
+        },
+    };
+    let start = clockwise_index(reference);
+    for turn in 0..4 {
+        set.supported[(start + turn * 2) % CLOCKWISE_DIRECTIONS.len()] = true;
+    }
+
+    set
+}
+
+fn quarter_turns(from: Dir, to: Dir) -> Option<SelectionRotation> {
+    let steps = (clockwise_index(to) + CLOCKWISE_DIRECTIONS.len() - clockwise_index(from)) % CLOCKWISE_DIRECTIONS.len();
+
+    match steps {
+        0 => Some(SelectionRotation::Original),
+        2 => Some(SelectionRotation::Clockwise),
+        4 => Some(SelectionRotation::Half),
+        6 => Some(SelectionRotation::CounterClockwise),
+        _ => None,
+    }
+}
+
+fn hover_request(
+    action: DirectionAction, state: DirectionState, set: DirectionSet, direction: Dir, group: EditGroupId,
+) -> Option<DirectionRequest> {
+    match action {
+        DirectionAction::Face => (current_direction(state, set) != Some(direction)).then_some(DirectionRequest::Face {
+            direction,
+            group: Some(group),
+        }),
+        DirectionAction::RotateGroup => {
+            let rotation = quarter_turns(reference_direction(state), direction)
+                .filter(|rotation| *rotation != SelectionRotation::Original)?;
+
+            Some(DirectionRequest::RotateGroup {
+                rotation,
+                group: Some(group),
+            })
+        },
+    }
 }
 
 fn pending_direction_outcome(pressed_at: f64, now: f64, key_down: bool, key_released: bool) -> PendingDirectionOutcome {
@@ -1697,14 +1817,14 @@ mod tests {
         assert_eq!(direction_set(Some(2), None, None), None);
 
         let four = direction_set(Some(4), None, None).unwrap();
-        assert_eq!(four.slots, 4);
+        assert_eq!(four.slots, CARDINAL_DIRECTION_SLOTS);
         assert_eq!(
             four.directions().collect::<Vec<_>>(),
             [Dir::North, Dir::East, Dir::South, Dir::West]
         );
 
         let eight = direction_set(Some(8), None, None).unwrap();
-        assert_eq!(eight.slots, 8);
+        assert_eq!(eight.slots, ALL_DIRECTION_SLOTS);
         assert_eq!(eight.directions().collect::<Vec<_>>(), CLOCKWISE_DIRECTIONS);
     }
 
@@ -1721,7 +1841,7 @@ mod tests {
 
         let set = direction_set(Some(8), None, Some(types)).unwrap();
         assert_eq!(set.directions().collect::<Vec<_>>(), [Dir::North, Dir::East, Dir::West]);
-        assert_eq!(set.slots, 4);
+        assert_eq!(set.slots, CARDINAL_DIRECTION_SLOTS);
 
         let one_type = DirectionalTypes {
             supported: [true, false, false, false, false, false, false, false],
@@ -1740,7 +1860,7 @@ mod tests {
             set.directions().collect::<Vec<_>>(),
             [Dir::North, Dir::East, Dir::South, Dir::West]
         );
-        assert_eq!(set.slots, 4);
+        assert_eq!(set.slots, CARDINAL_DIRECTION_SLOTS);
 
         let types = DirectionalTypes {
             supported: [false, true, true, false, false, false, false, false],
@@ -1810,6 +1930,89 @@ mod tests {
             direction_at([160.0, 100.0], origin, [0.0, 0.0], [200.0, 200.0], set, 1.0),
             None
         );
+    }
+
+    #[test]
+    fn a_tap_rotates_the_group_even_without_a_direction_set() {
+        let state = DirectionState {
+            dir: Dir::North.to_bits(),
+            dmi_directions: Some(4),
+            declared: None,
+            directional_types: None,
+        };
+        let set = direction_set(Some(4), None, None);
+
+        assert_eq!(
+            direction_tap(DirectionAction::RotateGroup, None, state),
+            Some(DirectionTap::RotateGroup)
+        );
+        assert_eq!(
+            direction_tap(DirectionAction::RotateGroup, set, state),
+            Some(DirectionTap::RotateGroup)
+        );
+        assert_eq!(direction_tap(DirectionAction::Face, None, state), None);
+        assert_eq!(
+            direction_tap(DirectionAction::Face, set, state),
+            Some(DirectionTap::Face(Dir::East))
+        );
+    }
+
+    #[test]
+    fn quarter_turns_count_clockwise_steps_between_same_kind_directions() {
+        assert_eq!(quarter_turns(Dir::North, Dir::East), Some(SelectionRotation::Clockwise));
+        assert_eq!(quarter_turns(Dir::North, Dir::South), Some(SelectionRotation::Half));
+        assert_eq!(
+            quarter_turns(Dir::North, Dir::West),
+            Some(SelectionRotation::CounterClockwise)
+        );
+        assert_eq!(quarter_turns(Dir::West, Dir::North), Some(SelectionRotation::Clockwise));
+        assert_eq!(
+            quarter_turns(Dir::Northeast, Dir::Southeast),
+            Some(SelectionRotation::Clockwise)
+        );
+        assert_eq!(
+            quarter_turns(Dir::Northeast, Dir::Northeast),
+            Some(SelectionRotation::Original)
+        );
+        assert_eq!(quarter_turns(Dir::North, Dir::Northeast), None);
+    }
+
+    #[test]
+    fn the_group_wheel_offers_the_reference_and_its_quarter_turns() {
+        let cardinal = group_direction_set(Dir::East);
+        assert_eq!(cardinal.slots, CARDINAL_DIRECTION_SLOTS);
+        assert_eq!(
+            cardinal.directions().collect::<Vec<_>>(),
+            [Dir::North, Dir::East, Dir::South, Dir::West]
+        );
+
+        let diagonal = group_direction_set(Dir::Southwest);
+        assert_eq!(diagonal.slots, ALL_DIRECTION_SLOTS);
+        assert_eq!(
+            diagonal.directions().collect::<Vec<_>>(),
+            [Dir::Northeast, Dir::Southeast, Dir::Southwest, Dir::Northwest]
+        );
+    }
+
+    #[test]
+    fn a_group_hover_turns_from_the_current_facing_to_the_hovered_slot() {
+        let state = DirectionState {
+            dir: Dir::East.to_bits(),
+            dmi_directions: None,
+            declared: None,
+            directional_types: None,
+        };
+        let set = group_direction_set(Dir::North);
+        let group = EditGroupId::new();
+
+        assert!(matches!(
+            hover_request(DirectionAction::RotateGroup, state, set, Dir::West, group),
+            Some(DirectionRequest::RotateGroup {
+                rotation: SelectionRotation::Half,
+                ..
+            })
+        ));
+        assert!(hover_request(DirectionAction::RotateGroup, state, set, Dir::East, group).is_none());
     }
 
     #[test]
