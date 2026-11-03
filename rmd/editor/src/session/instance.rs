@@ -173,6 +173,20 @@ impl Session {
         }
     }
 
+    pub fn pick_instances(&mut self, ids: &[PrefabInstanceId]) {
+        let prefab = self.state.active().and_then(|active| {
+            self.effective_grid(active)?
+                .prefab_instance(*ids.last()?)
+                .map(|instance| instance.prefab().clone())
+        });
+        if let Some(document) = self.state.active_document_mut() {
+            document.pick_instances(ids);
+        }
+        if let Some(prefab) = prefab {
+            self.state.choose_prefab(prefab);
+        }
+    }
+
     pub fn picked_instances(&self) -> Vec<PrefabInstanceId> {
         self.state
             .active_document()

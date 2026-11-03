@@ -218,6 +218,16 @@ impl Selection {
         }
     }
 
+    pub fn enclosing(coords: impl IntoIterator<Item = Coord>) -> Option<Self> {
+        let mut coords = coords.into_iter();
+        let first = coords.next()?;
+
+        Some(coords.fold(Self::from_drag(first, first), |bounds, coord| Self {
+            min: Coord::new(bounds.min.x.min(coord.x), bounds.min.y.min(coord.y), bounds.min.z),
+            max: Coord::new(bounds.max.x.max(coord.x), bounds.max.y.max(coord.y), bounds.max.z),
+        }))
+    }
+
     pub fn is_well_formed(&self) -> bool {
         self.min.x >= 1
             && self.min.y >= 1
@@ -489,6 +499,14 @@ impl MapDocument {
 
     pub fn pick_instance(&mut self, picked: Option<PrefabInstanceId>) {
         self.picked = picked.filter(|id| self.is_pickable_instance(*id)).into_iter().collect();
+    }
+
+    pub fn pick_instances(&mut self, ids: &[PrefabInstanceId]) {
+        self.picked = ids
+            .iter()
+            .copied()
+            .filter(|id| self.is_pickable_instance(*id))
+            .collect();
     }
 
     pub fn toggle_picked_instance(&mut self, id: PrefabInstanceId) {

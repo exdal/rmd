@@ -5,7 +5,7 @@ use objtree::ObjectTree;
 
 use crate::{
     command::Edit,
-    document::{MapDocument, PlacedPrefab, PlacedTile, Selection},
+    document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection},
     frame::HiddenTypes,
     maploader::preview::MapView,
     tool::{
@@ -14,6 +14,18 @@ use crate::{
     },
     world::{BaseTile, World},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasteMerge {
+    Replace,
+    Stack,
+}
+
+pub struct PastedRegion {
+    pub action: ToolEdit,
+    pub target: Selection,
+    pub placed: Vec<PrefabInstanceId>,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TileRegion {
@@ -24,9 +36,14 @@ pub struct TileRegion {
     tiles: Vec<Tile>,
     /// A paste leaves these on the destination
     hidden: HiddenTypes,
+    merge: PasteMerge,
 }
 
 impl TileRegion {
+    pub fn merge(&self) -> PasteMerge {
+        self.merge
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -117,6 +134,41 @@ pub fn copy_region(
         selection_mode: mode,
         tiles,
         hidden,
+        merge: PasteMerge::Replace,
+    })
+}
+
+pub fn copy_instances(map: MapView<'_>, ids: &[PrefabInstanceId]) -> Option<TileRegion> {
+    let located = ids
+        .iter()
+        .filter_map(|id| Some((*id, map.location(*id)?.coord)))
+        .collect::<Vec<_>>();
+    let bounds = Selection::enclosing(located.iter().map(|(_, coord)| *coord))?;
+    let (width, height) = (bounds.width(), bounds.height());
+    let mut tiles = vec![Tile::new(); (width as usize).checked_mul(height as usize)?];
+    let picked = located.iter().map(|(id, _)| *id).collect::<HashSet<_>>();
+    for (_, coord) in &located {
+        let index = ((coord.y - bounds.min.y) * width + (coord.x - bounds.min.x)) as usize;
+        if !tiles[index].is_empty() {
+            continue;
+        }
+
+        tiles[index] = map
+            .ids_at(*coord)
+            .iter()
+            .zip(map.tile_at(*coord)?)
+            .filter(|(id, _)| picked.contains(*id))
+            .map(|(_, prefab)| prefab.clone())
+            .collect();
+    }
+
+    Some(TileRegion {
+        width,
+        height,
+        selection_mode: RegionSelectionMode::Full,
+        tiles,
+        hidden: HiddenTypes::default(),
+        merge: PasteMerge::Stack,
     })
 }
 
@@ -141,7 +193,7 @@ pub fn can_paste(document: &MapDocument, region: &TileRegion, min: Coord, rotati
 
 pub fn paste_region(
     document: &mut MapDocument, tree: &ObjectTree, region: &TileRegion, min: Coord, rotation: SelectionRotation,
-) -> Option<(ToolEdit, Selection)> {
+) -> Option<PastedRegion> {
     let (target, placements) = placements(document, region, min, rotation)?;
     let staged = placements
         .into_iter()
@@ -166,12 +218,20 @@ pub fn paste_region(
 
     let mut edit = Edit::new("paste region");
     let mut affected = Vec::new();
+    let mut placed = Vec::new();
     for coord in coords {
         let before = document.placed_tile(coord)?;
-        let after = merge_pasted(tree, &before, staged.remove(&coord)?, &region.hidden);
+        let pasted = staged.remove(&coord)?;
+        let pasted_ids = pasted.iter().map(PlacedPrefab::id).collect::<Vec<_>>();
+        let after = match region.merge {
+            PasteMerge::Replace => merge_pasted(tree, &before, pasted, &region.hidden),
+            PasteMerge::Stack => stack_pasted(tree, &before, pasted),
+        };
         if before == after {
             continue;
         }
+
+        placed.extend(after.iter().map(PlacedPrefab::id).filter(|id| pasted_ids.contains(id)));
         affected.extend(before.iter().map(PlacedPrefab::id));
         affected.extend(after.iter().map(PlacedPrefab::id));
         edit.change(document, coord, after);
@@ -182,14 +242,29 @@ pub fn paste_region(
     affected.sort_unstable_by_key(|id| id.get());
     affected.dedup();
 
-    Some((
-        ToolEdit {
+    Some(PastedRegion {
+        action: ToolEdit {
             edit,
             picked: None,
             affected,
         },
         target,
-    ))
+        placed,
+    })
+}
+
+fn stack_pasted(tree: &ObjectTree, before: &PlacedTile, pasted: PlacedTile) -> PlacedTile {
+    let mut after = before.clone();
+    for placed in pasted {
+        let kind = kind_of(tree, placed.prefab());
+        if kind != PlacementKind::Atom {
+            after.retain(|existing| kind_of(tree, existing.prefab()) != kind);
+        }
+
+        after.insert(insertion_index(tree, &after, kind), placed);
+    }
+
+    after
 }
 
 pub(crate) fn merge_pasted(
@@ -408,7 +483,7 @@ mod tests {
         .expect("region");
         let area = destination.placed_tile(Coord::new(2, 1, 1)).expect("tile")[1].clone();
 
-        let (edit, _) = paste_region(
+        let paste = paste_region(
             &mut destination,
             &tree,
             &region,
@@ -416,7 +491,7 @@ mod tests {
             SelectionRotation::Original,
         )
         .expect("paste");
-        assert!(destination.apply(edit.edit));
+        assert!(destination.apply(paste.action.edit));
 
         let pasted = destination.placed_tile(Coord::new(2, 1, 1)).expect("tile");
         assert_eq!(pasted.len(), 2);
@@ -469,7 +544,7 @@ mod tests {
             .iter()
             .map(PlacedPrefab::id)
             .collect::<Vec<_>>();
-        let (edit, target) = paste_region(
+        let paste = paste_region(
             &mut destination,
             &tree,
             &region,
@@ -477,8 +552,8 @@ mod tests {
             SelectionRotation::Original,
         )
         .expect("paste");
-        assert_eq!(target, selection((3, 3), (4, 4)));
-        assert!(destination.apply(edit.edit));
+        assert_eq!(paste.target, selection((3, 3), (4, 4)));
+        assert!(destination.apply(paste.action.edit));
 
         let pasted = destination.placed_tile(Coord::new(3, 3, 1)).expect("tile");
         assert_eq!(pasted[0].prefab().path.to_string(), "/turf/t1_1");
@@ -531,9 +606,10 @@ mod tests {
             selection_mode: RegionSelectionMode::Full,
             tiles: vec![vec![Prefab::new(TreePath::parse("/turf/from/another/codebase"))]],
             hidden: HiddenTypes::default(),
+            merge: PasteMerge::Replace,
         };
 
-        let (edit, _) = paste_region(
+        let paste = paste_region(
             &mut destination,
             &tree,
             &region,
@@ -541,7 +617,7 @@ mod tests {
             SelectionRotation::Original,
         )
         .expect("paste");
-        assert!(destination.apply(edit.edit));
+        assert!(destination.apply(paste.action.edit));
         assert_eq!(
             destination.placed_tile(Coord::new(1, 1, 1)).expect("tile")[0]
                 .prefab()
@@ -549,5 +625,64 @@ mod tests {
                 .to_string(),
             "/turf/from/another/codebase"
         );
+    }
+
+    fn ids_at(document: &MapDocument, x: u32, y: u32) -> Vec<PrefabInstanceId> {
+        document.instance_ids_at(Coord::new(x, y, 1)).to_vec()
+    }
+
+    #[test]
+    fn copied_instances_keep_only_the_picked_prefabs_at_their_relative_positions() {
+        let document = MapDocument::new(map(Size { x: 4, y: 4, z: 1 }), 1);
+        let picked = [
+            ids_at(&document, 3, 3)[1],
+            ids_at(&document, 2, 2)[0],
+            ids_at(&document, 2, 2)[1],
+        ];
+        let region = copy_instances((&document.map).into(), &picked).expect("region");
+
+        assert_eq!((region.width(), region.height()), (2, 2));
+        assert_eq!(region.merge(), PasteMerge::Stack);
+        assert_eq!(region.tile(0, 0).expect("tile").len(), 2);
+        assert_eq!(region.tile(1, 1), Some(&vec![Prefab::new(TreePath::parse("/area"))]));
+        assert!(region.tile(1, 0).expect("tile").is_empty());
+        assert!(region.tile(0, 1).expect("tile").is_empty());
+        assert_eq!(copy_instances((&document.map).into(), &[]), None);
+    }
+
+    #[test]
+    fn a_stacked_paste_keeps_what_the_destination_had() {
+        let mut source = map(Size { x: 1, y: 1, z: 1 });
+        let key = source.intern_tile(vec![
+            Prefab::new(TreePath::parse("/turf/t1_1")),
+            Prefab::new(TreePath::parse("/area")),
+        ]);
+        source.grid[0][0][0] = key;
+        let source = MapDocument::new(source, 1);
+        let mut destination = MapDocument::new(map(Size { x: 2, y: 1, z: 1 }), 1);
+        let tree = ObjectTree::default();
+        let area = ids_at(&destination, 2, 1)[1];
+        let picked = [ids_at(&source, 1, 1)[0]];
+        let region = copy_instances((&source.map).into(), &picked).expect("region");
+
+        let pasted = paste_region(
+            &mut destination,
+            &tree,
+            &region,
+            Coord::new(2, 1, 1),
+            SelectionRotation::Original,
+        )
+        .expect("paste");
+        assert_eq!(pasted.placed.len(), 1);
+        assert!(destination.apply(pasted.action.edit));
+
+        let tile = destination.placed_tile(Coord::new(2, 1, 1)).expect("tile");
+        let paths = tile
+            .iter()
+            .map(|placed| placed.prefab().path.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(paths, ["/turf/t2_1", "/area", "/turf/t1_1"]);
+        assert_eq!(tile[2].id(), pasted.placed[0]);
+        assert_eq!(tile[1].id(), area, "the destination keeps what was not pasted");
     }
 }

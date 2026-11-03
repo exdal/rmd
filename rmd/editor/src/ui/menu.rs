@@ -1,4 +1,5 @@
 use dear_imgui_rs::Ui;
+use editor::tool::Tool;
 
 use super::{
     LAYER_KEYS, OpenRequest, SCREENSHOT_KEYS, ScreenshotArea, ScreenshotRequest, UiState,
@@ -166,9 +167,10 @@ impl UiState {
 
                 ui.separator();
                 let selected = session.selection().is_some();
+                let is_picking = session.tool() == Tool::Pick && session.picked_instance().is_some();
                 for (label, action, command, enabled) in [
-                    ("Copy", KeybindAction::Copy, EditCommand::Copy, selected),
-                    ("Cut", KeybindAction::Cut, EditCommand::Cut, selected),
+                    ("Copy", KeybindAction::Copy, EditCommand::Copy, selected || is_picking),
+                    ("Cut", KeybindAction::Cut, EditCommand::Cut, selected || is_picking),
                     (
                         "Paste",
                         KeybindAction::Paste,

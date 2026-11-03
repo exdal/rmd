@@ -176,7 +176,7 @@ impl Session {
     pub fn delete_picked_instances(&mut self) -> bool {
         let targets = self.picked_instances();
 
-        self.build_delete_instances(&targets)
+        self.build_delete_instances(&targets, "delete")
             .is_some_and(|action| self.commit(action, None))
     }
 
@@ -319,10 +319,10 @@ impl Session {
         changed
     }
 
-    fn build_delete_instances(&mut self, targets: &[PrefabInstanceId]) -> Option<ToolEdit> {
+    pub(super) fn build_delete_instances(&mut self, targets: &[PrefabInstanceId], verb: &str) -> Option<ToolEdit> {
         let (environment, document) = self.state.active_pair_mut()?;
 
-        tool::delete_instances(document, &environment.tree, &environment.world, targets)
+        tool::delete_instances(document, &environment.tree, &environment.world, targets, verb)
     }
 
     fn build_delete(&mut self, target: PrefabInstanceId) -> Option<ToolEdit> {

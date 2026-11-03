@@ -988,11 +988,11 @@ fn place_prefab_into(
 fn delete(context: &mut ToolContext<'_>) -> Option<ToolEdit> {
     let target = context.target?;
 
-    delete_instances(context.document, context.tree, context.world, &[target])
+    delete_instances(context.document, context.tree, context.world, &[target], "delete")
 }
 
 pub fn delete_instances(
-    document: &mut MapDocument, tree: &ObjectTree, world: &World, targets: &[PrefabInstanceId],
+    document: &mut MapDocument, tree: &ObjectTree, world: &World, targets: &[PrefabInstanceId], verb: &str,
 ) -> Option<ToolEdit> {
     let mut targets_by_tile = BTreeMap::<Coord, Vec<PrefabInstanceId>>::new();
     for target in targets {
@@ -1043,8 +1043,8 @@ pub fn delete_instances(
 
     let label = match removed.as_slice() {
         [] => return None,
-        [placed] => format!("delete {}", placed.prefab().path),
-        _ => format!("delete {} atoms", removed.len()),
+        [placed] => format!("{verb} {}", placed.prefab().path),
+        _ => format!("{verb} {} atoms", removed.len()),
     };
 
     let mut edit = Edit::new(label);

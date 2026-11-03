@@ -1,9 +1,9 @@
 use dmm::Coord;
 use editor::{
-    clipboard::{self, TileRegion},
+    clipboard::{self, PasteMerge, TileRegion},
     command::EditGroupId,
-    document::{DocumentId, Selection},
-    tool::{RegionSelectionMode, SelectionMask, SelectionRotation, ToolEdit},
+    document::{DocumentId, PrefabInstanceId, Selection},
+    tool::{RegionSelectionMode, SelectionMask, SelectionRotation, Tool, ToolEdit},
 };
 
 use super::{RegionState, Session};
@@ -42,6 +42,49 @@ impl Session {
         let Some(region) = self.read_region(selection, mode) else {
             return false;
         };
+
+        self.state.set_clipboard(region);
+
+        true
+    }
+
+    fn read_instances(&self, ids: &[PrefabInstanceId]) -> Option<TileRegion> {
+        self.state
+            .active()
+            .and_then(|active| self.effective_grid(active))
+            .and_then(|map| clipboard::copy_instances(map, ids))
+    }
+
+    pub fn copy_picked(&mut self) -> bool {
+        let Some(region) = self.read_instances(&self.picked_instances()) else {
+            return false;
+        };
+
+        self.state.set_clipboard(region);
+
+        true
+    }
+
+    pub fn cut_picked(&mut self) -> bool {
+        let Some(document) = self.state.active_document() else {
+            return false;
+        };
+        let targets = self
+            .picked_instances()
+            .into_iter()
+            .filter(|id| document.allows_edit_instance(*id))
+            .collect::<Vec<_>>();
+        let Some(region) = self.read_instances(&targets) else {
+            return false;
+        };
+
+        let Some(action) = self.build_delete_instances(&targets, "cut") else {
+            return false;
+        };
+
+        if !self.commit(action, None) {
+            return false;
+        }
 
         self.state.set_clipboard(region);
 
@@ -167,12 +210,39 @@ impl Session {
             return false;
         };
 
+        if region.merge() == PasteMerge::Stack {
+            return self.paste_stacked(&region, min, rotation);
+        }
+
         let Some(floating) = self.paste_floating(region, min, rotation) else {
             return false;
         };
 
         self.finish_live_move();
         self.region_state = RegionState::Floating(floating);
+
+        true
+    }
+
+    fn paste_stacked(&mut self, region: &TileRegion, min: Coord, rotation: SelectionRotation) -> bool {
+        let built = {
+            let Some((environment, document)) = self.state.active_pair_mut() else {
+                return false;
+            };
+
+            clipboard::paste_region(document, &environment.tree, region, min, rotation)
+        };
+        let Some(pasted) = built else {
+            return false;
+        };
+
+        if !self.commit(pasted.action, None) {
+            return false;
+        }
+
+        self.finish_live_move();
+        self.set_tool(Tool::Pick);
+        self.pick_instances(&pasted.placed);
 
         true
     }
@@ -184,16 +254,16 @@ impl Session {
             clipboard::paste_region(document, &environment.tree, &region, min, rotation)
         };
 
-        let (Some((action, bounds)), Some(document)) = (built, self.state.active()) else {
+        let (Some(pasted), Some(document)) = (built, self.state.active()) else {
             return None;
         };
 
         let group = EditGroupId::new();
         let target = SelectionMask {
-            bounds,
+            bounds: pasted.target,
             mode: region.selection_mode(),
         };
-        if !self.commit_selecting(action, target, Some(group)) {
+        if !self.commit_selecting(pasted.action, target, Some(group)) {
             return None;
         }
 
@@ -269,7 +339,8 @@ mod tests {
 
     use dmm::{Coord, Map, Prefab, Size};
     use editor::{
-        document::{MapDocument, PlacedPrefab, Selection},
+        clipboard::PasteMerge,
+        document::{MapDocument, PlacedPrefab, PrefabInstanceId, Selection},
         tool::{RegionSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
     };
 
@@ -834,5 +905,157 @@ mod tests {
         assert!(!session.can_clear_tile(destination));
         assert!(session.undo());
         assert_eq!(session.map().unwrap().tile_at(destination), Some(&before));
+    }
+
+    fn table() -> Prefab {
+        Prefab::new(TreePath::parse("/obj/structure/table"))
+    }
+
+    fn atom_at(session: &Session, coord: Coord) -> PrefabInstanceId {
+        session.state.active_document().unwrap().instance_ids_at(coord)[0]
+    }
+
+    fn two_picked_tables() -> (Session, [PrefabInstanceId; 2]) {
+        let mut session = flat_session(6, 3);
+        place(&mut session, table(), Coord::new(1, 1, 1));
+        place(&mut session, table(), Coord::new(2, 2, 1));
+        let ids = [
+            atom_at(&session, Coord::new(1, 1, 1)),
+            atom_at(&session, Coord::new(2, 2, 1)),
+        ];
+        session.set_tool(Tool::Pick);
+        session.pick_instance(None);
+        session.toggle_pick(ids[0]);
+        session.toggle_pick(ids[1]);
+
+        (session, ids)
+    }
+
+    #[test]
+    fn copied_picks_stack_onto_the_destination_and_become_the_pick_set() {
+        let (mut session, ids) = two_picked_tables();
+        place(
+            &mut session,
+            Prefab::new(TreePath::parse("/obj/machinery/light")),
+            Coord::new(4, 1, 1),
+        );
+        session.set_tool(Tool::Pick);
+        session.pick_instance(None);
+        session.toggle_pick(ids[0]);
+        session.toggle_pick(ids[1]);
+        let before = session.map().unwrap().clone();
+
+        assert!(session.copy_picked());
+        assert_eq!(session.clipboard().unwrap().merge(), PasteMerge::Stack);
+        assert!(session.paste_clipboard(Coord::new(4, 1, 1), SelectionRotation::Original));
+
+        assert_eq!(
+            paths_at(&session, Coord::new(4, 1, 1)),
+            [
+                "/obj/machinery/light",
+                "/obj/structure/table",
+                "/turf/open/floor",
+                "/area/station"
+            ]
+        );
+        assert_eq!(
+            paths_at(&session, Coord::new(5, 2, 1)),
+            ["/obj/structure/table", "/turf/open/floor", "/area/station"]
+        );
+        let document = session.state.active_document().unwrap();
+        let expected = [
+            atom_at(&session, Coord::new(4, 1, 1)),
+            atom_at(&session, Coord::new(5, 2, 1)),
+        ];
+        assert_eq!(session.tool(), Tool::Pick);
+        assert_eq!(session.selection(), None);
+        assert_eq!(document.picked_ids().len(), 2);
+        assert_eq!(session.picked_instance(), Some(expected[1]));
+        assert_eq!(
+            session.picked_instances().len(),
+            2,
+            "the pick set is exactly the pasted atoms"
+        );
+        assert_ne!(session.picked_instances()[0], atom_at(&session, Coord::new(1, 1, 1)));
+        assert_render_cache_matches_rebuild(&session);
+
+        assert!(session.undo());
+        assert_eq!(*session.map().unwrap(), before);
+    }
+
+    #[test]
+    fn pasting_picks_that_run_off_the_map_changes_nothing() {
+        let (mut session, _) = two_picked_tables();
+        let before = session.map().unwrap().clone();
+
+        assert!(session.copy_picked());
+        assert!(!session.can_paste_clipboard(Coord::new(6, 3, 1), SelectionRotation::Original));
+        assert!(!session.paste_clipboard(Coord::new(6, 3, 1), SelectionRotation::Original));
+        assert_eq!(*session.map().unwrap(), before);
+    }
+
+    #[test]
+    fn a_picked_turf_replaces_the_destination_turf_when_pasted() {
+        let mut session = flat_session(3, 1);
+        place(
+            &mut session,
+            Prefab::new(TreePath::parse("/turf/closed/wall")),
+            Coord::new(1, 1, 1),
+        );
+        let wall = session
+            .state
+            .active_document()
+            .unwrap()
+            .instance_ids_at(Coord::new(1, 1, 1))[0];
+        session.set_tool(Tool::Pick);
+        session.pick_instance(Some(wall));
+
+        assert!(session.copy_picked());
+        assert!(session.paste_clipboard(Coord::new(3, 1, 1), SelectionRotation::Original));
+
+        assert_eq!(
+            paths_at(&session, Coord::new(3, 1, 1)),
+            ["/turf/closed/wall", "/area/station"]
+        );
+    }
+
+    #[test]
+    fn cutting_picks_refills_what_it_removes_and_is_one_undo() {
+        let mut session = flat_session(3, 1);
+        place(
+            &mut session,
+            Prefab::new(TreePath::parse("/turf/closed/wall")),
+            Coord::new(1, 1, 1),
+        );
+        place(&mut session, table(), Coord::new(2, 1, 1));
+        let wall = session
+            .state
+            .active_document()
+            .unwrap()
+            .instance_ids_at(Coord::new(1, 1, 1))[0];
+        let table = atom_at(&session, Coord::new(2, 1, 1));
+        session.set_tool(Tool::Pick);
+        session.pick_instance(None);
+        session.toggle_pick(wall);
+        session.toggle_pick(table);
+        let before = session.map().unwrap().clone();
+
+        assert!(session.cut_picked());
+        let turf = session.world().unwrap().base_tile.clone().unwrap().turf.to_string();
+
+        assert_eq!(
+            paths_at(&session, Coord::new(1, 1, 1)),
+            [turf.as_str(), "/area/station"]
+        );
+        assert_eq!(
+            paths_at(&session, Coord::new(2, 1, 1)),
+            ["/turf/open/floor", "/area/station"]
+        );
+        assert_eq!(session.clipboard().unwrap().merge(), PasteMerge::Stack);
+        assert_eq!(session.undo_label(), Some("cut 2 atoms"));
+        assert_render_cache_matches_rebuild(&session);
+
+        assert!(session.undo());
+        assert_eq!(*session.map().unwrap(), before);
     }
 }
