@@ -78,6 +78,7 @@
 	InitGlobalstarlight_range()
 	InitGlobalstarlight_power()
 	InitGlobalstarlight_color()
+	InitGlobalmarker_beacon_colors()
 	InitGlobalareas()
 	InitGlobalareas_by_type()
 	InitGlobalstation_levels_cache()
@@ -426,6 +427,7 @@
 
 /datum/demir/tgstation
 	default = TRUE
+	light_corner_step = LIGHTING_ROUND_VALUE
 	var/smooth = TRUE
 	var/lighting = TRUE
 	var/show_cables = TRUE
@@ -770,6 +772,10 @@
 // Space areas are fullbright. Only space tiles next to a lit turf call enable_starlight().
 /turf/open/space
 	demir_light_edge_only = 1
+
+/obj/structure/marker_beacon/demir_apply_light()
+	update_appearance()
+	return ..()
 
 /turf/open/space/demir_apply_light()
 	demir_light_range = GLOB.starlight_range

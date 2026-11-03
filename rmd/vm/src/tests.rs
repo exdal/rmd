@@ -1701,6 +1701,30 @@ fn lighting_hook_keeps_zero_radius_quadratic_sources() {
 }
 
 #[test]
+fn lighting_corner_step_comes_from_the_profile() {
+    let (tree, module) = compile(fixture!("programs/lighting_corner_step_comes_from_the_profile.dm"));
+    let lamp = tree.id_of(&TreePath::parse("/obj/lamp")).expect("lamp type");
+    let bake = Bake::new(
+        &tree,
+        &module,
+        vec![Atom {
+            instance: 1,
+            ty: lamp,
+            position: Position::new(3, 3, 1),
+            vars: Vec::new(),
+        }],
+        [5, 5, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+    let lighting = bake.lighting.as_ref().expect("lamp exports a lightmap");
+    let corners = lighting.tiles.iter().flat_map(|tile| tile.corners.iter().flatten());
+
+    assert!(corners.clone().all(|value| (value / 0.25).fract() == 0.0));
+    assert!(corners.clone().any(|value| *value > 0.0 && *value < 1.0));
+}
+
+#[test]
 fn lighting_hook_offsets_source_origins_in_tile_units() {
     let (tree, module) = compile(fixture!(
         "programs/lighting_hook_offsets_source_origins_in_tile_units.dm"

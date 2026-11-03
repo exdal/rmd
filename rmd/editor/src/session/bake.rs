@@ -1896,6 +1896,47 @@ mod tests {
 
     #[test]
     #[ignore = "requires the local target/tgstation checkout"]
+    fn a_burgundy_marker_beacon_lights_its_tile_red_on_tg_corner_steps() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
+        let options = editor::environment::BakeOptions {
+            forced_profile: Some(String::from("tgstation")),
+            ..Default::default()
+        };
+        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+            .expect("tgstation codebase");
+        assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
+        let mut session = Session::new();
+        session.apply_codebase(loaded);
+
+        let mut map = Map::new(Size { x: 3, y: 3, z: 1 });
+        let floor = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/turf/open/floor/plating")),
+            Prefab::new(TreePath::parse("/area/station/asteroid")),
+        ]);
+        let beacon = map.intern_tile(vec![
+            Prefab::new(TreePath::parse("/obj/structure/marker_beacon/burgundy")),
+            Prefab::new(TreePath::parse("/turf/open/floor/plating")),
+            Prefab::new(TreePath::parse("/area/station/asteroid")),
+        ]);
+        map.grid[0] = vec![vec![floor; 3]; 3];
+        map.grid[0][1][1] = beacon;
+        session.activate_document(MapDocument::new(map, 1));
+        settle_bake(&mut session);
+
+        let bake = session.active_cache().bake.as_ref().expect("beacon bake");
+        assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
+        let lighting = bake.lighting.as_ref().expect("beacon lightmap");
+        let tile = lighting.tile(vm::world::Position::new(2, 2, 1)).expect("beacon tile");
+        let [red, green, blue] = tile.corners[0];
+        assert!(red > green && green > blue, "{:?}", tile.corners);
+
+        let step = 1.0 / 64.0;
+        let corners = lighting.tiles.iter().flat_map(|tile| tile.corners.iter().flatten());
+        assert!(corners.clone().all(|value| (value / step).fract() == 0.0));
+    }
+
+    #[test]
+    #[ignore = "requires the local target/tgstation checkout"]
     fn lava_lights_only_where_it_borders_another_turf() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
         let options = editor::environment::BakeOptions {

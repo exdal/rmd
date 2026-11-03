@@ -91,6 +91,9 @@
 	/// Select this profile when the user has not chosen another one. Exactly one profile subtype
 	/// must directly set this to a true value when a codebase defines profiles.
 	var/default = FALSE
+	/// Round every lighting corner to a multiple of this value, like DM's round(A, B). Zero keeps full
+	/// precision.
+	var/light_corner_step = 0
 
 	proc/bake(atom/target)
 

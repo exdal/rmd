@@ -666,7 +666,12 @@ impl Bake {
                 .iter()
                 .filter_map(|id| Some((*id, self.harvest_light(tree, *id)?)))
                 .collect::<Vec<_>>();
-            self.lighting = Some(LightingMap::build(self.runtime.world.size, atoms));
+            let corner_step = self
+                .runtime
+                .profile
+                .and_then(|profile| self.runtime.heap.object(profile))
+                .map_or(0.0, |profile| object_number(profile, tree, "light_corner_step", 0.0));
+            self.lighting = Some(LightingMap::build(self.runtime.world.size, corner_step, atoms));
         }
 
         let mut cache = AppearanceCache::default();

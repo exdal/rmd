@@ -35,6 +35,7 @@ pub struct LightingMap {
     reach: Vec<i32>,
     ambient: HashMap<usize, Vec<u64>>,
     dirty: Vec<Vec<Rect>>,
+    corner_step: f32,
 }
 
 impl PartialEq for LightingMap {
@@ -44,7 +45,7 @@ impl PartialEq for LightingMap {
 }
 
 impl LightingMap {
-    fn new(size: [i32; 3]) -> Self {
+    fn new(size: [i32; 3], corner_step: f32) -> Self {
         let size = size.map(|value| u32::try_from(value.max(0)).unwrap_or(0));
         let [width, height, levels] = size.map(|value| value as usize);
         let lengths = width.checked_mul(height).and_then(|plane| {
@@ -53,7 +54,7 @@ impl LightingMap {
             Some((plane.checked_mul(levels)?, corners.checked_mul(levels)?))
         });
         let Some((tiles, points)) = lengths else {
-            return Self::new([0; 3]);
+            return Self::new([0; 3], corner_step);
         };
         let buckets = width
             .div_ceil(BUCKET)
@@ -71,11 +72,14 @@ impl LightingMap {
             reach: vec![0; levels],
             ambient: HashMap::new(),
             dirty: vec![Vec::new(); levels],
+            corner_step,
         }
     }
 
-    pub(crate) fn build(size: [i32; 3], atoms: impl IntoIterator<Item = (u64, LightingAtom)>) -> Self {
-        let mut map = Self::new(size);
+    pub(crate) fn build(
+        size: [i32; 3], corner_step: f32, atoms: impl IntoIterator<Item = (u64, LightingAtom)>,
+    ) -> Self {
+        let mut map = Self::new(size, corner_step);
         for (id, atom) in atoms {
             map.replace(id, Some(atom), false);
         }
@@ -583,6 +587,7 @@ impl LightingMap {
 
         let row = self.width() + 1;
         let base = level.checked_mul(row * (self.height() + 1))?;
+        let step = self.corner_step;
         let first = usize::try_from(corners.y0).ok()? * row + usize::try_from(corners.x0).ok()?;
         for line in 0..rows {
             for column in 0..span {
@@ -592,7 +597,8 @@ impl LightingMap {
                 };
 
                 if let Some(slot) = self.points.get_mut(base + first + line * row + column) {
-                    *slot = normalize_color([regular[0] + peak[0], regular[1] + peak[1], regular[2] + peak[2]]);
+                    let color = normalize_color([regular[0] + peak[0], regular[1] + peak[1], regular[2] + peak[2]]);
+                    *slot = round_to_step(color, step);
                 }
             }
         }
@@ -915,6 +921,14 @@ fn normalize_color(mut color: [f32; 3]) -> [f32; 3] {
     color.map(|channel| channel.max(0.0))
 }
 
+fn round_to_step(color: [f32; 3], step: f32) -> [f32; 3] {
+    if step <= 0.0 || !step.is_finite() {
+        return color;
+    }
+
+    color.map(|channel| (channel / step + 0.5).floor() * step)
+}
+
 pub(crate) fn color_bytes(text: &str) -> Option<([u8; 4], bool)> {
     let text = text.trim();
     let Some(hex) = text.strip_prefix('#') else {
@@ -983,7 +997,7 @@ mod tests {
     use super::*;
 
     fn solved(size: [i32; 3], atoms: &[LightingAtom]) -> LightingMap {
-        LightingMap::build(size, (0u64..).zip(atoms.iter().copied()))
+        LightingMap::build(size, 0.0, (0u64..).zip(atoms.iter().copied()))
     }
 
     fn blocker(position: Position) -> LightingAtom {
@@ -1021,6 +1035,20 @@ mod tests {
             ambient: [0.0; 3],
             fullbright: false,
         }
+    }
+
+    #[test]
+    fn corner_step_rounds_every_corner_to_its_nearest_multiple() {
+        let atoms = [source(Position::new(2, 2, 1))];
+        let exact = solved([3, 3, 1], &atoms);
+        let rounded = LightingMap::build([3, 3, 1], 0.25, (0u64..).zip(atoms));
+
+        let pairs = rounded.tiles.iter().zip(&exact.tiles);
+        for (rounded, exact) in pairs.flat_map(|(a, b)| a.corners.iter().flatten().zip(b.corners.iter().flatten())) {
+            assert_eq!(*rounded, (exact / 0.25 + 0.5).floor() * 0.25);
+        }
+
+        assert_ne!(rounded.tiles, exact.tiles);
     }
 
     #[test]
@@ -1219,6 +1247,7 @@ mod tests {
 
         let expected = LightingMap::build(
             [map.size[0] as i32, map.size[1] as i32, map.size[2] as i32],
+            map.corner_step,
             atoms.iter().map(|(id, atom)| (*id, *atom)),
         );
         assert!(map.tiles == expected.tiles, "edit to {id} diverged from a full solve");
@@ -1282,7 +1311,7 @@ mod tests {
             },
         );
 
-        let mut map = LightingMap::build([40, 30, 2], atoms.iter().map(|(id, atom)| (*id, *atom)));
+        let mut map = LightingMap::build([40, 30, 2], 0.0, atoms.iter().map(|(id, atom)| (*id, *atom)));
         let mut moved = source(Position::new(11, 10, 1));
         assert_edit_matches_full_solve(&mut map, &mut atoms, lamp, Some(moved));
 
