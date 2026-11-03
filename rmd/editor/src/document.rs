@@ -25,7 +25,11 @@ use crate::{
     grid::{Grid, LevelCells},
     maploader::{preview::PREVIEW_ID_START, resolved_path},
     patch,
-    tool::{PlacementKind, RegionSelectionMode, SelectionMask, insertion_index, placement_kind},
+    tool::{
+        PlacementKind, RegionSelectionMode, SelectionMask, ToolEdit, insertion_index, placement_kind,
+        refill_missing_bases,
+    },
+    world::World,
 };
 
 pub fn sanitize_vars(map: &mut Map, tree: &ObjectTree) -> usize {
@@ -623,9 +627,10 @@ impl MapDocument {
         self.map.identical(prefab)
     }
 
+    /// A moved turf or area replaces the destination's, and a tile left without one gets the world default
     pub fn change_instances(
-        &mut self, tree: &ObjectTree, changes: &[InstanceChange], label: impl Into<String>, group: Option<EditGroupId>,
-    ) -> Option<bool> {
+        &mut self, tree: &ObjectTree, world: &World, changes: &[InstanceChange], label: impl Into<String>,
+    ) -> Option<ToolEdit> {
         let size = self.map.size();
         let mut before = BTreeMap::<Coord, PlacedTile>::new();
         let mut batch = Vec::with_capacity(changes.len());
@@ -652,6 +657,8 @@ impl MapDocument {
         }
 
         let mut after = before.clone();
+        let mut affected = changes.iter().map(|change| change.id).collect::<Vec<_>>();
+        let mut moved = Vec::new();
 
         for (change, source_coord, destination_coord) in batch {
             let source_tile = after.get_mut(&source_coord)?;
@@ -675,11 +682,31 @@ impl MapDocument {
                 continue;
             };
 
-            let moved = after.get_mut(&source_coord)?.remove(index);
-            let destination_tile = after.get_mut(&destination_coord)?;
-            let kind = placement_kind(tree, moved.prefab()).unwrap_or(PlacementKind::Atom);
+            moved.push((destination_coord, after.get_mut(&source_coord)?.remove(index)));
+        }
 
-            destination_tile.insert(insertion_index(tree, destination_tile, kind), moved);
+        // every mover leaves before any arrives, so a turf only replaces one that stays put
+        for (destination_coord, placed) in moved {
+            let destination_tile = after.get_mut(&destination_coord)?;
+            let kind = placement_kind(tree, placed.prefab()).unwrap_or(PlacementKind::Atom);
+            if kind != PlacementKind::Atom {
+                destination_tile.retain(|existing| {
+                    let is_replaced = placement_kind(tree, existing.prefab()) == Some(kind);
+                    if is_replaced {
+                        affected.push(existing.id);
+                    }
+
+                    !is_replaced
+                });
+            }
+
+            destination_tile.insert(insertion_index(tree, destination_tile, kind), placed);
+        }
+
+        if let Some(base_tile) = &world.base_tile {
+            for tile in after.values_mut() {
+                affected.extend(refill_missing_bases(self, tree, base_tile, tile));
+            }
         }
 
         let mut edit = Edit::new(label);
@@ -689,11 +716,11 @@ impl MapDocument {
             }
         }
 
-        if edit.is_empty() {
-            return Some(false);
-        }
-
-        Some(self.apply_grouped(edit, group))
+        Some(ToolEdit {
+            edit,
+            picked: None,
+            affected,
+        })
     }
 
     pub fn move_instance(

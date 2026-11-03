@@ -363,14 +363,12 @@ impl Session {
     ) -> Option<bool> {
         let (environment, document) = self.state.active_pair_mut()?;
 
-        let changed = document.change_instances(&environment.tree, changes, label, group)?;
-
-        if changed {
-            let ids = changes.iter().map(|change| change.id).collect::<Vec<_>>();
-            self.update_instances(&ids);
+        let action = document.change_instances(&environment.tree, &environment.world, changes, label)?;
+        if action.edit.is_empty() {
+            return Some(false);
         }
 
-        Some(changed)
+        Some(self.commit(action, group))
     }
 
     pub(crate) fn rotate_picked_group(&mut self, rotation: SelectionRotation, group: Option<EditGroupId>) -> bool {
@@ -795,6 +793,51 @@ mod tests {
         );
     }
 
+    fn turf_at(session: &Session, coord: Coord) -> PrefabInstanceId {
+        let document = session.state.active_document().unwrap();
+        let turfs = document
+            .instance_ids_at(coord)
+            .iter()
+            .copied()
+            .filter(|id| {
+                let path = &document.prefab_instance(*id).unwrap().prefab().path;
+
+                path.to_string().starts_with("/turf")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(turfs.len(), 1, "{coord:?} holds one turf");
+
+        turfs[0]
+    }
+
+    #[test]
+    fn a_batched_turf_move_replaces_the_destination_turf_and_refills_the_source() {
+        let mut session = flat_session(2, 1);
+        let (from, to) = (Coord::new(1, 1, 1), Coord::new(2, 1, 1));
+        let turf = turf_at(&session, from);
+        let replaced = turf_at(&session, to);
+
+        let changed = session.change_instances(&[change(turf, Some(to), &set_name("Moved"))], "move", None);
+
+        assert_eq!(changed, Some(true));
+        assert_eq!(turf_at(&session, to), turf);
+        assert_eq!(names(&session, &[turf]), [Some(Value::Text(String::from("Moved")))]);
+        let refilled = turf_at(&session, from);
+        assert_ne!(refilled, turf);
+        let document = session.state.active_document().unwrap();
+        assert!(document.prefab_instance(replaced).is_none());
+        assert_eq!(
+            document.prefab_instance(refilled).unwrap().prefab().path,
+            session.world().unwrap().base_tile.clone().unwrap().turf
+        );
+        assert_render_cache_matches_rebuild(&session);
+
+        assert!(session.undo());
+        assert_eq!(turf_at(&session, from), turf);
+        assert_eq!(turf_at(&session, to), replaced);
+        assert_render_cache_matches_rebuild(&session);
+    }
+
     #[test]
     fn the_gizmo_members_cover_every_editable_pick_on_the_level() {
         let (mut session, ids) = three_tables();
@@ -1124,6 +1167,28 @@ mod tests {
 
         assert_eq!(coords(&session, &ids), [at(1, 1), at(2, 1), at(3, 1)]);
         assert_eq!(session.revision(), revision);
+    }
+
+    #[test]
+    fn rotating_picked_turfs_keeps_one_turf_on_every_tile() {
+        let mut session = flat_session(3, 3);
+        let turfs = [turf_at(&session, at(1, 2)), turf_at(&session, at(2, 2))];
+        pick_all(&mut session, &turfs);
+
+        assert!(session.rotate_picked_group(SelectionRotation::Clockwise, None));
+
+        // 2x1 at min (1, 2) becomes 1x2 at min (1, 2)
+        assert_eq!(coords(&session, &turfs), [at(1, 3), at(1, 2)]);
+        for x in 1..=3 {
+            for y in 1..=3 {
+                turf_at(&session, at(x, y));
+            }
+        }
+        assert_render_cache_matches_rebuild(&session);
+
+        assert!(session.undo());
+        assert_eq!(coords(&session, &turfs), [at(1, 2), at(2, 2)]);
+        assert_render_cache_matches_rebuild(&session);
     }
 
     #[test]
