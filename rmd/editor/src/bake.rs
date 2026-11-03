@@ -457,7 +457,7 @@ mod tests {
     use dmm::{Map, Size};
 
     use super::*;
-    use crate::{command::Edit, frame, visual};
+    use crate::{command::Edit, frame, visual, world::Perspective};
 
     fn examples() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env")
@@ -507,6 +507,7 @@ mod tests {
 
     fn options<'a>(visibility: &'a frame::TypeVisibility, bake: &'a Bake) -> frame::FrameRenderOptions<'a> {
         frame::FrameRenderOptions {
+            perspective: Perspective::TopDown,
             node_types: None,
             visibility,
             tile_size: 32,

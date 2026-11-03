@@ -554,6 +554,7 @@ pub(super) fn assert_render_cache_matches_rebuild(session: &Session) {
         &session.textures,
         session.effective_grid(document_id).unwrap(),
         editor::frame::FrameRenderOptions {
+            perspective: environment.world.perspective,
             node_types: Some(&session.active_cache().node_types),
             visibility: &session.type_visibility,
             tile_size: session.options.tile_size,

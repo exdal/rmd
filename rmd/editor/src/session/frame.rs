@@ -264,6 +264,7 @@ impl Session {
                 &self.textures,
                 grid,
                 FrameRenderOptions {
+                    perspective: environment.world.perspective,
                     node_types: Some(&node_types),
                     visibility: &self.type_visibility,
                     tile_size: self.options.tile_size,

@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use defines::{FLOAT_LAYER, KEEP_APART, KEEP_TOGETHER};
+use defines::{EFFECTS_LAYER, FLOAT_LAYER, KEEP_APART, KEEP_TOGETHER};
 use dmi::metadata::{Dir, Metadata};
 use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
@@ -22,6 +22,7 @@ use crate::{
     document::{MapDocument, PrefabInstanceId},
     maploader::preview::MapView,
     visual::{self, Appearance},
+    world::Perspective,
 };
 
 mod pages;
@@ -30,11 +31,25 @@ use pages::{OwnerKeys, SpritePage, replace_owner_sprites};
 
 /// - 0: z level
 /// - 1: plane encoded with `visual::sort_component`
-/// - 2: layer encoded the same way as above
-/// - 3: whether the owner is not a turf, so equal-plane/layer turfs draw first across tiles
-/// - 4: placement order, see `PlacementOrder`
-/// - 5: sprite index within its placement, order goes like this: underlays, self, overlays
-type SpriteKey = (u32, i32, i32, bool, PlacementOrder, usize);
+/// - 2: owner's row, back rows first, `FLAT_ROW` outside side-view sorting
+/// - 3: layer encoded the same way as the plane
+/// - 4: whether the owner is not a turf, so equal-plane/layer turfs draw first across tiles
+/// - 5: placement order, see `PlacementOrder`
+/// - 6: sprite index within its placement, order goes like this: underlays, self, overlays
+type SpriteKey = (u32, i32, Reverse<i32>, i32, bool, PlacementOrder, usize);
+
+const FLAT_ROW: Reverse<i32> = Reverse(i32::MIN);
+
+// an offset moves the row only once it carries the sprite's center onto the next tile, mappers nudge
+// things a few pixels toward the viewer without changing what covers them
+fn side_row(coord: Coord, appearance: &Appearance, tile_size: u32) -> Reverse<i32> {
+    let tile_size = i64::from(tile_size.max(1));
+    let offset = i64::from(appearance.pixel_y) + i64::from(appearance.step_y);
+    let tiles = (offset.abs() + tile_size / 2) / tile_size * offset.signum();
+    let row = i64::from(coord.y) + tiles;
+
+    Reverse(row.clamp(i64::from(i32::MIN) + 1, i64::from(i32::MAX)) as i32)
+}
 
 /// rows from the top, left to right, then the prefab's index in its tile, it follows where a placement is now
 type PlacementOrder = (Reverse<u32>, u32, usize);
@@ -87,6 +102,7 @@ struct RenderContext<'a> {
     area: Option<TypeId>,
     visibility: &'a TypeVisibility,
     tile_size: u32,
+    perspective: Perspective,
 }
 
 #[derive(Debug, Default)]
@@ -288,6 +304,7 @@ pub struct FrameRenderOptions<'a> {
     /// What the bake made of each atom, keyed by `vm::bake` atom id, empty when baking is off
     pub appearances: &'a HashMap<u64, SharedAppearance>,
     pub lighting: Option<&'a LightingMap>,
+    pub perspective: Perspective,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -380,6 +397,7 @@ pub fn build(
         textures,
         document,
         FrameRenderOptions {
+            perspective: Perspective::TopDown,
             node_types: None,
             visibility: &TypeVisibility::default(),
             tile_size,
@@ -419,6 +437,7 @@ pub fn build_view_with_options(
         area,
         visibility: options.visibility,
         tile_size: options.tile_size,
+        perspective: options.perspective,
     };
 
     for z in 1..=map.size().z.max(1) {
@@ -509,6 +528,7 @@ pub fn update_prefabs(
         document,
         owners,
         FrameRenderOptions {
+            perspective: Perspective::TopDown,
             node_types: None,
             visibility: &TypeVisibility::default(),
             tile_size,
@@ -650,6 +670,7 @@ pub fn update_view_prefabs_with_options(
         area: tree.roots().area,
         visibility: options.visibility,
         tile_size: options.tile_size,
+        perspective: options.perspective,
     };
     let mut affected = affected.into_iter().collect::<Vec<_>>();
     affected.sort_unstable_by_key(|candidate| candidate.get());
@@ -882,13 +903,25 @@ impl RenderContext<'_> {
                 sprites: vec![sprite],
             });
         }
+
+        let owner_row = match self.perspective {
+            Perspective::Side => side_row(coord, &appearance, self.tile_size),
+            Perspective::TopDown => FLAT_ROW,
+        };
         let mut local_order = 0usize;
         let mut sprites = Vec::new();
         for group in groups {
+            let row = if group.layer >= EFFECTS_LAYER {
+                FLAT_ROW
+            } else {
+                owner_row
+            };
+
             for sprite in group.sprites {
                 let key = (
                     coord.z,
                     visual::sort_component(group.plane),
+                    row,
                     visual::sort_component(group.layer),
                     !is_turf,
                     order,
@@ -1221,6 +1254,7 @@ mod tests {
         types::{Identifier, Value, VarModifiers},
     };
     use std::{
+        cmp::Reverse,
         collections::{HashMap, HashSet},
         path::PathBuf,
         sync::Arc,
@@ -1240,12 +1274,13 @@ mod tests {
 
     use super::{
         FrameInstances, FrameRenderOptions, PrefabUpdate, TypeVisibility, build, build_with_options, instance_for,
-        pages::tests::assert_pages_hold, update_prefab, update_prefabs,
+        pages::tests::assert_pages_hold, side_row, update_prefab, update_prefabs, update_prefabs_with_options,
     };
     use crate::{
         command::Edit,
         document::{MapDocument, PrefabInstanceId, VarMutation},
         visual::Appearance,
+        world::Perspective,
     };
 
     const ICON: &str = "test.dmi";
@@ -1526,6 +1561,7 @@ mod tests {
             &textures,
             &document,
             FrameRenderOptions {
+                perspective: Perspective::TopDown,
                 node_types: None,
                 visibility: &visibility,
                 tile_size: 32,
@@ -1555,6 +1591,7 @@ mod tests {
             &textures,
             &document,
             FrameRenderOptions {
+                perspective: Perspective::TopDown,
                 node_types: None,
                 visibility: &visibility,
                 tile_size: 32,
@@ -1564,6 +1601,201 @@ mod tests {
         );
         assert!(without_areas.live_sprites().any(|sprite| sprite.owner == object_owner));
         assert!(without_areas.live_sprites().all(|sprite| sprite.owner != area_owner));
+    }
+
+    fn column_map(prefabs: Vec<(u32, Prefab)>) -> Map {
+        let mut map = Map::new(Size { x: 1, y: 3, z: 1 });
+        for (y, prefab) in prefabs {
+            map.grid[0][(3 - y) as usize][0] = map.intern_tile(vec![prefab]);
+        }
+
+        map
+    }
+
+    fn prefab_with(path: &str, vars: &[(&str, f32)]) -> Prefab {
+        let mut prefab = Prefab::new(TreePath::parse(path));
+        for (name, value) in vars {
+            prefab.set_var(Identifier::from(String::from(*name)), Value::Num(*value));
+        }
+
+        prefab
+    }
+
+    fn side_options<'a>(
+        visibility: &'a TypeVisibility, appearances: &'a HashMap<u64, SharedAppearance>,
+    ) -> FrameRenderOptions<'a> {
+        FrameRenderOptions {
+            perspective: Perspective::Side,
+            node_types: None,
+            visibility,
+            tile_size: 32,
+            appearances,
+            lighting: None,
+        }
+    }
+
+    fn build_side(
+        tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, document: &MapDocument,
+    ) -> FrameInstances {
+        build_with_options(
+            tree,
+            icons,
+            textures,
+            document,
+            side_options(&TypeVisibility::default(), &HashMap::new()),
+        )
+    }
+
+    fn drawn_owners(
+        tree: &ObjectTree, document: &MapDocument, perspective: Perspective, among: &[PrefabInstanceId],
+    ) -> Vec<PrefabInstanceId> {
+        let (icons, textures) = (icons(&["floor", "table"]), textures(&["floor", "table"]));
+        let instances = match perspective {
+            Perspective::Side => build_side(tree, &icons, &textures, document),
+            Perspective::TopDown => build(tree, &icons, &textures, document, 32),
+        };
+        instances
+            .live_sprites()
+            .map(|sprite| sprite.owner)
+            .filter(|owner| among.contains(owner))
+            .collect()
+    }
+
+    fn owner_at(document: &MapDocument, y: u32) -> PrefabInstanceId {
+        document.instance_ids_at(Coord::new(1, y, 1))[0]
+    }
+
+    #[test]
+    fn side_maps_draw_back_rows_first_regardless_of_layer() {
+        let tree = tree(&[("/obj/low", "floor", 1.0), ("/obj/high", "table", 9.0)]);
+        let map = column_map(vec![
+            (3, prefab_with("/obj/high", &[])),
+            (1, prefab_with("/obj/low", &[])),
+        ]);
+        let document = document(map);
+        let (back, near) = (owner_at(&document, 3), owner_at(&document, 1));
+
+        assert_eq!(
+            drawn_owners(&tree, &document, Perspective::Side, &[back, near]),
+            [back, near]
+        );
+
+        assert_eq!(
+            drawn_owners(&tree, &document, Perspective::TopDown, &[near, back]),
+            [near, back]
+        );
+    }
+
+    #[test]
+    fn side_rows_follow_the_tile_under_the_sprites_center() {
+        let row = |pixel_y| {
+            let appearance = Appearance {
+                pixel_y,
+                ..Appearance::default()
+            };
+
+            side_row(Coord::new(1, 42, 1), &appearance, 32)
+        };
+
+        assert_eq!(
+            [-5, 15, -15, 16, -16, 32, -32, 48].map(row),
+            [42, 42, 42, 43, 41, 43, 41, 44].map(Reverse)
+        );
+    }
+
+    #[test]
+    fn side_maps_sort_by_pixel_y_but_not_pixel_z() {
+        let tree = tree(&[("/obj/low", "floor", 1.0), ("/obj/high", "table", 9.0)]);
+        let map = column_map(vec![
+            (1, prefab_with("/obj/high", &[("pixel_y", 32.0)])),
+            (2, prefab_with("/obj/low", &[])),
+        ]);
+        let document = MapDocument::new(map, 1);
+        let (shifted, row_two) = (owner_at(&document, 1), owner_at(&document, 2));
+        assert_eq!(
+            drawn_owners(&tree, &document, Perspective::Side, &[shifted, row_two]),
+            [row_two, shifted],
+            "row 2 ties, layer decides"
+        );
+
+        let map = column_map(vec![
+            (1, prefab_with("/obj/high", &[("pixel_y", 64.0)])),
+            (2, prefab_with("/obj/low", &[])),
+        ]);
+        let document = MapDocument::new(map, 1);
+        let (shifted, row_two) = (owner_at(&document, 1), owner_at(&document, 2));
+        assert_eq!(
+            drawn_owners(&tree, &document, Perspective::Side, &[shifted, row_two]),
+            [shifted, row_two]
+        );
+
+        let map = column_map(vec![
+            (1, prefab_with("/obj/high", &[("pixel_z", -32.0)])),
+            (2, prefab_with("/obj/low", &[])),
+        ]);
+        let document = MapDocument::new(map, 1);
+        let (lifted, row_two) = (owner_at(&document, 1), owner_at(&document, 2));
+        assert_eq!(
+            drawn_owners(&tree, &document, Perspective::Side, &[row_two, lifted]),
+            [row_two, lifted]
+        );
+    }
+
+    #[test]
+    fn side_maps_draw_effects_layers_above_nearer_rows() {
+        let tree = tree(&[("/obj/low", "floor", 1.0), ("/obj/high", "table", 9.0)]);
+        let map = column_map(vec![
+            (3, prefab_with("/obj/low", &[("layer", 5000.0)])),
+            (1, prefab_with("/obj/high", &[])),
+        ]);
+        let document = document(map);
+        let (effect, near) = (owner_at(&document, 3), owner_at(&document, 1));
+
+        assert_eq!(
+            drawn_owners(&tree, &document, Perspective::Side, &[near, effect]),
+            [near, effect]
+        );
+    }
+
+    #[test]
+    fn side_map_updates_keep_the_keys_of_a_rebuild_when_an_owner_changes_rows() {
+        let tree = tree(&[("/obj/low", "floor", 1.0), ("/obj/high", "table", 9.0)]);
+        let map = column_map(vec![
+            (2, prefab_with("/obj/high", &[])),
+            (1, prefab_with("/obj/low", &[])),
+        ]);
+        let mut document = document(map);
+        let (icons, textures) = (icons(&["floor", "table"]), textures(&["floor", "table"]));
+        let mut instances = build_side(&tree, &icons, &textures, &document);
+        let (back, near) = (owner_at(&document, 2), owner_at(&document, 1));
+
+        for pixel_y in [-64.0, 0.0, 32.0] {
+            document
+                .edit_instance_vars(
+                    back,
+                    "move row",
+                    &[VarMutation::Set("pixel_y".into(), Value::Num(pixel_y))],
+                    None,
+                )
+                .unwrap();
+            update_prefabs_with_options(
+                &mut instances,
+                &tree,
+                &icons,
+                &textures,
+                &document,
+                &[back],
+                side_options(&TypeVisibility::default(), &HashMap::new()),
+            );
+            assert_render_data_matches(&instances, &build_side(&tree, &icons, &textures, &document));
+
+            let order = instances
+                .live_sprites()
+                .map(|sprite| sprite.owner)
+                .filter(|owner| [back, near].contains(owner))
+                .collect::<Vec<_>>();
+            assert_eq!(order, if pixel_y < -32.0 { [near, back] } else { [back, near] });
+        }
     }
 
     #[test]
@@ -1825,6 +2057,7 @@ mod tests {
             &textures(&["floor", "decal", "underlay", "overlay"]),
             &document,
             FrameRenderOptions {
+                perspective: Perspective::TopDown,
                 node_types: Some(&node_types),
                 visibility: &TypeVisibility::default(),
                 tile_size: 32,
@@ -1950,6 +2183,7 @@ mod tests {
             &textures(&["floor", "decal", "overlay"]),
             &document,
             FrameRenderOptions {
+                perspective: Perspective::TopDown,
                 node_types: None,
                 visibility: &TypeVisibility::default(),
                 tile_size: 32,
@@ -1996,6 +2230,7 @@ mod tests {
             &textures(&["floor", "table", "light"]),
             &document,
             FrameRenderOptions {
+                perspective: Perspective::TopDown,
                 node_types: None,
                 visibility: &visibility,
                 tile_size: 32,
@@ -2048,6 +2283,7 @@ mod tests {
             &textures(&["floor", "table", "light"]),
             &document,
             FrameRenderOptions {
+                perspective: Perspective::TopDown,
                 node_types: None,
                 visibility: &visibility,
                 tile_size: 32,
@@ -2096,6 +2332,7 @@ mod tests {
             &textures(&["floor", "table", "light"]),
             &document,
             FrameRenderOptions {
+                perspective: Perspective::TopDown,
                 node_types: None,
                 visibility: &visibility,
                 tile_size: 32,
@@ -2166,6 +2403,7 @@ mod tests {
             &textures,
             &document,
             FrameRenderOptions {
+                perspective: Perspective::TopDown,
                 node_types: None,
                 visibility: &visibility,
                 tile_size: 32,
@@ -2218,6 +2456,7 @@ mod tests {
             &textures,
             &document,
             FrameRenderOptions {
+                perspective: Perspective::TopDown,
                 node_types: None,
                 visibility: &TypeVisibility::default(),
                 tile_size: 32,

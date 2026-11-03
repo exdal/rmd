@@ -405,6 +405,7 @@ impl Session {
                 cache.modules.view(&document.map),
                 &affected,
                 FrameRenderOptions {
+                    perspective: environment.world.perspective,
                     node_types: Some(&cache.node_types),
                     visibility: type_visibility,
                     tile_size: options.tile_size,

@@ -8,7 +8,10 @@ pub const SOUTHEAST: u32 = SOUTH | EAST;
 pub const SOUTHWEST: u32 = SOUTH | WEST;
 
 pub const FLOAT_LAYER: f32 = -1.0;
+pub const EFFECTS_LAYER: f32 = 5000.0;
 pub const FLOAT_PLANE: f32 = -32767.0;
+
+pub const SIDE_MAP: u32 = 2;
 
 pub const RESET_COLOR: u32 = 2;
 pub const RESET_ALPHA: u32 = 4;

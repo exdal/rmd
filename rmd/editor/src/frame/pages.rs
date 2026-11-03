@@ -1,5 +1,5 @@
 use core::bitset::BitSet;
-use std::collections::BTreeMap;
+use std::{cmp::Reverse, collections::BTreeMap};
 
 use render::{SpriteInstance, SpriteTexture, UpdateRange};
 
@@ -119,7 +119,7 @@ impl FrameInstances {
             for (index, chunk) in chunks.into_iter().enumerate() {
                 let lower = match chunk.first() {
                     Some((key, _)) if index > 0 => *key,
-                    _ => (z, i32::MIN, i32::MIN, false, FIRST_PLACEMENT, 0),
+                    _ => (z, i32::MIN, Reverse(i32::MAX), i32::MIN, false, FIRST_PLACEMENT, 0),
                 };
 
                 let start_offset = sprites.len();
@@ -350,6 +350,7 @@ pub(super) mod tests {
             tests::{assert_render_data_matches, document, icons, textures, tree},
             update_prefab, update_prefabs,
         },
+        world::Perspective,
     };
 
     /// Pages sit back to back, hold sorted keys within their bounds, and pad with spare slots.
@@ -519,6 +520,7 @@ pub(super) mod tests {
             &textures,
             &document,
             FrameRenderOptions {
+                perspective: Perspective::TopDown,
                 node_types: None,
                 visibility: &visibility,
                 tile_size: 32,

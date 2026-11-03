@@ -92,6 +92,7 @@ impl Session {
                 &self.textures,
                 &document,
                 frame::FrameRenderOptions {
+                    perspective: environment.world.perspective,
                     node_types: None,
                     visibility: &frame::TypeVisibility::default(),
                     tile_size: self.options.tile_size,
