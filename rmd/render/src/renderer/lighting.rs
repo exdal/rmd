@@ -7,7 +7,7 @@ use super::{
     sprites::{merged_ranges, updates_since, valid_update_range},
     upload::{device_buffer_info, upload_buffer},
 };
-use crate::{Frame, GpuError};
+use crate::{Frame, GpuError, MapViewFrame, UpdateRange};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -46,7 +46,7 @@ impl Renderer {
             return Ok(());
         }
 
-        if frame.map_views.len() == 1 && self.uploaded_lighting.len() == 1 && self.prepare_lighting_update(frame)? {
+        if self.uploaded_lighting.len() == frame.map_views.len() && self.prepare_lighting_update(frame)? {
             return Ok(());
         }
 
@@ -133,54 +133,142 @@ impl Renderer {
     }
 
     fn prepare_lighting_update(&mut self, frame: &Frame<'_>) -> Result<bool, GpuError> {
-        let (Some(view), Some(uploaded)) = (frame.map_views.first(), self.uploaded_lighting.first()) else {
-            return Ok(false);
-        };
-        let (Some(lighting), Some(revision), Some(buffer)) = (view.lighting, uploaded.revision, self.lights) else {
-            return Ok(false);
-        };
-        let Some(updates) = updates_since(lighting.pending_updates, revision, |update| update.previous_revision) else {
+        let Some(buffer) = self.lights else {
             return Ok(false);
         };
 
-        let ranges = merged_ranges(updates.iter().map(|update| update.tiles));
-        if uploaded.base != 0
-            || uploaded.size != lighting.size
-            || uploaded.count != lighting.tiles.len()
-            || lighting.tiles.len() > self.light_capacity
-            || !ranges
-                .iter()
-                .all(|range| valid_update_range(Some(*range), lighting.tiles.len()))
-        {
-            return Ok(false);
+        let mut plans = Vec::new();
+        for (index, (uploaded, view)) in self.uploaded_lighting.iter().zip(frame.map_views).enumerate() {
+            if uploaded.revision == view.lighting.map(|lighting| lighting.revision) {
+                continue;
+            }
+
+            let Some(ranges) = plan_lighting_update(uploaded, view) else {
+                return Ok(false);
+            };
+            if uploaded.base as usize + uploaded.count > self.light_capacity {
+                return Ok(false);
+            }
+            plans.push((index, ranges));
         }
 
-        let payloads = ranges
-            .iter()
-            .map(|range| {
-                lighting.tiles[range.start..range.end]
-                    .iter()
-                    .enumerate()
-                    .map(|(offset, tile)| gpu_light_tile(range.start + offset, tile))
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if payloads.iter().any(|payload| !payload.is_empty()) {
+        let mut payloads = Vec::new();
+        for (index, ranges) in &plans {
+            let Some(lighting) = frame.map_views[*index].lighting else {
+                return Ok(false);
+            };
+            let base = self.uploaded_lighting[*index].base as usize;
+
+            for range in ranges {
+                let payload = (range.start - base..range.end - base)
+                    .map(|local| gpu_light_tile(local, &lighting.tiles[local]))
+                    .collect::<Result<Vec<_>, _>>()?;
+                payloads.push((*range, payload));
+            }
+        }
+
+        if payloads.iter().any(|(_, payload)| !payload.is_empty()) {
             self.graph.wait()?;
         }
-        let writes = ranges
+
+        let writes = payloads
             .iter()
-            .zip(&payloads)
             .map(|(range, payload)| Ok((gpu_light_offset(range.start)?, payload_bytes(payload))))
             .collect::<Result<Vec<_>, GpuError>>()?;
         upload_buffer(&mut self.device, &mut self.graph, buffer, &writes)?;
 
-        let Some(uploaded) = self.uploaded_lighting.first_mut() else {
-            return Ok(false);
-        };
-
-        uploaded.revision = Some(lighting.revision);
+        for (index, _) in &plans {
+            let revision = frame.map_views[*index].lighting.map(|lighting| lighting.revision);
+            self.uploaded_lighting[*index].revision = revision;
+        }
 
         Ok(true)
+    }
+}
+
+fn plan_lighting_update(uploaded: &UploadedLighting, view: &MapViewFrame<'_>) -> Option<Vec<UpdateRange>> {
+    let lighting = view.lighting?;
+    let updates = updates_since(lighting.pending_updates, uploaded.revision?, |update| {
+        update.previous_revision
+    })?;
+    let ranges = merged_ranges(updates.iter().map(|update| update.tiles));
+    let is_valid = uploaded.size == lighting.size
+        && uploaded.count == lighting.tiles.len()
+        && ranges
+            .iter()
+            .all(|range| valid_update_range(Some(*range), lighting.tiles.len()));
+    if !is_valid {
+        return None;
+    }
+
+    let base = uploaded.base as usize;
+
+    Some(
+        ranges
+            .into_iter()
+            .map(|range| UpdateRange {
+                start: base + range.start,
+                end: base + range.end,
+            })
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{LightTile, LightingFrame, LightingUpdate, MapViewRect, renderer::fixtures::map_view};
+
+    const TILES: [LightTile; 4] = [LightTile { corners: [[0.0; 3]; 4] }; 4];
+
+    fn lit_view(revision: u64, size: [u32; 3], updates: &'static [LightingUpdate]) -> MapViewFrame<'static> {
+        MapViewFrame {
+            lighting: Some(LightingFrame {
+                size,
+                tiles: &TILES,
+                tile_size: 32,
+                minimum_brightness: 0.0,
+                revision,
+                pending_updates: updates,
+            }),
+            ..map_view(MapViewRect::default())
+        }
+    }
+
+    fn uploaded(base: u32, revision: Option<u64>, size: [u32; 3]) -> UploadedLighting {
+        UploadedLighting {
+            revision,
+            base,
+            count: 4,
+            size,
+        }
+    }
+
+    static UPDATES: [LightingUpdate; 1] = [LightingUpdate {
+        previous_revision: 5,
+        tiles: UpdateRange { start: 1, end: 3 },
+    }];
+
+    #[test]
+    fn a_later_view_updates_at_its_own_base() {
+        let view = lit_view(6, [2, 2, 1], &UPDATES);
+
+        assert_eq!(
+            plan_lighting_update(&uploaded(100, Some(5), [2, 2, 1]), &view),
+            Some(vec![UpdateRange { start: 101, end: 103 }])
+        );
+    }
+
+    #[test]
+    fn lighting_updates_fall_back_when_the_layout_changes() {
+        let view = lit_view(6, [2, 2, 1], &UPDATES);
+
+        assert_eq!(plan_lighting_update(&uploaded(0, Some(5), [4, 1, 1]), &view), None);
+        assert_eq!(plan_lighting_update(&uploaded(0, Some(4), [2, 2, 1]), &view), None);
+        assert_eq!(plan_lighting_update(&uploaded(0, None, [2, 2, 1]), &view), None);
+        assert_eq!(
+            plan_lighting_update(&uploaded(0, Some(5), [2, 2, 1]), &map_view(MapViewRect::default())),
+            None
+        );
     }
 }

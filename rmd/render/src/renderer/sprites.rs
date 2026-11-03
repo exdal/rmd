@@ -3,11 +3,13 @@ use vir::allocator::Allocator;
 
 use super::{
     Renderer,
-    gpu::{GpuSprite, gpu_sprite, gpu_sprite_offset, gpu_sprite_range, payload_bytes},
+    gpu::{GpuSprite, gpu_sprite_offset, gpu_sprite_range, payload_bytes},
     sheets::{merge_sheets, note_sheets, sheet_indices},
     upload::{device_buffer_info, upload_buffer},
 };
-use crate::{Frame, GpuError, SpriteInstance};
+use crate::{Frame, GpuError, MapViewFrame, SpriteInstance, UpdateRange};
+
+const MIN_VIEW_CAPACITY: usize = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct LevelRange {
@@ -28,6 +30,7 @@ pub(super) struct UploadedMapView {
     pub(super) revision: u64,
     pub(super) base: u32,
     count: usize,
+    capacity: usize,
     pub(super) ranges: Vec<LevelRange>,
     pub(super) sheets: Vec<u32>,
 }
@@ -45,33 +48,39 @@ impl Renderer {
             return Ok(());
         }
 
-        if frame.map_views.len() == 1 && self.uploaded.len() == 1 && self.prepare_frame_update(frame)? {
+        if self.sprites.is_some() && self.uploaded.len() == frame.map_views.len() && self.prepare_frame_update(frame)? {
             return Ok(());
         }
 
-        let total: usize = frame.map_views.iter().map(|view| view.sprite_instances.len()).sum();
-        u32::try_from(total).map_err(|_| GpuError::SpriteUploadTooLarge)?;
-        let mut payload = Vec::with_capacity(total);
+        let regions = view_regions(frame.map_views.iter().map(|view| view.sprite_instances.len()))?;
+        let total = regions.last().map_or(0, |&(base, capacity)| base as usize + capacity);
 
+        let mut payloads = Vec::with_capacity(frame.map_views.len());
         let mut uploaded = Vec::with_capacity(frame.map_views.len());
-        for view in frame.map_views {
-            let base = u32::try_from(payload.len()).map_err(|_| GpuError::SpriteUploadTooLarge)?;
-
-            for sprite in view.sprite_instances {
-                let index = payload.len();
-                payload.push(gpu_sprite(index, sprite)?);
-            }
+        for (view, &(base, capacity)) in frame.map_views.iter().zip(&regions) {
+            let count = view.sprite_instances.len();
+            payloads.push(gpu_sprite_range(
+                view.sprite_instances,
+                UpdateRange { start: 0, end: count },
+            )?);
 
             note_sheets(&mut self.requested_sheets, view.sprite_instances);
 
             uploaded.push(UploadedMapView {
                 revision: view.revision,
                 base,
-                count: view.sprite_instances.len(),
+                count,
+                capacity,
                 ranges: level_ranges(view.sprite_instances),
                 sheets: sheet_indices(view.sprite_instances),
             });
         }
+
+        let writes = uploaded
+            .iter()
+            .zip(&payloads)
+            .map(|(view, payload)| Ok((gpu_sprite_offset(view.base as usize)?, payload_bytes(payload))))
+            .collect::<Result<Vec<_>, GpuError>>()?;
 
         self.device.wait_idle()?;
         self.uploaded.clear();
@@ -89,12 +98,7 @@ impl Renderer {
                 .device
                 .allocator
                 .allocate_buffer(&device_buffer_info(size, "sprites"))?;
-            if let Err(error) = upload_buffer(
-                &mut self.device,
-                &mut self.graph,
-                buffer,
-                &[(0, payload_bytes(&payload))],
-            ) {
+            if let Err(error) = upload_buffer(&mut self.device, &mut self.graph, buffer, &writes) {
                 self.device.allocator.deallocate_buffer(buffer);
 
                 return Err(error);
@@ -106,19 +110,23 @@ impl Renderer {
 
             self.sprite_capacity = capacity;
         } else if let Some(buffer) = self.sprites {
-            upload_buffer(
-                &mut self.device,
-                &mut self.graph,
-                buffer,
-                &[(0, payload_bytes(&payload))],
-            )?;
+            upload_buffer(&mut self.device, &mut self.graph, buffer, &writes)?;
         }
 
         // area colors sample the sprites' sheets, so those have to be loaded first
         self.load_requested_sheets()?;
 
         let sprites = *self.sprites.as_ref().ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
-        self.color_area_outlines(sprites, crate::UpdateRange { start: 0, end: total })?;
+        for view in &uploaded {
+            let start = view.base as usize;
+            self.color_area_outlines(
+                sprites,
+                UpdateRange {
+                    start,
+                    end: start + view.count,
+                },
+            )?;
+        }
 
         self.uploaded = uploaded;
 
@@ -126,66 +134,116 @@ impl Renderer {
     }
 
     fn prepare_frame_update(&mut self, frame: &Frame<'_>) -> Result<bool, GpuError> {
-        let (Some(view), Some(uploaded)) = (frame.map_views.first(), self.uploaded.first()) else {
-            return Ok(false);
-        };
-        let Some(updates) = updates_since(view.pending_updates, uploaded.revision, |update| {
-            update.previous_revision
-        }) else {
-            return Ok(false);
-        };
-        let ranges = merged_ranges(updates.iter().flat_map(|update| update.sprites.iter().copied()));
-        if uploaded.base != 0
-            || view.sprite_instances.len() > self.sprite_capacity
-            || !ranges
-                .iter()
-                .all(|range| valid_update_range(Some(*range), view.sprite_instances.len()))
-            || (uploaded.count != view.sprite_instances.len() && ranges.is_empty())
-        {
-            return Ok(false);
-        }
         let Some(sprites) = self.sprites else {
             return Ok(false);
         };
 
-        let sprite_payloads = ranges
-            .iter()
-            .map(|range| gpu_sprite_range(view.sprite_instances, *range))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut packed = Vec::new();
-        for range in &ranges {
-            note_sheets(&mut packed, &view.sprite_instances[range.start..range.end]);
-        }
-        self.requested_sheets.extend_from_slice(&packed);
-        if sprite_payloads.iter().any(|payload| !payload.is_empty()) {
-            self.graph.wait()?;
+        let mut plans = Vec::new();
+        for (index, (uploaded, view)) in self.uploaded.iter().zip(frame.map_views).enumerate() {
+            if uploaded.revision == view.revision {
+                continue;
+            }
+
+            let Some(ranges) = plan_sprite_update(uploaded, view) else {
+                return Ok(false);
+            };
+            plans.push((index, ranges));
         }
 
-        let writes = ranges
+        let mut payloads = Vec::new();
+        let mut packed_views = Vec::with_capacity(plans.len());
+        for (index, ranges) in &plans {
+            let view = &frame.map_views[*index];
+            let base = self.uploaded[*index].base as usize;
+
+            let mut packed = Vec::new();
+            for range in ranges {
+                let local = UpdateRange {
+                    start: range.start - base,
+                    end: range.end - base,
+                };
+                payloads.push((*range, gpu_sprite_range(view.sprite_instances, local)?));
+                note_sheets(&mut packed, &view.sprite_instances[local.start..local.end]);
+            }
+            packed_views.push(packed);
+        }
+
+        let writes = payloads
             .iter()
-            .zip(&sprite_payloads)
             .map(|(range, payload)| Ok((gpu_sprite_offset(range.start)?, payload_bytes(payload))))
             .collect::<Result<Vec<_>, GpuError>>()?;
 
+        if payloads.iter().any(|(_, payload)| !payload.is_empty()) {
+            self.graph.wait()?;
+        }
+
         upload_buffer(&mut self.device, &mut self.graph, sprites, &writes)?;
+        for packed in &packed_views {
+            self.requested_sheets.extend_from_slice(packed);
+        }
         self.load_requested_sheets()?;
 
-        for range in &ranges {
+        for (range, _) in &payloads {
             self.color_area_outlines(sprites, *range)?;
         }
 
-        let Some(uploaded) = self.uploaded.first_mut() else {
-            return Ok(false);
-        };
-        if uploaded.count != view.sprite_instances.len() {
-            uploaded.ranges = level_ranges(view.sprite_instances);
+        for ((index, _), packed) in plans.iter().zip(&packed_views) {
+            let view = &frame.map_views[*index];
+            let uploaded = &mut self.uploaded[*index];
+            if uploaded.count != view.sprite_instances.len() {
+                uploaded.ranges = level_ranges(view.sprite_instances);
+            }
+            uploaded.revision = view.revision;
+            uploaded.count = view.sprite_instances.len();
+            merge_sheets(&mut uploaded.sheets, packed);
         }
-        uploaded.revision = view.revision;
-        uploaded.count = view.sprite_instances.len();
-        merge_sheets(&mut uploaded.sheets, &packed);
 
         Ok(true)
     }
+}
+
+fn view_regions(counts: impl Iterator<Item = usize>) -> Result<Vec<(u32, usize)>, GpuError> {
+    let mut regions = Vec::new();
+    let mut next = 0usize;
+    for count in counts {
+        let capacity = count
+            .checked_add(count / 4)
+            .ok_or(GpuError::SpriteUploadTooLarge)?
+            .max(MIN_VIEW_CAPACITY);
+        let base = u32::try_from(next).map_err(|_| GpuError::SpriteUploadTooLarge)?;
+        next = next.checked_add(capacity).ok_or(GpuError::SpriteUploadTooLarge)?;
+        u32::try_from(next).map_err(|_| GpuError::SpriteUploadTooLarge)?;
+
+        regions.push((base, capacity));
+    }
+
+    Ok(regions)
+}
+
+fn plan_sprite_update(uploaded: &UploadedMapView, view: &MapViewFrame<'_>) -> Option<Vec<UpdateRange>> {
+    let updates = updates_since(view.pending_updates, uploaded.revision, |update| {
+        update.previous_revision
+    })?;
+    let len = view.sprite_instances.len();
+    let ranges = merged_ranges(updates.iter().flat_map(|update| update.sprites.iter().copied()));
+    let is_valid = len <= uploaded.capacity
+        && ranges.iter().all(|range| valid_update_range(Some(*range), len))
+        && (uploaded.count == len || !ranges.is_empty());
+    if !is_valid {
+        return None;
+    }
+
+    let base = uploaded.base as usize;
+
+    Some(
+        ranges
+            .into_iter()
+            .map(|range| UpdateRange {
+                start: base + range.start,
+                end: base + range.end,
+            })
+            .collect(),
+    )
 }
 
 pub(super) fn updates_since<T>(updates: &[T], uploaded: u64, previous_revision: impl Fn(&T) -> u64) -> Option<&[T]> {
@@ -196,7 +254,7 @@ pub(super) fn updates_since<T>(updates: &[T], uploaded: u64, previous_revision: 
     Some(&updates[start..])
 }
 
-pub(super) fn merged_ranges(ranges: impl Iterator<Item = crate::UpdateRange>) -> Vec<crate::UpdateRange> {
+pub(super) fn merged_ranges(ranges: impl Iterator<Item = UpdateRange>) -> Vec<UpdateRange> {
     let mut ranges = ranges.collect::<Vec<_>>();
     ranges.sort_unstable_by_key(|range| range.start);
     ranges.dedup_by(|next, kept| {
@@ -211,7 +269,7 @@ pub(super) fn merged_ranges(ranges: impl Iterator<Item = crate::UpdateRange>) ->
     ranges
 }
 
-pub(super) fn valid_update_range(range: Option<crate::UpdateRange>, len: usize) -> bool {
+pub(super) fn valid_update_range(range: Option<UpdateRange>, len: usize) -> bool {
     range.is_none_or(|range| range.start <= range.end && range.end <= len)
 }
 
@@ -261,7 +319,10 @@ pub(super) fn visible_range(ranges: &[LevelRange], active_z: u32, underlay_depth
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{UpdateRange, renderer::fixtures::sprite};
+    use crate::{
+        FrameUpdate, MapViewRect,
+        renderer::fixtures::{map_view_with_sprites, sprite},
+    };
 
     #[test]
     fn update_ranges_must_fit_their_current_buffer() {
@@ -426,6 +487,100 @@ mod tests {
                 count: 3,
                 underlay_count: 0,
             }
+        );
+    }
+
+    fn update(previous_revision: u64, start: usize, end: usize) -> FrameUpdate {
+        FrameUpdate {
+            previous_revision,
+            sprites: vec![UpdateRange { start, end }],
+        }
+    }
+
+    fn no_ranges(previous_revision: u64) -> FrameUpdate {
+        FrameUpdate {
+            previous_revision,
+            sprites: Vec::new(),
+        }
+    }
+
+    fn uploaded_view(base: u32, count: usize, capacity: usize) -> UploadedMapView {
+        UploadedMapView {
+            revision: 5,
+            base,
+            count,
+            capacity,
+            ..Default::default()
+        }
+    }
+
+    fn changed_view<'a>(sprites: &'a [SpriteInstance], updates: &'a [FrameUpdate]) -> MapViewFrame<'a> {
+        MapViewFrame {
+            revision: 6,
+            pending_updates: updates,
+            ..map_view_with_sprites(MapViewRect::default(), sprites)
+        }
+    }
+
+    #[test]
+    fn view_regions_are_ascending_and_leave_slack() {
+        let regions = view_regions([0, 10, 4000, 1024].into_iter()).unwrap();
+
+        assert_eq!(regions, [(0, 1024), (1024, 1024), (2048, 5000), (7048, 1280)]);
+        for (pair, count) in regions.windows(2).zip([0, 10, 4000]) {
+            assert_eq!(pair[0].0 as usize + pair[0].1, pair[1].0 as usize);
+            assert!(pair[0].1 >= count);
+        }
+    }
+
+    #[test]
+    fn view_regions_reject_u32_overflow() {
+        assert!(view_regions([u32::MAX as usize].into_iter()).is_err());
+    }
+
+    #[test]
+    fn a_later_view_updates_at_its_own_base() {
+        let sprites = [sprite(1), sprite(1), sprite(1)];
+        let updates = [update(5, 1, 3)];
+
+        assert_eq!(
+            plan_sprite_update(&uploaded_view(1024, 3, 1024), &changed_view(&sprites, &updates)),
+            Some(vec![UpdateRange { start: 1025, end: 1027 }])
+        );
+    }
+
+    #[test]
+    fn growth_inside_the_region_is_accepted_and_past_it_is_not() {
+        let sprites = vec![sprite(1); 5];
+        let updates = [update(5, 3, 5)];
+
+        assert!(plan_sprite_update(&uploaded_view(0, 3, 5), &changed_view(&sprites, &updates)).is_some());
+        assert_eq!(
+            plan_sprite_update(&uploaded_view(0, 3, 4), &changed_view(&sprites, &updates)),
+            None
+        );
+    }
+
+    #[test]
+    fn sprite_updates_fall_back_when_they_cannot_be_applied() {
+        let sprites = [sprite(1), sprite(1)];
+        let uploaded = uploaded_view(0, 2, 1024);
+
+        assert_eq!(
+            plan_sprite_update(&uploaded, &changed_view(&sprites, &[update(4, 0, 1)])),
+            None
+        );
+        assert_eq!(
+            plan_sprite_update(&uploaded_view(0, 1, 1024), &changed_view(&sprites, &[no_ranges(5)])),
+            None
+        );
+        assert_eq!(
+            plan_sprite_update(&uploaded_view(0, 1, 1024), &changed_view(&sprites, &[])),
+            None
+        );
+        assert_eq!(
+            plan_sprite_update(&uploaded, &changed_view(&sprites, &[update(5, 1, 3)])),
+            None
         );
     }
 }
