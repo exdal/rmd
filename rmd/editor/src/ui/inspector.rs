@@ -104,6 +104,7 @@ pub struct InspectorState {
     transform_mode: TransformMode,
     scope: EditScope,
     filter: InspectorFilter,
+    shows_all_directions: bool,
 }
 
 #[derive(Default)]
@@ -616,13 +617,29 @@ impl InspectorState {
                 8 => 8,
                 _ => 8,
             });
-        let directions = direction_choices(count, snapshot.declared_directions, snapshot.directional_types);
-        let current = selected_direction(bits, snapshot.directional_types);
+        let (directions, current) = if self.shows_all_directions {
+            (Dir::ORDER.to_vec(), Dir::from_bits(bits))
+        } else {
+            (
+                direction_choices(count, snapshot.declared_directions, snapshot.directional_types),
+                selected_direction(bits, snapshot.directional_types),
+            )
+        };
         let preview = current
             .map(direction_label)
             .unwrap_or_else(|| format!("Custom ({number})"));
 
-        begin_property_row(ui, session, self.scope, property, "Direction");
+        let shows_all_directions = &mut self.shows_all_directions;
+        begin_property_row_with(ui, session, self.scope, property, "Direction", |ui| {
+            let label = if *shows_all_directions {
+                "Show supported directions"
+            } else {
+                "Show all directions"
+            };
+            if ui.menu_item(label) {
+                *shows_all_directions = !*shows_all_directions;
+            }
+        });
         let _id = ui.push_id(vars::DIR);
         ui.set_next_item_width(-1.0);
         if let Some(combo) = ui.begin_combo("##value", &preview) {
@@ -633,7 +650,7 @@ impl InspectorState {
                     .selected(current == Some(direction))
                     .build()
                 {
-                    if snapshot.directional_types.is_some() {
+                    if snapshot.directional_types.is_some() && !self.shows_all_directions {
                         session.set_directional_type_in(self.scope, direction, None);
                     } else {
                         session.edit_instance_vars_in(
@@ -734,12 +751,14 @@ impl InspectorState {
         self.picked = None;
         self.drafts.clear();
         self.active_drag = None;
+        self.shows_all_directions = false;
     }
 
     fn sync(&mut self, snapshot: &InspectorSnapshot) {
         if self.picked != Some(snapshot.picked) {
             self.drafts.clear();
             self.active_drag = None;
+            self.shows_all_directions = false;
             self.picked = Some(snapshot.picked);
         }
 
@@ -1320,6 +1339,12 @@ fn draw_changed_text(ui: &Ui, text: &str, is_changed: bool) {
 }
 
 fn begin_property_row(ui: &Ui, session: &mut Session, scope: EditScope, property: &InspectorProperty, label: &str) {
+    begin_property_row_with(ui, session, scope, property, label, |_| {});
+}
+
+fn begin_property_row_with(
+    ui: &Ui, session: &mut Session, scope: EditScope, property: &InspectorProperty, label: &str, menu: impl FnOnce(&Ui),
+) {
     ui.table_next_row();
     ui.table_next_column();
     ui.align_text_to_frame_padding();
@@ -1338,6 +1363,7 @@ fn begin_property_row(ui: &Ui, session: &mut Session, scope: EditScope, property
     {
         let _id = ui.push_id(property.name.as_str());
         if let Some(_popup) = ui.begin_popup_context_item_with_label(Some("property-menu")) {
+            menu(ui);
             draw_reset_item(ui, session, scope, &property.name, property.overridden, || {
                 format!(
                     "Remove the map override and restore {}",
