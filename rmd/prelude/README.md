@@ -21,4 +21,4 @@ disables the optional standard prelude. Projects can omit an appearance profile.
 generates the Rust `Intrinsic` enum. Semantic analysis, IR generation, code generation, and the
 virtual machine share that enum.
 
-See [`docs/demir.md`](../docs/demir.md) for the compiler and appearance-baking architecture.
+See [`docs/demir.md`](../../docs/demir.md) for the compiler and appearance-baking architecture.

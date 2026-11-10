@@ -939,7 +939,7 @@ mod tests {
 
     #[test]
     fn eval_executes_main_and_prints_world_log() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/hello_world.dm");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello_world.dm");
 
         assert_eq!(
             evaluate_file(&path).expect("evaluate hello world"),
@@ -949,7 +949,7 @@ mod tests {
 
     #[test]
     fn eval_executes_an_explicit_entry() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/hello_world.dm");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello_world.dm");
 
         assert_eq!(
             evaluate_file_with(&path, EntrySelection::Explicit(String::from("/proc/main")))

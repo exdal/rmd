@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["prelude", "rmd/*", "rmdc"]
+members = ["rmd/*"]
 
 [workspace.package]
 edition = "2024"
@@ -16,7 +16,7 @@ ir = { path = "rmd/ir" }
 lexer = { path = "rmd/lexer" }
 net = { path = "rmd/net" }
 objtree = { path = "rmd/objtree" }
-prelude = { path = "prelude" }
+prelude = { path = "rmd/prelude" }
 preprocessor = { path = "rmd/preprocessor" }
 protocol = { path = "rmd/protocol" }
 render = { path = "rmd/render" }

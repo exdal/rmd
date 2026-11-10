@@ -177,7 +177,7 @@ field combines the selected, hovered, and always flags.
 `light` writes the `demir_light_*` fields declared on `/atom`. The schema supports point and cone
 sources, blockers, cells that pass light between levels, ambient light, fullbright cells, and
 appearance-based light roles. See
-[`prelude/demir.dm`](../prelude/demir.dm) for the complete field list.
+[`rmd/prelude/demir.dm`](../rmd/prelude/demir.dm) for the complete field list.
 
 `ui` can call the `imgui_*` procedures declared in the prelude. The editor retains widget values
 between frames. A frame keeps profile writes only when a user interaction changes the heap.
