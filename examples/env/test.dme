@@ -1,4 +1,4 @@
-// A minimal environment for exercising the viewer end to end.
+// A minimal environment for exercising the editor end to end.
 
 // BEGIN_FILE_DIR
 #define FILE_DIR .

@@ -62,7 +62,7 @@ profile and variants derived from it. Exactly one subtype must directly set `def
 default marker is not inherited for selection purposes, so a debug subtype does not become a
 second default merely because its parent is the default profile.
 
-The declared default is used by the viewer, compiler driver, and the editor's first load. The
+The declared default is used by the compiler driver and the editor's first load. The
 editor can request another profile by its complete type path. A missing remembered path falls back
 to the declared default. Zero or multiple explicit defaults are profile diagnostics and disable
 bake bytecode generation until the codebase fixes the declaration.
@@ -285,9 +285,9 @@ codebase. The files remain usable as templates for codebase-owned profiles:
   Goonstation, Monkestation, Monke’s Paw, Nova Sector, Oculis Station, SecondCity, TGMC, tgstation,
   and Vanderlin.
 
-## Editor and viewer
+## Editor
 
-The editor and viewer enable appearance baking by default. Set `DM_BAKE=0` to disable it for one
+The editor enables appearance baking by default. Set `DM_BAKE=0` to disable it for one
 run. The editor's **Run DM appearance baking** setting applies on the next codebase load.
 
 The editor's **Compiler > Codebase** setting lists every profile in the loaded codebase and marks
@@ -347,7 +347,7 @@ reads reach only files under the codebase directory. `catch` can handle DM throw
 Random values use a seed based on the target atom's type and coordinates. Repeating a bake for the
 same atom gives the same random sequence. World time and tick usage are deterministic.
 
-Profiles can write diagnostic text with `world.log << value`. The compiler driver and viewer write
+Profiles can write diagnostic text with `world.log << value`. The compiler driver writes
 each line to standard error with a `DM:` prefix. The editor sends the line to its normal log.
 
 A fault reports its kind, the line that raised it, and the call stack back to the hook:
