@@ -1,21 +1,24 @@
 [package]
 name = "rmdc"
 version = "1.7.5"
-edition = "2024"
+edition.workspace = true
 
 [[bin]]
 name = "rmdc"
 path = "src/main.rs"
 
 [dependencies]
-core = { path = "../rmd/core" }
-lexer = { path = "../rmd/lexer" }
-preprocessor = { path = "../rmd/preprocessor" }
-ast = { path = "../rmd/ast" }
-sema = { path = "../rmd/sema" }
-objtree = { path = "../rmd/objtree" }
-dmm = { path = "../rmd/dmm" }
-dmi = { path = "../rmd/dmi" }
-ir = { path = "../rmd/ir" }
-codegen = { path = "../rmd/codegen" }
-vm = { path = "../rmd/vm" }
+core.workspace = true
+lexer.workspace = true
+preprocessor.workspace = true
+ast.workspace = true
+sema.workspace = true
+objtree.workspace = true
+dmm.workspace = true
+dmi.workspace = true
+ir.workspace = true
+codegen.workspace = true
+vm.workspace = true
+
+[lints]
+workspace = true

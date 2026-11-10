@@ -1,16 +1,19 @@
 [package]
 name = "ir"
 version = "1.2.2"
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
-rustc-hash = "2"
-fixedbitset = "0.5"
-core = { path = "../core" }
-ast = { path = "../ast" }
-objtree = { path = "../objtree" }
-prelude = { path = "../../prelude" }
+rustc-hash.workspace = true
+fixedbitset.workspace = true
+core.workspace = true
+ast.workspace = true
+objtree.workspace = true
+prelude.workspace = true
 
 [dev-dependencies]
-lexer = { path = "../lexer" }
-sema = { path = "../sema" }
+lexer.workspace = true
+sema.workspace = true
+
+[lints]
+workspace = true

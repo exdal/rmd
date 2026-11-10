@@ -1,10 +1,13 @@
 [package]
 name = "lexer"
 version = "1.7.3"
-edition = "2024"
+edition.workspace = true
 
 [lib]
 path = "src/lib.rs"
 
 [dependencies]
-core = { path = "../core" }
+core.workspace = true
+
+[lints]
+workspace = true

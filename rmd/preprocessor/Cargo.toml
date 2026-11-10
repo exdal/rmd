@@ -1,13 +1,16 @@
 [package]
 name = "preprocessor"
 version = "1.9.2"
-edition = "2024"
+edition.workspace = true
 
 [lib]
 path = "src/lib.rs"
 
 [dependencies]
-core = { path = "../core" }
-lexer = { path = "../lexer" }
-prelude = { path = "../../prelude" }
-rustc-hash = "2"
+core.workspace = true
+lexer.workspace = true
+prelude.workspace = true
+rustc-hash.workspace = true
+
+[lints]
+workspace = true

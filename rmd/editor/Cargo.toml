@@ -1,7 +1,7 @@
 [package]
 name = "editor"
 version = "1.13.0"
-edition = "2024"
+edition.workspace = true
 
 [lib]
 path = "src/lib.rs"
@@ -11,30 +11,30 @@ name = "rmde"
 path = "src/main.rs"
 
 [dependencies]
-bitflags = "2"
-core = { path = "../core" }
-defines = { path = "../defines" }
-preprocessor = { path = "../preprocessor" }
-ast = { path = "../ast" }
-sema = { path = "../sema" }
-objtree = { path = "../objtree" }
-ir = { path = "../ir" }
-codegen = { path = "../codegen" }
-vm = { path = "../vm" }
-dmm = { path = "../dmm" }
-dmi = { path = "../dmi" }
-net = { path = "../net" }
-render = { path = "../render" }
-winit = "0.30.12"
-raw-window-handle = "0.6.0"
-dear-imgui-rs = { version = "=0.17.0", features = ["serde", "multi-viewport"] }
-dear-imgui-winit = { version = "=0.17.0", features = ["multi-viewport"] }
-serde = { version = "1", features = ["derive"] }
-toml = "1"
+bitflags.workspace = true
+core.workspace = true
+defines.workspace = true
+preprocessor.workspace = true
+ast.workspace = true
+sema.workspace = true
+objtree.workspace = true
+ir.workspace = true
+codegen.workspace = true
+vm.workspace = true
+dmm.workspace = true
+dmi.workspace = true
+net.workspace = true
+render.workspace = true
+winit.workspace = true
+raw-window-handle.workspace = true
+dear-imgui-rs = { workspace = true, features = ["serde"] }
+dear-imgui-winit.workspace = true
+serde = { workspace = true, features = ["derive"] }
+toml.workspace = true
 rfd = "0.17.2"
-png = "0.18"
-ring = "0.17"
-log = "0.4"
+png.workspace = true
+ring.workspace = true
+log.workspace = true
 shlex = "1.3"
 semver = "1"
 ureq = { version = "3", features = ["json"] }
@@ -42,3 +42,6 @@ gix = { version = "0.87.1", default-features = false, features = ["attributes", 
 jiff = "0.2"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 fontdb = "0.24.0"
+
+[lints]
+workspace = true

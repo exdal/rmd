@@ -2,6 +2,42 @@
 resolver = "3"
 members = ["prelude", "rmd/*", "rmdc"]
 
+[workspace.package]
+edition = "2024"
+
+[workspace.dependencies]
+ast = { path = "rmd/ast" }
+codegen = { path = "rmd/codegen" }
+core = { path = "rmd/core" }
+defines = { path = "rmd/defines" }
+dmi = { path = "rmd/dmi" }
+dmm = { path = "rmd/dmm" }
+ir = { path = "rmd/ir" }
+lexer = { path = "rmd/lexer" }
+net = { path = "rmd/net" }
+objtree = { path = "rmd/objtree" }
+prelude = { path = "prelude" }
+preprocessor = { path = "rmd/preprocessor" }
+protocol = { path = "rmd/protocol" }
+render = { path = "rmd/render" }
+sema = { path = "rmd/sema" }
+vm = { path = "rmd/vm" }
+
+bitflags = "2"
+dear-imgui-rs = { version = "=0.17.0", features = ["multi-viewport"] }
+dear-imgui-winit = { version = "=0.17.0", features = ["multi-viewport"] }
+fixedbitset = "0.5"
+log = "0.4"
+png = "0.18"
+raw-window-handle = "0.6.0"
+ring = "0.17"
+rustc-hash = "2"
+serde = "1"
+toml = "1"
+winit = "0.30.12"
+
+[workspace.lints]
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

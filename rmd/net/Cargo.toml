@@ -1,7 +1,7 @@
 [package]
 name = "net"
 version = "0.3.1"
-edition = "2024"
+edition.workspace = true
 
 [lib]
 path = "src/lib.rs"
@@ -11,14 +11,17 @@ name = "rmds"
 path = "src/bin/rmds.rs"
 
 [dependencies]
-protocol = { path = "../protocol" }
+protocol.workspace = true
 bytes = "1"
 fastrand = "2"
-log = "0.4"
+log.workspace = true
 quinn = { version = "0.11", default-features = false, features = ["log", "runtime-tokio", "rustls-ring"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
-ring = "0.17"
-serde = "1"
+ring.workspace = true
+serde.workspace = true
 socket2 = "0.6"
 rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std"] }
 tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
+
+[lints]
+workspace = true
