@@ -98,4 +98,4 @@ You can also check a profile from the command line:
 cargo run --release --bin rmdc -- bake path/to/codebase.dme path/to/map.dmm --summary
 ```
 
-The [profile guide](docs/demir.md) covers lighting, connections, highlights, UI hooks, and the Node tool. The [bundled profiles](examples/profiles) show how these hooks work in larger codebases.
+The [profile guide](docs/demir.md) covers lighting, connections, highlights, UI hooks, and the Node tool. The [bundled profiles](rmd/editor/profiles) show how these hooks work in larger codebases.

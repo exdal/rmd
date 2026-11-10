@@ -154,17 +154,17 @@ impl BundledProfile {
 
     const fn source(self) -> &'static str {
         match self {
-            Self::Beestation => include_str!("../../../examples/profiles/beestation.dm"),
-            Self::Cmss13 => include_str!("../../../examples/profiles/cmss13.dm"),
-            Self::Goonstation => include_str!("../../../examples/profiles/goonstation.dm"),
-            Self::Monkestation => include_str!("../../../examples/profiles/monkestation.dm"),
-            Self::Monkespaw => include_str!("../../../examples/profiles/monkespaw.dm"),
-            Self::Novasector => include_str!("../../../examples/profiles/novasector.dm"),
-            Self::Oculis => include_str!("../../../examples/profiles/oculis.dm"),
-            Self::SecondCity => include_str!("../../../examples/profiles/secondcity.dm"),
-            Self::Tgmc => include_str!("../../../examples/profiles/tgmc.dm"),
-            Self::Tgstation => include_str!("../../../examples/profiles/tgstation.dm"),
-            Self::Vanderlin => include_str!("../../../examples/profiles/vanderlin.dm"),
+            Self::Beestation => include_str!("../profiles/beestation.dm"),
+            Self::Cmss13 => include_str!("../profiles/cmss13.dm"),
+            Self::Goonstation => include_str!("../profiles/goonstation.dm"),
+            Self::Monkestation => include_str!("../profiles/monkestation.dm"),
+            Self::Monkespaw => include_str!("../profiles/monkespaw.dm"),
+            Self::Novasector => include_str!("../profiles/novasector.dm"),
+            Self::Oculis => include_str!("../profiles/oculis.dm"),
+            Self::SecondCity => include_str!("../profiles/secondcity.dm"),
+            Self::Tgmc => include_str!("../profiles/tgmc.dm"),
+            Self::Tgstation => include_str!("../profiles/tgstation.dm"),
+            Self::Vanderlin => include_str!("../profiles/vanderlin.dm"),
         }
     }
 
