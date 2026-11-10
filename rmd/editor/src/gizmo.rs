@@ -1,4 +1,4 @@
-use core::types::{Identifier, Value};
+use base::types::{Identifier, Value};
 
 use dear_imgui_rs::{DrawListMut, MouseButton, MouseCursor, StyleColor, Ui};
 use dmi::metadata::Dir;
@@ -1684,7 +1684,7 @@ mod tests {
 
     fn picked() -> PrefabInstanceId {
         let mut map = dmm::Map::new(dmm::Size { x: 1, y: 1, z: 1 });
-        let key = map.intern_tile(vec![dmm::Prefab::new(core::path::TreePath::parse("/obj/test"))]);
+        let key = map.intern_tile(vec![dmm::Prefab::new(base::path::TreePath::parse("/obj/test"))]);
         map.grid[0][0][0] = key;
         let document = editor::document::MapDocument::new(map, 1);
 

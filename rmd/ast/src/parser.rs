@@ -1,4 +1,4 @@
-use core::{
+use base::{
     location::{LineTable, Location, SourceLine},
     path::{PathFlags, TreePath},
     types::{Identifier, VarModifiers},

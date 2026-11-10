@@ -1,4 +1,4 @@
-use core::location::Position;
+use base::location::Position;
 
 use crate::Coord;
 

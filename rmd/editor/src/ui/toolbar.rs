@@ -1,4 +1,4 @@
-use core::path::TreePath;
+use base::path::TreePath;
 
 use dear_imgui_rs::{StyleColor, StyleVar, Ui};
 use editor::{

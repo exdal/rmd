@@ -1,5 +1,5 @@
-pub use core::types::{IrNodeId, ProcId, ProcKind};
-use core::{
+pub use base::types::{IrNodeId, ProcId, ProcKind};
+use base::{
     interner::SymbolMap,
     location::{LineTable, Location, SourceLine},
     path::TreePath,

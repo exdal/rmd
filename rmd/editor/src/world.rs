@@ -1,4 +1,4 @@
-use core::{
+use base::{
     path::TreePath,
     types::{Identifier, Value},
     vars,
@@ -89,7 +89,7 @@ fn default_path(tree: &ObjectTree, variable: &str, root: TypeId) -> Option<TreeP
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{Identifier, Value, VarModifiers},

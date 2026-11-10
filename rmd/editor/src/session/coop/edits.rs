@@ -371,7 +371,7 @@ mod tests {
             Some(LevelStep::Change),
             &LevelOp::Insert(InsertLevel {
                 at: InsertAt::Top,
-                contents: LevelContents::Fill(patch::encode_tile(&[Prefab::new(core::path::TreePath::parse("/turf"))])),
+                contents: LevelContents::Fill(patch::encode_tile(&[Prefab::new(base::path::TreePath::parse("/turf"))])),
             }),
         );
         assert_eq!(session.z(), 2);

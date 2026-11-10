@@ -1,4 +1,4 @@
-use core::{path::TreePath, types::Identifier, vars};
+use base::{path::TreePath, types::Identifier, vars};
 
 use dear_imgui_rs::{Key, MouseButton, PopupToken, Ui, WindowHoveredFlags};
 use dmm::{Coord, Prefab, PrefabInstanceId};
@@ -419,7 +419,7 @@ fn display_name(tree: Option<&ObjectTree>, prefab: &Prefab) -> String {
 
 #[cfg(test)]
 mod tests {
-    use core::{location::Location, path::TreePath, types::Value};
+    use base::{location::Location, path::TreePath, types::Value};
     use std::path::PathBuf;
 
     use dear_imgui_rs::{Condition, sys};

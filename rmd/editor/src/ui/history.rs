@@ -92,7 +92,7 @@ fn prefab_tooltip(prefab: &Prefab) -> String {
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
+    use base::path::TreePath;
 
     use dmm::Prefab;
 
@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn prefab_tooltips_include_the_path_and_exact_overrides() {
         let mut prefab = Prefab::new(TreePath::parse("/obj/table"));
-        prefab.set_var("name".into(), core::types::Value::Text("custom".into()));
+        prefab.set_var("name".into(), base::types::Value::Text("custom".into()));
 
         assert_eq!(prefab_tooltip(&prefab), "/obj/table\nname = \"custom\"");
     }

@@ -1,4 +1,4 @@
-use core::types::IrNodeId;
+use base::types::IrNodeId;
 
 use ast::UnaryOp;
 
@@ -91,7 +91,7 @@ fn is_removable_when_unused(node: &IrNode, facts: &ValueFacts) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{IrNodeId, ProcId, Value},

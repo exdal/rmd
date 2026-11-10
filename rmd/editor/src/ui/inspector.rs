@@ -1,4 +1,4 @@
-use core::{
+use base::{
     path::TreePath,
     types::{Identifier, ListEntry, Value},
     vars,
@@ -1979,7 +1979,7 @@ impl InspectorPanel {
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{Identifier, Value, VarModifiers},

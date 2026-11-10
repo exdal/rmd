@@ -1,4 +1,4 @@
-use core::path::TreePath;
+use base::path::TreePath;
 use std::{
     cell::Cell,
     collections::{HashMap, VecDeque},
@@ -1101,7 +1101,7 @@ impl UiState {
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
+    use base::path::TreePath;
     use std::{cell::Cell, path::PathBuf};
 
     use dear_imgui_rs::DockLayout;

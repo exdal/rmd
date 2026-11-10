@@ -1,4 +1,4 @@
-use core::types::{IrNodeId, ProcId, Value};
+use base::types::{IrNodeId, ProcId, Value};
 use std::fmt::Write;
 
 use rustc_hash::FxHashSet;
@@ -736,7 +736,7 @@ mod tests {
         };
     }
 
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{IrNodeId, ProcId},

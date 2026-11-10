@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 bitflags.workspace = true
-core.workspace = true
+base.workspace = true
 defines.workspace = true
 preprocessor.workspace = true
 ast.workspace = true

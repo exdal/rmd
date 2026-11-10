@@ -1,4 +1,4 @@
-use core::{path::TreePath, types::Identifier, vars};
+use base::{path::TreePath, types::Identifier, vars};
 
 use objtree::TypeId;
 

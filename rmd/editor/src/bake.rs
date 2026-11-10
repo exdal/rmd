@@ -1,4 +1,4 @@
-use core::file_path;
+use base::file_path;
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
@@ -448,7 +448,7 @@ pub fn build_map(
 
 #[cfg(test)]
 mod tests {
-    use core::{arena::StrArena, path::TreePath};
+    use base::{arena::StrArena, path::TreePath};
     use std::{
         path::PathBuf,
         sync::atomic::{AtomicUsize, Ordering},

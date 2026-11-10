@@ -1,4 +1,4 @@
-use core::types::IrNodeId;
+use base::types::IrNodeId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodegenError {

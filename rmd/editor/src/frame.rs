@@ -1,4 +1,4 @@
-use core::{path::TreePath, types::Identifier, vars};
+use base::{path::TreePath, types::Identifier, vars};
 use std::{
     cmp::Reverse,
     collections::{HashMap, HashSet},
@@ -1248,7 +1248,7 @@ pub fn sprite_texture_or_missing(
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{Identifier, Value, VarModifiers},

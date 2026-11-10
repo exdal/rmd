@@ -97,7 +97,7 @@ fn draw_fault(ui: &Ui, session: &Session, fault: &RuntimeFault<'_>, output: &mut
 
     let program = environment.bake_program.as_ref();
     let proc_name = |proc| program.map_or("<unknown proc>", |program| vm::proc_name(&program.module, proc));
-    let location = |location: core::location::Location| {
+    let location = |location: base::location::Location| {
         location
             .display(environment.relative_bake_file(location.file))
             .to_string()

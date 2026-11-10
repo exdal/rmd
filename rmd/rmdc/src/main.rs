@@ -14,7 +14,7 @@
 //! rmdc icon   <file.dmi>    decode an icon and list its states
 //! ```
 
-use core::{
+use base::{
     arena::StrArena,
     file_path,
     location::{FileId, Location},
@@ -445,8 +445,8 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
                 .map(|(_, value)| value.clone())
         });
         if baked.is_some()
-            && baked.as_ref().unwrap_or(&core::types::Value::Null)
-                != fallback.as_ref().unwrap_or(&core::types::Value::Null)
+            && baked.as_ref().unwrap_or(&base::types::Value::Null)
+                != fallback.as_ref().unwrap_or(&base::types::Value::Null)
         {
             changed += 1;
         }
@@ -540,7 +540,7 @@ fn icon_states(tree: &ObjectTree, module: &codegen::Module, roots: &[PathBuf]) -
         .map(|var| &var.value)
         .chain(&module.constants)
         .filter_map(|value| match value {
-            core::types::Value::Resource(path) if path.to_ascii_lowercase().ends_with(".dmi") => Some(path.as_str()),
+            base::types::Value::Resource(path) if path.to_ascii_lowercase().ends_with(".dmi") => Some(path.as_str()),
             _ => None,
         })
         .collect::<BTreeSet<_>>();
@@ -756,7 +756,7 @@ fn format_var(var: &VarDecl) -> String {
 }
 
 fn format_proc(proc: &ProcDecl) -> String {
-    let mut output = if proc.kind == core::types::ProcKind::Verb {
+    let mut output = if proc.kind == base::types::ProcKind::Verb {
         format!("verb/{}(", proc.name)
     } else {
         format!("proc/{}(", proc.name)
@@ -903,7 +903,7 @@ fn render_icon(icon: &IconFile) -> String {
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         arena::StrArena,
         location::{FileId, Location, Position},
         source::SourceMap,

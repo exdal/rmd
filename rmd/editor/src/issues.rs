@@ -1,4 +1,4 @@
-use core::path::TreePath;
+use base::path::TreePath;
 use std::collections::BTreeMap;
 
 use dmm::{Coord, Prefab};

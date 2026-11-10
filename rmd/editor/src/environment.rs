@@ -1,4 +1,4 @@
-use core::{arena::StrArena, location::FileId, path::TreePath, source::SourceMap};
+use base::{arena::StrArena, location::FileId, path::TreePath, source::SourceMap};
 use std::{
     io::{self, Write},
     path::{Path, PathBuf},

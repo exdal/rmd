@@ -1,4 +1,4 @@
-use core::path::TreePath;
+use base::path::TreePath;
 
 use dear_imgui_rs::Ui;
 use objtree::ObjectTree;
@@ -54,7 +54,7 @@ pub(super) fn matching_type_paths_up_to_filtered(
 
 #[cfg(test)]
 mod tests {
-    use core::{location::Location, path::TreePath};
+    use base::{location::Location, path::TreePath};
 
     use objtree::ObjectTree;
 

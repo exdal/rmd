@@ -1,4 +1,4 @@
-use core::{
+use base::{
     arena::StrArena,
     path::TreePath,
     types::{Identifier, Value},

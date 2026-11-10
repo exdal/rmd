@@ -368,7 +368,7 @@ impl ConflictState {
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
+    use base::path::TreePath;
 
     use dmm::{Coord, Map, Prefab, Size, merge::TileConflict};
 

@@ -6,7 +6,7 @@ edition.workspace = true
 [dependencies]
 fixedbitset.workspace = true
 rustc-hash.workspace = true
-core.workspace = true
+base.workspace = true
 ir.workspace = true
 objtree.workspace = true
 prelude.workspace = true

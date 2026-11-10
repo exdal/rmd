@@ -1,4 +1,4 @@
-use core::{
+use base::{
     location::Position,
     path::{PathFlags, TreePath},
     types::{Identifier, ListEntry, Value},
@@ -718,7 +718,7 @@ pub fn load(path: impl AsRef<Path>) -> std::io::Result<(Map, Vec<MapError>)> {
 
 #[cfg(test)]
 mod tests {
-    use core::types::{Identifier, Value};
+    use base::types::{Identifier, Value};
 
     use crate::{
         Coord, MapFormat, VarValue,

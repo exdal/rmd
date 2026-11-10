@@ -1,4 +1,4 @@
-use core::{arena::StrArena, path::TreePath};
+use base::{arena::StrArena, path::TreePath};
 use std::{
     collections::HashSet,
     fs,

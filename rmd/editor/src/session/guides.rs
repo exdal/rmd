@@ -129,7 +129,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use dmm::{Coord, Map, Prefab, Size};

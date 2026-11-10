@@ -128,7 +128,7 @@ pub fn merge3(base: Option<&Map>, ours: &Map, theirs: &Map) -> Merged {
 
 #[cfg(test)]
 mod tests {
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
 
     use super::{merge3, tiles_equal};
     use crate::{Coord, Map, Prefab, Size, Tile, parser::parse, writer::write};

@@ -1,4 +1,4 @@
-use core::path::TreePath;
+use base::path::TreePath;
 use std::{
     collections::{HashMap, HashSet},
     mem,
@@ -468,7 +468,7 @@ fn paths(tile: &Tile) -> Vec<&TreePath> {
 
 #[cfg(test)]
 mod tests {
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
     use std::sync::Arc;
 
     use dmm::{Coord, Map, Prefab, PrefabInstanceId, key::Key, parser, writer};

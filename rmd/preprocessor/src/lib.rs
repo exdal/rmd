@@ -3,7 +3,7 @@ pub mod diagnostic;
 pub mod error;
 pub mod eval;
 
-use core::{
+use base::{
     arena::StrArena,
     file_path,
     location::{FileId, Location},

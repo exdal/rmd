@@ -1,4 +1,4 @@
-use core::types::{IrNodeId, Value};
+use base::types::{IrNodeId, Value};
 use std::collections::VecDeque;
 
 use super::Adjacency;
@@ -154,7 +154,7 @@ fn kind(kinds: &[ValueKinds], id: IrNodeId) -> ValueKinds {
 
 #[cfg(test)]
 mod tests {
-    use core::types::{IrNodeId, Value};
+    use base::types::{IrNodeId, Value};
 
     use super::ValueFacts;
     use crate::{BinaryOp, IrNode, Module, PhiOperand, UnaryOp};

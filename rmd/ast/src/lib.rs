@@ -1,4 +1,4 @@
-use core::{
+use base::{
     location::{LineTable, Location, SourceLine},
     path::TreePath,
     types::{Identifier, VarModifiers},
@@ -90,10 +90,10 @@ pub enum Declaration {
     },
 }
 
-pub use core::types::{InputType, ProcKind, TypeSpec};
+pub use base::types::{InputType, ProcKind, TypeSpec};
 
-pub type VarSpec = core::types::VarSpec<ExpressionId>;
-pub type ProcParam = core::types::ProcParam<ExpressionId>;
+pub type VarSpec = base::types::VarSpec<ExpressionId>;
+pub type ProcParam = base::types::ProcParam<ExpressionId>;
 
 #[derive(Debug, Clone)]
 pub enum Statement {

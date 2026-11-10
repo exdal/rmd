@@ -1,4 +1,4 @@
-use core::types::IrNodeId;
+use base::types::IrNodeId;
 use std::collections::VecDeque;
 
 use crate::{IrNode, Module, PhiOperand};
@@ -251,7 +251,7 @@ fn protect(protected: &mut [bool], block: IrNodeId) {
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{IrNodeId, ProcId, Value},

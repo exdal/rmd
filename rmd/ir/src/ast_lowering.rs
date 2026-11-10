@@ -1,4 +1,4 @@
-use core::{
+use base::{
     location::{Location, SourceLine},
     path::{PathFlags, TreePath},
     types::{Identifier, InputType, ListEntry, ProcKind, Value, VarModifiers, VarSpec},
@@ -802,7 +802,7 @@ impl<'a> IrModuleBuilder<'a> {
         };
 
         let mut fills = rest.iter().map(|argument| argument.value);
-        let chunks = chunks.iter().map(|s| core::types::decode_string(s)).collect();
+        let chunks = chunks.iter().map(|s| base::types::decode_string(s)).collect();
         let values = expressions
             .iter()
             .map(|expression| match expression.or_else(|| fills.next().flatten()) {
@@ -957,7 +957,7 @@ impl<'a> IrModuleBuilder<'a> {
                     Literal::Null => Value::Null,
                     Literal::Bool(b) => Value::Num(f32::from(*b)),
                     Literal::Num(n) => Value::Num(*n),
-                    Literal::String(s) => Value::Text(core::types::decode_string(s)),
+                    Literal::String(s) => Value::Text(base::types::decode_string(s)),
                     Literal::Resource(s) => Value::Resource(s.clone()),
                 });
             },
@@ -997,7 +997,7 @@ impl<'a> IrModuleBuilder<'a> {
             Some(Expression::Builtin(builtin)) => IrNode::Builtin(*builtin),
             Some(Expression::Grouped(inner)) => return self.lower_expr(*inner),
             Some(Expression::InterpString { chunks, expressions }) => {
-                let chunks = chunks.iter().map(|s| core::types::decode_string(s)).collect();
+                let chunks = chunks.iter().map(|s| base::types::decode_string(s)).collect();
                 let values = expressions
                     .iter()
                     .map(|e| match e {

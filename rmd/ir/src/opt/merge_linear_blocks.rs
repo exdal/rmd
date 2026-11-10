@@ -1,4 +1,4 @@
-use core::types::IrNodeId;
+use base::types::IrNodeId;
 
 use crate::{IrNode, Module};
 
@@ -160,7 +160,7 @@ fn protect(protected: &mut [bool], block: IrNodeId) {
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{IrNodeId, ProcId, Value},

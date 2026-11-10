@@ -335,7 +335,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
 
     use dmm::{Coord, Map, Prefab, Size};
     use editor::{

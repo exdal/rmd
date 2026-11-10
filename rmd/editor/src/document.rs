@@ -1,4 +1,4 @@
-use core::{
+use base::{
     path::TreePath,
     types::{Identifier, Value},
 };
@@ -574,7 +574,7 @@ impl MapDocument {
 
     /// this function keeps the ID stable
     pub fn replace_instance_path(
-        &mut self, id: PrefabInstanceId, label: impl Into<String>, path: core::path::TreePath,
+        &mut self, id: PrefabInstanceId, label: impl Into<String>, path: base::path::TreePath,
         mutations: &[VarMutation], group: Option<EditGroupId>,
     ) -> Option<bool> {
         self.edit_instances(&[id], label, Some(&path), mutations, group)
@@ -582,7 +582,7 @@ impl MapDocument {
 
     /// Changes every placement in `ids` the same way, as one map edit
     pub fn edit_instances(
-        &mut self, ids: &[PrefabInstanceId], label: impl Into<String>, path: Option<&core::path::TreePath>,
+        &mut self, ids: &[PrefabInstanceId], label: impl Into<String>, path: Option<&base::path::TreePath>,
         mutations: &[VarMutation], group: Option<EditGroupId>,
     ) -> Option<bool> {
         let mut by_tile = BTreeMap::<Coord, Vec<usize>>::new();
@@ -1209,7 +1209,7 @@ fn with_replaced(edit: &Edit, replaced: Vec<PrefabInstanceId>) -> Vec<PrefabInst
 
 #[cfg(test)]
 mod tests {
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
     use std::{collections::HashSet, env, error::Error, fs, process, ptr};
 
     use dmm::{Map, MapFormat, Prefab, Size, parser, writer::MapWriter};
@@ -1295,7 +1295,7 @@ mod tests {
     #[test]
     fn sanitizing_drops_constant_defaults_and_merges_tiles_that_become_equal() {
         let mut tree = objtree::ObjectTree::new();
-        let table = tree.register(&TreePath::parse("/obj/table"), core::location::Location::default());
+        let table = tree.register(&TreePath::parse("/obj/table"), base::location::Location::default());
         for (name, value) in [
             ("name", Value::Text(String::from("table"))),
             ("desc", Value::Unevaluated),
@@ -1554,7 +1554,7 @@ mod tests {
         document.pick_instance(Some(id));
 
         assert_eq!(
-            document.set_instance_var(id, "name".into(), core::types::Value::Text("selected".into())),
+            document.set_instance_var(id, "name".into(), base::types::Value::Text("selected".into())),
             Some(true),
         );
         assert_eq!(document.picked_instance(), Some(id));
@@ -1564,7 +1564,7 @@ mod tests {
             document
                 .prefab_instance(id)
                 .and_then(|instance| instance.prefab().var(&"name".into())),
-            Some(&core::types::Value::Text("selected".into())),
+            Some(&base::types::Value::Text("selected".into())),
         );
         assert_eq!(
             document
@@ -1580,7 +1580,7 @@ mod tests {
         );
 
         assert_eq!(
-            document.set_instance_var(id, "name".into(), core::types::Value::Text("selected".into())),
+            document.set_instance_var(id, "name".into(), base::types::Value::Text("selected".into())),
             Some(false),
         );
 
@@ -1598,7 +1598,7 @@ mod tests {
             document
                 .prefab_instance(id)
                 .and_then(|instance| instance.prefab().var(&"name".into())),
-            Some(&core::types::Value::Text("selected".into())),
+            Some(&base::types::Value::Text("selected".into())),
         );
     }
 
@@ -1613,14 +1613,14 @@ mod tests {
                 .map(|instance| instance.prefab().path.to_string())
         };
         assert_eq!(
-            document.set_instance_var(id, "name".into(), core::types::Value::Text("before".into())),
+            document.set_instance_var(id, "name".into(), base::types::Value::Text("before".into())),
             Some(true),
         );
 
         document.set_read_only(true);
         assert!(!document.allows_edit_at(coord));
         assert_eq!(
-            document.set_instance_var(id, "name".into(), core::types::Value::Text("after".into())),
+            document.set_instance_var(id, "name".into(), base::types::Value::Text("after".into())),
             Some(false),
         );
         assert!(!document.resize(3, 1, &[]));
@@ -1647,7 +1647,7 @@ mod tests {
                     "change pixel offset",
                     &[VarMutation::Set(
                         "pixel_x".into(),
-                        core::types::Value::Num(value as f32),
+                        base::types::Value::Num(value as f32),
                     )],
                     Some(group),
                 ),
@@ -1662,7 +1662,7 @@ mod tests {
             document
                 .prefab_instance(id)
                 .and_then(|instance| instance.prefab().var(&"pixel_x".into())),
-            Some(&core::types::Value::Num(1_000.0)),
+            Some(&base::types::Value::Num(1_000.0)),
         );
         assert!(document.undo());
         assert_eq!(
@@ -1677,7 +1677,7 @@ mod tests {
             document
                 .prefab_instance(id)
                 .and_then(|instance| instance.prefab().var(&"pixel_x".into())),
-            Some(&core::types::Value::Num(1_000.0)),
+            Some(&base::types::Value::Num(1_000.0)),
         );
     }
 
@@ -1696,7 +1696,7 @@ mod tests {
                 id,
                 destination,
                 "re-anchor table",
-                &[VarMutation::Set("pixel_x".into(), core::types::Value::Num(-32.0))],
+                &[VarMutation::Set("pixel_x".into(), base::types::Value::Num(-32.0))],
                 None,
             ),
             Some(true),
@@ -1708,7 +1708,7 @@ mod tests {
                 .ok_or("prefab instance is missing")?
                 .prefab()
                 .var(&"pixel_x".into()),
-            Some(&core::types::Value::Num(-32.0)),
+            Some(&base::types::Value::Num(-32.0)),
         );
         assert_eq!(
             document.placed_tile(source).unwrap(),
@@ -1751,7 +1751,7 @@ mod tests {
                 id,
                 source,
                 "change pixel offset",
-                &[VarMutation::Set("pixel_x".into(), core::types::Value::Num(4.0))],
+                &[VarMutation::Set("pixel_x".into(), base::types::Value::Num(4.0))],
                 None,
             ),
             Some(true),
@@ -1774,7 +1774,7 @@ mod tests {
                 .ok_or("prefab instance is missing")?
                 .prefab()
                 .var(&"pixel_x".into()),
-            Some(&core::types::Value::Num(4.0)),
+            Some(&base::types::Value::Num(4.0)),
         );
         Ok(())
     }
@@ -1785,10 +1785,10 @@ mod tests {
         let coord = Coord::new(1, 1, 1);
         let id = document.instance_ids_at(coord)[1];
         document
-            .set_instance_var(id, "name".into(), core::types::Value::Text("custom".into()))
+            .set_instance_var(id, "name".into(), base::types::Value::Text("custom".into()))
             .unwrap();
         document
-            .set_instance_var(id, "dir".into(), core::types::Value::Num(8.0))
+            .set_instance_var(id, "dir".into(), base::types::Value::Num(8.0))
             .unwrap();
         let replacement = TreePath::parse("/obj/table/directional/north");
 
@@ -1809,7 +1809,7 @@ mod tests {
         assert_eq!(prefab.path, replacement);
         assert_eq!(
             prefab.var(&"name".into()),
-            Some(&core::types::Value::Text("custom".into()))
+            Some(&base::types::Value::Text("custom".into()))
         );
         assert_eq!(prefab.var(&"dir".into()), None);
 
@@ -1821,9 +1821,9 @@ mod tests {
         assert_eq!(prefab.path, TreePath::parse("/obj/table"));
         assert_eq!(
             prefab.var(&"name".into()),
-            Some(&core::types::Value::Text("custom".into()))
+            Some(&base::types::Value::Text("custom".into()))
         );
-        assert_eq!(prefab.var(&"dir".into()), Some(&core::types::Value::Num(8.0)));
+        assert_eq!(prefab.var(&"dir".into()), Some(&base::types::Value::Num(8.0)));
         assert!(document.redo());
         assert_eq!(
             document
@@ -1908,8 +1908,8 @@ mod tests {
                 id,
                 "set pixel offset",
                 &[
-                    VarMutation::Set("pixel_x".into(), core::types::Value::Num(4.0)),
-                    VarMutation::Set("pixel_y".into(), core::types::Value::Num(-2.0)),
+                    VarMutation::Set("pixel_x".into(), base::types::Value::Num(4.0)),
+                    VarMutation::Set("pixel_y".into(), base::types::Value::Num(-2.0)),
                 ],
                 None,
             ),

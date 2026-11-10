@@ -1,4 +1,4 @@
-use core::types::{IrNodeId, Value};
+use base::types::{IrNodeId, Value};
 use std::collections::VecDeque;
 
 use rustc_hash::FxHashMap;

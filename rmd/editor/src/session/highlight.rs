@@ -169,7 +169,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::{location::Location, path::TreePath};
+    use base::{location::Location, path::TreePath};
     use std::sync::Arc;
 
     use dmm::{Map, Prefab, Size};

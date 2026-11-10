@@ -30,7 +30,7 @@
 // as many fixed points (registers that are mapped to themselves) as possible." (4.2)
 //
 
-use core::types::IrNodeId;
+use base::types::IrNodeId;
 use std::collections::hash_map::Entry;
 
 use fixedbitset::FixedBitSet;

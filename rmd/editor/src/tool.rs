@@ -1,4 +1,4 @@
-use core::{
+use base::{
     path::TreePath,
     types::{Identifier, Value},
     vars,
@@ -1339,7 +1339,7 @@ pub fn is_placeable(tree: &ObjectTree, id: TypeId) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{Value, VarModifiers},

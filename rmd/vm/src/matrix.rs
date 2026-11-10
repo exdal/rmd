@@ -1,4 +1,4 @@
-use core::{path::TreePath, types::Identifier};
+use base::{path::TreePath, types::Identifier};
 
 use codegen::opcode::Binary;
 use objtree::ObjectTree;

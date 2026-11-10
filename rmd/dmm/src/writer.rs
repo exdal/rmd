@@ -1,4 +1,4 @@
-use core::{path::TreePath, types::Value};
+use base::{path::TreePath, types::Value};
 use std::{fmt::Write, path::Path};
 
 use crate::{Map, MapFormat, Prefab, Tile, VarValue, key::Key};
@@ -221,7 +221,7 @@ pub fn write(map: &Map) -> String {
 
 #[cfg(test)]
 mod tests {
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
 
     use crate::{
         Map, MapFormat, Prefab, Size,
@@ -300,11 +300,11 @@ mod tests {
     #[test]
     fn formats_variable_values_as_dmm_expressions() {
         let value = Value::List(vec![
-            core::types::ListEntry {
+            base::types::ListEntry {
                 key: Value::Text("key".into()),
                 value: Some(Value::Path(TreePath::parse("/obj/item"))),
             },
-            core::types::ListEntry {
+            base::types::ListEntry {
                 key: Value::Resource("icons/items.dmi".into()),
                 value: None,
             },

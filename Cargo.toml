@@ -7,8 +7,8 @@ edition = "2024"
 
 [workspace.dependencies]
 ast = { path = "rmd/ast" }
+base = { path = "rmd/base" }
 codegen = { path = "rmd/codegen" }
-core = { path = "rmd/core" }
 defines = { path = "rmd/defines" }
 dmi = { path = "rmd/dmi" }
 dmm = { path = "rmd/dmm" }

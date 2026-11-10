@@ -1,4 +1,4 @@
-use core::path::TreePath;
+use base::path::TreePath;
 
 use dmm::{Coord, Prefab};
 use editor::{
@@ -220,7 +220,7 @@ impl Session {
 
     #[cfg(test)]
     pub fn set_picked_instance_var(
-        &mut self, name: core::types::Identifier, value: core::types::Value,
+        &mut self, name: base::types::Identifier, value: base::types::Value,
     ) -> Option<bool> {
         let label = format!("set {name}");
 
@@ -509,7 +509,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
 
     use dmi::metadata::Dir;
     use dmm::{Coord, Prefab};

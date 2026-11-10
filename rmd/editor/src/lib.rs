@@ -24,7 +24,7 @@ pub mod tool;
 pub mod visual;
 pub mod world;
 
-use core::{
+use base::{
     location::FileId,
     types::{Identifier, Value},
 };
@@ -188,15 +188,15 @@ impl Environment {
         self.builtin_files.contains(&id)
     }
 
-    pub fn file(&self, id: core::location::FileId) -> Option<&Path> {
+    pub fn file(&self, id: base::location::FileId) -> Option<&Path> {
         self.files.get(id.0 as usize).map(PathBuf::as_path)
     }
 
-    pub fn bake_file(&self, id: core::location::FileId) -> Option<&Path> {
+    pub fn bake_file(&self, id: base::location::FileId) -> Option<&Path> {
         self.bake_files.get(id.0 as usize).map(PathBuf::as_path)
     }
 
-    pub fn relative_bake_file(&self, id: core::location::FileId) -> Option<&Path> {
+    pub fn relative_bake_file(&self, id: base::location::FileId) -> Option<&Path> {
         let path = self.bake_file(id)?;
 
         Some(path.strip_prefix(self.base_dir()).unwrap_or(path))
@@ -501,7 +501,7 @@ impl EditorState {
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{Identifier, ListEntry, Value, VarModifiers},
@@ -738,7 +738,7 @@ mod tests {
     #[test]
     fn builtin_declarations_are_not_fingerprinted() {
         // the synthetic root sits in the first opened file, which is a built-in prelude file
-        let root = core::location::Location::default().file;
+        let root = base::location::Location::default().file;
         assert_eq!(
             fingerprint_of("empty", ""),
             crate::fingerprint::object_tree(&ObjectTree::new(), &[root])

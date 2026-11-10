@@ -1,4 +1,4 @@
-use core::types::IrNodeId;
+use base::types::IrNodeId;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -246,7 +246,7 @@ fn verify_targets(
 
 #[cfg(test)]
 mod tests {
-    use core::types::IrNodeId;
+    use base::types::IrNodeId;
 
     use super::verify;
     use crate::{IrNode, Module, PhiOperand};

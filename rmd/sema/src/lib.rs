@@ -1,6 +1,6 @@
 pub mod error;
 
-use core::{
+use base::{
     path::{PathFlags, TreePath},
     types::{Identifier, InputType, TypeSpec, Value},
     vars,
@@ -254,7 +254,7 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn check_intrinsic(&mut self, body: &[Statement], location: core::location::Location) {
+    fn check_intrinsic(&mut self, body: &[Statement], location: base::location::Location) {
         let kind = match intrinsic_marker(self.ast, body) {
             Ok(Some(name)) if Intrinsic::from_str(&name).is_err() => SemaErrorKind::UnknownIntrinsic(name),
             Ok(_) => return,

@@ -1,4 +1,4 @@
-use core::{
+use base::{
     path::TreePath,
     types::{Identifier, Value},
     vars,
@@ -272,7 +272,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{Identifier, Value},

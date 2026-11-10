@@ -1,4 +1,4 @@
-use core::path::TreePath;
+use base::path::TreePath;
 
 use dmm::{Coord, Prefab};
 use editor::{bake::BakeUpdate, document::DocumentId, patch};
@@ -318,7 +318,7 @@ fn resolve_fill_path(tree: &ObjectTree, input: &str, root: Option<TypeId>, kind:
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
+    use base::path::TreePath;
 
     use dmm::{Coord, Map, Prefab, Size};
     use editor::{
@@ -490,7 +490,7 @@ mod tests {
         for z in 1..=3 {
             let mut tile = fill.clone();
             let mut table = Prefab::new(TreePath::parse("/obj/structure/table"));
-            table.set_var("name".into(), core::types::Value::Text(format!("level {z}")));
+            table.set_var("name".into(), base::types::Value::Text(format!("level {z}")));
             tile.insert(0, table);
             let key = map.intern_tile(tile);
             map.grid[z - 1][0].fill(key);

@@ -1,4 +1,4 @@
-use core::types::Value;
+use base::types::Value;
 
 use dmm::{Map, MapFormat, writer::MapWriter};
 

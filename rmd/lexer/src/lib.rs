@@ -1,7 +1,7 @@
 pub mod error;
 pub mod token;
 
-use core::location::{FileId, Location, Position};
+use base::location::{FileId, Location, Position};
 
 use crate::{
     error::{LexError, LexErrorKind},

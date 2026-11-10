@@ -1,4 +1,4 @@
-use core::{
+use base::{
     types::{Identifier, Value},
     vars,
 };
@@ -713,7 +713,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
     use std::{
         collections::{HashMap, HashSet},
         sync::Arc,

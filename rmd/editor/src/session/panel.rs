@@ -166,7 +166,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
+    use base::path::TreePath;
     use std::{
         collections::{HashMap, HashSet},
         path::PathBuf,

@@ -1,4 +1,4 @@
-use core::{location::Location, path::TreePath, types::Identifier};
+use base::{location::Location, path::TreePath, types::Identifier};
 use std::path::Path;
 
 #[derive(Clone, Debug)]

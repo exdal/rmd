@@ -4,7 +4,7 @@ pub mod merge;
 pub mod parser;
 pub mod writer;
 
-use core::{
+use base::{
     bitset::BitIndex,
     path::TreePath,
     types::{Identifier, Value},
@@ -299,7 +299,7 @@ impl Map {
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
+    use base::path::TreePath;
 
     use crate::{Map, Prefab, Size, key::Key};
 
@@ -437,26 +437,26 @@ mod tests {
     #[test]
     fn prefab_vars_keep_insertion_order_and_replace_in_place() {
         let mut prefab = Prefab::new(TreePath::parse("/obj/t"));
-        prefab.set_var("name".into(), core::types::Value::Num(1.0));
-        prefab.set_var("id_tag".into(), core::types::Value::Num(2.0));
-        prefab.set_var("name".into(), core::types::Value::Num(3.0));
+        prefab.set_var("name".into(), base::types::Value::Num(1.0));
+        prefab.set_var("id_tag".into(), base::types::Value::Num(2.0));
+        prefab.set_var("name".into(), base::types::Value::Num(3.0));
 
         let names: Vec<&str> = prefab.vars.iter().map(|(name, _)| name.as_str()).collect();
 
         assert_eq!(names, ["name", "id_tag"]);
-        assert_eq!(prefab.var(&"name".into()), Some(&core::types::Value::Num(3.0)));
+        assert_eq!(prefab.var(&"name".into()), Some(&base::types::Value::Num(3.0)));
     }
 
     #[test]
     fn removing_a_prefab_var_preserves_the_order_of_the_rest() {
         let mut prefab = Prefab::new(TreePath::parse("/obj/t"));
-        prefab.set_var("first".into(), core::types::Value::Num(1.0));
-        prefab.set_var("middle".into(), core::types::Value::Num(2.0));
-        prefab.set_var("last".into(), core::types::Value::Num(3.0));
+        prefab.set_var("first".into(), base::types::Value::Num(1.0));
+        prefab.set_var("middle".into(), base::types::Value::Num(2.0));
+        prefab.set_var("last".into(), base::types::Value::Num(3.0));
 
         assert_eq!(
             prefab.remove_var(&"middle".into()).map(|var| var.value),
-            Some(core::types::Value::Num(2.0)),
+            Some(base::types::Value::Num(2.0)),
         );
         assert_eq!(
             prefab.vars.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(),

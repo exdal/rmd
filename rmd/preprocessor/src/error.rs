@@ -1,4 +1,4 @@
-use core::location::Location;
+use base::location::Location;
 use std::path::Path;
 
 use crate::diagnostic::{Code, Level};

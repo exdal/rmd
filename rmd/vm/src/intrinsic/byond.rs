@@ -1,4 +1,4 @@
-use core::{file_path, path::TreePath, types::Identifier, vars};
+use base::{file_path, path::TreePath, types::Identifier, vars};
 use std::{collections::HashSet, path::PathBuf};
 
 use crate::{

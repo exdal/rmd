@@ -8,7 +8,7 @@ name = "rmdc"
 path = "src/main.rs"
 
 [dependencies]
-core.workspace = true
+base.workspace = true
 lexer.workspace = true
 preprocessor.workspace = true
 ast.workspace = true

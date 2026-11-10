@@ -1,4 +1,4 @@
-use core::{
+use base::{
     location::SourceLine,
     path::{PathFlags, TreePath},
     types::{Identifier, ProcId, Value},

@@ -384,7 +384,7 @@ pub(crate) fn has_kind(tree: &ObjectTree, tile: &[PlacedPrefab], kind: Placement
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
+    use base::path::TreePath;
 
     use dmm::{Map, Prefab, Size};
 

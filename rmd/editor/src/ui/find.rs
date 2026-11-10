@@ -1,4 +1,4 @@
-use core::path::TreePath;
+use base::path::TreePath;
 
 use dear_imgui_rs::{
     Condition, ListClipper, SelectableFlags, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError,
@@ -386,7 +386,7 @@ impl FindPanel {
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
+    use base::path::TreePath;
 
     use dmm::{Coord, Map, Prefab, Size};
     use editor::document::MapDocument;

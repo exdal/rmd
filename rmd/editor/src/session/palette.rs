@@ -1,4 +1,4 @@
-use core::path::TreePath;
+use base::path::TreePath;
 
 use dmm::Prefab;
 use editor::{
@@ -155,7 +155,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
     use std::sync::Arc;
 
     use dmm::{Coord, Prefab};
@@ -210,7 +210,7 @@ mod tests {
         target.icon_state = "wall"
 "#;
         let compile = |baking| {
-            let arena = core::arena::StrArena::new();
+            let arena = base::arena::StrArena::new();
             let prelude = preprocessor::prelude_files()
                 .into_iter()
                 .chain([preprocessor::PreludeFile::Embedded("<test-standalone.dm>", profile)]);

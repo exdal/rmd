@@ -1,4 +1,4 @@
-use core::{path::TreePath, types::Identifier, vars};
+use base::{path::TreePath, types::Identifier, vars};
 use std::collections::{HashMap, HashSet};
 
 use dear_imgui_rs::{ListClipper, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError};
@@ -701,7 +701,7 @@ fn visible_type_children(tree: &ObjectTree, parent: TypeId, filter: ObjectTreeTy
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{Identifier, Value, VarModifiers},

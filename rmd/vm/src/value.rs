@@ -1,4 +1,4 @@
-use core::{
+use base::{
     path::TreePath,
     types::{Identifier, ProcId},
 };
@@ -176,9 +176,9 @@ impl PartialEq for GenericValue {
             (Self::Path(a), Self::Path(b)) => {
                 a.segments == b.segments
                     && a.flags
-                        .intersects(core::path::PathFlags::IS_PROC | core::path::PathFlags::IS_VERB)
+                        .intersects(base::path::PathFlags::IS_PROC | base::path::PathFlags::IS_VERB)
                         == b.flags
-                            .intersects(core::path::PathFlags::IS_PROC | core::path::PathFlags::IS_VERB)
+                            .intersects(base::path::PathFlags::IS_PROC | base::path::PathFlags::IS_VERB)
             },
             (Self::List(a), Self::List(b)) => a == b,
             (Self::ArgList(a), Self::ArgList(b)) => a == b,
@@ -203,7 +203,7 @@ impl GenericValue {
             Self::Path(p) => {
                 p.segments.hash(&mut hash);
                 p.flags
-                    .intersects(core::path::PathFlags::IS_PROC | core::path::PathFlags::IS_VERB)
+                    .intersects(base::path::PathFlags::IS_PROC | base::path::PathFlags::IS_VERB)
                     .hash(&mut hash);
             },
             Self::List(id) => id.hash(&mut hash),
@@ -338,7 +338,7 @@ impl AppearanceLighting {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AppearanceDelta {
-    pub vars: Vec<(Identifier, core::types::Value)>,
+    pub vars: Vec<(Identifier, base::types::Value)>,
     pub overlays: Vec<AppearanceDelta>,
     pub underlays: Vec<AppearanceDelta>,
     pub lighting: AppearanceLighting,

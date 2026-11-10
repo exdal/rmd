@@ -1,4 +1,4 @@
-use core::{
+use base::{
     path::{PathFlags, TreePath},
     types::Identifier,
     vars,
@@ -181,7 +181,7 @@ mod tests {
         };
     }
 
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
 
     use lexer::token::Token;
     use objtree::{ObjectTree, TypeId};

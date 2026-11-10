@@ -1,4 +1,4 @@
-use core::types::IrNodeId;
+use base::types::IrNodeId;
 
 use super::{
     simplify_phis::{Replacements, replace_all_uses, replace_operands, resolve},
@@ -209,7 +209,7 @@ mod tests {
         };
     }
 
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{IrNodeId, ProcId, Value},

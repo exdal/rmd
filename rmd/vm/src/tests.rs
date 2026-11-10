@@ -1,4 +1,4 @@
-use core::{
+use base::{
     arena::StrArena,
     path::TreePath,
     types::{Identifier, Value},
@@ -60,13 +60,13 @@ fn compile(source: &str) -> (ObjectTree, codegen::Module) {
     (tree, module)
 }
 
-fn proc(tree: &ObjectTree, index: &ProcIndex, name: &str) -> core::types::ProcId {
+fn proc(tree: &ObjectTree, index: &ProcIndex, name: &str) -> base::types::ProcId {
     index
         .inherited_body(tree, TypeId::ROOT, &name.into())
         .expect("fixture proc should exist")
 }
 
-fn hook(tree: &ObjectTree, index: &ProcIndex, hook: ProfileHook) -> core::types::ProcId {
+fn hook(tree: &ObjectTree, index: &ProcIndex, hook: ProfileHook) -> base::types::ProcId {
     let profile = profile_type(tree).expect("fixture should declare one profile");
     ProfileDefinition::resolve(tree, index, profile)
         .procedure(hook)
@@ -2358,7 +2358,7 @@ fn bake_cache_uses_instance_variables() {
     assert!(bake.cache_hits > 10);
 
     let mut edited = atoms[9].clone();
-    edited.vars.push(("style".into(), core::types::Value::Num(7.0)));
+    edited.vars.push(("style".into(), base::types::Value::Num(7.0)));
     bake.update(&tree, &module, vec![edited], &[]);
 
     assert_eq!(baked_state(&bake, 10), Some("7"));
@@ -2497,7 +2497,7 @@ fn assigning_appearance_lists_empties_or_copies_them() {
             .iter()
             .find(|(name, _)| name.as_str() == "icon_state")
             .map(|(_, value)| value),
-        Some(&core::types::Value::Text("edge".into()))
+        Some(&base::types::Value::Text("edge".into()))
     );
 }
 

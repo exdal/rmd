@@ -1,6 +1,6 @@
 // https://sunfishcode.github.io/blog/2018/10/22/Canonicalization.html
 
-use core::types::IrNodeId;
+use base::types::IrNodeId;
 
 use rustc_hash::FxHashSet;
 
@@ -143,7 +143,7 @@ fn clear_removed(node: &mut Option<IrNodeId>, removed: &FxHashSet<IrNodeId>) {
 
 #[cfg(test)]
 mod tests {
-    use core::types::Value;
+    use base::types::Value;
 
     use super::canonicalize_terminators;
     use crate::{IrNode, Module, PhiOperand};
@@ -153,28 +153,28 @@ mod tests {
         let mut module = Module {
             nodes: vec![
                 IrNode::Constant(Box::new(Value::Num(1.0))),
-                IrNode::Label(vec![core::types::IrNodeId(2)]),
+                IrNode::Label(vec![base::types::IrNodeId(2)]),
                 IrNode::Leave {
                     regions: 1,
-                    target: core::types::IrNodeId(3),
+                    target: base::types::IrNodeId(3),
                 },
-                IrNode::Label(vec![core::types::IrNodeId(4), core::types::IrNodeId(5)]),
+                IrNode::Label(vec![base::types::IrNodeId(4), base::types::IrNodeId(5)]),
                 IrNode::Phi {
                     operands: vec![PhiOperand {
-                        block: core::types::IrNodeId(1),
-                        value: core::types::IrNodeId(0),
+                        block: base::types::IrNodeId(1),
+                        value: base::types::IrNodeId(0),
                     }],
                 },
-                IrNode::Return(Some(core::types::IrNodeId(4))),
+                IrNode::Return(Some(base::types::IrNodeId(4))),
             ],
-            constants: vec![core::types::IrNodeId(0)],
+            constants: vec![base::types::IrNodeId(0)],
             ..Module::default()
         };
 
         canonicalize_terminators(&mut module);
 
         assert!(matches!(
-            module.node(core::types::IrNodeId(4)),
+            module.node(base::types::IrNodeId(4)),
             Some(IrNode::Phi { operands }) if operands.len() == 1
         ));
     }
@@ -184,31 +184,31 @@ mod tests {
         let mut module = Module {
             nodes: vec![
                 IrNode::Constant(Box::new(Value::Num(1.0))),
-                IrNode::Label(vec![core::types::IrNodeId(2), core::types::IrNodeId(3)]),
-                IrNode::Throw(core::types::IrNodeId(0)),
-                IrNode::Branch(core::types::IrNodeId(4)),
-                IrNode::Label(vec![core::types::IrNodeId(5), core::types::IrNodeId(6)]),
+                IrNode::Label(vec![base::types::IrNodeId(2), base::types::IrNodeId(3)]),
+                IrNode::Throw(base::types::IrNodeId(0)),
+                IrNode::Branch(base::types::IrNodeId(4)),
+                IrNode::Label(vec![base::types::IrNodeId(5), base::types::IrNodeId(6)]),
                 IrNode::Phi {
                     operands: vec![PhiOperand {
-                        block: core::types::IrNodeId(1),
-                        value: core::types::IrNodeId(0),
+                        block: base::types::IrNodeId(1),
+                        value: base::types::IrNodeId(0),
                     }],
                 },
-                IrNode::Return(Some(core::types::IrNodeId(5))),
+                IrNode::Return(Some(base::types::IrNodeId(5))),
             ],
-            constants: vec![core::types::IrNodeId(0)],
+            constants: vec![base::types::IrNodeId(0)],
             ..Module::default()
         };
 
         canonicalize_terminators(&mut module);
 
         assert_eq!(
-            module.block(core::types::IrNodeId(1)),
-            Some([core::types::IrNodeId(2)].as_slice())
+            module.block(base::types::IrNodeId(1)),
+            Some([base::types::IrNodeId(2)].as_slice())
         );
-        assert!(matches!(module.node(core::types::IrNodeId(3)), Some(IrNode::Noop)));
+        assert!(matches!(module.node(base::types::IrNodeId(3)), Some(IrNode::Noop)));
         assert!(matches!(
-            module.node(core::types::IrNodeId(5)),
+            module.node(base::types::IrNodeId(5)),
             Some(IrNode::Phi { operands }) if operands.is_empty()
         ));
         crate::verify(&module).expect("canonicalized module should verify");

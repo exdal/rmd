@@ -1,4 +1,4 @@
-use core::{
+use base::{
     location::{FileId, Location},
     types::Value,
 };

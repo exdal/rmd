@@ -1,4 +1,4 @@
-use core::path::TreePath;
+use base::path::TreePath;
 use std::path::{Path, PathBuf};
 
 use dear_imgui_rs::{DragFlags, Ui, WindowFlags};
@@ -1083,7 +1083,7 @@ impl UiState {
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
+    use base::path::TreePath;
     use std::{
         error::Error,
         ffi::{CStr, CString},

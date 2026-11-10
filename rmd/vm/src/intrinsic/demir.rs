@@ -1,4 +1,4 @@
-use core::types::Identifier;
+use base::types::Identifier;
 use std::collections::hash_map::Entry;
 
 use defines::{EAST, NORTH, NORTHEAST, NORTHWEST, SOUTH, SOUTHEAST, SOUTHWEST, WEST};

@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use core::path::TreePath;
+use base::path::TreePath;
 use dmm::{Map, MapFormat, Prefab, Size};
 use editor::{
     conflict::ConflictState,
@@ -454,7 +454,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
 
     use dmm::{Coord, Map, MapFormat, Prefab, Size};
     use editor::{document::MapDocument, tool::Tool};

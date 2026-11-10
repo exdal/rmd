@@ -1,4 +1,4 @@
-use core::path::TreePath;
+use base::path::TreePath;
 use std::{cell::Ref, collections::BTreeMap, sync::Arc};
 
 use dmm::Coord;
@@ -131,7 +131,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::location::Location;
+    use base::location::Location;
 
     use dmm::{Coord, Prefab};
     use editor::{focus::AreaFocus, progress::Progress};

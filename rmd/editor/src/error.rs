@@ -1,4 +1,4 @@
-use core::{location::FileId, source::SourceMap};
+use base::{location::FileId, source::SourceMap};
 use std::path::{Path, PathBuf};
 
 use ast::error::ParseError;

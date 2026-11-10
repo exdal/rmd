@@ -1,4 +1,4 @@
-use core::{bitset::BitIndex, interner::SymbolMap};
+use base::{bitset::BitIndex, interner::SymbolMap};
 use std::collections::HashMap;
 
 use objtree::{SharedVarId, TypeId};

@@ -562,7 +562,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
     use std::{mem, path::PathBuf};
 
     use dmm::{Coord, Map, Prefab, Size};

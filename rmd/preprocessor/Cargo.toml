@@ -7,7 +7,7 @@ edition.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-core.workspace = true
+base.workspace = true
 lexer.workspace = true
 prelude.workspace = true
 rustc-hash.workspace = true

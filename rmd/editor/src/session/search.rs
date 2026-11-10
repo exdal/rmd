@@ -66,7 +66,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
 
     use dmm::{Coord, Prefab};
     use editor::{search::SearchQuery, tool::Tool};

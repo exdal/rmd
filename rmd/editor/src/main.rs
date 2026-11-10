@@ -740,7 +740,7 @@ impl App {
         match request {
             ProfileReload::Select(profile) => {
                 bake.forced_profile = None;
-                bake.profile = Some(core::path::TreePath::parse(&profile));
+                bake.profile = Some(base::path::TreePath::parse(&profile));
             },
             ProfileReload::Force(profile) => bake.forced_profile = profile,
             ProfileReload::Current => {},
@@ -1264,7 +1264,7 @@ fn bake_options(settings: &Settings, environment: Option<&std::path::Path>) -> B
         optimizations_enabled: settings.optimizations_enabled,
         profile: environment
             .and_then(|path| settings.profile_for(path))
-            .map(core::path::TreePath::parse),
+            .map(base::path::TreePath::parse),
         forced_profile: environment
             .and_then(|path| settings.forced_profile_for(path))
             .map(str::to_owned),
@@ -1502,7 +1502,7 @@ mod tests {
 
     #[test]
     fn unknown_map_types_open_the_issues_panel_and_keep_their_overrides_when_saved() {
-        use core::{location::Location, path::TreePath};
+        use base::{location::Location, path::TreePath};
         use std::sync::Arc;
 
         use dmm::{Coord, MapFormat, writer::MapWriter};
@@ -1657,7 +1657,7 @@ a
 
         assert_eq!(
             options.profile,
-            Some(core::path::TreePath::parse("/datum/demir/station/debug"))
+            Some(base::path::TreePath::parse("/datum/demir/station/debug"))
         );
         assert_eq!(options.forced_profile.as_deref(), Some("tgstation"));
         assert!(options.optimizations_enabled);

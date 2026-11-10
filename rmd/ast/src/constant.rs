@@ -1,4 +1,4 @@
-use core::types::{ListEntry, Value};
+use base::types::{ListEntry, Value};
 
 use crate::{AST, BinaryOp, Expression, ExpressionId, Literal, UnaryOp};
 
@@ -12,7 +12,7 @@ pub fn fold(ast: &AST, expr_id: ExpressionId) -> Value {
             Literal::Null => Value::Null,
             Literal::Bool(v) => Value::Num(f32::from(*v)),
             Literal::Num(v) => Value::Num(*v),
-            Literal::String(s) => Value::Text(core::types::decode_string(s)),
+            Literal::String(s) => Value::Text(base::types::decode_string(s)),
             Literal::Resource(s) => Value::Resource(s.clone()),
         },
 
@@ -91,7 +91,7 @@ fn bool_to_num(v: bool) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use core::types::{ListEntry, Value};
+    use base::types::{ListEntry, Value};
 
     use super::fold;
     use crate::{AST, Argument, Expression, ExpressionId, Literal};

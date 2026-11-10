@@ -2,7 +2,7 @@ use super::*;
 
 fn red_floor() -> Prefab {
     let mut red = Prefab::new(TreePath::parse("/turf/open/floor"));
-    red.set_var("color".into(), core::types::Value::Text("#ff0000".into()));
+    red.set_var("color".into(), base::types::Value::Text("#ff0000".into()));
 
     red
 }

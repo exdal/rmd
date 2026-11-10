@@ -1,4 +1,4 @@
-use core::{types::IrNodeId, vars};
+use base::{types::IrNodeId, vars};
 
 use fixedbitset::FixedBitSet;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -372,7 +372,7 @@ fn reachable_blocks(module: &Module, entry: IrNodeId) -> Vec<IrNodeId> {
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{IrNodeId, ProcId, Value},

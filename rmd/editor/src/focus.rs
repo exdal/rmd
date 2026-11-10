@@ -45,7 +45,7 @@ impl AreaFocus {
 
 #[cfg(test)]
 mod tests {
-    use core::path::TreePath;
+    use base::path::TreePath;
 
     use dmm::{Coord, Prefab, PrefabInstanceId};
 

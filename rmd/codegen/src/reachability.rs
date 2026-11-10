@@ -1,4 +1,4 @@
-use core::{
+use base::{
     path::TreePath,
     types::{Identifier, IrNodeId, ProcId, Value},
     vars,

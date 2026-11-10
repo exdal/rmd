@@ -408,7 +408,7 @@ pub fn restore_edit(document: &mut MapDocument, from: Option<&Map>, coords: &[Co
 
 #[cfg(test)]
 mod tests {
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
 
     use dmm::{Coord, Map, Prefab, Size, Tile};
 

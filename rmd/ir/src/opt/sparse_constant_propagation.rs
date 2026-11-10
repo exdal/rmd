@@ -1,7 +1,7 @@
 // https://dl.acm.org/doi/10.1145/103135.103136
 // https://www.cs.cornell.edu/courses/cs6120/2019fa/blog/sccp
 
-use core::{
+use base::{
     path::{PathFlags, TreePath},
     types::{IrNodeId, Value},
 };
@@ -820,7 +820,7 @@ mod tests {
         };
     }
 
-    use core::{location::Location, path::TreePath, types::Value};
+    use base::{location::Location, path::TreePath, types::Value};
 
     use super::{fold_binary, fold_unary};
     use crate::{BinaryOp, IrModuleBuilder, IrNode, Module, UnaryOp};

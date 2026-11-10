@@ -1,4 +1,4 @@
-use core::bitset::BitSet;
+use base::bitset::BitSet;
 use std::{cmp::Reverse, collections::BTreeMap};
 
 use render::{SpriteInstance, SpriteTexture, UpdateRange};
@@ -337,7 +337,7 @@ pub(super) fn replace_owner_sprites(
 
 #[cfg(test)]
 pub(super) mod tests {
-    use core::path::TreePath;
+    use base::path::TreePath;
 
     use dmm::{Coord, Map, Prefab, Size};
 

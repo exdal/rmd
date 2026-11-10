@@ -4,7 +4,7 @@ pub mod opcode;
 mod reachability;
 mod registers;
 
-use core::{
+use base::{
     location::{LineTable, Location, SourceLine},
     path::TreePath,
     types::{Identifier, IrNodeId, ProcId, Value},
@@ -1657,7 +1657,7 @@ mod tests {
         };
     }
 
-    use core::{location::Location, path::TreePath, types::ProcId};
+    use base::{location::Location, path::TreePath, types::ProcId};
 
     use super::*;
 

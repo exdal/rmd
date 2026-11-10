@@ -177,7 +177,7 @@ dependencies = [
 name = "ast"
 version = "1.9.2"
 dependencies = [
- "core",
+ "base",
  "lexer",
 ]
 
@@ -192,6 +192,14 @@ name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+
+[[package]]
+name = "base"
+version = "1.10.0"
+dependencies = [
+ "bitflags 2.13.1",
+ "rustc-hash",
+]
 
 [[package]]
 name = "base64"
@@ -421,7 +429,7 @@ name = "codegen"
 version = "1.2.2"
 dependencies = [
  "ast",
- "core",
+ "base",
  "fixedbitset",
  "ir",
  "lexer",
@@ -477,14 +485,6 @@ dependencies = [
  "serde_json",
  "time",
  "url",
-]
-
-[[package]]
-name = "core"
-version = "1.10.0"
-dependencies = [
- "bitflags 2.13.1",
- "rustc-hash",
 ]
 
 [[package]]
@@ -811,7 +811,7 @@ dependencies = [
 name = "dmm"
 version = "1.2.1"
 dependencies = [
- "core",
+ "base",
 ]
 
 [[package]]
@@ -847,9 +847,9 @@ version = "1.13.0"
 dependencies = [
  "arboard",
  "ast",
+ "base",
  "bitflags 2.13.1",
  "codegen",
- "core",
  "dear-imgui-rs",
  "dear-imgui-winit",
  "defines",
@@ -2161,7 +2161,7 @@ name = "ir"
 version = "1.2.2"
 dependencies = [
  "ast",
- "core",
+ "base",
  "fixedbitset",
  "lexer",
  "objtree",
@@ -2328,7 +2328,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 name = "lexer"
 version = "1.7.3"
 dependencies = [
- "core",
+ "base",
 ]
 
 [[package]]
@@ -2926,7 +2926,7 @@ dependencies = [
 name = "objtree"
 version = "1.8.1"
 dependencies = [
- "core",
+ "base",
 ]
 
 [[package]]
@@ -3134,7 +3134,7 @@ version = "1.2.0"
 name = "preprocessor"
 version = "1.9.2"
 dependencies = [
- "core",
+ "base",
  "lexer",
  "prelude",
  "rustc-hash",
@@ -3483,8 +3483,8 @@ name = "rmdc"
 version = "1.7.5"
 dependencies = [
  "ast",
+ "base",
  "codegen",
- "core",
  "dmi",
  "dmm",
  "ir",
@@ -3638,7 +3638,7 @@ name = "sema"
 version = "1.8.1"
 dependencies = [
  "ast",
- "core",
+ "base",
  "lexer",
  "objtree",
  "prelude",
@@ -4318,8 +4318,8 @@ name = "vm"
 version = "1.13.0"
 dependencies = [
  "ast",
+ "base",
  "codegen",
- "core",
  "defines",
  "ir",
  "lexer",

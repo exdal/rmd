@@ -1,4 +1,4 @@
-use core::path::TreePath;
+use base::path::TreePath;
 use std::collections::BTreeMap;
 
 use dmm::{Coord, Prefab};
@@ -167,7 +167,7 @@ fn finish(edit: Edit, mut affected: Vec<PrefabInstanceId>) -> Option<ToolEdit> {
 
 #[cfg(test)]
 mod tests {
-    use core::{location::Location, types::Value};
+    use base::{location::Location, types::Value};
 
     use dmm::{Map, Size};
 

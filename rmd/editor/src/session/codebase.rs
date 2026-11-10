@@ -351,7 +351,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         location::{FileId, Location, Position},
         path::TreePath,
         types::Value,
@@ -437,7 +437,7 @@ mod tests {
     fn map_and_failed_load_reports_keep_one_readable_path_prefix() {
         let error = dmm::error::MapError::new(
             dmm::error::MapErrorKind::RaggedGrid,
-            core::location::Position::new(2, 3),
+            base::location::Position::new(2, 3),
         );
         let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
         map.intern_tile(Vec::new());

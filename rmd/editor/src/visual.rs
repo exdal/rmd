@@ -1,4 +1,4 @@
-use core::{
+use base::{
     types::{Identifier, Value},
     vars,
 };
@@ -210,7 +210,7 @@ pub fn resolve_delta(tree: &ObjectTree, id: TypeId, prefab: &Prefab, delta: &vm:
 
 /// `overlays += "edge"`
 pub fn resolve_overlay(tree: &ObjectTree, parent: &Appearance, delta: &vm::AppearanceDelta) -> Appearance {
-    let prefab = Prefab::new(core::path::TreePath::parse("/image"));
+    let prefab = Prefab::new(base::path::TreePath::parse("/image"));
     let id = tree.id_of(&prefab.path).unwrap_or(TypeId::ROOT);
     let mut appearance = resolve_delta(tree, id, &prefab, delta);
 
@@ -273,7 +273,7 @@ pub fn resolve_overlay(tree: &ObjectTree, parent: &Appearance, delta: &vm::Appea
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{ListEntry, VarModifiers},

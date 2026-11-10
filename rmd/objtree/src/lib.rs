@@ -1,4 +1,4 @@
-use core::{
+use base::{
     interner::SymbolMap,
     location::Location,
     path::TreePath,
@@ -362,7 +362,7 @@ impl ObjectTree {
 
 #[cfg(test)]
 mod tests {
-    use core::{location::Location, path::TreePath};
+    use base::{location::Location, path::TreePath};
 
     use crate::{ObjectTree, Roots, TypeId};
 

@@ -1,4 +1,4 @@
-use core::{
+use base::{
     types::{Identifier, Value},
     vars,
 };
@@ -741,7 +741,7 @@ fn manhattan(left: Coord, right: Coord) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use core::{location::Location, path::TreePath, types::Value};
+    use base::{location::Location, path::TreePath, types::Value};
 
     use dmm::{Map, Size};
     use vm::bake::NodeOrientation;

@@ -458,7 +458,7 @@ fn apply_changes(grid: &mut Grid, changes: &[TileChange], side: ChangeSide) {
 
 #[cfg(test)]
 mod tests {
-    use core::{path::TreePath, types::Value};
+    use base::{path::TreePath, types::Value};
 
     use dmm::{Coord, Map, Prefab, Size};
 

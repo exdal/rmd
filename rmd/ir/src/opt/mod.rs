@@ -9,7 +9,7 @@ mod simplify_phis;
 mod sparse_constant_propagation;
 mod value_facts;
 
-use core::types::IrNodeId;
+use base::types::IrNodeId;
 use std::time::{Duration, Instant};
 
 pub use canonicalize_terminators::canonicalize_terminators;

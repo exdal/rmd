@@ -1,4 +1,4 @@
-use core::types::IrNodeId;
+use base::types::IrNodeId;
 
 use rustc_hash::FxHashSet;
 
@@ -117,7 +117,7 @@ fn is_reachable(reachable: &[bool], block: IrNodeId) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use core::{
+    use base::{
         location::Location,
         path::TreePath,
         types::{IrNodeId, ProcId, Value},

@@ -8,7 +8,7 @@ path = "src/lib.rs"
 
 [dependencies]
 rustc-hash.workspace = true
-core.workspace = true
+base.workspace = true
 ast.workspace = true
 objtree.workspace = true
 prelude.workspace = true
