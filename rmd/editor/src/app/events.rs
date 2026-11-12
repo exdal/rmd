@@ -1,13 +1,12 @@
 use std::time::Instant;
 
+use ui::viewports;
 use winit::{
     application::ApplicationHandler,
     event::{Event, StartCause, WindowEvent},
     event_loop::ActiveEventLoop,
     window::WindowId,
 };
-
-use crate::viewports;
 
 use super::{App, Redraw, pacing::Status};
 

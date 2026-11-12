@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn absolute_ui_scale_replaces_os_scale_without_compounding() {
-        let _context = ui::testing::CONTEXT_LOCK.lock().unwrap();
+        let _context = crate::testing::CONTEXT_LOCK.lock().unwrap();
         let mut context = Context::create();
         let base = context.style().clone();
         let base_padding = base.window_padding();
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn single_window_mode_keeps_os_scale_as_the_default() {
-        let _context = ui::testing::CONTEXT_LOCK.lock().unwrap();
+        let _context = crate::testing::CONTEXT_LOCK.lock().unwrap();
         let mut context = Context::create();
         let base = context.style().clone();
         let base_padding = base.window_padding();
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn thin_lines_survive_a_scale_below_one() {
-        let _context = ui::testing::CONTEXT_LOCK.lock().unwrap();
+        let _context = crate::testing::CONTEXT_LOCK.lock().unwrap();
         let mut context = Context::create();
         let base = context.style().clone();
         let mut scaled = ScaledStyle::new(&mut context, false);
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn scaling_down_keeps_the_sizes_imgui_asserts_on() {
-        let _context = ui::testing::CONTEXT_LOCK.lock().unwrap();
+        let _context = crate::testing::CONTEXT_LOCK.lock().unwrap();
         let mut context = Context::create();
         let mut base = context.style().clone();
         base.set_window_min_size([1.0, 1.5]);

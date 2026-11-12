@@ -4191,10 +4191,14 @@ name = "ui"
 version = "0.1.0"
 dependencies = [
  "dear-imgui-rs",
+ "dear-imgui-winit",
  "fontdb",
  "log",
+ "raw-window-handle",
+ "render",
  "serde",
  "toml",
+ "winit",
 ]
 
 [[package]]

@@ -8,10 +8,14 @@ path = "src/lib.rs"
 
 [dependencies]
 dear-imgui-rs.workspace = true
+dear-imgui-winit.workspace = true
 fontdb = "0.24.0"
 log.workspace = true
+raw-window-handle.workspace = true
+render.workspace = true
 serde = { workspace = true, features = ["derive"] }
 toml.workspace = true
+winit.workspace = true
 
 [lints]
 workspace = true

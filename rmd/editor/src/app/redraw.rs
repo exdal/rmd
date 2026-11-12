@@ -2,9 +2,8 @@ use std::time::Instant;
 
 use dear_imgui_rs::Context;
 use render::{PickRequest, PickResult};
+use ui::viewports;
 use winit::event_loop::ActiveEventLoop;
-
-use crate::viewports;
 
 use super::screenshot::take_screenshot;
 use super::{

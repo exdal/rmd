@@ -42,7 +42,6 @@ mod settings;
 mod state;
 mod tool;
 mod transform;
-mod viewports;
 mod visual;
 mod world;
 

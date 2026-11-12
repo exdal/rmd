@@ -22,7 +22,7 @@ use dear_imgui_rs::{BackendFlags, ConfigFlags, Context, Style, render::Synchrono
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use render::{Device, Renderer};
-use ui::{fonts::UiFont, theme::Themes};
+use ui::{fonts::UiFont, theme::Themes, viewports};
 use winit::{
     dpi::LogicalSize,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
@@ -36,7 +36,6 @@ use crate::{
     loader::{Job, Loader, Outcome},
     session::{LoadReport, Session},
     settings::{Settings, backup_dir, imgui_ini_path, profiles_dir, themes_dir},
-    viewports,
 };
 
 use args::{parse_arguments, usage};
