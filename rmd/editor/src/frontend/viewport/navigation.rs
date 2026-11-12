@@ -134,7 +134,7 @@ impl UiState {
         }
     }
 
-    pub(super) fn map_view_mut(&mut self, document: DocumentId) -> Option<&mut MapViewState> {
+    pub(crate) fn map_view_mut(&mut self, document: DocumentId) -> Option<&mut MapViewState> {
         match self.map_views.entry(document) {
             Entry::Occupied(entry) => Some(entry.into_mut()),
             Entry::Vacant(entry) => match MapViewState::new(document) {

@@ -19,6 +19,11 @@ use self::{inspector::InspectorPanel, object_tree::ObjectTreePanel, settings::Se
 use crate::{
     app::{external_editor::SourceLocation, pacing::FrameDemand, update::UpdateCheck},
     bake::panel::RuntimesPanel,
+    coop::panel::{
+        CommentDraft, CoopDialog, CoopDialogKind, CoopNotice, CoopNoticeChoice, OutOfDateChoice, draw_activity,
+        draw_coop_dialog, draw_coop_notice, draw_out_of_date_dialog,
+        presence::{CoopPresence, FollowedView},
+    },
     dm_ui::panel::DmUi,
     document::{DocumentId, MapDocument},
     environment::{
@@ -43,7 +48,6 @@ use crate::{
     },
 };
 
-mod coop;
 pub(crate) mod dialog;
 #[cfg(test)]
 mod fixtures;
@@ -216,67 +220,67 @@ enum CloseFocus {
 pub struct UiState {
     object_tree: ObjectTreePanel,
     pub(crate) map_views: HashMap<DocumentId, MapViewState>,
-    central_node: Option<Id>,
-    dockspace_root: Option<Id>,
-    dm_ui: DmUi,
-    welcome_window: WindowKey,
+    pub(crate) central_node: Option<Id>,
+    pub(crate) dockspace_root: Option<Id>,
+    pub(crate) dm_ui: DmUi,
+    pub(crate) welcome_window: WindowKey,
     inspector: InspectorPanel,
-    find: FindPanel,
-    issues: IssuesPanel,
-    runtimes: RuntimesPanel,
-    git_panel: GitPanel,
+    pub(crate) find: FindPanel,
+    pub(crate) issues: IssuesPanel,
+    pub(crate) runtimes: RuntimesPanel,
+    pub(crate) git_panel: GitPanel,
     /// Keeps the object tree in front of the Git tab while its saved layout settles
     select_object_tree: StartupPanelFocus,
     /// Keeps the inspector in front of the Search tab while its saved layout settles
     select_inspector: StartupPanelFocus,
     /// A docked tab only comes forward if it still holds the focus when its tab bar updates next frame
-    panel_focus_requested: bool,
+    pub(crate) panel_focus_requested: bool,
     settings_window: SettingsWindow,
-    layout: DockLayout,
-    reset_layout: bool,
-    gizmo: GizmoState,
-    gizmo_context: Option<(DocumentId, Tool, u32)>,
+    pub(crate) layout: DockLayout,
+    pub(crate) reset_layout: bool,
+    pub(crate) gizmo: GizmoState,
+    pub(crate) gizmo_context: Option<(DocumentId, Tool, u32)>,
     move_stroke: Option<MoveStroke>,
     placement_flash: Option<ActivePlacementFlash>,
     placement_stroke: Option<PlacementStroke>,
     pick_stroke: Option<PickStroke>,
     momentary_tool: Option<MomentaryTool>,
-    region_selection_options: RegionSelectionOptions,
-    fill_mode: FillMode,
-    custom_fill_boundaries: Vec<TreePath>,
-    custom_fill_search: String,
+    pub(crate) region_selection_options: RegionSelectionOptions,
+    pub(crate) fill_mode: FillMode,
+    pub(crate) custom_fill_boundaries: Vec<TreePath>,
+    pub(crate) custom_fill_search: String,
     pending_fill_warning: Option<PendingFillWarning>,
-    popup_was_open: bool,
+    pub(crate) popup_was_open: bool,
     new_map_dialog: Option<NewMapDialog>,
-    new_level_dialog: Option<NewLevelDialog>,
-    delete_level_dialog: Option<DeleteLevelDialog>,
+    pub(crate) new_level_dialog: Option<NewLevelDialog>,
+    pub(crate) delete_level_dialog: Option<DeleteLevelDialog>,
     resize_map_dialog: Option<ResizeMapDialog>,
     go_to_dialog: Option<GoToDialog>,
-    coop_dialog: Option<coop::CoopDialog>,
-    coop_notice: coop::CoopNotice,
-    comment_draft: Option<coop::CommentDraft>,
-    followed_view: Option<viewport::FollowedView>,
-    last_go_to: Option<Coord>,
+    pub(crate) coop_dialog: Option<CoopDialog>,
+    pub(crate) coop_notice: CoopNotice,
+    pub(crate) comment_draft: Option<CommentDraft>,
+    pub(crate) followed_view: Option<FollowedView>,
+    pub(crate) last_go_to: Option<Coord>,
     tile_fill: Option<TileFillPaths>,
     save_dialog: Option<SaveDialog>,
-    close_queue: VecDeque<DocumentId>,
+    pub(crate) close_queue: VecDeque<DocumentId>,
     close_focus: Option<CloseFocus>,
     edit_command: Option<EditCommand>,
-    pending_conflict_reload: Option<DocumentId>,
-    save_requested: bool,
-    exit_requested: bool,
-    show_welcome: bool,
-    welcome_map_filter: String,
-    welcome_maps_expanded: bool,
-    open_error: Option<String>,
-    load_window: WindowKey,
-    load_notice: Option<LoadNotice>,
-    diagnostics: DiagnosticsState,
-    keybind_preset_prompt: bool,
-    copy_to_clipboard: Option<String>,
-    open_map: Option<PathBuf>,
-    update_check: UpdateCheck,
-    demand: Cell<FrameDemand>,
+    pub(crate) pending_conflict_reload: Option<DocumentId>,
+    pub(crate) save_requested: bool,
+    pub(crate) exit_requested: bool,
+    pub(crate) show_welcome: bool,
+    pub(crate) welcome_map_filter: String,
+    pub(crate) welcome_maps_expanded: bool,
+    pub(crate) open_error: Option<String>,
+    pub(crate) load_window: WindowKey,
+    pub(crate) load_notice: Option<LoadNotice>,
+    pub(crate) diagnostics: DiagnosticsState,
+    pub(crate) keybind_preset_prompt: bool,
+    pub(crate) copy_to_clipboard: Option<String>,
+    pub(crate) open_map: Option<PathBuf>,
+    pub(crate) update_check: UpdateCheck,
+    pub(crate) demand: Cell<FrameDemand>,
 }
 
 impl UiState {
@@ -333,7 +337,7 @@ impl UiState {
             resize_map_dialog: None,
             go_to_dialog: None,
             coop_dialog: None,
-            coop_notice: coop::CoopNotice::default(),
+            coop_notice: CoopNotice::default(),
             comment_draft: None,
             followed_view: None,
             last_go_to: None,
@@ -369,7 +373,7 @@ impl UiState {
         self.issues.visible()
     }
 
-    fn raise_demand(&self, demand: FrameDemand) {
+    pub(crate) fn raise_demand(&self, demand: FrameDemand) {
         let mut raised = self.demand.get();
         raised.raise(demand);
         self.demand.set(raised);
@@ -429,7 +433,7 @@ impl UiState {
         self.pick_stroke = None;
     }
 
-    fn cancel_edit_gestures(&mut self, session: &mut Session, id: Option<DocumentId>) {
+    pub(crate) fn cancel_edit_gestures(&mut self, session: &mut Session, id: Option<DocumentId>) {
         self.cancel_tool_gestures();
         session.cancel_node_drag();
 
@@ -533,7 +537,7 @@ impl UiState {
         self.draw_map_dialogs(ui, session, &menu);
         let coop_open = self.draw_coop_dialogs(ui, session, settings, loading, menu.coop_dialog);
         if let Some(coop) = session.coop()
-            && coop::draw_activity(ui, coop)
+            && draw_activity(ui, coop)
         {
             self.raise_demand(FrameDemand::Full);
         }
@@ -989,7 +993,7 @@ impl UiState {
     ) -> (Vec<VisibleMapView>, Option<usize>) {
         self.follow_coop_peer(ui, session);
         let (map_views, picking, coop) = if session.state.is_empty() {
-            (Vec::new(), None, viewport::CoopPresence::default())
+            (Vec::new(), None, CoopPresence::default())
         } else {
             self.draw_map_views(ui, session, settings, refit)
         };
@@ -1044,29 +1048,28 @@ impl UiState {
     }
 
     fn draw_coop_dialogs(
-        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, loading: bool,
-        kind: Option<coop::CoopDialogKind>,
+        &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, loading: bool, kind: Option<CoopDialogKind>,
     ) -> Option<OpenRequest> {
         if let Some(kind) = kind {
-            let dialog = coop::CoopDialog::new(kind, settings);
+            let dialog = CoopDialog::new(kind, settings);
             ui.open_popup(dialog.popup());
             self.coop_dialog = Some(dialog);
         }
 
-        coop::draw_coop_dialog(ui, session, settings, &mut self.coop_dialog);
+        draw_coop_dialog(ui, session, settings, &mut self.coop_dialog);
 
-        match coop::draw_out_of_date_dialog(ui, session) {
-            Some((id, coop::OutOfDateChoice::SaveMine)) => {
+        match draw_out_of_date_dialog(ui, session) {
+            Some((id, OutOfDateChoice::SaveMine)) => {
                 session.set_active_document(id);
                 self.save_requested = true;
             },
-            Some((id, coop::OutOfDateChoice::DiscardMine)) => session.discard_for_coop_map(id),
-            Some((_, coop::OutOfDateChoice::Leave)) => session.leave_coop(),
+            Some((id, OutOfDateChoice::DiscardMine)) => session.discard_for_coop_map(id),
+            Some((_, OutOfDateChoice::Leave)) => session.leave_coop(),
             None => {},
         }
 
-        match coop::draw_coop_notice(ui, session.coop(), loading, &mut self.coop_notice) {
-            Some(coop::CoopNoticeChoice::Retry) => {
+        match draw_coop_notice(ui, session.coop(), loading, &mut self.coop_notice) {
+            Some(CoopNoticeChoice::Retry) => {
                 match session.retry_coop() {
                     Ok(()) => self.coop_notice.reset(),
                     Err(error) => self.open_error = Some(error),
@@ -1074,8 +1077,8 @@ impl UiState {
 
                 None
             },
-            Some(coop::CoopNoticeChoice::ReloadAndRetry) => Some(OpenRequest::ReloadCoop),
-            Some(coop::CoopNoticeChoice::Dismiss) => {
+            Some(CoopNoticeChoice::ReloadAndRetry) => Some(OpenRequest::ReloadCoop),
+            Some(CoopNoticeChoice::Dismiss) => {
                 session.leave_coop();
                 None
             },
@@ -1703,7 +1706,7 @@ mod tests {
             let ui = context.frame();
             let mut themes = Themes::load(None, &ui.clone_style(), DEFAULT_THEME);
             state.draw(ui, session, &mut settings, &mut themes, None).unwrap();
-            let is_open = ui.is_popup_open(super::coop::OUT_OF_DATE_POPUP);
+            let is_open = ui.is_popup_open(crate::coop::panel::OUT_OF_DATE_POPUP);
             assert!(context.render_legacy().valid());
             is_open
         };
@@ -1739,7 +1742,7 @@ mod tests {
         session.load_environment(&dir.join("game.dme")).unwrap();
         assert!(matches!(
             session.coop().unwrap().status,
-            crate::session::CoopStatus::CodebaseMismatch { .. }
+            crate::coop::CoopStatus::CodebaseMismatch { .. }
         ));
         assert!(session.state.is_empty());
         let mut settings = Settings {
@@ -1769,7 +1772,7 @@ mod tests {
                 button_width(ui, "Close"),
                 ui.clone_style().item_spacing()[0],
             ]);
-            let is_open = ui.is_popup_open(super::coop::STATUS_POPUP);
+            let is_open = ui.is_popup_open(crate::coop::panel::STATUS_POPUP);
             assert!(context.render_legacy().valid());
             (output.open, is_open)
         };

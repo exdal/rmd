@@ -1,17 +1,15 @@
 use dear_imgui_rs::{MouseButton, PopupQueryFlags, Ui};
 
-use super::{ViewFrame, selection::shows_region_selection};
+use crate::frontend::viewport::{ViewFrame, selection::shows_region_selection};
 use crate::{
     app::pacing::FrameDemand,
     camera::clamp_zoom,
-    document::DocumentId,
-    frontend::{
-        UiState,
-        coop::{
-            CommentHit, comment_at, draw_comment_composer, draw_comments, draw_receiving, draw_remote_cursors,
-            draw_remote_selections, draw_tab_out_of_date, draw_tab_progress,
-        },
+    coop::panel::{
+        CommentHit, comment_at, draw_comment_composer, draw_comments, draw_receiving, draw_remote_cursors,
+        draw_remote_selections, draw_tab_out_of_date, draw_tab_progress,
     },
+    document::DocumentId,
+    frontend::UiState,
     session::Session,
 };
 
@@ -21,20 +19,20 @@ const FOLLOW_SETTLED_PIXELS: f32 = 0.5;
 const FOLLOW_SETTLED_ZOOM: f32 = 0.001;
 
 #[derive(Default)]
-pub(in crate::frontend) struct CoopPresence {
-    pub(in crate::frontend) cursor: Option<net::Cursor>,
-    pub(in crate::frontend) view: Option<net::View>,
-    pub(in crate::frontend) selection: Option<net::Selection>,
+pub(crate) struct CoopPresence {
+    pub(crate) cursor: Option<net::Cursor>,
+    pub(crate) view: Option<net::View>,
+    pub(crate) selection: Option<net::Selection>,
 }
 
 // where following left the camera, so a change while drawing means the user moved it
-pub(in crate::frontend) struct FollowedView {
+pub(crate) struct FollowedView {
     document: DocumentId,
     camera: [f32; 3],
     z: u32,
 }
 
-pub(super) fn draw_coop_status(ui: &Ui, session: &Session, id: DocumentId, name: &str, is_out_of_date: bool) -> bool {
+pub(crate) fn draw_coop_status(ui: &Ui, session: &Session, id: DocumentId, name: &str, is_out_of_date: bool) -> bool {
     if let Some(state) = session.coop_transfer(id) {
         draw_tab_progress(ui, state);
     }
@@ -52,7 +50,7 @@ pub(super) fn draw_coop_status(ui: &Ui, session: &Session, id: DocumentId, name:
     true
 }
 
-pub(super) fn draw_tab_menu(ui: &Ui, session: &mut Session, id: DocumentId) {
+pub(crate) fn draw_tab_menu(ui: &Ui, session: &mut Session, id: DocumentId) {
     if !session.can_share_coop_maps() {
         return;
     }
@@ -70,7 +68,7 @@ pub(super) fn draw_tab_menu(ui: &Ui, session: &mut Session, id: DocumentId) {
     }
 }
 
-pub(super) fn hit_comment(ui: &Ui, session: &mut Session, frame: &ViewFrame<'_>) -> Option<CommentHit> {
+pub(crate) fn hit_comment(ui: &Ui, session: &mut Session, frame: &ViewFrame<'_>) -> Option<CommentHit> {
     let hit = session
         .coop()
         .zip(session.coop_shared_map_path(frame.id))
@@ -91,7 +89,7 @@ pub(super) fn hit_comment(ui: &Ui, session: &mut Session, frame: &ViewFrame<'_>)
     hit
 }
 
-pub(super) fn share_presence(session: &Session, frame: &ViewFrame<'_>, coop: &mut CoopPresence) {
+pub(crate) fn share_presence(session: &Session, frame: &ViewFrame<'_>, coop: &mut CoopPresence) {
     if !frame.is_active {
         return;
     }
@@ -133,7 +131,7 @@ pub(super) fn share_presence(session: &Session, frame: &ViewFrame<'_>, coop: &mu
 }
 
 impl UiState {
-    pub(super) fn draw_coop_overlays(
+    pub(crate) fn draw_coop_overlays(
         &mut self, ui: &Ui, session: &mut Session, frame: &ViewFrame<'_>, comment_hit: Option<CommentHit>,
     ) {
         if let Some(coop) = session.coop()
@@ -157,7 +155,7 @@ impl UiState {
         }
     }
 
-    pub(in crate::frontend) fn follow_coop_peer(&mut self, ui: &Ui, session: &mut Session) {
+    pub(crate) fn follow_coop_peer(&mut self, ui: &Ui, session: &mut Session) {
         // a dialog acts on the map it was opened for, so following waits until it closes
         if ui.is_popup_open_with_flags("", PopupQueryFlags::ANY_POPUP) {
             self.followed_view = None;
@@ -209,7 +207,7 @@ impl UiState {
         }
     }
 
-    pub(in crate::frontend) fn stop_following_when_moved(&mut self, session: &mut Session) {
+    pub(crate) fn stop_following_when_moved(&mut self, session: &mut Session) {
         let Some(followed) = self.followed_view.take() else {
             return;
         };

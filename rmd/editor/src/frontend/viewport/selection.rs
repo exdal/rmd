@@ -41,12 +41,12 @@ impl ViewGestures {
         self.rectangle_gesture.is_some() || self.region_placement.is_some() || self.fill_anchor.is_some()
     }
 
-    pub(super) fn displayed(&self, source: Selection) -> Selection {
+    pub(crate) fn displayed(&self, source: Selection) -> Selection {
         self.region_placement.map_or(source, |placement| placement.target)
     }
 }
 
-pub(super) fn shows_region_selection(tool: Tool) -> bool {
+pub(crate) fn shows_region_selection(tool: Tool) -> bool {
     matches!(tool, Tool::Select | Tool::Fill)
 }
 

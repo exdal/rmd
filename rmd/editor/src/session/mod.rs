@@ -11,6 +11,7 @@ use render::{FrameUpdate, texture::TextureCatalog};
 
 use crate::{
     bake::worker::Baker,
+    coop::Coop,
     document::{DocumentId, PrefabInstanceId, state::EditorState},
     frame::{FrameInstances, FrameOptions, TypeVisibility, visual},
     git::{session::GitDocState, worker::GitWorker},
@@ -19,7 +20,6 @@ use crate::{
     region::session::RegionState,
 };
 
-pub(crate) mod coop;
 mod direction;
 #[cfg(test)]
 pub(crate) mod fixtures;
@@ -29,15 +29,14 @@ mod instance;
 mod palette;
 mod preview;
 
+use self::{direction::direction_state, preview::RegionPreviewCache};
 pub(crate) use self::{
-    coop::{Activity, Coop, CoopStatus, SharedState},
     direction::{DirectionState, DirectionalTypes},
     guides::GuideBadge,
     instance::{EditScope, GizmoMember, PickedTransform},
     palette::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
     preview::{PlacementPreview, RegionPreviewSource},
 };
-use self::{direction::direction_state, preview::RegionPreviewCache};
 
 #[derive(Default)]
 pub(crate) enum BakeHold {

@@ -7,15 +7,12 @@ use base::path::TreePath;
 use dmm::{Map, MapFormat, Prefab, Size};
 
 use crate::git::session::GitDocState;
+use crate::{coop::LevelStep, session::Session, tool::session::is_reorder_label};
 use crate::{
     document::{DocumentId, MapDocument, grid::Grid},
     environment::worker::LoadedMap,
     git::conflict::ConflictState,
     tool::Tool,
-};
-use crate::{
-    session::{Session, coop::LevelStep},
-    tool::session::is_reorder_label,
 };
 
 #[derive(Debug, Default, PartialEq, Eq)]

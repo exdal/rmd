@@ -7,11 +7,11 @@ use super::{
     stroke::{ActivePlacementFlash, MoveStroke, PickStroke, PlacementStroke},
 };
 use crate::{
+    coop::panel::{COMMENT_POPUP, CommentDraft},
     document::{DocumentId, command::EditGroupId},
     frontend::{
         FILL_LIMIT_WARNING_POPUP, FillWarningContext, PendingFillWarning, UiState,
         context_menu::{NodeContext, POPUP as MAP_MENU_POPUP, Target as MenuTarget},
-        coop::{COMMENT_POPUP, CommentDraft},
     },
     gizmo::GizmoMapView,
     node::panel::{NodeOverlayHit, NodeOverlayView, NodeRightClick, draw_node_overlay, node_right_click},

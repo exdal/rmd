@@ -13,13 +13,14 @@ use net::{
     PRESENCE_REFRESH, PasswordHash, PeerId, PeerInfo, Selection, SeqId, Server, View,
 };
 
-use super::Session;
 use crate::document::DocumentId;
+use crate::session::Session;
 
 mod connection;
 mod edits;
 mod event;
 mod maps;
+pub(crate) mod panel;
 mod presence;
 #[cfg(test)]
 mod tests;

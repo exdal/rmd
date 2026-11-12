@@ -13,6 +13,7 @@ mod app;
 mod bake;
 mod camera;
 mod clipboard;
+mod coop;
 mod dm_ui;
 mod document;
 mod environment;

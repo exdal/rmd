@@ -1,3 +1,5 @@
+pub(crate) mod presence;
+
 use std::{env, iter};
 
 use dear_imgui_rs::{Condition, Key, PopupQueryFlags, StyleColor, StyleVar, Ui, WindowFlags, sys};
@@ -8,27 +10,28 @@ use ui::{
     widgets::{DialogButton, begin_centered_modal, dialog_buttons, dpi},
 };
 
-use super::{
-    dialog::{DIALOG_FIELD_WIDTH, MODAL_FLAGS, SAVE_ERROR_COLOR},
-    overlay::{OVERLAY_BG, OverlayRect},
-};
 use crate::{
     camera::Controller,
+    coop::{Activity, Coop, CoopStatus, SharedState},
     document::{DocumentId, Selection},
     environment::panel::DIAGNOSTIC_WARNING_COLOR,
+    frontend::{
+        dialog::{DIALOG_FIELD_WIDTH, MODAL_FLAGS, SAVE_ERROR_COLOR},
+        overlay::{OVERLAY_BG, OverlayRect},
+    },
     region::panel::{fill_selection, hollow_selection_inner, region_selection_bounds},
-    session::{Activity, Coop, CoopStatus, Session, SharedState},
+    session::Session,
     settings::Settings,
     tool::{RegionSelectionMode, Tool},
 };
 
-pub(super) const HOST_POPUP: &str = "Host co-op##coop-host";
+pub(crate) const HOST_POPUP: &str = "Host co-op##coop-host";
 
-pub(super) const JOIN_POPUP: &str = "Join co-op##coop-join";
+pub(crate) const JOIN_POPUP: &str = "Join co-op##coop-join";
 
-pub(super) const STATUS_POPUP: &str = "Co-op unavailable##coop-status";
+pub(crate) const STATUS_POPUP: &str = "Co-op unavailable##coop-status";
 
-pub(super) const OUT_OF_DATE_POPUP: &str = "Map out of date##coop-out-of-date";
+pub(crate) const OUT_OF_DATE_POPUP: &str = "Map out of date##coop-out-of-date";
 
 const NICK_PLACEHOLDER: &str = "someone";
 
@@ -44,7 +47,7 @@ const TAB_SWEEP_SPEED: f32 = 0.6;
 
 const TAB_SWEEP_WIDTH: f32 = 0.3;
 
-pub(super) const COMMENT_POPUP: &str = "##coop-comment";
+pub(crate) const COMMENT_POPUP: &str = "##coop-comment";
 
 const COMMENT_WIDTH: f32 = 240.0;
 
@@ -62,14 +65,14 @@ const REMOTE_SELECTION_FILL: f32 = 0.08;
 
 const REMOTE_SELECTION_OUTLINE: f32 = 0.7;
 
-pub(super) struct CommentDraft {
-    pub(super) document: DocumentId,
+pub(crate) struct CommentDraft {
+    pub(crate) document: DocumentId,
     pos: [f32; 2],
     text: String,
 }
 
 impl CommentDraft {
-    pub(super) const fn new(document: DocumentId, pos: [f32; 2]) -> Self {
+    pub(crate) const fn new(document: DocumentId, pos: [f32; 2]) -> Self {
         Self {
             document,
             pos,
@@ -79,12 +82,12 @@ impl CommentDraft {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum CoopDialogKind {
+pub(crate) enum CoopDialogKind {
     Host,
     Join,
 }
 
-pub(super) struct CoopDialog {
+pub(crate) struct CoopDialog {
     kind: CoopDialogKind,
     nick: String,
     address: String,
@@ -94,7 +97,7 @@ pub(super) struct CoopDialog {
 }
 
 impl CoopDialog {
-    pub(super) fn new(kind: CoopDialogKind, settings: &Settings) -> Self {
+    pub(crate) fn new(kind: CoopDialogKind, settings: &Settings) -> Self {
         let nick = Some(settings.coop.nick.clone())
             .filter(|nick| !nick.is_empty())
             .or_else(|| env::var("USER").ok())
@@ -111,7 +114,7 @@ impl CoopDialog {
         }
     }
 
-    pub(super) const fn popup(&self) -> &'static str {
+    pub(crate) const fn popup(&self) -> &'static str {
         match self.kind {
             CoopDialogKind::Host => HOST_POPUP,
             CoopDialogKind::Join => JOIN_POPUP,
@@ -119,7 +122,7 @@ impl CoopDialog {
     }
 }
 
-pub(super) fn draw_coop_dialog(
+pub(crate) fn draw_coop_dialog(
     ui: &Ui, session: &mut Session, settings: &mut Settings, dialog: &mut Option<CoopDialog>,
 ) {
     let mut close = false;
@@ -226,14 +229,14 @@ pub(super) fn draw_coop_dialog(
     }
 }
 
-pub(super) fn shared_maps(coop: &Coop) -> Vec<(String, String)> {
+pub(crate) fn shared_maps(coop: &Coop) -> Vec<(String, String)> {
     coop.shared_maps
         .keys()
         .map(|path| (path.clone(), map_note(coop, path)))
         .collect()
 }
 
-pub(super) fn map_note(coop: &Coop, path: &str) -> String {
+pub(crate) fn map_note(coop: &Coop, path: &str) -> String {
     let Some(shared_map) = coop.shared_maps.get(path) else {
         return String::new();
     };
@@ -310,7 +313,7 @@ fn fill_tab(ui: &Ui, min: [f32; 2], max: [f32; 2], mut color: [f32; 4]) {
     });
 }
 
-pub(super) fn draw_tab_progress(ui: &Ui, state: &SharedState) {
+pub(crate) fn draw_tab_progress(ui: &Ui, state: &SharedState) {
     let (min, max) = tab_rect();
     let width = max[0] - min[0];
     let (from, to) = match fraction(state) {
@@ -329,19 +332,19 @@ pub(super) fn draw_tab_progress(ui: &Ui, state: &SharedState) {
     );
 }
 
-pub(super) fn draw_tab_out_of_date(ui: &Ui) {
+pub(crate) fn draw_tab_out_of_date(ui: &Ui) {
     let (min, max) = tab_rect();
     fill_tab(ui, min, max, DIAGNOSTIC_WARNING_COLOR);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum OutOfDateChoice {
+pub(crate) enum OutOfDateChoice {
     SaveMine,
     DiscardMine,
     Leave,
 }
 
-pub(super) fn draw_out_of_date_dialog(ui: &Ui, session: &Session) -> Option<(DocumentId, OutOfDateChoice)> {
+pub(crate) fn draw_out_of_date_dialog(ui: &Ui, session: &Session) -> Option<(DocumentId, OutOfDateChoice)> {
     let out_of_date = session
         .state
         .document_ids()
@@ -393,7 +396,7 @@ pub(super) fn draw_out_of_date_dialog(ui: &Ui, session: &Session) -> Option<(Doc
     choice.map(|choice| (id, choice))
 }
 
-pub(super) fn draw_receiving(ui: &Ui, coop: &Coop, name: &str, state: &SharedState) {
+pub(crate) fn draw_receiving(ui: &Ui, coop: &Coop, name: &str, state: &SharedState) {
     let (text, overlay) = match *state {
         SharedState::Incoming { by, len, .. } => (
             format!(
@@ -423,7 +426,7 @@ pub(super) fn draw_receiving(ui: &Ui, coop: &Coop, name: &str, state: &SharedSta
         .build();
 }
 
-pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
+pub(crate) fn draw_coop_status(ui: &Ui, coop: &Coop) {
     let (color, label) = match &coop.status {
         CoopStatus::Connecting => (PENDING_COLOR, String::from("Co-op: connecting...")),
         CoopStatus::Connected if coop.is_paused() => (PENDING_COLOR, String::from("Co-op: reloading codebase...")),
@@ -492,7 +495,7 @@ pub(super) fn draw_coop_status(ui: &Ui, coop: &Coop) {
     });
 }
 
-pub(super) fn draw_coop_peers(ui: &Ui, coop: &Coop, following: Option<PeerId>) -> Option<PeerId> {
+pub(crate) fn draw_coop_peers(ui: &Ui, coop: &Coop, following: Option<PeerId>) -> Option<PeerId> {
     let you = coop.you.filter(|_| coop.is_connected())?;
 
     let scale = dpi(ui);
@@ -587,7 +590,7 @@ pub(super) fn draw_coop_peers(ui: &Ui, coop: &Coop, following: Option<PeerId>) -
     clicked
 }
 
-pub(super) fn draw_activity(ui: &Ui, coop: &Coop) -> bool {
+pub(crate) fn draw_activity(ui: &Ui, coop: &Coop) -> bool {
     let recent = coop
         .activity
         .iter()
@@ -658,7 +661,7 @@ pub(super) fn draw_activity(ui: &Ui, coop: &Coop) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum CoopNoticeChoice {
+pub(crate) enum CoopNoticeChoice {
     Retry,
     ReloadAndRetry,
     Dismiss,
@@ -676,17 +679,17 @@ fn codebase_description(codebase: &CodebaseId) -> String {
 }
 
 #[derive(Default)]
-pub(super) struct CoopNotice {
+pub(crate) struct CoopNotice {
     status: Option<CoopStatus>,
     requested: bool,
 }
 
 impl CoopNotice {
-    pub(super) fn request(&mut self) {
+    pub(crate) fn request(&mut self) {
         self.requested = true;
     }
 
-    pub(super) fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         *self = Self::default();
     }
 
@@ -702,7 +705,7 @@ impl CoopNotice {
     }
 }
 
-pub(super) fn draw_coop_notice(
+pub(crate) fn draw_coop_notice(
     ui: &Ui, coop: Option<&Coop>, is_loading: bool, notice: &mut CoopNotice,
 ) -> Option<CoopNoticeChoice> {
     notice.observe(coop);
@@ -771,7 +774,7 @@ pub(super) fn draw_coop_notice(
     })
 }
 
-pub(super) fn draw_remote_selections(
+pub(crate) fn draw_remote_selections(
     ui: &Ui, camera: &Controller, viewport: OverlayRect, coop: &Coop, map: &str, z: u32, tile_size: u32,
 ) {
     let scale = dpi(ui);
@@ -806,7 +809,7 @@ pub(super) fn draw_remote_selections(
     });
 }
 
-pub(super) fn draw_remote_cursors(
+pub(crate) fn draw_remote_cursors(
     ui: &Ui, camera: &Controller, viewport: OverlayRect, coop: &Coop, map: &str, z: u32,
 ) -> bool {
     let scale = dpi(ui);
@@ -846,7 +849,7 @@ pub(super) fn draw_remote_cursors(
     is_easing
 }
 
-pub(super) fn draw_comment_composer(ui: &Ui, session: &Session, draft: &mut Option<CommentDraft>) {
+pub(crate) fn draw_comment_composer(ui: &Ui, session: &Session, draft: &mut Option<CommentDraft>) {
     let Some(state) = draft.as_mut() else {
         return;
     };
@@ -879,9 +882,9 @@ pub(super) fn draw_comment_composer(ui: &Ui, session: &Session, draft: &mut Opti
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct CommentHit {
-    pub(super) id: CommentId,
-    pub(super) delete: bool,
+pub(crate) struct CommentHit {
+    pub(crate) id: CommentId,
+    pub(crate) delete: bool,
 }
 
 struct CommentLayout<'a> {
@@ -953,7 +956,7 @@ fn comment_layouts<'a>(
         })
 }
 
-pub(super) fn comment_at(
+pub(crate) fn comment_at(
     ui: &Ui, camera: &Controller, viewport_min: [f32; 2], coop: &Coop, map: &str, z: u32, point: [f32; 2],
 ) -> Option<CommentHit> {
     comment_layouts(ui, camera, viewport_min, coop, map, z)
@@ -965,7 +968,7 @@ pub(super) fn comment_at(
         })
 }
 
-pub(super) fn draw_comments(
+pub(crate) fn draw_comments(
     ui: &Ui, camera: &Controller, viewport: OverlayRect, coop: &Coop, map: &str, z: u32, hovered: Option<CommentHit>,
 ) {
     let header = COMMENT_HEADER * dpi(ui);

@@ -10,14 +10,12 @@ use ui::{
 
 pub(super) use self::{
     edit::{EDIT_KEYS, EditCommand},
-    presence::{CoopPresence, FollowedView},
     shortcuts::MomentaryTool,
     stroke::{ActivePlacementFlash, MoveStroke, PickStroke, PlacementStroke},
 };
 use self::{
     hover::draw_tile_hover,
     overlays::{banner_contains, draw_recent_prefabs},
-    presence::{draw_coop_status, draw_tab_menu, hit_comment, share_presence},
     selection::{ViewGestures, conflict_controls_contain, prepare_region_preview, sync_gestures},
     shortcuts::choose_recent_on_key,
     tools::{
@@ -32,6 +30,7 @@ use super::{
 use crate::{
     app::pacing::FrameDemand,
     camera::Controller,
+    coop::panel::presence::{CoopPresence, draw_coop_status, draw_tab_menu, hit_comment, share_presence},
     document::DocumentId,
     git::panel::blame::BlamePopup,
     gizmo::GizmoMapView,
@@ -47,8 +46,7 @@ mod edit;
 mod hover;
 mod navigation;
 mod overlays;
-mod presence;
-mod selection;
+pub(crate) mod selection;
 mod shortcuts;
 mod stroke;
 #[cfg(test)]
@@ -152,7 +150,7 @@ impl ViewLayout {
         }
     }
 
-    fn local(&self, point: [f32; 2]) -> Option<[f32; 2]> {
+    pub(crate) fn local(&self, point: [f32; 2]) -> Option<[f32; 2]> {
         let local = [point[0] - self.viewport.min[0], point[1] - self.viewport.min[1]];
 
         local
@@ -164,7 +162,7 @@ impl ViewLayout {
 }
 
 pub(crate) struct ViewFrame<'a> {
-    id: DocumentId,
+    pub(crate) id: DocumentId,
     pub(crate) camera: &'a mut Controller,
     refit: &'a mut bool,
     pub(crate) gestures: &'a mut ViewGestures,
@@ -173,9 +171,9 @@ pub(crate) struct ViewFrame<'a> {
     interaction: &'a mut MapViewInteraction,
     pub(crate) layout: ViewLayout,
     pub(crate) mouse: [f32; 2],
-    is_active: bool,
+    pub(crate) is_active: bool,
     is_focused: bool,
-    is_pointed: bool,
+    pub(crate) is_pointed: bool,
     pub(crate) is_hovered: bool,
     cursor: Option<[f32; 2]>,
     coord: Option<Coord>,

@@ -1,13 +1,15 @@
 use dear_imgui_rs::Ui;
 
 use super::{
-    LAYER_KEYS, OpenRequest, SCREENSHOT_KEYS, ScreenshotArea, ScreenshotRequest, UiState,
-    coop::{CoopDialogKind, draw_coop_peers, draw_coop_status},
-    viewport::EditCommand,
+    LAYER_KEYS, OpenRequest, SCREENSHOT_KEYS, ScreenshotArea, ScreenshotRequest, UiState, viewport::EditCommand,
     welcome::codebase_relative,
 };
 use crate::{
-    session::{CoopStatus, Session},
+    coop::{
+        CoopStatus,
+        panel::{CoopDialogKind, draw_coop_peers, draw_coop_status},
+    },
+    session::Session,
     settings::{Panel, Settings, keybind::KeybindAction},
     tool::Tool,
 };
