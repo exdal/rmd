@@ -7,12 +7,13 @@ use render::MapViewInteraction;
 use ui::testing::rectangle_context;
 
 use super::{
-    MapViewState, OverlayRect, UiState, conflict_controls_layout,
-    menu::MenuActions,
-    overlay_padding, recent_button_size,
-    viewport::{MapViewDraw, modules::controls_layout as module_controls_layout},
+    MapViewState, OverlayRect, UiState, conflict_controls_layout, menu::MenuActions, overlay_padding,
+    recent_button_size, viewport::MapViewDraw,
 };
-use crate::{document::DocumentId, session::Session, settings::Settings};
+use crate::{
+    document::DocumentId, maploader::panel::controls_layout as module_controls_layout, session::Session,
+    settings::Settings,
+};
 
 pub(super) struct RectangleUiHarness {
     pub(super) context: dear_imgui_rs::Context,

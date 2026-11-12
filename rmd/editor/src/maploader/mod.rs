@@ -1,6 +1,8 @@
 pub mod error;
 pub mod module;
+pub mod panel;
 pub mod preview;
+pub mod session;
 
 use std::{
     fs,

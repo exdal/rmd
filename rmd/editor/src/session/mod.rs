@@ -26,7 +26,6 @@ pub(crate) mod fixtures;
 mod guides;
 pub(crate) mod highlight;
 mod instance;
-mod modules;
 mod palette;
 mod preview;
 

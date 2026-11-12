@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use super::*;
-use crate::session::modules::tests::{
+use crate::maploader::session::tests::{
     Fixture, MODULE, TestResult, WALL, assert_settled, has, open_document, place_in, show,
 };
 

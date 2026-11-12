@@ -2,7 +2,7 @@ use std::{collections::HashSet, mem, path::Path, sync::Arc};
 
 use dmm::Prefab;
 
-use super::{BakeHold, PlacementPreview, Session, prefab_thumbnail_or_missing};
+use crate::session::{BakeHold, PlacementPreview, Session, prefab_thumbnail_or_missing};
 use crate::{
     document::{DocumentId, MapDocument, PrefabInstanceId},
     frame::visual,
@@ -13,7 +13,7 @@ use crate::{
 };
 
 #[cfg(test)]
-pub(super) mod tests;
+pub(crate) mod tests;
 
 impl Session {
     pub(crate) fn effective_grid(&self, id: DocumentId) -> Option<MapView<'_>> {
@@ -202,7 +202,7 @@ impl Session {
         self.settle_modules(id, changed);
     }
 
-    pub(super) fn is_module_document(&self, id: DocumentId) -> bool {
+    pub(crate) fn is_module_document(&self, id: DocumentId) -> bool {
         let Some(path) = self.state.document(id).and_then(MapDocument::resolved_path) else {
             return false;
         };

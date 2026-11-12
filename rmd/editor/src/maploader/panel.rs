@@ -8,14 +8,12 @@ use ui::{
     widgets::dpi,
 };
 
-use super::ViewFrame;
 use crate::{
     camera::Controller,
     frontend::{
-        OverlayRect,
         common::IDENTICAL_EDIT_COLOR,
-        draw_overlay_underlay,
-        overlay::{placement_preview_bounds, tile_bounds},
+        overlay::{OverlayRect, draw_overlay_underlay, placement_preview_bounds, tile_bounds},
+        viewport::ViewFrame,
         welcome::codebase_relative,
     },
     maploader::preview::ModuleVariantKey,
@@ -39,12 +37,12 @@ fn module_path(session: &Session, choice: &ModuleVariantKey) -> String {
     }
 }
 
-pub(super) struct ModuleControls {
-    pub(super) is_capturing: bool,
-    pub(super) open: Option<PathBuf>,
+pub(crate) struct ModuleControls {
+    pub(crate) is_capturing: bool,
+    pub(crate) open: Option<PathBuf>,
 }
 
-pub(super) fn draw(
+pub(crate) fn draw(
     ui: &Ui, session: &mut Session, frame: &mut ViewFrame<'_>, is_escape: bool, is_gizmo_hot: bool,
 ) -> ModuleControls {
     let mut open = None;
@@ -244,7 +242,7 @@ pub(super) fn draw(
     }
 }
 
-pub(in crate::frontend) fn controls_layout(
+pub(crate) fn controls_layout(
     ui: &Ui, camera: &Controller, coord: Coord, tile_size: u32, viewport_min: [f32; 2], area: OverlayRect,
     is_nested: bool,
 ) -> ([f32; 2], f32, OverlayRect) {

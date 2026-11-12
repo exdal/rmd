@@ -35,6 +35,7 @@ use crate::{
     document::DocumentId,
     git::panel::blame::BlamePopup,
     gizmo::GizmoMapView,
+    maploader::panel,
     node::panel::NodeOverlayHit,
     region::panel::restore_rectangle_gesture,
     session::{GuideBadge, Session},
@@ -44,7 +45,6 @@ use crate::{
 
 mod edit;
 mod hover;
-pub(super) mod modules;
 mod navigation;
 mod overlays;
 mod presence;
@@ -108,10 +108,10 @@ impl MapViewState {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ViewLayout {
+pub(crate) struct ViewLayout {
     extent: (u32, u32),
     scale: [f32; 2],
-    viewport: OverlayRect,
+    pub(crate) viewport: OverlayRect,
     top_overlay: OverlayRect,
     bottom_overlay: OverlayRect,
 }
@@ -145,7 +145,7 @@ impl ViewLayout {
         [self.extent.0 as f32 * 0.5, self.extent.1 as f32 * 0.5]
     }
 
-    fn controls_area(&self) -> OverlayRect {
+    pub(crate) fn controls_area(&self) -> OverlayRect {
         OverlayRect {
             min: [self.viewport.min[0], self.top_overlay.max[1]],
             max: [self.viewport.max[0], self.bottom_overlay.min[1]],
@@ -163,20 +163,20 @@ impl ViewLayout {
     }
 }
 
-struct ViewFrame<'a> {
+pub(crate) struct ViewFrame<'a> {
     id: DocumentId,
-    camera: &'a mut Controller,
+    pub(crate) camera: &'a mut Controller,
     refit: &'a mut bool,
-    gestures: &'a mut ViewGestures,
+    pub(crate) gestures: &'a mut ViewGestures,
     blame_popup: &'a mut Option<BlamePopup>,
     context: &'a mut Option<MenuTarget>,
     interaction: &'a mut MapViewInteraction,
-    layout: ViewLayout,
-    mouse: [f32; 2],
+    pub(crate) layout: ViewLayout,
+    pub(crate) mouse: [f32; 2],
     is_active: bool,
     is_focused: bool,
     is_pointed: bool,
-    is_hovered: bool,
+    pub(crate) is_hovered: bool,
     cursor: Option<[f32; 2]>,
     coord: Option<Coord>,
 }
@@ -591,7 +591,7 @@ impl UiState {
                     hovered: frame.is_hovered && !ui.io().want_text_input(),
                 },
             );
-        let module_controls = modules::draw(ui, session, frame, is_escape, is_gizmo_hot);
+        let module_controls = panel::draw(ui, session, frame, is_escape, is_gizmo_hot);
         if let Some(path) = module_controls.open {
             self.open_map = Some(path);
         }

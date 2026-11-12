@@ -274,7 +274,7 @@ pub(crate) struct OverlayRect {
 }
 
 impl OverlayRect {
-    pub(super) fn contains(self, point: [f32; 2]) -> bool {
+    pub(crate) fn contains(self, point: [f32; 2]) -> bool {
         point[0] >= self.min[0] && point[0] < self.max[0] && point[1] >= self.min[1] && point[1] < self.max[1]
     }
 }
@@ -304,7 +304,7 @@ pub(super) fn draw_placement_preview(
     true
 }
 
-pub(super) fn placement_preview_bounds(
+pub(crate) fn placement_preview_bounds(
     camera: &Controller, viewport_min: [f32; 2], coord: Coord, tile_size: u32, preview: PlacementPreview,
 ) -> OverlayRect {
     let tile_size = tile_size.max(1);
@@ -321,7 +321,7 @@ pub(super) fn placement_preview_bounds(
     }
 }
 
-pub(super) fn tile_bounds(camera: &Controller, viewport_min: [f32; 2], coord: Coord, tile_size: u32) -> OverlayRect {
+pub(crate) fn tile_bounds(camera: &Controller, viewport_min: [f32; 2], coord: Coord, tile_size: u32) -> OverlayRect {
     let tile_size = tile_size.max(1);
     let x = coord.x.saturating_sub(1).saturating_mul(tile_size) as f32;
     let y = coord.y.saturating_sub(1).saturating_mul(tile_size) as f32;

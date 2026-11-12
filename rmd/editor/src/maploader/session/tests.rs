@@ -28,23 +28,23 @@ use crate::{
     tool::{RegionSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
 };
 
-pub(in crate::session) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
+pub(crate) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 const PROFILE: &str = include_str!("../../../tests/fixtures/programs/module_preview_profile.dm");
 const COORDINATE_PROFILE: &str = include_str!("../../../tests/fixtures/programs/module_coordinate_profile.dm");
 const PLACEMENTS_PROFILE: &str = include_str!("../../../tests/fixtures/programs/module_placements_profile.dm");
 const COORDINATE_NESTED_PROFILE: &str =
     include_str!("../../../tests/fixtures/programs/module_coordinate_nested_profile.dm");
-pub(in crate::session) const WALL: &str = "/turf/closed/wall";
-pub(in crate::session) const MODULE: &str = "/obj/module";
+pub(crate) const WALL: &str = "/turf/closed/wall";
+pub(crate) const MODULE: &str = "/obj/module";
 const ROOT: &str = "/obj/modular_map_root";
 
-pub(in crate::session) struct Fixture {
-    pub(in crate::session) dir: PathBuf,
+pub(crate) struct Fixture {
+    pub(crate) dir: PathBuf,
 }
 
 impl Fixture {
-    pub(in crate::session) fn new(roots: &[(u32, &str)]) -> TestResult<Self> {
+    pub(crate) fn new(roots: &[(u32, &str)]) -> TestResult<Self> {
         Self::with_variants(roots, "'a.dmm', 'b.dmm'")
     }
 
@@ -125,7 +125,7 @@ impl Fixture {
         Ok(())
     }
 
-    pub(in crate::session) fn session(&self) -> TestResult<Session> {
+    pub(crate) fn session(&self) -> TestResult<Session> {
         self.session_with(PROFILE)
     }
 
@@ -216,7 +216,7 @@ fn source_paths(session: &Session, x: u32) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub(in crate::session) fn has(session: &Session, x: u32, path: &str) -> bool {
+pub(crate) fn has(session: &Session, x: u32, path: &str) -> bool {
     effective_paths(session, x).iter().any(|found| found == path)
 }
 
@@ -261,7 +261,7 @@ fn is_held(session: &Session) -> bool {
     matches!(session.active_cache().bake_hold, BakeHold::Modules { .. })
 }
 
-pub(in crate::session) fn assert_settled(session: &Session) {
+pub(crate) fn assert_settled(session: &Session) {
     assert!(!session.baker.is_busy());
     assert!(session.bake_view().is_none());
     assert_render_cache_matches_rebuild(session);
@@ -1357,16 +1357,14 @@ fn tramstation_root_move_timing() -> TestResult {
     Ok(())
 }
 
-pub(in crate::session) fn open_document(
-    session: &mut Session, fixture: &Fixture, name: &str,
-) -> TestResult<DocumentId> {
+pub(crate) fn open_document(session: &mut Session, fixture: &Fixture, name: &str) -> TestResult<DocumentId> {
     session.open_map(&fixture.dir.join(name), 1)?;
     settle_bake(session);
 
     Ok(session.state.active().ok_or("no active document")?)
 }
 
-pub(in crate::session) fn place_in(session: &mut Session, id: DocumentId, x: u32, path: &str) -> TestResult {
+pub(crate) fn place_in(session: &mut Session, id: DocumentId, x: u32, path: &str) -> TestResult {
     session.set_active_document(id);
     session.set_tool(Tool::Place);
     session.state.choose_prefab(prefab(path));
@@ -1375,7 +1373,7 @@ pub(in crate::session) fn place_in(session: &mut Session, id: DocumentId, x: u32
     Ok(())
 }
 
-pub(in crate::session) fn show(session: &mut Session, id: DocumentId) {
+pub(crate) fn show(session: &mut Session, id: DocumentId) {
     session.set_active_document(id);
     session.sync_open_modules();
 }

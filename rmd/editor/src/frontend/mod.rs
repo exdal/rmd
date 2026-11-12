@@ -80,7 +80,7 @@ use self::{
     welcome::{ForgetRequest, WelcomeOutput},
 };
 
-mod common;
+pub(crate) mod common;
 
 mod context_menu;
 

@@ -17,8 +17,8 @@ use crate::{
 };
 
 #[derive(Debug, Default)]
-pub(in crate::frontend) struct ViewGestures {
-    pub(in crate::frontend) module_popup: Option<(ModuleRootKey, Coord)>,
+pub(crate) struct ViewGestures {
+    pub(crate) module_popup: Option<(ModuleRootKey, Coord)>,
     pub(super) region_selection_anchor: Option<Coord>,
     pub(super) rectangle_gesture: Option<RectangleGesture>,
     pub(super) region_placement: Option<PendingRegionPlacement>,

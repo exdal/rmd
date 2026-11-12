@@ -260,7 +260,7 @@ pub(super) fn layered_node_environment() -> Environment {
     node_environment_with_profile(include_str!("../../tests/fixtures/programs/layered_node_profile.dm"))
 }
 
-pub(super) fn node_environment_with_profile(profile: &'static str) -> Environment {
+pub(crate) fn node_environment_with_profile(profile: &'static str) -> Environment {
     let root = examples();
     let compile = |baking| {
         let arena = StrArena::new();
@@ -542,11 +542,11 @@ pub(crate) fn settle_bake(session: &mut Session) {
 }
 
 pub(crate) fn module_viewport_session() -> Result<(impl Sized, Session), Box<dyn std::error::Error>> {
-    super::modules::tests::viewport_session()
+    crate::maploader::session::tests::viewport_session()
 }
 
 pub(crate) fn coordinate_viewport_session() -> Result<(impl Sized, Session), Box<dyn std::error::Error>> {
-    super::modules::tests::coordinate_viewport_session()
+    crate::maploader::session::tests::coordinate_viewport_session()
 }
 
 pub(crate) fn assert_render_cache_matches_rebuild(session: &Session) {
