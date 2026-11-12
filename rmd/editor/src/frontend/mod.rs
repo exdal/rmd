@@ -24,9 +24,10 @@ use crate::{
         session::LoadReport,
         worker::LoadView,
     },
+    frame::session::TypeLayer,
     git::panel::{GitPanel, GitTab},
     gizmo::GizmoState,
-    session::{Session, TypeLayer},
+    session::Session,
     settings::{
         OpenPanels, Panel, Settings,
         keybind::{KeybindAction, KeybindPreset},

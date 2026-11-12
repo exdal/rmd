@@ -9,8 +9,8 @@ use crate::{
         DocumentId, InstanceChange, MapDocument, PrefabInstanceId, PrefabLocation, Selection, VarMutation,
         command::EditGroupId,
     },
+    frame::visual,
     tool::{PlacementKind, SelectionRotation, Tool, placement_kind, rotate_point, rotate_prefab},
-    visual,
 };
 
 #[derive(Debug)]

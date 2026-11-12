@@ -20,12 +20,12 @@ use crate::{
         progress::{Progress, Snapshot, Stage},
         session::{build_textures, discover_maps},
     },
+    frame::visual,
     git::{
         conflict::ConflictData,
         repo::{self, RepoPath},
     },
     session::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
-    visual,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

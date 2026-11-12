@@ -5,12 +5,11 @@ use super::{PrefabThumbnail, Session};
 use crate::{
     document::{DocumentId, PrefabInstanceId, Selection},
     environment::Environment,
-    frame,
+    frame::{self, visual},
     git::conflict::Side,
     tool::{
         RegionSelectionMode, SelectionMask, SelectionRotation, Tool, rotate_point, rotate_prefab, rotated_selection_at,
     },
-    visual,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -26,21 +25,21 @@ pub(crate) enum RegionPreviewSource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct RegionPreviewKey {
+pub(crate) struct RegionPreviewKey {
     source: RegionPreviewSource,
     rotation: SelectionRotation,
-    pub(super) document_revision: u64,
+    pub(crate) document_revision: u64,
     texture_revision: u64,
     tile_size: u32,
     show_areas: bool,
 }
 
-pub(super) struct RegionPreviewCache {
-    pub(super) key: RegionPreviewKey,
-    pub(super) sprites: Vec<SpriteInstance>,
-    pub(super) revision: u64,
-    pub(super) destination: Coord,
-    pub(super) visible: bool,
+pub(crate) struct RegionPreviewCache {
+    pub(crate) key: RegionPreviewKey,
+    pub(crate) sprites: Vec<SpriteInstance>,
+    pub(crate) revision: u64,
+    pub(crate) destination: Coord,
+    pub(crate) visible: bool,
 }
 
 const PREVIEW_OWNER: PrefabInstanceId = match PrefabInstanceId::from_raw(1) {

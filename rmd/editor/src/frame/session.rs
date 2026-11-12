@@ -2,7 +2,7 @@ use dmm::{Coord, Prefab, Size};
 use objtree::{Roots, TypeId};
 use render::{Frame, GuideLine, MapViewFrame, MapViewInteraction, MapViewRect, SpritePreview};
 
-use super::Session;
+use crate::session::Session;
 use crate::{
     document::{DocumentId, PrefabInstanceId, Selection},
     focus::AreaFocus,
@@ -251,13 +251,13 @@ impl Session {
         })
     }
 
-    pub(super) fn rebuild_instances(&mut self, id: DocumentId) {
+    pub(crate) fn rebuild_instances(&mut self, id: DocumentId) {
         if let Some(cache) = self.caches.get_mut(&id) {
             drop(std::mem::take(&mut cache.instances));
         }
 
         let bake = self.caches.get(&id).and_then(|cache| cache.bake.as_ref());
-        let node_types = super::node::registered_types(self.state.environment.as_deref(), bake);
+        let node_types = crate::session::node::registered_types(self.state.environment.as_deref(), bake);
         let instances = match (self.state.environment.as_ref(), self.effective_grid(id)) {
             (Some(environment), Some(grid)) => frame::build_view_with_options(
                 &environment.tree,
@@ -287,7 +287,7 @@ impl Session {
         self.revalidate_focus();
     }
 
-    pub(super) fn bump_revision(&mut self) -> u64 {
+    pub(crate) fn bump_revision(&mut self) -> u64 {
         let revision = self.next_revision;
         self.next_revision = self.next_revision.wrapping_add(1).max(1);
 
@@ -333,7 +333,7 @@ impl Session {
         );
     }
 
-    pub(super) fn apply_remote_tiles(&mut self, id: DocumentId, tiles: Vec<(Coord, Vec<Prefab>)>) -> bool {
+    pub(crate) fn apply_remote_tiles(&mut self, id: DocumentId, tiles: Vec<(Coord, Vec<Prefab>)>) -> bool {
         let Some(document) = self.state.document_mut(id) else {
             return false;
         };
@@ -370,7 +370,7 @@ impl Session {
         }
     }
 
-    pub(super) fn update_document_instances(&mut self, id: DocumentId, affected: &[PrefabInstanceId]) {
+    pub(crate) fn update_document_instances(&mut self, id: DocumentId, affected: &[PrefabInstanceId]) {
         let changed = self
             .sync_module_source(id, affected)
             .unwrap_or_else(|| affected.to_vec());
@@ -386,8 +386,9 @@ mod tests {
 
     use crate::{
         document::{MapDocument, Selection},
+        frame::session::TypeLayer,
         session::{
-            Session, TypeLayer,
+            Session,
             bake::MAX_PENDING_UPDATES,
             fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, settle_bake},
         },

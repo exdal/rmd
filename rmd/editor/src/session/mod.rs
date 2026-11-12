@@ -12,26 +12,24 @@ use render::{FrameUpdate, texture::TextureCatalog};
 use crate::{
     baker::Baker,
     document::{DocumentId, PrefabInstanceId, state::EditorState},
-    frame::{FrameInstances, FrameOptions, TypeVisibility},
+    frame::{FrameInstances, FrameOptions, TypeVisibility, visual},
     git::{session::GitDocState, worker::GitWorker},
     maploader::preview::ModulePreviewState,
-    visual,
 };
 
-mod bake;
+pub(crate) mod bake;
 mod clipboard;
 pub(crate) mod coop;
 mod direction;
 #[cfg(test)]
 pub(crate) mod fixtures;
 mod focus;
-mod frame;
 mod guides;
 mod highlight;
 mod instance;
 mod issues;
 mod modules;
-mod node;
+pub(crate) mod node;
 mod palette;
 mod panel;
 mod preview;
@@ -46,7 +44,6 @@ pub(crate) use self::{
     bake::{FaultState, RuntimeFault},
     coop::{Activity, Coop, CoopStatus, SharedState},
     direction::{DirectionState, DirectionalTypes},
-    frame::TypeLayer,
     guides::GuideBadge,
     instance::{EditScope, GizmoMember, PickedTransform},
     node::NodeOverlay,
@@ -74,7 +71,7 @@ pub(crate) struct DocumentCache {
     pub(crate) frame_updates: Vec<FrameUpdate>,
     pub(crate) lighting_revision: u64,
     pub(crate) lighting_updates: Vec<render::LightingUpdate>,
-    preview: Option<RegionPreviewCache>,
+    pub(crate) preview: Option<RegionPreviewCache>,
     pub(crate) bake: Option<crate::bake::Bake>,
     bake_hold: BakeHold,
     // edited while the bake was off growing by a level, replayed when it comes back

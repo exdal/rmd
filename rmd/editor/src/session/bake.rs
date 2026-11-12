@@ -13,7 +13,7 @@ use crate::{
 };
 
 // updates the renderer may not have drawn yet, so a frame that missed some can still catch up
-pub(super) const MAX_PENDING_UPDATES: usize = 8;
+pub(crate) const MAX_PENDING_UPDATES: usize = 8;
 
 fn push_pending<T>(updates: &mut Vec<T>, update: T) {
     if updates.len() == MAX_PENDING_UPDATES {
@@ -440,7 +440,7 @@ impl Session {
         self.revalidate_focus();
     }
 
-    pub(super) fn bake_edits(&mut self, id: DocumentId, edited: &[PrefabInstanceId], changed: Vec<PrefabInstanceId>) {
+    pub(crate) fn bake_edits(&mut self, id: DocumentId, edited: &[PrefabInstanceId], changed: Vec<PrefabInstanceId>) {
         let update = self.bake_update(id, edited, changed);
         self.sync_module_guard(id);
         self.apply_bake_update(id, update);
@@ -541,7 +541,7 @@ impl Session {
         self.settle_modules(id, pending);
     }
 
-    pub(super) fn publish_frame_update(&mut self, id: DocumentId, update: PrefabUpdate) {
+    pub(crate) fn publish_frame_update(&mut self, id: DocumentId, update: PrefabUpdate) {
         match update {
             PrefabUpdate::Unchanged => {},
             PrefabUpdate::Buffers { sprites } => {
@@ -751,7 +751,7 @@ mod tests {
             let environment = session.state.environment.as_ref().unwrap();
             bake.appearances.get(&fixture.get()).is_some_and(|appearance| {
                 appearance.overlays.iter().any(|overlay| {
-                    crate::visual::resolve_overlay(&environment.tree, &owner, overlay)
+                    crate::frame::visual::resolve_overlay(&environment.tree, &owner, overlay)
                         .icon_state
                         .as_deref()
                         == Some("tube_1")
@@ -931,7 +931,7 @@ mod tests {
             .unwrap_or_else(|| panic!("missing {path} at {x}, {y}"))
     }
 
-    fn downstream_appearance(session: &Session, x: u32, y: u32, path: &str) -> crate::visual::Appearance {
+    fn downstream_appearance(session: &Session, x: u32, y: u32, path: &str) -> crate::frame::visual::Appearance {
         let id = downstream_instance(session, x, y, path);
         let document = session.state.active_document().unwrap();
         let prefab = document.prefab_instance(id).unwrap().prefab();
@@ -939,7 +939,7 @@ mod tests {
         let ty = environment.tree.id_of(&prefab.path).unwrap();
         let bake = session.active_cache().bake.as_ref().unwrap();
         let delta = bake.appearances.get(&id.get()).cloned().unwrap_or_default();
-        crate::visual::resolve_delta(&environment.tree, ty, prefab, &delta)
+        crate::frame::visual::resolve_delta(&environment.tree, ty, prefab, &delta)
     }
 
     fn downstream_checkbox(session: &mut Session, label: &str, value: bool) {
@@ -1092,7 +1092,7 @@ mod tests {
                 .get(&fixture.get())
                 .is_some_and(|appearance| {
                     appearance.overlays.iter().any(|overlay| {
-                        crate::visual::resolve_overlay(&environment.tree, &owner, overlay)
+                        crate::frame::visual::resolve_overlay(&environment.tree, &owner, overlay)
                             .icon
                             .as_deref()
                             == Some(overlay_icon.as_str())
@@ -1167,7 +1167,7 @@ mod tests {
             let mut overlays = Vec::new();
             while let Some((parent, delta)) = pending.pop() {
                 for overlay in &delta.overlays {
-                    let appearance = crate::visual::resolve_overlay(&environment.tree, &parent, overlay);
+                    let appearance = crate::frame::visual::resolve_overlay(&environment.tree, &parent, overlay);
                     pending.push((appearance.clone(), overlay));
                     overlays.push(appearance);
                 }
@@ -1397,22 +1397,22 @@ mod tests {
                 .prefab();
             let ty = environment.tree.id_of(&prefab.path).unwrap();
             let delta = bake.appearances.get(&instance.get()).expect("baked appearance");
-            let owner = crate::visual::resolve_delta(&environment.tree, ty, prefab, delta);
+            let owner = crate::frame::visual::resolve_delta(&environment.tree, ty, prefab, delta);
             let overlays = delta
                 .overlays
                 .iter()
-                .map(|overlay| crate::visual::resolve_overlay(&environment.tree, &owner, overlay))
+                .map(|overlay| crate::frame::visual::resolve_overlay(&environment.tree, &owner, overlay))
                 .collect::<Vec<_>>();
             Ok::<_, &str>((owner, overlays))
         };
         // Overlay colors carry an alpha byte.
-        let color = |appearance: &crate::visual::Appearance| {
+        let color = |appearance: &crate::frame::visual::Appearance| {
             appearance
                 .color
                 .as_deref()
                 .map(|color| color.get(..7).unwrap_or(color).to_ascii_lowercase())
         };
-        let has_sill = |overlays: &[crate::visual::Appearance]| {
+        let has_sill = |overlays: &[crate::frame::visual::Appearance]| {
             overlays.iter().any(|overlay| {
                 overlay
                     .icon
@@ -1488,11 +1488,11 @@ mod tests {
             .prefab();
         let ty = environment.tree.id_of(&prefab.path).unwrap();
         let delta = bake.appearances.get(&instance.get()).expect("baked computer");
-        let owner = crate::visual::resolve_delta(&environment.tree, ty, prefab, delta);
+        let owner = crate::frame::visual::resolve_delta(&environment.tree, ty, prefab, delta);
         let overlays = delta
             .overlays
             .iter()
-            .map(|overlay| crate::visual::resolve_overlay(&environment.tree, &owner, overlay))
+            .map(|overlay| crate::frame::visual::resolve_overlay(&environment.tree, &owner, overlay))
             .collect::<Vec<_>>();
 
         // The keyboard, then the screen and its emissive copy.
@@ -1518,7 +1518,7 @@ mod tests {
 
         use crate::{
             bake::{UiCommand, UiFeedback, UiValue},
-            visual,
+            frame::visual,
         };
 
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
@@ -1681,14 +1681,16 @@ mod tests {
             .prefab();
         let ty = environment.tree.id_of(&prefab.path).unwrap();
         let delta = &bake.appearances[&instance.get()];
-        let appearance = crate::visual::resolve_delta(&environment.tree, ty, prefab, delta);
+        let appearance = crate::frame::visual::resolve_delta(&environment.tree, ty, prefab, delta);
         assert_eq!(appearance.dir, defines::NORTH);
         assert_eq!(appearance.icon_state.as_deref(), Some("dvalve_off-1"));
 
         let mut underlays = delta
             .underlays
             .iter()
-            .filter_map(|underlay| crate::visual::resolve_overlay(&environment.tree, &appearance, underlay).icon_state)
+            .filter_map(|underlay| {
+                crate::frame::visual::resolve_overlay(&environment.tree, &appearance, underlay).icon_state
+            })
             .collect::<Vec<_>>();
         underlays.sort();
         assert_eq!(underlays, ["intact_1_3", "intact_2_3"]);
@@ -1784,12 +1786,12 @@ mod tests {
             let ty = environment.tree.id_of(&prefab.path).unwrap();
             let delta = bake.appearances.get(&instance.get());
             let appearance = delta.map_or_else(
-                || crate::visual::resolve_id(&environment.tree, ty, prefab),
-                |delta| crate::visual::resolve_delta(&environment.tree, ty, prefab, delta),
+                || crate::frame::visual::resolve_id(&environment.tree, ty, prefab),
+                |delta| crate::frame::visual::resolve_delta(&environment.tree, ty, prefab, delta),
             );
             Ok::<_, &str>((prefab.path.to_string(), appearance, delta))
         };
-        let depth = |appearance: &crate::visual::Appearance| appearance.plane * 1000.0 + appearance.layer;
+        let depth = |appearance: &crate::frame::visual::Appearance| appearance.plane * 1000.0 + appearance.layer;
 
         for (coord, expected) in [
             (Coord::new(1, 2, 1), ["intact_1_3", "intact_2_3"]),
@@ -1804,7 +1806,7 @@ mod tests {
             let (_, turf, _) = placed.iter().find(|(path, ..)| path.starts_with("/turf/")).unwrap();
             let mut states = Vec::new();
             for overlay in &delta.expect("baked manifold").overlays {
-                let connection = crate::visual::resolve_overlay(&environment.tree, owner, overlay);
+                let connection = crate::frame::visual::resolve_overlay(&environment.tree, owner, overlay);
                 let Some(state) = connection
                     .icon_state
                     .clone()
@@ -1877,11 +1879,11 @@ mod tests {
             let ty = environment.tree.id_of(&prefab.path).unwrap();
 
             Ok::<_, &str>(bake.appearances.get(&id.get()).map_or_else(
-                || crate::visual::resolve_id(&environment.tree, ty, prefab),
-                |delta| crate::visual::resolve_delta(&environment.tree, ty, prefab, delta),
+                || crate::frame::visual::resolve_id(&environment.tree, ty, prefab),
+                |delta| crate::frame::visual::resolve_delta(&environment.tree, ty, prefab, delta),
             ))
         };
-        let depth = |appearance: &crate::visual::Appearance| (appearance.plane, appearance.layer);
+        let depth = |appearance: &crate::frame::visual::Appearance| (appearance.plane, appearance.layer);
 
         let in_wall = appearance_at(Coord::new(1, 1, 1), pipe)?;
         let wall = appearance_at(Coord::new(1, 1, 1), "/turf/")?;
@@ -2135,12 +2137,12 @@ mod tests {
             let prefab = document.prefab_instance(instance)?.prefab();
             let ty = environment.tree.id_of(&prefab.path).unwrap();
             let delta = &bake.appearances[&instance.get()];
-            let owner = crate::visual::resolve_delta(&environment.tree, ty, prefab, delta);
+            let owner = crate::frame::visual::resolve_delta(&environment.tree, ty, prefab, delta);
 
             delta
                 .overlays
                 .iter()
-                .map(|overlay| crate::visual::resolve_overlay(&environment.tree, &owner, overlay))
+                .map(|overlay| crate::frame::visual::resolve_overlay(&environment.tree, &owner, overlay))
                 .find(|overlay| overlay.icon_state.as_deref() == Some("pipe"))
                 .map(|overlay| overlay.dir)
         };

@@ -14,7 +14,7 @@ use vm::bake::{NodeGroup, NodePortRule};
 
 use crate::{
     document::{MapDocument, PlacedTile},
-    visual,
+    frame::visual,
 };
 
 bitflags! {

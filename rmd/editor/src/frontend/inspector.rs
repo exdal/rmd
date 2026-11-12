@@ -22,12 +22,12 @@ use crate::git::panel::commit_summary;
 use crate::{
     app::external_editor::SourceLocation,
     document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation, command::EditGroupId},
+    frame::visual,
     git::blame::{self, BlameCell},
     maploader::preview::PREVIEW_ID_START,
     session::{DirectionalTypes, EditScope, Session},
     settings::Settings,
     transform::anchor_axis,
-    visual,
 };
 
 const DISPLAY_PROPERTIES: &[&str] = &[

@@ -7,9 +7,8 @@ use render::{SpriteTexture, texture::TextureCatalog};
 use super::Session;
 use crate::{
     environment::Environment,
-    frame::{self},
+    frame::{self, visual},
     tool::{Tool, is_placeable},
-    visual,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]

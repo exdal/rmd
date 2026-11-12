@@ -465,7 +465,11 @@ mod tests {
     use dmm::{Map, Size};
 
     use super::*;
-    use crate::{document::command::Edit, environment::world::Perspective, frame, visual};
+    use crate::{
+        document::command::Edit,
+        environment::world::Perspective,
+        frame::{self, visual},
+    };
 
     fn examples() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env")

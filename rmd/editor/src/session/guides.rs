@@ -4,7 +4,7 @@ use dmm::Coord;
 use render::GuideLine;
 
 use super::Session;
-use crate::{document::PrefabInstanceId, visual};
+use crate::{document::PrefabInstanceId, frame::visual};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct GuideBadge {

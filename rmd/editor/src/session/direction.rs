@@ -11,8 +11,8 @@ use super::{EditScope, Session};
 use crate::{
     document::{InstanceChange, VarMutation, command::EditGroupId},
     environment::Environment,
+    frame::visual,
     tool::Tool,
-    visual,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

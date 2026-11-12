@@ -20,8 +20,7 @@ use crate::{
     clipboard::{has_kind, merge_pasted},
     document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection, command::Edit, grid::Grid},
     environment::world::{BaseTile, World},
-    frame::HiddenTypes,
-    visual,
+    frame::{HiddenTypes, visual},
 };
 
 pub const MAX_FILL_TILES: usize = 5_000;
@@ -3392,7 +3391,7 @@ mod tests {
                 assert_eq!(prefab.path, TreePath::parse("/obj/sign/directional/west"));
                 let id = tree.id_of(&prefab.path).unwrap();
 
-                crate::visual::resolve_id(&tree, id, prefab)
+                crate::frame::visual::resolve_id(&tree, id, prefab)
             })
             .collect::<Vec<_>>();
         assert_eq!(

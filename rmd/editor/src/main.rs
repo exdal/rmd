@@ -29,7 +29,6 @@ mod session;
 mod settings;
 mod tool;
 mod transform;
-mod visual;
 
 use std::process::ExitCode;
 

@@ -12,12 +12,12 @@ use crate::{
         DocumentId, PlacedTile, PrefabInstanceId,
         command::{Edit, EditGroupId},
     },
+    frame::visual,
     node,
     tool::{FillMode, Tool, ToolContext, ToolEdit},
-    visual,
 };
 
-pub(super) fn registered_types(
+pub(crate) fn registered_types(
     environment: Option<&crate::environment::Environment>, bake: Option<&crate::bake::Bake>,
 ) -> HashSet<objtree::TypeId> {
     let Some((environment, bake)) = environment.zip(bake) else {

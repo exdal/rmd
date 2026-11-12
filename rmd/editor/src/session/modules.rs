@@ -5,18 +5,18 @@ use dmm::Prefab;
 use super::{BakeHold, PlacementPreview, Session, prefab_thumbnail_or_missing};
 use crate::{
     document::{DocumentId, MapDocument, PrefabInstanceId},
+    frame::visual,
     maploader::{
         LoadedModule, OpenModule,
         preview::{ComposeContext, MapView, ModulePreviewState, ModuleRootKey, ModuleRootPreview, PREVIEW_ID_START},
     },
-    visual,
 };
 
 #[cfg(test)]
 pub(super) mod tests;
 
 impl Session {
-    pub(super) fn effective_grid(&self, id: DocumentId) -> Option<MapView<'_>> {
+    pub(crate) fn effective_grid(&self, id: DocumentId) -> Option<MapView<'_>> {
         let source = &self.state.document(id)?.map;
 
         Some(
@@ -76,7 +76,7 @@ impl Session {
         }
     }
 
-    pub(super) fn sync_module_source(
+    pub(crate) fn sync_module_source(
         &mut self, id: DocumentId, affected: &[PrefabInstanceId],
     ) -> Option<Vec<PrefabInstanceId>> {
         let changed = self
@@ -87,7 +87,7 @@ impl Session {
         changed
     }
 
-    pub(super) fn settle_modules(&mut self, id: DocumentId, changed: Vec<PrefabInstanceId>) {
+    pub(crate) fn settle_modules(&mut self, id: DocumentId, changed: Vec<PrefabInstanceId>) {
         self.bake_edits(id, &[], changed);
     }
 }

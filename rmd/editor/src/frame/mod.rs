@@ -20,16 +20,14 @@ use vm::{
 
 #[cfg(test)]
 use crate::document::MapDocument;
-use crate::{
-    document::PrefabInstanceId,
-    environment::world::Perspective,
-    maploader::preview::MapView,
-    visual::{self, Appearance},
-};
+use crate::{document::PrefabInstanceId, environment::world::Perspective, maploader::preview::MapView};
 
 mod pages;
+pub(crate) mod session;
+pub(crate) mod visual;
 
 use pages::{OwnerKeys, SpritePage, replace_owner_sprites};
+use visual::Appearance;
 
 /// - 0: z level
 /// - 1: plane encoded with `visual::sort_component`
@@ -1286,7 +1284,7 @@ mod tests {
     use crate::{
         document::{MapDocument, PrefabInstanceId, VarMutation, command::Edit},
         environment::world::Perspective,
-        visual::Appearance,
+        frame::visual::Appearance,
     };
 
     const ICON: &str = "test.dmi";
