@@ -8,6 +8,10 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use dmi::metadata::Dir;
 use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
+use ui::icons::materialdesignicons::{
+    ICON_ARROW_ALL, ICON_COMMENT_TEXT_OUTLINE, ICON_ERASER, ICON_EYEDROPPER, ICON_FIND_REPLACE, ICON_FORMAT_COLOR_FILL,
+    ICON_PENCIL, ICON_SELECT_DRAG, ICON_TEXTURE, ICON_VECTOR_POLYLINE,
+};
 
 use crate::{
     clipboard::{has_kind, merge_pasted},
@@ -15,10 +19,6 @@ use crate::{
     document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection},
     frame::HiddenTypes,
     grid::Grid,
-    icons::materialdesignicons::{
-        ICON_ARROW_ALL, ICON_COMMENT_TEXT_OUTLINE, ICON_ERASER, ICON_EYEDROPPER, ICON_FIND_REPLACE,
-        ICON_FORMAT_COLOR_FILL, ICON_PENCIL, ICON_SELECT_DRAG, ICON_TEXTURE, ICON_VECTOR_POLYLINE,
-    },
     visual,
     world::{BaseTile, World},
 };

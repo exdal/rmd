@@ -3,6 +3,7 @@ use std::{env, iter};
 use dear_imgui_rs::{Condition, Key, PopupQueryFlags, StyleColor, StyleVar, Ui, WindowFlags, sys};
 use dmm::Coord;
 use net::{CodebaseId, Comment, CommentId, MAX_COMMENT_LEN, PeerId};
+use ui::icons::materialdesignicons::ICON_CLOSE;
 
 use super::{
     DIAGNOSTIC_WARNING_COLOR,
@@ -14,7 +15,6 @@ use super::{
 use crate::{
     camera::Controller,
     document::{DocumentId, Selection},
-    icons::materialdesignicons::ICON_CLOSE,
     session::{Activity, Coop, CoopStatus, Session, SharedState},
     settings::Settings,
     tool::{RegionSelectionMode, Tool},

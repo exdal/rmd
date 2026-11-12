@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use dear_imgui_rs::{StyleColor, Ui};
+use ui::icons::materialdesignicons::{ICON_ALERT, ICON_ALERT_CIRCLE, ICON_CLOSE_THICK, ICON_WEB};
 
 use super::{
     CloseFocus, DIAGNOSTIC_WARNING_COLOR, OpenRequest, SAVE_ERROR_COLOR, UiState,
@@ -8,7 +9,6 @@ use super::{
     coop::shared_maps,
 };
 use crate::{
-    icons::materialdesignicons::{ICON_ALERT, ICON_ALERT_CIRCLE, ICON_CLOSE_THICK, ICON_WEB},
     session::{DiagnosticSeverity, Session},
     settings::Settings,
     update::Release,

@@ -2,13 +2,13 @@ use std::collections::BTreeSet;
 
 use dear_imgui_rs::{MouseButton, Ui};
 use dmm::Coord;
+use ui::icons::materialdesignicons::ICON_CIRCLE_SMALL;
 
 use super::ViewFrame;
 use crate::{
     blame::{BlameCell, pending_note, relative_time},
     document::DocumentId,
     frontend::{BlamePopup, blame_tooltip_position, draw_blame_popup, draw_conflict_tooltip, draw_diff_tooltip},
-    icons::materialdesignicons::ICON_CIRCLE_SMALL,
     session::Session,
 };
 

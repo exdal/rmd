@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use dear_imgui_rs::{MouseButton, Ui};
 use dmm::Coord;
 use render::Renderer;
+use ui::icons::materialdesignicons::{ICON_MAP_MARKER, ICON_OPEN_IN_NEW};
 
 use super::ViewFrame;
 use crate::{
@@ -14,7 +15,6 @@ use crate::{
         overlay::{placement_preview_bounds, tile_bounds},
         welcome::codebase_relative,
     },
-    icons::materialdesignicons::{ICON_MAP_MARKER, ICON_OPEN_IN_NEW},
     maploader::preview::ModuleVariantKey,
     session::Session,
     tool::Tool,

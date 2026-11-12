@@ -1,11 +1,11 @@
 use dear_imgui_rs::Ui;
 use dmm::{Coord, Tile, merge::TileConflict};
+use ui::icons::materialdesignicons::ICON_ARROW_RIGHT;
 
 use super::common::opaque;
 use crate::{
     conflict::{OURS_COLOR, OURS_LABEL, THEIRS_COLOR, describe_tile},
     diff::{ADDED_COLOR, ChangeKind, LineKind, REMOVED_COLOR, TileLine, tile_lines},
-    icons::materialdesignicons::ICON_ARROW_RIGHT,
 };
 
 /// Shown in place of a var value one side doesn't set

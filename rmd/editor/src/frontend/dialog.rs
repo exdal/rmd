@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use dear_imgui_rs::{DragFlags, Ui, WindowFlags};
 use dmm::{Coord, MapFormat, Prefab, Size};
+use ui::icons::materialdesignicons::ICON_DOTS_HORIZONTAL;
 
 use super::{
     DIAGNOSTIC_WARNING_COLOR, MAX_CUSTOM_FILL_SEARCH_RESULTS, UiState,
@@ -11,7 +12,6 @@ use super::{
 };
 use crate::{
     document::{DocumentId, MapDocument},
-    icons::materialdesignicons::ICON_DOTS_HORIZONTAL,
     session::Session,
     settings::KeybindPreset,
     tool::{FillMode, SelectionMask, Tool},

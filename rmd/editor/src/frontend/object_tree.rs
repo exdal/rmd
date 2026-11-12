@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 use dear_imgui_rs::{ListClipper, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError};
 use objtree::{ObjectTree, TypeId};
+use ui::icons::materialdesignicons::{ICON_COG, ICON_EYE, ICON_EYE_OFF, ICON_FILTER};
 
 use super::{
     common::{dpi, draw_thumbnail, focus_window_on_hover},
@@ -10,7 +11,6 @@ use super::{
 };
 use crate::{
     external_editor::SourceLocation,
-    icons::materialdesignicons::{ICON_COG, ICON_EYE, ICON_EYE_OFF, ICON_FILTER},
     session::Session,
     settings::{ObjectTreeFilterOptions, ObjectTreeSearchOptions, Settings},
 };

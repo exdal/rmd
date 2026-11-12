@@ -3,6 +3,11 @@ use dear_imgui_rs::{
     TableRowFlags, TableSizingPolicy, TreeNodeFlags, Ui, WindowKey, WindowKeyError,
 };
 use dmm::Coord;
+use ui::icons::materialdesignicons::{
+    ICON_ALERT, ICON_ALERT_CIRCLE, ICON_ARROW_RIGHT, ICON_CHECK, ICON_CIRCLE_SMALL, ICON_CLOSE_THICK,
+    ICON_FILE_COMPARE, ICON_PENCIL, ICON_REFRESH, ICON_RESTORE, ICON_SOURCE_BRANCH, ICON_SOURCE_COMMIT,
+    ICON_SOURCE_MERGE,
+};
 
 use super::{
     SAVE_ERROR_COLOR,
@@ -17,11 +22,6 @@ use crate::{
     diff::{ChangeKind, DiffSource},
     document::DocumentId,
     git::{CommitInfo, WebLinks},
-    icons::materialdesignicons::{
-        ICON_ALERT, ICON_ALERT_CIRCLE, ICON_ARROW_RIGHT, ICON_CHECK, ICON_CIRCLE_SMALL, ICON_CLOSE_THICK,
-        ICON_FILE_COMPARE, ICON_PENCIL, ICON_REFRESH, ICON_RESTORE, ICON_SOURCE_BRANCH, ICON_SOURCE_COMMIT,
-        ICON_SOURCE_MERGE,
-    },
     session::{self, BlameState, DiffSide, GitDocState, Session},
     settings::Settings,
 };

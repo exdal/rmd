@@ -3,6 +3,7 @@ use std::mem;
 use dear_imgui_rs::{Condition, Ui, WindowFlags, WindowKey, WindowKeyError};
 use dmm::Coord;
 use render::{MapViewInteraction, MapViewRect, Renderer};
+use ui::icons::materialdesignicons::{ICON_ALERT, ICON_WEB};
 
 pub(super) use self::{
     edit::{EDIT_KEYS, EditCommand},
@@ -30,7 +31,6 @@ use crate::{
     camera::Controller,
     document::DocumentId,
     gizmo::GizmoMapView,
-    icons::materialdesignicons::{ICON_ALERT, ICON_WEB},
     pacing::FrameDemand,
     session::{GuideBadge, Session},
     settings::{KeybindAction, Settings},

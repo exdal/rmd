@@ -21,6 +21,7 @@ preprocessor = { path = "rmd/preprocessor" }
 protocol = { path = "rmd/protocol" }
 render = { path = "rmd/render" }
 sema = { path = "rmd/sema" }
+ui = { path = "rmd/ui" }
 vm = { path = "rmd/vm" }
 
 bitflags = "2"

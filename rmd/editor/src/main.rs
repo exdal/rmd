@@ -31,7 +31,6 @@ mod git;
 mod git_worker;
 mod gizmo;
 mod grid;
-mod icons;
 mod issues;
 mod loader;
 mod logging;

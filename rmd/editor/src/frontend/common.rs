@@ -4,8 +4,9 @@ use dear_imgui_rs::{
     Condition, Key, ModalPopupToken, StyleColor, TableFlags, Ui, WindowFlags, WindowHoveredFlags, sys,
 };
 use render::Renderer;
+use ui::icons::materialdesignicons::ICON_IMAGE_BROKEN;
 
-use crate::{icons::materialdesignicons::ICON_IMAGE_BROKEN, session::PrefabThumbnail};
+use crate::session::PrefabThumbnail;
 
 const ORIGIN_RADIUS: f32 = 3.0;
 const ORIGIN_MAX_DISTANCE: f32 = 32.0;

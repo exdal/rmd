@@ -9,6 +9,10 @@ use dear_imgui_rs::{ChildFlags, DragFlags, StyleColor, TableFlags, TableSizingPo
 use dmi::metadata::Dir;
 use dmm::{Coord, Prefab, error::MapErrorKind, parser::parse_value, writer::format_value};
 use objtree::{ObjectTree, ResolvedVarType, TypeId, VarTypeKind};
+use ui::icons::materialdesignicons::{
+    ICON_ARROW_BOTTOM_LEFT, ICON_ARROW_BOTTOM_RIGHT, ICON_ARROW_DOWN, ICON_ARROW_LEFT, ICON_ARROW_RIGHT,
+    ICON_ARROW_TOP_LEFT, ICON_ARROW_TOP_RIGHT, ICON_ARROW_UP, ICON_CIRCLE_SMALL, ICON_PIN, ICON_PIN_OUTLINE,
+};
 
 use super::{
     common::{IDENTICAL_EDIT_COLOR, checkbox_width, focus_window_on_hover, text_wrapped_colored},
@@ -20,10 +24,6 @@ use crate::{
     command::EditGroupId,
     document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation},
     external_editor::SourceLocation,
-    icons::materialdesignicons::{
-        ICON_ARROW_BOTTOM_LEFT, ICON_ARROW_BOTTOM_RIGHT, ICON_ARROW_DOWN, ICON_ARROW_LEFT, ICON_ARROW_RIGHT,
-        ICON_ARROW_TOP_LEFT, ICON_ARROW_TOP_RIGHT, ICON_ARROW_UP, ICON_CIRCLE_SMALL, ICON_PIN, ICON_PIN_OUTLINE,
-    },
     maploader::preview::PREVIEW_ID_START,
     session::{DirectionalTypes, EditScope, Session},
     settings::Settings,
