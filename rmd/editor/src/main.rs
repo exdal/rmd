@@ -24,7 +24,6 @@ mod environment;
 mod error;
 mod fingerprint;
 mod focus;
-mod fonts;
 mod frame;
 mod frontend;
 mod git;

@@ -6,15 +6,35 @@ use std::{
 };
 
 use dear_imgui_rs::{FontAtlas, FontConfig, FontId, FontSource, StbTrueTypeFontData};
-
-use crate::settings::FontSettings;
+use serde::{Deserialize, Serialize};
 
 const FONT_DATA: &[u8] = include_bytes!("../assets/FiraMono-Regular.ttf");
 const MDI_FONT_DATA: &[u8] = include_bytes!("../assets/materialdesignicons-webfont.ttf");
 const REFERENCE_SIZE: f32 = 16.0;
-pub(crate) const BUNDLED_FONT_NAME: &str = "Fira Mono";
+pub const BUNDLED_FONT_NAME: &str = "Fira Mono";
 
-pub(crate) struct UiFont {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FontSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    pub size: u32,
+    pub brightness_percent: u32,
+    pub pixel_snap: bool,
+}
+
+impl Default for FontSettings {
+    fn default() -> Self {
+        Self {
+            path: None,
+            size: 16,
+            brightness_percent: 100,
+            pixel_snap: false,
+        }
+    }
+}
+
+pub struct UiFont {
     id: FontId,
     loaded: FontSettings,
 }
@@ -80,13 +100,13 @@ fn font_sources(settings: &FontSettings) -> Result<[FontSource<'static>; 2], Box
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FontFace {
+pub struct FontFace {
     pub label: String,
     pub path: PathBuf,
 }
 
 #[derive(Default)]
-pub(crate) enum SystemFonts {
+pub enum SystemFonts {
     #[default]
     Unscanned,
     Scanning(JoinHandle<Vec<FontFace>>),
@@ -177,7 +197,7 @@ mod tests {
 
     #[test]
     fn fonts_swap_between_frames_and_bad_files_keep_the_current_font() {
-        let _context = ui::testing::CONTEXT_LOCK.lock().unwrap();
+        let _context = crate::testing::CONTEXT_LOCK.lock().unwrap();
         let mut context = Context::create();
         context.prepare_frame(FramePrepareOptions::new([800.0, 600.0], 1.0 / 60.0).renderer_has_textures());
         let consumer = context.create_synchronous_renderer_consumer().unwrap();

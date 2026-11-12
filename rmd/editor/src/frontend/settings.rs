@@ -4,8 +4,11 @@ use dear_imgui_rs::{
     ColorDisplayMode, ColorEditFlags, Condition, DragFlags, Key, StbTrueTypeFontData, Style, TableFlags,
     TableSizingPolicy, Ui, WindowFlags, WindowKey, WindowKeyError,
 };
-use ui::theme::{
-    FieldKind, STYLE_COLORS, STYLE_FIELDS, StyleField, TREE_LINE_MODES, Themes, direction_name, tree_lines_name,
+use ui::{
+    fonts::{BUNDLED_FONT_NAME, FontSettings, SystemFonts},
+    theme::{
+        FieldKind, STYLE_COLORS, STYLE_FIELDS, StyleField, TREE_LINE_MODES, Themes, direction_name, tree_lines_name,
+    },
 };
 
 use super::{
@@ -17,13 +20,11 @@ use super::{
 };
 use crate::{
     environment::profile_label,
-    fonts::{BUNDLED_FONT_NAME, SystemFonts},
     frontend::ProfileReload,
     session::Session,
     settings::{
-        BINDABLE_KEYS, FONT_BRIGHTNESS_PERCENT, FONT_SIZE, FontSettings, KeyBinding, KeyBindings, KeybindAction,
-        MODIFIER_KEYS, ObjectTreeFilterOptions, ObjectTreeSearchOptions, SelectionHighlight, Settings,
-        UI_SCALE_PERCENT, backup_dir,
+        BINDABLE_KEYS, FONT_BRIGHTNESS_PERCENT, FONT_SIZE, KeyBinding, KeyBindings, KeybindAction, MODIFIER_KEYS,
+        ObjectTreeFilterOptions, ObjectTreeSearchOptions, SelectionHighlight, Settings, UI_SCALE_PERCENT, backup_dir,
     },
 };
 

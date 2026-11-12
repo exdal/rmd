@@ -855,7 +855,6 @@ dependencies = [
  "defines",
  "dmi",
  "dmm",
- "fontdb",
  "gix",
  "ir",
  "jiff",
@@ -4192,6 +4191,7 @@ name = "ui"
 version = "0.1.0"
 dependencies = [
  "dear-imgui-rs",
+ "fontdb",
  "log",
  "serde",
  "toml",

@@ -22,7 +22,7 @@ use dear_imgui_rs::{BackendFlags, ConfigFlags, Context, Style, render::Synchrono
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use render::{Device, Renderer};
-use ui::theme::Themes;
+use ui::{fonts::UiFont, theme::Themes};
 use winit::{
     dpi::LogicalSize,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
@@ -32,7 +32,6 @@ use winit::{
 use crate::{
     document::{DocumentId, Selection},
     environment::BakeOptions,
-    fonts::UiFont,
     frontend::{LoadNotice, OpenRequest, ProfileReload, ScreenshotArea, ScreenshotRequest, UiState},
     loader::{Job, Loader, Outcome},
     session::{LoadReport, Session},

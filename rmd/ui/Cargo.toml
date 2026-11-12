@@ -8,6 +8,7 @@ path = "src/lib.rs"
 
 [dependencies]
 dear-imgui-rs.workspace = true
+fontdb = "0.24.0"
 log.workspace = true
 serde = { workspace = true, features = ["derive"] }
 toml.workspace = true

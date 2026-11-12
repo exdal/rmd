@@ -8,7 +8,7 @@ use std::{
 use dear_imgui_rs::{Key, Ui};
 use render::HighlightStyle;
 use serde::{Deserialize, Serialize};
-use ui::theme::DEFAULT_THEME;
+use ui::{fonts::FontSettings, theme::DEFAULT_THEME};
 
 use crate::frame::FrameOptions;
 
@@ -1114,27 +1114,6 @@ impl Default for OpenPanels {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub(crate) struct FontSettings {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<PathBuf>,
-    pub size: u32,
-    pub brightness_percent: u32,
-    pub pixel_snap: bool,
-}
-
-impl Default for FontSettings {
-    fn default() -> Self {
-        Self {
-            path: None,
-            size: 16,
-            brightness_percent: 100,
-            pixel_snap: false,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct ObjectTreeFilterOptions {
@@ -1815,6 +1794,25 @@ mod tests {
         let loaded = SettingsLoad::from_file_result(Ok(Some(stored)));
 
         assert_eq!(loaded.settings.minimum_light_brightness_percent, 100);
+    }
+
+    #[test]
+    fn a_stored_font_section_loads_every_key() {
+        let stored = toml::from_str(
+            "[font]\npath = \"/fonts/Caskaydia.ttf\"\nsize = 20\nbrightness_percent = 120\npixel_snap = true\n",
+        )
+        .unwrap();
+        let loaded = SettingsLoad::from_file_result(Ok(Some(stored)));
+
+        assert_eq!(
+            loaded.settings.font,
+            FontSettings {
+                path: Some(PathBuf::from("/fonts/Caskaydia.ttf")),
+                size: 20,
+                brightness_percent: 120,
+                pixel_snap: true,
+            }
+        );
     }
 
     #[test]
