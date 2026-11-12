@@ -8,8 +8,10 @@ use dmm::{Coord, PrefabInstanceId};
 use net::LevelChange;
 
 use crate::{
-    document::{MapDocument, PlacedTile},
-    grid::{Grid, LevelCells},
+    document::{
+        MapDocument, PlacedTile,
+        grid::{Grid, LevelCells},
+    },
     tool::SelectionMask,
 };
 

@@ -5,12 +5,14 @@ use objtree::ObjectTree;
 
 use super::{FillOutcome, Session};
 use crate::{
-    command::{Edit, EditGroupId, SelectionChange},
-    document::{PrefabInstanceId, VarMutation},
+    document::{
+        PrefabInstanceId, VarMutation,
+        command::{Edit, EditGroupId, SelectionChange},
+    },
     tool::{self, FillError, FillMode, MAX_FILL_TILES, SelectionMask, Tool, ToolContext, ToolEdit},
 };
 
-pub(super) fn is_reorder_label(label: &str) -> bool {
+pub(crate) fn is_reorder_label(label: &str) -> bool {
     matches!(label, "move atom to top" | "move atom to bottom")
 }
 
@@ -389,8 +391,7 @@ mod tests {
     use dmm::{Coord, Prefab};
 
     use crate::{
-        command::EditGroupId,
-        document::PrefabInstanceId,
+        document::{PrefabInstanceId, command::EditGroupId},
         session::{
             FillOutcome, Session,
             fixtures::{area_at, examples, flat_session, focus_session},

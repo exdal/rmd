@@ -11,20 +11,18 @@ use render::{FrameUpdate, texture::TextureCatalog};
 
 use crate::{
     baker::Baker,
-    document::{DocumentId, PrefabInstanceId},
+    document::{DocumentId, PrefabInstanceId, state::EditorState},
     frame::{FrameInstances, FrameOptions, TypeVisibility},
     git::{session::GitDocState, worker::GitWorker},
     maploader::preview::ModulePreviewState,
-    state::EditorState,
     visual,
 };
 
 mod bake;
 mod clipboard;
-mod coop;
+pub(crate) mod coop;
 mod direction;
-mod document;
-mod edit;
+pub(crate) mod edit;
 #[cfg(test)]
 pub(crate) mod fixtures;
 mod focus;
@@ -33,7 +31,6 @@ mod guides;
 mod highlight;
 mod instance;
 mod issues;
-mod level;
 mod modules;
 mod node;
 mod palette;
@@ -43,8 +40,8 @@ mod region;
 mod search;
 
 use self::{
-    bake::report_bake_output, direction::direction_state, edit::is_reorder_label, highlight::always_highlighted,
-    node::NodeEditState, preview::RegionPreviewCache, region::RegionState,
+    bake::report_bake_output, direction::direction_state, highlight::always_highlighted, node::NodeEditState,
+    preview::RegionPreviewCache, region::RegionState,
 };
 pub(crate) use self::{
     bake::{FaultState, RuntimeFault},
@@ -54,7 +51,6 @@ pub(crate) use self::{
     frame::TypeLayer,
     guides::GuideBadge,
     instance::{EditScope, GizmoMember, PickedTransform},
-    level::validate_level,
     node::NodeOverlay,
     palette::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
     preview::{PlacementPreview, RegionPreviewSource},
@@ -123,7 +119,7 @@ pub struct Session {
     pub(crate) logged_ui_fault: Option<vm::FaultKey>,
     /// The last interaction the panel committed, replayed into a bake that lands after it.
     pub(crate) ui_feedback: Option<crate::bake::UiFeedback>,
-    node_edit: Option<NodeEditState>,
+    pub(crate) node_edit: Option<NodeEditState>,
     identical: Option<instance::IdenticalCache>,
     pub(crate) coop: Option<Coop>,
     region_state: RegionState,

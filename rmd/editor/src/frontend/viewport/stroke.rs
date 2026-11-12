@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use dmm::{Coord, Prefab, PrefabInstanceId};
 use render::PlacementFlash;
 
-use crate::{command::EditGroupId, document::DocumentId, tool::Tool};
+use crate::{
+    document::{DocumentId, command::EditGroupId},
+    tool::Tool,
+};
 
 const PLACEMENT_FLASH_DURATION: f64 = 0.25;
 

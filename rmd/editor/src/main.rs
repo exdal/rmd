@@ -10,12 +10,10 @@
 //! With no arguments the editor opens on its welcome page, which can open a codebase or a map.
 
 mod app;
-mod backup;
 mod bake;
 mod baker;
 mod camera;
 mod clipboard;
-mod command;
 mod document;
 mod environment;
 mod focus;
@@ -23,15 +21,12 @@ mod frame;
 mod frontend;
 mod git;
 mod gizmo;
-mod grid;
 mod issues;
 mod maploader;
 mod node;
-mod patch;
 mod search;
 mod session;
 mod settings;
-mod state;
 mod tool;
 mod transform;
 mod visual;

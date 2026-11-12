@@ -15,8 +15,7 @@ use net::{
 
 use super::*;
 use crate::{
-    command::Edit,
-    document::DocumentId,
+    document::{DocumentId, command::Edit},
     environment::worker::LoadedMap,
     session::{Session, fixtures},
     tool::Tool,

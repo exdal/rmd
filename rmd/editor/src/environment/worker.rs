@@ -13,6 +13,7 @@ use objtree::TypeId;
 use render::texture::TextureCatalog;
 
 use crate::{
+    document::level_session::validate_level,
     environment::{
         BakeOptions, Environment, LoadDiagnostics,
         error::LoadError,
@@ -23,7 +24,7 @@ use crate::{
         conflict::ConflictData,
         repo::{self, RepoPath},
     },
-    session::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing, validate_level},
+    session::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
     visual,
 };
 
@@ -286,7 +287,7 @@ pub fn load_map_with_git(
     progress.set_detail(&path.display().to_string());
     let source = std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
     if let Some(root) = backups
-        && let Err(error) = crate::backup::back_up(root, path, &source, std::time::SystemTime::now())
+        && let Err(error) = crate::document::backup::back_up(root, path, &source, std::time::SystemTime::now())
     {
         log::warn!("{}: could not back up the map: {error}", path.display());
     }

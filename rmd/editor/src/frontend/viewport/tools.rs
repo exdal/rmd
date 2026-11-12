@@ -7,8 +7,7 @@ use super::{
     stroke::{ActivePlacementFlash, MoveStroke, PickStroke, PlacementStroke},
 };
 use crate::{
-    command::EditGroupId,
-    document::DocumentId,
+    document::{DocumentId, command::EditGroupId},
     frontend::{
         FILL_LIMIT_WARNING_POPUP, FillWarningContext, NodeOverlayView, NodeRightClick, PendingFillWarning, UiState,
         context_menu::{NodeContext, POPUP as MAP_MENU_POPUP, Target as MenuTarget},

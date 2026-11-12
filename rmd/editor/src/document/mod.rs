@@ -1,3 +1,11 @@
+pub(crate) mod backup;
+pub(crate) mod command;
+pub(crate) mod grid;
+pub(crate) mod level_session;
+pub(crate) mod patch;
+pub(crate) mod session;
+pub(crate) mod state;
+
 use base::{
     path::TreePath,
     types::{Identifier, Value},
@@ -20,17 +28,17 @@ use net::{LevelChange, LevelContents};
 use objtree::ObjectTree;
 
 use crate::{
-    command::{self, Edit, EditGroupId, History, LevelEdit, Resize, SelectionChange},
     environment::world::World,
     focus::AreaFocus,
-    grid::{Grid, LevelCells},
     maploader::{preview::PREVIEW_ID_START, resolved_path},
-    patch,
     tool::{
         PlacementKind, RegionSelectionMode, SelectionMask, ToolEdit, insertion_index, placement_kind,
         refill_missing_bases,
     },
 };
+
+use command::{Edit, EditGroupId, History, LevelEdit, Resize, SelectionChange};
+use grid::{Grid, LevelCells};
 
 pub fn sanitize_vars(map: &mut Map, tree: &ObjectTree) -> usize {
     let mut dropped = 0;
@@ -1218,9 +1226,11 @@ mod tests {
 
     use super::{Coord, MapDocument, Selection, VarMutation, sanitize_vars};
     use crate::{
-        command::{Edit, EditGroupId},
+        document::{
+            command::{Edit, EditGroupId},
+            patch,
+        },
         focus::AreaFocus,
-        patch,
         tool::RegionSelectionMode,
     };
 

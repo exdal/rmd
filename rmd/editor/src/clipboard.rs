@@ -4,8 +4,7 @@ use dmm::{Coord, Prefab, Tile};
 use objtree::ObjectTree;
 
 use crate::{
-    command::Edit,
-    document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection},
+    document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection, command::Edit},
     environment::world::{BaseTile, World},
     frame::HiddenTypes,
     maploader::preview::MapView,

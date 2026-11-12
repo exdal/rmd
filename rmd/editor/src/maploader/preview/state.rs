@@ -9,7 +9,7 @@ use super::{
     ComposeContext, MapView, ModuleChoices, ModuleOverlay, ModuleRootKey, PreviewIdAllocator, compose::update,
 };
 use crate::{
-    grid::Grid,
+    document::grid::Grid,
     maploader::{ModuleFiles, OpenModule, RootSpecs},
 };
 

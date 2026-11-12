@@ -3,8 +3,7 @@ use dmm::Coord;
 use super::{RegionState, Session};
 use crate::{
     clipboard::{self, PasteMerge, TileRegion},
-    command::EditGroupId,
-    document::{DocumentId, PrefabInstanceId, Selection},
+    document::{DocumentId, PrefabInstanceId, Selection, command::EditGroupId},
     tool::{RegionSelectionMode, SelectionMask, SelectionRotation, Tool, ToolEdit},
 };
 

@@ -4,7 +4,10 @@ use dmm::{Coord, Prefab};
 use net::{DeleteLevel, InsertAt, InsertLevel, LevelChange, LevelOp, MapEdit, SeqId};
 
 use super::{LevelRequest, LevelStep};
-use crate::{document::DocumentId, patch, session::Session};
+use crate::{
+    document::{DocumentId, patch},
+    session::Session,
+};
 
 impl Session {
     pub(super) fn apply_coop_edits(&mut self) {
@@ -194,19 +197,19 @@ impl Session {
         }
     }
 
-    pub(in crate::session) fn request_coop_level(&mut self, id: DocumentId, op: LevelOp) -> bool {
+    pub(crate) fn request_coop_level(&mut self, id: DocumentId, op: LevelOp) -> bool {
         self.queue_coop_level(id, op, LevelStep::Change)
     }
 
     // a shared map steps through level history one server round trip at a time
-    pub(in crate::session) fn can_step_coop_level(&self, id: DocumentId) -> bool {
+    pub(crate) fn can_step_coop_level(&self, id: DocumentId) -> bool {
         self.coop_map_path(id)
             .and_then(|path| self.coop.as_ref()?.shared_maps.get(&path))
             .is_none_or(|shared_map| shared_map.is_ready() && shared_map.level_request.is_none())
     }
 
     // none for a map that isn't shared, its history steps stay local
-    pub(in crate::session) fn request_coop_level_step(&mut self, id: DocumentId, step: LevelStep) -> Option<bool> {
+    pub(crate) fn request_coop_level_step(&mut self, id: DocumentId, step: LevelStep) -> Option<bool> {
         let path = self.coop_map_path(id)?;
         let shared_map = self.coop.as_ref()?.shared_maps.get(&path)?;
         if !shared_map.is_ready() || shared_map.level_request.is_some() {
@@ -258,7 +261,7 @@ impl Session {
         true
     }
 
-    pub(in crate::session) fn is_coop_level_requested(&self, id: DocumentId) -> bool {
+    pub(crate) fn is_coop_level_requested(&self, id: DocumentId) -> bool {
         self.coop_map_path(id)
             .and_then(|path| self.coop.as_ref()?.shared_maps.get(&path))
             .is_some_and(|shared_map| shared_map.level_request.is_some())

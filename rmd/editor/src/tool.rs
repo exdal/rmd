@@ -15,11 +15,9 @@ use ui::icons::materialdesignicons::{
 
 use crate::{
     clipboard::{has_kind, merge_pasted},
-    command::Edit,
-    document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection},
+    document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection, command::Edit, grid::Grid},
     environment::world::{BaseTile, World},
     frame::HiddenTypes,
-    grid::Grid,
     visual,
 };
 

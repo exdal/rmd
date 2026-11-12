@@ -80,7 +80,7 @@ impl Session {
             .unwrap_or_default()
     }
 
-    pub(super) fn note_loaded_issues(&mut self, id: DocumentId) {
+    pub(crate) fn note_loaded_issues(&mut self, id: DocumentId) {
         if !self.map_issues(id).is_empty() || !self.missing_base_tiles(id).is_empty() {
             self.loaded_issues = Some(id);
         }

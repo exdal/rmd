@@ -8,8 +8,10 @@ use dmm::{Coord, Prefab};
 
 use super::Session;
 use crate::{
-    command::{Edit, EditGroupId},
-    document::{DocumentId, PlacedTile, PrefabInstanceId},
+    document::{
+        DocumentId, PlacedTile, PrefabInstanceId,
+        command::{Edit, EditGroupId},
+    },
     node,
     tool::{FillMode, Tool, ToolContext, ToolEdit},
     visual,
@@ -53,8 +55,8 @@ struct NodeDrag {
 }
 
 #[derive(Debug)]
-pub(super) struct NodeEditState {
-    pub(super) document: DocumentId,
+pub(crate) struct NodeEditState {
+    pub(crate) document: DocumentId,
     z: u32,
     group: node::ResolvedGroup,
     seed: Coord,

@@ -21,8 +21,7 @@ use super::{common::IDENTICAL_EDIT_COLOR, search::draw_type_path_search};
 use crate::git::panel::commit_summary;
 use crate::{
     app::external_editor::SourceLocation,
-    command::EditGroupId,
-    document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation},
+    document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation, command::EditGroupId},
     git::blame::{self, BlameCell},
     maploader::preview::PREVIEW_ID_START,
     session::{DirectionalTypes, EditScope, Session},

@@ -293,7 +293,7 @@ impl Session {
         revision
     }
 
-    pub(super) fn refresh_reordered_from_affected(&mut self, affected: &[PrefabInstanceId]) {
+    pub(crate) fn refresh_reordered_from_affected(&mut self, affected: &[PrefabInstanceId]) {
         let coord = self.state.active_document().and_then(|document| {
             affected
                 .iter()
@@ -363,7 +363,7 @@ impl Session {
         self.update_instances(&[selected]);
     }
 
-    pub(super) fn update_instances(&mut self, affected: &[PrefabInstanceId]) {
+    pub(crate) fn update_instances(&mut self, affected: &[PrefabInstanceId]) {
         if let Some(id) = self.state.active() {
             self.update_document_instances(id, affected);
         }

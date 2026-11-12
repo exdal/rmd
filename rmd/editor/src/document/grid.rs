@@ -474,10 +474,7 @@ mod tests {
     use dmm::{Coord, Map, Prefab, PrefabInstanceId, key::Key, parser, writer};
 
     use super::Grid;
-    use crate::{
-        command::Edit,
-        document::{MapDocument, PlacedTile},
-    };
+    use crate::document::{MapDocument, PlacedTile, command::Edit};
 
     // "b" holds the same prefabs as "a"
     const MAP: &str = r#""a" = (/turf/open/floor,/area/station)

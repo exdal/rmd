@@ -1110,9 +1110,8 @@ mod tests {
         draw_new_map_dialog, draw_resize_map_dialog, resolve_new_map_path,
     };
     use crate::{
-        document::{DocumentId, MapDocument, Selection},
+        document::{DocumentId, MapDocument, Selection, patch},
         frontend::UiState,
-        patch,
         session::Session,
         settings::Settings,
         tool::{FillMode, RegionSelectionMode, SelectionMask, Tool},

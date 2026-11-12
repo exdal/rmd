@@ -6,13 +6,12 @@ use std::{
 use base::path::TreePath;
 use dmm::{Map, MapFormat, Prefab, Size};
 
-use super::{Session, coop::LevelStep, is_reorder_label};
 use crate::git::session::GitDocState;
+use crate::session::{Session, coop::LevelStep, edit::is_reorder_label};
 use crate::{
-    document::{DocumentId, MapDocument},
+    document::{DocumentId, MapDocument, grid::Grid},
     environment::worker::LoadedMap,
     git::conflict::ConflictState,
-    grid::Grid,
     tool::Tool,
 };
 
@@ -444,7 +443,7 @@ impl Session {
         self.sanitize_vars_on_save = enabled;
     }
 
-    pub(super) fn activate_document(&mut self, document: MapDocument) -> DocumentId {
+    pub(crate) fn activate_document(&mut self, document: MapDocument) -> DocumentId {
         self.cancel_node_edit();
         let id = self.state.open_document(document);
         self.rebake(id);

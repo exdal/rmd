@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use dmm::{Coord, Prefab, PrefabInstanceId};
 
-use crate::command::Edit;
+use crate::document::command::Edit;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AreaFocus {
@@ -50,7 +50,7 @@ mod tests {
     use dmm::{Coord, Prefab, PrefabInstanceId};
 
     use super::AreaFocus;
-    use crate::command::{Edit, TileChange};
+    use crate::document::command::{Edit, TileChange};
 
     fn focus(tiles: &[Coord]) -> AreaFocus {
         AreaFocus::new(

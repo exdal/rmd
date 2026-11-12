@@ -5,8 +5,7 @@ use dmm::{Coord, Prefab};
 use objtree::ObjectTree;
 
 use crate::{
-    command::Edit,
-    document::{MapDocument, PrefabInstanceId},
+    document::{MapDocument, PrefabInstanceId, command::Edit},
     environment::world::World,
     search,
     tool::{PlacementKind, ToolEdit, is_missing_base, placement_kind, refill_missing_bases},

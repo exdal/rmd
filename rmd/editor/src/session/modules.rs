@@ -101,7 +101,7 @@ impl Session {
         self.set_document_module_bake_held(id, is_held);
     }
 
-    pub(super) fn set_document_module_bake_held(&mut self, id: DocumentId, is_held: bool) {
+    pub(crate) fn set_document_module_bake_held(&mut self, id: DocumentId, is_held: bool) {
         let Some(cache) = self.caches.get_mut(&id) else {
             return;
         };

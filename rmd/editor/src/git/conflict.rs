@@ -7,8 +7,10 @@ use dmm::{
 
 use crate::{
     bake::{HIGHLIGHT_ALWAYS, Highlight, highlight_tiles},
-    command::{Edit, EditGroupId, History},
-    document::MapDocument,
+    document::{
+        MapDocument,
+        command::{Edit, EditGroupId, History},
+    },
     git::repo::Operation,
 };
 
@@ -372,7 +374,7 @@ mod tests {
     use dmm::{Coord, Map, Prefab, Size, merge::TileConflict};
 
     use super::{ConflictData, ConflictState, Side};
-    use crate::{command::EditGroupId, document::MapDocument};
+    use crate::document::{MapDocument, command::EditGroupId};
 
     fn tile(path: &str) -> Vec<Prefab> {
         vec![Prefab::new(TreePath::parse(path))]

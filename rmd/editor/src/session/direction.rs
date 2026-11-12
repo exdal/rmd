@@ -9,8 +9,7 @@ use objtree::{ObjectTree, TypeId};
 
 use super::{EditScope, Session};
 use crate::{
-    command::EditGroupId,
-    document::{InstanceChange, VarMutation},
+    document::{InstanceChange, VarMutation, command::EditGroupId},
     environment::Environment,
     tool::Tool,
     visual,

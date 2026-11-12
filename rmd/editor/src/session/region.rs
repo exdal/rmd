@@ -4,8 +4,7 @@ use dmm::Coord;
 
 use super::{Session, clipboard::FloatingPaste};
 use crate::{
-    command::EditGroupId,
-    document::{DocumentId, PrefabInstanceId, Selection},
+    document::{DocumentId, PrefabInstanceId, Selection, command::EditGroupId},
     tool::{
         RegionSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, SelectionTransform, Tool,
         fill_selection as build_selection_fill, is_placeable, place_selection_with_mode as build_selection_placement,

@@ -5,8 +5,10 @@ use render::SpriteInstance;
 
 use super::{DirectionalTypes, Session, direction_state};
 use crate::{
-    command::EditGroupId,
-    document::{DocumentId, InstanceChange, MapDocument, PrefabInstanceId, PrefabLocation, Selection, VarMutation},
+    document::{
+        DocumentId, InstanceChange, MapDocument, PrefabInstanceId, PrefabLocation, Selection, VarMutation,
+        command::EditGroupId,
+    },
     tool::{PlacementKind, SelectionRotation, Tool, placement_kind, rotate_point, rotate_prefab},
     visual,
 };
@@ -516,8 +518,7 @@ mod tests {
 
     use super::EditScope;
     use crate::{
-        command::EditGroupId,
-        document::{InstanceChange, PrefabInstanceId, VarMutation},
+        document::{InstanceChange, PrefabInstanceId, VarMutation, command::EditGroupId},
         session::{
             Session,
             fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session},

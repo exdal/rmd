@@ -26,11 +26,11 @@ use vm::{
 #[cfg(test)]
 use crate::document::MapDocument;
 use crate::{
+    document::grid::Grid,
     environment::{
         BakeProgram, Environment,
         progress::{Progress, Stage},
     },
-    grid::Grid,
     maploader::{
         RootSpecs,
         preview::{ComposeContext, MapView, ModulePreviewState},
@@ -465,7 +465,7 @@ mod tests {
     use dmm::{Map, Size};
 
     use super::*;
-    use crate::{command::Edit, environment::world::Perspective, frame, visual};
+    use crate::{document::command::Edit, environment::world::Perspective, frame, visual};
 
     fn examples() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env")

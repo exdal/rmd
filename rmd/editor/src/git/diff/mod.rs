@@ -13,10 +13,8 @@ use dmm::{
 
 use crate::{
     bake::{HIGHLIGHT_ALWAYS, Highlight, highlight_tiles},
-    command::Edit,
-    document::MapDocument,
+    document::{MapDocument, command::Edit, grid::Grid},
     git::conflict::{connected_hunks, describe_prefab, set_tile},
-    grid::Grid,
 };
 
 pub const ADDED_COLOR: [f32; 3] = [0.3, 0.85, 0.4];

@@ -344,8 +344,7 @@ pub(super) mod tests {
 
     use super::{PAGE_CAPACITY, SPARE_OWNER, spare_sprite};
     use crate::{
-        command::Edit,
-        document::{MapDocument, PrefabInstanceId},
+        document::{MapDocument, PrefabInstanceId, command::Edit},
         environment::world::Perspective,
         frame::{
             FrameInstances, FrameRenderOptions, PrefabUpdate, TypeVisibility, build, build_with_options,

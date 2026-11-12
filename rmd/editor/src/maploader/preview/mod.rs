@@ -7,7 +7,7 @@ use std::{
 use dmm::{Coord, Prefab, PrefabInstanceId};
 
 use crate::{
-    grid::Grid,
+    document::grid::Grid,
     maploader::{Diagnostic, ErrorKind},
 };
 

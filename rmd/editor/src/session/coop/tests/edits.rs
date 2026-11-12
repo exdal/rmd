@@ -1027,7 +1027,7 @@ fn a_carried_level_change_of_ours_leaves_a_newer_request_queued() {
 
     let append = Some(LevelOp::Insert(InsertLevel {
         at: InsertAt::Top,
-        contents: LevelContents::Fill(crate::patch::encode_tile(&plain_fill())),
+        contents: LevelContents::Fill(crate::document::patch::encode_tile(&plain_fill())),
     }));
     deliver_edits(
         &mut session,

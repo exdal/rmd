@@ -1,7 +1,7 @@
 use dmm::{Coord, Map, Prefab, Size, Tile, parser, writer};
 use net::LevelContents;
 
-use crate::grid::{Grid, LevelCells};
+use crate::document::grid::{Grid, LevelCells};
 
 // I kinda dont like this patch sending business, but for now its okay
 // if I was bikeshedding I would be sending delta compressed binary

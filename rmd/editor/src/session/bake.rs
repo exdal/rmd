@@ -131,7 +131,7 @@ impl Session {
         }
     }
 
-    pub(super) fn rebake(&mut self, id: DocumentId) {
+    pub(crate) fn rebake(&mut self, id: DocumentId) {
         // an extension in flight carries the old bake back, which this replaces
         self.baker.invalidate(id);
         let cache = self.caches.entry(id).or_default();
@@ -201,7 +201,7 @@ impl Session {
     }
 
     // a level the bake doesn't have yet bakes on its own, the rest of the map keeps its bake
-    pub(super) fn bake_new_levels(&mut self, id: DocumentId) {
+    pub(crate) fn bake_new_levels(&mut self, id: DocumentId) {
         if self.baker.extending(id) {
             return;
         }
@@ -383,7 +383,7 @@ impl Session {
             .collect()
     }
 
-    pub(super) fn apply_bake_update(&mut self, id: DocumentId, bake_update: crate::bake::BakeUpdate) {
+    pub(crate) fn apply_bake_update(&mut self, id: DocumentId, bake_update: crate::bake::BakeUpdate) {
         let Self {
             state,
             textures,
@@ -2322,7 +2322,7 @@ mod tests {
     fn secondcity_placement_timings() {
         use std::time::Instant;
 
-        use crate::command::Edit;
+        use crate::document::command::Edit;
 
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/SecondCity");
         let options = crate::environment::BakeOptions {

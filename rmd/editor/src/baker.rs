@@ -9,9 +9,8 @@ use std::{
 
 use crate::{
     bake::{Bake, BakeUpdate},
-    document::DocumentId,
+    document::{DocumentId, grid::Grid},
     environment::{Environment, progress::Progress, worker::LoadView},
-    grid::Grid,
     maploader::preview::ModulePreviewState,
 };
 

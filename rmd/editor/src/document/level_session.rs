@@ -4,8 +4,11 @@ use dmm::{Coord, Prefab};
 use net::{DeleteLevel, InsertAt, InsertLevel, LevelContents, LevelOp};
 use objtree::{ObjectTree, TypeId};
 
-use super::{LevelChange, Session};
-use crate::{bake::BakeUpdate, document::DocumentId, patch};
+use crate::session::{LevelChange, Session};
+use crate::{
+    bake::BakeUpdate,
+    document::{DocumentId, patch},
+};
 
 pub(crate) fn validate_level(z: u32, levels: u32) -> std::io::Result<()> {
     let levels = levels.max(1);
@@ -149,7 +152,7 @@ impl Session {
         Ok(z)
     }
 
-    pub(super) fn has_loaded_conflicts(&self, id: DocumentId) -> bool {
+    pub(crate) fn has_loaded_conflicts(&self, id: DocumentId) -> bool {
         self.caches
             .get(&id)
             .and_then(|cache| cache.git.as_ref())
@@ -194,13 +197,13 @@ impl Session {
         Ok(())
     }
 
-    pub(super) fn rebake_levels(&mut self, id: DocumentId) {
+    pub(crate) fn rebake_levels(&mut self, id: DocumentId) {
         let cache = self.caches.entry(id).or_default();
         cache.map_revision = cache.map_revision.wrapping_add(1);
         self.rebake(id);
     }
 
-    pub(super) fn show_level(&mut self, id: DocumentId, z: u32) {
+    pub(crate) fn show_level(&mut self, id: DocumentId, z: u32) {
         let Some(document) = self.state.document_mut(id) else {
             return;
         };
@@ -210,7 +213,7 @@ impl Session {
         self.set_active_document(id);
     }
 
-    pub(super) fn bake_appended_level(&mut self, id: DocumentId, z: u32) {
+    pub(crate) fn bake_appended_level(&mut self, id: DocumentId, z: u32) {
         let Some(document) = self.state.document(id) else {
             return;
         };

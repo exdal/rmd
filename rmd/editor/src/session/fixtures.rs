@@ -101,14 +101,14 @@ impl Session {
         Ok(())
     }
 
-    pub(super) fn active_cache(&self) -> &DocumentCache {
+    pub(crate) fn active_cache(&self) -> &DocumentCache {
         self.state
             .active()
             .and_then(|id| self.caches.get(&id))
             .expect("a document is open")
     }
 
-    pub(super) fn revision(&self) -> u64 {
+    pub(crate) fn revision(&self) -> u64 {
         self.active_cache().revision
     }
 
@@ -451,7 +451,7 @@ pub(super) fn area_at(session: &Session, coord: Coord) -> Option<PrefabInstanceI
     session.area_at(session.state.active()?, coord)
 }
 
-pub(super) fn focus_session() -> Session {
+pub(crate) fn focus_session() -> Session {
     let root = examples();
     let mut session = Session::new();
     session.load_environment(&root.join("test.dme")).unwrap();
@@ -474,7 +474,7 @@ pub(super) fn focus_session() -> Session {
     session
 }
 
-pub(super) fn flat_session(width: u32, height: u32) -> Session {
+pub(crate) fn flat_session(width: u32, height: u32) -> Session {
     let mut session = focus_session();
     let mut map = Map::new(Size {
         x: width,
@@ -532,7 +532,7 @@ pub(super) fn assert_same_sprites(actual: &[SpriteInstance], expected: &[SpriteI
 }
 
 /// Waits for the background bake, since a worker thread has no deterministic finish time.
-pub(super) fn settle_bake(session: &mut Session) {
+pub(crate) fn settle_bake(session: &mut Session) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
 
     while session.baker.is_busy() && std::time::Instant::now() < deadline {

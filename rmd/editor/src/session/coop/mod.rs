@@ -233,7 +233,7 @@ enum LevelRequest {
 
 // how our own level change lands in history once the server sends it back
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::session) enum LevelStep {
+pub(crate) enum LevelStep {
     Change,
     Undo,
     Redo,

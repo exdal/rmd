@@ -19,8 +19,7 @@ use super::{
     compose::{compose, update},
 };
 use crate::{
-    document::DocumentId,
-    grid::Grid,
+    document::{DocumentId, grid::Grid},
     maploader::{
         ErrorKind, LoadedModule, MAX_NESTING, ModuleFiles, OpenModule, RootSpecs, resolve_module_path, root_specs,
     },

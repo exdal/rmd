@@ -16,7 +16,7 @@ use super::{
     ModuleVariantPreview, PREVIEW_ID_START, PreviewIdAllocator,
 };
 use crate::{
-    grid::Grid,
+    document::grid::Grid,
     maploader::{
         Diagnostic, ErrorKind, LoadedModule, MAX_NESTING, ModuleFiles, RootSpecs, module::Anchor, resolve_module_path,
         resolved_path,

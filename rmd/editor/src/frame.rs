@@ -1284,8 +1284,7 @@ mod tests {
         pages::tests::assert_pages_hold, side_row, update_prefab, update_prefabs, update_prefabs_with_options,
     };
     use crate::{
-        command::Edit,
-        document::{MapDocument, PrefabInstanceId, VarMutation},
+        document::{MapDocument, PrefabInstanceId, VarMutation, command::Edit},
         environment::world::Perspective,
         visual::Appearance,
     };

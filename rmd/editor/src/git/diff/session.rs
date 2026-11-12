@@ -4,13 +4,12 @@ use dmm::{Coord, Map, Tile};
 
 use crate::session::{Session, SharedHighlights};
 use crate::{
-    document::DocumentId,
+    document::{DocumentId, grid::Grid},
     git::{
         diff::{self, ChangeKind, DiffSource, MapDiff, Version},
         repo::CommitInfo,
         worker::Revision,
     },
-    grid::Grid,
     tool::ToolEdit,
 };
 

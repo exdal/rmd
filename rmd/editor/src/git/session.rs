@@ -8,8 +8,7 @@ use super::{
 };
 use crate::session::{Session, SharedHighlights};
 use crate::{
-    command::EditGroupId,
-    document::DocumentId,
+    document::{DocumentId, command::EditGroupId},
     git::{
         conflict::{ConflictRow, ConflictState, Hunk, Resolved, Side},
         repo::{CommitInfo, CommitRef, Operation, RepoPath, WebLinks},
@@ -97,7 +96,7 @@ impl GitDocState {
 
     /// Runs `read` against the view for the current history, rebuilding it after any change
     fn with_conflict_view<R>(
-        &self, map_revision: u64, history: &crate::command::History,
+        &self, map_revision: u64, history: &crate::document::command::History,
         read: impl FnOnce(&mut ConflictView, &ConflictState) -> R,
     ) -> Option<R> {
         let conflicts = self.conflicts.as_ref()?;

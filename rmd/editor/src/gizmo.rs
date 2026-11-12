@@ -7,8 +7,7 @@ use ui::widgets::dpi;
 
 use crate::{
     camera::Controller,
-    command::EditGroupId,
-    document::{InstanceChange, PrefabInstanceId, Selection, VarMutation},
+    document::{InstanceChange, PrefabInstanceId, Selection, VarMutation, command::EditGroupId},
     frontend::TransformMode,
     session::{DirectionState, DirectionalTypes, GizmoMember, PickedTransform, Session},
     settings::{Settings, keybind::KeybindAction},
