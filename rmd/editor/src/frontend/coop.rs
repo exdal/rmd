@@ -11,12 +11,12 @@ use ui::{
 use super::{
     dialog::{DIALOG_FIELD_WIDTH, MODAL_FLAGS, SAVE_ERROR_COLOR},
     overlay::{OVERLAY_BG, OverlayRect},
-    region::{fill_selection, hollow_selection_inner, region_selection_bounds},
 };
 use crate::{
     camera::Controller,
     document::{DocumentId, Selection},
     environment::panel::DIAGNOSTIC_WARNING_COLOR,
+    region::panel::{fill_selection, hollow_selection_inner, region_selection_bounds},
     session::{Activity, Coop, CoopStatus, Session, SharedState},
     settings::Settings,
     tool::{RegionSelectionMode, Tool},

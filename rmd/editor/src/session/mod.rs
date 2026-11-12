@@ -16,9 +16,9 @@ use crate::{
     git::{session::GitDocState, worker::GitWorker},
     maploader::preview::ModulePreviewState,
     node::session::NodeEditState,
+    region::session::RegionState,
 };
 
-mod clipboard;
 pub(crate) mod coop;
 mod direction;
 #[cfg(test)]
@@ -31,7 +31,6 @@ mod issues;
 mod modules;
 mod palette;
 mod preview;
-mod region;
 mod search;
 
 pub(crate) use self::{
@@ -42,7 +41,7 @@ pub(crate) use self::{
     palette::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
     preview::{PlacementPreview, RegionPreviewSource},
 };
-use self::{direction::direction_state, preview::RegionPreviewCache, region::RegionState};
+use self::{direction::direction_state, preview::RegionPreviewCache};
 
 #[derive(Default)]
 pub(crate) enum BakeHold {
@@ -110,7 +109,7 @@ pub struct Session {
     pub(crate) node_edit: Option<NodeEditState>,
     identical: Option<instance::IdenticalCache>,
     pub(crate) coop: Option<Coop>,
-    region_state: RegionState,
+    pub(crate) region_state: RegionState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

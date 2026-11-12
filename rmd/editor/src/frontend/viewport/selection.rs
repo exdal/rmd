@@ -5,13 +5,13 @@ use super::ViewFrame;
 use crate::{
     app::pacing::FrameDemand,
     document::{DocumentId, Selection},
-    frontend::{
-        PendingRegionPlacement, RectangleGesture, UiState, conflict_controls_layout, draw_conflict_controls,
-        draw_region_outline, rectangle_drag_coord, restore_rectangle_gesture,
-    },
+    frontend::{UiState, conflict_controls_layout, draw_conflict_controls},
     git::conflict::{Hunk, Side},
     gizmo::{GizmoMapView, RegionDrag, RegionGizmoTarget},
     maploader::preview::ModuleRootKey,
+    region::panel::{
+        PendingRegionPlacement, RectangleGesture, draw_region_outline, rectangle_drag_coord, restore_rectangle_gesture,
+    },
     session::{RegionPreviewSource, Session},
     tool::{SelectionMask, SelectionPlacement, SelectionRotation, Tool},
 };

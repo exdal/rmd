@@ -3,12 +3,12 @@ use render::PickRequest;
 
 use super::{ViewFrame, tools::request_pick};
 use crate::{
-    clipboard::PasteMerge,
+    clipboard::{PasteMerge, panel::centered_paste_min},
     frontend::{
-        UiState, centered_paste_min,
+        UiState,
         context_menu::{Action as MenuAction, NodeContext, draw_popup as draw_map_menu},
-        restore_rectangle_gesture,
     },
+    region::panel::restore_rectangle_gesture,
     session::Session,
     settings::{Settings, keybind::KeybindAction},
     tool::{SelectionRotation, Tool},

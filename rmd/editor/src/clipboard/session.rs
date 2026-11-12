@@ -1,19 +1,19 @@
 use dmm::Coord;
 
-use super::{RegionState, Session};
 use crate::{
     clipboard::{self, PasteMerge, TileRegion},
     document::{DocumentId, PrefabInstanceId, Selection, command::EditGroupId},
     tool::{RegionSelectionMode, SelectionMask, SelectionRotation, Tool, ToolEdit},
 };
+use crate::{region::session::RegionState, session::Session};
 
 #[derive(Debug)]
-pub(super) struct FloatingPaste {
+pub(crate) struct FloatingPaste {
     document: DocumentId,
     group: EditGroupId,
     region: TileRegion,
-    pub(super) rotation: SelectionRotation,
-    pub(super) target: SelectionMask,
+    pub(crate) rotation: SelectionRotation,
+    pub(crate) target: SelectionMask,
 }
 
 impl Session {
@@ -275,7 +275,7 @@ impl Session {
         })
     }
 
-    pub(super) fn is_floating_live(&self, floating: &FloatingPaste) -> bool {
+    pub(crate) fn is_floating_live(&self, floating: &FloatingPaste) -> bool {
         let Some(document) = self.state.active_document() else {
             return false;
         };
@@ -285,7 +285,7 @@ impl Session {
             && self.selection_mask() == Some(floating.target)
     }
 
-    pub(super) fn live_floating_paste(&self) -> Option<&FloatingPaste> {
+    pub(crate) fn live_floating_paste(&self) -> Option<&FloatingPaste> {
         let floating = self.region_state.floating()?;
 
         self.is_floating_live(floating).then_some(floating)
@@ -294,7 +294,7 @@ impl Session {
     /// This function returns paste depending on the paste result:
     /// Old paste on err (aka paste failed), new paste on success (aka new paste returned from paste_floating)
     #[allow(clippy::result_large_err)]
-    pub(super) fn repaste_floating(
+    pub(crate) fn repaste_floating(
         &mut self, floating: FloatingPaste, min: Coord, rotation: SelectionRotation,
     ) -> Result<FloatingPaste, FloatingPaste> {
         let Some(document) = self.state.active_document() else {
@@ -320,7 +320,7 @@ impl Session {
         Err(floating)
     }
 
-    pub(super) fn store_pasted_floating(
+    pub(crate) fn store_pasted_floating(
         &mut self, floating: FloatingPaste, min: Coord, rotation: SelectionRotation,
     ) -> bool {
         let paste = self.repaste_floating(floating, min, rotation);

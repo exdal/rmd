@@ -1,3 +1,6 @@
+pub(crate) mod panel;
+pub(crate) mod session;
+
 use std::collections::{HashMap, HashSet};
 
 use dmm::{Coord, Prefab, Tile};

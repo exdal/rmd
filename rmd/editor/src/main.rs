@@ -24,6 +24,7 @@ mod gizmo;
 mod issues;
 mod maploader;
 mod node;
+mod region;
 mod search;
 mod session;
 mod settings;

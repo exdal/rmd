@@ -22,12 +22,10 @@ use super::{
 use crate::{
     camera::Controller,
     document::{DocumentId, MapDocument, Selection},
-    frontend::{
-        RectangleGesture, UiState, context_menu::NodeContext, fixtures::RectangleUiHarness, inspector::TransformMode,
-        region::region_selection_bounds, restore_rectangle_gesture,
-    },
+    frontend::{UiState, context_menu::NodeContext, fixtures::RectangleUiHarness, inspector::TransformMode},
     git::conflict::Side,
     gizmo::{GizmoMapView, GizmoState, RegionDrag, RegionGizmoTarget},
+    region::panel::{RectangleGesture, region_selection_bounds, restore_rectangle_gesture},
     session::{
         LevelChange, Session,
         fixtures::{install_blame, node_map, node_session, node_tile_has_group},

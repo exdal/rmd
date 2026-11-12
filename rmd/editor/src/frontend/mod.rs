@@ -29,6 +29,7 @@ use crate::{
     frame::session::TypeLayer,
     git::panel::{GitPanel, GitTab},
     gizmo::GizmoState,
+    region::panel::RegionSelectionOptions,
     session::Session,
     settings::{
         OpenPanels, Panel, Settings,
@@ -50,9 +51,7 @@ mod history;
 mod issues;
 mod menu;
 pub(crate) mod overlay;
-mod paste;
 mod prefab_menu;
-pub(crate) mod region;
 pub(crate) mod search;
 mod viewport;
 mod welcome;
@@ -69,15 +68,10 @@ use self::{
     history::{draw_history_overlay, recent_button_size},
     menu::MenuActions,
     overlay::{
-        OVERLAY_BG, OverlayRect, conflict_controls_layout, draw_conflict_controls, draw_guide_badges, draw_highlights,
+        OverlayRect, conflict_controls_layout, draw_conflict_controls, draw_guide_badges, draw_highlights,
         draw_identical_outlines, draw_overlay_underlay, draw_placement_preview, overlay_padding,
     },
-    paste::centered_paste_min,
     prefab_menu::{PrefabMenu, update_prefab_menu},
-    region::{
-        PendingRegionPlacement, RectangleGesture, RegionSelectionOptions, draw_marching_edge, draw_region_outline,
-        marching_stripe_offset, rectangle_drag_coord, restore_rectangle_gesture,
-    },
     search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search},
     viewport::{
         ActivePlacementFlash, EDIT_KEYS, EditCommand, MapViewState, MomentaryTool, MoveStroke, PickStroke,

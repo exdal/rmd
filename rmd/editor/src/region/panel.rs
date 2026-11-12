@@ -2,7 +2,7 @@ use dear_imgui_rs::{DragFlags, DrawListMut, Ui};
 use dmm::{Coord, Size};
 use ui::widgets::dpi;
 
-use super::{OVERLAY_BG, OverlayRect};
+use crate::frontend::overlay::{OVERLAY_BG, OverlayRect};
 use crate::{
     camera::Controller,
     document::{DocumentId, Selection},
@@ -22,8 +22,8 @@ const BLOCK_STRIPE_SPEED: f32 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RegionSelectionOptions {
-    pub(super) full_rectangle: bool,
-    pub(super) line_width: i32,
+    pub(crate) full_rectangle: bool,
+    pub(crate) line_width: i32,
 }
 
 impl Default for RegionSelectionOptions {
@@ -36,11 +36,11 @@ impl Default for RegionSelectionOptions {
 }
 
 impl RegionSelectionOptions {
-    pub(super) fn drawing_mode(self, shift: bool) -> RegionSelectionMode {
+    pub(crate) fn drawing_mode(self, shift: bool) -> RegionSelectionMode {
         if shift { self.hollow() } else { self.mode() }
     }
 
-    pub(super) fn mode(self) -> RegionSelectionMode {
+    pub(crate) fn mode(self) -> RegionSelectionMode {
         if self.full_rectangle {
             RegionSelectionMode::Full
         } else {
@@ -64,19 +64,19 @@ impl RegionSelectionOptions {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct PendingRegionPlacement {
-    pub(super) source: Selection,
-    pub(super) target: Selection,
-    pub(super) placement: SelectionPlacement,
+pub(crate) struct PendingRegionPlacement {
+    pub(crate) source: Selection,
+    pub(crate) target: Selection,
+    pub(crate) placement: SelectionPlacement,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct RectangleGesture {
-    pub(super) start: Option<SelectionMask>,
-    pub(super) z: u32,
+pub(crate) struct RectangleGesture {
+    pub(crate) start: Option<SelectionMask>,
+    pub(crate) z: u32,
 }
 
-pub(super) fn restore_rectangle_gesture(session: &mut Session, id: DocumentId, gesture: &mut Option<RectangleGesture>) {
+pub(crate) fn restore_rectangle_gesture(session: &mut Session, id: DocumentId, gesture: &mut Option<RectangleGesture>) {
     if let Some(gesture) = gesture.take()
         && let Some(document) = session.state.document_mut(id)
     {
@@ -86,7 +86,7 @@ pub(super) fn restore_rectangle_gesture(session: &mut Session, id: DocumentId, g
     }
 }
 
-pub(super) fn rectangle_drag_coord(
+pub(crate) fn rectangle_drag_coord(
     camera: &Controller, mouse: [f32; 2], viewport_min: [f32; 2], size: Size, tile_size: u32, z: u32,
 ) -> Option<Coord> {
     let point = camera.screen_to_map([mouse[0] - viewport_min[0], mouse[1] - viewport_min[1]]);
@@ -105,11 +105,11 @@ pub(super) fn rectangle_drag_coord(
     ))
 }
 
-pub(super) fn marching_stripe_offset(ui: &Ui) -> f32 {
+pub(crate) fn marching_stripe_offset(ui: &Ui) -> f32 {
     (ui.time() as f32 * BLOCK_STRIPE_SPEED).rem_euclid(BLOCK_STRIPE_LENGTH * 2.0)
 }
 
-pub(super) fn fill_selection(draw: &DrawListMut<'_>, bounds: OverlayRect, inner: Option<OverlayRect>, color: [f32; 4]) {
+pub(crate) fn fill_selection(draw: &DrawListMut<'_>, bounds: OverlayRect, inner: Option<OverlayRect>, color: [f32; 4]) {
     match inner {
         Some(inner) => {
             for rect in ring_rects(bounds, inner) {
@@ -128,7 +128,7 @@ fn draw_marching_border(draw: &DrawListMut<'_>, bounds: OverlayRect, clip: Overl
     }
 }
 
-pub(super) fn draw_marching_edge(draw: &DrawListMut<'_>, from: [f32; 2], to: [f32; 2], offset: f32, accent: [f32; 4]) {
+pub(crate) fn draw_marching_edge(draw: &DrawListMut<'_>, from: [f32; 2], to: [f32; 2], offset: f32, accent: [f32; 4]) {
     let horizontal = (to[0] - from[0]).abs() >= (to[1] - from[1]).abs();
     let (start, end) = if horizontal { (from[0], to[0]) } else { (from[1], to[1]) };
     let span = end - start;
@@ -153,7 +153,7 @@ pub(super) fn draw_marching_edge(draw: &DrawListMut<'_>, from: [f32; 2], to: [f3
     }
 }
 
-pub(super) fn region_selection_bounds(
+pub(crate) fn region_selection_bounds(
     camera: &Controller, viewport_min: [f32; 2], selection: Selection, tile_size: u32,
 ) -> OverlayRect {
     let tile_size = tile_size.max(1) as f32;
@@ -170,7 +170,7 @@ pub(super) fn region_selection_bounds(
     }
 }
 
-pub(super) fn draw_region_outline(
+pub(crate) fn draw_region_outline(
     ui: &Ui, session: &Session, camera: &Controller, displayed: Selection, mode: RegionSelectionMode,
     viewport: OverlayRect,
 ) {
@@ -235,7 +235,7 @@ fn ring_rects(bounds: OverlayRect, inner: OverlayRect) -> [OverlayRect; 4] {
     ]
 }
 
-pub(super) fn hollow_selection_inner(selection: Selection, mode: RegionSelectionMode) -> Option<Selection> {
+pub(crate) fn hollow_selection_inner(selection: Selection, mode: RegionSelectionMode) -> Option<Selection> {
     let RegionSelectionMode::Hollow { line_width } = mode else {
         return None;
     };
@@ -392,7 +392,7 @@ mod tests {
     use super::{
         RegionSelectionOptions, hollow_selection_inner, region_border_segments, region_selection_bounds, ring_rects,
     };
-    use crate::{camera::Controller, document::Selection, frontend::OverlayRect, tool::RegionSelectionMode};
+    use crate::{camera::Controller, document::Selection, frontend::overlay::OverlayRect, tool::RegionSelectionMode};
 
     #[test]
     fn region_selection_bounds_follow_whole_tile_edges() {

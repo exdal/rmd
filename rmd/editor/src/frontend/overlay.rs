@@ -3,18 +3,19 @@ use dmm::Coord;
 use render::Renderer;
 use ui::widgets::dpi;
 
-use super::{common::IDENTICAL_EDIT_COLOR, draw_marching_edge, marching_stripe_offset};
+use super::common::IDENTICAL_EDIT_COLOR;
 use crate::{
     camera::Controller,
     document::DocumentId,
     git::conflict::{Hunk, Side},
+    region::panel::{draw_marching_edge, marching_stripe_offset},
     session::{GuideBadge, PlacementPreview, RegionPreviewSource, Session},
     tool::SelectionRotation,
 };
 
 const OVERLAY_PADDING: f32 = 4.0;
 
-pub(super) const OVERLAY_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
+pub(crate) const OVERLAY_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 
 pub(crate) fn overlay_padding(ui: &Ui) -> f32 {
     OVERLAY_PADDING * dpi(ui)

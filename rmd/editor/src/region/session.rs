@@ -2,7 +2,7 @@ use std::mem;
 
 use dmm::Coord;
 
-use super::{Session, clipboard::FloatingPaste};
+use crate::{clipboard::session::FloatingPaste, session::Session};
 use crate::{
     document::{DocumentId, PrefabInstanceId, Selection, command::EditGroupId},
     tool::{
@@ -13,14 +13,14 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub(super) struct PendingMove {
+pub(crate) struct PendingMove {
     document: DocumentId,
     source: SelectionMask,
     state: PendingMoveState,
 }
 
 #[derive(Default)]
-pub(super) enum RegionState {
+pub(crate) enum RegionState {
     #[default]
     Idle,
     Floating(FloatingPaste),
@@ -29,7 +29,7 @@ pub(super) enum RegionState {
 
 // god have a mercy
 impl RegionState {
-    pub(super) fn floating(&self) -> Option<&FloatingPaste> {
+    pub(crate) fn floating(&self) -> Option<&FloatingPaste> {
         match self {
             RegionState::Floating(floating)
             | RegionState::Moving(PendingMove {
@@ -40,7 +40,7 @@ impl RegionState {
         }
     }
 
-    pub(super) fn take_floating(&mut self) -> Option<FloatingPaste> {
+    pub(crate) fn take_floating(&mut self) -> Option<FloatingPaste> {
         match mem::take(self) {
             RegionState::Floating(floating) => Some(floating),
             RegionState::Moving(mut pending) => {
@@ -65,7 +65,7 @@ impl RegionState {
         }
     }
 
-    pub(super) fn put_floating(&mut self, floating: FloatingPaste) {
+    pub(crate) fn put_floating(&mut self, floating: FloatingPaste) {
         match self {
             RegionState::Moving(pending) => pending.state = PendingMoveState::Floating(floating),
             RegionState::Idle | RegionState::Floating(_) => *self = RegionState::Floating(floating),
@@ -239,7 +239,7 @@ impl Session {
         true
     }
 
-    pub(super) fn settle_retracted(&mut self, retracted: &[PrefabInstanceId]) {
+    pub(crate) fn settle_retracted(&mut self, retracted: &[PrefabInstanceId]) {
         self.update_instances(retracted);
         if let Some(id) = self.state.active()
             && let Some(cache) = self.caches.get_mut(&id)

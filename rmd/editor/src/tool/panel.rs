@@ -7,9 +7,9 @@ use crate::{
     frontend::{
         dialog::{DeleteLevelDialog, NewLevelDialog},
         overlay::{OverlayRect, draw_overlay_underlay, overlay_padding},
-        region::{RegionSelectionOptions, draw_selection_mode_controls},
         search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search},
     },
+    region::panel::{RegionSelectionOptions, draw_selection_mode_controls},
     session::{LevelChange, Session},
     settings::keybind::{KeyBindings, KeybindAction},
     tool::{FillMode, Tool},

@@ -1,6 +1,6 @@
 use dmm::{Coord, Size};
 
-pub(super) fn centered_paste_min(width: u32, height: u32, anchor: Coord, map_size: Size) -> Coord {
+pub(crate) fn centered_paste_min(width: u32, height: u32, anchor: Coord, map_size: Size) -> Coord {
     let place = |anchor: u32, extent: u32, limit: u32| {
         let extent = extent.max(1);
         let last = limit.saturating_sub(extent - 1).max(1);
