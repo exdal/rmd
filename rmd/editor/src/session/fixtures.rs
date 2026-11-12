@@ -18,14 +18,13 @@ use crate::git::{
 };
 use crate::{
     document::{DocumentId, MapDocument, PrefabInstanceId},
-    environment::{BakeProgram, Environment},
+    environment::{BakeProgram, Environment, progress::Progress},
     git::{
         blame::BlameResult,
         diff::DiffSource,
         repo::{CommitInfo, WebLinks},
         worker::Revision,
     },
-    progress::Progress,
 };
 
 /// Counts live heap bytes, so memory tests can measure what a structure holds by dropping it.
@@ -87,7 +86,7 @@ pub(crate) fn take_peak_bytes() -> usize {
 /// The editor always loads in the background, but tests want one blocking call.
 impl Session {
     pub(crate) fn load_environment(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        self.apply_codebase(crate::loader::load_codebase(
+        self.apply_codebase(crate::environment::worker::load_codebase(
             path,
             &crate::environment::BakeOptions::default(),
             &Progress::new(),
@@ -96,8 +95,8 @@ impl Session {
         Ok(())
     }
 
-    pub(super) fn open_map(&mut self, path: &Path, z: u32) -> Result<(), Box<dyn std::error::Error>> {
-        self.apply_map(crate::loader::load_map(path, z, &Progress::new())?);
+    pub(crate) fn open_map(&mut self, path: &Path, z: u32) -> Result<(), Box<dyn std::error::Error>> {
+        self.apply_map(crate::environment::worker::load_map(path, z, &Progress::new())?);
 
         Ok(())
     }
@@ -145,7 +144,7 @@ pub(crate) fn conflicted_session() -> Session {
     let key = map.intern_tile(floor.clone());
     map.grid[0][0].fill(key);
     let mut session = Session::new();
-    session.apply_map(crate::loader::LoadedMap {
+    session.apply_map(crate::environment::worker::LoadedMap {
         path: PathBuf::from("conflicts.dmm"),
         map,
         z: 1,
@@ -205,7 +204,7 @@ pub(crate) fn install_blame(session: &mut Session, id: DocumentId, result: Blame
     git.web = WebLinks::from_remote("https://github.com/example/maps.git");
 }
 
-pub(super) fn examples() -> PathBuf {
+pub(crate) fn examples() -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
 
     path.canonicalize().unwrap_or(path)
@@ -508,7 +507,7 @@ pub(crate) fn unknown_paths_session() -> Session {
     map.intern_tile(vec![Prefab::new(TreePath::parse("/obj/unused_type"))]);
     map.grid[0][0] = vec![a, b];
     map.grid[1][0] = vec![b, a];
-    session.apply_map(crate::loader::LoadedMap {
+    session.apply_map(crate::environment::worker::LoadedMap {
         path: PathBuf::from("unknown-paths.dmm"),
         map,
         z: 1,
@@ -550,7 +549,7 @@ pub(crate) fn coordinate_viewport_session() -> Result<(impl Sized, Session), Box
     super::modules::tests::coordinate_viewport_session()
 }
 
-pub(super) fn assert_render_cache_matches_rebuild(session: &Session) {
+pub(crate) fn assert_render_cache_matches_rebuild(session: &Session) {
     let environment = session.state.environment.as_ref().unwrap();
     let document_id = session.state.active().unwrap();
     let expected = crate::frame::build_view_with_options(

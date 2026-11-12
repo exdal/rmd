@@ -3,8 +3,8 @@ use objtree::ObjectTree;
 use super::Session;
 use crate::{
     document::{DocumentId, PrefabInstanceId, Selection},
+    environment::world::World,
     search::{self, SearchQuery},
-    world::World,
 };
 
 impl Session {

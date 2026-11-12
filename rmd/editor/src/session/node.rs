@@ -1285,14 +1285,14 @@ mod tests {
     fn tgstation_pipes_connect_only_on_the_same_layer_and_color() {
         use std::path::PathBuf;
 
-        use crate::{progress::Progress, session::fixtures::settle_bake};
+        use crate::{environment::progress::Progress, session::fixtures::settle_bake};
 
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
         let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+        let loaded = crate::environment::worker::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
             .expect("tgstation codebase");
         assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
         let mut session = Session::new();

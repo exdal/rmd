@@ -125,7 +125,7 @@ impl Session {
         }
     }
 
-    pub(super) fn rebake_all(&mut self) {
+    pub(crate) fn rebake_all(&mut self) {
         for id in self.state.document_ids() {
             self.rebake(id);
         }
@@ -354,7 +354,7 @@ impl Session {
         self.flush_pending_rebake(id);
     }
 
-    pub fn bake_view(&self) -> Option<crate::loader::LoadView> {
+    pub fn bake_view(&self) -> Option<crate::environment::worker::LoadView> {
         self.baker.view()
     }
 
@@ -569,7 +569,7 @@ mod tests {
     use crate::{
         bake,
         document::MapDocument,
-        progress::Progress,
+        environment::progress::Progress,
         session::{
             Session,
             fixtures::{assert_render_cache_matches_rebuild, examples, live_bytes, settle_bake, take_peak_bytes},
@@ -585,8 +585,8 @@ mod tests {
             forced_profile: Some(String::from("tgmc")),
             ..Default::default()
         };
-        let loaded =
-            crate::loader::load_codebase(&root.join("tgmc.dme"), &options, &Progress::new()).expect("TGMC codebase");
+        let loaded = crate::environment::worker::load_codebase(&root.join("tgmc.dme"), &options, &Progress::new())
+            .expect("TGMC codebase");
         assert!(
             !loaded.diagnostics.bake_preprocess.iter().any(|error| error.is_fatal()),
             "{:?}",
@@ -835,7 +835,7 @@ mod tests {
             forced_profile: Some(String::from(profile)),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&entry, &options, &Progress::new()).expect("codebase");
+        let loaded = crate::environment::worker::load_codebase(&entry, &options, &Progress::new()).expect("codebase");
         assert!(
             !loaded.diagnostics.bake_preprocess.iter().any(|error| error.is_fatal()),
             "{:?}",
@@ -1208,7 +1208,8 @@ mod tests {
             forced_profile: Some(String::from("monkestation")),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&entry, &options, &Progress::new()).expect("Monkestation codebase");
+        let loaded = crate::environment::worker::load_codebase(&entry, &options, &Progress::new())
+            .expect("Monkestation codebase");
         assert!(
             !loaded.diagnostics.bake_preprocess.iter().any(|error| error.is_fatal()),
             "{:?}",
@@ -1297,7 +1298,7 @@ mod tests {
             forced_profile: Some(String::from("monkestation")),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+        let loaded = crate::environment::worker::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
             .expect("Monkestation codebase");
         assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
         let mut session = Session::new();
@@ -1352,7 +1353,7 @@ mod tests {
             forced_profile: Some(String::from("monkestation")),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+        let loaded = crate::environment::worker::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
             .expect("Monkestation codebase");
         assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
         let mut session = Session::new();
@@ -1451,7 +1452,7 @@ mod tests {
             forced_profile: Some(String::from("monkestation")),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+        let loaded = crate::environment::worker::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
             .expect("Monkestation codebase");
         assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
         let mut session = Session::new();
@@ -1525,7 +1526,7 @@ mod tests {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+        let loaded = crate::environment::worker::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
             .expect("tgstation codebase");
         assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
         let mut session = Session::new();
@@ -1650,7 +1651,7 @@ mod tests {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+        let loaded = crate::environment::worker::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
             .expect("tgstation codebase");
         assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
         let mut session = Session::new();
@@ -1728,7 +1729,7 @@ mod tests {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+        let loaded = crate::environment::worker::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
             .expect("tgstation codebase");
         assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
         let mut session = Session::new();
@@ -1833,7 +1834,7 @@ mod tests {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+        let loaded = crate::environment::worker::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
             .expect("tgstation codebase");
         assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
         let mut session = Session::new();
@@ -1907,7 +1908,7 @@ mod tests {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+        let loaded = crate::environment::worker::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
             .expect("tgstation codebase");
         assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
         let mut session = Session::new();
@@ -1948,7 +1949,7 @@ mod tests {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+        let loaded = crate::environment::worker::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
             .expect("tgstation codebase");
         assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
         let mut session = Session::new();
@@ -2003,7 +2004,7 @@ mod tests {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+        let loaded = crate::environment::worker::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
             .expect("tgstation codebase");
         assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
         let mut session = Session::new();
@@ -2046,8 +2047,9 @@ mod tests {
             ..Default::default()
         };
         let load = || {
-            let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
-                .expect("tgstation codebase");
+            let loaded =
+                crate::environment::worker::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+                    .expect("tgstation codebase");
             let mut session = Session::new();
             session.apply_codebase(loaded);
             session
@@ -2101,7 +2103,7 @@ mod tests {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+        let loaded = crate::environment::worker::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
             .expect("tgstation codebase");
         assert!(loaded.diagnostics.profile.is_none(), "{:?}", loaded.diagnostics.profile);
         let mut session = Session::new();
@@ -2167,7 +2169,8 @@ mod tests {
             forced_profile: Some(String::from("secondcity")),
             ..Default::default()
         };
-        let loaded = crate::loader::load_codebase(&entry, &options, &Progress::new()).expect("SecondCity codebase");
+        let loaded =
+            crate::environment::worker::load_codebase(&entry, &options, &Progress::new()).expect("SecondCity codebase");
         assert!(
             !loaded.diagnostics.bake_preprocess.iter().any(|error| error.is_fatal()),
             "{:?}",
@@ -2342,7 +2345,7 @@ mod tests {
         );
         take_peak_bytes();
 
-        let loaded = crate::loader::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
+        let loaded = crate::environment::worker::load_codebase(&root.join("tgstation.dme"), &options, &Progress::new())
             .expect("SecondCity codebase");
         let mut session = Session::new();
         session.apply_codebase(loaded);

@@ -6,7 +6,7 @@ use winit::event::WindowEvent;
 
 use super::*;
 use super::{args::Arguments, events::is_input, redraw::settle_appearing_windows};
-use crate::loader;
+use crate::environment::worker;
 
 fn headless_editor() -> App {
     let mut imgui = Context::create();
@@ -49,7 +49,7 @@ fn headless_editor() -> App {
     }
 }
 
-fn headless_frame(app: &mut App, now: Instant, load: Option<&loader::LoadView>) -> NextFrame {
+fn headless_frame(app: &mut App, now: Instant, load: Option<&worker::LoadView>) -> NextFrame {
     let imgui = app.imgui.as_mut().unwrap();
     let output = app
         .ui
@@ -170,10 +170,10 @@ fn a_load_result_settles_when_error_replaces_progress_in_the_same_window() {
     let mut app = headless_editor();
     // Keep simulated frames in the past: applying a loader result records real time.
     let idle = settle_headless_editor(&mut app, Instant::now() - Duration::from_secs(5));
-    let progress = loader::LoadView {
+    let progress = worker::LoadView {
         title: "Opening map",
         path: String::from("missing.dmm"),
-        snapshot: crate::progress::Progress::new().snapshot(),
+        snapshot: crate::environment::progress::Progress::new().snapshot(),
         cancelling: false,
         cancellable: true,
     };
@@ -260,7 +260,7 @@ a
     for (index, format) in [MapFormat::Standard, MapFormat::Tgm].into_iter().enumerate() {
         let path = root.join(format!("map-{index}.dmm"));
         fs::write(&path, MapWriter::new(&map).with_format(format).write()).unwrap();
-        let loaded = loader::load_map(&path, 1, &crate::progress::Progress::new()).unwrap();
+        let loaded = worker::load_map(&path, 1, &crate::environment::progress::Progress::new()).unwrap();
         app.apply_outcome(Outcome::Map(Box::new(loaded)));
         assert!(!app.session.state.active_document().unwrap().is_dirty());
         assert_eq!(
@@ -278,7 +278,7 @@ a
         // A reload uses the same validation and keeps the existing document.
         let id = app.session.state.active().unwrap();
         app.pending_reload = Some(id);
-        let loaded = loader::load_map(&path, 1, &crate::progress::Progress::new()).unwrap();
+        let loaded = worker::load_map(&path, 1, &crate::environment::progress::Progress::new()).unwrap();
         app.apply_outcome(Outcome::Map(Box::new(loaded)));
         assert_eq!(app.session.state.active(), Some(id));
         assert_eq!(app.session.state.document_ids().len(), index + 1);
@@ -405,7 +405,7 @@ fn opening_an_already_open_map_focuses_it_without_loading() {
     let open = |app: &mut App, name: &str| {
         let path = dir.join(name);
         fs::write(&path, "").unwrap();
-        app.session.apply_map(loader::LoadedMap {
+        app.session.apply_map(worker::LoadedMap {
             path,
             map: dmm::Map::new(dmm::Size { x: 4, y: 4, z: 1 }),
             z: 1,

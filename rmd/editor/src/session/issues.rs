@@ -137,8 +137,8 @@ mod tests {
 
     use super::*;
     use crate::{
+        environment::progress::Progress,
         focus::AreaFocus,
-        progress::Progress,
         session::fixtures::{assert_render_cache_matches_rebuild, examples, unknown_paths_session},
     };
 
@@ -229,7 +229,7 @@ mod tests {
         let groups = session.map_issues(first);
         let group = &groups[0];
         let map = session.state.document(first).unwrap().to_map();
-        session.apply_map(crate::loader::LoadedMap {
+        session.apply_map(crate::environment::worker::LoadedMap {
             path: "other-unknown-paths.dmm".into(),
             map,
             z: 1,
@@ -322,8 +322,12 @@ mod tests {
             session.take_loaded_issues().is_none(),
             "ordinary edits do not request panel focus"
         );
-        let mut loaded =
-            crate::loader::load_codebase(&examples().join("test.dme"), &Default::default(), &Progress::new()).unwrap();
+        let mut loaded = crate::environment::worker::load_codebase(
+            &examples().join("test.dme"),
+            &Default::default(),
+            &Progress::new(),
+        )
+        .unwrap();
         loaded.environment.tree.register(&source, Location::default());
         session.apply_codebase(loaded);
         assert_eq!(session.map_issues(id).len(), 1);

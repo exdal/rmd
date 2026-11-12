@@ -26,14 +26,16 @@ use vm::{
 #[cfg(test)]
 use crate::document::MapDocument;
 use crate::{
-    environment::{BakeProgram, Environment},
+    environment::{
+        BakeProgram, Environment,
+        progress::{Progress, Stage},
+    },
     grid::Grid,
     maploader::{
         RootSpecs,
         preview::{ComposeContext, MapView, ModulePreviewState},
         root_specs,
     },
-    progress::{Progress, Stage},
 };
 
 fn atom(program: &BakeProgram, prefab: &Prefab, instance: u64, coord: Coord) -> Option<Atom> {
@@ -463,7 +465,7 @@ mod tests {
     use dmm::{Map, Size};
 
     use super::*;
-    use crate::{command::Edit, frame, visual, world::Perspective};
+    use crate::{command::Edit, environment::world::Perspective, frame, visual};
 
     fn examples() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env")
@@ -504,7 +506,7 @@ mod tests {
             profile,
             icon_states: Default::default(),
         });
-        let failures = environment.load_icons(&[], &crate::progress::Progress::new());
+        let failures = environment.load_icons(&[], &crate::environment::progress::Progress::new());
         assert!(failures.is_empty(), "{failures:?}");
 
         environment
@@ -703,14 +705,22 @@ mod tests {
             enabled: false,
             ..Default::default()
         };
-        let (disabled, _) = Environment::load_with(root.join("test.dme"), disabled, &crate::progress::Progress::new())
-            .expect("codebase with baking off");
+        let (disabled, _) = Environment::load_with(
+            root.join("test.dme"),
+            disabled,
+            &crate::environment::progress::Progress::new(),
+        )
+        .expect("codebase with baking off");
         let phi_only = crate::environment::BakeOptions {
             optimizations_enabled: false,
             ..Default::default()
         };
-        let (phi_only, _) = Environment::load_with(root.join("test.dme"), phi_only, &crate::progress::Progress::new())
-            .expect("codebase with optional optimizations off");
+        let (phi_only, _) = Environment::load_with(
+            root.join("test.dme"),
+            phi_only,
+            &crate::environment::progress::Progress::new(),
+        )
+        .expect("codebase with optional optimizations off");
 
         assert!(profiled.bake_program.is_some());
         assert!(bare.bake_program.is_none());

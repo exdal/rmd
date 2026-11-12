@@ -31,10 +31,14 @@ use winit::{
 
 use crate::{
     document::{DocumentId, Selection},
-    environment::BakeOptions,
-    frontend::{LoadNotice, OpenRequest, ProfileReload, ScreenshotArea, ScreenshotRequest, UiState},
-    loader::{Job, Loader, Outcome},
-    session::{LoadReport, Session},
+    environment::{
+        BakeOptions,
+        panel::LoadNotice,
+        session::LoadReport,
+        worker::{Job, Loader, Outcome},
+    },
+    frontend::{OpenRequest, ProfileReload, ScreenshotArea, ScreenshotRequest, UiState},
+    session::Session,
     settings::{
         Settings,
         paths::{backup_dir, imgui_ini_path, profiles_dir, themes_dir},

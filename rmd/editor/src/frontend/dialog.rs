@@ -8,9 +8,10 @@ use ui::{
     widgets::{DialogButton, begin_centered_modal, dialog_buttons, dpi},
 };
 
-use super::{DIAGNOSTIC_WARNING_COLOR, MAX_CUSTOM_FILL_SEARCH_RESULTS, UiState, draw_type_path_search};
+use super::{MAX_CUSTOM_FILL_SEARCH_RESULTS, UiState, draw_type_path_search};
 use crate::{
     document::{DocumentId, MapDocument},
+    environment::panel::DIAGNOSTIC_WARNING_COLOR,
     session::Session,
     settings::keybind::KeybindPreset,
     tool::{FillMode, SelectionMask, Tool},

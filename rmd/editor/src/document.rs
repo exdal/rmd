@@ -21,6 +21,7 @@ use objtree::ObjectTree;
 
 use crate::{
     command::{self, Edit, EditGroupId, History, LevelEdit, Resize, SelectionChange},
+    environment::world::World,
     focus::AreaFocus,
     grid::{Grid, LevelCells},
     maploader::{preview::PREVIEW_ID_START, resolved_path},
@@ -29,7 +30,6 @@ use crate::{
         PlacementKind, RegionSelectionMode, SelectionMask, ToolEdit, insertion_index, placement_kind,
         refill_missing_bases,
     },
-    world::World,
 };
 
 pub fn sanitize_vars(map: &mut Map, tree: &ObjectTree) -> usize {

@@ -18,8 +18,6 @@ mod clipboard;
 mod command;
 mod document;
 mod environment;
-mod error;
-mod fingerprint;
 mod focus;
 mod frame;
 mod frontend;
@@ -27,11 +25,9 @@ mod git;
 mod gizmo;
 mod grid;
 mod issues;
-mod loader;
 mod maploader;
 mod node;
 mod patch;
-mod progress;
 mod search;
 mod session;
 mod settings;
@@ -39,7 +35,6 @@ mod state;
 mod tool;
 mod transform;
 mod visual;
-mod world;
 
 use std::process::ExitCode;
 

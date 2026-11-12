@@ -38,7 +38,7 @@ impl TypeLayer {
 }
 
 impl Session {
-    pub(super) fn instances(&self) -> Option<&FrameInstances> {
+    pub(crate) fn instances(&self) -> Option<&FrameInstances> {
         self.caches.get(&self.state.active()?).map(|cache| &cache.instances)
     }
 

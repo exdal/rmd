@@ -17,7 +17,7 @@ use super::*;
 use crate::{
     command::Edit,
     document::DocumentId,
-    loader::LoadedMap,
+    environment::worker::LoadedMap,
     session::{Session, fixtures},
     tool::Tool,
 };

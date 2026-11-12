@@ -467,7 +467,7 @@ mod tests {
     #[test]
     fn disabling_git_releases_a_document_waiting_on_staging() {
         let mut session = Session::new();
-        session.apply_map(crate::loader::LoadedMap {
+        session.apply_map(crate::environment::worker::LoadedMap {
             path: PathBuf::from("staging.dmm"),
             map: Map::new(Size { x: 1, y: 1, z: 1 }),
             z: 1,

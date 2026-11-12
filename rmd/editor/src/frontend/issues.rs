@@ -745,7 +745,7 @@ mod tests {
         let mut session = unknown_paths_session();
         let first = session.state.active().unwrap();
         let map = session.state.document(first).unwrap().to_map();
-        session.apply_map(crate::loader::LoadedMap {
+        session.apply_map(crate::environment::worker::LoadedMap {
             path: "other-map.dmm".into(),
             map,
             z: 1,

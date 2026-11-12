@@ -13,17 +13,17 @@ use objtree::TypeId;
 use render::texture::TextureCatalog;
 
 use crate::{
-    environment::{BakeOptions, Environment, LoadDiagnostics},
-    error::LoadError,
+    environment::{
+        BakeOptions, Environment, LoadDiagnostics,
+        error::LoadError,
+        progress::{Progress, Snapshot, Stage},
+        session::{build_textures, discover_maps},
+    },
     git::{
         conflict::ConflictData,
         repo::{self, RepoPath},
     },
-    progress::{Progress, Snapshot, Stage},
-    session::{
-        PrefabThumbnail, build_textures, discover_maps, prefab_thumbnail_for, prefab_thumbnail_or_missing,
-        validate_level,
-    },
+    session::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing, validate_level},
     visual,
 };
 
@@ -372,8 +372,8 @@ mod tests {
     };
 
     use super::{Job, Loader, Outcome, load_codebase, load_map};
-    use crate::{
-        environment::BakeOptions,
+    use crate::environment::{
+        BakeOptions,
         progress::{Progress, Stage},
     };
 
@@ -421,7 +421,8 @@ mod tests {
         assert!(fixture_git(&dir, &["commit", "-qam", "ours"]).status.success());
         assert!(!fixture_git(&dir, &["merge", "feature"]).status.success());
 
-        let loaded = super::load_map_with_git(&path, 1, &crate::progress::Progress::new(), true, None).unwrap();
+        let loaded =
+            super::load_map_with_git(&path, 1, &crate::environment::progress::Progress::new(), true, None).unwrap();
         assert_eq!(loaded.conflict.as_ref().unwrap().conflicts.len(), 1);
         assert_eq!(
             loaded.map.tile_at(dmm::Coord::new(1, 1, 1)).unwrap()[0]
@@ -486,7 +487,7 @@ mod tests {
         for index in [b"not an index".to_vec(), vec![b'x'; 256]] {
             std::fs::write(dir.join(".git").join("index"), index).unwrap();
 
-            let loaded = super::load_map_with_git(&path, 1, &crate::progress::Progress::new(), true, None)
+            let loaded = super::load_map_with_git(&path, 1, &crate::environment::progress::Progress::new(), true, None)
                 .expect("the map opens without conflict detection");
 
             assert!(loaded.conflict.is_none());
@@ -525,7 +526,8 @@ mod tests {
         assert!(fixture_git(&dir, &["commit", "-qam", "ours"]).status.success());
         assert!(!fixture_git(&dir, &["merge", "feature"]).status.success());
 
-        let loaded = super::load_map_with_git(&path, 1, &crate::progress::Progress::new(), true, None).unwrap();
+        let loaded =
+            super::load_map_with_git(&path, 1, &crate::environment::progress::Progress::new(), true, None).unwrap();
         assert!(loaded.conflict.as_ref().unwrap().conflicts.is_empty());
         let mut session = crate::session::Session::new();
         session.apply_map(loaded);

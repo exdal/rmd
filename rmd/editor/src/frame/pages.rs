@@ -346,12 +346,12 @@ pub(super) mod tests {
     use crate::{
         command::Edit,
         document::{MapDocument, PrefabInstanceId},
+        environment::world::Perspective,
         frame::{
             FrameInstances, FrameRenderOptions, PrefabUpdate, TypeVisibility, build, build_with_options,
             tests::{assert_render_data_matches, document, icons, textures, tree},
             update_prefab, update_prefabs,
         },
-        world::Perspective,
     };
 
     /// Pages sit back to back, hold sorted keys within their bounds, and pad with spare slots.

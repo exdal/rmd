@@ -17,10 +17,10 @@ use crate::{
     clipboard::{has_kind, merge_pasted},
     command::Edit,
     document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection},
+    environment::world::{BaseTile, World},
     frame::HiddenTypes,
     grid::Grid,
     visual,
-    world::{BaseTile, World},
 };
 
 pub const MAX_FILL_TILES: usize = 5_000;
@@ -1361,9 +1361,9 @@ mod tests {
     };
     use crate::{
         document::MapDocument,
+        environment::world::{BaseTile, World},
         focus::AreaFocus,
         frame::HiddenTypes,
-        world::{BaseTile, World},
     };
 
     fn tree() -> objtree::ObjectTree {

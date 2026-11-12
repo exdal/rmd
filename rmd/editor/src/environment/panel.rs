@@ -6,12 +6,12 @@ use std::{
 use dear_imgui_rs::{Condition, InputTextMultilineFlags, StyleColor, Ui, WindowFlags, WindowKey};
 use ui::widgets::{DialogButton, center_next_window, dialog_buttons, dpi};
 
-use super::SAVE_ERROR_COLOR;
-use crate::{
-    loader::LoadView,
+use crate::environment::{
     progress::{Snapshot, Stage},
     session::{DiagnosticSeverity, LoadReport, MAX_REPORTED_DIAGNOSTICS},
+    worker::LoadView,
 };
+use crate::frontend::dialog::SAVE_ERROR_COLOR;
 
 const LOAD_POPUP_WIDTH: f32 = 420.0;
 
@@ -23,7 +23,7 @@ const LOAD_TEXT_MIN_LINES: usize = 4;
 
 const LOAD_ERROR_MAX_LINES: usize = 10;
 
-pub(super) const DIAGNOSTIC_WARNING_COLOR: [f32; 4] = [1.0, 0.8, 0.25, 1.0];
+pub(crate) const DIAGNOSTIC_WARNING_COLOR: [f32; 4] = [1.0, 0.8, 0.25, 1.0];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadNotice {
@@ -45,22 +45,22 @@ impl LoadNotice {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct DiagnosticsState {
+pub(crate) struct DiagnosticsState {
     codebase: Option<LoadReport>,
     maps: HashMap<PathBuf, LoadReport>,
     failed_codebase: Option<LoadReport>,
-    pub(super) open: Option<DiagnosticSeverity>,
+    pub(crate) open: Option<DiagnosticSeverity>,
 }
 
 impl DiagnosticsState {
-    pub(super) fn set_codebase(&mut self, report: LoadReport) {
+    pub(crate) fn set_codebase(&mut self, report: LoadReport) {
         self.maps.clear();
         self.failed_codebase = None;
         self.open = (report.errors > 0).then_some(DiagnosticSeverity::Error);
         self.codebase = (!report.is_empty()).then_some(report);
     }
 
-    pub(super) fn set_map(&mut self, path: PathBuf, report: LoadReport) {
+    pub(crate) fn set_map(&mut self, path: PathBuf, report: LoadReport) {
         let errors = report.errors;
         let warnings = report.warnings;
         if report.is_empty() {
@@ -78,7 +78,7 @@ impl DiagnosticsState {
         }
     }
 
-    pub(super) fn set_failed_codebase(&mut self, report: LoadReport) {
+    pub(crate) fn set_failed_codebase(&mut self, report: LoadReport) {
         self.open = Some(DiagnosticSeverity::Error);
         self.failed_codebase = Some(report);
     }
@@ -89,7 +89,7 @@ impl DiagnosticsState {
         }
     }
 
-    pub(super) fn count(&self, severity: DiagnosticSeverity) -> usize {
+    pub(crate) fn count(&self, severity: DiagnosticSeverity) -> usize {
         self.codebase.as_ref().map_or(0, |report| report.count(severity))
             + self.failed_codebase.as_ref().map_or(0, |report| report.count(severity))
             + self.maps.values().map(|report| report.count(severity)).sum::<usize>()
@@ -126,13 +126,13 @@ impl DiagnosticsState {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(super) struct LoadPopup {
-    pub(super) cancel: bool,
-    pub(super) dismiss: bool,
-    pub(super) copy: Option<String>,
+pub(crate) struct LoadPopup {
+    pub(crate) cancel: bool,
+    pub(crate) dismiss: bool,
+    pub(crate) copy: Option<String>,
 }
 
-pub(super) fn draw_load_popup(
+pub(crate) fn draw_load_popup(
     ui: &Ui, window: &WindowKey, load: Option<&LoadView>, notice: Option<&mut LoadNotice>,
     diagnostics: &DiagnosticsState,
 ) -> LoadPopup {
@@ -318,10 +318,10 @@ mod tests {
     use ui::testing::{CONTEXT_LOCK, assert_window_centered, finish_frame, popup_context, set_desktop_geometry};
 
     use super::{DiagnosticsState, LOAD_POPUP_WIDTH, LoadNotice, draw_load_popup, fit_path, grouped, shorten_path};
-    use crate::{
-        loader::LoadView,
+    use crate::environment::{
         progress::{Snapshot, Stage},
         session::{DiagnosticSeverity, LoadReport},
+        worker::LoadView,
     };
 
     #[test]
@@ -334,7 +334,7 @@ mod tests {
             let progress = LoadView {
                 title: "Opening map",
                 path: String::from("missing.dmm"),
-                snapshot: crate::progress::Progress::new().snapshot(),
+                snapshot: crate::environment::progress::Progress::new().snapshot(),
                 cancelling: false,
                 cancellable: true,
             };

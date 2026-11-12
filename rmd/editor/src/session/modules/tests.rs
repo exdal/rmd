@@ -16,15 +16,13 @@ use dmm::{Coord, Map, MapFormat, Prefab, PrefabInstanceId, Size, writer};
 
 use crate::{
     document::{DocumentId, MapDocument, Selection},
-    environment::BakeOptions,
-    loader::load_codebase,
+    environment::{BakeOptions, progress::Progress, session::build_textures, worker::load_codebase},
     maploader::{
         ErrorKind,
         preview::{ModuleRootPreview, PREVIEW_ID_START},
     },
-    progress::Progress,
     session::{
-        BakeHold, Session, build_textures,
+        BakeHold, Session,
         fixtures::{assert_render_cache_matches_rebuild, node_environment_with_profile, settle_bake},
     },
     tool::{RegionSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},

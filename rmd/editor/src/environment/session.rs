@@ -8,15 +8,17 @@ use dmm::{Map, error::MapError};
 use objtree::{ObjectTree, TypeId};
 use render::texture::TextureCatalog;
 
-use super::Session;
+use crate::session::Session;
 use crate::{
     app::external_editor::SourceLocation,
-    environment::Environment,
+    environment::{
+        Environment,
+        progress::{Progress, Stage},
+        worker::LoadedCodebase,
+        world::World,
+    },
     frame::TypeVisibility,
-    loader::LoadedCodebase,
-    progress::{Progress, Stage},
     tool::Tool,
-    world::World,
 };
 
 pub(crate) const MAX_REPORTED_DIAGNOSTICS: usize = 500;
@@ -370,8 +372,7 @@ mod tests {
         DiagnosticSeverity, LoadReport, MAX_REPORTED_DIAGNOSTICS, build_textures, discover_maps, preprocess_severity,
     };
     use crate::{
-        environment::Environment,
-        progress::Progress,
+        environment::{Environment, progress::Progress},
         session::{
             Session,
             fixtures::{assert_render_cache_matches_rebuild, examples},

@@ -6,13 +6,13 @@ use objtree::ObjectTree;
 use crate::{
     command::Edit,
     document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection},
+    environment::world::{BaseTile, World},
     frame::HiddenTypes,
     maploader::preview::MapView,
     tool::{
         PlacementKind, RegionSelectionMode, SelectionRotation, ToolEdit, coord_in_bounds, insertion_index,
         placement_kind, rotate_point, rotate_prefab,
     },
-    world::{BaseTile, World},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

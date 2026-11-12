@@ -43,7 +43,7 @@ fn clicking_a_blamed_tile_opens_a_popup_without_placing_a_tile() {
         map: map.clone(),
     };
     let blame = crate::git::blame::blame(&map, &mut source, &|| false, &mut |_, _| {}).unwrap();
-    session.apply_map(crate::loader::LoadedMap {
+    session.apply_map(crate::environment::worker::LoadedMap {
         path: PathBuf::from("blame-ui-test.dmm"),
         map,
         z: 1,
@@ -92,7 +92,7 @@ fn conflict_button_takes_the_incoming_tile_without_reaching_the_place_tool() {
     }
     let coord = Coord::new(5, 8, 1);
     let incoming = Prefab::new(TreePath::parse("/turf/closed/wall"));
-    session.apply_map(crate::loader::LoadedMap {
+    session.apply_map(crate::environment::worker::LoadedMap {
         path: PathBuf::from("conflict-ui-test.dmm"),
         map,
         z: 1,

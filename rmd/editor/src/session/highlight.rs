@@ -179,8 +179,7 @@ mod tests {
     use crate::{
         bake::{HIGHLIGHT_EDGE_EAST, HIGHLIGHT_EDGE_WEST},
         document::MapDocument,
-        environment::Environment,
-        loader::LoadedCodebase,
+        environment::{Environment, worker::LoadedCodebase},
         session::fixtures::conflicted_session,
     };
 

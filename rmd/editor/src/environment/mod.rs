@@ -1,3 +1,11 @@
+pub(crate) mod error;
+mod fingerprint;
+pub(crate) mod panel;
+pub(crate) mod progress;
+pub(crate) mod session;
+pub(crate) mod worker;
+pub(crate) mod world;
+
 use base::{
     arena::StrArena,
     location::FileId,
@@ -22,13 +30,11 @@ use preprocessor::{
 };
 use sema::error::SemaError;
 
-use crate::{
-    error::LoadError,
-    fingerprint,
-    git::repo,
-    progress::{Progress, Stage},
-    world::World,
-};
+use crate::git::repo;
+
+use error::LoadError;
+use progress::{Progress, Stage};
+use world::World;
 
 pub struct BakeProgram {
     pub tree: ObjectTree,
@@ -421,17 +427,17 @@ impl BundledProfile {
 
     const fn source(self) -> &'static str {
         match self {
-            Self::Beestation => include_str!("../profiles/beestation.dm"),
-            Self::Cmss13 => include_str!("../profiles/cmss13.dm"),
-            Self::Goonstation => include_str!("../profiles/goonstation.dm"),
-            Self::Monkestation => include_str!("../profiles/monkestation.dm"),
-            Self::Monkespaw => include_str!("../profiles/monkespaw.dm"),
-            Self::Novasector => include_str!("../profiles/novasector.dm"),
-            Self::Oculis => include_str!("../profiles/oculis.dm"),
-            Self::SecondCity => include_str!("../profiles/secondcity.dm"),
-            Self::Tgmc => include_str!("../profiles/tgmc.dm"),
-            Self::Tgstation => include_str!("../profiles/tgstation.dm"),
-            Self::Vanderlin => include_str!("../profiles/vanderlin.dm"),
+            Self::Beestation => include_str!("../../profiles/beestation.dm"),
+            Self::Cmss13 => include_str!("../../profiles/cmss13.dm"),
+            Self::Goonstation => include_str!("../../profiles/goonstation.dm"),
+            Self::Monkestation => include_str!("../../profiles/monkestation.dm"),
+            Self::Monkespaw => include_str!("../../profiles/monkespaw.dm"),
+            Self::Novasector => include_str!("../../profiles/novasector.dm"),
+            Self::Oculis => include_str!("../../profiles/oculis.dm"),
+            Self::SecondCity => include_str!("../../profiles/secondcity.dm"),
+            Self::Tgmc => include_str!("../../profiles/tgmc.dm"),
+            Self::Tgstation => include_str!("../../profiles/tgstation.dm"),
+            Self::Vanderlin => include_str!("../../profiles/vanderlin.dm"),
         }
     }
 
@@ -1552,7 +1558,7 @@ mod tests {
         let root = base::location::Location::default().file;
         assert_eq!(
             fingerprint_of("empty", ""),
-            crate::fingerprint::object_tree(&ObjectTree::new(), &[root])
+            crate::environment::fingerprint::object_tree(&ObjectTree::new(), &[root])
         );
     }
 

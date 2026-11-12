@@ -7,9 +7,9 @@ use objtree::ObjectTree;
 use crate::{
     command::Edit,
     document::{MapDocument, PrefabInstanceId},
+    environment::world::World,
     search,
     tool::{PlacementKind, ToolEdit, is_missing_base, placement_kind, refill_missing_bases},
-    world::World,
 };
 
 fn unknown_kind(tree: &ObjectTree, path: &TreePath) -> Option<PlacementKind> {

@@ -161,8 +161,8 @@ mod tests {
     use dmm::{Coord, Prefab};
 
     use crate::{
-        progress::Progress,
-        session::{Session, build_textures, fixtures::examples},
+        environment::{progress::Progress, session::build_textures},
+        session::{Session, fixtures::examples},
         tool::Tool,
     };
 

@@ -1998,7 +1998,7 @@ mod tests {
             Prefab::new(TreePath::parse("/obj/structure/table")),
         ]);
         map.grid[0][0].fill(key);
-        session.apply_map(crate::loader::LoadedMap {
+        session.apply_map(crate::environment::worker::LoadedMap {
             path: root.join("identical-test.dmm"),
             map,
             z: 1,

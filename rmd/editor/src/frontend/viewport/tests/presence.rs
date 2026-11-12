@@ -1,7 +1,7 @@
 use super::*;
 
 fn open_blank_map(session: &mut Session, path: PathBuf) -> DocumentId {
-    session.apply_map(crate::loader::LoadedMap {
+    session.apply_map(crate::environment::worker::LoadedMap {
         path,
         map: dmm::Map::new(Size { x: 20, y: 20, z: 1 }),
         z: 1,

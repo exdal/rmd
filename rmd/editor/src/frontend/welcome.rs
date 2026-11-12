@@ -6,10 +6,11 @@ use ui::{
     widgets::{dpi, focus_window_on_hover},
 };
 
-use super::{CloseFocus, DIAGNOSTIC_WARNING_COLOR, OpenRequest, SAVE_ERROR_COLOR, UiState, coop::shared_maps};
+use super::{CloseFocus, OpenRequest, SAVE_ERROR_COLOR, UiState, coop::shared_maps};
 use crate::{
     app::update::Release,
-    session::{DiagnosticSeverity, Session},
+    environment::{panel::DIAGNOSTIC_WARNING_COLOR, session::DiagnosticSeverity},
+    session::Session,
     settings::Settings,
 };
 

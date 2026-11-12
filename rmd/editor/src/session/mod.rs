@@ -21,7 +21,6 @@ use crate::{
 
 mod bake;
 mod clipboard;
-mod codebase;
 mod coop;
 mod direction;
 mod document;
@@ -49,7 +48,6 @@ use self::{
 };
 pub(crate) use self::{
     bake::{FaultState, RuntimeFault},
-    codebase::{DiagnosticSeverity, LoadReport, MAX_REPORTED_DIAGNOSTICS, build_textures, discover_maps},
     coop::{Activity, Coop, CoopStatus, SharedState},
     direction::{DirectionState, DirectionalTypes},
     edit::context_placement_group,

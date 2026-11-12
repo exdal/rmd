@@ -6,8 +6,8 @@ use net::PeerId;
 use super::{Activity, Coop, Prepared, ReceivedMap, SharedMap, SharedState};
 use crate::{
     document::{DocumentId, MapDocument},
+    environment::worker::LoadedMap,
     git::repo,
-    loader::LoadedMap,
     session::Session,
 };
 

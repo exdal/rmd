@@ -10,11 +10,9 @@ use std::{
 use crate::{
     bake::{Bake, BakeUpdate},
     document::DocumentId,
-    environment::Environment,
+    environment::{Environment, progress::Progress, worker::LoadView},
     grid::Grid,
-    loader::LoadView,
     maploader::preview::ModulePreviewState,
-    progress::Progress,
 };
 
 pub struct Request {

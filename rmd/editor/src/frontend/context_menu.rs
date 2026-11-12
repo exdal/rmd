@@ -432,8 +432,8 @@ mod tests {
 
     use super::{POPUP, Target, draw_popup};
     use crate::{
+        environment::worker::LoadedMap,
         frontend::search::matching_type_paths_up_to_filtered,
-        loader::LoadedMap,
         session::{Session, context_placement_group},
         settings::Settings,
     };

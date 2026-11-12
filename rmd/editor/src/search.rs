@@ -7,8 +7,8 @@ use objtree::ObjectTree;
 use crate::{
     command::Edit,
     document::{MapDocument, PrefabInstanceId, PrefabLocation, Selection},
+    environment::world::World,
     tool::{ToolEdit, placement_kind, refill_missing_bases, same_prefabs},
-    world::World,
 };
 
 #[derive(Debug, Clone, PartialEq)]

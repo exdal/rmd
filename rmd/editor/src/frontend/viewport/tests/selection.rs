@@ -285,7 +285,7 @@ fn rectangle_ui_pastes_a_border_into_another_map_immediately() {
     for row in &mut destination.grid[0] {
         row.fill(key);
     }
-    app.session.apply_map(crate::loader::LoadedMap {
+    app.session.apply_map(crate::environment::worker::LoadedMap {
         path: PathBuf::from("rectangle-ui-destination.dmm"),
         map: destination,
         z: 1,
@@ -577,7 +577,7 @@ fn only_the_active_view_outlines_its_selected_instance() {
             row.fill(key);
         }
 
-        session.apply_map(crate::loader::LoadedMap {
+        session.apply_map(crate::environment::worker::LoadedMap {
             path: std::env::temp_dir().join(name),
             map,
             z: 1,

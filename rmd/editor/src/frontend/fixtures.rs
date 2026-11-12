@@ -42,7 +42,7 @@ impl RectangleUiHarness {
         for row in &mut map.grid[0] {
             row.fill(base);
         }
-        session.apply_map(crate::loader::LoadedMap {
+        session.apply_map(crate::environment::worker::LoadedMap {
             path: PathBuf::from("rectangle-ui-test.dmm"),
             map,
             z: 1,

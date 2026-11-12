@@ -19,10 +19,14 @@ use self::{inspector::InspectorPanel, object_tree::ObjectTreePanel, settings::Se
 use crate::{
     app::{external_editor::SourceLocation, pacing::FrameDemand, update::UpdateCheck},
     document::{DocumentId, MapDocument},
+    environment::{
+        panel::{DiagnosticsState, LoadNotice, LoadPopup, draw_load_popup},
+        session::LoadReport,
+        worker::LoadView,
+    },
     git::panel::{GitPanel, GitTab},
     gizmo::GizmoState,
-    loader::LoadView,
-    session::{LoadReport, Session, TypeLayer},
+    session::{Session, TypeLayer},
     settings::{
         OpenPanels, Panel, Settings,
         keybind::{KeybindAction, KeybindPreset},
@@ -38,7 +42,6 @@ mod fixtures;
 mod grid;
 mod history;
 mod issues;
-mod load;
 mod menu;
 mod node;
 pub(crate) mod overlay;
@@ -51,7 +54,6 @@ mod toolbar;
 mod viewport;
 mod welcome;
 
-pub(crate) use self::load::LoadNotice;
 use self::{
     dialog::{
         DeleteLevelDialog, FILL_LIMIT_WARNING_POPUP, FillWarningContext, GO_TO_POPUP, GoToDialog, NEW_MAP_POPUP,
@@ -62,7 +64,6 @@ use self::{
     },
     grid::{draw_selected_pixel_grid, draw_tile_grid},
     history::{draw_history_overlay, recent_button_size},
-    load::{DIAGNOSTIC_WARNING_COLOR, DiagnosticsState, LoadPopup, draw_load_popup},
     menu::MenuActions,
     node::{NodeOverlayView, NodeRightClick, draw_node_overlay, node_right_click},
     overlay::{
@@ -1107,7 +1108,8 @@ mod tests {
     use super::{DEFAULT_CUSTOM_FILL_BOUNDARY, RegionSelectionOptions, UiState, menu::MenuActions};
     use crate::git::panel::GitTab;
     use crate::{
-        session::{DiagnosticSeverity, Session, fixtures::install_diff},
+        environment::session::DiagnosticSeverity,
+        session::{Session, fixtures::install_diff},
         settings::{
             OpenPanels, Panel, Settings,
             keybind::{KeyBindings, KeybindAction},
@@ -1424,7 +1426,7 @@ mod tests {
         state.show_welcome = false;
         let mut session = Session::new();
         let mut themes = Themes::load(None, context.style(), DEFAULT_THEME);
-        session.apply_map(crate::loader::LoadedMap {
+        session.apply_map(crate::environment::worker::LoadedMap {
             path: PathBuf::from("reset-layout-test.dmm"),
             map: dmm::Map::new(dmm::Size { x: 10, y: 10, z: 1 }),
             z: 1,
@@ -1489,7 +1491,7 @@ mod tests {
         }
 
         state.reset_layout = true;
-        session.apply_map(crate::loader::LoadedMap {
+        session.apply_map(crate::environment::worker::LoadedMap {
             path: PathBuf::from("saved-dock.dmm"),
             map: dmm::Map::new(dmm::Size { x: 10, y: 10, z: 1 }),
             z: 1,
@@ -1525,7 +1527,7 @@ mod tests {
         let mut state = UiState::new(false).unwrap();
         let mut session = Session::new();
         let mut themes = Themes::load(None, context.style(), DEFAULT_THEME);
-        session.apply_map(crate::loader::LoadedMap {
+        session.apply_map(crate::environment::worker::LoadedMap {
             path: PathBuf::from("search-focus-test.dmm"),
             map: dmm::Map::new(dmm::Size { x: 10, y: 10, z: 1 }),
             z: 1,
@@ -1600,7 +1602,7 @@ mod tests {
         for row in &mut map.grid[0] {
             row.fill(floor);
         }
-        session.apply_map(crate::loader::LoadedMap {
+        session.apply_map(crate::environment::worker::LoadedMap {
             path: PathBuf::from("diff-ui-test.dmm"),
             map,
             z: 1,
@@ -1647,7 +1649,7 @@ mod tests {
             let mut session = Session::new();
             session.load_environment(&entry).unwrap();
             let path = session.codebase_dir().unwrap().join("_maps/out-of-date.dmm");
-            session.apply_map(crate::loader::LoadedMap {
+            session.apply_map(crate::environment::worker::LoadedMap {
                 path,
                 map: dmm::Map::new(Size { x: width, y: 1, z: 1 }),
                 z: 1,
@@ -1751,10 +1753,10 @@ mod tests {
             check_for_updates: false,
             ..Settings::default()
         };
-        let load = crate::loader::LoadView {
+        let load = crate::environment::worker::LoadView {
             title: "Opening codebase",
             path: "game.dme".into(),
-            snapshot: crate::progress::Progress::new().snapshot(),
+            snapshot: crate::environment::progress::Progress::new().snapshot(),
             cancelling: false,
             cancellable: true,
         };

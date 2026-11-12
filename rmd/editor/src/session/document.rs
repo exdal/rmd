@@ -10,9 +10,9 @@ use super::{Session, coop::LevelStep, is_reorder_label};
 use crate::git::session::GitDocState;
 use crate::{
     document::{DocumentId, MapDocument},
+    environment::worker::LoadedMap,
     git::conflict::ConflictState,
     grid::Grid,
-    loader::LoadedMap,
     tool::Tool,
 };
 

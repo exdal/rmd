@@ -3,7 +3,7 @@ use base::types::Value;
 use dmm::{Map, MapFormat, writer::MapWriter};
 
 use super::*;
-use crate::loader::LoadedMap;
+use crate::environment::worker::LoadedMap;
 
 #[test]
 fn node_tool_hover_and_single_click_survive_the_full_view_frame() {
@@ -196,7 +196,7 @@ fn object_gizmo_only_appears_on_the_selected_instances_z_level() {
         }
     }
     map.grid[0][2][5] = picked_tile;
-    session.apply_map(crate::loader::LoadedMap {
+    session.apply_map(crate::environment::worker::LoadedMap {
         path: PathBuf::from("object-gizmo-z-level-test.dmm"),
         map,
         z: 1,

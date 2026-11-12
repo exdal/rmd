@@ -9,7 +9,6 @@ use ui::{
 };
 
 use super::{
-    DIAGNOSTIC_WARNING_COLOR,
     dialog::{DIALOG_FIELD_WIDTH, MODAL_FLAGS, SAVE_ERROR_COLOR},
     overlay::{OVERLAY_BG, OverlayRect},
     region::{fill_selection, hollow_selection_inner, region_selection_bounds},
@@ -17,6 +16,7 @@ use super::{
 use crate::{
     camera::Controller,
     document::{DocumentId, Selection},
+    environment::panel::DIAGNOSTIC_WARNING_COLOR,
     session::{Activity, Coop, CoopStatus, Session, SharedState},
     settings::Settings,
     tool::{RegionSelectionMode, Tool},

@@ -22,9 +22,9 @@ use vm::{
 use crate::document::MapDocument;
 use crate::{
     document::PrefabInstanceId,
+    environment::world::Perspective,
     maploader::preview::MapView,
     visual::{self, Appearance},
-    world::Perspective,
 };
 
 mod pages;
@@ -1286,8 +1286,8 @@ mod tests {
     use crate::{
         command::Edit,
         document::{MapDocument, PrefabInstanceId, VarMutation},
+        environment::world::Perspective,
         visual::Appearance,
-        world::Perspective,
     };
 
     const ICON: &str = "test.dmi";

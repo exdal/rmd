@@ -299,7 +299,7 @@ fn the_popup_survives_switching_to_another_map_and_back() -> TestResult {
     let modular = session.state.active().ok_or("no document")?;
     let root = session.module_roots().first().ok_or("no module root")?;
     let popup = (root.key.clone(), root.coord);
-    session.apply_map(crate::loader::LoadedMap {
+    session.apply_map(crate::environment::worker::LoadedMap {
         path: std::env::temp_dir().join("rmd-module-popup-other.dmm"),
         map: dmm::Map::new(Size { x: 4, y: 4, z: 1 }),
         z: 1,
