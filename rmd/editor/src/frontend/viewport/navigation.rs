@@ -5,9 +5,9 @@ use dmm::Coord;
 
 use super::{MapViewState, ViewFrame, stroke::ActivePlacementFlash};
 use crate::{
+    app::pacing::FrameDemand,
     document::DocumentId,
     frontend::{UiState, common::dpi, find::JumpTarget},
-    pacing::FrameDemand,
     session::Session,
     settings::{KeybindAction, Settings},
 };

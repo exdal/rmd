@@ -4,7 +4,7 @@ use dear_imgui_rs::{Condition, StyleColor, TreeNodeFlags, Ui, WindowKey, WindowK
 
 use super::common::{centered_note, dpi, focus_window_on_hover};
 use crate::{
-    external_editor::SourceLocation,
+    app::external_editor::SourceLocation,
     session::{FaultState, RuntimeFault, Session},
     settings::Settings,
 };

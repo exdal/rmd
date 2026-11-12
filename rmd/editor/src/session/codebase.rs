@@ -10,8 +10,8 @@ use render::texture::TextureCatalog;
 
 use super::Session;
 use crate::{
+    app::external_editor::SourceLocation,
     environment::Environment,
-    external_editor::SourceLocation,
     frame::TypeVisibility,
     loader::LoadedCodebase,
     progress::{Progress, Stage},

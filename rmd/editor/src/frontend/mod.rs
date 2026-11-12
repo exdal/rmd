@@ -16,16 +16,14 @@ use render::{Camera, GuideLine, MapViewInteraction, MapViewRect};
 
 use self::{inspector::InspectorPanel, object_tree::ObjectTreePanel, settings::SettingsWindow};
 use crate::{
+    app::{external_editor::SourceLocation, pacing::FrameDemand, update::UpdateCheck},
     document::{DocumentId, MapDocument},
-    external_editor::SourceLocation,
     gizmo::GizmoState,
     loader::LoadView,
-    pacing::FrameDemand,
     session::{LoadReport, Session, TypeLayer},
     settings::{KeybindAction, KeybindPreset, OpenPanels, Panel, Settings},
     theme::Themes,
     tool::{FillMode, SelectionRotation, SelectionTransform, Tool},
-    update::UpdateCheck,
 };
 
 mod blame;

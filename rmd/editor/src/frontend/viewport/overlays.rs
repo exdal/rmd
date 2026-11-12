@@ -3,11 +3,11 @@ use dmm::Coord;
 
 use super::{ViewFrame, stroke::active_placement_flash};
 use crate::{
+    app::pacing::FrameDemand,
     frontend::{
         TopOverlayState, UiState, common::dpi, draw_guide_badges, draw_highlights, draw_history_overlay,
         draw_identical_outlines, draw_placement_preview, draw_selected_pixel_grid, draw_tile_grid, draw_top_overlay,
     },
-    pacing::FrameDemand,
     session::{GuideBadge, Session},
     settings::Settings,
     tool::Tool,

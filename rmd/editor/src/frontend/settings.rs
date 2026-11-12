@@ -835,7 +835,7 @@ fn os_scale_percent(ui: &Ui) -> u32 {
 fn show_backups() {
     let result = backup_dir().and_then(|dir| {
         std::fs::create_dir_all(&dir)?;
-        crate::process::open_directory(&dir)
+        crate::app::process::open_directory(&dir)
     });
     if let Err(error) = result {
         log::error!("could not open the backups folder: {error}");

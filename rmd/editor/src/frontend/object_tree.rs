@@ -10,7 +10,7 @@ use super::{
     settings::{draw_object_tree_filter_settings, draw_object_tree_search_settings},
 };
 use crate::{
-    external_editor::SourceLocation,
+    app::external_editor::SourceLocation,
     session::Session,
     settings::{ObjectTreeFilterOptions, ObjectTreeSearchOptions, Settings},
 };

@@ -9,9 +9,9 @@ use super::{
     coop::shared_maps,
 };
 use crate::{
+    app::update::Release,
     session::{DiagnosticSeverity, Session},
     settings::Settings,
-    update::Release,
 };
 
 const WELCOME_TITLE_SIZE: f32 = 40.0;

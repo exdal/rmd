@@ -3,6 +3,7 @@ use dmm::Coord;
 
 use super::ViewFrame;
 use crate::{
+    app::pacing::FrameDemand,
     conflict::{Hunk, Side},
     document::{DocumentId, Selection},
     frontend::{
@@ -11,7 +12,6 @@ use crate::{
     },
     gizmo::{GizmoMapView, RegionDrag, RegionGizmoTarget},
     maploader::preview::ModuleRootKey,
-    pacing::FrameDemand,
     session::{RegionPreviewSource, Session},
     tool::{SelectionMask, SelectionPlacement, SelectionRotation, Tool},
 };

@@ -20,10 +20,10 @@ use super::{
     search::draw_type_path_search,
 };
 use crate::{
+    app::external_editor::SourceLocation,
     blame::{self, BlameCell},
     command::EditGroupId,
     document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation},
-    external_editor::SourceLocation,
     maploader::preview::PREVIEW_ID_START,
     session::{DirectionalTypes, EditScope, Session},
     settings::Settings,

@@ -2,6 +2,7 @@ use dear_imgui_rs::{MouseButton, PopupQueryFlags, Ui};
 
 use super::{ViewFrame, selection::shows_region_selection};
 use crate::{
+    app::pacing::FrameDemand,
     camera::clamp_zoom,
     document::DocumentId,
     frontend::{
@@ -11,7 +12,6 @@ use crate::{
             draw_remote_selections, draw_tab_out_of_date, draw_tab_progress,
         },
     },
-    pacing::FrameDemand,
     session::Session,
 };
 

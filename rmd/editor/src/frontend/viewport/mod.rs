@@ -28,10 +28,10 @@ use super::{
     recent_button_size, restore_rectangle_gesture, update_prefab_menu,
 };
 use crate::{
+    app::pacing::FrameDemand,
     camera::Controller,
     document::DocumentId,
     gizmo::GizmoMapView,
-    pacing::FrameDemand,
     session::{GuideBadge, Session},
     settings::{KeybindAction, Settings},
     tool::Tool,
