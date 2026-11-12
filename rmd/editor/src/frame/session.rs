@@ -257,7 +257,7 @@ impl Session {
         }
 
         let bake = self.caches.get(&id).and_then(|cache| cache.bake.as_ref());
-        let node_types = crate::session::node::registered_types(self.state.environment.as_deref(), bake);
+        let node_types = crate::node::session::registered_types(self.state.environment.as_deref(), bake);
         let instances = match (self.state.environment.as_ref(), self.effective_grid(id)) {
             (Some(environment), Some(grid)) => frame::build_view_with_options(
                 &environment.tree,

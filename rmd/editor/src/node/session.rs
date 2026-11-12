@@ -6,14 +6,14 @@ use std::collections::{HashMap, HashSet};
 
 use dmm::{Coord, Prefab};
 
-use super::Session;
+use crate::session::Session;
 use crate::{
     document::{
         DocumentId, PlacedTile, PrefabInstanceId,
         command::{Edit, EditGroupId},
     },
     frame::visual,
-    node,
+    node::route,
     tool::{FillMode, Tool, ToolContext, ToolEdit},
 };
 
@@ -39,7 +39,7 @@ pub(crate) fn registered_types(
 pub(crate) struct NodeOverlay {
     pub nodes: Vec<Coord>,
     pub segments: Vec<(Coord, Coord)>,
-    pub connections: Vec<node::Connection>,
+    pub connections: Vec<route::Connection>,
     pub route: Vec<Coord>,
     pub route_valid: bool,
 }
@@ -58,7 +58,7 @@ struct NodeDrag {
 pub(crate) struct NodeEditState {
     pub(crate) document: DocumentId,
     z: u32,
-    group: node::ResolvedGroup,
+    group: route::ResolvedGroup,
     seed: Coord,
     brush: Prefab,
     manual: HashSet<Coord>,
@@ -102,7 +102,7 @@ impl Session {
             && let Some(instance) = document.prefab_instance(picked)
         {
             let prefab = instance.prefab();
-            if node::group_for_prefab(tree, groups, prefab).is_some() {
+            if route::group_for_prefab(tree, groups, prefab).is_some() {
                 return Some(picked);
             }
 
@@ -118,7 +118,7 @@ impl Session {
         document.instance_ids_at(coord).iter().rev().find_map(|instance| {
             let prefab = document.prefab_instance(*instance)?.prefab();
 
-            node::group_for_prefab(tree, groups, prefab)
+            route::group_for_prefab(tree, groups, prefab)
                 .is_some()
                 .then_some(*instance)
         })
@@ -154,10 +154,10 @@ impl Session {
         else {
             return false;
         };
-        let Some(group_index) = node::group_for_prefab(&program.tree, groups, prefab) else {
+        let Some(group_index) = route::group_for_prefab(&program.tree, groups, prefab) else {
             return false;
         };
-        let Some(group) = node::resolve_group(&program.tree, groups, group_index, prefab) else {
+        let Some(group) = route::resolve_group(&program.tree, groups, group_index, prefab) else {
             return false;
         };
         let coord = location.coord;
@@ -167,7 +167,7 @@ impl Session {
             && previous.document == document_id
             && previous.z == document.z
             && previous.group == group
-            && let Some(component) = node::component(document, &program.tree, &group, coord)
+            && let Some(component) = route::component(document, &program.tree, &group, coord)
             && component.tiles.contains(&previous.seed)
         {
             manual.extend(previous.manual.iter().copied());
@@ -196,7 +196,7 @@ impl Session {
         let environment = self.state.environment.as_ref()?;
         let tree = &environment.bake_program.as_ref()?.tree;
         let document = self.state.document(state.document)?;
-        let mut component = node::component(document, tree, &state.group, state.seed)?;
+        let mut component = route::component(document, tree, &state.group, state.seed)?;
         component.nodes.extend(
             state
                 .manual
@@ -209,7 +209,7 @@ impl Session {
         }
         component.nodes.sort_unstable_by_key(|coord| (coord.y, coord.x));
         component.nodes.dedup();
-        let connections = node::connections(&component, &state.manual);
+        let connections = route::connections(&component, &state.manual);
 
         Some(NodeOverlay {
             nodes: component.nodes,
@@ -257,10 +257,10 @@ impl Session {
         };
         let path = self.state.active_pair().and_then(|(environment, document)| {
             let tree = &environment.bake_program.as_ref()?.tree;
-            let path = node::route_with_context(document, tree, &state.group, start, target, &transient)?;
+            let path = route::route_with_context(document, tree, &state.group, start, target, &transient)?;
             if state.group.shapes(tree, &state.brush) {
                 let original = &state.drag.as_ref()?.original;
-                node::oriented_route_directions(document, tree, &state.group, &state.brush, &path, original)?;
+                route::oriented_route_directions(document, tree, &state.group, &state.brush, &path, original)?;
             }
 
             Some(path)
@@ -377,15 +377,15 @@ impl Session {
         changed
     }
 
-    pub(crate) fn node_connection_at(&self, coord: Coord) -> Option<node::Connection> {
+    pub(crate) fn node_connection_at(&self, coord: Coord) -> Option<route::Connection> {
         let overlay = self.node_overlay()?;
 
-        node::connection_at_tile(&overlay.connections, coord).cloned()
+        route::connection_at_tile(&overlay.connections, coord).cloned()
     }
 
     pub(crate) fn node_connection_from_pick(
         &self, picked: Option<PrefabInstanceId>, pointed: Coord,
-    ) -> Option<node::Connection> {
+    ) -> Option<route::Connection> {
         let state = self.node_edit.as_ref()?;
         let environment = self.state.environment.as_ref()?;
         let tree = &environment.bake_program.as_ref()?.tree;
@@ -393,7 +393,7 @@ impl Session {
         if let Some(picked) = picked
             && let Some(instance) = document.prefab_instance(picked)
         {
-            if node::instance_matches(document, tree, &state.group, picked) {
+            if route::instance_matches(document, tree, &state.group, picked) {
                 return self.node_connection_at(instance.location.coord);
             }
 
@@ -445,7 +445,7 @@ impl Session {
                     .instance_ids_at(coord)
                     .iter()
                     .copied()
-                    .filter(|id| node::instance_matches(document, &program.tree, &group, *id))
+                    .filter(|id| route::instance_matches(document, &program.tree, &group, *id))
                     .collect::<HashSet<_>>();
                 if removed.is_empty() {
                     continue;
@@ -504,7 +504,8 @@ impl Session {
                 .copied()
                 .filter(|coord| {
                     !document.instance_ids_at(*coord).iter().any(|id| {
-                        !previous_ids.contains(id) && node::instance_matches(document, &program.tree, &state.group, *id)
+                        !previous_ids.contains(id)
+                            && route::instance_matches(document, &program.tree, &state.group, *id)
                     })
                 })
                 .collect::<HashSet<_>>()
@@ -596,7 +597,7 @@ impl Session {
                 return false;
             };
             let tree = &program.tree;
-            let Some(directions) = node::oriented_route_directions(
+            let Some(directions) = route::oriented_route_directions(
                 document,
                 tree,
                 &state.group,

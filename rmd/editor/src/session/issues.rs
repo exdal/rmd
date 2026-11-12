@@ -16,7 +16,7 @@ pub(crate) struct MapIssueGroup {
 }
 
 #[derive(Default)]
-pub(super) struct IssueGroups {
+pub(crate) struct IssueGroups {
     key: (u64, u64),
     groups: Arc<[MapIssueGroup]>,
     missing_bases: Arc<[Coord]>,

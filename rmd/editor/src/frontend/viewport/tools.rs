@@ -9,14 +9,12 @@ use super::{
 use crate::{
     document::{DocumentId, command::EditGroupId},
     frontend::{
-        FILL_LIMIT_WARNING_POPUP, FillWarningContext, NodeOverlayView, NodeRightClick, PendingFillWarning, UiState,
+        FILL_LIMIT_WARNING_POPUP, FillWarningContext, PendingFillWarning, UiState,
         context_menu::{NodeContext, POPUP as MAP_MENU_POPUP, Target as MenuTarget},
         coop::{COMMENT_POPUP, CommentDraft},
-        draw_node_overlay,
-        node::NodeOverlayHit,
-        node_right_click,
     },
     gizmo::GizmoMapView,
+    node::panel::{NodeOverlayHit, NodeOverlayView, NodeRightClick, draw_node_overlay, node_right_click},
     session::{FillOutcome, Session},
     settings::{Settings, keybind::KeybindAction},
     tool::{PlacementKind, Tool},

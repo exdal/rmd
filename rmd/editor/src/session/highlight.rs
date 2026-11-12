@@ -12,7 +12,7 @@ use crate::{
 pub(super) const UNKNOWN_TYPE_COLOR: [f32; 3] = [0.58431375, 0.0, 1.0];
 
 #[derive(Default)]
-pub(super) struct UnknownHighlights {
+pub(crate) struct UnknownHighlights {
     key: (u64, u64),
     levels: HashMap<u32, SharedHighlights>,
 }

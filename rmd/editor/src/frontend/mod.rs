@@ -49,7 +49,6 @@ mod grid;
 mod history;
 mod issues;
 mod menu;
-mod node;
 pub(crate) mod overlay;
 mod paste;
 mod prefab_menu;
@@ -69,7 +68,6 @@ use self::{
     grid::{draw_selected_pixel_grid, draw_tile_grid},
     history::{draw_history_overlay, recent_button_size},
     menu::MenuActions,
-    node::{NodeOverlayView, NodeRightClick, draw_node_overlay, node_right_click},
     overlay::{
         OVERLAY_BG, OverlayRect, conflict_controls_layout, draw_conflict_controls, draw_guide_badges, draw_highlights,
         draw_identical_outlines, draw_overlay_underlay, draw_placement_preview, overlay_padding,

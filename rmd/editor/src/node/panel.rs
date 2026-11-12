@@ -2,25 +2,29 @@ use dear_imgui_rs::Ui;
 use dmm::Coord;
 use ui::widgets::dpi;
 
-use crate::{camera::Controller, node, session::NodeOverlay, tool::Tool};
+use crate::{
+    camera::Controller,
+    node::{route, session::NodeOverlay},
+    tool::Tool,
+};
 
 const NODE_HANDLE_RADIUS: f32 = 6.0;
 
 const NODE_CONNECTION_TOLERANCE: f32 = 6.0;
 
 #[derive(Default)]
-pub(super) struct NodeOverlayHit {
-    pub(super) handle: Option<Coord>,
-    pub(super) standalone: Option<Coord>,
-    pub(super) connection: Option<Vec<Coord>>,
+pub(crate) struct NodeOverlayHit {
+    pub(crate) handle: Option<Coord>,
+    pub(crate) standalone: Option<Coord>,
+    pub(crate) connection: Option<Vec<Coord>>,
 }
 
-pub(super) enum NodeRightClick<'a> {
+pub(crate) enum NodeRightClick<'a> {
     DeleteStandalone(Coord),
     DeleteConnection(&'a [Coord]),
 }
 
-pub(super) fn node_right_click(tool: Tool, shift: bool, hit: &NodeOverlayHit) -> Option<NodeRightClick<'_>> {
+pub(crate) fn node_right_click(tool: Tool, shift: bool, hit: &NodeOverlayHit) -> Option<NodeRightClick<'_>> {
     if tool == Tool::Node && !shift {
         if let Some(coord) = hit.standalone {
             return Some(NodeRightClick::DeleteStandalone(coord));
@@ -34,13 +38,13 @@ pub(super) fn node_right_click(tool: Tool, shift: bool, hit: &NodeOverlayHit) ->
     None
 }
 
-pub(super) struct NodeOverlayView<'a> {
-    pub(super) camera: &'a Controller,
-    pub(super) viewport_min: [f32; 2],
-    pub(super) viewport_max: [f32; 2],
-    pub(super) tile_size: u32,
-    pub(super) hovered_tile: Option<Coord>,
-    pub(super) interactive: bool,
+pub(crate) struct NodeOverlayView<'a> {
+    pub(crate) camera: &'a Controller,
+    pub(crate) viewport_min: [f32; 2],
+    pub(crate) viewport_max: [f32; 2],
+    pub(crate) tile_size: u32,
+    pub(crate) hovered_tile: Option<Coord>,
+    pub(crate) interactive: bool,
 }
 
 fn point_segment_distance_squared(point: [f32; 2], from: [f32; 2], to: [f32; 2]) -> f32 {
@@ -106,7 +110,7 @@ fn hit_node_overlay(
     } else {
         closest_node_connection(mouse, &overlay.connections, &center, NODE_CONNECTION_TOLERANCE * scale).or_else(|| {
             hovered_tile
-                .and_then(|coord| node::connection_at_tile(&overlay.connections, coord))
+                .and_then(|coord| route::connection_at_tile(&overlay.connections, coord))
                 .and_then(|connection| overlay.connections.iter().position(|current| current == connection))
         })
     };
@@ -119,7 +123,7 @@ fn hit_node_overlay(
     }
 }
 
-pub(super) fn draw_node_overlay(ui: &Ui, overlay: &NodeOverlay, view: NodeOverlayView<'_>) -> NodeOverlayHit {
+pub(crate) fn draw_node_overlay(ui: &Ui, overlay: &NodeOverlay, view: NodeOverlayView<'_>) -> NodeOverlayHit {
     const EDGE: [f32; 4] = [0.15, 0.78, 1.0, 0.9];
     const CONNECTION_HOVER: [f32; 4] = [1.0, 0.25, 0.2, 1.0];
     const ROUTE: [f32; 4] = [0.25, 1.0, 0.45, 1.0];
@@ -189,7 +193,7 @@ mod tests {
     use dmm::Coord;
 
     use super::{NodeOverlayHit, NodeRightClick, closest_node_connection, hit_node_overlay, node_right_click};
-    use crate::{session::NodeOverlay, tool::Tool};
+    use crate::{node::session::NodeOverlay, tool::Tool};
 
     #[test]
     fn node_connection_hit_test_uses_screen_distance_and_includes_adjacent_nodes() {

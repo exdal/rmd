@@ -15,6 +15,7 @@ use crate::{
     frame::{FrameInstances, FrameOptions, TypeVisibility, visual},
     git::{session::GitDocState, worker::GitWorker},
     maploader::preview::ModulePreviewState,
+    node::session::NodeEditState,
 };
 
 mod clipboard;
@@ -28,7 +29,6 @@ pub(crate) mod highlight;
 mod instance;
 mod issues;
 mod modules;
-pub(crate) mod node;
 mod palette;
 mod preview;
 mod region;
@@ -39,11 +39,10 @@ pub(crate) use self::{
     direction::{DirectionState, DirectionalTypes},
     guides::GuideBadge,
     instance::{EditScope, GizmoMember, PickedTransform},
-    node::NodeOverlay,
     palette::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
     preview::{PlacementPreview, RegionPreviewSource},
 };
-use self::{direction::direction_state, node::NodeEditState, preview::RegionPreviewCache, region::RegionState};
+use self::{direction::direction_state, preview::RegionPreviewCache, region::RegionState};
 
 #[derive(Default)]
 pub(crate) enum BakeHold {
@@ -71,8 +70,8 @@ pub(crate) struct DocumentCache {
     // edited while the bake was off growing by a level, replayed when it comes back
     pub(crate) unbaked: Vec<PrefabInstanceId>,
     pub(crate) always_highlights: Vec<PrefabInstanceId>,
-    unknown_highlights: RefCell<highlight::UnknownHighlights>,
-    issues: RefCell<issues::IssueGroups>,
+    pub(crate) unknown_highlights: RefCell<highlight::UnknownHighlights>,
+    pub(crate) issues: RefCell<issues::IssueGroups>,
     /// What a replayed panel frame asked this document to re-derive, held until it is active.
     pub(crate) pending_rebake: crate::bake::UiRebake,
     pub(crate) git: Option<GitDocState>,

@@ -27,8 +27,7 @@ use self::{
 };
 use super::{
     CloseFocus, OverlayRect, PrefabMenu, UiState, VisibleMapView, context_menu::Target as MenuTarget,
-    draw_fill_limit_warning, node::NodeOverlayHit, overlay_padding, recent_button_size, restore_rectangle_gesture,
-    update_prefab_menu,
+    draw_fill_limit_warning, overlay_padding, recent_button_size, restore_rectangle_gesture, update_prefab_menu,
 };
 use crate::{
     app::pacing::FrameDemand,
@@ -36,6 +35,7 @@ use crate::{
     document::DocumentId,
     git::panel::blame::BlamePopup,
     gizmo::GizmoMapView,
+    node::panel::NodeOverlayHit,
     session::{GuideBadge, Session},
     settings::{Settings, keybind::KeybindAction},
     tool::Tool,

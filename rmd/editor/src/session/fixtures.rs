@@ -210,7 +210,7 @@ pub(crate) fn examples() -> PathBuf {
     path.canonicalize().unwrap_or(path)
 }
 
-pub(super) fn node_environment() -> Environment {
+pub(crate) fn node_environment() -> Environment {
     const PROFILE: &str = r#"
 /obj/cable
 /obj/cable/heavy
@@ -364,11 +364,11 @@ pub(crate) fn node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId)
     node_session_with_environment(map, seed, node_environment(), "/obj/cable")
 }
 
-pub(super) fn oriented_node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId) {
+pub(crate) fn oriented_node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId) {
     node_session_with_environment(map, seed, oriented_node_environment(), "/obj/link/segment")
 }
 
-pub(super) fn layered_node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId) {
+pub(crate) fn layered_node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId) {
     node_session_with_environment(map, seed, layered_node_environment(), "/obj/pipe/layer2")
 }
 
@@ -402,7 +402,7 @@ pub(super) fn node_session_with_environment(
     (session, target)
 }
 
-pub(super) fn oriented_node_map(width: u32, height: u32, placements: &[(Coord, &str, u32)]) -> Map {
+pub(crate) fn oriented_node_map(width: u32, height: u32, placements: &[(Coord, &str, u32)]) -> Map {
     let mut map = Map::new(Size {
         x: width,
         y: height,
@@ -427,7 +427,7 @@ pub(super) fn oriented_node_map(width: u32, height: u32, placements: &[(Coord, &
     map
 }
 
-pub(super) fn oriented_dir(session: &Session, coord: Coord) -> Option<u32> {
+pub(crate) fn oriented_dir(session: &Session, coord: Coord) -> Option<u32> {
     session.map()?.tile_at(coord)?.iter().find_map(|prefab| {
         prefab.path.to_string().starts_with("/obj/link/segment").then(|| {
             prefab
