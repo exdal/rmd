@@ -201,9 +201,6 @@
 	var/list/all_spawned = list()
 	var/list/owned_spawned = list()
 	for(var/turf/nearby_turf in nearby_turfs)
-		if(isclosedturf(nearby_turf))
-			// Nova has walls smooth with windows too
-			all_spawned += nearby_turf
 		for(var/obj/effect/spawner/structure/window/spawner in nearby_turf)
 			var/list/before = list()
 			for(var/atom/movable/existing in nearby_turf)
@@ -217,7 +214,7 @@
 				if(spawner == src)
 					owned_spawned += spawned
 
-	for(var/atom/spawned in all_spawned)
+	for(var/atom/movable/spawned in all_spawned)
 		if(spawned.smoothing_flags & USES_SMOOTHING)
 			spawned.smooth_icon()
 
