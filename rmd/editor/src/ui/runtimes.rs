@@ -119,7 +119,7 @@ fn draw_fault(ui: &Ui, session: &Session, fault: &RuntimeFault<'_>, output: &mut
     drop(stopped);
     ui.same_line();
     if ui.small_button("Copy") {
-        output.copy = Some(environment.fault_fault_report(error));
+        output.copy = Some(environment.fault_report(error));
     }
 
     let Some(_node) = node else {

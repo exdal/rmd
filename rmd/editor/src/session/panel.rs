@@ -60,7 +60,7 @@ impl Session {
                 let key = fault.key();
                 if self.logged_ui_fault.as_ref() != Some(&key) {
                     if let Some(environment) = &self.state.environment {
-                        log::warn!("DM ui(): {}", environment.fault_fault_report(&fault));
+                        log::warn!("DM ui(): {}", environment.fault_report(&fault));
                     }
                     self.logged_ui_fault = Some(key);
                 }

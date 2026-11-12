@@ -120,7 +120,7 @@ impl Session {
 
         for entry in &self.diagnostics.bake {
             if self.logged_faults.insert(entry.fault.key()) {
-                log::warn!("DM: {}", environment.fault_fault_report(&entry.fault));
+                log::warn!("DM: {}", environment.fault_report(&entry.fault));
             }
         }
     }
