@@ -9,11 +9,7 @@ use super::{
 use crate::{
     command::EditGroupId,
     document::DocumentId,
-    gizmo::GizmoMapView,
-    session::{FillOutcome, Session},
-    settings::{KeybindAction, Settings},
-    tool::{PlacementKind, Tool},
-    ui::{
+    frontend::{
         FILL_LIMIT_WARNING_POPUP, FillWarningContext, NodeOverlayView, NodeRightClick, PendingFillWarning, UiState,
         context_menu::{NodeContext, POPUP as MAP_MENU_POPUP, Target as MenuTarget},
         coop::{COMMENT_POPUP, CommentDraft},
@@ -21,6 +17,10 @@ use crate::{
         node::NodeOverlayHit,
         node_right_click,
     },
+    gizmo::GizmoMapView,
+    session::{FillOutcome, Session},
+    settings::{KeybindAction, Settings},
+    tool::{PlacementKind, Tool},
 };
 
 #[derive(Debug, Clone, Copy)]

@@ -320,13 +320,13 @@ mod tests {
 
     use super::{DiagnosticsState, LOAD_POPUP_WIDTH, LoadNotice, draw_load_popup, fit_path, grouped, shorten_path};
     use crate::{
-        loader::LoadView,
-        progress::{Snapshot, Stage},
-        session::{DiagnosticSeverity, LoadReport},
-        ui::{
+        frontend::{
             IMGUI_CONTEXT,
             fixtures::{assert_window_centered, finish_frame, popup_context, set_desktop_geometry},
         },
+        loader::LoadView,
+        progress::{Snapshot, Stage},
+        session::{DiagnosticSeverity, LoadReport},
     };
 
     #[test]

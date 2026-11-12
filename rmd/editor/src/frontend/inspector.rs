@@ -2023,8 +2023,8 @@ mod tests {
 
     #[test]
     fn the_identical_banner_replaces_the_checkbox_while_the_mode_is_on() {
-        let _guard = crate::ui::IMGUI_CONTEXT.lock().unwrap();
-        let mut context = crate::ui::fixtures::rectangle_context();
+        let _guard = crate::frontend::IMGUI_CONTEXT.lock().unwrap();
+        let mut context = crate::frontend::fixtures::rectangle_context();
         let (mut session, _) = two_tables();
         let mut settings = Settings::default();
         let mut panel = InspectorPanel::new().unwrap();
@@ -2042,8 +2042,8 @@ mod tests {
 
     #[test]
     fn a_filtered_panel_with_pins_draws_every_filter_state() {
-        let _guard = crate::ui::IMGUI_CONTEXT.lock().unwrap();
-        let mut context = crate::ui::fixtures::rectangle_context();
+        let _guard = crate::frontend::IMGUI_CONTEXT.lock().unwrap();
+        let mut context = crate::frontend::fixtures::rectangle_context();
         let (mut session, _) = two_tables();
         let mut settings = Settings {
             pinned_vars: vec![String::from("desc"), String::from("missing")],

@@ -391,7 +391,7 @@ mod tests {
     use super::{
         RegionSelectionOptions, hollow_selection_inner, region_border_segments, region_selection_bounds, ring_rects,
     };
-    use crate::{camera::Controller, document::Selection, tool::RegionSelectionMode, ui::OverlayRect};
+    use crate::{camera::Controller, document::Selection, frontend::OverlayRect, tool::RegionSelectionMode};
 
     #[test]
     fn region_selection_bounds_follow_whole_tile_edges() {

@@ -2,10 +2,10 @@ use dear_imgui_rs::{Key, MouseButton, Ui};
 
 use super::ViewFrame;
 use crate::{
+    frontend::{LAYER_KEYS, UiState, request_level_change},
     session::Session,
     settings::{KeyBinding, KeybindAction, Settings},
     tool::Tool,
-    ui::{LAYER_KEYS, UiState, request_level_change},
 };
 
 const TOOL_KEYS: [(KeybindAction, Tool); 10] = [
@@ -23,7 +23,7 @@ const TOOL_KEYS: [(KeybindAction, Tool); 10] = [
 
 /// aka Alternate tool
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::ui) struct MomentaryTool {
+pub(in crate::frontend) struct MomentaryTool {
     binding: KeyBinding,
     tool: Tool,
     previous: Tool,

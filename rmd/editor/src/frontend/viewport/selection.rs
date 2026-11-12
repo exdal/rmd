@@ -5,20 +5,20 @@ use super::ViewFrame;
 use crate::{
     conflict::{Hunk, Side},
     document::{DocumentId, Selection},
+    frontend::{
+        PendingRegionPlacement, RectangleGesture, UiState, conflict_controls_layout, draw_conflict_controls,
+        draw_region_outline, rectangle_drag_coord, restore_rectangle_gesture,
+    },
     gizmo::{GizmoMapView, RegionDrag, RegionGizmoTarget},
     maploader::preview::ModuleRootKey,
     pacing::FrameDemand,
     session::{RegionPreviewSource, Session},
     tool::{SelectionMask, SelectionPlacement, SelectionRotation, Tool},
-    ui::{
-        PendingRegionPlacement, RectangleGesture, UiState, conflict_controls_layout, draw_conflict_controls,
-        draw_region_outline, rectangle_drag_coord, restore_rectangle_gesture,
-    },
 };
 
 #[derive(Debug, Default)]
-pub(in crate::ui) struct ViewGestures {
-    pub(in crate::ui) module_popup: Option<(ModuleRootKey, Coord)>,
+pub(in crate::frontend) struct ViewGestures {
+    pub(in crate::frontend) module_popup: Option<(ModuleRootKey, Coord)>,
     pub(super) region_selection_anchor: Option<Coord>,
     pub(super) rectangle_gesture: Option<RectangleGesture>,
     pub(super) region_placement: Option<PendingRegionPlacement>,
@@ -26,7 +26,7 @@ pub(in crate::ui) struct ViewGestures {
 }
 
 impl ViewGestures {
-    pub(in crate::ui) fn cancel(&mut self, session: &mut Session, id: DocumentId) {
+    pub(in crate::frontend) fn cancel(&mut self, session: &mut Session, id: DocumentId) {
         if session.state.active() == Some(id) {
             session.cancel_live_move();
         }

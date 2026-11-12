@@ -15,6 +15,7 @@ use super::{
 use crate::{
     environment::profile_label,
     fonts::{BUNDLED_FONT_NAME, SystemFonts},
+    frontend::ProfileReload,
     session::Session,
     settings::{
         BINDABLE_KEYS, FONT_BRIGHTNESS_PERCENT, FONT_SIZE, FontSettings, KeyBinding, KeyBindings, KeybindAction,
@@ -24,7 +25,6 @@ use crate::{
     theme::{
         FieldKind, STYLE_COLORS, STYLE_FIELDS, StyleField, TREE_LINE_MODES, Themes, direction_name, tree_lines_name,
     },
-    ui::ProfileReload,
 };
 
 const SETTINGS_WINDOW_SIZE: [f32; 2] = [760.0, 560.0];
@@ -1253,8 +1253,8 @@ mod tests {
 
     use super::{super::IMGUI_CONTEXT, *};
     use crate::{
+        frontend::fixtures::{assert_window_centered, finish_frame, popup_context, set_desktop_geometry},
         theme::DEFAULT_THEME,
-        ui::fixtures::{assert_window_centered, finish_frame, popup_context, set_desktop_geometry},
     };
 
     #[test]

@@ -4,15 +4,15 @@ use super::{ViewFrame, selection::shows_region_selection};
 use crate::{
     camera::clamp_zoom,
     document::DocumentId,
-    pacing::FrameDemand,
-    session::Session,
-    ui::{
+    frontend::{
         UiState,
         coop::{
             CommentHit, comment_at, draw_comment_composer, draw_comments, draw_receiving, draw_remote_cursors,
             draw_remote_selections, draw_tab_out_of_date, draw_tab_progress,
         },
     },
+    pacing::FrameDemand,
+    session::Session,
 };
 
 const FOLLOW_SMOOTHING: f32 = 20.0;
@@ -21,14 +21,14 @@ const FOLLOW_SETTLED_PIXELS: f32 = 0.5;
 const FOLLOW_SETTLED_ZOOM: f32 = 0.001;
 
 #[derive(Default)]
-pub(in crate::ui) struct CoopPresence {
-    pub(in crate::ui) cursor: Option<net::Cursor>,
-    pub(in crate::ui) view: Option<net::View>,
-    pub(in crate::ui) selection: Option<net::Selection>,
+pub(in crate::frontend) struct CoopPresence {
+    pub(in crate::frontend) cursor: Option<net::Cursor>,
+    pub(in crate::frontend) view: Option<net::View>,
+    pub(in crate::frontend) selection: Option<net::Selection>,
 }
 
 // where following left the camera, so a change while drawing means the user moved it
-pub(in crate::ui) struct FollowedView {
+pub(in crate::frontend) struct FollowedView {
     document: DocumentId,
     camera: [f32; 3],
     z: u32,
@@ -157,7 +157,7 @@ impl UiState {
         }
     }
 
-    pub(in crate::ui) fn follow_coop_peer(&mut self, ui: &Ui, session: &mut Session) {
+    pub(in crate::frontend) fn follow_coop_peer(&mut self, ui: &Ui, session: &mut Session) {
         // a dialog acts on the map it was opened for, so following waits until it closes
         if ui.is_popup_open_with_flags("", PopupQueryFlags::ANY_POPUP) {
             self.followed_view = None;
@@ -209,7 +209,7 @@ impl UiState {
         }
     }
 
-    pub(in crate::ui) fn stop_following_when_moved(&mut self, session: &mut Session) {
+    pub(in crate::frontend) fn stop_following_when_moved(&mut self, session: &mut Session) {
         let Some(followed) = self.followed_view.take() else {
             return;
         };

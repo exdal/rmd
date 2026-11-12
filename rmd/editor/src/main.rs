@@ -26,6 +26,7 @@ mod fingerprint;
 mod focus;
 mod fonts;
 mod frame;
+mod frontend;
 mod git;
 mod git_worker;
 mod gizmo;
@@ -47,7 +48,6 @@ mod state;
 mod theme;
 mod tool;
 mod transform;
-mod ui;
 mod update;
 mod viewports;
 mod visual;
@@ -78,12 +78,12 @@ use crate::{
     environment::BakeOptions,
     external_editor::SourceLocation,
     fonts::UiFont,
+    frontend::{LoadNotice, OpenRequest, ProfileReload, ScreenshotArea, ScreenshotRequest, UiState},
     loader::{Job, Loader, Outcome},
     pacing::{FrameDemand, FramePacer, NextFrame, Status},
     session::{LoadReport, Session},
     settings::{Settings, backup_dir, imgui_ini_path, profiles_dir, themes_dir},
     theme::Themes,
-    ui::{LoadNotice, OpenRequest, ProfileReload, ScreenshotArea, ScreenshotRequest, UiState},
 };
 
 fn style_base(themes: &Themes, settings: &Settings) -> Style {
@@ -1427,7 +1427,7 @@ mod tests {
 
     #[test]
     fn an_incoming_load_notice_appears_and_settles_without_input() {
-        let _guard = ui::IMGUI_CONTEXT.lock().unwrap();
+        let _guard = frontend::IMGUI_CONTEXT.lock().unwrap();
         let mut app = headless_editor();
         let idle = settle_headless_editor(&mut app, Instant::now());
 
@@ -1463,7 +1463,7 @@ mod tests {
 
     #[test]
     fn a_load_result_settles_when_error_replaces_progress_in_the_same_window() {
-        let _guard = ui::IMGUI_CONTEXT.lock().unwrap();
+        let _guard = frontend::IMGUI_CONTEXT.lock().unwrap();
         let mut app = headless_editor();
         // Keep simulated frames in the past: applying a loader result records real time.
         let idle = settle_headless_editor(&mut app, Instant::now() - Duration::from_secs(5));
@@ -1531,7 +1531,7 @@ mod tests {
 
         use dmm::{Coord, MapFormat, writer::MapWriter};
 
-        let _guard = ui::IMGUI_CONTEXT.lock().unwrap();
+        let _guard = frontend::IMGUI_CONTEXT.lock().unwrap();
         let mut app = headless_editor();
         let root = std::env::temp_dir().join(format!("rmd-unknown-map-types-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
@@ -1695,7 +1695,7 @@ a
 
     #[test]
     fn opening_an_already_open_map_focuses_it_without_loading() {
-        let _guard = ui::IMGUI_CONTEXT.lock().unwrap();
+        let _guard = frontend::IMGUI_CONTEXT.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("rmd-open-focus-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let mut app = headless_editor();

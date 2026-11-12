@@ -7,9 +7,9 @@ use super::ViewFrame;
 use crate::{
     blame::{BlameCell, pending_note, relative_time},
     document::DocumentId,
+    frontend::{BlamePopup, blame_tooltip_position, draw_blame_popup, draw_conflict_tooltip, draw_diff_tooltip},
     icons::materialdesignicons::ICON_CIRCLE_SMALL,
     session::Session,
-    ui::{BlamePopup, blame_tooltip_position, draw_blame_popup, draw_conflict_tooltip, draw_diff_tooltip},
 };
 
 pub(super) fn draw_tile_hover(

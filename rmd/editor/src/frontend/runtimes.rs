@@ -152,9 +152,9 @@ fn fault_id(fault: &RuntimeFault<'_>) -> usize {
 mod tests {
     use super::RuntimesPanel;
     use crate::{
+        frontend::{IMGUI_CONTEXT, fixtures::rectangle_context},
         session::fixtures::faulting_profile_session,
         settings::Settings,
-        ui::{IMGUI_CONTEXT, fixtures::rectangle_context},
     };
 
     #[test]

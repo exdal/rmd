@@ -423,7 +423,7 @@ mod tests {
         DialogButton, RowSelection, begin_centered_modal, cancel_index, dialog_buttons, enter_index, fit_icon,
         focus_window_on_hover,
     };
-    use crate::ui::{
+    use crate::frontend::{
         IMGUI_CONTEXT,
         dialog::MODAL_FLAGS,
         fixtures::{

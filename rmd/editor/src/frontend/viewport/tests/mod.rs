@@ -19,14 +19,7 @@ use crate::{
     camera::Controller,
     conflict::Side,
     document::{DocumentId, MapDocument, Selection},
-    gizmo::{GizmoMapView, GizmoState, RegionDrag, RegionGizmoTarget},
-    session::{
-        LevelChange, Session,
-        fixtures::{install_blame, node_map, node_session, node_tile_has_group},
-    },
-    settings::{KeyBinding, KeybindAction, KeybindPreset, Settings},
-    tool::{RegionSelectionMode, SelectionMask, Tool},
-    ui::{
+    frontend::{
         IMGUI_CONTEXT, RectangleGesture, UiState,
         context_menu::NodeContext,
         fixtures::{RectangleUiHarness, rectangle_context},
@@ -34,6 +27,13 @@ use crate::{
         region::region_selection_bounds,
         restore_rectangle_gesture,
     },
+    gizmo::{GizmoMapView, GizmoState, RegionDrag, RegionGizmoTarget},
+    session::{
+        LevelChange, Session,
+        fixtures::{install_blame, node_map, node_session, node_tile_has_group},
+    },
+    settings::{KeyBinding, KeybindAction, KeybindPreset, Settings},
+    tool::{RegionSelectionMode, SelectionMask, Tool},
 };
 
 mod hover;

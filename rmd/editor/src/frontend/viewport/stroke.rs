@@ -8,7 +8,7 @@ use crate::{command::EditGroupId, document::DocumentId, tool::Tool};
 const PLACEMENT_FLASH_DURATION: f64 = 0.25;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(in crate::ui) struct ActivePlacementFlash {
+pub(in crate::frontend) struct ActivePlacementFlash {
     pub(super) owner: PrefabInstanceId,
     pub(super) coord: Coord,
     pub(super) started_at: f64,
@@ -69,7 +69,7 @@ impl TileStroke {
 }
 
 #[derive(Debug)]
-pub(in crate::ui) struct PlacementStroke {
+pub(in crate::frontend) struct PlacementStroke {
     prefab: Prefab,
     tiles: TileStroke,
 }
@@ -92,7 +92,7 @@ impl PlacementStroke {
 }
 
 #[derive(Debug)]
-pub(in crate::ui) struct PickStroke {
+pub(in crate::frontend) struct PickStroke {
     cursor: [u32; 2],
     tiles: TileStroke,
 }
@@ -118,7 +118,7 @@ impl PickStroke {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(in crate::ui) enum MoveStroke {
+pub(in crate::frontend) enum MoveStroke {
     Pressed {
         document: DocumentId,
         press: Coord,

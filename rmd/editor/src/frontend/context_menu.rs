@@ -427,10 +427,10 @@ mod tests {
 
     use super::{POPUP, Target, draw_popup};
     use crate::{
+        frontend::{IMGUI_CONTEXT, fixtures::rectangle_context, search::matching_type_paths_up_to_filtered},
         loader::LoadedMap,
         session::{Session, context_placement_group},
         settings::Settings,
-        ui::{IMGUI_CONTEXT, fixtures::rectangle_context, search::matching_type_paths_up_to_filtered},
     };
 
     #[test]

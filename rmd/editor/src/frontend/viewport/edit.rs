@@ -4,17 +4,17 @@ use render::PickRequest;
 use super::{ViewFrame, tools::request_pick};
 use crate::{
     clipboard::PasteMerge,
-    session::Session,
-    settings::{KeybindAction, Settings},
-    tool::{SelectionRotation, Tool},
-    ui::{
+    frontend::{
         UiState, centered_paste_min,
         context_menu::{Action as MenuAction, NodeContext, draw_popup as draw_map_menu},
         restore_rectangle_gesture,
     },
+    session::Session,
+    settings::{KeybindAction, Settings},
+    tool::{SelectionRotation, Tool},
 };
 
-pub(in crate::ui) const EDIT_KEYS: [(KeybindAction, EditCommand); 5] = [
+pub(in crate::frontend) const EDIT_KEYS: [(KeybindAction, EditCommand); 5] = [
     (KeybindAction::Copy, EditCommand::Copy),
     (KeybindAction::Cut, EditCommand::Cut),
     (KeybindAction::Delete, EditCommand::Delete),
@@ -23,7 +23,7 @@ pub(in crate::ui) const EDIT_KEYS: [(KeybindAction, EditCommand); 5] = [
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::ui) enum EditCommand {
+pub(in crate::frontend) enum EditCommand {
     Copy,
     Cut,
     Delete,

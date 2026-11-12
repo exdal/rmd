@@ -6,10 +6,10 @@ use dmm::Coord;
 use super::{MapViewState, ViewFrame, stroke::ActivePlacementFlash};
 use crate::{
     document::DocumentId,
+    frontend::{UiState, common::dpi, find::JumpTarget},
     pacing::FrameDemand,
     session::Session,
     settings::{KeybindAction, Settings},
-    ui::{UiState, common::dpi, find::JumpTarget},
 };
 
 const KEY_PAN_SPEED: f32 = 800.0;
@@ -82,7 +82,7 @@ impl UiState {
         }
     }
 
-    pub(in crate::ui) fn jump_to_instance(&mut self, session: &mut Session, target: JumpTarget) {
+    pub(in crate::frontend) fn jump_to_instance(&mut self, session: &mut Session, target: JumpTarget) {
         let Some(location) = session
             .state
             .document(target.document)
@@ -100,7 +100,9 @@ impl UiState {
         session.pick_instance(Some(target.instance));
     }
 
-    pub(in crate::ui) fn go_to_tile(&mut self, session: &mut Session, document: DocumentId, coord: Coord, now: f64) {
+    pub(in crate::frontend) fn go_to_tile(
+        &mut self, session: &mut Session, document: DocumentId, coord: Coord, now: f64,
+    ) {
         self.cancel_edit_gestures(session, session.state.active());
         self.center_view_on(session, document, coord);
         self.placement_flash = session.turf_at(document, coord).map(|owner| ActivePlacementFlash {
@@ -110,7 +112,7 @@ impl UiState {
         });
     }
 
-    pub(in crate::ui) fn center_view_on(&mut self, session: &mut Session, document: DocumentId, coord: Coord) {
+    pub(in crate::frontend) fn center_view_on(&mut self, session: &mut Session, document: DocumentId, coord: Coord) {
         session.set_active_document(document);
         session.set_level(coord.z);
 

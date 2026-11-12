@@ -7,17 +7,17 @@ use render::Renderer;
 use super::ViewFrame;
 use crate::{
     camera::Controller,
-    icons::materialdesignicons::{ICON_MAP_MARKER, ICON_OPEN_IN_NEW},
-    maploader::preview::ModuleVariantKey,
-    session::Session,
-    tool::Tool,
-    ui::{
+    frontend::{
         OverlayRect,
         common::{IDENTICAL_EDIT_COLOR, dpi},
         draw_overlay_underlay,
         overlay::{placement_preview_bounds, tile_bounds},
         welcome::codebase_relative,
     },
+    icons::materialdesignicons::{ICON_MAP_MARKER, ICON_OPEN_IN_NEW},
+    maploader::preview::ModuleVariantKey,
+    session::Session,
+    tool::Tool,
 };
 
 fn label(choice: &ModuleVariantKey) -> String {
@@ -241,7 +241,7 @@ pub(super) fn draw(
     }
 }
 
-pub(in crate::ui) fn controls_layout(
+pub(in crate::frontend) fn controls_layout(
     ui: &Ui, camera: &Controller, coord: Coord, tile_size: u32, viewport_min: [f32; 2], area: OverlayRect,
     is_nested: bool,
 ) -> ([f32; 2], f32, OverlayRect) {

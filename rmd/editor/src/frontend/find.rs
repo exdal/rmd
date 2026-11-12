@@ -394,7 +394,7 @@ mod tests {
     use super::*;
     use crate::{
         document::MapDocument,
-        ui::{MapViewState, UiState},
+        frontend::{MapViewState, UiState},
     };
 
     fn map() -> Map {

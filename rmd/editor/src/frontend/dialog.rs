@@ -1104,18 +1104,18 @@ mod tests {
     };
     use crate::{
         document::{DocumentId, MapDocument, Selection},
-        patch,
-        session::Session,
-        settings::Settings,
-        theme::{DEFAULT_THEME, Themes},
-        tool::{FillMode, RegionSelectionMode, SelectionMask, Tool},
-        ui::{
+        frontend::{
             IMGUI_CONTEXT, UiState,
             fixtures::{
                 PopupContext, assert_window_centered, finish_frame, popup_context, rectangle_context,
                 set_desktop_geometry,
             },
         },
+        patch,
+        session::Session,
+        settings::Settings,
+        theme::{DEFAULT_THEME, Themes},
+        tool::{FillMode, RegionSelectionMode, SelectionMask, Tool},
     };
 
     struct CloseUi {
@@ -1620,7 +1620,7 @@ mod tests {
     #[test]
     fn enter_creates_a_z_level_filled_with_the_default_turf_and_area() {
         let _guard = IMGUI_CONTEXT.lock().unwrap();
-        let mut context = crate::ui::fixtures::rectangle_context();
+        let mut context = crate::frontend::fixtures::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
@@ -1657,7 +1657,7 @@ mod tests {
     #[test]
     fn a_changed_fill_is_remembered_for_the_next_z_level_and_resize() {
         let _guard = IMGUI_CONTEXT.lock().unwrap();
-        let mut context = crate::ui::fixtures::rectangle_context();
+        let mut context = crate::frontend::fixtures::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
@@ -1700,7 +1700,7 @@ mod tests {
     #[test]
     fn enter_in_an_open_fill_search_does_not_create_a_z_level() {
         let _guard = IMGUI_CONTEXT.lock().unwrap();
-        let mut context = crate::ui::fixtures::rectangle_context();
+        let mut context = crate::frontend::fixtures::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
@@ -1727,7 +1727,7 @@ mod tests {
     #[test]
     fn an_invalid_fill_path_blocks_z_level_creation() {
         let _guard = IMGUI_CONTEXT.lock().unwrap();
-        let mut context = crate::ui::fixtures::rectangle_context();
+        let mut context = crate::frontend::fixtures::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
@@ -1755,7 +1755,7 @@ mod tests {
     #[test]
     fn closing_several_maps_asks_about_each_unsaved_one_and_cancel_keeps_the_rest_open() {
         let _guard = IMGUI_CONTEXT.lock().unwrap();
-        let mut context = crate::ui::fixtures::rectangle_context();
+        let mut context = crate::frontend::fixtures::rectangle_context();
         let mut session = Session::new();
         let map = || dmm::Map::new(Size { x: 1, y: 1, z: 1 });
         let clean = session.state.open_document(MapDocument::new(map(), 1));
@@ -1792,7 +1792,7 @@ mod tests {
     #[test]
     fn the_go_to_dialog_clamps_to_the_map_and_enter_returns_the_tile() {
         let _guard = IMGUI_CONTEXT.lock().unwrap();
-        let mut context = crate::ui::fixtures::rectangle_context();
+        let mut context = crate::frontend::fixtures::rectangle_context();
         let mut session = Session::new();
         session
             .state
@@ -1815,7 +1815,7 @@ mod tests {
     #[test]
     fn the_resize_dialog_warns_about_the_tiles_a_shrink_deletes() {
         let _guard = IMGUI_CONTEXT.lock().unwrap();
-        let mut context = crate::ui::fixtures::rectangle_context();
+        let mut context = crate::frontend::fixtures::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();

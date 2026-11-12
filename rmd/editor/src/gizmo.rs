@@ -8,11 +8,11 @@ use crate::{
     camera::Controller,
     command::EditGroupId,
     document::{InstanceChange, PrefabInstanceId, Selection, VarMutation},
+    frontend::{TransformMode, dpi},
     session::{DirectionState, DirectionalTypes, GizmoMember, PickedTransform, Session},
     settings::{KeybindAction, Settings},
     tool::SelectionRotation,
     transform::anchor_to_tile,
-    ui::{TransformMode, dpi},
 };
 
 const AXIS_LENGTH: f32 = 48.0;

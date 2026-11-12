@@ -581,8 +581,8 @@ fn matches_filter(query: &str, title: &str, label: &str) -> bool {
 mod tests {
     use super::*;
     use crate::{
+        frontend::{IMGUI_CONTEXT, UiState, fixtures::rectangle_context},
         session::fixtures::unknown_paths_session,
-        ui::{IMGUI_CONTEXT, UiState, fixtures::rectangle_context},
     };
 
     fn expand_all(panel: &mut IssuesPanel, session: &Session) {
