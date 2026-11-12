@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     session::{CoopStatus, Session},
-    settings::{KeybindAction, Panel, Settings},
+    settings::{Panel, Settings, keybind::KeybindAction},
     tool::Tool,
 };
 

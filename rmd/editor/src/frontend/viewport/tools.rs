@@ -19,7 +19,7 @@ use crate::{
     },
     gizmo::GizmoMapView,
     session::{FillOutcome, Session},
-    settings::{KeybindAction, Settings},
+    settings::{Settings, keybind::KeybindAction},
     tool::{PlacementKind, Tool},
 };
 

@@ -10,7 +10,7 @@ use super::{
 use crate::{
     document::DocumentId,
     session::{PlacementPreview, Session},
-    settings::{KeybindAction, Settings},
+    settings::{Settings, keybind::KeybindAction},
 };
 
 const POPUP: &str = "Prefab variants##prefab-variants";

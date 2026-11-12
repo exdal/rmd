@@ -8,7 +8,7 @@ use std::{
 use dear_imgui_rs::{Condition, DockLayout, Key, MouseButton};
 use dmm::{Coord, Prefab, PrefabInstanceId, Size};
 use render::{HighlightStyle, InteractionMode, MapViewInteraction, MapViewRect, PickRequest, PlacementFlash};
-use ui::testing::CONTEXT_LOCK;
+use ui::{keybind::KeyBinding, testing::CONTEXT_LOCK};
 
 use super::{
     ActivePlacementFlash, CoopPresence, EditCommand, MapViewState, PickStroke, PlacementStroke, cursor_in_map_view,
@@ -33,7 +33,10 @@ use crate::{
         LevelChange, Session,
         fixtures::{install_blame, node_map, node_session, node_tile_has_group},
     },
-    settings::{KeyBinding, KeybindAction, KeybindPreset, Settings},
+    settings::{
+        Settings,
+        keybind::{KeybindAction, KeybindPreset},
+    },
     tool::{RegionSelectionMode, SelectionMask, Tool},
 };
 

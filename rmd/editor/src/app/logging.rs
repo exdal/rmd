@@ -12,13 +12,13 @@ use std::{
 use log::{Level, LevelFilter, Log, Metadata, Record};
 
 #[cfg(target_os = "windows")]
-use crate::settings;
+use crate::settings::paths;
 
 static LOGGER: OnceLock<FileLogger> = OnceLock::new();
 
 pub(crate) fn init() {
     #[cfg(target_os = "windows")]
-    let (file, error) = match settings::log_path().and_then(|path| open_log_file(&path)) {
+    let (file, error) = match paths::log_path().and_then(|path| open_log_file(&path)) {
         Ok(file) => (Some(file), None),
         Err(error) => (None, Some(error)),
     };

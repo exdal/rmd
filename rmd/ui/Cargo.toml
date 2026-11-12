@@ -7,7 +7,7 @@ edition.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-dear-imgui-rs.workspace = true
+dear-imgui-rs = { workspace = true, features = ["serde"] }
 dear-imgui-winit.workspace = true
 fontdb = "0.24.0"
 log.workspace = true

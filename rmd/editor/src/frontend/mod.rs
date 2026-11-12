@@ -22,7 +22,10 @@ use crate::{
     gizmo::GizmoState,
     loader::LoadView,
     session::{LoadReport, Session, TypeLayer},
-    settings::{KeybindAction, KeybindPreset, OpenPanels, Panel, Settings},
+    settings::{
+        OpenPanels, Panel, Settings,
+        keybind::{KeybindAction, KeybindPreset},
+    },
     tool::{FillMode, SelectionRotation, SelectionTransform, Tool},
 };
 
@@ -1099,8 +1102,11 @@ mod tests {
 
     use dear_imgui_rs::DockLayout;
     use dmm::{Prefab, Size};
-    use ui::testing::CONTEXT_LOCK;
-    use ui::theme::{DEFAULT_THEME, Themes};
+    use ui::{
+        keybind::KeyBinding,
+        testing::CONTEXT_LOCK,
+        theme::{DEFAULT_THEME, Themes},
+    };
 
     use super::{
         DEFAULT_CUSTOM_FILL_BOUNDARY, RegionSelectionOptions, UiState, common::button_width,
@@ -1108,7 +1114,10 @@ mod tests {
     };
     use crate::{
         session::{DiagnosticSeverity, Session, fixtures::install_diff},
-        settings::{KeyBinding, KeyBindings, KeybindAction, OpenPanels, Panel, Settings},
+        settings::{
+            OpenPanels, Panel, Settings,
+            keybind::{KeyBindings, KeybindAction},
+        },
         tool::FillMode,
     };
 

@@ -35,7 +35,10 @@ use crate::{
     frontend::{LoadNotice, OpenRequest, ProfileReload, ScreenshotArea, ScreenshotRequest, UiState},
     loader::{Job, Loader, Outcome},
     session::{LoadReport, Session},
-    settings::{Settings, backup_dir, imgui_ini_path, profiles_dir, themes_dir},
+    settings::{
+        Settings,
+        paths::{backup_dir, imgui_ini_path, profiles_dir, themes_dir},
+    },
 };
 
 use args::{parse_arguments, usage};

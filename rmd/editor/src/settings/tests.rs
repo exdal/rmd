@@ -1,4 +1,11 @@
+use dear_imgui_rs::Key;
+use ui::keybind::{BINDABLE_KEYS, KeyBinding, MODIFIER_KEYS};
+
 use super::*;
+use super::{
+    keybind::{KeybindAction, KeybindPreset},
+    paths::settings_path_from,
+};
 
 #[test]
 fn map_issues_panel_starts_closed_even_if_previously_saved_open() {
@@ -196,9 +203,9 @@ fn every_preset_uses_unique_bindable_keys() {
         for (index, action) in KeybindAction::ALL.into_iter().enumerate() {
             let binding = bindings.get(action);
             assert!(
-                BINDABLE_KEYS.contains(&binding.key) || (action.is_held() && MODIFIER_KEYS.contains(&binding.key)),
+                BINDABLE_KEYS.contains(&binding.key()) || (action.is_held() && MODIFIER_KEYS.contains(&binding.key())),
                 "{preset:?} binding for {action:?} uses non-bindable key {:?}",
-                binding.key
+                binding.key()
             );
             for candidate in KeybindAction::ALL.into_iter().skip(index + 1) {
                 assert_ne!(
@@ -391,16 +398,9 @@ fn settings_round_trip_through_toml() {
         panels: OpenPanels::default(),
         show_dm_ui: true,
     };
-    settings.keybindings.rebind(
-        KeybindAction::ShowAreas,
-        KeyBinding {
-            key: Key::G,
-            ctrl: true,
-            shift: false,
-            alt: false,
-            super_key: false,
-        },
-    );
+    settings
+        .keybindings
+        .rebind(KeybindAction::ShowAreas, KeyBinding::with_ctrl(Key::G));
     settings
         .keybindings
         .rebind(KeybindAction::Recent1, KeyBinding::with_shift(Key::F2));

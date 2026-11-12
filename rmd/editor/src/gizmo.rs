@@ -10,7 +10,7 @@ use crate::{
     document::{InstanceChange, PrefabInstanceId, Selection, VarMutation},
     frontend::{TransformMode, dpi},
     session::{DirectionState, DirectionalTypes, GizmoMember, PickedTransform, Session},
-    settings::{KeybindAction, Settings},
+    settings::{Settings, keybind::KeybindAction},
     tool::SelectionRotation,
     transform::anchor_to_tile,
 };

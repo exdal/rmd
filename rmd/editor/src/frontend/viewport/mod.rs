@@ -33,7 +33,7 @@ use crate::{
     document::DocumentId,
     gizmo::GizmoMapView,
     session::{GuideBadge, Session},
-    settings::{KeybindAction, Settings},
+    settings::{Settings, keybind::KeybindAction},
     tool::Tool,
 };
 

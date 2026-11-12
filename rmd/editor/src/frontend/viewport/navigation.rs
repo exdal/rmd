@@ -9,7 +9,7 @@ use crate::{
     document::DocumentId,
     frontend::{UiState, common::dpi, find::JumpTarget},
     session::Session,
-    settings::{KeybindAction, Settings},
+    settings::{Settings, keybind::KeybindAction},
 };
 
 const KEY_PAN_SPEED: f32 = 800.0;

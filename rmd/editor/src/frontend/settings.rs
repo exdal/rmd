@@ -6,6 +6,7 @@ use dear_imgui_rs::{
 };
 use ui::{
     fonts::{BUNDLED_FONT_NAME, FontSettings, SystemFonts},
+    keybind::{BINDABLE_KEYS, KeyBinding, MODIFIER_KEYS},
     theme::{
         FieldKind, STYLE_COLORS, STYLE_FIELDS, StyleField, TREE_LINE_MODES, Themes, direction_name, tree_lines_name,
     },
@@ -23,8 +24,10 @@ use crate::{
     frontend::ProfileReload,
     session::Session,
     settings::{
-        BINDABLE_KEYS, FONT_BRIGHTNESS_PERCENT, FONT_SIZE, KeyBinding, KeyBindings, KeybindAction, MODIFIER_KEYS,
-        ObjectTreeFilterOptions, ObjectTreeSearchOptions, SelectionHighlight, Settings, UI_SCALE_PERCENT, backup_dir,
+        FONT_BRIGHTNESS_PERCENT, FONT_SIZE, ObjectTreeFilterOptions, ObjectTreeSearchOptions, SelectionHighlight,
+        Settings, UI_SCALE_PERCENT,
+        keybind::{KeyBindings, KeybindAction},
+        paths::backup_dir,
     },
 };
 
@@ -999,7 +1002,7 @@ fn draw_profile_setting(
 
     let forced = environment.bake_options.forced_profile.as_deref();
     ui.text("Forced profile");
-    if let Ok(dir) = crate::settings::profiles_dir() {
+    if let Ok(dir) = crate::settings::paths::profiles_dir() {
         ui.set_item_tooltip(format!("Profiles are read from {}", dir.display()));
     }
     {

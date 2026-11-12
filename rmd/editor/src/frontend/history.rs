@@ -6,7 +6,7 @@ use super::{
     common::{IconOrigin, dpi, draw_thumbnail},
     draw_overlay_underlay, overlay_padding,
 };
-use crate::{session::Session, settings::KeyBindings};
+use crate::{session::Session, settings::keybind::KeyBindings};
 
 const RECENT_ICON_SIZE: f32 = 48.0;
 

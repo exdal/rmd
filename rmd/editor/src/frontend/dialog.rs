@@ -13,7 +13,7 @@ use super::{
 use crate::{
     document::{DocumentId, MapDocument},
     session::Session,
-    settings::KeybindPreset,
+    settings::keybind::KeybindPreset,
     tool::{FillMode, SelectionMask, Tool},
 };
 

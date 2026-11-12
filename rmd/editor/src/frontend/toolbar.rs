@@ -9,7 +9,7 @@ use super::{
 };
 use crate::{
     session::{LevelChange, Session},
-    settings::{KeyBindings, KeybindAction},
+    settings::keybind::{KeyBindings, KeybindAction},
     tool::{FillMode, Tool},
 };
 

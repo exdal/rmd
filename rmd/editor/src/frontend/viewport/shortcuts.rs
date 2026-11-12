@@ -1,10 +1,11 @@
 use dear_imgui_rs::{Key, MouseButton, Ui};
+use ui::keybind::KeyBinding;
 
 use super::ViewFrame;
 use crate::{
     frontend::{LAYER_KEYS, UiState, request_level_change},
     session::Session,
-    settings::{KeyBinding, KeybindAction, Settings},
+    settings::{Settings, keybind::KeybindAction},
     tool::Tool,
 };
 

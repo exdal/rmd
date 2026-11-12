@@ -10,7 +10,7 @@ use crate::{
         restore_rectangle_gesture,
     },
     session::Session,
-    settings::{KeybindAction, Settings},
+    settings::{Settings, keybind::KeybindAction},
     tool::{SelectionRotation, Tool},
 };
 
