@@ -3,11 +3,11 @@ use super::*;
 #[test]
 fn clicking_a_blamed_tile_opens_a_popup_without_placing_a_tile() {
     struct OneVersion {
-        commits: Vec<editor::git::CommitInfo>,
+        commits: Vec<crate::git::CommitInfo>,
         map: dmm::Map,
     }
-    impl editor::blame::VersionSource for OneVersion {
-        fn commits(&self) -> &[editor::git::CommitInfo] {
+    impl crate::blame::VersionSource for OneVersion {
+        fn commits(&self) -> &[crate::git::CommitInfo] {
             &self.commits
         }
 
@@ -15,8 +15,8 @@ fn clicking_a_blamed_tile_opens_a_popup_without_placing_a_tile() {
             false
         }
 
-        fn map_at(&mut self, _: usize) -> Result<editor::blame::MapVersion, editor::git::GitError> {
-            Ok(editor::blame::MapVersion::Present(self.map.clone()))
+        fn map_at(&mut self, _: usize) -> Result<crate::blame::MapVersion, crate::git::GitError> {
+            Ok(crate::blame::MapVersion::Present(self.map.clone()))
         }
     }
 
@@ -32,7 +32,7 @@ fn clicking_a_blamed_tile_opens_a_popup_without_placing_a_tile() {
         row.fill(key);
     }
     let mut source = OneVersion {
-        commits: vec![editor::git::CommitInfo {
+        commits: vec![crate::git::CommitInfo {
             hash: String::from("a").repeat(40),
             short: String::from("aaaaaaa"),
             author: String::from("Map author"),
@@ -42,13 +42,13 @@ fn clicking_a_blamed_tile_opens_a_popup_without_placing_a_tile() {
         }],
         map: map.clone(),
     };
-    let blame = editor::blame::blame(&map, &mut source, &|| false, &mut |_, _| {}).unwrap();
+    let blame = crate::blame::blame(&map, &mut source, &|| false, &mut |_, _| {}).unwrap();
     session.apply_map(crate::loader::LoadedMap {
         path: PathBuf::from("blame-ui-test.dmm"),
         map,
         z: 1,
         errors: vec![],
-        repo: Some(editor::git::RepoPath {
+        repo: Some(crate::git::RepoPath {
             root: PathBuf::from("."),
             git_dir: PathBuf::from(".git"),
             rel: String::from("blame-ui-test.dmm"),
@@ -97,12 +97,12 @@ fn conflict_button_takes_the_incoming_tile_without_reaching_the_place_tool() {
         map,
         z: 1,
         errors: vec![],
-        repo: Some(editor::git::RepoPath {
+        repo: Some(crate::git::RepoPath {
             root: PathBuf::from("."),
             git_dir: PathBuf::from(".git"),
             rel: String::from("conflict-ui-test.dmm"),
         }),
-        conflict: Some(editor::conflict::ConflictData {
+        conflict: Some(crate::conflict::ConflictData {
             operation: None,
             conflicts: vec![dmm::merge::TileConflict {
                 coord,

@@ -4,7 +4,6 @@ use dear_imgui_rs::{
     ColorDisplayMode, ColorEditFlags, Condition, DragFlags, Key, StbTrueTypeFontData, Style, TableFlags,
     TableSizingPolicy, Ui, WindowFlags, WindowKey, WindowKeyError,
 };
-use editor::environment::profile_label;
 
 use super::{
     common::{
@@ -14,6 +13,7 @@ use super::{
     dialog::{MODAL_FLAGS, SAVE_ERROR_COLOR, draw_keybind_preset_dialog},
 };
 use crate::{
+    environment::profile_label,
     fonts::{BUNDLED_FONT_NAME, SystemFonts},
     session::Session,
     settings::{
@@ -835,7 +835,7 @@ fn os_scale_percent(ui: &Ui) -> u32 {
 fn show_backups() {
     let result = backup_dir().and_then(|dir| {
         std::fs::create_dir_all(&dir)?;
-        editor::process::open_directory(&dir)
+        crate::process::open_directory(&dir)
     });
     if let Err(error) = result {
         log::error!("could not open the backups folder: {error}");
@@ -1529,9 +1529,9 @@ mod tests {
             let mut pending_profile = None;
             let mut ui_scale_draft = None;
             let mut session = Session::new();
-            let mut environment = editor::Environment::new("station.dme", objtree::ObjectTree::new());
+            let mut environment = crate::environment::Environment::new("station.dme", objtree::ObjectTree::new());
             environment.bake_options.forced_profile = forced_profile;
-            environment.profiles = Some(editor::Profiles {
+            environment.profiles = Some(crate::environment::Profiles {
                 available: vec![
                     String::from("/datum/demir/tgstation"),
                     String::from("/datum/demir/tgstation/debug"),

@@ -15,7 +15,8 @@ use vm::{Fault, FaultKind, bake::ModuleRoot, world::Position};
 
 use super::{
     ComposeContext, MapView, ModuleOrigin, ModuleOverlay, ModulePreviewState, ModuleRootKey, ModuleVariantKey,
-    PREVIEW_ID_START, PreviewIdAllocator, compose, compose::update,
+    PREVIEW_ID_START, PreviewIdAllocator,
+    compose::{compose, update},
 };
 use crate::{
     document::DocumentId,

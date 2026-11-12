@@ -97,6 +97,7 @@ impl<'a> MapView<'a> {
         Some(PrefabInstance::new(id, prefab, location))
     }
 
+    #[cfg(test)]
     pub fn prefab_instances(self) -> impl Iterator<Item = PrefabInstance<'a>> {
         self.source
             .prefab_instances()

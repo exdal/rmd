@@ -13,23 +13,21 @@ use std::{
 };
 
 use dmm::{Coord, Map, MapFormat, Prefab, PrefabInstanceId, Size, writer};
-use editor::{
+
+use crate::{
     document::{DocumentId, MapDocument, Selection},
     environment::BakeOptions,
+    loader::load_codebase,
     maploader::{
         ErrorKind,
         preview::{ModuleRootPreview, PREVIEW_ID_START},
     },
     progress::Progress,
-    tool::{RegionSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
-};
-
-use crate::{
-    loader::load_codebase,
     session::{
         BakeHold, Session, build_textures,
         fixtures::{assert_render_cache_matches_rebuild, node_environment_with_profile, settle_bake},
     },
+    tool::{RegionSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
 };
 
 pub(in crate::session) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -443,7 +441,7 @@ fn a_ui_button_can_place_a_module_on_the_selected_atom() -> TestResult {
         .pick_instance(Some(root));
     let frame = session.dm_ui(
         0,
-        editor::bake::UiFeedback {
+        crate::bake::UiFeedback {
             clicks: ["Panel/Place".to_owned()].into(),
             interacted: true,
             ..Default::default()
@@ -472,7 +470,7 @@ fn a_ui_placed_module_survives_editing_its_root_and_leaves_with_it() -> TestResu
         .pick_instance(Some(root));
     session.dm_ui(
         0,
-        editor::bake::UiFeedback {
+        crate::bake::UiFeedback {
             clicks: ["Panel/Place".to_owned()].into(),
             interacted: true,
             ..Default::default()
@@ -565,12 +563,8 @@ fn the_profile_checkbox_toggles_previews() -> TestResult {
     let toggle = |session: &mut Session, is_shown: bool| {
         session.dm_ui(
             0,
-            editor::bake::UiFeedback {
-                values: [(
-                    "Panel/Preview modules".to_owned(),
-                    editor::bake::UiValue::Bool(is_shown),
-                )]
-                .into(),
+            crate::bake::UiFeedback {
+                values: [("Panel/Preview modules".to_owned(), crate::bake::UiValue::Bool(is_shown))].into(),
                 modular_preview: session.modules_enabled(),
                 interacted: true,
                 ..Default::default()
@@ -582,8 +576,8 @@ fn the_profile_checkbox_toggles_previews() -> TestResult {
 
     let quiet = session.dm_ui(
         0,
-        editor::bake::UiFeedback {
-            values: [("Panel/Preview modules".to_owned(), editor::bake::UiValue::Bool(false))].into(),
+        crate::bake::UiFeedback {
+            values: [("Panel/Preview modules".to_owned(), crate::bake::UiValue::Bool(false))].into(),
             modular_preview: true,
             ..Default::default()
         },

@@ -3,18 +3,19 @@ use std::path::{Path, PathBuf};
 
 use dear_imgui_rs::{DragFlags, Ui, WindowFlags};
 use dmm::{Coord, MapFormat, Prefab, Size};
-use editor::{
-    document::{DocumentId, MapDocument},
-    icons::materialdesignicons::ICON_DOTS_HORIZONTAL,
-    tool::{FillMode, SelectionMask, Tool},
-};
 
 use super::{
     DIAGNOSTIC_WARNING_COLOR, MAX_CUSTOM_FILL_SEARCH_RESULTS, UiState,
     common::{DialogButton, begin_centered_modal, dialog_buttons, dpi},
     draw_type_path_search,
 };
-use crate::{session::Session, settings::KeybindPreset};
+use crate::{
+    document::{DocumentId, MapDocument},
+    icons::materialdesignicons::ICON_DOTS_HORIZONTAL,
+    session::Session,
+    settings::KeybindPreset,
+    tool::{FillMode, SelectionMask, Tool},
+};
 
 pub(super) const MODAL_FLAGS: WindowFlags = WindowFlags::ALWAYS_AUTO_RESIZE
     .union(WindowFlags::NO_RESIZE)
@@ -1093,11 +1094,6 @@ mod tests {
 
     use dear_imgui_rs::{ConfigFlags, Key, MouseButton, Ui, sys};
     use dmm::{Coord, Map, MapFormat, Prefab, Size};
-    use editor::{
-        document::{DocumentId, MapDocument, Selection},
-        patch,
-        tool::{FillMode, RegionSelectionMode, SelectionMask, Tool},
-    };
     use net::LevelContents;
 
     use super::{
@@ -1107,9 +1103,12 @@ mod tests {
         draw_new_map_dialog, draw_resize_map_dialog, resolve_new_map_path,
     };
     use crate::{
+        document::{DocumentId, MapDocument, Selection},
+        patch,
         session::Session,
         settings::Settings,
         theme::{DEFAULT_THEME, Themes},
+        tool::{FillMode, RegionSelectionMode, SelectionMask, Tool},
         ui::{
             IMGUI_CONTEXT, UiState,
             fixtures::{

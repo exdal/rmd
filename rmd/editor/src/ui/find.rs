@@ -3,13 +3,14 @@ use base::path::TreePath;
 use dear_imgui_rs::{
     Condition, ListClipper, SelectableFlags, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError,
 };
-use editor::{
-    document::{DocumentId, PrefabInstanceId, Selection},
-    search::{SearchQuery, resolve_instances},
-};
 
 use super::common::{centered_note, dpi, focus_window_on_hover, text_wrapped_colored};
-use crate::{session::Session, settings::Settings};
+use crate::{
+    document::{DocumentId, PrefabInstanceId, Selection},
+    search::{SearchQuery, resolve_instances},
+    session::Session,
+    settings::Settings,
+};
 
 const SEARCH_WINDOW_SIZE: [f32; 2] = [460.0, 360.0];
 
@@ -389,10 +390,12 @@ mod tests {
     use base::path::TreePath;
 
     use dmm::{Coord, Map, Prefab, Size};
-    use editor::document::MapDocument;
 
     use super::*;
-    use crate::ui::{MapViewState, UiState};
+    use crate::{
+        document::MapDocument,
+        ui::{MapViewState, UiState},
+    };
 
     fn map() -> Map {
         let table = Prefab::new(TreePath::parse("/obj/table"));

@@ -1,9 +1,11 @@
 use std::collections::HashSet;
 
 use dear_imgui_rs::{Condition, Id, TreeNodeFlags, Ui};
-use editor::bake::{UiCommand, UiFeedback, UiPopupId, UiRebake, UiValue};
 
-use crate::session::Session;
+use crate::{
+    bake::{UiCommand, UiFeedback, UiPopupId, UiRebake, UiValue},
+    session::Session,
+};
 
 #[derive(Debug, Default)]
 pub(crate) struct DmUi {

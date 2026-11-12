@@ -1,11 +1,10 @@
 use std::{collections::BTreeMap, mem};
 
 use dmm::{Coord, Prefab};
-use editor::{document::DocumentId, patch};
 use net::{DeleteLevel, InsertAt, InsertLevel, LevelChange, LevelOp, MapEdit, SeqId};
 
 use super::{LevelRequest, LevelStep};
-use crate::session::Session;
+use crate::{document::DocumentId, patch, session::Session};
 
 impl Session {
     pub(super) fn apply_coop_edits(&mut self) {

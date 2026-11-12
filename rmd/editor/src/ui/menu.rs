@@ -1,5 +1,4 @@
 use dear_imgui_rs::Ui;
-use editor::tool::Tool;
 
 use super::{
     LAYER_KEYS, OpenRequest, SCREENSHOT_KEYS, ScreenshotArea, ScreenshotRequest, UiState,
@@ -10,6 +9,7 @@ use super::{
 use crate::{
     session::{CoopStatus, Session},
     settings::{KeybindAction, Panel, Settings},
+    tool::Tool,
 };
 
 /// How far down the "Blur below" menu goes. The option itself takes any depth.

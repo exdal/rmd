@@ -5,7 +5,9 @@ use base::{
 use std::collections::{HashMap, HashSet};
 
 use dmm::{Coord, Prefab};
-use editor::{
+
+use super::Session;
+use crate::{
     command::{Edit, EditGroupId},
     document::{DocumentId, PlacedTile, PrefabInstanceId},
     node,
@@ -13,10 +15,8 @@ use editor::{
     visual,
 };
 
-use super::Session;
-
 pub(super) fn registered_types(
-    environment: Option<&editor::Environment>, bake: Option<&editor::bake::Bake>,
+    environment: Option<&crate::environment::Environment>, bake: Option<&crate::bake::Bake>,
 ) -> HashSet<objtree::TypeId> {
     let Some((environment, bake)) = environment.zip(bake) else {
         return HashSet::new();
@@ -720,13 +720,16 @@ mod tests {
     };
 
     use dmm::{Coord, Map, Prefab, Size};
-    use editor::{document::MapDocument, focus::AreaFocus};
 
-    use crate::session::{
-        DocumentCache, Session,
-        fixtures::{
-            layered_node_session, node_environment, node_map, node_session, node_tile_has_group, oriented_dir,
-            oriented_node_map, oriented_node_session,
+    use crate::{
+        document::MapDocument,
+        focus::AreaFocus,
+        session::{
+            DocumentCache, Session,
+            fixtures::{
+                layered_node_session, node_environment, node_map, node_session, node_tile_has_group, oriented_dir,
+                oriented_node_map, oriented_node_session,
+            },
         },
     };
 
@@ -761,7 +764,7 @@ mod tests {
         assert!(eligibility(&session));
 
         session.state.choose_prefab(Prefab::new(TreePath::parse("/obj/cable")));
-        session.set_tool(editor::tool::Tool::Place);
+        session.set_tool(crate::tool::Tool::Place);
         let placed = session.place_at(coord, None).unwrap();
         assert!(session.instances().unwrap().sprite(placed).unwrap().node_pickable);
 
@@ -798,7 +801,7 @@ mod tests {
         let coord = Coord::new(1, 1, 1);
         let map = node_map(1, 1, &[(coord, vec!["/obj/cable/heavy", "/obj/not_node"])]);
         let (mut session, seed) = node_session(map, coord);
-        session.set_tool(editor::tool::Tool::Node);
+        session.set_tool(crate::tool::Tool::Node);
         let other = *session
             .state
             .active_document()
@@ -847,7 +850,7 @@ mod tests {
         let supply = candidates[&supply_path];
         let scrubbers = candidates[&scrubbers_path];
         let other = candidates[&other_path];
-        let bake = editor::bake::build(&environment, &document).expect("node profile bakes");
+        let bake = crate::bake::build(&environment, &document).expect("node profile bakes");
         let mut session = Session::new();
         session.state.environment = Some(Arc::new(environment));
         let document_id = session.state.open_document(document);
@@ -906,7 +909,7 @@ mod tests {
                     .is_some_and(|instance| instance.prefab().path == seed.path)
             })
             .expect("seed cable");
-        let bake = editor::bake::build(&environment, &document).expect("node profile bakes");
+        let bake = crate::bake::build(&environment, &document).expect("node profile bakes");
         assert_eq!(bake.node_groups().len(), 3);
 
         let mut session = Session::new();
@@ -1282,12 +1285,10 @@ mod tests {
     fn tgstation_pipes_connect_only_on_the_same_layer_and_color() {
         use std::path::PathBuf;
 
-        use editor::progress::Progress;
-
-        use crate::session::fixtures::settle_bake;
+        use crate::{progress::Progress, session::fixtures::settle_bake};
 
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
@@ -1701,7 +1702,7 @@ mod tests {
                     .is_some_and(|instance| instance.prefab().path == seed.path)
             })
             .expect("seed cable");
-        let bake = editor::bake::build(&environment, &document).expect("node profile bakes");
+        let bake = crate::bake::build(&environment, &document).expect("node profile bakes");
         let mut session = Session::new();
         session.state.environment = Some(Arc::new(environment));
         let document_id = session.state.open_document(document);
@@ -1772,7 +1773,7 @@ mod tests {
                     .is_some_and(|instance| instance.prefab().path == seed.path)
             })
             .expect("seed cable");
-        let bake = editor::bake::build(&environment, &document).expect("node profile bakes");
+        let bake = crate::bake::build(&environment, &document).expect("node profile bakes");
         let mut session = Session::new();
         session.state.environment = Some(Arc::new(environment));
         let document_id = session.state.open_document(document);

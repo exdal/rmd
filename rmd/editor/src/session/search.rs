@@ -1,11 +1,11 @@
-use editor::{
+use objtree::ObjectTree;
+
+use super::Session;
+use crate::{
     document::{DocumentId, PrefabInstanceId, Selection},
     search::{self, SearchQuery},
     world::World,
 };
-use objtree::ObjectTree;
-
-use super::Session;
 
 impl Session {
     pub fn find_instances(
@@ -69,9 +69,12 @@ mod tests {
     use base::{path::TreePath, types::Value};
 
     use dmm::{Coord, Prefab};
-    use editor::{search::SearchQuery, tool::Tool};
 
-    use crate::session::fixtures::{assert_render_cache_matches_rebuild, flat_session};
+    use crate::{
+        search::SearchQuery,
+        session::fixtures::{assert_render_cache_matches_rebuild, flat_session},
+        tool::Tool,
+    };
 
     #[test]
     fn replace_all_swaps_matching_instances_for_the_brush_in_one_undo() {

@@ -9,7 +9,8 @@ use std::{
 };
 
 use dmm::Map;
-use editor::{
+
+use crate::{
     blame::{self, BlameResult, GitVersions},
     diff::DiffSource,
     document::DocumentId,
@@ -252,9 +253,9 @@ impl GitWorker {
 
 #[cfg(test)]
 mod tests {
-    use editor::document::DocumentId;
 
     use super::{Finished, GitWorker, Outcome};
+    use crate::document::DocumentId;
 
     #[test]
     fn closing_a_document_rejects_results_from_its_previous_jobs() {

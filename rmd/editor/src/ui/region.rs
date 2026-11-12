@@ -1,12 +1,13 @@
 use dear_imgui_rs::{DragFlags, DrawListMut, Ui};
 use dmm::{Coord, Size};
-use editor::{
-    document::{DocumentId, Selection},
-    tool::{RegionSelectionMode, SelectionMask, SelectionPlacement},
-};
 
 use super::{OVERLAY_BG, OverlayRect, common::dpi};
-use crate::{camera::Controller, session::Session};
+use crate::{
+    camera::Controller,
+    document::{DocumentId, Selection},
+    session::Session,
+    tool::{RegionSelectionMode, SelectionMask, SelectionPlacement},
+};
 
 const BLOCK_SELECTION_GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 
@@ -386,12 +387,11 @@ pub(super) fn draw_selection_mode_controls(ui: &Ui, session: &mut Session, optio
 #[cfg(test)]
 mod tests {
     use dmm::Coord;
-    use editor::{document::Selection, tool::RegionSelectionMode};
 
     use super::{
         RegionSelectionOptions, hollow_selection_inner, region_border_segments, region_selection_bounds, ring_rects,
     };
-    use crate::{camera::Controller, ui::OverlayRect};
+    use crate::{camera::Controller, document::Selection, tool::RegionSelectionMode, ui::OverlayRect};
 
     #[test]
     fn region_selection_bounds_follow_whole_tile_edges() {

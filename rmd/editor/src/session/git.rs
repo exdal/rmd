@@ -1,16 +1,16 @@
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use dmm::Coord;
-use editor::{
+
+use super::{BlameState, DiffSide, DiffState, Session, SharedHighlights};
+use crate::{
     command::EditGroupId,
     conflict::{ConflictRow, ConflictState, Hunk, Resolved, Side},
     document::DocumentId,
     git::{CommitInfo, CommitRef, Operation, RepoPath, WebLinks},
+    git_worker::Outcome as GitOutcome,
     tool::ToolEdit,
 };
-
-use super::{BlameState, DiffSide, DiffState, Session, SharedHighlights};
-use crate::git_worker::Outcome as GitOutcome;
 
 /// Each conflict row's resolution, indexed like `ConflictState::rows`
 pub(crate) type ConflictStatus = Arc<[Option<Side>]>;
@@ -91,7 +91,7 @@ impl GitDocState {
 
     /// Runs `read` against the view for the current history, rebuilding it after any change
     fn with_conflict_view<R>(
-        &self, map_revision: u64, history: &editor::command::History,
+        &self, map_revision: u64, history: &crate::command::History,
         read: impl FnOnce(&mut ConflictView, &ConflictState) -> R,
     ) -> Option<R> {
         let conflicts = self.conflicts.as_ref()?;
@@ -157,7 +157,7 @@ impl Session {
                         self.state
                             .document(id)
                             .and_then(|document| document.path.as_deref())
-                            .and_then(editor::git::discover)
+                            .and_then(crate::git::discover)
                     })
                     .flatten();
 
@@ -415,9 +415,9 @@ mod tests {
         );
 
         let all = [Coord::new(1, 1, 1), Coord::new(3, 1, 1)];
-        assert!(session.resolve_conflict(id, &all, editor::conflict::Side::Theirs));
+        assert!(session.resolve_conflict(id, &all, crate::conflict::Side::Theirs));
         let (_, status) = session.conflict_table(id).unwrap();
-        assert_eq!(status.as_ref(), [Some(editor::conflict::Side::Theirs); 2]);
+        assert_eq!(status.as_ref(), [Some(crate::conflict::Side::Theirs); 2]);
         assert_eq!(session.mark_resolved_blocker(id).as_deref(), Some("Save the map first"));
         assert!(!session.mark_resolved(id));
 
@@ -439,7 +439,7 @@ mod tests {
         assert_eq!(session.conflict_hunks(id, Some(1)).len(), 2);
         assert_eq!(session.unresolved_conflicts(id), 2);
 
-        assert!(session.resolve_conflict(id, &[Coord::new(1, 1, 1)], editor::conflict::Side::Theirs));
+        assert!(session.resolve_conflict(id, &[Coord::new(1, 1, 1)], crate::conflict::Side::Theirs));
         assert_eq!(session.conflict_hunks(id, Some(1)).len(), 1);
         assert_eq!(session.unresolved_conflicts(id), 1);
 
@@ -466,7 +466,7 @@ mod tests {
             map: Map::new(Size { x: 1, y: 1, z: 1 }),
             z: 1,
             errors: Vec::new(),
-            repo: Some(editor::git::RepoPath {
+            repo: Some(crate::git::RepoPath {
                 root: PathBuf::from("missing-repository"),
                 git_dir: PathBuf::from("missing-repository/.git"),
                 rel: String::from("staging.dmm"),

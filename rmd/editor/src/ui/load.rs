@@ -4,7 +4,6 @@ use std::{
 };
 
 use dear_imgui_rs::{Condition, InputTextMultilineFlags, StyleColor, Ui, WindowFlags, WindowKey};
-use editor::progress::{Snapshot, Stage};
 
 use super::{
     SAVE_ERROR_COLOR,
@@ -12,6 +11,7 @@ use super::{
 };
 use crate::{
     loader::LoadView,
+    progress::{Snapshot, Stage},
     session::{DiagnosticSeverity, LoadReport, MAX_REPORTED_DIAGNOSTICS},
 };
 
@@ -317,11 +317,11 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use dear_imgui_rs::{Context, WindowKey, sys};
-    use editor::progress::{Snapshot, Stage};
 
     use super::{DiagnosticsState, LOAD_POPUP_WIDTH, LoadNotice, draw_load_popup, fit_path, grouped, shorten_path};
     use crate::{
         loader::LoadView,
+        progress::{Snapshot, Stage},
         session::{DiagnosticSeverity, LoadReport},
         ui::{
             IMGUI_CONTEXT,
@@ -339,7 +339,7 @@ mod tests {
             let progress = LoadView {
                 title: "Opening map",
                 path: String::from("missing.dmm"),
-                snapshot: editor::progress::Progress::new().snapshot(),
+                snapshot: crate::progress::Progress::new().snapshot(),
                 cancelling: false,
                 cancellable: true,
             };

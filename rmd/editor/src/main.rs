@@ -10,22 +10,48 @@
 //! With no arguments the editor opens on its welcome page, which can open a codebase or a map.
 
 mod backup;
+mod bake;
 mod baker;
+mod blame;
 mod camera;
+mod clipboard;
+mod command;
+mod conflict;
+mod diff;
+mod document;
+mod environment;
+mod error;
 mod external_editor;
+mod fingerprint;
+mod focus;
 mod fonts;
+mod frame;
+mod git;
 mod git_worker;
 mod gizmo;
+mod grid;
+mod icons;
+mod issues;
 mod loader;
 mod logging;
+mod maploader;
+mod node;
 mod pacing;
+mod patch;
+mod process;
+mod progress;
+mod search;
 mod session;
 mod settings;
+mod state;
 mod theme;
+mod tool;
 mod transform;
 mod ui;
 mod update;
 mod viewports;
+mod visual;
+mod world;
 
 use std::{
     fs, mem,
@@ -37,10 +63,6 @@ use std::{
 
 use dear_imgui_rs::{BackendFlags, ClipboardBackend, ConfigFlags, Context, Style, render::SynchronousRendererConsumer};
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
-use editor::{
-    document::{DocumentId, Selection},
-    environment::BakeOptions,
-};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use render::{CapturedImage, Device, PickRequest, PickResult, Renderer};
 use winit::{
@@ -52,6 +74,8 @@ use winit::{
 };
 
 use crate::{
+    document::{DocumentId, Selection},
+    environment::BakeOptions,
     external_editor::SourceLocation,
     fonts::UiFont,
     loader::{Job, Loader, Outcome},
@@ -1246,21 +1270,21 @@ fn install_profiles() -> Vec<String> {
         Err(error) => {
             log::warn!("profiles fall back to the embedded copies: {error}");
 
-            return editor::environment::BundledProfile::ALL
+            return crate::environment::BundledProfile::ALL
                 .map(|profile| profile.stem().to_owned())
                 .to_vec();
         },
     };
-    if let Err(error) = editor::environment::write_missing_profiles(&dir) {
+    if let Err(error) = crate::environment::write_missing_profiles(&dir) {
         log::warn!("writing profiles to {}: {error}", dir.display());
     }
 
-    editor::environment::scan_profiles(&dir)
+    crate::environment::scan_profiles(&dir)
 }
 
 fn bake_options(settings: &Settings, environment: Option<&std::path::Path>) -> BakeOptions {
     BakeOptions {
-        enabled: editor::environment::baking_enabled(settings.bake_enabled),
+        enabled: crate::environment::baking_enabled(settings.bake_enabled),
         optimizations_enabled: settings.optimizations_enabled,
         profile: environment
             .and_then(|path| settings.profile_for(path))
@@ -1446,7 +1470,7 @@ mod tests {
         let progress = loader::LoadView {
             title: "Opening map",
             path: String::from("missing.dmm"),
-            snapshot: editor::progress::Progress::new().snapshot(),
+            snapshot: crate::progress::Progress::new().snapshot(),
             cancelling: false,
             cancellable: true,
         };
@@ -1515,7 +1539,10 @@ mod tests {
         for path in ["/turf", "/area"] {
             tree.register(&TreePath::parse(path), Location::default());
         }
-        app.session.state.environment = Some(Arc::new(editor::Environment::new(root.join("game.dme"), tree)));
+        app.session.state.environment = Some(Arc::new(crate::environment::Environment::new(
+            root.join("game.dme"),
+            tree,
+        )));
         app.session.set_sanitize_vars_on_save(true);
         let (map, errors) = dmm::parser::parse(
             r#"
@@ -1530,7 +1557,7 @@ a
         for (index, format) in [MapFormat::Standard, MapFormat::Tgm].into_iter().enumerate() {
             let path = root.join(format!("map-{index}.dmm"));
             fs::write(&path, MapWriter::new(&map).with_format(format).write()).unwrap();
-            let loaded = loader::load_map(&path, 1, &editor::progress::Progress::new()).unwrap();
+            let loaded = loader::load_map(&path, 1, &crate::progress::Progress::new()).unwrap();
             app.apply_outcome(Outcome::Map(Box::new(loaded)));
             assert!(!app.session.state.active_document().unwrap().is_dirty());
             assert_eq!(
@@ -1548,7 +1575,7 @@ a
             // A reload uses the same validation and keeps the existing document.
             let id = app.session.state.active().unwrap();
             app.pending_reload = Some(id);
-            let loaded = loader::load_map(&path, 1, &editor::progress::Progress::new()).unwrap();
+            let loaded = loader::load_map(&path, 1, &crate::progress::Progress::new()).unwrap();
             app.apply_outcome(Outcome::Map(Box::new(loaded)));
             assert_eq!(app.session.state.active(), Some(id));
             assert_eq!(app.session.state.document_ids().len(), index + 1);

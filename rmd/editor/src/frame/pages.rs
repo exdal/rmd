@@ -82,6 +82,7 @@ pub(super) struct SpritePage {
 }
 
 impl FrameInstances {
+    #[cfg(test)]
     pub fn live_sprites(&self) -> impl Iterator<Item = &SpriteInstance> {
         self.sprites
             .iter()

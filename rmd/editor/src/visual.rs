@@ -189,6 +189,7 @@ pub(crate) fn sort_component(value: f32) -> i32 {
     bits ^ (((bits >> 31) as u32 >> 1) as i32)
 }
 
+#[cfg(test)]
 pub fn sort_key(appearance: &Appearance, index: usize) -> (i32, i32, usize) {
     (
         sort_component(appearance.plane),

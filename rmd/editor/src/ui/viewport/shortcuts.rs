@@ -1,10 +1,10 @@
 use dear_imgui_rs::{Key, MouseButton, Ui};
-use editor::tool::Tool;
 
 use super::ViewFrame;
 use crate::{
     session::Session,
     settings::{KeyBinding, KeybindAction, Settings},
+    tool::Tool,
     ui::{LAYER_KEYS, UiState, request_level_change},
 };
 

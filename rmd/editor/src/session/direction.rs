@@ -5,16 +5,16 @@ use base::{
 };
 
 use dmi::metadata::Dir;
-use editor::{
-    Environment,
-    command::EditGroupId,
-    document::{InstanceChange, VarMutation},
-    tool::Tool,
-    visual,
-};
 use objtree::{ObjectTree, TypeId};
 
 use super::{EditScope, Session};
+use crate::{
+    command::EditGroupId,
+    document::{InstanceChange, VarMutation},
+    environment::Environment,
+    tool::Tool,
+    visual,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DirectionalTypes {
@@ -281,11 +281,15 @@ mod tests {
 
     use dmi::metadata::Dir;
     use dmm::Prefab;
-    use editor::{Environment, document::VarMutation, tool::Tool};
     use objtree::ObjectTree;
 
     use super::{direction_mutation, directional_type_target, directional_types_for};
-    use crate::session::{EditScope, Session};
+    use crate::{
+        document::VarMutation,
+        environment::Environment,
+        session::{EditScope, Session},
+        tool::Tool,
+    };
 
     #[test]
     fn an_identical_scope_rotation_moves_every_matching_placement_to_the_new_subtype() {
@@ -299,7 +303,7 @@ mod tests {
         map.grid[0][0] = vec![key, empty, key];
         let mut session = Session::new();
         session.state.environment = Some(Arc::new(Environment::new(".", tree)));
-        let id = session.state.open_document(editor::document::MapDocument::new(map, 1));
+        let id = session.state.open_document(crate::document::MapDocument::new(map, 1));
         session.rebuild_instances(id);
         let first = session
             .state
@@ -404,7 +408,7 @@ mod tests {
         map.grid[0][0] = vec![alarm, plain];
         let mut session = Session::new();
         session.state.environment = Some(Arc::new(Environment::new(".", tree)));
-        let id = session.state.open_document(editor::document::MapDocument::new(map, 1));
+        let id = session.state.open_document(crate::document::MapDocument::new(map, 1));
         session.rebuild_instances(id);
         let ids = (1..=2)
             .map(|x| {

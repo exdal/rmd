@@ -7,11 +7,6 @@ use std::{
 
 use dear_imgui_rs::{Condition, DockLayout, Key, MouseButton};
 use dmm::{Coord, Prefab, PrefabInstanceId, Size};
-use editor::{
-    conflict::Side,
-    document::{DocumentId, MapDocument, Selection},
-    tool::{RegionSelectionMode, SelectionMask, Tool},
-};
 use render::{HighlightStyle, InteractionMode, MapViewInteraction, MapViewRect, PickRequest, PlacementFlash};
 
 use super::{
@@ -22,12 +17,15 @@ use super::{
 };
 use crate::{
     camera::Controller,
+    conflict::Side,
+    document::{DocumentId, MapDocument, Selection},
     gizmo::{GizmoMapView, GizmoState, RegionDrag, RegionGizmoTarget},
     session::{
         LevelChange, Session,
         fixtures::{install_blame, node_map, node_session, node_tile_has_group},
     },
     settings::{KeyBinding, KeybindAction, KeybindPreset, Settings},
+    tool::{RegionSelectionMode, SelectionMask, Tool},
     ui::{
         IMGUI_CONTEXT, RectangleGesture, UiState,
         context_menu::NodeContext,

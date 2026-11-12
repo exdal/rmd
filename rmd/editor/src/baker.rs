@@ -7,16 +7,15 @@ use std::{
     thread,
 };
 
-use editor::{
-    Environment,
+use crate::{
     bake::{Bake, BakeUpdate},
     document::DocumentId,
+    environment::Environment,
     grid::Grid,
+    loader::LoadView,
     maploader::preview::ModulePreviewState,
     progress::Progress,
 };
-
-use crate::loader::LoadView;
 
 pub struct Request {
     pub document: DocumentId,
@@ -122,7 +121,7 @@ impl Baker {
         thread::spawn(move || {
             let baked = match job {
                 Job::Build { source, path, modules } => Baked::Build(
-                    editor::bake::build_map(&environment, source, path, *modules, &worker)
+                    crate::bake::build_map(&environment, source, path, *modules, &worker)
                         .map(|(bake, modules)| Box::new(BakedMap { bake, modules })),
                 ),
                 Job::Extend {
@@ -130,7 +129,7 @@ impl Baker {
                     level_count,
                     atoms,
                 } => {
-                    let update = editor::bake::extend(&mut bake, &environment, level_count, atoms, &worker);
+                    let update = crate::bake::extend(&mut bake, &environment, level_count, atoms, &worker);
                     Baked::Extend(bake, update)
                 },
             };

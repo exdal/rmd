@@ -6,11 +6,10 @@ use std::{
 };
 
 use dear_imgui_rs::{Key, Ui};
-use editor::frame::FrameOptions;
 use render::HighlightStyle;
 use serde::{Deserialize, Serialize};
 
-use crate::theme::DEFAULT_THEME;
+use crate::{frame::FrameOptions, theme::DEFAULT_THEME};
 
 const MAX_RECENT: usize = 10;
 const DEFAULT_PREFERRED_EDITOR: &str = "code {root} --goto {file}:{line}:{column}";

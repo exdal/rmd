@@ -11,8 +11,7 @@ pub use vm::{
     AppearanceDelta,
     bake::{
         Bake, HIGHLIGHT_ALWAYS, HIGHLIGHT_EDGE_EAST, HIGHLIGHT_EDGE_NORTH, HIGHLIGHT_EDGE_SOUTH, HIGHLIGHT_EDGE_WEST,
-        HIGHLIGHT_HOVERED, HIGHLIGHT_SELECTED, Highlight, HighlightTile, PendingBake, SharedAppearance,
-        highlight_tiles,
+        HIGHLIGHT_HOVERED, HIGHLIGHT_SELECTED, Highlight, PendingBake, SharedAppearance, highlight_tiles,
     },
     ui::{
         Command as UiCommand, Feedback as UiFeedback, Frame as UiFrame, PopupId as UiPopupId, Rebake as UiRebake,
@@ -24,9 +23,10 @@ use vm::{
     world::Position,
 };
 
+#[cfg(test)]
+use crate::document::MapDocument;
 use crate::{
-    BakeProgram, Environment,
-    document::MapDocument,
+    environment::{BakeProgram, Environment},
     grid::Grid,
     maploader::{
         RootSpecs,
@@ -102,10 +102,12 @@ impl Standalone {
     }
 }
 
+#[cfg(test)]
 pub fn atoms(environment: &Environment, document: &MapDocument) -> Vec<Atom> {
     atoms_from_level(environment, document, 1)
 }
 
+#[cfg(test)]
 pub fn atoms_from_level(environment: &Environment, document: &MapDocument, first: u32) -> Vec<Atom> {
     atoms_from_view(environment, (&document.map).into(), first)
 }
@@ -128,12 +130,14 @@ pub fn atoms_from_view(environment: &Environment, view: MapView<'_>, first: u32)
     atoms
 }
 
+#[cfg(test)]
 pub fn size(document: &MapDocument) -> [i32; 3] {
     let size = document.map.size();
 
     [size.x as i32, size.y as i32, size.z as i32]
 }
 
+#[cfg(test)]
 pub fn build_atoms(
     environment: &Environment, atoms: Vec<Atom>, size: [i32; 3], document_path: Option<&Path>, progress: &Progress,
 ) -> Option<Bake> {
@@ -207,6 +211,7 @@ pub fn extend(
     }
 }
 
+#[cfg(test)]
 pub fn build(environment: &Environment, document: &MapDocument) -> Option<Bake> {
     build_atoms(
         environment,
@@ -217,6 +222,7 @@ pub fn build(environment: &Environment, document: &MapDocument) -> Option<Bake> 
     )
 }
 
+#[cfg(test)]
 pub fn update(
     bake: &mut Bake, environment: &Environment, document: &MapDocument, affected: &[PrefabInstanceId],
 ) -> BakeUpdate {
@@ -496,7 +502,6 @@ mod tests {
             tree: bake_tree,
             module: codegen::generate(&module).expect("codegen"),
             profile,
-            files: Default::default(),
             icon_states: Default::default(),
         });
         let failures = environment.load_icons(&[], &crate::progress::Progress::new());

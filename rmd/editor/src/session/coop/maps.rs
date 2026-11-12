@@ -1,14 +1,15 @@
 use std::{path::Path, thread};
 
 use dmm::{Size, writer};
-use editor::{
-    document::{DocumentId, MapDocument},
-    git,
-};
 use net::PeerId;
 
 use super::{Activity, Coop, Prepared, ReceivedMap, SharedMap, SharedState};
-use crate::{loader::LoadedMap, session::Session};
+use crate::{
+    document::{DocumentId, MapDocument},
+    git,
+    loader::LoadedMap,
+    session::Session,
+};
 
 impl Session {
     pub(super) fn follow_shared_documents(&mut self) {

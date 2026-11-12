@@ -2,10 +2,10 @@ use std::collections::hash_map::Entry;
 
 use dear_imgui_rs::{MouseButton, Ui};
 use dmm::Coord;
-use editor::document::DocumentId;
 
 use super::{MapViewState, ViewFrame, stroke::ActivePlacementFlash};
 use crate::{
+    document::DocumentId,
     pacing::FrameDemand,
     session::Session,
     settings::{KeybindAction, Settings},

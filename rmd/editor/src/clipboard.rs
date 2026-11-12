@@ -56,6 +56,7 @@ impl TileRegion {
         self.selection_mode
     }
 
+    #[cfg(test)]
     pub fn tile(&self, x: u32, y: u32) -> Option<&Tile> {
         (x < self.width && y < self.height).then(|| &self.tiles[(y * self.width + x) as usize])
     }

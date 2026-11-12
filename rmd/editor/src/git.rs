@@ -156,6 +156,7 @@ pub struct WebLinks {
 
 impl WebLinks {
     /// `git@github.com:owner/repo.git`
+    #[cfg(test)]
     pub fn from_remote(url: &str) -> Option<Self> {
         web_links(&gix::url::parse(url.as_bytes().as_bstr()).ok()?)
     }

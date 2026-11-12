@@ -249,6 +249,7 @@ const fn coord_key(coord: Coord) -> (u32, u32, u32) {
     (coord.z, coord.y, coord.x)
 }
 
+#[cfg(test)]
 pub fn route(
     document: &MapDocument, tree: &ObjectTree, group: &ResolvedGroup, start: Coord, target: Coord,
 ) -> Option<Vec<Coord>> {

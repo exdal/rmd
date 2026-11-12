@@ -1,8 +1,7 @@
-use editor::document::DocumentId;
 use net::{Client, CommentId, Cursor, PeerId, Selection, View};
 
 use super::{Coop, Following};
-use crate::session::Session;
+use crate::{document::DocumentId, session::Session};
 
 impl Session {
     pub fn comment_tool_available(&self) -> bool {

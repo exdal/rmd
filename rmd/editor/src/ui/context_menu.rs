@@ -2,14 +2,13 @@ use base::{path::TreePath, types::Identifier, vars};
 
 use dear_imgui_rs::{Key, MouseButton, PopupToken, Ui, WindowHoveredFlags};
 use dmm::{Coord, Prefab, PrefabInstanceId};
-use editor::{blame::BlameCell, conflict::Side, document::DocumentId};
 use objtree::ObjectTree;
 
 use super::{
     EditCommand, SelectionTransform, Session, Tool, common::draw_thumbnail, draw_type_path_search,
     find::SimilarMatchKind,
 };
-use crate::session::context_placement_group;
+use crate::{blame::BlameCell, conflict::Side, document::DocumentId, session::context_placement_group};
 
 pub(super) const POPUP: &str = "Map context##map-context";
 
@@ -167,7 +166,7 @@ pub(super) fn draw_popup(
                         || String::from("Older than blame depth"),
                         |blame| blame.result.boundary_label(),
                     )),
-                    _ => ui.text_disabled(editor::blame::pending_note(cell, changed).unwrap_or_default()),
+                    _ => ui.text_disabled(crate::blame::pending_note(cell, changed).unwrap_or_default()),
                 }
             } else if git.blame.is_none() && ui.menu_item("Run blame") {
                 action = Some(Action::BlameRun);

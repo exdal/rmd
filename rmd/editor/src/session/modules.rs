@@ -1,7 +1,9 @@
 use std::{collections::HashSet, mem, path::Path, sync::Arc};
 
 use dmm::Prefab;
-use editor::{
+
+use super::{BakeHold, PlacementPreview, Session, prefab_thumbnail_or_missing};
+use crate::{
     document::{DocumentId, MapDocument, PrefabInstanceId},
     maploader::{
         LoadedModule, OpenModule,
@@ -9,8 +11,6 @@ use editor::{
     },
     visual,
 };
-
-use super::{BakeHold, PlacementPreview, Session, prefab_thumbnail_or_missing};
 
 #[cfg(test)]
 pub(super) mod tests;

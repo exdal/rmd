@@ -1,10 +1,5 @@
 use dear_imgui_rs::{DrawListMut, Ui};
 use dmm::Coord;
-use editor::{
-    conflict::{Hunk, Side},
-    document::DocumentId,
-    tool::SelectionRotation,
-};
 use render::Renderer;
 
 use super::{
@@ -13,7 +8,10 @@ use super::{
 };
 use crate::{
     camera::Controller,
+    conflict::{Hunk, Side},
+    document::DocumentId,
     session::{GuideBadge, PlacementPreview, RegionPreviewSource, Session},
+    tool::SelectionRotation,
 };
 
 const OVERLAY_PADDING: f32 = 4.0;
@@ -58,7 +56,7 @@ pub(super) fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
 }
 
 pub(super) fn draw_highlights(
-    ui: &Ui, camera: &Controller, viewport: OverlayRect, highlights: &[&editor::bake::Highlight], tile_size: u32,
+    ui: &Ui, camera: &Controller, viewport: OverlayRect, highlights: &[&crate::bake::Highlight], tile_size: u32,
 ) {
     if highlights.is_empty() {
         return;
@@ -102,10 +100,10 @@ pub(super) fn draw_highlights(
 
                 // Screen y grows downward, so the map's north edge is the rectangle's top.
                 for (edge, from, to) in [
-                    (editor::bake::HIGHLIGHT_EDGE_NORTH, min, [max[0], min[1]]),
-                    (editor::bake::HIGHLIGHT_EDGE_SOUTH, [min[0], max[1]], max),
-                    (editor::bake::HIGHLIGHT_EDGE_WEST, min, [min[0], max[1]]),
-                    (editor::bake::HIGHLIGHT_EDGE_EAST, [max[0], min[1]], max),
+                    (crate::bake::HIGHLIGHT_EDGE_NORTH, min, [max[0], min[1]]),
+                    (crate::bake::HIGHLIGHT_EDGE_SOUTH, [min[0], max[1]], max),
+                    (crate::bake::HIGHLIGHT_EDGE_WEST, min, [min[0], max[1]]),
+                    (crate::bake::HIGHLIGHT_EDGE_EAST, [max[0], min[1]], max),
                 ] {
                     if tile.edges & edge != 0 {
                         draw_marching_edge(&draw, from, to, offset, accent);
@@ -207,7 +205,7 @@ pub(super) fn draw_conflict_controls(
 }
 
 fn draw_highlight_label(
-    ui: &Ui, draw: &DrawListMut<'_>, camera: &Controller, viewport: OverlayRect, highlight: &editor::bake::Highlight,
+    ui: &Ui, draw: &DrawListMut<'_>, camera: &Controller, viewport: OverlayRect, highlight: &crate::bake::Highlight,
     tile_size: f32, accent: [f32; 4],
 ) {
     let Some(label) = highlight.label.as_deref() else {

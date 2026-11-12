@@ -8,13 +8,13 @@ use std::{
 };
 
 use dmm::{Coord, error::MapError};
-use editor::document::DocumentId;
 use net::{
     Client, CodebaseId, Comment, CommentId, Cursor, GenerationId, InsertAt, InsertLevel, LevelLog, LevelOp, MapEdit,
     PRESENCE_REFRESH, PasswordHash, PeerId, PeerInfo, Selection, SeqId, Server, View,
 };
 
 use super::Session;
+use crate::document::DocumentId;
 
 mod connection;
 mod edits;

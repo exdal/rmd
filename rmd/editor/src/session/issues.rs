@@ -2,12 +2,12 @@ use base::path::TreePath;
 use std::{cell::Ref, collections::BTreeMap, sync::Arc};
 
 use dmm::Coord;
-use editor::{
+
+use super::Session;
+use crate::{
     document::{DocumentId, PrefabInstanceId},
     issues,
 };
-
-use super::Session;
 
 #[derive(Debug)]
 pub(crate) struct MapIssueGroup {
@@ -134,10 +134,13 @@ mod tests {
     use base::location::Location;
 
     use dmm::{Coord, Prefab};
-    use editor::{focus::AreaFocus, progress::Progress};
 
     use super::*;
-    use crate::session::fixtures::{assert_render_cache_matches_rebuild, examples, unknown_paths_session};
+    use crate::{
+        focus::AreaFocus,
+        progress::Progress,
+        session::fixtures::{assert_render_cache_matches_rebuild, examples, unknown_paths_session},
+    };
 
     #[test]
     fn groups_are_sorted_live_and_shared_until_the_document_changes() {

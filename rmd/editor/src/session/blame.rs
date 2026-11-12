@@ -5,12 +5,12 @@ use std::{
 };
 
 use dmm::{Coord, Map};
-use editor::{
+
+use super::{Session, SharedHighlights};
+use crate::{
     blame::{self, BlameCell, BlameCounts, BlameResult},
     document::DocumentId,
 };
-
-use super::{Session, SharedHighlights};
 
 pub(crate) struct BlameState {
     pub result: BlameResult,
@@ -60,13 +60,13 @@ impl BlameState {
                     return Arc::new([]);
                 }
 
-                Arc::new([editor::bake::Highlight {
-                    tiles: editor::bake::highlight_tiles(&covered),
+                Arc::new([crate::bake::Highlight {
+                    tiles: crate::bake::highlight_tiles(&covered),
                     z: z as i32,
                     color: [1.0, 1.0, 1.0],
                     fill: 0.0,
                     outline: true,
-                    when: editor::bake::HIGHLIGHT_ALWAYS,
+                    when: crate::bake::HIGHLIGHT_ALWAYS,
                     label: self
                         .result
                         .commits
@@ -93,7 +93,7 @@ const BLAME_HOT_OPACITY_REDUCTION: f32 = 0.30;
 
 const BLAME_COLDEST_HEAT: f32 = 0.12;
 
-fn blame_heatmap(result: &BlameResult, z: u32) -> Vec<editor::bake::Highlight> {
+fn blame_heatmap(result: &BlameResult, z: u32) -> Vec<crate::bake::Highlight> {
     let mut buckets: BTreeMap<BlameHeat, HashSet<[i32; 2]>> = BTreeMap::new();
     for (coord, cell) in result.level(z) {
         let source = blame_heat(result, cell);
@@ -104,13 +104,13 @@ fn blame_heatmap(result: &BlameResult, z: u32) -> Vec<editor::bake::Highlight> {
     }
     buckets
         .into_iter()
-        .map(|(source, covered)| editor::bake::Highlight {
-            tiles: editor::bake::highlight_tiles(&covered),
+        .map(|(source, covered)| crate::bake::Highlight {
+            tiles: crate::bake::highlight_tiles(&covered),
             z: z as i32,
             color: blame_heatmap_color(source, result.heat_span),
             fill: blame_heatmap_fill(source, result.heat_span),
             outline: false,
-            when: editor::bake::HIGHLIGHT_ALWAYS,
+            when: crate::bake::HIGHLIGHT_ALWAYS,
             label: None,
         })
         .collect()

@@ -3,10 +3,9 @@ use std::{collections::HashSet, hash::Hash};
 use dear_imgui_rs::{
     Condition, Key, ModalPopupToken, StyleColor, TableFlags, Ui, WindowFlags, WindowHoveredFlags, sys,
 };
-use editor::icons::materialdesignicons::ICON_IMAGE_BROKEN;
 use render::Renderer;
 
-use crate::session::PrefabThumbnail;
+use crate::{icons::materialdesignicons::ICON_IMAGE_BROKEN, session::PrefabThumbnail};
 
 const ORIGIN_RADIUS: f32 = 3.0;
 const ORIGIN_MAX_DISTANCE: f32 = 32.0;

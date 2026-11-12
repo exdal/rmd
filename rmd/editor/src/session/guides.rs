@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 
 use dmm::Coord;
-use editor::{document::PrefabInstanceId, visual};
 use render::GuideLine;
 
 use super::Session;
+use crate::{document::PrefabInstanceId, visual};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct GuideBadge {
@@ -133,13 +133,15 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use dmm::{Coord, Map, Prefab, Size};
-    use editor::document::{MapDocument, VarMutation};
     use render::GuideLine;
 
     use super::GuideBadge;
-    use crate::session::{
-        Session,
-        fixtures::{examples, settle_bake},
+    use crate::{
+        document::{MapDocument, VarMutation},
+        session::{
+            Session,
+            fixtures::{examples, settle_bake},
+        },
     };
 
     #[test]

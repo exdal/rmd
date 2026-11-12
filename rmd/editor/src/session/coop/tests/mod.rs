@@ -8,7 +8,6 @@ use std::{
 };
 
 use dmm::{Coord, Prefab, parser};
-use editor::{command::Edit, document::DocumentId, tool::Tool};
 use net::{
     CodebaseHash, CodebaseId, Cursor, DeleteLevel, Direction, Event, GenerationId, Impairment, InsertAt, InsertLevel,
     LevelContents, LevelOp, LossyProxy, PeerId, PeerInfo, SeqId, Server, ServerConfig, View,
@@ -16,8 +15,11 @@ use net::{
 
 use super::*;
 use crate::{
+    command::Edit,
+    document::DocumentId,
     loader::LoadedMap,
     session::{Session, fixtures},
+    tool::Tool,
 };
 
 mod codebase;

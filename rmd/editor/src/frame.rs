@@ -18,8 +18,10 @@ use vm::{
     matrix::Matrix,
 };
 
+#[cfg(test)]
+use crate::document::MapDocument;
 use crate::{
-    document::{MapDocument, PrefabInstanceId},
+    document::PrefabInstanceId,
     maploader::preview::MapView,
     visual::{self, Appearance},
     world::Perspective,
@@ -126,6 +128,7 @@ impl FrameInstances {
     /// Frees the cache one part at a time and calls `freed` after each, so a caller that counts
     /// allocations can see what each part held.
     #[doc(hidden)]
+    #[cfg(test)]
     pub fn release_in_stages(mut self, mut freed: impl FnMut(&'static str)) {
         drop(std::mem::take(&mut self.sprites));
         freed("sprites");
@@ -205,7 +208,6 @@ pub enum PrefabUpdate {
         /// disjoint and in order
         sprites: Vec<UpdateRange>,
     },
-    Rebuild,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -387,6 +389,7 @@ pub fn instance_for(
     }
 }
 
+#[cfg(test)]
 pub fn build(
     tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, document: &MapDocument,
     tile_size: u32,
@@ -407,6 +410,7 @@ pub fn build(
     )
 }
 
+#[cfg(test)]
 pub fn build_with_options(
     tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, document: &MapDocument,
     options: FrameRenderOptions<'_>,
@@ -509,6 +513,7 @@ pub fn build_view_with_options(
     instances
 }
 
+#[cfg(test)]
 pub fn update_prefab(
     instances: &mut FrameInstances, tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog,
     document: &MapDocument, owner: PrefabInstanceId, tile_size: u32,
@@ -516,6 +521,7 @@ pub fn update_prefab(
     update_prefabs(instances, tree, icons, textures, document, &[owner], tile_size)
 }
 
+#[cfg(test)]
 pub fn update_prefabs(
     instances: &mut FrameInstances, tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog,
     document: &MapDocument, owners: &[PrefabInstanceId], tile_size: u32,
@@ -538,6 +544,7 @@ pub fn update_prefabs(
     )
 }
 
+#[cfg(test)]
 pub fn update_prefabs_with_options(
     instances: &mut FrameInstances, tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog,
     document: &MapDocument, owners: &[PrefabInstanceId], options: FrameRenderOptions<'_>,
@@ -2656,8 +2663,7 @@ mod tests {
         document
             .set_instance_var(owner, "name".into(), Value::Text(String::from("Moved")))
             .unwrap();
-        let update = update_prefab(&mut instances, &tree, &icons, &textures, &document, owner, 32);
-        assert!(!matches!(update, PrefabUpdate::Rebuild));
+        update_prefab(&mut instances, &tree, &icons, &textures, &document, owner, 32);
         assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
     }
 
@@ -2684,8 +2690,7 @@ mod tests {
         document
             .replace_instance_path(owner, "make area", TreePath::parse("/area/station"), &[], None)
             .unwrap();
-        let update = update_prefab(&mut instances, &tree, &icons, &textures, &document, owner, 32);
-        assert!(!matches!(update, PrefabUpdate::Rebuild));
+        update_prefab(&mut instances, &tree, &icons, &textures, &document, owner, 32);
         assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
     }
 
@@ -3076,7 +3081,7 @@ mod example_environment {
     use render::texture::TextureCatalog;
 
     use super::build;
-    use crate::{Environment, document::MapDocument};
+    use crate::{document::MapDocument, environment::Environment};
 
     fn examples() -> PathBuf {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");

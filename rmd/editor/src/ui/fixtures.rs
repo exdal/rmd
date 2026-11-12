@@ -7,7 +7,6 @@ use std::{
 
 use dear_imgui_rs::{BackendFlags, Condition, Context, Key, MouseButton, sys};
 use dmm::{Prefab, Size};
-use editor::document::DocumentId;
 use render::MapViewInteraction;
 
 use super::{
@@ -16,7 +15,7 @@ use super::{
     overlay_padding, recent_button_size,
     viewport::{MapViewDraw, modules::controls_layout as module_controls_layout},
 };
-use crate::{session::Session, settings::Settings};
+use crate::{document::DocumentId, session::Session, settings::Settings};
 
 pub(super) fn rectangle_context() -> dear_imgui_rs::Context {
     let mut context = dear_imgui_rs::Context::create();

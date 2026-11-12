@@ -1,13 +1,13 @@
 use dmm::{Coord, Prefab, Size};
-use editor::{
-    document::{DocumentId, PrefabInstanceId, Selection},
-    focus::AreaFocus,
-    frame::{self, FrameInstances, FrameRenderOptions, HiddenTypes, PrefabUpdate},
-};
 use objtree::{Roots, TypeId};
 use render::{Frame, GuideLine, MapViewFrame, MapViewInteraction, MapViewRect, SpritePreview};
 
 use super::{Session, context_placement_group};
+use crate::{
+    document::{DocumentId, PrefabInstanceId, Selection},
+    focus::AreaFocus,
+    frame::{self, FrameInstances, FrameRenderOptions, HiddenTypes, PrefabUpdate},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeLayer {
@@ -268,7 +268,7 @@ impl Session {
                     node_types: Some(&node_types),
                     visibility: &self.type_visibility,
                     tile_size: self.options.tile_size,
-                    appearances: editor::bake::appearances(bake),
+                    appearances: crate::bake::appearances(bake),
                     lighting: bake.and_then(|bake| bake.lighting.as_ref()),
                 },
             ),
@@ -325,7 +325,7 @@ impl Session {
         // drawn in their new tile order once the render cache takes their indices again
         self.apply_bake_update(
             id,
-            editor::bake::BakeUpdate {
+            crate::bake::BakeUpdate {
                 appearances: ordered,
                 lighting: None,
             },
@@ -382,15 +382,15 @@ mod tests {
     use base::{path::TreePath, types::Value};
 
     use dmm::{Coord, Map, Prefab, Size};
-    use editor::{
-        document::{MapDocument, Selection},
-        tool::Tool,
-    };
 
-    use crate::session::{
-        Session, TypeLayer,
-        bake::MAX_PENDING_UPDATES,
-        fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, settle_bake},
+    use crate::{
+        document::{MapDocument, Selection},
+        session::{
+            Session, TypeLayer,
+            bake::MAX_PENDING_UPDATES,
+            fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, settle_bake},
+        },
+        tool::Tool,
     };
 
     #[test]

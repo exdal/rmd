@@ -11,15 +11,12 @@ use dear_imgui_rs::{
     WindowKeyError,
 };
 use dmm::{Coord, PrefabInstanceId};
-use editor::{
-    document::{DocumentId, MapDocument},
-    tool::{FillMode, SelectionRotation, SelectionTransform, Tool},
-};
 pub(crate) use inspector::TransformMode;
 use render::{Camera, GuideLine, MapViewInteraction, MapViewRect};
 
 use self::{inspector::InspectorPanel, object_tree::ObjectTreePanel, settings::SettingsWindow};
 use crate::{
+    document::{DocumentId, MapDocument},
     external_editor::SourceLocation,
     gizmo::GizmoState,
     loader::LoadView,
@@ -27,6 +24,7 @@ use crate::{
     session::{LoadReport, Session, TypeLayer},
     settings::{KeybindAction, KeybindPreset, OpenPanels, Panel, Settings},
     theme::Themes,
+    tool::{FillMode, SelectionRotation, SelectionTransform, Tool},
     update::UpdateCheck,
 };
 
@@ -1106,7 +1104,6 @@ mod tests {
 
     use dear_imgui_rs::DockLayout;
     use dmm::{Prefab, Size};
-    use editor::tool::FillMode;
 
     use super::{
         DEFAULT_CUSTOM_FILL_BOUNDARY, IMGUI_CONTEXT, RegionSelectionOptions, UiState, common::button_width,
@@ -1116,6 +1113,7 @@ mod tests {
         session::{DiagnosticSeverity, Session, fixtures::install_diff},
         settings::{KeyBinding, KeyBindings, KeybindAction, OpenPanels, Panel, Settings},
         theme::{DEFAULT_THEME, Themes},
+        tool::FillMode,
     };
 
     #[test]
@@ -1608,7 +1606,7 @@ mod tests {
             map,
             z: 1,
             errors: vec![],
-            repo: Some(editor::git::RepoPath {
+            repo: Some(crate::git::RepoPath {
                 root: PathBuf::from("missing-repository"),
                 git_dir: PathBuf::from("missing-repository/.git"),
                 rel: String::from("diff-ui-test.dmm"),
@@ -1757,7 +1755,7 @@ mod tests {
         let load = crate::loader::LoadView {
             title: "Opening codebase",
             path: "game.dme".into(),
-            snapshot: editor::progress::Progress::new().snapshot(),
+            snapshot: crate::progress::Progress::new().snapshot(),
             cancelling: false,
             cancellable: true,
         };

@@ -1,9 +1,9 @@
 use dear_imgui_rs::{MouseButton, PopupQueryFlags, Ui};
-use editor::document::DocumentId;
 
 use super::{ViewFrame, selection::shows_region_selection};
 use crate::{
     camera::clamp_zoom,
+    document::DocumentId,
     pacing::FrameDemand,
     session::Session,
     ui::{

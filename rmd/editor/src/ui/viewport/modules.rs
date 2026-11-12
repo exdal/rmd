@@ -2,17 +2,15 @@ use std::path::PathBuf;
 
 use dear_imgui_rs::{MouseButton, Ui};
 use dmm::Coord;
-use editor::{
-    icons::materialdesignicons::{ICON_MAP_MARKER, ICON_OPEN_IN_NEW},
-    maploader::preview::ModuleVariantKey,
-    tool::Tool,
-};
 use render::Renderer;
 
 use super::ViewFrame;
 use crate::{
     camera::Controller,
+    icons::materialdesignicons::{ICON_MAP_MARKER, ICON_OPEN_IN_NEW},
+    maploader::preview::ModuleVariantKey,
     session::Session,
+    tool::Tool,
     ui::{
         OverlayRect,
         common::{IDENTICAL_EDIT_COLOR, dpi},

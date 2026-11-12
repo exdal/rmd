@@ -5,15 +5,15 @@ use std::{
 
 use base::path::TreePath;
 use dmm::{Map, MapFormat, Prefab, Size};
-use editor::{
+
+use super::{GitDocState, Session, coop::LevelStep, is_reorder_label};
+use crate::{
     conflict::ConflictState,
     document::{DocumentId, MapDocument},
     grid::Grid,
+    loader::LoadedMap,
     tool::Tool,
 };
-
-use super::{GitDocState, Session, coop::LevelStep, is_reorder_label};
-use crate::loader::LoadedMap;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct SaveAllOutcome {
@@ -457,11 +457,14 @@ mod tests {
     use base::{path::TreePath, types::Value};
 
     use dmm::{Coord, Map, MapFormat, Prefab, Size};
-    use editor::{document::MapDocument, tool::Tool};
 
-    use crate::session::{
-        Session,
-        fixtures::{assert_render_cache_matches_rebuild, examples, flat_session},
+    use crate::{
+        document::MapDocument,
+        session::{
+            Session,
+            fixtures::{assert_render_cache_matches_rebuild, examples, flat_session},
+        },
+        tool::Tool,
     };
 
     #[test]

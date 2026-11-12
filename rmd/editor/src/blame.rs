@@ -115,10 +115,6 @@ impl BlameResult {
         find(prefer_z).or_else(|| (1..=self.size.z).filter(|z| *z != prefer_z).find_map(find))
     }
 
-    pub fn oldest_commit(&self) -> Option<&CommitInfo> {
-        self.commits.last()
-    }
-
     pub fn boundary_label(&self) -> String {
         self.parse_boundary
             .and_then(|index| self.commits.get(index))
@@ -308,6 +304,7 @@ pub struct GitVersions {
 }
 
 impl GitVersions {
+    #[cfg(test)]
     pub fn open(path: RepoPath, depth: usize) -> Result<Self, GitError> {
         Self::open_with_cancel(path, depth, &|| false)
     }

@@ -8,11 +8,10 @@ use std::{
     time::Instant,
 };
 
-use editor::{Environment, tool::Tool};
 use net::{Client, CodebaseId, Event, PasswordHash, Server, ServerConfig};
 
 use super::{Coop, CoopConnection, CoopStatus, Prepared, SharedState};
-use crate::session::Session;
+use crate::{environment::Environment, session::Session, tool::Tool};
 
 impl Session {
     fn loaded_codebase_id(&self) -> Result<CodebaseId, String> {

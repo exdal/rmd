@@ -1,12 +1,12 @@
 use dear_imgui_rs::{Condition, StyleColor, Ui, WindowFlags};
 use dmm::Coord;
-use editor::{
+
+use super::{OverlayRect, common::dpi, git::commit_summary};
+use crate::{
     document::DocumentId,
     git::{CommitInfo, WebLinks},
     icons::materialdesignicons::ICON_CIRCLE_SMALL,
 };
-
-use super::{OverlayRect, common::dpi, git::commit_summary};
 
 pub(super) struct BlamePopup {
     pub(super) coord: Coord,
@@ -63,7 +63,7 @@ pub(super) fn draw_blame_popup(
             ui.text(format!(
                 "{ICON_CIRCLE_SMALL} {} {ICON_CIRCLE_SMALL} {}",
                 commit.author,
-                editor::blame::relative_time(now, commit.time)
+                crate::blame::relative_time(now, commit.time)
             ));
             let padding = ui.clone_style().window_padding()[0];
             commit_summary(ui, commit, web, width - padding * 2.0);

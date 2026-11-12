@@ -1,16 +1,16 @@
 use std::{collections::HashSet, mem};
 
-use editor::{
-    bake::{self, BakeUpdate},
-    document::{DocumentId, PrefabInstanceId},
-    frame::{self, FrameRenderOptions, PrefabUpdate},
-    maploader::preview::PREVIEW_ID_START,
-};
 use render::FrameUpdate;
 use vm::profile::ProfileHook;
 
 use super::{BakeHold, Session, always_highlighted};
-use crate::baker::{self, Baked, BakedMap, Job};
+use crate::{
+    bake::{self, BakeUpdate},
+    baker::{self, Baked, BakedMap, Job},
+    document::{DocumentId, PrefabInstanceId},
+    frame::{self, FrameRenderOptions, PrefabUpdate},
+    maploader::preview::PREVIEW_ID_START,
+};
 
 // updates the renderer may not have drawn yet, so a frame that missed some can still catch up
 pub(super) const MAX_PENDING_UPDATES: usize = 8;
@@ -23,7 +23,7 @@ fn push_pending<T>(updates: &mut Vec<T>, update: T) {
     updates.push(update);
 }
 
-pub(super) fn report_bake_output(bake: &mut editor::bake::Bake) {
+pub(super) fn report_bake_output(bake: &mut crate::bake::Bake) {
     for line in bake.take_output() {
         log::info!("DM: {line}");
     }
@@ -54,7 +54,7 @@ pub(super) struct LoggedFault {
     state: FaultState,
 }
 
-fn log_runtimes(bake: &editor::bake::Bake, log: &mut Vec<LoggedFault>) {
+fn log_runtimes(bake: &crate::bake::Bake, log: &mut Vec<LoggedFault>) {
     for logged in log.iter_mut() {
         logged.state = FaultState::Stopped;
     }
@@ -169,13 +169,13 @@ impl Session {
 
             let level_count = document.map.size().z;
             let cache = self.caches.entry(id).or_default();
-            let behind = cache.bake.take_if(|bake| editor::bake::levels(bake) < level_count);
+            let behind = cache.bake.take_if(|bake| crate::bake::levels(bake) < level_count);
             let job = match behind {
                 Some(bake) => Job::Extend {
-                    atoms: editor::bake::atoms_from_view(
+                    atoms: crate::bake::atoms_from_view(
                         &environment,
                         cache.modules.view(&document.map),
-                        editor::bake::levels(&bake) + 1,
+                        crate::bake::levels(&bake) + 1,
                     ),
                     bake: Box::new(bake),
                     level_count,
@@ -220,7 +220,7 @@ impl Session {
             .caches
             .get(&id)
             .and_then(|cache| cache.bake.as_ref())
-            .is_some_and(|bake| editor::bake::levels(bake) < level_count);
+            .is_some_and(|bake| crate::bake::levels(bake) < level_count);
         if !is_behind {
             return;
         }
@@ -248,7 +248,7 @@ impl Session {
         self.start_next_bake();
     }
 
-    fn land_extension(&mut self, id: DocumentId, mut bake: editor::bake::Bake, mut update: BakeUpdate) {
+    fn land_extension(&mut self, id: DocumentId, mut bake: crate::bake::Bake, mut update: BakeUpdate) {
         report_bake_output(&mut bake);
         let cache = self.caches.entry(id).or_default();
         let unbaked = std::mem::take(&mut cache.unbaked);
@@ -261,9 +261,9 @@ impl Session {
         ) {
             // levels added since it left get their own extension
             let edits =
-                editor::bake::update_known_levels(bake, environment, cache.modules.view(&document.map), &unbaked);
+                crate::bake::update_known_levels(bake, environment, cache.modules.view(&document.map), &unbaked);
             update.merge(edits);
-            update.merge(editor::bake::settle_modules(
+            update.merge(crate::bake::settle_modules(
                 bake,
                 environment,
                 &document.map,
@@ -328,7 +328,7 @@ impl Session {
             // previews switched while the bake ran
             if let (Some(environment), Some(document)) = (state.environment.as_ref(), state.document(id)) {
                 let changed = cache.modules.set_enabled(&document.map, is_enabled);
-                editor::bake::update_known_levels(&mut bake, environment, cache.modules.view(&document.map), &changed);
+                crate::bake::update_known_levels(&mut bake, environment, cache.modules.view(&document.map), &changed);
                 report_bake_output(&mut bake);
             }
 
@@ -339,7 +339,7 @@ impl Session {
 
         self.sync_module_guard(id);
         let cache = self.caches.entry(id).or_default();
-        cache.pending_rebake = editor::bake::UiRebake::default();
+        cache.pending_rebake = crate::bake::UiRebake::default();
         // a bake starts from the profile's own defaults, so it has to be told what the
         // panel already asked for before it is first shown
         if let Some(feedback) = self.ui_feedback.clone() {
@@ -383,7 +383,7 @@ impl Session {
             .collect()
     }
 
-    pub(super) fn apply_bake_update(&mut self, id: DocumentId, bake_update: editor::bake::BakeUpdate) {
+    pub(super) fn apply_bake_update(&mut self, id: DocumentId, bake_update: crate::bake::BakeUpdate) {
         let Self {
             state,
             textures,
@@ -409,7 +409,7 @@ impl Session {
                     node_types: Some(&cache.node_types),
                     visibility: type_visibility,
                     tile_size: options.tile_size,
-                    appearances: editor::bake::appearances(cache.bake.as_ref()),
+                    appearances: crate::bake::appearances(cache.bake.as_ref()),
                     lighting: cache.bake.as_ref().and_then(|bake| bake.lighting.as_ref()),
                 },
             ),
@@ -555,7 +555,6 @@ impl Session {
                     },
                 );
             },
-            PrefabUpdate::Rebuild => self.rebuild_instances(id),
         }
     }
 }
@@ -566,18 +565,23 @@ mod tests {
     use std::{mem, path::PathBuf};
 
     use dmm::{Coord, Map, Prefab, Size};
-    use editor::{bake, document::MapDocument, progress::Progress, tool::Tool};
 
-    use crate::session::{
-        Session,
-        fixtures::{assert_render_cache_matches_rebuild, examples, live_bytes, settle_bake, take_peak_bytes},
+    use crate::{
+        bake,
+        document::MapDocument,
+        progress::Progress,
+        session::{
+            Session,
+            fixtures::{assert_render_cache_matches_rebuild, examples, live_bytes, settle_bake, take_peak_bytes},
+        },
+        tool::Tool,
     };
 
     #[test]
     #[ignore = "requires the local target/TerraGov-Marine-Corps checkout"]
     fn bundled_tgmc_profile_bakes_maps_and_tools() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/TerraGov-Marine-Corps");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("tgmc")),
             ..Default::default()
         };
@@ -747,7 +751,7 @@ mod tests {
             let environment = session.state.environment.as_ref().unwrap();
             bake.appearances.get(&fixture.get()).is_some_and(|appearance| {
                 appearance.overlays.iter().any(|overlay| {
-                    editor::visual::resolve_overlay(&environment.tree, &owner, overlay)
+                    crate::visual::resolve_overlay(&environment.tree, &owner, overlay)
                         .icon_state
                         .as_deref()
                         == Some("tube_1")
@@ -827,7 +831,7 @@ mod tests {
             .join("../../target")
             .join(checkout);
         let entry = root.join(dme);
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from(profile)),
             ..Default::default()
         };
@@ -917,7 +921,7 @@ mod tests {
         }
     }
 
-    fn downstream_instance(session: &Session, x: u32, y: u32, path: &str) -> editor::document::PrefabInstanceId {
+    fn downstream_instance(session: &Session, x: u32, y: u32, path: &str) -> crate::document::PrefabInstanceId {
         let document = session.state.active_document().unwrap();
         document
             .instance_ids_at(Coord::new(x, y, 1))
@@ -927,7 +931,7 @@ mod tests {
             .unwrap_or_else(|| panic!("missing {path} at {x}, {y}"))
     }
 
-    fn downstream_appearance(session: &Session, x: u32, y: u32, path: &str) -> editor::visual::Appearance {
+    fn downstream_appearance(session: &Session, x: u32, y: u32, path: &str) -> crate::visual::Appearance {
         let id = downstream_instance(session, x, y, path);
         let document = session.state.active_document().unwrap();
         let prefab = document.prefab_instance(id).unwrap().prefab();
@@ -935,11 +939,11 @@ mod tests {
         let ty = environment.tree.id_of(&prefab.path).unwrap();
         let bake = session.active_cache().bake.as_ref().unwrap();
         let delta = bake.appearances.get(&id.get()).cloned().unwrap_or_default();
-        editor::visual::resolve_delta(&environment.tree, ty, prefab, &delta)
+        crate::visual::resolve_delta(&environment.tree, ty, prefab, &delta)
     }
 
     fn downstream_checkbox(session: &mut Session, label: &str, value: bool) {
-        use editor::bake::{UiCommand, UiFeedback, UiValue};
+        use crate::bake::{UiCommand, UiFeedback, UiValue};
 
         let frame = session.dm_ui(0, UiFeedback::default());
         assert!(session.active_cache().bake.as_ref().unwrap().ui_fault.is_none());
@@ -1088,7 +1092,7 @@ mod tests {
                 .get(&fixture.get())
                 .is_some_and(|appearance| {
                     appearance.overlays.iter().any(|overlay| {
-                        editor::visual::resolve_overlay(&environment.tree, &owner, overlay)
+                        crate::visual::resolve_overlay(&environment.tree, &owner, overlay)
                             .icon
                             .as_deref()
                             == Some(overlay_icon.as_str())
@@ -1163,7 +1167,7 @@ mod tests {
             let mut overlays = Vec::new();
             while let Some((parent, delta)) = pending.pop() {
                 for overlay in &delta.overlays {
-                    let appearance = editor::visual::resolve_overlay(&environment.tree, &parent, overlay);
+                    let appearance = crate::visual::resolve_overlay(&environment.tree, &parent, overlay);
                     pending.push((appearance.clone(), overlay));
                     overlays.push(appearance);
                 }
@@ -1200,7 +1204,7 @@ mod tests {
     fn bundled_monkestation_profile_bakes_debug_maps() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
         let entry = root.join("tgstation.dme");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("monkestation")),
             ..Default::default()
         };
@@ -1289,7 +1293,7 @@ mod tests {
     #[ignore = "requires the local target/MonkeStation2.0 checkout"]
     fn monkestation_fixtures_light_corners_like_the_game() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("monkestation")),
             ..Default::default()
         };
@@ -1344,7 +1348,7 @@ mod tests {
     #[ignore = "requires the local target/MonkeStation2.0 checkout"]
     fn monkestation_windows_take_department_colors_and_sills() -> Result<(), &'static str> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("monkestation")),
             ..Default::default()
         };
@@ -1392,22 +1396,22 @@ mod tests {
                 .prefab();
             let ty = environment.tree.id_of(&prefab.path).unwrap();
             let delta = bake.appearances.get(&instance.get()).expect("baked appearance");
-            let owner = editor::visual::resolve_delta(&environment.tree, ty, prefab, delta);
+            let owner = crate::visual::resolve_delta(&environment.tree, ty, prefab, delta);
             let overlays = delta
                 .overlays
                 .iter()
-                .map(|overlay| editor::visual::resolve_overlay(&environment.tree, &owner, overlay))
+                .map(|overlay| crate::visual::resolve_overlay(&environment.tree, &owner, overlay))
                 .collect::<Vec<_>>();
             Ok::<_, &str>((owner, overlays))
         };
         // Overlay colors carry an alpha byte.
-        let color = |appearance: &editor::visual::Appearance| {
+        let color = |appearance: &crate::visual::Appearance| {
             appearance
                 .color
                 .as_deref()
                 .map(|color| color.get(..7).unwrap_or(color).to_ascii_lowercase())
         };
-        let has_sill = |overlays: &[editor::visual::Appearance]| {
+        let has_sill = |overlays: &[crate::visual::Appearance]| {
             overlays.iter().any(|overlay| {
                 overlay
                     .icon
@@ -1443,7 +1447,7 @@ mod tests {
     #[ignore = "requires the local target/MonkeStation2.0 checkout"]
     fn monkestation_computers_draw_their_powered_overlays() -> Result<(), &'static str> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("monkestation")),
             ..Default::default()
         };
@@ -1483,11 +1487,11 @@ mod tests {
             .prefab();
         let ty = environment.tree.id_of(&prefab.path).unwrap();
         let delta = bake.appearances.get(&instance.get()).expect("baked computer");
-        let owner = editor::visual::resolve_delta(&environment.tree, ty, prefab, delta);
+        let owner = crate::visual::resolve_delta(&environment.tree, ty, prefab, delta);
         let overlays = delta
             .overlays
             .iter()
-            .map(|overlay| editor::visual::resolve_overlay(&environment.tree, &owner, overlay))
+            .map(|overlay| crate::visual::resolve_overlay(&environment.tree, &owner, overlay))
             .collect::<Vec<_>>();
 
         // The keyboard, then the screen and its emissive copy.
@@ -1511,13 +1515,13 @@ mod tests {
     fn tgstation_fixture_glows_follow_the_lighting_toggle() -> Result<(), &'static str> {
         use std::collections::HashMap;
 
-        use editor::{
+        use crate::{
             bake::{UiCommand, UiFeedback, UiValue},
             visual,
         };
 
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
@@ -1642,7 +1646,7 @@ mod tests {
                 map.grid[0][(5 - y) as usize][(x - 1) as usize] = key;
             }
         }
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
@@ -1676,14 +1680,14 @@ mod tests {
             .prefab();
         let ty = environment.tree.id_of(&prefab.path).unwrap();
         let delta = &bake.appearances[&instance.get()];
-        let appearance = editor::visual::resolve_delta(&environment.tree, ty, prefab, delta);
+        let appearance = crate::visual::resolve_delta(&environment.tree, ty, prefab, delta);
         assert_eq!(appearance.dir, defines::NORTH);
         assert_eq!(appearance.icon_state.as_deref(), Some("dvalve_off-1"));
 
         let mut underlays = delta
             .underlays
             .iter()
-            .filter_map(|underlay| editor::visual::resolve_overlay(&environment.tree, &appearance, underlay).icon_state)
+            .filter_map(|underlay| crate::visual::resolve_overlay(&environment.tree, &appearance, underlay).icon_state)
             .collect::<Vec<_>>();
         underlays.sort();
         assert_eq!(underlays, ["intact_1_3", "intact_2_3"]);
@@ -1720,7 +1724,7 @@ mod tests {
     #[ignore = "requires the local target/tgstation checkout"]
     fn a_hidden_layer_manifold_draws_its_connections_above_the_floor() -> Result<(), &'static str> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
@@ -1771,7 +1775,7 @@ mod tests {
         assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
         let environment = session.state.environment.as_ref().unwrap();
         let document = session.state.active_document().unwrap();
-        let resolved = |instance: editor::document::PrefabInstanceId| {
+        let resolved = |instance: crate::document::PrefabInstanceId| {
             let prefab = document
                 .prefab_instance(instance)
                 .ok_or("prefab instance is missing")?
@@ -1779,12 +1783,12 @@ mod tests {
             let ty = environment.tree.id_of(&prefab.path).unwrap();
             let delta = bake.appearances.get(&instance.get());
             let appearance = delta.map_or_else(
-                || editor::visual::resolve_id(&environment.tree, ty, prefab),
-                |delta| editor::visual::resolve_delta(&environment.tree, ty, prefab, delta),
+                || crate::visual::resolve_id(&environment.tree, ty, prefab),
+                |delta| crate::visual::resolve_delta(&environment.tree, ty, prefab, delta),
             );
             Ok::<_, &str>((prefab.path.to_string(), appearance, delta))
         };
-        let depth = |appearance: &editor::visual::Appearance| appearance.plane * 1000.0 + appearance.layer;
+        let depth = |appearance: &crate::visual::Appearance| appearance.plane * 1000.0 + appearance.layer;
 
         for (coord, expected) in [
             (Coord::new(1, 2, 1), ["intact_1_3", "intact_2_3"]),
@@ -1799,7 +1803,7 @@ mod tests {
             let (_, turf, _) = placed.iter().find(|(path, ..)| path.starts_with("/turf/")).unwrap();
             let mut states = Vec::new();
             for overlay in &delta.expect("baked manifold").overlays {
-                let connection = editor::visual::resolve_overlay(&environment.tree, owner, overlay);
+                let connection = crate::visual::resolve_overlay(&environment.tree, owner, overlay);
                 let Some(state) = connection
                     .icon_state
                     .clone()
@@ -1825,7 +1829,7 @@ mod tests {
     #[ignore = "requires the local target/tgstation checkout"]
     fn a_hidden_pipe_in_a_wall_draws_above_the_wall() -> Result<(), &'static str> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
@@ -1872,11 +1876,11 @@ mod tests {
             let ty = environment.tree.id_of(&prefab.path).unwrap();
 
             Ok::<_, &str>(bake.appearances.get(&id.get()).map_or_else(
-                || editor::visual::resolve_id(&environment.tree, ty, prefab),
-                |delta| editor::visual::resolve_delta(&environment.tree, ty, prefab, delta),
+                || crate::visual::resolve_id(&environment.tree, ty, prefab),
+                |delta| crate::visual::resolve_delta(&environment.tree, ty, prefab, delta),
             ))
         };
-        let depth = |appearance: &editor::visual::Appearance| (appearance.plane, appearance.layer);
+        let depth = |appearance: &crate::visual::Appearance| (appearance.plane, appearance.layer);
 
         let in_wall = appearance_at(Coord::new(1, 1, 1), pipe)?;
         let wall = appearance_at(Coord::new(1, 1, 1), "/turf/")?;
@@ -1899,7 +1903,7 @@ mod tests {
     #[ignore = "requires the local target/tgstation checkout"]
     fn a_burgundy_marker_beacon_lights_its_tile_red_on_tg_corner_steps() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
@@ -1940,7 +1944,7 @@ mod tests {
     #[ignore = "requires the local target/tgstation checkout"]
     fn lava_lights_only_where_it_borders_another_turf() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
@@ -1995,7 +1999,7 @@ mod tests {
     #[ignore = "requires the local target/tgstation checkout"]
     fn lava_lights_the_level_above_through_openspace() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
@@ -2037,7 +2041,7 @@ mod tests {
     #[ignore = "requires the local target/tgstation checkout"]
     fn an_openspace_level_added_above_lava_lights_like_a_full_bake() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
@@ -2093,7 +2097,7 @@ mod tests {
     #[ignore = "requires the local target/tgstation checkout"]
     fn a_thermomachine_rotates_its_baked_pipe_with_dir() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("tgstation")),
             ..Default::default()
         };
@@ -2129,12 +2133,12 @@ mod tests {
             let prefab = document.prefab_instance(instance)?.prefab();
             let ty = environment.tree.id_of(&prefab.path).unwrap();
             let delta = &bake.appearances[&instance.get()];
-            let owner = editor::visual::resolve_delta(&environment.tree, ty, prefab, delta);
+            let owner = crate::visual::resolve_delta(&environment.tree, ty, prefab, delta);
 
             delta
                 .overlays
                 .iter()
-                .map(|overlay| editor::visual::resolve_overlay(&environment.tree, &owner, overlay))
+                .map(|overlay| crate::visual::resolve_overlay(&environment.tree, &owner, overlay))
                 .find(|overlay| overlay.icon_state.as_deref() == Some("pipe"))
                 .map(|overlay| overlay.dir)
         };
@@ -2147,7 +2151,7 @@ mod tests {
         session.pick_instance(Some(instance));
         session.edit_picked_instance_vars(
             "set dir",
-            &[editor::document::VarMutation::Set("dir".into(), Value::Num(4.0))],
+            &[crate::document::VarMutation::Set("dir".into(), Value::Num(4.0))],
             None,
         );
         settle_bake(&mut session);
@@ -2159,7 +2163,7 @@ mod tests {
     fn bundled_secondcity_profile_bakes_city_maps() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/SecondCity");
         let entry = root.join("tgstation.dme");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("secondcity")),
             ..Default::default()
         };
@@ -2315,10 +2319,10 @@ mod tests {
     fn secondcity_placement_timings() {
         use std::time::Instant;
 
-        use editor::command::Edit;
+        use crate::command::Edit;
 
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/SecondCity");
-        let options = editor::environment::BakeOptions {
+        let options = crate::environment::BakeOptions {
             forced_profile: Some(String::from("secondcity")),
             ..Default::default()
         };

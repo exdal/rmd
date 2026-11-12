@@ -1,14 +1,12 @@
 use dear_imgui_rs::{Key, PopupQueryFlags, Ui};
-use editor::{
-    clipboard::PasteMerge,
-    tool::{SelectionRotation, Tool},
-};
 use render::PickRequest;
 
 use super::{ViewFrame, tools::request_pick};
 use crate::{
+    clipboard::PasteMerge,
     session::Session,
     settings::{KeybindAction, Settings},
+    tool::{SelectionRotation, Tool},
     ui::{
         UiState, centered_paste_min,
         context_menu::{Action as MenuAction, NodeContext, draw_popup as draw_map_menu},

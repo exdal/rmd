@@ -1,18 +1,16 @@
 use base::path::TreePath;
 
 use dear_imgui_rs::{StyleColor, StyleVar, Ui};
-use editor::{
-    icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_DELETE, ICON_MENU_DOWN},
-    tool::{FillMode, Tool},
-};
 
 use super::{
     DeleteLevelDialog, MAX_CUSTOM_FILL_SEARCH_RESULTS, NewLevelDialog, OverlayRect, RegionSelectionOptions,
     draw_overlay_underlay, draw_selection_mode_controls, draw_type_path_search, overlay_padding,
 };
 use crate::{
+    icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_DELETE, ICON_MENU_DOWN},
     session::{LevelChange, Session},
     settings::{KeyBindings, KeybindAction},
+    tool::{FillMode, Tool},
 };
 
 pub(super) const DEFAULT_CUSTOM_FILL_BOUNDARY: &str = "/turf/closed/wall";

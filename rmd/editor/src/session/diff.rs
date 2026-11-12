@@ -1,16 +1,16 @@
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use dmm::{Coord, Map, Tile};
-use editor::{
+
+use super::{Session, SharedHighlights};
+use crate::{
     diff::{self, ChangeKind, DiffSource, MapDiff, Version},
     document::DocumentId,
     git::CommitInfo,
+    git_worker::Revision,
     grid::Grid,
     tool::ToolEdit,
 };
-
-use super::{Session, SharedHighlights};
-use crate::git_worker::Revision;
 
 /// One side of a loaded comparison
 pub(crate) struct DiffSide {
@@ -217,11 +217,13 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use dmm::Coord;
-    use editor::diff::{ChangeKind, MODIFIED_COLOR};
 
-    use crate::session::{
-        Session,
-        fixtures::{conflicted_session, install_diff},
+    use crate::{
+        diff::{ChangeKind, MODIFIED_COLOR},
+        session::{
+            Session,
+            fixtures::{conflicted_session, install_diff},
+        },
     };
 
     #[test]

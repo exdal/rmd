@@ -32,7 +32,7 @@ pub(crate) fn open(template: &str, source: &SourceLocation, root: Option<&Path>)
 }
 
 fn spawn(program: &str, arguments: &[String]) -> io::Result<()> {
-    editor::process::command(program).args(arguments).spawn().map(|_| ())
+    crate::process::command(program).args(arguments).spawn().map(|_| ())
 }
 
 fn editor_command(template: &str, source: &SourceLocation, root: Option<&Path>) -> Result<EditorCommand, String> {

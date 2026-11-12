@@ -1,8 +1,8 @@
 use dear_imgui_rs::{DrawListMut, Ui};
-use editor::document::DocumentId;
 
 use crate::{
     camera::Controller,
+    document::DocumentId,
     session::{PickedTransform, Session},
 };
 

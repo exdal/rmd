@@ -109,6 +109,7 @@ impl EditorState {
         Some(document)
     }
 
+    #[cfg(test)]
     pub fn has_unsaved_changes(&self) -> bool {
         self.documents.iter().any(MapDocument::is_dirty)
     }

@@ -1,12 +1,12 @@
 use dmm::Coord;
-use editor::{
+
+use super::{RegionState, Session};
+use crate::{
     clipboard::{self, PasteMerge, TileRegion},
     command::EditGroupId,
     document::{DocumentId, PrefabInstanceId, Selection},
     tool::{RegionSelectionMode, SelectionMask, SelectionRotation, Tool, ToolEdit},
 };
-
-use super::{RegionState, Session};
 
 #[derive(Debug)]
 pub(super) struct FloatingPaste {
@@ -338,15 +338,15 @@ mod tests {
     use base::{path::TreePath, types::Value};
 
     use dmm::{Coord, Map, Prefab, Size};
-    use editor::{
+
+    use crate::{
         clipboard::PasteMerge,
         document::{MapDocument, PlacedPrefab, PrefabInstanceId, Selection},
+        session::{
+            Session,
+            fixtures::{assert_render_cache_matches_rebuild, examples, flat_session},
+        },
         tool::{RegionSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
-    };
-
-    use crate::session::{
-        Session,
-        fixtures::{assert_render_cache_matches_rebuild, examples, flat_session},
     };
 
     #[test]
@@ -512,7 +512,7 @@ mod tests {
                             .1
                             .clone();
                         for prefab in &mut expected {
-                            editor::tool::rotate_prefab(session.tree().unwrap(), prefab, rotation);
+                            crate::tool::rotate_prefab(session.tree().unwrap(), prefab, rotation);
                         }
                         assert_eq!(
                             document.map.tile_at(coord).unwrap(),

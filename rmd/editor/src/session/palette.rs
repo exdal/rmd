@@ -1,16 +1,16 @@
 use base::path::TreePath;
 
 use dmm::Prefab;
-use editor::{
-    Environment,
-    frame::{self},
-    tool::{Tool, is_placeable},
-    visual,
-};
 use objtree::TypeId;
 use render::{SpriteTexture, texture::TextureCatalog};
 
 use super::Session;
+use crate::{
+    environment::Environment,
+    frame::{self},
+    tool::{Tool, is_placeable},
+    visual,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PrefabThumbnail {
@@ -159,9 +159,12 @@ mod tests {
     use std::sync::Arc;
 
     use dmm::{Coord, Prefab};
-    use editor::{progress::Progress, tool::Tool};
 
-    use crate::session::{Session, build_textures, fixtures::examples};
+    use crate::{
+        progress::Progress,
+        session::{Session, build_textures, fixtures::examples},
+        tool::Tool,
+    };
 
     #[test]
     fn prefab_thumbnails_resolve_overrides_and_sheet_coordinates() {
@@ -231,12 +234,11 @@ mod tests {
         let (editor_tree, _) = compile(false);
         let (bake_tree, module) = compile(true);
         let selected_profile = vm::bake::profile_type(&bake_tree).expect("default profile");
-        let mut environment = editor::Environment::new(root.join("test.dme"), editor_tree);
-        environment.bake_program = Some(editor::BakeProgram {
+        let mut environment = crate::environment::Environment::new(root.join("test.dme"), editor_tree);
+        environment.bake_program = Some(crate::environment::BakeProgram {
             tree: bake_tree,
             module: codegen::generate(&module).expect("codegen"),
             profile: selected_profile,
-            files: Default::default(),
             icon_states: Default::default(),
         });
         assert!(environment.load_icons(&[], &Progress::new()).is_empty());

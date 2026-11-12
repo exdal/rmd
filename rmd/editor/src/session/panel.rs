@@ -1,11 +1,10 @@
-use editor::document::{DocumentId, PrefabInstanceId};
-
 use super::{Session, report_bake_output};
+use crate::document::{DocumentId, PrefabInstanceId};
 
 impl Session {
-    pub(crate) fn dm_ui(&mut self, dockspace: u32, feedback: editor::bake::UiFeedback) -> editor::bake::UiFrame {
+    pub(crate) fn dm_ui(&mut self, dockspace: u32, feedback: crate::bake::UiFeedback) -> crate::bake::UiFrame {
         let Some(id) = self.state.active() else {
-            return editor::bake::UiFrame::default();
+            return crate::bake::UiFrame::default();
         };
         let Some(program) = self
             .state
@@ -13,7 +12,7 @@ impl Session {
             .as_ref()
             .and_then(|environment| environment.bake_program.as_ref())
         else {
-            return editor::bake::UiFrame::default();
+            return crate::bake::UiFrame::default();
         };
         let target = self
             .state
@@ -21,7 +20,7 @@ impl Session {
             .and_then(|document| document.picked_instance())
             .map(PrefabInstanceId::get);
         let Some(bake) = self.caches.get_mut(&id).and_then(|cache| cache.bake.as_mut()) else {
-            return editor::bake::UiFrame::default();
+            return crate::bake::UiFrame::default();
         };
 
         let mut replayed = feedback.clone();
@@ -65,7 +64,7 @@ impl Session {
                     self.logged_ui_fault = Some(key);
                 }
 
-                editor::bake::UiFrame::default()
+                crate::bake::UiFrame::default()
             },
         };
 
@@ -73,7 +72,7 @@ impl Session {
         frame
     }
 
-    pub(super) fn replay_ui(&mut self, id: DocumentId, feedback: &editor::bake::UiFeedback) -> bool {
+    pub(super) fn replay_ui(&mut self, id: DocumentId, feedback: &crate::bake::UiFeedback) -> bool {
         let Some(environment) = self.state.environment.clone() else {
             return false;
         };
@@ -124,7 +123,7 @@ impl Session {
         }
     }
 
-    pub(crate) fn dm_ui_rebake(&mut self, request: editor::bake::UiRebake) {
+    pub(crate) fn dm_ui_rebake(&mut self, request: crate::bake::UiRebake) {
         if let Some(id) = self.state.active() {
             self.caches.entry(id).or_default().pending_rebake.merge(request);
         }
@@ -132,7 +131,7 @@ impl Session {
         self.flush_pending_rebakes();
     }
 
-    fn run_rebake(&mut self, id: DocumentId, request: editor::bake::UiRebake) {
+    fn run_rebake(&mut self, id: DocumentId, request: crate::bake::UiRebake) {
         let Some(program) = self
             .state
             .environment
@@ -151,7 +150,7 @@ impl Session {
         self.collect_bake_diagnostics();
         self.apply_bake_update(
             id,
-            editor::bake::BakeUpdate {
+            crate::bake::BakeUpdate {
                 appearances: update
                     .appearances
                     .into_iter()
@@ -173,13 +172,16 @@ mod tests {
     };
 
     use dmm::{Coord, Map, Prefab, Size};
-    use editor::document::{DocumentId, MapDocument, PrefabInstanceId};
     use vm::profile::ProfileHook;
 
-    use crate::session::{
-        FaultState, Session,
-        fixtures::{
-            examples, faulting_profile_session, highlight_toggle_fault_session, interaction_fault_session, settle_bake,
+    use crate::{
+        document::{DocumentId, MapDocument, PrefabInstanceId},
+        session::{
+            FaultState, Session,
+            fixtures::{
+                examples, faulting_profile_session, highlight_toggle_fault_session, interaction_fault_session,
+                settle_bake,
+            },
         },
     };
 
@@ -225,11 +227,11 @@ mod tests {
             .and_then(|(_, value)| value.as_text())
     }
 
-    fn toggle_smooth(session: &mut Session, smooth: bool) -> editor::bake::UiFrame {
+    fn toggle_smooth(session: &mut Session, smooth: bool) -> crate::bake::UiFrame {
         session.dm_ui(
             0,
-            editor::bake::UiFeedback {
-                values: HashMap::from([(String::from("Panel/Smooth"), editor::bake::UiValue::Bool(smooth))]),
+            crate::bake::UiFeedback {
+                values: HashMap::from([(String::from("Panel/Smooth"), crate::bake::UiValue::Bool(smooth))]),
                 interacted: true,
                 ..Default::default()
             },
@@ -297,7 +299,7 @@ mod tests {
     #[test]
     fn ui_and_bake_faults_are_listed_with_their_hook_and_line() {
         let (mut session, id) = faulting_profile_session();
-        session.dm_ui(0, editor::bake::UiFeedback::default());
+        session.dm_ui(0, crate::bake::UiFeedback::default());
 
         let maps = session.runtime_faults();
         let [(document, faults)] = maps.as_slice() else {
@@ -313,7 +315,7 @@ mod tests {
 
     #[test]
     fn a_ui_fault_from_an_interaction_survives_the_idle_frames_after_it() {
-        use editor::bake::{UiFeedback, UiValue};
+        use crate::bake::{UiFeedback, UiValue};
 
         let (mut session, _) = interaction_fault_session();
         let slider = |hours: f32| UiFeedback {
@@ -348,7 +350,7 @@ mod tests {
     #[test]
     #[ignore = "requires the local target/Vanderlin checkout"]
     fn vanderlin_tallies_loot_and_shades_ambushes_within_budget() {
-        use editor::bake::{UiCommand, UiFeedback, UiValue};
+        use crate::bake::{UiCommand, UiFeedback, UiValue};
 
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/Vanderlin");
         let mut session = Session::new();
@@ -408,7 +410,7 @@ mod tests {
 
     #[test]
     fn a_highlight_fault_stays_listed_after_its_checkbox_turns_off() {
-        use editor::bake::{UiFeedback, UiValue};
+        use crate::bake::{UiFeedback, UiValue};
 
         let (mut session, _) = highlight_toggle_fault_session();
         let toggle = |session: &mut Session, show: bool| {

@@ -192,10 +192,4 @@ impl ModulePreviewState {
 
         ModuleOverlay::changes(source, self.preview.as_ref(), None)
     }
-
-    pub fn apply_choices(&mut self, ctx: ComposeContext<'_>, choices: ModuleChoices) -> Vec<PrefabInstanceId> {
-        self.choices = choices;
-
-        self.compose(ctx, &HashSet::new())
-    }
 }

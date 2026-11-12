@@ -3,7 +3,15 @@ use dear_imgui_rs::{
     TableRowFlags, TableSizingPolicy, TreeNodeFlags, Ui, WindowKey, WindowKeyError,
 };
 use dmm::Coord;
-use editor::{
+
+use super::{
+    SAVE_ERROR_COLOR,
+    common::{
+        RowSelection, align_right, button_width, centered_note, checkbox_width, dpi, focus_window_on_hover,
+        label_width, opaque, overflow_scroll, same_line_if_fits, table_min_width, text_wrapped_colored,
+    },
+};
+use crate::{
     blame::{self, BOUNDARY, UNCOMMITTED},
     conflict::{OURS_COLOR, OURS_LABEL, Side, THEIRS_COLOR, UNRESOLVED_COLOR, describe_tile},
     diff::{ChangeKind, DiffSource},
@@ -14,16 +22,6 @@ use editor::{
         ICON_FILE_COMPARE, ICON_PENCIL, ICON_REFRESH, ICON_RESTORE, ICON_SOURCE_BRANCH, ICON_SOURCE_COMMIT,
         ICON_SOURCE_MERGE,
     },
-};
-
-use super::{
-    SAVE_ERROR_COLOR,
-    common::{
-        RowSelection, align_right, button_width, centered_note, checkbox_width, dpi, focus_window_on_hover,
-        label_width, opaque, overflow_scroll, same_line_if_fits, table_min_width, text_wrapped_colored,
-    },
-};
-use crate::{
     session::{self, BlameState, DiffSide, GitDocState, Session},
     settings::Settings,
 };

@@ -1,7 +1,9 @@
 use std::mem;
 
 use dmm::Coord;
-use editor::{
+
+use super::{Session, clipboard::FloatingPaste};
+use crate::{
     command::EditGroupId,
     document::{DocumentId, PrefabInstanceId, Selection},
     tool::{
@@ -10,8 +12,6 @@ use editor::{
         rotated_selection_at, transform_selection_with_mode as build_selection_transform, transformed_selection,
     },
 };
-
-use super::{Session, clipboard::FloatingPaste};
 
 #[derive(Debug)]
 pub(super) struct PendingMove {
@@ -617,19 +617,19 @@ mod tests {
     use base::{path::TreePath, types::Value};
 
     use dmm::{Coord, Prefab};
-    use editor::{
+
+    use vm::world::Position;
+
+    use crate::{
         document::{PrefabInstanceId, Selection},
+        session::{
+            BakeHold, FillOutcome, RegionPreviewSource, Session,
+            fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session, settle_bake},
+        },
         tool::{
             FillMode, RegionSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, SelectionTransform,
             Tool,
         },
-    };
-
-    use vm::world::Position;
-
-    use crate::session::{
-        BakeHold, FillOutcome, RegionPreviewSource, Session,
-        fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session, settle_bake},
     };
 
     #[test]

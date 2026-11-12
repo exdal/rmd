@@ -9,18 +9,18 @@ use std::{
 };
 
 use dmm::{Coord, Map, Prefab, Size};
-use editor::{
-    BakeProgram, Environment,
-    blame::BlameResult,
-    diff::DiffSource,
-    document::{DocumentId, MapDocument, PrefabInstanceId},
-    git::{CommitInfo, WebLinks},
-    progress::Progress,
-};
 use render::{FrameUpdate, SpriteInstance};
 
 use super::{BlameState, DiffSide, DiffState, DocumentCache, Session};
-use crate::git_worker::Revision;
+use crate::{
+    blame::BlameResult,
+    diff::DiffSource,
+    document::{DocumentId, MapDocument, PrefabInstanceId},
+    environment::{BakeProgram, Environment},
+    git::{CommitInfo, WebLinks},
+    git_worker::Revision,
+    progress::Progress,
+};
 
 /// Counts live heap bytes, so memory tests can measure what a structure holds by dropping it.
 struct CountingAllocator;
@@ -83,7 +83,7 @@ impl Session {
     pub(crate) fn load_environment(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         self.apply_codebase(crate::loader::load_codebase(
             path,
-            &editor::environment::BakeOptions::default(),
+            &crate::environment::BakeOptions::default(),
             &Progress::new(),
         )?);
 
@@ -119,7 +119,7 @@ impl Session {
         let mut positions = (1..=size.x)
             .flat_map(|x| (1..=size.y).flat_map(move |y| (1..=size.z).map(move |z| dmm::Coord::new(x, y, z))))
             .flat_map(|coord| grid.ids_at(coord).to_vec())
-            .filter(|id| id.get() >= editor::maploader::preview::PREVIEW_ID_START)
+            .filter(|id| id.get() >= crate::maploader::preview::PREVIEW_ID_START)
             .map(|id| (id.get(), bake.and_then(|bake| bake.position(id.get()))))
             .collect::<Vec<_>>();
         positions.sort_unstable_by_key(|(id, _)| *id);
@@ -144,12 +144,12 @@ pub(super) fn conflicted_session() -> Session {
         map,
         z: 1,
         errors: Vec::new(),
-        repo: Some(editor::git::RepoPath {
+        repo: Some(crate::git::RepoPath {
             root: PathBuf::from("missing-repository"),
             git_dir: PathBuf::from("missing-repository/.git"),
             rel: String::from("conflicts.dmm"),
         }),
-        conflict: Some(editor::conflict::ConflictData {
+        conflict: Some(crate::conflict::ConflictData {
             operation: None,
             conflicts: [1, 3]
                 .map(|x| dmm::merge::TileConflict {
@@ -284,7 +284,6 @@ pub(super) fn node_environment_with_profile(profile: &'static str) -> Environmen
         tree: bake_tree,
         module: codegen::generate(&module).expect("codegen"),
         profile,
-        files: Default::default(),
         icon_states: Default::default(),
     });
 
@@ -313,7 +312,7 @@ pub(crate) fn highlight_toggle_fault_session() -> (Session, DocumentId) {
 fn profile_session(profile: &'static str) -> (Session, DocumentId) {
     let environment = node_environment_with_profile(profile);
     let document = MapDocument::new(node_map(1, 1, &[]), 1);
-    let bake = editor::bake::build(&environment, &document).expect("the profile bakes");
+    let bake = crate::bake::build(&environment, &document).expect("the profile bakes");
     let mut session = Session::new();
     session.state.environment = Some(Arc::new(environment));
     let id = session.state.open_document(document);
@@ -382,7 +381,7 @@ pub(super) fn node_session_with_environment(
                 .is_some_and(|instance| instance.prefab().path.to_string().starts_with(target_path))
         })
         .expect("seed node");
-    let bake = editor::bake::build(&environment, &document).expect("node profile bakes");
+    let bake = crate::bake::build(&environment, &document).expect("node profile bakes");
     let mut session = Session::new();
     session.state.environment = Some(Arc::new(environment));
     let document_id = session.state.open_document(document);
@@ -548,17 +547,17 @@ pub(crate) fn coordinate_viewport_session() -> Result<(impl Sized, Session), Box
 pub(super) fn assert_render_cache_matches_rebuild(session: &Session) {
     let environment = session.state.environment.as_ref().unwrap();
     let document_id = session.state.active().unwrap();
-    let expected = editor::frame::build_view_with_options(
+    let expected = crate::frame::build_view_with_options(
         &environment.tree,
         &environment.icons,
         &session.textures,
         session.effective_grid(document_id).unwrap(),
-        editor::frame::FrameRenderOptions {
+        crate::frame::FrameRenderOptions {
             perspective: environment.world.perspective,
             node_types: Some(&session.active_cache().node_types),
             visibility: &session.type_visibility,
             tile_size: session.options.tile_size,
-            appearances: editor::bake::appearances(session.active_cache().bake.as_ref()),
+            appearances: crate::bake::appearances(session.active_cache().bake.as_ref()),
             lighting: session
                 .active_cache()
                 .bake

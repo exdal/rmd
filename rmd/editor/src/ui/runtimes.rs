@@ -162,7 +162,7 @@ mod tests {
         let _guard = IMGUI_CONTEXT.lock().unwrap();
         let mut context = rectangle_context();
         let (mut session, _) = faulting_profile_session();
-        session.dm_ui(0, editor::bake::UiFeedback::default());
+        session.dm_ui(0, crate::bake::UiFeedback::default());
         let mut panel = RuntimesPanel::new().unwrap();
         let settings = Settings::default();
         let mut open = true;

@@ -231,10 +231,6 @@ impl ConflictState {
         self.order.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.order.is_empty()
-    }
-
     pub fn conflict_at(&self, coord: Coord) -> Option<&TileConflict> {
         self.tiles.get(&coord)
     }
@@ -244,6 +240,7 @@ impl ConflictState {
     }
 
     /// The latest resolution that is still applied in the history
+    #[cfg(test)]
     pub fn resolution(&self, coord: Coord, history: &History) -> Option<Side> {
         self.resolutions
             .get(&coord)?
@@ -278,6 +275,7 @@ impl ConflictState {
             .filter(move |coord| !resolved.0.contains_key(coord))
     }
 
+    #[cfg(test)]
     pub fn unresolved_count(&self, history: &History) -> usize {
         self.unresolved_in(&self.resolved(history)).count()
     }
@@ -328,6 +326,7 @@ impl ConflictState {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    #[cfg(test)]
     pub fn highlights(&self, z: u32, history: &History) -> Vec<Highlight> {
         self.highlights_in(z, &self.resolved(history))
     }

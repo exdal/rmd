@@ -1,13 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
 use dmm::Coord;
-use editor::{
+
+use super::{Session, SharedHighlights};
+use crate::{
     bake::{Bake, HIGHLIGHT_ALWAYS, HIGHLIGHT_HOVERED, HIGHLIGHT_SELECTED, Highlight, highlight_tiles},
     blame::BlameCell,
     document::{DocumentId, PrefabInstanceId},
 };
-
-use super::{Session, SharedHighlights};
 
 pub(super) const UNKNOWN_TYPE_COLOR: [f32; 3] = [0.58431375, 0.0, 1.0];
 
@@ -19,7 +19,7 @@ pub(super) struct UnknownHighlights {
 
 impl UnknownHighlights {
     fn get(
-        &mut self, generation: u64, revision: u64, instances: &editor::frame::FrameInstances, z: u32,
+        &mut self, generation: u64, revision: u64, instances: &crate::frame::FrameInstances, z: u32,
     ) -> SharedHighlights {
         if self.key != (generation, revision) {
             self.key = (generation, revision);
@@ -173,15 +173,16 @@ mod tests {
     use std::sync::Arc;
 
     use dmm::{Map, Prefab, Size};
-    use editor::{
-        Environment,
-        bake::{HIGHLIGHT_EDGE_EAST, HIGHLIGHT_EDGE_WEST},
-        document::MapDocument,
-    };
     use objtree::ObjectTree;
 
     use super::*;
-    use crate::{loader::LoadedCodebase, session::fixtures::conflicted_session};
+    use crate::{
+        bake::{HIGHLIGHT_EDGE_EAST, HIGHLIGHT_EDGE_WEST},
+        document::MapDocument,
+        environment::Environment,
+        loader::LoadedCodebase,
+        session::fixtures::conflicted_session,
+    };
 
     fn codebase(extra_paths: &[&str]) -> LoadedCodebase {
         let mut tree = ObjectTree::new();
@@ -311,6 +312,6 @@ mod tests {
         let highlights = set.iter().collect::<Vec<_>>();
         assert_eq!(highlights.len(), 2);
         assert_eq!(highlights[0].color, UNKNOWN_TYPE_COLOR);
-        assert_eq!(highlights[1].color, editor::conflict::UNRESOLVED_COLOR);
+        assert_eq!(highlights[1].color, crate::conflict::UNRESOLVED_COLOR);
     }
 }

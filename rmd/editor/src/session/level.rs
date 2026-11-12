@@ -1,11 +1,11 @@
 use base::path::TreePath;
 
 use dmm::{Coord, Prefab};
-use editor::{bake::BakeUpdate, document::DocumentId, patch};
 use net::{DeleteLevel, InsertAt, InsertLevel, LevelContents, LevelOp};
 use objtree::{ObjectTree, TypeId};
 
 use super::{LevelChange, Session};
+use crate::{bake::BakeUpdate, document::DocumentId, patch};
 
 pub(crate) fn validate_level(z: u32, levels: u32) -> std::io::Result<()> {
     let levels = levels.max(1);
@@ -321,15 +321,15 @@ mod tests {
     use base::path::TreePath;
 
     use dmm::{Coord, Map, Prefab, Size};
-    use editor::{
-        document::{MapDocument, Selection},
-        tool::Tool,
-    };
 
     use super::validate_level;
-    use crate::session::{
-        LevelChange, Session,
-        fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session, settle_bake},
+    use crate::{
+        document::{MapDocument, Selection},
+        session::{
+            LevelChange, Session,
+            fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session, settle_bake},
+        },
+        tool::Tool,
     };
 
     #[test]

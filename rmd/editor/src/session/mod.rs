@@ -6,17 +6,18 @@ use std::{
 };
 
 use dmm::Prefab;
-use editor::{
-    EditorState,
-    document::{DocumentId, PrefabInstanceId},
-    frame::{FrameInstances, FrameOptions, TypeVisibility},
-    maploader::preview::ModulePreviewState,
-    visual,
-};
 use objtree::TypeId;
 use render::{FrameUpdate, texture::TextureCatalog};
 
-use crate::{baker::Baker, git_worker::GitWorker};
+use crate::{
+    baker::Baker,
+    document::{DocumentId, PrefabInstanceId},
+    frame::{FrameInstances, FrameOptions, TypeVisibility},
+    git_worker::GitWorker,
+    maploader::preview::ModulePreviewState,
+    state::EditorState,
+    visual,
+};
 
 mod bake;
 mod blame;
@@ -88,7 +89,7 @@ struct DocumentCache {
     lighting_revision: u64,
     lighting_updates: Vec<render::LightingUpdate>,
     preview: Option<RegionPreviewCache>,
-    bake: Option<editor::bake::Bake>,
+    bake: Option<crate::bake::Bake>,
     bake_hold: BakeHold,
     // edited while the bake was off growing by a level, replayed when it comes back
     unbaked: Vec<PrefabInstanceId>,
@@ -96,19 +97,19 @@ struct DocumentCache {
     unknown_highlights: RefCell<highlight::UnknownHighlights>,
     issues: RefCell<issues::IssueGroups>,
     /// What a replayed panel frame asked this document to re-derive, held until it is active.
-    pending_rebake: editor::bake::UiRebake,
+    pending_rebake: crate::bake::UiRebake,
     git: Option<GitDocState>,
     map_revision: u64,
     runtimes: Vec<bake::LoggedFault>,
 }
 
-type SharedHighlights = Arc<[editor::bake::Highlight]>;
+type SharedHighlights = Arc<[crate::bake::Highlight]>;
 
 pub struct Session {
     pub state: EditorState,
     pub textures: TextureCatalog,
     pub options: FrameOptions,
-    pub diagnostics: editor::environment::LoadDiagnostics,
+    pub diagnostics: crate::environment::LoadDiagnostics,
     caches: HashMap<DocumentId, DocumentCache>,
     next_revision: u64,
     next_preview_revision: u64,
@@ -124,12 +125,12 @@ pub struct Session {
     loaded_conflicts: Option<DocumentId>,
     loaded_issues: Option<DocumentId>,
     queued_bakes: Vec<DocumentId>,
-    standalone_baker: editor::bake::Standalone,
+    standalone_baker: crate::bake::Standalone,
     standalone: Vec<(Prefab, Option<visual::Appearance>)>,
     logged_faults: HashSet<vm::FaultKey>,
     logged_ui_fault: Option<vm::FaultKey>,
     /// The last interaction the panel committed, replayed into a bake that lands after it.
-    ui_feedback: Option<editor::bake::UiFeedback>,
+    ui_feedback: Option<crate::bake::UiFeedback>,
     node_edit: Option<NodeEditState>,
     identical: Option<instance::IdenticalCache>,
     coop: Option<Coop>,
@@ -156,7 +157,7 @@ impl Session {
             state: EditorState::new(),
             textures: TextureCatalog::default(),
             options: FrameOptions::default(),
-            diagnostics: editor::environment::LoadDiagnostics::default(),
+            diagnostics: crate::environment::LoadDiagnostics::default(),
             caches: HashMap::new(),
             next_revision: 1,
             next_preview_revision: 1,
@@ -171,7 +172,7 @@ impl Session {
             loaded_conflicts: None,
             loaded_issues: None,
             queued_bakes: Vec::new(),
-            standalone_baker: editor::bake::Standalone::default(),
+            standalone_baker: crate::bake::Standalone::default(),
             standalone: Vec::new(),
             logged_faults: HashSet::new(),
             logged_ui_fault: None,

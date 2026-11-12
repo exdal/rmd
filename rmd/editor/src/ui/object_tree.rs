@@ -2,7 +2,6 @@ use base::{path::TreePath, types::Identifier, vars};
 use std::collections::{HashMap, HashSet};
 
 use dear_imgui_rs::{ListClipper, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError};
-use editor::icons::materialdesignicons::{ICON_COG, ICON_EYE, ICON_EYE_OFF, ICON_FILTER};
 use objtree::{ObjectTree, TypeId};
 
 use super::{
@@ -11,6 +10,7 @@ use super::{
 };
 use crate::{
     external_editor::SourceLocation,
+    icons::materialdesignicons::{ICON_COG, ICON_EYE, ICON_EYE_OFF, ICON_FILTER},
     session::Session,
     settings::{ObjectTreeFilterOptions, ObjectTreeSearchOptions, Settings},
 };
@@ -708,13 +708,13 @@ mod tests {
     };
 
     use dmm::{Coord, Map, Prefab, Size};
-    use editor::{document::MapDocument, tool::Tool};
     use objtree::VarDecl;
 
     use super::{
         super::{IMGUI_CONTEXT, MAX_CUSTOM_FILL_SEARCH_RESULTS, search::matching_type_paths_up_to_filtered},
         *,
     };
+    use crate::{document::MapDocument, tool::Tool};
 
     fn set_type_name(tree: &mut ObjectTree, id: TypeId, value: &str) {
         let name = Identifier::from("name");
@@ -938,7 +938,7 @@ mod tests {
         let document = MapDocument::new(map, 1);
         let picked_instance = document.instance_ids_at(Coord::new(1, 1, 1))[0];
         let mut session = Session::new();
-        session.state.environment = Some(std::sync::Arc::new(editor::Environment::new(".", tree)));
+        session.state.environment = Some(std::sync::Arc::new(crate::environment::Environment::new(".", tree)));
         session.state.open_document(document);
         session.set_tool(Tool::Pick);
         session.pick_instance(Some(picked_instance));
@@ -1118,7 +1118,7 @@ mod tests {
             );
         }
         let mut session = Session::new();
-        session.state.environment = Some(std::sync::Arc::new(editor::Environment::new(".", tree)));
+        session.state.environment = Some(std::sync::Arc::new(crate::environment::Environment::new(".", tree)));
         let mut state = ObjectTreePanel::new().expect("valid window key");
         state.search = String::from("atom");
         state.filter_revision = u64::MAX;

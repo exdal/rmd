@@ -33,7 +33,6 @@ pub struct BakeProgram {
     pub tree: ObjectTree,
     pub module: codegen::Module,
     pub profile: objtree::TypeId,
-    pub files: Arc<[PathBuf]>,
     pub icon_states: vm::IconStates,
 }
 
@@ -70,6 +69,7 @@ pub struct Environment {
 }
 
 impl Environment {
+    #[cfg(test)]
     pub fn new(root: impl Into<PathBuf>, tree: ObjectTree) -> Self {
         Self {
             root: root.into(),
@@ -107,6 +107,7 @@ impl Environment {
         }))
     }
 
+    #[cfg(test)]
     pub fn load(entry: impl AsRef<Path>) -> Result<(Self, LoadDiagnostics), LoadError> {
         Self::load_with(entry, BakeOptions::default(), &Progress::new())
     }
@@ -261,17 +262,6 @@ impl Environment {
     }
 }
 
-// the prelude and anything else outside the codebase is left out
-pub fn codebase_key(base: &Path, path: &Path) -> Option<String> {
-    let relative = path.strip_prefix(base).ok()?;
-    let parts = relative
-        .components()
-        .map(|part| part.as_os_str().to_string_lossy().to_ascii_lowercase())
-        .collect::<Vec<_>>();
-
-    (!parts.is_empty()).then(|| parts.join("/"))
-}
-
 /// `var/static/list/light_overlays = list("32" = 'icons/effects/light_32.dmi')`
 fn collect_icon_paths<'a>(value: &'a Value, paths: &mut BTreeSet<&'a str>) {
     match value {
@@ -319,6 +309,7 @@ pub struct LoadDiagnostics {
 }
 
 impl LoadDiagnostics {
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.preprocess.is_empty()
             && self.sema.is_empty()
@@ -328,17 +319,6 @@ impl LoadDiagnostics {
             && self.profile.is_none()
             && self.icons.is_empty()
             && self.bake.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.preprocess.len()
-            + self.sema.len()
-            + self.bake_preprocess.len()
-            + self.bake_sema.len()
-            + usize::from(self.codegen.is_some())
-            + usize::from(self.profile.is_some())
-            + self.icons.len()
-            + self.bake.len()
     }
 }
 
@@ -690,7 +670,6 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
                                 tree: view.tree,
                                 module,
                                 profile,
-                                files: files.clone(),
                                 icon_states: vm::IconStates::default(),
                             }),
                             None,

@@ -2,11 +2,6 @@ use std::mem;
 
 use dear_imgui_rs::{Condition, Ui, WindowFlags, WindowKey, WindowKeyError};
 use dmm::Coord;
-use editor::{
-    document::DocumentId,
-    icons::materialdesignicons::{ICON_ALERT, ICON_WEB},
-    tool::Tool,
-};
 use render::{MapViewInteraction, MapViewRect, Renderer};
 
 pub(super) use self::{
@@ -33,10 +28,13 @@ use super::{
 };
 use crate::{
     camera::Controller,
+    document::DocumentId,
     gizmo::GizmoMapView,
+    icons::materialdesignicons::{ICON_ALERT, ICON_WEB},
     pacing::FrameDemand,
     session::{GuideBadge, Session},
     settings::{KeybindAction, Settings},
+    tool::Tool,
 };
 
 mod edit;

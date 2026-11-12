@@ -5,18 +5,19 @@ use std::{
 };
 
 use dmm::{Map, error::MapError};
-use editor::{
-    Environment,
-    frame::TypeVisibility,
-    progress::{Progress, Stage},
-    tool::Tool,
-    world::World,
-};
 use objtree::{ObjectTree, TypeId};
 use render::texture::TextureCatalog;
 
 use super::Session;
-use crate::{external_editor::SourceLocation, loader::LoadedCodebase};
+use crate::{
+    environment::Environment,
+    external_editor::SourceLocation,
+    frame::TypeVisibility,
+    loader::LoadedCodebase,
+    progress::{Progress, Stage},
+    tool::Tool,
+    world::World,
+};
 
 pub(crate) const MAX_REPORTED_DIAGNOSTICS: usize = 500;
 
@@ -181,7 +182,7 @@ fn preprocess_severity(level: preprocessor::diagnostic::Level) -> DiagnosticSeve
     }
 }
 
-pub(crate) fn report(environment: &Environment, diagnostics: &editor::environment::LoadDiagnostics) -> LoadReport {
+pub(crate) fn report(environment: &Environment, diagnostics: &crate::environment::LoadDiagnostics) -> LoadReport {
     let root = environment.base_dir();
     let path = |file| {
         let path = environment.file(file)?;
@@ -285,7 +286,7 @@ impl Session {
         self.textures = textures;
         self.type_thumbnails = thumbnails;
         self.standalone.clear();
-        self.standalone_baker = editor::bake::Standalone::default();
+        self.standalone_baker = crate::bake::Standalone::default();
         self.texture_revision = self.texture_revision.wrapping_add(1);
         self.type_visibility = TypeVisibility::default();
         self.maps = maps;
@@ -363,15 +364,18 @@ mod tests {
 
     use dmi::IconFile;
     use dmm::{Coord, Map, MapFormat, Prefab, Size, writer::MapWriter};
-    use editor::{Environment, progress::Progress};
     use objtree::ObjectTree;
 
     use super::{
         DiagnosticSeverity, LoadReport, MAX_REPORTED_DIAGNOSTICS, build_textures, discover_maps, preprocess_severity,
     };
-    use crate::session::{
-        Session,
-        fixtures::{assert_render_cache_matches_rebuild, examples},
+    use crate::{
+        environment::Environment,
+        progress::Progress,
+        session::{
+            Session,
+            fixtures::{assert_render_cache_matches_rebuild, examples},
+        },
     };
 
     #[test]

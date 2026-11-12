@@ -3,16 +3,14 @@ use base::types::{Identifier, Value};
 use dear_imgui_rs::{DrawListMut, MouseButton, MouseCursor, StyleColor, Ui};
 use dmi::metadata::Dir;
 use dmm::{Coord, Size};
-use editor::{
-    command::EditGroupId,
-    document::{InstanceChange, PrefabInstanceId, Selection, VarMutation},
-    tool::SelectionRotation,
-};
 
 use crate::{
     camera::Controller,
+    command::EditGroupId,
+    document::{InstanceChange, PrefabInstanceId, Selection, VarMutation},
     session::{DirectionState, DirectionalTypes, GizmoMember, PickedTransform, Session},
     settings::{KeybindAction, Settings},
+    tool::SelectionRotation,
     transform::anchor_to_tile,
     ui::{TransformMode, dpi},
 };
@@ -1686,7 +1684,7 @@ mod tests {
         let mut map = dmm::Map::new(dmm::Size { x: 1, y: 1, z: 1 });
         let key = map.intern_tile(vec![dmm::Prefab::new(base::path::TreePath::parse("/obj/test"))]);
         map.grid[0][0][0] = key;
-        let document = editor::document::MapDocument::new(map, 1);
+        let document = crate::document::MapDocument::new(map, 1);
 
         document.instance_ids_at(dmm::Coord::new(1, 1, 1))[0]
     }

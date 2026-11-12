@@ -1,10 +1,5 @@
 use dear_imgui_rs::{MouseButton, Ui};
 use dmm::Coord;
-use editor::{
-    command::EditGroupId,
-    document::DocumentId,
-    tool::{PlacementKind, Tool},
-};
 use render::{InteractionMode, MapViewInteraction, PickRequest};
 
 use super::{
@@ -12,9 +7,12 @@ use super::{
     stroke::{ActivePlacementFlash, MoveStroke, PickStroke, PlacementStroke},
 };
 use crate::{
+    command::EditGroupId,
+    document::DocumentId,
     gizmo::GizmoMapView,
     session::{FillOutcome, Session},
     settings::{KeybindAction, Settings},
+    tool::{PlacementKind, Tool},
     ui::{
         FILL_LIMIT_WARNING_POPUP, FillWarningContext, NodeOverlayView, NodeRightClick, PendingFillWarning, UiState,
         context_menu::{NodeContext, POPUP as MAP_MENU_POPUP, Target as MenuTarget},

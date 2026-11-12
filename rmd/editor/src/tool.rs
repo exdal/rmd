@@ -296,6 +296,7 @@ impl From<net::SelectionMode> for RegionSelectionMode {
     }
 }
 
+#[cfg(test)]
 pub fn move_selection(
     document: &mut MapDocument, tree: &ObjectTree, world: &World, selection: Selection, target_min: Coord,
 ) -> Option<(ToolEdit, Selection)> {
@@ -310,6 +311,7 @@ pub fn move_selection(
     )
 }
 
+#[cfg(test)]
 pub fn copy_selection(
     document: &mut MapDocument, tree: &ObjectTree, world: &World, selection: Selection, target_min: Coord,
 ) -> Option<(ToolEdit, Selection)> {
@@ -360,6 +362,7 @@ pub fn fill_selection(
     })
 }
 
+#[cfg(test)]
 pub fn place_selection(
     document: &mut MapDocument, tree: &ObjectTree, world: &World, selection: Selection, target_min: Coord,
     rotation: SelectionRotation, placement: SelectionPlacement,
@@ -407,6 +410,7 @@ pub fn place_selection_with_mode(
     )
 }
 
+#[cfg(test)]
 pub fn transform_selection(
     document: &mut MapDocument, tree: &ObjectTree, world: &World, selection: Selection, transform: SelectionTransform,
 ) -> Option<(ToolEdit, Selection)> {

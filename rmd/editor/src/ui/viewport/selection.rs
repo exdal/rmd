@@ -1,17 +1,15 @@
 use dear_imgui_rs::Ui;
 use dmm::Coord;
-use editor::{
-    conflict::{Hunk, Side},
-    document::{DocumentId, Selection},
-    maploader::preview::ModuleRootKey,
-    tool::{SelectionMask, SelectionPlacement, SelectionRotation, Tool},
-};
 
 use super::ViewFrame;
 use crate::{
+    conflict::{Hunk, Side},
+    document::{DocumentId, Selection},
     gizmo::{GizmoMapView, RegionDrag, RegionGizmoTarget},
+    maploader::preview::ModuleRootKey,
     pacing::FrameDemand,
     session::{RegionPreviewSource, Session},
+    tool::{SelectionMask, SelectionPlacement, SelectionRotation, Tool},
     ui::{
         PendingRegionPlacement, RectangleGesture, UiState, conflict_controls_layout, draw_conflict_controls,
         draw_region_outline, rectangle_drag_coord, restore_rectangle_gesture,

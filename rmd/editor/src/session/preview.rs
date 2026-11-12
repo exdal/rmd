@@ -1,17 +1,17 @@
 use dmm::{Coord, Prefab};
-use editor::{
-    Environment,
+use render::SpriteInstance;
+
+use super::{PrefabThumbnail, Session};
+use crate::{
     conflict::Side,
     document::{DocumentId, PrefabInstanceId, Selection},
+    environment::Environment,
     frame::{self},
     tool::{
         RegionSelectionMode, SelectionMask, SelectionRotation, Tool, rotate_point, rotate_prefab, rotated_selection_at,
     },
     visual,
 };
-use render::SpriteInstance;
-
-use super::{PrefabThumbnail, Session};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PlacementPreview {
@@ -245,9 +245,11 @@ mod tests {
     use base::{path::TreePath, types::Value};
 
     use dmm::Prefab;
-    use editor::tool::Tool;
 
-    use crate::session::{Session, fixtures::examples};
+    use crate::{
+        session::{Session, fixtures::examples},
+        tool::Tool,
+    };
 
     #[test]
     fn placement_previews_require_place_mode_and_preserve_visual_offsets() {

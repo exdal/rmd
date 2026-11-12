@@ -1,15 +1,15 @@
 use base::path::TreePath;
 
 use dmm::{Coord, Prefab};
-use editor::{
+use render::SpriteInstance;
+
+use super::{DirectionalTypes, Session, direction_state};
+use crate::{
     command::EditGroupId,
     document::{DocumentId, InstanceChange, MapDocument, PrefabInstanceId, PrefabLocation, Selection, VarMutation},
     tool::{PlacementKind, SelectionRotation, Tool, placement_kind, rotate_point, rotate_prefab},
     visual,
 };
-use render::SpriteInstance;
-
-use super::{DirectionalTypes, Session, direction_state};
 
 #[derive(Debug)]
 pub(super) struct IdenticalCache {
@@ -513,16 +513,16 @@ mod tests {
 
     use dmi::metadata::Dir;
     use dmm::{Coord, Prefab};
-    use editor::{
-        command::EditGroupId,
-        document::{InstanceChange, PrefabInstanceId, VarMutation},
-        tool::{SelectionRotation, Tool},
-    };
 
     use super::EditScope;
-    use crate::session::{
-        Session,
-        fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session},
+    use crate::{
+        command::EditGroupId,
+        document::{InstanceChange, PrefabInstanceId, VarMutation},
+        session::{
+            Session,
+            fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session},
+        },
+        tool::{SelectionRotation, Tool},
     };
 
     fn place(session: &mut Session, placements: &[(u32, &Prefab)]) -> Vec<PrefabInstanceId> {
@@ -969,7 +969,7 @@ mod tests {
         let moved = session.move_picked_instance(
             destination,
             "re-anchor object",
-            &[editor::document::VarMutation::Set(
+            &[crate::document::VarMutation::Set(
                 "pixel_x".into(),
                 Value::Num((before.pixel[0] - 32) as f32),
             )],

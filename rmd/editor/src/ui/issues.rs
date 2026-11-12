@@ -6,10 +6,6 @@ use dear_imgui_rs::{
     WindowKeyError,
 };
 use dmm::Coord;
-use editor::{
-    document::{DocumentId, PrefabInstanceId},
-    issues,
-};
 use objtree::ObjectTree;
 
 use super::{
@@ -21,7 +17,12 @@ use super::{
     search::draw_type_path_search,
     welcome::codebase_relative,
 };
-use crate::{session::Session, settings::Settings};
+use crate::{
+    document::{DocumentId, PrefabInstanceId},
+    issues,
+    session::Session,
+    settings::Settings,
+};
 
 enum Action {
     Jump(JumpTarget),

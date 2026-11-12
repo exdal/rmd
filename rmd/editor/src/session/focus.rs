@@ -1,12 +1,12 @@
 use dmm::Coord;
-use editor::{
+use objtree::{Roots, TypeId};
+
+use super::Session;
+use crate::{
     document::{DocumentId, PrefabInstanceId},
     focus::AreaFocus,
     frame::{self},
 };
-use objtree::{Roots, TypeId};
-
-use super::Session;
 
 impl Session {
     pub fn area_at(&self, id: DocumentId, coord: Coord) -> Option<PrefabInstanceId> {
@@ -110,9 +110,11 @@ mod tests {
     use base::path::TreePath;
 
     use dmm::Coord;
-    use editor::tool::Tool;
 
-    use crate::session::fixtures::{area_at, focus_session};
+    use crate::{
+        session::fixtures::{area_at, focus_session},
+        tool::Tool,
+    };
 
     #[test]
     fn focus_toggles_connected_regions_and_clears_without_an_area() {

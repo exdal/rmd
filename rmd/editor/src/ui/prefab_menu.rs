@@ -2,13 +2,13 @@ use std::{iter, ptr};
 
 use dear_imgui_rs::{Ui, sys};
 use dmm::Prefab;
-use editor::document::DocumentId;
 
 use super::{
     common::{IconOrigin, dpi, draw_thumbnail},
     context_menu::begin_map_popup,
 };
 use crate::{
+    document::DocumentId,
     session::{PlacementPreview, Session},
     settings::{KeybindAction, Settings},
 };

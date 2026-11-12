@@ -1,9 +1,8 @@
 use dear_imgui_rs::Ui;
 use dmm::Coord;
-use editor::{node, tool::Tool};
 
 use super::common::dpi;
-use crate::{camera::Controller, session::NodeOverlay};
+use crate::{camera::Controller, node, session::NodeOverlay, tool::Tool};
 
 const NODE_HANDLE_RADIUS: f32 = 6.0;
 
@@ -188,10 +187,9 @@ pub(super) fn draw_node_overlay(ui: &Ui, overlay: &NodeOverlay, view: NodeOverla
 #[cfg(test)]
 mod tests {
     use dmm::Coord;
-    use editor::tool::Tool;
 
     use super::{NodeOverlayHit, NodeRightClick, closest_node_connection, hit_node_overlay, node_right_click};
-    use crate::session::NodeOverlay;
+    use crate::{session::NodeOverlay, tool::Tool};
 
     #[test]
     fn node_connection_hit_test_uses_screen_distance_and_includes_adjacent_nodes() {

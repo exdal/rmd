@@ -93,6 +93,7 @@ impl MapDiff {
         self.changes.is_empty()
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.changes.len()
     }

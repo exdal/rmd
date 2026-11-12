@@ -8,17 +8,6 @@ use std::collections::{HashMap, HashSet};
 use dear_imgui_rs::{ChildFlags, DragFlags, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError};
 use dmi::metadata::Dir;
 use dmm::{Coord, Prefab, error::MapErrorKind, parser::parse_value, writer::format_value};
-use editor::{
-    blame::{self, BlameCell},
-    command::EditGroupId,
-    document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation},
-    icons::materialdesignicons::{
-        ICON_ARROW_BOTTOM_LEFT, ICON_ARROW_BOTTOM_RIGHT, ICON_ARROW_DOWN, ICON_ARROW_LEFT, ICON_ARROW_RIGHT,
-        ICON_ARROW_TOP_LEFT, ICON_ARROW_TOP_RIGHT, ICON_ARROW_UP, ICON_CIRCLE_SMALL, ICON_PIN, ICON_PIN_OUTLINE,
-    },
-    maploader::preview::PREVIEW_ID_START,
-    visual,
-};
 use objtree::{ObjectTree, ResolvedVarType, TypeId, VarTypeKind};
 
 use super::{
@@ -27,10 +16,19 @@ use super::{
     search::draw_type_path_search,
 };
 use crate::{
+    blame::{self, BlameCell},
+    command::EditGroupId,
+    document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation},
     external_editor::SourceLocation,
+    icons::materialdesignicons::{
+        ICON_ARROW_BOTTOM_LEFT, ICON_ARROW_BOTTOM_RIGHT, ICON_ARROW_DOWN, ICON_ARROW_LEFT, ICON_ARROW_RIGHT,
+        ICON_ARROW_TOP_LEFT, ICON_ARROW_TOP_RIGHT, ICON_ARROW_UP, ICON_CIRCLE_SMALL, ICON_PIN, ICON_PIN_OUTLINE,
+    },
+    maploader::preview::PREVIEW_ID_START,
     session::{DirectionalTypes, EditScope, Session},
     settings::Settings,
     transform::anchor_axis,
+    visual,
 };
 
 const DISPLAY_PROPERTIES: &[&str] = &[
@@ -248,7 +246,7 @@ impl InspectorState {
             ui.separator();
             ui.text("Blame");
             enum Detail {
-                Commit(u32, editor::git::CommitInfo),
+                Commit(u32, crate::git::CommitInfo),
                 Boundary,
                 Note(&'static str),
             }
