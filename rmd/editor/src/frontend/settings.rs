@@ -4,6 +4,9 @@ use dear_imgui_rs::{
     ColorDisplayMode, ColorEditFlags, Condition, DragFlags, Key, StbTrueTypeFontData, Style, TableFlags,
     TableSizingPolicy, Ui, WindowFlags, WindowKey, WindowKeyError,
 };
+use ui::theme::{
+    FieldKind, STYLE_COLORS, STYLE_FIELDS, StyleField, TREE_LINE_MODES, Themes, direction_name, tree_lines_name,
+};
 
 use super::{
     common::{
@@ -21,9 +24,6 @@ use crate::{
         BINDABLE_KEYS, FONT_BRIGHTNESS_PERCENT, FONT_SIZE, FontSettings, KeyBinding, KeyBindings, KeybindAction,
         MODIFIER_KEYS, ObjectTreeFilterOptions, ObjectTreeSearchOptions, SelectionHighlight, Settings,
         UI_SCALE_PERCENT, backup_dir,
-    },
-    theme::{
-        FieldKind, STYLE_COLORS, STYLE_FIELDS, StyleField, TREE_LINE_MODES, Themes, direction_name, tree_lines_name,
     },
 };
 
@@ -1250,16 +1250,15 @@ fn finish_keybind_capture(ui: &Ui, capturing: &mut Option<KeybindAction>, keybin
 #[cfg(test)]
 mod tests {
     use dear_imgui_rs::MouseButton;
+    use ui::testing::CONTEXT_LOCK;
+    use ui::theme::DEFAULT_THEME;
 
-    use super::{super::IMGUI_CONTEXT, *};
-    use crate::{
-        frontend::fixtures::{assert_window_centered, finish_frame, popup_context, set_desktop_geometry},
-        theme::DEFAULT_THEME,
-    };
+    use super::*;
+    use crate::frontend::fixtures::{assert_window_centered, finish_frame, popup_context, set_desktop_geometry};
 
     #[test]
     fn settings_reopens_centered_after_resize_and_stays_draggable() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         for desktop in [false, true] {
             let mut context = popup_context(desktop);
             let mut window = SettingsWindow::new().unwrap();
@@ -1320,7 +1319,7 @@ mod tests {
 
     #[test]
     fn ui_scale_changes_only_when_apply_is_clicked() {
-        let _context = IMGUI_CONTEXT.lock().unwrap();
+        let _context = CONTEXT_LOCK.lock().unwrap();
         let mut context = super::super::fixtures::rectangle_context();
         context.io_mut().set_display_framebuffer_scale([1.5, 1.5]);
         let mut settings = Settings::default();
@@ -1384,7 +1383,7 @@ mod tests {
 
     #[test]
     fn only_held_actions_capture_a_lone_modifier() {
-        let _context = IMGUI_CONTEXT.lock().unwrap();
+        let _context = CONTEXT_LOCK.lock().unwrap();
         let mut context = dear_imgui_rs::Context::create();
         context.font_atlas().try_claim_legacy_renderer().unwrap().build();
         context.io_mut().set_display_size([800.0, 600.0]);
@@ -1445,7 +1444,7 @@ mod tests {
 
     #[test]
     fn every_settings_category_renders_in_the_two_pane_window() {
-        let _context = IMGUI_CONTEXT.lock().unwrap();
+        let _context = CONTEXT_LOCK.lock().unwrap();
         for mut category in SettingsCategory::ALL {
             let mut context = dear_imgui_rs::Context::create();
             context
@@ -1493,7 +1492,7 @@ mod tests {
 
     #[test]
     fn reloading_the_current_profile_skips_the_confirmation() {
-        let _context = IMGUI_CONTEXT.lock().unwrap();
+        let _context = CONTEXT_LOCK.lock().unwrap();
         let mut context = super::super::fixtures::rectangle_context();
         let mut pending_profile = Some(ProfileReload::Current);
 
@@ -1509,7 +1508,7 @@ mod tests {
 
     #[test]
     fn compiler_settings_render_native_and_forced_profile_states() {
-        let _context = IMGUI_CONTEXT.lock().unwrap();
+        let _context = CONTEXT_LOCK.lock().unwrap();
         for forced_profile in [None, Some(String::from("tgstation"))] {
             let mut context = dear_imgui_rs::Context::create();
             context

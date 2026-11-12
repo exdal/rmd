@@ -303,7 +303,7 @@ mod tests {
     }
 
     fn replay(commands: &[UiCommand]) -> DmUi {
-        let _guard = super::super::IMGUI_CONTEXT
+        let _guard = ui::testing::CONTEXT_LOCK
             .lock()
             .unwrap_or_else(|guard| guard.into_inner());
         let mut context = context();
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn a_widget_the_profile_stopped_drawing_is_forgotten() {
-        let _guard = super::super::IMGUI_CONTEXT
+        let _guard = ui::testing::CONTEXT_LOCK
             .lock()
             .unwrap_or_else(|guard| guard.into_inner());
         let mut context = context();

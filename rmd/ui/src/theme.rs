@@ -10,7 +10,7 @@ use dear_imgui_rs::{Direction, Style, StyleColor, ThemePreset, TreeLineMode};
 use serde::{Deserialize, Serialize};
 use toml::{Table, Value};
 
-pub(crate) const DEFAULT_THEME: &str = "imgui_dark";
+pub const DEFAULT_THEME: &str = "imgui_dark";
 const LIGHT_THEME: &str = "imgui_light";
 const TABLE_ROW_ALT_ALPHA_SCALE: f32 = 0.4;
 
@@ -26,18 +26,18 @@ const TAB_CLOSE: RangeInclusive<f32> = -1.0..=64.0;
 
 const MENU_BUTTON_POSITIONS: &[Direction] = &[Direction::None, Direction::Left, Direction::Right];
 const COLOR_BUTTON_POSITIONS: &[Direction] = &[Direction::Left, Direction::Right];
-pub(crate) const TREE_LINE_MODES: [(TreeLineMode, &str); 3] = [
+pub const TREE_LINE_MODES: [(TreeLineMode, &str); 3] = [
     (TreeLineMode::NONE, "None"),
     (TreeLineMode::FULL, "Full"),
     (TreeLineMode::TO_NODES, "ToNodes"),
 ];
 
-pub(crate) struct StyleField {
+pub struct StyleField {
     pub key: &'static str,
     pub kind: FieldKind,
 }
 
-pub(crate) enum FieldKind {
+pub enum FieldKind {
     Float {
         get: fn(&Style) -> f32,
         set: fn(&mut Style, f32),
@@ -97,7 +97,7 @@ const fn direction(
     }
 }
 
-pub(crate) const STYLE_FIELDS: &[StyleField] = &[
+pub const STYLE_FIELDS: &[StyleField] = &[
     float("Alpha", Style::alpha, Style::set_alpha, ALPHA),
     float("DisabledAlpha", Style::disabled_alpha, Style::set_disabled_alpha, UNIT),
     vec2("WindowPadding", Style::window_padding, Style::set_window_padding, SIZE),
@@ -437,7 +437,7 @@ pub(crate) const STYLE_FIELDS: &[StyleField] = &[
     ),
 ];
 
-pub(crate) const STYLE_COLORS: [(StyleColor, &str); StyleColor::COUNT] = [
+pub const STYLE_COLORS: [(StyleColor, &str); StyleColor::COUNT] = [
     (StyleColor::Text, "Text"),
     (StyleColor::TextDisabled, "TextDisabled"),
     (StyleColor::WindowBg, "WindowBg"),
@@ -507,7 +507,7 @@ fn snap_tab_close(value: f32) -> f32 {
     if value < 0.0 { -1.0 } else { value }
 }
 
-pub(crate) const fn direction_name(direction: Direction) -> &'static str {
+pub const fn direction_name(direction: Direction) -> &'static str {
     match direction {
         Direction::None => "None",
         Direction::Left => "Left",
@@ -517,7 +517,7 @@ pub(crate) const fn direction_name(direction: Direction) -> &'static str {
     }
 }
 
-pub(crate) fn tree_lines_name(mode: TreeLineMode) -> &'static str {
+pub fn tree_lines_name(mode: TreeLineMode) -> &'static str {
     TREE_LINE_MODES
         .iter()
         .find(|(candidate, _)| *candidate == mode)
@@ -618,7 +618,7 @@ struct ThemeFile {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Theme {
+pub struct Theme {
     pub name: String,
     pub url: String,
     pub style: Style,
@@ -734,7 +734,7 @@ impl ThemeEntry {
     }
 }
 
-pub(crate) struct Themes {
+pub struct Themes {
     dir: Option<PathBuf>,
     builtins: [(&'static str, Theme); 2],
     entries: Vec<ThemeEntry>,
@@ -979,7 +979,7 @@ mod tests {
             url: url.to_owned(),
             style: default_style(),
         };
-        let _context = crate::frontend::IMGUI_CONTEXT.lock().unwrap();
+        let _context = crate::testing::CONTEXT_LOCK.lock().unwrap();
 
         assert_eq!(
             theme(" https://github.com/a/b ").web_url(),
@@ -993,7 +993,7 @@ mod tests {
 
     #[test]
     fn builtin_files_fill_missing_keys_from_their_own_preset() {
-        let _context = crate::frontend::IMGUI_CONTEXT.lock().unwrap();
+        let _context = crate::testing::CONTEXT_LOCK.lock().unwrap();
         let dir = scratch_dir("preset-base");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("imgui_light.toml"), "name = \"ImGui Light\"\n").unwrap();
@@ -1018,7 +1018,7 @@ mod tests {
 
     #[test]
     fn builtin_themes_survive_a_round_trip() {
-        let _context = crate::frontend::IMGUI_CONTEXT.lock().unwrap();
+        let _context = crate::testing::CONTEXT_LOCK.lock().unwrap();
         let default_style = default_style();
         for (id, theme) in builtin_themes(&default_style) {
             let written = theme.to_toml().unwrap();
@@ -1029,7 +1029,7 @@ mod tests {
 
     #[test]
     fn partial_theme_keeps_defaults_and_ignores_unknown_keys() {
-        let _context = crate::frontend::IMGUI_CONTEXT.lock().unwrap();
+        let _context = crate::testing::CONTEXT_LOCK.lock().unwrap();
         let base = default_style();
         let source = r##"
             [style]
@@ -1056,7 +1056,7 @@ mod tests {
 
     #[test]
     fn loading_writes_builtins_and_falls_back_to_the_default() {
-        let _context = crate::frontend::IMGUI_CONTEXT.lock().unwrap();
+        let _context = crate::testing::CONTEXT_LOCK.lock().unwrap();
         let dir = scratch_dir("load");
         let default_style = default_style();
         fs::create_dir_all(&dir).unwrap();
@@ -1094,7 +1094,7 @@ mod tests {
 
     #[test]
     fn builtins_reset_and_new_themes_copy_the_active_one() {
-        let _context = crate::frontend::IMGUI_CONTEXT.lock().unwrap();
+        let _context = crate::testing::CONTEXT_LOCK.lock().unwrap();
         let dir = scratch_dir("create");
         let mut themes = Themes::load(Some(dir.clone()), &default_style(), DEFAULT_THEME);
         themes.active_theme_mut().style.set_window_rounding(7.0);

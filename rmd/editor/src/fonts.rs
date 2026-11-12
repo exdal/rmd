@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn fonts_swap_between_frames_and_bad_files_keep_the_current_font() {
-        let _context = crate::frontend::IMGUI_CONTEXT.lock().unwrap();
+        let _context = ui::testing::CONTEXT_LOCK.lock().unwrap();
         let mut context = Context::create();
         context.prepare_frame(FramePrepareOptions::new([800.0, 600.0], 1.0 / 60.0).renderer_has_textures());
         let consumer = context.create_synchronous_renderer_consumer().unwrap();

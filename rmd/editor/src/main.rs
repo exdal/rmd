@@ -41,7 +41,6 @@ mod search;
 mod session;
 mod settings;
 mod state;
-mod theme;
 mod tool;
 mod transform;
 mod viewports;

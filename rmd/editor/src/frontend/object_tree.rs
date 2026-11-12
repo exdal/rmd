@@ -709,9 +709,10 @@ mod tests {
 
     use dmm::{Coord, Map, Prefab, Size};
     use objtree::VarDecl;
+    use ui::testing::CONTEXT_LOCK;
 
     use super::{
-        super::{IMGUI_CONTEXT, MAX_CUSTOM_FILL_SEARCH_RESULTS, search::matching_type_paths_up_to_filtered},
+        super::{MAX_CUSTOM_FILL_SEARCH_RESULTS, search::matching_type_paths_up_to_filtered},
         *,
     };
     use crate::{document::MapDocument, tool::Tool};
@@ -953,7 +954,7 @@ mod tests {
 
     #[test]
     fn object_tree_rows_follow_expansion_and_render_a_clipped_search() {
-        let _context = IMGUI_CONTEXT.lock().unwrap();
+        let _context = CONTEXT_LOCK.lock().unwrap();
         let mut tree = ObjectTree::new();
         let thing = tree.register(&TreePath::parse("/atom/structure/thing"), Location::default());
         tree.register(&TreePath::parse("/atom/movable/item"), Location::default());

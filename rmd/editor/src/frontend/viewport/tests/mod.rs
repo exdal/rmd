@@ -8,6 +8,7 @@ use std::{
 use dear_imgui_rs::{Condition, DockLayout, Key, MouseButton};
 use dmm::{Coord, Prefab, PrefabInstanceId, Size};
 use render::{HighlightStyle, InteractionMode, MapViewInteraction, MapViewRect, PickRequest, PlacementFlash};
+use ui::testing::CONTEXT_LOCK;
 
 use super::{
     ActivePlacementFlash, CoopPresence, EditCommand, MapViewState, PickStroke, PlacementStroke, cursor_in_map_view,
@@ -20,7 +21,7 @@ use crate::{
     conflict::Side,
     document::{DocumentId, MapDocument, Selection},
     frontend::{
-        IMGUI_CONTEXT, RectangleGesture, UiState,
+        RectangleGesture, UiState,
         context_menu::NodeContext,
         fixtures::{RectangleUiHarness, rectangle_context},
         inspector::TransformMode,

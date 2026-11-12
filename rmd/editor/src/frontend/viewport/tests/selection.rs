@@ -25,7 +25,7 @@ fn ctrl_key(app: &mut RectangleUiHarness, key: Key) {
 
 #[test]
 fn rectangle_ui_draws_borders_resizes_from_the_edges_and_shares_the_mask_with_the_bucket() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     app.pointer(app.tile(5, 8), false);
     app.key(Key::ModShift, true);
@@ -95,7 +95,7 @@ fn rectangle_ui_draws_borders_resizes_from_the_edges_and_shares_the_mask_with_th
 
 #[test]
 fn rectangle_ui_keeps_shift_draw_mode_and_restores_cancelled_gestures() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     app.session.set_tool(Tool::Select);
     app.pointer(app.tile(5, 8), true);
@@ -140,7 +140,7 @@ fn rectangle_ui_keeps_shift_draw_mode_and_restores_cancelled_gestures() {
 
 #[test]
 fn rectangle_ui_clears_on_a_click_outside_and_selects_one_tile_without_a_selection() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     app.session.set_tool(Tool::Select);
     app.click(app.tile(4, 4));
@@ -160,7 +160,7 @@ fn rectangle_ui_clears_on_a_click_outside_and_selects_one_tile_without_a_selecti
 
 #[test]
 fn rectangle_ui_moves_while_dragging_copies_with_ctrl_and_cancels_with_escape() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     app.session
         .state
@@ -226,7 +226,7 @@ fn rectangle_ui_moves_while_dragging_copies_with_ctrl_and_cancels_with_escape() 
 
 #[test]
 fn rotate_shortcut_rotates_the_selection_in_place_with_both_presets_and_a_custom_binding() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     for (preset, modifier, key, custom) in [
         (KeybindPreset::Default, None, Key::R, false),
         (KeybindPreset::StrongDmm, Some(Key::ModShift), Key::R, false),
@@ -261,7 +261,7 @@ fn rotate_shortcut_rotates_the_selection_in_place_with_both_presets_and_a_custom
 
 #[test]
 fn rectangle_ui_pastes_a_border_into_another_map_immediately() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     let source_id = app.id;
     app.session.set_tool(Tool::Select);
@@ -332,7 +332,7 @@ fn rectangle_ui_pastes_a_border_into_another_map_immediately() {
 
 #[test]
 fn rect_fill_tool_fills_on_release_and_leaves_the_selection_alone() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     app.session.set_tool(Tool::Select);
     app.drag(app.tile(15, 15), app.tile(16, 16));
@@ -411,7 +411,7 @@ fn gizmo_frame(
 
 #[test]
 fn region_drags_keep_their_mouse_down_action_when_modifiers_change() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     for (resize, copy) in [(true, false), (false, false), (false, true)] {
         let mut context = rectangle_context();
         let mut camera = Controller::new();
@@ -506,7 +506,7 @@ fn cancelling_rectangle_gestures_restores_only_the_originating_document_and_leve
 
 #[test]
 fn rectangle_ui_moves_and_cuts_on_a_created_level() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     for created in [false, true] {
         let mut app = RectangleUiHarness::new();
         let z = if created {
@@ -561,7 +561,7 @@ fn rectangle_ui_moves_and_cuts_on_a_created_level() {
 
 #[test]
 fn only_the_active_view_outlines_its_selected_instance() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut session = Session::new();
     session
         .load_environment(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme"))

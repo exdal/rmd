@@ -38,7 +38,7 @@ fn selected(app: &RectangleUiHarness) -> Option<usize> {
 
 #[test]
 fn clicking_a_marker_opens_the_popup() -> TestResult {
-    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let _guard = CONTEXT_LOCK.lock().map_err(|error| error.to_string())?;
     let (_fixture, mut app) = harness()?;
     assert!(app.view.gestures.module_popup.is_none());
 
@@ -61,7 +61,7 @@ fn source_root(app: &RectangleUiHarness) -> Result<dmm::PrefabInstanceId, Box<dy
 
 #[test]
 fn clicking_a_source_roots_marker_selects_it() -> TestResult {
-    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let _guard = CONTEXT_LOCK.lock().map_err(|error| error.to_string())?;
     let (_fixture, mut app) = harness()?;
     assert_eq!(app.session.picked_instance(), None);
 
@@ -75,7 +75,7 @@ fn clicking_a_source_roots_marker_selects_it() -> TestResult {
 
 #[test]
 fn clicking_a_coordinate_roots_marker_opens_the_popup_and_keeps_the_selection() -> TestResult {
-    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let _guard = CONTEXT_LOCK.lock().map_err(|error| error.to_string())?;
     let (_fixture, session) = coordinate_viewport_session()?;
     let mut app = RectangleUiHarness::with_session(session);
     app.view.camera.camera.x = 64.0;
@@ -101,7 +101,7 @@ fn clicking_a_coordinate_roots_marker_opens_the_popup_and_keeps_the_selection() 
 
 #[test]
 fn clicking_a_nested_roots_marker_keeps_the_selection() -> TestResult {
-    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let _guard = CONTEXT_LOCK.lock().map_err(|error| error.to_string())?;
     let (_fixture, mut app) = harness()?;
 
     app.click(app.tile(3, 1));
@@ -124,7 +124,7 @@ fn clicking_a_nested_roots_marker_keeps_the_selection() -> TestResult {
 
 #[test]
 fn the_popup_follows_a_moved_root() -> TestResult {
-    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let _guard = CONTEXT_LOCK.lock().map_err(|error| error.to_string())?;
     let (_fixture, mut app) = harness()?;
     app.click(app.tile(2, 1));
     let target = Coord::new(5, 1, 1);
@@ -142,7 +142,7 @@ fn the_popup_follows_a_moved_root() -> TestResult {
 
 #[test]
 fn dragging_the_gizmo_of_a_selected_root_moves_it() -> TestResult {
-    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let _guard = CONTEXT_LOCK.lock().map_err(|error| error.to_string())?;
     let (_fixture, mut app) = harness()?;
     app.click(app.tile(2, 1));
     app.key(Key::Escape, true);
@@ -165,7 +165,7 @@ fn dragging_the_gizmo_of_a_selected_root_moves_it() -> TestResult {
 
 #[test]
 fn a_root_drag_leaves_the_bake_alone_until_release() -> TestResult {
-    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let _guard = CONTEXT_LOCK.lock().map_err(|error| error.to_string())?;
     let (_fixture, mut app) = harness()?;
     app.click(app.tile(2, 1));
     app.key(Key::Escape, true);
@@ -196,7 +196,7 @@ fn a_root_drag_leaves_the_bake_alone_until_release() -> TestResult {
 
 #[test]
 fn the_arrows_skip_variants_with_errors_and_leave_the_map_alone() -> TestResult {
-    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let _guard = CONTEXT_LOCK.lock().map_err(|error| error.to_string())?;
     let (_fixture, mut app) = harness()?;
     let before = source(&app)?;
     app.click(app.tile(2, 1));
@@ -230,7 +230,7 @@ fn the_arrows_skip_variants_with_errors_and_leave_the_map_alone() -> TestResult 
 
 #[test]
 fn the_combo_chooses_a_variant_without_editing() -> TestResult {
-    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let _guard = CONTEXT_LOCK.lock().map_err(|error| error.to_string())?;
     let (_fixture, mut app) = harness()?;
     let before = source(&app)?;
     app.click(app.tile(2, 1));
@@ -262,7 +262,7 @@ fn the_combo_chooses_a_variant_without_editing() -> TestResult {
 
 #[test]
 fn escape_and_outside_clicks_close_the_popup() -> TestResult {
-    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let _guard = CONTEXT_LOCK.lock().map_err(|error| error.to_string())?;
     let (_fixture, mut app) = harness()?;
     app.click(app.tile(2, 1));
     assert!(app.view.gestures.module_popup.is_some());
@@ -294,7 +294,7 @@ fn escape_and_outside_clicks_close_the_popup() -> TestResult {
 
 #[test]
 fn the_popup_survives_switching_to_another_map_and_back() -> TestResult {
-    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let _guard = CONTEXT_LOCK.lock().map_err(|error| error.to_string())?;
     let (_fixture, mut session) = module_viewport_session()?;
     let modular = session.state.active().ok_or("no document")?;
     let root = session.module_roots().first().ok_or("no module root")?;
@@ -351,7 +351,7 @@ fn the_popup_survives_switching_to_another_map_and_back() -> TestResult {
 
 #[test]
 fn the_delete_key_removes_a_selected_source_root() -> TestResult {
-    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let _guard = CONTEXT_LOCK.lock().map_err(|error| error.to_string())?;
     let (_fixture, mut app) = harness()?;
     app.click(app.tile(2, 1));
     let root = source_root(&app)?;
@@ -370,7 +370,7 @@ fn the_delete_key_removes_a_selected_source_root() -> TestResult {
 
 #[test]
 fn the_delete_tool_picks_through_a_marker_instead_of_opening_the_popup() -> TestResult {
-    let _guard = IMGUI_CONTEXT.lock().map_err(|error| error.to_string())?;
+    let _guard = CONTEXT_LOCK.lock().map_err(|error| error.to_string())?;
     let (_fixture, mut app) = harness()?;
     app.session.set_tool(Tool::Delete);
     let marker = app.tile(2, 1);

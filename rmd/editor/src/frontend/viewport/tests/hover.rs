@@ -20,7 +20,7 @@ fn clicking_a_blamed_tile_opens_a_popup_without_placing_a_tile() {
         }
     }
 
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut session = Session::new();
     session
         .load_environment(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme"))
@@ -79,7 +79,7 @@ fn clicking_a_blamed_tile_opens_a_popup_without_placing_a_tile() {
 
 #[test]
 fn conflict_button_takes_the_incoming_tile_without_reaching_the_place_tool() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut session = Session::new();
     session
         .load_environment(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme"))

@@ -32,7 +32,7 @@ fn presence_frame(
 
 #[test]
 fn the_coop_cursor_only_follows_shared_maps() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut session = Session::new();
     session
         .load_environment(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme"))
@@ -94,7 +94,7 @@ fn follow_frame(context: &mut dear_imgui_rs::Context, state: &mut UiState, sessi
 
 #[test]
 fn following_snaps_the_camera_to_the_peer_and_stops_when_the_user_moves_it() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let load = || {
         let mut session = Session::new();
         session

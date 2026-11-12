@@ -580,8 +580,10 @@ fn matches_filter(query: &str, title: &str, label: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ui::testing::CONTEXT_LOCK;
+
     use crate::{
-        frontend::{IMGUI_CONTEXT, UiState, fixtures::rectangle_context},
+        frontend::{UiState, fixtures::rectangle_context},
         session::fixtures::unknown_paths_session,
     };
 
@@ -710,7 +712,7 @@ mod tests {
 
     #[test]
     fn panel_renders_live_results_repairs_and_the_empty_state() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = rectangle_context();
         let mut session = unknown_paths_session();
         let document = session.state.active().unwrap();

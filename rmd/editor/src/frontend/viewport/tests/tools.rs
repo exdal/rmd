@@ -7,7 +7,7 @@ use crate::loader::LoadedMap;
 
 #[test]
 fn node_tool_hover_and_single_click_survive_the_full_view_frame() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let coord = Coord::new(5, 8, 1);
     let (mut session, seed) = node_session(node_map(20, 20, &[(coord, vec!["/obj/cable"])]), coord);
     session.set_tool(Tool::Node);
@@ -29,7 +29,7 @@ fn node_tool_hover_and_single_click_survive_the_full_view_frame() {
 
 #[test]
 fn selection_keeps_its_double_click_node_shortcut() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let coord = Coord::new(5, 8, 1);
     let (mut session, _) = node_session(node_map(20, 20, &[(coord, vec!["/obj/cable"])]), coord);
     session.set_tool(Tool::Pick);
@@ -45,7 +45,7 @@ fn selection_keeps_its_double_click_node_shortcut() {
 
 #[test]
 fn ctrl_clicking_with_the_pick_tool_requests_a_toggle() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let coord = Coord::new(5, 8, 1);
     let (mut session, _) = node_session(node_map(20, 20, &[(coord, vec!["/obj/cable"])]), coord);
     session.set_tool(Tool::Pick);
@@ -60,7 +60,7 @@ fn ctrl_clicking_with_the_pick_tool_requests_a_toggle() {
 
 #[test]
 fn node_handles_start_a_drag_instead_of_requesting_a_new_pick() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let coord = Coord::new(5, 8, 1);
     let (mut session, seed) = node_session(node_map(20, 20, &[(coord, vec!["/obj/cable"])]), coord);
     assert!(session.begin_node_edit(seed));
@@ -76,7 +76,7 @@ fn node_handles_start_a_drag_instead_of_requesting_a_new_pick() {
 
 #[test]
 fn right_click_captures_the_clicked_tile_in_every_tool() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     for tool in [
         Tool::Pick,
         Tool::Place,
@@ -106,7 +106,7 @@ fn right_click_captures_the_clicked_tile_in_every_tool() {
 
 #[test]
 fn node_right_click_deletes_on_the_first_unfocused_click_and_shift_opens_the_menu() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let start = Coord::new(5, 8, 1);
     let middle = Coord::new(6, 8, 1);
     let end = Coord::new(7, 8, 1);
@@ -174,7 +174,7 @@ fn object_gizmo_frame(
 
 #[test]
 fn object_gizmo_only_appears_on_the_selected_instances_z_level() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut context = rectangle_context();
     let mut session = Session::new();
     let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
@@ -237,7 +237,7 @@ fn object_gizmo_only_appears_on_the_selected_instances_z_level() {
 
 #[test]
 fn ctrl_dragging_an_object_onto_another_tile_keeps_its_area_last() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut context = rectangle_context();
     let mut session = Session::new();
     let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
@@ -312,7 +312,7 @@ fn ctrl_dragging_an_object_onto_another_tile_keeps_its_area_last() {
 
 #[test]
 fn edit_menu_commands_reach_the_active_map_view() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     let table = Prefab::new(TreePath::parse("/obj/structure/table"));
     app.session.state.choose_prefab(table.clone());
@@ -341,7 +341,7 @@ fn edit_menu_commands_reach_the_active_map_view() {
 
 #[test]
 fn edit_keys_work_while_another_panel_has_focus() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     app.settings.focus_windows_on_hover = false;
     app.focus_other_window = true;
@@ -366,7 +366,7 @@ fn edit_keys_work_while_another_panel_has_focus() {
 
 #[test]
 fn edit_keys_leave_the_map_alone_while_a_modal_is_open() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     let table = Prefab::new(TreePath::parse("/obj/structure/table"));
     app.session.state.choose_prefab(table.clone());
@@ -392,7 +392,7 @@ fn edit_keys_leave_the_map_alone_while_a_modal_is_open() {
 
 #[test]
 fn a_tapped_tool_key_switches_tools_and_a_held_one_hands_the_old_tool_back() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     let table = Prefab::new(TreePath::parse("/obj/structure/table"));
     app.session.state.choose_prefab(table.clone());
@@ -423,7 +423,7 @@ fn a_tapped_tool_key_switches_tools_and_a_held_one_hands_the_old_tool_back() {
 
 #[test]
 fn the_alternate_delete_drag_clears_each_tile_in_one_undo_step_with_any_bound_key() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     for (bound, held, clears) in [
         (None, Key::ModAlt, true),
         (Some(Key::ModShift), Key::ModShift, true),
@@ -466,7 +466,7 @@ fn the_alternate_delete_drag_clears_each_tile_in_one_undo_step_with_any_bound_ke
 
 #[test]
 fn move_tool_selects_on_press_and_moves_only_the_picked_atom() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     let table = Prefab::new(TreePath::parse("/obj/structure/table"));
     let light = Prefab::new(TreePath::parse("/obj/machinery/light"));
@@ -516,7 +516,7 @@ fn move_tool_selects_on_press_and_moves_only_the_picked_atom() {
 
 #[test]
 fn move_tool_sub_tile_drag_edits_nothing() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     let table = Prefab::new(TreePath::parse("/obj/structure/table"));
     app.session.set_tool(Tool::Place);
@@ -555,7 +555,7 @@ fn move_tool_sub_tile_drag_edits_nothing() {
 
 #[test]
 fn move_tool_drag_moves_whole_tiles_and_keeps_pixel_offsets() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     let table = Prefab::new(TreePath::parse("/obj/structure/table"));
     app.session.set_tool(Tool::Place);
@@ -594,7 +594,7 @@ fn move_tool_drag_moves_whole_tiles_and_keeps_pixel_offsets() {
 
 #[test]
 fn move_tool_drag_back_to_the_origin_tile_returns_the_atom() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     let table = Prefab::new(TreePath::parse("/obj/structure/table"));
     app.session.set_tool(Tool::Place);
@@ -635,7 +635,7 @@ fn move_tool_drag_back_to_the_origin_tile_returns_the_atom() {
 
 #[test]
 fn move_tool_ignores_where_pixel_offsets_draw_the_atom() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     app.session.set_tool(Tool::Place);
     app.session
@@ -683,7 +683,7 @@ fn move_tool_ignores_where_pixel_offsets_draw_the_atom() {
 
 #[test]
 fn move_tool_highlights_only_the_dragged_atom() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     app.session.set_tool(Tool::Place);
     app.session
@@ -710,7 +710,7 @@ fn move_tool_highlights_only_the_dragged_atom() {
 
 #[test]
 fn move_tool_leaves_turfs_in_place() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     let coord = Coord::new(5, 8, 1);
     let floor = TreePath::parse("/turf/open/floor");

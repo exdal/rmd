@@ -424,10 +424,11 @@ mod tests {
     use dear_imgui_rs::{Condition, sys};
     use dmm::{Coord, Map, Prefab, Size};
     use objtree::ObjectTree;
+    use ui::testing::CONTEXT_LOCK;
 
     use super::{POPUP, Target, draw_popup};
     use crate::{
-        frontend::{IMGUI_CONTEXT, fixtures::rectangle_context, search::matching_type_paths_up_to_filtered},
+        frontend::{fixtures::rectangle_context, search::matching_type_paths_up_to_filtered},
         loader::LoadedMap,
         session::{Session, context_placement_group},
         settings::Settings,
@@ -435,7 +436,7 @@ mod tests {
 
     #[test]
     fn hovering_atom_rows_opens_submenus_without_truncating_names_or_hit_areas() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         // With the test font, these table names previously padded the menu labels
         // to 123, 124 and 125 bytes. At 124 bytes ImGui's window name ended in ###.
         let cases = [

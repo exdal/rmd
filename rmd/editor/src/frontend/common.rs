@@ -419,13 +419,13 @@ pub(super) fn draw_thumbnail(
 #[cfg(test)]
 mod tests {
     use dear_imgui_rs::{Condition, Ui, WindowFlags, sys};
+    use ui::testing::CONTEXT_LOCK;
 
     use super::{
         DialogButton, RowSelection, begin_centered_modal, cancel_index, dialog_buttons, enter_index, fit_icon,
         focus_window_on_hover,
     };
     use crate::frontend::{
-        IMGUI_CONTEXT,
         dialog::MODAL_FLAGS,
         fixtures::{
             PopupContext, assert_window_centered, finish_frame, popup_context, rectangle_context, set_desktop_geometry,
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn dialog_button_gap_ignores_dialog_width() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = popup_context(true);
         set_desktop_geometry(&mut context, [0.0, 0.0], [1920.0, 1080.0]);
         let buttons = [
@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn dialog_shrinks_after_wide_content_goes_away() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = popup_context(true);
         set_desktop_geometry(&mut context, [0.0, 0.0], [1920.0, 1080.0]);
         let name = "Shrinking dialog";
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn table_selection_supports_control_toggle_and_shift_range() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = rectangle_context();
         let mut selection = RowSelection::default();
         let order = [10, 20, 30, 40];
@@ -593,7 +593,7 @@ mod tests {
 
     #[test]
     fn movable_modals_keep_their_position_until_reopened() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = popup_context(true);
         let name = "Movable modal";
         let flags = WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_SAVED_SETTINGS;
@@ -672,7 +672,7 @@ mod tests {
 
     #[test]
     fn hover_focus_keeps_child_windows_and_ignores_popups() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = rectangle_context();
         context.io_mut().add_mouse_pos_event([100.0, 100.0]);
 

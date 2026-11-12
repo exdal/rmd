@@ -6,5 +6,11 @@ edition.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+dear-imgui-rs.workspace = true
+log.workspace = true
+serde = { workspace = true, features = ["derive"] }
+toml.workspace = true
+
 [lints]
 workspace = true

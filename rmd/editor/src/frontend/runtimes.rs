@@ -151,15 +151,15 @@ fn fault_id(fault: &RuntimeFault<'_>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::RuntimesPanel;
+    use ui::testing::CONTEXT_LOCK;
+
     use crate::{
-        frontend::{IMGUI_CONTEXT, fixtures::rectangle_context},
-        session::fixtures::faulting_profile_session,
-        settings::Settings,
+        frontend::fixtures::rectangle_context, session::fixtures::faulting_profile_session, settings::Settings,
     };
 
     #[test]
     fn the_panel_draws_a_profile_that_faults() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = rectangle_context();
         let (mut session, _) = faulting_profile_session();
         session.dm_ui(0, crate::bake::UiFeedback::default());

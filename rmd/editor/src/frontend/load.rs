@@ -317,13 +317,11 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use dear_imgui_rs::{Context, WindowKey, sys};
+    use ui::testing::CONTEXT_LOCK;
 
     use super::{DiagnosticsState, LOAD_POPUP_WIDTH, LoadNotice, draw_load_popup, fit_path, grouped, shorten_path};
     use crate::{
-        frontend::{
-            IMGUI_CONTEXT,
-            fixtures::{assert_window_centered, finish_frame, popup_context, set_desktop_geometry},
-        },
+        frontend::fixtures::{assert_window_centered, finish_frame, popup_context, set_desktop_geometry},
         loader::LoadView,
         progress::{Snapshot, Stage},
         session::{DiagnosticSeverity, LoadReport},
@@ -331,7 +329,7 @@ mod tests {
 
     #[test]
     fn load_popups_follow_window_resize_and_content_changes() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         for desktop in [false, true] {
             let mut context = popup_context(desktop);
             let window = WindowKey::new("load-resize-test", "Load").unwrap();
@@ -384,7 +382,7 @@ mod tests {
 
     #[test]
     fn long_progress_details_do_not_widen_the_popup() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = popup_context(true);
         set_desktop_geometry(&mut context, [0.0, 0.0], [1920.0, 1080.0]);
         let window = WindowKey::new("load-width-test", "Load").unwrap();
@@ -420,7 +418,7 @@ mod tests {
 
     #[test]
     fn paths_are_fitted_to_a_pixel_width_keeping_their_tail() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = popup_context(false);
         let ui = context.frame();
         let path = "code/modules/mob/living/carbon/human/human.dm";

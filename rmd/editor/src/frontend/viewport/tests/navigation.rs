@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn middle_click_outside_the_map_menu_closes_it_and_pans() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     let point = app.tile(5, 8);
     app.context.io_mut().add_mouse_pos_event(point);
@@ -28,7 +28,7 @@ fn middle_click_outside_the_map_menu_closes_it_and_pans() {
 
 #[test]
 fn grid_overlay_shortcuts_toggle_settings_while_hovered() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     app.pointer(app.tile(5, 8), false);
 
@@ -133,7 +133,7 @@ fn mirroring_copies_the_active_camera_and_the_levels_other_maps_have() {
 
 #[test]
 fn arrow_keys_pan_shift_pans_faster_and_space_drags_the_map_without_placing() {
-    let _guard = IMGUI_CONTEXT.lock().unwrap();
+    let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
     let table = Prefab::new(TreePath::parse("/obj/structure/table"));
     app.session.state.choose_prefab(table.clone());

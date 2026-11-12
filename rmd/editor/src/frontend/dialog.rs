@@ -1095,6 +1095,8 @@ mod tests {
     use dear_imgui_rs::{ConfigFlags, Key, MouseButton, Ui, sys};
     use dmm::{Coord, Map, MapFormat, Prefab, Size};
     use net::LevelContents;
+    use ui::testing::CONTEXT_LOCK;
+    use ui::theme::{DEFAULT_THEME, Themes};
 
     use super::{
         DeleteLevelDialog, FillWarningContext, GO_TO_POPUP, GoToDialog, KEYBIND_PRESET_POPUP, NewLevelDialog,
@@ -1105,7 +1107,7 @@ mod tests {
     use crate::{
         document::{DocumentId, MapDocument, Selection},
         frontend::{
-            IMGUI_CONTEXT, UiState,
+            UiState,
             fixtures::{
                 PopupContext, assert_window_centered, finish_frame, popup_context, rectangle_context,
                 set_desktop_geometry,
@@ -1114,7 +1116,6 @@ mod tests {
         patch,
         session::Session,
         settings::Settings,
-        theme::{DEFAULT_THEME, Themes},
         tool::{FillMode, RegionSelectionMode, SelectionMask, Tool},
     };
 
@@ -1215,7 +1216,7 @@ mod tests {
             let keep_selected =
                 self.session.state.active() == Some(id) && self.session.state.document(id).unwrap().is_dirty();
             let name = CString::new(format!("###viewport-{}", id.get())).unwrap();
-            // SAFETY: this test owns the current context while holding IMGUI_CONTEXT.
+            // SAFETY: this test owns the current context while holding CONTEXT_LOCK.
             let point = unsafe {
                 let window = &*sys::igFindWindowByName(name.as_ptr());
                 let rect = window.DC.DockTabItemRect;
@@ -1265,7 +1266,7 @@ mod tests {
     }
 
     fn button_centers(ui: &Ui, name: &CStr, labels: &[&str]) -> Vec<[f32; 2]> {
-        // SAFETY: this function runs during the test's current frame with IMGUI_CONTEXT held.
+        // SAFETY: this function runs during the test's current frame with CONTEXT_LOCK held.
         let Some(window) = (unsafe { sys::igFindWindowByName(name.as_ptr()).as_ref() }) else {
             return Vec::new();
         };
@@ -1330,7 +1331,7 @@ mod tests {
 
     #[test]
     fn dirty_close_popup_recenters_after_leaving_fullscreen() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         for desktop in [false, true] {
             let context = popup_context(desktop);
             let mut app = CloseUi::with_context(context);
@@ -1364,7 +1365,7 @@ mod tests {
 
     #[test]
     fn dirty_tab_close_keeps_the_map_selected_until_cancel_or_escape() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut app = CloseUi::new();
         let id = app.add_map("dirty.dmm", true, false);
         app.select(id);
@@ -1392,7 +1393,7 @@ mod tests {
 
     #[test]
     fn closing_an_inactive_dirty_tab_selects_that_map_for_confirmation() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut app = CloseUi::new();
         let dirty = app.add_map("dirty.dmm", true, false);
         let active = app.add_map("active.dmm", false, false);
@@ -1407,7 +1408,7 @@ mod tests {
 
     #[test]
     fn clean_active_tab_closes_select_the_next_map_then_previous_then_welcome() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut app = CloseUi::new();
         let first = app.add_map("first.dmm", false, false);
         let second = app.add_map("second.dmm", false, false);
@@ -1427,7 +1428,7 @@ mod tests {
 
     #[test]
     fn discard_selects_the_next_map_then_the_previous_map_then_welcome() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut app = CloseUi::new();
         let first = app.add_map("first.dmm", true, false);
         let second = app.add_map("second.dmm", true, false);
@@ -1449,7 +1450,7 @@ mod tests {
 
     #[test]
     fn closing_the_last_map_reopens_welcome_and_clean_background_closes_keep_focus() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut app = CloseUi::new();
         let background = app.add_map("background.dmm", false, false);
         let id = app.add_map("last.dmm", true, false);
@@ -1468,7 +1469,7 @@ mod tests {
 
     #[test]
     fn successful_save_closes_the_map_and_focuses_its_neighbor() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let dir = TestDirectory::new("save");
         let file = dir.0.join("saved.dmm");
         let mut app = CloseUi::new();
@@ -1486,7 +1487,7 @@ mod tests {
 
     #[test]
     fn a_failed_save_keeps_the_confirmation_and_map_open() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let dir = TestDirectory::new("save-failure");
         let mut app = CloseUi::new();
         let id = app.add_map(&dir.0, true, false);
@@ -1502,7 +1503,7 @@ mod tests {
 
     #[test]
     fn save_as_keeps_the_pending_close_until_it_succeeds() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let dir = TestDirectory::new("save-as");
         let file = dir.0.join("saved.dmm");
         let mut app = CloseUi::new();
@@ -1537,7 +1538,7 @@ mod tests {
 
     #[test]
     fn cancelling_save_as_cancels_the_close_batch_and_keeps_maps_open() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut app = CloseUi::new();
         let first = app.add_map("first.dmm", true, true);
         let second = app.add_map("second.dmm", true, true);
@@ -1561,7 +1562,7 @@ mod tests {
 
     #[test]
     fn save_as_success_advances_the_close_batch_to_the_next_dirty_map() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let dir = TestDirectory::new("save-as-batch");
         let file = dir.0.join("first.dmm");
         let mut app = CloseUi::new();
@@ -1619,7 +1620,7 @@ mod tests {
 
     #[test]
     fn enter_creates_a_z_level_filled_with_the_default_turf_and_area() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = crate::frontend::fixtures::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
@@ -1656,7 +1657,7 @@ mod tests {
 
     #[test]
     fn a_changed_fill_is_remembered_for_the_next_z_level_and_resize() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = crate::frontend::fixtures::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
@@ -1699,7 +1700,7 @@ mod tests {
 
     #[test]
     fn enter_in_an_open_fill_search_does_not_create_a_z_level() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = crate::frontend::fixtures::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
@@ -1726,7 +1727,7 @@ mod tests {
 
     #[test]
     fn an_invalid_fill_path_blocks_z_level_creation() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = crate::frontend::fixtures::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
@@ -1754,7 +1755,7 @@ mod tests {
 
     #[test]
     fn closing_several_maps_asks_about_each_unsaved_one_and_cancel_keeps_the_rest_open() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = crate::frontend::fixtures::rectangle_context();
         let mut session = Session::new();
         let map = || dmm::Map::new(Size { x: 1, y: 1, z: 1 });
@@ -1791,7 +1792,7 @@ mod tests {
 
     #[test]
     fn the_go_to_dialog_clamps_to_the_map_and_enter_returns_the_tile() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = crate::frontend::fixtures::rectangle_context();
         let mut session = Session::new();
         session
@@ -1814,7 +1815,7 @@ mod tests {
 
     #[test]
     fn the_resize_dialog_warns_about_the_tiles_a_shrink_deletes() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = crate::frontend::fixtures::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
@@ -1849,7 +1850,7 @@ mod tests {
 
     #[test]
     fn the_resize_dialog_accepts_dimensions_above_255() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         for (width, height) in [(256, 1), (1, 256)] {
             let mut context = rectangle_context();
@@ -1894,7 +1895,7 @@ mod tests {
 
     #[test]
     fn the_resize_dialog_preserves_dimensions_up_to_u32_max() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
@@ -1928,7 +1929,7 @@ mod tests {
 
     #[test]
     fn first_launch_opens_the_keybinding_preset_dialog() {
-        let _context = IMGUI_CONTEXT.lock().unwrap();
+        let _context = CONTEXT_LOCK.lock().unwrap();
         let mut context = dear_imgui_rs::Context::create();
         context
             .font_atlas()
@@ -1958,7 +1959,7 @@ mod tests {
 
     #[test]
     fn the_new_map_dialog_accepts_dimensions_above_255() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let directory = TestDirectory::new("large-map-dialog");
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
@@ -1999,7 +2000,7 @@ mod tests {
 
     #[test]
     fn the_new_map_dialog_preserves_dimensions_up_to_u32_max() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut session = Session::new();
 
         for dimension in [i32::MAX as u32 + 1, u32::MAX] {
@@ -2065,7 +2066,7 @@ mod tests {
 
     #[test]
     fn confirming_deletion_removes_the_selected_level_and_can_be_undone() -> Result<(), Box<dyn Error>> {
-        let _guard = IMGUI_CONTEXT.lock().map_err(|_| "UI context lock is poisoned")?;
+        let _guard = CONTEXT_LOCK.lock().map_err(|_| "UI context lock is poisoned")?;
         let mut context = rectangle_context();
         let mut session = Session::new();
         let id = session
@@ -2092,7 +2093,7 @@ mod tests {
 
     #[test]
     fn cancellation_or_a_changed_document_does_not_delete_a_level() -> Result<(), Box<dyn Error>> {
-        let _guard = IMGUI_CONTEXT.lock().map_err(|_| "UI context lock is poisoned")?;
+        let _guard = CONTEXT_LOCK.lock().map_err(|_| "UI context lock is poisoned")?;
         for stale in [false, true] {
             let mut context = rectangle_context();
             let mut session = Session::new();
@@ -2132,7 +2133,7 @@ mod tests {
 
     #[test]
     fn read_only_and_last_level_restrictions_apply_at_confirmation() -> Result<(), Box<dyn Error>> {
-        let _guard = IMGUI_CONTEXT.lock().map_err(|_| "UI context lock is poisoned")?;
+        let _guard = CONTEXT_LOCK.lock().map_err(|_| "UI context lock is poisoned")?;
         for levels in [1, 2] {
             let mut context = rectangle_context();
             let mut session = Session::new();

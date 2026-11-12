@@ -13,6 +13,7 @@ use dear_imgui_rs::{
 use dmm::{Coord, PrefabInstanceId};
 pub(crate) use inspector::TransformMode;
 use render::{Camera, GuideLine, MapViewInteraction, MapViewRect};
+use ui::theme::Themes;
 
 use self::{inspector::InspectorPanel, object_tree::ObjectTreePanel, settings::SettingsWindow};
 use crate::{
@@ -22,7 +23,6 @@ use crate::{
     loader::LoadView,
     session::{LoadReport, Session, TypeLayer},
     settings::{KeybindAction, KeybindPreset, OpenPanels, Panel, Settings},
-    theme::Themes,
     tool::{FillMode, SelectionRotation, SelectionTransform, Tool},
 };
 
@@ -286,9 +286,6 @@ pub struct UiState {
     update_check: UpdateCheck,
     demand: Cell<FrameDemand>,
 }
-
-#[cfg(test)]
-pub(crate) static IMGUI_CONTEXT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 impl UiState {
     pub fn new(keybind_preset_prompt: bool) -> Result<Self, WindowKeyError> {
@@ -1102,15 +1099,16 @@ mod tests {
 
     use dear_imgui_rs::DockLayout;
     use dmm::{Prefab, Size};
+    use ui::testing::CONTEXT_LOCK;
+    use ui::theme::{DEFAULT_THEME, Themes};
 
     use super::{
-        DEFAULT_CUSTOM_FILL_BOUNDARY, IMGUI_CONTEXT, RegionSelectionOptions, UiState, common::button_width,
+        DEFAULT_CUSTOM_FILL_BOUNDARY, RegionSelectionOptions, UiState, common::button_width,
         fixtures::rectangle_context, git, menu::MenuActions,
     };
     use crate::{
         session::{DiagnosticSeverity, Session, fixtures::install_diff},
         settings::{KeyBinding, KeyBindings, KeybindAction, OpenPanels, Panel, Settings},
-        theme::{DEFAULT_THEME, Themes},
         tool::FillMode,
     };
 
@@ -1183,7 +1181,7 @@ mod tests {
 
     #[test]
     fn the_inspector_tab_starts_in_front_of_the_search_tab() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = rectangle_context();
         let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
         context.io_mut().set_config_flags(flags);
@@ -1255,7 +1253,7 @@ mod tests {
 
     #[test]
     fn a_closed_panel_reopens_from_the_window_menu_in_its_dock() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = docking_context();
         let mut state = UiState::new(false).unwrap();
         let mut settings = Settings::default();
@@ -1285,7 +1283,7 @@ mod tests {
 
     #[test]
     fn a_closed_panel_releases_startup_focus() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = docking_context();
         let mut state = UiState::new(false).unwrap();
         let mut settings = Settings::default();
@@ -1299,7 +1297,7 @@ mod tests {
 
     #[test]
     fn a_search_request_reopens_the_search_panel() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = docking_context();
         let mut state = UiState::new(false).unwrap();
         let mut settings = Settings::default();
@@ -1335,7 +1333,7 @@ mod tests {
 
     #[test]
     fn restored_floating_panels_release_startup_focus() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
 
         for panel in ["inspector", "object-tree"] {
             let mut saved = {
@@ -1415,7 +1413,7 @@ mod tests {
 
     #[test]
     fn resetting_the_layout_keeps_open_map_views_docked() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = rectangle_context();
         let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
         context.io_mut().set_config_flags(flags);
@@ -1473,7 +1471,7 @@ mod tests {
 
     #[test]
     fn a_new_map_view_ignores_a_saved_dock_node_that_no_longer_exists() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = rectangle_context();
         let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
         context.io_mut().set_config_flags(flags);
@@ -1517,7 +1515,7 @@ mod tests {
 
     #[test]
     fn a_search_request_brings_its_tab_forward_while_the_mouse_is_over_the_map() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = rectangle_context();
         let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
         context.io_mut().set_config_flags(flags);
@@ -1555,7 +1553,7 @@ mod tests {
 
     #[test]
     fn the_object_tree_tab_starts_in_front_of_the_git_tab() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = rectangle_context();
         let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
         context.io_mut().set_config_flags(flags);
@@ -1587,7 +1585,7 @@ mod tests {
 
     #[test]
     fn the_diff_tab_draws_the_versions_and_the_changes() {
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = rectangle_context();
         let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
         context.io_mut().set_config_flags(flags);
@@ -1640,7 +1638,7 @@ mod tests {
             time::{Duration, Instant},
         };
 
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme");
         let open = |width: u32| {
             let mut session = Session::new();
@@ -1726,7 +1724,7 @@ mod tests {
         use dear_imgui_rs::{Key, MouseButton, sys};
 
         use super::OpenRequest;
-        let _guard = IMGUI_CONTEXT.lock().unwrap();
+        let _guard = CONTEXT_LOCK.lock().unwrap();
         let mut context = rectangle_context();
         let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
         context.io_mut().set_config_flags(flags);

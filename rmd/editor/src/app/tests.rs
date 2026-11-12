@@ -1,11 +1,12 @@
 use std::time::Duration;
 
 use dear_imgui_rs::sys;
+use ui::theme;
 use winit::event::WindowEvent;
 
 use super::*;
 use super::{args::Arguments, events::is_input, redraw::settle_appearing_windows};
-use crate::{frontend, loader, theme};
+use crate::loader;
 
 fn headless_editor() -> App {
     let mut imgui = Context::create();
@@ -95,7 +96,7 @@ struct PopupGeometry {
 }
 
 fn load_popup_geometry() -> PopupGeometry {
-    // SAFETY: the test holds IMGUI_CONTEXT and inspects its live window after rendering.
+    // SAFETY: the test holds CONTEXT_LOCK and inspects its live window after rendering.
     unsafe {
         let window = sys::igFindWindowByName(c"###load".as_ptr());
         assert!(!window.is_null(), "the load popup should exist");
@@ -129,7 +130,7 @@ fn assert_error_popup_is_visible_and_centered(app: &mut App) {
 
 #[test]
 fn an_incoming_load_notice_appears_and_settles_without_input() {
-    let _guard = frontend::IMGUI_CONTEXT.lock().unwrap();
+    let _guard = ui::testing::CONTEXT_LOCK.lock().unwrap();
     let mut app = headless_editor();
     let idle = settle_headless_editor(&mut app, Instant::now());
 
@@ -165,7 +166,7 @@ fn an_incoming_load_notice_appears_and_settles_without_input() {
 
 #[test]
 fn a_load_result_settles_when_error_replaces_progress_in_the_same_window() {
-    let _guard = frontend::IMGUI_CONTEXT.lock().unwrap();
+    let _guard = ui::testing::CONTEXT_LOCK.lock().unwrap();
     let mut app = headless_editor();
     // Keep simulated frames in the past: applying a loader result records real time.
     let idle = settle_headless_editor(&mut app, Instant::now() - Duration::from_secs(5));
@@ -233,7 +234,7 @@ fn unknown_map_types_open_the_issues_panel_and_keep_their_overrides_when_saved()
 
     use dmm::{Coord, MapFormat, writer::MapWriter};
 
-    let _guard = frontend::IMGUI_CONTEXT.lock().unwrap();
+    let _guard = ui::testing::CONTEXT_LOCK.lock().unwrap();
     let mut app = headless_editor();
     let root = std::env::temp_dir().join(format!("rmd-unknown-map-types-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
@@ -397,7 +398,7 @@ fn bake_options_restore_native_and_forced_profile_choices_per_codebase() {
 
 #[test]
 fn opening_an_already_open_map_focuses_it_without_loading() {
-    let _guard = frontend::IMGUI_CONTEXT.lock().unwrap();
+    let _guard = ui::testing::CONTEXT_LOCK.lock().unwrap();
     let dir = std::env::temp_dir().join(format!("rmd-open-focus-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let mut app = headless_editor();
