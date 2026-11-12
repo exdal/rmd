@@ -31,7 +31,10 @@ use crate::{
         OpenPanels, Panel, Settings,
         keybind::{KeybindAction, KeybindPreset},
     },
-    tool::{FillMode, SelectionRotation, SelectionTransform, Tool},
+    tool::{
+        FillMode, SelectionRotation, SelectionTransform, Tool,
+        panel::{DEFAULT_CUSTOM_FILL_BOUNDARY, request_level_change},
+    },
 };
 
 mod coop;
@@ -47,10 +50,9 @@ mod node;
 pub(crate) mod overlay;
 mod paste;
 mod prefab_menu;
-mod region;
+pub(crate) mod region;
 mod runtimes;
-mod search;
-mod toolbar;
+pub(crate) mod search;
 mod viewport;
 mod welcome;
 
@@ -74,10 +76,9 @@ use self::{
     prefab_menu::{PrefabMenu, update_prefab_menu},
     region::{
         PendingRegionPlacement, RectangleGesture, RegionSelectionOptions, draw_marching_edge, draw_region_outline,
-        draw_selection_mode_controls, marching_stripe_offset, rectangle_drag_coord, restore_rectangle_gesture,
+        marching_stripe_offset, rectangle_drag_coord, restore_rectangle_gesture,
     },
     search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search},
-    toolbar::{DEFAULT_CUSTOM_FILL_BOUNDARY, TopOverlayState, draw_top_overlay, request_level_change},
     viewport::{
         ActivePlacementFlash, EDIT_KEYS, EditCommand, MapViewState, MomentaryTool, MoveStroke, PickStroke,
         PlacementStroke,

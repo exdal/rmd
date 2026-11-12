@@ -22,7 +22,6 @@ mod bake;
 mod clipboard;
 pub(crate) mod coop;
 mod direction;
-pub(crate) mod edit;
 #[cfg(test)]
 pub(crate) mod fixtures;
 mod focus;
@@ -47,7 +46,6 @@ pub(crate) use self::{
     bake::{FaultState, RuntimeFault},
     coop::{Activity, Coop, CoopStatus, SharedState},
     direction::{DirectionState, DirectionalTypes},
-    edit::context_placement_group,
     frame::TypeLayer,
     guides::GuideBadge,
     instance::{EditScope, GizmoMember, PickedTransform},

@@ -3,10 +3,10 @@ use ui::keybind::KeyBinding;
 
 use super::ViewFrame;
 use crate::{
-    frontend::{LAYER_KEYS, UiState, request_level_change},
+    frontend::{LAYER_KEYS, UiState},
     session::Session,
     settings::{Settings, keybind::KeybindAction},
-    tool::Tool,
+    tool::{Tool, panel::request_level_change},
 };
 
 const TOOL_KEYS: [(KeybindAction, Tool); 10] = [

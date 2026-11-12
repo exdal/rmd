@@ -2,11 +2,12 @@ use dmm::{Coord, Prefab, Size};
 use objtree::{Roots, TypeId};
 use render::{Frame, GuideLine, MapViewFrame, MapViewInteraction, MapViewRect, SpritePreview};
 
-use super::{Session, context_placement_group};
+use super::Session;
 use crate::{
     document::{DocumentId, PrefabInstanceId, Selection},
     focus::AreaFocus,
     frame::{self, FrameInstances, FrameRenderOptions, HiddenTypes, PrefabUpdate},
+    tool::session::context_placement_group,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,7 +86,7 @@ impl Session {
         changed
     }
 
-    pub(super) fn hidden_types(&self) -> HiddenTypes {
+    pub(crate) fn hidden_types(&self) -> HiddenTypes {
         let Some(environment) = self.state.environment.as_ref() else {
             return HiddenTypes::default();
         };
@@ -304,7 +305,7 @@ impl Session {
         }
     }
 
-    pub(super) fn refresh_reordered_tile(&mut self, coord: Coord) {
+    pub(crate) fn refresh_reordered_tile(&mut self, coord: Coord) {
         let Some(id) = self.state.active() else {
             return;
         };
@@ -359,7 +360,7 @@ impl Session {
         )
     }
 
-    pub(super) fn update_instance(&mut self, selected: PrefabInstanceId) {
+    pub(crate) fn update_instance(&mut self, selected: PrefabInstanceId) {
         self.update_instances(&[selected]);
     }
 

@@ -3,19 +3,21 @@ use base::path::TreePath;
 use dear_imgui_rs::{StyleColor, StyleVar, Ui};
 use ui::icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_DELETE, ICON_MENU_DOWN};
 
-use super::{
-    DeleteLevelDialog, MAX_CUSTOM_FILL_SEARCH_RESULTS, NewLevelDialog, OverlayRect, RegionSelectionOptions,
-    draw_overlay_underlay, draw_selection_mode_controls, draw_type_path_search, overlay_padding,
-};
 use crate::{
+    frontend::{
+        dialog::{DeleteLevelDialog, NewLevelDialog},
+        overlay::{OverlayRect, draw_overlay_underlay, overlay_padding},
+        region::{RegionSelectionOptions, draw_selection_mode_controls},
+        search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search},
+    },
     session::{LevelChange, Session},
     settings::keybind::{KeyBindings, KeybindAction},
     tool::{FillMode, Tool},
 };
 
-pub(super) const DEFAULT_CUSTOM_FILL_BOUNDARY: &str = "/turf/closed/wall";
+pub(crate) const DEFAULT_CUSTOM_FILL_BOUNDARY: &str = "/turf/closed/wall";
 
-pub(super) fn request_level_change(session: &mut Session, delta: i32, dialog: &mut Option<NewLevelDialog>) {
+pub(crate) fn request_level_change(session: &mut Session, delta: i32, dialog: &mut Option<NewLevelDialog>) {
     if session.change_level(delta) != LevelChange::NewLevelRequested {
         return;
     }
@@ -73,18 +75,18 @@ fn draw_z_levels(
     }
 }
 
-pub(super) struct TopOverlayState<'a> {
-    pub(super) keybindings: KeyBindings,
-    pub(super) selection_busy: bool,
-    pub(super) region_selection_options: &'a mut RegionSelectionOptions,
-    pub(super) fill_mode: &'a mut FillMode,
-    pub(super) custom_fill_boundaries: &'a mut Vec<TreePath>,
-    pub(super) custom_fill_search: &'a mut String,
-    pub(super) new_level_dialog: &'a mut Option<NewLevelDialog>,
-    pub(super) delete_level_dialog: &'a mut Option<DeleteLevelDialog>,
+pub(crate) struct TopOverlayState<'a> {
+    pub(crate) keybindings: KeyBindings,
+    pub(crate) selection_busy: bool,
+    pub(crate) region_selection_options: &'a mut RegionSelectionOptions,
+    pub(crate) fill_mode: &'a mut FillMode,
+    pub(crate) custom_fill_boundaries: &'a mut Vec<TreePath>,
+    pub(crate) custom_fill_search: &'a mut String,
+    pub(crate) new_level_dialog: &'a mut Option<NewLevelDialog>,
+    pub(crate) delete_level_dialog: &'a mut Option<DeleteLevelDialog>,
 }
 
-pub(super) fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect, state: TopOverlayState<'_>) {
+pub(crate) fn draw_top_overlay(ui: &Ui, session: &mut Session, bounds: OverlayRect, state: TopOverlayState<'_>) {
     let TopOverlayState {
         keybindings,
         selection_busy,

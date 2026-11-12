@@ -175,7 +175,7 @@ impl TileFillSearch {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct NewLevelDialog {
+pub(crate) struct NewLevelDialog {
     pub(super) document: DocumentId,
     fill: TileFillSearch,
     error: Option<String>,
@@ -183,7 +183,7 @@ pub(super) struct NewLevelDialog {
 }
 
 impl NewLevelDialog {
-    pub(super) fn new(document: DocumentId) -> Self {
+    pub(crate) fn new(document: DocumentId) -> Self {
         Self {
             document,
             fill: TileFillSearch::default(),
@@ -194,7 +194,7 @@ impl NewLevelDialog {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct DeleteLevelDialog {
+pub(crate) struct DeleteLevelDialog {
     pub(super) document: DocumentId,
     z: u32,
     // peers' tile edits don't matter, a level change does
@@ -204,7 +204,7 @@ pub(super) struct DeleteLevelDialog {
 }
 
 impl DeleteLevelDialog {
-    pub(super) fn new(document: &MapDocument) -> Self {
+    pub(crate) fn new(document: &MapDocument) -> Self {
         Self {
             document: document.id(),
             z: document.z,

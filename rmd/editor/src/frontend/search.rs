@@ -4,9 +4,9 @@ use dear_imgui_rs::Ui;
 use objtree::ObjectTree;
 use ui::widgets::dpi;
 
-pub(super) const MAX_CUSTOM_FILL_SEARCH_RESULTS: usize = 50;
+pub(crate) const MAX_CUSTOM_FILL_SEARCH_RESULTS: usize = 50;
 
-pub(super) fn draw_type_path_search(
+pub(crate) fn draw_type_path_search(
     ui: &Ui, tree: Option<&ObjectTree>, query: &mut String, input_id: &str, limit: usize,
     allowed: impl Fn(&ObjectTree, &TreePath) -> bool, enabled: impl Fn(&TreePath) -> bool,
 ) -> Option<TreePath> {

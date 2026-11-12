@@ -21,7 +21,7 @@ const BLOCK_STRIPE_LENGTH: f32 = 6.0;
 const BLOCK_STRIPE_SPEED: f32 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct RegionSelectionOptions {
+pub(crate) struct RegionSelectionOptions {
     pub(super) full_rectangle: bool,
     pub(super) line_width: i32,
 }
@@ -54,7 +54,7 @@ impl RegionSelectionOptions {
         }
     }
 
-    pub(super) fn label(self) -> String {
+    pub(crate) fn label(self) -> String {
         match self.mode() {
             RegionSelectionMode::Full => String::from("Full rectangle"),
             RegionSelectionMode::Hollow { line_width: 1 } => String::from("Border, 1 tile"),
@@ -344,7 +344,7 @@ fn region_border_point(bounds: OverlayRect, distance: f32) -> [f32; 2] {
     }
 }
 
-pub(super) fn draw_selection_mode_controls(ui: &Ui, session: &mut Session, options: &mut RegionSelectionOptions) {
+pub(crate) fn draw_selection_mode_controls(ui: &Ui, session: &mut Session, options: &mut RegionSelectionOptions) {
     let current = session.selection_mask();
     let mode = current.map_or(options.mode(), |mask| mask.mode);
     let mut next = *options;

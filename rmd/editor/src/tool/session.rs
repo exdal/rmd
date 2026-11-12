@@ -3,7 +3,7 @@ use base::path::TreePath;
 use dmm::{Coord, Prefab};
 use objtree::ObjectTree;
 
-use super::{FillOutcome, Session};
+use crate::session::{FillOutcome, Session};
 use crate::{
     document::{
         PrefabInstanceId, VarMutation,
@@ -321,7 +321,7 @@ impl Session {
         changed
     }
 
-    pub(super) fn build_delete_instances(&mut self, targets: &[PrefabInstanceId], verb: &str) -> Option<ToolEdit> {
+    pub(crate) fn build_delete_instances(&mut self, targets: &[PrefabInstanceId], verb: &str) -> Option<ToolEdit> {
         let (environment, document) = self.state.active_pair_mut()?;
 
         tool::delete_instances(document, &environment.tree, &environment.world, targets, verb)
@@ -345,7 +345,7 @@ impl Session {
     }
 
     /// Commits a region edit that leaves `after` selected, undo puts the old selection back
-    pub(super) fn commit_selecting(
+    pub(crate) fn commit_selecting(
         &mut self, mut action: ToolEdit, after: SelectionMask, group: Option<EditGroupId>,
     ) -> bool {
         action.edit = action.edit.selecting(SelectionChange {

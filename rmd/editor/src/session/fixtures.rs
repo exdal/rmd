@@ -132,7 +132,7 @@ impl Session {
         positions
     }
 
-    pub(super) fn frame_update(&self) -> Option<FrameUpdate> {
+    pub(crate) fn frame_update(&self) -> Option<FrameUpdate> {
         self.active_cache().frame_updates.last().cloned()
     }
 }
@@ -447,7 +447,7 @@ pub(crate) fn node_tile_has_group(session: &Session, coord: Coord) -> bool {
     })
 }
 
-pub(super) fn area_at(session: &Session, coord: Coord) -> Option<PrefabInstanceId> {
+pub(crate) fn area_at(session: &Session, coord: Coord) -> Option<PrefabInstanceId> {
     session.area_at(session.state.active()?, coord)
 }
 

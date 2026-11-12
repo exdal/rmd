@@ -11,7 +11,7 @@ use super::{
 use crate::{
     document::DocumentId,
     git::{blame::BlameCell, conflict::Side},
-    session::context_placement_group,
+    tool::session::context_placement_group,
 };
 
 pub(super) const POPUP: &str = "Map context##map-context";
@@ -432,10 +432,8 @@ mod tests {
 
     use super::{POPUP, Target, draw_popup};
     use crate::{
-        environment::worker::LoadedMap,
-        frontend::search::matching_type_paths_up_to_filtered,
-        session::{Session, context_placement_group},
-        settings::Settings,
+        environment::worker::LoadedMap, frontend::search::matching_type_paths_up_to_filtered, session::Session,
+        settings::Settings, tool::session::context_placement_group,
     };
 
     #[test]

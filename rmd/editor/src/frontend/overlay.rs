@@ -16,7 +16,7 @@ const OVERLAY_PADDING: f32 = 4.0;
 
 pub(super) const OVERLAY_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 
-pub(super) fn overlay_padding(ui: &Ui) -> f32 {
+pub(crate) fn overlay_padding(ui: &Ui) -> f32 {
     OVERLAY_PADDING * dpi(ui)
 }
 
@@ -46,7 +46,7 @@ pub(super) fn draw_identical_outlines(ui: &Ui, session: &Session, camera: &Contr
     });
 }
 
-pub(super) fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
+pub(crate) fn draw_overlay_underlay(ui: &Ui, bounds: OverlayRect) {
     ui.get_window_draw_list()
         .add_rect(bounds.min, bounds.max, OVERLAY_BG)
         .filled(true)

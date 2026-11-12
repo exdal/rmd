@@ -155,7 +155,7 @@ impl Session {
     // thois is a dedicated function to __PICK__ an atom under preview, for example: tramstation has map root atoms, and
     // when we place the previews, those map root atoms fall under that preview, so visbuffer actually renders the
     // previewed root atom that is coming from preview itself.
-    pub(super) fn source_root_under(&self, target: PrefabInstanceId) -> Option<PrefabInstanceId> {
+    pub(crate) fn source_root_under(&self, target: PrefabInstanceId) -> Option<PrefabInstanceId> {
         if target.get() < PREVIEW_ID_START {
             return None;
         }
