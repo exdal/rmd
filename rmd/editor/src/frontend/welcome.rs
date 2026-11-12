@@ -152,7 +152,7 @@ fn share_tooltip(session: &Session, map: &Path) -> Option<&'static str> {
     })
 }
 
-pub(in crate::frontend) fn codebase_relative(base: &Path, path: &Path) -> String {
+pub(crate) fn codebase_relative(base: &Path, path: &Path) -> String {
     path.strip_prefix(base).unwrap_or(path).display().to_string()
 }
 

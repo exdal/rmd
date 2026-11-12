@@ -1,6 +1,6 @@
 use objtree::ObjectTree;
 
-use super::Session;
+use crate::session::Session;
 use crate::{
     document::{DocumentId, PrefabInstanceId, Selection},
     environment::world::World,

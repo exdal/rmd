@@ -55,15 +55,15 @@ mod stroke;
 mod tests;
 mod tools;
 
-pub(super) struct MapViewState {
+pub(crate) struct MapViewState {
     window: WindowKey,
-    pub(super) camera: Controller,
+    pub(crate) camera: Controller,
     size: (u32, u32),
     pub(super) rect: MapViewRect,
     visible: bool,
     placed: bool,
-    pub(super) refit: bool,
-    pub(super) focus: bool,
+    pub(crate) refit: bool,
+    pub(crate) focus: bool,
     hovered_coord: Option<Coord>,
     blame_popup: Option<BlamePopup>,
     prefab_menu: Option<PrefabMenu>,
@@ -84,7 +84,7 @@ pub(super) struct MapViewDraw<'a> {
 }
 
 impl MapViewState {
-    pub(super) fn new(id: DocumentId) -> Result<Self, WindowKeyError> {
+    pub(crate) fn new(id: DocumentId) -> Result<Self, WindowKeyError> {
         Ok(Self {
             window: WindowKey::new(format!("viewport-{}", id.get()), "Map View")?,
             camera: Controller::new(),

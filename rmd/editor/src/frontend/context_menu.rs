@@ -4,13 +4,11 @@ use dear_imgui_rs::{Key, MouseButton, PopupToken, Ui, WindowHoveredFlags};
 use dmm::{Coord, Prefab, PrefabInstanceId};
 use objtree::ObjectTree;
 
-use super::{
-    EditCommand, SelectionTransform, Session, Tool, common::draw_thumbnail, draw_type_path_search,
-    find::SimilarMatchKind,
-};
+use super::{EditCommand, SelectionTransform, Session, Tool, common::draw_thumbnail, draw_type_path_search};
 use crate::{
     document::DocumentId,
     git::{blame::BlameCell, conflict::Side},
+    search::panel::SimilarMatchKind,
     tool::session::context_placement_group,
 };
 

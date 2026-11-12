@@ -8,7 +8,8 @@ use super::{MapViewState, ViewFrame, stroke::ActivePlacementFlash};
 use crate::{
     app::pacing::FrameDemand,
     document::DocumentId,
-    frontend::{UiState, find::JumpTarget},
+    frontend::UiState,
+    search::panel::JumpTarget,
     session::Session,
     settings::{Settings, keybind::KeybindAction},
 };
@@ -83,7 +84,7 @@ impl UiState {
         }
     }
 
-    pub(in crate::frontend) fn jump_to_instance(&mut self, session: &mut Session, target: JumpTarget) {
+    pub(crate) fn jump_to_instance(&mut self, session: &mut Session, target: JumpTarget) {
         let Some(location) = session
             .state
             .document(target.document)

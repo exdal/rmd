@@ -3,7 +3,7 @@ use std::{cell::Ref, collections::BTreeMap, sync::Arc};
 
 use dmm::Coord;
 
-use super::Session;
+use crate::session::Session;
 use crate::{
     document::{DocumentId, PrefabInstanceId},
     issues,

@@ -1,7 +1,7 @@
 use dmm::Coord;
 use objtree::{Roots, TypeId};
 
-use super::Session;
+use crate::session::Session;
 use crate::{
     document::{DocumentId, PrefabInstanceId},
     focus::AreaFocus,

@@ -29,7 +29,9 @@ use crate::{
     frame::session::TypeLayer,
     git::panel::{GitPanel, GitTab},
     gizmo::GizmoState,
+    issues::panel::IssuesPanel,
     region::panel::RegionSelectionOptions,
+    search::panel::{FindPanel, SimilarMatchKind},
     session::Session,
     settings::{
         OpenPanels, Panel, Settings,
@@ -43,18 +45,16 @@ use crate::{
 
 mod coop;
 pub(crate) mod dialog;
-mod find;
 #[cfg(test)]
 mod fixtures;
 mod grid;
 mod history;
-mod issues;
 mod menu;
 pub(crate) mod overlay;
 mod prefab_menu;
 pub(crate) mod search;
-mod viewport;
-mod welcome;
+pub(crate) mod viewport;
+pub(crate) mod welcome;
 
 use self::{
     dialog::{
@@ -215,14 +215,14 @@ enum CloseFocus {
 
 pub struct UiState {
     object_tree: ObjectTreePanel,
-    map_views: HashMap<DocumentId, MapViewState>,
+    pub(crate) map_views: HashMap<DocumentId, MapViewState>,
     central_node: Option<Id>,
     dockspace_root: Option<Id>,
     dm_ui: DmUi,
     welcome_window: WindowKey,
     inspector: InspectorPanel,
-    find: find::FindPanel,
-    issues: issues::IssuesPanel,
+    find: FindPanel,
+    issues: IssuesPanel,
     runtimes: RuntimesPanel,
     git_panel: GitPanel,
     /// Keeps the object tree in front of the Git tab while its saved layout settles
@@ -284,8 +284,8 @@ impl UiState {
         let object_tree = ObjectTreePanel::new()?;
         let welcome_window = WindowKey::new("welcome", "Welcome")?;
         let inspector = InspectorPanel::new()?;
-        let find = find::FindPanel::new()?;
-        let issues = issues::IssuesPanel::new()?;
+        let find = FindPanel::new()?;
+        let issues = IssuesPanel::new()?;
         let runtimes = RuntimesPanel::new()?;
         let git_panel = GitPanel::new()?;
         let settings_window = SettingsWindow::new()?;
@@ -727,7 +727,7 @@ impl UiState {
             {
                 Some((document, instance)) => {
                     self.find
-                        .open_for(session, document, instance, find::SimilarMatchKind::Prefab);
+                        .open_for(session, document, instance, SimilarMatchKind::Prefab);
                 },
                 None => self.find.request(),
             }
@@ -859,7 +859,7 @@ impl UiState {
         self.copy_to_clipboard = inspector.copy_hash.or(object_tree.copy_path);
         if let Some((document, instance)) = inspector.find_similar {
             self.find
-                .open_for(session, document, instance, find::SimilarMatchKind::Prefab);
+                .open_for(session, document, instance, SimilarMatchKind::Prefab);
         }
 
         panels.search |= self.find.has_focus_request();

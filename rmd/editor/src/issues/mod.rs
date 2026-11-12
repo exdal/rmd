@@ -1,3 +1,6 @@
+pub(crate) mod panel;
+pub(crate) mod session;
+
 use base::path::TreePath;
 use std::collections::BTreeMap;
 

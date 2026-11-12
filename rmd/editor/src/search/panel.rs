@@ -15,15 +15,15 @@ use crate::{
 const SEARCH_WINDOW_SIZE: [f32; 2] = [460.0, 360.0];
 
 #[derive(Clone, Copy)]
-pub(super) enum SimilarMatchKind {
+pub(crate) enum SimilarMatchKind {
     Type,
     Prefab,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct JumpTarget {
-    pub(super) document: DocumentId,
-    pub(super) instance: PrefabInstanceId,
+pub(crate) struct JumpTarget {
+    pub(crate) document: DocumentId,
+    pub(crate) instance: PrefabInstanceId,
 }
 
 struct ActiveSearch {
@@ -43,7 +43,7 @@ enum Action {
     Step(bool),
 }
 
-pub(super) struct FindPanel {
+pub(crate) struct FindPanel {
     window: WindowKey,
     focus: bool,
     visible: bool,
@@ -55,7 +55,7 @@ pub(super) struct FindPanel {
 }
 
 impl FindPanel {
-    pub(super) fn new() -> Result<Self, WindowKeyError> {
+    pub(crate) fn new() -> Result<Self, WindowKeyError> {
         Ok(Self {
             window: WindowKey::new("search", "Search")?,
             focus: false,
@@ -68,24 +68,24 @@ impl FindPanel {
         })
     }
 
-    pub(super) const fn window(&self) -> &WindowKey {
+    pub(crate) const fn window(&self) -> &WindowKey {
         &self.window
     }
 
-    pub(super) fn request(&mut self) {
+    pub(crate) fn request(&mut self) {
         self.focus = true;
     }
 
-    pub(super) const fn has_focus_request(&self) -> bool {
+    pub(crate) const fn has_focus_request(&self) -> bool {
         self.focus
     }
 
     #[cfg(test)]
-    pub(super) const fn visible(&self) -> bool {
+    pub(crate) const fn visible(&self) -> bool {
         self.visible
     }
 
-    pub(super) fn open_for(
+    pub(crate) fn open_for(
         &mut self, session: &Session, document: DocumentId, instance: PrefabInstanceId, kind: SimilarMatchKind,
     ) {
         let Some(instance) = session
@@ -111,7 +111,7 @@ impl FindPanel {
         self.request();
     }
 
-    pub(super) fn open_for_path(&mut self, session: &Session, path: &TreePath) {
+    pub(crate) fn open_for_path(&mut self, session: &Session, path: &TreePath) {
         self.path = path.to_string();
         self.search_typed_path(session);
         self.request();
@@ -159,7 +159,7 @@ impl FindPanel {
         self.run(session, document, query, bounds);
     }
 
-    pub(super) fn step(&mut self, session: &Session, forward: bool) -> Option<JumpTarget> {
+    pub(crate) fn step(&mut self, session: &Session, forward: bool) -> Option<JumpTarget> {
         let search = self.search.as_mut()?;
         let rows = resolve_instances(session.state.document(search.document)?, &search.instances);
         if rows.is_empty() {
@@ -183,7 +183,7 @@ impl FindPanel {
         })
     }
 
-    pub(super) fn draw(
+    pub(crate) fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &Settings, open: &mut bool,
     ) -> Option<JumpTarget> {
         if self
@@ -394,7 +394,7 @@ mod tests {
     use super::*;
     use crate::{
         document::MapDocument,
-        frontend::{MapViewState, UiState},
+        frontend::{UiState, viewport::MapViewState},
     };
 
     fn map() -> Map {

@@ -1,3 +1,5 @@
+pub(crate) mod session;
+
 use std::collections::HashSet;
 
 use dmm::{Coord, Prefab, PrefabInstanceId};

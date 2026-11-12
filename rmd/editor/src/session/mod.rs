@@ -23,15 +23,12 @@ pub(crate) mod coop;
 mod direction;
 #[cfg(test)]
 pub(crate) mod fixtures;
-mod focus;
 mod guides;
 pub(crate) mod highlight;
 mod instance;
-mod issues;
 mod modules;
 mod palette;
 mod preview;
-mod search;
 
 pub(crate) use self::{
     coop::{Activity, Coop, CoopStatus, SharedState},
@@ -70,7 +67,7 @@ pub(crate) struct DocumentCache {
     pub(crate) unbaked: Vec<PrefabInstanceId>,
     pub(crate) always_highlights: Vec<PrefabInstanceId>,
     pub(crate) unknown_highlights: RefCell<highlight::UnknownHighlights>,
-    pub(crate) issues: RefCell<issues::IssueGroups>,
+    pub(crate) issues: RefCell<crate::issues::session::IssueGroups>,
     /// What a replayed panel frame asked this document to re-derive, held until it is active.
     pub(crate) pending_rebake: crate::bake::UiRebake,
     pub(crate) git: Option<GitDocState>,

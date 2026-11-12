@@ -12,10 +12,11 @@ use ui::widgets::{
     table_min_width,
 };
 
-use super::{find::JumpTarget, search::draw_type_path_search, welcome::codebase_relative};
 use crate::{
     document::{DocumentId, PrefabInstanceId},
+    frontend::{search::draw_type_path_search, welcome::codebase_relative},
     issues,
+    search::panel::JumpTarget,
     session::Session,
     settings::Settings,
 };
@@ -40,7 +41,7 @@ enum Action {
 }
 
 #[derive(Default)]
-pub(super) struct IssuesOutput {
+pub(crate) struct IssuesOutput {
     pub jump: Option<JumpTarget>,
     pub tile: Option<(DocumentId, Coord)>,
     pub copy: Option<String>,
@@ -75,7 +76,7 @@ enum Row {
     },
 }
 
-pub(super) struct IssuesPanel {
+pub(crate) struct IssuesPanel {
     window: WindowKey,
     focus_requested: bool,
     filter: String,
@@ -87,7 +88,7 @@ pub(super) struct IssuesPanel {
 }
 
 impl IssuesPanel {
-    pub(super) fn new() -> Result<Self, WindowKeyError> {
+    pub(crate) fn new() -> Result<Self, WindowKeyError> {
         Ok(Self {
             window: WindowKey::new("map-issues", "Map Issues")?,
             focus_requested: false,
@@ -100,11 +101,11 @@ impl IssuesPanel {
         })
     }
 
-    pub(super) fn window(&self) -> &WindowKey {
+    pub(crate) fn window(&self) -> &WindowKey {
         &self.window
     }
 
-    pub(super) fn request(&mut self, document: Option<DocumentId>) {
+    pub(crate) fn request(&mut self, document: Option<DocumentId>) {
         self.focus_requested = true;
         if document.is_some() {
             self.filter.clear();
@@ -112,16 +113,16 @@ impl IssuesPanel {
         }
     }
 
-    pub(super) fn has_focus_request(&self) -> bool {
+    pub(crate) fn has_focus_request(&self) -> bool {
         self.focus_requested
     }
 
     #[cfg(test)]
-    pub(super) fn visible(&self) -> bool {
+    pub(crate) fn visible(&self) -> bool {
         self.visible
     }
 
-    pub(super) fn draw(
+    pub(crate) fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &Settings, open: &mut bool,
     ) -> IssuesOutput {
         let mut output = IssuesOutput::default();
