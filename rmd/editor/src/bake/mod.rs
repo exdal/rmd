@@ -1,3 +1,7 @@
+pub(crate) mod panel;
+pub(crate) mod session;
+pub(crate) mod worker;
+
 use base::file_path;
 use std::{
     collections::{HashMap, HashSet},

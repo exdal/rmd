@@ -53,7 +53,7 @@ impl UnknownHighlights {
     }
 }
 
-pub(super) fn always_highlighted(bake: Option<&Bake>) -> Vec<PrefabInstanceId> {
+pub(crate) fn always_highlighted(bake: Option<&Bake>) -> Vec<PrefabInstanceId> {
     let Some(bake) = bake else {
         return Vec::new();
     };

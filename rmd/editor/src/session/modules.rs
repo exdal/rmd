@@ -45,7 +45,7 @@ impl Session {
         ))
     }
 
-    pub(super) fn sync_module_guard(&mut self, id: DocumentId) {
+    pub(crate) fn sync_module_guard(&mut self, id: DocumentId) {
         let Some(document) = self.state.document(id) else {
             return;
         };

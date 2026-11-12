@@ -18,6 +18,8 @@ use ui::theme::Themes;
 use self::{inspector::InspectorPanel, object_tree::ObjectTreePanel, settings::SettingsWindow};
 use crate::{
     app::{external_editor::SourceLocation, pacing::FrameDemand, update::UpdateCheck},
+    bake::panel::RuntimesPanel,
+    dm_ui::panel::DmUi,
     document::{DocumentId, MapDocument},
     environment::{
         panel::{DiagnosticsState, LoadNotice, LoadPopup, draw_load_popup},
@@ -52,7 +54,6 @@ pub(crate) mod overlay;
 mod paste;
 mod prefab_menu;
 pub(crate) mod region;
-mod runtimes;
 pub(crate) mod search;
 mod viewport;
 mod welcome;
@@ -90,8 +91,6 @@ use self::{
 mod common;
 
 mod context_menu;
-
-mod dm;
 
 mod inspector;
 
@@ -227,12 +226,12 @@ pub struct UiState {
     map_views: HashMap<DocumentId, MapViewState>,
     central_node: Option<Id>,
     dockspace_root: Option<Id>,
-    dm_ui: dm::DmUi,
+    dm_ui: DmUi,
     welcome_window: WindowKey,
     inspector: InspectorPanel,
     find: find::FindPanel,
     issues: issues::IssuesPanel,
-    runtimes: runtimes::RuntimesPanel,
+    runtimes: RuntimesPanel,
     git_panel: GitPanel,
     /// Keeps the object tree in front of the Git tab while its saved layout settles
     select_object_tree: StartupPanelFocus,
@@ -295,7 +294,7 @@ impl UiState {
         let inspector = InspectorPanel::new()?;
         let find = find::FindPanel::new()?;
         let issues = issues::IssuesPanel::new()?;
-        let runtimes = runtimes::RuntimesPanel::new()?;
+        let runtimes = RuntimesPanel::new()?;
         let git_panel = GitPanel::new()?;
         let settings_window = SettingsWindow::new()?;
         let load_window = WindowKey::new("load", "Loading")?;
@@ -310,7 +309,7 @@ impl UiState {
             map_views: HashMap::new(),
             central_node: None,
             dockspace_root: None,
-            dm_ui: dm::DmUi::default(),
+            dm_ui: DmUi::default(),
             welcome_window,
             inspector,
             find,

@@ -10,14 +10,13 @@ use objtree::TypeId;
 use render::{FrameUpdate, texture::TextureCatalog};
 
 use crate::{
-    baker::Baker,
+    bake::worker::Baker,
     document::{DocumentId, PrefabInstanceId, state::EditorState},
     frame::{FrameInstances, FrameOptions, TypeVisibility, visual},
     git::{session::GitDocState, worker::GitWorker},
     maploader::preview::ModulePreviewState,
 };
 
-pub(crate) mod bake;
 mod clipboard;
 pub(crate) mod coop;
 mod direction;
@@ -25,23 +24,17 @@ mod direction;
 pub(crate) mod fixtures;
 mod focus;
 mod guides;
-mod highlight;
+pub(crate) mod highlight;
 mod instance;
 mod issues;
 mod modules;
 pub(crate) mod node;
 mod palette;
-mod panel;
 mod preview;
 mod region;
 mod search;
 
-use self::{
-    bake::report_bake_output, direction::direction_state, highlight::always_highlighted, node::NodeEditState,
-    preview::RegionPreviewCache, region::RegionState,
-};
 pub(crate) use self::{
-    bake::{FaultState, RuntimeFault},
     coop::{Activity, Coop, CoopStatus, SharedState},
     direction::{DirectionState, DirectionalTypes},
     guides::GuideBadge,
@@ -50,9 +43,10 @@ pub(crate) use self::{
     palette::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
     preview::{PlacementPreview, RegionPreviewSource},
 };
+use self::{direction::direction_state, node::NodeEditState, preview::RegionPreviewCache, region::RegionState};
 
 #[derive(Default)]
-enum BakeHold {
+pub(crate) enum BakeHold {
     /// Every edit bakes RIGHT NOW
     #[default]
     Off,
@@ -73,7 +67,7 @@ pub(crate) struct DocumentCache {
     pub(crate) lighting_updates: Vec<render::LightingUpdate>,
     pub(crate) preview: Option<RegionPreviewCache>,
     pub(crate) bake: Option<crate::bake::Bake>,
-    bake_hold: BakeHold,
+    pub(crate) bake_hold: BakeHold,
     // edited while the bake was off growing by a level, replayed when it comes back
     pub(crate) unbaked: Vec<PrefabInstanceId>,
     pub(crate) always_highlights: Vec<PrefabInstanceId>,
@@ -83,7 +77,7 @@ pub(crate) struct DocumentCache {
     pub(crate) pending_rebake: crate::bake::UiRebake,
     pub(crate) git: Option<GitDocState>,
     pub(crate) map_revision: u64,
-    runtimes: Vec<bake::LoggedFault>,
+    pub(crate) runtimes: Vec<crate::bake::session::LoggedFault>,
 }
 
 pub(crate) type SharedHighlights = Arc<[crate::bake::Highlight]>;

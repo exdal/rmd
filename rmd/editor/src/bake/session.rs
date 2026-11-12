@@ -3,10 +3,12 @@ use std::{collections::HashSet, mem};
 use render::FrameUpdate;
 use vm::profile::ProfileHook;
 
-use super::{BakeHold, Session, always_highlighted};
+use crate::session::{BakeHold, Session, highlight::always_highlighted};
 use crate::{
-    bake::{self, BakeUpdate},
-    baker::{self, Baked, BakedMap, Job},
+    bake::{
+        self, BakeUpdate,
+        worker::{self, Baked, BakedMap, Job},
+    },
     document::{DocumentId, PrefabInstanceId},
     frame::{self, FrameRenderOptions, PrefabUpdate},
     maploader::preview::PREVIEW_ID_START,
@@ -23,7 +25,7 @@ fn push_pending<T>(updates: &mut Vec<T>, update: T) {
     updates.push(update);
 }
 
-pub(super) fn report_bake_output(bake: &mut crate::bake::Bake) {
+pub(crate) fn report_bake_output(bake: &mut crate::bake::Bake) {
     for line in bake.take_output() {
         log::info!("DM: {line}");
     }
@@ -46,7 +48,7 @@ pub(crate) enum FaultState {
 // the bake only tallies what its current state raises, a placement that re-runs takes its fault
 // back, so this keeps every fault a map raised until the user clears it
 #[derive(Debug)]
-pub(super) struct LoggedFault {
+pub(crate) struct LoggedFault {
     hook: Option<ProfileHook>,
     key: vm::FaultKey,
     fault: vm::Fault,
@@ -86,7 +88,7 @@ fn log_runtimes(bake: &crate::bake::Bake, log: &mut Vec<LoggedFault>) {
 
 impl Session {
     // a map whose bake is still in flight keeps its log as it was
-    pub(super) fn log_runtimes(&mut self) {
+    pub(crate) fn log_runtimes(&mut self) {
         for cache in self.caches.values_mut() {
             if let Some(bake) = cache.bake.as_ref() {
                 log_runtimes(bake, &mut cache.runtimes);
@@ -102,7 +104,7 @@ impl Session {
         self.log_runtimes();
     }
 
-    pub(super) fn collect_bake_diagnostics(&mut self) {
+    pub(crate) fn collect_bake_diagnostics(&mut self) {
         self.log_runtimes();
 
         self.diagnostics.bake = self
@@ -187,7 +189,7 @@ impl Session {
                 },
             };
 
-            self.baker.start(baker::Request {
+            self.baker.start(worker::Request {
                 document: id,
                 path: document
                     .path

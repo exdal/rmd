@@ -1,5 +1,5 @@
-use super::{Session, report_bake_output};
 use crate::document::{DocumentId, PrefabInstanceId};
+use crate::{bake::session::report_bake_output, session::Session};
 
 impl Session {
     pub(crate) fn dm_ui(&mut self, dockspace: u32, feedback: crate::bake::UiFeedback) -> crate::bake::UiFrame {
@@ -72,7 +72,7 @@ impl Session {
         frame
     }
 
-    pub(super) fn replay_ui(&mut self, id: DocumentId, feedback: &crate::bake::UiFeedback) -> bool {
+    pub(crate) fn replay_ui(&mut self, id: DocumentId, feedback: &crate::bake::UiFeedback) -> bool {
         let Some(environment) = self.state.environment.clone() else {
             return false;
         };
@@ -105,7 +105,7 @@ impl Session {
         frame.committed
     }
 
-    pub(super) fn flush_pending_rebake(&mut self, id: DocumentId) {
+    pub(crate) fn flush_pending_rebake(&mut self, id: DocumentId) {
         let request = self
             .caches
             .get_mut(&id)
@@ -175,9 +175,10 @@ mod tests {
     use vm::profile::ProfileHook;
 
     use crate::{
+        bake::session::FaultState,
         document::{DocumentId, MapDocument, PrefabInstanceId},
         session::{
-            FaultState, Session,
+            Session,
             fixtures::{
                 examples, faulting_profile_session, highlight_toggle_fault_session, interaction_fault_session,
                 settle_bake,

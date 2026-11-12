@@ -385,11 +385,11 @@ mod tests {
     use dmm::{Coord, Map, Prefab, Size};
 
     use crate::{
+        bake::session::MAX_PENDING_UPDATES,
         document::{MapDocument, Selection},
         frame::session::TypeLayer,
         session::{
             Session,
-            bake::MAX_PENDING_UPDATES,
             fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, settle_bake},
         },
         tool::Tool,

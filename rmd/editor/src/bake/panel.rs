@@ -5,37 +5,38 @@ use ui::widgets::{centered_note, dpi, focus_window_on_hover};
 
 use crate::{
     app::external_editor::SourceLocation,
-    session::{FaultState, RuntimeFault, Session},
+    bake::session::{FaultState, RuntimeFault},
+    session::Session,
     settings::Settings,
 };
 
 const RUNTIMES_WINDOW_SIZE: [f32; 2] = [560.0, 320.0];
 
 #[derive(Default)]
-pub(super) struct RuntimesOutput {
-    pub(super) open_source: Option<SourceLocation>,
-    pub(super) copy: Option<String>,
-    pub(super) clear: bool,
+pub(crate) struct RuntimesOutput {
+    pub(crate) open_source: Option<SourceLocation>,
+    pub(crate) copy: Option<String>,
+    pub(crate) clear: bool,
 }
 
-pub(super) struct RuntimesPanel {
+pub(crate) struct RuntimesPanel {
     window: WindowKey,
     focus: bool,
 }
 
 impl RuntimesPanel {
-    pub(super) fn new() -> Result<Self, WindowKeyError> {
+    pub(crate) fn new() -> Result<Self, WindowKeyError> {
         Ok(Self {
             window: WindowKey::new("runtimes", "Runtimes")?,
             focus: false,
         })
     }
 
-    pub(super) fn request(&mut self) {
+    pub(crate) fn request(&mut self) {
         self.focus = true;
     }
 
-    pub(super) fn draw(&mut self, ui: &Ui, session: &Session, settings: &Settings, open: &mut bool) -> RuntimesOutput {
+    pub(crate) fn draw(&mut self, ui: &Ui, session: &Session, settings: &Settings, open: &mut bool) -> RuntimesOutput {
         let mut output = RuntimesOutput::default();
         let focus = std::mem::take(&mut self.focus);
         if !*open {
