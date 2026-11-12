@@ -9,16 +9,15 @@ use dear_imgui_rs::{ChildFlags, DragFlags, StyleColor, TableFlags, TableSizingPo
 use dmi::metadata::Dir;
 use dmm::{Coord, Prefab, error::MapErrorKind, parser::parse_value, writer::format_value};
 use objtree::{ObjectTree, ResolvedVarType, TypeId, VarTypeKind};
-use ui::icons::materialdesignicons::{
-    ICON_ARROW_BOTTOM_LEFT, ICON_ARROW_BOTTOM_RIGHT, ICON_ARROW_DOWN, ICON_ARROW_LEFT, ICON_ARROW_RIGHT,
-    ICON_ARROW_TOP_LEFT, ICON_ARROW_TOP_RIGHT, ICON_ARROW_UP, ICON_CIRCLE_SMALL, ICON_PIN, ICON_PIN_OUTLINE,
+use ui::{
+    icons::materialdesignicons::{
+        ICON_ARROW_BOTTOM_LEFT, ICON_ARROW_BOTTOM_RIGHT, ICON_ARROW_DOWN, ICON_ARROW_LEFT, ICON_ARROW_RIGHT,
+        ICON_ARROW_TOP_LEFT, ICON_ARROW_TOP_RIGHT, ICON_ARROW_UP, ICON_CIRCLE_SMALL, ICON_PIN, ICON_PIN_OUTLINE,
+    },
+    widgets::{checkbox_width, focus_window_on_hover, text_wrapped_colored},
 };
 
-use super::{
-    common::{IDENTICAL_EDIT_COLOR, checkbox_width, focus_window_on_hover, text_wrapped_colored},
-    git::commit_summary,
-    search::draw_type_path_search,
-};
+use super::{common::IDENTICAL_EDIT_COLOR, git::commit_summary, search::draw_type_path_search};
 use crate::{
     app::external_editor::SourceLocation,
     blame::{self, BlameCell},
@@ -2024,7 +2023,7 @@ mod tests {
     #[test]
     fn the_identical_banner_replaces_the_checkbox_while_the_mode_is_on() {
         let _guard = ui::testing::CONTEXT_LOCK.lock().unwrap();
-        let mut context = crate::frontend::fixtures::rectangle_context();
+        let mut context = ui::testing::rectangle_context();
         let (mut session, _) = two_tables();
         let mut settings = Settings::default();
         let mut panel = InspectorPanel::new().unwrap();
@@ -2043,7 +2042,7 @@ mod tests {
     #[test]
     fn a_filtered_panel_with_pins_draws_every_filter_state() {
         let _guard = ui::testing::CONTEXT_LOCK.lock().unwrap();
-        let mut context = crate::frontend::fixtures::rectangle_context();
+        let mut context = ui::testing::rectangle_context();
         let (mut session, _) = two_tables();
         let mut settings = Settings {
             pinned_vars: vec![String::from("desc"), String::from("missing")],

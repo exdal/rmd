@@ -1,12 +1,13 @@
 use dear_imgui_rs::Ui;
 use dmm::Coord;
+use ui::widgets::dpi;
 
 use super::{ViewFrame, stroke::active_placement_flash};
 use crate::{
     app::pacing::FrameDemand,
     frontend::{
-        TopOverlayState, UiState, common::dpi, draw_guide_badges, draw_highlights, draw_history_overlay,
-        draw_identical_outlines, draw_placement_preview, draw_selected_pixel_grid, draw_tile_grid, draw_top_overlay,
+        TopOverlayState, UiState, draw_guide_badges, draw_highlights, draw_history_overlay, draw_identical_outlines,
+        draw_placement_preview, draw_selected_pixel_grid, draw_tile_grid, draw_top_overlay,
     },
     session::{GuideBadge, Session},
     settings::Settings,

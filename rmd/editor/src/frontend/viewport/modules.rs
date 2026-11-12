@@ -3,14 +3,17 @@ use std::path::PathBuf;
 use dear_imgui_rs::{MouseButton, Ui};
 use dmm::Coord;
 use render::Renderer;
-use ui::icons::materialdesignicons::{ICON_MAP_MARKER, ICON_OPEN_IN_NEW};
+use ui::{
+    icons::materialdesignicons::{ICON_MAP_MARKER, ICON_OPEN_IN_NEW},
+    widgets::dpi,
+};
 
 use super::ViewFrame;
 use crate::{
     camera::Controller,
     frontend::{
         OverlayRect,
-        common::{IDENTICAL_EDIT_COLOR, dpi},
+        common::IDENTICAL_EDIT_COLOR,
         draw_overlay_underlay,
         overlay::{placement_preview_bounds, tile_bounds},
         welcome::codebase_relative,

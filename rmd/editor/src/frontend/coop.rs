@@ -3,11 +3,13 @@ use std::{env, iter};
 use dear_imgui_rs::{Condition, Key, PopupQueryFlags, StyleColor, StyleVar, Ui, WindowFlags, sys};
 use dmm::Coord;
 use net::{CodebaseId, Comment, CommentId, MAX_COMMENT_LEN, PeerId};
-use ui::icons::materialdesignicons::ICON_CLOSE;
+use ui::{
+    icons::materialdesignicons::ICON_CLOSE,
+    widgets::{DialogButton, begin_centered_modal, dialog_buttons, dpi},
+};
 
 use super::{
     DIAGNOSTIC_WARNING_COLOR,
-    common::{DialogButton, begin_centered_modal, dialog_buttons, dpi},
     dialog::{DIALOG_FIELD_WIDTH, MODAL_FLAGS, SAVE_ERROR_COLOR},
     overlay::{OVERLAY_BG, OverlayRect},
     region::{fill_selection, hollow_selection_inner, region_selection_bounds},

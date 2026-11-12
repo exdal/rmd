@@ -10,15 +10,13 @@ use ui::{
     theme::{
         FieldKind, STYLE_COLORS, STYLE_FIELDS, StyleField, TREE_LINE_MODES, Themes, direction_name, tree_lines_name,
     },
-};
-
-use super::{
-    common::{
+    widgets::{
         DialogButton, begin_centered_modal, button_width, center_next_window, dialog_buttons, dpi,
         focus_window_on_hover,
     },
-    dialog::{MODAL_FLAGS, SAVE_ERROR_COLOR, draw_keybind_preset_dialog},
 };
+
+use super::dialog::{MODAL_FLAGS, SAVE_ERROR_COLOR, draw_keybind_preset_dialog};
 use crate::{
     environment::profile_label,
     frontend::ProfileReload,
@@ -1254,11 +1252,12 @@ fn finish_keybind_capture(ui: &Ui, capturing: &mut Option<KeybindAction>, keybin
 #[cfg(test)]
 mod tests {
     use dear_imgui_rs::MouseButton;
-    use ui::testing::CONTEXT_LOCK;
-    use ui::theme::DEFAULT_THEME;
+    use ui::{
+        testing::{CONTEXT_LOCK, assert_window_centered, finish_frame, popup_context, set_desktop_geometry},
+        theme::DEFAULT_THEME,
+    };
 
     use super::*;
-    use crate::frontend::fixtures::{assert_window_centered, finish_frame, popup_context, set_desktop_geometry};
 
     #[test]
     fn settings_reopens_centered_after_resize_and_stays_draggable() {
@@ -1324,7 +1323,7 @@ mod tests {
     #[test]
     fn ui_scale_changes_only_when_apply_is_clicked() {
         let _context = CONTEXT_LOCK.lock().unwrap();
-        let mut context = super::super::fixtures::rectangle_context();
+        let mut context = ui::testing::rectangle_context();
         context.io_mut().set_display_framebuffer_scale([1.5, 1.5]);
         let mut settings = Settings::default();
         let mut draft = None;
@@ -1497,7 +1496,7 @@ mod tests {
     #[test]
     fn reloading_the_current_profile_skips_the_confirmation() {
         let _context = CONTEXT_LOCK.lock().unwrap();
-        let mut context = super::super::fixtures::rectangle_context();
+        let mut context = ui::testing::rectangle_context();
         let mut pending_profile = Some(ProfileReload::Current);
 
         let ui = context.frame();

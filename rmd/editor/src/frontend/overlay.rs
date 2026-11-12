@@ -1,11 +1,9 @@
 use dear_imgui_rs::{DrawListMut, Ui};
 use dmm::Coord;
 use render::Renderer;
+use ui::widgets::dpi;
 
-use super::{
-    common::{IDENTICAL_EDIT_COLOR, dpi},
-    draw_marching_edge, marching_stripe_offset,
-};
+use super::{common::IDENTICAL_EDIT_COLOR, draw_marching_edge, marching_stripe_offset};
 use crate::{
     camera::Controller,
     conflict::{Hunk, Side},

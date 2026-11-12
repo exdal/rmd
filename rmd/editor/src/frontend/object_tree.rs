@@ -3,10 +3,13 @@ use std::collections::{HashMap, HashSet};
 
 use dear_imgui_rs::{ListClipper, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError};
 use objtree::{ObjectTree, TypeId};
-use ui::icons::materialdesignicons::{ICON_COG, ICON_EYE, ICON_EYE_OFF, ICON_FILTER};
+use ui::{
+    icons::materialdesignicons::{ICON_COG, ICON_EYE, ICON_EYE_OFF, ICON_FILTER},
+    widgets::{dpi, focus_window_on_hover},
+};
 
 use super::{
-    common::{dpi, draw_thumbnail, focus_window_on_hover},
+    common::draw_thumbnail,
     settings::{draw_object_tree_filter_settings, draw_object_tree_search_settings},
 };
 use crate::{

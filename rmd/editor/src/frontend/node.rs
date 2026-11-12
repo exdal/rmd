@@ -1,7 +1,7 @@
 use dear_imgui_rs::Ui;
 use dmm::Coord;
+use ui::widgets::dpi;
 
-use super::common::dpi;
 use crate::{camera::Controller, node, session::NodeOverlay, tool::Tool};
 
 const NODE_HANDLE_RADIUS: f32 = 6.0;

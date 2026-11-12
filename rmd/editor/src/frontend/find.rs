@@ -3,8 +3,8 @@ use base::path::TreePath;
 use dear_imgui_rs::{
     Condition, ListClipper, SelectableFlags, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError,
 };
+use ui::widgets::{centered_note, dpi, focus_window_on_hover, text_wrapped_colored};
 
-use super::common::{centered_note, dpi, focus_window_on_hover, text_wrapped_colored};
 use crate::{
     document::{DocumentId, PrefabInstanceId, Selection},
     search::{SearchQuery, resolve_instances},

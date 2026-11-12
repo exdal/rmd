@@ -1,8 +1,8 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use dear_imgui_rs::{Condition, StyleColor, TreeNodeFlags, Ui, WindowKey, WindowKeyError};
+use ui::widgets::{centered_note, dpi, focus_window_on_hover};
 
-use super::common::{centered_note, dpi, focus_window_on_hover};
 use crate::{
     app::external_editor::SourceLocation,
     session::{FaultState, RuntimeFault, Session},
@@ -151,11 +151,9 @@ fn fault_id(fault: &RuntimeFault<'_>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::RuntimesPanel;
-    use ui::testing::CONTEXT_LOCK;
+    use ui::testing::{CONTEXT_LOCK, rectangle_context};
 
-    use crate::{
-        frontend::fixtures::rectangle_context, session::fixtures::faulting_profile_session, settings::Settings,
-    };
+    use crate::{session::fixtures::faulting_profile_session, settings::Settings};
 
     #[test]
     fn the_panel_draws_a_profile_that_faults() {

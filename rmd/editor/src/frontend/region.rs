@@ -1,7 +1,8 @@
 use dear_imgui_rs::{DragFlags, DrawListMut, Ui};
 use dmm::{Coord, Size};
+use ui::widgets::dpi;
 
-use super::{OVERLAY_BG, OverlayRect, common::dpi};
+use super::{OVERLAY_BG, OverlayRect};
 use crate::{
     camera::Controller,
     document::{DocumentId, Selection},

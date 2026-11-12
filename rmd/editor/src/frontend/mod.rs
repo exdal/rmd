@@ -52,6 +52,7 @@ mod tooltip;
 mod viewport;
 mod welcome;
 
+pub(crate) use self::load::LoadNotice;
 use self::{
     blame::{BlamePopup, blame_tooltip_position, draw_blame_popup},
     dialog::{
@@ -85,7 +86,6 @@ use self::{
     },
     welcome::{ForgetRequest, WelcomeOutput},
 };
-pub(crate) use self::{common::dpi, load::LoadNotice};
 
 mod common;
 
@@ -934,18 +934,18 @@ impl UiState {
             ui.open_popup(RELOAD_CONFLICTS_POPUP);
         }
 
-        let _modal = common::begin_centered_modal(
+        let _modal = ui::widgets::begin_centered_modal(
             ui,
             RELOAD_CONFLICTS_POPUP,
             WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_SAVED_SETTINGS,
         )?;
         ui.text("Discard unsaved changes and load conflicts from Git?");
         let mut load_conflicts = None;
-        let pressed = common::dialog_buttons(
+        let pressed = ui::widgets::dialog_buttons(
             ui,
             &[
-                common::DialogButton::cancel("Cancel"),
-                common::DialogButton::destructive("Discard and Load", false),
+                ui::widgets::DialogButton::cancel("Cancel"),
+                ui::widgets::DialogButton::destructive("Discard and Load", false),
             ],
             true,
         );
@@ -1104,14 +1104,12 @@ mod tests {
     use dmm::{Prefab, Size};
     use ui::{
         keybind::KeyBinding,
-        testing::CONTEXT_LOCK,
+        testing::{CONTEXT_LOCK, rectangle_context},
         theme::{DEFAULT_THEME, Themes},
+        widgets::button_width,
     };
 
-    use super::{
-        DEFAULT_CUSTOM_FILL_BOUNDARY, RegionSelectionOptions, UiState, common::button_width,
-        fixtures::rectangle_context, git, menu::MenuActions,
-    };
+    use super::{DEFAULT_CUSTOM_FILL_BOUNDARY, RegionSelectionOptions, UiState, git, menu::MenuActions};
     use crate::{
         session::{DiagnosticSeverity, Session, fixtures::install_diff},
         settings::{

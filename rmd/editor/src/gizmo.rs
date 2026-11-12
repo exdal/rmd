@@ -3,12 +3,13 @@ use base::types::{Identifier, Value};
 use dear_imgui_rs::{DrawListMut, MouseButton, MouseCursor, StyleColor, Ui};
 use dmi::metadata::Dir;
 use dmm::{Coord, Size};
+use ui::widgets::dpi;
 
 use crate::{
     camera::Controller,
     command::EditGroupId,
     document::{InstanceChange, PrefabInstanceId, Selection, VarMutation},
-    frontend::{TransformMode, dpi},
+    frontend::TransformMode,
     session::{DirectionState, DirectionalTypes, GizmoMember, PickedTransform, Session},
     settings::{Settings, keybind::KeybindAction},
     tool::SelectionRotation,

@@ -1,8 +1,7 @@
 use dear_imgui_rs::Ui;
 use dmm::{Coord, Tile, merge::TileConflict};
-use ui::icons::materialdesignicons::ICON_ARROW_RIGHT;
+use ui::{icons::materialdesignicons::ICON_ARROW_RIGHT, widgets::opaque};
 
-use super::common::opaque;
 use crate::{
     conflict::{OURS_COLOR, OURS_LABEL, THEIRS_COLOR, describe_tile},
     diff::{ADDED_COLOR, ChangeKind, LineKind, REMOVED_COLOR, TileLine, tile_lines},

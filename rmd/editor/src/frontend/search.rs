@@ -2,8 +2,7 @@ use base::path::TreePath;
 
 use dear_imgui_rs::Ui;
 use objtree::ObjectTree;
-
-use super::common::dpi;
+use ui::widgets::dpi;
 
 pub(super) const MAX_CUSTOM_FILL_SEARCH_RESULTS: usize = 50;
 

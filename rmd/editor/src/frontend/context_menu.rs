@@ -424,11 +424,11 @@ mod tests {
     use dear_imgui_rs::{Condition, sys};
     use dmm::{Coord, Map, Prefab, Size};
     use objtree::ObjectTree;
-    use ui::testing::CONTEXT_LOCK;
+    use ui::testing::{CONTEXT_LOCK, rectangle_context};
 
     use super::{POPUP, Target, draw_popup};
     use crate::{
-        frontend::{fixtures::rectangle_context, search::matching_type_paths_up_to_filtered},
+        frontend::search::matching_type_paths_up_to_filtered,
         loader::LoadedMap,
         session::{Session, context_placement_group},
         settings::Settings,

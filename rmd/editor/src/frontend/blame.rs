@@ -1,8 +1,8 @@
 use dear_imgui_rs::{Condition, StyleColor, Ui, WindowFlags};
 use dmm::Coord;
-use ui::icons::materialdesignicons::ICON_CIRCLE_SMALL;
+use ui::{icons::materialdesignicons::ICON_CIRCLE_SMALL, widgets::dpi};
 
-use super::{OverlayRect, common::dpi, git::commit_summary};
+use super::{OverlayRect, git::commit_summary};
 use crate::{
     document::DocumentId,
     git::{CommitInfo, WebLinks},

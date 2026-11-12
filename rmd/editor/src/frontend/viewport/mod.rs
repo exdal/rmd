@@ -3,7 +3,10 @@ use std::mem;
 use dear_imgui_rs::{Condition, Ui, WindowFlags, WindowKey, WindowKeyError};
 use dmm::Coord;
 use render::{MapViewInteraction, MapViewRect, Renderer};
-use ui::icons::materialdesignicons::{ICON_ALERT, ICON_WEB};
+use ui::{
+    icons::materialdesignicons::{ICON_ALERT, ICON_WEB},
+    widgets::focus_window_on_hover,
+};
 
 pub(super) use self::{
     edit::{EDIT_KEYS, EditCommand},
@@ -23,9 +26,9 @@ use self::{
     },
 };
 use super::{
-    BlamePopup, CloseFocus, OverlayRect, PrefabMenu, UiState, VisibleMapView, common::focus_window_on_hover,
-    context_menu::Target as MenuTarget, draw_fill_limit_warning, node::NodeOverlayHit, overlay_padding,
-    recent_button_size, restore_rectangle_gesture, update_prefab_menu,
+    BlamePopup, CloseFocus, OverlayRect, PrefabMenu, UiState, VisibleMapView, context_menu::Target as MenuTarget,
+    draw_fill_limit_warning, node::NodeOverlayHit, overlay_padding, recent_button_size, restore_rectangle_gesture,
+    update_prefab_menu,
 };
 use crate::{
     app::pacing::FrameDemand,

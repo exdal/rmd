@@ -4,3 +4,4 @@ pub mod keybind;
 pub mod testing;
 pub mod theme;
 pub mod viewports;
+pub mod widgets;

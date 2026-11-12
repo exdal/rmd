@@ -4,11 +4,9 @@ use std::{
 };
 
 use dear_imgui_rs::{Condition, InputTextMultilineFlags, StyleColor, Ui, WindowFlags, WindowKey};
+use ui::widgets::{DialogButton, center_next_window, dialog_buttons, dpi};
 
-use super::{
-    SAVE_ERROR_COLOR,
-    common::{DialogButton, center_next_window, dialog_buttons, dpi},
-};
+use super::SAVE_ERROR_COLOR;
 use crate::{
     loader::LoadView,
     progress::{Snapshot, Stage},
@@ -317,11 +315,10 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use dear_imgui_rs::{Context, WindowKey, sys};
-    use ui::testing::CONTEXT_LOCK;
+    use ui::testing::{CONTEXT_LOCK, assert_window_centered, finish_frame, popup_context, set_desktop_geometry};
 
     use super::{DiagnosticsState, LOAD_POPUP_WIDTH, LoadNotice, draw_load_popup, fit_path, grouped, shorten_path};
     use crate::{
-        frontend::fixtures::{assert_window_centered, finish_frame, popup_context, set_desktop_geometry},
         loader::LoadView,
         progress::{Snapshot, Stage},
         session::{DiagnosticSeverity, LoadReport},

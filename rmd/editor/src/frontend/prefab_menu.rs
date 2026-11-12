@@ -2,9 +2,10 @@ use std::{iter, ptr};
 
 use dear_imgui_rs::{Ui, sys};
 use dmm::Prefab;
+use ui::widgets::dpi;
 
 use super::{
-    common::{IconOrigin, dpi, draw_thumbnail},
+    common::{IconOrigin, draw_thumbnail},
     context_menu::begin_map_popup,
 };
 use crate::{

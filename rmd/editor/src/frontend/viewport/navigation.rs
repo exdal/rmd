@@ -2,12 +2,13 @@ use std::collections::hash_map::Entry;
 
 use dear_imgui_rs::{MouseButton, Ui};
 use dmm::Coord;
+use ui::widgets::dpi;
 
 use super::{MapViewState, ViewFrame, stroke::ActivePlacementFlash};
 use crate::{
     app::pacing::FrameDemand,
     document::DocumentId,
-    frontend::{UiState, common::dpi, find::JumpTarget},
+    frontend::{UiState, find::JumpTarget},
     session::Session,
     settings::{Settings, keybind::KeybindAction},
 };

@@ -3,19 +3,19 @@ use dear_imgui_rs::{
     TableRowFlags, TableSizingPolicy, TreeNodeFlags, Ui, WindowKey, WindowKeyError,
 };
 use dmm::Coord;
-use ui::icons::materialdesignicons::{
-    ICON_ALERT, ICON_ALERT_CIRCLE, ICON_ARROW_RIGHT, ICON_CHECK, ICON_CIRCLE_SMALL, ICON_CLOSE_THICK,
-    ICON_FILE_COMPARE, ICON_PENCIL, ICON_REFRESH, ICON_RESTORE, ICON_SOURCE_BRANCH, ICON_SOURCE_COMMIT,
-    ICON_SOURCE_MERGE,
-};
-
-use super::{
-    SAVE_ERROR_COLOR,
-    common::{
+use ui::{
+    icons::materialdesignicons::{
+        ICON_ALERT, ICON_ALERT_CIRCLE, ICON_ARROW_RIGHT, ICON_CHECK, ICON_CIRCLE_SMALL, ICON_CLOSE_THICK,
+        ICON_FILE_COMPARE, ICON_PENCIL, ICON_REFRESH, ICON_RESTORE, ICON_SOURCE_BRANCH, ICON_SOURCE_COMMIT,
+        ICON_SOURCE_MERGE,
+    },
+    widgets::{
         RowSelection, align_right, button_width, centered_note, checkbox_width, dpi, focus_window_on_hover,
         label_width, opaque, overflow_scroll, same_line_if_fits, table_min_width, text_wrapped_colored,
     },
 };
+
+use super::SAVE_ERROR_COLOR;
 use crate::{
     blame::{self, BOUNDARY, UNCOMMITTED},
     conflict::{OURS_COLOR, OURS_LABEL, Side, THEIRS_COLOR, UNRESOLVED_COLOR, describe_tile},

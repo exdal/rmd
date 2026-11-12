@@ -3,13 +3,12 @@ use std::path::{Path, PathBuf};
 
 use dear_imgui_rs::{DragFlags, Ui, WindowFlags};
 use dmm::{Coord, MapFormat, Prefab, Size};
-use ui::icons::materialdesignicons::ICON_DOTS_HORIZONTAL;
-
-use super::{
-    DIAGNOSTIC_WARNING_COLOR, MAX_CUSTOM_FILL_SEARCH_RESULTS, UiState,
-    common::{DialogButton, begin_centered_modal, dialog_buttons, dpi},
-    draw_type_path_search,
+use ui::{
+    icons::materialdesignicons::ICON_DOTS_HORIZONTAL,
+    widgets::{DialogButton, begin_centered_modal, dialog_buttons, dpi},
 };
+
+use super::{DIAGNOSTIC_WARNING_COLOR, MAX_CUSTOM_FILL_SEARCH_RESULTS, UiState, draw_type_path_search};
 use crate::{
     document::{DocumentId, MapDocument},
     session::Session,
@@ -1095,8 +1094,13 @@ mod tests {
     use dear_imgui_rs::{ConfigFlags, Key, MouseButton, Ui, sys};
     use dmm::{Coord, Map, MapFormat, Prefab, Size};
     use net::LevelContents;
-    use ui::testing::CONTEXT_LOCK;
-    use ui::theme::{DEFAULT_THEME, Themes};
+    use ui::{
+        testing::{
+            CONTEXT_LOCK, PopupContext, assert_window_centered, finish_frame, popup_context, rectangle_context,
+            set_desktop_geometry,
+        },
+        theme::{DEFAULT_THEME, Themes},
+    };
 
     use super::{
         DeleteLevelDialog, FillWarningContext, GO_TO_POPUP, GoToDialog, KEYBIND_PRESET_POPUP, NewLevelDialog,
@@ -1106,13 +1110,7 @@ mod tests {
     };
     use crate::{
         document::{DocumentId, MapDocument, Selection},
-        frontend::{
-            UiState,
-            fixtures::{
-                PopupContext, assert_window_centered, finish_frame, popup_context, rectangle_context,
-                set_desktop_geometry,
-            },
-        },
+        frontend::UiState,
         patch,
         session::Session,
         settings::Settings,
@@ -1621,7 +1619,7 @@ mod tests {
     #[test]
     fn enter_creates_a_z_level_filled_with_the_default_turf_and_area() {
         let _guard = CONTEXT_LOCK.lock().unwrap();
-        let mut context = crate::frontend::fixtures::rectangle_context();
+        let mut context = ui::testing::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
@@ -1658,7 +1656,7 @@ mod tests {
     #[test]
     fn a_changed_fill_is_remembered_for_the_next_z_level_and_resize() {
         let _guard = CONTEXT_LOCK.lock().unwrap();
-        let mut context = crate::frontend::fixtures::rectangle_context();
+        let mut context = ui::testing::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
@@ -1701,7 +1699,7 @@ mod tests {
     #[test]
     fn enter_in_an_open_fill_search_does_not_create_a_z_level() {
         let _guard = CONTEXT_LOCK.lock().unwrap();
-        let mut context = crate::frontend::fixtures::rectangle_context();
+        let mut context = ui::testing::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
@@ -1728,7 +1726,7 @@ mod tests {
     #[test]
     fn an_invalid_fill_path_blocks_z_level_creation() {
         let _guard = CONTEXT_LOCK.lock().unwrap();
-        let mut context = crate::frontend::fixtures::rectangle_context();
+        let mut context = ui::testing::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
@@ -1756,7 +1754,7 @@ mod tests {
     #[test]
     fn closing_several_maps_asks_about_each_unsaved_one_and_cancel_keeps_the_rest_open() {
         let _guard = CONTEXT_LOCK.lock().unwrap();
-        let mut context = crate::frontend::fixtures::rectangle_context();
+        let mut context = ui::testing::rectangle_context();
         let mut session = Session::new();
         let map = || dmm::Map::new(Size { x: 1, y: 1, z: 1 });
         let clean = session.state.open_document(MapDocument::new(map(), 1));
@@ -1793,7 +1791,7 @@ mod tests {
     #[test]
     fn the_go_to_dialog_clamps_to_the_map_and_enter_returns_the_tile() {
         let _guard = CONTEXT_LOCK.lock().unwrap();
-        let mut context = crate::frontend::fixtures::rectangle_context();
+        let mut context = ui::testing::rectangle_context();
         let mut session = Session::new();
         session
             .state
@@ -1816,7 +1814,7 @@ mod tests {
     #[test]
     fn the_resize_dialog_warns_about_the_tiles_a_shrink_deletes() {
         let _guard = CONTEXT_LOCK.lock().unwrap();
-        let mut context = crate::frontend::fixtures::rectangle_context();
+        let mut context = ui::testing::rectangle_context();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();

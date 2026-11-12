@@ -7,16 +7,12 @@ use dear_imgui_rs::{
 };
 use dmm::Coord;
 use objtree::ObjectTree;
-
-use super::{
-    common::{
-        button_width, centered_note, checkbox_width, focus_window_on_hover, overflow_scroll, same_line_if_fits,
-        table_min_width,
-    },
-    find::JumpTarget,
-    search::draw_type_path_search,
-    welcome::codebase_relative,
+use ui::widgets::{
+    button_width, centered_note, checkbox_width, focus_window_on_hover, overflow_scroll, same_line_if_fits,
+    table_min_width,
 };
+
+use super::{find::JumpTarget, search::draw_type_path_search, welcome::codebase_relative};
 use crate::{
     document::{DocumentId, PrefabInstanceId},
     issues,
@@ -580,12 +576,9 @@ fn matches_filter(query: &str, title: &str, label: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ui::testing::CONTEXT_LOCK;
+    use ui::testing::{CONTEXT_LOCK, rectangle_context};
 
-    use crate::{
-        frontend::{UiState, fixtures::rectangle_context},
-        session::fixtures::unknown_paths_session,
-    };
+    use crate::{frontend::UiState, session::fixtures::unknown_paths_session};
 
     fn expand_all(panel: &mut IssuesPanel, session: &Session) {
         for row in panel.rows(session) {

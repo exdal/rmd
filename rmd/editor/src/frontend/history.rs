@@ -1,9 +1,10 @@
 use dear_imgui_rs::{StyleColor, Ui};
 use dmm::Prefab;
+use ui::widgets::dpi;
 
 use super::{
     OverlayRect,
-    common::{IconOrigin, dpi, draw_thumbnail},
+    common::{IconOrigin, draw_thumbnail},
     draw_overlay_underlay, overlay_padding,
 };
 use crate::{session::Session, settings::keybind::KeyBindings};
