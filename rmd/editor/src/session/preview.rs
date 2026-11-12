@@ -3,10 +3,10 @@ use render::SpriteInstance;
 
 use super::{PrefabThumbnail, Session};
 use crate::{
-    conflict::Side,
     document::{DocumentId, PrefabInstanceId, Selection},
     environment::Environment,
-    frame::{self},
+    frame,
+    git::conflict::Side,
     tool::{
         RegionSelectionMode, SelectionMask, SelectionRotation, Tool, rotate_point, rotate_prefab, rotated_selection_at,
     },

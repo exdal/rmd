@@ -1,3 +1,5 @@
+pub(crate) mod session;
+
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -12,8 +14,8 @@ use dmm::{
 use crate::{
     bake::{HIGHLIGHT_ALWAYS, Highlight, highlight_tiles},
     command::Edit,
-    conflict::{connected_hunks, describe_prefab, set_tile},
     document::MapDocument,
+    git::conflict::{connected_hunks, describe_prefab, set_tile},
     grid::Grid,
 };
 

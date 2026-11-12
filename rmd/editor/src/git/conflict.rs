@@ -9,7 +9,7 @@ use crate::{
     bake::{HIGHLIGHT_ALWAYS, Highlight, highlight_tiles},
     command::{Edit, EditGroupId, History},
     document::MapDocument,
-    git::Operation,
+    git::repo::Operation,
 };
 
 pub const OURS_LABEL: &str = "HEAD";

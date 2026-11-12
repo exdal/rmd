@@ -6,10 +6,10 @@ use std::{
 
 use dmm::{Coord, Map};
 
-use super::{Session, SharedHighlights};
+use crate::session::{Session, SharedHighlights};
 use crate::{
-    blame::{self, BlameCell, BlameCounts, BlameResult},
     document::DocumentId,
+    git::blame::{self, BlameCell, BlameCounts, BlameResult},
 };
 
 pub(crate) struct BlameState {
@@ -25,7 +25,7 @@ pub(crate) struct BlameState {
 }
 
 impl BlameState {
-    pub(super) fn new(result: BlameResult, snapshot: Map, revision: u64) -> Self {
+    pub(crate) fn new(result: BlameResult, snapshot: Map, revision: u64) -> Self {
         Self {
             counts: result.counts(),
             result,
@@ -37,7 +37,7 @@ impl BlameState {
         }
     }
 
-    pub(super) fn heatmap(&self, z: u32) -> SharedHighlights {
+    pub(crate) fn heatmap(&self, z: u32) -> SharedHighlights {
         self.heatmap
             .borrow_mut()
             .entry(z)
@@ -45,7 +45,7 @@ impl BlameState {
             .clone()
     }
 
-    pub(super) fn outline(&self, z: u32, commit: u32) -> SharedHighlights {
+    pub(crate) fn outline(&self, z: u32, commit: u32) -> SharedHighlights {
         self.outlines
             .borrow_mut()
             .entry((z, commit))

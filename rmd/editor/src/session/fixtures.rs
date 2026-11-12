@@ -11,14 +11,20 @@ use std::{
 use dmm::{Coord, Map, Prefab, Size};
 use render::{FrameUpdate, SpriteInstance};
 
-use super::{BlameState, DiffSide, DiffState, DocumentCache, Session};
+use super::{DocumentCache, Session};
+use crate::git::{
+    blame::session::BlameState,
+    diff::session::{DiffSide, DiffState},
+};
 use crate::{
-    blame::BlameResult,
-    diff::DiffSource,
     document::{DocumentId, MapDocument, PrefabInstanceId},
     environment::{BakeProgram, Environment},
-    git::{CommitInfo, WebLinks},
-    git_worker::Revision,
+    git::{
+        blame::BlameResult,
+        diff::DiffSource,
+        repo::{CommitInfo, WebLinks},
+        worker::Revision,
+    },
     progress::Progress,
 };
 
@@ -132,7 +138,7 @@ impl Session {
     }
 }
 
-pub(super) fn conflicted_session() -> Session {
+pub(crate) fn conflicted_session() -> Session {
     let floor = vec![Prefab::new(TreePath::parse("/turf/floor"))];
     let wall = vec![Prefab::new(TreePath::parse("/turf/wall"))];
     let mut map = Map::new(Size { x: 3, y: 1, z: 1 });
@@ -144,12 +150,12 @@ pub(super) fn conflicted_session() -> Session {
         map,
         z: 1,
         errors: Vec::new(),
-        repo: Some(crate::git::RepoPath {
+        repo: Some(crate::git::repo::RepoPath {
             root: PathBuf::from("missing-repository"),
             git_dir: PathBuf::from("missing-repository/.git"),
             rel: String::from("conflicts.dmm"),
         }),
-        conflict: Some(crate::conflict::ConflictData {
+        conflict: Some(crate::git::conflict::ConflictData {
             operation: None,
             conflicts: [1, 3]
                 .map(|x| dmm::merge::TileConflict {

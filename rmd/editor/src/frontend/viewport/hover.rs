@@ -6,9 +6,14 @@ use ui::icons::materialdesignicons::ICON_CIRCLE_SMALL;
 
 use super::ViewFrame;
 use crate::{
-    blame::{BlameCell, pending_note, relative_time},
     document::DocumentId,
-    frontend::{BlamePopup, blame_tooltip_position, draw_blame_popup, draw_conflict_tooltip, draw_diff_tooltip},
+    git::{
+        blame::{BlameCell, pending_note, relative_time},
+        panel::{
+            blame::{BlamePopup, blame_tooltip_position, draw_blame_popup},
+            tooltip::{draw_conflict_tooltip, draw_diff_tooltip},
+        },
+    },
     session::Session,
 };
 

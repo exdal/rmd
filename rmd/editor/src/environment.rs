@@ -24,7 +24,8 @@ use sema::error::SemaError;
 
 use crate::{
     error::LoadError,
-    fingerprint, git,
+    fingerprint,
+    git::repo,
     progress::{Progress, Stage},
     world::World,
 };
@@ -256,7 +257,7 @@ impl Environment {
     }
 
     pub fn git_hint(&self) -> Option<String> {
-        let head = git::discover(&self.root)?.open().ok()?.head_ref()?;
+        let head = repo::discover(&self.root)?.open().ok()?.head_ref()?;
 
         Some(head.short)
     }

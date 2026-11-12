@@ -2,13 +2,19 @@ use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use dmm::Coord;
 
-use super::{BlameState, DiffSide, DiffState, Session, SharedHighlights};
+use super::{
+    blame::session::BlameState,
+    diff::session::{DiffSide, DiffState},
+};
+use crate::session::{Session, SharedHighlights};
 use crate::{
     command::EditGroupId,
-    conflict::{ConflictRow, ConflictState, Hunk, Resolved, Side},
     document::DocumentId,
-    git::{CommitInfo, CommitRef, Operation, RepoPath, WebLinks},
-    git_worker::Outcome as GitOutcome,
+    git::{
+        conflict::{ConflictRow, ConflictState, Hunk, Resolved, Side},
+        repo::{CommitInfo, CommitRef, Operation, RepoPath, WebLinks},
+        worker::Outcome as GitOutcome,
+    },
     tool::ToolEdit,
 };
 
@@ -16,7 +22,7 @@ use crate::{
 pub(crate) type ConflictStatus = Arc<[Option<Side>]>;
 
 /// Conflict hunks and overlays derived for one point in the history
-pub(super) struct ConflictView {
+pub(crate) struct ConflictView {
     key: (u64, u64, usize),
     resolved: Resolved,
     unresolved: usize,
@@ -33,7 +39,7 @@ impl ConflictView {
             .clone()
     }
 
-    pub(super) fn highlights(&mut self, conflicts: &ConflictState, z: u32) -> SharedHighlights {
+    pub(crate) fn highlights(&mut self, conflicts: &ConflictState, z: u32) -> SharedHighlights {
         self.highlights
             .entry(z)
             .or_insert_with(|| conflicts.highlights_in(z, &self.resolved).into())
@@ -56,7 +62,7 @@ pub(crate) struct GitDocState {
     pub staging: bool,
     /// Commits that changed the map, for picking what to compare
     pub history: Option<Vec<CommitInfo>>,
-    pub(super) history_loading: bool,
+    pub(crate) history_loading: bool,
     pub diff: Option<DiffState>,
     pub show_diff: bool,
     pub diff_loading: bool,
@@ -64,7 +70,7 @@ pub(crate) struct GitDocState {
 }
 
 impl GitDocState {
-    pub(super) fn new(repo: RepoPath, conflicts: Option<ConflictState>) -> Self {
+    pub(crate) fn new(repo: RepoPath, conflicts: Option<ConflictState>) -> Self {
         let unmerged_on_disk = conflicts.is_some();
 
         Self {
@@ -114,7 +120,7 @@ impl GitDocState {
 }
 
 impl Session {
-    pub(super) fn refresh_git_document(&mut self, id: DocumentId) {
+    pub(crate) fn refresh_git_document(&mut self, id: DocumentId) {
         if !self.git_enabled {
             return;
         }
@@ -157,7 +163,7 @@ impl Session {
                         self.state
                             .document(id)
                             .and_then(|document| document.path.as_deref())
-                            .and_then(crate::git::discover)
+                            .and_then(crate::git::repo::discover)
                     })
                     .flatten();
 
@@ -298,7 +304,7 @@ impl Session {
         self.caches.get(&id)?.git.as_ref()
     }
 
-    pub(super) fn with_conflict_view<R>(
+    pub(crate) fn with_conflict_view<R>(
         &self, id: DocumentId, read: impl FnOnce(&mut ConflictView, &ConflictState) -> R,
     ) -> Option<R> {
         let document = self.state.document(id)?;
@@ -415,9 +421,9 @@ mod tests {
         );
 
         let all = [Coord::new(1, 1, 1), Coord::new(3, 1, 1)];
-        assert!(session.resolve_conflict(id, &all, crate::conflict::Side::Theirs));
+        assert!(session.resolve_conflict(id, &all, crate::git::conflict::Side::Theirs));
         let (_, status) = session.conflict_table(id).unwrap();
-        assert_eq!(status.as_ref(), [Some(crate::conflict::Side::Theirs); 2]);
+        assert_eq!(status.as_ref(), [Some(crate::git::conflict::Side::Theirs); 2]);
         assert_eq!(session.mark_resolved_blocker(id).as_deref(), Some("Save the map first"));
         assert!(!session.mark_resolved(id));
 
@@ -439,7 +445,7 @@ mod tests {
         assert_eq!(session.conflict_hunks(id, Some(1)).len(), 2);
         assert_eq!(session.unresolved_conflicts(id), 2);
 
-        assert!(session.resolve_conflict(id, &[Coord::new(1, 1, 1)], crate::conflict::Side::Theirs));
+        assert!(session.resolve_conflict(id, &[Coord::new(1, 1, 1)], crate::git::conflict::Side::Theirs));
         assert_eq!(session.conflict_hunks(id, Some(1)).len(), 1);
         assert_eq!(session.unresolved_conflicts(id), 1);
 
@@ -466,7 +472,7 @@ mod tests {
             map: Map::new(Size { x: 1, y: 1, z: 1 }),
             z: 1,
             errors: Vec::new(),
-            repo: Some(crate::git::RepoPath {
+            repo: Some(crate::git::repo::RepoPath {
                 root: PathBuf::from("missing-repository"),
                 git_dir: PathBuf::from("missing-repository/.git"),
                 rel: String::from("staging.dmm"),

@@ -5,8 +5,8 @@ use dmm::Coord;
 use super::{Session, SharedHighlights};
 use crate::{
     bake::{Bake, HIGHLIGHT_ALWAYS, HIGHLIGHT_HOVERED, HIGHLIGHT_SELECTED, Highlight, highlight_tiles},
-    blame::BlameCell,
     document::{DocumentId, PrefabInstanceId},
+    git::blame::BlameCell,
 };
 
 pub(super) const UNKNOWN_TYPE_COLOR: [f32; 3] = [0.58431375, 0.0, 1.0];
@@ -312,6 +312,6 @@ mod tests {
         let highlights = set.iter().collect::<Vec<_>>();
         assert_eq!(highlights.len(), 2);
         assert_eq!(highlights[0].color, UNKNOWN_TYPE_COLOR);
-        assert_eq!(highlights[1].color, crate::conflict::UNRESOLVED_COLOR);
+        assert_eq!(highlights[1].color, crate::git::conflict::UNRESOLVED_COLOR);
     }
 }

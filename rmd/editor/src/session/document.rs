@@ -6,10 +6,11 @@ use std::{
 use base::path::TreePath;
 use dmm::{Map, MapFormat, Prefab, Size};
 
-use super::{GitDocState, Session, coop::LevelStep, is_reorder_label};
+use super::{Session, coop::LevelStep, is_reorder_label};
+use crate::git::session::GitDocState;
 use crate::{
-    conflict::ConflictState,
     document::{DocumentId, MapDocument},
+    git::conflict::ConflictState,
     grid::Grid,
     loader::LoadedMap,
     tool::Tool,

@@ -11,10 +11,12 @@ use std::{
 use dmm::Map;
 
 use crate::{
-    blame::{self, BlameResult, GitVersions},
-    diff::DiffSource,
     document::DocumentId,
-    git::{CommitInfo, CommitRef, GitError, Operation, Repo, RepoPath, WebLinks},
+    git::{
+        blame::{self, BlameResult, GitVersions},
+        diff::DiffSource,
+        repo::{CommitInfo, CommitRef, GitError, Operation, Repo, RepoPath, WebLinks},
+    },
 };
 
 pub struct Status {

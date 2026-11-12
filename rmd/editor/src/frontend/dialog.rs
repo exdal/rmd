@@ -50,7 +50,7 @@ const KEYBIND_PRESET_POPUP: &str = "Choose keybindings##keybind-preset";
 
 const SAVE_MAP_PATH_WIDTH: f32 = 460.0;
 
-pub(super) const SAVE_ERROR_COLOR: [f32; 4] = [1.0, 0.4, 0.4, 1.0];
+pub(crate) const SAVE_ERROR_COLOR: [f32; 4] = [1.0, 0.4, 0.4, 1.0];
 
 const CLOSE_MAP_POPUP: &str = "Unsaved changes##close-map";
 

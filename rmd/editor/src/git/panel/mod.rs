@@ -1,3 +1,6 @@
+pub(crate) mod blame;
+pub(crate) mod tooltip;
+
 use dear_imgui_rs::{
     ItemHoveredFlags, ListClipper, SelectableFlags, StyleColor, TabItemFlags, TableColumnFlags, TableFlags,
     TableRowFlags, TableSizingPolicy, TreeNodeFlags, Ui, WindowKey, WindowKeyError,
@@ -15,14 +18,20 @@ use ui::{
     },
 };
 
-use super::SAVE_ERROR_COLOR;
 use crate::{
-    blame::{self, BOUNDARY, UNCOMMITTED},
-    conflict::{OURS_COLOR, OURS_LABEL, Side, THEIRS_COLOR, UNRESOLVED_COLOR, describe_tile},
-    diff::{ChangeKind, DiffSource},
     document::DocumentId,
-    git::{CommitInfo, WebLinks},
-    session::{self, BlameState, DiffSide, GitDocState, Session},
+    frontend::dialog::SAVE_ERROR_COLOR,
+    git::{
+        blame::{
+            BOUNDARY, UNCOMMITTED, relative_time,
+            session::{BlameState, blame_color},
+        },
+        conflict::{OURS_COLOR, OURS_LABEL, Side, THEIRS_COLOR, UNRESOLVED_COLOR, describe_tile},
+        diff::{ChangeKind, DiffSource, session::DiffSide},
+        repo::{CommitInfo, WebLinks},
+        session::GitDocState,
+    },
+    session::Session,
     settings::Settings,
 };
 
@@ -37,14 +46,14 @@ const VERSIONS_MIN_ROWS: f32 = 3.0;
 const VERSIONS_HEIGHT_SHARE: f32 = 0.4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum GitTab {
+pub(crate) enum GitTab {
     Conflicts,
     Blame,
     Diff,
 }
 
 #[derive(Default)]
-pub(super) struct GitPanelOutput {
+pub(crate) struct GitPanelOutput {
     pub center: Option<(DocumentId, Coord)>,
     pub load_conflicts: Option<DocumentId>,
     pub copy: Option<String>,
@@ -68,7 +77,7 @@ enum Action {
     Restore(Vec<Coord>),
 }
 
-pub(super) struct GitPanel {
+pub(crate) struct GitPanel {
     window: WindowKey,
     focus_requested: bool,
     select_tab: Option<GitTab>,
@@ -561,7 +570,7 @@ impl GitPanel {
                         true => "Click to stop outlining these tiles",
                         false => "Click to outline these tiles on the map",
                     });
-                    draw_swatch(ui, origin, swatch, session::blame_color(&blame.result, cell));
+                    draw_swatch(ui, origin, swatch, blame_color(&blame.result, cell));
 
                     if let Some(_menu) = ui.begin_popup_context_item() {
                         let pinned = blame.pinned == Some(cell);
@@ -601,7 +610,7 @@ impl GitPanel {
 
                     ui.table_next_column();
                     if let Some(commit) = commit {
-                        ui.text(blame::relative_time(now, commit.time));
+                        ui.text(relative_time(now, commit.time));
                     }
 
                     ui.table_next_column();
@@ -942,7 +951,7 @@ fn draw_versions(ui: &Ui, git: &GitDocState, share: f32, reveal: &mut Option<usi
                         let details = format!(
                             "{ICON_CIRCLE_SMALL} {} {ICON_CIRCLE_SMALL} {}",
                             commit.author,
-                            blame::relative_time(now, commit.time)
+                            relative_time(now, commit.time)
                         );
                         match web {
                             Some(web) => {
@@ -1102,7 +1111,7 @@ fn draw_legend(ui: &Ui, blame: &BlameState) {
         let step = width / LEGEND_STEPS as f32;
         for index in 0..LEGEND_STEPS {
             let cell = (index * span.saturating_sub(1) / (LEGEND_STEPS - 1)) as u32;
-            let color = session::blame_color(&blame.result, cell);
+            let color = blame_color(&blame.result, cell);
             let min = [origin[0] + step * index as f32, origin[1]];
             ui.get_window_draw_list()
                 .add_rect(min, [min[0] + step + 0.5, min[1] + height], opaque(color))
@@ -1120,7 +1129,7 @@ fn draw_legend(ui: &Ui, blame: &BlameState) {
         }
 
         let origin = ui.cursor_screen_pos();
-        draw_swatch(ui, origin, height, session::blame_color(&blame.result, cell));
+        draw_swatch(ui, origin, height, blame_color(&blame.result, cell));
         ui.dummy([height, height]);
         ui.same_line();
         ui.text_disabled(label);
@@ -1140,7 +1149,7 @@ fn draw_swatch(ui: &Ui, origin: [f32; 2], size: f32, color: [f32; 3]) {
         .build();
 }
 
-pub(super) fn commit_summary(ui: &Ui, commit: &CommitInfo, web: Option<&WebLinks>, width: f32) {
+pub(crate) fn commit_summary(ui: &Ui, commit: &CommitInfo, web: Option<&WebLinks>, width: f32) {
     let (Some(number), Some(web)) = (commit.pull_request, web) else {
         ui.text_wrapped(&commit.summary);
 

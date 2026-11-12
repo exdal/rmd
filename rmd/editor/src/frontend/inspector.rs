@@ -17,12 +17,13 @@ use ui::{
     widgets::{checkbox_width, focus_window_on_hover, text_wrapped_colored},
 };
 
-use super::{common::IDENTICAL_EDIT_COLOR, git::commit_summary, search::draw_type_path_search};
+use super::{common::IDENTICAL_EDIT_COLOR, search::draw_type_path_search};
+use crate::git::panel::commit_summary;
 use crate::{
     app::external_editor::SourceLocation,
-    blame::{self, BlameCell},
     command::EditGroupId,
     document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation},
+    git::blame::{self, BlameCell},
     maploader::preview::PREVIEW_ID_START,
     session::{DirectionalTypes, EditScope, Session},
     settings::Settings,
@@ -245,7 +246,7 @@ impl InspectorState {
             ui.separator();
             ui.text("Blame");
             enum Detail {
-                Commit(u32, crate::git::CommitInfo),
+                Commit(u32, crate::git::repo::CommitInfo),
                 Boundary,
                 Note(&'static str),
             }

@@ -6,7 +6,7 @@ use net::PeerId;
 use super::{Activity, Coop, Prepared, ReceivedMap, SharedMap, SharedState};
 use crate::{
     document::{DocumentId, MapDocument},
-    git,
+    git::repo,
     loader::LoadedMap,
     session::Session,
 };
@@ -404,7 +404,7 @@ impl Session {
         shared_map.pending_document = None;
         shared_map.received = true;
 
-        let repo = self.git_enabled.then(|| git::discover(&file)).flatten();
+        let repo = self.git_enabled.then(|| repo::discover(&file)).flatten();
         let loaded = LoadedMap {
             path: file.clone(),
             map,

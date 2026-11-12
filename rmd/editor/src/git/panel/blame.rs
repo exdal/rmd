@@ -2,19 +2,20 @@ use dear_imgui_rs::{Condition, StyleColor, Ui, WindowFlags};
 use dmm::Coord;
 use ui::{icons::materialdesignicons::ICON_CIRCLE_SMALL, widgets::dpi};
 
-use super::{OverlayRect, git::commit_summary};
+use super::commit_summary;
+use crate::frontend::overlay::OverlayRect;
 use crate::{
     document::DocumentId,
-    git::{CommitInfo, WebLinks},
+    git::repo::{CommitInfo, WebLinks},
 };
 
-pub(super) struct BlamePopup {
-    pub(super) coord: Coord,
-    pub(super) position: [f32; 2],
-    pub(super) bounds: Option<OverlayRect>,
+pub(crate) struct BlamePopup {
+    pub(crate) coord: Coord,
+    pub(crate) position: [f32; 2],
+    pub(crate) bounds: Option<OverlayRect>,
 }
 
-pub(super) fn blame_tooltip_position(ui: &Ui, mouse: [f32; 2]) -> [f32; 2] {
+pub(crate) fn blame_tooltip_position(ui: &Ui, mouse: [f32; 2]) -> [f32; 2] {
     let display = ui.io().display_size();
     let width = 390.0;
     let height = ui.text_line_height_with_spacing() * 6.0;
@@ -32,7 +33,7 @@ pub(super) fn blame_tooltip_position(ui: &Ui, mouse: [f32; 2]) -> [f32; 2] {
     ]
 }
 
-pub(super) fn draw_blame_popup(
+pub(crate) fn draw_blame_popup(
     ui: &Ui, document: DocumentId, popup: &BlamePopup, commit: &CommitInfo, web: Option<&WebLinks>,
 ) -> Option<(OverlayRect, bool)> {
     const WIDTH: f32 = 390.0;
@@ -63,7 +64,7 @@ pub(super) fn draw_blame_popup(
             ui.text(format!(
                 "{ICON_CIRCLE_SMALL} {} {ICON_CIRCLE_SMALL} {}",
                 commit.author,
-                crate::blame::relative_time(now, commit.time)
+                crate::git::blame::relative_time(now, commit.time)
             ));
             let padding = ui.clone_style().window_padding()[0];
             commit_summary(ui, commit, web, width - padding * 2.0);

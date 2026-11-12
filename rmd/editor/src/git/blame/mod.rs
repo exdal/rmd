@@ -1,8 +1,10 @@
+pub(crate) mod session;
+
 use std::collections::HashMap;
 
 use dmm::{Coord, Map, Size, Tile, key::Key, merge::tiles_equal, writer::format_value};
 
-use crate::git::{CommitInfo, FileVersion, GitError, Repo, RepoPath, parse_map};
+use crate::git::repo::{CommitInfo, FileVersion, GitError, Repo, RepoPath, parse_map};
 
 pub const UNCOMMITTED: u32 = u32::MAX;
 /// The change is older than the walked, parseable history
@@ -391,7 +393,7 @@ mod tests {
         BlameCell, BlameCounts, MapVersion, UNCOMMITTED, VersionSource, blame, history_window, pending_note,
         relative_time,
     };
-    use crate::git::{CommitInfo, FileVersion, GitError};
+    use crate::git::repo::{CommitInfo, FileVersion, GitError};
 
     fn file_versions(count: usize) -> Vec<FileVersion> {
         (0..count)
@@ -684,15 +686,15 @@ mod tests {
 
     #[test]
     fn git_versions_attribute_exact_tiles_to_file_commits() {
-        if !crate::git::tests::git_available() {
+        if !crate::git::repo::tests::git_available() {
             return;
         }
-        let dir = crate::git::tests::temp_repo("tile-blame");
+        let dir = crate::git::repo::tests::temp_repo("tile-blame");
         let file = "map.dmm";
-        crate::git::tests::commit(&dir, file, &grid("aa"), "add map");
-        crate::git::tests::commit(&dir, file, &grid("ba"), "change first tile");
-        crate::git::tests::commit(&dir, file, &grid("bb"), "change second tile");
-        let path = crate::git::discover(&dir.join(file)).unwrap();
+        crate::git::repo::tests::commit(&dir, file, &grid("aa"), "add map");
+        crate::git::repo::tests::commit(&dir, file, &grid("ba"), "change first tile");
+        crate::git::repo::tests::commit(&dir, file, &grid("bb"), "change second tile");
+        let path = crate::git::repo::discover(&dir.join(file)).unwrap();
         let mut versions = super::GitVersions::open(path, 500).unwrap();
         let current = parse(&grid("bb")).0;
         let result = blame(&current, &mut versions, &|| false, &mut |_, _| {}).unwrap();
@@ -707,16 +709,16 @@ mod tests {
 
     #[test]
     fn git_versions_stop_at_unparseable_map_revision() {
-        if !crate::git::tests::git_available() {
+        if !crate::git::repo::tests::git_available() {
             return;
         }
-        let dir = crate::git::tests::temp_repo("tile-blame-parse-boundary");
+        let dir = crate::git::repo::tests::temp_repo("tile-blame-parse-boundary");
         let file = "map.dmm";
-        crate::git::tests::commit(&dir, file, &grid("bb"), "original map");
-        crate::git::tests::commit(&dir, file, "not a map", "unparseable map");
-        crate::git::tests::commit(&dir, file, &grid("aa"), "restored map");
-        crate::git::tests::commit(&dir, file, &grid("ab"), "change second tile");
-        let path = crate::git::discover(&dir.join(file)).unwrap();
+        crate::git::repo::tests::commit(&dir, file, &grid("bb"), "original map");
+        crate::git::repo::tests::commit(&dir, file, "not a map", "unparseable map");
+        crate::git::repo::tests::commit(&dir, file, &grid("aa"), "restored map");
+        crate::git::repo::tests::commit(&dir, file, &grid("ab"), "change second tile");
+        let path = crate::git::repo::discover(&dir.join(file)).unwrap();
         let current = parse(&grid("ab")).0;
 
         let mut versions = super::GitVersions::open(path.clone(), 500).unwrap();

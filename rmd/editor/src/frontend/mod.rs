@@ -19,6 +19,7 @@ use self::{inspector::InspectorPanel, object_tree::ObjectTreePanel, settings::Se
 use crate::{
     app::{external_editor::SourceLocation, pacing::FrameDemand, update::UpdateCheck},
     document::{DocumentId, MapDocument},
+    git::panel::{GitPanel, GitTab},
     gizmo::GizmoState,
     loader::LoadView,
     session::{LoadReport, Session, TypeLayer},
@@ -29,9 +30,8 @@ use crate::{
     tool::{FillMode, SelectionRotation, SelectionTransform, Tool},
 };
 
-mod blame;
 mod coop;
-mod dialog;
+pub(crate) mod dialog;
 mod find;
 #[cfg(test)]
 mod fixtures;
@@ -41,20 +41,18 @@ mod issues;
 mod load;
 mod menu;
 mod node;
-mod overlay;
+pub(crate) mod overlay;
 mod paste;
 mod prefab_menu;
 mod region;
 mod runtimes;
 mod search;
 mod toolbar;
-mod tooltip;
 mod viewport;
 mod welcome;
 
 pub(crate) use self::load::LoadNotice;
 use self::{
-    blame::{BlamePopup, blame_tooltip_position, draw_blame_popup},
     dialog::{
         DeleteLevelDialog, FILL_LIMIT_WARNING_POPUP, FillWarningContext, GO_TO_POPUP, GoToDialog, NEW_MAP_POPUP,
         NewLevelDialog, NewMapDialog, PendingFillWarning, RESIZE_MAP_POPUP, ResizeMapDialog, SAVE_ERROR_COLOR,
@@ -79,7 +77,6 @@ use self::{
     },
     search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search},
     toolbar::{DEFAULT_CUSTOM_FILL_BOUNDARY, TopOverlayState, draw_top_overlay, request_level_change},
-    tooltip::{draw_conflict_tooltip, draw_diff_tooltip},
     viewport::{
         ActivePlacementFlash, EDIT_KEYS, EditCommand, MapViewState, MomentaryTool, MoveStroke, PickStroke,
         PlacementStroke,
@@ -92,8 +89,6 @@ mod common;
 mod context_menu;
 
 mod dm;
-
-mod git;
 
 mod inspector;
 
@@ -235,7 +230,7 @@ pub struct UiState {
     find: find::FindPanel,
     issues: issues::IssuesPanel,
     runtimes: runtimes::RuntimesPanel,
-    git_panel: git::GitPanel,
+    git_panel: GitPanel,
     /// Keeps the object tree in front of the Git tab while its saved layout settles
     select_object_tree: StartupPanelFocus,
     /// Keeps the inspector in front of the Search tab while its saved layout settles
@@ -298,7 +293,7 @@ impl UiState {
         let find = find::FindPanel::new()?;
         let issues = issues::IssuesPanel::new()?;
         let runtimes = runtimes::RuntimesPanel::new()?;
-        let git_panel = git::GitPanel::new()?;
+        let git_panel = GitPanel::new()?;
         let settings_window = SettingsWindow::new()?;
         let load_window = WindowKey::new("load", "Loading")?;
         let layout = dock_layout(
@@ -823,7 +818,7 @@ impl UiState {
 
     fn draw_panels(&mut self, ui: &Ui, session: &mut Session, settings: &mut Settings) -> Option<SourceLocation> {
         if session.take_loaded_conflicts().is_some() {
-            self.git_panel.request(git::GitTab::Conflicts);
+            self.git_panel.request(GitTab::Conflicts);
         }
         let loaded_issues = session.take_loaded_issues();
 
@@ -1109,7 +1104,8 @@ mod tests {
         widgets::button_width,
     };
 
-    use super::{DEFAULT_CUSTOM_FILL_BOUNDARY, RegionSelectionOptions, UiState, git, menu::MenuActions};
+    use super::{DEFAULT_CUSTOM_FILL_BOUNDARY, RegionSelectionOptions, UiState, menu::MenuActions};
+    use crate::git::panel::GitTab;
     use crate::{
         session::{DiagnosticSeverity, Session, fixtures::install_diff},
         settings::{
@@ -1583,7 +1579,7 @@ mod tests {
         );
         assert!(!state.git_panel.visible(), "the Git tab waits behind the object tree");
 
-        state.git_panel.request(git::GitTab::Conflicts);
+        state.git_panel.request(GitTab::Conflicts);
         for _ in 0..2 {
             frame(&mut state);
         }
@@ -1609,7 +1605,7 @@ mod tests {
             map,
             z: 1,
             errors: vec![],
-            repo: Some(crate::git::RepoPath {
+            repo: Some(crate::git::repo::RepoPath {
                 root: PathBuf::from("missing-repository"),
                 git_dir: PathBuf::from("missing-repository/.git"),
                 rel: String::from("diff-ui-test.dmm"),
@@ -1629,7 +1625,7 @@ mod tests {
         for _ in 0..4 {
             frame(&mut state, &mut session);
         }
-        state.git_panel.request(git::GitTab::Diff);
+        state.git_panel.request(GitTab::Diff);
         for _ in 0..3 {
             frame(&mut state, &mut session);
         }

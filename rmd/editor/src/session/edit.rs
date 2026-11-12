@@ -363,7 +363,7 @@ impl Session {
         true
     }
 
-    pub(super) fn commit(&mut self, action: ToolEdit, group: Option<EditGroupId>) -> bool {
+    pub(crate) fn commit(&mut self, action: ToolEdit, group: Option<EditGroupId>) -> bool {
         let affected = action.affected;
         let applied = self
             .state

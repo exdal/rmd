@@ -26,7 +26,7 @@ use self::{
     },
 };
 use super::{
-    BlamePopup, CloseFocus, OverlayRect, PrefabMenu, UiState, VisibleMapView, context_menu::Target as MenuTarget,
+    CloseFocus, OverlayRect, PrefabMenu, UiState, VisibleMapView, context_menu::Target as MenuTarget,
     draw_fill_limit_warning, node::NodeOverlayHit, overlay_padding, recent_button_size, restore_rectangle_gesture,
     update_prefab_menu,
 };
@@ -34,6 +34,7 @@ use crate::{
     app::pacing::FrameDemand,
     camera::Controller,
     document::DocumentId,
+    git::panel::blame::BlamePopup,
     gizmo::GizmoMapView,
     session::{GuideBadge, Session},
     settings::{Settings, keybind::KeybindAction},

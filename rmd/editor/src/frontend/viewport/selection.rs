@@ -4,12 +4,12 @@ use dmm::Coord;
 use super::ViewFrame;
 use crate::{
     app::pacing::FrameDemand,
-    conflict::{Hunk, Side},
     document::{DocumentId, Selection},
     frontend::{
         PendingRegionPlacement, RectangleGesture, UiState, conflict_controls_layout, draw_conflict_controls,
         draw_region_outline, rectangle_drag_coord, restore_rectangle_gesture,
     },
+    git::conflict::{Hunk, Side},
     gizmo::{GizmoMapView, RegionDrag, RegionGizmoTarget},
     maploader::preview::ModuleRootKey,
     session::{RegionPreviewSource, Session},

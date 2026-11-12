@@ -2,12 +2,14 @@ use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use dmm::{Coord, Map, Tile};
 
-use super::{Session, SharedHighlights};
+use crate::session::{Session, SharedHighlights};
 use crate::{
-    diff::{self, ChangeKind, DiffSource, MapDiff, Version},
     document::DocumentId,
-    git::CommitInfo,
-    git_worker::Revision,
+    git::{
+        diff::{self, ChangeKind, DiffSource, MapDiff, Version},
+        repo::CommitInfo,
+        worker::Revision,
+    },
     grid::Grid,
     tool::ToolEdit,
 };
@@ -21,7 +23,7 @@ pub(crate) struct DiffSide {
 }
 
 impl DiffSide {
-    pub(super) fn new(source: DiffSource, revision: Option<Revision>) -> Self {
+    pub(crate) fn new(source: DiffSource, revision: Option<Revision>) -> Self {
         let (commit, map) = revision.map_or((None, None), |revision| (Some(revision.commit), revision.map));
 
         Self { source, commit, map }
@@ -49,10 +51,10 @@ impl DiffSide {
     }
 }
 
-pub(super) struct DiffView {
+pub(crate) struct DiffView {
     key: u64,
-    pub(super) diff: Arc<MapDiff>,
-    pub(super) highlights: HashMap<u32, SharedHighlights>,
+    pub(crate) diff: Arc<MapDiff>,
+    pub(crate) highlights: HashMap<u32, SharedHighlights>,
 }
 
 pub(crate) struct DiffState {
@@ -63,7 +65,7 @@ pub(crate) struct DiffState {
 }
 
 impl DiffState {
-    pub(super) fn new(from: DiffSide, to: DiffSide) -> Self {
+    pub(crate) fn new(from: DiffSide, to: DiffSide) -> Self {
         Self {
             from,
             to,
@@ -147,7 +149,7 @@ impl Session {
         }
     }
 
-    pub(super) fn with_diff_view<R>(&self, id: DocumentId, read: impl FnOnce(&mut DiffView) -> R) -> Option<R> {
+    pub(crate) fn with_diff_view<R>(&self, id: DocumentId, read: impl FnOnce(&mut DiffView) -> R) -> Option<R> {
         let document = self.state.document(id)?;
         let cache = self.caches.get(&id)?;
         let diff = cache.git.as_ref().filter(|_| self.git_enabled)?.diff.as_ref()?;
@@ -219,7 +221,7 @@ mod tests {
     use dmm::Coord;
 
     use crate::{
-        diff::{ChangeKind, MODIFIED_COLOR},
+        git::diff::{ChangeKind, MODIFIED_COLOR},
         session::{
             Session,
             fixtures::{conflicted_session, install_diff},

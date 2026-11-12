@@ -13,10 +13,12 @@ use objtree::TypeId;
 use render::texture::TextureCatalog;
 
 use crate::{
-    conflict::ConflictData,
     environment::{BakeOptions, Environment, LoadDiagnostics},
     error::LoadError,
-    git::{self, RepoPath},
+    git::{
+        conflict::ConflictData,
+        repo::{self, RepoPath},
+    },
     progress::{Progress, Snapshot, Stage},
     session::{
         PrefabThumbnail, build_textures, discover_maps, prefab_thumbnail_for, prefab_thumbnail_or_missing,
@@ -222,7 +224,7 @@ pub fn load_map(path: &Path, z: u32, progress: &Progress) -> Result<LoadedMap, S
 pub fn load_map_with_git(
     path: &Path, z: u32, progress: &Progress, git_enabled: bool, backups: Option<&Path>,
 ) -> Result<LoadedMap, String> {
-    let repo = git_enabled.then(|| git::discover(path)).flatten();
+    let repo = git_enabled.then(|| repo::discover(path)).flatten();
     // Git is optional here: when the repository can't be read, open the file as usual
     let unmerged = repo.as_ref().and_then(|repo_path| {
         let opened = repo_path.open().and_then(|opened| Ok((opened.unmerged()?, opened)));
@@ -431,7 +433,7 @@ mod tests {
         session.apply_map(loaded);
         let id = session.state.active().unwrap();
         assert!(session.state.document(id).unwrap().is_dirty());
-        assert!(session.resolve_conflict(id, &[dmm::Coord::new(1, 1, 1)], crate::conflict::Side::Theirs));
+        assert!(session.resolve_conflict(id, &[dmm::Coord::new(1, 1, 1)], crate::git::conflict::Side::Theirs));
         session.save_map().unwrap();
         assert!(session.mark_resolved(id));
         let deadline = Instant::now() + std::time::Duration::from_secs(10);
@@ -446,7 +448,7 @@ mod tests {
             session.git_state(id).unwrap().error
         );
         assert!(
-            crate::git::discover(&path)
+            crate::git::repo::discover(&path)
                 .unwrap()
                 .open()
                 .unwrap()
@@ -539,7 +541,7 @@ mod tests {
         }
         assert!(session.git_state(id).unwrap().error.is_none());
         assert!(
-            crate::git::discover(&path)
+            crate::git::repo::discover(&path)
                 .unwrap()
                 .open()
                 .unwrap()

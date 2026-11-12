@@ -6,8 +6,8 @@ use ui::widgets::dpi;
 use super::{common::IDENTICAL_EDIT_COLOR, draw_marching_edge, marching_stripe_offset};
 use crate::{
     camera::Controller,
-    conflict::{Hunk, Side},
     document::DocumentId,
+    git::conflict::{Hunk, Side},
     session::{GuideBadge, PlacementPreview, RegionPreviewSource, Session},
     tool::SelectionRotation,
 };
@@ -267,9 +267,9 @@ pub(super) fn draw_guide_badges(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct OverlayRect {
-    pub(super) min: [f32; 2],
-    pub(super) max: [f32; 2],
+pub(crate) struct OverlayRect {
+    pub(crate) min: [f32; 2],
+    pub(crate) max: [f32; 2],
 }
 
 impl OverlayRect {

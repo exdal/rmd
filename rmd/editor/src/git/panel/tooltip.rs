@@ -2,7 +2,7 @@ use dear_imgui_rs::Ui;
 use dmm::{Coord, Tile, merge::TileConflict};
 use ui::{icons::materialdesignicons::ICON_ARROW_RIGHT, widgets::opaque};
 
-use crate::{
+use crate::git::{
     conflict::{OURS_COLOR, OURS_LABEL, THEIRS_COLOR, describe_tile},
     diff::{ADDED_COLOR, ChangeKind, LineKind, REMOVED_COLOR, TileLine, tile_lines},
 };
@@ -82,7 +82,7 @@ fn draw_missing_side(ui: &Ui, tile: Option<&Tile>, label: &str) {
     }
 }
 
-pub(super) fn draw_conflict_tooltip(ui: &Ui, coord: Coord, conflict: &TileConflict) {
+pub(crate) fn draw_conflict_tooltip(ui: &Ui, coord: Coord, conflict: &TileConflict) {
     ui.text(format!("Conflict at {}, {}, {}", coord.x, coord.y, coord.z));
     ui.separator();
     ui.text(format!("Base:\n{}", describe_tile(conflict.base.as_ref())));
@@ -98,7 +98,7 @@ pub(super) fn draw_conflict_tooltip(ui: &Ui, coord: Coord, conflict: &TileConfli
     }
 }
 
-pub(super) fn draw_diff_tooltip(
+pub(crate) fn draw_diff_tooltip(
     ui: &Ui, coord: Coord, kind: ChangeKind, (from_label, before): (&str, Option<&Tile>),
     (to_label, after): (&str, Option<&Tile>),
 ) {
