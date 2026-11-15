@@ -1,11 +1,26 @@
+use std::collections::HashSet;
+
 use base::{
     location::Location,
     path::TreePath,
-    types::{Identifier, Value, VarModifiers},
+    types::{Identifier, ListEntry, Value, VarModifiers},
 };
+use dmi::metadata::Dir;
+use dmm::{Coord, Prefab, parser::parse_value, writer::format_value};
+use objtree::{ObjectTree, ResolvedVarType, TypeId, VarDecl, VarTypeKind};
 
-use dmm::Prefab;
-use objtree::{ObjectTree, VarDecl};
+use crate::{document::command::EditGroupId, gizmo::direction::DirectionalTypes};
+
+use super::{
+    direction::{direction_choices, selected_direction},
+    property::{commit_int_property, format_color},
+    snapshot::{
+        InspectorVariable, inspector_snapshot, inspector_variables, list_entry_drafts, parse_list_entries,
+        property_snapshot, variable_groups,
+    },
+    state::{EditorMode, InspectorFilter, ListEntryDraft, VariableDraft, split_pinned},
+    variable::{VariableWidget, editor_mode, type_label, variable_widget},
+};
 
 use super::*;
 
