@@ -33,8 +33,8 @@ use crate::{
     focus::AreaFocus,
     maploader::{preview::PREVIEW_ID_START, resolved_path},
     tool::{
-        PlacementKind, RegionSelectionMode, SelectionMask, ToolEdit, insertion_index, placement_kind,
-        refill_missing_bases,
+        PlacementKind, RegionSelectionMode, SelectionMask, ToolEdit,
+        place::{insertion_index, placement_kind, refill_missing_bases},
     },
 };
 

@@ -77,7 +77,7 @@ impl Session {
             let (environment, document) = self.state.active_pair_mut()?;
 
             match &hidden {
-                Some(hidden) => tool::place_replacing_objs(document, &environment.tree, coord, &prefab, hidden),
+                Some(hidden) => tool::place::place_replacing_objs(document, &environment.tree, coord, &prefab, hidden),
                 None => Tool::Place.build_edit(&mut ToolContext {
                     document,
                     tree: &environment.tree,
@@ -324,7 +324,7 @@ impl Session {
     pub(crate) fn build_delete_instances(&mut self, targets: &[PrefabInstanceId], verb: &str) -> Option<ToolEdit> {
         let (environment, document) = self.state.active_pair_mut()?;
 
-        tool::delete_instances(document, &environment.tree, &environment.world, targets, verb)
+        tool::place::delete_instances(document, &environment.tree, &environment.world, targets, verb)
     }
 
     fn build_delete(&mut self, target: PrefabInstanceId) -> Option<ToolEdit> {

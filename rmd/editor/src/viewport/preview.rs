@@ -9,7 +9,8 @@ use crate::{
     frame::{self, visual},
     git::conflict::Side,
     tool::{
-        RegionSelectionMode, SelectionMask, SelectionRotation, Tool, rotate_point, rotate_prefab, rotated_selection_at,
+        RegionSelectionMode, SelectionMask, SelectionRotation, Tool,
+        transform::{rotate_point, rotate_prefab, rotated_selection_at},
     },
 };
 

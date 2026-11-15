@@ -11,7 +11,11 @@ use crate::{
     frame::visual,
     gizmo::direction::{DirectionalTypes, direction_state},
     session::Session,
-    tool::{PlacementKind, SelectionRotation, Tool, placement_kind, rotate_point, rotate_prefab},
+    tool::{
+        PlacementKind, SelectionRotation, Tool,
+        place::placement_kind,
+        transform::{rotate_point, rotate_prefab},
+    },
 };
 
 #[derive(Debug)]

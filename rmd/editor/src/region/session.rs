@@ -7,8 +7,12 @@ use crate::{
     document::{DocumentId, PrefabInstanceId, Selection, command::EditGroupId},
     tool::{
         RegionSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, SelectionTransform, Tool,
-        fill_selection as build_selection_fill, is_placeable, place_selection_with_mode as build_selection_placement,
-        rotated_selection_at, transform_selection_with_mode as build_selection_transform, transformed_selection,
+        place::is_placeable,
+        selection::{
+            fill_selection as build_selection_fill, place_selection_with_mode as build_selection_placement,
+            transform_selection_with_mode as build_selection_transform,
+        },
+        transform::{rotated_selection_at, transformed_selection},
     },
 };
 

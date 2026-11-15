@@ -12,8 +12,10 @@ use crate::{
     frame::HiddenTypes,
     maploader::preview::MapView,
     tool::{
-        PlacementKind, RegionSelectionMode, SelectionRotation, ToolEdit, coord_in_bounds, insertion_index,
-        placement_kind, rotate_point, rotate_prefab,
+        PlacementKind, RegionSelectionMode, SelectionRotation, ToolEdit,
+        fill::coord_in_bounds,
+        place::{insertion_index, placement_kind},
+        transform::{rotate_point, rotate_prefab},
     },
 };
 

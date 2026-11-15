@@ -5,17 +5,22 @@ use base::{
 };
 use std::collections::{HashMap, HashSet};
 
+use dmi::metadata::Dir;
 use dmm::{Coord, Map, Prefab, Size};
 use objtree::VarDecl;
 
 use super::{
-    Dir, FillError, FillMode, MAX_FILL_TILES, RegionSelectionMode, Selection, SelectionMask, SelectionPlacement,
-    SelectionRotation, SelectionTransform, Tool, ToolContext, copy_selection, fill_selection, move_selection,
-    place_replacing_objs, place_selection, place_selection_with_mode, rotate_point, transform_direction,
-    transform_point, transform_selection, transform_selection_with_mode, transformed_selection,
+    FillError, FillMode, MAX_FILL_TILES, RegionSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation,
+    SelectionTransform, Tool, ToolContext,
+    place::place_replacing_objs,
+    selection::{
+        copy_selection, fill_selection, move_selection, place_selection, place_selection_with_mode,
+        transform_selection, transform_selection_with_mode,
+    },
+    transform::{rotate_point, transform_direction, transform_point, transformed_selection},
 };
 use crate::{
-    document::MapDocument,
+    document::{MapDocument, Selection},
     environment::world::{BaseTile, World},
     focus::AreaFocus,
     frame::HiddenTypes,

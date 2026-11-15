@@ -8,7 +8,7 @@ use crate::{
     environment::Environment,
     frame::{self, visual},
     session::Session,
-    tool::{Tool, is_placeable},
+    tool::{Tool, place::is_placeable},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]

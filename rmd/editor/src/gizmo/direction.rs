@@ -13,7 +13,10 @@ use crate::{
     frame::visual,
     inspector::session::EditScope,
     session::Session,
-    tool::{Tool, direction_from_name, directional_type_group, directional_type_target},
+    tool::{
+        Tool,
+        transform::{direction_from_name, directional_type_group, directional_type_target},
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

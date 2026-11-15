@@ -15,7 +15,7 @@ use crate::{
     environment::Environment,
     inspector::session::EditScope,
     session::Session,
-    tool::{Tool, directional_type_target},
+    tool::{Tool, transform::directional_type_target},
 };
 
 #[test]

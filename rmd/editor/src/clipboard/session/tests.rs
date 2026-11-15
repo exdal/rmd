@@ -175,7 +175,7 @@ fn cross_map_paste_preserves_the_copied_mask_contents_and_destination_hole() {
                         .1
                         .clone();
                     for prefab in &mut expected {
-                        crate::tool::rotate_prefab(session.tree().unwrap(), prefab, rotation);
+                        crate::tool::transform::rotate_prefab(session.tree().unwrap(), prefab, rotation);
                     }
                     assert_eq!(
                         document.map.tile_at(coord).unwrap(),
