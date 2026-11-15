@@ -1,0 +1,723 @@
+use base::{path::TreePath, types::Value};
+
+use dmm::{Coord, Map, Prefab, Size};
+
+use crate::{
+    clipboard::PasteMerge,
+    document::{MapDocument, PlacedPrefab, PrefabInstanceId, Selection},
+    session::{
+        Session,
+        fixtures::{assert_render_cache_matches_rebuild, examples, flat_session},
+    },
+    tool::{RegionSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, Tool},
+};
+
+#[test]
+fn a_region_copied_from_one_map_pastes_into_another() {
+    let root = examples();
+    let mut session = Session::new();
+    session.load_environment(&root.join("test.dme")).expect("codebase");
+    session.open_map(&root.join("test.dmm"), 1).expect("first map");
+    let first = session.state.active().expect("first is active");
+
+    session.set_tool(Tool::Select);
+    session.choose_type(
+        session
+            .tree()
+            .and_then(|tree| tree.id_of(&TreePath::parse("/obj/structure/table")))
+            .expect("a placeable type"),
+    );
+    session.set_tool(Tool::Place);
+    assert!(
+        session.place_at(Coord::new(1, 1, 1), None).is_some(),
+        "something to copy"
+    );
+    session.set_tool(Tool::Select);
+
+    let source = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 2, 1));
+    assert!(session.select_region(Some(source)));
+    assert!(session.copy_selection(RegionSelectionMode::Full));
+    let copied = session
+        .state
+        .active_document()
+        .and_then(|document| document.placed_tile(Coord::new(1, 1, 1)))
+        .expect("source tile");
+
+    session.open_map(&root.join("test2.dmm"), 1).expect("second map");
+    let second = session.state.active().expect("second is active");
+    assert_ne!(first, second);
+
+    let target_min = Coord::new(3, 3, 1);
+    assert!(session.can_paste_clipboard(target_min, SelectionRotation::Original));
+    assert!(session.paste_clipboard(target_min, SelectionRotation::Original));
+
+    let pasted = session
+        .state
+        .document(second)
+        .and_then(|document| document.placed_tile(target_min))
+        .expect("pasted tile");
+    assert_eq!(
+        pasted.iter().map(PlacedPrefab::prefab).collect::<Vec<_>>(),
+        copied.iter().map(PlacedPrefab::prefab).collect::<Vec<_>>(),
+        "the prefabs survive the trip"
+    );
+    assert_eq!(
+        session.selection(),
+        Some(Selection::from_drag(target_min, Coord::new(4, 4, 1))),
+        "what landed is selected"
+    );
+
+    // The region is still on the clipboard, and the map it came from never moved.
+    assert!(session.clipboard().is_some());
+    assert_eq!(
+        session
+            .state
+            .document(first)
+            .and_then(|document| document.placed_tile(Coord::new(1, 1, 1))),
+        Some(copied)
+    );
+}
+
+#[test]
+fn a_paste_is_one_undo_in_the_map_it_landed_in() {
+    let root = examples();
+    let mut session = Session::new();
+    session.load_environment(&root.join("test.dme")).expect("codebase");
+    session.open_map(&root.join("test.dmm"), 1).expect("first map");
+    session.set_tool(Tool::Select);
+    assert!(session.select_region(Some(Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 2, 1)))));
+    assert!(session.copy_selection(RegionSelectionMode::Full));
+
+    session.open_map(&root.join("test2.dmm"), 1).expect("second map");
+    let second = session.state.active().expect("second is active");
+    let before = session
+        .state
+        .document(second)
+        .and_then(|document| document.placed_tile(Coord::new(3, 3, 1)))
+        .expect("tile");
+
+    assert!(session.paste_clipboard(Coord::new(3, 3, 1), SelectionRotation::Original));
+    assert!(session.state.document(second).is_some_and(MapDocument::is_dirty));
+
+    // `History` is per document and the paste went in as a single edit, so
+    // one undo takes all of it back.
+    assert!(
+        session.state.document_mut(second).is_some_and(MapDocument::undo),
+        "the paste is undoable"
+    );
+    assert_eq!(
+        session
+            .state
+            .document(second)
+            .and_then(|document| document.placed_tile(Coord::new(3, 3, 1))),
+        Some(before)
+    );
+}
+
+#[test]
+fn cross_map_paste_preserves_the_copied_mask_contents_and_destination_hole() {
+    for mode in [
+        RegionSelectionMode::Full,
+        RegionSelectionMode::Hollow { line_width: 1 },
+        RegionSelectionMode::Hollow { line_width: 2 },
+    ] {
+        for rotation in [
+            SelectionRotation::Original,
+            SelectionRotation::Clockwise,
+            SelectionRotation::Half,
+            SelectionRotation::CounterClockwise,
+        ] {
+            let mut session = flat_session(9, 11);
+            session.options.show_areas = true;
+            let first = session.state.active().unwrap();
+            let source = Selection::from_drag(Coord::new(2, 2, 1), Coord::new(6, 8, 1));
+            let mut red = Prefab::new(TreePath::parse("/turf/open/floor"));
+            red.set_var("color".into(), Value::Text("#ff0000".into()));
+            session.state.choose_prefab(red.clone());
+            session.set_tool(Tool::Select);
+            assert!(session.select_region_with_mode(Some(source), mode));
+            assert!(session.fill_rect(SelectionMask { bounds: source, mode }));
+            assert!(session.copy_selection(session.selection_mode()));
+            let copied = session.clipboard().unwrap().clone();
+            let source_grid = session.map().unwrap().clone();
+            let source_revision = session.caches[&first].revision;
+
+            let mut map = Map::new(Size { x: 15, y: 15, z: 2 });
+            let base = map.intern_tile(vec![
+                Prefab::new(TreePath::parse("/turf/open/floor")),
+                Prefab::new(TreePath::parse("/area/station")),
+            ]);
+            for row in map.grid.iter_mut().flatten() {
+                row.fill(base);
+            }
+            let second = session.activate_document(MapDocument::new(map, 2));
+            let destination_grid = session.map().unwrap().clone();
+            let min = Coord::new(4, 4, 2);
+            let target = copied.footprint(min, rotation).unwrap();
+            let before = target
+                .iter()
+                .map(|coord| {
+                    (
+                        coord,
+                        session.state.active_document().unwrap().placed_tile(coord).unwrap(),
+                    )
+                })
+                .collect::<std::collections::HashMap<_, _>>();
+            assert_eq!(session.selection_mask(), None);
+            assert!(session.paste_clipboard(min, rotation));
+            for coord in target.iter() {
+                let document = session.state.active_document().unwrap();
+                if mode.includes(target, coord) {
+                    let mut expected = copied
+                        .destinations(target, rotation)
+                        .find(|(destination, _)| *destination == coord)
+                        .unwrap()
+                        .1
+                        .clone();
+                    for prefab in &mut expected {
+                        crate::tool::rotate_prefab(session.tree().unwrap(), prefab, rotation);
+                    }
+                    assert_eq!(
+                        document.map.tile_at(coord).unwrap(),
+                        &expected,
+                        "{mode:?}, {rotation:?}, {coord:?}"
+                    );
+                    assert_ne!(document.placed_tile(coord).unwrap()[0].id(), before[&coord][0].id());
+                } else {
+                    assert_eq!(
+                        document.placed_tile(coord).unwrap(),
+                        before[&coord],
+                        "the hole must preserve the destination's contents and IDs"
+                    );
+                }
+            }
+            assert_eq!(session.selection_mask(), Some(SelectionMask { bounds: target, mode }));
+            assert_render_cache_matches_rebuild(&session);
+            assert!(session.undo());
+            assert_eq!(*session.map().unwrap(), destination_grid);
+            assert!(!session.undo());
+            assert!(session.redo());
+            assert_render_cache_matches_rebuild(&session);
+            assert_eq!(session.state.document(first).unwrap().map, source_grid);
+            assert_eq!(session.caches[&first].revision, source_revision);
+            assert_eq!(session.state.active(), Some(second));
+        }
+    }
+}
+
+fn paths_at(session: &Session, coord: Coord) -> Vec<String> {
+    session
+        .map()
+        .unwrap()
+        .tile_at(coord)
+        .unwrap()
+        .iter()
+        .map(|prefab| prefab.path.to_string())
+        .collect()
+}
+
+fn place(session: &mut Session, prefab: Prefab, coord: Coord) {
+    session.state.choose_prefab(prefab);
+    session.set_tool(Tool::Place);
+    assert!(session.place_at(coord, None).is_some());
+}
+
+#[test]
+fn a_copy_takes_areas_only_while_they_are_shown() {
+    let mut session = flat_session(2, 1);
+    let source = Coord::new(1, 1, 1);
+    place(
+        &mut session,
+        Prefab::new(TreePath::parse("/obj/structure/table")),
+        source,
+    );
+
+    assert!(session.copy_tile(source));
+    let copied = session.clipboard().unwrap().tile(0, 0).unwrap();
+    assert!(
+        copied
+            .iter()
+            .all(|prefab| !prefab.path.to_string().starts_with("/area"))
+    );
+
+    session.options.show_areas = true;
+    assert!(session.copy_tile(source));
+    assert_eq!(
+        session.clipboard().unwrap().tile(0, 0).unwrap().last().unwrap().path,
+        TreePath::parse("/area/station")
+    );
+}
+
+#[test]
+fn a_region_cut_and_paste_leaves_hidden_areas_where_they_were() {
+    let mut session = flat_session(4, 4);
+    let source = Coord::new(1, 1, 1);
+    let destination = Coord::new(3, 3, 1);
+    let mut engineering = Prefab::new(TreePath::parse("/area/station"));
+    engineering.set_var("name".into(), Value::Text("Engineering".into()));
+    place(
+        &mut session,
+        Prefab::new(TreePath::parse("/obj/structure/table")),
+        source,
+    );
+    place(&mut session, engineering.clone(), destination);
+    let source_area = session.state.active_document().unwrap().placed_tile(source).unwrap()[2].clone();
+    let destination_area = session
+        .state
+        .active_document()
+        .unwrap()
+        .placed_tile(destination)
+        .unwrap()[1]
+        .clone();
+    let area = session.tree().unwrap().id_of(&TreePath::parse("/area")).unwrap();
+    assert!(session.toggle_type_visibility(area));
+
+    session.set_tool(Tool::Select);
+    assert!(session.select_region(Some(Selection::from_drag(source, source))));
+    assert!(session.cut_selection());
+    let cut = session.state.active_document().unwrap().placed_tile(source).unwrap();
+    let defaults = session.world().unwrap().base_tile.clone().unwrap();
+    assert_eq!(cut.len(), 2);
+    assert_eq!(cut[0].prefab().path, defaults.turf);
+    assert_eq!(cut[1], source_area, "the hidden area is untouched");
+    assert_render_cache_matches_rebuild(&session);
+
+    assert!(session.paste_clipboard(destination, SelectionRotation::Original));
+    let pasted = session
+        .state
+        .active_document()
+        .unwrap()
+        .placed_tile(destination)
+        .unwrap();
+    assert_eq!(
+        paths_at(&session, destination),
+        ["/obj/structure/table", "/turf/open/floor", "/area/station"]
+    );
+    assert_eq!(pasted[2], destination_area, "the destination keeps its own area");
+    assert_eq!(pasted[2].prefab(), &engineering);
+    assert_render_cache_matches_rebuild(&session);
+
+    assert!(session.undo());
+    assert!(session.undo());
+    assert_eq!(
+        paths_at(&session, source),
+        ["/obj/structure/table", "/turf/open/floor", "/area/station"]
+    );
+}
+
+#[test]
+fn a_filtered_paste_never_leaves_a_tile_without_a_turf() {
+    let mut session = flat_session(4, 1);
+    session.options.show_areas = true;
+    let source = Coord::new(1, 1, 1);
+    let destination = Coord::new(3, 1, 1);
+    place(
+        &mut session,
+        Prefab::new(TreePath::parse("/turf/closed/wall")),
+        destination,
+    );
+    let floor = session
+        .tree()
+        .unwrap()
+        .id_of(&TreePath::parse("/turf/open/floor"))
+        .unwrap();
+    assert!(session.toggle_type_visibility(floor));
+
+    assert!(session.copy_tile(source));
+    assert_eq!(
+        session.clipboard().unwrap().tile(0, 0).unwrap().len(),
+        1,
+        "only the area is copied"
+    );
+    assert!(session.paste_clipboard(destination, SelectionRotation::Original));
+
+    assert_eq!(paths_at(&session, destination), ["/turf/closed/wall", "/area/station"]);
+}
+
+#[test]
+fn deleting_a_region_with_nothing_visible_to_remove_does_nothing() {
+    let mut session = flat_session(4, 4);
+    let turf = session.tree().unwrap().id_of(&TreePath::parse("/turf")).unwrap();
+    let area = session.tree().unwrap().id_of(&TreePath::parse("/area")).unwrap();
+    assert!(session.toggle_type_visibility(turf));
+    assert!(session.toggle_type_visibility(area));
+    session.set_tool(Tool::Select);
+    assert!(session.select_region(Some(Selection::from_drag(Coord::new(1, 1, 1), Coord::new(4, 4, 1)))));
+
+    assert!(!session.can_clear_tile(Coord::new(1, 1, 1)));
+    assert!(!session.can_clear_selection());
+    assert!(!session.delete_selection());
+    assert!(!session.state.active_document().unwrap().is_dirty());
+}
+
+#[test]
+fn a_region_can_be_cleared_while_any_tile_in_it_has_something_to_remove() {
+    let mut session = flat_session(4, 4);
+    session.set_tool(Tool::Select);
+    assert!(!session.can_clear_selection());
+
+    assert!(session.select_region(Some(Selection::from_drag(Coord::new(1, 1, 1), Coord::new(4, 4, 1)))));
+    assert!(session.can_clear_selection());
+    assert!(session.delete_selection());
+    assert!(!session.can_clear_tile(Coord::new(1, 1, 1)));
+    assert!(!session.can_clear_selection());
+
+    place(
+        &mut session,
+        Prefab::new(TreePath::parse("/obj/structure/table")),
+        Coord::new(4, 4, 1),
+    );
+    session.set_tool(Tool::Select);
+    assert!(session.select_region(Some(Selection::from_drag(Coord::new(1, 1, 1), Coord::new(4, 4, 1)))));
+    assert!(!session.can_clear_tile(Coord::new(1, 1, 1)));
+    assert!(session.can_clear_selection());
+}
+
+fn wall_under_a_paste(width: u32, height: u32, wall: Coord) -> Session {
+    let mut session = flat_session(width, height);
+    place(&mut session, Prefab::new(TreePath::parse("/turf/closed/wall")), wall);
+    place(
+        &mut session,
+        Prefab::new(TreePath::parse("/obj/structure/table")),
+        Coord::new(1, 1, 1),
+    );
+    session.set_tool(Tool::Select);
+
+    session
+}
+
+#[test]
+fn moving_a_fresh_paste_puts_back_what_it_covered() {
+    let wall = Coord::new(4, 1, 1);
+    let mut session = wall_under_a_paste(6, 1, wall);
+    assert!(session.copy_tile(Coord::new(1, 1, 1)));
+    let covered = session.state.active_document().unwrap().placed_tile(wall).unwrap();
+    let before_paste = session.map().unwrap().clone();
+
+    assert!(session.paste_clipboard(wall, SelectionRotation::Original));
+    assert_ne!(paths_at(&session, wall), ["/turf/closed/wall", "/area/station"]);
+    for min in [Coord::new(5, 1, 1), Coord::new(6, 1, 1)] {
+        assert!(session.place_selected_region_with_mode(
+            min,
+            SelectionRotation::Original,
+            SelectionPlacement::Move,
+            RegionSelectionMode::Full,
+        ));
+    }
+
+    let document = session.state.active_document().unwrap();
+    assert_eq!(document.placed_tile(wall).unwrap(), covered, "the wall keeps its ids");
+    assert_eq!(
+        paths_at(&session, Coord::new(5, 1, 1)),
+        ["/turf/open/floor", "/area/station"]
+    );
+    assert_eq!(
+        paths_at(&session, Coord::new(6, 1, 1)),
+        ["/obj/structure/table", "/turf/open/floor", "/area/station"]
+    );
+    assert_eq!(
+        session.selection(),
+        Some(Selection::from_drag(Coord::new(6, 1, 1), Coord::new(6, 1, 1)))
+    );
+    assert_eq!(session.undo_label(), Some("paste region"));
+    assert_render_cache_matches_rebuild(&session);
+
+    assert!(session.undo());
+    assert_eq!(*session.map().unwrap(), before_paste, "one undo takes the paste back");
+    assert_eq!(session.selection(), None);
+    assert!(session.redo());
+    assert_eq!(
+        paths_at(&session, Coord::new(6, 1, 1)),
+        ["/obj/structure/table", "/turf/open/floor", "/area/station"]
+    );
+}
+
+#[test]
+fn a_fresh_paste_moved_live_stays_one_paste_and_cancels_back_to_where_it_landed() {
+    let wall = Coord::new(4, 1, 1);
+    let mut session = wall_under_a_paste(6, 1, wall);
+    assert!(session.copy_tile(Coord::new(1, 1, 1)));
+    let covered = session.state.active_document().unwrap().placed_tile(wall).unwrap();
+    let before_paste = session.map().unwrap().clone();
+    let landed = Some(Selection::from_drag(wall, wall));
+
+    assert!(session.paste_clipboard(wall, SelectionRotation::Original));
+    assert!(session.move_selected_region_live(Coord::new(6, 1, 1)));
+    assert_eq!(
+        session.state.active_document().unwrap().placed_tile(wall).unwrap(),
+        covered
+    );
+    session.cancel_live_move();
+    assert_eq!(session.selection(), landed);
+
+    assert!(session.move_selected_region_live(Coord::new(5, 1, 1)));
+    assert!(session.move_selected_region_live(Coord::new(6, 1, 1)));
+    session.finish_live_move();
+
+    assert_eq!(
+        session.state.active_document().unwrap().placed_tile(wall).unwrap(),
+        covered,
+        "the wall keeps its ids"
+    );
+    assert_eq!(
+        paths_at(&session, Coord::new(6, 1, 1)),
+        ["/obj/structure/table", "/turf/open/floor", "/area/station"]
+    );
+    assert_eq!(session.undo_label(), Some("paste region"));
+    assert_render_cache_matches_rebuild(&session);
+
+    assert!(session.undo());
+    assert_eq!(*session.map().unwrap(), before_paste, "one undo takes the paste back");
+}
+
+#[test]
+fn rotating_a_fresh_non_square_paste_puts_back_what_it_covered() {
+    let wall = Coord::new(3, 2, 1);
+    let mut session = wall_under_a_paste(3, 3, wall);
+    assert!(session.select_region(Some(Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 1, 1)))));
+    assert!(session.copy_selection(RegionSelectionMode::Full));
+    let covered = session.state.active_document().unwrap().placed_tile(wall).unwrap();
+    let before_paste = session.map().unwrap().clone();
+
+    assert!(session.paste_clipboard(Coord::new(2, 2, 1), SelectionRotation::Original));
+    assert_eq!(paths_at(&session, wall), ["/turf/open/floor", "/area/station"]);
+    assert!(session.rotate_selected_region());
+
+    assert_eq!(
+        session.state.active_document().unwrap().placed_tile(wall).unwrap(),
+        covered
+    );
+    assert_eq!(
+        session.selection(),
+        Some(Selection::from_drag(Coord::new(2, 2, 1), Coord::new(2, 3, 1)))
+    );
+    assert_eq!(
+        paths_at(&session, Coord::new(2, 3, 1)),
+        ["/obj/structure/table", "/turf/open/floor", "/area/station"]
+    );
+
+    assert!(session.undo());
+    assert_eq!(*session.map().unwrap(), before_paste);
+}
+
+#[test]
+fn a_paste_stops_floating_after_another_edit_or_a_reselect() {
+    let wall = Coord::new(4, 1, 1);
+    let target = Selection::from_drag(wall, wall);
+    for is_reselected in [false, true] {
+        let mut session = wall_under_a_paste(6, 1, wall);
+        assert!(session.copy_tile(Coord::new(1, 1, 1)));
+        assert!(session.paste_clipboard(wall, SelectionRotation::Original));
+        if is_reselected {
+            assert!(session.select_region(Some(target)));
+        } else {
+            place(
+                &mut session,
+                Prefab::new(TreePath::parse("/obj/structure/table")),
+                Coord::new(2, 1, 1),
+            );
+            session.set_tool(Tool::Select);
+            assert_eq!(session.selection(), Some(target));
+        }
+
+        assert!(session.place_selected_region_with_mode(
+            Coord::new(5, 1, 1),
+            SelectionRotation::Original,
+            SelectionPlacement::Move,
+            RegionSelectionMode::Full,
+        ));
+        assert_ne!(
+            paths_at(&session, wall)[0],
+            "/turf/closed/wall",
+            "is_reselected: {is_reselected}"
+        );
+        assert_eq!(session.undo_label(), Some("move region"));
+    }
+}
+
+#[test]
+fn context_tile_cut_paste_and_delete_are_undoable() {
+    let mut session = flat_session(4, 4);
+    session.options.show_areas = true;
+    let source = Coord::new(2, 2, 1);
+    let destination = Coord::new(3, 2, 1);
+    let table = TreePath::parse("/obj/structure/table");
+    let type_id = session.tree().unwrap().id_of(&table).unwrap();
+    assert!(session.choose_type(type_id));
+    assert!(session.place_at(source, None).is_some());
+    let before = session.map().unwrap().tile_at(source).unwrap().clone();
+
+    assert!(session.copy_tile(source));
+    assert_eq!(session.clipboard().unwrap().tile(0, 0), Some(&before));
+    assert!(session.cut_tile(source));
+    assert_render_cache_matches_rebuild(&session);
+    let defaults = session.world().unwrap().base_tile.clone().unwrap();
+    let cleared = session.map().unwrap().tile_at(source).unwrap();
+    assert_eq!(
+        cleared.iter().map(|prefab| &prefab.path).collect::<Vec<_>>(),
+        vec![&defaults.turf, &defaults.area]
+    );
+    assert!(session.undo());
+    assert_eq!(session.map().unwrap().tile_at(source), Some(&before));
+    assert!(session.redo());
+
+    assert!(session.paste_clipboard(destination, SelectionRotation::Original));
+    assert_eq!(session.map().unwrap().tile_at(destination), Some(&before));
+    assert!(session.delete_tile(destination, None));
+    assert_render_cache_matches_rebuild(&session);
+    assert!(!session.can_clear_tile(destination));
+    assert!(session.undo());
+    assert_eq!(session.map().unwrap().tile_at(destination), Some(&before));
+}
+
+fn table() -> Prefab {
+    Prefab::new(TreePath::parse("/obj/structure/table"))
+}
+
+fn atom_at(session: &Session, coord: Coord) -> PrefabInstanceId {
+    session.state.active_document().unwrap().instance_ids_at(coord)[0]
+}
+
+fn two_picked_tables() -> (Session, [PrefabInstanceId; 2]) {
+    let mut session = flat_session(6, 3);
+    place(&mut session, table(), Coord::new(1, 1, 1));
+    place(&mut session, table(), Coord::new(2, 2, 1));
+    let ids = [
+        atom_at(&session, Coord::new(1, 1, 1)),
+        atom_at(&session, Coord::new(2, 2, 1)),
+    ];
+    session.set_tool(Tool::Pick);
+    session.pick_instance(None);
+    session.toggle_pick(ids[0]);
+    session.toggle_pick(ids[1]);
+
+    (session, ids)
+}
+
+#[test]
+fn copied_picks_stack_onto_the_destination_and_become_the_pick_set() {
+    let (mut session, ids) = two_picked_tables();
+    place(
+        &mut session,
+        Prefab::new(TreePath::parse("/obj/machinery/light")),
+        Coord::new(4, 1, 1),
+    );
+    session.set_tool(Tool::Pick);
+    session.pick_instance(None);
+    session.toggle_pick(ids[0]);
+    session.toggle_pick(ids[1]);
+    let before = session.map().unwrap().clone();
+
+    assert!(session.copy_picked());
+    assert_eq!(session.clipboard().unwrap().merge(), PasteMerge::Stack);
+    assert!(session.paste_clipboard(Coord::new(4, 1, 1), SelectionRotation::Original));
+
+    assert_eq!(
+        paths_at(&session, Coord::new(4, 1, 1)),
+        [
+            "/obj/machinery/light",
+            "/obj/structure/table",
+            "/turf/open/floor",
+            "/area/station"
+        ]
+    );
+    assert_eq!(
+        paths_at(&session, Coord::new(5, 2, 1)),
+        ["/obj/structure/table", "/turf/open/floor", "/area/station"]
+    );
+    let document = session.state.active_document().unwrap();
+    let expected = [
+        atom_at(&session, Coord::new(4, 1, 1)),
+        atom_at(&session, Coord::new(5, 2, 1)),
+    ];
+    assert_eq!(session.tool(), Tool::Pick);
+    assert_eq!(session.selection(), None);
+    assert_eq!(document.picked_ids().len(), 2);
+    assert_eq!(session.picked_instance(), Some(expected[1]));
+    assert_eq!(
+        session.picked_instances().len(),
+        2,
+        "the pick set is exactly the pasted atoms"
+    );
+    assert_ne!(session.picked_instances()[0], atom_at(&session, Coord::new(1, 1, 1)));
+    assert_render_cache_matches_rebuild(&session);
+
+    assert!(session.undo());
+    assert_eq!(*session.map().unwrap(), before);
+}
+
+#[test]
+fn pasting_picks_that_run_off_the_map_changes_nothing() {
+    let (mut session, _) = two_picked_tables();
+    let before = session.map().unwrap().clone();
+
+    assert!(session.copy_picked());
+    assert!(!session.can_paste_clipboard(Coord::new(6, 3, 1), SelectionRotation::Original));
+    assert!(!session.paste_clipboard(Coord::new(6, 3, 1), SelectionRotation::Original));
+    assert_eq!(*session.map().unwrap(), before);
+}
+
+#[test]
+fn a_picked_turf_replaces_the_destination_turf_when_pasted() {
+    let mut session = flat_session(3, 1);
+    place(
+        &mut session,
+        Prefab::new(TreePath::parse("/turf/closed/wall")),
+        Coord::new(1, 1, 1),
+    );
+    let wall = session
+        .state
+        .active_document()
+        .unwrap()
+        .instance_ids_at(Coord::new(1, 1, 1))[0];
+    session.set_tool(Tool::Pick);
+    session.pick_instance(Some(wall));
+
+    assert!(session.copy_picked());
+    assert!(session.paste_clipboard(Coord::new(3, 1, 1), SelectionRotation::Original));
+
+    assert_eq!(
+        paths_at(&session, Coord::new(3, 1, 1)),
+        ["/turf/closed/wall", "/area/station"]
+    );
+}
+
+#[test]
+fn cutting_picks_refills_what_it_removes_and_is_one_undo() {
+    let mut session = flat_session(3, 1);
+    place(
+        &mut session,
+        Prefab::new(TreePath::parse("/turf/closed/wall")),
+        Coord::new(1, 1, 1),
+    );
+    place(&mut session, table(), Coord::new(2, 1, 1));
+    let wall = session
+        .state
+        .active_document()
+        .unwrap()
+        .instance_ids_at(Coord::new(1, 1, 1))[0];
+    let table = atom_at(&session, Coord::new(2, 1, 1));
+    session.set_tool(Tool::Pick);
+    session.pick_instance(None);
+    session.toggle_pick(wall);
+    session.toggle_pick(table);
+    let before = session.map().unwrap().clone();
+
+    assert!(session.cut_picked());
+    let turf = session.world().unwrap().base_tile.clone().unwrap().turf.to_string();
+
+    assert_eq!(
+        paths_at(&session, Coord::new(1, 1, 1)),
+        [turf.as_str(), "/area/station"]
+    );
+    assert_eq!(
+        paths_at(&session, Coord::new(2, 1, 1)),
+        ["/turf/open/floor", "/area/station"]
+    );
+    assert_eq!(session.clipboard().unwrap().merge(), PasteMerge::Stack);
+    assert_eq!(session.undo_label(), Some("cut 2 atoms"));
+    assert_render_cache_matches_rebuild(&session);
+
+    assert!(session.undo());
+    assert_eq!(*session.map().unwrap(), before);
+}
