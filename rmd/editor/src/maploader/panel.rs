@@ -11,7 +11,7 @@ use ui::{
 use crate::{
     frontend::welcome::codebase_relative,
     inspector::panel::IDENTICAL_EDIT_COLOR,
-    maploader::preview::ModuleVariantKey,
+    maploader::preview::{ModuleRootPreview, ModuleVariantKey},
     session::Session,
     tool::Tool,
     viewport::{
@@ -47,7 +47,7 @@ pub(crate) struct ModuleControls {
 pub(crate) fn draw(
     ui: &Ui, session: &mut Session, frame: &mut ViewFrame<'_>, is_escape: bool, is_gizmo_hot: bool,
 ) -> ModuleControls {
-    let mut open = None;
+    let open = None;
     if !session.modules_enabled() || is_escape {
         frame.gestures.module_popup = None;
         return ModuleControls {
@@ -66,8 +66,52 @@ pub(crate) fn draw(
         }
     }
     let viewport = frame.layout.viewport;
+    let hovered = draw_module_markers(ui, session, frame, viewport, &roots);
+    let (mut captured, combo_open, open) = draw_module_controls(ui, session, frame, viewport, &roots, open);
+    if !captured && !combo_open && ui.is_mouse_clicked(MouseButton::Left) {
+        // the delete tool picks the root under its marker instead
+        if frame.is_hovered
+            && session.tool() != Tool::Delete
+            && let Some(first) = hovered.first()
+        {
+            // Repeated clicks cycle roots sharing the same marker position.
+            let index = frame
+                .gestures
+                .module_popup
+                .as_ref()
+                .and_then(|(key, _)| hovered.iter().position(|root| root.key == *key))
+                .map_or(0, |index| (index + 1) % hovered.len());
+            let root = hovered.get(index).unwrap_or(first);
+            let source = session.source_root(root);
+            if is_gizmo_hot && source.is_some() && session.picked_instance() == source {
+                return ModuleControls {
+                    is_capturing: false,
+                    open,
+                };
+            }
+
+            frame.gestures.module_popup = Some((root.key.clone(), root.coord));
+            if session.tool() == Tool::Pick
+                && let Some(id) = source
+            {
+                session.pick_instance(Some(id));
+            }
+            captured = true;
+        } else {
+            frame.gestures.module_popup = None;
+        }
+    }
+    ModuleControls {
+        is_capturing: captured || combo_open,
+        open,
+    }
+}
+
+fn draw_module_markers<'a>(
+    ui: &Ui, session: &Session, frame: &ViewFrame<'_>, viewport: OverlayRect, roots: &'a [ModuleRootPreview],
+) -> Vec<&'a ModuleRootPreview> {
     let mut hovered = Vec::new();
-    for root in &roots {
+    for root in roots {
         let coord = root.coord;
         if coord.z != session.z() {
             continue;
@@ -116,6 +160,13 @@ pub(crate) fn draw(
             hovered.push(root);
         }
     }
+    hovered
+}
+
+fn draw_module_controls(
+    ui: &Ui, session: &mut Session, frame: &ViewFrame<'_>, viewport: OverlayRect, roots: &[ModuleRootPreview],
+    mut open: Option<PathBuf>,
+) -> (bool, bool, Option<PathBuf>) {
     let mut captured = false;
     let mut combo_open = false;
     if let Some((root, coord)) = frame
@@ -205,43 +256,7 @@ pub(crate) fn draw(
             session.choose_module_variant(&root.key, index);
         }
     }
-    if !captured && !combo_open && ui.is_mouse_clicked(MouseButton::Left) {
-        // the delete tool picks the root under its marker instead
-        if frame.is_hovered
-            && session.tool() != Tool::Delete
-            && let Some(first) = hovered.first()
-        {
-            // Repeated clicks cycle roots sharing the same marker position.
-            let index = frame
-                .gestures
-                .module_popup
-                .as_ref()
-                .and_then(|(key, _)| hovered.iter().position(|root| root.key == *key))
-                .map_or(0, |index| (index + 1) % hovered.len());
-            let root = hovered.get(index).unwrap_or(first);
-            let source = session.source_root(root);
-            if is_gizmo_hot && source.is_some() && session.picked_instance() == source {
-                return ModuleControls {
-                    is_capturing: false,
-                    open,
-                };
-            }
-
-            frame.gestures.module_popup = Some((root.key.clone(), root.coord));
-            if session.tool() == Tool::Pick
-                && let Some(id) = source
-            {
-                session.pick_instance(Some(id));
-            }
-            captured = true;
-        } else {
-            frame.gestures.module_popup = None;
-        }
-    }
-    ModuleControls {
-        is_capturing: captured || combo_open,
-        open,
-    }
+    (captured, combo_open, open)
 }
 
 pub(crate) fn controls_layout(

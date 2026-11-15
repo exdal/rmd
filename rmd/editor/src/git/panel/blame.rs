@@ -13,7 +13,10 @@ use ui::{
 use crate::{
     document::DocumentId,
     git::{
-        blame::{BOUNDARY, UNCOMMITTED, relative_time, session::blame_color},
+        blame::{
+            BOUNDARY, UNCOMMITTED, relative_time,
+            session::{BlameState, blame_color},
+        },
         repo::{CommitInfo, WebLinks},
         session::GitDocState,
     },
@@ -113,26 +116,9 @@ impl GitPanel {
         }
 
         let blame = session.blame_state(id);
-        let label = if blame.is_some() {
-            format!("{ICON_REFRESH} Refresh##run-blame")
-        } else {
-            String::from("Run blame##run-blame")
-        };
-        same_line_if_fits(ui, button_width(ui, &label));
-        if ui.button(label) {
-            actions.push(Action::RunBlame);
-        }
+        draw_blame_button(ui, blame, actions);
 
-        if let Some(done) = session.blame_progress(id) {
-            let depth = (settings.blame_depth as usize).max(1);
-            ui.progress_bar((done as f32 / depth as f32).min(1.0))
-                .overlay_text(format!("Walking history: {done} revisions"))
-                .size([-f32::MIN_POSITIVE, 0.0])
-                .build();
-        }
-        if session.blame_stale(id) {
-            text_wrapped_colored(ui, STALE_COLOR, &format!("{ICON_ALERT} Map changed since blame ran"));
-        }
+        draw_blame_progress(ui, session, settings, id);
 
         let Some(blame) = blame else {
             if session.blame_progress(id).is_none() {
@@ -141,25 +127,11 @@ impl GitPanel {
             return;
         };
 
-        if blame.counts.boundary != 0 || blame.result.parse_boundary.is_some() {
-            text_wrapped_colored(
-                ui,
-                ui.style_color(StyleColor::TextDisabled),
-                &blame.result.boundary_label(),
-            );
-        }
+        draw_boundary_note(ui, blame);
         draw_legend(ui, blame);
         ui.checkbox("Show all commits", &mut self.show_all_commits);
 
-        let cells = std::iter::once(UNCOMMITTED)
-            .filter(|_| blame.counts.uncommitted != 0)
-            .chain(
-                (0..blame.result.commits.len())
-                    .filter(|index| self.show_all_commits || blame.counts.commits[*index] != 0)
-                    .map(|index| index as u32),
-            )
-            .chain(std::iter::once(BOUNDARY).filter(|_| blame.counts.boundary != 0))
-            .collect::<Vec<_>>();
+        let cells = self.blame_cells(blame);
         let web = git.web.as_ref();
         let now = unix_now();
         let swatch = ui.text_line_height();
@@ -231,60 +203,120 @@ impl GitPanel {
                     });
                     draw_swatch(ui, origin, swatch, blame_color(&blame.result, cell));
 
-                    if let Some(_menu) = ui.begin_popup_context_item() {
-                        let pinned = blame.pinned == Some(cell);
-                        if ui.menu_item(if pinned { "Unpin tiles" } else { "Pin tiles" }) {
-                            actions.push(Action::PinBlame(cell));
-                        }
-                        if ui.menu_item_enabled_selected_no_shortcut("Jump to tiles", false, tiles != 0)
-                            && let Some(coord) = blame.result.first_tile(cell, z)
-                        {
-                            actions.push(Action::Center(coord));
-                        }
-                        if let Some(commit) = commit
-                            && ui.menu_item("Copy hash")
-                        {
-                            actions.push(Action::Copy(commit.hash.clone()));
-                        }
-                    }
+                    draw_blame_menu(ui, blame, cell, tiles, z, commit, actions);
 
-                    ui.table_next_column();
-                    match (commit, web) {
-                        (Some(commit), Some(web)) => {
-                            let url = web.commit(&commit.hash);
-                            ui.text_link_open_url(&commit.short, &url);
-                        },
-                        (Some(commit), None) => {
-                            ui.text(format!("{ICON_SOURCE_COMMIT} {}", commit.short));
-                            ui.set_item_tooltip(&commit.summary);
-                        },
-                        (None, _) if cell == UNCOMMITTED => ui.text_colored(STALE_COLOR, "Uncommitted"),
-                        (None, _) => ui.text_disabled("Older"),
-                    }
-
-                    ui.table_next_column();
-                    if let Some(commit) = commit {
-                        ui.text(&commit.author);
-                    }
-
-                    ui.table_next_column();
-                    if let Some(commit) = commit {
-                        ui.text(relative_time(now, commit.time));
-                    }
-
-                    ui.table_next_column();
-                    match (commit, cell) {
-                        (Some(commit), _) => {
-                            ui.text(&commit.summary);
-                            ui.set_item_tooltip(&commit.summary);
-                        },
-                        (None, UNCOMMITTED) => ui.text_disabled("Changed in the working tree"),
-                        (None, _) => ui.text_disabled(blame.result.boundary_label()),
-                    }
-
-                    ui.table_next_column();
-                    ui.text(tiles.to_string());
+                    draw_blame_cells(ui, blame, cell, commit, web, now, tiles);
                 }
             });
     }
+
+    fn blame_cells(&self, blame: &BlameState) -> Vec<u32> {
+        std::iter::once(UNCOMMITTED)
+            .filter(|_| blame.counts.uncommitted != 0)
+            .chain(
+                (0..blame.result.commits.len())
+                    .filter(|index| self.show_all_commits || blame.counts.commits[*index] != 0)
+                    .map(|index| index as u32),
+            )
+            .chain(std::iter::once(BOUNDARY).filter(|_| blame.counts.boundary != 0))
+            .collect::<Vec<_>>()
+    }
+}
+
+fn draw_blame_button(ui: &Ui, blame: Option<&BlameState>, actions: &mut Vec<Action>) {
+    let label = if blame.is_some() {
+        format!("{ICON_REFRESH} Refresh##run-blame")
+    } else {
+        String::from("Run blame##run-blame")
+    };
+    same_line_if_fits(ui, button_width(ui, &label));
+    if ui.button(label) {
+        actions.push(Action::RunBlame);
+    }
+}
+
+fn draw_blame_progress(ui: &Ui, session: &Session, settings: &Settings, id: DocumentId) {
+    if let Some(done) = session.blame_progress(id) {
+        let depth = (settings.blame_depth as usize).max(1);
+        ui.progress_bar((done as f32 / depth as f32).min(1.0))
+            .overlay_text(format!("Walking history: {done} revisions"))
+            .size([-f32::MIN_POSITIVE, 0.0])
+            .build();
+    }
+    if session.blame_stale(id) {
+        text_wrapped_colored(ui, STALE_COLOR, &format!("{ICON_ALERT} Map changed since blame ran"));
+    }
+}
+
+fn draw_boundary_note(ui: &Ui, blame: &BlameState) {
+    if blame.counts.boundary != 0 || blame.result.parse_boundary.is_some() {
+        text_wrapped_colored(
+            ui,
+            ui.style_color(StyleColor::TextDisabled),
+            &blame.result.boundary_label(),
+        );
+    }
+}
+
+fn draw_blame_menu(
+    ui: &Ui, blame: &BlameState, cell: u32, tiles: usize, z: u32, commit: Option<&CommitInfo>,
+    actions: &mut Vec<Action>,
+) {
+    if let Some(_menu) = ui.begin_popup_context_item() {
+        let pinned = blame.pinned == Some(cell);
+        if ui.menu_item(if pinned { "Unpin tiles" } else { "Pin tiles" }) {
+            actions.push(Action::PinBlame(cell));
+        }
+        if ui.menu_item_enabled_selected_no_shortcut("Jump to tiles", false, tiles != 0)
+            && let Some(coord) = blame.result.first_tile(cell, z)
+        {
+            actions.push(Action::Center(coord));
+        }
+        if let Some(commit) = commit
+            && ui.menu_item("Copy hash")
+        {
+            actions.push(Action::Copy(commit.hash.clone()));
+        }
+    }
+}
+
+fn draw_blame_cells(
+    ui: &Ui, blame: &BlameState, cell: u32, commit: Option<&CommitInfo>, web: Option<&WebLinks>, now: i64, tiles: usize,
+) {
+    ui.table_next_column();
+    match (commit, web) {
+        (Some(commit), Some(web)) => {
+            let url = web.commit(&commit.hash);
+            ui.text_link_open_url(&commit.short, &url);
+        },
+        (Some(commit), None) => {
+            ui.text(format!("{ICON_SOURCE_COMMIT} {}", commit.short));
+            ui.set_item_tooltip(&commit.summary);
+        },
+        (None, _) if cell == UNCOMMITTED => ui.text_colored(STALE_COLOR, "Uncommitted"),
+        (None, _) => ui.text_disabled("Older"),
+    }
+
+    ui.table_next_column();
+    if let Some(commit) = commit {
+        ui.text(&commit.author);
+    }
+
+    ui.table_next_column();
+    if let Some(commit) = commit {
+        ui.text(relative_time(now, commit.time));
+    }
+
+    ui.table_next_column();
+    match (commit, cell) {
+        (Some(commit), _) => {
+            ui.text(&commit.summary);
+            ui.set_item_tooltip(&commit.summary);
+        },
+        (None, UNCOMMITTED) => ui.text_disabled("Changed in the working tree"),
+        (None, _) => ui.text_disabled(blame.result.boundary_label()),
+    }
+
+    ui.table_next_column();
+    ui.text(tiles.to_string());
 }

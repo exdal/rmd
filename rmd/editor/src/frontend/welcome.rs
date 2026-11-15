@@ -10,7 +10,10 @@ use super::{CloseFocus, OpenRequest, SAVE_ERROR_COLOR, UiState};
 use crate::coop::panel::shared_maps;
 use crate::{
     app::update::Release,
-    environment::{panel::DIAGNOSTIC_WARNING_COLOR, session::DiagnosticSeverity},
+    environment::{
+        panel::{DIAGNOSTIC_WARNING_COLOR, DiagnosticsState},
+        session::DiagnosticSeverity,
+    },
     session::Session,
     settings::Settings,
 };
@@ -199,68 +202,15 @@ impl UiState {
             ui.dummy([0.0, min_indent]);
             ui.indent_by(indent);
 
-            {
-                let _font = ui.push_font_with_size(None, WELCOME_TITLE_SIZE);
-                ui.text("Rapid Mapping Device");
-            }
-
-            match codebase {
-                Some(codebase) => ui.text_disabled(codebase.display().to_string()),
-                None => draw_welcome_subtitle(ui, release),
-            }
+            draw_welcome_title(ui, codebase, release);
 
             ui.dummy([0.0, min_indent]);
 
-            let warnings = diagnostics.count(DiagnosticSeverity::Warning);
-            if warnings > 0 {
-                let _color = ui.push_style_color(StyleColor::TextLink, DIAGNOSTIC_WARNING_COLOR);
-                let label = if warnings == 1 { "warning" } else { "warnings" };
-                if ui.text_link(format!("{ICON_ALERT} {warnings} {label}##load-warnings")) {
-                    diagnostics.open = Some(DiagnosticSeverity::Warning);
-                }
-            }
-            let errors = diagnostics.count(DiagnosticSeverity::Error);
-            if errors > 0 {
-                if warnings > 0 {
-                    ui.same_line();
-                }
-                let _color = ui.push_style_color(StyleColor::TextLink, SAVE_ERROR_COLOR);
-                let label = if errors == 1 { "error" } else { "errors" };
-                if ui.text_link(format!("{ICON_ALERT_CIRCLE} {errors} {label}##load-errors")) {
-                    diagnostics.open = Some(DiagnosticSeverity::Error);
-                }
-            }
-            if warnings + errors > 0 {
-                ui.dummy([0.0, min_indent]);
-            }
+            draw_load_diagnostics(ui, diagnostics, min_indent);
 
             match codebase {
                 None => {
-                    ui.text("Start");
-                    if ui.text_link("Open codebase...") {
-                        out.open = Some(OpenRequest::PickCodebase);
-                    }
-
-                    ui.dummy([0.0, min_indent]);
-                    ui.text("Recent codebases");
-                    if settings.recent_codebases.is_empty() {
-                        ui.text_disabled("No recent codebases");
-                    }
-                    for (index, recent) in settings.recent_codebases.iter().enumerate() {
-                        let entry = draw_recent_entry(
-                            ui,
-                            &recent.display().to_string(),
-                            &format!("codebase-{index}"),
-                            None,
-                            true,
-                        );
-                        if entry.open {
-                            out.open = Some(OpenRequest::Codebase(recent.clone()));
-                        }
-                        if entry.forget {
-                            out.forget = Some(ForgetRequest::Codebase(recent.clone()));
-                        }
-                    }
+                    draw_recent_codebases(ui, settings, min_indent, out);
                 },
 
                 Some(codebase) => {
@@ -274,102 +224,188 @@ impl UiState {
                         out.open = Some(OpenRequest::PickMap);
                     }
 
-                    ui.dummy([0.0, min_indent]);
-                    ui.text("Recent maps");
-                    let mut empty = true;
-                    for (index, recent) in settings.recent_maps_for(codebase).enumerate() {
-                        empty = false;
-                        let entry = draw_recent_entry(
-                            ui,
-                            &codebase_relative(base, &recent.map),
-                            &format!("recent-{index}"),
-                            share_tooltip(session, &recent.map),
-                            true,
-                        );
-                        if entry.open {
-                            out.open = Some(OpenRequest::Map(recent.map.clone()));
-                        }
+                    draw_recent_maps(ui, session, settings, codebase, base, min_indent, out);
 
-                        if entry.share {
-                            out.open = Some(OpenRequest::ShareMap(recent.map.clone()));
-                        }
+                    draw_shared_maps(ui, session, base, min_indent, out);
 
-                        if entry.forget {
-                            out.forget = Some(ForgetRequest::Map(recent.map.clone()));
-                        }
-                    }
+                    draw_map_filter(ui, session, min_indent, scale, map_filter);
 
-                    if empty {
-                        ui.text_disabled("No recent maps in this codebase");
-                    }
-
-                    let shared = session.coop().map(shared_maps).unwrap_or_default();
-                    if !shared.is_empty() {
-                        ui.dummy([0.0, min_indent]);
-                        ui.text("Shared maps");
-                        for (index, (path, note)) in shared.iter().enumerate() {
-                            if ui.text_link(format!("{path} {note}##shared-{index}")) {
-                                out.open = Some(OpenRequest::Map(base.join(path)));
-                            }
-                        }
-                    }
-
-                    ui.dummy([0.0, min_indent]);
-                    ui.text("Maps");
-                    if session.maps().is_empty() {
-                        ui.text_disabled("No maps found in this codebase");
-                    } else {
-                        ui.set_next_item_width(WELCOME_CONTENT_WIDTH * scale);
-                        ui.input_text("##welcome-map-filter", map_filter)
-                            .hint("Filter maps")
-                            .build();
-                    }
-
-                    let needle = map_filter.trim().to_ascii_lowercase();
-                    let matching = session
-                        .maps()
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, map)| map_matches(base, map, &needle));
-                    let limit = if *maps_expanded {
-                        usize::MAX
-                    } else {
-                        WELCOME_MAP_PREVIEW
-                    };
-
-                    let mut shown = 0;
-                    for (index, map) in matching.clone().take(limit) {
-                        shown += 1;
-                        let entry = draw_recent_entry(
-                            ui,
-                            &codebase_relative(base, map),
-                            &format!("map-{index}"),
-                            share_tooltip(session, map),
-                            false,
-                        );
-                        if entry.open {
-                            out.open = Some(OpenRequest::Map(map.clone()));
-                        }
-
-                        if entry.share {
-                            out.open = Some(OpenRequest::ShareMap(map.clone()));
-                        }
-                    }
-
-                    if shown == 0 && !session.maps().is_empty() {
-                        ui.text_disabled("No maps match the filter");
-                    }
-                    let hidden = matching.count().saturating_sub(shown);
-                    if hidden > 0 {
-                        if ui.text_link(format!("Show more... ({hidden})")) {
-                            *maps_expanded = true;
-                        }
-                    } else if *maps_expanded && shown > WELCOME_MAP_PREVIEW && ui.text_link("Show less") {
-                        *maps_expanded = false;
-                    }
+                    draw_map_list(ui, session, base, map_filter, maps_expanded, out);
                 },
             }
         });
+    }
+}
+
+fn draw_welcome_title(ui: &Ui, codebase: Option<&Path>, release: Option<&Release>) {
+    {
+        let _font = ui.push_font_with_size(None, WELCOME_TITLE_SIZE);
+        ui.text("Rapid Mapping Device");
+    }
+
+    match codebase {
+        Some(codebase) => ui.text_disabled(codebase.display().to_string()),
+        None => draw_welcome_subtitle(ui, release),
+    }
+}
+
+fn draw_load_diagnostics(ui: &Ui, diagnostics: &mut DiagnosticsState, min_indent: f32) {
+    let warnings = diagnostics.count(DiagnosticSeverity::Warning);
+    if warnings > 0 {
+        let _color = ui.push_style_color(StyleColor::TextLink, DIAGNOSTIC_WARNING_COLOR);
+        let label = if warnings == 1 { "warning" } else { "warnings" };
+        if ui.text_link(format!("{ICON_ALERT} {warnings} {label}##load-warnings")) {
+            diagnostics.open = Some(DiagnosticSeverity::Warning);
+        }
+    }
+    let errors = diagnostics.count(DiagnosticSeverity::Error);
+    if errors > 0 {
+        if warnings > 0 {
+            ui.same_line();
+        }
+        let _color = ui.push_style_color(StyleColor::TextLink, SAVE_ERROR_COLOR);
+        let label = if errors == 1 { "error" } else { "errors" };
+        if ui.text_link(format!("{ICON_ALERT_CIRCLE} {errors} {label}##load-errors")) {
+            diagnostics.open = Some(DiagnosticSeverity::Error);
+        }
+    }
+    if warnings + errors > 0 {
+        ui.dummy([0.0, min_indent]);
+    }
+}
+
+fn draw_recent_codebases(ui: &Ui, settings: &Settings, min_indent: f32, out: &mut WelcomeOutput) {
+    ui.text("Start");
+    if ui.text_link("Open codebase...") {
+        out.open = Some(OpenRequest::PickCodebase);
+    }
+
+    ui.dummy([0.0, min_indent]);
+    ui.text("Recent codebases");
+    if settings.recent_codebases.is_empty() {
+        ui.text_disabled("No recent codebases");
+    }
+    for (index, recent) in settings.recent_codebases.iter().enumerate() {
+        let entry = draw_recent_entry(
+            ui,
+            &recent.display().to_string(),
+            &format!("codebase-{index}"),
+            None,
+            true,
+        );
+        if entry.open {
+            out.open = Some(OpenRequest::Codebase(recent.clone()));
+        }
+        if entry.forget {
+            out.forget = Some(ForgetRequest::Codebase(recent.clone()));
+        }
+    }
+}
+
+fn draw_recent_maps(
+    ui: &Ui, session: &Session, settings: &Settings, codebase: &Path, base: &Path, min_indent: f32,
+    out: &mut WelcomeOutput,
+) {
+    ui.dummy([0.0, min_indent]);
+    ui.text("Recent maps");
+    let mut empty = true;
+    for (index, recent) in settings.recent_maps_for(codebase).enumerate() {
+        empty = false;
+        let entry = draw_recent_entry(
+            ui,
+            &codebase_relative(base, &recent.map),
+            &format!("recent-{index}"),
+            share_tooltip(session, &recent.map),
+            true,
+        );
+        if entry.open {
+            out.open = Some(OpenRequest::Map(recent.map.clone()));
+        }
+
+        if entry.share {
+            out.open = Some(OpenRequest::ShareMap(recent.map.clone()));
+        }
+
+        if entry.forget {
+            out.forget = Some(ForgetRequest::Map(recent.map.clone()));
+        }
+    }
+
+    if empty {
+        ui.text_disabled("No recent maps in this codebase");
+    }
+}
+
+fn draw_shared_maps(ui: &Ui, session: &Session, base: &Path, min_indent: f32, out: &mut WelcomeOutput) {
+    let shared = session.coop().map(shared_maps).unwrap_or_default();
+    if !shared.is_empty() {
+        ui.dummy([0.0, min_indent]);
+        ui.text("Shared maps");
+        for (index, (path, note)) in shared.iter().enumerate() {
+            if ui.text_link(format!("{path} {note}##shared-{index}")) {
+                out.open = Some(OpenRequest::Map(base.join(path)));
+            }
+        }
+    }
+}
+
+fn draw_map_filter(ui: &Ui, session: &Session, min_indent: f32, scale: f32, map_filter: &mut String) {
+    ui.dummy([0.0, min_indent]);
+    ui.text("Maps");
+    if session.maps().is_empty() {
+        ui.text_disabled("No maps found in this codebase");
+    } else {
+        ui.set_next_item_width(WELCOME_CONTENT_WIDTH * scale);
+        ui.input_text("##welcome-map-filter", map_filter)
+            .hint("Filter maps")
+            .build();
+    }
+}
+
+fn draw_map_list(
+    ui: &Ui, session: &Session, base: &Path, map_filter: &str, maps_expanded: &mut bool, out: &mut WelcomeOutput,
+) {
+    let needle = map_filter.trim().to_ascii_lowercase();
+    let matching = session
+        .maps()
+        .iter()
+        .enumerate()
+        .filter(|(_, map)| map_matches(base, map, &needle));
+    let limit = if *maps_expanded {
+        usize::MAX
+    } else {
+        WELCOME_MAP_PREVIEW
+    };
+
+    let mut shown = 0;
+    for (index, map) in matching.clone().take(limit) {
+        shown += 1;
+        let entry = draw_recent_entry(
+            ui,
+            &codebase_relative(base, map),
+            &format!("map-{index}"),
+            share_tooltip(session, map),
+            false,
+        );
+        if entry.open {
+            out.open = Some(OpenRequest::Map(map.clone()));
+        }
+
+        if entry.share {
+            out.open = Some(OpenRequest::ShareMap(map.clone()));
+        }
+    }
+
+    if shown == 0 && !session.maps().is_empty() {
+        ui.text_disabled("No maps match the filter");
+    }
+    let hidden = matching.count().saturating_sub(shown);
+    if hidden > 0 {
+        if ui.text_link(format!("Show more... ({hidden})")) {
+            *maps_expanded = true;
+        }
+    } else if *maps_expanded && shown > WELCOME_MAP_PREVIEW && ui.text_link("Show less") {
+        *maps_expanded = false;
     }
 }
 

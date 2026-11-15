@@ -84,6 +84,27 @@ pub(super) fn draw_popup(ui: &Ui, session: &mut Session, settings: &Settings, ta
     ui.text_disabled(format!("X: {}, Y: {}, Z: {}", coord.x, coord.y, coord.z));
     // every section starts with its own separator so none of them double up
     let mut action = None;
+    action = draw_conflict_actions(ui, session, target, coord, action);
+
+    action = draw_restore_action(ui, session, target, coord, action);
+
+    action = draw_blame_menu(ui, session, target, coord, action);
+
+    action = draw_node_action(ui, session, target, action);
+
+    action = draw_history_actions(ui, session, settings, action);
+    action = draw_clipboard_actions(ui, session, settings, target, coord, action);
+
+    action = draw_mirror_actions(ui, session, target, action);
+
+    action = draw_atom_menus(ui, session, target, coord, action);
+
+    action
+}
+
+fn draw_conflict_actions(
+    ui: &Ui, session: &Session, target: &Target, coord: Coord, mut action: Option<Action>,
+) -> Option<Action> {
     if let Some(conflicts) = session
         .git_state(target.document)
         .and_then(|git| git.conflicts.as_ref())
@@ -125,7 +146,12 @@ pub(super) fn draw_popup(ui: &Ui, session: &mut Session, settings: &Settings, ta
             }
         }
     }
+    action
+}
 
+fn draw_restore_action(
+    ui: &Ui, session: &Session, target: &Target, coord: Coord, mut action: Option<Action>,
+) -> Option<Action> {
     if let Some(state) = session
         .git_state(target.document)
         .and_then(|git| git.diff.as_ref())
@@ -151,7 +177,12 @@ pub(super) fn draw_popup(ui: &Ui, session: &mut Session, settings: &Settings, ta
             }
         }
     }
+    action
+}
 
+fn draw_blame_menu(
+    ui: &Ui, session: &Session, target: &Target, coord: Coord, mut action: Option<Action>,
+) -> Option<Action> {
     if let Some(git) = session.git_state(target.document) {
         ui.separator();
         if let Some(_menu) = ui.begin_menu("Blame") {
@@ -177,7 +208,10 @@ pub(super) fn draw_popup(ui: &Ui, session: &mut Session, settings: &Settings, ta
             }
         }
     }
+    action
+}
 
+fn draw_node_action(ui: &Ui, session: &Session, target: &Target, mut action: Option<Action>) -> Option<Action> {
     if let Some(node) = target.node.as_ref() {
         ui.separator();
         let label = match node {
@@ -194,7 +228,10 @@ pub(super) fn draw_popup(ui: &Ui, session: &mut Session, settings: &Settings, ta
             action = Some(Action::Node(node.clone()));
         }
     }
+    action
+}
 
+fn draw_history_actions(ui: &Ui, session: &Session, settings: &Settings, mut action: Option<Action>) -> Option<Action> {
     ui.separator();
     let undo = session.undo_label();
     let undo_label = undo.map_or_else(|| "Undo".to_owned(), |label| format!("Undo {label}"));
@@ -216,6 +253,12 @@ pub(super) fn draw_popup(ui: &Ui, session: &mut Session, settings: &Settings, ta
     ) {
         action = Some(Action::Redo);
     }
+    action
+}
+
+fn draw_clipboard_actions(
+    ui: &Ui, session: &Session, settings: &Settings, target: &Target, coord: Coord, mut action: Option<Action>,
+) -> Option<Action> {
     ui.separator();
     let is_picking = !target.region_selected && session.tool() == Tool::Pick && session.picked_instance().is_some();
     let is_group_command = target.region_selected || is_picking;
@@ -265,7 +308,10 @@ pub(super) fn draw_popup(ui: &Ui, session: &mut Session, settings: &Settings, ta
             Action::Delete(coord)
         });
     }
+    action
+}
 
+fn draw_mirror_actions(ui: &Ui, session: &Session, target: &Target, mut action: Option<Action>) -> Option<Action> {
     if target.region_selected {
         ui.separator();
 
@@ -283,7 +329,12 @@ pub(super) fn draw_popup(ui: &Ui, session: &mut Session, settings: &Settings, ta
             }
         }
     }
+    action
+}
 
+fn draw_atom_menus(
+    ui: &Ui, session: &mut Session, target: &mut Target, coord: Coord, mut action: Option<Action>,
+) -> Option<Action> {
     ui.separator();
 
     let (name_width, path_width) = target
@@ -399,7 +450,6 @@ pub(super) fn draw_popup(ui: &Ui, session: &mut Session, settings: &Settings, ta
         draw.add_text([origin[0] + icon_width, origin[1]], text_color, name);
         draw.add_text([origin[0] + path_column, origin[1]], text_color, path_text);
     }
-
     action
 }
 

@@ -1,4 +1,5 @@
 use dear_imgui_rs::{MouseButton, MouseCursor, Ui};
+use dmi::metadata::Dir;
 use dmm::{Coord, Size};
 use ui::widgets::dpi;
 
@@ -8,13 +9,17 @@ use self::{
     draw::{draw_direction_wheel, draw_gizmo},
     region::{dragged_region_selection, draw_resize_handles, region_hit_at, resize_cursor},
     state::{
-        AXIS_LENGTH, CENTER_HALF_SIZE, DirectionGesture, DirectionGestureTarget, DirectionPhase, DirectionTarget,
-        DirectionUpdate, DragMember, DragState, HIT_RADIUS, Handle, RegionDragAction, RegionDragState,
+        AXIS_LENGTH, CENTER_HALF_SIZE, DirectionGesture, DirectionGestureTarget, DirectionPhase, DirectionSet,
+        DirectionTarget, DirectionUpdate, DragMember, DragState, HIT_RADIUS, Handle, RegionDragAction, RegionDragState,
     },
 };
 use crate::{
     document::{command::EditGroupId, instance::InstanceChange, selection::Selection},
-    inspector::{panel::TransformMode, session::GizmoMember},
+    gizmo::direction::DirectionState,
+    inspector::{
+        panel::TransformMode,
+        session::{GizmoMember, PickedTransform},
+    },
     session::Session,
     settings::Settings,
     viewport::camera::Controller,
@@ -111,16 +116,7 @@ impl GizmoState {
             self.drag = None;
         }
 
-        if self.drag.as_ref().is_some_and(|drag| {
-            drag.mode != mode
-                || !drag
-                    .members
-                    .iter()
-                    .map(|member| member.id)
-                    .eq(members.iter().map(|member| member.id))
-        }) {
-            self.drag = None;
-        }
+        self.reset_stale_drag(mode, &members);
 
         let mouse = ui.io().mouse_pos();
         let scale = dpi(ui);
@@ -129,24 +125,8 @@ impl GizmoState {
             .map(|center| tile_point_origin(camera, map_view.min, center, session.options.tile_size));
         let was_dragging = self.drag.is_some();
         let mut direction_target = session.gizmo_transform();
-        let was_direction_active = match direction_target {
-            Some(target) => self.update_direction(
-                ui,
-                session,
-                settings,
-                DirectionUpdate {
-                    target: picked_direction_target(target),
-                    origin: direction_origin,
-                    placement_coord: None,
-                    map_view,
-                },
-            ),
-            None => {
-                self.direction = None;
-
-                false
-            },
-        };
+        let was_direction_active =
+            self.update_picked_direction(ui, session, settings, direction_target, direction_origin, map_view);
         if let Some(updated) = session.picked_transform() {
             direction_target = Some(updated);
         }
@@ -184,6 +164,76 @@ impl GizmoState {
         }
 
         let active_handle = self.drag.as_ref().map(|drag| drag.handle);
+        members = self.update_drag(ui, session, mode, mouse, members);
+
+        let origin = union_bounds(&members).map(|bounds| gizmo_origin(camera, map_view.min, bounds));
+        let hovered = if self.drag.is_some() {
+            None
+        } else if map_view.hovered {
+            origin.and_then(|origin| handle_at(mouse, origin, map_view.min, map_view.max, scale))
+        } else {
+            None
+        };
+        let hot = self.drag.as_ref().map(|drag| drag.handle).or(hovered).or(active_handle);
+        let open_wheel = self.direction.and_then(|gesture| match gesture.phase {
+            DirectionPhase::Open {
+                origin, last_hovered, ..
+            } => gesture.set.map(|set| (origin, set, last_hovered)),
+            DirectionPhase::Pending => None,
+        });
+        let direction_state = direction_target.map(|target| picked_direction_target(target).state);
+
+        draw_direction_or_gizmo(ui, open_wheel, direction_state, origin, hot, map_view);
+
+        GizmoResponse {
+            captures_mouse: was_dragging
+                || self.drag.is_some()
+                || was_direction_active
+                || self.direction.is_some()
+                || hovered.is_some(),
+        }
+    }
+
+    fn reset_stale_drag(&mut self, mode: TransformMode, members: &[GizmoMember]) {
+        if self.drag.as_ref().is_some_and(|drag| {
+            drag.mode != mode
+                || !drag
+                    .members
+                    .iter()
+                    .map(|member| member.id)
+                    .eq(members.iter().map(|member| member.id))
+        }) {
+            self.drag = None;
+        }
+    }
+
+    fn update_picked_direction(
+        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, direction_target: Option<PickedTransform>,
+        direction_origin: Option<[f32; 2]>, map_view: GizmoMapView,
+    ) -> bool {
+        match direction_target {
+            Some(target) => self.update_direction(
+                ui,
+                session,
+                settings,
+                DirectionUpdate {
+                    target: picked_direction_target(target),
+                    origin: direction_origin,
+                    placement_coord: None,
+                    map_view,
+                },
+            ),
+            None => {
+                self.direction = None;
+
+                false
+            },
+        }
+    }
+
+    fn update_drag(
+        &mut self, ui: &Ui, session: &mut Session, mode: TransformMode, mouse: [f32; 2], mut members: Vec<GizmoMember>,
+    ) -> Vec<GizmoMember> {
         if let Some(drag) = &self.drag {
             if !ui.is_mouse_down(MouseButton::Left) {
                 self.drag = None;
@@ -239,50 +289,7 @@ impl GizmoState {
             }
         }
 
-        let origin = union_bounds(&members).map(|bounds| gizmo_origin(camera, map_view.min, bounds));
-        let hovered = if self.drag.is_some() {
-            None
-        } else if map_view.hovered {
-            origin.and_then(|origin| handle_at(mouse, origin, map_view.min, map_view.max, scale))
-        } else {
-            None
-        };
-        let hot = self.drag.as_ref().map(|drag| drag.handle).or(hovered).or(active_handle);
-        let open_wheel = self.direction.and_then(|gesture| match gesture.phase {
-            DirectionPhase::Open {
-                origin, last_hovered, ..
-            } => gesture.set.map(|set| (origin, set, last_hovered)),
-            DirectionPhase::Pending => None,
-        });
-        let direction_state = direction_target.map(|target| picked_direction_target(target).state);
-
-        if let Some(((wheel_origin, set, hovered_direction), state)) = open_wheel.zip(direction_state) {
-            if hovered_direction.is_some() {
-                ui.set_mouse_cursor(Some(MouseCursor::Hand));
-            }
-            draw_direction_wheel(
-                ui,
-                wheel_origin,
-                map_view,
-                set,
-                current_direction(state, set),
-                hovered_direction,
-            );
-        } else if let Some(origin) = origin {
-            if let Some(handle) = hot {
-                ui.set_mouse_cursor(Some(handle.cursor()));
-            }
-            let facing = direction_state.and_then(facing_direction);
-            draw_gizmo(ui, origin, map_view, hot, facing);
-        }
-
-        GizmoResponse {
-            captures_mouse: was_dragging
-                || self.drag.is_some()
-                || was_direction_active
-                || self.direction.is_some()
-                || hovered.is_some(),
-        }
+        members
     }
 
     pub(crate) fn draw_region(
@@ -444,6 +451,31 @@ impl GizmoState {
         GizmoResponse {
             captures_mouse: was_direction_active || self.direction.is_some(),
         }
+    }
+}
+
+fn draw_direction_or_gizmo(
+    ui: &Ui, open_wheel: Option<([f32; 2], DirectionSet, Option<Dir>)>, direction_state: Option<DirectionState>,
+    origin: Option<[f32; 2]>, hot: Option<Handle>, map_view: GizmoMapView,
+) {
+    if let Some(((wheel_origin, set, hovered_direction), state)) = open_wheel.zip(direction_state) {
+        if hovered_direction.is_some() {
+            ui.set_mouse_cursor(Some(MouseCursor::Hand));
+        }
+        draw_direction_wheel(
+            ui,
+            wheel_origin,
+            map_view,
+            set,
+            current_direction(state, set),
+            hovered_direction,
+        );
+    } else if let Some(origin) = origin {
+        if let Some(handle) = hot {
+            ui.set_mouse_cursor(Some(handle.cursor()));
+        }
+        let facing = direction_state.and_then(facing_direction);
+        draw_gizmo(ui, origin, map_view, hot, facing);
     }
 }
 

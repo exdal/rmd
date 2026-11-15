@@ -56,348 +56,22 @@ impl UiState {
         let mut actions = MenuActions::default();
         ui.main_menu_bar(|| {
             ui.menu("File", || {
-                if ui.menu_item_enabled_selected_no_shortcut(
-                    "Open codebase...",
-                    false,
-                    session.tree().is_none() && !loading,
-                ) {
-                    actions.open = Some(OpenRequest::PickCodebase);
-                }
-                if ui.menu_item_enabled_selected_no_shortcut("New map...", false, session.tree().is_some() && !loading)
-                {
-                    actions.new_map = true;
-                }
-                if ui.menu_item_enabled_selected_no_shortcut("Open map...", false, session.tree().is_some() && !loading)
-                {
-                    actions.open = Some(OpenRequest::PickMap);
-                }
-                let codebase = session.environment_path().filter(|_| !loading);
-                let has_recent = codebase.is_some_and(|codebase| settings.recent_maps_for(codebase).next().is_some());
-                if let Some(_recent) = ui.begin_menu_with_enabled("Recent maps", has_recent)
-                    && let Some(codebase) = codebase
-                {
-                    let base = session.codebase_dir().unwrap_or(codebase);
-                    for recent in settings.recent_maps_for(codebase) {
-                        if ui.menu_item(codebase_relative(base, &recent.map)) {
-                            actions.open = Some(OpenRequest::Map(recent.map.clone()));
-                        }
-                    }
-                }
-                ui.separator();
-                if ui.menu_item_enabled_selected_with_shortcut(
-                    "Save...",
-                    settings.keybindings.get(KeybindAction::Save).label(ui),
-                    false,
-                    session.map().is_some(),
-                ) {
-                    actions.open_save_dialog = true;
-                }
-                if ui.menu_item_enabled_selected_with_shortcut(
-                    "Save all",
-                    settings.keybindings.get(KeybindAction::SaveAll).label(ui),
-                    false,
-                    session.state.documents().iter().any(|document| document.is_dirty()),
-                ) {
-                    actions.save_all = true;
-                }
-                if let Some(_screenshot) = ui.begin_menu_with_enabled("Screenshot", session.map().is_some()) {
-                    let selected = session.selection().is_some();
-                    for (action, area, copy) in SCREENSHOT_KEYS {
-                        let label = match (area, copy) {
-                            (ScreenshotArea::Map, false) => "Save map...",
-                            (ScreenshotArea::Selection, false) => "Save selection...",
-                            (ScreenshotArea::Map, true) => "Copy map",
-                            (ScreenshotArea::Selection, true) => "Copy selection",
-                        };
-                        let enabled = area == ScreenshotArea::Map || selected;
-                        if ui.menu_item_enabled_selected_with_shortcut(
-                            label,
-                            settings.keybindings.get(action).label(ui),
-                            false,
-                            enabled,
-                        ) {
-                            actions.screenshot = Some(ScreenshotRequest { area, copy });
-                        }
-                    }
-                }
-                ui.separator();
-                if ui.menu_item_enabled_selected_with_shortcut(
-                    "Close map",
-                    settings.keybindings.get(KeybindAction::CloseMap).label(ui),
-                    false,
-                    session.map().is_some(),
-                ) {
-                    actions.close_map = true;
-                }
-                if ui.menu_item_enabled_selected_no_shortcut("Close all", false, !session.state.is_empty()) {
-                    actions.close_all = true;
-                }
-                ui.separator();
-                if ui.menu_item("Welcome") {
-                    actions.show_welcome = true;
-                }
-                if ui.menu_item("Settings...") {
-                    self.settings_window.open();
-                }
-                ui.separator();
-                if ui.menu_item("Exit") {
-                    self.request_exit();
-                }
+                self.draw_file_menu(ui, session, settings, loading, &mut actions);
             });
             ui.menu("Edit", || {
-                let next = session.undo_label();
-                let label = next.map_or_else(|| String::from("Undo"), |edit| format!("Undo {edit}"));
-                if ui.menu_item_enabled_selected_with_shortcut(
-                    label,
-                    settings.keybindings.get(KeybindAction::Undo).label(ui),
-                    false,
-                    next.is_some(),
-                ) {
-                    actions.undo = true;
-                }
-
-                let next = session.redo_label();
-                let label = next.map_or_else(|| String::from("Redo"), |edit| format!("Redo {edit}"));
-                if ui.menu_item_enabled_selected_with_shortcut(
-                    label,
-                    settings.keybindings.get(KeybindAction::Redo).label(ui),
-                    false,
-                    next.is_some(),
-                ) {
-                    actions.redo = true;
-                }
-
-                ui.separator();
-                let selected = session.selection().is_some();
-                let is_picking = session.tool() == Tool::Pick && session.picked_instance().is_some();
-                for (label, action, command, enabled) in [
-                    ("Copy", KeybindAction::Copy, EditCommand::Copy, selected || is_picking),
-                    ("Cut", KeybindAction::Cut, EditCommand::Cut, selected || is_picking),
-                    (
-                        "Paste",
-                        KeybindAction::Paste,
-                        EditCommand::Paste,
-                        session.clipboard().is_some(),
-                    ),
-                    (
-                        "Delete",
-                        KeybindAction::Delete,
-                        EditCommand::Delete,
-                        selected || session.picked_instance().is_some(),
-                    ),
-                    (
-                        "Deselect",
-                        KeybindAction::Deselect,
-                        EditCommand::Deselect,
-                        selected || session.picked_instance().is_some(),
-                    ),
-                ] {
-                    if ui.menu_item_enabled_selected_with_shortcut(
-                        label,
-                        settings.keybindings.get(action).label(ui),
-                        false,
-                        enabled && session.map().is_some(),
-                    ) {
-                        actions.edit = Some(command);
-                    }
-                }
-
-                ui.separator();
-                if ui.menu_item_enabled_selected_with_shortcut(
-                    "Search...",
-                    settings.keybindings.get(KeybindAction::Find).label(ui),
-                    false,
-                    session.map().is_some(),
-                ) {
-                    actions.search = true;
-                }
-                if ui.menu_item_enabled_selected_with_shortcut(
-                    "Go to...",
-                    settings.keybindings.get(KeybindAction::GoTo).label(ui),
-                    false,
-                    session.map().is_some(),
-                ) {
-                    actions.go_to = true;
-                }
-                if ui.menu_item_enabled_selected_no_shortcut("Resize map...", false, session.map().is_some()) {
-                    actions.resize_map = true;
-                }
+                draw_edit_menu(ui, session, settings, &mut actions);
             });
             ui.menu("View", || {
-                if ui.menu_item_enabled_selected_with_shortcut(
-                    "Show areas",
-                    settings.keybindings.get(KeybindAction::ShowAreas).label(ui),
-                    session.options.show_areas,
-                    true,
-                ) {
-                    actions.toggle_areas = true;
-                }
-                ui.menu("Type layers", || {
-                    for (action, layer) in LAYER_KEYS {
-                        if ui.menu_item_enabled_selected_with_shortcut(
-                            layer.label(),
-                            settings.keybindings.get(action).label(ui),
-                            session.is_layer_visible(layer),
-                            session.tree().is_some(),
-                        ) {
-                            session.toggle_layer(layer);
-                        }
-                    }
-                    ui.separator();
-                    if ui.menu_item_enabled_selected_with_shortcut(
-                        "Show all",
-                        settings.keybindings.get(KeybindAction::ShowAllLayers).label(ui),
-                        false,
-                        session.hides_types(),
-                    ) {
-                        session.show_all_types();
-                    }
-                });
-                if ui.menu_item_enabled_selected_with_shortcut(
-                    "Show area outlines",
-                    settings.keybindings.get(KeybindAction::ShowAreaOutlines).label(ui),
-                    session.options.show_area_outlines,
-                    true,
-                ) {
-                    actions.toggle_area_outlines = true;
-                }
-                if ui.menu_item_enabled_selected_with_shortcut(
-                    "Show lighting",
-                    settings.keybindings.get(KeybindAction::ShowLighting).label(ui),
-                    session.options.show_lighting,
-                    true,
-                ) {
-                    actions.toggle_lighting = true;
-                }
-                if ui.menu_item_enabled_selected_with_shortcut(
-                    "Show tile grid",
-                    settings.keybindings.get(KeybindAction::ShowTileGrid).label(ui),
-                    settings.show_tile_grid,
-                    true,
-                ) {
-                    actions.toggle_tile_grid = true;
-                }
-                if ui.menu_item_enabled_selected_with_shortcut(
-                    "Show pixel grid",
-                    settings.keybindings.get(KeybindAction::ShowPixelGrid).label(ui),
-                    settings.show_selected_pixel_grid,
-                    true,
-                ) {
-                    actions.toggle_pixel_grid = true;
-                }
-                if ui.menu_item_with_shortcut("Z up", settings.keybindings.get(KeybindAction::LevelUp).label(ui)) {
-                    actions.level_delta += 1;
-                }
-                if ui.menu_item_with_shortcut("Z down", settings.keybindings.get(KeybindAction::LevelDown).label(ui)) {
-                    actions.level_delta -= 1;
-                }
-                ui.menu("Blur below", || {
-                    for depth in 0..=MAX_UNDERLAY_DEPTH {
-                        let label = match depth {
-                            0 => String::from("Off"),
-                            depth => format!("{depth} level(s)"),
-                        };
-
-                        if ui.menu_item_enabled_selected(
-                            label,
-                            None::<&str>,
-                            session.options.underlay_depth == depth,
-                            true,
-                        ) {
-                            actions.underlay_depth = Some(depth);
-                        }
-                    }
-                });
-                if ui.menu_item_with_shortcut("Refit", settings.keybindings.get(KeybindAction::Refit).label(ui)) {
-                    actions.refit = true;
-                }
-                if ui.menu_item_enabled_selected_no_shortcut("Mirror camera", settings.mirror_camera, true) {
-                    actions.toggle_mirror_camera = true;
-                }
-                ui.set_item_tooltip("Keep pan, zoom and Z level the same in every map view");
+                draw_view_menu(ui, session, settings, &mut actions);
             });
             ui.menu("Git", || {
-                if ui.menu_item("Git Panel") {
-                    self.git_panel.focus();
-                }
-
-                if let Some(id) = session.state.active() {
-                    let shown = session.git_state(id).is_some_and(|git| git.show_blame);
-                    if ui.menu_item_enabled_selected_no_shortcut("Show Blame", shown, settings.git_enabled) {
-                        session.toggle_blame(id, settings.blame_depth as usize);
-                    }
-
-                    let shown = session.git_state(id).is_some_and(|git| git.show_diff);
-                    if ui.menu_item_enabled_selected_no_shortcut("Show Diff", shown, settings.git_enabled) {
-                        session.toggle_diff(id);
-                    }
-                }
-
-                if ui.menu_item_enabled_selected_no_shortcut("Refresh", false, settings.git_enabled) {
-                    session.refresh_git();
-                }
+                self.draw_git_menu(ui, session, settings);
             });
             ui.menu("Co-op", || {
-                let is_idle = session.coop().is_none() && session.tree().is_some() && !loading;
-                if ui.menu_item_enabled_selected_no_shortcut("Host...", false, is_idle) {
-                    actions.coop_dialog = Some(CoopDialogKind::Host);
-                }
-
-                if ui.menu_item_enabled_selected_no_shortcut("Join...", false, is_idle) {
-                    actions.coop_dialog = Some(CoopDialogKind::Join);
-                }
-
-                ui.separator();
-                if ui.menu_item_enabled_selected_no_shortcut("Share current map", false, session.can_share_coop_map()) {
-                    session.share_coop_map();
-                }
-
-                if ui.menu_item_enabled_selected_no_shortcut(
-                    "Stop sharing current map",
-                    false,
-                    session.can_stop_sharing_coop_map(),
-                ) {
-                    session.stop_sharing_coop_map();
-                }
-
-                let is_notice_available = session.coop().is_some_and(|coop| {
-                    matches!(coop.status, CoopStatus::Ended(_) | CoopStatus::CodebaseMismatch { .. })
-                });
-                if ui.menu_item_enabled_selected_no_shortcut("Session status...", false, is_notice_available) {
-                    self.coop_notice.request();
-                }
-
-                let is_hosting = session.coop().is_some_and(|coop| coop.is_hosting());
-                let label = if is_hosting { "Stop hosting" } else { "Leave" };
-                if ui.menu_item_enabled_selected_no_shortcut(label, false, session.coop().is_some()) {
-                    session.leave_coop();
-                }
+                self.draw_coop_menu(ui, session, loading, &mut actions);
             });
             ui.menu("Window", || {
-                for panel in Panel::ALL {
-                    let label = match panel {
-                        Panel::ObjectTree => "Object tree",
-                        Panel::Git => "Git",
-                        Panel::Inspector => "Inspector",
-                        Panel::Search => "Search",
-                        Panel::MapIssues => "Map Issues",
-                        Panel::Runtimes => "Runtimes",
-                    };
-                    if ui.menu_item_enabled_selected_no_shortcut(label, settings.panels.is_open(panel), true) {
-                        actions.toggle_panel = Some(panel);
-                    }
-                }
-
-                ui.separator();
-                if ui.menu_item_enabled_selected_no_shortcut("DM UI", settings.show_dm_ui, true) {
-                    actions.toggle_dm_ui = true;
-                }
-                ui.set_item_tooltip("Draw the windows from the profile's ui() proc");
-
-                ui.separator();
-                if ui.menu_item("Reset layout") {
-                    actions.reset_layout = true;
-                }
+                draw_window_menu(ui, settings, &mut actions);
             });
 
             if let Some(coop) = session.coop() {
@@ -410,5 +84,346 @@ impl UiState {
         });
 
         actions
+    }
+
+    fn draw_file_menu(
+        &mut self, ui: &Ui, session: &Session, settings: &Settings, loading: bool, actions: &mut MenuActions,
+    ) {
+        if ui.menu_item_enabled_selected_no_shortcut("Open codebase...", false, session.tree().is_none() && !loading) {
+            actions.open = Some(OpenRequest::PickCodebase);
+        }
+        if ui.menu_item_enabled_selected_no_shortcut("New map...", false, session.tree().is_some() && !loading) {
+            actions.new_map = true;
+        }
+        if ui.menu_item_enabled_selected_no_shortcut("Open map...", false, session.tree().is_some() && !loading) {
+            actions.open = Some(OpenRequest::PickMap);
+        }
+        let codebase = session.environment_path().filter(|_| !loading);
+        let has_recent = codebase.is_some_and(|codebase| settings.recent_maps_for(codebase).next().is_some());
+        if let Some(_recent) = ui.begin_menu_with_enabled("Recent maps", has_recent)
+            && let Some(codebase) = codebase
+        {
+            let base = session.codebase_dir().unwrap_or(codebase);
+            for recent in settings.recent_maps_for(codebase) {
+                if ui.menu_item(codebase_relative(base, &recent.map)) {
+                    actions.open = Some(OpenRequest::Map(recent.map.clone()));
+                }
+            }
+        }
+        ui.separator();
+        if ui.menu_item_enabled_selected_with_shortcut(
+            "Save...",
+            settings.keybindings.get(KeybindAction::Save).label(ui),
+            false,
+            session.map().is_some(),
+        ) {
+            actions.open_save_dialog = true;
+        }
+        if ui.menu_item_enabled_selected_with_shortcut(
+            "Save all",
+            settings.keybindings.get(KeybindAction::SaveAll).label(ui),
+            false,
+            session.state.documents().iter().any(|document| document.is_dirty()),
+        ) {
+            actions.save_all = true;
+        }
+        if let Some(_screenshot) = ui.begin_menu_with_enabled("Screenshot", session.map().is_some()) {
+            let selected = session.selection().is_some();
+            for (action, area, copy) in SCREENSHOT_KEYS {
+                let label = match (area, copy) {
+                    (ScreenshotArea::Map, false) => "Save map...",
+                    (ScreenshotArea::Selection, false) => "Save selection...",
+                    (ScreenshotArea::Map, true) => "Copy map",
+                    (ScreenshotArea::Selection, true) => "Copy selection",
+                };
+                let enabled = area == ScreenshotArea::Map || selected;
+                if ui.menu_item_enabled_selected_with_shortcut(
+                    label,
+                    settings.keybindings.get(action).label(ui),
+                    false,
+                    enabled,
+                ) {
+                    actions.screenshot = Some(ScreenshotRequest { area, copy });
+                }
+            }
+        }
+        ui.separator();
+        if ui.menu_item_enabled_selected_with_shortcut(
+            "Close map",
+            settings.keybindings.get(KeybindAction::CloseMap).label(ui),
+            false,
+            session.map().is_some(),
+        ) {
+            actions.close_map = true;
+        }
+        if ui.menu_item_enabled_selected_no_shortcut("Close all", false, !session.state.is_empty()) {
+            actions.close_all = true;
+        }
+        ui.separator();
+        if ui.menu_item("Welcome") {
+            actions.show_welcome = true;
+        }
+        if ui.menu_item("Settings...") {
+            self.settings_window.open();
+        }
+        ui.separator();
+        if ui.menu_item("Exit") {
+            self.request_exit();
+        }
+    }
+
+    fn draw_git_menu(&mut self, ui: &Ui, session: &mut Session, settings: &Settings) {
+        if ui.menu_item("Git Panel") {
+            self.git_panel.focus();
+        }
+
+        if let Some(id) = session.state.active() {
+            let shown = session.git_state(id).is_some_and(|git| git.show_blame);
+            if ui.menu_item_enabled_selected_no_shortcut("Show Blame", shown, settings.git_enabled) {
+                session.toggle_blame(id, settings.blame_depth as usize);
+            }
+
+            let shown = session.git_state(id).is_some_and(|git| git.show_diff);
+            if ui.menu_item_enabled_selected_no_shortcut("Show Diff", shown, settings.git_enabled) {
+                session.toggle_diff(id);
+            }
+        }
+
+        if ui.menu_item_enabled_selected_no_shortcut("Refresh", false, settings.git_enabled) {
+            session.refresh_git();
+        }
+    }
+
+    fn draw_coop_menu(&mut self, ui: &Ui, session: &mut Session, loading: bool, actions: &mut MenuActions) {
+        let is_idle = session.coop().is_none() && session.tree().is_some() && !loading;
+        if ui.menu_item_enabled_selected_no_shortcut("Host...", false, is_idle) {
+            actions.coop_dialog = Some(CoopDialogKind::Host);
+        }
+
+        if ui.menu_item_enabled_selected_no_shortcut("Join...", false, is_idle) {
+            actions.coop_dialog = Some(CoopDialogKind::Join);
+        }
+
+        ui.separator();
+        if ui.menu_item_enabled_selected_no_shortcut("Share current map", false, session.can_share_coop_map()) {
+            session.share_coop_map();
+        }
+
+        if ui.menu_item_enabled_selected_no_shortcut(
+            "Stop sharing current map",
+            false,
+            session.can_stop_sharing_coop_map(),
+        ) {
+            session.stop_sharing_coop_map();
+        }
+
+        let is_notice_available = session
+            .coop()
+            .is_some_and(|coop| matches!(coop.status, CoopStatus::Ended(_) | CoopStatus::CodebaseMismatch { .. }));
+        if ui.menu_item_enabled_selected_no_shortcut("Session status...", false, is_notice_available) {
+            self.coop_notice.request();
+        }
+
+        let is_hosting = session.coop().is_some_and(|coop| coop.is_hosting());
+        let label = if is_hosting { "Stop hosting" } else { "Leave" };
+        if ui.menu_item_enabled_selected_no_shortcut(label, false, session.coop().is_some()) {
+            session.leave_coop();
+        }
+    }
+}
+
+fn draw_edit_menu(ui: &Ui, session: &Session, settings: &Settings, actions: &mut MenuActions) {
+    let next = session.undo_label();
+    let label = next.map_or_else(|| String::from("Undo"), |edit| format!("Undo {edit}"));
+    if ui.menu_item_enabled_selected_with_shortcut(
+        label,
+        settings.keybindings.get(KeybindAction::Undo).label(ui),
+        false,
+        next.is_some(),
+    ) {
+        actions.undo = true;
+    }
+
+    let next = session.redo_label();
+    let label = next.map_or_else(|| String::from("Redo"), |edit| format!("Redo {edit}"));
+    if ui.menu_item_enabled_selected_with_shortcut(
+        label,
+        settings.keybindings.get(KeybindAction::Redo).label(ui),
+        false,
+        next.is_some(),
+    ) {
+        actions.redo = true;
+    }
+
+    ui.separator();
+    let selected = session.selection().is_some();
+    let is_picking = session.tool() == Tool::Pick && session.picked_instance().is_some();
+    for (label, action, command, enabled) in [
+        ("Copy", KeybindAction::Copy, EditCommand::Copy, selected || is_picking),
+        ("Cut", KeybindAction::Cut, EditCommand::Cut, selected || is_picking),
+        (
+            "Paste",
+            KeybindAction::Paste,
+            EditCommand::Paste,
+            session.clipboard().is_some(),
+        ),
+        (
+            "Delete",
+            KeybindAction::Delete,
+            EditCommand::Delete,
+            selected || session.picked_instance().is_some(),
+        ),
+        (
+            "Deselect",
+            KeybindAction::Deselect,
+            EditCommand::Deselect,
+            selected || session.picked_instance().is_some(),
+        ),
+    ] {
+        if ui.menu_item_enabled_selected_with_shortcut(
+            label,
+            settings.keybindings.get(action).label(ui),
+            false,
+            enabled && session.map().is_some(),
+        ) {
+            actions.edit = Some(command);
+        }
+    }
+
+    ui.separator();
+    if ui.menu_item_enabled_selected_with_shortcut(
+        "Search...",
+        settings.keybindings.get(KeybindAction::Find).label(ui),
+        false,
+        session.map().is_some(),
+    ) {
+        actions.search = true;
+    }
+    if ui.menu_item_enabled_selected_with_shortcut(
+        "Go to...",
+        settings.keybindings.get(KeybindAction::GoTo).label(ui),
+        false,
+        session.map().is_some(),
+    ) {
+        actions.go_to = true;
+    }
+    if ui.menu_item_enabled_selected_no_shortcut("Resize map...", false, session.map().is_some()) {
+        actions.resize_map = true;
+    }
+}
+
+fn draw_view_menu(ui: &Ui, session: &mut Session, settings: &Settings, actions: &mut MenuActions) {
+    if ui.menu_item_enabled_selected_with_shortcut(
+        "Show areas",
+        settings.keybindings.get(KeybindAction::ShowAreas).label(ui),
+        session.options.show_areas,
+        true,
+    ) {
+        actions.toggle_areas = true;
+    }
+    ui.menu("Type layers", || {
+        for (action, layer) in LAYER_KEYS {
+            if ui.menu_item_enabled_selected_with_shortcut(
+                layer.label(),
+                settings.keybindings.get(action).label(ui),
+                session.is_layer_visible(layer),
+                session.tree().is_some(),
+            ) {
+                session.toggle_layer(layer);
+            }
+        }
+        ui.separator();
+        if ui.menu_item_enabled_selected_with_shortcut(
+            "Show all",
+            settings.keybindings.get(KeybindAction::ShowAllLayers).label(ui),
+            false,
+            session.hides_types(),
+        ) {
+            session.show_all_types();
+        }
+    });
+    if ui.menu_item_enabled_selected_with_shortcut(
+        "Show area outlines",
+        settings.keybindings.get(KeybindAction::ShowAreaOutlines).label(ui),
+        session.options.show_area_outlines,
+        true,
+    ) {
+        actions.toggle_area_outlines = true;
+    }
+    if ui.menu_item_enabled_selected_with_shortcut(
+        "Show lighting",
+        settings.keybindings.get(KeybindAction::ShowLighting).label(ui),
+        session.options.show_lighting,
+        true,
+    ) {
+        actions.toggle_lighting = true;
+    }
+    if ui.menu_item_enabled_selected_with_shortcut(
+        "Show tile grid",
+        settings.keybindings.get(KeybindAction::ShowTileGrid).label(ui),
+        settings.show_tile_grid,
+        true,
+    ) {
+        actions.toggle_tile_grid = true;
+    }
+    if ui.menu_item_enabled_selected_with_shortcut(
+        "Show pixel grid",
+        settings.keybindings.get(KeybindAction::ShowPixelGrid).label(ui),
+        settings.show_selected_pixel_grid,
+        true,
+    ) {
+        actions.toggle_pixel_grid = true;
+    }
+    if ui.menu_item_with_shortcut("Z up", settings.keybindings.get(KeybindAction::LevelUp).label(ui)) {
+        actions.level_delta += 1;
+    }
+    if ui.menu_item_with_shortcut("Z down", settings.keybindings.get(KeybindAction::LevelDown).label(ui)) {
+        actions.level_delta -= 1;
+    }
+    ui.menu("Blur below", || {
+        for depth in 0..=MAX_UNDERLAY_DEPTH {
+            let label = match depth {
+                0 => String::from("Off"),
+                depth => format!("{depth} level(s)"),
+            };
+
+            if ui.menu_item_enabled_selected(label, None::<&str>, session.options.underlay_depth == depth, true) {
+                actions.underlay_depth = Some(depth);
+            }
+        }
+    });
+    if ui.menu_item_with_shortcut("Refit", settings.keybindings.get(KeybindAction::Refit).label(ui)) {
+        actions.refit = true;
+    }
+    if ui.menu_item_enabled_selected_no_shortcut("Mirror camera", settings.mirror_camera, true) {
+        actions.toggle_mirror_camera = true;
+    }
+    ui.set_item_tooltip("Keep pan, zoom and Z level the same in every map view");
+}
+
+fn draw_window_menu(ui: &Ui, settings: &Settings, actions: &mut MenuActions) {
+    for panel in Panel::ALL {
+        let label = match panel {
+            Panel::ObjectTree => "Object tree",
+            Panel::Git => "Git",
+            Panel::Inspector => "Inspector",
+            Panel::Search => "Search",
+            Panel::MapIssues => "Map Issues",
+            Panel::Runtimes => "Runtimes",
+        };
+        if ui.menu_item_enabled_selected_no_shortcut(label, settings.panels.is_open(panel), true) {
+            actions.toggle_panel = Some(panel);
+        }
+    }
+
+    ui.separator();
+    if ui.menu_item_enabled_selected_no_shortcut("DM UI", settings.show_dm_ui, true) {
+        actions.toggle_dm_ui = true;
+    }
+    ui.set_item_tooltip("Draw the windows from the profile's ui() proc");
+
+    ui.separator();
+    if ui.menu_item("Reset layout") {
+        actions.reset_layout = true;
     }
 }

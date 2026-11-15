@@ -1,7 +1,7 @@
 use std::{fs, mem, path::Path, thread};
 
 use dmm::parser;
-use net::{Direction, Event, GenerationId, PeerId};
+use net::{Direction, Event, GenerationId, MapEdit, PeerId, Selection, SeqId, View};
 
 use super::{Activity, Coop, CoopStatus, Prepared, Received, ReceivedMap, RemotePeer, SharedMap, SharedState};
 
@@ -84,27 +84,10 @@ impl Coop {
                 }
             },
             Event::View { from, view } => {
-                if let Some(peer) = self.peers.get_mut(&from) {
-                    peer.view = view
-                        .filter(|view| {
-                            view.zoom.is_finite()
-                                && view.zoom > 0.0
-                                && view.center.iter().all(|value| value.is_finite())
-                        })
-                        .map(Received::now);
-                }
+                self.apply_view(from, view);
             },
             Event::Selection { from, selection } => {
-                if let Some(peer) = self.peers.get_mut(&from) {
-                    peer.selection = selection
-                        .filter(|selection| {
-                            selection.z >= 1
-                                && selection.min.iter().all(|&value| value >= 1)
-                                && selection.min[0] <= selection.max[0]
-                                && selection.min[1] <= selection.max[1]
-                        })
-                        .map(Received::now);
-                }
+                self.apply_selection(from, selection);
             },
             Event::Comment(comment) => {
                 self.comments.insert(comment.id, comment);
@@ -113,17 +96,7 @@ impl Coop {
                 self.comments.remove(&id);
             },
             Event::MapIncoming { path, by, len } => {
-                let shared_map = self
-                    .shared_maps
-                    .entry(path)
-                    .or_insert_with(|| SharedMap::new(by, SharedState::Closed));
-
-                let before = match mem::replace(&mut shared_map.state, SharedState::Closed) {
-                    SharedState::Incoming { before, .. } => before,
-                    state => Box::new(state),
-                };
-
-                shared_map.state = SharedState::Incoming { by, len, before };
+                self.apply_map_incoming(path, by, len);
             },
             Event::MapCancelled { path, by } => {
                 let Some(shared_map) = self.shared_maps.get_mut(&path) else {
@@ -142,28 +115,7 @@ impl Coop {
                 }
             },
             Event::MapShared { path, by, generation } => {
-                let you = self.you;
-                let shared_map = self
-                    .shared_maps
-                    .entry(path)
-                    .or_insert_with(|| SharedMap::new(by, SharedState::RECEIVING));
-
-                let is_known = shared_map.generation == Some(generation);
-                shared_map.by = by;
-                shared_map.renumber(generation);
-                if Some(by) == you {
-                    // we share this map, skip all sharing stuff
-                    shared_map.state = SharedState::Ready;
-                    shared_map.received = true;
-                } else if !is_known
-                    && matches!(
-                        shared_map.state,
-                        SharedState::Incoming { .. } | SharedState::Ready | SharedState::Waiting(_)
-                    )
-                {
-                    // a map closed while it was uploading stays closed, and the snapshot may have come first
-                    shared_map.state = SharedState::RECEIVING;
-                }
+                self.apply_map_shared(path, by, generation);
             },
             Event::Progress {
                 path,
@@ -183,18 +135,7 @@ impl Coop {
                 done,
                 total,
             } => {
-                // special case handling:L the download can beat its announcement
-                let shared_map = self
-                    .shared_maps
-                    .entry(path)
-                    .or_insert_with(|| SharedMap::new(PeerId(0), SharedState::RECEIVING));
-
-                if matches!(
-                    shared_map.state,
-                    SharedState::Incoming { .. } | SharedState::Receiving { .. }
-                ) {
-                    shared_map.state = SharedState::Receiving { done, total };
-                }
+                self.apply_receiving_progress(path, done, total);
             },
             Event::MapSnapshot {
                 path,
@@ -226,19 +167,100 @@ impl Coop {
                 }
             },
             Event::Edit { by, seq, edit } => {
-                if let Some(shared_map) = self.shared_maps.get_mut(&edit.path).filter(|shared_map| {
-                    shared_map.generation == Some(edit.generation)
-                        && !matches!(shared_map.state, SharedState::Closed)
-                        && seq >= shared_map.next_seq
-                }) {
-                    shared_map.inbox.insert(seq, (by, edit));
-                }
+                self.apply_edit(by, seq, edit);
             },
             // the session closes its pending document too, see `forget_coop_map`
             Event::MapUnshared { .. } => {},
             Event::CodebaseMismatch { expected } => self.mismatch(expected),
             Event::Rejected(reason) => self.end(format!("rejected: {reason}")),
             Event::Disconnected(reason) => self.end(reason),
+        }
+    }
+
+    fn apply_view(&mut self, from: PeerId, view: Option<View>) {
+        if let Some(peer) = self.peers.get_mut(&from) {
+            peer.view = view
+                .filter(|view| {
+                    view.zoom.is_finite() && view.zoom > 0.0 && view.center.iter().all(|value| value.is_finite())
+                })
+                .map(Received::now);
+        }
+    }
+
+    fn apply_selection(&mut self, from: PeerId, selection: Option<Selection>) {
+        if let Some(peer) = self.peers.get_mut(&from) {
+            peer.selection = selection
+                .filter(|selection| {
+                    selection.z >= 1
+                        && selection.min.iter().all(|&value| value >= 1)
+                        && selection.min[0] <= selection.max[0]
+                        && selection.min[1] <= selection.max[1]
+                })
+                .map(Received::now);
+        }
+    }
+
+    fn apply_map_incoming(&mut self, path: String, by: PeerId, len: u64) {
+        let shared_map = self
+            .shared_maps
+            .entry(path)
+            .or_insert_with(|| SharedMap::new(by, SharedState::Closed));
+
+        let before = match mem::replace(&mut shared_map.state, SharedState::Closed) {
+            SharedState::Incoming { before, .. } => before,
+            state => Box::new(state),
+        };
+
+        shared_map.state = SharedState::Incoming { by, len, before };
+    }
+
+    fn apply_map_shared(&mut self, path: String, by: PeerId, generation: GenerationId) {
+        let you = self.you;
+        let shared_map = self
+            .shared_maps
+            .entry(path)
+            .or_insert_with(|| SharedMap::new(by, SharedState::RECEIVING));
+
+        let is_known = shared_map.generation == Some(generation);
+        shared_map.by = by;
+        shared_map.renumber(generation);
+        if Some(by) == you {
+            // we share this map, skip all sharing stuff
+            shared_map.state = SharedState::Ready;
+            shared_map.received = true;
+        } else if !is_known
+            && matches!(
+                shared_map.state,
+                SharedState::Incoming { .. } | SharedState::Ready | SharedState::Waiting(_)
+            )
+        {
+            // a map closed while it was uploading stays closed, and the snapshot may have come first
+            shared_map.state = SharedState::RECEIVING;
+        }
+    }
+
+    fn apply_receiving_progress(&mut self, path: String, done: u64, total: u64) {
+        // special case handling:L the download can beat its announcement
+        let shared_map = self
+            .shared_maps
+            .entry(path)
+            .or_insert_with(|| SharedMap::new(PeerId(0), SharedState::RECEIVING));
+
+        if matches!(
+            shared_map.state,
+            SharedState::Incoming { .. } | SharedState::Receiving { .. }
+        ) {
+            shared_map.state = SharedState::Receiving { done, total };
+        }
+    }
+
+    fn apply_edit(&mut self, by: PeerId, seq: SeqId, edit: MapEdit) {
+        if let Some(shared_map) = self.shared_maps.get_mut(&edit.path).filter(|shared_map| {
+            shared_map.generation == Some(edit.generation)
+                && !matches!(shared_map.state, SharedState::Closed)
+                && seq >= shared_map.next_seq
+        }) {
+            shared_map.inbox.insert(seq, (by, edit));
         }
     }
 }
