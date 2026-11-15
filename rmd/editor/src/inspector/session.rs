@@ -5,8 +5,8 @@ use render::SpriteInstance;
 
 use crate::{
     document::{
-        DocumentId, InstanceChange, MapDocument, PrefabInstanceId, PrefabLocation, Selection, VarMutation,
-        command::EditGroupId,
+        DocumentId, MapDocument, PrefabInstanceId, command::EditGroupId, instance::InstanceChange,
+        instance::PrefabLocation, instance::VarMutation, selection::Selection,
     },
     frame::visual,
     gizmo::direction::{DirectionalTypes, direction_state},

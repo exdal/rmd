@@ -30,7 +30,7 @@ use winit::{
 };
 
 use crate::{
-    document::{DocumentId, Selection},
+    document::{DocumentId, selection::Selection},
     environment::{
         BakeOptions,
         panel::LoadNotice,

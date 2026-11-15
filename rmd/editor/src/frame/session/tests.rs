@@ -4,7 +4,7 @@ use dmm::{Coord, Map, Prefab, Size};
 
 use crate::{
     bake::session::MAX_PENDING_UPDATES,
-    document::{MapDocument, Selection},
+    document::{MapDocument, selection::Selection},
     frame::session::TypeLayer,
     session::{
         Session,

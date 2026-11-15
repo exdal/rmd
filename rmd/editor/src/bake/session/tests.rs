@@ -1591,7 +1591,10 @@ fn a_thermomachine_rotates_its_baked_pipe_with_dir() {
     session.pick_instance(Some(instance));
     session.edit_picked_instance_vars(
         "set dir",
-        &[crate::document::VarMutation::Set("dir".into(), Value::Num(4.0))],
+        &[crate::document::instance::VarMutation::Set(
+            "dir".into(),
+            Value::Num(4.0),
+        )],
         None,
     );
     settle_bake(&mut session);

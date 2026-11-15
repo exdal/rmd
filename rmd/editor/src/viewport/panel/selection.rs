@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     app::pacing::FrameDemand,
-    document::{DocumentId, Selection},
+    document::{DocumentId, selection::Selection},
     frontend::UiState,
     git::conflict::{Hunk, Side},
     gizmo::panel::{GizmoMapView, RegionDrag, RegionGizmoTarget},

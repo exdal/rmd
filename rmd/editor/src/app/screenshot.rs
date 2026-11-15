@@ -7,7 +7,7 @@ use dear_imgui_rs::ClipboardBackend;
 use render::{CapturedImage, Renderer};
 
 use crate::{
-    document::{DocumentId, Selection},
+    document::{DocumentId, selection::Selection},
     session::Session,
 };
 

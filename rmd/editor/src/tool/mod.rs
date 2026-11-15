@@ -15,7 +15,7 @@ use ui::icons::materialdesignicons::{
 };
 
 use crate::{
-    document::{MapDocument, PrefabInstanceId, Selection, command::Edit},
+    document::{MapDocument, PrefabInstanceId, command::Edit, selection::Selection},
     environment::world::World,
 };
 

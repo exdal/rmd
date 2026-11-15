@@ -20,7 +20,7 @@ use super::{
     transform::{rotate_point, transform_direction, transform_point, transformed_selection},
 };
 use crate::{
-    document::{MapDocument, Selection},
+    document::{MapDocument, selection::Selection},
     environment::world::{BaseTile, World},
     focus::AreaFocus,
     frame::options::HiddenTypes,

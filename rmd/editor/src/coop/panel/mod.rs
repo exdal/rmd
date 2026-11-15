@@ -12,7 +12,7 @@ use ui::{
 
 use crate::{
     coop::{Activity, Coop, CoopStatus, SharedState},
-    document::{DocumentId, Selection},
+    document::{DocumentId, selection::Selection},
     environment::panel::DIAGNOSTIC_WARNING_COLOR,
     frontend::dialog::{DIALOG_FIELD_WIDTH, MODAL_FLAGS, SAVE_ERROR_COLOR},
     region::panel::{fill_selection, hollow_selection_inner, region_selection_bounds},

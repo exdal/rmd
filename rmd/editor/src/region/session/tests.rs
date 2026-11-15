@@ -5,7 +5,7 @@ use dmm::{Coord, Prefab};
 use vm::world::Position;
 
 use crate::{
-    document::{PrefabInstanceId, Selection},
+    document::{PrefabInstanceId, selection::Selection},
     session::{
         BakeHold, FillOutcome, Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session, settle_bake},

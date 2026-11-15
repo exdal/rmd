@@ -5,7 +5,7 @@ use dmm::{Coord, Prefab};
 
 use super::EditScope;
 use crate::{
-    document::{InstanceChange, PrefabInstanceId, VarMutation, command::EditGroupId},
+    document::{PrefabInstanceId, command::EditGroupId, instance::InstanceChange, instance::VarMutation},
     session::{
         Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session},
@@ -457,7 +457,7 @@ fn reanchoring_the_selected_instance_keeps_its_rendered_position() {
     let moved = session.move_picked_instance(
         destination,
         "re-anchor object",
-        &[crate::document::VarMutation::Set(
+        &[crate::document::instance::VarMutation::Set(
             "pixel_x".into(),
             Value::Num((before.pixel[0] - 32) as f32),
         )],

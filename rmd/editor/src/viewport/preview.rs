@@ -4,7 +4,7 @@ use render::SpriteInstance;
 use crate::palette::session::PrefabThumbnail;
 use crate::session::Session;
 use crate::{
-    document::{DocumentId, PrefabInstanceId, Selection},
+    document::{DocumentId, PrefabInstanceId, selection::Selection},
     environment::Environment,
     frame::{self, visual},
     git::conflict::Side,

@@ -4,7 +4,7 @@ use dmm::{Coord, Map, Prefab, Size};
 
 use crate::{
     clipboard::PasteMerge,
-    document::{MapDocument, PlacedPrefab, PrefabInstanceId, Selection},
+    document::{MapDocument, PrefabInstanceId, instance::PlacedPrefab, selection::Selection},
     session::{
         Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session},

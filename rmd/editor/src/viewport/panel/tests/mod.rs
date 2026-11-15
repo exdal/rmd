@@ -24,7 +24,7 @@ use super::{
 };
 use crate::{
     coop::panel::presence::CoopPresence,
-    document::{DocumentId, MapDocument, Selection},
+    document::{DocumentId, MapDocument, selection::Selection},
     frontend::{UiState, fixtures::RectangleUiHarness},
     git::conflict::Side,
     gizmo::panel::{GizmoMapView, GizmoState, RegionDrag, RegionGizmoTarget},

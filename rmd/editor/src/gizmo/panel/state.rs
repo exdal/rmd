@@ -7,7 +7,7 @@ use super::{
     direction::{clockwise_index, is_diagonal},
 };
 use crate::{
-    document::{PrefabInstanceId, Selection, command::EditGroupId},
+    document::{PrefabInstanceId, command::EditGroupId, selection::Selection},
     gizmo::direction::DirectionState,
     inspector::panel::TransformMode,
     tool::SelectionRotation,

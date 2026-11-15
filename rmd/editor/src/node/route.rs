@@ -13,7 +13,7 @@ use objtree::{ObjectTree, TypeId};
 use vm::bake::{NodeGroup, NodePortRule};
 
 use crate::{
-    document::{MapDocument, PlacedTile},
+    document::{MapDocument, instance::PlacedTile},
     frame::visual,
 };
 

@@ -9,8 +9,9 @@ use dmm::{Coord, Prefab};
 use crate::session::Session;
 use crate::{
     document::{
-        DocumentId, PlacedTile, PrefabInstanceId,
+        DocumentId, PrefabInstanceId,
         command::{Edit, EditGroupId},
+        instance::PlacedTile,
     },
     frame::visual,
     node::route,

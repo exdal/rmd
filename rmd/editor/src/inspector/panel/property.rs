@@ -9,7 +9,7 @@ use dmm::{Coord, parser::parse_value, writer::format_value};
 use ui::{color::byte, widgets::text_wrapped_colored};
 
 use crate::{
-    document::{VarMutation, command::EditGroupId},
+    document::{command::EditGroupId, instance::VarMutation},
     gizmo::transform::anchor_axis,
     inspector::session::EditScope,
     session::Session,

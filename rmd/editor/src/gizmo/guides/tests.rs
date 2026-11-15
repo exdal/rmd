@@ -6,7 +6,7 @@ use render::GuideLine;
 
 use super::GuideBadge;
 use crate::{
-    document::{MapDocument, VarMutation},
+    document::{MapDocument, instance::VarMutation},
     session::{
         Session,
         fixtures::{examples, settle_bake},

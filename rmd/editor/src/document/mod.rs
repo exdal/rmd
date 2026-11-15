@@ -1,19 +1,20 @@
 pub(crate) mod backup;
 pub(crate) mod command;
 pub(crate) mod grid;
+pub(crate) mod instance;
+mod journal;
+mod level;
 pub(crate) mod level_session;
 pub(crate) mod panel;
 pub(crate) mod patch;
+pub(crate) mod selection;
 pub(crate) mod session;
 pub(crate) mod state;
 
-use base::{
-    path::TreePath,
-    types::{Identifier, Value},
-};
+use base::types::{Identifier, Value};
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, HashSet},
     io::Write,
     mem,
     path::{Path, PathBuf},
@@ -25,7 +26,6 @@ use std::{
 
 pub use dmm::PrefabInstanceId;
 use dmm::{Coord, Map, MapFormat, Prefab, writer};
-use net::{LevelChange, LevelContents};
 use objtree::ObjectTree;
 
 use crate::{
@@ -38,8 +38,11 @@ use crate::{
     },
 };
 
-use command::{Edit, EditGroupId, History, LevelEdit, Resize, SelectionChange};
-use grid::{Grid, LevelCells};
+use command::{Edit, EditGroupId, History, LevelEdit, SelectionChange};
+use grid::Grid;
+use instance::{InstanceChange, PlacedPrefab, PlacedTile, PrefabInstance, PrefabLocation, VarMutation};
+use journal::Journal;
+use selection::Selection;
 
 pub fn sanitize_vars(map: &mut Map, tree: &ObjectTree) -> usize {
     let mut dropped = 0;
@@ -106,35 +109,6 @@ pub struct MapDocument {
     preview_exempt: HashSet<PrefabInstanceId>,
 }
 
-#[derive(Debug, Default)]
-pub struct Journal {
-    pub coords: BTreeSet<Coord>,
-    pub reshaped: bool,
-}
-
-impl Journal {
-    fn record(&mut self, edit: &Edit) {
-        self.coords.extend(edit.changes.iter().map(|change| change.coord));
-        self.reshaped |= edit.is_structural();
-    }
-
-    fn extend(&mut self, other: Journal) {
-        self.coords.extend(other.coords);
-        self.reshaped |= other.reshaped;
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.coords.is_empty() && !self.reshaped
-    }
-
-    fn shift(&mut self, change: LevelChange) {
-        self.coords = mem::take(&mut self.coords)
-            .into_iter()
-            .filter_map(|coord| change.level(coord.z).map(|z| Coord { z, ..coord }))
-            .collect();
-    }
-}
-
 enum StepKind {
     Undo,
     Redo,
@@ -155,134 +129,6 @@ impl StepKind {
             StepKind::Redo => history.redo(grid).map(Cow::Borrowed),
             StepKind::Retract => history.retract(grid).map(Cow::Owned),
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PrefabLocation {
-    pub coord: Coord,
-    pub prefab_index: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PrefabInstance<'a> {
-    pub id: PrefabInstanceId,
-    pub location: PrefabLocation,
-    prefab: &'a Prefab,
-}
-
-impl<'a> PrefabInstance<'a> {
-    pub(crate) fn new(id: PrefabInstanceId, prefab: &'a Prefab, location: PrefabLocation) -> Self {
-        Self { id, location, prefab }
-    }
-
-    pub fn prefab(&self) -> &'a Prefab {
-        self.prefab
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PlacedPrefab {
-    id: PrefabInstanceId,
-    prefab: Prefab,
-}
-
-impl PlacedPrefab {
-    pub fn id(&self) -> PrefabInstanceId {
-        self.id
-    }
-
-    pub fn prefab(&self) -> &Prefab {
-        &self.prefab
-    }
-
-    pub fn prefab_mut(&mut self) -> &mut Prefab {
-        &mut self.prefab
-    }
-}
-
-pub type PlacedTile = Vec<PlacedPrefab>;
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum VarMutation {
-    Set(Identifier, Value),
-    Remove(Identifier),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct InstanceChange {
-    pub id: PrefabInstanceId,
-    pub to_coord: Option<Coord>,
-    pub path: Option<TreePath>,
-    pub mutations: Vec<VarMutation>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Selection {
-    pub min: Coord,
-    pub max: Coord,
-}
-
-impl Selection {
-    pub fn from_drag(anchor: Coord, cursor: Coord) -> Self {
-        Self {
-            min: Coord::new(anchor.x.min(cursor.x), anchor.y.min(cursor.y), anchor.z),
-            max: Coord::new(anchor.x.max(cursor.x), anchor.y.max(cursor.y), anchor.z),
-        }
-    }
-
-    pub fn enclosing(coords: impl IntoIterator<Item = Coord>) -> Option<Self> {
-        let mut coords = coords.into_iter();
-        let first = coords.next()?;
-
-        Some(coords.fold(Self::from_drag(first, first), |bounds, coord| Self {
-            min: Coord::new(bounds.min.x.min(coord.x), bounds.min.y.min(coord.y), bounds.min.z),
-            max: Coord::new(bounds.max.x.max(coord.x), bounds.max.y.max(coord.y), bounds.max.z),
-        }))
-    }
-
-    pub fn is_well_formed(&self) -> bool {
-        self.min.x >= 1
-            && self.min.y >= 1
-            && self.min.z >= 1
-            && self.max.x >= self.min.x
-            && self.max.y >= self.min.y
-            && self.max.z == self.min.z
-    }
-
-    pub fn contains(&self, coord: Coord) -> bool {
-        coord.z == self.min.z
-            && (self.min.x..=self.max.x).contains(&coord.x)
-            && (self.min.y..=self.max.y).contains(&coord.y)
-    }
-
-    pub fn width(&self) -> u32 {
-        self.max.x - self.min.x + 1
-    }
-
-    pub fn height(&self) -> u32 {
-        self.max.y - self.min.y + 1
-    }
-
-    pub fn with_min(&self, min: Coord) -> Option<Self> {
-        if min.z != self.min.z || self.max.z != self.min.z || self.max.x < self.min.x || self.max.y < self.min.y {
-            return None;
-        }
-
-        Some(Self {
-            min,
-            max: Coord::new(
-                min.x.checked_add(self.width().checked_sub(1)?)?,
-                min.y.checked_add(self.height().checked_sub(1)?)?,
-                min.z,
-            ),
-        })
-    }
-
-    pub fn iter(self) -> impl Iterator<Item = Coord> {
-        let (min, max) = (self.min, self.max);
-
-        (min.y..=max.y).flat_map(move |y| (min.x..=max.x).map(move |x| Coord::new(x, y, min.z)))
     }
 }
 
@@ -769,46 +615,6 @@ impl MapDocument {
         Some(self.apply_grouped(edit, group))
     }
 
-    /// Keeps the bottom-left corner in place, tiles that appear hold `fill`. One undo step, which drops the
-    /// area focus and any selection that no longer fits.
-    pub fn resize(&mut self, width: u32, height: u32, fill: &[Prefab]) -> bool {
-        let size = self.map.size();
-        let (old_width, old_height) = (size.x, size.y);
-        if width == 0 || height == 0 || (width, height) == (old_width, old_height) {
-            return false;
-        }
-
-        let mut edit = Edit::new(format!("resize map to {width}x{height}")).resizing(Resize {
-            before: (old_width, old_height),
-            after: (width, height),
-        });
-        for z in 1..=size.z {
-            for y in 1..=height.max(old_height) {
-                for x in 1..=width.max(old_width) {
-                    let kept = x <= width && y <= height;
-                    let existed = x <= old_width && y <= old_height;
-                    let coord = Coord::new(x, y, z);
-                    if existed && !kept {
-                        edit.change(self, coord, PlacedTile::new());
-                    } else if kept && !existed {
-                        let placed = fill.iter().map(|prefab| self.instantiate(prefab.clone())).collect();
-                        edit.change(self, coord, placed);
-                    }
-                }
-            }
-        }
-
-        self.focus = None;
-        if self
-            .selection
-            .is_some_and(|selection| selection.max.x > width || selection.max.y > height)
-        {
-            self.selection = None;
-        }
-
-        self.apply(edit)
-    }
-
     pub fn set_selection(&mut self, selection: Option<Selection>, selection_mode: RegionSelectionMode) {
         self.selection = selection;
         self.selection_mode = selection_mode;
@@ -980,186 +786,6 @@ impl MapDocument {
 
     pub fn redo_label(&self) -> Option<&str> {
         self.history.redo_label()
-    }
-
-    pub fn append_level(&mut self, tile: &[Prefab]) -> Option<u32> {
-        if self.read_only {
-            return None;
-        }
-
-        let edit = self.new_level_edit(tile)?;
-        let z = edit.level()?.z();
-        self.apply(edit).then_some(z)
-    }
-
-    // in this map's instance ids
-    pub fn level_cells(&mut self, contents: &LevelContents) -> LevelCells {
-        patch::decode_level(&mut self.map, contents)
-    }
-
-    pub fn insert_requested_level(&mut self, z: u32, cells: LevelCells) -> bool {
-        if self.read_only {
-            return false;
-        }
-
-        let edit = Edit::new(format!("create Z level {z}")).changing_level(LevelEdit::Insert { z, cells });
-        if !self.history.apply_grouped(&mut self.map, edit, None) {
-            return false;
-        }
-
-        self.requested_level_changed(LevelChange::Inserted(z));
-
-        true
-    }
-
-    pub fn insert_remote_level(&mut self, z: u32, cells: LevelCells) -> bool {
-        if self.read_only {
-            return false;
-        }
-
-        let is_appended = z > self.map.size().z;
-        let edit = Edit::new(format!("create Z level {z}")).changing_level(LevelEdit::Insert { z, cells });
-        if !command::apply_unrecorded(&mut self.map, &edit) {
-            return false;
-        }
-
-        // a level on top renumbers nothing, one in between moves the levels our history points at
-        if !is_appended {
-            let change = LevelChange::Inserted(z);
-            self.history.clear();
-            self.shift_journal(change);
-            self.level_changed(change.level(self.z).unwrap_or(z));
-        }
-
-        self.pending_write = true;
-        self.generation += 1;
-
-        true
-    }
-
-    // our own level undo, back from the server like a peer's change would be
-    pub fn undo_requested_level(&mut self, change: LevelChange) -> bool {
-        if self.read_only {
-            return false;
-        }
-
-        if self
-            .history
-            .next_undo()
-            .and_then(Edit::level)
-            .map(LevelEdit::undo_change)
-            != Some(change)
-            || self.history.undo(&mut self.map).is_none()
-        {
-            return false;
-        }
-
-        self.requested_level_changed(change);
-
-        true
-    }
-
-    pub fn redo_requested_level(&mut self, change: LevelChange) -> bool {
-        if self.read_only {
-            return false;
-        }
-
-        if self.history.next_redo().and_then(Edit::level).map(LevelEdit::change) != Some(change)
-            || self.history.redo(&mut self.map).is_none()
-        {
-            return false;
-        }
-
-        self.requested_level_changed(change);
-
-        true
-    }
-
-    fn requested_level_changed(&mut self, change: LevelChange) {
-        self.shift_journal(change);
-        let (LevelChange::Appended(z) | LevelChange::Inserted(z) | LevelChange::Deleted(z)) = change;
-        self.level_changed(z);
-        self.generation += 1;
-    }
-
-    fn shift_journal(&mut self, change: LevelChange) {
-        if let Some(journal) = self.journal.as_mut() {
-            journal.shift(change);
-        }
-    }
-
-    fn new_level_edit(&mut self, tile: &[Prefab]) -> Option<Edit> {
-        let z = self.map.size().z.checked_add(1)?;
-        let cells = self.map.filled_level(tile);
-
-        Some(Edit::new(format!("create Z level {z}")).changing_level(LevelEdit::Insert { z, cells }))
-    }
-
-    fn delete_level_edit(&self, z: u32) -> Option<Edit> {
-        if self.map.size().z <= 1 {
-            return None;
-        }
-
-        let cells = self.map.level(z)?;
-
-        Some(Edit::new(format!("delete Z level {z}")).changing_level(LevelEdit::Delete { z, cells }))
-    }
-
-    pub fn delete_level(&mut self, z: u32) -> bool {
-        if self.read_only {
-            return false;
-        }
-
-        self.delete_level_edit(z).is_some_and(|edit| self.apply(edit))
-    }
-
-    pub fn delete_requested_level(&mut self, z: u32) -> bool {
-        if self.read_only {
-            return false;
-        }
-
-        let Some(edit) = self.delete_level_edit(z) else {
-            return false;
-        };
-
-        if !self.history.apply_grouped(&mut self.map, edit, None) {
-            return false;
-        }
-
-        self.requested_level_changed(LevelChange::Deleted(z));
-
-        true
-    }
-
-    pub fn delete_remote_level(&mut self, z: u32) -> bool {
-        if self.read_only {
-            return false;
-        }
-
-        let Some(edit) = self.delete_level_edit(z) else {
-            return false;
-        };
-
-        if !command::apply_unrecorded(&mut self.map, &edit) {
-            return false;
-        }
-
-        // every entry points at levels by their old numbers
-        let change = LevelChange::Deleted(z);
-        self.history.clear();
-        self.shift_journal(change);
-        self.level_changed(change.level(self.z).unwrap_or(z));
-        self.pending_write = true;
-        self.generation += 1;
-
-        true
-    }
-
-    fn level_changed(&mut self, z: u32) {
-        self.z = z.min(self.map.size().z).max(1);
-        self.selection = None;
-        self.picked.clear();
-        self.focus = None;
     }
 
     pub fn save(&mut self) -> std::io::Result<()> {

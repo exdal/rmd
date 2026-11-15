@@ -7,7 +7,10 @@ use dmm::{Coord, Prefab, Tile};
 use objtree::ObjectTree;
 
 use crate::{
-    document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection, command::Edit},
+    document::{
+        MapDocument, PrefabInstanceId, command::Edit, instance::PlacedPrefab, instance::PlacedTile,
+        selection::Selection,
+    },
     environment::world::{BaseTile, World},
     frame::options::HiddenTypes,
     maploader::preview::MapView,

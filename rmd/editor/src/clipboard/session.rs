@@ -2,7 +2,7 @@ use dmm::Coord;
 
 use crate::{
     clipboard::{self, PasteMerge, TileRegion},
-    document::{DocumentId, PrefabInstanceId, Selection, command::EditGroupId},
+    document::{DocumentId, PrefabInstanceId, command::EditGroupId, selection::Selection},
     tool::{RegionSelectionMode, SelectionMask, SelectionRotation, Tool, ToolEdit},
 };
 use crate::{region::session::RegionState, session::Session};

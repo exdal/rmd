@@ -3,7 +3,7 @@ use base::types::{Identifier, Value};
 use dmm::Coord;
 
 use super::state::{DragMember, DragState};
-use crate::{document::VarMutation, gizmo::transform::anchor_to_tile, inspector::panel::TransformMode};
+use crate::{document::instance::VarMutation, gizmo::transform::anchor_to_tile, inspector::panel::TransformMode};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct DraggedGroup {

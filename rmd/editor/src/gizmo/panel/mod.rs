@@ -13,7 +13,7 @@ use self::{
     },
 };
 use crate::{
-    document::{InstanceChange, Selection, command::EditGroupId},
+    document::{command::EditGroupId, instance::InstanceChange, selection::Selection},
     inspector::{panel::TransformMode, session::GizmoMember},
     session::Session,
     settings::Settings,

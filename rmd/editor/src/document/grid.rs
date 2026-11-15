@@ -7,7 +7,7 @@ use std::{
 
 use dmm::{Coord, Map, MapFormat, Prefab, PrefabInstanceId, Size, Tile, key::Key, merge::tiles_equal};
 
-use crate::document::{PlacedPrefab, PrefabInstance, PrefabLocation};
+use crate::document::{instance::PlacedPrefab, instance::PrefabInstance, instance::PrefabLocation};
 
 #[derive(Debug, Clone, PartialEq)]
 struct Cell {

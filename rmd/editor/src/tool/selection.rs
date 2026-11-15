@@ -5,7 +5,7 @@ use objtree::ObjectTree;
 
 use crate::{
     clipboard::{has_kind, merge_pasted},
-    document::{MapDocument, PlacedPrefab, PlacedTile, Selection, command::Edit},
+    document::{MapDocument, command::Edit, instance::PlacedPrefab, instance::PlacedTile, selection::Selection},
     environment::world::World,
     frame::options::HiddenTypes,
 };

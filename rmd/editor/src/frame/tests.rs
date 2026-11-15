@@ -31,7 +31,7 @@ use super::{
     pages::assert_pages_hold,
 };
 use crate::{
-    document::{MapDocument, PrefabInstanceId, VarMutation, command::Edit},
+    document::{MapDocument, PrefabInstanceId, command::Edit, instance::VarMutation},
     environment::world::Perspective,
     frame::visual::Appearance,
 };

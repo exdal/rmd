@@ -4,7 +4,7 @@ use ui::widgets::dpi;
 
 use crate::viewport::panel::overlay::{OVERLAY_BG, OverlayRect};
 use crate::{
-    document::{DocumentId, Selection},
+    document::{DocumentId, selection::Selection},
     session::Session,
     tool::{RegionSelectionMode, SelectionMask, SelectionPlacement},
     viewport::camera::Controller,
@@ -393,7 +393,7 @@ mod tests {
         RegionSelectionOptions, hollow_selection_inner, region_border_segments, region_selection_bounds, ring_rects,
     };
     use crate::{
-        document::Selection, tool::RegionSelectionMode, viewport::camera::Controller,
+        document::selection::Selection, tool::RegionSelectionMode, viewport::camera::Controller,
         viewport::panel::overlay::OverlayRect,
     };
 

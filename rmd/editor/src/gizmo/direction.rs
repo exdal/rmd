@@ -8,7 +8,7 @@ use dmi::metadata::Dir;
 use objtree::{ObjectTree, TypeId};
 
 use crate::{
-    document::{InstanceChange, VarMutation, command::EditGroupId},
+    document::{command::EditGroupId, instance::InstanceChange, instance::VarMutation},
     environment::Environment,
     frame::visual,
     inspector::session::EditScope,

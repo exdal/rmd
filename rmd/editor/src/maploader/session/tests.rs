@@ -4,7 +4,7 @@ use std::{env, fs, path::PathBuf, time::Instant};
 use dmm::{Coord, MapFormat, PrefabInstanceId};
 
 use crate::{
-    document::{MapDocument, Selection},
+    document::{MapDocument, selection::Selection},
     environment::{BakeOptions, progress::Progress, worker::load_codebase},
     maploader::{
         ErrorKind,

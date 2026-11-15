@@ -8,7 +8,7 @@ use super::{
         RESIZE_HANDLE_HALF_SIZE, RESIZE_HANDLE_HIT_HALF_SIZE, RESIZE_HANDLE_OFFSET, RegionDragAction, RegionDragState,
     },
 };
-use crate::{document::Selection, viewport::camera::Controller};
+use crate::{document::selection::Selection, viewport::camera::Controller};
 
 pub(super) fn dragged_region_selection(drag: RegionDragState, mouse: [f32; 2]) -> Selection {
     let scale = drag.zoom * drag.tile_size as f32;

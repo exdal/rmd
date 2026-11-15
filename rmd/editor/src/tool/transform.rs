@@ -8,7 +8,7 @@ use dmi::metadata::Dir;
 use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
 
-use crate::{document::Selection, frame::visual};
+use crate::{document::selection::Selection, frame::visual};
 
 use super::{SelectionRotation, SelectionTransform};
 

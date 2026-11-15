@@ -2,7 +2,7 @@ use objtree::ObjectTree;
 
 use crate::session::Session;
 use crate::{
-    document::{DocumentId, PrefabInstanceId, Selection},
+    document::{DocumentId, PrefabInstanceId, selection::Selection},
     environment::world::World,
     search::{self, SearchQuery},
 };

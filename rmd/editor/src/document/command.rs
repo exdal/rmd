@@ -9,8 +9,9 @@ use net::LevelChange;
 
 use crate::{
     document::{
-        MapDocument, PlacedTile,
+        MapDocument,
         grid::{Grid, LevelCells},
+        instance::PlacedTile,
     },
     tool::SelectionMask,
 };

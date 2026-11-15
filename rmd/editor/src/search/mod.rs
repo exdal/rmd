@@ -8,7 +8,7 @@ use dmm::{Coord, Prefab};
 use objtree::ObjectTree;
 
 use crate::{
-    document::{MapDocument, PrefabInstanceId, PrefabLocation, Selection, command::Edit},
+    document::{MapDocument, PrefabInstanceId, command::Edit, instance::PrefabLocation, selection::Selection},
     environment::world::World,
     tool::{
         ToolEdit,

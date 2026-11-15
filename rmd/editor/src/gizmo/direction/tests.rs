@@ -11,7 +11,7 @@ use objtree::ObjectTree;
 
 use super::{direction_mutation, directional_types_for};
 use crate::{
-    document::VarMutation,
+    document::instance::VarMutation,
     environment::Environment,
     inspector::session::EditScope,
     session::Session,

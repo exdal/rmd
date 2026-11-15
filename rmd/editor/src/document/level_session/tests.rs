@@ -4,7 +4,7 @@ use dmm::{Coord, Map, Prefab, Size};
 
 use super::validate_level;
 use crate::{
-    document::{MapDocument, Selection},
+    document::{MapDocument, selection::Selection},
     session::{
         LevelChange, Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session, settle_bake},

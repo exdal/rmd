@@ -4,7 +4,7 @@ use std::sync::Arc;
 use dmm::{Coord, Map, Prefab, PrefabInstanceId, key::Key, parser, writer};
 
 use super::Grid;
-use crate::document::{MapDocument, PlacedTile, command::Edit};
+use crate::document::{MapDocument, command::Edit, instance::PlacedTile};
 
 // "b" holds the same prefabs as "a"
 const MAP: &str = r#""a" = (/turf/open/floor,/area/station)

@@ -6,8 +6,9 @@ use objtree::ObjectTree;
 use crate::session::{FillOutcome, Session};
 use crate::{
     document::{
-        PrefabInstanceId, VarMutation,
+        PrefabInstanceId,
         command::{Edit, EditGroupId, SelectionChange},
+        instance::VarMutation,
     },
     tool::{self, FillError, FillMode, MAX_FILL_TILES, SelectionMask, Tool, ToolContext, ToolEdit},
 };

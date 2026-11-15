@@ -113,7 +113,7 @@ mod tests {
 
     use super::{FillWarningContext, PendingFillWarning};
     use crate::{
-        document::{MapDocument, Selection},
+        document::{MapDocument, selection::Selection},
         session::Session,
         tool::{FillMode, RegionSelectionMode, SelectionMask, Tool},
     };

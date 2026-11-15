@@ -4,7 +4,7 @@ use render::{Frame, GuideLine, MapViewFrame, MapViewInteraction, MapViewRect, Sp
 
 use crate::session::Session;
 use crate::{
-    document::{DocumentId, PrefabInstanceId, Selection},
+    document::{DocumentId, PrefabInstanceId, selection::Selection},
     focus::AreaFocus,
     frame::{
         self, FrameInstances, PrefabUpdate,

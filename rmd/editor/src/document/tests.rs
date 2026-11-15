@@ -5,7 +5,7 @@ use dmm::{Map, MapFormat, Prefab, Size, parser, writer::MapWriter};
 use net::{LevelChange, LevelContents};
 use objtree::ObjectTree;
 
-use super::{Coord, MapDocument, Selection, VarMutation, sanitize_vars};
+use super::{Coord, MapDocument, instance::VarMutation, sanitize_vars, selection::Selection};
 use crate::{
     document::{
         command::{Edit, EditGroupId},

@@ -10,7 +10,7 @@ use objtree::{ObjectTree, ResolvedVarType, TypeId};
 
 use crate::{
     app::external_editor::SourceLocation,
-    document::{PrefabInstanceId, PrefabLocation},
+    document::{PrefabInstanceId, instance::PrefabLocation},
     frame::visual,
     gizmo::direction::DirectionalTypes,
     session::Session,

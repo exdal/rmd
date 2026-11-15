@@ -2,7 +2,7 @@ use base::types::{Identifier, Value};
 use dmi::metadata::Dir;
 
 use crate::{
-    document::{PrefabInstanceId, VarMutation},
+    document::{PrefabInstanceId, instance::VarMutation},
     gizmo::direction::{DirectionState, DirectionalTypes},
     tool::SelectionRotation,
 };

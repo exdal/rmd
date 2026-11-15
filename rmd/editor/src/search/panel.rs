@@ -6,7 +6,7 @@ use dear_imgui_rs::{
 use ui::widgets::{centered_note, dpi, focus_window_on_hover, text_wrapped_colored};
 
 use crate::{
-    document::{DocumentId, PrefabInstanceId, Selection},
+    document::{DocumentId, PrefabInstanceId, selection::Selection},
     search::{SearchQuery, resolve_instances},
     session::Session,
     settings::Settings,

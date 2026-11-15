@@ -5,7 +5,7 @@ use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
 
 use crate::{
-    document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, command::Edit},
+    document::{MapDocument, PrefabInstanceId, command::Edit, instance::PlacedPrefab, instance::PlacedTile},
     environment::world::{BaseTile, World},
     frame::options::HiddenTypes,
 };
@@ -277,7 +277,7 @@ pub(super) fn would_replace_kind(
 
 pub(super) fn replace_kind(
     document: &mut MapDocument, tree: &ObjectTree, coord: Coord, prefab: &Prefab, kind: PlacementKind,
-) -> Option<(crate::document::PlacedTile, Vec<PrefabInstanceId>)> {
+) -> Option<(crate::document::instance::PlacedTile, Vec<PrefabInstanceId>)> {
     let mut after = document.placed_tile(coord)?;
     let matching = after
         .iter()
@@ -304,7 +304,9 @@ pub(super) fn replace_kind(
     (document.placed_tile(coord).as_ref() != Some(&after)).then_some((after, affected))
 }
 
-pub(crate) fn insertion_index(tree: &ObjectTree, tile: &[crate::document::PlacedPrefab], kind: PlacementKind) -> usize {
+pub(crate) fn insertion_index(
+    tree: &ObjectTree, tile: &[crate::document::instance::PlacedPrefab], kind: PlacementKind,
+) -> usize {
     let rank = placement_rank(kind);
 
     tile.iter()
