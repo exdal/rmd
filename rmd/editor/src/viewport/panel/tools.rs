@@ -11,15 +11,15 @@ use super::{
 use crate::{
     coop::panel::{COMMENT_POPUP, CommentDraft},
     document::{DocumentId, command::EditGroupId},
-    frontend::{
-        UiState,
-        dialog::{FILL_LIMIT_WARNING_POPUP, FillWarningContext, PendingFillWarning},
-    },
+    frontend::UiState,
     gizmo::panel::GizmoMapView,
     node::panel::{NodeOverlayHit, NodeOverlayView, NodeRightClick, draw_node_overlay, node_right_click},
     session::{FillOutcome, Session},
     settings::{Settings, keybind::KeybindAction},
-    tool::{PlacementKind, Tool},
+    tool::{
+        PlacementKind, Tool,
+        panel::fill_warning::{FILL_LIMIT_WARNING_POPUP, FillWarningContext, PendingFillWarning},
+    },
 };
 
 #[derive(Debug, Clone, Copy)]

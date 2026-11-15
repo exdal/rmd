@@ -1,7 +1,7 @@
 use base::path::TreePath;
-use std::path::PathBuf;
+use std::{ffi::CStr, fs, path::PathBuf};
 
-use dear_imgui_rs::{Condition, Key, MouseButton};
+use dear_imgui_rs::{Condition, Key, MouseButton, Ui, sys};
 use dmm::{Prefab, Size};
 use render::MapViewInteraction;
 use ui::testing::rectangle_context;
@@ -220,5 +220,69 @@ impl RectangleUiHarness {
     pub(crate) fn key(&mut self, key: Key, down: bool) {
         self.context.io_mut().add_key_event(key, down);
         self.step();
+    }
+}
+
+pub(crate) fn button_centers(ui: &Ui, name: &CStr, labels: &[&str]) -> Vec<[f32; 2]> {
+    // SAFETY: this function runs during the test's current frame with CONTEXT_LOCK held.
+    let Some(window) = (unsafe { sys::igFindWindowByName(name.as_ptr()).as_ref() }) else {
+        return Vec::new();
+    };
+    if !window.Active {
+        return Vec::new();
+    }
+    let style = ui.clone_style();
+    let total = labels
+        .iter()
+        .map(|label| ui.calc_text_size(label)[0] + 2.0 * style.frame_padding()[0])
+        .sum::<f32>()
+        + style.item_spacing()[0] * labels.len().saturating_sub(1) as f32;
+    let mut x = window.Pos.x + window.Size.x - style.window_padding()[0] - total;
+    let y = window.Pos.y + window.Size.y - style.window_padding()[1] - ui.frame_height() / 2.0;
+    labels
+        .iter()
+        .map(|label| {
+            let width = ui.calc_text_size(label)[0] + 2.0 * style.frame_padding()[0];
+            let center = [x + width / 2.0, y];
+            x += width + style.item_spacing()[0];
+            center
+        })
+        .collect::<Vec<_>>()
+}
+
+pub(crate) fn click_dialog_button(
+    context: &mut dear_imgui_rs::Context, name: &CStr, labels: &[&str], mut draw: impl FnMut(&Ui),
+) {
+    let mut point = [0.0, 0.0];
+    for _ in 0..4 {
+        let ui = context.frame();
+        ui.open_popup(name.to_str().unwrap());
+        draw(ui);
+        point = *button_centers(ui, name, labels).last().unwrap();
+        assert!(context.render_legacy().valid());
+    }
+
+    for down in [false, true, false] {
+        context.io_mut().add_mouse_pos_event(point);
+        context.io_mut().add_mouse_button_event(MouseButton::Left, down);
+        let ui = context.frame();
+        draw(ui);
+        assert!(context.render_legacy().valid());
+    }
+}
+
+pub(crate) struct TestDirectory(pub(crate) PathBuf);
+
+impl TestDirectory {
+    pub(crate) fn new(name: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("rmd-close-{name}-{}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
     }
 }

@@ -2,6 +2,7 @@ pub(crate) mod backup;
 pub(crate) mod command;
 pub(crate) mod grid;
 pub(crate) mod level_session;
+pub(crate) mod panel;
 pub(crate) mod patch;
 pub(crate) mod session;
 pub(crate) mod state;

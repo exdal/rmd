@@ -5,9 +5,9 @@ use ui::widgets::dpi;
 
 use crate::{
     document::DocumentId,
-    frontend::common::IDENTICAL_EDIT_COLOR,
     git::conflict::{Hunk, Side},
     gizmo::guides::GuideBadge,
+    inspector::panel::IDENTICAL_EDIT_COLOR,
     region::panel::{draw_marching_edge, marching_stripe_offset},
     session::Session,
     tool::SelectionRotation,

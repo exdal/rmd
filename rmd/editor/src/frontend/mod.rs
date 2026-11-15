@@ -23,7 +23,15 @@ use crate::{
         presence::{CoopPresence, FollowedView},
     },
     dm_ui::panel::DmUi,
-    document::{DocumentId, MapDocument},
+    document::{
+        DocumentId, MapDocument,
+        panel::{
+            DeleteLevelDialog, GO_TO_POPUP, GoToDialog, NEW_MAP_POPUP, NewLevelDialog, NewMapDialog, RESIZE_MAP_POPUP,
+            ResizeMapDialog, SAVE_MAP_POPUP, SaveDialog, SaveDialogOutcome, TileFillPaths, TileFillSearch,
+            draw_delete_level_dialog, draw_go_to_dialog, draw_new_level_dialog, draw_new_map_dialog,
+            draw_resize_map_dialog, draw_save_dialog,
+        },
+    },
     environment::{
         panel::{DiagnosticsState, LoadNotice, LoadPopup, draw_load_popup},
         session::LoadReport,
@@ -45,7 +53,7 @@ use crate::{
     },
     tool::{
         FillMode, Tool,
-        panel::{DEFAULT_CUSTOM_FILL_BOUNDARY, request_level_change},
+        panel::{DEFAULT_CUSTOM_FILL_BOUNDARY, fill_warning::PendingFillWarning, request_level_change},
     },
     viewport::panel::{
         MapViewState,
@@ -62,17 +70,10 @@ mod menu;
 pub(crate) mod welcome;
 
 use self::{
-    dialog::{
-        DeleteLevelDialog, GO_TO_POPUP, GoToDialog, NEW_MAP_POPUP, NewLevelDialog, NewMapDialog, PendingFillWarning,
-        RESIZE_MAP_POPUP, ResizeMapDialog, SAVE_ERROR_COLOR, SAVE_MAP_POPUP, SaveDialog, SaveDialogOutcome,
-        TileFillPaths, TileFillSearch, draw_delete_level_dialog, draw_go_to_dialog, draw_keybind_preset_dialog,
-        draw_new_level_dialog, draw_new_map_dialog, draw_resize_map_dialog, draw_save_dialog,
-    },
+    dialog::{SAVE_ERROR_COLOR, draw_keybind_preset_dialog},
     menu::MenuActions,
     welcome::{ForgetRequest, WelcomeOutput},
 };
-
-pub(crate) mod common;
 
 const DOCKSPACE_ID: &str = "rmd-main-dockspace-v4";
 
@@ -231,18 +232,18 @@ pub struct UiState {
     pub(crate) custom_fill_search: String,
     pub(crate) pending_fill_warning: Option<PendingFillWarning>,
     pub(crate) popup_was_open: bool,
-    new_map_dialog: Option<NewMapDialog>,
+    pub(crate) new_map_dialog: Option<NewMapDialog>,
     pub(crate) new_level_dialog: Option<NewLevelDialog>,
     pub(crate) delete_level_dialog: Option<DeleteLevelDialog>,
-    resize_map_dialog: Option<ResizeMapDialog>,
-    go_to_dialog: Option<GoToDialog>,
+    pub(crate) resize_map_dialog: Option<ResizeMapDialog>,
+    pub(crate) go_to_dialog: Option<GoToDialog>,
     pub(crate) coop_dialog: Option<CoopDialog>,
     pub(crate) coop_notice: CoopNotice,
     pub(crate) comment_draft: Option<CommentDraft>,
     pub(crate) followed_view: Option<FollowedView>,
     pub(crate) last_go_to: Option<Coord>,
-    tile_fill: Option<TileFillPaths>,
-    save_dialog: Option<SaveDialog>,
+    pub(crate) tile_fill: Option<TileFillPaths>,
+    pub(crate) save_dialog: Option<SaveDialog>,
     pub(crate) close_queue: VecDeque<DocumentId>,
     pub(crate) close_focus: Option<CloseFocus>,
     pub(crate) edit_command: Option<EditCommand>,

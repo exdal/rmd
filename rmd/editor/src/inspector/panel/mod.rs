@@ -22,7 +22,6 @@ use crate::{
     app::external_editor::SourceLocation,
     document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation, command::EditGroupId},
     frame::visual,
-    frontend::common::IDENTICAL_EDIT_COLOR,
     git::blame::{self, BlameCell},
     gizmo::{direction::DirectionalTypes, transform::anchor_axis},
     inspector::session::EditScope,
@@ -69,6 +68,9 @@ const DISPLAY_ROWS: &[&str] = &[
     vars::INVISIBILITY,
 ];
 const ADVANCED_OFFSETS: &[&str] = &[vars::PIXEL_W, vars::PIXEL_Z];
+
+/// Marks everything an identical scope edit reaches, in the inspector and on the map
+pub(crate) const IDENTICAL_EDIT_COLOR: [f32; 4] = [1.0, 0.7, 0.15, 1.0];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum TransformMode {

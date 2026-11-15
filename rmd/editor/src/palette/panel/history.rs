@@ -3,7 +3,7 @@ use dmm::Prefab;
 use ui::widgets::dpi;
 
 use crate::{
-    frontend::common::{IconOrigin, draw_thumbnail},
+    palette::panel::thumbnail::{IconOrigin, draw_thumbnail},
     session::Session,
     settings::keybind::KeyBindings,
     viewport::panel::overlay::{OverlayRect, draw_overlay_underlay, overlay_padding},

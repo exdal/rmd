@@ -6,7 +6,7 @@ use ui::widgets::dpi;
 
 use crate::{
     document::DocumentId,
-    frontend::common::{IconOrigin, draw_thumbnail},
+    palette::panel::thumbnail::{IconOrigin, draw_thumbnail},
     session::Session,
     settings::{Settings, keybind::KeybindAction},
     viewport::{panel::context_menu::begin_map_popup, preview::PlacementPreview},

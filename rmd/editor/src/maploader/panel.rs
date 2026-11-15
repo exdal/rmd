@@ -9,7 +9,8 @@ use ui::{
 };
 
 use crate::{
-    frontend::{common::IDENTICAL_EDIT_COLOR, welcome::codebase_relative},
+    frontend::welcome::codebase_relative,
+    inspector::panel::IDENTICAL_EDIT_COLOR,
     maploader::preview::ModuleVariantKey,
     session::Session,
     tool::Tool,

@@ -7,9 +7,9 @@ use objtree::ObjectTree;
 use super::edit::EditCommand;
 use crate::{
     document::DocumentId,
-    frontend::common::draw_thumbnail,
     git::{blame::BlameCell, conflict::Side},
     object_tree::panel::type_search::draw_type_path_search,
+    palette::panel::thumbnail::draw_thumbnail,
     search::panel::SimilarMatchKind,
     session::Session,
     settings::{Settings, keybind::KeybindAction},

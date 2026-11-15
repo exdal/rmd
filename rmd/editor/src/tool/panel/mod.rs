@@ -1,10 +1,12 @@
+pub(crate) mod fill_warning;
+
 use base::path::TreePath;
 
 use dear_imgui_rs::{StyleColor, StyleVar, Ui};
 use ui::icons::materialdesignicons::{ICON_CIRCLE_SMALL, ICON_DELETE, ICON_MENU_DOWN};
 
 use crate::{
-    frontend::dialog::{DeleteLevelDialog, NewLevelDialog},
+    document::panel::{DeleteLevelDialog, NewLevelDialog},
     object_tree::panel::type_search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search},
     region::panel::{RegionSelectionOptions, draw_selection_mode_controls},
     session::{LevelChange, Session},

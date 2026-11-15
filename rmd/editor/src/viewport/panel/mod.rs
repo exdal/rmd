@@ -24,7 +24,7 @@ use crate::{
     app::pacing::FrameDemand,
     coop::panel::presence::{CoopPresence, draw_coop_status, draw_tab_menu, hit_comment, share_presence},
     document::DocumentId,
-    frontend::{CloseFocus, UiState, VisibleMapView, dialog::draw_fill_limit_warning},
+    frontend::{CloseFocus, UiState, VisibleMapView},
     git::panel::blame::BlamePopup,
     gizmo::{guides::GuideBadge, panel::GizmoMapView},
     maploader::panel,
@@ -36,7 +36,7 @@ use crate::{
     region::panel::restore_rectangle_gesture,
     session::Session,
     settings::{Settings, keybind::KeybindAction},
-    tool::Tool,
+    tool::{Tool, panel::fill_warning::draw_fill_limit_warning},
     viewport::camera::Controller,
 };
 

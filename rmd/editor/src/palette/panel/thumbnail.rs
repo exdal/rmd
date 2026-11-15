@@ -11,9 +11,6 @@ const ORIGIN_RADIUS: f32 = 3.0;
 const ORIGIN_MAX_DISTANCE: f32 = 32.0;
 const ORIGIN_COLOR: [f32; 4] = [1.0, 0.5, 0.0, 1.0];
 
-/// Marks everything an identical scope edit reaches, in the inspector and on the map
-pub(crate) const IDENTICAL_EDIT_COLOR: [f32; 4] = [1.0, 0.7, 0.15, 1.0];
-
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct IconOrigin {
     pub offset: [i32; 2],

@@ -10,7 +10,7 @@ use ui::{
 
 use crate::{
     app::external_editor::SourceLocation,
-    frontend::common::draw_thumbnail,
+    palette::panel::thumbnail::draw_thumbnail,
     session::Session,
     settings::{
         ObjectTreeFilterOptions, ObjectTreeSearchOptions, Settings,
