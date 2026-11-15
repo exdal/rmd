@@ -267,7 +267,7 @@ impl Default for NewMapDialog {
     }
 }
 
-pub(super) fn draw_keybind_preset_dialog(ui: &Ui, open: &mut bool) -> Option<KeybindPreset> {
+pub(crate) fn draw_keybind_preset_dialog(ui: &Ui, open: &mut bool) -> Option<KeybindPreset> {
     if !*open {
         return None;
     }

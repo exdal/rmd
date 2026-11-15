@@ -16,10 +16,12 @@ use ui::{
     },
 };
 
-use super::dialog::{MODAL_FLAGS, SAVE_ERROR_COLOR, draw_keybind_preset_dialog};
 use crate::{
     environment::profile_label,
-    frontend::ProfileReload,
+    frontend::{
+        ProfileReload,
+        dialog::{MODAL_FLAGS, SAVE_ERROR_COLOR, draw_keybind_preset_dialog},
+    },
     session::Session,
     settings::{
         FONT_BRIGHTNESS_PERCENT, FONT_SIZE, ObjectTreeFilterOptions, ObjectTreeSearchOptions, SelectionHighlight,
@@ -81,7 +83,7 @@ struct FontPicker {
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
-pub(super) struct SettingsWindowOutput {
+pub(crate) struct SettingsWindowOutput {
     pub object_tree_changed: bool,
     pub reload_profile: Option<ProfileReload>,
 }
@@ -191,7 +193,7 @@ const SETTINGS_KEYBINDING_GROUPS: &[(&str, &[KeybindAction])] = &[
     ("Recent", &KeybindAction::RECENT),
 ];
 
-pub(super) struct SettingsWindow {
+pub(crate) struct SettingsWindow {
     window: WindowKey,
     open: bool,
     category: SettingsCategory,
@@ -205,7 +207,7 @@ pub(super) struct SettingsWindow {
 }
 
 impl SettingsWindow {
-    pub(super) fn new() -> Result<Self, WindowKeyError> {
+    pub(crate) fn new() -> Result<Self, WindowKeyError> {
         Ok(Self {
             window: WindowKey::new("settings-v2", "Settings")?,
             open: false,
@@ -220,19 +222,19 @@ impl SettingsWindow {
         })
     }
 
-    pub(super) fn open(&mut self) {
+    pub(crate) fn open(&mut self) {
         self.open = true;
     }
 
-    pub(super) fn set_profiles(&mut self, profiles: Vec<String>) {
+    pub(crate) fn set_profiles(&mut self, profiles: Vec<String>) {
         self.profiles = profiles;
     }
 
-    pub(super) const fn is_capturing_keybind(&self) -> bool {
+    pub(crate) const fn is_capturing_keybind(&self) -> bool {
         self.capturing.is_some()
     }
 
-    pub(super) fn draw(
+    pub(crate) fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, themes: &mut Themes, loading: bool,
     ) -> SettingsWindowOutput {
         draw_settings_window(
@@ -256,7 +258,7 @@ impl SettingsWindow {
         )
     }
 
-    pub(super) fn finish_keybind_capture(&mut self, ui: &Ui, keybindings: &mut KeyBindings) {
+    pub(crate) fn finish_keybind_capture(&mut self, ui: &Ui, keybindings: &mut KeyBindings) {
         finish_keybind_capture(ui, &mut self.capturing, keybindings);
     }
 }

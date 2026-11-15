@@ -14,7 +14,6 @@ use dmm::{Coord, PrefabInstanceId};
 use render::{Camera, GuideLine, MapViewInteraction, MapViewRect};
 use ui::theme::Themes;
 
-use self::settings::SettingsWindow;
 use crate::{
     app::{external_editor::SourceLocation, pacing::FrameDemand, update::UpdateCheck},
     bake::panel::RuntimesPanel,
@@ -42,6 +41,7 @@ use crate::{
     settings::{
         OpenPanels, Panel, Settings,
         keybind::{KeybindAction, KeybindPreset},
+        panel::SettingsWindow,
     },
     tool::{
         FillMode, Tool,
@@ -73,8 +73,6 @@ use self::{
 };
 
 pub(crate) mod common;
-
-pub(crate) mod settings;
 
 const DOCKSPACE_ID: &str = "rmd-main-dockspace-v4";
 
@@ -217,7 +215,7 @@ pub struct UiState {
     select_inspector: StartupPanelFocus,
     /// A docked tab only comes forward if it still holds the focus when its tab bar updates next frame
     pub(crate) panel_focus_requested: bool,
-    settings_window: SettingsWindow,
+    pub(crate) settings_window: SettingsWindow,
     pub(crate) layout: DockLayout,
     pub(crate) reset_layout: bool,
     pub(crate) gizmo: GizmoState,

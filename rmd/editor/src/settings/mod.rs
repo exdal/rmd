@@ -481,6 +481,7 @@ impl Settings {
 }
 
 pub(crate) mod keybind;
+pub(crate) mod panel;
 pub(crate) mod paths;
 #[cfg(test)]
 mod tests;

@@ -10,12 +10,12 @@ use ui::{
 
 use crate::{
     app::external_editor::SourceLocation,
-    frontend::{
-        common::draw_thumbnail,
-        settings::{draw_object_tree_filter_settings, draw_object_tree_search_settings},
-    },
+    frontend::common::draw_thumbnail,
     session::Session,
-    settings::{ObjectTreeFilterOptions, ObjectTreeSearchOptions, Settings},
+    settings::{
+        ObjectTreeFilterOptions, ObjectTreeSearchOptions, Settings,
+        panel::{draw_object_tree_filter_settings, draw_object_tree_search_settings},
+    },
 };
 
 pub(crate) mod type_search;
