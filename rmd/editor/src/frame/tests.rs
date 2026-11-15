@@ -23,11 +23,12 @@ use render::{
 use vm::{AppearanceDelta, bake::SharedAppearance, matrix::Matrix};
 
 use super::{
-    FrameInstances, FrameRenderOptions, PrefabUpdate, TypeVisibility,
+    FrameInstances, PrefabUpdate,
+    context::side_row,
     fixtures::{build, build_with_options, update_prefab, update_prefabs, update_prefabs_with_options},
     instance_for,
+    options::{FrameRenderOptions, TypeVisibility},
     pages::assert_pages_hold,
-    side_row,
 };
 use crate::{
     document::{MapDocument, PrefabInstanceId, VarMutation, command::Edit},
@@ -1605,9 +1606,9 @@ fn area_identity_uses_values_instead_of_source_order() {
     right.set_var("icon_state".into(), Value::Text(String::from("bridge")));
     right.set_var("name".into(), Value::Text(String::from("Bridge")));
 
-    assert!(super::same_area(&left, &right));
+    assert!(super::area::same_area(&left, &right));
     right.set_var("name".into(), Value::Text(String::from("Engineering")));
-    assert!(!super::same_area(&left, &right));
+    assert!(!super::area::same_area(&left, &right));
 }
 
 #[test]

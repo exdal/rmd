@@ -6,7 +6,10 @@ use crate::session::Session;
 use crate::{
     document::{DocumentId, PrefabInstanceId, Selection},
     focus::AreaFocus,
-    frame::{self, FrameInstances, FrameRenderOptions, HiddenTypes, PrefabUpdate},
+    frame::{
+        self, FrameInstances, PrefabUpdate,
+        options::{FrameRenderOptions, HiddenTypes},
+    },
     tool::session::context_placement_group,
 };
 

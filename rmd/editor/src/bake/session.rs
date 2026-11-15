@@ -9,7 +9,7 @@ use crate::{
         worker::{self, Baked, BakedMap, Job},
     },
     document::{DocumentId, PrefabInstanceId},
-    frame::{self, FrameRenderOptions, PrefabUpdate},
+    frame::{self, PrefabUpdate, options::FrameRenderOptions},
     maploader::preview::PREVIEW_ID_START,
 };
 use crate::{

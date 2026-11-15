@@ -29,8 +29,10 @@ fn environment(profile: &'static str) -> Environment {
     environment
 }
 
-fn options<'a>(visibility: &'a frame::TypeVisibility, bake: &'a Bake) -> frame::FrameRenderOptions<'a> {
-    frame::FrameRenderOptions {
+fn options<'a>(
+    visibility: &'a frame::options::TypeVisibility, bake: &'a Bake,
+) -> frame::options::FrameRenderOptions<'a> {
+    frame::options::FrameRenderOptions {
         perspective: Perspective::TopDown,
         node_types: None,
         visibility,
@@ -310,7 +312,7 @@ fn overlays_follow_the_owner_dir_and_sort_by_layer() -> Result<(), &'static str>
             &dmi::IconFile::load(examples().join("icons/test.dmi")).expect("test icon"),
         )
         .expect("pack test icon");
-    let visibility = frame::TypeVisibility::default();
+    let visibility = frame::options::TypeVisibility::default();
     let instances = fixtures::build_with_options(
         &environment.tree,
         &environment.icons,
@@ -357,7 +359,7 @@ fn overlays_below_float_layer_draw_under_their_owner() {
             &dmi::IconFile::load(examples().join("icons/test.dmi")).expect("test icon"),
         )
         .expect("pack test icon");
-    let visibility = frame::TypeVisibility::default();
+    let visibility = frame::options::TypeVisibility::default();
     let instances = fixtures::build_with_options(
         &environment.tree,
         &environment.icons,
@@ -407,7 +409,7 @@ fn derived_sprites_follow_edits_and_history_without_changing_map_bytes() -> Resu
             &dmi::IconFile::load(examples().join("icons/test.dmi")).expect("test icon"),
         )
         .expect("pack test icon");
-    let visibility = frame::TypeVisibility::default();
+    let visibility = frame::options::TypeVisibility::default();
     let mut instances = fixtures::build_with_options(
         &environment.tree,
         &environment.icons,

@@ -7,7 +7,7 @@ use crate::{
     clipboard::{has_kind, merge_pasted},
     document::{MapDocument, PlacedPrefab, PlacedTile, Selection, command::Edit},
     environment::world::World,
-    frame::HiddenTypes,
+    frame::options::HiddenTypes,
 };
 
 use super::{

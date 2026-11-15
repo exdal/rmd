@@ -8,7 +8,7 @@ use render::HighlightStyle;
 use serde::{Deserialize, Serialize};
 use ui::{fonts::FontSettings, theme::DEFAULT_THEME};
 
-use crate::frame::FrameOptions;
+use crate::frame::options::FrameOptions;
 
 use keybind::KeyBindings;
 use paths::{absolute, settings_path};

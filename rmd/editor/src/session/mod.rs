@@ -13,7 +13,11 @@ use crate::{
     bake::worker::Baker,
     coop::Coop,
     document::{DocumentId, PrefabInstanceId, state::EditorState},
-    frame::{FrameInstances, FrameOptions, TypeVisibility, visual},
+    frame::{
+        FrameInstances,
+        options::{FrameOptions, TypeVisibility},
+        visual,
+    },
     git::{session::GitDocState, worker::GitWorker},
     inspector::session::IdenticalCache,
     maploader::preview::ModulePreviewState,

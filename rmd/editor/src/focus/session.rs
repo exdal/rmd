@@ -100,7 +100,7 @@ impl Session {
 
         let resolved = self
             .resolve_focus(seed.0)
-            .filter(|focus| frame::same_area(&seed.1, focus.prefab()));
+            .filter(|focus| frame::area::same_area(&seed.1, focus.prefab()));
         self.set_focus(resolved);
     }
 }

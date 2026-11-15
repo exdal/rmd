@@ -9,7 +9,7 @@ use objtree::ObjectTree;
 use crate::{
     document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, Selection, command::Edit},
     environment::world::{BaseTile, World},
-    frame::HiddenTypes,
+    frame::options::HiddenTypes,
     maploader::preview::MapView,
     tool::{
         PlacementKind, RegionSelectionMode, SelectionRotation, ToolEdit,

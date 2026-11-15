@@ -158,7 +158,7 @@ fn area_region(context: &ToolContext<'_>, mask: Option<SelectionMask>) -> Vec<Co
         if !context.document.allows_edit_at(coord)
             || mask.is_some_and(|mask| !mask.includes(coord))
             || !prefab_of_subtype(context.tree, &context.document.map, coord, area)
-                .is_some_and(|candidate| crate::frame::same_area(&seed, candidate))
+                .is_some_and(|candidate| crate::frame::area::same_area(&seed, candidate))
         {
             continue;
         }

@@ -16,7 +16,7 @@ use crate::{
         worker::LoadedCodebase,
         world::World,
     },
-    frame::TypeVisibility,
+    frame::options::TypeVisibility,
     session::Session,
     tool::Tool,
 };

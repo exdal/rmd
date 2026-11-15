@@ -7,8 +7,9 @@ use crate::{
     document::{MapDocument, PrefabInstanceId, command::Edit},
     environment::world::Perspective,
     frame::{
-        FrameRenderOptions, PrefabUpdate, TypeVisibility,
+        PrefabUpdate,
         fixtures::{build, build_with_options, update_prefab, update_prefabs},
+        options::{FrameRenderOptions, TypeVisibility},
         tests::{assert_render_data_matches, document, icons, textures, tree},
     },
 };

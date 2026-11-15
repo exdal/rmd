@@ -7,7 +7,7 @@ use objtree::{ObjectTree, TypeId};
 use crate::{
     document::{MapDocument, PlacedPrefab, PlacedTile, PrefabInstanceId, command::Edit},
     environment::world::{BaseTile, World},
-    frame::HiddenTypes,
+    frame::options::HiddenTypes,
 };
 
 use super::{PlacementKind, ToolContext, ToolEdit};

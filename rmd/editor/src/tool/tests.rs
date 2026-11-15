@@ -23,7 +23,7 @@ use crate::{
     document::{MapDocument, Selection},
     environment::world::{BaseTile, World},
     focus::AreaFocus,
-    frame::HiddenTypes,
+    frame::options::HiddenTypes,
 };
 
 fn tree() -> objtree::ObjectTree {

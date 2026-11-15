@@ -518,7 +518,7 @@ pub(crate) fn assert_render_cache_matches_rebuild(session: &Session) {
         &environment.icons,
         &session.textures,
         session.effective_grid(document_id).unwrap(),
-        crate::frame::FrameRenderOptions {
+        crate::frame::options::FrameRenderOptions {
             perspective: environment.world.perspective,
             node_types: Some(&session.active_cache().node_types),
             visibility: &session.type_visibility,
