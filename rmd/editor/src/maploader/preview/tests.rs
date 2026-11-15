@@ -3,13 +3,10 @@ use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::Arc,
 };
 
-use dmm::{Coord, Map, Prefab, PrefabInstanceId, Size};
+use dmm::{Coord, Map, PrefabInstanceId, Size};
 use objtree::{ObjectTree, TypeId};
 use vm::{Fault, FaultKind, bake::ModuleRoot, world::Position};
 
@@ -23,25 +20,20 @@ use crate::{
     maploader::{
         ErrorKind, LoadedModule, MAX_NESTING, ModuleFiles, OpenModule, RootSpecs, resolve_module_path, root_specs,
     },
+    testing::{TempDir, prefab},
 };
 
 const ROOT: &str = "/obj/modular_map_root";
 const CONNECTOR: &str = "/obj/modular_map_connector";
 
 struct Fixture {
-    directory: PathBuf,
+    directory: TempDir,
     tree: ObjectTree,
 }
 
 impl Fixture {
     fn new() -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let directory = std::env::temp_dir().join(format!(
-            "rmd-modular-maps-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed),
-        ));
-        fs::create_dir_all(&directory).unwrap();
+        let directory = TempDir::new("modular-maps");
         let entry = directory.join("types.dm");
         fs::write(&entry, include_str!("../../../tests/fixtures/modular_maps/types.dm")).unwrap();
 
@@ -90,12 +82,6 @@ impl Fixture {
     }
 }
 
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.directory);
-    }
-}
-
 fn analyze(entry: &Path) -> ObjectTree {
     let arena = StrArena::new();
     let preprocessed = preprocessor::preprocess(&arena, entry).unwrap();
@@ -105,10 +91,6 @@ fn analyze(entry: &Path) -> ObjectTree {
     assert!(errors.is_empty(), "{errors:?}");
 
     tree
-}
-
-fn prefab(path: &str) -> Prefab {
-    Prefab::new(TreePath::parse(path))
 }
 
 fn map(size: [u32; 3], placed: &[(Coord, &str)]) -> Map {

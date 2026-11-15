@@ -244,12 +244,10 @@ mod tests {
     use super::{KEYBIND_PRESET_POPUP, draw_keybind_preset_dialog};
     use crate::{
         document::{DocumentId, MapDocument},
-        frontend::{
-            UiState,
-            fixtures::{TestDirectory, button_centers},
-        },
+        frontend::{UiState, fixtures::button_centers},
         session::Session,
         settings::Settings,
+        testing::TempDir,
     };
 
     struct CloseUi {
@@ -539,8 +537,8 @@ mod tests {
     #[test]
     fn successful_save_closes_the_map_and_focuses_its_neighbor() {
         let _guard = CONTEXT_LOCK.lock().unwrap();
-        let dir = TestDirectory::new("save");
-        let file = dir.0.join("saved.dmm");
+        let dir = TempDir::new("save");
+        let file = dir.path().join("saved.dmm");
         let mut app = CloseUi::new();
         let id = app.add_map(&file, true, false);
         let next = app.add_map("next.dmm", false, false);
@@ -557,9 +555,9 @@ mod tests {
     #[test]
     fn a_failed_save_keeps_the_confirmation_and_map_open() {
         let _guard = CONTEXT_LOCK.lock().unwrap();
-        let dir = TestDirectory::new("save-failure");
+        let dir = TempDir::new("save-failure");
         let mut app = CloseUi::new();
-        let id = app.add_map(&dir.0, true, false);
+        let id = app.add_map(dir.path(), true, false);
         app.select(id);
         app.close_tab(id);
         app.click(app.close_buttons[2]);
@@ -573,8 +571,8 @@ mod tests {
     #[test]
     fn save_as_keeps_the_pending_close_until_it_succeeds() {
         let _guard = CONTEXT_LOCK.lock().unwrap();
-        let dir = TestDirectory::new("save-as");
-        let file = dir.0.join("saved.dmm");
+        let dir = TempDir::new("save-as");
+        let file = dir.path().join("saved.dmm");
         let mut app = CloseUi::new();
         let id = app.add_map(&file, true, true);
         let next = app.add_map("next.dmm", false, false);
@@ -586,7 +584,7 @@ mod tests {
         assert!(app.state.save_dialog.as_ref().unwrap().close_after_save);
         app.assert_selected_map(id);
 
-        app.state.save_dialog.as_mut().unwrap().path = dir.0.display().to_string();
+        app.state.save_dialog.as_mut().unwrap().path = dir.path().display().to_string();
         app.settle();
         app.click(app.save_buttons[1]);
         assert!(app.save_open);
@@ -632,8 +630,8 @@ mod tests {
     #[test]
     fn save_as_success_advances_the_close_batch_to_the_next_dirty_map() {
         let _guard = CONTEXT_LOCK.lock().unwrap();
-        let dir = TestDirectory::new("save-as-batch");
-        let file = dir.0.join("first.dmm");
+        let dir = TempDir::new("save-as-batch");
+        let file = dir.path().join("first.dmm");
         let mut app = CloseUi::new();
         let first = app.add_map(&file, true, true);
         let second = app.add_map("second.dmm", true, true);

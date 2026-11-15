@@ -10,6 +10,8 @@ use dear_imgui_rs::{Direction, Style, StyleColor, ThemePreset, TreeLineMode};
 use serde::{Deserialize, Serialize};
 use toml::{Table, Value};
 
+use crate::color::byte;
+
 pub const DEFAULT_THEME: &str = "imgui_dark";
 const LIGHT_THEME: &str = "imgui_light";
 const TABLE_ROW_ALT_ALPHA_SCALE: f32 = 0.4;
@@ -524,12 +526,8 @@ pub fn tree_lines_name(mode: TreeLineMode) -> &'static str {
         .map_or("None", |(_, name)| name)
 }
 
-fn color_byte(channel: f32) -> u8 {
-    (channel.clamp(0.0, 1.0) * 255.0).round() as u8
-}
-
 pub(crate) fn hex_color(rgba: [f32; 4]) -> String {
-    let [r, g, b, a] = rgba.map(color_byte);
+    let [r, g, b, a] = rgba.map(byte);
 
     format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
 }
@@ -701,7 +699,7 @@ fn builtin_themes(default_style: &Style) -> [(&'static str, Theme); 2] {
         alternate_row[3] *= TABLE_ROW_ALT_ALPHA_SCALE;
         style.set_color(StyleColor::TableRowBgAlt, alternate_row);
         for (color, _) in STYLE_COLORS {
-            let rgba = style.color(color).map(|channel| f32::from(color_byte(channel)) / 255.0);
+            let rgba = style.color(color).map(|channel| f32::from(byte(channel)) / 255.0);
             style.set_color(color, rgba);
         }
 

@@ -4,12 +4,12 @@ use dear_imgui_rs::sys;
 use dmm::writer;
 
 use super::*;
-use crate::session::fixtures::{coordinate_viewport_session, module_viewport_session};
+use crate::maploader::fixtures::{coordinate_viewport_session, viewport_session};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
 fn harness() -> Result<(impl Sized, RectangleUiHarness), Box<dyn Error>> {
-    let (fixture, session) = module_viewport_session()?;
+    let (fixture, session) = viewport_session()?;
     let mut app = RectangleUiHarness::with_session(session);
     app.view.camera.camera.x = 64.0;
     app.view.camera.camera.y = 16.0;
@@ -295,7 +295,7 @@ fn escape_and_outside_clicks_close_the_popup() -> TestResult {
 #[test]
 fn the_popup_survives_switching_to_another_map_and_back() -> TestResult {
     let _guard = CONTEXT_LOCK.lock().map_err(|error| error.to_string())?;
-    let (_fixture, mut session) = module_viewport_session()?;
+    let (_fixture, mut session) = viewport_session()?;
     let modular = session.state.active().ok_or("no document")?;
     let root = session.module_roots().first().ok_or("no module root")?;
     let popup = (root.key.clone(), root.coord);

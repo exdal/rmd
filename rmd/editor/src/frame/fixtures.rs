@@ -1,0 +1,85 @@
+use std::collections::HashMap;
+
+use dmi::metadata::Metadata;
+use objtree::ObjectTree;
+use render::texture::TextureCatalog;
+
+use super::{
+    FrameInstances, FrameRenderOptions, PrefabUpdate, TypeVisibility, build_view_with_options,
+    update_view_prefabs_with_options,
+};
+use crate::{
+    document::{MapDocument, PrefabInstanceId},
+    environment::world::Perspective,
+};
+
+pub(crate) fn build(
+    tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, document: &MapDocument,
+    tile_size: u32,
+) -> FrameInstances {
+    build_with_options(
+        tree,
+        icons,
+        textures,
+        document,
+        FrameRenderOptions {
+            perspective: Perspective::TopDown,
+            node_types: None,
+            visibility: &TypeVisibility::default(),
+            tile_size,
+            appearances: &HashMap::new(),
+            lighting: None,
+        },
+    )
+}
+
+pub(crate) fn build_with_options(
+    tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, document: &MapDocument,
+    options: FrameRenderOptions<'_>,
+) -> FrameInstances {
+    build_view_with_options(tree, icons, textures, (&document.map).into(), options)
+}
+
+pub(crate) fn update_prefab(
+    instances: &mut FrameInstances, tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog,
+    document: &MapDocument, owner: PrefabInstanceId, tile_size: u32,
+) -> PrefabUpdate {
+    update_prefabs(instances, tree, icons, textures, document, &[owner], tile_size)
+}
+
+pub(crate) fn update_prefabs(
+    instances: &mut FrameInstances, tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog,
+    document: &MapDocument, owners: &[PrefabInstanceId], tile_size: u32,
+) -> PrefabUpdate {
+    update_prefabs_with_options(
+        instances,
+        tree,
+        icons,
+        textures,
+        document,
+        owners,
+        FrameRenderOptions {
+            perspective: Perspective::TopDown,
+            node_types: None,
+            visibility: &TypeVisibility::default(),
+            tile_size,
+            appearances: &HashMap::new(),
+            lighting: None,
+        },
+    )
+}
+
+pub(crate) fn update_prefabs_with_options(
+    instances: &mut FrameInstances, tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog,
+    document: &MapDocument, owners: &[PrefabInstanceId], options: FrameRenderOptions<'_>,
+) -> PrefabUpdate {
+    update_view_prefabs_with_options(
+        instances,
+        tree,
+        icons,
+        textures,
+        (&document.map).into(),
+        owners,
+        options,
+    )
+}

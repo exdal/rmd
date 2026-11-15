@@ -62,7 +62,7 @@ fn the_coop_cursor_only_follows_shared_maps() {
     assert_eq!(session.state.active(), Some(shared));
 
     session
-        .host_coop(0, net::hash_password("hunter2"), String::from("host"))
+        .host_coop(0, net::hash_password(PASSWORD), String::from("host"))
         .unwrap();
     let poll_until = |session: &mut Session, done: &dyn Fn(&Session) -> bool| {
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -118,7 +118,7 @@ fn following_snaps_the_camera_to_the_peer_and_stops_when_the_user_moves_it() {
     let mut host = load();
     let file = host.codebase_dir().unwrap().join("_maps/follow.dmm");
     let shared = open_blank_map(&mut host, file);
-    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password(PASSWORD), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], &|sessions| {
         sessions[0].coop().is_some_and(|coop| coop.is_connected())
@@ -134,7 +134,7 @@ fn following_snaps_the_camera_to_the_peer_and_stops_when_the_user_moves_it() {
     guest
         .join_coop(
             format!("127.0.0.1:{port}"),
-            net::hash_password("hunter2"),
+            net::hash_password(PASSWORD),
             String::from("guest"),
         )
         .unwrap();

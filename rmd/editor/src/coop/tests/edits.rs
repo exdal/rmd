@@ -13,7 +13,7 @@ fn edits_sync_both_ways_converge_and_replay_for_late_joiners() {
     let (left, right) = (Coord::new(1, 1, 1), Coord::new(2, 1, 1));
     open_local(&mut host, host_file.clone());
 
-    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password(PASSWORD), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
     host.share_coop_map();
@@ -22,7 +22,7 @@ fn edits_sync_both_ways_converge_and_replay_for_late_joiners() {
         session
             .join_coop(
                 format!("127.0.0.1:{port}"),
-                net::hash_password("hunter2"),
+                net::hash_password(PASSWORD),
                 String::from(nick),
             )
             .unwrap();
@@ -113,7 +113,7 @@ fn a_reshare_keeps_edits_its_snapshot_missed() {
     let left = Coord::new(1, 1, 1);
     let id = open_local(&mut host, host_file.clone());
 
-    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password(PASSWORD), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
     host.share_coop_map();
@@ -121,7 +121,7 @@ fn a_reshare_keeps_edits_its_snapshot_missed() {
     guest
         .join_coop(
             format!("127.0.0.1:{port}"),
-            net::hash_password("hunter2"),
+            net::hash_password(PASSWORD),
             String::from("guest"),
         )
         .unwrap();
@@ -148,12 +148,7 @@ fn a_reshare_keeps_edits_its_snapshot_missed() {
 
 #[test]
 fn edits_converge_through_a_lossy_link() {
-    let server = Server::spawn(ServerConfig {
-        codebase: None,
-        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-        password: net::hash_password("hunter2"),
-    })
-    .unwrap();
+    let server = spawn_server(None);
     let proxy = LossyProxy::spawn(
         SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         server.local_addr(),
@@ -175,7 +170,7 @@ fn edits_converge_through_a_lossy_link() {
         session
             .join_coop(
                 proxy.local_addr().to_string(),
-                net::hash_password("hunter2"),
+                net::hash_password(PASSWORD),
                 String::from(nick),
             )
             .unwrap();
@@ -328,7 +323,7 @@ fn a_new_level_reaches_every_peer_without_a_reshare() {
     let guest_file = guest_dir.join("_maps/a.dmm");
     let host_id = open_local(&mut host, host_file.clone());
 
-    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password(PASSWORD), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
     host.share_coop_map();
@@ -336,7 +331,7 @@ fn a_new_level_reaches_every_peer_without_a_reshare() {
     guest
         .join_coop(
             format!("127.0.0.1:{port}"),
-            net::hash_password("hunter2"),
+            net::hash_password(PASSWORD),
             String::from("guest"),
         )
         .unwrap();
@@ -395,7 +390,7 @@ fn shared_pair(name: &str) -> (PathBuf, Session, PathBuf, Session, DocumentId, D
     let (guest_dir, mut guest) = codebase_with_map(&format!("{name}-guest"), "aa");
     let host_id = open_local(&mut host, host_dir.join("_maps/a.dmm"));
 
-    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password(PASSWORD), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
     host.share_coop_map();
@@ -403,7 +398,7 @@ fn shared_pair(name: &str) -> (PathBuf, Session, PathBuf, Session, DocumentId, D
     guest
         .join_coop(
             format!("127.0.0.1:{port}"),
-            net::hash_password("hunter2"),
+            net::hash_password(PASSWORD),
             String::from("guest"),
         )
         .unwrap();
@@ -428,7 +423,7 @@ fn a_level_created_before_the_first_share_is_numbered_reaches_peers() {
     let (host_dir, mut host) = codebase_with_map("level-unnumbered-host", "aa");
     let (guest_dir, mut guest) = codebase_with_map("level-unnumbered-guest", "aa");
     let host_id = open_local(&mut host, host_dir.join("_maps/a.dmm"));
-    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password(PASSWORD), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
 
@@ -441,7 +436,7 @@ fn a_level_created_before_the_first_share_is_numbered_reaches_peers() {
     guest
         .join_coop(
             format!("127.0.0.1:{port}"),
-            net::hash_password("hunter2"),
+            net::hash_password(PASSWORD),
             String::from("guest"),
         )
         .unwrap();

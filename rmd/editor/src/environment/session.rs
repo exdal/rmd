@@ -8,16 +8,16 @@ use dmm::{Map, error::MapError};
 use objtree::{ObjectTree, TypeId};
 use render::texture::TextureCatalog;
 
-use crate::session::Session;
 use crate::{
     app::external_editor::SourceLocation,
     environment::{
-        Environment,
+        Environment, is_map,
         progress::{Progress, Stage},
         worker::LoadedCodebase,
         world::World,
     },
     frame::TypeVisibility,
+    session::Session,
     tool::Tool,
 };
 
@@ -57,12 +57,6 @@ fn is_hidden(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.starts_with('.'))
-}
-
-fn is_map(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("dmm"))
 }
 
 pub(crate) fn build_textures(environment: &Environment, progress: &Progress) -> TextureCatalog {

@@ -6,6 +6,7 @@ use base::{
 use defines::{FLOAT_PLANE, RESET_ALPHA, RESET_COLOR, RESET_TRANSFORM, SOUTH};
 use dmm::Prefab;
 use objtree::{ObjectTree, TypeId};
+use ui::color::byte;
 use vm::matrix::Matrix;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -256,7 +257,7 @@ pub fn resolve_overlay(tree: &ObjectTree, parent: &Appearance, delta: &vm::Appea
         let channels = tint(parent.color.as_deref())
             .into_iter()
             .zip(tint(appearance.color.as_deref()))
-            .map(|(parent, own)| format!("{:02x}", (parent * own * 255.0).round() as u8))
+            .map(|(parent, own)| format!("{:02x}", byte(parent * own)))
             .collect::<String>();
         appearance.color = Some(format!("#{channels}"));
     }

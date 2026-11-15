@@ -13,7 +13,7 @@ use crate::{
     frame::visual,
     inspector::session::EditScope,
     session::Session,
-    tool::Tool,
+    tool::{Tool, direction_from_name, directional_type_group, directional_type_target},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,45 +52,6 @@ pub(crate) fn direction_state(
     }
 }
 
-fn direction_from_name(name: &str) -> Option<Dir> {
-    match name {
-        "south" => Some(Dir::South),
-        "north" => Some(Dir::North),
-        "east" => Some(Dir::East),
-        "west" => Some(Dir::West),
-        "southeast" => Some(Dir::Southeast),
-        "southwest" => Some(Dir::Southwest),
-        "northeast" => Some(Dir::Northeast),
-        "northwest" => Some(Dir::Northwest),
-        _ => None,
-    }
-}
-
-fn directional_type_group(tree: &ObjectTree, selected: TypeId) -> Option<(TypeId, Option<Dir>)> {
-    let declaration = tree.get(selected)?;
-    let name = declaration.path.name()?.as_str();
-    if name == "directional" {
-        return Some((selected, None));
-    }
-
-    if let Some(direction) = direction_from_name(name)
-        && let Some(parent) = declaration.parent
-        && tree
-            .get(parent)
-            .and_then(|parent| parent.path.name())
-            .is_some_and(|name| name.as_str() == "directional")
-    {
-        return Some((parent, Some(direction)));
-    }
-
-    declaration.children.iter().copied().find_map(|child| {
-        tree.get(child)
-            .and_then(|child| child.path.name())
-            .is_some_and(|name| name.as_str() == "directional")
-            .then_some((child, None))
-    })
-}
-
 fn directional_types_for(tree: &ObjectTree, selected: TypeId) -> Option<DirectionalTypes> {
     let (group, current) = directional_type_group(tree, selected)?;
     let mut supported = [false; 8];
@@ -112,17 +73,6 @@ fn directional_types_for(tree: &ObjectTree, selected: TypeId) -> Option<Directio
         .iter()
         .any(|supported| *supported)
         .then_some(DirectionalTypes { supported, current })
-}
-
-fn directional_type_target(tree: &ObjectTree, selected: TypeId, direction: Dir) -> Option<TreePath> {
-    let (group, _) = directional_type_group(tree, selected)?;
-
-    tree.get(group)?.children.iter().find_map(|child| {
-        let child = tree.get(*child)?;
-
-        (child.path.name().and_then(|name| direction_from_name(name.as_str())) == Some(direction))
-            .then(|| TreePath::parse(&child.path.to_string()))
-    })
 }
 
 impl Session {
@@ -283,9 +233,13 @@ mod tests {
     use dmm::Prefab;
     use objtree::ObjectTree;
 
-    use super::{direction_mutation, directional_type_target, directional_types_for};
+    use super::{direction_mutation, directional_types_for};
     use crate::{
-        document::VarMutation, environment::Environment, inspector::session::EditScope, session::Session, tool::Tool,
+        document::VarMutation,
+        environment::Environment,
+        inspector::session::EditScope,
+        session::Session,
+        tool::{Tool, directional_type_target},
     };
 
     #[test]

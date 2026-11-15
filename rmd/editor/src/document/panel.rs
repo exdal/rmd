@@ -788,8 +788,9 @@ mod tests {
     };
     use crate::{
         document::{MapDocument, patch},
-        frontend::fixtures::{TestDirectory, click_dialog_button},
+        frontend::fixtures::click_dialog_button,
         session::Session,
+        testing::TempDir,
     };
 
     #[test]
@@ -1077,7 +1078,7 @@ mod tests {
     #[test]
     fn the_new_map_dialog_accepts_dimensions_above_255() {
         let _guard = CONTEXT_LOCK.lock().unwrap();
-        let directory = TestDirectory::new("large-map-dialog");
+        let directory = TempDir::new("large-map-dialog");
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
         let mut session = Session::new();
         session.load_environment(&root.join("test.dme")).unwrap();
@@ -1085,7 +1086,7 @@ mod tests {
 
         for (width, height, levels) in [(256, 1, 1), (1, 256, 1), (1, 1, 256)] {
             let mut context = rectangle_context();
-            let path = directory.0.join(format!("map-{width}-{height}-{levels}.dmm"));
+            let path = directory.path().join(format!("map-{width}-{height}-{levels}.dmm"));
             let mut dialog = Some(NewMapDialog {
                 path: path.to_str().unwrap().to_owned(),
                 width,

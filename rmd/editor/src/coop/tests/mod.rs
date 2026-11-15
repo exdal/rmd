@@ -18,6 +18,7 @@ use crate::{
     document::{DocumentId, command::Edit},
     environment::worker::LoadedMap,
     session::{Session, fixtures},
+    testing::PASSWORD,
     tool::Tool,
 };
 
@@ -26,6 +27,15 @@ mod connection;
 mod edits;
 mod maps;
 mod modules;
+
+fn spawn_server(codebase: Option<CodebaseId>) -> Server {
+    Server::spawn(ServerConfig {
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        password: net::hash_password(PASSWORD),
+        codebase,
+    })
+    .unwrap()
+}
 
 fn session() -> Session {
     let mut session = Session::new();
@@ -59,7 +69,7 @@ const OTHER: PeerId = PeerId(99);
 fn hosting(name: &str) -> (PathBuf, Session) {
     let (dir, mut session) = codebase_with_map(name, "aa");
     session
-        .host_coop(0, net::hash_password("hunter2"), String::from("host"))
+        .host_coop(0, net::hash_password(PASSWORD), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut session], |sessions| connected(sessions[0]));
 
@@ -124,7 +134,7 @@ fn guest_out_of_date(name: &str) -> (PathBuf, Session, PathBuf, Session, Documen
     let local = open_local(&mut guest, guest_dir.join("_maps/a.dmm"));
     guest.state.document_mut(local).unwrap().mark_unsaved();
 
-    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password(PASSWORD), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
     assert!(host.can_share_coop_map());
@@ -140,7 +150,7 @@ fn guest_out_of_date(name: &str) -> (PathBuf, Session, PathBuf, Session, Documen
     guest
         .join_coop(
             format!("127.0.0.1:{port}"),
-            net::hash_password("hunter2"),
+            net::hash_password(PASSWORD),
             String::from("guest"),
         )
         .unwrap();

@@ -31,6 +31,8 @@ mod region;
 mod search;
 mod session;
 mod settings;
+#[cfg(test)]
+mod testing;
 mod tool;
 mod viewport;
 

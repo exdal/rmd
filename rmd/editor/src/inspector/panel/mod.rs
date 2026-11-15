@@ -10,6 +10,7 @@ use dmi::metadata::Dir;
 use dmm::{Coord, Prefab, error::MapErrorKind, parser::parse_value, writer::format_value};
 use objtree::{ObjectTree, ResolvedVarType, TypeId, VarTypeKind};
 use ui::{
+    color::byte,
     icons::materialdesignicons::{
         ICON_ARROW_BOTTOM_LEFT, ICON_ARROW_BOTTOM_RIGHT, ICON_ARROW_DOWN, ICON_ARROW_LEFT, ICON_ARROW_RIGHT,
         ICON_ARROW_TOP_LEFT, ICON_ARROW_TOP_RIGHT, ICON_ARROW_UP, ICON_CIRCLE_SMALL, ICON_PIN, ICON_PIN_OUTLINE,
@@ -1588,8 +1589,7 @@ fn selected_direction(bits: u32, directional_types: Option<DirectionalTypes>) ->
 }
 
 fn format_color(color: [f32; 4]) -> String {
-    let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
-    let [red, green, blue, alpha] = color.map(channel);
+    let [red, green, blue, alpha] = color.map(byte);
 
     if alpha == u8::MAX {
         format!("#{red:02X}{green:02X}{blue:02X}")

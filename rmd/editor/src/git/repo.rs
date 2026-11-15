@@ -105,7 +105,7 @@ pub struct CommitInfo {
     pub pull_request: Option<u64>,
 }
 
-fn pull_request(summary: &str, body: Option<&str>) -> (Option<u64>, String) {
+fn parse_pull_request(summary: &str, body: Option<&str>) -> (Option<u64>, String) {
     fn number(digits: &str) -> Option<u64> {
         if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
             return None;
@@ -158,7 +158,7 @@ impl WebLinks {
     /// `git@github.com:owner/repo.git`
     #[cfg(test)]
     pub fn from_remote(url: &str) -> Option<Self> {
-        web_links(&gix::url::parse(url.as_bytes().as_bstr()).ok()?)
+        web_links_from_url(&gix::url::parse(url.as_bytes().as_bstr()).ok()?)
     }
 
     pub fn commit(&self, hash: &str) -> String {
@@ -268,7 +268,7 @@ impl Repo {
             .ok()
             .or_else(|| self.repo.find_remote("origin").ok())?;
 
-        web_links(remote.url(gix::remote::Direction::Fetch)?)
+        web_links_from_url(remote.url(gix::remote::Direction::Fetch)?)
     }
 
     fn abbreviate(&self, id: ObjectId) -> String {
@@ -283,7 +283,7 @@ impl Repo {
         let (pull_request, summary) = commit.message().map_or((None, String::new()), |message| {
             let body = message.body.map(|body| body.to_str_lossy());
 
-            pull_request(&message.summary().to_str_lossy(), body.as_deref())
+            parse_pull_request(&message.summary().to_str_lossy(), body.as_deref())
         });
 
         Ok(CommitInfo {
@@ -512,7 +512,7 @@ impl Repo {
     }
 }
 
-fn web_links(remote: &gix::Url) -> Option<WebLinks> {
+fn web_links_from_url(remote: &gix::Url) -> Option<WebLinks> {
     use gix::url::Scheme;
 
     let scheme = match remote.scheme {
@@ -566,10 +566,9 @@ fn web_links(remote: &gix::Url) -> Option<WebLinks> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
-    use std::path::{Path, PathBuf};
-
-    use super::{OperationKind, detect_operation, discover, pull_request, web_links};
+mod tests {
+    use super::{OperationKind, detect_operation, discover, parse_pull_request, web_links_from_url};
+    use crate::git::fixtures::{commit, git, git_available, temp_repo};
 
     #[test]
     fn commit_links_follow_the_remote_host_without_credentials() {
@@ -619,7 +618,7 @@ pub(crate) mod tests {
             ("file:///tmp/map.git", None),
         ] {
             let parsed = gix::url::parse(remote).unwrap();
-            let links = web_links(&parsed).map(|links| (links.commit("abc"), links.pull_request(7)));
+            let links = web_links_from_url(&parsed).map(|links| (links.commit("abc"), links.pull_request(7)));
             assert_eq!(
                 links.as_ref().map(|(commit, pull)| (commit.as_str(), pull.as_str())),
                 expected,
@@ -660,46 +659,9 @@ pub(crate) mod tests {
                 (None, "Merge branch 'master' of https://github.com/team/map"),
             ),
         ] {
-            let (number, text) = pull_request(summary, body);
+            let (number, text) = parse_pull_request(summary, body);
             assert_eq!((number, text.as_str()), expected, "{summary}");
         }
-    }
-
-    /// Runs the git executable to build fixtures, `None` when it isn't installed
-    pub(crate) fn git(dir: &Path, arguments: &[&str]) -> Option<String> {
-        let output = std::process::Command::new("git")
-            .args([
-                "-c",
-                "user.name=rmd",
-                "-c",
-                "user.email=rmd@example.com",
-                "-c",
-                "core.autocrlf=false",
-            ])
-            .args(arguments)
-            .current_dir(dir)
-            .output()
-            .ok()?;
-
-        Some(String::from_utf8_lossy(&output.stdout).into_owned() + &String::from_utf8_lossy(&output.stderr))
-    }
-
-    pub(crate) fn git_available() -> bool {
-        git(Path::new("."), &["--version"]).is_some()
-    }
-
-    pub(crate) fn temp_repo(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("rmd-git-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        git(&dir, &["init", "-q", "-b", "main"]);
-        dir
-    }
-
-    pub(crate) fn commit(dir: &Path, file: &str, contents: &str, message: &str) {
-        std::fs::write(dir.join(file), contents).unwrap();
-        git(dir, &["add", file]);
-        git(dir, &["commit", "-q", "-m", message]);
     }
 
     #[test]
@@ -751,8 +713,6 @@ pub(crate) mod tests {
         assert_eq!(turf("v1"), Ok(Some(String::from("/turf/floor"))));
         assert_eq!(turf("HEAD~3"), Ok(None), "the map didn't exist yet");
         assert!(turf("HEAD").is_err(), "an unparseable map is an error");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -833,7 +793,5 @@ pub(crate) mod tests {
             ""
         );
         assert_eq!(git(&dir, &["show", ":maps/a.dmm"]).unwrap(), "resolved\n");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

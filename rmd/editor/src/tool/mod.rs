@@ -836,7 +836,7 @@ fn transform_direction(direction: Dir, transform: SelectionTransform) -> Dir {
     }
 }
 
-fn direction_from_name(name: &str) -> Option<Dir> {
+pub(crate) fn direction_from_name(name: &str) -> Option<Dir> {
     match name {
         "south" => Some(Dir::South),
         "north" => Some(Dir::North),
@@ -850,12 +850,13 @@ fn direction_from_name(name: &str) -> Option<Dir> {
     }
 }
 
-fn directional_type_group(tree: &ObjectTree, selected: TypeId) -> Option<(TypeId, Option<Dir>)> {
+pub(crate) fn directional_type_group(tree: &ObjectTree, selected: TypeId) -> Option<(TypeId, Option<Dir>)> {
     let declaration = tree.get(selected)?;
     let name = declaration.path.name()?.as_str();
     if name == "directional" {
         return Some((selected, None));
     }
+
     if let Some(direction) = direction_from_name(name)
         && let Some(parent) = declaration.parent
         && tree
@@ -874,7 +875,7 @@ fn directional_type_group(tree: &ObjectTree, selected: TypeId) -> Option<(TypeId
     })
 }
 
-fn directional_type_target(tree: &ObjectTree, selected: TypeId, direction: Dir) -> Option<TreePath> {
+pub(crate) fn directional_type_target(tree: &ObjectTree, selected: TypeId, direction: Dir) -> Option<TreePath> {
     let (group, _) = directional_type_group(tree, selected)?;
 
     tree.get(group)?.children.iter().find_map(|child| {

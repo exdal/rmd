@@ -1,5 +1,5 @@
 use base::path::TreePath;
-use std::{ffi::CStr, fs, path::PathBuf};
+use std::{ffi::CStr, path::PathBuf};
 
 use dear_imgui_rs::{Condition, Key, MouseButton, Ui, sys};
 use dmm::{Prefab, Size};
@@ -268,21 +268,5 @@ pub(crate) fn click_dialog_button(
         let ui = context.frame();
         draw(ui);
         assert!(context.render_legacy().valid());
-    }
-}
-
-pub(crate) struct TestDirectory(pub(crate) PathBuf);
-
-impl TestDirectory {
-    pub(crate) fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("rmd-close-{name}-{}", std::process::id()));
-        fs::create_dir_all(&path).unwrap();
-        Self(path)
-    }
-}
-
-impl Drop for TestDirectory {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
     }
 }

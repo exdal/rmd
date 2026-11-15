@@ -38,6 +38,7 @@ use crate::{
         Settings,
         keybind::{KeybindAction, KeybindPreset},
     },
+    testing::PASSWORD,
     tool::{RegionSelectionMode, SelectionMask, Tool},
     viewport::camera::Controller,
 };

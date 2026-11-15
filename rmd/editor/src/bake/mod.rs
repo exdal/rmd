@@ -460,7 +460,7 @@ pub fn build_map(
 
 #[cfg(test)]
 mod tests {
-    use base::{arena::StrArena, path::TreePath};
+    use base::path::TreePath;
     use std::{
         path::PathBuf,
         sync::atomic::{AtomicUsize, Ordering},
@@ -472,7 +472,8 @@ mod tests {
     use crate::{
         document::command::Edit,
         environment::world::Perspective,
-        frame::{self, visual},
+        frame::{self, fixtures, visual},
+        testing,
     };
 
     fn examples() -> PathBuf {
@@ -480,40 +481,10 @@ mod tests {
     }
 
     fn environment(profile: &'static str) -> Environment {
-        let root = examples();
-        let compile = |baking| {
-            let arena = StrArena::new();
-            let prelude = preprocessor::prelude_files().into_iter().chain([
-                preprocessor::PreludeFile::Embedded("<test-profile.dm>", profile),
-                preprocessor::PreludeFile::Embedded(
-                    "<test-profile-default.dm>",
-                    "/datum/demir/test\n    default = TRUE\n",
-                ),
-            ]);
-            let preprocessed = preprocessor::Preprocessor::new(&arena)
-                .with_prelude(prelude)
-                .with_baking(baking)
-                .run(root.join("test.dm"))
-                .expect("preprocess");
-            assert!(preprocessed.is_ok(), "{:?}", preprocessed.errors);
-
-            let ast = ast::parse(&preprocessed.tokens).expect("parse");
-            let (tree, errors) = sema::analyze(&ast);
-            assert!(errors.is_empty(), "{errors:?}");
-            let (module, _) = ir::lower(&ast, &tree, baking);
-
-            (tree, module)
-        };
-        let (editor_tree, _) = compile(false);
-        let (bake_tree, module) = compile(true);
-        let profile = vm::bake::profile_type(&bake_tree).expect("default profile");
-        let mut environment = Environment::new(root.join("test.dme"), editor_tree);
-        environment.bake_program = Some(BakeProgram {
-            tree: bake_tree,
-            module: codegen::generate(&module).expect("codegen"),
-            profile,
-            icon_states: Default::default(),
-        });
+        let mut environment = testing::compile_environment(&[
+            ("<test-profile.dm>", profile),
+            ("<test-profile-default.dm>", "/datum/demir/test\n    default = TRUE\n"),
+        ]);
         let failures = environment.load_icons(&[], &crate::environment::progress::Progress::new());
         assert!(failures.is_empty(), "{failures:?}");
 
@@ -802,7 +773,7 @@ mod tests {
             )
             .expect("pack test icon");
         let visibility = frame::TypeVisibility::default();
-        let instances = frame::build_with_options(
+        let instances = fixtures::build_with_options(
             &environment.tree,
             &environment.icons,
             &textures,
@@ -849,7 +820,7 @@ mod tests {
             )
             .expect("pack test icon");
         let visibility = frame::TypeVisibility::default();
-        let instances = frame::build_with_options(
+        let instances = fixtures::build_with_options(
             &environment.tree,
             &environment.icons,
             &textures,
@@ -899,7 +870,7 @@ mod tests {
             )
             .expect("pack test icon");
         let visibility = frame::TypeVisibility::default();
-        let mut instances = frame::build_with_options(
+        let mut instances = fixtures::build_with_options(
             &environment.tree,
             &environment.icons,
             &textures,
@@ -917,7 +888,7 @@ mod tests {
 
         assert_eq!(var(&bake, south, "name"), Some("12"));
 
-        frame::update_prefabs_with_options(
+        fixtures::update_prefabs_with_options(
             &mut instances,
             &environment.tree,
             &environment.icons,
@@ -926,7 +897,7 @@ mod tests {
             &affected.appearances,
             options(&visibility, &bake),
         );
-        let rebuilt = frame::build_with_options(
+        let rebuilt = fixtures::build_with_options(
             &environment.tree,
             &environment.icons,
             &textures,

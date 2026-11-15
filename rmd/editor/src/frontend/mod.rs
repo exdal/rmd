@@ -1091,6 +1091,7 @@ mod tests {
             OpenPanels, Panel, Settings,
             keybind::{KeyBindings, KeybindAction},
         },
+        testing::PASSWORD,
         tool::FillMode,
     };
 
@@ -1651,7 +1652,7 @@ mod tests {
         };
 
         let (mut host, _) = open(2);
-        host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+        host.host_coop(0, net::hash_password(PASSWORD), String::from("host"))
             .unwrap();
         poll_until(&mut [&mut host], &|sessions| {
             sessions[0].coop().is_some_and(|coop| coop.is_connected())
@@ -1667,7 +1668,7 @@ mod tests {
         guest
             .join_coop(
                 format!("127.0.0.1:{port}"),
-                net::hash_password("hunter2"),
+                net::hash_password(PASSWORD),
                 String::from("guest"),
             )
             .unwrap();

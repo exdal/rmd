@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use super::*;
-use crate::maploader::session::tests::{
+use crate::maploader::fixtures::{
     Fixture, MODULE, TestResult, WALL, assert_settled, has, open_document, place_in, show,
 };
 
@@ -30,16 +30,12 @@ fn hosting_modules() -> TestResult<Shared> {
 
 // the fixture's environment is built in memory and has no fingerprint to host with
 fn host_fixture(session: &mut Session) -> TestResult {
-    let password = net::hash_password("hunter2");
+    let password = net::hash_password(PASSWORD);
     let codebase = CodebaseId {
         hash: CodebaseHash([7; 32]),
         git_hint: None,
     };
-    let server = Server::spawn(ServerConfig {
-        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-        password,
-        codebase: Some(codebase.clone()),
-    })?;
+    let server = spawn_server(Some(codebase.clone()));
     let port = server.local_addr().port();
     let connection = CoopConnection::Host { port, password };
     session

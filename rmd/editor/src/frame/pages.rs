@@ -337,60 +337,61 @@ pub(super) fn replace_owner_sprites(
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+/// Pages sit back to back, hold sorted keys within their bounds, and pad with spare slots.
+pub(super) fn assert_pages_hold(instances: &FrameInstances) {
+    assert_eq!(instances.sprites.len(), instances.pages.len() * PAGE_CAPACITY);
+    let mut live = 0;
+    for (index, page) in instances.pages.iter().enumerate() {
+        assert_eq!(page.start, index * PAGE_CAPACITY);
+        assert!(page.len <= PAGE_CAPACITY);
+        let next = instances.pages.get(index + 1).map(|next| next.lower);
+        let keys = &instances.sprite_sort_keys[page.start..page.start + page.len];
+        assert!(keys.windows(2).all(|keys| keys[0] < keys[1]));
+        assert!(
+            keys.iter()
+                .all(|key| *key >= page.lower && next.is_none_or(|next| *key < next))
+        );
+
+        let slots = &instances.sprites[page.start..page.start + PAGE_CAPACITY];
+        let (used, spare) = slots.split_at(page.len);
+        assert!(used.iter().all(|sprite| sprite.owner != SPARE_OWNER));
+        assert!(spare.iter().all(|sprite| *sprite == spare_sprite(page.lower.0)));
+        live += page.len;
+    }
+
+    let owned = instances
+        .owner_keys
+        .values()
+        .map(|keys| keys.as_slice().len())
+        .sum::<usize>();
+    assert_eq!(owned, live);
+    for (owner, keys) in &instances.owner_keys {
+        for key in keys.as_slice() {
+            let page = instances.pages[instances.page_of(key).expect("a page for every key")];
+            let index = instances.sprite_sort_keys[page.start..page.start + page.len]
+                .binary_search(key)
+                .expect("an owner key is in its page");
+            assert_eq!(instances.sprites[page.start + index].owner, *owner);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
     use base::path::TreePath;
 
     use dmm::{Coord, Map, Prefab, Size};
 
-    use super::{PAGE_CAPACITY, SPARE_OWNER, spare_sprite};
+    use super::{PAGE_CAPACITY, assert_pages_hold};
     use crate::{
         document::{MapDocument, PrefabInstanceId, command::Edit},
         environment::world::Perspective,
         frame::{
-            FrameInstances, FrameRenderOptions, PrefabUpdate, TypeVisibility, build, build_with_options,
+            FrameRenderOptions, PrefabUpdate, TypeVisibility,
+            fixtures::{build, build_with_options, update_prefab, update_prefabs},
             tests::{assert_render_data_matches, document, icons, textures, tree},
-            update_prefab, update_prefabs,
         },
     };
-
-    /// Pages sit back to back, hold sorted keys within their bounds, and pad with spare slots.
-    pub(in crate::frame) fn assert_pages_hold(instances: &FrameInstances) {
-        assert_eq!(instances.sprites.len(), instances.pages.len() * PAGE_CAPACITY);
-        let mut live = 0;
-        for (index, page) in instances.pages.iter().enumerate() {
-            assert_eq!(page.start, index * PAGE_CAPACITY);
-            assert!(page.len <= PAGE_CAPACITY);
-            let next = instances.pages.get(index + 1).map(|next| next.lower);
-            let keys = &instances.sprite_sort_keys[page.start..page.start + page.len];
-            assert!(keys.windows(2).all(|keys| keys[0] < keys[1]));
-            assert!(
-                keys.iter()
-                    .all(|key| *key >= page.lower && next.is_none_or(|next| *key < next))
-            );
-
-            let slots = &instances.sprites[page.start..page.start + PAGE_CAPACITY];
-            let (used, spare) = slots.split_at(page.len);
-            assert!(used.iter().all(|sprite| sprite.owner != SPARE_OWNER));
-            assert!(spare.iter().all(|sprite| *sprite == spare_sprite(page.lower.0)));
-            live += page.len;
-        }
-
-        let owned = instances
-            .owner_keys
-            .values()
-            .map(|keys| keys.as_slice().len())
-            .sum::<usize>();
-        assert_eq!(owned, live);
-        for (owner, keys) in &instances.owner_keys {
-            for key in keys.as_slice() {
-                let page = instances.pages[instances.page_of(key).expect("a page for every key")];
-                let index = instances.sprite_sort_keys[page.start..page.start + page.len]
-                    .binary_search(key)
-                    .expect("an owner key is in its page");
-                assert_eq!(instances.sprites[page.start + index].owner, *owner);
-            }
-        }
-    }
 
     fn floor_map(width: u32, height: u32, levels: u32) -> Map {
         let mut map = Map::new(Size {

@@ -15,7 +15,7 @@ use crate::{
 };
 
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;
 
 impl Session {
     pub(crate) fn effective_grid(&self, id: DocumentId) -> Option<MapView<'_>> {

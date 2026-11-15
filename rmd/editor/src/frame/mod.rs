@@ -18,10 +18,10 @@ use vm::{
     matrix::Matrix,
 };
 
-#[cfg(test)]
-use crate::document::MapDocument;
 use crate::{document::PrefabInstanceId, environment::world::Perspective, maploader::preview::MapView};
 
+#[cfg(test)]
+pub(crate) mod fixtures;
 mod pages;
 pub(crate) mod session;
 pub(crate) mod visual;
@@ -387,35 +387,6 @@ pub fn instance_for(
     }
 }
 
-#[cfg(test)]
-pub fn build(
-    tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, document: &MapDocument,
-    tile_size: u32,
-) -> FrameInstances {
-    build_with_options(
-        tree,
-        icons,
-        textures,
-        document,
-        FrameRenderOptions {
-            perspective: Perspective::TopDown,
-            node_types: None,
-            visibility: &TypeVisibility::default(),
-            tile_size,
-            appearances: &HashMap::new(),
-            lighting: None,
-        },
-    )
-}
-
-#[cfg(test)]
-pub fn build_with_options(
-    tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, document: &MapDocument,
-    options: FrameRenderOptions<'_>,
-) -> FrameInstances {
-    build_view_with_options(tree, icons, textures, (&document.map).into(), options)
-}
-
 pub fn build_view_with_options(
     tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, map: MapView<'_>,
     options: FrameRenderOptions<'_>,
@@ -509,53 +480,6 @@ pub fn build_view_with_options(
     instances.lay_out(keyed_sprites, map.size().z.max(1));
 
     instances
-}
-
-#[cfg(test)]
-pub fn update_prefab(
-    instances: &mut FrameInstances, tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog,
-    document: &MapDocument, owner: PrefabInstanceId, tile_size: u32,
-) -> PrefabUpdate {
-    update_prefabs(instances, tree, icons, textures, document, &[owner], tile_size)
-}
-
-#[cfg(test)]
-pub fn update_prefabs(
-    instances: &mut FrameInstances, tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog,
-    document: &MapDocument, owners: &[PrefabInstanceId], tile_size: u32,
-) -> PrefabUpdate {
-    update_prefabs_with_options(
-        instances,
-        tree,
-        icons,
-        textures,
-        document,
-        owners,
-        FrameRenderOptions {
-            perspective: Perspective::TopDown,
-            node_types: None,
-            visibility: &TypeVisibility::default(),
-            tile_size,
-            appearances: &HashMap::new(),
-            lighting: None,
-        },
-    )
-}
-
-#[cfg(test)]
-pub fn update_prefabs_with_options(
-    instances: &mut FrameInstances, tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog,
-    document: &MapDocument, owners: &[PrefabInstanceId], options: FrameRenderOptions<'_>,
-) -> PrefabUpdate {
-    update_view_prefabs_with_options(
-        instances,
-        tree,
-        icons,
-        textures,
-        (&document.map).into(),
-        owners,
-        options,
-    )
 }
 
 pub fn update_view_prefabs_with_options(
@@ -1278,8 +1202,11 @@ mod tests {
     use vm::{AppearanceDelta, bake::SharedAppearance, matrix::Matrix};
 
     use super::{
-        FrameInstances, FrameRenderOptions, PrefabUpdate, TypeVisibility, build, build_with_options, instance_for,
-        pages::tests::assert_pages_hold, side_row, update_prefab, update_prefabs, update_prefabs_with_options,
+        FrameInstances, FrameRenderOptions, PrefabUpdate, TypeVisibility,
+        fixtures::{build, build_with_options, update_prefab, update_prefabs, update_prefabs_with_options},
+        instance_for,
+        pages::assert_pages_hold,
+        side_row,
     };
     use crate::{
         document::{MapDocument, PrefabInstanceId, VarMutation, command::Edit},
@@ -3077,7 +3004,7 @@ mod example_environment {
     use dmi::IconFile;
     use render::texture::TextureCatalog;
 
-    use super::build;
+    use super::fixtures::build;
     use crate::{document::MapDocument, environment::Environment};
 
     fn examples() -> PathBuf {

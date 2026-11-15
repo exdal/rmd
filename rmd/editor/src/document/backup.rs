@@ -75,12 +75,7 @@ fn prune(root: &Path, cutoff: SystemTime) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("rmd-backup-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        dir
-    }
+    use crate::testing::TempDir;
 
     fn files(dir: &Path) -> Vec<PathBuf> {
         let mut files: Vec<_> = backups(dir).unwrap().into_iter().map(|(path, _)| path).collect();
@@ -90,7 +85,8 @@ mod tests {
 
     #[test]
     fn opening_a_map_backs_it_up_once_per_change() {
-        let root = scratch("changes");
+        let dir = TempDir::new("backup-changes");
+        let root = dir.join("backups");
         let map = Path::new("maps/station.dmm");
         let now = SystemTime::now();
 
@@ -102,13 +98,12 @@ mod tests {
         let saved = files(&root.join("station"));
         assert_eq!(saved.len(), 2);
         assert!(saved.iter().any(|path| fs::read_to_string(path).unwrap() == "second"));
-
-        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn backups_older_than_three_days_are_deleted_for_every_map() {
-        let root = scratch("prune");
+        let dir = TempDir::new("backup-prune");
+        let root = dir.join("backups");
         let now = SystemTime::now();
         let stale = root.join("old/2020-01-01_00-00-00.dmm");
         fs::create_dir_all(stale.parent().unwrap()).unwrap();
@@ -125,7 +120,5 @@ mod tests {
         assert!(!stale.exists());
         assert!(!root.join("old").exists());
         assert_eq!(files(&root.join("station")).len(), 1);
-
-        fs::remove_dir_all(&root).unwrap();
     }
 }

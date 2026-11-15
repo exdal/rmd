@@ -17,7 +17,7 @@ fn a_different_codebase_is_rejected_without_touching_unsaved_maps_then_can_retry
     guest
         .join_coop(
             format!("127.0.0.1:{port}"),
-            net::hash_password("hunter2"),
+            net::hash_password(PASSWORD),
             "guest".into(),
         )
         .unwrap();
@@ -144,7 +144,7 @@ fn changing_a_hosts_codebase_stops_its_relay_and_closes_pending_documents() {
     guest
         .join_coop(
             format!("127.0.0.1:{port}"),
-            net::hash_password("hunter2"),
+            net::hash_password(PASSWORD),
             "guest".into(),
         )
         .unwrap();

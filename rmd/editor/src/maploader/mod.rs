@@ -1,4 +1,6 @@
 pub mod error;
+#[cfg(test)]
+pub(crate) mod fixtures;
 pub mod module;
 pub mod panel;
 pub mod preview;

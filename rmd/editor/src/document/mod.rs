@@ -998,19 +998,25 @@ impl MapDocument {
     }
 
     pub fn insert_requested_level(&mut self, z: u32, cells: LevelCells) -> bool {
+        if self.read_only {
+            return false;
+        }
+
         let edit = Edit::new(format!("create Z level {z}")).changing_level(LevelEdit::Insert { z, cells });
         if !self.history.apply_grouped(&mut self.map, edit, None) {
             return false;
         }
 
-        self.shift_journal(LevelChange::Inserted(z));
-        self.level_changed(z);
-        self.generation += 1;
+        self.requested_level_changed(LevelChange::Inserted(z));
 
         true
     }
 
     pub fn insert_remote_level(&mut self, z: u32, cells: LevelCells) -> bool {
+        if self.read_only {
+            return false;
+        }
+
         let is_appended = z > self.map.size().z;
         let edit = Edit::new(format!("create Z level {z}")).changing_level(LevelEdit::Insert { z, cells });
         if !command::apply_unrecorded(&mut self.map, &edit) {
@@ -1033,6 +1039,10 @@ impl MapDocument {
 
     // our own level undo, back from the server like a peer's change would be
     pub fn undo_requested_level(&mut self, change: LevelChange) -> bool {
+        if self.read_only {
+            return false;
+        }
+
         if self
             .history
             .next_undo()
@@ -1050,6 +1060,10 @@ impl MapDocument {
     }
 
     pub fn redo_requested_level(&mut self, change: LevelChange) -> bool {
+        if self.read_only {
+            return false;
+        }
+
         if self.history.next_redo().and_then(Edit::level).map(LevelEdit::change) != Some(change)
             || self.history.redo(&mut self.map).is_none()
         {
@@ -1100,6 +1114,10 @@ impl MapDocument {
     }
 
     pub fn delete_requested_level(&mut self, z: u32) -> bool {
+        if self.read_only {
+            return false;
+        }
+
         let Some(edit) = self.delete_level_edit(z) else {
             return false;
         };
@@ -1108,14 +1126,16 @@ impl MapDocument {
             return false;
         }
 
-        self.shift_journal(LevelChange::Deleted(z));
-        self.level_changed(z);
-        self.generation += 1;
+        self.requested_level_changed(LevelChange::Deleted(z));
 
         true
     }
 
     pub fn delete_remote_level(&mut self, z: u32) -> bool {
+        if self.read_only {
+            return false;
+        }
+
         let Some(edit) = self.delete_level_edit(z) else {
             return false;
         };
@@ -1222,7 +1242,7 @@ mod tests {
     use std::{collections::HashSet, env, error::Error, fs, process, ptr};
 
     use dmm::{Map, MapFormat, Prefab, Size, parser, writer::MapWriter};
-    use net::LevelContents;
+    use net::{LevelChange, LevelContents};
     use objtree::ObjectTree;
 
     use super::{Coord, MapDocument, Selection, VarMutation, sanitize_vars};
@@ -2281,5 +2301,34 @@ mod tests {
         assert!(peer.is_dirty());
         assert!(author.undo());
         assert!(author.take_journal().is_some_and(|journal| journal.reshaped));
+    }
+
+    #[test]
+    fn read_only_documents_refuse_requested_and_remote_level_changes() {
+        let mut document = level_document();
+        let empty = LevelContents::Fill(patch::encode_tile(&[]));
+        assert_eq!(document.append_level(&[]), Some(4));
+        let original = document.map.clone();
+        document.set_read_only(true);
+
+        let cells = document.level_cells(&empty);
+        assert!(!document.insert_requested_level(5, cells));
+        let cells = document.level_cells(&empty);
+        assert!(!document.insert_remote_level(5, cells));
+        assert!(!document.delete_requested_level(2));
+        assert!(!document.delete_remote_level(2));
+        assert!(!document.undo_requested_level(LevelChange::Deleted(4)));
+        assert_eq!(document.map, original);
+        assert_eq!(document.history.undo_depth(), 1);
+
+        document.set_read_only(false);
+        assert!(document.undo_requested_level(LevelChange::Deleted(4)));
+        document.set_read_only(true);
+        assert!(!document.redo_requested_level(LevelChange::Inserted(4)));
+        assert_eq!(document.history.undo_depth(), 0);
+
+        document.set_read_only(false);
+        assert!(document.redo_requested_level(LevelChange::Inserted(4)));
+        assert_eq!(document.map, original);
     }
 }

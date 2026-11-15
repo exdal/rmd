@@ -331,8 +331,8 @@ impl LoadDiagnostics {
 
 pub(crate) fn is_map(path: &Path) -> bool {
     path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("dmm"))
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("dmm"))
 }
 
 pub(crate) fn source_root<'a>(sources: &'a SourceMap<'_>, entry: Option<FileId>, path: &'a Path) -> &'a Path {

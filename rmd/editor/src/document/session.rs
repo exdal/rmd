@@ -9,7 +9,7 @@ use dmm::{Map, MapFormat, Prefab, Size};
 use crate::git::session::GitDocState;
 use crate::{coop::LevelStep, session::Session, tool::session::is_reorder_label};
 use crate::{
-    document::{DocumentId, MapDocument, grid::Grid},
+    document::{DocumentId, MapDocument, command::Edit, grid::Grid},
     environment::worker::LoadedMap,
     git::conflict::ConflictState,
     tool::Tool,
@@ -234,146 +234,96 @@ impl Session {
         self.has_loaded_conflicts(id) || !self.can_step_coop_level(id)
     }
 
-    pub fn undo_label(&self) -> Option<&str> {
+    fn next_step(&self, step: LevelStep) -> Option<&Edit> {
+        let history = &self.state.active_document()?.history;
+        match step {
+            LevelStep::Undo => history.next_undo(),
+            LevelStep::Redo => history.next_redo(),
+            LevelStep::Change => None,
+        }
+    }
+
+    fn step_label(&self, step: LevelStep) -> Option<&str> {
         let id = self.state.active()?;
         let document = self.state.document(id)?;
-        if document.history.next_undo()?.level().is_some() && self.is_level_history_blocked(id) {
+        if self.next_step(step)?.level().is_some() && self.is_level_history_blocked(id) {
             return None;
         }
 
-        document.undo_label()
+        match step {
+            LevelStep::Undo => document.undo_label(),
+            LevelStep::Redo => document.redo_label(),
+            LevelStep::Change => None,
+        }
+    }
+
+    pub fn undo_label(&self) -> Option<&str> {
+        self.step_label(LevelStep::Undo)
     }
 
     pub fn redo_label(&self) -> Option<&str> {
-        let id = self.state.active()?;
-        let document = self.state.document(id)?;
-        if document.history.next_redo()?.level().is_some() && self.is_level_history_blocked(id) {
-            return None;
+        self.step_label(LevelStep::Redo)
+    }
+
+    fn step(&mut self, step: LevelStep) -> bool {
+        let reordered = self.step_label(step).is_some_and(is_reorder_label);
+        let is_level_edit = self.next_step(step).is_some_and(|edit| edit.level().is_some());
+
+        if is_level_edit {
+            let Some(id) = self.state.active() else {
+                return false;
+            };
+
+            if self.is_level_history_blocked(id) {
+                return false;
+            }
+
+            // a shared map's level edits go through the server like they were made
+            if let Some(is_requested) = self.request_coop_level_step(id, step) {
+                return is_requested;
+            }
+
+            self.cancel_node_edit();
         }
 
-        document.redo_label()
+        let resized = self.next_step(step).is_some_and(|edit| edit.resize().is_some());
+        let Some(affected) = self.state.active_document_mut().and_then(|document| match step {
+            LevelStep::Undo => document.undo_with_affected(),
+            LevelStep::Redo => document.redo_with_affected(),
+            LevelStep::Change => None,
+        }) else {
+            return false;
+        };
+
+        if is_level_edit {
+            if let Some(id) = self.state.active() {
+                self.rebake_levels(id);
+            }
+        } else if resized {
+            if let Some(id) = self.state.active() {
+                self.rebake(id);
+            }
+        } else if reordered {
+            self.refresh_reordered_from_affected(&affected);
+        } else {
+            self.update_instances(&affected);
+        }
+
+        if let Some(id) = self.state.active()
+            && let Some(cache) = self.caches.get_mut(&id)
+        {
+            cache.map_revision = cache.map_revision.wrapping_add(1);
+        }
+
+        true
     }
 
     pub fn undo(&mut self) -> bool {
-        let reordered = self.undo_label().is_some_and(is_reorder_label);
-        let is_level_edit = self
-            .state
-            .active_document()
-            .and_then(|document| document.history.next_undo())
-            .is_some_and(|edit| edit.level().is_some());
-
-        if is_level_edit {
-            let Some(id) = self.state.active() else {
-                return false;
-            };
-
-            if self.is_level_history_blocked(id) {
-                return false;
-            }
-
-            // a shared map's level edits go through the server like they were made
-            if let Some(is_requested) = self.request_coop_level_step(id, LevelStep::Undo) {
-                return is_requested;
-            }
-
-            self.cancel_node_edit();
-        }
-
-        let resized = self
-            .state
-            .active_document()
-            .and_then(|document| document.history.next_undo())
-            .is_some_and(|edit| edit.resize().is_some());
-        let Some(affected) = self
-            .state
-            .active_document_mut()
-            .and_then(MapDocument::undo_with_affected)
-        else {
-            return false;
-        };
-
-        if is_level_edit {
-            if let Some(id) = self.state.active() {
-                self.rebake_levels(id);
-            }
-        } else if resized {
-            if let Some(id) = self.state.active() {
-                self.rebake(id);
-            }
-        } else if reordered {
-            self.refresh_reordered_from_affected(&affected);
-        } else {
-            self.update_instances(&affected);
-        }
-
-        if let Some(id) = self.state.active()
-            && let Some(cache) = self.caches.get_mut(&id)
-        {
-            cache.map_revision = cache.map_revision.wrapping_add(1);
-        }
-
-        true
+        self.step(LevelStep::Undo)
     }
 
     pub fn redo(&mut self) -> bool {
-        let reordered = self.redo_label().is_some_and(is_reorder_label);
-        let is_level_edit = self
-            .state
-            .active_document()
-            .and_then(|document| document.history.next_redo())
-            .is_some_and(|edit| edit.level().is_some());
-
-        if is_level_edit {
-            let Some(id) = self.state.active() else {
-                return false;
-            };
-
-            if self.is_level_history_blocked(id) {
-                return false;
-            }
-
-            // a shared map's level edits go through the server like they were made
-            if let Some(is_requested) = self.request_coop_level_step(id, LevelStep::Redo) {
-                return is_requested;
-            }
-
-            self.cancel_node_edit();
-        }
-
-        let resized = self
-            .state
-            .active_document()
-            .and_then(|document| document.history.next_redo())
-            .is_some_and(|edit| edit.resize().is_some());
-        let Some(affected) = self
-            .state
-            .active_document_mut()
-            .and_then(MapDocument::redo_with_affected)
-        else {
-            return false;
-        };
-
-        if is_level_edit {
-            if let Some(id) = self.state.active() {
-                self.rebake_levels(id);
-            }
-        } else if resized {
-            if let Some(id) = self.state.active() {
-                self.rebake(id);
-            }
-        } else if reordered {
-            self.refresh_reordered_from_affected(&affected);
-        } else {
-            self.update_instances(&affected);
-        }
-
-        if let Some(id) = self.state.active()
-            && let Some(cache) = self.caches.get_mut(&id)
-        {
-            cache.map_revision = cache.map_revision.wrapping_add(1);
-        }
-
-        true
+        self.step(LevelStep::Redo)
     }
 
     pub fn can_save_map_in_place(&self) -> bool {

@@ -59,7 +59,7 @@ pub(crate) struct LoggedFault {
     state: FaultState,
 }
 
-fn log_runtimes(bake: &crate::bake::Bake, log: &mut Vec<LoggedFault>) {
+fn update_fault_log(bake: &crate::bake::Bake, log: &mut Vec<LoggedFault>) {
     for logged in log.iter_mut() {
         logged.state = FaultState::Stopped;
     }
@@ -94,7 +94,7 @@ impl Session {
     pub(crate) fn log_runtimes(&mut self) {
         for cache in self.caches.values_mut() {
             if let Some(bake) = cache.bake.as_ref() {
-                log_runtimes(bake, &mut cache.runtimes);
+                update_fault_log(bake, &mut cache.runtimes);
             }
         }
     }

@@ -1,5 +1,4 @@
 use base::{
-    arena::StrArena,
     path::TreePath,
     types::{Identifier, Value},
 };
@@ -18,13 +17,14 @@ use crate::git::{
 };
 use crate::{
     document::{DocumentId, MapDocument, PrefabInstanceId},
-    environment::{BakeProgram, Environment, progress::Progress},
+    environment::{Environment, progress::Progress},
     git::{
         blame::BlameResult,
         diff::DiffSource,
         repo::{CommitInfo, WebLinks},
         worker::Revision,
     },
+    testing,
 };
 
 /// Counts live heap bytes, so memory tests can measure what a structure holds by dropping it.
@@ -261,38 +261,7 @@ pub(super) fn layered_node_environment() -> Environment {
 }
 
 pub(crate) fn node_environment_with_profile(profile: &'static str) -> Environment {
-    let root = examples();
-    let compile = |baking| {
-        let arena = StrArena::new();
-        let prelude = preprocessor::prelude_files()
-            .into_iter()
-            .chain([preprocessor::PreludeFile::Embedded("<test-node-profile.dm>", profile)]);
-        let preprocessed = preprocessor::Preprocessor::new(&arena)
-            .with_prelude(prelude)
-            .with_baking(baking)
-            .run(root.join("test.dm"))
-            .expect("preprocess");
-        assert!(preprocessed.is_ok(), "{:?}", preprocessed.errors);
-
-        let ast = ast::parse(&preprocessed.tokens).expect("parse");
-        let (tree, errors) = sema::analyze(&ast);
-        assert!(errors.is_empty(), "{errors:?}");
-        let (module, _) = ir::lower(&ast, &tree, baking);
-
-        (tree, module)
-    };
-    let (editor_tree, _) = compile(false);
-    let (bake_tree, module) = compile(true);
-    let profile = vm::bake::profile_type(&bake_tree).expect("default profile");
-    let mut environment = Environment::new(root.join("test.dme"), editor_tree);
-    environment.bake_program = Some(BakeProgram {
-        tree: bake_tree,
-        module: codegen::generate(&module).expect("codegen"),
-        profile,
-        icon_states: Default::default(),
-    });
-
-    environment
+    testing::compile_environment(&[("<test-node-profile.dm>", profile)])
 }
 
 /// One floor tile whose profile faults in `bake()` and `ui()`
@@ -539,14 +508,6 @@ pub(crate) fn settle_bake(session: &mut Session) {
         session.poll_bake();
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-}
-
-pub(crate) fn module_viewport_session() -> Result<(impl Sized, Session), Box<dyn std::error::Error>> {
-    crate::maploader::session::tests::viewport_session()
-}
-
-pub(crate) fn coordinate_viewport_session() -> Result<(impl Sized, Session), Box<dyn std::error::Error>> {
-    crate::maploader::session::tests::coordinate_viewport_session()
 }
 
 pub(crate) fn assert_render_cache_matches_rebuild(session: &Session) {

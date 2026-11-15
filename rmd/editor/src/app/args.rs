@@ -1,5 +1,7 @@
 use std::{path::PathBuf, process::ExitCode};
 
+use crate::environment::is_map;
+
 pub(super) fn usage() -> ExitCode {
     log::error!(
         "usage: rmde\n       rmde <file.dme> [file.dmm] [z]\n       rmde <file.dme> [z]\n       rmde <file.dmm> [z]"
@@ -36,10 +38,4 @@ fn parse_z(argument: &std::path::Path) -> Result<u32, String> {
         .and_then(|argument| argument.parse::<u32>().ok())
         .filter(|z| *z > 0)
         .ok_or_else(|| format!("invalid z level '{}': expected a positive integer", argument.display()))
-}
-
-fn is_map(path: &std::path::Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("dmm"))
 }

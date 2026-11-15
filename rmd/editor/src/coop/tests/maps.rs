@@ -120,7 +120,7 @@ fn sharing_a_file_needs_it_open_and_a_connection() {
     assert!(!session.share_coop_file(&file), "shared without a session");
 
     session
-        .host_coop(0, net::hash_password("hunter2"), String::from("host"))
+        .host_coop(0, net::hash_password(PASSWORD), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut session], |sessions| connected(sessions[0]));
     assert!(!session.share_coop_file(&dir.join("_maps/missing.dmm")));
@@ -296,7 +296,7 @@ fn a_closed_shared_map_resyncs_when_reopened() {
     let (left, right) = (Coord::new(1, 1, 1), Coord::new(2, 1, 1));
     open_local(&mut host, host_file.clone());
 
-    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password(PASSWORD), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
     host.share_coop_map();
@@ -304,7 +304,7 @@ fn a_closed_shared_map_resyncs_when_reopened() {
     guest
         .join_coop(
             format!("127.0.0.1:{port}"),
-            net::hash_password("hunter2"),
+            net::hash_password(PASSWORD),
             String::from("guest"),
         )
         .unwrap();
@@ -371,7 +371,7 @@ fn anyone_can_stop_sharing_a_map_and_every_copy_stays_open() {
     let (host_dir, mut host) = codebase_with_map("unshare-host", "aa");
     let (guest_dir, mut guest) = codebase_with_map("unshare-guest", "aa");
     let host_map = open_local(&mut host, host_dir.join("_maps/a.dmm"));
-    host.host_coop(0, net::hash_password("hunter2"), String::from("host"))
+    host.host_coop(0, net::hash_password(PASSWORD), String::from("host"))
         .unwrap();
     poll_until(&mut [&mut host], |sessions| connected(sessions[0]));
     host.share_coop_map();
@@ -380,7 +380,7 @@ fn anyone_can_stop_sharing_a_map_and_every_copy_stays_open() {
     guest
         .join_coop(
             format!("127.0.0.1:{port}"),
-            net::hash_password("hunter2"),
+            net::hash_password(PASSWORD),
             String::from("guest"),
         )
         .unwrap();
