@@ -220,7 +220,7 @@ fn only_a_codebase_with_a_profile_bakes() {
     let root = examples();
     let (profiled, _) = Environment::load(root.join("test.dme")).expect("profiled codebase");
     let (bare, _) = Environment::load(root.join("test.dm")).expect("codebase without a profile");
-    let disabled = crate::environment::BakeOptions {
+    let disabled = crate::environment::compile::BakeOptions {
         enabled: false,
         ..Default::default()
     };
@@ -230,7 +230,7 @@ fn only_a_codebase_with_a_profile_bakes() {
         &crate::environment::progress::Progress::new(),
     )
     .expect("codebase with baking off");
-    let phi_only = crate::environment::BakeOptions {
+    let phi_only = crate::environment::compile::BakeOptions {
         optimizations_enabled: false,
         ..Default::default()
     };

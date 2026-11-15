@@ -3,7 +3,8 @@ use std::ops::RangeInclusive;
 use dear_imgui_rs::{ColorDisplayMode, ColorEditFlags, DragFlags, Style, TableFlags, TableSizingPolicy, Ui};
 use ui::{
     theme::{
-        FieldKind, STYLE_COLORS, STYLE_FIELDS, StyleField, TREE_LINE_MODES, Themes, direction_name, tree_lines_name,
+        Themes,
+        style::{FieldKind, STYLE_COLORS, STYLE_FIELDS, StyleField, TREE_LINE_MODES, direction_name, tree_lines_name},
     },
     widgets::{DialogButton, begin_centered_modal, dialog_buttons, dpi},
 };

@@ -18,7 +18,7 @@ use crate::{
 #[ignore = "requires the local target/TerraGov-Marine-Corps checkout"]
 fn bundled_tgmc_profile_bakes_maps_and_tools() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/TerraGov-Marine-Corps");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("tgmc")),
         ..Default::default()
     };
@@ -268,7 +268,7 @@ fn check_downstream_profile(checkout: &str, dme: &str, profile: &str) {
         .join("../../target")
         .join(checkout);
     let entry = root.join(dme);
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from(profile)),
         ..Default::default()
     };
@@ -641,7 +641,7 @@ fn check_downstream_windows(session: &mut Session, profile: &str) {
 fn bundled_monkestation_profile_bakes_debug_maps() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
     let entry = root.join("tgstation.dme");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("monkestation")),
         ..Default::default()
     };
@@ -731,7 +731,7 @@ fn bundled_monkestation_profile_bakes_debug_maps() {
 #[ignore = "requires the local target/MonkeStation2.0 checkout"]
 fn monkestation_fixtures_light_corners_like_the_game() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("monkestation")),
         ..Default::default()
     };
@@ -786,7 +786,7 @@ fn monkestation_fixtures_light_corners_like_the_game() {
 #[ignore = "requires the local target/MonkeStation2.0 checkout"]
 fn monkestation_windows_take_department_colors_and_sills() -> Result<(), &'static str> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("monkestation")),
         ..Default::default()
     };
@@ -885,7 +885,7 @@ fn monkestation_windows_take_department_colors_and_sills() -> Result<(), &'stati
 #[ignore = "requires the local target/MonkeStation2.0 checkout"]
 fn monkestation_computers_draw_their_powered_overlays() -> Result<(), &'static str> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/MonkeStation2.0");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("monkestation")),
         ..Default::default()
     };
@@ -959,7 +959,7 @@ fn tgstation_fixture_glows_follow_the_lighting_toggle() -> Result<(), &'static s
     };
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("tgstation")),
         ..Default::default()
     };
@@ -1084,7 +1084,7 @@ fn tramstation_waste_release_draws_its_prepared_valve_direction() -> Result<(), 
             map.grid[0][(5 - y) as usize][(x - 1) as usize] = key;
         }
     }
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("tgstation")),
         ..Default::default()
     };
@@ -1164,7 +1164,7 @@ fn tramstation_waste_release_draws_its_prepared_valve_direction() -> Result<(), 
 #[ignore = "requires the local target/tgstation checkout"]
 fn a_hidden_layer_manifold_draws_its_connections_above_the_floor() -> Result<(), &'static str> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("tgstation")),
         ..Default::default()
     };
@@ -1269,7 +1269,7 @@ fn a_hidden_layer_manifold_draws_its_connections_above_the_floor() -> Result<(),
 #[ignore = "requires the local target/tgstation checkout"]
 fn a_hidden_pipe_in_a_wall_draws_above_the_wall() -> Result<(), &'static str> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("tgstation")),
         ..Default::default()
     };
@@ -1343,7 +1343,7 @@ fn a_hidden_pipe_in_a_wall_draws_above_the_wall() -> Result<(), &'static str> {
 #[ignore = "requires the local target/tgstation checkout"]
 fn a_burgundy_marker_beacon_lights_its_tile_red_on_tg_corner_steps() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("tgstation")),
         ..Default::default()
     };
@@ -1384,7 +1384,7 @@ fn a_burgundy_marker_beacon_lights_its_tile_red_on_tg_corner_steps() {
 #[ignore = "requires the local target/tgstation checkout"]
 fn lava_lights_only_where_it_borders_another_turf() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("tgstation")),
         ..Default::default()
     };
@@ -1439,7 +1439,7 @@ fn lava_lights_only_where_it_borders_another_turf() {
 #[ignore = "requires the local target/tgstation checkout"]
 fn lava_lights_the_level_above_through_openspace() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("tgstation")),
         ..Default::default()
     };
@@ -1481,7 +1481,7 @@ fn lava_lights_the_level_above_through_openspace() {
 #[ignore = "requires the local target/tgstation checkout"]
 fn an_openspace_level_added_above_lava_lights_like_a_full_bake() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("tgstation")),
         ..Default::default()
     };
@@ -1537,7 +1537,7 @@ fn an_openspace_level_added_above_lava_lights_like_a_full_bake() {
 #[ignore = "requires the local target/tgstation checkout"]
 fn a_thermomachine_rotates_its_baked_pipe_with_dir() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("tgstation")),
         ..Default::default()
     };
@@ -1606,7 +1606,7 @@ fn a_thermomachine_rotates_its_baked_pipe_with_dir() {
 fn bundled_secondcity_profile_bakes_city_maps() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/SecondCity");
     let entry = root.join("tgstation.dme");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("secondcity")),
         ..Default::default()
     };
@@ -1766,7 +1766,7 @@ fn secondcity_placement_timings() {
     use crate::document::command::Edit;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/SecondCity");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("secondcity")),
         ..Default::default()
     };

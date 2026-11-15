@@ -32,7 +32,7 @@ use winit::{
 use crate::{
     document::{DocumentId, selection::Selection},
     environment::{
-        BakeOptions,
+        compile::BakeOptions,
         panel::LoadNotice,
         session::LoadReport,
         worker::{Job, Loader, Outcome},
@@ -709,21 +709,21 @@ fn install_profiles() -> Vec<String> {
         Err(error) => {
             log::warn!("profiles fall back to the embedded copies: {error}");
 
-            return crate::environment::BundledProfile::ALL
+            return crate::environment::profile::BundledProfile::ALL
                 .map(|profile| profile.stem().to_owned())
                 .to_vec();
         },
     };
-    if let Err(error) = crate::environment::write_missing_profiles(&dir) {
+    if let Err(error) = crate::environment::profile::write_missing_profiles(&dir) {
         log::warn!("writing profiles to {}: {error}", dir.display());
     }
 
-    crate::environment::scan_profiles(&dir)
+    crate::environment::profile::scan_profiles(&dir)
 }
 
 fn bake_options(settings: &Settings, environment: Option<&std::path::Path>) -> BakeOptions {
     BakeOptions {
-        enabled: crate::environment::baking_enabled(settings.bake_enabled),
+        enabled: crate::environment::compile::baking_enabled(settings.bake_enabled),
         optimizations_enabled: settings.optimizations_enabled,
         profile: environment
             .and_then(|path| settings.profile_for(path))

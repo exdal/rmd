@@ -9,7 +9,7 @@ use super::{
     stroke::{ActivePlacementFlash, MoveStroke, PickStroke, PlacementStroke},
 };
 use crate::{
-    coop::panel::{COMMENT_POPUP, CommentDraft},
+    coop::panel::comment::{COMMENT_POPUP, CommentDraft},
     document::{DocumentId, command::EditGroupId},
     frontend::UiState,
     gizmo::panel::GizmoMapView,

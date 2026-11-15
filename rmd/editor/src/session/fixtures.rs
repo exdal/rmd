@@ -88,7 +88,7 @@ impl Session {
     pub(crate) fn load_environment(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         self.apply_codebase(crate::environment::worker::load_codebase(
             path,
-            &crate::environment::BakeOptions::default(),
+            &crate::environment::compile::BakeOptions::default(),
             &Progress::new(),
         )?);
 

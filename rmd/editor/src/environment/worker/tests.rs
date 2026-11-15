@@ -5,7 +5,7 @@ use std::{
 
 use super::{Job, Loader, Outcome, load_codebase, load_map};
 use crate::environment::{
-    BakeOptions,
+    compile::BakeOptions,
     progress::{Progress, Stage},
 };
 

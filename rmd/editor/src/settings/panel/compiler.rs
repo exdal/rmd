@@ -1,7 +1,7 @@
 use dear_imgui_rs::{TableFlags, TableSizingPolicy, Ui, WindowFlags};
 use ui::widgets::{DialogButton, begin_centered_modal, dialog_buttons};
 
-use crate::{environment::profile_label, frontend::ProfileReload, session::Session, settings::Settings};
+use crate::{environment::profile::profile_label, frontend::ProfileReload, session::Session, settings::Settings};
 
 use super::draw_section_heading;
 

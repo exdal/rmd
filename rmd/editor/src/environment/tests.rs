@@ -2,11 +2,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use base::{
     location::Location,
+    path::TreePath,
     types::{ListEntry, VarModifiers},
 };
 use objtree::VarDecl;
 
-use super::*;
+use super::{
+    profile::{BundledProfile, profile_label, scan_profiles, write_missing_profiles},
+    *,
+};
 
 fn fixture(source: &str) -> PathBuf {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -633,7 +637,7 @@ fn an_unloaded_environment_has_no_fingerprint() {
 
 #[test]
 fn local_bake_settings_do_not_change_the_fingerprint() {
-    use crate::environment::BakeOptions;
+    use crate::environment::compile::BakeOptions;
 
     let entry = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme");
     let fingerprint = |options| {

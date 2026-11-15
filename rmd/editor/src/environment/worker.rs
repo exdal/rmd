@@ -15,7 +15,8 @@ use render::texture::TextureCatalog;
 use crate::{
     document::level_session::validate_level,
     environment::{
-        BakeOptions, Environment, LoadDiagnostics,
+        Environment, LoadDiagnostics,
+        compile::BakeOptions,
         error::LoadError,
         progress::{Progress, Snapshot, Stage},
         session::{build_textures, discover_maps},

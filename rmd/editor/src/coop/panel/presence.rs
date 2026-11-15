@@ -1,22 +1,38 @@
+use std::iter;
+
 use dear_imgui_rs::{MouseButton, PopupQueryFlags, Ui};
+use dmm::Coord;
+use ui::widgets::dpi;
+
+use super::peer_color;
 
 use crate::viewport::panel::{ViewFrame, selection::shows_region_selection};
 use crate::{
     app::pacing::FrameDemand,
+    coop::Coop,
     coop::panel::{
-        CommentHit, comment_at, draw_comment_composer, draw_comments, draw_receiving, draw_remote_cursors,
-        draw_remote_selections, draw_tab_out_of_date, draw_tab_progress,
+        comment::{CommentHit, comment_at, draw_comment_composer, draw_comments},
+        draw_receiving, draw_tab_out_of_date, draw_tab_progress,
     },
-    document::DocumentId,
+    document::{DocumentId, selection::Selection},
     frontend::UiState,
+    region::panel::{fill_selection, hollow_selection_inner, region_selection_bounds},
     session::Session,
-    viewport::camera::clamp_zoom,
+    tool::{RegionSelectionMode, Tool},
+    viewport::{
+        camera::{Controller, clamp_zoom},
+        panel::overlay::{OVERLAY_BG, OverlayRect},
+    },
 };
 
 const FOLLOW_SMOOTHING: f32 = 20.0;
 // close enough to the followed camera to stop drawing at full rate
 const FOLLOW_SETTLED_PIXELS: f32 = 0.5;
 const FOLLOW_SETTLED_ZOOM: f32 = 0.001;
+
+const REMOTE_SELECTION_FILL: f32 = 0.08;
+
+const REMOTE_SELECTION_OUTLINE: f32 = 0.7;
 
 #[derive(Default)]
 pub(crate) struct CoopPresence {
@@ -224,4 +240,79 @@ impl UiState {
             session.stop_coop_follow();
         }
     }
+}
+
+pub(crate) fn draw_remote_selections(
+    ui: &Ui, camera: &Controller, viewport: OverlayRect, coop: &Coop, map: &str, z: u32, tile_size: u32,
+) {
+    let scale = dpi(ui);
+    let draw = ui.get_window_draw_list();
+    draw.with_clip_rect(viewport.min, viewport.max, || {
+        for peer in coop.peers.values() {
+            let Some(selection) = peer
+                .selection()
+                .filter(|selection| selection.map == map && selection.z == z)
+            else {
+                continue;
+            };
+
+            let mode = RegionSelectionMode::from(selection.mode);
+            let selection = Selection {
+                min: Coord::new(selection.min[0], selection.min[1], z),
+                max: Coord::new(selection.max[0], selection.max[1], z),
+            };
+            let bounds = region_selection_bounds(camera, viewport.min, selection, tile_size);
+            let inner = hollow_selection_inner(selection, mode)
+                .map(|inner| region_selection_bounds(camera, viewport.min, inner, tile_size));
+
+            let mut color = peer_color(peer.info.id);
+            color[3] = REMOTE_SELECTION_FILL;
+            fill_selection(&draw, bounds, inner, color);
+
+            color[3] = REMOTE_SELECTION_OUTLINE;
+            for border in iter::once(bounds).chain(inner) {
+                draw.add_rect(border.min, border.max, color).thickness(scale).build();
+            }
+        }
+    });
+}
+
+pub(crate) fn draw_remote_cursors(
+    ui: &Ui, camera: &Controller, viewport: OverlayRect, coop: &Coop, map: &str, z: u32,
+) -> bool {
+    let scale = dpi(ui);
+    let viewport_min = viewport.min;
+    let draw = ui.get_window_draw_list();
+    let mut is_easing = false;
+    draw.with_clip_rect(viewport.min, viewport.max, || {
+        for peer in coop.peers.values() {
+            let Some(cursor) = peer.cursor().filter(|cursor| cursor.map == map && cursor.z == z) else {
+                continue;
+            };
+
+            is_easing |= peer.is_cursor_easing();
+
+            let local = camera.map_to_screen(peer.shown);
+            if !local.iter().all(|value| value.is_finite()) {
+                continue;
+            }
+
+            let color = peer_color(peer.info.id);
+            let tip = [viewport_min[0] + local[0], viewport_min[1] + local[1]];
+            let bottom = [tip[0], tip[1] + 16.0 * scale];
+            let side = [tip[0] + 11.0 * scale, tip[1] + 11.0 * scale];
+            draw.add_triangle(tip, bottom, side, color).filled(true).build();
+            draw.add_triangle(tip, bottom, side, [0.0, 0.0, 0.0, 1.0]).build();
+
+            let label = format!("{} {}", Tool::from(cursor.tool).icon(), peer.info.nick);
+            let text_size = ui.calc_text_size(&label);
+            let min = [side[0] + 2.0 * scale, side[1]];
+            let max = [min[0] + text_size[0] + 6.0, min[1] + text_size[1] + 4.0];
+            draw.add_rect(min, max, OVERLAY_BG).filled(true).build();
+            draw.add_rect(min, max, color).build();
+            draw.add_text([min[0] + 3.0, min[1] + 2.0], color, &label);
+        }
+    });
+
+    is_easing
 }

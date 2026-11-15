@@ -5,7 +5,7 @@ use dmm::{Coord, MapFormat, PrefabInstanceId};
 
 use crate::{
     document::{MapDocument, selection::Selection},
-    environment::{BakeOptions, progress::Progress, worker::load_codebase},
+    environment::{compile::BakeOptions, progress::Progress, worker::load_codebase},
     maploader::{
         ErrorKind,
         fixtures::{

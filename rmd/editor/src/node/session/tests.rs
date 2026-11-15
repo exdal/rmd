@@ -573,7 +573,7 @@ fn tgstation_pipes_connect_only_on_the_same_layer_and_color() {
     use crate::{environment::progress::Progress, session::fixtures::settle_bake};
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tgstation");
-    let options = crate::environment::BakeOptions {
+    let options = crate::environment::compile::BakeOptions {
         forced_profile: Some(String::from("tgstation")),
         ..Default::default()
     };
