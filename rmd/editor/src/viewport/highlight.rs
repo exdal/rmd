@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use dmm::Coord;
 
-use super::{Session, SharedHighlights};
+use crate::session::{Session, SharedHighlights};
 use crate::{
     bake::{Bake, HIGHLIGHT_ALWAYS, HIGHLIGHT_HOVERED, HIGHLIGHT_SELECTED, Highlight, highlight_tiles},
     document::{DocumentId, PrefabInstanceId},

@@ -6,12 +6,10 @@ use ui::widgets::dpi;
 
 use crate::{
     document::DocumentId,
-    frontend::{
-        common::{IconOrigin, draw_thumbnail},
-        context_menu::begin_map_popup,
-    },
-    session::{PlacementPreview, Session},
+    frontend::common::{IconOrigin, draw_thumbnail},
+    session::Session,
     settings::{Settings, keybind::KeybindAction},
+    viewport::{panel::context_menu::begin_map_popup, preview::PlacementPreview},
 };
 
 const POPUP: &str = "Prefab variants##prefab-variants";

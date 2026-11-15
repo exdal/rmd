@@ -3,15 +3,16 @@ use dmm::Coord;
 use render::Renderer;
 use ui::widgets::dpi;
 
-use super::common::IDENTICAL_EDIT_COLOR;
 use crate::{
-    camera::Controller,
     document::DocumentId,
+    frontend::common::IDENTICAL_EDIT_COLOR,
     git::conflict::{Hunk, Side},
     gizmo::guides::GuideBadge,
     region::panel::{draw_marching_edge, marching_stripe_offset},
-    session::{PlacementPreview, RegionPreviewSource, Session},
+    session::Session,
     tool::SelectionRotation,
+    viewport::camera::Controller,
+    viewport::preview::{PlacementPreview, RegionPreviewSource},
 };
 
 const OVERLAY_PADDING: f32 = 4.0;
@@ -116,7 +117,7 @@ pub(super) fn draw_highlights(
     });
 }
 
-pub(super) fn conflict_controls_layout(
+pub(crate) fn conflict_controls_layout(
     ui: &Ui, camera: &Controller, hunk: &Hunk, tile_size: u32, viewport_min: [f32; 2], bounds: OverlayRect,
     theirs: &str,
 ) -> Option<([f32; 2], OverlayRect)> {
@@ -347,7 +348,7 @@ mod tests {
     use render::SpriteTexture;
 
     use super::{OverlayRect, placement_preview_bounds, placement_preview_opacity};
-    use crate::{camera::Controller, session::PlacementPreview};
+    use crate::viewport::{camera::Controller, preview::PlacementPreview};
 
     #[test]
     fn placement_preview_breathes_between_full_and_eighty_percent_opacity() {

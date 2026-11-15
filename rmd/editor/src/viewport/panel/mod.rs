@@ -8,13 +8,10 @@ use ui::{
     widgets::focus_window_on_hover,
 };
 
-pub(super) use self::{
-    edit::{EDIT_KEYS, EditCommand},
-    shortcuts::MomentaryTool,
-    stroke::{ActivePlacementFlash, MoveStroke, PickStroke, PlacementStroke},
-};
 use self::{
+    context_menu::Target as MenuTarget,
     hover::draw_tile_hover,
+    overlay::{OverlayRect, overlay_padding},
     overlays::{banner_contains, draw_recent_prefabs},
     selection::{ViewGestures, conflict_controls_contain, prepare_region_preview, sync_gestures},
     shortcuts::choose_recent_on_key,
@@ -23,15 +20,11 @@ use self::{
         shows_picked,
     },
 };
-use super::{
-    CloseFocus, OverlayRect, UiState, VisibleMapView, context_menu::Target as MenuTarget, draw_fill_limit_warning,
-    overlay_padding,
-};
 use crate::{
     app::pacing::FrameDemand,
-    camera::Controller,
     coop::panel::presence::{CoopPresence, draw_coop_status, draw_tab_menu, hit_comment, share_presence},
     document::DocumentId,
+    frontend::{CloseFocus, UiState, VisibleMapView, dialog::draw_fill_limit_warning},
     git::panel::blame::BlamePopup,
     gizmo::{guides::GuideBadge, panel::GizmoMapView},
     maploader::panel,
@@ -44,15 +37,19 @@ use crate::{
     session::Session,
     settings::{Settings, keybind::KeybindAction},
     tool::Tool,
+    viewport::camera::Controller,
 };
 
-mod edit;
+pub(crate) mod context_menu;
+pub(crate) mod edit;
+mod grid;
 mod hover;
 mod navigation;
+pub(crate) mod overlay;
 mod overlays;
 pub(crate) mod selection;
-mod shortcuts;
-mod stroke;
+pub(crate) mod shortcuts;
+pub(crate) mod stroke;
 #[cfg(test)]
 mod tests;
 mod tools;
@@ -61,7 +58,7 @@ pub(crate) struct MapViewState {
     window: WindowKey,
     pub(crate) camera: Controller,
     size: (u32, u32),
-    pub(super) rect: MapViewRect,
+    pub(crate) rect: MapViewRect,
     visible: bool,
     placed: bool,
     pub(crate) refit: bool,
@@ -69,20 +66,20 @@ pub(crate) struct MapViewState {
     hovered_coord: Option<Coord>,
     blame_popup: Option<BlamePopup>,
     prefab_menu: Option<PrefabMenu>,
-    pub(super) gestures: ViewGestures,
+    pub(crate) gestures: ViewGestures,
     context: Option<MenuTarget>,
 }
 
-pub(super) struct MapViewDraw<'a> {
-    pub(super) id: DocumentId,
-    pub(super) index: usize,
-    pub(super) view: &'a mut MapViewState,
-    pub(super) interaction: &'a mut MapViewInteraction,
-    pub(super) guide_badges: &'a [GuideBadge],
+pub(crate) struct MapViewDraw<'a> {
+    pub(crate) id: DocumentId,
+    pub(crate) index: usize,
+    pub(crate) view: &'a mut MapViewState,
+    pub(crate) interaction: &'a mut MapViewInteraction,
+    pub(crate) guide_badges: &'a [GuideBadge],
 
-    pub(super) refit_requested: bool,
-    pub(super) keep_open: &'a mut bool,
-    pub(super) coop: &'a mut CoopPresence,
+    pub(crate) refit_requested: bool,
+    pub(crate) keep_open: &'a mut bool,
+    pub(crate) coop: &'a mut CoopPresence,
 }
 
 impl MapViewState {
@@ -104,7 +101,7 @@ impl MapViewState {
         })
     }
 
-    pub(super) const fn window(&self) -> &WindowKey {
+    pub(crate) const fn window(&self) -> &WindowKey {
         &self.window
     }
 }
@@ -261,7 +258,7 @@ fn map_view_title(session: &Session, id: DocumentId, name: &str, is_out_of_date:
 }
 
 impl UiState {
-    pub(super) fn draw_map_views(
+    pub(crate) fn draw_map_views(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, refit_active: bool,
     ) -> (Vec<VisibleMapView>, Option<usize>, CoopPresence) {
         let mut closing = None;
@@ -372,7 +369,7 @@ impl UiState {
         (visible, picking, coop)
     }
 
-    pub(super) fn draw_map_view(
+    pub(crate) fn draw_map_view(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, draw: MapViewDraw<'_>,
     ) {
         let MapViewDraw {

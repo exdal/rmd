@@ -20,15 +20,11 @@ use crate::{
     node::session::NodeEditState,
     palette::session::PrefabThumbnail,
     region::session::RegionState,
+    viewport::{highlight, preview::RegionPreviewCache},
 };
 
 #[cfg(test)]
 pub(crate) mod fixtures;
-pub(crate) mod highlight;
-mod preview;
-
-use self::preview::RegionPreviewCache;
-pub(crate) use self::preview::{PlacementPreview, RegionPreviewSource};
 
 #[derive(Default)]
 pub(crate) enum BakeHold {

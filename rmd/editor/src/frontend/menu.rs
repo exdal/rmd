@@ -1,8 +1,7 @@
 use dear_imgui_rs::Ui;
 
 use super::{
-    LAYER_KEYS, OpenRequest, SCREENSHOT_KEYS, ScreenshotArea, ScreenshotRequest, UiState, viewport::EditCommand,
-    welcome::codebase_relative,
+    LAYER_KEYS, OpenRequest, SCREENSHOT_KEYS, ScreenshotArea, ScreenshotRequest, UiState, welcome::codebase_relative,
 };
 use crate::{
     coop::{
@@ -12,6 +11,7 @@ use crate::{
     session::Session,
     settings::{Panel, Settings, keybind::KeybindAction},
     tool::Tool,
+    viewport::panel::edit::EditCommand,
 };
 
 /// How far down the "Blur below" menu goes. The option itself takes any depth.

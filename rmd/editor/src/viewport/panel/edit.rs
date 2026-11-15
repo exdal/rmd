@@ -1,20 +1,21 @@
 use dear_imgui_rs::{Key, PopupQueryFlags, Ui};
 use render::PickRequest;
 
-use super::{ViewFrame, tools::request_pick};
+use super::{
+    ViewFrame,
+    context_menu::{Action as MenuAction, NodeContext, draw_popup as draw_map_menu},
+    tools::request_pick,
+};
 use crate::{
     clipboard::{PasteMerge, panel::centered_paste_min},
-    frontend::{
-        UiState,
-        context_menu::{Action as MenuAction, NodeContext, draw_popup as draw_map_menu},
-    },
+    frontend::UiState,
     region::panel::restore_rectangle_gesture,
     session::Session,
     settings::{Settings, keybind::KeybindAction},
     tool::{SelectionRotation, Tool},
 };
 
-pub(in crate::frontend) const EDIT_KEYS: [(KeybindAction, EditCommand); 5] = [
+pub(crate) const EDIT_KEYS: [(KeybindAction, EditCommand); 5] = [
     (KeybindAction::Copy, EditCommand::Copy),
     (KeybindAction::Cut, EditCommand::Cut),
     (KeybindAction::Delete, EditCommand::Delete),
@@ -23,7 +24,7 @@ pub(in crate::frontend) const EDIT_KEYS: [(KeybindAction, EditCommand); 5] = [
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::frontend) enum EditCommand {
+pub(crate) enum EditCommand {
     Copy,
     Cut,
     Delete,

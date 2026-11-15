@@ -24,7 +24,7 @@ const TOOL_KEYS: [(KeybindAction, Tool); 10] = [
 
 /// aka Alternate tool
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::frontend) struct MomentaryTool {
+pub(crate) struct MomentaryTool {
     binding: KeyBinding,
     tool: Tool,
     previous: Tool,

@@ -102,9 +102,7 @@ impl UiState {
         session.pick_instance(Some(target.instance));
     }
 
-    pub(in crate::frontend) fn go_to_tile(
-        &mut self, session: &mut Session, document: DocumentId, coord: Coord, now: f64,
-    ) {
+    pub(crate) fn go_to_tile(&mut self, session: &mut Session, document: DocumentId, coord: Coord, now: f64) {
         self.cancel_edit_gestures(session, session.state.active());
         self.center_view_on(session, document, coord);
         self.placement_flash = session.turf_at(document, coord).map(|owner| ActivePlacementFlash {
@@ -114,7 +112,7 @@ impl UiState {
         });
     }
 
-    pub(in crate::frontend) fn center_view_on(&mut self, session: &mut Session, document: DocumentId, coord: Coord) {
+    pub(crate) fn center_view_on(&mut self, session: &mut Session, document: DocumentId, coord: Coord) {
         session.set_active_document(document);
         session.set_level(coord.z);
 

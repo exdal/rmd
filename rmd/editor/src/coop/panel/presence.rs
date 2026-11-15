@@ -1,9 +1,8 @@
 use dear_imgui_rs::{MouseButton, PopupQueryFlags, Ui};
 
-use crate::frontend::viewport::{ViewFrame, selection::shows_region_selection};
+use crate::viewport::panel::{ViewFrame, selection::shows_region_selection};
 use crate::{
     app::pacing::FrameDemand,
-    camera::clamp_zoom,
     coop::panel::{
         CommentHit, comment_at, draw_comment_composer, draw_comments, draw_receiving, draw_remote_cursors,
         draw_remote_selections, draw_tab_out_of_date, draw_tab_progress,
@@ -11,6 +10,7 @@ use crate::{
     document::DocumentId,
     frontend::UiState,
     session::Session,
+    viewport::camera::clamp_zoom,
 };
 
 const FOLLOW_SMOOTHING: f32 = 20.0;

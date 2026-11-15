@@ -11,18 +11,18 @@ use ui::{
 };
 
 use crate::{
-    camera::Controller,
     coop::{Activity, Coop, CoopStatus, SharedState},
     document::{DocumentId, Selection},
     environment::panel::DIAGNOSTIC_WARNING_COLOR,
-    frontend::{
-        dialog::{DIALOG_FIELD_WIDTH, MODAL_FLAGS, SAVE_ERROR_COLOR},
-        overlay::{OVERLAY_BG, OverlayRect},
-    },
+    frontend::dialog::{DIALOG_FIELD_WIDTH, MODAL_FLAGS, SAVE_ERROR_COLOR},
     region::panel::{fill_selection, hollow_selection_inner, region_selection_bounds},
     session::Session,
     settings::Settings,
     tool::{RegionSelectionMode, Tool},
+    viewport::{
+        camera::Controller,
+        panel::overlay::{OVERLAY_BG, OverlayRect},
+    },
 };
 
 pub(crate) const HOST_POPUP: &str = "Host co-op##coop-host";

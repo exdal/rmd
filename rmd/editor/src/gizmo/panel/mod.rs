@@ -6,7 +6,6 @@ use dmm::{Coord, Size};
 use ui::widgets::dpi;
 
 use crate::{
-    camera::Controller,
     document::{InstanceChange, PrefabInstanceId, Selection, VarMutation, command::EditGroupId},
     gizmo::{
         direction::{DirectionState, DirectionalTypes},
@@ -19,6 +18,7 @@ use crate::{
     session::Session,
     settings::{Settings, keybind::KeybindAction},
     tool::SelectionRotation,
+    viewport::camera::Controller,
 };
 
 const AXIS_LENGTH: f32 = 48.0;

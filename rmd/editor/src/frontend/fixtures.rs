@@ -6,31 +6,35 @@ use dmm::{Prefab, Size};
 use render::MapViewInteraction;
 use ui::testing::rectangle_context;
 
-use super::{
-    MapViewState, OverlayRect, UiState, conflict_controls_layout, menu::MenuActions, overlay_padding,
-    viewport::MapViewDraw,
-};
+use super::{UiState, menu::MenuActions};
 use crate::{
-    document::DocumentId, maploader::panel::controls_layout as module_controls_layout,
-    palette::panel::history::recent_button_size, session::Session, settings::Settings,
+    document::DocumentId,
+    maploader::panel::controls_layout as module_controls_layout,
+    palette::panel::history::recent_button_size,
+    session::Session,
+    settings::Settings,
+    viewport::panel::{
+        MapViewDraw, MapViewState,
+        overlay::{OverlayRect, conflict_controls_layout, overlay_padding},
+    },
 };
 
-pub(super) struct RectangleUiHarness {
-    pub(super) context: dear_imgui_rs::Context,
-    pub(super) state: UiState,
-    pub(super) session: Session,
-    pub(super) settings: Settings,
-    pub(super) view: MapViewState,
-    pub(super) interaction: MapViewInteraction,
-    pub(super) id: DocumentId,
-    pub(super) module_buttons: Option<[[f32; 2]; 3]>,
-    pub(super) conflict_button: Option<[f32; 2]>,
-    pub(super) focus_other_window: bool,
-    pub(super) is_modal_open: bool,
+pub(crate) struct RectangleUiHarness {
+    pub(crate) context: dear_imgui_rs::Context,
+    pub(crate) state: UiState,
+    pub(crate) session: Session,
+    pub(crate) settings: Settings,
+    pub(crate) view: MapViewState,
+    pub(crate) interaction: MapViewInteraction,
+    pub(crate) id: DocumentId,
+    pub(crate) module_buttons: Option<[[f32; 2]; 3]>,
+    pub(crate) conflict_button: Option<[f32; 2]>,
+    pub(crate) focus_other_window: bool,
+    pub(crate) is_modal_open: bool,
 }
 
 impl RectangleUiHarness {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut session = Session::new();
         session
             .load_environment(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env/test.dme"))
@@ -55,7 +59,7 @@ impl RectangleUiHarness {
         Self::with_session(session)
     }
 
-    pub(super) fn with_session(session: Session) -> Self {
+    pub(crate) fn with_session(session: Session) -> Self {
         let context = rectangle_context();
         let id = session.state.active().unwrap();
         let mut view = MapViewState::new(id).unwrap();
@@ -82,7 +86,7 @@ impl RectangleUiHarness {
         harness
     }
 
-    pub(super) fn step(&mut self) {
+    pub(crate) fn step(&mut self) {
         let ui = self.context.frame();
         if self.focus_other_window {
             ui.window("other-window")
@@ -186,7 +190,7 @@ impl RectangleUiHarness {
         assert!(self.context.render_legacy().valid());
     }
 
-    pub(super) fn tile(&self, x: u32, y: u32) -> [f32; 2] {
+    pub(crate) fn tile(&self, x: u32, y: u32) -> [f32; 2] {
         let point = self
             .view
             .camera
@@ -194,26 +198,26 @@ impl RectangleUiHarness {
         [point[0] + self.view.rect.x as f32, point[1] + self.view.rect.y as f32]
     }
 
-    pub(super) fn pointer(&mut self, point: [f32; 2], down: bool) {
+    pub(crate) fn pointer(&mut self, point: [f32; 2], down: bool) {
         self.context.io_mut().add_mouse_pos_event(point);
         self.context.io_mut().add_mouse_button_event(MouseButton::Left, down);
         self.step();
     }
 
-    pub(super) fn drag(&mut self, from: [f32; 2], to: [f32; 2]) {
+    pub(crate) fn drag(&mut self, from: [f32; 2], to: [f32; 2]) {
         self.pointer(from, false);
         self.pointer(from, true);
         self.pointer(to, true);
         self.pointer(to, false);
     }
 
-    pub(super) fn click(&mut self, point: [f32; 2]) {
+    pub(crate) fn click(&mut self, point: [f32; 2]) {
         self.pointer(point, false);
         self.pointer(point, true);
         self.pointer(point, false);
     }
 
-    pub(super) fn key(&mut self, key: Key, down: bool) {
+    pub(crate) fn key(&mut self, key: Key, down: bool) {
         self.context.io_mut().add_key_event(key, down);
         self.step();
     }

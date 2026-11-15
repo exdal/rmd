@@ -392,10 +392,7 @@ mod tests {
     use dmm::{Coord, Map, Prefab, Size};
 
     use super::*;
-    use crate::{
-        document::MapDocument,
-        frontend::{UiState, viewport::MapViewState},
-    };
+    use crate::{document::MapDocument, frontend::UiState, viewport::panel::MapViewState};
 
     fn map() -> Map {
         let table = Prefab::new(TreePath::parse("/obj/table"));

@@ -3,15 +3,17 @@ use dmm::Coord;
 use render::{InteractionMode, MapViewInteraction, PickRequest};
 
 use super::{
-    ViewFrame, cursor_in_map_view,
+    ViewFrame,
+    context_menu::{NodeContext, POPUP as MAP_MENU_POPUP, Target as MenuTarget},
+    cursor_in_map_view,
     stroke::{ActivePlacementFlash, MoveStroke, PickStroke, PlacementStroke},
 };
 use crate::{
     coop::panel::{COMMENT_POPUP, CommentDraft},
     document::{DocumentId, command::EditGroupId},
     frontend::{
-        FILL_LIMIT_WARNING_POPUP, FillWarningContext, PendingFillWarning, UiState,
-        context_menu::{NodeContext, POPUP as MAP_MENU_POPUP, Target as MenuTarget},
+        UiState,
+        dialog::{FILL_LIMIT_WARNING_POPUP, FillWarningContext, PendingFillWarning},
     },
     gizmo::panel::GizmoMapView,
     node::panel::{NodeOverlayHit, NodeOverlayView, NodeRightClick, draw_node_overlay, node_right_click},

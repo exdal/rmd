@@ -14,15 +14,18 @@ use ui::{
 };
 
 use super::{
-    ActivePlacementFlash, CoopPresence, EditCommand, MapViewState, PickStroke, PlacementStroke, cursor_in_map_view,
+    MapViewState,
+    context_menu::NodeContext,
+    cursor_in_map_view,
+    edit::EditCommand,
     framebuffer_rect, panel_extent,
-    stroke::active_placement_flash,
+    stroke::{ActivePlacementFlash, PickStroke, PlacementStroke, active_placement_flash},
     tools::{configure_tool_interaction, request_pick},
 };
 use crate::{
-    camera::Controller,
+    coop::panel::presence::CoopPresence,
     document::{DocumentId, MapDocument, Selection},
-    frontend::{UiState, context_menu::NodeContext, fixtures::RectangleUiHarness},
+    frontend::{UiState, fixtures::RectangleUiHarness},
     git::conflict::Side,
     gizmo::panel::{GizmoMapView, GizmoState, RegionDrag, RegionGizmoTarget},
     inspector::panel::TransformMode,
@@ -36,6 +39,7 @@ use crate::{
         keybind::{KeybindAction, KeybindPreset},
     },
     tool::{RegionSelectionMode, SelectionMask, Tool},
+    viewport::camera::Controller,
 };
 
 mod hover;

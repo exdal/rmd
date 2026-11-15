@@ -44,44 +44,35 @@ use crate::{
         keybind::{KeybindAction, KeybindPreset},
     },
     tool::{
-        FillMode, SelectionRotation, SelectionTransform, Tool,
+        FillMode, Tool,
         panel::{DEFAULT_CUSTOM_FILL_BOUNDARY, request_level_change},
+    },
+    viewport::panel::{
+        MapViewState,
+        edit::{EDIT_KEYS, EditCommand},
+        shortcuts::MomentaryTool,
+        stroke::{ActivePlacementFlash, MoveStroke, PickStroke, PlacementStroke},
     },
 };
 
 pub(crate) mod dialog;
 #[cfg(test)]
-mod fixtures;
-mod grid;
+pub(crate) mod fixtures;
 mod menu;
-pub(crate) mod overlay;
-pub(crate) mod viewport;
 pub(crate) mod welcome;
 
 use self::{
     dialog::{
-        DeleteLevelDialog, FILL_LIMIT_WARNING_POPUP, FillWarningContext, GO_TO_POPUP, GoToDialog, NEW_MAP_POPUP,
-        NewLevelDialog, NewMapDialog, PendingFillWarning, RESIZE_MAP_POPUP, ResizeMapDialog, SAVE_ERROR_COLOR,
-        SAVE_MAP_POPUP, SaveDialog, SaveDialogOutcome, TileFillPaths, TileFillSearch, draw_delete_level_dialog,
-        draw_fill_limit_warning, draw_go_to_dialog, draw_keybind_preset_dialog, draw_new_level_dialog,
-        draw_new_map_dialog, draw_resize_map_dialog, draw_save_dialog,
+        DeleteLevelDialog, GO_TO_POPUP, GoToDialog, NEW_MAP_POPUP, NewLevelDialog, NewMapDialog, PendingFillWarning,
+        RESIZE_MAP_POPUP, ResizeMapDialog, SAVE_ERROR_COLOR, SAVE_MAP_POPUP, SaveDialog, SaveDialogOutcome,
+        TileFillPaths, TileFillSearch, draw_delete_level_dialog, draw_go_to_dialog, draw_keybind_preset_dialog,
+        draw_new_level_dialog, draw_new_map_dialog, draw_resize_map_dialog, draw_save_dialog,
     },
-    grid::{draw_selected_pixel_grid, draw_tile_grid},
     menu::MenuActions,
-    overlay::{
-        OverlayRect, conflict_controls_layout, draw_conflict_controls, draw_guide_badges, draw_highlights,
-        draw_identical_outlines, draw_placement_preview, overlay_padding,
-    },
-    viewport::{
-        ActivePlacementFlash, EDIT_KEYS, EditCommand, MapViewState, MomentaryTool, MoveStroke, PickStroke,
-        PlacementStroke,
-    },
     welcome::{ForgetRequest, WelcomeOutput},
 };
 
 pub(crate) mod common;
-
-pub(crate) mod context_menu;
 
 pub(crate) mod settings;
 
@@ -103,7 +94,7 @@ fn dock_layout<'a>(
     )
 }
 
-const LAYER_KEYS: [(KeybindAction, TypeLayer); 4] = [
+pub(crate) const LAYER_KEYS: [(KeybindAction, TypeLayer); 4] = [
     (KeybindAction::ToggleAreaLayer, TypeLayer::Area),
     (KeybindAction::ToggleTurfLayer, TypeLayer::Turf),
     (KeybindAction::ToggleObjLayer, TypeLayer::Obj),
@@ -203,7 +194,7 @@ impl StartupPanelFocus {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum CloseFocus {
+pub(crate) enum CloseFocus {
     Map(DocumentId),
     Welcome,
 }
@@ -231,16 +222,16 @@ pub struct UiState {
     pub(crate) reset_layout: bool,
     pub(crate) gizmo: GizmoState,
     pub(crate) gizmo_context: Option<(DocumentId, Tool, u32)>,
-    move_stroke: Option<MoveStroke>,
-    placement_flash: Option<ActivePlacementFlash>,
-    placement_stroke: Option<PlacementStroke>,
-    pick_stroke: Option<PickStroke>,
-    momentary_tool: Option<MomentaryTool>,
+    pub(crate) move_stroke: Option<MoveStroke>,
+    pub(crate) placement_flash: Option<ActivePlacementFlash>,
+    pub(crate) placement_stroke: Option<PlacementStroke>,
+    pub(crate) pick_stroke: Option<PickStroke>,
+    pub(crate) momentary_tool: Option<MomentaryTool>,
     pub(crate) region_selection_options: RegionSelectionOptions,
     pub(crate) fill_mode: FillMode,
     pub(crate) custom_fill_boundaries: Vec<TreePath>,
     pub(crate) custom_fill_search: String,
-    pending_fill_warning: Option<PendingFillWarning>,
+    pub(crate) pending_fill_warning: Option<PendingFillWarning>,
     pub(crate) popup_was_open: bool,
     new_map_dialog: Option<NewMapDialog>,
     pub(crate) new_level_dialog: Option<NewLevelDialog>,
@@ -255,8 +246,8 @@ pub struct UiState {
     tile_fill: Option<TileFillPaths>,
     save_dialog: Option<SaveDialog>,
     pub(crate) close_queue: VecDeque<DocumentId>,
-    close_focus: Option<CloseFocus>,
-    edit_command: Option<EditCommand>,
+    pub(crate) close_focus: Option<CloseFocus>,
+    pub(crate) edit_command: Option<EditCommand>,
     pub(crate) pending_conflict_reload: Option<DocumentId>,
     pub(crate) save_requested: bool,
     pub(crate) exit_requested: bool,
@@ -416,7 +407,7 @@ impl UiState {
         }
     }
 
-    fn cancel_tool_gestures(&mut self) {
+    pub(crate) fn cancel_tool_gestures(&mut self) {
         self.gizmo.cancel();
         self.move_stroke = None;
         self.placement_flash = None;

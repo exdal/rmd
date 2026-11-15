@@ -9,16 +9,17 @@ use ui::{
 };
 
 use crate::{
-    camera::Controller,
-    frontend::{
-        common::IDENTICAL_EDIT_COLOR,
-        overlay::{OverlayRect, draw_overlay_underlay, placement_preview_bounds, tile_bounds},
-        viewport::ViewFrame,
-        welcome::codebase_relative,
-    },
+    frontend::{common::IDENTICAL_EDIT_COLOR, welcome::codebase_relative},
     maploader::preview::ModuleVariantKey,
     session::Session,
     tool::Tool,
+    viewport::{
+        camera::Controller,
+        panel::{
+            ViewFrame,
+            overlay::{OverlayRect, draw_overlay_underlay, placement_preview_bounds, tile_bounds},
+        },
+    },
 };
 
 fn label(choice: &ModuleVariantKey) -> String {

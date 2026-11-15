@@ -3,9 +3,9 @@ use dmm::Coord;
 use ui::widgets::dpi;
 
 use crate::{
-    camera::Controller,
     node::{route, session::NodeOverlay},
     tool::Tool,
+    viewport::camera::Controller,
 };
 
 const NODE_HANDLE_RADIUS: f32 = 6.0;

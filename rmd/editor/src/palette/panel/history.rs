@@ -3,12 +3,10 @@ use dmm::Prefab;
 use ui::widgets::dpi;
 
 use crate::{
-    frontend::{
-        common::{IconOrigin, draw_thumbnail},
-        overlay::{OverlayRect, draw_overlay_underlay, overlay_padding},
-    },
+    frontend::common::{IconOrigin, draw_thumbnail},
     session::Session,
     settings::keybind::KeyBindings,
+    viewport::panel::overlay::{OverlayRect, draw_overlay_underlay, overlay_padding},
 };
 
 const RECENT_ICON_SIZE: f32 = 48.0;

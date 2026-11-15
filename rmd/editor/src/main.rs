@@ -11,7 +11,6 @@
 
 mod app;
 mod bake;
-mod camera;
 mod clipboard;
 mod coop;
 mod dm_ui;
@@ -33,6 +32,7 @@ mod search;
 mod session;
 mod settings;
 mod tool;
+mod viewport;
 
 use std::process::ExitCode;
 

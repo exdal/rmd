@@ -25,7 +25,7 @@ pub(crate) const MODAL_FLAGS: WindowFlags = WindowFlags::ALWAYS_AUTO_RESIZE
     .union(WindowFlags::NO_SAVED_SETTINGS)
     .union(WindowFlags::NO_DOCKING);
 
-pub(super) const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warning";
+pub(crate) const FILL_LIMIT_WARNING_POPUP: &str = "Large fill##fill-limit-warning";
 
 pub(super) const NEW_MAP_POPUP: &str = "New map##new-map";
 
@@ -59,16 +59,16 @@ const CLOSE_MAP_POPUP: &str = "Unsaved changes##close-map";
 const EXIT_POPUP: &str = "Unsaved changes##exit";
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct PendingFillWarning {
-    pub(super) context: FillWarningContext,
-    pub(super) coord: Coord,
-    pub(super) fill_mode: FillMode,
-    pub(super) custom_fill_boundaries: Vec<TreePath>,
-    pub(super) limit: usize,
+pub(crate) struct PendingFillWarning {
+    pub(crate) context: FillWarningContext,
+    pub(crate) coord: Coord,
+    pub(crate) fill_mode: FillMode,
+    pub(crate) custom_fill_boundaries: Vec<TreePath>,
+    pub(crate) limit: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct FillWarningContext {
+pub(crate) struct FillWarningContext {
     document: Option<DocumentId>,
     revision: Option<u64>,
     z: u32,
@@ -78,7 +78,7 @@ pub(super) struct FillWarningContext {
 }
 
 impl FillWarningContext {
-    pub(super) fn capture(session: &Session) -> Self {
+    pub(crate) fn capture(session: &Session) -> Self {
         Self {
             document: session.state.active(),
             revision: session.edit_revision(),
@@ -859,7 +859,7 @@ pub(super) fn draw_save_dialog(
     outcome
 }
 
-pub(super) fn draw_fill_limit_warning(
+pub(crate) fn draw_fill_limit_warning(
     ui: &Ui, session: &mut Session, pending: &mut Option<PendingFillWarning>, fill_mode: FillMode,
     boundaries: &[TreePath],
 ) {
@@ -980,7 +980,7 @@ impl UiState {
         pressed == Some(1)
     }
 
-    pub(super) fn request_close(&mut self, session: &mut Session, ids: impl IntoIterator<Item = DocumentId>) {
+    pub(crate) fn request_close(&mut self, session: &mut Session, ids: impl IntoIterator<Item = DocumentId>) {
         for id in ids {
             if !session.state.document(id).is_some_and(MapDocument::is_dirty) {
                 self.close_map_view(session, id);
@@ -990,7 +990,7 @@ impl UiState {
         }
     }
 
-    pub(super) fn draw_close_confirmation(&mut self, ui: &Ui, session: &mut Session) {
+    pub(crate) fn draw_close_confirmation(&mut self, ui: &Ui, session: &mut Session) {
         if self.save_dialog.as_ref().is_some_and(|dialog| dialog.close_after_save) {
             return;
         }

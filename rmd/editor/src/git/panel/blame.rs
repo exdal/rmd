@@ -3,7 +3,7 @@ use dmm::Coord;
 use ui::{icons::materialdesignicons::ICON_CIRCLE_SMALL, widgets::dpi};
 
 use super::commit_summary;
-use crate::frontend::overlay::OverlayRect;
+use crate::viewport::panel::overlay::OverlayRect;
 use crate::{
     document::DocumentId,
     git::repo::{CommitInfo, WebLinks},

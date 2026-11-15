@@ -622,13 +622,14 @@ mod tests {
     use crate::{
         document::{PrefabInstanceId, Selection},
         session::{
-            BakeHold, FillOutcome, RegionPreviewSource, Session,
+            BakeHold, FillOutcome, Session,
             fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session, settle_bake},
         },
         tool::{
             FillMode, RegionSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, SelectionTransform,
             Tool,
         },
+        viewport::preview::RegionPreviewSource,
     };
 
     #[test]

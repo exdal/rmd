@@ -1,6 +1,8 @@
 use dear_imgui_rs::{DrawListMut, Ui};
 
-use crate::{camera::Controller, document::DocumentId, inspector::session::PickedTransform, session::Session};
+use crate::{
+    document::DocumentId, inspector::session::PickedTransform, session::Session, viewport::camera::Controller,
+};
 
 const TILE_GRID_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.12];
 

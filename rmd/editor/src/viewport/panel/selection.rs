@@ -1,19 +1,23 @@
 use dear_imgui_rs::Ui;
 use dmm::Coord;
 
-use super::ViewFrame;
+use super::{
+    ViewFrame,
+    overlay::{conflict_controls_layout, draw_conflict_controls},
+};
 use crate::{
     app::pacing::FrameDemand,
     document::{DocumentId, Selection},
-    frontend::{UiState, conflict_controls_layout, draw_conflict_controls},
+    frontend::UiState,
     git::conflict::{Hunk, Side},
     gizmo::panel::{GizmoMapView, RegionDrag, RegionGizmoTarget},
     maploader::preview::ModuleRootKey,
     region::panel::{
         PendingRegionPlacement, RectangleGesture, draw_region_outline, rectangle_drag_coord, restore_rectangle_gesture,
     },
-    session::{RegionPreviewSource, Session},
+    session::Session,
     tool::{SelectionMask, SelectionPlacement, SelectionRotation, Tool},
+    viewport::preview::RegionPreviewSource,
 };
 
 #[derive(Debug, Default)]
@@ -26,7 +30,7 @@ pub(crate) struct ViewGestures {
 }
 
 impl ViewGestures {
-    pub(in crate::frontend) fn cancel(&mut self, session: &mut Session, id: DocumentId) {
+    pub(crate) fn cancel(&mut self, session: &mut Session, id: DocumentId) {
         if session.state.active() == Some(id) {
             session.cancel_live_move();
         }

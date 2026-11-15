@@ -2,12 +2,12 @@ use dear_imgui_rs::{DragFlags, DrawListMut, Ui};
 use dmm::{Coord, Size};
 use ui::widgets::dpi;
 
-use crate::frontend::overlay::{OVERLAY_BG, OverlayRect};
+use crate::viewport::panel::overlay::{OVERLAY_BG, OverlayRect};
 use crate::{
-    camera::Controller,
     document::{DocumentId, Selection},
     session::Session,
     tool::{RegionSelectionMode, SelectionMask, SelectionPlacement},
+    viewport::camera::Controller,
 };
 
 const BLOCK_SELECTION_GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
@@ -392,7 +392,10 @@ mod tests {
     use super::{
         RegionSelectionOptions, hollow_selection_inner, region_border_segments, region_selection_bounds, ring_rects,
     };
-    use crate::{camera::Controller, document::Selection, frontend::overlay::OverlayRect, tool::RegionSelectionMode};
+    use crate::{
+        document::Selection, tool::RegionSelectionMode, viewport::camera::Controller,
+        viewport::panel::overlay::OverlayRect,
+    };
 
     #[test]
     fn region_selection_bounds_follow_whole_tile_edges() {

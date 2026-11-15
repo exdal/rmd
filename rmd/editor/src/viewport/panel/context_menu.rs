@@ -4,13 +4,16 @@ use dear_imgui_rs::{Key, MouseButton, PopupToken, Ui, WindowHoveredFlags};
 use dmm::{Coord, Prefab, PrefabInstanceId};
 use objtree::ObjectTree;
 
-use super::{EditCommand, SelectionTransform, Session, Tool, common::draw_thumbnail};
-use crate::object_tree::panel::type_search::draw_type_path_search;
+use super::edit::EditCommand;
 use crate::{
     document::DocumentId,
+    frontend::common::draw_thumbnail,
     git::{blame::BlameCell, conflict::Side},
+    object_tree::panel::type_search::draw_type_path_search,
     search::panel::SimilarMatchKind,
-    tool::session::context_placement_group,
+    session::Session,
+    settings::{Settings, keybind::KeybindAction},
+    tool::{SelectionRotation, SelectionTransform, Tool, session::context_placement_group},
 };
 
 pub(super) const POPUP: &str = "Map context##map-context";
@@ -75,9 +78,7 @@ pub(crate) fn begin_map_popup<'ui>(
     Some(popup)
 }
 
-pub(super) fn draw_popup(
-    ui: &Ui, session: &mut Session, settings: &super::Settings, target: &mut Target,
-) -> Option<Action> {
+pub(super) fn draw_popup(ui: &Ui, session: &mut Session, settings: &Settings, target: &mut Target) -> Option<Action> {
     let _popup = begin_map_popup(ui, session, POPUP, target.document)?;
     let coord = target.coord;
     ui.text_disabled(format!("X: {}, Y: {}, Z: {}", coord.x, coord.y, coord.z));
@@ -199,7 +200,7 @@ pub(super) fn draw_popup(
     let undo_label = undo.map_or_else(|| "Undo".to_owned(), |label| format!("Undo {label}"));
     if ui.menu_item_enabled_selected_with_shortcut(
         undo_label,
-        settings.keybindings.get(super::KeybindAction::Undo).label(ui),
+        settings.keybindings.get(KeybindAction::Undo).label(ui),
         false,
         undo.is_some(),
     ) {
@@ -209,7 +210,7 @@ pub(super) fn draw_popup(
     let redo_label = redo.map_or_else(|| "Redo".to_owned(), |label| format!("Redo {label}"));
     if ui.menu_item_enabled_selected_with_shortcut(
         redo_label,
-        settings.keybindings.get(super::KeybindAction::Redo).label(ui),
+        settings.keybindings.get(KeybindAction::Redo).label(ui),
         false,
         redo.is_some(),
     ) {
@@ -221,7 +222,7 @@ pub(super) fn draw_popup(
     let can_copy = is_group_command || session.map().is_some_and(|map| map.tile_at(coord).is_some());
     if ui.menu_item_enabled_selected_with_shortcut(
         "Copy",
-        settings.keybindings.get(super::KeybindAction::Copy).label(ui),
+        settings.keybindings.get(KeybindAction::Copy).label(ui),
         false,
         can_copy,
     ) {
@@ -231,10 +232,10 @@ pub(super) fn draw_popup(
             Action::Copy(coord)
         });
     }
-    let can_paste = session.can_paste_clipboard(coord, super::SelectionRotation::Original);
+    let can_paste = session.can_paste_clipboard(coord, SelectionRotation::Original);
     if ui.menu_item_enabled_selected_with_shortcut(
         "Paste",
-        settings.keybindings.get(super::KeybindAction::Paste).label(ui),
+        settings.keybindings.get(KeybindAction::Paste).label(ui),
         false,
         can_paste,
     ) {

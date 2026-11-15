@@ -10,7 +10,8 @@ use crate::{
         preview::{ComposeContext, MapView, ModulePreviewState, ModuleRootKey, ModuleRootPreview, PREVIEW_ID_START},
     },
     palette::session::prefab_thumbnail_or_missing,
-    session::{BakeHold, PlacementPreview, Session},
+    session::{BakeHold, Session},
+    viewport::preview::PlacementPreview,
 };
 
 #[cfg(test)]

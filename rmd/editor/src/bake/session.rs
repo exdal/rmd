@@ -3,7 +3,6 @@ use std::{collections::HashSet, mem};
 use render::FrameUpdate;
 use vm::profile::ProfileHook;
 
-use crate::session::{BakeHold, Session, highlight::always_highlighted};
 use crate::{
     bake::{
         self, BakeUpdate,
@@ -12,6 +11,10 @@ use crate::{
     document::{DocumentId, PrefabInstanceId},
     frame::{self, FrameRenderOptions, PrefabUpdate},
     maploader::preview::PREVIEW_ID_START,
+};
+use crate::{
+    session::{BakeHold, Session},
+    viewport::highlight::always_highlighted,
 };
 
 // updates the renderer may not have drawn yet, so a frame that missed some can still catch up
