@@ -22,6 +22,7 @@ mod frame;
 mod frontend;
 mod git;
 mod gizmo;
+mod inspector;
 mod issues;
 mod maploader;
 mod node;
@@ -30,7 +31,6 @@ mod search;
 mod session;
 mod settings;
 mod tool;
-mod transform;
 
 use std::process::ExitCode;
 

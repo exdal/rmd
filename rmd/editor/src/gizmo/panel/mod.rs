@@ -8,11 +8,17 @@ use ui::widgets::dpi;
 use crate::{
     camera::Controller,
     document::{InstanceChange, PrefabInstanceId, Selection, VarMutation, command::EditGroupId},
-    frontend::TransformMode,
-    session::{DirectionState, DirectionalTypes, GizmoMember, PickedTransform, Session},
+    gizmo::{
+        direction::{DirectionState, DirectionalTypes},
+        transform::anchor_to_tile,
+    },
+    inspector::{
+        panel::TransformMode,
+        session::{GizmoMember, PickedTransform},
+    },
+    session::Session,
     settings::{Settings, keybind::KeybindAction},
     tool::SelectionRotation,
-    transform::anchor_to_tile,
 };
 
 const AXIS_LENGTH: f32 = 48.0;

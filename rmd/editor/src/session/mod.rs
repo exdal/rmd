@@ -15,25 +15,20 @@ use crate::{
     document::{DocumentId, PrefabInstanceId, state::EditorState},
     frame::{FrameInstances, FrameOptions, TypeVisibility, visual},
     git::{session::GitDocState, worker::GitWorker},
+    inspector::session::IdenticalCache,
     maploader::preview::ModulePreviewState,
     node::session::NodeEditState,
     region::session::RegionState,
 };
 
-mod direction;
 #[cfg(test)]
 pub(crate) mod fixtures;
-mod guides;
 pub(crate) mod highlight;
-mod instance;
 mod palette;
 mod preview;
 
-use self::{direction::direction_state, preview::RegionPreviewCache};
+use self::preview::RegionPreviewCache;
 pub(crate) use self::{
-    direction::{DirectionState, DirectionalTypes},
-    guides::GuideBadge,
-    instance::{EditScope, GizmoMember, PickedTransform},
     palette::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
     preview::{PlacementPreview, RegionPreviewSource},
 };
@@ -102,7 +97,7 @@ pub struct Session {
     /// The last interaction the panel committed, replayed into a bake that lands after it.
     pub(crate) ui_feedback: Option<crate::bake::UiFeedback>,
     pub(crate) node_edit: Option<NodeEditState>,
-    identical: Option<instance::IdenticalCache>,
+    pub(crate) identical: Option<IdenticalCache>,
     pub(crate) coop: Option<Coop>,
     pub(crate) region_state: RegionState,
 }

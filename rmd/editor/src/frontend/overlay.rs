@@ -8,8 +8,9 @@ use crate::{
     camera::Controller,
     document::DocumentId,
     git::conflict::{Hunk, Side},
+    gizmo::guides::GuideBadge,
     region::panel::{draw_marching_edge, marching_stripe_offset},
-    session::{GuideBadge, PlacementPreview, RegionPreviewSource, Session},
+    session::{PlacementPreview, RegionPreviewSource, Session},
     tool::SelectionRotation,
 };
 

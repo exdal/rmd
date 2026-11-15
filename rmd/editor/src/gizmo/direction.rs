@@ -7,11 +7,12 @@ use base::{
 use dmi::metadata::Dir;
 use objtree::{ObjectTree, TypeId};
 
-use super::{EditScope, Session};
 use crate::{
     document::{InstanceChange, VarMutation, command::EditGroupId},
     environment::Environment,
     frame::visual,
+    inspector::session::EditScope,
+    session::Session,
     tool::Tool,
 };
 
@@ -33,7 +34,7 @@ fn direction_mutation(direction: Dir) -> VarMutation {
     VarMutation::Set(Identifier::from(vars::DIR), Value::Num(direction.to_bits() as f32))
 }
 
-pub(super) fn direction_state(
+pub(crate) fn direction_state(
     environment: &Environment, id: TypeId, appearance: &visual::Appearance, declared: Option<[bool; 8]>,
 ) -> DirectionState {
     let dmi_directions = appearance
@@ -284,10 +285,7 @@ mod tests {
 
     use super::{direction_mutation, directional_type_target, directional_types_for};
     use crate::{
-        document::VarMutation,
-        environment::Environment,
-        session::{EditScope, Session},
-        tool::Tool,
+        document::VarMutation, environment::Environment, inspector::session::EditScope, session::Session, tool::Tool,
     };
 
     #[test]

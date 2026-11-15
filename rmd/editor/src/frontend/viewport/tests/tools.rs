@@ -153,7 +153,7 @@ fn node_right_click_deletes_on_the_first_unfocused_click_and_shift_opens_the_men
 fn object_gizmo_frame(
     context: &mut dear_imgui_rs::Context, gizmo: &mut GizmoState, session: &mut Session, camera: &Controller,
     settings: &Settings,
-) -> (crate::gizmo::GizmoResponse, usize) {
+) -> (crate::gizmo::panel::GizmoResponse, usize) {
     let ui = context.frame();
     let view = GizmoMapView {
         min: [0.0; 2],

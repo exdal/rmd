@@ -17,17 +17,18 @@ use ui::{
     widgets::{checkbox_width, focus_window_on_hover, text_wrapped_colored},
 };
 
-use super::{common::IDENTICAL_EDIT_COLOR, search::draw_type_path_search};
 use crate::git::panel::commit_summary;
 use crate::{
     app::external_editor::SourceLocation,
     document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation, command::EditGroupId},
     frame::visual,
+    frontend::{common::IDENTICAL_EDIT_COLOR, search::draw_type_path_search},
     git::blame::{self, BlameCell},
+    gizmo::{direction::DirectionalTypes, transform::anchor_axis},
+    inspector::session::EditScope,
     maploader::preview::PREVIEW_ID_START,
-    session::{DirectionalTypes, EditScope, Session},
+    session::Session,
     settings::Settings,
-    transform::anchor_axis,
 };
 
 const DISPLAY_PROPERTIES: &[&str] = &[
@@ -1910,40 +1911,40 @@ fn toggle_pin(pins: &mut Vec<String>, name: &str) {
     }
 }
 
-pub(super) struct InspectorPanel {
+pub(crate) struct InspectorPanel {
     window: WindowKey,
     state: InspectorState,
 }
 
 #[derive(Default)]
-pub(super) struct InspectorPanelOutput {
-    pub(super) open_source: Option<SourceLocation>,
-    pub(super) find_similar: Option<(DocumentId, PrefabInstanceId)>,
-    pub(super) copy_hash: Option<String>,
-    pub(super) docked: bool,
+pub(crate) struct InspectorPanelOutput {
+    pub(crate) open_source: Option<SourceLocation>,
+    pub(crate) find_similar: Option<(DocumentId, PrefabInstanceId)>,
+    pub(crate) copy_hash: Option<String>,
+    pub(crate) docked: bool,
 }
 
 impl InspectorPanel {
-    pub(super) fn new() -> Result<Self, WindowKeyError> {
+    pub(crate) fn new() -> Result<Self, WindowKeyError> {
         Ok(Self {
             window: WindowKey::new("inspector", "Inspector")?,
             state: InspectorState::default(),
         })
     }
 
-    pub(super) const fn window(&self) -> &WindowKey {
+    pub(crate) const fn window(&self) -> &WindowKey {
         &self.window
     }
 
-    pub(super) const fn transform_mode(&self) -> TransformMode {
+    pub(crate) const fn transform_mode(&self) -> TransformMode {
         self.state.transform_mode()
     }
 
-    pub(super) fn edits_identical(&self) -> bool {
+    pub(crate) fn edits_identical(&self) -> bool {
         self.state.scope == EditScope::Identical
     }
 
-    pub(super) fn draw(
+    pub(crate) fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, focus: bool, open: &mut bool,
     ) -> InspectorPanelOutput {
         if !*open {

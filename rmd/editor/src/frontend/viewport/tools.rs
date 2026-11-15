@@ -13,7 +13,7 @@ use crate::{
         FILL_LIMIT_WARNING_POPUP, FillWarningContext, PendingFillWarning, UiState,
         context_menu::{NodeContext, POPUP as MAP_MENU_POPUP, Target as MenuTarget},
     },
-    gizmo::GizmoMapView,
+    gizmo::panel::GizmoMapView,
     node::panel::{NodeOverlayHit, NodeOverlayView, NodeRightClick, draw_node_overlay, node_right_click},
     session::{FillOutcome, Session},
     settings::{Settings, keybind::KeybindAction},

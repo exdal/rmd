@@ -11,11 +11,10 @@ use dear_imgui_rs::{
     WindowKeyError,
 };
 use dmm::{Coord, PrefabInstanceId};
-pub(crate) use inspector::TransformMode;
 use render::{Camera, GuideLine, MapViewInteraction, MapViewRect};
 use ui::theme::Themes;
 
-use self::{inspector::InspectorPanel, object_tree::ObjectTreePanel, settings::SettingsWindow};
+use self::{object_tree::ObjectTreePanel, settings::SettingsWindow};
 use crate::{
     app::{external_editor::SourceLocation, pacing::FrameDemand, update::UpdateCheck},
     bake::panel::RuntimesPanel,
@@ -33,7 +32,8 @@ use crate::{
     },
     frame::session::TypeLayer,
     git::panel::{GitPanel, GitTab},
-    gizmo::GizmoState,
+    gizmo::panel::GizmoState,
+    inspector::panel::InspectorPanel,
     issues::panel::IssuesPanel,
     region::panel::RegionSelectionOptions,
     search::panel::{FindPanel, SimilarMatchKind},
@@ -87,8 +87,6 @@ use self::{
 pub(crate) mod common;
 
 mod context_menu;
-
-mod inspector;
 
 mod object_tree;
 
@@ -224,7 +222,7 @@ pub struct UiState {
     pub(crate) dockspace_root: Option<Id>,
     pub(crate) dm_ui: DmUi,
     pub(crate) welcome_window: WindowKey,
-    inspector: InspectorPanel,
+    pub(crate) inspector: InspectorPanel,
     pub(crate) find: FindPanel,
     pub(crate) issues: IssuesPanel,
     pub(crate) runtimes: RuntimesPanel,

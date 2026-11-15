@@ -7,7 +7,7 @@ use crate::{
     document::{DocumentId, Selection},
     frontend::{UiState, conflict_controls_layout, draw_conflict_controls},
     git::conflict::{Hunk, Side},
-    gizmo::{GizmoMapView, RegionDrag, RegionGizmoTarget},
+    gizmo::panel::{GizmoMapView, RegionDrag, RegionGizmoTarget},
     maploader::preview::ModuleRootKey,
     region::panel::{
         PendingRegionPlacement, RectangleGesture, draw_region_outline, rectangle_drag_coord, restore_rectangle_gesture,

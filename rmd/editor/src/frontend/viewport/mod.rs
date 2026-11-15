@@ -33,11 +33,11 @@ use crate::{
     coop::panel::presence::{CoopPresence, draw_coop_status, draw_tab_menu, hit_comment, share_presence},
     document::DocumentId,
     git::panel::blame::BlamePopup,
-    gizmo::GizmoMapView,
+    gizmo::{guides::GuideBadge, panel::GizmoMapView},
     maploader::panel,
     node::panel::NodeOverlayHit,
     region::panel::restore_rectangle_gesture,
-    session::{GuideBadge, Session},
+    session::Session,
     settings::{Settings, keybind::KeybindAction},
     tool::Tool,
 };

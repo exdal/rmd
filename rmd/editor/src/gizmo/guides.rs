@@ -3,8 +3,7 @@ use std::collections::HashSet;
 use dmm::Coord;
 use render::GuideLine;
 
-use super::Session;
-use crate::{document::PrefabInstanceId, frame::visual};
+use crate::{document::PrefabInstanceId, frame::visual, session::Session};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct GuideBadge {

@@ -380,7 +380,7 @@ fn rect_fill_tool_fills_on_release_and_leaves_the_selection_alone() {
 fn gizmo_frame(
     context: &mut dear_imgui_rs::Context, gizmo: &mut GizmoState, camera: &Controller, target: RegionGizmoTarget,
     hovered: bool,
-) -> crate::gizmo::RegionGizmoResponse {
+) -> crate::gizmo::panel::RegionGizmoResponse {
     let ui = context.frame();
     let view = GizmoMapView {
         min: [0.0; 2],

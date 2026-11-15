@@ -3,18 +3,19 @@ use base::path::TreePath;
 use dmm::{Coord, Prefab};
 use render::SpriteInstance;
 
-use super::{DirectionalTypes, Session, direction_state};
 use crate::{
     document::{
         DocumentId, InstanceChange, MapDocument, PrefabInstanceId, PrefabLocation, Selection, VarMutation,
         command::EditGroupId,
     },
     frame::visual,
+    gizmo::direction::{DirectionalTypes, direction_state},
+    session::Session,
     tool::{PlacementKind, SelectionRotation, Tool, placement_kind, rotate_point, rotate_prefab},
 };
 
 #[derive(Debug)]
-pub(super) struct IdenticalCache {
+pub(crate) struct IdenticalCache {
     document: DocumentId,
     generation: u64,
     focus: Option<PrefabInstanceId>,
@@ -241,7 +242,7 @@ impl Session {
         self.edit_instances_in(scope, label, None, mutations, group)
     }
 
-    pub(super) fn edit_instances_in(
+    pub(crate) fn edit_instances_in(
         &mut self, scope: EditScope, label: impl Into<String>, path: Option<&TreePath>, mutations: &[VarMutation],
         group: Option<EditGroupId>,
     ) -> Option<bool> {

@@ -9,7 +9,8 @@ use crate::{
         UiState, draw_guide_badges, draw_highlights, draw_history_overlay, draw_identical_outlines,
         draw_placement_preview, draw_selected_pixel_grid, draw_tile_grid,
     },
-    session::{GuideBadge, Session},
+    gizmo::guides::GuideBadge,
+    session::Session,
     settings::Settings,
     tool::{
         Tool,
