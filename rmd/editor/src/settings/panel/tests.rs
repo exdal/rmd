@@ -1,10 +1,18 @@
-use dear_imgui_rs::MouseButton;
+use dear_imgui_rs::{Key, MouseButton};
 use ui::{
+    keybind::KeyBinding,
     testing::{CONTEXT_LOCK, assert_window_centered, finish_frame, popup_context, set_desktop_geometry},
     theme::DEFAULT_THEME,
+    widgets::button_width,
 };
 
-use super::*;
+use super::{
+    appearance::{FontPicker, draw_ui_scale_setting},
+    compiler::PROFILE_RELOAD_POPUP,
+    keybinds::{SETTINGS_KEYBINDING_GROUPS, finish_keybind_capture},
+    theme::ThemeEditor,
+    *,
+};
 
 #[test]
 fn settings_reopens_centered_after_resize_and_stays_draggable() {
